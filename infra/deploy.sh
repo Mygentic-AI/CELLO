@@ -1039,6 +1039,89 @@ else
   echo "── Skipping cello-cicd (us-east-1 only, current region: ${REGION}) ──────"
 fi
 
+# ── STEP 15: cello-waitlist — M11 waitlist API (us-east-1 only) ──────────────
+# depends on: cello-vpc (subnets, CIDR, RDS security group), cello-rds (endpoint,
+# port, master secret). Deliberately last: nothing in the protocol path depends on
+# it, so a waitlist failure must never block directory, relay, or DNS.
+#
+# US-EAST-1 ONLY, and that is a design decision rather than an omission. These
+# Lambdas are the only writers to the single waitlist schema in the portal RDS
+# instance. A second regional copy would be a second uncoordinated writer to the
+# same rows. The one-node-one-region rule governs SOVEREIGN directory and relay
+# nodes; the waitlist is a single global service like the ops-agent and cicd.
+#
+# NON-FATAL: a marketing waitlist must never be able to fail a protocol deploy.
+
+if [[ "${REGION}" == "us-east-1" ]]; then
+  # Every input is resolved here and asserted non-empty BEFORE deploy_stack is
+  # called. infra/CLAUDE.md's Required Config Anti-Pattern: a required value that
+  # is silently empty produces a stack that deploys, reports healthy, and cannot
+  # do its job. Failing here names the missing thing instead.
+
+  WAITLIST_RDS_ENDPOINT=$(aws cloudformation list-exports --region "${REGION}" \
+    --query "Exports[?Name=='cello-${ENVIRONMENT}-rds-endpoint'].Value" --output text 2>/dev/null || echo "")
+  WAITLIST_RDS_PORT=$(aws cloudformation list-exports --region "${REGION}" \
+    --query "Exports[?Name=='cello-${ENVIRONMENT}-rds-port'].Value" --output text 2>/dev/null || echo "")
+  WAITLIST_SECRET_ARN=$(aws cloudformation list-exports --region "${REGION}" \
+    --query "Exports[?Name=='cello-${ENVIRONMENT}-rds-master-secret-arn'].Value" --output text 2>/dev/null || echo "")
+
+  # The RDS-managed master secret. Read at deploy time, never stored in the repo.
+  WAITLIST_DB_PASSWORD=""
+  if [[ -n "${WAITLIST_SECRET_ARN}" ]]; then
+    WAITLIST_DB_PASSWORD=$(aws secretsmanager get-secret-value --region "${REGION}" \
+      --secret-id "${WAITLIST_SECRET_ARN}" --query 'SecretString' --output text 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])' 2>/dev/null || echo "")
+  fi
+
+  # The ACM certificate for the API custom domain. Looked up by domain rather
+  # than hardcoded — a recreated certificate gets a new ARN, and a stale hardcoded
+  # one fails the deploy with an unrelated-looking error.
+  WAITLIST_API_DOMAIN="api.${DOMAIN_NAME}"
+  WAITLIST_CERT_ARN=$(aws acm list-certificates --region "${REGION}" \
+    --certificate-statuses ISSUED \
+    --query "CertificateSummaryList[?DomainName=='${WAITLIST_API_DOMAIN}' || DomainName=='*.${DOMAIN_NAME}'].CertificateArn | [0]" \
+    --output text 2>/dev/null || echo "")
+
+  waitlist_missing=()
+  [[ -z "${WAITLIST_RDS_ENDPOINT}" || "${WAITLIST_RDS_ENDPOINT}" == "None" ]] && waitlist_missing+=("rds endpoint export cello-${ENVIRONMENT}-rds-endpoint")
+  [[ -z "${WAITLIST_RDS_PORT}" || "${WAITLIST_RDS_PORT}" == "None" ]] && waitlist_missing+=("rds port export cello-${ENVIRONMENT}-rds-port")
+  [[ -z "${WAITLIST_DB_PASSWORD}" ]] && waitlist_missing+=("rds master password from ${WAITLIST_SECRET_ARN:-<no secret arn export>}")
+  [[ -z "${WAITLIST_CERT_ARN}" || "${WAITLIST_CERT_ARN}" == "None" ]] && waitlist_missing+=("ACM certificate for ${WAITLIST_API_DOMAIN} or *.${DOMAIN_NAME} in ${REGION}")
+
+  if [[ ${#waitlist_missing[@]} -gt 0 ]]; then
+    echo ""
+    echo "── Skipping cello-waitlist — prerequisites are missing ───────────────" >&2
+    for m in "${waitlist_missing[@]}"; do echo "     missing: ${m}" >&2; done
+    echo "     The waitlist is not on the protocol path, so this is a warning, not a failure." >&2
+    echo ""
+  else
+    WAITLIST_DATABASE_URL="postgresql://postgres:${WAITLIST_DB_PASSWORD}@${WAITLIST_RDS_ENDPOINT}:${WAITLIST_RDS_PORT}/cello_${ENVIRONMENT}"
+
+    waitlist_exit=0
+    (
+      deploy_stack "cello-waitlist-${ENVIRONMENT}" "cello-waitlist.yaml" \
+        "Environment=${ENVIRONMENT}" \
+        "WaitlistDatabaseUrl=${WAITLIST_DATABASE_URL}" \
+        "ApiDomainName=${WAITLIST_API_DOMAIN}" \
+        "ApiCertificateArn=${WAITLIST_CERT_ARN}" \
+        "HostedZoneId=${HOSTED_ZONE_ID}"
+    ) || waitlist_exit=$?
+
+    if [[ ${waitlist_exit} -ne 0 ]]; then
+      echo ""
+      echo "WARNING: cello-waitlist-${ENVIRONMENT} failed (exit ${waitlist_exit})." >&2
+      echo "         The waitlist is not required for CELLO protocol operation. Continuing." >&2
+      echo ""
+    else
+      echo "  Waitlist stack deployed. Function CODE is NOT deployed by CFN —"
+      echo "  run: ./infra/deploy-lambdas.sh ${ENVIRONMENT} waitlist"
+    fi
+  fi
+else
+  echo ""
+  echo "── Skipping cello-waitlist (us-east-1 only, current region: ${REGION}) ──"
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEPLOYMENT COMPLETE — print summary
 # ═══════════════════════════════════════════════════════════════════════════════

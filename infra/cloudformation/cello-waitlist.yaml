@@ -1,0 +1,1055 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CELLO M11 waitlist — Lambdas, API Gateway, schedules and the SES bounce topic.
+
+  Every function here reaches the PORTAL RDS (DOD-INV-SINGLE-DB — no new database
+  is provisioned), which is PubliclyAccessible:false, so all of them are VPC-
+  attached to the private subnets. That in turn means they have no route to SES,
+  Secrets Manager or the public internet without egress, which is why this stack
+  creates interface endpoints rather than relying on a NAT: the NAT gateways are
+  deleted on every hibernate, and an email pipeline that stops working overnight
+  because the environment was parked is not a pipeline.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, production]
+    Description: Deployment environment.
+
+  # No Default. A required value with an empty default silently disables the
+  # feature it configures — infra/CLAUDE.md's Required Config Anti-Pattern.
+  WaitlistDatabaseUrl:
+    Type: String
+    NoEcho: true
+    Description: >
+      Postgres connection string for the portal RDS instance. Read from Secrets
+      Manager by deploy.sh and passed at deploy time; never hardcoded.
+      KNOWN TRADEOFF, taken deliberately (M11-D25): this lands as a plaintext
+      Lambda environment variable, readable by anyone holding
+      lambda:GetFunctionConfiguration on this account. ECS avoids that with
+      ValueFrom; Lambda has no equivalent, so the alternative is a cold-start
+      Secrets Manager fetch inside all twelve handlers. Not taken for launch —
+      single-operator account, and the twelve connect() paths are the most
+      heavily tested surface in M11. Revisit before any second operator gets
+      IAM access.
+
+  ApiDomainName:
+    Type: String
+    Default: api.cello.mygentic.ai
+    Description: >
+      Custom domain for the waitlist API. LOAD-BEARING, not cosmetic: the session
+      cookie is SameSite=Lax, and a Lax cookie is never attached to a cross-SITE
+      fetch. Serving this API from execute-api.amazonaws.com while the app is on
+      cello.mygentic.ai means /status can never authenticate and every user loops
+      between /status and /auth forever.
+
+  ApiCertificateArn:
+    Type: String
+    Description: ACM certificate ARN covering ApiDomainName (us-east-1).
+
+  HostedZoneId:
+    Type: String
+    Default: Z02692523DOH7NW521CL8
+    Description: Route53 zone for cello.mygentic.ai.
+
+  FromEmailAddress:
+    Type: String
+    Default: CELLO <noreply@mygentic.ai>
+    Description: Verified SES sender.
+
+Resources:
+
+  # ── Security group ──────────────────────────────────────────────────────────
+
+  WaitlistLambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "CELLO ${Environment} waitlist Lambdas"
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !ImportValue
+            Fn::Sub: "cello-${Environment}-vpc-cidr"
+          Description: Postgres to the portal RDS
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !ImportValue
+            Fn::Sub: "cello-${Environment}-vpc-cidr"
+          Description: HTTPS to the VPC interface endpoints (SES, Secrets Manager, Lambda)
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  RdsIngressFromWaitlist:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !ImportValue
+        Fn::Sub: "cello-${Environment}-rds-sg"
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref WaitlistLambdaSecurityGroup
+      Description: Waitlist Lambdas
+
+  # ── VPC endpoints ───────────────────────────────────────────────────────────
+  # NOT a NAT gateway. Hibernate deletes NAT gateways, so an email pipeline that
+  # depended on one would stop delivering every night the environment is parked
+  # — silently, since a job that cannot reach SES just retries.
+
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "CELLO ${Environment} waitlist VPC endpoints"
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref WaitlistLambdaSecurityGroup
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  SesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.email-smtp"
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-private-subnet-a"
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-private-subnet-b"
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !ImportValue
+        Fn::Sub: "cello-${Environment}-vpc-id"
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-private-subnet-a"
+        - !ImportValue
+          Fn::Sub: "cello-${Environment}-private-subnet-b"
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  # ── Execution role ──────────────────────────────────────────────────────────
+
+  WaitlistLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "cello-waitlist-lambda-${Environment}-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: waitlist-send-email
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [ses:SendEmail, ses:SendRawEmail]
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    # Scoped to our own verified identity. Without this the role
+                    # can send as anything SES will accept, which is a spoofing
+                    # surface rather than a permission.
+                    ses:FromAddress: noreply@mygentic.ai
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── SES bounce + complaint notifications ────────────────────────────────────
+
+  BounceTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "cello-waitlist-bounces-${Environment}"
+      DisplayName: CELLO waitlist SES bounces and complaints
+
+  BounceTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref BounceTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ses.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref BounceTopic
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+
+  # ── HTTP API ────────────────────────────────────────────────────────────────
+  #
+  # The custom domain is the reason this section exists rather than letting the
+  # default execute-api hostname serve. A SameSite=Lax session cookie is never
+  # attached to a cross-SITE request, so an API on execute-api.amazonaws.com
+  # cannot authenticate a browser on cello.mygentic.ai — /status 401s, redirects
+  # to /auth, and the user loops forever. Same-site is a functional requirement
+  # here, not branding.
+
+  WaitlistApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "cello-waitlist-${Environment}"
+      ProtocolType: HTTP
+      # CORS is handled per-Lambda, not here. The reads are wildcard-public and
+      # the writes are origin-restricted, and expressing that split at the
+      # gateway would put the rule in two places that can disagree.
+      Tags:
+        Project: cello
+        Environment: !Ref Environment
+
+  WaitlistApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref WaitlistApi
+      StageName: $default
+      AutoDeploy: true
+      DefaultRouteSettings:
+        # A public, unauthenticated signup endpoint with 8-byte bearer codes
+        # behind it. The throttle is the only thing between a script and the
+        # whole code space.
+        ThrottlingRateLimit: 50
+        ThrottlingBurstLimit: 100
+
+  WaitlistApiDomain:
+    Type: AWS::ApiGatewayV2::DomainName
+    Properties:
+      DomainName: !Ref ApiDomainName
+      DomainNameConfigurations:
+        - CertificateArn: !Ref ApiCertificateArn
+          EndpointType: REGIONAL
+          SecurityPolicy: TLS_1_2
+
+  WaitlistApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      ApiId: !Ref WaitlistApi
+      DomainName: !Ref WaitlistApiDomain
+      Stage: !Ref WaitlistApiStage
+
+  WaitlistApiDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref ApiDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt WaitlistApiDomain.RegionalDomainName
+        HostedZoneId: !GetAtt WaitlistApiDomain.RegionalHostedZoneId
+        EvaluateTargetHealth: false
+
+  SignupFunctionIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WaitlistApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt SignupFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  SignupFunctionApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt SignupFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WaitlistApi}/*"
+
+  SignupRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "POST /waitlist/signup"
+      Target: !Sub "integrations/${SignupFunctionIntegration}"
+
+  AuthFunctionIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WaitlistApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt AuthFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  AuthFunctionApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AuthFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WaitlistApi}/*"
+
+  AuthRequestRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "POST /waitlist/auth/request"
+      Target: !Sub "integrations/${AuthFunctionIntegration}"
+
+  AuthVerifyRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "GET /waitlist/auth/verify"
+      Target: !Sub "integrations/${AuthFunctionIntegration}"
+
+  AuthSessionRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "GET /waitlist/auth/session"
+      Target: !Sub "integrations/${AuthFunctionIntegration}"
+
+  AuthLogoutRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "POST /waitlist/auth/logout"
+      Target: !Sub "integrations/${AuthFunctionIntegration}"
+
+  UnsubGetRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "GET /waitlist/unsubscribe"
+      Target: !Sub "integrations/${AuthFunctionIntegration}"
+
+  UnsubPostRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "POST /waitlist/unsubscribe"
+      Target: !Sub "integrations/${AuthFunctionIntegration}"
+
+  ActionsFunctionIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WaitlistApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ActionsFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  ActionsFunctionApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ActionsFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WaitlistApi}/*"
+
+  SurveyRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "POST /waitlist/survey"
+      Target: !Sub "integrations/${ActionsFunctionIntegration}"
+
+  ReadinessRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "POST /waitlist/readiness"
+      Target: !Sub "integrations/${ActionsFunctionIntegration}"
+
+  InterviewRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "POST /waitlist/interview-commit"
+      Target: !Sub "integrations/${ActionsFunctionIntegration}"
+
+  PostUrlRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "POST /waitlist/post-url"
+      Target: !Sub "integrations/${ActionsFunctionIntegration}"
+
+  ContentAlertsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "POST /waitlist/content-alerts"
+      Target: !Sub "integrations/${ActionsFunctionIntegration}"
+
+  GalleryFunctionIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WaitlistApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt GalleryFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  GalleryFunctionApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt GalleryFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WaitlistApi}/*"
+
+  GalleryIndexRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "GET /gallery/receipts"
+      Target: !Sub "integrations/${GalleryFunctionIntegration}"
+
+  GalleryReceiptRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "GET /gallery/receipts/{hash}"
+      Target: !Sub "integrations/${GalleryFunctionIntegration}"
+
+  GalleryPublishRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "POST /gallery/publish"
+      Target: !Sub "integrations/${GalleryFunctionIntegration}"
+
+  # ── The functions ───────────────────────────────────────────────────────────
+  # All VPC-attached, because every one of them reaches the portal RDS.
+
+  SignupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-signup-${Environment}"
+      Description: "Public signup endpoint. Behind API Gateway."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
+          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-signup/handler.py
+          # and CI replaces this on deploy. Raising rather than returning is
+          # deliberate: a stub that returned a plausible empty result would let a
+          # half-deployed stack look healthy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh — see infra/lambda/waitlist-signup/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  AuthFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-auth-${Environment}"
+      Description: "Magic link, session, unsubscribe. Behind API Gateway."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      # The response floor that flattens the enumeration timing channel is a
+      # SLEEP, so the timeout must comfortably exceed it or the guard turns
+      # into a 502 for exactly the addresses it protects.
+      Timeout: 30
+      MemorySize: 256
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
+          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-auth/handler.py
+          # and CI replaces this on deploy. Raising rather than returning is
+          # deliberate: a stub that returned a plausible empty result would let a
+          # half-deployed stack look healthy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh — see infra/lambda/waitlist-auth/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  ActionsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-actions-${Environment}"
+      Description: "Survey, readiness, interview commit, post URL, content alerts."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
+          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-actions/handler.py
+          # and CI replaces this on deploy. Raising rather than returning is
+          # deliberate: a stub that returned a plausible empty result would let a
+          # half-deployed stack look healthy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh — see infra/lambda/waitlist-actions/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  EmailFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-email-${Environment}"
+      Description: "Drains email_jobs and sends via SES."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      # Longer: a batch of 25 makes 25 SES round trips. The delivery model
+      # commits the claim before each send, so a timeout mid-batch leaves
+      # 'sending' rows that are reclaimed rather than lost.
+      Timeout: 120
+      MemorySize: 256
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
+          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-email/handler.py
+          # and CI replaces this on deploy. Raising rather than returning is
+          # deliberate: a stub that returned a plausible empty result would let a
+          # half-deployed stack look healthy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh — see infra/lambda/waitlist-email/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  BounceFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-bounce-${Environment}"
+      Description: "SES bounce and complaint handler. SNS-triggered."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
+          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-bounce/handler.py
+          # and CI replaces this on deploy. Raising rather than returning is
+          # deliberate: a stub that returned a plausible empty result would let a
+          # half-deployed stack look healthy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh — see infra/lambda/waitlist-bounce/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  WavesFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-waves-${Environment}"
+      Description: "Wave assembly. Invoked ONLY by the ops dashboard — never scheduled."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
+          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-waves/handler.py
+          # and CI replaces this on deploy. Raising rather than returning is
+          # deliberate: a stub that returned a plausible empty result would let a
+          # half-deployed stack look healthy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh — see infra/lambda/waitlist-waves/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  GateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-gate-${Environment}"
+      Description: "Telegram admission gate. Invoked by the operations agent."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
+          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-gate/handler.py
+          # and CI replaces this on deploy. Raising rather than returning is
+          # deliberate: a stub that returned a plausible empty result would let a
+          # half-deployed stack look healthy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh — see infra/lambda/waitlist-gate/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  FirstWinFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-firstwin-${Environment}"
+      # NO INVOKER EXISTS YET, and this description says so rather than implying
+      # one. The handler takes {agent_pubkey} by direct invoke; the seal event
+      # originates in the operator's daemon, which holds no AWS credentials and
+      # cannot call this. Closing that gap means either a public authenticated
+      # route or a portal-side relay — DOD-INV-NO-DIRECTORY-RELAY rules out
+      # doing it from the directory. Deliberately left unwired instead of given
+      # a schedule: a sweep would have to invent "which seal is new?", which is
+      # a harder question than the one the handler answers.
+      Description: "First-win detection. Direct invoke, {agent_pubkey}. CALL SITE NOT YET WIRED."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
+          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-firstwin/handler.py
+          # and CI replaces this on deploy. Raising rather than returning is
+          # deliberate: a stub that returned a plausible empty result would let a
+          # half-deployed stack look healthy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh — see infra/lambda/waitlist-firstwin/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  FeedbackFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-feedback-${Environment}"
+      Description: "High-activity detection sweep. Daily."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      # A full-table sweep over session_telemetry. Generous, because a sweep
+      # that times out half way through is indistinguishable from a quiet
+      # week to everything downstream.
+      Timeout: 300
+      MemorySize: 256
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
+          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-feedback/handler.py
+          # and CI replaces this on deploy. Raising rather than returning is
+          # deliberate: a stub that returned a plausible empty result would let a
+          # half-deployed stack look healthy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh — see infra/lambda/waitlist-feedback/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  OutreachFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-outreach-${Environment}"
+      Description: "Day-6 grants and the call-completed action."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      Timeout: 120
+      MemorySize: 256
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
+          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-outreach/handler.py
+          # and CI replaces this on deploy. Raising rather than returning is
+          # deliberate: a stub that returned a plausible empty result would let a
+          # half-deployed stack look healthy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh — see infra/lambda/waitlist-outreach/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  UtmFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-utm-${Environment}"
+      Description: "UTM link generator. Invoked by the ops dashboard."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
+          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-utm/handler.py
+          # and CI replaces this on deploy. Raising rather than returning is
+          # deliberate: a stub that returned a plausible empty result would let a
+          # half-deployed stack look healthy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh — see infra/lambda/waitlist-utm/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  GalleryFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "cello-waitlist-gallery-${Environment}"
+      Description: "Gallery reads and the portal publish action."
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt WaitlistLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-a"
+          - !ImportValue
+            Fn::Sub: "cello-${Environment}-private-subnet-b"
+        SecurityGroupIds:
+          - !Ref WaitlistLambdaSecurityGroup
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref WaitlistDatabaseUrl
+          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
+          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          CELLO_ENV: !Ref Environment
+      Code:
+        ZipFile: |
+          # Placeholder. The authoritative source is infra/lambda/waitlist-gallery/handler.py
+          # and CI replaces this on deploy. Raising rather than returning is
+          # deliberate: a stub that returned a plausible empty result would let a
+          # half-deployed stack look healthy.
+          def lambda_handler(event, context):
+              raise NotImplementedError(
+                  "Deploy via deploy-lambdas.sh — see infra/lambda/waitlist-gallery/handler.py"
+              )
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── EventBridge schedules ───────────────────────────────────────────────────
+  #
+  # DELIBERATELY ABSENT: any schedule for wave assembly. DOD-INV-WAVE-GATE means
+  # admission is an operator action and never a calendar one, so that function
+  # must never be given a rule. Recorded here because the absence of a resource
+  # is invisible in a template and the next person to add one will be trying to
+  # be helpful.
+
+  EmailDispatchSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "cello-waitlist-email-${Environment}"
+      Description: Drains email_jobs. Every minute — E1 must land within 60 seconds of signup.
+      ScheduleExpression: "rate(1 minute)"
+      State: ENABLED
+      Targets:
+        - Id: dispatcher
+          Arn: !GetAtt EmailFunction.Arn
+
+  FeedbackSweepSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "cello-waitlist-feedback-${Environment}"
+      Description: High-activity detection (§5c). Daily.
+      ScheduleExpression: "cron(17 6 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Id: sweep
+          Arn: !GetAtt FeedbackFunction.Arn
+
+  OutreachSweepSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "cello-waitlist-outreach-${Environment}"
+      Description: Day-6 no-response invite grant. Daily, after the feedback sweep.
+      ScheduleExpression: "cron(47 6 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Id: sweep
+          Arn: !GetAtt OutreachFunction.Arn
+
+  EmailSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt EmailFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EmailDispatchSchedule.Arn
+
+  FeedbackSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt FeedbackFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt FeedbackSweepSchedule.Arn
+
+  OutreachSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt OutreachFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt OutreachSweepSchedule.Arn
+
+  BounceSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref BounceTopic
+      Protocol: lambda
+      Endpoint: !GetAtt BounceFunction.Arn
+
+  BounceInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt BounceFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref BounceTopic
+
+Outputs:
+  ApiEndpoint:
+    Description: The raw execute-api endpoint. Use ApiDomain in anything a browser touches.
+    Value: !GetAtt WaitlistApi.ApiEndpoint
+
+  ApiDomain:
+    Description: >
+      The waitlist API origin. Must be same-site with the web app or the
+      SameSite=Lax session cookie is never sent.
+    Value: !Sub "https://${ApiDomainName}"
+    Export:
+      Name: !Sub "cello-${Environment}-waitlist-api-domain"
+
+  BounceTopicArn:
+    Description: Subscribe the SES configuration set's bounce and complaint destinations to this.
+    Value: !Ref BounceTopic
+    Export:
+      Name: !Sub "cello-${Environment}-waitlist-bounce-topic"
+
+  LambdaSecurityGroupId:
+    Value: !Ref WaitlistLambdaSecurityGroup
+    Export:
+      Name: !Sub "cello-${Environment}-waitlist-lambda-sg"
