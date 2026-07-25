@@ -2909,3 +2909,67 @@ suites were chosen to sit on the other side of one — the round-trip test uses 
 `rowToRecord`, and the F2 tests assert on what crosses the Lambda boundary.
 
 **Still owed:** the ops-agent image is still not rebuilt, so none of this is live.
+
+---
+
+## 2026-07-25 — the second review: one counter cannot answer two questions
+
+The gate went live mid-session — `cello-operations-agent-dev` reached steady state on the image
+built from `602a563`, and the gate Lambda was verified by direct invoke on three refusal paths
+(`token_required`, `missing_telegram_id`, `token_malformed`), each returning the 200-plus-boolean
+shape the client now insists on. IAM confirmed on the live role, not just in IaC: `InvokeWaitlistGate`
+grants that one function and nothing else.
+
+That third refusal corrected a belief in my own code. `ZZZZZZZZZZZZ` — twelve characters over the
+referral alphabet — comes back `token_malformed`, because a waitlist token is
+`waitlist_tokens.token`, a `gen_random_uuid()`. The 12-character 32-symbol code is
+`referral_codes.code`, a different token on a different path. The comment I had written to justify
+the attempt limit named the wrong one. Its conclusion was right and is now stronger (122 bits, not
+60), but a comment that confidently names the wrong column is worse than no comment.
+
+**The finding that mattered, and the shape of it.** I had asked the reviewer to check whether a user
+could be locked out by OUR failure, found it myself while it was running, and fixed it: the attempt
+was recorded before the gate call, so a throw spent one. Five outages and somebody holding a good
+token is locked out for an hour, for doing exactly what our own error message told them to do — and
+is then handed the message *"Too many token attempts … if you believe your invitation token should
+work"*, which is the same error substitution F2 fixed one layer down, reintroduced by the fix
+one layer up.
+
+The reviewer confirmed it and then found what the fix opened. Refunding on throw means throws stop
+counting, which means `check` — never bounded at all — is unbounded on exactly the path where a
+bound matters. When `check` throws, `repository.insert` never runs, so the user has no record and
+every later message re-enters `handleNewUser` for another invocation and another RDS connect.
+
+The reconciliation is that these are **two bounds answering two different questions**, and one
+counter cannot be both:
+
+| | counts | message |
+|---|---|---|
+| allowance (fairness) | refusals only | "too many token attempts" |
+| cooldown (cost) | faults only | "something went wrong on our side" |
+
+Sixty seconds per user after a fault, on both call sites. We already tell them to try again in a few
+minutes, so repeating that without a second invocation costs them nothing they were not already
+waiting out. Not a cached decision — `#tellGateFailed` is one method both paths call, so the two can
+never drift into telling a user inside the cooldown something different from one outside it.
+
+**Four test defects, all mine, all the same family as F1.** Two describes labelled "clause 6" and
+"clause 7" against a DoD with four clauses. `toBeLessThanOrEqual(5)` admitting a limit of one.
+`counts per user` passing with no limiter at all — a wrong-implementation discriminator counting
+itself as coverage. And one outright hollow: *"a successful redemption does not consume the
+allowance forever"* asserted `redeem` was called once, which is true with no limiter, and promised a
+pruning property **the code does not have**. `TOKEN_ATTEMPT_WINDOW_MS` and the prune loop had no
+test at all; there is now one that advances the clock an hour instead of describing it.
+
+**The seam again.** No test crossed F5 and F7. An implementation that counts after the call passes
+every F7 test identically to the one that counts before and never releases — the difference is only
+visible when a throw is followed by a real attempt. Five outages, then recovery, then the sixth
+message must still redeem. That is the test that would have caught it, and it is the same lesson as
+F1 one unit earlier: **the bug lived exactly where two units' tests both stopped.**
+
+One line is annotated rather than tested. Clearing the fault marker on success survives its own
+mutation, because any call reaching that point already passed the cooldown check and its marker was
+necessarily stale. It is map hygiene, it reads like logic, and the comment now says which — rather
+than inventing a contorted test to make dead-effect code look covered.
+
+**Runs:** 125 passed, 52 skipped. Lint, typecheck, build clean.
