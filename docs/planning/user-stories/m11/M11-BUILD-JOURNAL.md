@@ -2797,3 +2797,59 @@ operator learns to ignore it. `eligible_remaining` is the datum that separates "
 **The count so far this milestone: four guards that could not fire.** The touchpoints activity clause, a
 test that poisoned the wrong call, the invariant checker's base, and the invariant checker's *replacement*
 base. Every one was green, and every one had a confident comment above it.
+
+---
+
+### Entry 60: the gate existed, was deployed, and nothing asked it
+**Date:** 2026-07-25
+**Target:** DOD-TELEGRAM-GATE-1 [trustless-cello]
+
+The gate Lambda had been deployed and correctly refusing unlinked accounts for hours — I verified it
+live at 07:30 (`{"allowed": false, "error": "token_required"}`). Nothing in the product was calling it.
+The DoD line's "Owed: the ops-agent call site" was the whole difference between a gate and a function
+that returns the right answer to nobody.
+
+**Behind an interface, because the ops-agent must not read the waitlist database.** It runs in the
+directory's VPC holding directory credentials; giving it waitlist ones too would put every waitlist row
+one bug away from a Telegram bot. It asks a question over a single IAM grant — `lambda:InvokeFunction`
+on one function — and never evaluates the rule.
+
+**Fail closed, and the shape of that matters.** Every failure path in the client throws: transport error,
+the function throwing, a 5xx, an unparseable body. The state machine deliberately does **not** catch it.
+An exception propagating *is* the refusal; a catch that logged and sent a friendly message would be the
+fail-open path wearing a helpful face. A 5xx is the gate *failing*, not the gate *refusing* — only a 200
+carrying `allowed: false` reaches the user as a refusal.
+
+**The gate goes before the phone prompt.** Asking an unadmitted stranger for their phone number and only
+then refusing them collects PII from somebody who was never going to be admitted. `NO-PII-DIRECTORY`
+governs what we store; this governs what we ask for.
+
+**Two things I got wrong and caught by looking rather than by being told.**
+
+First: I shipped the enforcement and did not wire the client into the composition root. In dev, staging
+and production the dependency would have been `undefined`, the state machine would have logged
+`registration.gate.NOT_ENFORCED`, and every account that messaged the bot would have been admitted.
+The state machine *has* to tolerate a missing gate — the CLI adapter legitimately runs without one — and
+that tolerance is exactly what made it invisible: "nobody wired it up" and "this environment does not
+enforce the gate" look identical from inside. So the assertion lives at the composition root, where the
+question is actually decided, and the type is non-optional there.
+
+Second, and worse: **re-registration walked around it.** `handleExistingUser` — the path for somebody
+who completed a registration before and comes back — never consulted the gate. For a legitimate
+returning user that is invisible, because they are still linked and the gate would say yes. It matters
+when an account has been **revoked**, since removing somebody from `telegram_accounts` is what banning
+them means. A kill switch a user can walk around by messaging the bot again is not a kill switch. Found
+by enumerating every route into `AWAITING_CONTACT` instead of only the two I had touched.
+
+**No migration.** `registrations.state` is `TEXT` with no `CHECK` constraint, so the new
+`AWAITING_WAITLIST_TOKEN` state touches no directory schema — which keeps `DOD-INV-NO-DIRECTORY-RELAY`
+intact and avoids a Flyway version bump.
+
+**Runs:** 102 tests in the package. Six reverts, each turning a named test red: fail-open on throw,
+skipping the gated branch, a spent token advancing, the composition root supplying nothing, a 5xx read as
+a refusal, and the re-registration bypass.
+
+**Still owed on this line:** the live end-to-end enforcer — burn a real token on a real Telegram account
+and confirm DKG proceeds. That needs a verified waitlist user and a token, which needs the database read
+path, which needs the ops dashboard deployed. And the ops-agent image has not been rebuilt, so none of
+this is live yet.
