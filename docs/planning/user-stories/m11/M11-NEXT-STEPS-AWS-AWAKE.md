@@ -206,9 +206,29 @@ attributed user, `/auth/request` is byte-identical for known and unknown address
 ## B. Waiting on the ops-dashboard existing somewhere
 
 The repo is local-only — **creating its GitHub remote is an outward action** — and it then needs a
-container deploy. Two constraints are in its README: it needs a persistent Node process (the
-fire-and-forget sign-in send is the no-enumeration property, and a frozen serverless container
-would never send), and `OPS_PUBLIC_URL` at *build* time.
+container deploy. One constraint is in its README and still holds: it needs a persistent Node
+process, because the fire-and-forget sign-in send IS the no-enumeration property and a frozen
+serverless container would never send.
+
+**The second constraint is gone (2026-07-25).** The README said it needed `OPS_PUBLIC_URL` at
+*build* time. That was not a constraint, it was a defect: `config.ts` and `db.ts` threw at module
+load, `next build` imports every route module, and so **the dashboard did not build at all** — 53
+tests passed and the thing had never once been built. Build and boot are now separate: the values
+stand in during a build, and `src/instrumentation.ts` refuses at server start (verified on the
+image — no env exits 1, env set serves `/sign-in` 200).
+
+**What now exists:** a Dockerfile (built and run), `infra/cloudformation/cello-ops-dashboard.yaml`
+and a `DEPLOY_OPS_DASHBOARD=1` step in deploy.sh covering ECR, cert, a host rule on the existing
+portal ALB, its own security group, the DB ingress rule, the service and DNS. Validated, imports
+checked against the live account, **deployed: no.**
+
+**Strict order, and only the first step is Andre's:**
+1. Create the GitHub remote and push. *(outward — Andre)*
+2. Add a pipeline (source → CodeBuild → ECR push). Cannot be written blind: it needs the repo's
+   real owner/name.
+3. Let CodeBuild push an image. Nothing may push from a laptop.
+4. `DEPLOY_OPS_DASHBOARD=1 IMAGE_TAG=<sha> ./infra/deploy.sh dev`. Before an image exists this
+   crash-loops and rolls back.
 
 `DOD-OPS-SHELL-1` · `DOD-OPS-POST-REVIEW-1` · `DOD-OPS-WAVE-MGMT-1` · `DOD-OPS-FEEDBACK-1` ·
 `DOD-OPS-CONTENT-ALERT-1` · `DOD-OPS-TELEGRAM-1` · `DOD-OPS-UTM-1` · `DOD-INV-WAVE-GATE`
@@ -228,11 +248,26 @@ produce. Their code and local proofs are done.
 
 ## D. Genuinely still work
 
-Small, and none of it blocked:
+- **One fork, three faces** — `DOD-FIRST-WIN-1`'s missing invoker, `waitlist_agent_links`' missing
+  writer (`DOD-TELEGRAM-GATE-1` clause 4, now marked PARTIAL) and `DOD-FEEDBACK-DETECTION-1`'s
+  missing telemetry writer are the same gap: a fact that originates on the operator's machine, a
+  daemon holding no AWS credentials, and no path between them. Parked as ONE fork in the DoD with
+  its options, so it gets one decision instead of three. Not an agent's call overnight — one option
+  needs a ruling on `DOD-INV-NO-DIRECTORY-RELAY`, the other adds a public authenticated surface to
+  the trust layer.
+- **The legacy confirm link is broken in production** — `/beta/apply` and `/agent/interest` mail a
+  link that 404s, and the page reports a valid token as invalid. Retire the funnel or route it under
+  the custom domain; that is a product call. Parked in the DoD with the evidence.
+- `DOD-FEEDBACK-OUTREACH-1` — the `CELLO_FEEDBACK` agent's provisioning half. Its session-initiation
+  half depends on the fork above.
+- `DOD-E-INV-1` / `DOD-E-WIN-1` / `DOD-E-RE-1` — need a real SES send, which needs a job row, which
+  needs the database write path, which is (B).
 
-- `DOD-FIRST-WIN-1` — the seal-event call site. The function is deployed with **no invoker**, and
-  its CFN Description says so. The event originates in the operator's daemon, which holds no AWS
-  credentials, so this needs a design choice about how it reaches AWS.
-- `DOD-FEEDBACK-OUTREACH-1` — the `CELLO_FEEDBACK` agent's session-initiation half (provisioning).
-- `DOD-FEEDBACK-DETECTION-1` — the daemon writing session telemetry (cello-client work).
-- `DOD-E-INV-1` / `DOD-E-WIN-1` — need a wave to actually admit somebody, which needs (B).
+## E. Done since this document was written (2026-07-25)
+
+- **The Telegram gate is LIVE.** `cello-operations-agent-dev` runs it; the gate Lambda is verified
+  by direct invoke on three refusal paths; IAM confirmed on the live role. Reviewed twice — the
+  first pass found the feature had shipped **dead** (no deserializer case, 13 tests passing over a
+  faked repository), the second found the attempt bound charging users for our own outages.
+- **`DOD-INV-DOMAIN`'s scan** covered only the directories M11 touched while the clause says "all
+  repos"; it now scans the corp site entire, which is how the broken confirm link surfaced.
