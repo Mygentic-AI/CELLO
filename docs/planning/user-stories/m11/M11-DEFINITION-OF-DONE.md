@@ -359,6 +359,13 @@ each line.
   separate run with the database unreachable still returned the same 202 and logged
   `ops.magic_link.request_failed` at ERROR — the caller learns nothing, the operator learns
   everything.
+- **ops dashboard PAGES (run for the first time)** — against one local database carrying both the
+  ops tables and all 22 waitlist migrations, which is the shape `DOD-INV-SINGLE-DB` mandates. With a
+  minted session all five render: `/`, `/posts`, `/waves`, `/feedback`, `/links` — 200 each. A
+  seeded `post_review_queue` row appears on `/posts`, so the page reads the real queue rather than a
+  placeholder. **Not proven:** the approve/reject actions, which are Next server actions and cannot
+  be driven from curl without reconstructing the action encoding; their atomic review-claim is
+  unit-tested. That boundary is stated rather than glossed.
 - **wave gate** — `capacity` alone is refused `invalid_capacity`; with a capacity but no operator,
   refused `missing_opened_by` ("every wave names the operator who opened it"); with both, it declines
   to open a wave at all: `{admitted:0, reason:'all_unverified', waiting_total:8,
