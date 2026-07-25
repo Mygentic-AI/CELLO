@@ -123,45 +123,67 @@ fi
 # packages/relay is out of scope and would trigger a 25-30 minute 3-region
 # deploy nobody asked for.
 cd "$TRUSTLESS" || exit 1
-# THE BASE WAS WRONG, AND THE CHECK WAS THEREFORE VACUOUS FOR THE WHOLE
-# MILESTONE. It was `git log --grep='M11' --reverse -1`, and git applies -1
-# BEFORE --reverse — so it returned the most RECENT M11 commit, not the first.
-# The diff ran from "an hour ago" to HEAD and would have passed no matter what
-# M11 did to packages/directory. Green every run, checking essentially nothing.
+
+# THE BASE HAS BEEN WRONG TWICE, IN OPPOSITE WAYS. Recorded because both
+# failures were silent passes, which is the one outcome this script exists to
+# prevent.
 #
-# Anchored on the commit that created the DoD instead. That is unambiguous and
-# semantic: M11 began when its Definition of Done was written, and unlike a
-# commit-message grep it cannot drift as more commits mention M11.
-M11_DOD="docs/planning/user-stories/m11/M11-DEFINITION-OF-DONE.md"
-BASE="${M11_BASE_REF:-$(git log --format=%H --reverse -- "$M11_DOD" 2>/dev/null | head -1)}"
-# And the parent, so the DoD's own commit is inside the range being checked.
-BASE="$(git rev-parse "${BASE}^" 2>/dev/null || echo "$BASE")"
-if [[ -n "$BASE" ]]; then
-  touched=$(git diff --name-only "$BASE"..HEAD -- packages/directory packages/relay 2>/dev/null)
-  if [[ -n "$touched" ]]; then
-    fail "DOD-INV-NO-DIRECTORY-RELAY — directory/relay code changed during M11:"
-    echo "$touched" | sed 's/^/        /'
-  else
-    pass "DOD-INV-NO-DIRECTORY-RELAY — packages/directory and packages/relay untouched"
+#   1. `git log --grep='M11' --reverse -1` — git applies -1 BEFORE --reverse, so
+#      it returned the NEWEST M11 commit. The check diffed from ~1h ago for the
+#      whole milestone.
+#   2. Replacing it with `$(git rev-parse "${BASE}^" || echo "$BASE")` — when the
+#      ref does not resolve, rev-parse prints its ARGUMENT to stdout and exits
+#      non-zero, so the fallback APPENDED a second line. BASE became two lines,
+#      git diff died with "bad revision", 2>/dev/null swallowed it, and the empty
+#      output read as "nothing changed". Green and vacuous, from one bad env var.
+#
+# So: a PINNED SHA, verified to exist. A fixed commit cannot drift when the DoD
+# is renamed (git log without --follow stops at a rename), cannot be narrowed by
+# a shallow clone, and cannot become a two-line string via a failed fallback.
+M11_BASE_DEFAULT="7df188b1b5de5c4b663452cdf5ced4a165cd25a8"  # parent of 185efe27 "add: M11 Definition of Done"
+_want="${M11_BASE_REF:-$M11_BASE_DEFAULT}"
+
+if ! BASE=$(git rev-parse --verify -q "${_want}^{commit}"); then
+  fail "DOD-INV-NO-DIRECTORY-RELAY — base commit '${_want}' does not resolve. NOT checked."
+else
+  # A dirty tree is unchecked work: the history scan below sees commits only, so
+  # an uncommitted edit to packages/directory would pass silently.
+  if ! git diff --quiet -- packages/directory packages/relay 2>/dev/null \
+     || ! git diff --cached --quiet -- packages/directory packages/relay 2>/dev/null; then
+    fail "DOD-INV-NO-DIRECTORY-RELAY — uncommitted changes under packages/directory or packages/relay"
   fi
 
-  # THE CLAUSE ALSO SAYS "or their CloudFormation stacks", and nothing checked
-  # that. The scan above covers source only, so a change to the directory's ECS
-  # template — which is how its task definition, env, secrets and ALB wiring are
-  # set — would have passed silently. That is the half of the invariant with
-  # teeth: M11 has no business redefining how the directory runs.
-  cfn_touched=$(git diff --name-only "$BASE"..HEAD -- \
-    infra/cloudformation/cello-ecs-directory.yaml \
-    infra/cloudformation/cello-ecs-relay.yaml 2>/dev/null)
-  if [[ -n "$cfn_touched" ]]; then
-    fail "DOD-INV-NO-DIRECTORY-RELAY — a directory/relay ECS stack changed during M11:"
-    echo "$cfn_touched" | sed 's/^/        /'
+  # git LOG, not git diff. A two-endpoint diff cannot see a commit that touched
+  # the directory and a later one that reverted it — and that push is exactly
+  # what triggers the path-filtered pipeline. The clause's third sentence, "No
+  # directory deploy is triggered by M11 work", is about the COMMITS, not the
+  # net tree.
+  DIR_PATHS=(packages/directory packages/relay
+             infra/cloudformation/cello-ecs-directory.yaml
+             infra/cloudformation/cello-ecs-relay.yaml)
+  for _p in "${DIR_PATHS[@]}"; do
+    [[ -e "$TRUSTLESS/$_p" ]] || fail "DOD-INV-NO-DIRECTORY-RELAY — pathspec missing: $_p (would match nothing and PASS)"
+  done
+  touched=$(git log --format='%h %s' "$BASE"..HEAD -- "${DIR_PATHS[@]}" 2>/dev/null)
+  if [[ -n "$touched" ]]; then
+    fail "DOD-INV-NO-DIRECTORY-RELAY — commit(s) touching directory/relay code or their ECS stacks:"
+    echo "$touched" | sed 's/^/        /'
   else
-    pass "DOD-INV-NO-DIRECTORY-RELAY — cello-ecs-directory.yaml and cello-ecs-relay.yaml untouched"
+    pass "DOD-INV-NO-DIRECTORY-RELAY — no commit touched directory/relay code or their ECS stacks"
   fi
-else
-  fail "DOD-INV-NO-DIRECTORY-RELAY — could not determine an M11 base commit to diff against"
+
+  # cello-iam.yaml also defines DirectoryTaskRole and RelayTaskRole, so it is
+  # "their CloudFormation stack" by any honest reading — and M11 DID modify it,
+  # to add the ops-agent's InvokeWaitlistGate grant. Reported rather than failed,
+  # so the exception stays visible instead of becoming a hole somebody widens.
+  iam_touched=$(git log --format='%h %s' "$BASE"..HEAD -- infra/cloudformation/cello-iam.yaml 2>/dev/null)
+  if [[ -n "$iam_touched" ]]; then
+    printf '  \033[33mNOTE\033[0m  cello-iam.yaml was modified (it also defines the directory/relay task\n'
+    printf '        roles). Allowed for the ops-agent grant; confirm no directory/relay role changed:\n'
+    echo "$iam_touched" | sed 's/^/          /'
+  fi
 fi
+
 
 # ── DOD-INV-SINGLE-DB ─────────────────────────────────────────────────────────
 # All M11 database work targets the portal RDS. A connection string or import
