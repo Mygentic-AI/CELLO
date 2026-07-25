@@ -1981,3 +1981,75 @@ demand — a statically exported queue would be a build-time snapshot with no au
 
 **Status:** the four lines stay 🟡. Owed on each: a browser has never loaded these pages, and the GitHub
 remote and deploy are outward actions.
+
+---
+
+### Entry 42: the sign-in flow leaked the thing it was built not to leak
+**Date:** 2026-07-25
+**Target:** DOD-OPS-SHELL-1 and the review of Entry 41 [ops-dashboard]
+
+Entry 41 said the no-enumeration property held. It did not. The review is worth recording in full,
+because the cause is a specific, repeatable mistake: **DOD-OPS-SHELL-1 says to *borrow*
+`magic-link.ts` from cello-portal, and I rewrote it instead.** Both defences that file goes to trouble
+to document were lost in the rewrite, and its comments say why they exist.
+
+**The send was awaited.** The allowed path waited on an SES network call; the refused path returned
+after an in-memory allowlist check. Three separable oracles, not one: latency (milliseconds of database
+work versus hundreds of milliseconds of a network send), a **500** when SES throws — the refused path
+cannot throw — and an attacker who induces SES throttling and simply reads the 500s, needing no timing
+measurement at all. cello-portal's version is fire-and-forget with the reason written above it. Mine
+had a commit message asserting "same delay", which was not true.
+
+**The rate-limit table was simply absent.** `0002_magic_link_requests.sql` is named verbatim in the DoD.
+Its own header explains that the attempt is recorded for *every* address *before* the allowlist is
+consulted, because a limit that counts **issued tokens** only ever fires for real operators — so
+429-versus-202 hands back exactly the answer the silent rejection removes.
+
+Its absence cost something worse than an oracle. `requestOperatorLink` kills an operator's unused links
+when a new one is issued. Without a throttle, anyone who knows an operator's address can loop requests
+and **guarantee the link sitting in that operator's inbox is already dead when they click it** — locking
+out the one dashboard that opens waves and grants invites, with no credentials and no access. A refusal
+that makes the system unusable is the failure the availability rule exists to catch, and I built one.
+
+**The token was stored in plaintext.** `ops_magic_links.token` was the UUID primary key — the exact
+string in the sign-in URL — twelve lines below `ops_sessions` storing a sha256. I did the right thing
+for the session and not for the link, in the same file, in the same sitting. Any backup, snapshot or
+query log held a live fifteen-minute operator sign-in.
+
+**"Approved. No points — already at the cap for posts."** was returned for *every* failure of the
+`points_ledger` insert. And `db.ts` documents the dashboard's database grant as covering
+`post_review_queue`, `email_jobs`, `telegram_accounts`, `waitlist_tokens` and some `waitlist_users`
+columns — `points_ledger` is **not on that list**. If that grant is applied as written this was not an
+edge case: every approval would silently award nothing while naming a cap. The queue row is already
+burned and the page hides reviewed rows, so the points vanish with nothing to notice, and points move
+queue positions, which move who gets admitted.
+
+**Two of my own tests were hollow**, and both in the instructive way.
+
+- *"returns indistinguishably for an allowed and a refused address"* asserted that two `Promise<void>`
+  results were both `undefined`. They are undefined **by construction** — the assertion could not fail.
+  It was a test of the TypeScript return type wearing the name of the security property. Everything the
+  property actually consists of lives in the route handler, which had **no tests at all**. There is now
+  a route suite asserting identical status, `Location` and body for allowed, refused, malformed,
+  throttled, SES-failing — and database-down, which is the case that turns the endpoint into an oracle
+  at precisely the moment nobody is watching it.
+- *"refuses a malformed token without touching the database"* used two inputs that both failed on
+  **length**, so it never reached the character class it claimed to test — and the loose pattern it was
+  guarding admitted 36 hyphens, which Postgres rejects with `22P02`, surfacing as a 500. An error naming
+  a driver failure for a cause that is "malformed token".
+
+**The lesson, stated plainly.** Entry 40 ended by noting that recognising a class of defect once does
+not inoculate the next thing you write. This is the same again one layer up: I read the DoD line naming
+the files to borrow, treated the list as a description of *what the module should do* rather than an
+instruction to *take the file*, and lost two properties that a previous version of this project had
+already paid to learn. The borrow list is not a summary. It is the summary of things that went wrong
+before.
+
+**Three revert tests confirm the fixes are load-bearing:** awaiting the send makes the timing test hang
+and fail; moving the throttle after the allowlist turns both throttle-symmetry tests red; storing the
+raw token fails the at-rest test.
+
+**Runs:** 45 tests green (was 24), `tsc` clean, `next build` clean.
+
+**Status:** DOD-OPS-SHELL-1 stays 🟡 — the browser walkthrough and the deploy are still owed, and
+neither is runnable tonight.
