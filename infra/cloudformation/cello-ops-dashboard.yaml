@@ -203,7 +203,7 @@ Resources:
               - Sid: ReadAllowlist
                 Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/ops/allowed-emails-*"
+                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops/allowed-emails-*"
 
               # Operator sign-in mail. Deliberately NOT routed through the
               # waitlist email pipeline: that pipeline enforces marketing
@@ -248,7 +248,7 @@ Resources:
             - Name: OPS_AWS_REGION
               Value: !Ref AWS::Region
             - Name: OPS_ALLOWLIST_SECRET_ID
-              Value: cello/ops/allowed-emails
+              Value: !Sub "cello/${Environment}/ops/allowed-emails"
             - Name: OPS_LAMBDA_PREFIX
               Value: cello-waitlist
             - Name: PORT
