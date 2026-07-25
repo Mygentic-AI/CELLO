@@ -754,6 +754,22 @@ one build script (all in `infra/`):
 - **`infra/build-portal.sh`** → `git archive` the committed cello-portal HEAD → S3 → CodeBuild. Images
   built in AWS only (never docker-pushed from local). **Built `cello-portal:8a2603b` + `:latest`**
   (commit 8a2603b on m8-assembly; CodeBuild SUCCEEDED).
+- **`cello-waitlist.yaml`** → stack `cello-waitlist-dev` **[CREATE_COMPLETE, 2026-07-25]**, us-east-1 only.
+  63 resources: 12 Lambdas (`cello-waitlist-{signup,auth,actions,email,bounce,waves,gate,firstwin,feedback,outreach,utm,gallery}-dev`),
+  HTTP API with custom domain **`api.cello.mygentic.ai`** (status AVAILABLE) + its own DNS-validated ACM
+  cert, 20 routes incl. CORS preflight, 4 EventBridge schedules (email drain every minute; re-engage
+  06:23, feedback 06:17, outreach 06:47 UTC), SNS bounce topic + SES configuration set
+  `cello-waitlist-dev` publishing bounce/complaint/reject/renderingFailure to it, and a security group
+  reaching the PORTAL RDS (`sg-07ba031fda87adb88`) on 5432.
+  **DATABASE_URL verified as `portal_admin@cello-portal-dev…/cello_portal`** — NOT the directory
+  instance; an earlier draft imported the wrong exports and that check is the one worth repeating.
+  **Deployed by hand with `aws cloudformation deploy`, NOT deploy.sh**, because deploy.sh cannot reach
+  its STEP 15: it exits on `cello-ecs-directory-dev`, which has failed on every run since at least
+  2026-07-16 (ALB drift across hibernate/wake — see
+  `docs/planning/discussion_logs/2026-07-25_0545_directory-stack-undeployable-alb-drift.md`).
+  Parameters used were exactly the ones STEP 15 computes.
+  **Function CODE is NOT in the stack** — CFN ships placeholders that raise; `deploy-lambdas.sh dev waitlist` owns it.
+
 - **`cello-portal-data.yaml`** → stack `cello-portal-data-dev` **[UPDATE_COMPLETE, 2026-07-25]**. SGs (portal-alb
   `sg-0640c459d8887e2b6` / portal-task `sg-00c0f6e65386bf534` / portal-db **`sg-07ba031fda87adb88`**), RDS Postgres
   **`cello-portal-dev.c9iokw02w3f8.us-east-1.rds.amazonaws.com:5432`** (db.t4g.micro, DB `cello_portal`,
