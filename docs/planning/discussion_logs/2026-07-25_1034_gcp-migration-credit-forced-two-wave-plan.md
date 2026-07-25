@@ -539,6 +539,71 @@ genuine architectural addition with its own attack surface.
 the post-launch roadmap** — promoted to the top of it if the cross-cloud VPN proves as painful in
 practice as it looks on paper, since it makes the VPN unnecessary rather than easier.
 
+### So what is the actual GCP↔AWS replication solution?
+
+The link has to be **bidirectional** — the AWS node both publishes to and subscribes from the GCP
+nodes. Three ways to get there.
+
+**Why the obvious one is fiddlier than it looks.** VPN + Cloud SQL private IP *is* supported, but
+Cloud SQL private IP lives in a Google-managed producer network attached by **Private Services
+Access**, which is a VPC peering — and **VPC peering is not transitive**. Google's docs are explicit:
+*"By default, on-premises hosts can't reach the service producer's network by using private services
+access."* Making it work needs four separate things, each of which fails **silently**:
+
+1. Export custom routes on the `servicenetworking` peering, so Cloud SQL learns the route back to AWS.
+2. Terminate the VPN in the **same** VPC as the private connection (no transitive hop).
+3. Configure Cloud Router custom advertisement of the PSA allocated range, so AWS learns the route
+   *to* Cloud SQL.
+4. Explicitly export any non-RFC 1918 ranges — Cloud SQL does not learn them by default.
+
+Four config steps, no error when one is missing, just a subscription that never replicates. On a
+consortium of three that is a bad ratio of ceremony to benefit.
+
+**The recommendation: drop Cloud SQL and run Postgres on the node VM.**
+
+This dissolves the problem rather than configuring around it, and it composes with the single-VM
+node shape already recommended in §6:
+
+- **PSA disappears entirely.** A VM's private IP is an ordinary VPC route — directly reachable over
+  the VPN with no peering, no transitivity, no custom route export. Four silent failure points
+  become zero.
+- **The Cloud SQL HA-subscriber restriction disappears** too (§5: HA instances cannot be logical
+  replication subscribers, which would have constrained production).
+- **It is markedly cheaper** — no managed instance per node, on top of the LB/NAT savings in §6.
+- **It makes a node a portable artifact.** This is the part that matters beyond cost: if a node
+  requires Cloud SQL, then "run a CELLO directory" means "have a GCP account." One VM with Postgres
+  runs identically on AWS, GCP, Azure, or bare metal. For a protocol that wants third-party
+  operators, requiring a specific managed database is exactly the lock-in the sovereignty invariant
+  exists to prevent. Nothing in the code wants Cloud SQL — the directory takes a `pg` connection
+  string.
+
+The cost is managed backups and patching. Backups are a `pg_dump` to object storage on a timer —
+and worth actually doing, because a node's **shares are not replicated** (§2), so its database is
+the only copy of them. At N=3/T=2 losing one node's shares is survivable, but it is not free.
+
+**For symmetry, do the same on AWS** — Postgres on the EC2 node rather than RDS. On a rebuild the
+symmetry is free, and it makes every node the same artifact.
+
+**Then the tunnel is the only question left, and it gets simpler.** With Postgres on VMs, any
+IP-level link works. Two options:
+
+- **Cloud VPN ↔ AWS Site-to-Site** — managed, ~2 tunnels for the SLA, fine for one AWS node. But it
+  does not generalise: pairwise cloud VPN gateways do not scale to nodes on three providers plus
+  bare metal.
+- **A WireGuard overlay between the node VMs** — provider-agnostic, cheap, and the same
+  configuration everywhere. It is the option that still works when the fourth node is on Azure and
+  the fifth is in somebody's rack.
+
+For N=3 with a single AWS node, either is defensible; **Cloud VPN is the lower-effort launch
+choice, WireGuard is the one that matches where the architecture is going.** Both become
+unnecessary if libp2p anti-entropy ever lands, which is the argument for not over-investing in
+whichever is picked.
+
+**Stopgap for early testing only:** Cloud SQL (or VM Postgres) with a public IP, TLS required, and
+an authorized-networks allowlist of the AWS egress IPs. Acceptable to unblock Wave 1 testing;
+**not** acceptable at launch, and never by making RDS publicly accessible — that puts the share
+store on the internet, which is not a trade a trust product should make.
+
 ### Narrowing what replicates is a separate, cheaper lever
 
 Worth noting because it is often confused with the topology question: the publication covers **21
@@ -894,11 +959,13 @@ isolation. Temporarily this means **all three directories on GCP** (N=3, no AWS 
 5. Relays: per region one VM, static IP, persistent disk for `WAL_DIR`, two secrets, firewall rule.
    No code changes — the relay has no AWS SDK and no database.
 6. Directories: the four adapters (Secret Manager, GCS ×2, Parameter Manager only if the
-   empty-registry test in §12 fails); Cloud SQL Postgres 18 per node, **no HA** (HA instances
-   cannot be logical-replication subscribers); the configurable-multiaddr fix at
-   `directory.ts:1095`.
-7. Replication: generalise `setup-replication.sh` off its three hardwired regions. Intra-GCP only
-   at this stage — native VPC, no VPN.
+   empty-registry test in §12 fails); **Postgres 18 on the node VM** rather than Cloud SQL (§5 —
+   this removes Private Service Access, the four silent route-export failure points, and the
+   HA-subscriber restriction); the configurable-multiaddr fix at `directory.ts:1095`. Add a
+   `pg_dump`-to-object-storage timer, since a node's shares exist nowhere else.
+7. Replication: generalise `setup-replication.sh` off its three hardwired regions, and raise
+   `max_logical_replication_workers` / `max_worker_processes` off their defaults now rather than
+   discovering the ceiling later (§4). Intra-GCP only at this stage — native VPC, no tunnel.
 8. Move the non-node workloads to GCP: **ops-agent, portal, waitlist**. The blocker is email —
    GCP has no first-party sending service and blocks outbound port 25, so plan on calling the
    **SES API over HTTPS** from GCP (pennies, and AWS is not going away anyway since we keep a node
@@ -912,9 +979,10 @@ isolation. Temporarily this means **all three directories on GCP** (N=3, no AWS 
 ### Wave 2 — bring AWS back as a consortium member
 
 11. Stand up the us-east-1 directory + relay pair fresh (no data to migrate).
-12. **One HA VPN**, us-east-1 ↔ the global GCP VPC with `--bgp-routing-mode=global` (§5). Verify
-    Cloud SQL private-IP reachability explicitly — the Private Service Access custom-route-export
-    trap in §5 is the likely failure and it fails silently.
+12. **One tunnel**, us-east-1 ↔ the global GCP VPC with `--bgp-routing-mode=global` — Cloud VPN
+    for least effort, WireGuard if we want the setup that generalises past two providers (§5).
+    With Postgres on VMs there is no PSA to route around, but still verify reachability
+    end-to-end before creating subscriptions.
 13. Re-sign the manifest so the AWS node replaces one GCP node, landing on **N=3: 1 AWS + 2 GCP**.
     Clients adopt by poll — no republish.
 14. **Prove the launch claim.** With GCP directories unreachable, confirm an existing agent can
