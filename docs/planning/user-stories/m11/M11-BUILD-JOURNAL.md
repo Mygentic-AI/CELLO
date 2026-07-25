@@ -3058,3 +3058,34 @@ run the binary, read the built output, exec the container.**
 **Still owed, and now visible rather than implied:** the GitHub remote (Andre's), an ECR repository,
 an ECS service + ALB + ACM cert + Route53 record for `operations.cello.mygentic.ai`, and a pipeline.
 None of that is written. The Dockerfile is, and it builds and runs.
+
+---
+
+## 2026-07-25 — the deploy that "was owed" was an entire stack
+
+`DOD-OPS-SHELL-1` said the remote and "a deploy" were owed. There was no ECR repository, no ECS
+service, no certificate, no DNS record and no Dockerfile — the deploy was not a step, it was a
+stack. It is written now: `infra/cloudformation/cello-ops-dashboard.yaml`, plus an opt-in step in
+deploy.sh.
+
+**It shares the portal's ALB.** A dedicated one is ~$16/month for a dashboard one person opens a few
+times a day, on a project explicitly short of runway. The cost is a cross-stack dependency
+CloudFormation will not protect anyone from — the listener lives in `cello-portal-app.yaml` — and
+the template says so where somebody will read it rather than in a commit message. The ALB ARNs are
+*resolved* by deploy.sh rather than imported, so adding the dashboard does not force a portal
+redeploy just to add exports.
+
+**Its own security group, not the portal's.** Sharing one couples two services that merely happen to
+sit behind the same load balancer, and a rule added for the portal would silently widen an operator
+surface whose blast radius is the whole waitlist.
+
+**Checked against the account, not against memory.** `cello-dev-portal-sg` is the obvious guess and
+does not exist — it is `cello-dev-portal-task-sg`, and that import would have failed at deploy time
+with an error about an export rather than about the guess behind it. Every other import was checked
+the same way, and a parameter-coverage check confirms deploy.sh passes everything without a default.
+
+**Behind `DEPLOY_OPS_DASHBOARD=1`, for an ordering reason rather than caution.** The service needs an
+image that does not exist. Nothing can push one: the repo has no GitHub remote, so there is no
+pipeline, and pushing from a laptop is forbidden outright. Deploying now yields a crash-looping
+service, the circuit breaker firing, and a rollback — noise with a confident-looking cause. The
+order is **repo → pipeline → image → deploy**, and only the first step is Andre's.
