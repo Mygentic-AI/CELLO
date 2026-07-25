@@ -2376,3 +2376,83 @@ subsystem rather than to the connection string.
 It also states the known gaps rather than leaving them to be rediscovered: E-re mails a daily visitor who
 never signs in, a rotated master password stales all twelve Lambdas, and two `status_note` kinds have a
 reader and no producer.
+
+---
+
+### Entry 51: the gate I shipped was a net loss, and the deploy found a week-old fault
+**Date:** 2026-07-25
+**Target:** DOD-INV-EMAIL-SEGMENTS, DOD-WAVE-ASSEMBLY-1, DOD-SCHEMA-1 [trustless-cello]
+
+Infra came back up mid-session. Two things happened: a review proved the verified gate from Entry 49 was
+worse than what it replaced, and the first real deploy surfaced a fault that predates this milestone.
+
+## The gate was a one-way door
+
+Entry 49 added `email_verified` to the dispatcher and I was pleased with it. A reviewer measured it and
+found the opposite of what the comment claimed.
+
+**The reversible skip was terminal after five minutes.** The skip returned the job to `pending` without
+resetting `attempts`, and `claim_jobs` refuses anything at `attempts >= MAX_ATTEMPTS`. The drain runs
+every minute. So an unverified user's `e2_survey` burned all five attempts in five minutes and became
+permanently unclaimable — while sitting in status `pending`, which reads as healthy, with no event, no
+alarm, and a batch summary of all zeros that is indistinguishable from an empty queue. The comment
+directly above the gate promised *"somebody who confirms on day three still receives the survey they were
+meant to get on day two"*. That is precisely what the code prevented.
+
+A retry budget exists to bound **failures**. Waiting for a user to confirm is not a failure, and must not
+spend it.
+
+**There was no route back from unverified.** `email_verified` was set only by the E1 link — enqueued once
+at signup, 24-hour token, no resend path. The gate's own comment said `e_magic_link` was how somebody who
+never confirmed signs in to fix it; that was falsified two Lambdas away, where the code stated in as many
+words that a magic link is *not* the verification. So the gate turned "missed the 24-hour window" into
+"receives no email of any kind, ever". Magic links now verify — redeeming one requires reading the
+mailbox, which is the entire claim `email_verified` makes.
+
+The lesson is narrower than "test more": **a flag that can only move one way needs a route back before
+anything is allowed to depend on it.** I added the dependency and never asked what the reverse edge was.
+
+## One fix collided with an index, which is how the real shape surfaced
+
+Filtering wave cohorts on `email_verified` was straightforward. The other half — that a *lapsed* grant
+should stop excluding its holder from future waves — produced a `23505` against
+`waitlist_tokens_one_live_per_user_idx`.
+
+The index and the cohort query had each independently decided what "live" means, and both said an unused
+expired token counts. Adding `AND expires_at > now()` to the query alone would let the cohort admit
+somebody the index then refuses a token to. And the obvious repair is unavailable: **a partial index
+predicate must be IMMUTABLE, and `now()` is not** — Postgres rejects it.
+
+So `0022` makes the lapse a *recorded fact* (`retired_at`) rather than a computation each reader repeats
+differently, and wave assembly reaps lapsed grants in the same transaction that reads them. Not a reuse of
+`used_at`: "redeemed" and "expired unredeemed" are different events, and collapsing them destroys the one
+number that says whether waves are the right size.
+
+## The deploy found something a week old
+
+`./infra/deploy.sh dev us-east-1` failed on `cello-ecs-directory-dev` — and had failed identically on
+**2026-07-16 and 2026-07-19**. The stack holds a listener ARN belonging to an ALB that hibernate deleted
+and wake recreated under a new ARN. CloudFormation reports `HttpListener` as `UPDATE_COMPLETE` while the
+listener it names does not exist, so `RegistryPathRule` fails with `NotFound`.
+
+Same species as the Route53 drift already in `infra/CLAUDE.md`, one layer up: **a stack in
+`UPDATE_COMPLETE` is not proof its resources exist.** It is invisible because the services are healthy —
+the *live* ALB is fine, only CFN's record of it is stale — and because directory is fatal in `deploy.sh`,
+every stack ordered after it is currently unshippable in dev.
+
+Not fixed here: protocol path, another agent owned the wake cycle, and a wrong repair on a drifted stack
+is worse than a known-broken one. Written up with a detection command and three options in
+[[2026-07-25_0545_directory-stack-undeployable-alb-drift]].
+
+## And a path that did not exist
+
+`DOD-SCHEMA-1` said "application to the portal RDS" was owed and never said how — because there was no
+how. The migrations live in a static-export repo that can never run them, and the portal RDS is
+`PubliclyAccessible: false` in a VPC with no peering to anything a laptop reaches. A VPC-attached
+migrate Lambda is the only thing both inside the network and runnable on demand.
+
+**Deployed:** `cello-waitlist-dev`, 63 resources, `api.cello.mygentic.ai` AVAILABLE, and `DATABASE_URL`
+verified as `portal_admin@…/cello_portal` — the check worth repeating, because an earlier draft imported
+the directory's exports and the failure mode reads as a migration problem.
+
+**Runs:** 423 tests green.
