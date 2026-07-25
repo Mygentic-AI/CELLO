@@ -730,8 +730,20 @@ def test_recent_points_count_as_activity(mailer):
     assert sweep_re(mailer)["re_engage_enqueued"] == 0
 
 
-def test_a_recent_visit_counts_as_activity(mailer):
-    uid = dormant_user("visitor@example.test")
+def test_a_page_view_does_not_protect_and_that_is_a_known_gap(mailer):
+    """Documents the gap rather than pretending it is covered.
+
+    An earlier version of the sweep also checked waitlist_touchpoints and its
+    docstring claimed that covered "arrived on the site". It did not: the only
+    writer of that table is the signup handler, inserting the pre-signup
+    localStorage trail once. For anyone older than sixty days every row predates
+    the thirty-day window, so the clause could never fire — a guard that read as
+    protective and stopped anyone looking for the real one.
+
+    So this asserts the CURRENT truth: a touchpoint does not protect. When a
+    post-signup pageview writer exists, this test is the one that should flip.
+    """
+    uid = dormant_user("viewer@example.test")
     conn = psycopg2.connect(PGURL)
     conn.autocommit = True
     with conn.cursor() as cur:
@@ -743,7 +755,10 @@ def test_a_recent_visit_counts_as_activity(mailer):
         )
     conn.close()
 
-    assert sweep_re(mailer)["re_engage_enqueued"] == 0
+    assert sweep_re(mailer)["re_engage_enqueued"] == 1, (
+        "a page view does not currently protect anyone — if this starts failing, "
+        "a pageview writer was added and the sweep should consider it"
+    )
 
 
 def test_a_recent_sign_in_counts_as_activity(mailer):
@@ -807,3 +822,53 @@ def test_the_sweep_does_not_drain_the_queue(mailer):
 
     assert "sent" not in result
     assert mailer.fake.sent == []
+
+
+def test_activity_just_inside_the_quiet_window_still_protects(mailer):
+    """Pins the NEAR side of the 30-day boundary.
+
+    The far side was already covered (activity 120 days ago does not protect),
+    which left the window free to collapse: setting it to 1 day kept every test
+    green while the sweep mailed people who were on the site yesterday.
+    """
+    uid = dormant_user("recent@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO points_ledger (waitlist_user_id, points, reason, created_at) "
+            "VALUES (%s, 20, 'survey', now() - interval '29 days')",
+            (uid,),
+        )
+    conn.close()
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 0, (
+        "activity 29 days ago is inside the 30-day quiet window and must protect"
+    )
+
+
+def test_a_user_just_under_sixty_days_old_is_not_swept(mailer):
+    """Pins the NEAR side of the 60-day boundary.
+
+    The only age test used 30 days, so any threshold in (30, 61] stayed green —
+    the DoD's "60 days" was unpinned and could have silently become 31.
+    """
+    dormant_user("young@example.test", age_days=59)
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 0
+
+
+def test_the_sweep_is_bounded_so_a_backfill_cannot_starve_confirmations(mailer, monkeypatch):
+    """Every enqueued row gets scheduled_at = now(), and claim_jobs orders by
+    scheduled_at — so an unbounded first run puts the entire dormant backlog
+    AHEAD of every confirmation email enqueued afterwards."""
+    for i in range(5):
+        dormant_user(f"backlog{i}@example.test")
+    monkeypatch.setattr(mailer, "RE_ENGAGE_BATCH", 2)
+
+    assert sweep_re(mailer)["re_engage_enqueued"] == 2, "the batch bound must apply"
+
+    # And it self-drains, because the sweep is daily and idempotent.
+    assert sweep_re(mailer)["re_engage_enqueued"] == 2
+    assert sweep_re(mailer)["re_engage_enqueued"] == 1
+    assert sweep_re(mailer)["re_engage_enqueued"] == 0

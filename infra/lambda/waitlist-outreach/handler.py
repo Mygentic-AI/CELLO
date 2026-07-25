@@ -271,8 +271,9 @@ def complete_call(body, correlation_id):
             # Same rule as Day 6: only tell them if something arrived. A note
             # saying invites were granted when the ceiling was already reached
             # sends them looking for codes that do not exist.
+            noted = 0
             if issued:
-                note(
+                noted = note(
                     cur,
                     user_id,
                     "call_invites_granted",
@@ -287,8 +288,9 @@ def complete_call(body, correlation_id):
             waitlistId=user_id,
             completedBy=completed_by,
             invitesIssued=issued,
+            notesWritten=noted,
         )
-        return {"granted": issued, "total": CALL_COMPLETED_TOTAL}
+        return {"granted": issued, "total": CALL_COMPLETED_TOTAL, "notes_written": noted}
 
     except Exception:
         conn.rollback()

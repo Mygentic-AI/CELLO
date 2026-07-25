@@ -409,6 +409,19 @@ def handle_session(headers, origin, correlation_id):
                 (session["waitlist_user_id"],),
             )
             prefs = cur.fetchone()
+
+            # THE READER for status_notes. Without one the Day-6 sweep grants two
+            # premium invite codes and writes a note nobody ever sees, which is
+            # the exact failure 0021_status_notes.sql opens by describing — a
+            # reward nobody is told about is not a reward. A write with no reader
+            # is invisible to a green test suite, so it has to be looked for.
+            cur.execute(
+                "SELECT kind, body, created_at FROM status_notes "
+                "WHERE waitlist_user_id = %s AND dismissed_at IS NULL "
+                "ORDER BY created_at DESC LIMIT 10",
+                (session["waitlist_user_id"],),
+            )
+            notes = cur.fetchall()
     finally:
         conn.close()
 
@@ -433,6 +446,10 @@ def handle_session(headers, origin, correlation_id):
                 for r in breakdown
             ],
             "content_alerts": prefs["content_alerts"],
+            "notes": [
+                {"kind": n["kind"], "body": n["body"], "created_at": n["created_at"].isoformat()}
+                for n in notes
+            ],
         },
         origin,
     )

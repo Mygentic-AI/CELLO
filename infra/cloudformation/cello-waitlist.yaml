@@ -1093,7 +1093,11 @@ Resources:
     Type: AWS::Events::Rule
     Properties:
       Name: !Sub "cello-waitlist-re-engage-${Environment}"
-      Description: E-re 60-day re-engagement sweep. Daily, before the feedback sweeps.
+      # 06:23, which is AFTER the feedback sweep at 06:17 and before the
+      # outreach one at 06:47. An earlier version of this line said "before
+      # the feedback sweeps", which the crons contradicted — a wrong
+      # ordering claim on a resource where ordering was chosen deliberately.
+      Description: E-re 60-day re-engagement sweep. Daily, between the feedback and outreach sweeps.
       ScheduleExpression: "cron(23 6 * * ? *)"
       State: ENABLED
       Targets:

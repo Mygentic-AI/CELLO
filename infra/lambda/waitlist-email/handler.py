@@ -413,6 +413,7 @@ def schedule_next_nurture(conn, job, correlation_id):
 
 RE_ENGAGE_AFTER_DAYS = int(os.environ.get("EMAIL_RE_ENGAGE_AFTER_DAYS", "60"))
 RE_ENGAGE_QUIET_DAYS = int(os.environ.get("EMAIL_RE_ENGAGE_QUIET_DAYS", "30"))
+RE_ENGAGE_BATCH = int(os.environ.get("EMAIL_RE_ENGAGE_BATCH", "500"))
 
 
 def sweep_re_engagement(correlation_id):
@@ -425,13 +426,26 @@ def sweep_re_engagement(correlation_id):
     any prior email went out, and which can become true long afterwards.
 
     WHAT COUNTS AS ACTIVITY, since the DoD says "no activity" and the schema has
-    no last_activity_at column. Three things the user themselves did:
+    no last_activity_at column. TWO things the user themselves did:
       - earned points (survey, share conversion, a post)  → points_ledger
-      - arrived on the site                               → waitlist_touchpoints
       - signed in to their status page                    → waitlist_sessions
-    Deliberately NOT "we sent them an email", which is our activity, not theirs
-    — counting it would mean the drip keeps somebody looking permanently active
-    while they ignore every message.
+
+    NOT page views, and this is a correction rather than an omission. An earlier
+    version also checked waitlist_touchpoints and its docstring claimed that
+    covered "arrived on the site". It does not: the ONLY writer of that table is
+    the signup handler, inserting the visitor's pre-signup localStorage trail in
+    one shot. Nothing records a touchpoint afterwards, so for anyone older than
+    sixty days every row predates the thirty-day window and the clause could
+    never fire. A guard that reads as protective and cannot fire is worse than
+    no guard, because it stops the next person looking for the real one.
+
+    The consequence, stated plainly: somebody who visits the site every day but
+    never signs in and never earns a point will receive this email. Closing that
+    needs a post-signup pageview writer, which does not exist yet — see the DoD.
+
+    Deliberately NOT "we sent them an email" either, which is our activity, not
+    theirs — counting it would keep somebody looking permanently active while
+    they ignore every message.
 
     ONCE, EVER. The guard is "no e_re_engage row exists for this user", so a
     sweep that runs twice a day, or is replayed after a partial failure, enqueues
@@ -462,18 +476,25 @@ def sweep_re_engagement(correlation_id):
                           AND l.created_at > now() - make_interval(days => %(quiet)s)
                   )
                   AND NOT EXISTS (
-                        SELECT 1 FROM waitlist_touchpoints t
-                        WHERE t.waitlist_user_id = u.waitlist_id
-                          AND t.ts > now() - make_interval(days => %(quiet)s)
-                  )
-                  AND NOT EXISTS (
                         SELECT 1 FROM waitlist_sessions s
                         WHERE s.waitlist_user_id = u.waitlist_id
                           AND s.created_at > now() - make_interval(days => %(quiet)s)
                   )
+                -- BOUNDED. Without a limit the first run enqueues the entire
+                -- dormant backlog at scheduled_at = now(), and claim_jobs orders
+                -- by scheduled_at — so every backfilled E-re sits AHEAD of every
+                -- e1_confirm enqueued afterwards. At 25 jobs a minute a 100k
+                -- backlog is ~67 hours during which a brand-new signup's
+                -- confirmation waits behind it while the page says "check your
+                -- inbox". The sweep is daily and idempotent, so it self-drains.
+                LIMIT %(batch)s
                 RETURNING user_id
                 """,
-                {"after": RE_ENGAGE_AFTER_DAYS, "quiet": RE_ENGAGE_QUIET_DAYS},
+                {
+                    "after": RE_ENGAGE_AFTER_DAYS,
+                    "quiet": RE_ENGAGE_QUIET_DAYS,
+                    "batch": RE_ENGAGE_BATCH,
+                },
             )
             enqueued = cur.fetchall()
         conn.commit()

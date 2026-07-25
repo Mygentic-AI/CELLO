@@ -648,3 +648,80 @@ def test_the_alert_confirm_page_carries_its_scope(auth):
 
     assert 'name="list" value="content_alerts"' in body["html"]
     assert "waitlist emails are unaffected" in body["html"].lower()
+
+
+# ── status_notes have a READER (DOD-FEEDBACK-OUTREACH-1 Day-6 clause) ─────────
+
+
+def signed_in(auth, email):
+    """A user with a live session cookie, using this file's existing idiom."""
+    uid = make_user(email)
+    request_link(auth, email)
+    verify, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token_for(uid))})
+    return uid, verify["headers"]["Set-Cookie"].split(";")[0]
+
+
+def session_body(auth, cookie):
+    _, body = call(auth, "GET", "/waitlist/auth/session", cookie=cookie)
+    return body
+
+
+def make_note(uid, kind="feedback_invites_granted", body="Two premium invites are on your account."):
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO status_notes (waitlist_user_id, kind, body) VALUES (%s, %s, %s) RETURNING id",
+            (uid, kind, body),
+        )
+        nid = cur.fetchone()[0]
+    conn.close()
+    return nid
+
+
+def test_the_session_carries_live_status_notes(auth):
+    """A write with no reader is invisible to a green test suite.
+
+    The Day-6 sweep grants two premium invite codes and writes a note saying so.
+    Until this endpoint returned it, the user was granted the codes with nothing
+    anywhere telling them the codes existed — the exact failure the migration
+    that created the table opens by describing.
+    """
+    uid, cookie = signed_in(auth, "noted@example.test")
+    make_note(uid)
+
+    body = session_body(auth, cookie)
+
+    assert [n["kind"] for n in body["notes"]] == ["feedback_invites_granted"]
+    assert "premium invites" in body["notes"][0]["body"]
+
+
+def test_a_dismissed_note_is_not_returned(auth):
+    uid, cookie = signed_in(auth, "dismissed@example.test")
+    nid = make_note(uid)
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE status_notes SET dismissed_at = now() WHERE id = %s", (nid,))
+    conn.close()
+
+    assert session_body(auth, cookie)["notes"] == []
+
+
+def test_one_users_note_never_reaches_another(auth):
+    """The correlation, asserted. An uncorrelated query would show every user
+    every note — including one naming invites they do not hold."""
+    other = make_user("other@example.test")
+    make_note(other)
+    _, cookie = signed_in(auth, "mine@example.test")
+
+    assert session_body(auth, cookie)["notes"] == []
+
+
+def test_notes_is_always_present_even_when_empty(auth):
+    """An absent key and an empty list are different things to a client. The
+    status page renders `session.notes?.length > 0`; a missing key would work by
+    accident today and break the first time somebody writes `notes.map`."""
+    _, cookie = signed_in(auth, "nonotes@example.test")
+
+    assert session_body(auth, cookie)["notes"] == []
