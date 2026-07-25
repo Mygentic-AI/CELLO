@@ -2889,7 +2889,9 @@ avoids the refusal vocabulary: sending somebody to hunt for an invitation token 
 our Lambda is the same error substitution as F2, one layer up.
 
 **F7 — every inbound message was an unbounded Lambda invocation and portal-DB query.** Not a
-guessing risk (60 bits), a cost one. Five per hour per channel user, checked before the call. Per
+guessing risk — a waitlist token is a `gen_random_uuid()`, 122 bits — but a cost one. (The
+first version of this note said 60 bits, having reached for the referral-code alphabet; live-testing
+the deployed gate corrected it, since a 12-character code comes back `token_malformed`.) Five per hour per channel user, checked before the call. Per
 user, because a per-record counter resets when the record does and a shared one is a DoS against
 everybody else — both are revert tests.
 
