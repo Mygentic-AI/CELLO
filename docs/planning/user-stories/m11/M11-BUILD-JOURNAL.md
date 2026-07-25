@@ -2219,3 +2219,31 @@ governs queue positions, applied to a date.
 
 **Status:** 🟠 → 🟡. What remains is (a) Google Search Console property verification and (b) the GA4
 script — both outward actions.
+
+---
+
+### Entry 47: the receipt footer is sequenced behind DNS, not blocked by it
+**Date:** 2026-07-25
+**Target:** DOD-GALLERY-RECEIPT-1 [cello-client]
+
+Recorded so the next pass does not spend time rediscovering the shape of this, and does not build it in
+the wrong order.
+
+The footer itself is small: `cello_get_sealed_receipt` already returns `{ ok, session_id, session_name,
+sealed_root, legibility }`, so the change is one `verify_url` field derived from `sealed_root`, plus the
+line the CLI and MCP print. Well inside what is buildable on this laptop.
+
+**It must not land first.** The URL it advertises is `gallery.cello.mygentic.ai/receipt/{hash}`, and that
+host does not resolve yet. The nginx server block exists in `deploy/cello-site.conf` — written in Entry
+33 — but the DNS record and the site deploy do not. Shipping the footer now means every sealed session in
+the product prints a link that 404s, on a product whose entire claim is that things can be verified. That
+is worse than no footer: an unverifiable "Verified by CELLO" is an argument against the thing it
+advertises.
+
+**And it reaches operators only on upgrade.** cello-client is a heavy local node, not a server-side
+rollout — the footer appears for a given operator when they update their install, so shipping it early
+does not get it in front of anyone sooner.
+
+**Correct order:** DNS record → site deploy → confirm the gallery serves a real receipt → then the
+footer, then a client publish. Recorded as a sequencing dependency rather than parked, because nothing
+about it is undecided.
