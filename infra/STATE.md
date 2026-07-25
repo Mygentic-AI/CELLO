@@ -60,6 +60,32 @@ flaky FROST/session test for weeks.
 
 ---
 
+## 🟢 OPS DASHBOARD IS LIVE — operations.cello.mygentic.ai (2026-07-25)
+
+`cello-ops-dashboard-dev` CREATE_COMPLETE; ECS service 1/1; DNS resolves; `/sign-in` 200 over HTTPS.
+Image `cello-ops-dashboard:096cea1`, **built by GitHub Actions and pushed via OIDC — never from a
+laptop.** Shares the `cello-portal-dev` ALB via a host `ListenerRule` + `ListenerCertificate`, so no
+second load balancer exists.
+
+**Its four `ops_*` migrations applied to `cello_portal` at boot** (`ops.migrate.complete`), from
+`scripts/migrate.mjs` run by the container CMD before `server.js`.
+
+**New secret, now in IaC:** `cello/ops/allowed-emails` (added to `cello-secrets.yaml` with a
+PLACEHOLDER; the real value set out-of-band, as an access list must never live in git). It currently
+holds `apemmelaar@gmail.com` and `andre@mygentic.ai`. The dashboard **fails closed** on anything it
+cannot parse, which is what happened on first deploy — sign-in returned its usual 202 and silently
+sent nothing.
+
+**Three things bit, in order, and each looked healthy from outside:**
+1. The allowlist secret did not exist → identical 202s, no mail.
+2. Nothing had ever created `ops_sessions` / `ops_magic_links` / `ops_magic_link_requests`. The
+   Dockerfile skipped `migrations/` on the reasoning that the waitlist migrate Lambda owns the
+   shared ledger — true, but that Lambda bundles only the WAITLIST files.
+3. Running migrations from `instrumentation.ts` could not be BUILT: Next compiles it for the edge
+   runtime, where `pg`'s builtins do not resolve. Hence the pre-start script.
+
+---
+
 ## 🟢 ECR repo `cello-ops-dashboard` CREATED (2026-07-25)
 
 `aws cloudformation deploy` on `cello-ecr-dev` — additive, no other resource changed.
