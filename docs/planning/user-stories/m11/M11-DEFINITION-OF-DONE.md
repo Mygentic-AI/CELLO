@@ -336,6 +336,31 @@ These are not DoD lines — they are the real-world checks that determine whethe
 ---
 
 ## Parked
+
+### Live verification, 2026-07-25 evening
+
+Run against the deployed system, no browser needed. Recorded once here rather than rewritten into
+each line.
+
+- **signup** — `{success, waitlist_id, referral_code}`; a repeat address returns **409
+  `email_already_registered`**, not a 500.
+- **referral attribution** — a valid `ref` returns `{applied:true, kind:'share', points_awarded:10}`;
+  an unknown code returns `{applied:false, reason:'unknown_code'}` and awards nothing.
+- **E1 send** — `cello-waitlist-email-dev` drained the queue and reported `{sent:1, failed:0}`: a real
+  `send_raw_email` through the configuration set.
+- **no-enumeration** — `/waitlist/auth/request` is byte-identical for a real address and an invented
+  one.
+- **wave gate** — `capacity` alone is refused `invalid_capacity`; with a capacity but no operator,
+  refused `missing_opened_by` ("every wave names the operator who opened it"); with both, it declines
+  to open a wave at all: `{admitted:0, reason:'all_unverified', waiting_total:8,
+  excluded_unverified:8}`. Real counts, no wave invented to look busy.
+- **gallery** — list serves; publish refuses a bogus payload 400; an unknown hash 404.
+- **tracking** — the script is present on all 12 deployed pages.
+- **protocol** — 8/8 smoke scenarios green against live staging, exit 0.
+
+Every one of these is the SERVER half. The client halves — localStorage touchpoints, `ref`
+extraction, the session cookie round-trip, copy buttons — remain unrun, because curl does not execute
+JavaScript. No line goes ✅ on the strength of the above alone.
 *(Genuine undecidable forks. Never silently dropped.)*
 
 - **I VIOLATED `DOD-INV-NO-DIRECTORY-RELAY` AND IT COST A 3-REGION DIRECTORY DEPLOY (2026-07-25).**
