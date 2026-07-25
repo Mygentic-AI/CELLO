@@ -158,6 +158,15 @@ Outputs:
     Value: !Ref PortalTaskSg
     Export:
       Name: !Sub "cello-${Environment}-portal-task-sg"
+  # Exported so another stack can grant itself 5432 to THIS database. Without
+  # it the only DB security group reachable by cross-stack reference is the
+  # directory's (cello-${env}-rds-sg from cello-vpc.yaml), and a stack that
+  # needs the portal DB will reach for that one and appear to work — which is
+  # exactly what happened to cello-waitlist.yaml on its first draft.
+  PortalDbSgId:
+    Value: !Ref PortalDbSg
+    Export:
+      Name: !Sub "cello-${Environment}-portal-db-sg"
   PortalCertificateArn:
     Value: !Ref PortalCertificate
     Export:

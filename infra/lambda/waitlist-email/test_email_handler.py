@@ -37,6 +37,11 @@ class FakeSES:
 def mailer(database, monkeypatch):
     os.environ["DATABASE_URL"] = PGURL
     os.environ["PGSSLMODE"] = "disable"
+    # Required in production and therefore required here. Set on the fixture
+    # rather than defaulted in the handler: a default would mean a real
+    # deployment that forgot it still sends, emitting no bounce events and
+    # silently disabling suppression.
+    os.environ["WAITLIST_SES_CONFIG_SET"] = "cello-waitlist-test"
     mod = load_lambda(Path(__file__).parent, "email_handler")
     fake = FakeSES()
     monkeypatch.setattr(mod, "ses", lambda: fake)
@@ -556,3 +561,57 @@ def test_a_future_e2_is_not_sent_today(mailer):
 
     assert counts["sent"] == 0
     assert mailer.fake.sent == []
+
+
+def test_sending_without_a_configuration_set_refuses_instead_of_sending(mailer, monkeypatch):
+    """SES only emits bounce and complaint events for mail sent WITH a
+    configuration set. Send without one and every message still leaves, nothing
+    errors, and deliverability looks fine — while no bounce ever reaches the SNS
+    topic, so email_status is never set to bounced or complained and
+    DOD-INV-EMAIL-SUPPRESS quietly stops being enforced. That failure is
+    invisible for exactly as long as it takes to burn the sending domain."""
+    uid = make_user("nocfg@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO email_jobs (user_id, template, scheduled_at) "
+            "VALUES (%s, 'e1_confirm', now())",
+            (uid,),
+        )
+    conn.close()
+
+    monkeypatch.setattr(mailer, "SES_CONFIG_SET", None)
+
+    with pytest.raises(RuntimeError, match="WAITLIST_SES_CONFIG_SET"):
+        mailer.lambda_handler({}, None)
+
+    assert mailer.fake.sent == [], "nothing may go out without a configuration set"
+
+    # And the refusal happens BEFORE the claim, so no row is stranded in
+    # 'sending' waiting on the reclaim window for a fault unrelated to it.
+    conn = psycopg2.connect(PGURL)
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM email_jobs WHERE user_id = %s", (uid,))
+        assert [r[0] for r in cur.fetchall()] == ["pending"]
+    conn.close()
+
+
+def test_every_send_carries_the_configuration_set(mailer):
+    """The positive half: without this the guard above could be satisfied by a
+    handler that checks the variable and then never passes it to SES."""
+    uid = make_user("withcfg@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO email_jobs (user_id, template, scheduled_at) "
+            "VALUES (%s, 'e1_confirm', now())",
+            (uid,),
+        )
+    conn.close()
+
+    mailer.lambda_handler({}, None)
+
+    assert len(mailer.fake.sent) == 1
+    assert mailer.fake.sent[0]["ConfigurationSetName"] == "cello-waitlist-test"

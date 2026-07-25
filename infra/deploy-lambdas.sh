@@ -174,34 +174,49 @@ waitlist_assert_imports_resolve() {
   python3 - "${stage_dir}" "${name}" <<'PY'
 import ast, pathlib, sys
 
+# SUBTRACTIVE, not a name pattern. The first version only checked roots starting
+# with '_', on the theory that sibling modules in this repo always do. They do
+# not: waitlist-email/handler.py does `from templates import TEMPLATES` inside a
+# function body, so a missing templates.py passed the check AND survived cold
+# start, failing later on the first job that rendered a template. Now every
+# import root is collected and only stdlib and what is physically in the stage
+# are subtracted — whatever is left is the finding, whatever it happens to be
+# called. This also catches a handler that grows a `requests` import nobody
+# added to the package.
 stage, name = pathlib.Path(sys.argv[1]), sys.argv[2]
-present = {p.stem for p in stage.glob("*.py")}
-# Everything else is either stdlib or vendored into the stage by pip.
-vendored = {p.name for p in stage.iterdir()} | {p.stem for p in stage.glob("*.py")}
+
+present = {p.stem for p in stage.glob("*.py")} | {p.name for p in stage.iterdir() if p.is_dir()}
+# Distribution directories are not import names (psycopg2_binary-2.9.9.dist-info).
+present |= {d.name.split("-")[0] for d in stage.iterdir() if d.is_dir()}
+stdlib = set(getattr(sys, "stdlib_module_names", set()))
+# Shipped inside the AWS Lambda Python runtime itself, so present at execution
+# without being in the zip. Named EXPLICITLY and kept to exactly these two —
+# a broad "well-known packages" allowlist would let a genuinely missing
+# dependency through, which is the failure this check exists to prevent.
+RUNTIME_PROVIDED = {"boto3", "botocore"}
+stdlib |= RUNTIME_PROVIDED
 
 missing = set()
 for src in stage.glob("*.py"):
     tree = ast.parse(src.read_text(), filename=str(src))
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            root = node.module.split(".")[0]
+        roots = []
+        if isinstance(node, ast.ImportFrom):
+            # level > 0 is a relative import — resolved within the package, not
+            # by top-level name.
+            if node.level == 0 and node.module:
+                roots = [node.module.split(".")[0]]
         elif isinstance(node, ast.Import):
-            for alias in node.names:
-                root = alias.name.split(".")[0]
-                # A sibling module in this repo always starts with '_' or is a
-                # known local name; third-party and stdlib never do.
-                if root.startswith("_") and root not in present:
-                    missing.add(root)
-            continue
-        else:
-            continue
-        if root.startswith("_") and root not in present:
-            missing.add(root)
+            roots = [a.name.split(".")[0] for a in node.names]
+        for root in roots:
+            if root not in stdlib and root not in present:
+                missing.add(root)
 
 if missing:
     print(
-        f"FAIL: waitlist-{name} imports {sorted(missing)} but those modules are not in the "
-        f"package. The zip would deploy and then ImportError on first invocation.",
+        f"FAIL: waitlist-{name} imports {sorted(missing)}, which is neither stdlib nor "
+        f"present in the package. The zip would deploy and then fail on import — possibly "
+        f"not at cold start, if the import sits inside a function.",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -270,10 +285,21 @@ deploy_waitlist_function() {
 # writer to the same rows with no coordination. The sovereign-node rule governs
 # directory and relay nodes — the waitlist is not one, it is a single global
 # service like the ops-agent.
+# $1 = "explicit" when the operator asked for the waitlist by name. Asking for it
+# in another region is an error worth stopping on; reaching it via `all` is not,
+# because `all` legitimately runs in every region for the rotation Lambda. The
+# first version hard-exited in both cases, which turned the previously-working
+# `deploy-lambdas.sh dev all eu-central-1` into a failure AFTER it had already
+# deployed rotation — and webhook/filter, also us-east-1-only, skip silently in
+# exactly that situation.
 deploy_waitlist() {
   if [[ -n "${REGION_OVERRIDE}" && "${REGION_OVERRIDE}" != "${PRIMARY_REGION}" ]]; then
-    echo "ERROR: waitlist Lambdas are ${PRIMARY_REGION}-only; refusing to deploy to ${REGION_OVERRIDE}." >&2
-    exit 1
+    if [[ "${1:-}" == "explicit" ]]; then
+      echo "ERROR: waitlist Lambdas are ${PRIMARY_REGION}-only; refusing to deploy to ${REGION_OVERRIDE}." >&2
+      exit 1
+    fi
+    log "Skipping waitlist functions — ${PRIMARY_REGION}-only, and ${REGION_OVERRIDE} was requested."
+    return 0
   fi
   for name in "${WAITLIST_FUNCTIONS[@]}"; do
     deploy_waitlist_function "${name}"
@@ -294,7 +320,7 @@ case "${TARGET}" in
   webhook)  deploy_webhook_receiver ;;
   filter)   deploy_pipeline_filter ;;
   rotation) deploy_rds_rotation ;;
-  waitlist) deploy_waitlist ;;
+  waitlist) deploy_waitlist explicit ;;
   all)      deploy_webhook_receiver && deploy_pipeline_filter && deploy_rds_rotation && deploy_waitlist ;;
   *)
     echo "ERROR: target must be one of: webhook, filter, rotation, waitlist, all" >&2

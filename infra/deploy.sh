@@ -1058,44 +1058,85 @@ if [[ "${REGION}" == "us-east-1" ]]; then
   # is silently empty produces a stack that deploys, reports healthy, and cannot
   # do its job. Failing here names the missing thing instead.
 
-  WAITLIST_RDS_ENDPOINT=$(aws cloudformation list-exports --region "${REGION}" \
-    --query "Exports[?Name=='cello-${ENVIRONMENT}-rds-endpoint'].Value" --output text 2>/dev/null || echo "")
-  WAITLIST_RDS_PORT=$(aws cloudformation list-exports --region "${REGION}" \
-    --query "Exports[?Name=='cello-${ENVIRONMENT}-rds-port'].Value" --output text 2>/dev/null || echo "")
-  WAITLIST_SECRET_ARN=$(aws cloudformation list-exports --region "${REGION}" \
-    --query "Exports[?Name=='cello-${ENVIRONMENT}-rds-master-secret-arn'].Value" --output text 2>/dev/null || echo "")
+  # PORTAL exports, never the directory's. `cello-${env}-rds-*` is the DIRECTORY
+  # instance (database cello_${env}, user postgres, agent profiles under pgaudit);
+  # `cello-${env}-portal-db-*` is the one the waitlist schema lives in. The names
+  # are one word apart, the first draft used the wrong pair, and the resulting
+  # failure would have been `42P01 undefined_table` on waitlist_users — an error
+  # that sends you to the migration subsystem, not to "you are connected to the
+  # wrong database". DOD-INV-SINGLE-DB calls that connection string a blocking
+  # finding, and the credential it would have copied into twelve Lambdas is the
+  # directory master password that cello-rotation.yaml withholds from every role.
+  #
+  # resolve() distinguishes CANNOT-LOOK-UP from GENUINELY-ABSENT. The first draft
+  # used `2>/dev/null || echo ""`, which collapsed a denied IAM call, expired
+  # credentials and a wrong profile into the same message as a missing resource —
+  # sending the operator to check RDS when the fault was in IAM.
+  resolve() {
+    local what="$1"; shift
+    local out rc
+    out=$("$@" 2>&1); rc=$?
+    if [[ ${rc} -ne 0 ]]; then
+      waitlist_failed+=("${what}: the lookup itself failed — ${out%%$'\n'*}")
+      printf ''
+      return 0
+    fi
+    [[ "${out}" == "None" ]] && out=""
+    printf '%s' "${out}"
+  }
+
+  export_value() {
+    aws cloudformation list-exports --region "${REGION}" \
+      --query "Exports[?Name=='$1'].Value" --output text
+  }
+
+  waitlist_failed=()
+  waitlist_missing=()
+
+  WAITLIST_DB_HOST=$(resolve "portal db endpoint" export_value "cello-${ENVIRONMENT}-portal-db-endpoint")
+  WAITLIST_DB_PORT=$(resolve "portal db port" export_value "cello-${ENVIRONMENT}-portal-db-port")
+  WAITLIST_SECRET_ARN=$(resolve "portal db secret arn" export_value "cello-${ENVIRONMENT}-portal-db-master-secret-arn")
 
   # The RDS-managed master secret. Read at deploy time, never stored in the repo.
+  # Percent-encoded before going into a URI: RDS-generated passwords exclude / @ "
+  # and space, but not % ? or #, each of which corrupts a libpq URI and surfaces
+  # as an authentication failure rather than an encoding one.
   WAITLIST_DB_PASSWORD=""
   if [[ -n "${WAITLIST_SECRET_ARN}" ]]; then
-    WAITLIST_DB_PASSWORD=$(aws secretsmanager get-secret-value --region "${REGION}" \
-      --secret-id "${WAITLIST_SECRET_ARN}" --query 'SecretString' --output text 2>/dev/null \
-      | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])' 2>/dev/null || echo "")
+    WAITLIST_DB_PASSWORD=$(resolve "portal db password" \
+      aws secretsmanager get-secret-value --region "${REGION}" \
+        --secret-id "${WAITLIST_SECRET_ARN}" --query 'SecretString' --output text \
+      | python3 -c 'import json,sys,urllib.parse; print(urllib.parse.quote(json.load(sys.stdin)["password"], safe=""))' 2>/dev/null || echo "")
   fi
 
-  # The ACM certificate for the API custom domain. Looked up by domain rather
-  # than hardcoded — a recreated certificate gets a new ARN, and a stale hardcoded
-  # one fails the deploy with an unrelated-looking error.
+  [[ -z "${WAITLIST_DB_HOST}" ]] && waitlist_missing+=("export cello-${ENVIRONMENT}-portal-db-endpoint (is cello-portal-data deployed?)")
+  [[ -z "${WAITLIST_DB_PORT}" ]] && waitlist_missing+=("export cello-${ENVIRONMENT}-portal-db-port")
+  [[ -z "${WAITLIST_DB_PASSWORD}" ]] && waitlist_missing+=("portal db master password from ${WAITLIST_SECRET_ARN:-<no secret arn export>}")
+
   WAITLIST_API_DOMAIN="api.${DOMAIN_NAME}"
-  WAITLIST_CERT_ARN=$(aws acm list-certificates --region "${REGION}" \
-    --certificate-statuses ISSUED \
-    --query "CertificateSummaryList[?DomainName=='${WAITLIST_API_DOMAIN}' || DomainName=='*.${DOMAIN_NAME}'].CertificateArn | [0]" \
-    --output text 2>/dev/null || echo "")
 
-  waitlist_missing=()
-  [[ -z "${WAITLIST_RDS_ENDPOINT}" || "${WAITLIST_RDS_ENDPOINT}" == "None" ]] && waitlist_missing+=("rds endpoint export cello-${ENVIRONMENT}-rds-endpoint")
-  [[ -z "${WAITLIST_RDS_PORT}" || "${WAITLIST_RDS_PORT}" == "None" ]] && waitlist_missing+=("rds port export cello-${ENVIRONMENT}-rds-port")
-  [[ -z "${WAITLIST_DB_PASSWORD}" ]] && waitlist_missing+=("rds master password from ${WAITLIST_SECRET_ARN:-<no secret arn export>}")
-  [[ -z "${WAITLIST_CERT_ARN}" || "${WAITLIST_CERT_ARN}" == "None" ]] && waitlist_missing+=("ACM certificate for ${WAITLIST_API_DOMAIN} or *.${DOMAIN_NAME} in ${REGION}")
-
-  if [[ ${#waitlist_missing[@]} -gt 0 ]]; then
+  # A lookup that FAILED is not the same as a resource that is ABSENT, and it is
+  # reported separately so the operator is sent to IAM rather than to RDS.
+  if [[ ${#waitlist_failed[@]} -gt 0 ]]; then
+    echo ""
+    echo "── cello-waitlist — could not determine prerequisites ────────────────" >&2
+    for f in "${waitlist_failed[@]}"; do echo "     ${f}" >&2; done
+    echo "     These are lookup FAILURES, not missing resources. Check credentials and IAM" >&2
+    echo "     before concluding anything about what does or does not exist." >&2
+    WAITLIST_STATUS="SKIPPED — prerequisite lookups failed (see above; likely IAM)"
+    echo ""
+  elif [[ ${#waitlist_missing[@]} -gt 0 ]]; then
     echo ""
     echo "── Skipping cello-waitlist — prerequisites are missing ───────────────" >&2
     for m in "${waitlist_missing[@]}"; do echo "     missing: ${m}" >&2; done
     echo "     The waitlist is not on the protocol path, so this is a warning, not a failure." >&2
+    WAITLIST_STATUS="SKIPPED — missing: ${waitlist_missing[*]}"
     echo ""
   else
-    WAITLIST_DATABASE_URL="postgresql://postgres:${WAITLIST_DB_PASSWORD}@${WAITLIST_RDS_ENDPOINT}:${WAITLIST_RDS_PORT}/cello_${ENVIRONMENT}"
+    # portal_admin / cello_portal — the portal instance's own master user and
+    # database, per cello-portal-data.yaml. Not postgres / cello_${ENVIRONMENT},
+    # which belong to the directory.
+    WAITLIST_DATABASE_URL="postgresql://portal_admin:${WAITLIST_DB_PASSWORD}@${WAITLIST_DB_HOST}:${WAITLIST_DB_PORT}/cello_portal"
 
     waitlist_exit=0
     (
@@ -1103,7 +1144,6 @@ if [[ "${REGION}" == "us-east-1" ]]; then
         "Environment=${ENVIRONMENT}" \
         "WaitlistDatabaseUrl=${WAITLIST_DATABASE_URL}" \
         "ApiDomainName=${WAITLIST_API_DOMAIN}" \
-        "ApiCertificateArn=${WAITLIST_CERT_ARN}" \
         "HostedZoneId=${HOSTED_ZONE_ID}"
     ) || waitlist_exit=$?
 
@@ -1111,13 +1151,16 @@ if [[ "${REGION}" == "us-east-1" ]]; then
       echo ""
       echo "WARNING: cello-waitlist-${ENVIRONMENT} failed (exit ${waitlist_exit})." >&2
       echo "         The waitlist is not required for CELLO protocol operation. Continuing." >&2
+      WAITLIST_STATUS="FAILED (exit ${waitlist_exit}) — non-fatal, protocol path unaffected"
       echo ""
     else
+      WAITLIST_STATUS="deployed — now run ./infra/deploy-lambdas.sh ${ENVIRONMENT} waitlist for function CODE"
       echo "  Waitlist stack deployed. Function CODE is NOT deployed by CFN —"
       echo "  run: ./infra/deploy-lambdas.sh ${ENVIRONMENT} waitlist"
     fi
   fi
 else
+  WAITLIST_STATUS="skipped — us-east-1 only"
   echo ""
   echo "── Skipping cello-waitlist (us-east-1 only, current region: ${REGION}) ──"
 fi
@@ -1166,6 +1209,13 @@ done
 if [[ "${REGION}" == "us-east-1" ]]; then
   echo "  cello-cicd-${ENVIRONMENT}"
 fi
+
+# Printed HERE, not only at the point of decision. The waitlist is deliberately
+# non-fatal, but a warning emitted hundreds of lines above a "deployment
+# complete" banner is not an announcement — an operator reads the summary and
+# concludes everything shipped. Degraded must be visible where success is.
+echo ""
+echo "  cello-waitlist-${ENVIRONMENT}: ${WAITLIST_STATUS:-not evaluated}"
 
 echo ""
 echo "Next steps (one-time, if first deploy):"

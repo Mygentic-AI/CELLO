@@ -7,6 +7,7 @@ has no way to notice it happened.
 """
 
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -199,6 +200,10 @@ def test_a_suppressed_user_then_receives_no_email(bouncer, database):
     make_user("loop@example.test")
     bouncer.lambda_handler(bounce("loop@example.test"), None)
 
+    # The dispatcher refuses to send without a configuration set — SES emits no
+    # bounce events without one, which would make THIS Lambda's producer role
+    # impossible. Set here because this test drives the real dispatcher.
+    os.environ["WAITLIST_SES_CONFIG_SET"] = "cello-waitlist-test"
     mailer = load_lambda(Path(__file__).resolve().parents[1] / "waitlist-email", "email_handler_2")
     sent = []
     mailer.ses = lambda: type("S", (), {"send_email": lambda _s, **kw: sent.append(kw)})()

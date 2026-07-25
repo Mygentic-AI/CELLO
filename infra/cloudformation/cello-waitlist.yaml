@@ -2,13 +2,15 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   CELLO M11 waitlist — Lambdas, API Gateway, schedules and the SES bounce topic.
 
-  Every function here reaches the PORTAL RDS (DOD-INV-SINGLE-DB — no new database
-  is provisioned), which is PubliclyAccessible:false, so all of them are VPC-
-  attached to the private subnets. That in turn means they have no route to SES,
-  Secrets Manager or the public internet without egress, which is why this stack
-  creates interface endpoints rather than relying on a NAT: the NAT gateways are
-  deleted on every hibernate, and an email pipeline that stops working overnight
-  because the environment was parked is not a pipeline.
+  Every function reaches the PORTAL RDS — cello-{env}-portal-db-* exports,
+  database cello_portal, user portal_admin. NEVER the directory instance
+  (cello-{env}-rds-*, database cello_{env}, user postgres): DOD-INV-SINGLE-DB
+  makes a connection string pointing there a blocking finding, and that instance
+  holds agent profiles under pgaudit.
+
+  The portal DB is PubliclyAccessible:false, so every function is VPC-attached to
+  the private subnets and reaches SES and the AWS APIs over the NAT gateway that
+  cello-vpc.yaml already provides.
 
 Parameters:
   Environment:
@@ -43,10 +45,6 @@ Parameters:
       cello.mygentic.ai means /status can never authenticate and every user loops
       between /status and /auth forever.
 
-  ApiCertificateArn:
-    Type: String
-    Description: ACM certificate ARN covering ApiDomainName (us-east-1).
-
   HostedZoneId:
     Type: String
     Default: Z02692523DOH7NW521CL8
@@ -74,82 +72,52 @@ Resources:
           CidrIp: !ImportValue
             Fn::Sub: "cello-${Environment}-vpc-cidr"
           Description: Postgres to the portal RDS
+        # 0.0.0.0/0, routed through the NAT gateway in cello-vpc.yaml. Scoped to
+        # the VPC CIDR in the first draft, which silently blocked SES entirely:
+        # boto3's SES client resolves email.<region>.amazonaws.com, a PUBLIC
+        # address, so every send would have hung until the Lambda timed out and
+        # the job cycled pending → sending → reclaimed forever.
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          CidrIp: !ImportValue
-            Fn::Sub: "cello-${Environment}-vpc-cidr"
-          Description: HTTPS to the VPC interface endpoints (SES, Secrets Manager, Lambda)
+          CidrIp: "0.0.0.0/0"
+          Description: HTTPS to SES and the AWS APIs, via the NAT gateway
       Tags:
         - Key: Project
           Value: cello
         - Key: Environment
           Value: !Ref Environment
 
-  RdsIngressFromWaitlist:
+  # cello-{env}-portal-db-sg, NOT cello-{env}-rds-sg. Those two names are one
+  # word apart and point at different databases: the second is the DIRECTORY's
+  # instance (agent profiles, pgaudit), which this stack must never touch —
+  # DOD-INV-SINGLE-DB calls a connection to it a blocking finding, and its
+  # master credential is the one cello-rotation.yaml deliberately withholds from
+  # every task role. The first draft of this file imported the wrong one.
+  PortalDbIngressFromWaitlist:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       GroupId: !ImportValue
-        Fn::Sub: "cello-${Environment}-rds-sg"
+        Fn::Sub: "cello-${Environment}-portal-db-sg"
       IpProtocol: tcp
       FromPort: 5432
       ToPort: 5432
       SourceSecurityGroupId: !Ref WaitlistLambdaSecurityGroup
       Description: Waitlist Lambdas
 
-  # ── VPC endpoints ───────────────────────────────────────────────────────────
-  # NOT a NAT gateway. Hibernate deletes NAT gateways, so an email pipeline that
-  # depended on one would stop delivering every night the environment is parked
-  # — silently, since a job that cannot reach SES just retries.
-
-  EndpointSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: !Sub "CELLO ${Environment} waitlist VPC endpoints"
-      VpcId: !ImportValue
-        Fn::Sub: "cello-${Environment}-vpc-id"
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !Ref WaitlistLambdaSecurityGroup
-      Tags:
-        - Key: Project
-          Value: cello
-        - Key: Environment
-          Value: !Ref Environment
-
-  SesEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcEndpointType: Interface
-      VpcId: !ImportValue
-        Fn::Sub: "cello-${Environment}-vpc-id"
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.email-smtp"
-      PrivateDnsEnabled: true
-      SubnetIds:
-        - !ImportValue
-          Fn::Sub: "cello-${Environment}-private-subnet-a"
-        - !ImportValue
-          Fn::Sub: "cello-${Environment}-private-subnet-b"
-      SecurityGroupIds:
-        - !Ref EndpointSecurityGroup
-
-  SecretsManagerEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcEndpointType: Interface
-      VpcId: !ImportValue
-        Fn::Sub: "cello-${Environment}-vpc-id"
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
-      PrivateDnsEnabled: true
-      SubnetIds:
-        - !ImportValue
-          Fn::Sub: "cello-${Environment}-private-subnet-a"
-        - !ImportValue
-          Fn::Sub: "cello-${Environment}-private-subnet-b"
-      SecurityGroupIds:
-        - !Ref EndpointSecurityGroup
+  # ── No VPC endpoints, deliberately ────────────────────────────────────────
+  # The first draft created interface endpoints for SES and Secrets Manager,
+  # reasoning that hibernate deletes the NAT gateway and an email pipeline must
+  # not depend on one. The premise is true and the conclusion was wrong: hibernate
+  # also STOPS the RDS instance, so during hibernation these Lambdas have no
+  # email_jobs table to read. Endpoints would have bought the ability to reach SES
+  # while the queue they drain is unreachable — nothing — and they would have
+  # billed straight through every hibernation, since hibernate.sh only discovers
+  # the ssmmessages endpoint and would never have torn them down.
+  #
+  # M6B-014 stage 2 already removed six interface endpoints per region in favour
+  # of the NAT for exactly this cost reason. Reintroducing two here would have
+  # quietly reversed that decision for the least important service in the stack.
 
   # ── Execution role ──────────────────────────────────────────────────────────
 
@@ -192,6 +160,35 @@ Resources:
     Properties:
       TopicName: !Sub "cello-waitlist-bounces-${Environment}"
       DisplayName: CELLO waitlist SES bounces and complaints
+
+  # WITHOUT THESE TWO, THE TOPIC HAS NO PUBLISHER. The first draft created the
+  # topic, the policy, the subscription and the Lambda permission — a complete
+  # delivery path with nothing at the top of it — and deferred "point SES at
+  # this" to a manual step that was never written down. The visible result would
+  # have been a bounce handler that never fires, so email_status is never set to
+  # bounced or complained, DOD-INV-EMAIL-SUPPRESS becomes unenforceable, and the
+  # sending domain's reputation degrades with nothing reporting it.
+  #
+  # The dispatcher must send WITH this configuration set for events to be
+  # emitted; waitlist-email passes ConfigurationSetName from WAITLIST_SES_CONFIG_SET.
+  SesConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: !Sub "cello-waitlist-${Environment}"
+
+  SesBounceDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName: !Ref SesConfigurationSet
+      EventDestination:
+        Name: bounces-and-complaints
+        Enabled: true
+        # Only the events that change deliverability state. Sends, opens and
+        # clicks would be volume the handler has to filter and a per-notification
+        # cost for data nothing reads.
+        MatchingEventTypes: [bounce, complaint, reject, renderingFailure]
+        SnsDestination:
+          TopicARN: !Ref BounceTopic
 
   BounceTopicPolicy:
     Type: AWS::SNS::TopicPolicy
@@ -242,12 +239,33 @@ Resources:
         ThrottlingRateLimit: 50
         ThrottlingBurstLimit: 100
 
+  # CREATED HERE, not looked up. The first draft took the ARN as a parameter and
+  # had deploy.sh find it with `acm list-certificates` — but no template in this
+  # repo ever created a cert for api.*, so the lookup returned nothing on every
+  # run and the stack skipped itself permanently while the deploy still printed
+  # complete. A resource IaC owns cannot go missing that way.
+  #
+  # DNS-validated against HostedZoneId, the same pattern as PortalCertificate in
+  # cello-portal-data.yaml. CFN writes the validation record itself and blocks
+  # until ACM issues, so the first deploy of this stack is slower than later ones.
+  ApiCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref ApiDomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref ApiDomainName
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Project
+          Value: cello
+
   WaitlistApiDomain:
     Type: AWS::ApiGatewayV2::DomainName
     Properties:
       DomainName: !Ref ApiDomainName
       DomainNameConfigurations:
-        - CertificateArn: !Ref ApiCertificateArn
+        - CertificateArn: !Ref ApiCertificate
           EndpointType: REGIONAL
           SecurityPolicy: TLS_1_2
 
@@ -291,6 +309,66 @@ Resources:
       ApiId: !Ref WaitlistApi
       RouteKey: "POST /waitlist/signup"
       Target: !Sub "integrations/${SignupFunctionIntegration}"
+
+  # ── CORS preflight ──────────────────────────────────────────────────────────
+  #
+  # WITHOUT THESE, EVERY WRITE ENDPOINT IS DEAD IN A BROWSER. All four handlers
+  # implement `if method == "OPTIONS": return 204` — but the first draft routed
+  # no OPTIONS request to any of them and defined no $default, so API Gateway
+  # answered every preflight itself with 404 and no Access-Control-Allow-Origin,
+  # and the handler-side CORS code was dead by wiring.
+  #
+  # cello.mygentic.ai → api.cello.mygentic.ai is same-SITE, which is what keeps
+  # the Lax session cookie attached (see ApiDomainName). It is still cross-ORIGIN,
+  # and a POST carrying application/json is not CORS-safelisted, so it always
+  # preflights. Same shape of bug as the SameSite one: a property of the wiring
+  # that no handler test can see.
+  #
+  # EACH PREFIX GOES TO THE HANDLER THAT OWNS IT — not one catch-all. A single
+  # OPTIONS /waitlist/{proxy+} pointed at signup would have been worse than no
+  # route at all: signup's preflight response omits Access-Control-Allow-
+  # Credentials (it has no session), while /auth/* and the action endpoints are
+  # all credentialed. The browser rejects a credentialed request whose preflight
+  # lacks that header, so the catch-all would have broken precisely the calls the
+  # status page depends on, while appearing to fix CORS.
+  #
+  # HTTP API routes most-specific-first, so the exact and deeper-prefix keys win
+  # over the trailing {proxy+}, which catches survey / readiness /
+  # interview-commit / post-url / content-alerts and any endpoint added later.
+  SignupPreflightRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "OPTIONS /waitlist/signup"
+      Target: !Sub "integrations/${SignupFunctionIntegration}"
+
+  AuthPreflightRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "OPTIONS /waitlist/auth/{proxy+}"
+      Target: !Sub "integrations/${AuthFunctionIntegration}"
+
+  UnsubPreflightRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "OPTIONS /waitlist/unsubscribe"
+      Target: !Sub "integrations/${AuthFunctionIntegration}"
+
+  ActionsPreflightRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "OPTIONS /waitlist/{proxy+}"
+      Target: !Sub "integrations/${ActionsFunctionIntegration}"
+
+  GalleryPreflightRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "OPTIONS /gallery/{proxy+}"
+      Target: !Sub "integrations/${GalleryFunctionIntegration}"
 
   AuthFunctionIntegration:
     Type: AWS::ApiGatewayV2::Integration
@@ -465,7 +543,6 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
           WAITLIST_SITE: https://cello.mygentic.ai
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
-          CELLO_ENV: !Ref Environment
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-signup/handler.py
@@ -509,7 +586,6 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
           WAITLIST_SITE: https://cello.mygentic.ai
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
-          CELLO_ENV: !Ref Environment
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-auth/handler.py
@@ -550,7 +626,6 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
           WAITLIST_SITE: https://cello.mygentic.ai
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
-          CELLO_ENV: !Ref Environment
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-actions/handler.py
@@ -594,7 +669,8 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
           WAITLIST_SITE: https://cello.mygentic.ai
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
-          CELLO_ENV: !Ref Environment
+          # Only the dispatcher sends mail, so only the dispatcher needs this.
+          WAITLIST_SES_CONFIG_SET: !Ref SesConfigurationSet
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-email/handler.py
@@ -635,7 +711,6 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
           WAITLIST_SITE: https://cello.mygentic.ai
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
-          CELLO_ENV: !Ref Environment
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-bounce/handler.py
@@ -656,7 +731,11 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub "cello-waitlist-waves-${Environment}"
-      Description: "Wave assembly. Invoked ONLY by the ops dashboard — never scheduled."
+      # The ops dashboard is not deployed yet and therefore holds no
+      # lambda:InvokeFunction grant on this function. Said plainly, because the
+      # sibling gate function's caller (the ops-agent) DOES have one now, and an
+      # inconsistent set of descriptions is worse than a uniformly honest one.
+      Description: "Wave assembly. Direct invoke by the ops dashboard; NEVER scheduled. CALLER NOT YET GRANTED."
       Runtime: python3.12
       Handler: handler.lambda_handler
       Role: !GetAtt WaitlistLambdaRole.Arn
@@ -676,7 +755,6 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
           WAITLIST_SITE: https://cello.mygentic.ai
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
-          CELLO_ENV: !Ref Environment
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-waves/handler.py
@@ -697,6 +775,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub "cello-waitlist-gate-${Environment}"
+      # Grant lives in cello-iam.yaml, OpsAgentTaskRole / InvokeWaitlistGate.
       Description: "Telegram admission gate. Invoked by the operations agent."
       Runtime: python3.12
       Handler: handler.lambda_handler
@@ -717,7 +796,6 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
           WAITLIST_SITE: https://cello.mygentic.ai
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
-          CELLO_ENV: !Ref Environment
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-gate/handler.py
@@ -766,7 +844,6 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
           WAITLIST_SITE: https://cello.mygentic.ai
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
-          CELLO_ENV: !Ref Environment
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-firstwin/handler.py
@@ -810,7 +887,6 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
           WAITLIST_SITE: https://cello.mygentic.ai
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
-          CELLO_ENV: !Ref Environment
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-feedback/handler.py
@@ -851,7 +927,6 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
           WAITLIST_SITE: https://cello.mygentic.ai
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
-          CELLO_ENV: !Ref Environment
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-outreach/handler.py
@@ -872,7 +947,8 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub "cello-waitlist-utm-${Environment}"
-      Description: "UTM link generator. Invoked by the ops dashboard."
+      # As with waves: no grant exists until the dashboard is deployed.
+      Description: "UTM link generator. Direct invoke by the ops dashboard. CALLER NOT YET GRANTED."
       Runtime: python3.12
       Handler: handler.lambda_handler
       Role: !GetAtt WaitlistLambdaRole.Arn
@@ -892,7 +968,6 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
           WAITLIST_SITE: https://cello.mygentic.ai
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
-          CELLO_ENV: !Ref Environment
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-utm/handler.py
@@ -933,7 +1008,6 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
           WAITLIST_SITE: https://cello.mygentic.ai
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
-          CELLO_ENV: !Ref Environment
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-gallery/handler.py

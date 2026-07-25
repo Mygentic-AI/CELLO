@@ -157,6 +157,39 @@ else
   pass "DOD-INV-SINGLE-DB — no hardcoded RDS endpoint; all connections via DATABASE_URL"
 fi
 
+# THE ONE PLACE THE TARGET IS DECIDED — and until now it was outside this scan.
+# The check above proves no Lambda hardcodes a host; it says nothing about which
+# host deploy.sh puts in DATABASE_URL. That file assembled the connection string
+# from the DIRECTORY exports on its first draft and every check here stayed
+# green, which is the whole reason a scanner that cannot see the deciding file is
+# worth less than it appears.
+#
+# POSITIVE assertion, not a denylist: the directory export names are legitimate
+# elsewhere in deploy.sh (the directory service uses them), so their absence
+# proves nothing. What must be true is that the WAITLIST block reads portal-db-*.
+WAITLIST_STEP=$(awk '/STEP 15: cello-waitlist/,/DEPLOYMENT COMPLETE/' "$TRUSTLESS/infra/deploy.sh")
+if [[ -z "$WAITLIST_STEP" ]]; then
+  fail "DOD-INV-SINGLE-DB — could not find the waitlist step in deploy.sh to check it"
+elif ! grep -q 'portal-db-endpoint' <<<"$WAITLIST_STEP"; then
+  fail "DOD-INV-SINGLE-DB — deploy.sh's waitlist step does not read cello-\${env}-portal-db-endpoint"
+elif grep -qE "cello-\\\$\{ENVIRONMENT\}-rds-(endpoint|port|master-secret-arn)" <<<"$WAITLIST_STEP"; then
+  fail "DOD-INV-SINGLE-DB — deploy.sh's waitlist step reads a DIRECTORY rds-* export:"
+  grep -nE "cello-\\\$\{ENVIRONMENT\}-rds-" <<<"$WAITLIST_STEP" | sed 's/^/        /'
+elif grep -qE '/cello_\$\{ENVIRONMENT\}"?$|postgresql://postgres:' <<<"$WAITLIST_STEP"; then
+  fail "DOD-INV-SINGLE-DB — deploy.sh builds the waitlist URL with the DIRECTORY user/database"
+else
+  pass "DOD-INV-SINGLE-DB — deploy.sh's waitlist step targets the portal DB"
+fi
+
+# Same question for the stack itself: which security group does it open?
+if grep -q 'cello-\${Environment}-rds-sg' "$TRUSTLESS/infra/cloudformation/cello-waitlist.yaml"; then
+  fail "DOD-INV-SINGLE-DB — cello-waitlist.yaml opens the DIRECTORY RDS security group"
+elif ! grep -q 'cello-\${Environment}-portal-db-sg' "$TRUSTLESS/infra/cloudformation/cello-waitlist.yaml"; then
+  fail "DOD-INV-SINGLE-DB — cello-waitlist.yaml does not open the portal DB security group"
+else
+  pass "DOD-INV-SINGLE-DB — cello-waitlist.yaml opens the portal DB security group only"
+fi
+
 # ── DOD-INV-NO-PII-DIRECTORY ──────────────────────────────────────────────────
 # Waitlist PII lives in the waitlist tables only. No M11 code may write an email
 # address toward the directory.

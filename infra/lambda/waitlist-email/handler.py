@@ -46,6 +46,14 @@ import psycopg2.extras
 DATABASE_URL = os.environ.get("DATABASE_URL")
 FROM_EMAIL = os.environ.get("WAITLIST_FROM_EMAIL", "CELLO <noreply@mygentic.ai>")
 AWS_REGION_NAME = os.environ.get("SES_REGION", "us-east-1")
+# NO DEFAULT, and absence REFUSES rather than sending without it. SES only emits
+# bounce and complaint events for messages sent WITH a configuration set. Send
+# without one and every message still leaves — nothing errors, deliverability
+# looks fine — but no bounce ever reaches the SNS topic, so email_status is never
+# set to bounced or complained and DOD-INV-EMAIL-SUPPRESS quietly stops being
+# enforced. That failure is invisible for exactly as long as it takes to burn the
+# sending domain's reputation.
+SES_CONFIG_SET = os.environ.get("WAITLIST_SES_CONFIG_SET")
 BATCH_SIZE = int(os.environ.get("EMAIL_BATCH_SIZE", "25"))
 
 # After this many attempts a job is terminal. Without a bound, a permanently
@@ -437,6 +445,16 @@ def lambda_handler(event, context):
     correlation_id = getattr(context, "aws_request_id", None) or str(uuid.uuid4())
     limit = int((event or {}).get("batch_size") or BATCH_SIZE)
 
+    # Checked BEFORE any job is claimed. Refusing after a claim would leave rows
+    # stranded in 'sending' until the reclaim window, for a fault that has
+    # nothing to do with those rows.
+    if not SES_CONFIG_SET:
+        raise RuntimeError(
+            "WAITLIST_SES_CONFIG_SET is not set on this function. Sending without a "
+            "configuration set delivers mail but emits no bounce or complaint events, "
+            "which silently disables email suppression."
+        )
+
     counts = {"sent": 0, "skipped": 0, "failed": 0, "retired": 0}
     conn = connect()
     try:
@@ -477,6 +495,9 @@ def lambda_handler(event, context):
                 # rather than a job that looks untouched and is sent twice.
                 ses().send_email(
                     Source=FROM_EMAIL,
+                    # Without this, SES emits no bounce or complaint events and
+                    # suppression silently stops working. See SES_CONFIG_SET.
+                    ConfigurationSetName=SES_CONFIG_SET,
                     Destination={"ToAddresses": [job["email"]]},
                     Message={
                         "Subject": {"Data": subject, "Charset": "UTF-8"},

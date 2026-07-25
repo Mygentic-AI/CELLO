@@ -334,6 +334,21 @@ Resources:
                   - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/ses-credentials*"
                   - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/directory-api-key*"
                   - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cello/${Environment}/ops-agent/rds-credentials*"
+              # M11: the ops-agent is the Telegram admission gate's caller. The
+              # gate Lambda's own Description says "Invoked by the operations
+              # agent" — without this grant that sentence describes something
+              # that cannot happen, and the failure is an AccessDeniedException
+              # at the moment a real person tries to join.
+              #
+              # Enumerated, not a wildcard on cello-waitlist-*: the ops-agent has
+              # no business opening a WAVE or minting invites, and the same rule
+              # that keeps the master DB secret away from this role applies here.
+              - Sid: InvokeWaitlistGate
+                Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cello-waitlist-gate-${Environment}"
               - Sid: CloudWatchLogsOpsAgent
                 Effect: Allow
                 Action:
