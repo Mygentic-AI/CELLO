@@ -3259,3 +3259,46 @@ deliberately not valid JSON, and the dashboard fails closed on anything it canno
 
 **The pace correction stands.** 64 commits in the preceding 8 hours, 39 of them documentation only.
 This is one entry for the whole arc.
+
+---
+
+## 2026-07-25 (late) — a human closed the clause no agent could, and I broke something already fixed
+
+**`DOD-OPS-SHELL-1`'s own verification is done.** Its text reads *"log in with an allowed email,
+confirm magic link arrives, land on a dashboard shell"* — Andre did exactly that on the deployed
+dashboard. Before that could work, three things had to be true and none were: the allowlist secret
+did not exist, the dashboard's tables had never been created, and the migration runner could not be
+built. All three presented as a healthy container returning a normal `202`.
+
+A review then found four blocking defects in that runner, all fixed and proven:
+`applied: []` meant three different things (healthy, empty directory, stem collision — the last two
+started the server); two migrations silently ended the runner's transaction with their own `COMMIT`;
+the cross-repo collision test passed in CI for the wrong reason; and the one access-control secret
+was the only one of thirteen not environment-scoped.
+
+**Then I made things worse on something already fixed.** The directory pipeline's smoke test was
+failing on a stale ALB hostname. `discussion_logs/2026-07-19_0600_smoke-test-fix-and-alb-drift.md`
+already contained the answer under the heading *"The actual fix"* — one `aws codebuild update-project`
+command — and I did not look until Andre said to. By then I had changed the CFN template so an empty
+parameter would mean "resolve at run time", deployed `cello-cicd-dev`, and **it failed and rolled
+back**: a CodePipeline variable derives from that parameter and rejects an empty default. The
+rollback restored the env var from the stack's stored parameter, **destroying the manual repair from
+six days earlier**. CI is now further from working than when I started. Blast radius was CI only.
+
+**The root cause, which that log did not have.** It blamed the 2026-07-17 rogue-agent cleanup. That
+was the first instance, not the mechanism: **`hibernate.sh` DELETES the dir and relay ALBs and
+`wake.sh` recreates them**, and AWS assigns a new DNS name every time. So a baked ALB name goes stale
+on *every* hibernate cycle — which is why one command fixed it in July and it needed fixing again six
+days later.
+
+**The permanent fix is to stop using the ALB's name at all.** `wake.sh` already re-points Route53, so
+`directory-us1.cello.mygentic.ai` follows the new ALB — verified, identical addresses. The smoke
+runner now defaults to the per-region hostname, `deploy.sh` builds it from `get_directory_subdomain`
+rather than a fourth hardcoded copy, and the AWS-lookup fallback I had written earlier is deleted: an
+SDK dependency and an IAM grant to solve what a DNS record solves for free. All 8 scenarios pass
+against the hostname.
+
+**Two lessons, both now in memory.** Search `discussion_logs/` for the symptom before changing
+infrastructure. And a CFN rollback restores live configuration from stored parameters — so a value
+repaired by hand outside the stack cannot survive the next failed deploy, which is exactly why the
+hand-repair had to become a template change.
