@@ -9,6 +9,21 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🟢 ECR repo `cello-ops-dashboard` CREATED (2026-07-25)
+
+`aws cloudformation deploy` on `cello-ecr-dev` — additive, no other resource changed.
+URI: `257394457473.dkr.ecr.us-east-1.amazonaws.com/cello-ops-dashboard`, exported as
+`cello-dev-ops-dashboard-ecr-uri`.
+
+**Moved here from `cello-ops-dashboard.yaml` to break a bootstrap loop.** That stack creates an ECS
+service whose image must already exist, so deploying it to create the registry also created a
+service pointing at an empty one — crash-loop, rollback, and the repo goes with it. Registries
+belong with the other registries.
+
+The ops-dashboard GitHub repo now exists too: `Andre-Mygentic/cello-ops-dashboard` (private).
+
+---
+
 ## 📄 cello-ops-dashboard.yaml WRITTEN, NOT DEPLOYED (2026-07-25)
 
 **Nothing new exists in AWS from this.** Recorded so a future session does not mistake a written

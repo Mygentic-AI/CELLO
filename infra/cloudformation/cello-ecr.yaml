@@ -105,7 +105,51 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # MOVED HERE FROM cello-ops-dashboard.yaml, to break a bootstrap loop.
+  #
+  # The app stack creates an ECS service whose image must already exist. When the
+  # registry lived in that same stack there was no order that worked: deploying
+  # it created the repo AND a service pointing at an empty one, which crash-loops
+  # and rolls back — taking the just-created repo with it. Registries belong with
+  # the other registries, where nothing depends on them at create time.
+  OpsDashboardRepo:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: cello-ops-dashboard
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: MUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire untagged images after 14 days",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 14
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+      Tags:
+        - Key: Project
+          Value: cello
+        - Key: Environment
+          Value: !Ref Environment
+
 Outputs:
+  OpsDashboardRepoUri:
+    Value: !GetAtt OpsDashboardRepo.RepositoryUri
+    Export:
+      Name: !Sub "cello-${Environment}-ops-dashboard-ecr-uri"
+
   DirectoryRepoUri:
     Value: !GetAtt DirectoryRepo.RepositoryUri
     Export:

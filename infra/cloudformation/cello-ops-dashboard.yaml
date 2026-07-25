@@ -63,29 +63,11 @@ Parameters:
     Default: "512"
 
 Resources:
-  # ── Image registry ──────────────────────────────────────────────────────────
-  EcrRepository:
-    Type: AWS::ECR::Repository
-    Properties:
-      RepositoryName: !Sub "cello-ops-dashboard"
-      ImageScanningConfiguration:
-        ScanOnPush: true
-      LifecyclePolicy:
-        LifecyclePolicyText: |
-          {
-            "rules": [
-              {
-                "rulePriority": 1,
-                "description": "Keep the 20 most recent images; a dashboard does not need a year of tags.",
-                "selection": {
-                  "tagStatus": "any",
-                  "countType": "imageCountMoreThan",
-                  "countNumber": 20
-                },
-                "action": { "type": "expire" }
-              }
-            ]
-          }
+  # The ECR repository is NOT here — it lives in cello-ecr.yaml with the other
+  # registries. Keeping it in this stack was a bootstrap loop: this stack's ECS
+  # service needs an image, so deploying it to create the repo also creates a
+  # service pointing at an empty one, which crash-loops, rolls back, and takes
+  # the repo with it. Nothing may depend on a registry at its own create time.
 
   # ── Certificate for the ops hostname ────────────────────────────────────────
   # Created in-stack and DNS-validated, the same shape the waitlist API cert
