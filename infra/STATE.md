@@ -782,7 +782,12 @@ one build script (all in `infra/`):
     Invoke `{"dry_run": true}` first — it lists what WOULD be applied and touches nothing.
     All 13 function bodies redeployed 2026-07-25 10:09 UTC; the migrator now takes a non-blocking
     session advisory lock (key 0x4D31314D49475241) so two concurrent runs cannot both execute DDL.
-    Verified against the deployed function: dry run reports 0 pending, 29 already applied.
+    Verified against the deployed function: dry run reports
+    `{"pending": [], "already_applied_here": 22, "ledger_rows_total": 29}` — 22 M11 migrations
+    matched by this runner, 29 rows in the table (the portal's own 7 are the difference).
+    Redeployed 2026-07-25 ~10:30 with three guards added after review: a filename-keyed ledger row
+    refuses (three runners write this ledger and one had a different key format), a gap in the
+    migration set refuses, and the advisory lock is now taken BEFORE the ledger CREATE.
   - **ALL 22 M11 MIGRATIONS APPLIED to `cello_portal` on 2026-07-25.** `schema_migrations` now holds 29
     rows: the portal's own 7 (`0001_init` … `0007_track_record_refresh_log`, applied by the portal
     container at boot) plus M11's 22 (`0001_m11_waitlist_p0` … `0022_retire_lapsed_tokens`). Both sets

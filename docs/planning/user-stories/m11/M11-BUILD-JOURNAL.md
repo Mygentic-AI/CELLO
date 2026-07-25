@@ -2616,3 +2616,50 @@ That is the same species it was written to catch, one level up: **a check that p
 than the one in its name.** Corrected, and the revert now goes red.
 
 **Runs:** 438 tests green. The deployed migrator confirms 0 pending / 29 applied through the new lock path.
+
+---
+
+### Entry 56: three runners write one ledger, and one of them disagreed
+**Date:** 2026-07-25
+**Target:** DOD-SCHEMA-1
+
+A review found that `corp-cello-site/scripts/migrate.js` keys `schema_migrations` on the **full
+filename**, while `cello-portal/src/server/migrate.ts` and the new waitlist-migrate Lambda both strip
+`.sql` and key on the **stem**. Same twenty-two files, two different keys, one shared table.
+
+**Why that is not cosmetic.** A runner cannot see rows written under the other key. So "already applied"
+is always false across them, "exactly once" degrades to "once per runner", and the edited-migration
+checksum guard — the entire reason this ledger exists — can never fire. Point one runner at the other's
+database and it re-executes the whole set while reporting a normal first-time apply.
+
+**The fix went the opposite way to the obvious one, and that mattered.** The reviewer proposed changing
+the Lambda to use the filename. That would have been the damaging choice: the live `cello_portal` ledger
+is stem-keyed for all twenty-nine of its rows, so a filename-keyed Lambda would have seen **zero** as
+applied and re-run twenty-two migrations against production. `migrate.js` only ever runs against local
+databases, so it is the one that can safely move. Reading the live state before choosing a direction is
+what made the difference between a fix and an outage.
+
+**Three guards so the class is visible rather than silent**, added to the Lambda:
+
+- A `<stem>.sql` row anywhere in the ledger now refuses the whole run. If some runner used the other key,
+  nothing here can tell what has actually been applied, and re-executing an applied set is not
+  recoverable.
+- **A short set is not a valid set.** `migration_files()` already refused an absent or empty directory,
+  on the argument that applying zero migrations looks exactly like being up to date. Applying seventeen
+  of twenty-two looks exactly the same and is worse: drop 0015 from a stale checkout and 0016 onward
+  apply against a schema missing it, then a later complete deploy applies 0015 *after* 0022 — out of
+  order, ledger green. The code stopped one step short of the argument its own comment made.
+- The advisory lock is now taken **before** the ledger `CREATE TABLE IF NOT EXISTS`, which is not
+  concurrency-safe.
+
+And the dry-run payload no longer contradicts itself: it reported the total row count as
+`already_applied`, so against a ledger holding another component's migrations it could say *"22 pending,
+22 already applied"* in one breath.
+
+**The enforcer then caught my own omission.** Running `verify-schema.sh` after the key change failed with
+*"migration(s) create tables with no seeder"* — I had added 0021 and 0022 without seeders, so 0022 would
+replay against an empty `status_notes` and the staged replay would have quietly stopped covering what it
+exists to cover. That assertion was added in an earlier round for exactly this, and it worked.
+
+**Runs:** 442 Lambda tests, 18 site tests, and the schema enforcer green on all five properties.
+Production dry run: `{"pending": [], "already_applied_here": 22, "ledger_rows_total": 29}`.
