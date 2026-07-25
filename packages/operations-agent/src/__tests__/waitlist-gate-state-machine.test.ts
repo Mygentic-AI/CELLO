@@ -224,7 +224,7 @@ describe("re-registration is gated too — clause 1 applies every time", () => {
   });
 });
 
-describe("an unreachable gate — clause 6, the failure the user can see", () => {
+describe("an unreachable gate (review finding F5) — the failure the user can see", () => {
   // Failing closed is correct. Failing closed SILENTLY is not: the client
   // throws on transport failure, the engine catches and logs, `onError` is
   // undefined in production (grep: it is wired in exactly one integration
@@ -281,7 +281,7 @@ describe("an unreachable gate — clause 6, the failure the user can see", () =>
   });
 });
 
-describe("redemption attempts are bounded — clause 7", () => {
+describe("redemption attempts are bounded (review finding F7)", () => {
   // Guessing is not the threat: a waitlist token is a `gen_random_uuid()`,
   // 122 bits. (Verified against the live gate: a 12-character code over the
   // referral alphabet comes back `token_malformed` — that alphabet belongs to
@@ -318,7 +318,9 @@ describe("redemption attempts are bounded — clause 7", () => {
 
     // The ceiling is enforced BEFORE the call, so the gate stops being invoked
     // entirely rather than being invoked and ignored.
-    expect(REFUSING.redeem.mock.calls.length).toBeLessThanOrEqual(5);
+    // toBe, not toBeLessThanOrEqual — the loose form admits a limit of one and
+    // calls it a pass, which is not the constant the code declares.
+    expect(REFUSING.redeem.mock.calls.length).toBe(5);
 
     const last = String(channel.send.mock.calls.at(-1)?.[1] ?? "");
     expect(last.toLowerCase()).toContain("too many");
@@ -338,20 +340,36 @@ describe("redemption attempts are bounded — clause 7", () => {
     // A shared counter would be the obvious wrong implementation, and it would
     // hand any stranger a denial-of-service against every other user.
     expect(REFUSING.redeem.mock.calls.length).toBe(afterFlood + 1);
+
+    // And the flooder is still blocked in the same breath. Without this the
+    // test passes with NO limiter at all — it discriminated one wrong
+    // implementation while counting as coverage of the feature.
+    const before = REFUSING.redeem.mock.calls.length;
+    await sm.handleMessage(gated(), "STILL-FLOODING", "tg-flood");
+    expect(REFUSING.redeem.mock.calls.length).toBe(before);
   });
 
-  it("a successful redemption does not consume the allowance forever", async () => {
-    // The limiter must not accumulate an entry per user that never clears —
-    // this process runs for weeks.
-    const OK = {
-      check: vi.fn(async () => ({ allowed: true, alreadyLinked: false })),
-      redeem: vi.fn(async () => ({ redeemed: true })),
-    };
-    const { deps } = makeDeps({ waitlistGate: OK });
-    const sm = new RegistrationStateMachine(deps);
+  it("the window actually expires — an hour later the allowance is back", async () => {
+    // The replaced version of this test asserted `redeem` was called once after
+    // one success, which passes with no limiter at all, and its name promised a
+    // pruning property the code does not have (a success leaves the stamp in
+    // place for the full hour). TOKEN_ATTEMPT_WINDOW_MS and the prune loop had
+    // no test at all. This one advances the clock instead of describing it.
+    vi.useFakeTimers();
+    try {
+      const { deps } = makeDeps({ waitlistGate: REFUSING });
+      const sm = new RegistrationStateMachine(deps);
 
-    await sm.handleMessage(gated(), "GOOD-TOKEN", "tg-ok");
-    expect(OK.redeem).toHaveBeenCalledTimes(1);
+      for (let i = 0; i < 7; i++) await sm.handleMessage(gated(), `X-${i}`, "tg-clock");
+      expect(REFUSING.redeem.mock.calls.length).toBe(5);
+
+      vi.advanceTimersByTime(60 * 60 * 1_000 + 1_000);
+
+      await sm.handleMessage(gated(), "AFTER-THE-HOUR", "tg-clock");
+      expect(REFUSING.redeem.mock.calls.length).toBe(6);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -375,17 +393,22 @@ describe("our outage must not spend the user's allowance", () => {
   });
 
   it("refunds the attempt when the gate throws", async () => {
+    vi.useFakeTimers();
     const { deps } = makeDeps({ waitlistGate: BROKEN });
     const sm = new RegistrationStateMachine(deps);
 
-    // Eight outages — more than the five-attempt ceiling.
+    // Eight outages — more than the five-attempt ceiling. The clock advances
+    // past the fault cooldown between them, which is what a real user does:
+    // they were told to try again in a few minutes, and they do.
     for (let i = 0; i < 8; i++) {
       await expect(sm.handleMessage(gated(), `TOKEN-${i}`, "tg-unlucky")).rejects.toThrow();
+      vi.advanceTimersByTime(61 * 1_000);
     }
 
     // Every one reached the gate. Without the refund the sixth onward would
     // have been refused locally and the count would stop at five.
     expect(BROKEN.redeem).toHaveBeenCalledTimes(8);
+    vi.useRealTimers();
   });
 
   it("gives back exactly one attempt, not the whole record", async () => {
@@ -393,6 +416,7 @@ describe("our outage must not spend the user's allowance", () => {
     // quietly destroy the ceiling: alternate one outage with one guess and the
     // count never reaches five. Verified as a mutation — replacing the refund
     // with `rest = []` left every other test in this file green.
+    vi.useFakeTimers();
     let throwNext = false;
     const FLAKY = {
       check: vi.fn(async () => ({ allowed: true, alreadyLinked: false })),
@@ -411,6 +435,7 @@ describe("our outage must not spend the user's allowance", () => {
     throwNext = true;
     await expect(sm.handleMessage(gated(), "OUTAGE", "tg-mix")).rejects.toThrow();
     throwNext = false;
+    vi.advanceTimersByTime(61 * 1_000);
 
     // Two more refusals take them to exactly five.
     for (let i = 0; i < 2; i++) await sm.handleMessage(gated(), `B-${i}`, "tg-mix");
@@ -421,5 +446,65 @@ describe("our outage must not spend the user's allowance", () => {
     // reach the gate again.
     await sm.handleMessage(gated(), "SIXTH", "tg-mix");
     expect(FLAKY.redeem.mock.calls.length).toBe(spent);
+    vi.useRealTimers();
+  });
+});
+
+describe("the seam between F5 and F7 — no test crossed it, which is why the bug shipped", () => {
+  it("five outages then recovery: the sixth message still redeems", async () => {
+    // Neither commit's tests looked here. An implementation that counts the
+    // attempt only after a completed call passes every F7 test identically to
+    // one that counts before and never releases — the difference is only
+    // visible when a THROW is followed by a real attempt.
+    vi.useFakeTimers();
+    let broken = true;
+    const RECOVERING = {
+      check: vi.fn(async () => ({ allowed: true, alreadyLinked: false })),
+      redeem: vi.fn(async () => {
+        if (broken) throw new Error("The waitlist gate could not be reached (redeem).");
+        return { redeemed: true };
+      }),
+    };
+    const { deps } = makeDeps({ waitlistGate: RECOVERING });
+    const sm = new RegistrationStateMachine(deps);
+
+    for (let i = 0; i < 5; i++) {
+      await expect(sm.handleMessage(gated(), `TRY-${i}`, "tg-patient")).rejects.toThrow();
+      vi.advanceTimersByTime(61 * 1_000);
+    }
+    broken = false;
+
+    await sm.handleMessage(gated(), "REAL-TOKEN", "tg-patient");
+    expect(RECOVERING.redeem).toHaveBeenCalledTimes(6);
+    vi.useRealTimers();
+  });
+
+  it("a broken CHECK does not become an unbounded invocation loop", async () => {
+    // The cost bound covers `redeem` only, and `check` is the path that fails
+    // OPEN on cost: when it throws, `repository.insert` never runs, so the user
+    // has no record and every later message re-enters handleNewUser for another
+    // check. Unbounded Lambda invocations and RDS connects, per user, exactly
+    // while the gate is unhealthy — the moment the bound is supposed to matter.
+    //
+    // Charging their token allowance for it is the wrong answer (that is the
+    // fairness bug above, in reverse). A short per-user cooldown after a fault
+    // is the right one: we already told them "try again in a few minutes", so
+    // repeating that without a second invocation costs the user nothing.
+    const DOWN = {
+      check: vi.fn(async () => {
+        throw new Error("The waitlist gate could not be reached (check).");
+      }),
+      redeem: vi.fn(async () => ({ redeemed: false, error: "x", message: "x" })),
+    };
+    const { deps, channel } = makeDeps({ waitlistGate: DOWN });
+    const sm = new RegistrationStateMachine(deps);
+
+    for (let i = 0; i < 10; i++) {
+      await expect(sm.handleNewUser("tg-storm", "telegram", "hash")).rejects.toThrow();
+    }
+
+    expect(DOWN.check.mock.calls.length).toBeLessThan(10);
+    // Still fails closed on every one of the ten, and still tells them.
+    expect(channel.send.mock.calls.length).toBe(10);
   });
 });

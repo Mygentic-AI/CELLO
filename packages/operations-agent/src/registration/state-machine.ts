@@ -84,6 +84,25 @@ const MAX_TOKEN_ATTEMPTS = 5;
 /** Rolling window for the above. */
 const TOKEN_ATTEMPT_WINDOW_MS = 60 * 60 * 1_000;
 
+/**
+ * How long to stop calling the gate for a user after it FAULTED on them.
+ *
+ * A separate bound from the attempt allowance above, because it answers a
+ * different question. The allowance is about fairness — how many guesses does
+ * somebody get — and so it must count only refusals, never our own failures.
+ * This one is about cost, and so it must count exactly the failures.
+ *
+ * Without it the `check` path is unbounded on the one path where a bound
+ * matters: when `check` throws, no record is inserted, so every later message
+ * re-enters `handleNewUser` for another invocation and another RDS connect,
+ * per user, for as long as the gate is unhealthy.
+ *
+ * Sixty seconds is chosen against what we already tell them — "please try
+ * again in a few minutes" — so repeating that answer without a second
+ * invocation costs the user nothing they were not already waiting out.
+ */
+const GATE_FAULT_COOLDOWN_MS = 60 * 1_000;
+
 /** Registration expiry — 7 days */
 const REGISTRATION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
@@ -180,6 +199,9 @@ export class RegistrationStateMachine {
    * deployment shape, not an implementation detail.
    */
   readonly #tokenAttempts = new Map<string, number[]>();
+
+  /** channelUserId → when the gate last faulted for them. See GATE_FAULT_COOLDOWN_MS. */
+  readonly #gateFaultAt = new Map<string, number>();
   readonly #rateLimitMap: Map<string, RateLimitEntry> = new Map();
 
   constructor(deps: StateMachineDeps) {
@@ -460,19 +482,6 @@ export class RegistrationStateMachine {
   // ─── Private state handlers ────────────────────────────────────────────────
 
   /**
-   * The user sent something while gated. Treat it as a waitlist token.
-   *
-   * The redemption is ATOMIC IN THE GATE — it burns the token, links the
-   * account and writes the agent bridge in one transaction. This handler does
-   * not validate-then-burn, because splitting those across a network boundary
-   * is exactly what lets one token be redeemed twice.
-   *
-   * A refusal keeps the user in AWAITING_WAITLIST_TOKEN so they can try again
-   * with the right token. It does NOT advance and it does not fail the
-   * registration: mistyping a token is the common case, and a terminal failure
-   * would force them to start over for a typo.
-   */
-  /**
    * Record a redemption attempt and report whether the user is over the limit.
    *
    * Prunes as it goes, so the map holds only users who have attempted inside
@@ -527,25 +536,78 @@ export class RegistrationStateMachine {
    * down — it sends them hunting for something that would not have helped.
    */
   async #askGate<T>(call: () => Promise<T>, from: string, kind: "check" | "redeem"): Promise<T> {
+    const now = Date.now();
+
+    // Prune here rather than in the catch: this runs on every gate call, so the
+    // map stays bounded even in the normal case where nobody is faulting. In
+    // the catch it would only shrink when something went wrong, which is the
+    // wrong trigger for a map that grows on healthy traffic.
+    for (const [user, at] of this.#gateFaultAt) {
+      if (now - at >= GATE_FAULT_COOLDOWN_MS) this.#gateFaultAt.delete(user);
+    }
+
+    const faultedAt = this.#gateFaultAt.get(from);
+    if (faultedAt !== undefined && now - faultedAt < GATE_FAULT_COOLDOWN_MS) {
+      // Same outcome, same message, no invocation. Refusing without asking is
+      // only sound because the answer we would send is identical either way —
+      // this is not a cached DECISION, which would be a fail-open in disguise.
+      await this.#tellGateFailed(from, kind);
+      throw new Error(
+        `The waitlist gate faulted for this user moments ago (${kind}); not re-invoking inside the ` +
+          `cooldown. Registration is refused.`,
+      );
+    }
+
     try {
-      return await call();
+      const result = await call();
+      // HYGIENE, NOT LOGIC — and worth saying, because it reads like logic.
+      // A mutation removing this line left every test green, which is correct:
+      // any call that gets this far already cleared the cooldown check, so its
+      // marker is necessarily stale and could not have gated anything. What it
+      // does is drop the entry a moment earlier than the prune above would.
+      this.#gateFaultAt.delete(from);
+      return result;
     } catch (error) {
-      const note =
-        kind === "redeem"
-          ? "Something went wrong on our side and we could not process that. " +
-            "Your token has NOT been used — please try again in a few minutes."
-          : "Something went wrong on our side and we could not check your access. " +
-            "Please try again in a few minutes.";
-      try {
-        await this.#deps.channel.send(from, note);
-      } catch {
-        // The channel is down too. Nothing further to attempt, and swallowing
-        // this is correct: the gate error below is the one worth propagating.
-      }
+      this.#gateFaultAt.set(from, now);
+      await this.#tellGateFailed(from, kind);
       throw error;
     }
   }
 
+  /**
+   * The user-facing half of a gate failure. Extracted so the cooldown path
+   * sends the IDENTICAL message — if the two ever drifted, a user inside the
+   * cooldown would be told something different from a user outside it, for the
+   * same underlying fault.
+   */
+  async #tellGateFailed(from: string, kind: "check" | "redeem"): Promise<void> {
+    const note =
+      kind === "redeem"
+        ? "Something went wrong on our side and we could not process that. " +
+          "Your token has NOT been used — please try again in a few minutes."
+        : "Something went wrong on our side and we could not check your access. " +
+          "Please try again in a few minutes.";
+    try {
+      await this.#deps.channel.send(from, note);
+    } catch {
+      // The channel is down too. Nothing further to attempt, and swallowing
+      // this is correct: the gate error is the one worth propagating.
+    }
+  }
+
+  /**
+   * The user sent something while gated. Treat it as a waitlist token.
+   *
+   * The redemption is ATOMIC IN THE GATE — it burns the token, links the
+   * account and writes the agent bridge in one transaction. This handler does
+   * not validate-then-burn, because splitting those across a network boundary
+   * is exactly what lets one token be redeemed twice.
+   *
+   * A refusal keeps the user in AWAITING_WAITLIST_TOKEN so they can try again
+   * with the right token. It does NOT advance and it does not fail the
+   * registration: mistyping a token is the common case, and a terminal failure
+   * would force them to start over for a typo.
+   */
   async #handleAwaitingWaitlistToken(
     record: RegistrationRecord,
     message: string,
