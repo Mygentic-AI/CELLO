@@ -88,6 +88,12 @@ M11_CONFIG="$TRUSTLESS/infra/cloudformation/cello-waitlist.yaml"
 # wholly to the waitlist API, and the route lives on the OTHER API — so a user
 # who clicks a perfectly valid confirmation link is told it is invalid.
 CORP_ALL="$CORP/app $CORP/src $CORP/scripts $CORP/migrations"
+# STILL NOT "all repos", and saying so keeps the widening from reading as closed.
+# Unscanned: the rest of corp-cello-site (root config, public/, content),
+# cello-portal entirely, and — as of 2026-07-25 — the ops-dashboard repo, which is
+# now where operations.cello.mygentic.ai appears in a Dockerfile, a workflow and a
+# README. That is the same shape as the gap this widening just fixed: a whole tree
+# one directory outside the scan.
 for _p in $CORP_ALL; do
   [[ -e "$_p" ]] || fail "scan target missing: $_p (the checker would narrow silently)"
 done

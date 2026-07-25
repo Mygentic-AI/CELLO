@@ -36,6 +36,14 @@ Parameters:
   # real trade and it is taken deliberately. deploy.sh resolves the ARNs at
   # deploy time rather than importing them, so the portal stack does not have to
   # be modified to add exports — one less reason to redeploy the portal.
+  #
+  # DELETE ORDER MATTERS, and only in one direction. Deleting THIS stack while
+  # the portal lives is clean: RemoveListenerCertificates cannot strip the
+  # portal's own certificate, which is the listener's default. Deleting this
+  # stack AFTER the portal stack is gone hits a vanished listener and is likely
+  # to need --retain-resources. A portal UPDATE is safe either way: ModifyListener
+  # only carries the default certificate, so SNI certs added here are out of its
+  # scope and are not silently dropped.
   PortalAlbListenerArn:
     Type: String
     Description: HTTPS listener ARN of the portal ALB. Resolved by deploy.sh, not imported.
@@ -53,6 +61,15 @@ Parameters:
     Description: >
       Secrets Manager ARN for the PORTAL database URL. The dashboard shares the portal's
       database (DOD-INV-SINGLE-DB) and must never be pointed at the directory's.
+
+  # A PARAMETER because nothing reserves it. The portal's 443 listener currently
+  # has no numbered rules at all — checked live — so 100 is free today. It is not
+  # RESERVED, though: a future portal rule or another stack can take it, and then
+  # this deploy fails PriorityInUse. Cheaper to change a parameter under pressure
+  # than to edit a template.
+  ListenerRulePriority:
+    Type: Number
+    Default: 100
 
   Cpu:
     Type: String
@@ -271,7 +288,7 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
       ListenerArn: !Ref PortalAlbListenerArn
-      Priority: 100
+      Priority: !Ref ListenerRulePriority
       Conditions:
         - Field: host-header
           HostHeaderConfig:
@@ -285,6 +302,9 @@ Resources:
     DependsOn: [ListenerRule, ListenerCertificate]
     Properties:
       ServiceName: !Sub "cello-ops-dashboard-${Environment}"
+      # The literal, matching how this cluster is named today (cello-dev). Every
+      # other stack imports cello-${env}-cluster-arn; this is the one that breaks
+      # silently if the cluster is ever renamed.
       Cluster: !Sub "cello-${Environment}"
       LaunchType: FARGATE
       DesiredCount: 1
@@ -326,5 +346,3 @@ Resources:
 Outputs:
   OpsUrl:
     Value: !Sub "https://${OpsHostname}"
-  EcrRepositoryUri:
-    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cello-ops-dashboard"
