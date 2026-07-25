@@ -382,7 +382,7 @@ CELLO is split across two repos. `trustless-cello` (server-side) depends on pack
 ## Compaction Protocol
 
 When Andre says "prepare for compaction" or "compact following the compaction protocol",
-**load the `compaction-protocol` skill and follow it.** No follow-through doc means no compaction.
+**load `/compaction-protocol` and follow it.** No follow-through doc means no compaction.
 
 ---
 

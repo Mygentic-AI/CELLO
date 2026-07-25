@@ -754,8 +754,8 @@ one build script (all in `infra/`):
 - **`infra/build-portal.sh`** → `git archive` the committed cello-portal HEAD → S3 → CodeBuild. Images
   built in AWS only (never docker-pushed from local). **Built `cello-portal:8a2603b` + `:latest`**
   (commit 8a2603b on m8-assembly; CodeBuild SUCCEEDED).
-- **`cello-portal-data.yaml`** → stack `cello-portal-data-dev` **[CREATE_COMPLETE]**. SGs (portal-alb
-  `sg-0640c459d8887e2b6` / portal-task `sg-00c0f6e65386bf534` / portal-db), RDS Postgres
+- **`cello-portal-data.yaml`** → stack `cello-portal-data-dev` **[UPDATE_COMPLETE, 2026-07-25]**. SGs (portal-alb
+  `sg-0640c459d8887e2b6` / portal-task `sg-00c0f6e65386bf534` / portal-db **`sg-07ba031fda87adb88`**), RDS Postgres
   **`cello-portal-dev.c9iokw02w3f8.us-east-1.rds.amazonaws.com:5432`** (db.t4g.micro, DB `cello_portal`,
   ManageMasterUserPassword → secret `rds!db-1292ef13-…`), ACM cert
   `arn:aws:acm:us-east-1:257394457473:certificate/de0d5927-601e-450e-914a-f58ff7a80200` (issued, DNS-
@@ -769,6 +769,14 @@ one build script (all in `infra/`):
   PORTAL_BASE_URL, PORTAL_EMAIL_FROM, **WEBAUTHN_RP_ID=portal.cello.mygentic.ai**,
   **WEBAUTHN_ORIGIN=https://portal.cello.mygentic.ai**. **Current ImageTag: `776752d`** (was f6a43d8 at
   first deploy; redeployed several times today for live fixes).
+  **2026-07-25 update (M11):** added Output/Export `cello-dev-portal-db-sg` = `sg-07ba031fda87adb88`.
+  Zero resource changes — the changeset was empty, only the Output is new. Needed because
+  `cello-waitlist.yaml` imports that SG to open 5432 from the waitlist Lambdas; without the export
+  the only DB security group reachable by cross-stack reference is the DIRECTORY's
+  (`cello-dev-rds-sg`), which is what the waitlist template's first draft wrongly imported.
+  Applied by hand via `aws cloudformation deploy` (deploy.sh does not own this stack;
+  `infra/deploy-portal.sh` step 3 does, and running the whole script would have rebuilt the
+  portal image unnecessarily).
 
 ### 2026-06-29 — operator-verified live + the fixes it surfaced
 Andre exercised the live portal; each issue was fixed, redeployed, and verified:
