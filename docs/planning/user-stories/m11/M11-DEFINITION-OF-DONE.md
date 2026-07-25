@@ -44,6 +44,8 @@ Every DoD line carries a `[repo]` tag immediately after its ID. Use this table t
 ## Status legend
 ✅ PROVEN (enforcer-green) · 🟡 BUILT/UNVERIFIED-LIVE · 🟠 PARTIAL · ❌ NOT BUILT · 🅿️ PARKED
 
+**Every 🟡 line owes an AWS enforcer, and they are listed in dependency order in [[M11-NEXT-STEPS-AWS-AWAKE]].** That document was written while infra was hibernated and none of it could be run — read it before deploying anything, particularly §0, which gates six lines and cannot be answered by reading this repo.
+
 ---
 
 ## Tier I — Invariants (must hold in every phase, every line)

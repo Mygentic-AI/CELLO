@@ -2345,3 +2345,34 @@ default correct means the unverified case is now a *stated condition* of the tes
 rather than the silent background state of tests that are about something else.
 
 **Runs:** 417 tests green; all statically-checkable M11 invariants hold.
+
+
+---
+
+### Entry 50: the AWS half, written down while it could not be run
+**Date:** 2026-07-25
+**Target:** all 🟡 lines
+
+Infra was hibernated for this entire session, so every AWS-dependent enforcer stayed unrun and 56 DoD
+lines sat at 🟡. That is the correct status, but it is also a large amount of *sequencing knowledge* held
+only in forty-nine journal entries, and sequencing knowledge decays fastest.
+
+[[M11-NEXT-STEPS-AWS-AWAKE]] is that knowledge, ordered. The order is the content, not the list:
+
+- **SES production access first**, because it is the only item nobody can answer by reading the repo, and
+  in the sandbox every email enforcer below it appears to pass while silently reaching nobody real.
+- **Stack before code**, because CloudFormation deliberately ships placeholder bodies that raise — a stub
+  returning a plausible empty result would let a half-deployed stack look healthy.
+- **Migrations before the email enforcer**, because `0012` is the migration that failed on the first
+  database holding real data, and that condition exists nowhere else.
+- **Gallery subdomain before the receipt footer**, because the reverse makes every sealed session
+  advertise a 404 (Entry 47).
+
+The one verification worth doing immediately after the first deploy is named explicitly: confirm the
+Lambdas point at `portal_admin@…/cello_portal` and not `postgres@…/cello_dev`. That shipped wrong once
+(Entry 40) and it fails as `42P01 undefined_table` — an error that sends the operator to the migration
+subsystem rather than to the connection string.
+
+It also states the known gaps rather than leaving them to be rediscovered: E-re mails a daily visitor who
+never signs in, a rotated master password stales all twelve Lambdas, and two `status_note` kinds have a
+reader and no producer.
