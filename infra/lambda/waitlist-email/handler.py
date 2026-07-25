@@ -152,6 +152,7 @@ def claim_jobs(conn, limit, correlation_id):
             """
             SELECT j.id, j.user_id, j.template, j.attempts, j.payload,
                    u.email, u.display_name, u.email_status, u.content_alerts,
+                   u.email_verified,
                    u.status AS user_status, u.wave_number,
                    q.queue_position, q.queue_size,
                    rc.code AS referral_code
@@ -319,6 +320,24 @@ def should_send(job):
     if job["template"] in CONTENT_ALERT_TEMPLATES and not job["content_alerts"]:
         return False, "not_opted_into_content_alerts", False
 
+    # DOD-INV-EMAIL-SEGMENTS defines the base list as "all VERIFIED signups".
+    # Nothing enforced that: e2_survey and e3_update are enqueued at signup —
+    # before verification, by construction — and the dispatcher re-checked
+    # status and suppression but never email_verified. So every unconfirmed
+    # address received the survey nudge a day later and an update two weeks
+    # after that, from a list it was never actually on.
+    #
+    # NOT terminal: confirming is exactly the thing that makes these sendable,
+    # and retiring the job would mean somebody who confirms on day three never
+    # receives the survey they were meant to get on day two.
+    #
+    # PRE_VERIFICATION_TEMPLATES is the deliberate exception and has to stay
+    # small: e1_confirm IS the confirmation, and e_magic_link is how somebody
+    # who never confirmed signs in to fix it. Gate either and the account is
+    # unrecoverable — a check that locks the door it is guarding.
+    if job["template"] not in PRE_VERIFICATION_TEMPLATES and not job["email_verified"]:
+        return False, "email_not_verified", False
+
     return True, None, False
 
 
@@ -367,6 +386,10 @@ def finish(conn, job_id, status, correlation_id, **fields):
 
 
 NURTURE_INTERVAL_DAYS = int(os.environ.get("EMAIL_NURTURE_INTERVAL_DAYS", "14"))
+
+# The only two messages that may reach an unverified address, because each is
+# part of becoming verified. Everything else is base-list mail and waits.
+PRE_VERIFICATION_TEMPLATES = frozenset({"e1_confirm", "e_magic_link"})
 
 
 def schedule_next_nurture(conn, job, correlation_id):

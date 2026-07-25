@@ -154,13 +154,8 @@ This has consequences that must be understood before making any implementation d
 
 ## Vault Structure
 
-```
-docs/planning/
-├── protocol-map.md          # Start here — 9 protocol domains, readiness, key discussion logs
-├── end-to-end-flow.md       # Canonical narrative — every domain in one story
-├── discussion_logs/         # YYYY-MM-DD_HHMM_slug.md — one file per design session
-└── user-stories/            # m0/ m1/ … — story YAML files per milestone
-```
+Start at `docs/planning/protocol-map.md` (protocol domains + readiness) and
+`docs/planning/end-to-end-flow.md` (the canonical narrative); `ls docs/planning/` for the rest.
 
 Every document needs YAML frontmatter: `name`, `type`, `date`, `topics`, `status`, `description`.
 
@@ -411,17 +406,6 @@ CELLO is split across two repos. `trustless-cello` (server-side) depends on pack
 3. Never write a story that changes cello-client behavior without also specifying the version bump and the trustless-cello package.json update as blocking ACs.
 
 **Dead pipelines (cleanup pending):** `cello-crypto-pipeline`, `cello-transport-pipeline`, `cello-client-pipeline`, `cello-protocol-types-pipeline` in `cello-cicd.yaml` still watch `packages/crypto/`, `packages/transport/` etc. in trustless-cello. These paths are stale post-REPOSPLIT — no code changes will ever land there. These pipelines trigger on ghost changes and waste CI resources. They must be removed from `cello-cicd.yaml` and from `pipeline-mappings.json`, and `deploy-lambdas.sh dev filter` must be run after.
-
----
-
-## Slash Commands
-
-- **`/cello-read`** — Use at session start. Loads current project state without reading everything.
-- **`/cello-sprint M4`** — Implementation briefing for a milestone. For M4+, loads adapter/observability context.
-- **`/cello-story`** — Write new user stories. Enforces E2E-first ordering and observability ACs.
-- **`/cello-review STORY-ID`** — Review a completed implementation. Verifies AC coverage, SI coverage, observability implementation, fixture discipline, gate sequence.
-- **`/cello-link`** — Run after adding or modifying documents. Wires new files into the vault graph via wikilinks.
-- **`/cello-walkie-talkie`** — Enter a CELLO peer-to-peer conversation session, driven by a strict walkie-talkie turn protocol (one send → always block on receive; two-close `[[WRAP]]` ending). Update after each milestone.
 
 ---
 

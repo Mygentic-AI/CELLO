@@ -49,16 +49,29 @@ def mailer(database, monkeypatch):
     return mod
 
 
-def make_user(email, *, email_status="active", content_alerts=False, status="waiting", points=0):
+def make_user(
+    email,
+    *,
+    email_status="active",
+    content_alerts=False,
+    status="waiting",
+    points=0,
+    email_verified=True,
+):
+    """Verified by DEFAULT, because most of this file is about suppression and
+    segments rather than about verification — and base-list mail now requires a
+    confirmed address (DOD-INV-EMAIL-SEGMENTS). The unverified case has its own
+    tests below rather than being the accidental state of every other one."""
     conn = psycopg2.connect(PGURL)
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO waitlist_users (email, anon_id, email_status, content_alerts, status, points_total)
-            VALUES (%s, %s, %s, %s, %s, %s) RETURNING waitlist_id
+            INSERT INTO waitlist_users
+                (email, anon_id, email_status, content_alerts, status, points_total, email_verified)
+            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING waitlist_id
             """,
-            (email, str(uuid.uuid4()), email_status, content_alerts, status, points),
+            (email, str(uuid.uuid4()), email_status, content_alerts, status, points, email_verified),
         )
         uid = cur.fetchone()[0]
         cur.execute(
@@ -872,3 +885,76 @@ def test_the_sweep_is_bounded_so_a_backfill_cannot_starve_confirmations(mailer, 
     assert sweep_re(mailer)["re_engage_enqueued"] == 2
     assert sweep_re(mailer)["re_engage_enqueued"] == 1
     assert sweep_re(mailer)["re_engage_enqueued"] == 0
+
+
+# ── DOD-INV-EMAIL-SEGMENTS: the base list is VERIFIED signups ─────────────────
+
+
+@pytest.mark.parametrize("template", ["e2_survey", "e3_update", "e_re_engage"])
+def test_base_list_mail_waits_for_a_confirmed_address(mailer, template):
+    """The invariant says the base list is "all VERIFIED signups", and nothing
+    enforced it. e2_survey and e3_update are enqueued AT SIGNUP — before
+    verification, by construction — so every unconfirmed address received the
+    survey nudge a day later and an update two weeks after that, from a list it
+    was never on."""
+    uid = make_user(f"unconfirmed-{template}@example.test", email_verified=False)
+    enqueue(uid, template)
+
+    counts = mailer.lambda_handler({}, None)
+
+    assert mailer.fake.sent == []
+    assert counts["skipped"] == 1
+
+
+def test_the_skip_is_reversible_so_confirming_late_still_delivers(mailer):
+    """NOT terminal. Confirming is exactly what makes these sendable, and
+    retiring the job would mean somebody who confirms on day three never
+    receives the survey they were meant to get on day two."""
+    uid = make_user("late@example.test", email_verified=False)
+    jid = enqueue(uid, "e2_survey")
+
+    mailer.lambda_handler({}, None)
+    assert job_status(jid) == "pending", "a reversible skip returns to pending"
+
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE waitlist_users SET email_verified = true WHERE waitlist_id = %s", (uid,))
+    conn.close()
+
+    mailer.lambda_handler({}, None)
+    assert [m["Destination"]["ToAddresses"][0] for m in mailer.fake.sent] == ["late@example.test"]
+
+
+def test_e1_is_not_gated_because_it_IS_the_confirmation(mailer):
+    """Gate this and the account is unrecoverable — a check that locks the door
+    it is guarding."""
+    uid = make_user("needs-confirm@example.test", email_verified=False)
+    enqueue(uid, "e1_confirm")
+
+    mailer.lambda_handler({}, None)
+
+    assert len(mailer.fake.sent) == 1
+
+
+@pytest.mark.parametrize("template", ["e1_confirm", "e_magic_link"])
+def test_the_exception_list_is_exactly_the_two_that_enable_verification(mailer, template):
+    """Asserted on the predicate rather than through a send, because
+    e_magic_link also needs a live token row and that machinery is not what is
+    under test here. What matters is that the gate lets these two past an
+    unverified address — and only these two."""
+    job = {
+        "template": template,
+        "email_status": "active",
+        "content_alerts": False,
+        "email_verified": False,
+    }
+
+    send, reason, terminal = mailer.should_send(job)
+
+    assert send is True, f"{template} must reach an unverified address"
+    assert reason is None
+
+    # And the inverse, so the list cannot quietly grow.
+    gated = dict(job, template="e2_survey")
+    assert mailer.should_send(gated) == (False, "email_not_verified", False)
