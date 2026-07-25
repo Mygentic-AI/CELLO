@@ -366,6 +366,21 @@ each line.
   placeholder. **Not proven:** the approve/reject actions, which are Next server actions and cannot
   be driven from curl without reconstructing the action encoding; their atomic review-claim is
   unit-tested. That boundary is stated rather than glossed.
+- **THE ADMISSION CHAIN, END TO END (first time, 2026-07-25)** — real handler code against a local
+  Postgres carrying all 22 migrations. A verified user; `waitlist-waves` opens wave 2 and admits 1
+  (`{admitted:1, wave_number:2, breakdown:{premium:0, priority:1, zero:0}}`), minting a token; the
+  gate burns it — `{allowed:true, reason:'token_burned', waitlist_user_id:…}`; a SECOND burn of the
+  same token from a DIFFERENT Telegram account is refused `{allowed:false,
+  error:'token_already_used'}`; and a plain check on the now-admitted account returns
+  `{allowed:true, reason:'already_linked', source:'waitlist_token'}`.
+
+  That is `DOD-INV-TOKEN-SINGLE-USE`'s enforcer, the slow door of `DOD-INV-TWO-DOOR`, and clauses
+  1–3 of `DOD-TELEGRAM-GATE-1` — executed rather than unit-tested. It also confirms the client fix
+  that reads `alreadyLinked` from the gate's `reason`: the gate does emit `already_linked`.
+
+  **Local, not the deployed database** — same standard the schema lines were held to. What remains
+  is the same run against `cello_portal` with a real Telegram account, which needs an admitted
+  operator and DB visibility.
 - **wave gate** — `capacity` alone is refused `invalid_capacity`; with a capacity but no operator,
   refused `missing_opened_by` ("every wave names the operator who opened it"); with both, it declines
   to open a wave at all: `{admitted:0, reason:'all_unverified', waiting_total:8,
