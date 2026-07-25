@@ -13,11 +13,11 @@ topics:
   - cost
 description: >
   Supersedes the 06:17 GCP deployment log. AWS credits are running out, so migrating
-  all but one directory/relay pair to GCP is forced rather than optional. Establishes
-  that only five agents hold shares — so share preservation is not worth engineering —
-  documents the lift-and-shift path for when that changes, and shows the cross-cloud
-  replication problem shrinks from three VPN tunnels to one. Answers the nodeId
-  convention and GCP project questions.
+  all but one directory/relay pair to GCP is forced rather than optional. Total data
+  loss is acceptable and wanted — there is one user and a clean slate is a chance to
+  test every flow end to end — which turns this from a migration into a rebuild and
+  removes the cross-cloud VPN from the critical path entirely. Recommends an AWS relay
+  plus all-GCP directories. Answers the nodeId convention and GCP project questions.
 status: draft
 ---
 
