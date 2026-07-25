@@ -24,6 +24,24 @@ Parameters:
     Type: String
     Default: cello-ops-dashboard
 
+  # THE CLAIM CARRIES IMMUTABLE NUMERIC IDS, and nothing in GitHub's own
+  # documentation of the `sub` format shows them. Observed in CloudTrail after
+  # two failed deploys:
+  #   repo:Andre-Mygentic@186459211/cello-ops-dashboard@1312030261:ref:refs/heads/main
+  # The IDs sit INSIDE the owner and repo segments, so neither
+  # `repo:owner/repo:ref:refs/heads/main` nor even `repo:owner/repo:*` matches.
+  #
+  # Pinning the IDs is STRONGER than pinning the names: a repository rename
+  # changes the name and keeps the ID, and a different account cannot mint the
+  # same one. The names stay in the parameters for readability.
+  GitHubOwnerId:
+    Type: String
+    Default: "186459211"
+
+  GitHubRepoId:
+    Type: String
+    Default: "1312030261"
+
 Resources:
   # Created here rather than assumed to exist. The account had NO GitHub OIDC
   # provider (only accounts.google.com) when this was written — checked, not
@@ -58,10 +76,10 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                # main only. A push to any other branch, and any pull_request
-                # from a fork, gets no credentials — which is the point of
-                # pinning the ref rather than only the repo.
-                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOwner}/${GitHubRepo}:ref:refs/heads/main"
+              StringLike:
+                # One repository, identified by IDs, any ref within it. See the
+                # note on GitHubOwnerId for why the documented form does not work.
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOwner}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:*"
       Policies:
         - PolicyName: PushToOwnRepository
           PolicyDocument:
