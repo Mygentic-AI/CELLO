@@ -25,6 +25,20 @@ recent executions (`985fd257` today, `2fa01b74` at 07:34).
 It reads as a flaky protocol test. It is a stage-1 baked value that went stale when the ALB was
 replaced and the cicd stack was not redeployed — the exact lifecycle `infra/CLAUDE.md` documents.
 
+**Two things block the deploy of this fix (found 2026-07-25):**
+1. `cello-cicd.yaml` has a REQUIRED `CelloClientWebhookSecret` (no default) that the live stack does
+   not carry — the stack has been undeployable since that parameter was added, exactly as
+   `infra/CLAUDE.md` records. No secret of that name exists in Secrets Manager, so the value has to
+   come from whoever owns the GitHub webhook.
+2. `cello-cicd.yaml` creates a GitHub OIDC provider when `ExistingGitHubOidcProviderArn` is empty,
+   and AWS permits ONE per issuer per account. `cello-github-oidc-dev` created it today, so the next
+   cicd deploy would have failed `EntityAlreadyExists`. deploy.sh now resolves and passes the
+   existing ARN. **That landmine was mine.**
+
+Also worth noting: the live stack parameter says `cello-dir-dev-85618485`, the CodeBuild project says
+`cello-dir-dev-1341968405`, and the real ALB is `cello-dir-dev-1389700310`. Three values, none
+current — which is the argument for resolving it at run time rather than storing it anywhere.
+
 **Fix is written and committed, NOT deployed** (all pushes are blocked on GitHub email
 verification): the smoke runner resolves the ALB from AWS at run time, an empty
 `StagingDirectoryUrl` means exactly that, deploy.sh stops baking it, and `CodeBuildRole` gains

@@ -1041,7 +1041,17 @@ if [[ "${REGION}" == "us-east-1" ]]; then
 
   # Pass STAGING_DIRECTORY_URL from stack output so CodePipeline can inject it into
   # the smoke test CodeBuild action (AC-009: no hardcoded .elb.amazonaws.com strings)
+  # cello-cicd.yaml creates a GitHub OIDC provider when this is empty, and AWS
+  # permits only ONE per issuer per account. cello-github-oidc-dev already created
+  # it (2026-07-25), so leaving this empty makes the next cicd deploy fail with
+  # EntityAlreadyExists — a landmine laid by that stack, defused here rather than
+  # discovered mid-deploy.
+  OIDC_PROVIDER_ARN=$(aws iam list-open-id-connect-providers --region "${REGION}" \
+    --query "OpenIDConnectProviderList[?contains(Arn,'token.actions.githubusercontent.com')].Arn" \
+    --output text 2>/dev/null || true)
+
   deploy_stack "cello-cicd-${ENVIRONMENT}" "cello-cicd.yaml" \
+    "ExistingGitHubOidcProviderArn=${OIDC_PROVIDER_ARN}" \
     "Environment=${ENVIRONMENT}" \
     "GitHubConnectionArn=${GITHUB_CONNECTION_ARN}" \
     "StagingDirectoryUrl=${STAGING_DIRECTORY_URL}"
