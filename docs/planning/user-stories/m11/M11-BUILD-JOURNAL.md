@@ -2663,3 +2663,37 @@ exists to cover. That assertion was added in an earlier round for exactly this, 
 
 **Runs:** 442 Lambda tests, 18 site tests, and the schema enforcer green on all five properties.
 Production dry run: `{"pending": [], "already_applied_here": 22, "ledger_rows_total": 29}`.
+
+---
+
+### Entry 57: two silences in the path an operator reads at 1am
+**Date:** 2026-07-25
+**Target:** DOD-WAVE-ASSEMBLY-1, DOD-INV-WAVE-GATE
+
+Both from review, and both the same species as the errors this milestone keeps producing: a message that
+names where a check happened rather than why it failed.
+
+**"No waiting users matched the selection rules."** The operator is looking at an ops-dashboard queue
+showing N waiting people — `waitlist_queue` does not filter on `email_verified` — while the Lambda says
+nobody matched. It points at the selection rules. The cause is almost always that nobody has confirmed
+their address, which became an exclusion criterion only hours earlier, in Entry 51. The empty result now
+counts those users and says so, and returns `excluded_unverified` so the dashboard can show it.
+
+Verified live against the four simulator signups sitting in the production database:
+
+> `{"admitted": 0, "excluded_unverified": 4, "detail": "No waiting users were eligible; no wave was
+> opened. 4 waiting user(s) have not confirmed their email address and cannot be admitted — a wave seat
+> given to an unreachable address is spent."}`
+
+**An under-filled wave was silent.** Postgres applies `LIMIT` before taking row locks, and rows dropped
+by the post-lock re-check are *not* replaced. So a second wave running behind a first sees those users
+already `admitted`, drops them, and comes back short — while the existing `len(admitted) != len(cohort)`
+guard sees nothing, because those rows never reached the cohort. `capacity` and `short_by` are now on
+both the response and the log line, so under-fill is reported rather than left for an operator to notice
+by comparing two numbers.
+
+Neither is a correctness bug. Both are the difference between an operator diagnosing something in a
+minute and spending an hour on the wrong subsystem — which is the whole content of the debugging rules
+this project keeps re-learning.
+
+**Runs:** 445 tests green; both reverts turn their named test red; redeployed and confirmed on live data.
