@@ -17,10 +17,28 @@ description: >
   is gated on cross-cloud Postgres replication and the deferred share-enrollment story.
   Finds that adding exactly one node (N=3→4) buys zero extra fault tolerance, and that
   Cloud Run is disqualified for both node types by its 60-minute request cap.
-status: draft
+status: superseded
+superseded_by: 2026-07-25_1034_gcp-migration-credit-forced-two-wave-plan.md
 ---
 
 # GCP relay and directory deployment plan
+
+> **⚠️ SUPERSEDED by `2026-07-25_1034_gcp-migration-credit-forced-two-wave-plan.md`.**
+>
+> This log was written assuming GCP nodes were an *optional* provider-diversity addition, and it
+> recommended **relay now, directory post-launch**. That premise is wrong: AWS credits are running
+> out, so migrating all but one directory/relay pair to GCP is forced. **The deferral
+> recommendation in §7 is withdrawn**, and the "one GCP node" framing throughout is obsolete — the
+> target is 1 AWS + 6 GCP nodes.
+>
+> Two specific corrections: the cross-cloud replication analysis in §4 overstates the difficulty
+> at the real scale (six GCP nodes peer natively; only *one* cross-cloud link is needed, not
+> three), and §5's claim that the directory is "blocked on the deferred enrollment story"
+> overstated it — the directory side of resharing is already wired in `frost-handler.ts`.
+>
+> Still accurate and not repeated in the newer log: the Cloud Run 60-minute disqualification, the
+> Cloud SQL / Postgres 18 findings, the relay-vs-directory dependency asymmetry, the AWS→GCP
+> resource mapping table, and the hardcoded-multiaddr defect at `directory.ts:1095`.
 
 **Investigation only. Nothing was created, enabled, or modified in GCP or AWS.** No API was
 enabled, no project created. Every GCP claim below is from the CLI or from Google's own docs;
