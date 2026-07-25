@@ -338,24 +338,53 @@ These are not DoD lines — they are the real-world checks that determine whethe
 ## Parked
 *(Genuine undecidable forks. Never silently dropped.)*
 
-- **`waitlist_agent_links` has three readers and no writer (2026-07-25).** Clause 4 of
-  `DOD-TELEGRAM-GATE-1` says the gate inserts `waitlist_agent_links (agent_pubkey,
-  waitlist_user_id)` at token-burn time. The Lambda does exactly that — but only `if agent_pubkey`,
-  and **no caller ever sends one**, because at burn time it does not exist: the registration flow ends
-  at `PRE_AUTH_TOKEN_ISSUED`, and the operator only creates an agent afterwards with
-  `cello register <agent> <token>`. So the table stays empty while `waitlist-firstwin`,
-  `waitlist-gallery` and `waitlist-feedback` all query it as though it were populated — first-win
+- **ONE FORK, THREE FACES: nothing carries an agent-side event to AWS (2026-07-25).**
+
+  Three DoD lines are open, they look unrelated, and they are the same missing thing:
+
+  | Line | What it needs | Carrying |
+  |---|---|---|
+  | `DOD-TELEGRAM-GATE-1` clause 4 | a writer for `waitlist_agent_links` | `agent_pubkey` |
+  | `DOD-FIRST-WIN-1` | an invoker for `waitlist-firstwin` | the seal event |
+  | `DOD-FEEDBACK-DETECTION-1` | a writer for `session_telemetry` | session metadata |
+
+  In every case the fact originates on the operator's machine — in the daemon or at agent creation —
+  and must arrive in the waitlist database. **The daemon holds no AWS credentials, and there is no
+  path.** `waitlist-firstwin` is deployed with no invoker and its own CFN `Description` says so.
+  `waitlist_agent_links` has three readers (firstwin, gallery, feedback) and no writer, so first-win
   attribution and premium-invite minting silently never fire.
 
-  This is **the same fork as the first-win trigger above**, and they should be decided together: both
-  need an agent-pubkey-bearing event to reach the waitlist backend, and the natural moment is when the
-  pre-auth token is claimed and the pubkey first exists. The obstacle is the same too — that moment
-  happens in the directory or the client, and `DOD-INV-NO-DIRECTORY-RELAY` puts directory code out of
-  M11's scope. Option 1 there (a signature-authenticated public route) would serve both, since
-  `waitlist_agent_links` is precisely the table that makes such a route verifiable.
+  **Why it cannot simply be written at token burn.** The gate inserts the bridge only `if
+  agent_pubkey`, and no caller sends one, because at burn time it does not exist: registration ends
+  at `PRE_AUTH_TOKEN_ISSUED` and the operator creates the agent afterwards with `cello register`.
+  Checked: the ops-agent POSTs `/internal/pre-authorize` to *issue* a token and is never told when
+  one is *claimed*, so there is no existing notification to hang this on either.
 
-  **Clause 4 of DOD-TELEGRAM-GATE-1 is therefore PARTIAL, not done**: burn and `telegram_accounts` are
-  atomic and proven; the agent bridge is not written by anything. Recorded rather than left as three
+  **The options, and the constraint that shapes them.** `DOD-INV-NO-DIRECTORY-RELAY` puts directory
+  and relay code outside M11, which rules out the otherwise-obvious answer (the directory already
+  authenticates the agent and already holds AWS credentials — it would be a few lines there).
+
+  1. **A signature-authenticated public route on the waitlist API.** The agent signs its payload with
+     the Ed25519 key it already has; the Lambda verifies against the pubkey. Serves all three lines
+     with one endpoint. Note the bootstrapping order: the first such call is what *creates* the
+     bridge row, so the route cannot authorise against `waitlist_agent_links` — it must carry the
+     pre-auth token or a session as the proof of which waitlist user this is, and write the link as a
+     side effect. Everything after that can authenticate against the link.
+  2. **The directory forwards on claim.** Smallest code, cleanest trust story, and blocked by the
+     invariant rather than by difficulty — so it is really a question of whether M11 may spend a
+     directory change, not whether the design works.
+  3. **Leave all three unshipped for launch.** They are growth-loop features — attribution, a points
+     award, an outreach trigger. Under the launch-triage test they are forgivable: nobody is stopped
+     from connecting two agents. The cost of choosing this is that it must be *stated*, because three
+     deployed Lambdas currently read a table nothing writes, which reads as working.
+
+  **Not decided here, and deliberately not decided by an agent overnight** — option 2 needs a ruling
+  on the invariant, and option 1 is a new public authenticated surface on the trust layer, which is
+  not a thing to introduce unreviewed. Recorded as one fork so it gets one decision instead of three.
+
+  **Consequently `DOD-TELEGRAM-GATE-1` clause 4 is PARTIAL, not done**: burn and `telegram_accounts`
+  are atomic and proven; the agent bridge is not written by anything.
+
   Lambdas querying a table nothing writes.
 
 - **How the seal event reaches `waitlist-firstwin` (2026-07-25).** The function is deployed with **no
