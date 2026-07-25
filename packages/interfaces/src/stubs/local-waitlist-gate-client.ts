@@ -29,8 +29,8 @@ export class LocalWaitlistGateClient implements WaitlistGateClient {
     this.#warn =
       warn ??
       ((message, context) => {
-        // eslint-disable-next-line no-console -- stub of last resort; the real
-        // logger is injected by the composition root when one exists.
+        // Stub of last resort; the real logger is injected by the composition
+        // root when one exists.
         console.warn(message, context ?? {});
       });
   }
@@ -42,7 +42,7 @@ export class LocalWaitlistGateClient implements WaitlistGateClient {
         "LocalWaitlistGateClient is in use — the waitlist gate is NOT being enforced. " +
         "This must never appear outside CELLO_ENV=local.",
     });
-    return { allowed: true, alreadyLinked: true };
+    return { allowed: true, alreadyLinked: false };
   }
 
   async redeem(telegramId: string, token: string): Promise<WaitlistTokenRedemption> {

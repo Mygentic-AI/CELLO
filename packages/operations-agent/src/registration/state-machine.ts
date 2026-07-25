@@ -218,10 +218,12 @@ export class RegistrationStateMachine {
     // propagating is the fail-closed outcome, whereas a catch that logged and
     // continued would admit on "could not check".
     let gateAllowed = true;
+    let gateMessage = "Access is currently invitation-only.";
     if (waitlistGate) {
       const decision = await waitlistGate.check(channelUserId);
       gateAllowed = decision.allowed;
       if (!decision.allowed) {
+        gateMessage = decision.message;
         logger.info("registration.gate.token_required", {
           channel,
           correlationId,
@@ -242,12 +244,17 @@ export class RegistrationStateMachine {
       });
     }
 
-    // Create in INITIAL state, then transition to whichever door applies
+    // INSERTED DIRECTLY INTO THE DESTINATION STATE, not INITIAL-then-transition.
+    // The two-step left a window: if the process died between the insert and the
+    // transition, a GATED user's record sat in INITIAL — and INITIAL's re-prompt
+    // asks for a phone number. That is precisely the PII ordering this gate
+    // exists to enforce, inverted, and it persisted for seven days because the
+    // contact-prompt sweep only looks at AWAITING_CONTACT.
     const record = await repository.insert({
       phoneStubHash,
       channel,
       channelUserId,
-      state: "INITIAL",
+      state: gateAllowed ? "AWAITING_CONTACT" : "AWAITING_WAITLIST_TOKEN",
       expiresAt,
     });
 
@@ -259,18 +266,22 @@ export class RegistrationStateMachine {
     });
 
     if (!gateAllowed) {
-      const gated = await repository.transition(record.id, "AWAITING_WAITLIST_TOKEN");
+      const gated = record;
+      // The GATE'S wording, not a canned string. The interface promises the
+      // four refusals stay distinct, and the previous version kept that promise
+      // on the redeem path and broke it here — every check refusal, whatever
+      // its cause, read as "invitation-only".
       await this.#deps.channel.send(
         channelUserId,
-        "Welcome to CELLO! Access is currently invitation-only.\n\n" +
+        `Welcome to CELLO! ${gateMessage}\n\n` +
           "If you have a waitlist invitation token, send it now and I'll get you set up. " +
-          "If you don't, you can join the waitlist at https://cello.mygentic.ai — " +
+          "Otherwise you can join the waitlist at https://cello.mygentic.ai — " +
           "we open access in waves.",
       );
       return gated;
     }
 
-    const awaitingRecord = await repository.transition(record.id, "AWAITING_CONTACT");
+    const awaitingRecord = record;
 
     // Send request_contact prompt (OA-2 item 2: welcome + directory-scoped privacy note)
     await this.#deps.channel.send(
@@ -365,7 +376,7 @@ export class RegistrationStateMachine {
       correlationId,
     });
 
-    const awaitingRecord = await repository.transition(record.id, "AWAITING_CONTACT");
+    const awaitingRecord = record;
 
     // Send request_contact prompt (OA-2 item 2: returning-user welcome + same privacy note)
     await this.#deps.channel.send(

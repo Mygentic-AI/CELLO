@@ -338,6 +338,26 @@ These are not DoD lines — they are the real-world checks that determine whethe
 ## Parked
 *(Genuine undecidable forks. Never silently dropped.)*
 
+- **`waitlist_agent_links` has three readers and no writer (2026-07-25).** Clause 4 of
+  `DOD-TELEGRAM-GATE-1` says the gate inserts `waitlist_agent_links (agent_pubkey,
+  waitlist_user_id)` at token-burn time. The Lambda does exactly that — but only `if agent_pubkey`,
+  and **no caller ever sends one**, because at burn time it does not exist: the registration flow ends
+  at `PRE_AUTH_TOKEN_ISSUED`, and the operator only creates an agent afterwards with
+  `cello register <agent> <token>`. So the table stays empty while `waitlist-firstwin`,
+  `waitlist-gallery` and `waitlist-feedback` all query it as though it were populated — first-win
+  attribution and premium-invite minting silently never fire.
+
+  This is **the same fork as the first-win trigger above**, and they should be decided together: both
+  need an agent-pubkey-bearing event to reach the waitlist backend, and the natural moment is when the
+  pre-auth token is claimed and the pubkey first exists. The obstacle is the same too — that moment
+  happens in the directory or the client, and `DOD-INV-NO-DIRECTORY-RELAY` puts directory code out of
+  M11's scope. Option 1 there (a signature-authenticated public route) would serve both, since
+  `waitlist_agent_links` is precisely the table that makes such a route verifiable.
+
+  **Clause 4 of DOD-TELEGRAM-GATE-1 is therefore PARTIAL, not done**: burn and `telegram_accounts` are
+  atomic and proven; the agent bridge is not written by anything. Recorded rather than left as three
+  Lambdas querying a table nothing writes.
+
 - **How the seal event reaches `waitlist-firstwin` (2026-07-25).** The function is deployed with **no
   invoker**, and its CFN Description says so. `DOD-FIRST-WIN-1` says the trigger is a "session seal event
   from the daemon" — but the daemon runs on the operator's laptop and holds **no AWS credentials**, so

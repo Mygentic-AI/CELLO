@@ -14,7 +14,15 @@ import type { RegistrationRecord } from "@cello-protocol/interfaces";
 function makeDeps(overrides: Record<string, unknown> = {}) {
   const record = { id: "reg-1", state: "INITIAL", channel: "telegram", channelUserId: "tg-1" } as unknown as RegistrationRecord;
   const repository = {
-    insert: vi.fn().mockResolvedValue(record),
+    // HONOURS THE STATE IT IS GIVEN, because the real repository does. The
+    // previous fake returned a hardcoded INITIAL regardless, which is how a
+    // change from insert-then-transition to insert-directly went unnoticed —
+    // and, more seriously, why nothing here round-trips through
+    // deserializeState (see repository-state-roundtrip.test.ts).
+    insert: vi.fn().mockImplementation(async (row: { state?: string }) => ({
+      ...record,
+      state: row.state ?? "INITIAL",
+    })),
     transition: vi.fn().mockImplementation(async (_id: string, state: string) => ({ ...record, state })),
   };
   const channel = { send: vi.fn().mockResolvedValue(undefined) };
@@ -44,17 +52,31 @@ describe("first message — clauses 1 and 2", () => {
     const out = await new RegistrationStateMachine(deps).handleNewUser("tg-1", "telegram", "hash");
 
     expect(out.state).toBe("AWAITING_CONTACT");
-    expect(repository.transition).toHaveBeenCalledWith("reg-1", "AWAITING_CONTACT");
+    // The gate was ASKED — without this the test passes with the gate removed
+    // entirely, since the ungated path also reaches AWAITING_CONTACT. It pinned
+    // the happy path and called it a gate test.
+    expect(ADMITTED.check).toHaveBeenCalledWith("tg-1");
     expect(channel.send.mock.calls[0][1]).toContain("share your phone");
+    // The symmetric half of the refused case below: an admitted account is
+    // inserted DIRECTLY into AWAITING_CONTACT too. Neither branch passes
+    // through INITIAL, so there is no window in which a crash leaves a record
+    // in a state the gate has not yet ruled on.
+    expect(repository.insert.mock.calls[0][0].state).toBe("AWAITING_CONTACT");
   });
 
   it("an unadmitted account is asked for a token and NOT for a phone number", async () => {
     // Ordering is the property. Asking a stranger for their phone number and
     // only then refusing collects PII from somebody never going to be admitted.
-    const { deps, channel } = makeDeps({ waitlistGate: REFUSED });
+    const { deps, channel, repository } = makeDeps({ waitlistGate: REFUSED });
     const out = await new RegistrationStateMachine(deps).handleNewUser("tg-1", "telegram", "hash");
 
     expect(out.state).toBe("AWAITING_WAITLIST_TOKEN");
+    // Inserted DIRECTLY into the gated state — never INITIAL, whose re-prompt
+    // asks for a phone number. A crash between an insert and a transition would
+    // otherwise strand a gated user in exactly that prompt for seven days.
+    expect(repository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ state: "AWAITING_WAITLIST_TOKEN" }),
+    );
     expect(channel.send.mock.calls[0][1]).toContain("waitlist invitation token");
     expect(channel.send.mock.calls[0][1]).not.toContain("phone");
   });

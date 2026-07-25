@@ -125,6 +125,8 @@ function deserializeState(row: RegistrationRow): RegistrationState {
   switch (row.state) {
     case "INITIAL":
       return { state: "INITIAL" };
+    case "AWAITING_WAITLIST_TOKEN":
+      return { state: "AWAITING_WAITLIST_TOKEN" };
     case "AWAITING_CONTACT":
       return { state: "AWAITING_CONTACT" };
     case "PHONE_CONFIRMED":
@@ -158,6 +160,28 @@ function deserializeState(row: RegistrationRow): RegistrationState {
         reason: (row.state_data["reason"] as string | undefined) ?? "unknown",
       };
     default:
+      // A STATE THIS MAPPER DOES NOT KNOW BECOMES A TERMINAL FAILURE, silently.
+      // That is the right behaviour for a genuinely legacy row, and it is a trap
+      // for a newly added state: AWAITING_WAITLIST_TOKEN shipped without a case
+      // here, so every gated user's record deserialized as FAILED, the engine
+      // dropped it as terminal, and the handler that redeems tokens was dead
+      // code in production — while thirteen tests passed, because they faked the
+      // repository and never round-tripped a row.
+      //
+      // Logging it does not make the omission impossible, but it makes it
+      // audible the first time a single user hits it, rather than never.
+      // Written with console.error because this module takes no logger, and
+      // threading one through purely for this line would be worse.
+      console.error(
+        JSON.stringify({
+          event: "registration.state.UNMAPPED",
+          level: "ERROR",
+          state: row.state,
+          detail:
+            "This state has no case in deserializeState, so the record is being treated as " +
+            "terminally FAILED. If the state was added recently, add its case — the user is stuck.",
+        }),
+      );
       return { state: "FAILED", reason: `legacy/unknown state: ${row.state}` };
   }
 }
