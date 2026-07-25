@@ -435,11 +435,9 @@ def test_an_empty_wave_names_the_unverified_users_rather_than_the_rules(waves):
     _, body = open_wave(waves, capacity=4)
 
     assert body["admitted"] == 0
+    assert body["reason"] == "all_unverified"
     assert body["excluded_unverified"] == 2
     assert "confirmed their email" in body["detail"]
-    assert "selection rules" not in body["detail"], (
-        "the message must name the cause, not the place the check happened"
-    )
 
 
 def test_an_under_filled_wave_reports_how_short_it_came(waves):
@@ -464,3 +462,59 @@ def test_a_full_wave_reports_short_by_zero(waves):
     _, body = open_wave(waves, capacity=3)
 
     assert body["admitted"] == 3 and body["short_by"] == 0
+
+
+def test_the_empty_reason_does_not_blame_email_when_email_is_not_the_cause(waves):
+    """The defect this replaced: the message counted only unverified users, so
+    with zero_pct=0 and a queue of VERIFIED zero-point users plus one unverified
+    one, it reported "1 user has not confirmed their email" — and confirming
+    them would have changed nothing. An operator sent to the confirmation flow
+    by a number derived from real data is worse off than one given no message,
+    because the number lends it authority."""
+    make_user("verified-zero@example.test", points=0)
+    make_user("unverified@example.test", points=0, email_verified=False)
+
+    _, body = open_wave(waves, capacity=4, zero_pct=0, priority_pct=100)
+
+    assert body["admitted"] == 0
+    assert body["reason"] == "zero_points_and_zero_pct_is_zero", body["detail"]
+    assert "Confirming emails will NOT help" in body["detail"]
+
+
+def test_an_empty_queue_says_so_rather_than_blaming_a_filter(waves):
+    _, body = open_wave(waves, capacity=4)
+
+    assert body["reason"] == "queue_empty"
+    assert "queue is empty" in body["detail"]
+
+
+def test_holders_of_a_live_invitation_are_named_as_the_cause(waves):
+    uid = make_user("holder@example.test", points=10)
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO waitlist_tokens (waitlist_user_id, expires_at) "
+            "VALUES (%s, now() + interval '14 days')",
+            (uid,),
+        )
+    conn.close()
+
+    _, body = open_wave(waves, capacity=4)
+
+    assert body["reason"] == "all_hold_live_grants"
+    assert "already hold an unredeemed invitation" in body["detail"]
+
+
+def test_a_short_wave_over_an_exhausted_queue_is_NOT_flagged_anomalous(waves):
+    """short_by alone is noise: it is >0 in the ordinary early case where the
+    queue is smaller than capacity. eligible_remaining is what separates that
+    from the wave having lost rows it already counted."""
+    make_user("solo@example.test")
+
+    _, body = open_wave(waves, capacity=5)
+
+    assert body["short_by"] == 4
+    assert body["eligible_remaining"] == 0, (
+        "nobody left, so short_by is a small queue and not an anomaly"
+    )

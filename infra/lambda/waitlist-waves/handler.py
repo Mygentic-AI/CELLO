@@ -295,29 +295,91 @@ def assemble(body, correlation_id):
                 # `waitlist_queue` does not filter on email_verified — while
                 # this says nobody matched. It points at the selection rules;
                 # the cause is usually that nobody has confirmed their address.
+                # DIAGNOSE, don't guess. The first version counted only
+                # unverified users, which meant it could name a cause that was
+                # NOT the cause: with zero_pct = 0 and a queue of verified
+                # zero-point users plus one unverified one, it reported "1 user
+                # has not confirmed their email" — and confirming them would
+                # have changed nothing. An operator sent to the confirmation
+                # flow by a message derived from real data is worse off than one
+                # given no message, because the number lends it authority.
+                #
+                # select_cohort excludes on four things, so all four are counted
+                # and the dominant one is named.
                 cur.execute(
-                    "SELECT count(*)::int AS n FROM waitlist_users "
-                    "WHERE status = 'waiting' AND NOT email_verified"
+                    """
+                    SELECT
+                      count(*) FILTER (WHERE NOT email_verified)::int AS unverified,
+                      count(*) FILTER (WHERE email_verified AND EXISTS (
+                            SELECT 1 FROM waitlist_tokens t
+                            WHERE t.waitlist_user_id = u.waitlist_id
+                              AND t.used_at IS NULL AND t.retired_at IS NULL))::int AS holding_grant,
+                      count(*) FILTER (WHERE email_verified AND points_total = 0
+                            AND NOT premium_referred AND NOT EXISTS (
+                            SELECT 1 FROM waitlist_tokens t
+                            WHERE t.waitlist_user_id = u.waitlist_id
+                              AND t.used_at IS NULL AND t.retired_at IS NULL))::int AS zero_points,
+                      count(*)::int AS waiting_total
+                    FROM waitlist_users u WHERE status = 'waiting'
+                    """
                 )
-                unverified = cur.fetchone()["n"]
+                why = cur.fetchone()
                 conn.rollback()
+
+                # A machine-readable reason as well as prose. An enum is what an
+                # alarm or a dashboard can branch on; prose is what a human
+                # reads, and neither substitutes for the other.
+                if why["waiting_total"] == 0:
+                    reason, detail = "queue_empty", "The queue is empty; no wave was opened."
+                elif why["unverified"] == why["waiting_total"]:
+                    reason = "all_unverified"
+                    detail = (
+                        f"No waiting users were eligible; no wave was opened. All "
+                        f"{why['unverified']} of them have not confirmed their email address — a wave "
+                        f"seat given to an unreachable address is spent."
+                    )
+                elif why["holding_grant"] and not why["zero_points"]:
+                    reason = "all_hold_live_grants"
+                    detail = (
+                        f"No waiting users were eligible; no wave was opened. "
+                        f"{why['holding_grant']} already hold an unredeemed invitation, so they are "
+                        f"not re-admitted."
+                    )
+                elif why["zero_points"] and zero_pct == 0:
+                    reason = "zero_points_and_zero_pct_is_zero"
+                    detail = (
+                        f"No waiting users were eligible; no wave was opened. "
+                        f"{why['zero_points']} waiting user(s) have zero points, and zero_pct is 0 — "
+                        f"raise zero_pct to admit any of them. Confirming emails will NOT help here."
+                    )
+                else:
+                    reason = "no_cohort_matched"
+                    detail = (
+                        f"No waiting users were eligible; no wave was opened. Of "
+                        f"{why['waiting_total']} waiting: {why['unverified']} unconfirmed, "
+                        f"{why['holding_grant']} holding a live invitation, {why['zero_points']} with "
+                        f"zero points."
+                    )
+
                 log(
                     "waitlist.wave.empty",
                     correlation_id,
                     level="WARN",
                     capacity=capacity,
-                    excludedUnverified=unverified,
+                    reason=reason,
+                    waitingTotal=why["waiting_total"],
+                    excludedUnverified=why["unverified"],
+                    holdingLiveGrant=why["holding_grant"],
+                    zeroPoints=why["zero_points"],
                 )
-                detail = "No waiting users were eligible; no wave was opened."
-                if unverified:
-                    detail += (
-                        f" {unverified} waiting user(s) have not confirmed their email address and "
-                        f"cannot be admitted — a wave seat given to an unreachable address is spent."
-                    )
                 return {
                     "admitted": 0,
                     "wave_number": None,
-                    "excluded_unverified": unverified,
+                    "reason": reason,
+                    "waiting_total": why["waiting_total"],
+                    "excluded_unverified": why["unverified"],
+                    "holding_live_grant": why["holding_grant"],
+                    "zero_points": why["zero_points"],
                     "detail": detail,
                 }
 
@@ -369,6 +431,21 @@ def assemble(body, correlation_id):
             )
 
         conn.commit()
+        # Counted in the SAME transaction as the admissions, so it describes the
+        # queue the wave actually saw rather than one a later signup changed.
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur2:
+            cur2.execute(
+                """
+                SELECT count(*)::int AS n FROM waitlist_users u
+                WHERE status = 'waiting' AND email_verified
+                  AND NOT EXISTS (
+                        SELECT 1 FROM waitlist_tokens t
+                        WHERE t.waitlist_user_id = u.waitlist_id
+                          AND t.used_at IS NULL AND t.retired_at IS NULL)
+                """
+            )
+            eligible_remaining = cur2.fetchone()["n"]
+
         log(
             "waitlist.wave.opened",
             correlation_id,
@@ -376,13 +453,20 @@ def assemble(body, correlation_id):
             openedBy=opened_by,
             admitted=len(admitted),
             capacity=capacity,
-            # UNDER-FILL IS REPORTED, not inferred by the operator comparing two
-            # numbers. Postgres applies LIMIT before taking row locks, and rows
-            # dropped by the post-lock re-check are NOT replaced — so a second
-            # wave running behind a first sees those users already admitted,
-            # drops them, and comes back short. The len(admitted) != len(cohort)
-            # guard cannot see it, because those rows never reached the cohort.
+            # short_by ALONE IS NOISE, and saying so is the point. It is >0 in
+            # the ordinary early case — a queue smaller than capacity, which
+            # Wave 1 will be — and also in the anomaly it was added for, where a
+            # concurrent wave takes rows the LIMIT already counted (Postgres
+            # applies LIMIT before row locks and does not replace rows dropped
+            # by the post-lock re-check). A signal that fires on the designed
+            # benign case is one the operator learns to ignore.
+            #
+            # eligible_remaining is what separates them: short with nobody left
+            # is a small queue; short with people STILL ELIGIBLE means the wave
+            # lost rows it had already counted.
             shortBy=max(0, capacity - len(admitted)),
+            eligibleRemaining=eligible_remaining,
+            underFilledAnomaly=(capacity - len(admitted) > 0 and eligible_remaining > 0),
             premium=n_premium,
             priority=n_priority,
             zero=n_zero,
@@ -392,6 +476,9 @@ def assemble(body, correlation_id):
             "wave_number": wave_number,
             "capacity": capacity,
             "short_by": max(0, capacity - len(admitted)),
+            # Zero here means "short because the queue ran out", which is normal.
+            # Non-zero with short_by > 0 means the wave lost rows it had counted.
+            "eligible_remaining": eligible_remaining,
             "breakdown": {"premium": n_premium, "priority": n_priority, "zero": n_zero},
         }
     except Exception:
