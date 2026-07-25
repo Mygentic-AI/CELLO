@@ -35,6 +35,15 @@ describe-only permission. **Applying it needs a `cello-cicd-dev` stack deploy** 
 **Deliberately NOT done:** patching the CodeBuild env var by hand. It would work and it would put
 the account out of step with IaC I currently cannot push.
 
+**PROVEN, not assumed (2026-07-25 14:21Z).** The fix was run from the compiled artifact against live
+staging: `node packages/e2e-tests/dist/smoke/run-smoke-tests.js` with no `STAGING_DIRECTORY_URL`
+resolved `cello-dir-dev-1389700310...` — the live ALB — and **all 8 scenarios passed, exit 0**,
+including `two_sessions_established`, the exact one CI reports as failing.
+
+So two things are settled at once: the fix works, and **the protocol path itself is healthy**. The
+pipeline failure was never a protocol regression — it was a hostname, and it has been reading as a
+flaky FROST/session test for weeks.
+
 ---
 
 ## 🟢 ECR repo `cello-ops-dashboard` CREATED (2026-07-25)
