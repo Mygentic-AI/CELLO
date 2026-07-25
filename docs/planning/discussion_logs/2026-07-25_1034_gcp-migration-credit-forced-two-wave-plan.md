@@ -15,9 +15,11 @@ description: >
   Supersedes the 06:17 GCP deployment log. AWS credits are running out, so migrating
   all but one directory/relay pair to GCP is forced rather than optional. Total data
   loss is acceptable and wanted — there is one user and a clean slate is a chance to
-  test every flow end to end — which turns this from a migration into a rebuild and
-  removes the cross-cloud VPN from the critical path entirely. Recommends an AWS relay
-  plus all-GCP directories. Answers the nodeId convention and GCP project questions.
+  test every flow end to end — which turns this from a migration into a rebuild.
+  Recommends N=3 with one AWS directory retained, because only a directory can seal and
+  so only a directory backs the "if GCP goes down, CELLO works" launch claim. Corrects
+  an arithmetic error in the fault-tolerance table, explains why growing N is safe but
+  non-beneficial for existing agents, and answers the nodeId and GCP project questions.
 status: draft
 ---
 
@@ -45,10 +47,10 @@ GCP, and the demo agent and ops agent as candidates too.
 - Because total data loss is free and wanted, this is a **rebuild at the launch topology**, not a
   migration of state (§2). Almost every hard problem in the previous log came from preserving
   something.
-- The "one surviving AWS node" is worth keeping as a **relay**, not a directory (§5). Relays need
-  no database and no replication, so provider diversity costs nothing there — while a surviving
-  AWS *directory* is what forces the cross-cloud VPN. Recommended target: **7 GCP directories +
-  at least 1 AWS relay.**
+- **One AWS *directory* stays** (§5). Andre overruled my all-GCP proposal and was right: only a
+  directory can seal, so only a directory backs the launch claim *"if GCP goes down, CELLO still
+  works."* Recommended target: **N=3 — one AWS directory + two GCP** — plus relays on both, scaling
+  freely on GCP. The threshold arithmetic in §5 is what pins N to 3 rather than 5 or 7.
 
 **Whatever else moves, us-east-1 stays.** It uniquely carries CI/CD, the ops-agent, the portal and
 its RDS, the waitlist stack, and the demo agent (`deploy.sh:284-291`: every other region gets 15
@@ -81,24 +83,30 @@ them disappear:
   inherited identifiers).
 - No `nodeId` rename-in-place, so the cloud-prefix convention applies to every node from birth
   (§7).
-- **No cross-cloud VPN, if the directories go all-GCP** (§5) — this is the big one.
+- No cutover choreography for the one cross-cloud VPN — it can be built, broken, and rebuilt
+  freely until it works, because nothing depends on it staying up (§5).
 
 **Treat "rebuild the consortium from zero at the launch topology" as the actual deliverable.**
 
-### The rebuild is itself the test we have never run
+### The rebuild is itself a test worth running
 
-This deserves stating as a benefit, not just a consequence. **The system has only ever run at
-N=3/T=2.** The launch topology is N=7/T=4 and it has never been exercised — not the DKG at seven
-participants, not a four-of-seven signing quorum, not a seven-node replication mesh, not the
-client's failover behaviour across seven endpoints.
+A rebuild forces every flow through a real bring-up: fresh registration, fresh DKG, fresh
+replication, fresh manifest adoption, fresh client failover. There is no cheaper moment to do that
+than while the only user is the person planning it.
 
-A rebuild forces all of that through a real bring-up: fresh registration, fresh DKG, fresh
-replication, fresh manifest adoption, fresh client flows. That is genuine launch de-risking, and
-there is no cheaper moment to do it than while the only user is the person planning it.
+Being precise about what is and is not new, since settling on N=3 (§5) changes this: **the
+threshold topology itself is not new** — N=3/T=2 is exactly what runs today, which is a point in
+its favour. What has never been exercised is everything *around* it:
 
-The flip side, stated plainly: **N=7/T=4 is an untested path.** Expect the bring-up to surface
-real defects — that is the point of doing it now rather than after launch. Budget for finding
-things, not for a clean run.
+- a directory running outside AWS at all,
+- replication across two providers rather than three AWS regions,
+- the one cross-cloud VPN and the Private Service Access route-export trap (§5),
+- a manifest whose nodes span providers, adopted by poll,
+- the ops-agent, portal, and waitlist running on GCP.
+
+So expect defects in the **plumbing**, not the cryptography. That is a materially lower-risk shape
+than the N=7 rebuild I proposed earlier, and it is another argument for N=3: it changes one
+variable (provider) instead of two (provider and threshold).
 
 ### The hazard, recorded for later
 
@@ -131,8 +139,13 @@ a share is bound to nothing about the node holding it. CLAUDE.md already states 
 plainly: *"a stolen decrypted share works on any node (possession = authority)."*
 
 So a faithful successor node is: the `agent_key_shares` rows + the envelope key + the node
-private key + the transport key. Move those four and the GCP node *is* the old node,
-cryptographically. No resharing ceremony, no enrollment story.
+private key + the transport key + **`NODE_ID` itself**. Move those five and the GCP node *is* the
+old node, cryptographically. No resharing ceremony, no enrollment story.
+
+**`NODE_ID` is in that list and I originally omitted it** — see §4. The FROST participant identifier
+is `Identifier.derive(NODE_ID)`, so a successor that changes its `NODE_ID` derives a different
+identifier and cannot use the inherited shares at all. It is the single most important item to
+preserve, not an afterthought.
 
 Two consequences worth flagging:
 
@@ -155,37 +168,108 @@ orchestration work, not crypto work.
 
 ---
 
-## 4. N and T for the new topology
+## 4. How T-of-N actually works — and why my earlier N=7 was wrong
 
-`directory-node.ts:2818` — `T = majority(N)`:
+Andre pushed back on N=7/T=4 and on whether adding directories strands existing agents. He was
+right to. Reading the code closely, **his original mental model is the correct one**, my table had
+an arithmetic error, and the design doc agrees with him. Taking the questions in order.
 
-| Topology | N | T | Failures tolerated |
+### The correction: I under-counted fault tolerance
+
+`directory-node.ts:2818` computes `T = majority(N)`, but the comment two lines up is the part I
+failed to carry into the table: *"T counts the client (`runNetworkDkg` adds it as +1), so directory
+signatures needed = T−1."*
+
+The client is one of the T signers. So the number of **directories** needed to seal is **T−1**, and
+tolerance is **N−(T−1)**, not N−T. Corrected:
+
+| N | T | Directories needed to seal | Directories that can be down |
 |---|---|---|---|
-| Today | 3 | 2 | 1 |
-| 5 GCP directories | 5 | 3 | 2 |
-| 6 GCP directories | 6 | 4 | 2 |
-| **7 GCP directories** | **7** | **4** | **3** |
-| 1 AWS + 6 GCP | 7 | 4 | 3 |
+| **3 (today)** | 2 | **1** | **2** |
+| 4 | 3 | 2 | 2 |
+| **5** | 3 | **2** | **3** |
+| 6 | 4 | 3 | 3 |
+| 7 | 4 | 3 | 4 |
+| 10 | 6 | 5 | 5 |
 
-**Go to seven directories.** N=6 and N=7 both require four co-signers, so the seventh node is
-free redundancy — it raises tolerance from two failures to three at no ceremony cost. Odd N is
-strictly better under a majority rule, and the difference is one VM.
+Today's N=3 tolerates **two** directories being down, not one. I stated one. Registration is the
+stricter operation — it needs `|Q| ≥ T`, so two directories up — but sealing needs only one.
 
-Note the two ways to reach N=7. Per §5, **seven GCP directories** gets the same threshold
-properties as 1 AWS + 6 GCP without needing the cross-cloud VPN. That is the recommended shape.
+**This also answers "do I need all five to sign?"** No. You need T−1 directories. At today's N=3
+that is literally **one** — which is exactly the intuition you had.
 
-Also worth seeing: **N=5 tolerates two failures for only three co-signers.** If bring-up at seven
-nodes proves painful, N=5 is a legitimate resting point — it doubles today's fault tolerance and
-is cheaper per ceremony than N=6 or N=7. Do not read the table as "bigger is better"; read it as
-"odd is better."
+### Avoid N=4 specifically
 
-### Provider concentration, stated honestly
+N=4 needs two directories to seal and tolerates two down — **identical tolerance to N=3, but one
+more node and one more partial per ceremony.** It is the one strictly-dominated choice. If you go
+past three, go to five.
 
-All-GCP directories means a GCP-wide outage takes the consortium down. That is a real shape and
-should be recorded rather than discovered — but it is not a regression: today an AWS-wide outage
-leaves *zero of three*. The honest framing is that provider concentration is unchanged while
-region count doubles and fault tolerance improves. §5 covers why the fix is an AWS relay now and
-an AWS directory later.
+### Growing N does *not* strand existing agents — verified
+
+This was the real worry, and the answer is reassuring. The agent's `threshold` **and** the quorum
+`nodeIds` (Q) it was dealt among are persisted **with the share, client-side**
+(`registration-persistence.ts:45,50` — *"the directory nodeIds (Q) the DKG ran among; a restored
+signer targets these"*).
+
+Signing uses those **stored** values, never the current manifest. So an agent registered at N=4
+keeps T=3 and its original four-node cohort permanently. **Growing the manifest to 10 changes
+nothing about it — it does not break, it simply does not benefit.** That is a much softer
+statement than CLAUDE.md's "migration trap" phrasing implies: growth is *safe*.
+
+### What new nodes can and cannot do — the actual gap
+
+A node that was not in an agent's DKG holds **no share** for it, and shares are secret — never
+replicated (§2), never transmitted. So six freshly-added directories are useless to the
+four-node-era agents until they are given a share, which requires **enrollment**: dynamic
+resharing onto an expanded access structure.
+
+Your recollection of the original intent is correct, and it is written down. M8B §9 says it
+outright:
+
+> *"T-of-N is the **signing** threshold — T of the N directories sign each seal, and the other N−T
+> may be down… Registration DKGs among the available quorum… **Absent nodes enroll
+> asynchronously**, off the registration critical path, until coverage reaches full T-of-N."*
+
+So "any T of the N can serve you" **is** the design. The current state — where non-participants
+hold nothing forever — is an **unfinished implementation**, not a design change. M8B Sprint A
+shipped quorum registration (register among who is up) and deferred the enrollment half that
+restores full coverage. That deferral is the whole gap.
+
+### What "locks a node in" is its FROST identifier — and it comes from `NODE_ID`
+
+`frost-handler.ts:728` — `ed25519_FROST.Identifier.derive(this.#nodeId)`. The client derives the
+same mapping (`session-ceremony.ts:238`: *"`id` feeds `Identifier.derive()` in the signer"*).
+
+So **`NODE_ID` is cryptographically load-bearing, not a label.** Two corrections follow:
+
+- **§7 was wrong.** I listed the costs of renaming a nodeId as archival rows and a manifest bump.
+  In fact renaming changes the node's FROST identifier, so it can no longer participate for any
+  agent whose share was dealt to the old identifier. On a rebuild that is free. On a live system it
+  is a **share-destroying operation**. Materially worse than I described.
+- **§3 was incomplete.** Lift-and-shift must preserve `NODE_ID` along with the share rows,
+  envelope key, node key, and transport key. I omitted the one item that the crypto actually
+  depends on.
+
+### Your eventual topology (N=10, T=3–5) is not reachable as written
+
+`T = majority(N)` is hardcoded and was **settled in writing on 2026-07-04** ("DO NOT RE-RAISE").
+So N=10 gives **T=6** — five directories per seal — not 3–5. Many directories with small ceremonies
+would require decoupling T from N, which lowers the collusion bar to any T operators. That is the
+exact trade the majority rule was chosen to make, so it is a reopened decision, not a config
+change. (The design doc's "10-of-15" predates that decision and does not satisfy
+majority(15)=8 — treat it as illustrative and superseded.)
+
+**But the goal behind it is already satisfied by the architecture.** "Many nodes, small ceremonies"
+maps cleanly onto: **scale relays freely, keep directories few and odd.** Relays have no FROST, no
+DKG, and no shares (§5) — they scale horizontally without touching the threshold at all. That is
+where "quite a few nodes" belongs.
+
+### So at launch: three or five directories
+
+You are right that seven was over-shot; it came from threshold aesthetics ("odd is better") rather
+than from need. **Recommendation: five directories** — two per seal, tolerates three down, a real
+improvement on today at modest cost. **Three is entirely defensible** if you want minimum change,
+and it is what is proven today. Avoid four.
 
 ---
 
@@ -201,38 +285,86 @@ the GCP side, Site-to-Site on the AWS side, CIDR allocation around the existing 
 ranges, and a failure mode that silently stops replication rather than erroring loudly. It exists
 for exactly one reason: to keep one **directory** on AWS.
 
-### The recommendation: keep an AWS *relay*, make the directories all-GCP
+### Recommendation, revised: keep one AWS **directory**, not just a relay
 
-This is the structural insight the free-data-loss constraint unlocks, and it is worth more than
-anything else in this log.
+I previously argued for all-GCP directories with an AWS relay, on the grounds that the VPN was
+the hardest remaining piece. **Andre overruled that, and he is right.** Two reasons, and the
+second one is decisive:
 
-**Relays need no replication.** Verified earlier: the relay has no database, no AWS SDK, no FROST
-participation, and no share. It is not a consortium member. An AWS relay peers with GCP
-directories over plain libp2p and self-registers — **zero cross-cloud database plumbing.**
+1. **Google Cloud has had provider-wide outages.** Concentrating every directory *and* every
+   database in one provider is the concentration risk, and "it's no worse than today's all-AWS" is
+   a weak defence when we are choosing the topology from scratch.
+2. **At launch we want to say, with evidence, "if GCP goes down, CELLO still works."** For a trust
+   product that is a *product* claim, not an architecture detail. An AWS relay cannot support it —
+   relays hold no shares and cannot seal. Only a directory can. A relay-only AWS presence would
+   make the claim technically false.
 
-So split the invariant by cost:
+That second point is the one my earlier reasoning missed: I was optimising the infrastructure and
+gave away the thing the infrastructure exists to demonstrate.
 
-| | Provider diversity | Cost of achieving it |
-|---|---|---|
-| **Relay** (session data path) | Keep 1+ on AWS | ~zero — no DB, no VPN |
-| **Directory** (consortium) | All GCP for now | one HA VPN + mesh generalisation |
+### And the VPN is cheaper than I implied — one tunnel, not one per region
 
-This buys provider diversity **on the path that actually carries user traffic**, and removes the
-VPN from the critical path entirely.
+Andre's instinct that a single VPN might serve all the nodes is **correct**, and GCP's design is
+what makes it work: **a VPC network is a global resource** with regional subnets. With the VPC's
+dynamic routing mode set to **global** (`--bgp-routing-mode=global`; regional is the default), routes
+learned over one HA VPN are advertised into *every* region of that VPC.
 
-**Is all-GCP directories a violation of the sovereign-node "choice" purpose?** No — and this is
-the part worth being precise about rather than hand-waving. Today all three directories are AWS.
-All-GCP is a *lateral* move on provider concentration, not a regression, while being a large
-improvement on region count (3 → 6) and fault tolerance (1 → 2 failures). The invariant that must
-never be violated is that the architecture *permits* cross-provider deployment — no hardcoded
-endpoints, no provider-specific networking. A rebuild on GCP with the adapter seams intact keeps
-that property fully alive; §3's lift-and-shift then makes adding an AWS directory later a
-contained piece of work rather than a re-architecture.
+So: **one HA VPN between us-east-1 and a single global GCP VPC reaches Cloud SQL in all GCP
+regions.** Not one tunnel per region. That collapses the piece I called the hardest remaining work
+into a single, well-documented setup.
 
-Add the seventh AWS directory as a deliberate, separately-scoped provider-diversity story once
-the VPN is worth building. Note the N/T consequence: all-GCP means **N=6, T=4, two failures
-tolerated** rather than N=7's three. If you want the odd-N benefit without the VPN, the answer is
-**seven GCP directories** (N=7, T=4) — one extra VM, no tunnel.
+> **The wrinkle that will bite, flagged deliberately.** Cloud SQL private IP is reached through
+> **Private Service Access**, which is itself a VPC peering. Routes learned over the VPN are **not**
+> re-exported into that peering by default — it needs `--export-custom-routes` on the
+> `servicenetworking` peering. This is a classic silent failure: everything looks configured, and
+> the AWS node simply cannot reach Cloud SQL. Verify reachability explicitly before wiring
+> subscriptions.
+
+### Co-locating relay and directory — sound, with one correction
+
+Putting the relay and directory in the same region (sharing an ALB via host-based routing, and one
+NAT) is a real cost saving and is how the AWS side is already shaped. One clarification: **the
+relay does not need the VPN at all.** It has no database and no replication, so the tunnel serves
+the directory alone. Nothing is "split" to the relay — it just never uses it.
+
+Note this interacts with §6: if a node is a single VM with a static IP and no load balancer, there
+is no ALB to share. Pick one model — the sharing argument applies to the ALB shape, the cost
+argument favours no ALB at all.
+
+### The claim has an arithmetic requirement — and it constrains N
+
+This is the part that decides the topology, and I nearly got it wrong. "If GCP goes down, CELLO
+still works" means: **the surviving AWS directories alone must meet T−1.** From §4's corrected
+table:
+
+| N | T | Directories needed to seal (T−1) | AWS directories required for the claim |
+|---|---|---|---|
+| **3** | 2 | 1 | **1** ✓ |
+| 5 | 3 | 2 | **2** |
+| 7 | 4 | 3 | **3** |
+
+So **one AWS directory only backs the claim at N=3.** At N=5, a single AWS node leaves you with one
+directory against a requirement of two — a total GCP outage would take sealing down, and the claim
+would be false. N=5 needs **two** AWS directories.
+
+Be precise about what survives even when the arithmetic holds: **sealing continues, new
+registration does not.** Registration requires `|Q| ≥ T` (§4), which a lone AWS node cannot satisfy.
+The defensible claim is *"existing agents keep working through a GCP-wide outage"* — worth stating
+that way rather than the broader version.
+
+### Target shape — two honest options
+
+- **N=3, one AWS + two GCP.** The claim holds with a single AWS directory. Cheapest, and it is the
+  configuration proven in production today. Tolerates two directories down.
+- **N=5, two AWS + three GCP.** The claim holds, tolerance rises to three down, and it costs a
+  second AWS directory — which partly works against the credit pressure that started this.
+
+**Recommendation: N=3 (1 AWS + 2 GCP) at launch.** It satisfies the product claim with the smallest
+AWS footprint, which is exactly the constraint we are optimising, and N=3/T=2 is the only topology
+with live evidence behind it. Grow to N=5 (2 AWS + 3 GCP) once enrollment ships and node growth
+stops being one-way.
+
+Relays are separate and scale freely — put several on GCP and keep at least one on AWS.
 
 ### Replication is healthy today
 
@@ -325,6 +457,12 @@ What remains:
 ever be — the convention question only became expensive in the migration framing that no longer
 applies.
 
+> **Correction (see §4).** I described renaming a live node's `NODE_ID` as costing only archival
+> rows and a manifest bump. That was wrong. `NODE_ID` feeds `Identifier.derive()`, so renaming
+> changes the node's FROST identifier and **destroys its ability to sign for every existing agent.**
+> On this rebuild it is free because every node is born with its final name. Post-launch it is not a
+> rename — it is a decommission plus an enrollment. Pick the names now and never change them.
+
 ---
 
 ## 8. GCP project and billing — answering the question
@@ -339,7 +477,7 @@ quotas. You also hold `roles/resourcemanager.organizationAdmin`, so you can gran
 
 **You do not need one project per node.** My earlier suggestion of a project per node to mirror
 the sovereignty boundary was over-engineering. GCP regions are a resource attribute, not a project
-boundary — **one project, seven regions** is correct and sidesteps the billing concern entirely.
+boundary — **one project, many regions** is correct and sidesteps the billing concern entirely.
 
 **On reusing `claude-code-vertex-mygentic`:** I verified it is genuinely empty — zero Compute
 instances, no buckets, no Cloud SQL, only the default compute service account. Created
@@ -412,80 +550,74 @@ by cost, so the plan does not change with the numbers, but the *urgency* does.
 
 ---
 
-## 11. The plan — two waves, plus a wave zero
+## 11. The plan — GCP standalone first, then bring AWS back in
 
-Per your direction: two waves, no waiting for post-launch.
+**Andre's sequencing is better than my earlier two-wave order, and replaces it.** Build the entire
+system on GCP with *no* AWS component so it can be tested as a self-contained whole; then add the
+AWS directory/relay pair; then tear down what remains on AWS. The advantage is that every
+cross-cloud problem is deferred until after there is a known-good, fully testable system — instead
+of debugging a VPN and a fresh consortium at the same time.
 
-### Wave 0 — build capability (must precede or run alongside Wave 1)
+### Wave 0 — capability
 
-Nothing else can ship if this is not in place.
+Nothing ships if this is missing.
 
 1. Decide and create the project (§8). Enable only the APIs needed.
-2. **Check per-region quotas before committing to seven regions.** Young GCP projects commonly
-   default to low per-region CPU and static-IP quotas; seven regions means seven separate quota
-   grants, and requests take time. This is the most likely schedule surprise in the whole plan —
-   and it now gates *both* waves, since relays need regions too.
-3. Cloud Build + Artifact Registry pipeline producing the directory and relay images.
-4. Pick the seven GCP regions. Favour genuine geographic spread while keeping four-node quorums
-   latency-reasonable, since T=4 of 7 must be reachable for every ceremony.
+2. **Check per-region quotas early.** Young GCP projects default to low per-region CPU and
+   static-IP quotas, and each region is a separate grant with lead time. Most likely schedule
+   surprise in the plan.
+3. Cloud Build + Artifact Registry pipeline for the directory and relay images. This is urgent
+   independently of the nodes — see §9, CI/CD is the real critical path.
+4. Pick regions. Note the design constraint: **one node = one region**, and with T−1 = 1 directory
+   needed to seal at N=3, latency between them is not on the critical path for a single seal.
 
-### Wave 1 — relays (no code changes)
+### Wave 1 — a complete CELLO on GCP, standalone
 
-The relay has zero AWS SDK dependencies, no database, no FROST participation, and its advertised
-address is already a parameter. It is not a consortium member, so **none of the N/T or share
-analysis applies to it.**
+The goal is a system that works end to end with AWS switched off entirely, so it can be tested in
+isolation. Temporarily this means **all three directories on GCP** (N=3, no AWS member yet).
 
-5. Per region: one VM, static IP, persistent disk for `WAL_DIR`, two Secret Manager secrets
-   (`NODE_PRIVATE_KEY`, transport key), firewall rule for the WS port.
-6. Point them at the still-running AWS directories; they self-register via `relay_register`.
-7. Add Route53 records (the `cello.mygentic.ai` zone stays authoritative on AWS — it is cheap and
-   moving DNS mid-rebuild adds risk for no gain).
-8. **Keep one AWS relay** (§5) — it is the cheap half of the provider-diversity invariant. Retire
-   the other two as GCP relays come online.
+5. Relays: per region one VM, static IP, persistent disk for `WAL_DIR`, two secrets, firewall rule.
+   No code changes — the relay has no AWS SDK and no database.
+6. Directories: the four adapters (Secret Manager, GCS ×2, Parameter Manager only if the
+   empty-registry test in §12 fails); Cloud SQL Postgres 18 per node, **no HA** (HA instances
+   cannot be logical-replication subscribers); the configurable-multiaddr fix at
+   `directory.ts:1095`.
+7. Replication: generalise `setup-replication.sh` off its three hardwired regions. Intra-GCP only
+   at this stage — native VPC, no VPN.
+8. Move the non-node workloads to GCP: **ops-agent, portal, waitlist**. The blocker is email —
+   GCP has no first-party sending service and blocks outbound port 25, so plan on calling the
+   **SES API over HTTPS** from GCP (pennies, and AWS is not going away anyway since we keep a node
+   there). Do not plan self-hosted SMTP from GCE.
+9. Sign a fresh manifest with `<cloud>-<region>` nodeIds (§7 — and per §4 these names are
+   permanent, so choose them deliberately).
+10. **Full end-to-end test with AWS off.** Register from scratch, seal, run a live two-agent
+    session, verify replication convergence, kill a directory and confirm sealing continues
+    (T−1 = 1 at N=3, so two can be down), confirm client failover.
 
-A persistent disk for `WAL_DIR` is incidentally *more* durable than the current Fargate ephemeral
-`/tmp/wal`.
+### Wave 2 — bring AWS back as a consortium member
 
-Wave 1 is genuinely low-risk: relays hold no durable trust state, so a bad relay is a restart,
-not an incident. It is also the natural place to shake out the VM/IP/firewall/TLS shape before
-betting the directories on it.
+11. Stand up the us-east-1 directory + relay pair fresh (no data to migrate).
+12. **One HA VPN**, us-east-1 ↔ the global GCP VPC with `--bgp-routing-mode=global` (§5). Verify
+    Cloud SQL private-IP reachability explicitly — the Private Service Access custom-route-export
+    trap in §5 is the likely failure and it fails silently.
+13. Re-sign the manifest so the AWS node replaces one GCP node, landing on **N=3: 1 AWS + 2 GCP**.
+    Clients adopt by poll — no republish.
+14. **Prove the launch claim.** With GCP directories unreachable, confirm an existing agent can
+    still seal via the AWS node. Per §5 this works at N=3 and only at N=3 with one AWS node — and
+    confirm the honest boundary too: sealing survives, new registration does not.
+15. Decommission eu-central-1, ap-northeast-1, and any GCP node displaced in step 13.
 
-### Wave 2 — directories (a fresh consortium)
+### Later
 
-9. Write the four adapters behind the existing interfaces: Secret Manager, GCS ×2, and Parameter
-   Manager **only if** the empty-registry boot test (§12) fails.
-10. Make the bootstrap multiaddr configurable — `directory.ts:1095` hardcodes `/tcp/80/ws`, while
-    the relay's equivalent is already an env var. Fix regardless of GCP.
-11. Cloud SQL Postgres 18 per node, **no HA** (HA instances cannot be logical-replication
-    subscribers, and every node is both publisher and subscriber).
-12. Generalise `setup-replication.sh` from three hardwired regions to N. **All-GCP means native
-    peering only — no VPN** (§5).
-13. Sign a **fresh manifest** at N=7 with `<cloud>-<region>` nodeIds. Clients adopt by poll — no
-    republish, no npm cascade.
-14. **Bring-up test — this is the deliverable, not a formality.** Register from scratch, confirm
-    the DKG runs at seven participants with T=4, confirm a four-of-seven signing quorum, kill two
-    nodes and confirm ceremonies still complete, confirm replication converges across all seven,
-    confirm client failover across seven endpoints. This path has never been exercised (§2).
-15. Decommission all three AWS directory stacks and the two retired relays — only after the GCP
-    consortium is serving.
-
-Wave 2 has a natural pause point after step 13: the fresh GCP consortium can run alongside the
-old AWS one before anything is torn down. Because there is no state to preserve, the old
-consortium is a fallback you can simply abandon rather than reconcile — which is a luxury this
-project will not have again.
-
-### Later, separately scoped
-
-16. Add a seventh **AWS directory** for provider diversity when the HA VPN is worth building
-    (§5). §3's lift-and-shift makes this contained rather than a re-architecture.
-
----
+16. Grow to N=5 (2 AWS + 3 GCP) once **enrollment** ships (§4), since until then node growth only
+    benefits newly-registered agents.
 
 ## 12. What I could not verify
 
 - **Whether the directory boots usefully with an empty node registry.** Decides whether the
   Parameter Manager adapter is needed at all. Cheap to test locally; not tested.
-- **Per-region GCP quota headroom** for seven regions. Flagged above as the likeliest surprise.
+- **Per-region GCP quota headroom** across the chosen regions — directories *and* relays, so more
+  regions than the directory count alone. Flagged in §11 as the likeliest schedule surprise.
 - **Cross-cloud replication lag under real write load.** Today's intra-AWS lag is 1112 bytes,
   which tells us nothing about a GCP↔AWS tunnel.
 - **Whether the client's `/bootstrap` path handles an `https://` manifest endpoint** — all three
@@ -497,19 +629,21 @@ project will not have again.
 
 ## 13. Open decisions
 
-1. **All-GCP directories, AWS relay** (§5) — confirm. This removes the cross-cloud VPN from the
-   critical path and is the single largest simplification available. The AWS directory becomes a
-   separately-scoped story later.
-2. **Seven GCP directories** (N=7, T=4, tolerates 3) — confirm. The seventh is free redundancy
-   under `majority(N)`. N=5 is a legitimate fallback if bring-up proves painful.
+1. **N=3 (1 AWS + 2 GCP)** — confirm. §5's arithmetic is the reason: one AWS directory backs the
+   "GCP down, CELLO up" claim *only* at N=3. N=5 would need two AWS directories, which works
+   against the credit pressure. Avoid N=4 entirely (§4).
+2. **Enrollment** — is it in scope before launch? It is what makes node growth benefit existing
+   agents (§4). Not needed for N=3 at launch; needed before N grows. The directory half already
+   exists; the client half does not.
 3. **Project ID** — attempt `cello-infra`, or accept the immutable `claude-code-vertex-mygentic`?
-4. **Ops agent** — leave on AWS, or run on GCP against the SES API?
-5. **Node shape** — single VM with static IP (cheap, and sound given T-of-N), or load balancer per
-   node (conventional, costlier)? My recommendation is the single VM.
-6. **Portal and waitlist** — out of scope for these two waves? My recommendation is yes for the
-   waitlist (shipped today, still moving) and a separate decision for the portal.
-
----
+4. **Node shape** — single VM with static IP (cheap, sound at T-of-N), or shared ALB per region as
+   Andre suggested? These are mutually exclusive (§5); my recommendation is the single VM, but the
+   shared-ALB model is the closer analogue of what runs today.
+5. **Email** — SES API over HTTPS from GCP is the only workable option I found for the ops-agent
+   and waitlist (§9). Confirm that is acceptable, since it means AWS is permanently in the path for
+   email.
+6. **Waitlist** — leave on AWS for now? It shipped today and is still moving; moving it in Wave 1
+   step 8 may be premature.
 
 ## 14. One documentation correction found along the way
 
