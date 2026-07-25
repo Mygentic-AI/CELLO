@@ -45,6 +45,10 @@ from _logging import emit as log
 DATABASE_URL = os.environ.get("DATABASE_URL")
 MIGRATIONS_DIR = pathlib.Path(os.environ.get("MIGRATIONS_DIR", "/var/task/migrations"))
 
+# Arbitrary but FIXED: every migrator must pick the same number or the lock
+# protects nothing. Derived from nothing, written down once, never changed.
+MIGRATION_LOCK_KEY = 0x4D31314D49475241  # "M11MIGRA"
+
 LEDGER = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version    TEXT PRIMARY KEY,
@@ -98,6 +102,27 @@ def lambda_handler(event, context):
     try:
         with conn.cursor() as cur:
             cur.execute(LEDGER)
+            conn.commit()
+
+            # ONE MIGRATOR AT A TIME. The ledger's primary key stops the same
+            # migration being RECORDED twice, but not the DDL being EXECUTED
+            # twice: two invocations can both read an empty ledger and both run
+            # `ALTER TABLE … ADD COLUMN` before either commits, and the loser
+            # fails on something that has nothing to do with the migration it
+            # was applying. `CREATE TABLE IF NOT EXISTS` hides this only for as
+            # long as every migration is pure table creation, which stopped
+            # being true at 0002.
+            #
+            # A session-level advisory lock, taken without waiting: a second
+            # concurrent run should say so and stop, not queue up behind a
+            # fifteen-minute migration and then apply nothing.
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (MIGRATION_LOCK_KEY,))
+            if not cur.fetchone()[0]:
+                raise MigrationError(
+                    "Another migration run holds the lock. Nothing was applied. "
+                    "Wait for it to finish and check the result before retrying — "
+                    "two migrators against one database is how a half-applied schema happens."
+                )
             conn.commit()
 
             cur.execute("SELECT version, checksum FROM schema_migrations")
