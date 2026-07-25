@@ -455,15 +455,97 @@ layer, just a node that quietly stops converging. STATE.md records a prior wedge
 ap-northeast-1 that produced thousands of apply-errors, so this class of failure has bitten once
 already.
 
-**This is the actual ceiling on directory count, and it is far lower than the threshold math
-implies.** Anyone reasoning only from `majority(N)` would conclude N=9 or N=11 is fine; the
-database says N=5 without a parameter-group change and a reboot.
+**At current settings this bounds directory count well below what the threshold math implies** —
+reasoning only from `majority(N)` you would conclude N=9 is fine, while the running database stops
+at N=5. But these are tunables, not architecture: see the correction and the topology alternatives
+immediately below.
 
 **2. The enrollment debt.** Adding a directory gives *existing* agents exactly zero extra
 redundancy until enrollment ships (§4) — shares are never replicated, so a new node holds nothing
 for them. "More directories = more redundancy" is currently true **only for newly-registered
 agents**. And the M8B design doc notes that at large N enrollment becomes *"the normal path, not an
 edge case"* — so growing N makes unbuilt machinery load-bearing.
+
+### Correction: N=5 is a parameter default, not an architectural wall
+
+Andre pushed back: are these self-imposed limits, just because we chose a mesh? **Largely yes, and
+I overstated the ceiling.**
+
+`max_logical_replication_workers = 4` is a *tunable*, not a property of logical replication. Raising
+it (together with `max_worker_processes`, currently 8, since the workers come from that pool) moves
+the ceiling to roughly N=30 on the worker axis; `max_replication_slots` and `max_wal_senders` raise
+the same way. All are static parameters — a parameter-group change plus a reboot per node.
+
+So calling N=5 a "wall" was too strong. The honest statement: **N=5 is where the *current
+configuration* stops working, and the mesh's O(N²) subscription growth is a cost curve, not a
+cliff.** For any realistic directory count, raising the parameters is the answer.
+
+One thing that *looks* like an N-coupling and is not, checked so nobody re-investigates: the
+replicated `BIGSERIAL` sequences are staggered with `SEQ_INCREMENT=1000`
+(`setup-replication.sh:177`), giving headroom for 1000 nodes. The `V34` header comment saying
+"INCREMENT BY 3" is stale — the script disagrees with it, and the script is what runs. Adding a node
+needs only a new `NODE_SEQ_OFFSET` entry.
+
+### Are there better replication topologies? Yes — evaluated against sovereignty
+
+The mesh is a choice. The alternatives are worth naming explicitly, because two of them are
+tempting and wrong for *this* system specifically:
+
+| Approach | Subscriptions | Verdict |
+|---|---|---|
+| **Full mesh** (today) | N(N−1) | Works, no privileged node. Quadratic. |
+| **Raise the parameters** | unchanged | ✅ **Near-term answer** — hours of work |
+| Hub-and-spoke | O(N) | ❌ Creates a **privileged node**; hub loss partitions replication |
+| Ring / chain | O(N) | ❌ O(N) propagation latency; any single break partitions |
+| Managed distributed SQL | 0 | ❌ **Sovereignty violation** — see below |
+| **App-level anti-entropy over libp2p** | O(N) gossip | ⭐ Right long-term; dissolves the VPN too |
+
+**Managed distributed SQL deserves an explicit rejection**, because it is the answer any general
+cloud-architecture instinct reaches for. Spanner, CockroachDB, YugabyteDB, AlloyDB multi-region,
+Aurora Global — they solve multi-region replication properly and would delete this entire problem.
+They are wrong here: **one logical database means one operator and one control plane.** Sovereign
+nodes must be independently operable, and "no single node can complete a ceremony alone" becomes
+meaningless if every node reads and writes the same managed cluster. Spanner additionally pins us
+to Google, which defeats the multi-cloud point we are keeping an AWS directory for. Reject — but
+consciously, not by omission.
+
+**Hub-and-spoke fails for the same class of reason:** it re-introduces a special node, which is the
+thing the architecture exists to avoid.
+
+### The interesting option: anti-entropy over libp2p
+
+This is the one worth keeping on the roadmap, and several pieces already exist:
+
+- **Most replicated tables are append-only and hash-chained** — exactly the shape anti-entropy
+  suits. Nodes exchange Merkle roots, find divergence, pull deltas.
+- **The Merkle primitive is already built** — `V5__mmr_tables.sql`, `directory_checkpoints`,
+  `checkpoint_node_signatures` exist for tamper-evidence, and a checkpoint root is precisely what
+  cheap divergence detection needs.
+- **Nodes already have authenticated libp2p identities**, and the manifest already pins every
+  node's public key.
+- **It eliminates the cross-cloud VPN outright** — nodes would sync over the public internet with
+  their existing authenticated transport, which is the single biggest structural win for a
+  multi-cloud consortium. No PSA route-export trap, no BGP, no CIDR planning.
+- It scales O(N) per node with gossip fanout, and drops the slot/worker/sequence machinery entirely.
+
+Honest costs: it is a real build, not a config change. The **mutable** tables
+(`agent_suspensions`, `agent_presence`, `primary_holder`) are not append-only and need explicit
+conflict resolution — and `agent_suspensions` is the kill switch, so its convergence semantics are
+security-critical, not best-effort. It would also introduce the **first directory↔directory
+channel** in the system (CLAUDE.md: *"CELLO has no cross-node RPC/consensus anywhere"*), which is a
+genuine architectural addition with its own attack surface.
+
+**Recommendation: raise the parameters for launch, keep the mesh, and put libp2p anti-entropy on
+the post-launch roadmap** — promoted to the top of it if the cross-cloud VPN proves as painful in
+practice as it looks on paper, since it makes the VPN unnecessary rather than easier.
+
+### Narrowing what replicates is a separate, cheaper lever
+
+Worth noting because it is often confused with the topology question: the publication covers **21
+tables** (`setup-replication.sh:169`). Only a couple are genuinely needed cross-node —
+`agent_profiles` (so any node can serve a lookup) and `agent_suspensions` (so any node can honour a
+pause). Trimming the set reduces WAL volume and apply load, but **does not change the topology** —
+it is still N−1 subscriptions per node. It treats the constant, not the exponent.
 
 ### Why this strengthens "few directories, many relays"
 
