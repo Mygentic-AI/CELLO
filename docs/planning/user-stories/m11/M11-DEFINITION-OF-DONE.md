@@ -419,6 +419,22 @@ each line.
   with `list=content_alerts` clears only that flag and leaves `email_status` active. `POST` without
   a scope sets `email_status='unsubscribed'`. Three states, three outcomes, verified against the
   database rather than the response code.
+- **THE BROWSER CLAUSES, run in a real browser for the first time (2026-07-25)** — against the LIVE
+  site, which is the half curl could never reach:
+
+  | clause | result |
+  |---|---|
+  | `wl_anon_id` generated and persisted | a UUID, on first visit |
+  | UTM + `ref` captured into `wl_touchpoints[]` | `utm_source`, `utm_medium` and `ref=HARNESSPROBE` all recorded |
+  | de-duplicates identical consecutive visits | reloading the same URL leaves the count at 1; a different `utm_source` appends |
+  | caps at 20 | 27 distinct visits → exactly 20 kept, oldest evicted |
+  | **first touch survives the cap** | `wl_first_touch` still held the ORIGINAL visit after eviction — the property attribution depends on |
+  | `wl_user_id` set post-signup | a real signup through the form set it to a real `waitlist_id` |
+  | the browser carries `ref` into the POST | `ref` was present in `wl_touchpoints` at submit time, and the server half (`applied:true, kind:'share', +10`) was proven separately |
+
+  That closes `DOD-TRACKING-1`'s behavioural clauses and the client half of `DOD-LANDING-1` clause
+  (c) — the ones every prior note said were "unit-tested but never executed in a browser".
+
 - **wave gate** — `capacity` alone is refused `invalid_capacity`; with a capacity but no operator,
   refused `missing_opened_by` ("every wave names the operator who opened it"); with both, it declines
   to open a wave at all: `{admitted:0, reason:'all_unverified', waiting_total:8,
