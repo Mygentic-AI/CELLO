@@ -34,9 +34,17 @@ from `env` (`cello-waitlist-gate-${env}`, region pinned to us-east-1 because the
 single global service, M11-D26) — so there is no new task-definition env var, and an image swap is
 sufficient.
 
-**`cello-operations-agent-pipeline` triggered by the pushes to `main`** (path filter on
-`packages/operations-agent/`). Until it reaches ProductionDeploy the gate is **not enforced live** —
-the deployed image predates it.
+**THE GATE IS LIVE.** `cello-operations-agent-pipeline` (triggered by the pushes to `main` via the
+path filter on `packages/operations-agent/`) reached ProductionDeploy; `cello-operations-agent-dev`
+is at steady state (`rolloutState: COMPLETED`, 1/1) on task definition **:73**, image
+`cello-operations-agent:602a563` — which carries the gate and every review fix through that commit.
+
+Later pushes in the same session keep re-triggering this pipeline, so the running image SHA advances;
+what matters and stays true is that every one of them is a descendant of `22e1cfc0` (the gate) and
+`e4b2c096` (the attempt bound). A deploy watchdog cron is armed at `*/4` per M11-PROCEDURE §3b.
+
+**Still NOT proven live:** burning a REAL token on a REAL Telegram account. That needs an admitted
+user, which needs DB visibility, which needs the ops dashboard — blocked on Andre (repo + deploy).
 
 ---
 
