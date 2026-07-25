@@ -24,6 +24,7 @@
  */
 
 import type {
+  WaitlistGateClient,
   MessagingChannel,
   OtpDeliveryProvider,
   PreAuthorizationClient,
@@ -60,6 +61,8 @@ export type RegistrationEngineOptions = {
   channel: MessagingChannel;
   otpDelivery: OtpDeliveryProvider;
   preAuth: PreAuthorizationClient;
+  /** DOD-TELEGRAM-GATE-1 — passed straight through to the state machine. */
+  waitlistGate?: WaitlistGateClient;
   logger: Logger;
   /** Channel type for this engine instance */
   channelType: "telegram" | "whatsapp" | "cli";
@@ -122,6 +125,7 @@ export class RegistrationEngine {
       channel: opts.channel,
       otpDelivery: opts.otpDelivery,
       preAuth: opts.preAuth,
+      waitlistGate: opts.waitlistGate,
       logger: opts.logger,
     });
   }

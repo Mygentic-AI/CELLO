@@ -55,16 +55,19 @@ import {
   CliAdapter,
   ConsoleOtpDeliveryProvider,
   LocalPreAuthorizationClient,
+  LocalWaitlistGateClient,
 } from "@cello-protocol/interfaces/stubs";
 import type {
   Logger,
   MessagingChannel,
   OtpDeliveryProvider,
   PreAuthorizationClient,
+  WaitlistGateClient,
 } from "@cello-protocol/interfaces";
 import { TelegramAdapter } from "./telegram-adapter.js";
 import { SesOtpDeliveryProvider } from "./ses/ses-otp-delivery-provider.js";
 import { DirectoryPreAuthorizationClient } from "./directory-pre-auth-client.js";
+import { LambdaWaitlistGateClient } from "./waitlist-gate-client.js";
 import { RegistrationEngine } from "./registration/engine.js";
 
 // ─── Expected migration version ───────────────────────────────────────────────
@@ -94,6 +97,15 @@ export type ResolvedAdapters = {
   channel: MessagingChannel;
   otpDelivery: OtpDeliveryProvider;
   preAuth: PreAuthorizationClient;
+  /**
+   * DOD-TELEGRAM-GATE-1. Always present — the local stub admits everybody and
+   * says so on every call, and every other environment gets the real client.
+   * NOT optional here even though the state machine tolerates absence: the
+   * composition root is where "which environment enforces the gate" is decided,
+   * and leaving it undefined for a real environment would silently open the
+   * network to anybody who messages the bot.
+   */
+  waitlistGate: WaitlistGateClient;
   /** Channel type string for the RegistrationEngine */
   channelType: "telegram" | "cli";
 };
@@ -134,6 +146,11 @@ export function resolveAdapters(config: AdapterConfig): ResolvedAdapters {
       channel: new CliAdapter(),
       otpDelivery: new ConsoleOtpDeliveryProvider(),
       preAuth: new LocalPreAuthorizationClient(),
+      // Admits everybody and warns on every call. Only reachable here, under
+      // CELLO_ENV=local, because this is the one branch that gets it.
+      waitlistGate: new LocalWaitlistGateClient((message, context) =>
+        logger.warn(message, context ?? {}),
+      ),
       channelType: "cli",
     };
   }
@@ -190,6 +207,14 @@ export function resolveAdapters(config: AdapterConfig): ResolvedAdapters {
     preAuth: new DirectoryPreAuthorizationClient({
       directoryInternalUrl,
       apiKey: directoryApiKey,
+    }),
+    // us-east-1 regardless of this service's region: the waitlist is a single
+    // global service (M11-D26), so there is exactly one gate function and it is
+    // not per-region like the directory.
+    waitlistGate: new LambdaWaitlistGateClient({
+      region: "us-east-1",
+      functionName: `cello-waitlist-gate-${env}`,
+      logger,
     }),
     channelType: "telegram",
   };
@@ -396,6 +421,7 @@ async function main(): Promise<void> {
     channel: adapters.channel,
     otpDelivery: adapters.otpDelivery,
     preAuth: adapters.preAuth,
+    waitlistGate: adapters.waitlistGate,
     logger,
     channelType: adapters.channelType,
   });

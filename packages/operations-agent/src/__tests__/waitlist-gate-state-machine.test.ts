@@ -119,3 +119,46 @@ describe("token redemption — clauses 3 and 4", () => {
     expect(channel.send.mock.calls[0][1]).toContain("send your waitlist invitation token");
   });
 });
+
+
+// ── The composition root ─────────────────────────────────────────────────────
+
+describe("resolveAdapters selects a gate for every environment", () => {
+  /**
+   * This exists because the state machine tolerates a missing gate — it has to,
+   * for the CLI adapter — which means "nobody wired it up" and "this
+   * environment does not enforce the gate" look identical from inside. The
+   * composition root is where that is decided, so it is where it is asserted.
+   *
+   * The bug this would have caught was real and lasted about ten minutes: the
+   * state machine enforced the gate and server.ts did not supply one, so
+   * production would have logged NOT_ENFORCED and admitted everybody.
+   */
+  it("gives a real, enforcing client to a non-local environment", async () => {
+    const { resolveAdapters } = await import("../server.js");
+    const { LambdaWaitlistGateClient } = await import("../waitlist-gate-client.js");
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+
+    const adapters = resolveAdapters({
+      env: "dev",
+      logger: logger as never,
+      telegramBotToken: "t",
+      directoryApiKey: "k",
+      directoryInternalUrl: "https://directory.test",
+      sesCredentials: JSON.stringify({ accessKeyId: "a", secretAccessKey: "b", region: "us-east-1" }),
+      sesFromAddress: "noreply@mygentic.ai",
+    } as never);
+
+    expect(adapters.waitlistGate).toBeInstanceOf(LambdaWaitlistGateClient);
+  });
+
+  it("gives local the stub that admits everybody — and only local", async () => {
+    const { resolveAdapters } = await import("../server.js");
+    const { LocalWaitlistGateClient } = await import("@cello-protocol/interfaces/stubs");
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+
+    const adapters = resolveAdapters({ env: "local", logger: logger as never } as never);
+
+    expect(adapters.waitlistGate).toBeInstanceOf(LocalWaitlistGateClient);
+  });
+});
