@@ -1967,7 +1967,12 @@ own story) deliberately, never smuggled in as a rider. Source:
   now close." (or send `signal: wrap` semantics on the ack itself). AC: ack text names the
   one-shot rule; test updated.
 
-- **DOD-RECEIVE-GUIDANCE-1** ✅ DONE (2026-07-25, cello-client) — `cello_receive` must surface next-step guidance on every delivered message, keyed on the counterparty's signal token, so the receiving agent knows its correct next move without consulting external docs.
+- **DOD-RECEIVE-GUIDANCE-1** ✅ LIVE-PROVEN (2026-07-25, cello-client `5a9813d`, published daemon `0.0.75` / cli `0.0.76` via tag `v0.0.128`, promoted to latest) — `cello_receive` must surface next-step guidance on every delivered message, keyed on the counterparty's signal token, so the receiving agent knows its correct next move without consulting external docs.
+
+  **Live proof (session `5b07cd90…`, CELLO_Support → CELLO_Feedback, published binaries):**
+  - Positive case — the one-shot rejection ending `[[WRAP]]` returned `guidance: "Counterparty wrapped. Call cello_close_session now — do not reply."` The receiving agent then closed without replying; `cello_inbox` for CELLO_Support ended at zero unread (the original bug left one orphan per session).
+  - Negative case — both away-ack messages, whose prose mentions "send with signal: wrap" but carry NO appended token, correctly returned NO guidance field. Confirms the end-anchored detector (DOD-WRAP-SUBSTRING-1) does not fire on a mere mention.
+  - Binary verified: all four strings grepped out of `package/dist/session-content-handlers.js` in the published `@cello-protocol/daemon@0.0.75` tarball; `cli@0.0.76` pins `daemon@0.0.75` (real version, no `workspace:*`); `smoke-tag` green.
 
   **Found live 2026-07-25:** receptionist-check sessions consistently left one sealed-unread per session. Root cause: the successful-delivery return in `session-content-handlers.ts` carried no guidance. Every error path had one; the happy path was skipped. On receiving `[[WRAP]]` with no guidance, the agent replied — creating an orphan message that arrived after the sender had correctly closed.
 
