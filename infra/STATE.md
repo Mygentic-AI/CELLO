@@ -9,6 +9,27 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 📄 cello-ops-dashboard.yaml WRITTEN, NOT DEPLOYED (2026-07-25)
+
+**Nothing new exists in AWS from this.** Recorded so a future session does not mistake a written
+template for a deployed one, and does not write it twice.
+
+`infra/cloudformation/cello-ops-dashboard.yaml` + a `DEPLOY_OPS_DASHBOARD=1` block in `deploy.sh`
+cover: ECR repo `cello-ops-dashboard`, an ACM cert for `operations.cello.mygentic.ai`, a
+`ListenerCertificate` + host `ListenerRule` on the **existing `cello-portal-dev` ALB** (no second
+ALB — ~$16/month for a dashboard one person opens a few times a day), its own task security group,
+a `PortalDbIngressFromOpsDashboard` rule on `cello-dev-portal-db-sg`, the task definition, the ECS
+service and the Route53 alias.
+
+Template validated; every import checked against the live account (`cello-dev-portal-sg` does NOT
+exist — it is `cello-dev-portal-task-sg`).
+
+**Do not deploy it yet.** The ECS service needs an image in ECR, nothing pushes one (no GitHub
+remote → no pipeline; local pushes are forbidden), and deploying first gives a crash-loop and a
+rollback. Order: **repo → pipeline → image → `DEPLOY_OPS_DASHBOARD=1 IMAGE_TAG=<sha> ./infra/deploy.sh dev`**.
+
+---
+
 ## 🔒 Telegram waitlist gate — Lambda verified live, ops-agent redeploying (2026-07-25, ~14:20 CEST)
 
 **`cello-waitlist-gate-dev` (us-east-1) verified live by direct invoke — read-only, no mutation.**
