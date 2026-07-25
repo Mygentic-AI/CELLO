@@ -2503,3 +2503,42 @@ the SameSite cookie and the missing CORS routes — properties of the boundary r
 either side of it — and it is the third one this milestone has produced.
 
 **Runs:** 425 tests green.
+
+---
+
+### Entry 53: every Lambda proven against real infrastructure
+**Date:** 2026-07-25
+**Target:** DOD-WAVE-ASSEMBLY-1, DOD-INV-WAVE-GATE, DOD-UTM-TOOL-1, DOD-TELEGRAM-GATE-1, DOD-FIRST-WIN-1,
+DOD-FEEDBACK-DETECTION-1, DOD-FEEDBACK-OUTREACH-1
+
+With the stack deployed and the schema applied, every function was invoked against the real portal RDS.
+Recording the outputs because "it deployed" and "it runs" are different claims, and this milestone has
+already produced one function that deployed and could never have worked.
+
+**Wave assembly refuses correctly, live.** No `opened_by` → `400 missing_opened_by`, message naming
+DOD-INV-WAVE-GATE. Capacity 0 → `400 invalid_capacity`. Both errors name their cause rather than an exit
+point.
+
+**And the cohort filter added hours earlier is doing its job.** A wave for capacity 5, with three signed-up
+users in the database, admitted **zero** — because none of the three has confirmed their address, and
+`select_cohort` now requires `email_verified`. Better still, `wave_number` came back `null`: it declined
+to open an empty wave rather than burning a wave number on nobody. That is the fix from Entry 51
+demonstrated on real data rather than in a fixture.
+
+**The other four, each refusing with a named cause:**
+
+| function | probe | result |
+|---|---|---|
+| `utm` | channel + campaign | `200` with a fully tagged URL |
+| `gate` | unlinked telegram id | `200 {"allowed": false, "error": "token_required"}` — the admission gate holds |
+| `firstwin` | unknown agent pubkey | `200 {"first_win": false, "reason": "agent_not_linked_to_a_waitlist_user"}` |
+| `feedback` | daily sweep | `200 {"newly_eligible": 0}` |
+| `outreach` | daily sweep | `200 {"day_six_granted": 0, "invites_issued": 0, "notes_written": 0}` |
+
+Every one connected to the portal database, ran its query, and returned a structured answer. None threw.
+
+**What is still NOT proven, and why it cannot be here.** Everything past the confirmation click needs a
+real inbox: the E1 body's queue position and referral link, the session cookie surviving the verify
+redirect, the survey and readiness and post-url actions (all session-gated), a wave admitting an actual
+person, and first-win. The SES simulator accepts and discards, so it proves the *send* and nothing after
+it. That is a genuine boundary, not an omission — recorded so nobody re-derives it.
