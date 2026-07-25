@@ -769,6 +769,17 @@ one build script (all in `infra/`):
   `docs/planning/discussion_logs/2026-07-25_0545_directory-stack-undeployable-alb-drift.md`).
   Parameters used were exactly the ones STEP 15 computes.
   **Function CODE is NOT in the stack** — CFN ships placeholders that raise; `deploy-lambdas.sh dev waitlist` owns it.
+  **2026-07-25, later the same session:**
+  - All 12 function bodies deployed via `./infra/deploy-lambdas.sh dev waitlist` (~4.29 MB each,
+    psycopg2-binary built for linux/amd64 in Docker). Verified: every function's `CodeSize` is now
+    ~4.29 MB rather than the 392-byte placeholder.
+  - **13th function added: `cello-waitlist-migrate-dev`** (stack update → 64 resources). VPC-attached,
+    900s timeout, 512 MB, `DATABASE_URL` only. **No schedule, no API route, MANUAL INVOKE ONLY** —
+    applying DDL is an operator action. It carries the `.sql` files packaged from the
+    `corp-cello-site/migrations` checkout, and exists because there was no other path from those files
+    to the database: the site is a static export that cannot run them, and the portal RDS is
+    `PubliclyAccessible:false` in a VPC with no peering a laptop can reach.
+    Invoke `{"dry_run": true}` first — it lists what WOULD be applied and touches nothing.
 
 - **`cello-portal-data.yaml`** → stack `cello-portal-data-dev` **[UPDATE_COMPLETE, 2026-07-25]**. SGs (portal-alb
   `sg-0640c459d8887e2b6` / portal-task `sg-00c0f6e65386bf534` / portal-db **`sg-07ba031fda87adb88`**), RDS Postgres
