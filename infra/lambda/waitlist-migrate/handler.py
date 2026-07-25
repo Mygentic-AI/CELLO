@@ -101,9 +101,12 @@ def lambda_handler(event, context):
 
     try:
         with conn.cursor() as cur:
-            cur.execute(LEDGER)
-            conn.commit()
-
+            # THE LOCK COMES FIRST, before even the ledger is created.
+            # `CREATE TABLE IF NOT EXISTS` is not concurrency-safe — two cold
+            # starts can collide on pg_type with a duplicate-key error that has
+            # nothing to do with migrations. Taking the lock first puts every
+            # write in this function, including that one, behind it.
+            #
             # ONE MIGRATOR AT A TIME. The ledger's primary key stops the same
             # migration being RECORDED twice, but not the DDL being EXECUTED
             # twice: two invocations can both read an empty ledger and both run
@@ -125,6 +128,9 @@ def lambda_handler(event, context):
                 )
             conn.commit()
 
+            cur.execute(LEDGER)
+            conn.commit()
+
             cur.execute("SELECT version, checksum FROM schema_migrations")
             applied = {row[0]: row[1] for row in cur.fetchall()}
 
@@ -142,6 +148,47 @@ def lambda_handler(event, context):
                     f"does not re-run, so the change would silently never land."
                 )
 
+        # THE KEY FORMAT MUST MATCH the other two runners against this database
+        # (cello-portal's migrate.ts at container boot, and
+        # corp-cello-site/scripts/migrate.js for local work). All three key on
+        # the STEM. If a `<stem>.sql` row is present, some runner disagreed and
+        # every "already applied" answer here is unreliable — refuse rather than
+        # re-execute a set that has already been applied under another name.
+        confused = sorted(v for v in applied if v.endswith(".sql"))
+        if confused:
+            raise MigrationError(
+                f"The ledger contains filename-keyed rows {confused[:3]}… alongside stem-keyed ones. "
+                f"Another runner wrote this ledger with a different key format, so nothing here can "
+                f"tell what has actually been applied. Nothing was applied. Reconcile the "
+                f"schema_migrations keys before running again — re-executing an applied set is not "
+                f"recoverable."
+            )
+
+        # A SHORT SET IS NOT A VALID SET. migration_files() refuses an absent or
+        # empty directory on the grounds that applying zero migrations looks
+        # exactly like being up to date. Applying SEVENTEEN of twenty-two looks
+        # exactly the same, and is worse: a stale checkout that drops 0015
+        # applies 0016 onward against a schema missing it, and a later complete
+        # deploy then applies 0015 AFTER 0022 — out of order, with the ledger
+        # reporting everything green.
+        numbers = []
+        for path in files:
+            head = path.stem.split("_", 1)[0]
+            if not head.isdigit():
+                raise MigrationError(
+                    f"{path.name} does not start with a numeric version. Ordering is by filename, "
+                    f"so a file that cannot be ordered must not be applied."
+                )
+            numbers.append(int(head))
+        expected = list(range(numbers[0], numbers[0] + len(numbers)))
+        if numbers != expected:
+            missing = sorted(set(expected) - set(numbers))
+            raise MigrationError(
+                f"The migration set has gaps at {missing}. Nothing was applied. This is a partially "
+                f"copied package — the .sql files are bundled from a corp-cello-site checkout, and a "
+                f"stale or shallow one yields a set that is present, non-empty and WRONG."
+            )
+
         pending = [p for p in files if p.stem not in applied]
 
         if dry_run:
@@ -154,7 +201,13 @@ def lambda_handler(event, context):
             return {
                 "dry_run": True,
                 "pending": [p.name for p in pending],
-                "already_applied": len(applied),
+                # The COUNT of ledger rows this run actually matched, not the
+                # total number of rows in the table. Those differ whenever the
+                # ledger also holds another component's migrations (the portal
+                # writes its seven here), and reporting the total made the
+                # payload self-contradicting: "22 pending, 22 already applied".
+                "already_applied_here": len(files) - len(pending),
+                "ledger_rows_total": len(applied),
             }
 
         for path in files:

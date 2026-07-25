@@ -152,6 +152,7 @@ def test_dry_run_lists_pending_and_changes_nothing(scratch):
     result = mod.lambda_handler({"dry_run": True}, None)
 
     assert result["pending"] == ["0001_a.sql"]
+    assert result["already_applied_here"] == 0
     assert rows(url, "SELECT to_regclass('a') IS NULL")[0][0] is True
     assert rows(url, "SELECT count(*) FROM schema_migrations")[0][0] == 0
 
@@ -301,3 +302,80 @@ def test_the_ledger_row_and_the_DDL_share_one_transaction(scratch):
         "is applied but unrecorded, and the next run applies it again"
     )
     assert rows(url, "SELECT count(*) FROM schema_migrations")[0][0] == 0
+
+
+# ── The ledger key must agree with the other two runners ─────────────────────
+
+
+def test_a_filename_keyed_ledger_row_stops_everything(scratch):
+    """Three things write this ledger: cello-portal's migrate.ts at container
+    boot, corp-cello-site/scripts/migrate.js for local work, and this Lambda.
+    All three key on the STEM.
+
+    migrate.js keyed on the full filename until this was found. A runner cannot
+    see rows written under the other key, so "already applied" is always false,
+    "exactly once" becomes "once per runner", and the edited-migration checksum
+    guard — the entire reason the ledger exists — can never fire across them.
+    Pointing one runner at the other's database re-executes the whole set and
+    reports it as a normal first-time apply.
+
+    So a `.sql`-suffixed row means the answer to "what is applied?" is unknown,
+    and re-executing an applied set is not recoverable.
+    """
+    mod, d, url = scratch
+    write(d, "0001_a.sql", "CREATE TABLE a (id int);")
+    mod.lambda_handler({}, None)
+
+    conn = psycopg2.connect(url)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO schema_migrations (version, checksum) VALUES ('0002_b.sql', 'x')"
+        )
+    conn.close()
+    write(d, "0002_b.sql", "CREATE TABLE b (id int);")
+
+    with pytest.raises(mod.MigrationError, match="filename-keyed"):
+        mod.lambda_handler({}, None)
+
+    assert rows(url, "SELECT to_regclass('b') IS NULL")[0][0] is True
+
+
+# ── A short set is not a valid set ───────────────────────────────────────────
+
+
+def test_a_gap_in_the_migration_set_refuses(scratch):
+    """Present, non-empty and WRONG. The .sql files are bundled from a
+    corp-cello-site checkout; a stale or shallow one yields a set with a hole.
+    Applying 0016 onward against a schema missing 0015 succeeds, and a later
+    complete deploy then applies 0015 AFTER 0022 — out of order, ledger green."""
+    mod, d, url = scratch
+    write(d, "0001_a.sql", "CREATE TABLE a (id int);")
+    write(d, "0003_c.sql", "CREATE TABLE c (id int);")
+
+    with pytest.raises(mod.MigrationError, match=r"gaps at \[2\]"):
+        mod.lambda_handler({}, None)
+
+    assert rows(url, "SELECT to_regclass('a') IS NULL")[0][0] is True, (
+        "nothing may be applied when the set is incomplete"
+    )
+
+
+def test_a_set_that_does_not_start_at_one_is_still_valid(scratch):
+    """Contiguity, not a fixed origin. The check must not reject a legitimately
+    trimmed package or a future set that starts higher."""
+    mod, d, url = scratch
+    write(d, "0007_g.sql", "CREATE TABLE g (id int);")
+    write(d, "0008_h.sql", "CREATE TABLE h (id int);")
+
+    assert mod.lambda_handler({}, None)["applied"] == ["0007_g.sql", "0008_h.sql"]
+
+
+def test_a_file_with_no_numeric_prefix_refuses(scratch):
+    """Ordering is by filename, so a file that cannot be ordered must not run."""
+    mod, d, url = scratch
+    write(d, "0001_a.sql", "CREATE TABLE a (id int);")
+    write(d, "hotfix.sql", "CREATE TABLE h (id int);")
+
+    with pytest.raises(mod.MigrationError, match="numeric version"):
+        mod.lambda_handler({}, None)
