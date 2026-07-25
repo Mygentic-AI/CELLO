@@ -381,6 +381,20 @@ each line.
   **Local, not the deployed database** — same standard the schema lines were held to. What remains
   is the same run against `cello_portal` with a real Telegram account, which needs an admitted
   operator and DB visibility.
+- **FIRST WIN and the FAST DOOR (first time, 2026-07-25)** — same local rig.
+  `waitlist-firstwin` on a sealed session: **3 premium codes minted, all active**, `first_win_at`
+  set, and an `e_win_invites` email enqueued. A replay returns `{first_win:false,
+  reason:'already_recorded'}` and the count stays 3, not 6.
+
+  Spending one of those codes at signup: `{applied:true, kind:'premium'}`, the code flips
+  `active:false`, and the user lands `status:'admitted', premium_referred:true` — **it skips the
+  queue**. A second signup with the same code gets `{applied:false, reason:'code_already_used'}`
+  and stays `waiting`. That is `DOD-INV-PREMIUM-BEARER` and the fast door of `DOD-INV-TWO-DOOR`,
+  executed. Wave admission also enqueued `e_inv_admission`.
+
+  **One caveat, stated:** `waitlist_agent_links` was seeded by hand for this run, because nothing
+  writes it — the parked fork. Everything downstream of that row is proven; the row's absence in
+  production is not fixed by this.
 - **wave gate** — `capacity` alone is refused `invalid_capacity`; with a capacity but no operator,
   refused `missing_opened_by` ("every wave names the operator who opened it"); with both, it declines
   to open a wave at all: `{admitted:0, reason:'all_unverified', waiting_total:8,
