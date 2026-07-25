@@ -280,3 +280,73 @@ describe("an unreachable gate — clause 6, the failure the user can see", () =>
     expect(said.toLowerCase()).toContain("not been used");
   });
 });
+
+describe("redemption attempts are bounded — clause 7", () => {
+  // Guessing is not the threat: a token is 12 characters over a 32-symbol
+  // alphabet, 60 bits. The threat is that every inbound Telegram message in
+  // this state cost one Lambda invocation and one query against the PORTAL
+  // database, with no ceiling, driven by anyone who can message the bot.
+  //
+  // The bound is per channel-user and held in memory rather than on the
+  // record. A per-record counter resets the moment the record does: five
+  // refusals, FAILED, message again, five more — the rate is unchanged and you
+  // have added a `check` call per cycle. In-memory is sound HERE specifically
+  // because the ops-agent is a single global process (one instance long-polls
+  // the one bot token — infra/CLAUDE.md, "Ops-Agent Is Single-Region"), so
+  // there is no second replica holding a separate count.
+  const REFUSING = {
+    check: vi.fn(async () => ({ allowed: false, error: "token_required", message: "Token needed." })),
+    redeem: vi.fn(async () => ({ redeemed: false, error: "unknown_token", message: "Unknown token." })),
+  };
+
+  beforeEach(() => {
+    REFUSING.check.mockClear();
+    REFUSING.redeem.mockClear();
+  });
+
+  it("stops asking the gate once a user has burned through their attempts", async () => {
+    const { deps, channel } = makeDeps({ waitlistGate: REFUSING });
+    const sm = new RegistrationStateMachine(deps);
+
+    for (let i = 0; i < 12; i++) {
+      await sm.handleMessage(gated(), `GUESS-${i}`, "tg-flood");
+    }
+
+    // The ceiling is enforced BEFORE the call, so the gate stops being invoked
+    // entirely rather than being invoked and ignored.
+    expect(REFUSING.redeem.mock.calls.length).toBeLessThanOrEqual(5);
+
+    const last = String(channel.send.mock.calls.at(-1)?.[1] ?? "");
+    expect(last.toLowerCase()).toContain("too many");
+  });
+
+  it("counts per user — one flooder does not lock out anybody else", async () => {
+    const { deps } = makeDeps({ waitlistGate: REFUSING });
+    const sm = new RegistrationStateMachine(deps);
+
+    for (let i = 0; i < 12; i++) {
+      await sm.handleMessage(gated(), `GUESS-${i}`, "tg-flood");
+    }
+    const afterFlood = REFUSING.redeem.mock.calls.length;
+
+    await sm.handleMessage(gated(), "SOMEBODY-ELSES-TOKEN", "tg-innocent");
+
+    // A shared counter would be the obvious wrong implementation, and it would
+    // hand any stranger a denial-of-service against every other user.
+    expect(REFUSING.redeem.mock.calls.length).toBe(afterFlood + 1);
+  });
+
+  it("a successful redemption does not consume the allowance forever", async () => {
+    // The limiter must not accumulate an entry per user that never clears —
+    // this process runs for weeks.
+    const OK = {
+      check: vi.fn(async () => ({ allowed: true, alreadyLinked: false })),
+      redeem: vi.fn(async () => ({ redeemed: true })),
+    };
+    const { deps } = makeDeps({ waitlistGate: OK });
+    const sm = new RegistrationStateMachine(deps);
+
+    await sm.handleMessage(gated(), "GOOD-TOKEN", "tg-ok");
+    expect(OK.redeem).toHaveBeenCalledTimes(1);
+  });
+});

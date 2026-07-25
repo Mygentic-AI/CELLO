@@ -61,6 +61,24 @@ const OTP_TTL_MS = 15 * 60 * 1_000;
 /** Max OTP attempts before invalidation */
 const MAX_OTP_ATTEMPTS = 3;
 
+/**
+ * Max waitlist-token redemptions a single channel user may attempt per window.
+ *
+ * Not a guessing defence — a token is 12 characters over a 32-symbol alphabet,
+ * 60 bits, and no number of Telegram messages makes that searchable. It bounds
+ * COST: without it, every inbound message in AWAITING_WAITLIST_TOKEN spent one
+ * Lambda invocation and one query against the portal database, unbounded, at
+ * the discretion of anybody who can message the bot.
+ *
+ * Five is chosen to sit above real mistyping (the alphabet already excludes
+ * I/O/0/1 precisely because they get misread) and well below anything useful
+ * as an amplifier.
+ */
+const MAX_TOKEN_ATTEMPTS = 5;
+
+/** Rolling window for the above. */
+const TOKEN_ATTEMPT_WINDOW_MS = 60 * 60 * 1_000;
+
 /** Registration expiry — 7 days */
 const REGISTRATION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
@@ -141,6 +159,22 @@ export type StateMachineDeps = {
 
 export class RegistrationStateMachine {
   readonly #deps: StateMachineDeps;
+
+  /**
+   * channelUserId → redemption attempt timestamps inside the current window.
+   *
+   * PER USER, and deliberately not on the record: a per-record counter resets
+   * when the record does, so five refusals then a fresh registration is five
+   * more, and the rate is unchanged. A single shared counter would be worse
+   * still — it hands any stranger a denial of service against every other user.
+   *
+   * In memory is sound HERE because the ops-agent is a single global process:
+   * exactly one instance long-polls the one Telegram bot token (infra/CLAUDE.md,
+   * "Ops-Agent Is Single-Region"). If that ever becomes more than one process,
+   * this must move to the database — it is a correctness dependency on the
+   * deployment shape, not an implementation detail.
+   */
+  readonly #tokenAttempts = new Map<string, number[]>();
   readonly #rateLimitMap: Map<string, RateLimitEntry> = new Map();
 
   constructor(deps: StateMachineDeps) {
@@ -434,6 +468,27 @@ export class RegistrationStateMachine {
    * would force them to start over for a typo.
    */
   /**
+   * Record a redemption attempt and report whether the user is over the limit.
+   *
+   * Prunes as it goes, so the map holds only users who have attempted inside
+   * the window rather than every user this process has ever seen — it runs for
+   * weeks at a time.
+   */
+  #overTokenLimit(from: string, now: number): boolean {
+    const cutoff = now - TOKEN_ATTEMPT_WINDOW_MS;
+    for (const [user, stamps] of this.#tokenAttempts) {
+      const live = stamps.filter((t) => t > cutoff);
+      if (live.length === 0) this.#tokenAttempts.delete(user);
+      else this.#tokenAttempts.set(user, live);
+    }
+
+    const mine = this.#tokenAttempts.get(from) ?? [];
+    if (mine.length >= MAX_TOKEN_ATTEMPTS) return true;
+    this.#tokenAttempts.set(from, [...mine, now]);
+    return false;
+  }
+
+  /**
    * Run a gate call; if it throws, tell the user before letting it propagate.
    *
    * The throw is preserved deliberately — it is what makes the gate fail
@@ -488,6 +543,21 @@ export class RegistrationStateMachine {
 
     if (!token) {
       await channel.send(from, "Please send your waitlist invitation token.");
+      return record;
+    }
+
+    if (this.#overTokenLimit(from, Date.now())) {
+      logger.info("registration.gate.token_attempts_exhausted", {
+        registrationId: record.id,
+        correlationId,
+      });
+      // Checked BEFORE the call, so an exhausted user stops costing a Lambda
+      // invocation altogether rather than costing one and having it discarded.
+      await channel.send(
+        from,
+        "Too many token attempts. Please wait an hour before trying again, or " +
+          "contact us if you believe your invitation token should work.",
+      );
       return record;
     }
 
