@@ -1050,8 +1050,31 @@ if [[ "${REGION}" == "us-east-1" ]]; then
     --query "OpenIDConnectProviderList[?contains(Arn,'token.actions.githubusercontent.com')].Arn" \
     --output text 2>/dev/null || true)
 
+  # CelloClientWebhookSecret has NO Default, by design — the template says an
+  # empty or placeholder value "would silently accept requests with empty
+  # signatures". It was never wired in here, which is why cello-cicd has been
+  # UNDEPLOYABLE since M7-CICD-001 added it, and why the directory smoke-test fix
+  # could not ship.
+  #
+  # Generated once and kept in Secrets Manager, not regenerated per deploy: the
+  # value must match whatever is configured on the GitHub webhook, so churning it
+  # every deploy would break the thing it authenticates. It currently guards the
+  # cello-client e2e-gate, which is disabled (`if: false`) pending exactly this
+  # secret and its OIDC role — parked, not dead, so it is stood up rather than
+  # deleted.
+  CELLO_CLIENT_WEBHOOK_SECRET=$(aws secretsmanager get-secret-value \
+    --secret-id "cello/${ENVIRONMENT}/pipeline/cello-client-webhook-secret" \
+    --region "${REGION}" --query 'SecretString' --output text 2>/dev/null || true)
+  if [[ -z "${CELLO_CLIENT_WEBHOOK_SECRET}" ]]; then
+    CELLO_CLIENT_WEBHOOK_SECRET=$(openssl rand -hex 32)
+    echo "  Minted a new cello-client webhook secret (none existed)."
+    echo "  If a GitHub webhook is ever configured for cello-client, it must use this value:"
+    echo "    aws secretsmanager get-secret-value --secret-id cello/${ENVIRONMENT}/pipeline/cello-client-webhook-secret --region ${REGION} --query SecretString --output text"
+  fi
+
   deploy_stack "cello-cicd-${ENVIRONMENT}" "cello-cicd.yaml" \
     "ExistingGitHubOidcProviderArn=${OIDC_PROVIDER_ARN}" \
+    "CelloClientWebhookSecret=${CELLO_CLIENT_WEBHOOK_SECRET}" \
     "Environment=${ENVIRONMENT}" \
     "GitHubConnectionArn=${GITHUB_CONNECTION_ARN}" \
     "StagingDirectoryUrl=${STAGING_DIRECTORY_URL}"
