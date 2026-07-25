@@ -282,8 +282,12 @@ describe("an unreachable gate — clause 6, the failure the user can see", () =>
 });
 
 describe("redemption attempts are bounded — clause 7", () => {
-  // Guessing is not the threat: a token is 12 characters over a 32-symbol
-  // alphabet, 60 bits. The threat is that every inbound Telegram message in
+  // Guessing is not the threat: a waitlist token is a `gen_random_uuid()`,
+  // 122 bits. (Verified against the live gate: a 12-character code over the
+  // referral alphabet comes back `token_malformed` — that alphabet belongs to
+  // `referral_codes`, a different token on a different path.)
+  //
+  // The threat is that every inbound Telegram message in
   // this state cost one Lambda invocation and one query against the PORTAL
   // database, with no ceiling, driven by anyone who can message the bot.
   //

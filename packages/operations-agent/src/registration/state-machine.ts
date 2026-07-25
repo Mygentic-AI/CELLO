@@ -64,15 +64,20 @@ const MAX_OTP_ATTEMPTS = 3;
 /**
  * Max waitlist-token redemptions a single channel user may attempt per window.
  *
- * Not a guessing defence — a token is 12 characters over a 32-symbol alphabet,
- * 60 bits, and no number of Telegram messages makes that searchable. It bounds
- * COST: without it, every inbound message in AWAITING_WAITLIST_TOKEN spent one
- * Lambda invocation and one query against the portal database, unbounded, at
- * the discretion of anybody who can message the bot.
+ * Not a guessing defence — a waitlist token is `waitlist_tokens.token`, a
+ * `gen_random_uuid()` (122 bits of randomness), and no number of Telegram
+ * messages makes that searchable. It bounds COST: without it, every inbound
+ * message in AWAITING_WAITLIST_TOKEN spent one Lambda invocation and one query
+ * against the portal database, unbounded, at the discretion of anybody who can
+ * message the bot.
  *
- * Five is chosen to sit above real mistyping (the alphabet already excludes
- * I/O/0/1 precisely because they get misread) and well below anything useful
- * as an amplifier.
+ * NOT to be confused with `referral_codes.code`, which IS 12 characters over a
+ * 32-symbol alphabet — that is the share/premium code, a different thing on a
+ * different path. The gate refuses a non-UUID as `token_malformed` before it
+ * touches the database.
+ *
+ * Five is chosen to sit above real mistyping and well below anything useful as
+ * an amplifier.
  */
 const MAX_TOKEN_ATTEMPTS = 5;
 
