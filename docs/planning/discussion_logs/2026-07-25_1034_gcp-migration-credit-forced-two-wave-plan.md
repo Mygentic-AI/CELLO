@@ -37,16 +37,23 @@ below were read-only `SELECT`s via ECS Exec.
 
 ## 1. The forcing function and the target
 
-Migrate all but one directory/relay pair off AWS. GCP has room for 5–6 pairs. The demo agent and
-ops agent are candidates too.
+The starting brief: migrate all but one directory/relay pair off AWS, with room for 5–6 pairs on
+GCP, and the demo agent and ops agent as candidates too.
 
-**Keep us-east-1 as the surviving AWS node.** It is not an arbitrary choice — us-east-1 uniquely
-carries CI/CD, the ops-agent, the portal and its RDS, the waitlist stack, and the demo agent
-(`deploy.sh:284-291`: every other region gets 15 stacks, us-east-1 gets 17). Migrating it would
-mean migrating five workloads at once. Migrate eu-central-1 and ap-northeast-1.
+**Two findings changed that brief, and the sections below argue for them:**
 
-Keeping one AWS node also converts the sovereign-node **choice** purpose from a design claim into
-a deployed fact, which it has never been — all three nodes are AWS today.
+- Because total data loss is free and wanted, this is a **rebuild at the launch topology**, not a
+  migration of state (§2). Almost every hard problem in the previous log came from preserving
+  something.
+- The "one surviving AWS node" is worth keeping as a **relay**, not a directory (§5). Relays need
+  no database and no replication, so provider diversity costs nothing there — while a surviving
+  AWS *directory* is what forces the cross-cloud VPN. Recommended target: **7 GCP directories +
+  at least 1 AWS relay.**
+
+**Whatever else moves, us-east-1 stays.** It uniquely carries CI/CD, the ops-agent, the portal and
+its RDS, the waitlist stack, and the demo agent (`deploy.sh:284-291`: every other region gets 15
+stacks, us-east-1 gets 17). It is not a node to be decommissioned; it is where the non-node
+workloads live (§9).
 
 ---
 
@@ -155,20 +162,30 @@ orchestration work, not crypto work.
 | Topology | N | T | Failures tolerated |
 |---|---|---|---|
 | Today | 3 | 2 | 1 |
-| 1 AWS + 5 GCP | 6 | 4 | 2 |
-| **1 AWS + 6 GCP** | **7** | **4** | **3** |
+| 5 GCP directories | 5 | 3 | 2 |
+| 6 GCP directories | 6 | 4 | 2 |
+| **7 GCP directories** | **7** | **4** | **3** |
+| 1 AWS + 6 GCP | 7 | 4 | 3 |
 
-**Go to seven.** N=6 and N=7 both require four co-signers, so the sixth GCP node is free
-redundancy — it raises tolerance from two failures to three at no ceremony cost. Odd N is
-strictly better under a majority rule, and the difference between 5 and 6 GCP nodes is one VM.
+**Go to seven directories.** N=6 and N=7 both require four co-signers, so the seventh node is
+free redundancy — it raises tolerance from two failures to three at no ceremony cost. Odd N is
+strictly better under a majority rule, and the difference is one VM.
+
+Note the two ways to reach N=7. Per §5, **seven GCP directories** gets the same threshold
+properties as 1 AWS + 6 GCP without needing the cross-cloud VPN. That is the recommended shape.
+
+Also worth seeing: **N=5 tolerates two failures for only three co-signers.** If bring-up at seven
+nodes proves painful, N=5 is a legitimate resting point — it doubles today's fault tolerance and
+is cheaper per ceremony than N=6 or N=7. Do not read the table as "bigger is better"; read it as
+"odd is better."
 
 ### Provider concentration, stated honestly
 
-Six of seven nodes on GCP means a GCP-wide outage leaves one node — below T=4, consortium down.
-That sounds alarming until you compare it to today, where an AWS-wide outage leaves *zero* of
-three. The migration is a strict improvement in provider risk, not a regression. But it should be
-recorded as a known shape rather than discovered later, and it is the argument for keeping at
-least one node off GCP permanently.
+All-GCP directories means a GCP-wide outage takes the consortium down. That is a real shape and
+should be recorded rather than discovered — but it is not a regression: today an AWS-wide outage
+leaves *zero of three*. The honest framing is that provider concentration is unchanged while
+region count doubles and fault tolerance improves. §5 covers why the fix is an AWS relay now and
+an AWS directory later.
 
 ---
 
@@ -235,25 +252,14 @@ ap-northeast-1. A fresh mesh starts from a known-good pattern.
 `setup-replication.sh` is hardwired to exactly three regions and will need generalising to N —
 unavoidable either way.
 
-**Replication is healthy today** — I verified rather than assumed:
+**One anomaly worth understanding before the mesh gets twice as large:** `directory_nodes` in
+us-east-1 contains only the `us-east-1` row, despite the table being in the publication and
+replication being healthy. Either the other two nodes never write their own row, or that table's
+replication is not landing.
 
-```
-cello_dev_us_east_1_eu_central_1     active=true   lag=1112 bytes
-cello_dev_us_east_1_ap_northeast_1   active=true   lag=1112 bytes
-cello_sub_from_eu_central_1          connected, latest_end 10:30:04Z
-cello_sub_from_ap_northeast_1        connected, latest_end 10:30:05Z
-```
-
-Both slots active, negligible lag, both subscriptions current. Extending this mesh is building on
-something that works, which was not a given — STATE.md records a prior wedge that produced
-thousands of apply-errors on ap-northeast-1.
-
-`setup-replication.sh` is hardwired to exactly three regions and will need generalising to N.
-
-**One anomaly to look at:** `directory_nodes` in us-east-1 contains only the `us-east-1` row,
-despite the table being in the publication and replication being healthy. Either the other two
-nodes never write their own row, or that table's replication is not landing. Small, pre-existing,
-and worth understanding before the mesh gets six times larger.
+A rebuild wipes the symptom, so it is tempting to skip — but if the cause is that nodes don't
+self-register into `directory_nodes`, it will reappear identically at seven nodes. Diagnose the
+cause, not the row count.
 
 ---
 
@@ -304,17 +310,20 @@ verification, and it is written into five replicated columns: `directory_nodes.n
   is auditable at a glance rather than requiring a lookup table.
 - Extends to Azure without another convention change.
 
-**Cons:**
-- Renaming the AWS survivor rewrites a trust-anchor key. Cheap in practice: clients adopt a
-  re-signed manifest via `startHttpManifestPoll`, so **no client republish and no npm cascade.**
-- Historical replicated rows keep the old names. This is archival only — verified that no share
-  table references `node_id` at all, so nothing that matters joins on it.
-- Anything parsing `NODE_ID` as a bare region needs checking (it is currently
-  `!Ref AWS::Region`).
+**Cons — and a rebuild removes nearly all of them.** The costs I listed against renaming were
+about *migrating* existing nodes: rewriting a trust-anchor key, orphaning historical
+`owning_node_id` rows, needing a coordinated manifest version. **On a rebuild none of that
+applies** — every node is born with the right name, no rename happens, and there are no
+historical rows to orphan.
 
-**Do the AWS rename in the same manifest version that adds the first GCP nodes** — one
-coordinated change rather than two, and it avoids a window where conventions are mixed. Do it in
-a quiet period, since `sessions.owning_node_id` would orphan in-flight sessions.
+What remains:
+- Anything parsing `NODE_ID` as a bare region needs checking (it is currently
+  `!Ref AWS::Region`, so the value has always *been* a region string). Worth a grep before the
+  first GCP node boots.
+
+**So adopt `<cloud>-<region>` from the first node of the rebuild.** This is the cheapest it will
+ever be — the convention question only became expensive in the migration framing that no longer
+applies.
 
 ---
 
@@ -330,7 +339,7 @@ quotas. You also hold `roles/resourcemanager.organizationAdmin`, so you can gran
 
 **You do not need one project per node.** My earlier suggestion of a project per node to mirror
 the sovereignty boundary was over-engineering. GCP regions are a resource attribute, not a project
-boundary — **one project, six regions** is correct and sidesteps the billing concern entirely.
+boundary — **one project, seven regions** is correct and sidesteps the billing concern entirely.
 
 **On reusing `claude-code-vertex-mygentic`:** I verified it is genuinely empty — zero Compute
 instances, no buckets, no Cloud SQL, only the default compute service account. Created
@@ -412,11 +421,12 @@ Per your direction: two waves, no waiting for post-launch.
 Nothing else can ship if this is not in place.
 
 1. Decide and create the project (§8). Enable only the APIs needed.
-2. **Check per-region quotas before committing to six regions.** Young GCP projects commonly
-   default to low per-region CPU and static-IP quotas; six regions means six separate quota
-   grants, and requests take time. This is the most likely schedule surprise in the whole plan.
+2. **Check per-region quotas before committing to seven regions.** Young GCP projects commonly
+   default to low per-region CPU and static-IP quotas; seven regions means seven separate quota
+   grants, and requests take time. This is the most likely schedule surprise in the whole plan —
+   and it now gates *both* waves, since relays need regions too.
 3. Cloud Build + Artifact Registry pipeline producing the directory and relay images.
-4. Pick the six GCP regions. Favour genuine geographic spread while keeping four-node quorums
+4. Pick the seven GCP regions. Favour genuine geographic spread while keeping four-node quorums
    latency-reasonable, since T=4 of 7 must be reachable for every ceremony.
 
 ### Wave 1 — relays (no code changes)
@@ -427,33 +437,47 @@ analysis applies to it.**
 
 5. Per region: one VM, static IP, persistent disk for `WAL_DIR`, two Secret Manager secrets
    (`NODE_PRIVATE_KEY`, transport key), firewall rule for the WS port.
-6. Point them at the surviving AWS directory; they self-register via `relay_register`.
+6. Point them at the still-running AWS directories; they self-register via `relay_register`.
 7. Add Route53 records (the `cello.mygentic.ai` zone stays authoritative on AWS — it is cheap and
-   moving DNS during a migration adds risk for no gain).
-8. Retire the eu/ap AWS relays as GCP relays come online.
+   moving DNS mid-rebuild adds risk for no gain).
+8. **Keep one AWS relay** (§5) — it is the cheap half of the provider-diversity invariant. Retire
+   the other two as GCP relays come online.
 
-A persistent disk for `WAL_DIR` is incidentally *more* durable than the current Fargate
-ephemeral `/tmp/wal`.
+A persistent disk for `WAL_DIR` is incidentally *more* durable than the current Fargate ephemeral
+`/tmp/wal`.
 
-### Wave 2 — directories
+Wave 1 is genuinely low-risk: relays hold no durable trust state, so a bad relay is a restart,
+not an incident. It is also the natural place to shake out the VM/IP/firewall/TLS shape before
+betting the directories on it.
+
+### Wave 2 — directories (a fresh consortium)
 
 9. Write the four adapters behind the existing interfaces: Secret Manager, GCS ×2, and Parameter
    Manager **only if** the empty-registry boot test (§12) fails.
-10. Make the bootstrap multiaddr configurable — `directory.ts:1095` hardcodes
-    `/tcp/80/ws`, while the relay's equivalent is already an env var. Fix regardless of GCP.
+10. Make the bootstrap multiaddr configurable — `directory.ts:1095` hardcodes `/tcp/80/ws`, while
+    the relay's equivalent is already an env var. Fix regardless of GCP.
 11. Cloud SQL Postgres 18 per node, **no HA** (HA instances cannot be logical-replication
     subscribers, and every node is both publisher and subscriber).
-12. Generalise `setup-replication.sh` from three hardwired regions to N; native GCP↔GCP peering
-    plus one HA VPN to us-east-1.
-13. Re-sign the manifest to N=7 with the `<cloud>-<region>` convention, renaming the AWS survivor
-    in that same version. Clients adopt by poll — no republish.
-14. **Re-register the five agents.** Confirm the share count is still small immediately
-    beforehand (§2 tripwire).
-15. Decommission the eu-central-1 and ap-northeast-1 stacks — only after the GCP nodes are
-    serving and the agents are re-registered.
+12. Generalise `setup-replication.sh` from three hardwired regions to N. **All-GCP means native
+    peering only — no VPN** (§5).
+13. Sign a **fresh manifest** at N=7 with `<cloud>-<region>` nodeIds. Clients adopt by poll — no
+    republish, no npm cascade.
+14. **Bring-up test — this is the deliverable, not a formality.** Register from scratch, confirm
+    the DKG runs at seven participants with T=4, confirm a four-of-seven signing quorum, kill two
+    nodes and confirm ceremonies still complete, confirm replication converges across all seven,
+    confirm client failover across seven endpoints. This path has never been exercised (§2).
+15. Decommission all three AWS directory stacks and the two retired relays — only after the GCP
+    consortium is serving.
 
-Wave 2 has a natural pause point after step 13: the consortium can run with GCP directories
-alongside AWS ones before anything is torn down.
+Wave 2 has a natural pause point after step 13: the fresh GCP consortium can run alongside the
+old AWS one before anything is torn down. Because there is no state to preserve, the old
+consortium is a fallback you can simply abandon rather than reconcile — which is a luxury this
+project will not have again.
+
+### Later, separately scoped
+
+16. Add a seventh **AWS directory** for provider diversity when the HA VPN is worth building
+    (§5). §3's lift-and-shift makes this contained rather than a re-architecture.
 
 ---
 
@@ -461,7 +485,7 @@ alongside AWS ones before anything is torn down.
 
 - **Whether the directory boots usefully with an empty node registry.** Decides whether the
   Parameter Manager adapter is needed at all. Cheap to test locally; not tested.
-- **Per-region GCP quota headroom** for six regions. Flagged above as the likeliest surprise.
+- **Per-region GCP quota headroom** for seven regions. Flagged above as the likeliest surprise.
 - **Cross-cloud replication lag under real write load.** Today's intra-AWS lag is 1112 bytes,
   which tells us nothing about a GCP↔AWS tunnel.
 - **Whether the client's `/bootstrap` path handles an `https://` manifest endpoint** — all three
@@ -473,11 +497,29 @@ alongside AWS ones before anything is torn down.
 
 ## 13. Open decisions
 
-1. **Six GCP nodes, not five** — confirm N=7. The sixth node is free redundancy.
-2. **Project ID** — attempt `cello-infra`, or accept the immutable
-   `claude-code-vertex-mygentic`?
-3. **Ops agent** — leave on AWS, or run on GCP against the SES API?
-4. **Node shape** — single VM with static IP (cheap, and sound given T-of-N), or load balancer
-   per node (conventional, costlier)? My recommendation is the single VM.
-5. **Portal and waitlist** — out of scope for these two waves? My recommendation is yes for the
+1. **All-GCP directories, AWS relay** (§5) — confirm. This removes the cross-cloud VPN from the
+   critical path and is the single largest simplification available. The AWS directory becomes a
+   separately-scoped story later.
+2. **Seven GCP directories** (N=7, T=4, tolerates 3) — confirm. The seventh is free redundancy
+   under `majority(N)`. N=5 is a legitimate fallback if bring-up proves painful.
+3. **Project ID** — attempt `cello-infra`, or accept the immutable `claude-code-vertex-mygentic`?
+4. **Ops agent** — leave on AWS, or run on GCP against the SES API?
+5. **Node shape** — single VM with static IP (cheap, and sound given T-of-N), or load balancer per
+   node (conventional, costlier)? My recommendation is the single VM.
+6. **Portal and waitlist** — out of scope for these two waves? My recommendation is yes for the
    waitlist (shipped today, still moving) and a separate decision for the portal.
+
+---
+
+## 14. One documentation correction found along the way
+
+`.claude/CLAUDE.md`'s **Database** section states that the six M7 session tables "join on
+`agent_name`" and calls this "a known defect (`DOD-AGENT-ID-JOINKEY-1`)". That is **out of date** —
+the DoD records it as `✅ BUILT + REVIEWED + SHIPPED` (cello-client `173d34f`, `daemon@0.0.45`),
+live-proven 2026-07-11 on Andre's real database, re-keying 11 agents / 133 sessions, with a
+seventh table (`retry_queue`) found and fixed in the same pass.
+
+The *rule* that section teaches — join on the stable primary key, never a mutable attribute — is
+still exactly right and worth keeping. Only the factual claim about current state is stale, and
+since CLAUDE.md loads every session it is actively telling agents a fixed defect is live. Worth a
+small edit; not part of this plan.
