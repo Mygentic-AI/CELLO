@@ -395,6 +395,24 @@ each line.
   **One caveat, stated:** `waitlist_agent_links` was seeded by hand for this run, because nothing
   writes it — the parked fork. Everything downstream of that row is proven; the row's absence in
   production is not fixed by this.
+- **THE FIVE POINT-EARNING ACTIONS, each called TWICE (first time, 2026-07-25)** — real handler
+  code, real session, local Postgres:
+
+  | action | 1st | 2nd | effect |
+  |---|---|---|---|
+  | `/waitlist/readiness` | 200 | 200 | +20 once |
+  | `/waitlist/interview-commit` | 200 | 200 | +30 once |
+  | `/waitlist/survey` | 200 | 200 | +30 once (20 structured + 10 free-form) |
+  | `/waitlist/post-url` | 200 | **409** | queued, **no points** — credit waits for review |
+  | `/waitlist/content-alerts` | 200 | 200 | flag set, no points |
+
+  Total 80, and the ledger holds exactly three rows — one per paying action. Calling everything
+  twice is the point: idempotency and the caps are enforced in the database, so a second call
+  changes nothing.
+
+- **queue position is COMPUTED** — `waitlist_queue` ranks correctly by points then age (80, 50, 50,
+  0), and `queue_position` exists on no table, only the view. `DOD-INV-NO-INFLATION` has nowhere to
+  store a fabricated number.
 - **wave gate** — `capacity` alone is refused `invalid_capacity`; with a capacity but no operator,
   refused `missing_opened_by` ("every wave names the operator who opened it"); with both, it declines
   to open a wave at all: `{admitted:0, reason:'all_unverified', waiting_total:8,
