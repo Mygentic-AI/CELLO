@@ -128,10 +128,14 @@ Resources:
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
-          Description: >
-            Postgres, SES, Secrets Manager and Lambda over the NAT. Scoped egress
-            was tried on the waitlist stack and broke SES, because boto3 resolves
-            a public host and the VPC CIDR does not contain it.
+          # EC2 rejects newlines in a rule description, so this is a single
+          # line — a folded YAML block leaves a trailing newline and the stack
+          # fails with "Invalid rule description".
+          #
+          # Egress is unscoped on purpose: scoping it to the VPC CIDR was tried
+          # on the waitlist stack and broke SES, because boto3 resolves a public
+          # host the CIDR does not contain.
+          Description: Postgres, SES, Secrets Manager and Lambda via NAT
       Tags:
         - Key: Name
           Value: !Sub "cello-${Environment}-ops-dashboard-sg"
