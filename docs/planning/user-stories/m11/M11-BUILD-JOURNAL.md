@@ -3219,3 +3219,43 @@ sitting behind one.
 **Still blocked on one thing:** every `git push` fails with *"You must verify your email address"*.
 Nine commits queued, including the fix for the directory CI breakage that has kept eu-central-1 and
 ap-northeast-1 from receiving a deploy for weeks.
+
+---
+
+## 2026-07-25 (evening) — the ops dashboard reached production, through four silent failures
+
+`operations.cello.mygentic.ai` is live: stack CREATE_COMPLETE, ECS 1/1, `/sign-in` 200 over HTTPS,
+all five operator pages 307ing to sign-in with nothing in the body. The image was built by GitHub
+Actions and pushed via OIDC — never from a laptop. It shares the portal ALB via a host rule, so
+there is no second load balancer and no second monthly bill.
+
+**Every failure on the way looked healthy from outside**, which is the pattern of this whole
+milestone:
+
+1. **The OIDC role could not be assumed.** Repo, owner, audience and the `sub` string all matched
+   what GitHub documents. CloudTrail had the real claim:
+   `repo:Andre-Mygentic@186459211/cello-ops-dashboard@1312030261:ref:refs/heads/main` — immutable
+   numeric IDs *inside* the owner and repo segments, which the docs do not show. Nothing matching
+   the documented shape could ever have worked. I guessed twice and burned two build cycles; one
+   CloudTrail lookup answered it. Pinning the IDs is also stronger than pinning names.
+2. **The allowlist secret did not exist.** Sign-in returned its usual `202 {"status":"sent_if_allowed"}`
+   and sent nothing. Failing closed, correctly, and invisibly. Now created by `cello-secrets.yaml`
+   with `PLACEHOLDER_POPULATE_VIA_CLI` and set out-of-band — an access list does not belong in git.
+3. **Nothing had ever created the dashboard's own tables.** I had told the Dockerfile to skip
+   `migrations/` because "the waitlist migrate Lambda owns the shared ledger". True, and the wrong
+   half mattered: that Lambda bundles only the WAITLIST files. Every sign-in logged
+   `relation "ops_magic_link_requests" does not exist` behind a 202.
+4. **The fix for (3) could not be BUILT.** Running migrations from `instrumentation.ts` fails
+   `next build`, because Next compiles that file for the edge runtime where `pg`'s builtins do not
+   resolve. Four bundler-level workarounds each surfaced the next missing builtin. The bundler was
+   the wrong thing to argue with — they now run as `node scripts/migrate.mjs && node server.js`
+   from the container CMD, which is the better place anyway: a failed migration means the server
+   never starts, so no window exists in which it serves a half-migrated database.
+
+**One guard caught me and was right.** I wrote the new secret's placeholder as `["PLACEHOLDER"]` so
+it would parse as JSON; `deploy-001-iac-validation` enforces `PLACEHOLDER_POPULATE_VIA_CLI` across
+every secret in that template. Following the convention is also better behaviour — the value is
+deliberately not valid JSON, and the dashboard fails closed on anything it cannot parse.
+
+**The pace correction stands.** 64 commits in the preceding 8 hours, 39 of them documentation only.
+This is one entry for the whole arc.
