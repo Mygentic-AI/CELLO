@@ -2974,6 +2974,11 @@ than inventing a contorted test to make dead-effect code look covered.
 
 **Runs:** 125 passed, 52 skipped. Lint, typecheck, build clean.
 
+**Correction.** The commit message for *"two bounds, because they answer different questions"*
+(`30a75787`) cites the fairness fix as `24bd1b5f`. **No such commit exists** — it is `6c916e0e`. I
+wrote a hash from memory rather than looking it up, in the same session spent removing claims the
+artifact does not support. Recorded here rather than by rewriting pushed history.
+
 ---
 
 ## 2026-07-25 — the ops dashboard had never been built
