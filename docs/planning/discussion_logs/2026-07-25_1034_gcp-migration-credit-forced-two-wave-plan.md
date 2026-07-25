@@ -174,6 +174,82 @@ Andre pushed back on N=7/T=4 and on whether adding directories strands existing 
 right to. Reading the code closely, **his original mental model is the correct one**, my table had
 an arithmetic error, and the design doc agrees with him. Taking the questions in order.
 
+### Where the numbers come from
+
+I gave a table without the derivation. The whole relationship is **one line of code** plus one
+structural fact.
+
+**The line** — `directory-node.ts:2818`:
+
+```js
+const dkgThreshold = consortiumNodeCount === 1 ? 2 : Math.floor(consortiumNodeCount / 2) + 1;
+```
+
+`T = floor(N/2) + 1` — the smallest integer strictly greater than half of N, i.e. a simple
+majority. Nothing cryptographic forces this; FROST works for any `1 ≤ T ≤ n`. **It is a policy
+choice**, settled 2026-07-04. Mechanically:
+
+| N | floor(N/2) | **T** |
+|---|---|---|
+| 3 | 1 | **2** |
+| 4 | 2 | **3** |
+| 5 | 2 | **3** |
+| 6 | 3 | **4** |
+| 7 | 3 | **4** |
+| 10 | 5 | **6** |
+
+**Why majority specifically:** two majorities always overlap. If `T > N/2` you cannot form two
+disjoint groups of size T, so there can never be two independent, non-communicating sets of
+directories each producing a valid signature for the same identity. At `T ≤ N/2` you could split
+the consortium into two quorums that never talk and each could sign — two authorities for one
+agent. For a trust product that is the one outcome that must be impossible. Majority is the
+*minimum* threshold that forecloses it.
+
+**Why odd N is better** — this is why the table pairs up. `floor(N/2)+1` only increments when N
+goes **odd → even**:
+
+- 3 → 4: T rises 2 → 3. You added a node *and* raised the bar.
+- 4 → 5: T stays 3. You added a node and the bar did not move — free redundancy.
+
+So every even N has the same fault tolerance as the odd N beneath it while demanding one more
+signature. Even N is always strictly wasteful. That is the entire reason to prefer 3, 5, 7 over
+4, 6, 8.
+
+### Why T−1 directories, not T
+
+The structural fact, from `directory-node.ts:228`:
+
+> *"the FROST group is **(T, N+1)** with T = majority(N) ≤ N"*
+
+The group has **N+1** participants — the N directories **plus the client itself**, which holds a
+share of its own. The threshold is T out of those N+1.
+
+The client is always present when sealing its own data — it is the party initiating. So it supplies
+one of the T signatures, and the other **T−1** must come from directories.
+
+At today's N=3, T=2: the group is **2-of-4**. Client + any **one** directory reaches threshold. Two
+of the three directories can be down.
+
+**The security corollary worth knowing**, because it explains why T<N is safe: since T is a
+majority of **N** (not of N+1), **T directories alone also reach threshold — without the client.**
+That is a real hazard, and it is what `SEC-2` addresses: every commit/sign request must carry an
+Ed25519 signature made with the agent's `K_local` private key over the exact message
+(`FROST_AUTH_DOMAIN`, `directory-node.ts:231`), verified *before* the share is touched. So colluding
+directories cannot forge arbitrary bytes — they can only contribute to a message the client
+provably authorised.
+
+### Two operations, two different requirements
+
+Worth separating, because they explain the apparent inconsistency in the numbers:
+
+- **Sealing/signing** needs **T−1 directories** (the client makes up the difference).
+- **Registration/DKG** needs **|Q| ≥ T directories** (`directory-node.ts:2821`) — the ceremony has
+  to *deal* shares to at least T holders, and the client cannot substitute for a holder here.
+
+So at N=3: sealing tolerates **two** directories down; registering a new agent tolerates only
+**one**. Registration is always the stricter operation, which is why §5's outage claim covers
+sealing but not new registration.
+
 ### The correction: I under-counted fault tolerance
 
 `directory-node.ts:2818` computes `T = majority(N)`, but the comment two lines up is the part I
