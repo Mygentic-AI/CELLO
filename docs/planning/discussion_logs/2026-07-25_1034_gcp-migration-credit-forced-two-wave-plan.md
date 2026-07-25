@@ -50,7 +50,7 @@ a deployed fact, which it has never been — all three nodes are AWS today.
 
 ---
 
-## 2. The decisive finding: there are five agents
+## 2. This is a rebuild, not a migration
 
 I queried the live us-east-1 directory database rather than reasoning about it:
 
@@ -60,33 +60,57 @@ agent_profiles    →  5
 distinct epochs   →  5
 ```
 
-Five agents, all Andre's own test/demo identities, zero external users.
+Five agents — all Andre's own testing, one user, zero external. And per Andre: losing all of it
+is not merely acceptable but **preferable**, because a clean slate is a chance to exercise every
+flow end to end.
 
-**So do not engineer share preservation.** Re-registering five agents is a few minutes of work.
-Building a share-migration runbook — export encrypted shares, move envelope keys, verify
-identifiers, cut over atomically — is days of work carrying real risk of silently corrupting the
-one thing in this system that cannot be reconstructed. The launch-triage answer is unambiguous:
-**stand up fresh GCP nodes and re-register.**
+**That reframes the whole project.** Nothing below is a migration of state. There is no data to
+move, no share to preserve, no cutover window to hold, no rollback plan to write. Every hard
+problem in the previous log came from *preserving* something. Delete that requirement and most of
+them disappear:
 
-I want to be explicit that this is the whole reason the migration is cheap, because the same
-migration becomes genuinely dangerous later.
+- No share export, envelope-key transfer, or identifier verification.
+- No atomic per-node manifest cutover (§3's same-identifier hazard cannot arise — there are no
+  inherited identifiers).
+- No `nodeId` rename-in-place, so the cloud-prefix convention applies to every node from birth
+  (§7).
+- **No cross-cloud VPN, if the directories go all-GCP** (§5) — this is the big one.
 
-### The hazard this finding lets you skip
+**Treat "rebuild the consortium from zero at the launch topology" as the actual deliverable.**
 
-`agent_key_shares` is keyed `(agent_id, epoch_id)` with **no `node_id` column**
-(`V4__agent_key_shares.sql`), and it is **absent from `PUBLICATION_TABLES`**
+### The rebuild is itself the test we have never run
+
+This deserves stating as a benefit, not just a consequence. **The system has only ever run at
+N=3/T=2.** The launch topology is N=7/T=4 and it has never been exercised — not the DKG at seven
+participants, not a four-of-seven signing quorum, not a seven-node replication mesh, not the
+client's failover behaviour across seven endpoints.
+
+A rebuild forces all of that through a real bring-up: fresh registration, fresh DKG, fresh
+replication, fresh manifest adoption, fresh client flows. That is genuine launch de-risking, and
+there is no cheaper moment to do it than while the only user is the person planning it.
+
+The flip side, stated plainly: **N=7/T=4 is an untested path.** Expect the bring-up to surface
+real defects — that is the point of doing it now rather than after launch. Budget for finding
+things, not for a clean run.
+
+### The hazard, recorded for later
+
+Not applicable now; it will be. `agent_key_shares` is keyed `(agent_id, epoch_id)` with **no
+`node_id` column** (`V4__agent_key_shares.sql`) and is **absent from `PUBLICATION_TABLES`**
 (`setup-replication.sh:169`). Shares are per-node, secret, and never replicated — by design.
 
-Therefore: tearing down eu-central-1 and ap-northeast-1 **destroys their shares.** Existing
-agents registered at N=3/T=2 would drop from three share-holders to one — permanently below
-threshold, permanently unserviceable. No restore, no resharing shortcut, nothing.
+So decommissioning a directory **destroys its shares.** Post-launch, tearing down two of three
+nodes would drop existing agents from three share-holders to one — permanently below threshold,
+permanently unserviceable, with no restore and no resharing shortcut.
 
-With five throwaway agents that is a shrug. **With real users it is an unrecoverable data-loss
-event.**
+> **Tripwire.** The moment there is a user who is not Andre, this stops being background and
+> becomes the blocking constraint, and §3's lift-and-shift becomes mandatory rather than
+> optional. Re-check the share count and the user count immediately before decommissioning
+> anything, every time.
 
-> **Tripwire.** If real users register before the migration executes, this section stops being
-> background and becomes the blocking constraint. Re-check the share count immediately before
-> decommissioning anything.
+Related, client-side: wiping the local daemon database also sidesteps
+`DOD-MIGRATION-AMBIGUITY-RESOLVE-1`, whose only documented recovery is "resolve by hand or start
+from a fresh database." A rebuild gets that for free.
 
 ---
 
@@ -148,15 +172,68 @@ least one node off GCP permanently.
 
 ---
 
-## 5. The replication problem inverts — this is the big win
+## 5. The replication problem — and how to delete it entirely
 
 The earlier log's hardest problem was cross-cloud Postgres replication: one GCP node needed HA
-VPN tunnels to three AWS regions. That problem largely **evaporates** at this scale.
+VPN tunnels to three AWS regions. At this scale it shrinks to **one** tunnel — six GCP nodes
+replicate to each other **natively inside GCP** (VPC peering or a shared VPC, no VPN, no
+cross-cloud egress), leaving only the surviving us-east-1 directory to join the mesh.
 
-Six GCP nodes replicate to each other **natively inside GCP** — VPC peering or a shared VPC, no
-VPN, no cross-cloud egress. Only **one** cross-cloud link remains: the surviving us-east-1 node
-into the GCP mesh. The count of hard things goes from three to one, and the one that remains is
-the one we were always going to need.
+But that last tunnel is still, by a wide margin, the hardest remaining piece of work: HA VPN on
+the GCP side, Site-to-Site on the AWS side, CIDR allocation around the existing `10.0`–`10.2/16`
+ranges, and a failure mode that silently stops replication rather than erroring loudly. It exists
+for exactly one reason: to keep one **directory** on AWS.
+
+### The recommendation: keep an AWS *relay*, make the directories all-GCP
+
+This is the structural insight the free-data-loss constraint unlocks, and it is worth more than
+anything else in this log.
+
+**Relays need no replication.** Verified earlier: the relay has no database, no AWS SDK, no FROST
+participation, and no share. It is not a consortium member. An AWS relay peers with GCP
+directories over plain libp2p and self-registers — **zero cross-cloud database plumbing.**
+
+So split the invariant by cost:
+
+| | Provider diversity | Cost of achieving it |
+|---|---|---|
+| **Relay** (session data path) | Keep 1+ on AWS | ~zero — no DB, no VPN |
+| **Directory** (consortium) | All GCP for now | one HA VPN + mesh generalisation |
+
+This buys provider diversity **on the path that actually carries user traffic**, and removes the
+VPN from the critical path entirely.
+
+**Is all-GCP directories a violation of the sovereign-node "choice" purpose?** No — and this is
+the part worth being precise about rather than hand-waving. Today all three directories are AWS.
+All-GCP is a *lateral* move on provider concentration, not a regression, while being a large
+improvement on region count (3 → 6) and fault tolerance (1 → 2 failures). The invariant that must
+never be violated is that the architecture *permits* cross-provider deployment — no hardcoded
+endpoints, no provider-specific networking. A rebuild on GCP with the adapter seams intact keeps
+that property fully alive; §3's lift-and-shift then makes adding an AWS directory later a
+contained piece of work rather than a re-architecture.
+
+Add the seventh AWS directory as a deliberate, separately-scoped provider-diversity story once
+the VPN is worth building. Note the N/T consequence: all-GCP means **N=6, T=4, two failures
+tolerated** rather than N=7's three. If you want the odd-N benefit without the VPN, the answer is
+**seven GCP directories** (N=7, T=4) — one extra VM, no tunnel.
+
+### Replication is healthy today
+
+Verified rather than assumed:
+
+```
+cello_dev_us_east_1_eu_central_1     active=true   lag=1112 bytes
+cello_dev_us_east_1_ap_northeast_1   active=true   lag=1112 bytes
+cello_sub_from_eu_central_1          connected, latest_end 10:30:04Z
+cello_sub_from_ap_northeast_1        connected, latest_end 10:30:05Z
+```
+
+Both slots active, negligible lag, both subscriptions current. The mechanism works — which was
+not a given, since STATE.md records a prior wedge that produced thousands of apply-errors on
+ap-northeast-1. A fresh mesh starts from a known-good pattern.
+
+`setup-replication.sh` is hardwired to exactly three regions and will need generalising to N —
+unavoidable either way.
 
 **Replication is healthy today** — I verified rather than assumed:
 

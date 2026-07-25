@@ -179,3 +179,60 @@ test — and, more conclusively, the bounce Lambda logging `waitlist.email.suppr
 **The dispatcher can return `{"sent": 0, "failed": 0}` while a job appears to be waiting.** A job that
 failed earlier goes back with `attempts` incremented and is not re-claimed immediately. Enqueue a fresh
 one (sign up again) rather than concluding the drain is broken.
+
+
+---
+
+# WHO IS BLOCKED ON WHAT (2026-07-25, after the live deploy)
+
+The backend is deployed and proven. Almost everything still 🟡 is waiting on one of three
+**outward actions only Andre can take** — not on further work. Written down because several DoD
+lines named the wrong blocker, which made them look like agent work when they were not.
+
+## A. Waiting on ONE thing: the corp-cello-site deploy
+
+`main` is ~35 commits behind `m11/review-fixes`, and merging auto-deploys the live public site, so
+it is deliberately not an agent action. Every line below is code-complete and API-proven; each
+needs the page it lives on to actually be the deployed page:
+
+`DOD-LANDING-1` · `DOD-TRACKING-1` · `DOD-SIGNUP-1` · `DOD-AUTH-1` · `DOD-STATUS-PAGE-1` ·
+`DOD-SURVEY-1` · `DOD-READINESS-1` · `DOD-CONTENT-ALERTS-1` · `DOD-DYNAMIC-ESTIMATOR-1` ·
+`DOD-STATUS-STUB-1` · `DOD-GALLERY-INDEX-1`
+
+The API half of these IS verified live: signup with `anon_id`/`touchpoints`/`ref` returns an
+attributed user, `/auth/request` is byte-identical for known and unknown addresses, `/auth/session`
+401s without a cookie, `/gallery/receipts` serves.
+
+## B. Waiting on the ops-dashboard existing somewhere
+
+The repo is local-only — **creating its GitHub remote is an outward action** — and it then needs a
+container deploy. Two constraints are in its README: it needs a persistent Node process (the
+fire-and-forget sign-in send is the no-enumeration property, and a frozen serverless container
+would never send), and `OPS_PUBLIC_URL` at *build* time.
+
+`DOD-OPS-SHELL-1` · `DOD-OPS-POST-REVIEW-1` · `DOD-OPS-WAVE-MGMT-1` · `DOD-OPS-FEEDBACK-1` ·
+`DOD-OPS-CONTENT-ALERT-1` · `DOD-OPS-TELEGRAM-1` · `DOD-OPS-UTM-1` · `DOD-INV-WAVE-GATE`
+
+**This also blocks agent verification**, which is worth knowing: the ops dashboard is the sanctioned
+read path to the portal database. Without it, `DOD-INV-TOKEN-SINGLE-USE` and `DOD-INV-POINTS-CAPS`
+cannot be proven live, because both need a verified user and a token that only a database read can
+produce. Their code and local proofs are done.
+
+## C. Other outward actions
+
+- `gallery.cello.mygentic.ai` DNS record — the nginx block already exists. Blocks `DOD-GALLERY-1`,
+  and **must land before** the cello-client receipt footer (Entry 47), or every sealed session
+  advertises a 404.
+- Google Search Console verification + the GA4 script — `DOD-BLOG-INFRA-1`.
+- Submitting the openclaw skill to the directory — `DOD-OPENCLAW-SKILL-1`.
+
+## D. Genuinely still work
+
+Small, and none of it blocked:
+
+- `DOD-FIRST-WIN-1` — the seal-event call site. The function is deployed with **no invoker**, and
+  its CFN Description says so. The event originates in the operator's daemon, which holds no AWS
+  credentials, so this needs a design choice about how it reaches AWS.
+- `DOD-FEEDBACK-OUTREACH-1` — the `CELLO_FEEDBACK` agent's session-initiation half (provisioning).
+- `DOD-FEEDBACK-DETECTION-1` — the daemon writing session telemetry (cello-client work).
+- `DOD-E-INV-1` / `DOD-E-WIN-1` — need a wave to actually admit somebody, which needs (B).
