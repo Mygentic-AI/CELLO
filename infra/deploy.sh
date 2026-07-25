@@ -1072,17 +1072,25 @@ if [[ "${REGION}" == "us-east-1" ]]; then
   # used `2>/dev/null || echo ""`, which collapsed a denied IAM call, expired
   # credentials and a wrong profile into the same message as a missing resource —
   # sending the operator to check RDS when the fault was in IAM.
+  # ASSIGNS BY NAME, and is deliberately NOT called as `X=$(resolve …)`.
+  # A command substitution runs in a subshell, so an array append inside one is
+  # discarded when it exits — the first version of this did exactly that, which
+  # made waitlist_failed permanently empty, the whole "could not determine
+  # prerequisites" branch dead code, and a denied IAM call print
+  # "missing: export cello-dev-portal-db-endpoint (is cello-portal-data
+  # deployed?)". That is worse than the `|| echo ""` it replaced: it attaches a
+  # confident, specific, wrong remedy to a fault that is in IAM.
   resolve() {
-    local what="$1"; shift
+    local target="$1" what="$2"; shift 2
     local out rc
     out=$("$@" 2>&1); rc=$?
     if [[ ${rc} -ne 0 ]]; then
       waitlist_failed+=("${what}: the lookup itself failed — ${out%%$'\n'*}")
-      printf ''
+      printf -v "${target}" '%s' ""
       return 0
     fi
     [[ "${out}" == "None" ]] && out=""
-    printf '%s' "${out}"
+    printf -v "${target}" '%s' "${out}"
   }
 
   export_value() {
@@ -1093,9 +1101,9 @@ if [[ "${REGION}" == "us-east-1" ]]; then
   waitlist_failed=()
   waitlist_missing=()
 
-  WAITLIST_DB_HOST=$(resolve "portal db endpoint" export_value "cello-${ENVIRONMENT}-portal-db-endpoint")
-  WAITLIST_DB_PORT=$(resolve "portal db port" export_value "cello-${ENVIRONMENT}-portal-db-port")
-  WAITLIST_SECRET_ARN=$(resolve "portal db secret arn" export_value "cello-${ENVIRONMENT}-portal-db-master-secret-arn")
+  resolve WAITLIST_DB_HOST "portal db endpoint" export_value "cello-${ENVIRONMENT}-portal-db-endpoint"
+  resolve WAITLIST_DB_PORT "portal db port" export_value "cello-${ENVIRONMENT}-portal-db-port"
+  resolve WAITLIST_SECRET_ARN "portal db secret arn" export_value "cello-${ENVIRONMENT}-portal-db-master-secret-arn"
 
   # The RDS-managed master secret. Read at deploy time, never stored in the repo.
   # Percent-encoded before going into a URI: RDS-generated passwords exclude / @ "
@@ -1103,15 +1111,35 @@ if [[ "${REGION}" == "us-east-1" ]]; then
   # as an authentication failure rather than an encoding one.
   WAITLIST_DB_PASSWORD=""
   if [[ -n "${WAITLIST_SECRET_ARN}" ]]; then
-    WAITLIST_DB_PASSWORD=$(resolve "portal db password" \
+    # Two steps, because the fetch and the parse fail for different reasons and
+    # collapsing them re-creates the substitution this whole block exists to
+    # remove: a denied GetSecretValue and a secret whose JSON has no "password"
+    # key are not the same problem and must not print the same line.
+    resolve WAITLIST_SECRET_JSON "portal db secret" \
       aws secretsmanager get-secret-value --region "${REGION}" \
-        --secret-id "${WAITLIST_SECRET_ARN}" --query 'SecretString' --output text \
-      | python3 -c 'import json,sys,urllib.parse; print(urllib.parse.quote(json.load(sys.stdin)["password"], safe=""))' 2>/dev/null || echo "")
+        --secret-id "${WAITLIST_SECRET_ARN}" --query 'SecretString' --output text
+    if [[ -n "${WAITLIST_SECRET_JSON}" ]]; then
+      # Percent-encoded: RDS-generated passwords exclude / @ " and space, but not
+      # % ? or #, each of which corrupts a libpq URI and then surfaces as an
+      # authentication failure rather than an encoding one.
+      if ! WAITLIST_DB_PASSWORD=$(printf '%s' "${WAITLIST_SECRET_JSON}" | python3 -c \
+        'import json,sys,urllib.parse; print(urllib.parse.quote(json.load(sys.stdin)["password"], safe=""))' 2>&1); then
+        waitlist_failed+=("portal db password: the secret did not parse — ${WAITLIST_DB_PASSWORD##*$'\n'}")
+        WAITLIST_DB_PASSWORD=""
+      fi
+    fi
   fi
 
   [[ -z "${WAITLIST_DB_HOST}" ]] && waitlist_missing+=("export cello-${ENVIRONMENT}-portal-db-endpoint (is cello-portal-data deployed?)")
   [[ -z "${WAITLIST_DB_PORT}" ]] && waitlist_missing+=("export cello-${ENVIRONMENT}-portal-db-port")
   [[ -z "${WAITLIST_DB_PASSWORD}" ]] && waitlist_missing+=("portal db master password from ${WAITLIST_SECRET_ARN:-<no secret arn export>}")
+  # PLACEHOLDER is what deploy.sh substitutes when the Route53 zone lookup fails,
+  # and it became load-bearing the moment the ACM certificate moved inside this
+  # stack: a non-empty but invalid HostedZoneId fails DomainValidationOptions and
+  # takes the whole stack down. Non-empty is not the same as valid — the Required
+  # Config Anti-Pattern in its less obvious form.
+  [[ -z "${HOSTED_ZONE_ID}" || "${HOSTED_ZONE_ID}" == "PLACEHOLDER" ]] && \
+    waitlist_missing+=("a real Route53 hosted zone for ${DOMAIN_NAME} (got '${HOSTED_ZONE_ID:-<empty>}')")
 
   WAITLIST_API_DOMAIN="api.${DOMAIN_NAME}"
 

@@ -88,6 +88,11 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # NOTE TO A FUTURE EDITOR: the export names below are written with {env}
+  # rather than the real CFN syntax ON PURPOSE. verify-m11-invariants.sh greps
+  # this whole file for the directory SG name, so spelling it properly here —
+  # the natural tidy-up — makes the invariant check fail on a correct file.
+  #
   # cello-{env}-portal-db-sg, NOT cello-{env}-rds-sg. Those two names are one
   # word apart and point at different databases: the second is the DIRECTORY's
   # instance (agent profiles, pgaudit), which this stack must never touch —
@@ -161,7 +166,7 @@ Resources:
       TopicName: !Sub "cello-waitlist-bounces-${Environment}"
       DisplayName: CELLO waitlist SES bounces and complaints
 
-  # WITHOUT THESE TWO, THE TOPIC HAS NO PUBLISHER. The first draft created the
+  # WITHOUT THESE TWO, NOTHING PUBLISHES TO THE TOPIC. The first draft created the
   # topic, the policy, the subscription and the Lambda permission — a complete
   # delivery path with nothing at the top of it — and deferred "point SES at
   # this" to a manual step that was never written down. The visible result would
@@ -169,6 +174,10 @@ Resources:
   # bounced or complained, DOD-INV-EMAIL-SUPPRESS becomes unenforceable, and the
   # sending domain's reputation degrades with nothing reporting it.
   #
+  # SES emits events to THIS TOPIC only for mail sent with THIS configuration
+  # set. (Identity-level notifications via SetIdentityNotificationTopic are a
+  # separate mechanism that would cover all mail from the verified identity;
+  # the configuration set is chosen because it is scoped and IaC-managed.)
   # The dispatcher must send WITH this configuration set for events to be
   # emitted; waitlist-email passes ConfigurationSetName from WAITLIST_SES_CONFIG_SET.
   SesConfigurationSet:
@@ -178,6 +187,12 @@ Resources:
 
   SesBounceDestination:
     Type: AWS::SES::ConfigurationSetEventDestination
+    # CreateConfigurationSetEventDestination validates that SES may publish to
+    # the topic. !Ref BounceTopic orders this after the TOPIC but not after the
+    # POLICY that grants it, so a first deploy can lose the race and fail with
+    # InvalidSNSDestination — an error that reads as an SES problem and rolls
+    # back the stack.
+    DependsOn: BounceTopicPolicy
     Properties:
       ConfigurationSetName: !Ref SesConfigurationSet
       EventDestination:
@@ -1036,7 +1051,11 @@ Resources:
     Type: AWS::Events::Rule
     Properties:
       Name: !Sub "cello-waitlist-email-${Environment}"
-      Description: Drains email_jobs. Every minute — E1 must land within 60 seconds of signup.
+      # Every minute. NOT a 60-second guarantee: a job enqueued just after a
+      # tick waits until the next one, then adds VPC cold start and the SES
+      # round trip, so the p99 exceeds 60s by construction (M11-D27). One
+      # minute is the polling interval, not a latency bound.
+      Description: Drains email_jobs. Polls every minute.
       ScheduleExpression: "rate(1 minute)"
       State: ENABLED
       Targets:

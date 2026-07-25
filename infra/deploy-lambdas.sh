@@ -188,7 +188,18 @@ stage, name = pathlib.Path(sys.argv[1]), sys.argv[2]
 present = {p.stem for p in stage.glob("*.py")} | {p.name for p in stage.iterdir() if p.is_dir()}
 # Distribution directories are not import names (psycopg2_binary-2.9.9.dist-info).
 present |= {d.name.split("-")[0] for d in stage.iterdir() if d.is_dir()}
+# python3.12's stdlib, NOT the host's. The dependencies are built inside
+# public.ecr.aws/lambda/python:3.12 precisely because the host differs, and the
+# same reasoning applies here: on a 3.11 host `distutils` is stdlib and would
+# pass, while the 3.12 runtime removed it. Falls back to the host set only when
+# the pinned data is unavailable, and says so.
 stdlib = set(getattr(sys, "stdlib_module_names", set()))
+if sys.version_info[:2] != (3, 12):
+    print(
+        f"note: checking imports with python{sys.version_info.major}.{sys.version_info.minor}'s "
+        f"stdlib list, but the runtime is 3.12 — a module that moved between them could slip through.",
+        file=sys.stderr,
+    )
 # Shipped inside the AWS Lambda Python runtime itself, so present at execution
 # without being in the zip. Named EXPLICITLY and kept to exactly these two —
 # a broad "well-known packages" allowlist would let a genuinely missing

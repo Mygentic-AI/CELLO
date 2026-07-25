@@ -81,7 +81,7 @@ def grant_invites_up_to(cur, user_id, target, correlation_id, reason, scope="out
     they could never be picked up again. The DoD clause is unconditional:
     "Day 6, no response: auto-grant 2 premium invite codes."
     
-    The call-completed ceiling of 4 deliberately DOES count everything (M11-D28)
+    The call-completed ceiling of 4 deliberately DOES count everything (M11-D29)
     — that number is a cap on what one person can hand out. The Day-6 grant is
     not a cap; it is a grant. Different questions, so different scopes.
     """
@@ -123,6 +123,28 @@ def grant_invites_up_to(cur, user_id, target, correlation_id, reason, scope="out
     return needed
 
 
+def note(cur, waitlist_user_id, kind, body):
+    """Write a status-page note, at most one live one per kind per user.
+
+    ON CONFLICT DO NOTHING against the partial unique index rather than an
+    upsert: a replayed sweep must not restamp created_at and shuffle the note
+    back to the top of someone's page, and it must not rewrite a body they have
+    already read. Returns 1 if a note was written, 0 if one was already there —
+    the caller counts it, so "granted invites but wrote no note" is visible in
+    the log rather than assumed impossible.
+    """
+    cur.execute(
+        """
+        INSERT INTO status_notes (waitlist_user_id, kind, body)
+        VALUES (%s, %s, %s)
+        ON CONFLICT DO NOTHING
+        RETURNING id
+        """,
+        (waitlist_user_id, kind, body),
+    )
+    return 1 if cur.fetchone() else 0
+
+
 # ── Day 6 sweep ───────────────────────────────────────────────────────────────
 
 
@@ -150,10 +172,27 @@ def sweep_day_six(correlation_id):
             claimed = cur.fetchall()
             issued = 0
 
+            noted = 0
             for row in claimed:
-                issued += grant_invites_up_to(
+                granted = grant_invites_up_to(
                     cur, row["waitlist_id"], DAY_SIX_INVITES, correlation_id, "day_six_no_response"
                 )
+                issued += granted
+                # THE NOTE IS ONLY WRITTEN IF SOMETHING WAS ACTUALLY GRANTED.
+                # grant_invites_up_to grants UP TO a target, so a user already
+                # holding the ceiling receives zero — and telling them invites
+                # arrived when none did is worse than saying nothing, because
+                # they go looking for codes that are not there.
+                if granted:
+                    noted += note(
+                        cur,
+                        row["waitlist_id"],
+                        "feedback_invites_granted",
+                        f"We'd still love to hear how it's going. In the meantime, "
+                        f"{granted} premium invite{'s are' if granted != 1 else ' is'} "
+                        f"on your account — pass {'them' if granted != 1 else 'it'} on to "
+                        f"someone whose agent you'd want to talk to.",
+                    )
 
         conn.commit()
         # Users claimed AND invites issued. Reporting only the row count said
@@ -163,8 +202,13 @@ def sweep_day_six(correlation_id):
             correlation_id,
             usersClaimed=len(claimed),
             invitesIssued=issued,
+            notesWritten=noted,
         )
-        return {"day_six_granted": len(claimed), "invites_issued": issued}
+        return {
+            "day_six_granted": len(claimed),
+            "invites_issued": issued,
+            "notes_written": noted,
+        }
 
     except Exception:
         conn.rollback()
@@ -215,7 +259,7 @@ def complete_call(body, correlation_id):
                 return {"granted": 0, "reason": "already_completed"}
 
             # scope="all": the 4 is a CEILING on what one person can hand out
-            # (M11-D28), so first-win invites count toward it.
+            # (M11-D29), so first-win invites count toward it.
             issued = grant_invites_up_to(
                 cur,
                 user_id,
@@ -224,6 +268,17 @@ def complete_call(body, correlation_id):
                 f"call_completed_by:{completed_by}",
                 scope="all",
             )
+            # Same rule as Day 6: only tell them if something arrived. A note
+            # saying invites were granted when the ceiling was already reached
+            # sends them looking for codes that do not exist.
+            if issued:
+                note(
+                    cur,
+                    user_id,
+                    "call_invites_granted",
+                    f"Thanks for the call — that was genuinely useful. {issued} more premium "
+                    f"invite{'s are' if issued != 1 else ' is'} on your account.",
+                )
 
         conn.commit()
         log(

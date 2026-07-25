@@ -291,3 +291,154 @@ def test_the_call_ceiling_still_counts_everything(outreach):
 
     assert body["granted"] == 1
     assert invites(uid) == 4
+
+
+# ── DOD-FEEDBACK-OUTREACH-1: the Day-6 status-page note ───────────────────────
+
+
+def live_notes(uid, kind=None):
+    sql = "SELECT kind, body FROM status_notes WHERE waitlist_user_id = %s AND dismissed_at IS NULL"
+    params = [uid]
+    if kind:
+        sql += " AND kind = %s"
+        params.append(kind)
+    return query(sql, tuple(params))
+
+
+def hold_outreach_invites(uid, n):
+    """Premium codes carrying meta.source = 'outreach'.
+
+    Plain premium codes would NOT do: the Day-6 grant is scoped to codes from
+    this sequence, so a first-win code does not suppress it. Seeding the wrong
+    kind is how a test about the ceiling ends up not testing the ceiling.
+    """
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        for i in range(n):
+            cur.execute(
+                "INSERT INTO referral_codes (code, owner_waitlist_user_id, type, meta) "
+                "VALUES (%s, %s, 'premium', '{\"source\": \"outreach\"}'::jsonb)",
+                (f"OUT{i}{str(uid)[:8].upper()}", uid),
+            )
+    conn.close()
+
+
+def test_day_six_writes_a_status_note_alongside_the_grant(outreach):
+    """The DoD clause is "auto-grant 2 premium invite codes; set a status-page
+    note." Only the grant happened before, so a user received two invite codes
+    with nothing anywhere telling them the codes existed."""
+    uid = make_eligible("noted@example.test", days_ago=7)
+
+    result = sweep(outreach)
+
+    assert result["invites_issued"] == 2
+    assert result["notes_written"] == 1
+    notes = live_notes(uid, "feedback_invites_granted")
+    assert len(notes) == 1
+    assert "2 premium invites are" in notes[0][1]
+
+
+def test_no_grant_means_no_note(outreach):
+    """grant_invites_up_to grants UP TO a target, so somebody already holding
+    two outreach invites receives zero. Telling them invites arrived when none
+    did sends them looking for codes that are not there."""
+    uid = make_eligible("atcap@example.test", days_ago=7)
+    hold_outreach_invites(uid, 2)
+
+    result = sweep(outreach)
+
+    assert result["invites_issued"] == 0
+    assert result["notes_written"] == 0
+    assert live_notes(uid, "feedback_invites_granted") == []
+
+
+def test_a_replayed_sweep_writes_no_second_note(outreach):
+    """The sweep is idempotent, so it must not produce a second note.
+
+    NOTE ON WHAT THIS DOES *NOT* PROVE. The sweep never reaches note() twice —
+    feedback_day6_granted_at stops it re-claiming the user — so this passes
+    even with note() written as an upsert. It covers the sweep. The note's own
+    idempotency is a separate property and is tested directly below, because a
+    test that passes for a reason other than the one in its name is how a
+    guarantee gets believed without ever being checked.
+    """
+    uid = make_eligible("replay@example.test", days_ago=7)
+
+    sweep(outreach)
+    second = sweep(outreach)
+
+    assert second["notes_written"] == 0
+    assert len(live_notes(uid, "feedback_invites_granted")) == 1
+
+
+def test_writing_the_same_note_twice_neither_duplicates_nor_restamps_it(outreach):
+    """note() itself, called twice — the case the sweep can never produce.
+
+    Two things must hold. No duplicate row, obviously. And created_at must not
+    move: an upsert would shuffle a note the user has already read back to the
+    top of their page, and rewrite a body they have already seen, with nothing
+    recording that it changed.
+    """
+    uid = make_eligible("noteidem@example.test", days_ago=7)
+
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        assert outreach.note(cur, uid, "wave_admitted", "You're in.") == 1
+        before = query(
+            "SELECT created_at, body FROM status_notes WHERE waitlist_user_id = %s", (uid,)
+        )[0]
+
+        assert outreach.note(cur, uid, "wave_admitted", "DIFFERENT TEXT") == 0, (
+            "a second write must report that it wrote nothing"
+        )
+    conn.close()
+
+    rows = query("SELECT created_at, body FROM status_notes WHERE waitlist_user_id = %s", (uid,))
+    assert len(rows) == 1, "one live note per kind"
+    assert rows[0][0] == before[0], "created_at must not move"
+    assert rows[0][1] == "You're in.", "the body the user read must not be rewritten"
+
+
+def test_a_dismissed_note_can_be_raised_again(outreach):
+    """The uniqueness is partial on dismissed_at IS NULL, deliberately: a second
+    wave admission is a real new fact, and a permanent block would silence it."""
+    uid = make_eligible("redo@example.test", days_ago=7)
+
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        outreach.note(cur, uid, "wave_admitted", "Wave 1.")
+        cur.execute("UPDATE status_notes SET dismissed_at = now() WHERE waitlist_user_id = %s", (uid,))
+        assert outreach.note(cur, uid, "wave_admitted", "Wave 2.") == 1
+    conn.close()
+
+    assert [b for _, b in live_notes(uid, "wave_admitted")] == ["Wave 2."]
+
+
+def test_the_note_states_what_was_granted_not_the_configured_target(outreach):
+    """DOD-INV-NO-INFLATION applied to prose. One outreach invite already held
+    means one more is issued, and the note must say one."""
+    uid = make_eligible("partial@example.test", days_ago=7)
+    hold_outreach_invites(uid, 1)
+
+    result = sweep(outreach)
+
+    assert result["invites_issued"] == 1
+    body = live_notes(uid, "feedback_invites_granted")[0][1]
+    assert "1 premium invite is" in body, f"the note must say 1, not 2. Got: {body}"
+
+
+def test_day_six_and_call_completed_notes_coexist(outreach):
+    """Uniqueness is per KIND, so both facts stay visible to the user."""
+    uid = make_eligible("both@example.test", days_ago=7)
+    sweep(outreach)
+
+    status, _ = complete(outreach, uid)
+
+    assert status == 200
+    assert sorted(k for k, _ in live_notes(uid)) == [
+        "call_invites_granted",
+        "feedback_invites_granted",
+    ]
