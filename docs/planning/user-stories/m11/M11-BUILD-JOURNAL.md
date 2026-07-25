@@ -3011,3 +3011,45 @@ strongest single lesson of this milestone: **check what ships, not what compiles
 
 **Runs:** 60 tests. Revert tests: disabling the hook fails 2; removing the build-phase branch fails 4.
 Local commit only — the repo still has no remote.
+
+---
+
+## 2026-07-25 — the container disproved three passing tests
+
+Continuing from the build fix. The dashboard also had **no Dockerfile, no `.dockerignore`, no CI,
+no infra** — "owed: a deploy" was hiding all of it. Written from cello-portal's, which is the right
+template (both are server-rendered Next apps on ECS), with two deliberate differences: npm rather
+than pnpm, and **no migrations copy** — this dashboard shares the portal's database
+(`DOD-INV-SINGLE-DB`) and must never migrate it; the waitlist migrate Lambda owns that ledger.
+
+Then the image was actually run, and it disproved the tests three times running.
+
+**One.** `next.config` did not exist, so Next 14 never called `register()` at all. Caught by looking
+for the chunk in the build output.
+
+**Two.** With the hook enabled, `register()` threw — and every test agreed that was correct. The
+container did not: **Next catches an instrumentation-hook error, logs `Failed to prepare server`,
+prints `✓ Ready in 50ms`, and serves 500s from a process that reports itself healthy.** That is the
+exact outcome the assertion exists to prevent, arrived at from the other side. A throw is not a
+refusal here; only a non-zero exit is.
+
+**Three.** The rewrite still did not fire. The dynamic `import("@/server/config")` sat *outside* the
+try, and at runtime `config.ts` throws during module **load** — so the import rejected before the
+assertion was reached, the catch never ran, and Next swallowed it exactly as before. The test missed
+it because it set `NEXT_PHASE`, which is the one case where that import succeeds. **Same-side-of-the-
+seam, twice inside a single fix for a same-side-of-the-seam bug.**
+
+Now verified on the shipped artifact in both directions: `docker run` with no environment exits **1**
+with a `FATAL` line naming the variable; with the environment set it starts and serves `/sign-in`
+**200**.
+
+**The pattern, stated once for the milestone.** Three separate times today the source was correct,
+the tests were green, and the built artifact disagreed: `deserializeState` (F1, a feature shipped
+dead), the instrumentation hook Next was never configured to call, and a boot assertion Next
+swallowed. In each case the tests sat on the same side of a seam as the code they claimed to prove —
+a fake repository, a source file, a thrown error. **The only reliable check is the thing that ships:
+run the binary, read the built output, exec the container.**
+
+**Still owed, and now visible rather than implied:** the GitHub remote (Andre's), an ECR repository,
+an ECS service + ALB + ACM cert + Route53 record for `operations.cello.mygentic.ai`, and a pipeline.
+None of that is written. The Dockerfile is, and it builds and runs.
