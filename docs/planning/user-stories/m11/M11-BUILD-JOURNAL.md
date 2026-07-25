@@ -2853,3 +2853,57 @@ a refusal, and the re-registration bypass.
 and confirm DKG proceeds. That needs a verified waitlist user and a token, which needs the database read
 path, which needs the ops dashboard deployed. And the ops-agent image has not been rebuilt, so none of
 this is live yet.
+
+---
+
+## 2026-07-25 — the review: the gate was shipped dead
+
+`cello-unit-reviewer` on `DOD-TELEGRAM-GATE-1`, seven findings. The unit had 13 tests, six revert
+tests, a clean gate sequence, and a journal entry above claiming the feature worked. It did not.
+
+**F1, and the reason it survived everything.** `deserializeState` had no case for
+`AWAITING_WAITLIST_TOKEN`, so every gated record came back out of the database as `FAILED`. The
+handler I wrote to receive the token was unreachable: a user asked for a token could never redeem
+one. The state machine tests all passed because `makeDeps` fakes the repository — it returns the
+object it was handed, so nothing in the suite ever went through `rowToRecord`. **One bypass, shared
+by every test in the unit, sitting exactly on the seam that broke.** The six revert tests were real
+but all lived on the same side of it.
+
+The fix is one `case`. The test is the general one: `registration-state-roundtrip.test.ts` walks
+*every* state in the union through `rowToRecord`, so the next state added without a deserializer
+case fails at once. `default:` also logs `registration.state.UNMAPPED` at ERROR now — it cannot make
+the omission impossible, but it makes it audible on the first user who hits it rather than never.
+
+**F2 — my own layer defeating the layer below it.** The gate Lambda classifies a SQLSTATE-23 fault
+as 409 `constraint_violation` and deliberately omits `allowed`, so a database fault cannot be read
+as an answer. The client threw only on 5xx and treated the rest as a decision: `allowed !== true`
+became `allowed: false`, and a database integrity error reached the user as *"you are not invited"*,
+logged at INFO as `token_required`. A decision now requires 200 **and** a boolean `allowed`.
+
+**F5 — failing closed silently.** The client threw, the engine caught and logged, `onError` is
+optional and wired in exactly one integration test, and nothing reached the user. No record either,
+since the throw precedes the insert. The person who messaged the bot got silence. Two comments in
+the state machine asserted this was necessary — that catching "would be the fail-open path wearing a
+helpful face" — which is a false dichotomy the code then obeyed. Catch, tell, rethrow. The wording
+avoids the refusal vocabulary: sending somebody to hunt for an invitation token when the fault is
+our Lambda is the same error substitution as F2, one layer up.
+
+**F7 — every inbound message was an unbounded Lambda invocation and portal-DB query.** Not a
+guessing risk (60 bits), a cost one. Five per hour per channel user, checked before the call. Per
+user, because a per-record counter resets when the record does and a shared one is a DoS against
+everybody else — both are revert tests.
+
+**F3 parked, and clause 4 marked PARTIAL rather than done.** `waitlist_agent_links` has three
+readers — firstwin, gallery, feedback — and nothing writes it. The gate inserts only `if
+agent_pubkey`, and no caller sends one, because at burn time it does not exist: registration ends at
+`PRE_AUTH_TOKEN_ISSUED` and the agent is created afterwards. Same fork as the first-win trigger and
+they want deciding together. The test asserting the payload was exactly two keys is now a subset
+match — exact equality codified the absence as correct and would have to be edited to un-park it.
+
+**Runs:** 121 passed, 52 skipped (integration, no DB). Lint and typecheck clean.
+
+**The lesson worth keeping:** a green suite over a faked seam is evidence about the fake. Both new
+suites were chosen to sit on the other side of one — the round-trip test uses the real
+`rowToRecord`, and the F2 tests assert on what crosses the Lambda boundary.
+
+**Still owed:** the ops-agent image is still not rebuilt, so none of this is live.
