@@ -604,6 +604,58 @@ an authorized-networks allowlist of the AWS egress IPs. Acceptable to unblock Wa
 **not** acceptable at launch, and never by making RDS publicly accessible — that puts the share
 store on the internet, which is not a trade a trust product should make.
 
+### What "one VM" actually means — the node artifact, concretely
+
+To be unambiguous, since "single-VM node" is easy to read as "one container for everything":
+**one VM per node, running several containers.** Not one container.
+
+**A directory node = one VM:**
+
+| Container | What it is | Notes |
+|---|---|---|
+| `cello-directory` | **The existing image, unchanged** | Only its env differs — `DATABASE_URL` points at the sibling Postgres instead of RDS |
+| `postgres:18` | The node's own database | Data on an attached persistent disk, **not** the boot disk |
+| `caddy` *(optional)* | TLS termination → ports 8080 / 9090 / 8081 | Replaces the ALB's only real job. See the TLS note below |
+
+Managed with Docker Compose or three systemd units. Ports stay exactly as they are today — 8080
+libp2p WS, 8081 internal API, 9090 health — so nothing about the application changes.
+
+**Emphatically not one container.** Putting Postgres and the directory in a single container couples
+their lifecycles: you cannot restart the app without bouncing the database, the data volume gets
+tangled with the image, and a crash-loop in one takes out the other. Two containers on one host is
+the right granularity; one container running two processes is not.
+
+**Do we still need TLS?** Less than it appears. The libp2p stream is **Noise-encrypted end to end**
+(`noise()` at `core/transport/src/node.ts:503`), so plain `ws://` is *not* plaintext on the wire —
+which is why the current ALB has been serving plain HTTP:80 without that being a confidentiality
+bug. Caddy is therefore optional and worth adding for three non-security reasons: it removes the
+"why is your endpoint `http://`?" question from anyone evaluating a trust product, it gets through
+corporate proxies that block non-443 traffic, and it lets the advertised multiaddr be
+`/tcp/443/wss` (which needs the `directory.ts:1095` fix either way).
+
+**Sizing.** Today the directory runs in 0.25 vCPU / 512 MB of Fargate and the database is a
+`db.t3.small`. One `e2-medium` (2 vCPU / 4 GB) holds both comfortably at any plausible launch load —
+recall the entire production system currently has **five agents**.
+
+**Relays get their own VMs.** They are meant to be numerous and directories few, so keeping them
+separate preserves independent failure and lets relay count grow without touching directories. At
+launch scale co-locating one relay with one directory would work, but it saves little and couples
+two things the architecture wants uncoupled.
+
+**Operational consequences to accept deliberately:**
+
+- **A VM loss takes the node *and* its shares.** This is the strongest argument for the `pg_dump`
+  timer — shares are not replicated, so that disk is their only copy.
+- **No in-node rolling deploy.** A deploy restarts the node. That is fine at N=3/T=2 where one
+  directory suffices to seal (§4) — but it makes **sequential, never simultaneous** deploys a hard
+  rule. Today's three-region parallel deploy would have to become one-at-a-time.
+- **Resource contention** between Postgres and the directory on one host. Irrelevant at five
+  agents; the trigger to split them back out is a node whose database outgrows the VM, or wanting
+  managed point-in-time recovery.
+
+None of this changes the container image, the ports, or the application code. It changes where the
+container runs and what it points at.
+
 ### Narrowing what replicates is a separate, cheaper lever
 
 Worth noting because it is often confused with the topology question: the publication covers **21
