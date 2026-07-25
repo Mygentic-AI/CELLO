@@ -123,7 +123,19 @@ fi
 # packages/relay is out of scope and would trigger a 25-30 minute 3-region
 # deploy nobody asked for.
 cd "$TRUSTLESS" || exit 1
-BASE="${M11_BASE_REF:-$(git log --format=%H --grep='M11' --reverse -1 2>/dev/null)}"
+# THE BASE WAS WRONG, AND THE CHECK WAS THEREFORE VACUOUS FOR THE WHOLE
+# MILESTONE. It was `git log --grep='M11' --reverse -1`, and git applies -1
+# BEFORE --reverse — so it returned the most RECENT M11 commit, not the first.
+# The diff ran from "an hour ago" to HEAD and would have passed no matter what
+# M11 did to packages/directory. Green every run, checking essentially nothing.
+#
+# Anchored on the commit that created the DoD instead. That is unambiguous and
+# semantic: M11 began when its Definition of Done was written, and unlike a
+# commit-message grep it cannot drift as more commits mention M11.
+M11_DOD="docs/planning/user-stories/m11/M11-DEFINITION-OF-DONE.md"
+BASE="${M11_BASE_REF:-$(git log --format=%H --reverse -- "$M11_DOD" 2>/dev/null | head -1)}"
+# And the parent, so the DoD's own commit is inside the range being checked.
+BASE="$(git rev-parse "${BASE}^" 2>/dev/null || echo "$BASE")"
 if [[ -n "$BASE" ]]; then
   touched=$(git diff --name-only "$BASE"..HEAD -- packages/directory packages/relay 2>/dev/null)
   if [[ -n "$touched" ]]; then
@@ -131,6 +143,21 @@ if [[ -n "$BASE" ]]; then
     echo "$touched" | sed 's/^/        /'
   else
     pass "DOD-INV-NO-DIRECTORY-RELAY — packages/directory and packages/relay untouched"
+  fi
+
+  # THE CLAUSE ALSO SAYS "or their CloudFormation stacks", and nothing checked
+  # that. The scan above covers source only, so a change to the directory's ECS
+  # template — which is how its task definition, env, secrets and ALB wiring are
+  # set — would have passed silently. That is the half of the invariant with
+  # teeth: M11 has no business redefining how the directory runs.
+  cfn_touched=$(git diff --name-only "$BASE"..HEAD -- \
+    infra/cloudformation/cello-ecs-directory.yaml \
+    infra/cloudformation/cello-ecs-relay.yaml 2>/dev/null)
+  if [[ -n "$cfn_touched" ]]; then
+    fail "DOD-INV-NO-DIRECTORY-RELAY — a directory/relay ECS stack changed during M11:"
+    echo "$cfn_touched" | sed 's/^/        /'
+  else
+    pass "DOD-INV-NO-DIRECTORY-RELAY — cello-ecs-directory.yaml and cello-ecs-relay.yaml untouched"
   fi
 else
   fail "DOD-INV-NO-DIRECTORY-RELAY — could not determine an M11 base commit to diff against"
