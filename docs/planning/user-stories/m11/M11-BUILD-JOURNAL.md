@@ -2973,3 +2973,41 @@ necessarily stale. It is map hygiene, it reads like logic, and the comment now s
 than inventing a contorted test to make dead-effect code look covered.
 
 **Runs:** 125 passed, 52 skipped. Lint, typecheck, build clean.
+
+---
+
+## 2026-07-25 — the ops dashboard had never been built
+
+Went to confirm the dashboard was ready so that Andre's step would be nothing but *create the repo,
+push, deploy*. It was not ready. **`npm run build` failed.** 53 tests passed, the DoD line said the
+only thing owed was a GitHub remote — and the thing had never once been built, so it could not have
+been deployed at all.
+
+`config.ts` and `db.ts` both read required values at module load and throw if one is absent. That is
+right, and its comment says why: *"a dashboard that boots healthy and fails on the first click has
+told the operator nothing useful, and the click it fails on is a sign-in."* The flaw is one word.
+**"At load" is not "at boot."** `next build` imports every route module to collect page data, and a
+CI image build has neither `OPS_PUBLIC_URL` nor `DATABASE_URL` — so the build died on
+`/api/auth/magic-link`, and once that was fixed, on `/api/auth/sign-out`.
+
+The policy is kept, the moment corrected: the values stand in during a production build, and the
+boot-time half moved to `instrumentation.ts`, which Next runs when the server starts and not during
+a build.
+
+Two things worth keeping from the fix itself:
+
+**The stand-in must not be scheme-shaped.** `"placeholder:invalid"` was my first attempt and is not
+safe — `new URL()` parses it happily, reading `placeholder` as the scheme. A stand-in that escaped
+into a rendered artifact would be a sign-in link mailed to a real operator, so a test asserts it
+cannot parse at all.
+
+**And the fix nearly repeated the day's lesson.** The first version shipped `src/instrumentation.ts`
+with **no `next.config` at all**. Next 14 does not call `register()` without
+`experimental.instrumentationHook`. The file compiled, all 58 tests passed, and nothing ever called
+it — the boot assertion was dead code, the same shape as F1 that morning, in the fix for it. Caught
+only by looking at the BUILT output for the chunk instead of trusting the source. That is three
+times in one day that the source looked correct and the artifact disagreed, which is now the
+strongest single lesson of this milestone: **check what ships, not what compiles.**
+
+**Runs:** 60 tests. Revert tests: disabling the hook fails 2; removing the build-phase branch fails 4.
+Local commit only — the repo still has no remote.
