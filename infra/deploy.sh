@@ -1027,9 +1027,20 @@ deploy_stack "cello-route53-relay-${ENVIRONMENT}" "cello-route53.yaml" \
 # at pipeline invocation time. No ALB DNS name is hardcoded anywhere in infra/.
 
 if [[ "${REGION}" == "us-east-1" ]]; then
+  # DELIBERATELY EMPTY NOW. Passing the ALB DNS name here bakes it into the
+  # CodeBuild project, and CloudFormation then holds that value until the next
+  # deploy.sh run — stage 1 of the lifecycle in infra/CLAUDE.md. The ALB was
+  # replaced, the cicd stack was not redeployed, and the smoke test spent weeks
+  # fetching `cello-dir-dev-1341968405...`, a host that no longer resolves. Every
+  # directory deploy failed at SmokeTest, so ProductionDeploy never ran and
+  # eu-central-1 and ap-northeast-1 could not receive a directory deploy at all.
+  #
+  # Empty means the runner resolves it from AWS at run time, so a stale cicd
+  # stack self-heals. Set CELLO_STAGING_DIRECTORY_URL for a deliberate override.
+  STAGING_DIRECTORY_URL="${CELLO_STAGING_DIRECTORY_URL:-}"
+
   # Pass STAGING_DIRECTORY_URL from stack output so CodePipeline can inject it into
   # the smoke test CodeBuild action (AC-009: no hardcoded .elb.amazonaws.com strings)
-  STAGING_DIRECTORY_URL="${ALB_DNS_NAME}"
   deploy_stack "cello-cicd-${ENVIRONMENT}" "cello-cicd.yaml" \
     "Environment=${ENVIRONMENT}" \
     "GitHubConnectionArn=${GITHUB_CONNECTION_ARN}" \

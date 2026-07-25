@@ -25,10 +25,14 @@ Parameters:
   # read_output "cello-ecs-directory-{env}" "AlbDnsName".
   StagingDirectoryUrl:
     Type: String
-    Default: "PLACEHOLDER"
+    Default: ""
     Description: >
-      DNS name of the staging directory ALB (read from cello-ecs-directory stack outputs
-      by deploy.sh — AC-009 requires this is never hardcoded in this template).
+      DNS name of the staging directory ALB. LEAVE EMPTY to have the smoke runner resolve
+      it from AWS at run time, which is what infra/CLAUDE.md requires of ALB DNS names and
+      what stops this going stale when the load balancer is replaced. Set it only for a
+      deliberate one-off override. The old default was the literal "PLACEHOLDER", which is
+      a perfectly valid hostname to try to fetch and fails as a network error rather than
+      as a configuration one.
   # M7-CICD-001 AC-015: webhook secret for cello-client GitHub webhook validation.
   # No Default — deploy.sh must supply the value at deploy time. An empty or
   # placeholder secret would silently accept requests with empty signatures.
@@ -362,6 +366,12 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              # The smoke runner resolves the staging ALB's DNS name at run time
+              # instead of trusting a value baked in at deploy time — see the
+              # SmokeTestBuild comment. Describe-only, no mutation.
+              - Effect: Allow
+                Action: elasticloadbalancing:DescribeLoadBalancers
+                Resource: "*"
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
@@ -701,9 +711,22 @@ Resources:
         Image: aws/codebuild/standard:7.0
         ComputeType: BUILD_GENERAL1_SMALL
         # AC-006: NO VpcConfig on this project — smoke test connects via public ALB URL
-        # AC-009: STAGING_DIRECTORY_URL is set here from the StagingDirectoryUrl parameter,
-        # which deploy.sh reads from cello-ecs-directory stack output AlbDnsName.
-        # This is never a hardcoded .elb.amazonaws.com string.
+        #
+        # AC-009 said this "is never a hardcoded .elb.amazonaws.com string", and that
+        # was true and operationally meaningless. It is a STAGE-1 BAKED VALUE in the
+        # sense infra/CLAUDE.md warns about: deploy.sh resolves it once, CloudFormation
+        # freezes it into the project, and updating the source changes nothing until
+        # deploy.sh runs again. The ALB was replaced and the cicd stack was not
+        # redeployed, so this held `cello-dir-dev-1341968405...` — a host that no longer
+        # resolves. EVERY directory deploy then failed at SmokeTest with `fetch failed`,
+        # ProductionDeploy never ran, and eu-central-1 and ap-northeast-1 could not
+        # receive a directory deploy AT ALL. Two of three sovereign regions, unreachable
+        # by CI, reported as a scenario failure rather than a configuration one.
+        #
+        # An EMPTY value now means "resolve it from AWS at run time", which is what
+        # infra/CLAUDE.md has always said to do with ALB DNS names. A stale cicd stack
+        # then self-heals instead of pointing the gate at a dead host. A non-empty value
+        # still wins, for a deliberate one-off override.
         EnvironmentVariables:
           - Name: STAGING_DIRECTORY_URL
             Value: !Ref StagingDirectoryUrl

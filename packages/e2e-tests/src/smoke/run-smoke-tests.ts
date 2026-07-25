@@ -31,14 +31,59 @@ import { SMOKE_SCENARIOS, SMOKE_EVENTS } from "./scenarios.js";
 
 // ─── Environment validation ──────────────────────────────────────────────────
 
-const STAGING_DIRECTORY_URL = process.env["STAGING_DIRECTORY_URL"];
+/**
+ * RESOLVED FROM AWS, not read from a baked-in value.
+ *
+ * `STAGING_DIRECTORY_URL` was a PLAINTEXT CodeBuild environment variable
+ * containing `cello-dir-dev-1341968405...`. That load balancer no longer exists
+ * — it was replaced, and the variable was not. So EVERY directory deploy failed
+ * at SmokeTest with `fetch failed`, ProductionDeploy never ran, and
+ * **eu-central-1 and ap-northeast-1 could not receive a directory deploy at
+ * all.** Two of three sovereign regions, unreachable by CI, reported as a
+ * scenario failure rather than as a configuration one.
+ *
+ * This is the documented anti-pattern in infra/CLAUDE.md — "ALB DNS Names:
+ * always query AWS, never use STATE.md" — in a place nobody thought to apply it,
+ * because it was CI configuration rather than a runbook step.
+ *
+ * The env var still wins when set, so a local run or a one-off override needs no
+ * AWS call. Absent, it is looked up; and a lookup that fails REFUSES rather than
+ * falling back to a guess, because a smoke test pointed at the wrong host is
+ * worse than one that did not run.
+ */
 const PIPELINE_EXECUTION_ID = process.env["CODEBUILD_BUILD_ID"] ?? "local";
 
-if (!STAGING_DIRECTORY_URL) {
+async function resolveStagingDirectoryUrl(): Promise<string> {
+  const fromEnv = process.env["STAGING_DIRECTORY_URL"];
+  if (fromEnv) return fromEnv;
+
+  const { ElasticLoadBalancingV2Client, DescribeLoadBalancersCommand } = await import(
+    "@aws-sdk/client-elastic-load-balancing-v2"
+  );
+  const region = process.env["AWS_REGION"] ?? "us-east-1";
+  const client = new ElasticLoadBalancingV2Client({ region });
+  const out = await client.send(new DescribeLoadBalancersCommand({}));
+  const env = process.env["CELLO_ENV"] ?? "dev";
+  const alb = (out.LoadBalancers ?? []).find((lb) =>
+    (lb.LoadBalancerName ?? "").startsWith(`cello-dir-${env}`),
+  );
+  if (!alb?.DNSName) {
+    throw new Error(
+      `No load balancer named cello-dir-${env}* in ${region}. Refusing to run: a smoke ` +
+        `test pointed at the wrong host is worse than one that did not run.`,
+    );
+  }
+  return alb.DNSName;
+}
+
+let STAGING_DIRECTORY_URL: string;
+try {
+  STAGING_DIRECTORY_URL = await resolveStagingDirectoryUrl();
+} catch (error) {
   emitEvent(SMOKE_EVENTS.failed, {
     pipelineExecutionId: PIPELINE_EXECUTION_ID,
     failedScenario: "startup",
-    reason: "STAGING_DIRECTORY_URL environment variable is not set",
+    reason: error instanceof Error ? error.message : String(error),
   });
   process.exit(1);
 }

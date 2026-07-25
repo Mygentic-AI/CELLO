@@ -13,7 +13,7 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.2
-        version: 3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.0.0
         version: 8.59.1(@typescript-eslint/parser@8.59.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4)(typescript@5.9.3)
@@ -77,7 +77,7 @@ importers:
         version: link:../relay
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.2)
@@ -93,6 +93,9 @@ importers:
 
   packages/e2e-tests:
     dependencies:
+      '@aws-sdk/client-elastic-load-balancing-v2':
+        specifier: ^3.700.0
+        version: 3.1095.0
       '@cello-protocol/connect':
         specifier: ^0.0.71
         version: 0.0.71
@@ -116,7 +119,7 @@ importers:
         version: 0.0.23
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.2)
@@ -221,7 +224,7 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
 
   packages/test-fixtures:
     dependencies:
@@ -231,7 +234,7 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@types/node':
         specifier: ^25.6.2
         version: 25.6.2
@@ -260,6 +263,10 @@ packages:
 
   '@aws-crypto/util@5.2.0':
     resolution: {integrity: sha512-4RkU9EsI6ZpBve5fseQlGNUWKMa1RLPQ1dnjnQoe07ldfIzcsGb5hC5W0Dm7u423KWzawlrpbjXBrXCEv9zazQ==}
+
+  '@aws-sdk/client-elastic-load-balancing-v2@3.1095.0':
+    resolution: {integrity: sha512-nAOX8al8ITvJj2XW6ofo2wYCI1fSGOsg9WJCWFb1i8pA1xiNTDaEMSuTlukD+zPh2X4uI1wBezNc+/VTIv50eA==}
+    engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-lambda@3.1095.0':
     resolution: {integrity: sha512-zWx4ugkVrm77xDgtUc1bnVoFjaq2r3b4bJuT8EtyD2y6/LAvrY+9q1FbUkXxhiAFsAjRV9+2sG/SUp+x1lsFNQ==}
@@ -3792,6 +3799,17 @@ snapshots:
       '@smithy/util-utf8': 2.3.0
       tslib: 2.8.1
 
+  '@aws-sdk/client-elastic-load-balancing-v2@3.1095.0':
+    dependencies:
+      '@aws-sdk/core': 3.977.1
+      '@aws-sdk/credential-provider-node': 3.972.72
+      '@aws-sdk/types': 3.974.2
+      '@smithy/core': 3.30.0
+      '@smithy/fetch-http-handler': 5.6.11
+      '@smithy/node-http-handler': 4.9.11
+      '@smithy/types': 4.16.1
+      tslib: 2.8.1
+
   '@aws-sdk/client-lambda@3.1095.0':
     dependencies:
       '@aws-sdk/core': 3.977.1
@@ -4533,14 +4551,14 @@ snapshots:
 
   '@claude-flow/swarm@3.0.0-alpha.1': {}
 
-  '@claude-flow/testing@3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
+  '@claude-flow/testing@3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
     dependencies:
       '@claude-flow/memory': 3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2)
       '@claude-flow/shared': 3.0.0-alpha.1
       '@claude-flow/swarm': 3.0.0-alpha.1
       vitest: 3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0)
 
-  '@claude-flow/testing@3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
+  '@claude-flow/testing@3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
     dependencies:
       '@claude-flow/memory': 3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2)
       '@claude-flow/shared': 3.0.0-alpha.1
