@@ -9,6 +9,31 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## ✅ DIRECTORY CI REACHES ALL THREE REGIONS AGAIN (2026-07-26, first time since ~2026-07-16)
+
+Pipeline `07d82775` after the wake: **Source → Build → StagingDeploy → SmokeTest → ProductionDeploy,
+all Succeeded**, with `ProductionDeployUsEast1`, `ProductionDeployEuCentral1` and
+`ProductionDeployApNortheast1` each green. That stage had been SKIPPED on every run since the
+directory ALB was recreated, because the smoke gate ahead of it failed on a dead hostname.
+
+Verified beyond the pipeline's own status: all three `cello-directory-dev` services report 1/1 with
+`rolloutState: COMPLETED`, and the 8-scenario protocol smoke suite passes against live staging.
+
+**Two fixes made it stick:**
+1. `cello-smoke-test-build` targets `directory-us1.cello.mygentic.ai` — the Route53 name wake
+   re-points every cycle — instead of an ALB DNS name that hibernate destroys. This is why the
+   repair does not need repeating; the July fix used a raw ALB name and lasted one cycle.
+2. `deploy.sh` and `cello-cicd.yaml` set the same hostname, so a future stack deploy reinforces it
+   rather than clobbering it. A CFN rollback restoring a stale parameter is what silently undid the
+   previous repair.
+
+**Also fixed this morning:** `operations.cello.mygentic.ai` failed the wake exactly as predicted (DNS
+correct, service healthy, requests routing nowhere) and was restored by one stack redeploy. hibernate
+now captures the portal listener's host rules and SNI certificates and wake re-creates them, so that
+manual step is gone from the next cycle onward.
+
+---
+
 ## ⚠️ SMOKE-TEST ALB DRIFT IS RECURRING BY DESIGN — and I re-made a documented mistake (2026-07-25)
 
 **The fix is ONE command**, already written down in
