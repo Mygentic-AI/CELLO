@@ -247,7 +247,11 @@ for REGION in "${TARGET_REGIONS[@]}"; do
   ecs_svcs=("cello-directory-${ENVIRONMENT}" "cello-relay-${ENVIRONMENT}")
   # us-east-1 only: portal and ops-agent are global singletons that run here
   if [[ "${REGION}" == "us-east-1" ]]; then
-    ecs_svcs+=("cello-portal-${ENVIRONMENT}" "cello-operations-agent-${ENVIRONMENT}")
+    # ops-dashboard added 2026-07-26. It was deployed a day earlier and NOT added
+    # here, so the first hibernate would have left it running and billing while
+    # its ALB was deleted underneath it — a crash-looping task through the whole
+    # hibernation. Any new us-east-1 service must be added to this list.
+    ecs_svcs+=("cello-portal-${ENVIRONMENT}" "cello-operations-agent-${ENVIRONMENT}" "cello-ops-dashboard-${ENVIRONMENT}")
   fi
   for svc in "${ecs_svcs[@]}"; do
     desired=$(aws ecs describe-services --cluster "${CLUSTER_NAME}" \

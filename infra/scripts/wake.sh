@@ -489,6 +489,11 @@ for REGION in "${TARGET_REGIONS[@]}"; do
         --query 'LoadBalancers[0].CanonicalHostedZoneId' --output text)
     fi
     update_r53_alias "portal" "${NEW_PORTAL_DNS}" "${PORTAL_ALB_ZONE}"
+    # operations.* rides the SAME ALB as the portal (a host rule, not its own
+    # load balancer — a dedicated ALB is ~$16/mo for a dashboard one person
+    # opens a few times a day). So its alias must be re-pointed here too, or it
+    # keeps aliasing the ALB that hibernate deleted.
+    update_r53_alias "operations" "${NEW_PORTAL_DNS}" "${PORTAL_ALB_ZONE}"
   fi
 
   # ── STEP 6: ECS services ─────────────────────────────────────────────────────
@@ -626,6 +631,13 @@ else
   banner "WAKE COMPLETE" "${REGIONS_STR}"
   echo ""
   echo "Post-wake checklist:"
+  echo "  0. ${C_BOLD}REDEPLOY THE OPS DASHBOARD${C_RESET} — operations.cello.mygentic.ai does NOT"
+  echo "     come back on its own. It rides the portal ALB via a host rule, and hibernate"
+  echo "     deletes that ALB, taking the rule and its certificate with it. Wake recreates"
+  echo "     the listener and re-points the DNS, but not the rule. Until this runs, the"
+  echo "     hostname resolves and routes nowhere:"
+  echo "       DEPLOY_OPS_DASHBOARD=1 CELLO_IMAGE_TAG=<sha> ./infra/deploy.sh dev us-east-1"
+  echo "     (the deploy resolves the NEW listener ARN; the stack still holds the dead one)"
   echo "  1. Verify /manifest endpoints serve a current manifest"
   echo "  2. Relay manifests auto-re-signed when relay re-registered (check CloudWatch logs)"
   echo "  3. ECS Exec available again (ssmmessages endpoint restored)"
