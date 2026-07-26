@@ -246,6 +246,24 @@ user, which needs DB visibility, which needs the ops dashboard — blocked on An
 
 ---
 
+## 🟢 Wake complete — all 3 regions live (2026-07-26, 07:48:25–08:03:56 UTC)
+
+**Elapsed: 15 min 31 sec** — fastest cycle so far (RDS cleared in ~9 min). All 3 inventory diffs
+IDENTICAL. eu-central-1 and ap-northeast-1 finished first; us-east-1 trailed because it restores
+four ECS services rather than two.
+
+**ALB DNS names after this wake (always query AWS — these rotate each wake):**
+- **us-east-1:** dir `cello-dir-dev-1331770655.us-east-1.elb.amazonaws.com` / relay `cello-relay-dev-638138632.us-east-1.elb.amazonaws.com` / portal `cello-portal-dev-55479137.us-east-1.elb.amazonaws.com`
+- **eu-central-1:** dir `cello-dir-dev-258981800.eu-central-1.elb.amazonaws.com` / relay `cello-relay-dev-1680165026.eu-central-1.elb.amazonaws.com`
+- **ap-northeast-1:** dir `cello-dir-dev-611263329.ap-northeast-1.elb.amazonaws.com` / relay `cello-relay-dev-1852153856.ap-northeast-1.elb.amazonaws.com`
+
+**Verified independently of the script:** all 7 Route53 names resolve to real ALB addresses (no
+`198.51.100.1` blackhole remaining), 7 ALBs `active`, all 8 ECS services 1/1 `COMPLETED`, 4 RDS
+`available`, demo agent EC2 `i-0ad3e7c22470f266e` `running`. Portal HTTPS listener re-wired with the
+existing ACM cert. ECS Exec available again.
+
+---
+
 ## 🔴 Hibernate complete — all 3 regions down (2026-07-25, 20:04–20:11 UTC)
 
 Uptime this cycle: ~15 h (woken 04:58 UTC). ECS→0 (directory + relay ×3, portal, ops-agent), 4 RDS
