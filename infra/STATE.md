@@ -35,7 +35,18 @@ CloudFormation restored that environment variable from the stack's stored parame
 the manual repair from 2026-07-19**. CI is therefore further from working than before I started, and
 this is exactly the failure mode that log documents — a rollback silently reverting live config.
 
-**THE FIX AND THE ROOT FIX COLLAPSE INTO ONE COMMAND**, if it points at the hostname rather than the
+**✅ APPLIED 2026-07-26.** `cello-smoke-test-build` now has
+`STAGING_DIRECTORY_URL = directory-us1.cello.mygentic.ai`. Because that is the Route53 name `wake.sh`
+re-points on every wake, it does not go stale on the next hibernate — this is the last time this
+repair should be needed. Pipeline re-run to confirm the gate passes.
+
+**SCOPE, corrected:** BOTH `cello-directory-pipeline` and `cello-relay-pipeline` use this ONE smoke
+project, and `ProductionDeploy` is a single stage containing all three regions. So a failing gate did
+not "fail in EU/AP" — it skipped that stage entirely, for both services. `StagingDeploy` runs BEFORE
+the gate and targets us-east-1, which is why the system looked healthy: the region exercised daily was
+the only one still receiving code.
+
+**Original one-command form, kept for the next reader**, if it points at the hostname rather than the
 ALB — no stack deploy needed, and it survives every future hibernate:
 
 ```bash
