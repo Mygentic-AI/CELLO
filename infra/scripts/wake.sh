@@ -423,14 +423,56 @@ for REGION in "${TARGET_REGIONS[@]}"; do
         --region "${REGION}" --no-cli-pager >/dev/null
       ok "  Portal HTTP→HTTPS redirect listener wired."
 
-      # HTTPS/443 → portal TG with ACM cert
-      aws elbv2 create-listener \
+      # HTTPS/443 → portal TG with ACM cert. The ARN is captured because host
+      # rules for services riding this ALB have to be re-attached to it below.
+      PORTAL_LISTENER_ARN=$(aws elbv2 create-listener \
         --load-balancer-arn "$NEW_PORTAL_ARN" \
         --protocol HTTPS --port 443 \
         --certificates "CertificateArn=${PORTAL_ACM_CERT}" \
         --default-actions "Type=forward,TargetGroupArn=${PORTAL_TG_ARN}" \
-        --region "${REGION}" --no-cli-pager >/dev/null
+        --region "${REGION}" --no-cli-pager \
+        --query 'Listeners[0].ListenerArn' --output text)
       ok "  Portal HTTPS listener wired (cert: ${PORTAL_ACM_CERT})."
+
+      # SNI CERTIFICATES for the other hostnames on this listener. The default
+      # cert above covers portal.*; operations.* has its own, and without it TLS
+      # fails before any rule is consulted — so the host rule alone is not enough.
+      PORTAL_EXTRA_CERTS=$(echo "$R" | jq -r '.portal_extra_certs // [] | .[]')
+      for cert in ${PORTAL_EXTRA_CERTS}; do
+        [[ -z "$cert" || "$cert" == "null" ]] && continue
+        run aws elbv2 add-listener-certificates --listener-arn "$PORTAL_LISTENER_ARN" \
+          --certificates "CertificateArn=${cert}" --region "${REGION}" --no-cli-pager >/dev/null 2>&1 \
+          && ok "  Portal SNI cert re-attached: ${cert##*/}"
+      done
+
+      # HOST RULES ON THE PORTAL LISTENER — other services ride this ALB rather
+      # than paying ~$16/mo for one of their own. Today that is operations.*
+      # (the ops dashboard). Its rule and SNI certificate die with the ALB, and
+      # without this the hostname resolves and routes NOWHERE: DNS answers, the
+      # ECS service is healthy, and every request 000s. The only repair was
+      # redeploying that stack by hand after every wake.
+      PORTAL_RULES=$(echo "$R" | jq -c '.portal_listener_rules // []')
+      restored=0
+      while read -r rule; do
+        [[ -z "$rule" || "$rule" == "null" ]] && continue
+        prio=$(echo "$rule" | jq -r '.priority')
+        field=$(echo "$rule" | jq -r '.field // "host-header"')
+        vals=$(echo "$rule" | jq -c '.paths')
+        tg=$(echo "$rule" | jq -r '.tg_arn')
+        # `default` has no priority and is already set by create-listener above.
+        [[ "$prio" == "default" || "$tg" == "null" || -z "$tg" ]] && continue
+        # The target group survives hibernate (TGs are KEPT), so its ARN is still valid.
+        run aws elbv2 create-rule --listener-arn "$PORTAL_LISTENER_ARN" --priority "$prio" \
+          --conditions "Field=${field},Values=${vals}" \
+          --actions "Type=forward,TargetGroupArn=${tg}" \
+          --region "${REGION}" --no-cli-pager >/dev/null 2>&1 && restored=$((restored+1))
+      done < <(echo "$PORTAL_RULES" | jq -c '.[]')
+      if [[ "$restored" -gt 0 ]]; then
+        ok "  Portal host rules restored: ${restored}"
+      else
+        warn "  No portal host rules in the snapshot — if operations.* 000s, redeploy"
+        warn "  cello-ops-dashboard-dev (a snapshot taken before 2026-07-26 lacks them)."
+      fi
     fi
   fi
 

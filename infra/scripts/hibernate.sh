@@ -135,6 +135,7 @@ for REGION in "${TARGET_REGIONS[@]}"; do
 
   # Capture listener rules before deleting (needed to recreate faithfully on wake)
   dir_rules='[]'
+  portal_rules='[]'
   relay_rules='[]'
 
   capture_rules() {
@@ -147,12 +148,31 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     if [[ "$listener_arn" == "None" || -z "$listener_arn" ]]; then echo '[]'; return; fi
     # Capture rules with target group ARNs (we keep the TGs, so ARNs survive)
     aws elbv2 describe-rules --listener-arn "$listener_arn" --region "$region" \
-      --query 'Rules[*].{priority:Priority,paths:Conditions[0].Values,tg_arn:Actions[0].TargetGroupArn}' \
+      --query 'Rules[*].{priority:Priority,paths:Conditions[0].Values,field:Conditions[0].Field,tg_arn:Actions[0].TargetGroupArn}' \
       --output json 2>/dev/null || echo '[]'
   }
 
   dir_rules=$(capture_rules "$alb_dir_arn" "${REGION}")
   relay_rules=$(capture_rules "$alb_relay_arn" "${REGION}")
+  # The portal ALB carries HOST rules for other services that ride it — today
+  # operations.* (the ops dashboard). Those were never captured, so on wake the
+  # hostname resolved and routed nowhere, and the only repair was redeploying
+  # that stack by hand. Captured with host-header values as well as paths.
+  portal_rules=$(capture_rules "$portal_alb_arn" "${REGION}")
+
+  # SNI certificates on the portal listener beyond the default one. operations.*
+  # has its own; without it TLS fails before any host rule is consulted, so
+  # restoring the rule without the cert would still leave the hostname dead.
+  portal_extra_certs='[]'
+  if [[ "$portal_alb_arn" != "None" ]]; then
+    _pl=$(aws elbv2 describe-listeners --load-balancer-arn "$portal_alb_arn" --region "${REGION}" \
+      --query 'Listeners[?Port==`443`].ListenerArn' --output text 2>/dev/null || echo "")
+    if [[ -n "$_pl" && "$_pl" != "None" ]]; then
+      portal_extra_certs=$(aws elbv2 describe-listener-certificates --listener-arn "$_pl" \
+        --region "${REGION}" --query 'Certificates[?IsDefault==`false`].CertificateArn' \
+        --output json 2>/dev/null || echo '[]')
+    fi
+  fi
 
   # Capture subnets and SGs from the ALBs (needed to recreate them)
   dir_alb_config='{}'
@@ -314,8 +334,10 @@ for REGION in "${TARGET_REGIONS[@]}"; do
   dir_alb_config=$(echo "${dir_alb_config}"   | jq -c .)
   relay_alb_config=$(echo "${relay_alb_config}" | jq -c .)
   [[ -z "$dir_rules"   || "$dir_rules"   == "null" ]] && dir_rules='[]'
+  [[ -z "$portal_rules" || "$portal_rules" == "null" ]] && portal_rules='[]'
   [[ -z "$relay_rules" || "$relay_rules" == "null" ]] && relay_rules='[]'
   dir_rules=$(echo "${dir_rules}"             | jq -c .)
+  portal_rules=$(echo "${portal_rules}"       | jq -c .)
   relay_rules=$(echo "${relay_rules}"         | jq -c .)
   [[ -z "$ep_config" || "$ep_config" == "null" ]] && ep_config='{}'
   ep_config=$(echo "$ep_config" | jq -c .)
@@ -344,6 +366,8 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     --arg demo_ec2_id "${demo_ec2_instance_id}" \
     --argjson dir_rules "${dir_rules}" \
     --argjson relay_rules "${relay_rules}" \
+    --argjson portal_rules "${portal_rules}" \
+    --argjson portal_extra_certs "${portal_extra_certs}" \
     --arg tg_main "${tg_main_arn}" \
     --arg tg_bootstrap "${tg_bootstrap_arn}" \
     --arg tg_internal "${tg_internal_arn}" \
@@ -373,6 +397,8 @@ for REGION in "${TARGET_REGIONS[@]}"; do
       demo_ec2_id: $demo_ec2_id,
       dir_listener_rules: $dir_rules,
       relay_listener_rules: $relay_rules,
+      portal_listener_rules: $portal_rules,
+      portal_extra_certs: $portal_extra_certs,
       target_groups: {
         main: $tg_main,
         bootstrap: $tg_bootstrap,
