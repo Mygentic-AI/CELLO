@@ -3461,3 +3461,81 @@ form disclosing which mail it sent.
 
 **Gate:** 463 Python tests; corp-cello-site lint, typecheck, 19 vitest, build.
 Still nothing run against AWS.
+
+
+---
+
+## 2026-07-27 (second review) — two of my thirteen fixes did not hold
+
+The reviewer ran the code instead of reading it, and that is what caught both.
+
+**The credential classifier could not execute in the scenario its own comment
+described.** I had added a SQLSTATE class-28 branch for the rotated-password
+case. A rotated password surfaces from `psycopg2.connect()` with `pgcode =
+None`, so the no-SQLSTATE branch answers first and class 28 is never evaluated.
+The 2026-07-26 outage would have produced the identical wrong message today —
+and worse than before the fix, because a comment now told the operator the case
+was handled. The reviewer proved it by connecting with a bad password and
+printing `classify()`'s output. The branch now matches what psycopg2 actually
+provides, and the test constructs the error from a REAL refused connection: a
+hand-built `Error` with `pgcode = "28P01"` would have passed while the real
+thing stayed broken, which is exactly how the first version shipped.
+
+**`/auth/request` still recorded refused requests.** So both holes the
+`_resend.py` docstring declared closed were open one door over — and because
+the previous commit made the two doors share one counter, it was worse than
+before it. A person refused at the resend button goes to the sign-in form, and
+that refusal extended the shared window: refused forever, the precise defect
+the commit is named after, re-created one door over. And an unauthenticated
+third party could mail-bomb any known address five links and then pin the window
+at the ceiling with one request every few minutes, locking the owner out of the
+sign-in link, the resend button and the signup form's remedy path at once.
+
+**Two `e1_confirm` jobs draining in one batch shipped a dead link.** The
+dispatcher mints at send time and burns predecessors as it goes, so job one's
+token was dead before its mail left the building — and clicking it says "you've
+already used that link", which the person had not. At most one pending job per
+template per person now. The rate-limit tests drain between sends, which is what
+the 60-second dispatcher does; they were previously asserting against a queue
+that limited itself.
+
+**A premium invite admitted a typed address.** Twenty lines below the comment I
+had just written saying an unverified signup must not move anyone up the queue,
+the premium branch set `status = 'admitted'` on no proof of a mailbox. Spend a
+scarce invite on a stranger's address and they are admitted. The claim and the
+code burn stay at signup — a bearer capability must not be claimable twice while
+a confirmation is pending — and the admission moved to the confirm click, beside
+the referral payout.
+
+**Smaller ones:** `_page` escaped its heading and not its sentence, which was
+safe only while every caller passed a literal, and two dispatcher branches now
+feed error text in. `award_referrer_for` ran on every sign-in, so a referrer at
+their cap took a row lock inside the session transaction and logged a WARN
+forever — a signal that fires on the designed benign case is not a signal; it
+now runs only on the click that makes the member, and nothing is owed
+retroactively because anyone verified earlier was paid at signup under the old
+rule. `?welcome=1` survived a refresh despite a comment saying it must not. The
+`checkingSession` gate was applied to the card and not to the heading that
+renders the very string it was added to hide.
+
+**One hollow test deleted.** `test_a_referrer_at_their_cap_does_not_lose_the_new_user_their_signup`
+survived its own subject: nothing in `apply_referral` writes to `points_ledger`
+any more, so the pre-seeded cap could not influence a single statement it
+executed. Its invariant is asserted where the payout now happens. Every other
+new test in the range survives the revert test, including all three I rewrote
+after the first review.
+
+**Noted, not changed:** the resend budget went 3 → 5 when the two limits were
+consolidated onto `AUTH_RATE_LIMIT_MAX`. Deliberate — one counter cannot have
+two ceilings — but it is a 67% increase in outbound mail per address per window
+arriving as a side effect of a consolidation, so it is written down here.
+
+**Gate:** 470 Python tests; corp-cello-site lint, typecheck, 19 vitest, build.
+Still nothing run against AWS.
+
+**The pattern worth keeping.** Both blockers were fixes I wrote, tested, and
+believed. The tests passed because they asserted the shape of the fix rather
+than the behaviour under the real condition — a synthetic `pgcode`, a bound on
+mail that was never sent. That is the same failure as the fixture that tested a
+gateway which does not exist. Reviewing my own fix with the same instrument that
+missed the original bug is not a check.
