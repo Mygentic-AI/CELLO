@@ -98,66 +98,54 @@ def _position_line(job):
 def e1_confirm(job):
     """E1 — confirm your email. Sent within 60s of signup.
 
-    Carries the three things DOD-E1-1 asks for beyond the verify link: the real
-    queue position, the personal referral link, and one sentence on how waves
-    work.
+    ONE JOB: get the click. Nothing else belongs here.
+
+    It used to carry the queue position and the personal referral link, per an
+    earlier reading of DOD-E1-1. Both were wrong at this point in the flow:
+
+      - The position said "You're #11 of 11 on the list" to someone who is NOT
+        yet on the list. Membership begins at the click this email exists to
+        obtain; announcing it beforehand tells the reader the mail is optional.
+      - The referral link was a working, point-earning credential issued to an
+        address nobody had proved control of. It is now minted at verification
+        (waitlist-auth), so at send time there is no code to show.
+
+    Both belong on the page the click lands on, where they are true.
     """
     name = _greeting(job)
     token = job.get("auth_token")
     confirm_url = f"{API}/auth/verify?token={token}" if token else f"{SITE}/auth"
-    code = job.get("referral_code")
-    referral_url = f"{SITE}/?ref={esc(code)}" if code else None
-    position = _position_line(job)
-
-    waves = (
-        "Access opens in waves. Each wave is sized when we open it, based on how "
-        "the previous one went — so there's no fixed date, and sharing your link "
-        "moves you up."
-    )
 
     parts = [
         f'<h1 style="margin:0 0 8px;font-size:28px;font-weight:700;color:#111;letter-spacing:-0.5px;">Confirm your email, {name}.</h1>',
-        f'<p style="margin:0 0 24px;font-size:16px;color:#666;line-height:1.6;">One click and your spot is secured.</p>',
+        f'<p style="margin:0 0 24px;font-size:16px;color:#666;line-height:1.6;">'
+        f'One click and your spot on the waitlist is secured. Until then you are not on it yet.</p>',
         f'<a href="{confirm_url}" style="display:inline-block;padding:16px 32px;background:{BRAND};color:#fff;text-decoration:none;border-radius:100px;font-size:16px;font-weight:600;">Confirm email →</a>',
+        f'<p style="margin:28px 0 0;font-size:14px;color:#666;line-height:1.6;">'
+        f'This link expires in 24 hours.</p>',
+        f'<p style="margin:20px 0 0;font-size:12px;color:#bbb;word-break:break-all;line-height:1.6;">'
+        f"If the button doesn't work, paste this into your browser:<br>{confirm_url}</p>",
     ]
-    if position:
-        parts.append(
-            f'<p style="margin:28px 0 0;font-size:16px;color:#111;font-weight:600;">{position}</p>'
-        )
-    parts.append(
-        f'<p style="margin:12px 0 0;font-size:14px;color:#666;line-height:1.6;">{waves}</p>'
-    )
-    if referral_url:
-        parts.append(
-            f'<p style="margin:24px 0 4px;font-size:14px;color:#111;font-weight:600;">Your referral link</p>'
-            f'<p style="margin:0;font-size:13px;color:#666;word-break:break-all;">'
-            f'<a href="{referral_url}" style="color:{BRAND};text-decoration:none;">{referral_url}</a></p>'
-        )
-    parts.append(
-        f'<p style="margin:28px 0 0;font-size:12px;color:#bbb;word-break:break-all;line-height:1.6;">'
-        f"If the button doesn't work, paste this into your browser:<br>{confirm_url}</p>"
-    )
 
     text_lines = [
         f"Hi {name},",
         "",
-        "Confirm your email to secure your spot on the CELLO waitlist:",
+        "Confirm your email to secure your spot on the CELLO waitlist.",
+        "Until you do, you are not on the list yet.",
+        "",
         confirm_url,
         "",
+        "This link expires in 24 hours.",
+        "",
+        "— The CELLO team",
+        SITE,
     ]
-    if position:
-        text_lines += [position, ""]
-    text_lines += [waves, ""]
-    if referral_url:
-        text_lines += ["Your referral link:", referral_url, ""]
-    text_lines += ["— The CELLO team", SITE]
 
     return (
         "Confirm your spot on the CELLO waitlist",
         _shell("".join(parts)),
         "\n".join(text_lines),
     )
-
 
 def e_magic_link(job):
     """The /auth sign-in link. 15 minutes, single use.

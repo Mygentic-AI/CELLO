@@ -401,7 +401,7 @@ def test_one_failing_job_does_not_sink_the_rest_of_the_batch(mailer):
 # ── DOD-E1-1 content ──────────────────────────────────────────────────────────
 
 
-def test_e1_carries_a_real_queue_position_a_referral_link_and_a_verify_token(mailer):
+def test_e1_carries_the_verify_token_AND_NOTHING_THAT_PRESUMES_MEMBERSHIP(mailer):
     make_user("ahead@example.test", points=100)
     uid = make_user("e1@example.test", points=5)
     enqueue(uid)
@@ -409,15 +409,22 @@ def test_e1_carries_a_real_queue_position_a_referral_link_and_a_verify_token(mai
     mailer.lambda_handler({}, None)
 
     body = text_part(mailer.fake.sent[0])
-    assert "#2 of 2 on the list" in body, f"real computed position expected, got:\n{body}"
-    assert "/?ref=C" in body, "personal referral link missing"
-    assert "waves" in body.lower(), "the how-waves-work sentence is a DOD-E1-1 clause"
 
     token = query(
         "SELECT token, kind FROM auth_tokens WHERE waitlist_user_id = %s", (uid,)
     )[0]
     assert str(token[0]) in body, "the confirm link must carry the minted token"
     assert token[1] == "email_verify"
+
+    # This email has ONE job. It used to announce a queue position and a
+    # referral link to somebody who had not yet clicked — telling them they were
+    # already on the list, and handing an unverified address a point-earning
+    # credential. Both now live on the page the click lands on.
+    # Targeted at the CLAIM, not the phrase: the copy legitimately says "you are
+    # not on the list yet", which a substring check on "on the list" would flag.
+    import re
+    assert not re.search(r"#\d+", body), f"a queue position is claimed before the click:\n{body}"
+    assert "/?ref=" not in body, "an unverified address must not be given a referral link"
 
 
 def test_the_e1_verify_token_gets_24_hours_not_15_minutes(mailer):
