@@ -3684,3 +3684,65 @@ And any row stranded by the pre-M11-D32 behaviour (`status='admitted'`,
 `wave_number IS NULL`, no token) is unreachable to every wave cohort; that
 should be a `SELECT count(*)` before the waitlist takes traffic, not an
 assumption. Both are on the wake-up checklist.
+
+
+---
+
+## 2026-07-28 — a mutation sweep instead of a fifth review
+
+Four review passes, four blockers, three of them inside the fix for the previous
+round — and every one survived for the same reason: **no test failed when the
+clause was removed.** A fifth pass would have sampled that problem again. So I
+asked the question directly instead, across the whole loop rather than only the
+lines last touched: 29 mutations, each breaking one load-bearing clause, against
+a mirrored copy of the tree.
+
+**24 killed.** The cookie read, the atomic token burn, expiry, magic-link
+predecessor burning, the user-row lock, the unlocked read, the stranded-job
+clause, suppression at both doors, the refusal-recording rule at both doors, the
+enumeration timing floor, session revocation and expiry, token hashing, the
+dead-link pages and both escapes, the welcome flag, the confirm-token burn, and
+both new error classifications — all covered.
+
+**Five survivors, of which three were not findings.** Two were my own bad
+mutations (one a no-op; the property is covered elsewhere) and one is an
+equivalent mutant: the `kind IN ('email_verify','magic_link')` guard, where the
+DB CHECK makes the set exhaustive, so no test *can* distinguish it from
+`if True`. That one now carries a comment saying so — "uncovered" and
+"unfalsifiable" are different problems and the next reader deserves to know
+which they are looking at.
+
+**Two were real, and one of them is the more interesting failure mode.**
+
+*Two guards masking each other.* The `just_verified` gate in the caller and the
+ledger check inside `award_referrer_for` both prevent paying a referrer twice —
+and each caught the other's removal, so the suite stayed green whichever one you
+deleted. Neither was individually tested. A later change dropping both would
+have looked safe twice over, and the tests would have agreed both times. Each is
+now pinned alone: the ledger by calling the function directly where the gate
+cannot help (two devices opening the same confirm link both arrive with
+`just_verified` true), and the gate on the one case the ledger cannot mask — a
+capped referrer, where no ledger row is ever written, so the attempt repeats on
+every sign-in forever and takes a row lock inside the session transaction to do
+it.
+
+*`attempts < MAX_ATTEMPTS` untested.* A job past its attempts is unclaimable
+forever, so counting it as "a mail is coming" means that person can never be
+sent another confirm link while the row exists, with every resend answering
+"check your inbox" for a mail that will never arrive. Reachable by lowering
+`EMAIL_MAX_ATTEMPTS`, which is deliberately env-tunable without a deploy.
+
+The sweep is kept at `infra/scripts/mutation-sweep.py`. Add a load-bearing
+clause, add a mutation for it.
+
+**Gate:** 481 Python tests; corp-cello-site lint, typecheck, 21 vitest, build.
+Still nothing run against AWS — that has not changed and no amount of local
+verification changes it.
+
+**What four rounds and a sweep actually taught.** Mutual masking is the reason
+"the tests pass" kept being true while the code was wrong. Two correct-looking
+guards, each making the other unfalsifiable, is indistinguishable from good
+coverage until you delete one. The reviewer's sentence for the simpler version
+of this was *a comment cannot fail*; the sweep's version is that a test suite
+can be green because two defects would be needed to break it, which is not the
+same as being right.

@@ -141,6 +141,12 @@ Every DoD line carries a `[repo]` tag immediately after its ID. Use this table t
   test that failed when the clause was removed. Every behavioural clause is now mutation-verified.
   477 tests. **Still 🟡 — nothing has run against AWS** → Journal 2026-07-27 (fourth review)
 
+  **A mutation sweep replaced a fifth review pass** — 29 mutations over the loop's load-bearing
+  clauses, 24 killed, two real gaps closed: the two guards against double-paying a referrer were
+  masking each other so neither was individually tested, and `attempts < MAX_ATTEMPTS` had no
+  coverage. Kept at `infra/scripts/mutation-sweep.py`. 481 tests, still 🟡
+  → Journal 2026-07-28
+
   **2026-07-27 (later) — the rest of the agreed flow, also code-only.** `/waitlist` is now the front
   door: it detects a live session and offers `/status` instead of a signup form, and one field decides
   whether the server sends a confirm mail, a sign-in link, or nothing (suppressed) — the 409 that
