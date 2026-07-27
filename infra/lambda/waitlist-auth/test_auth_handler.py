@@ -1158,3 +1158,30 @@ def test_five_rapid_clicks_send_one_mail_and_say_so(auth):
     assert query(
         "SELECT count(*) FROM auth_link_requests WHERE lower(email_requested) = 'impatient@example.test'"
     )[0][0] == 1
+
+
+def test_a_dead_link_page_escapes_what_it_renders(auth):
+    """Defence in depth, and it has to be asserted or it is only a comment.
+
+    Every heading and sentence _page renders today is a string literal, so
+    nothing is currently injectable. But two of its call sites now feed SERVER
+    ERROR TEXT into the sentence, and the next person adding a call site will
+    read the template and assume it escapes. Deleting either escape leaves the
+    whole suite green unless something looks.
+    """
+    page = auth._page(
+        410,
+        "<img src=x onerror=alert(1)>",
+        "<script>alert(2)</script> & \"quoted\"",
+        "https://cello.mygentic.ai",
+    )
+    body = page["body"]
+
+    # The property is that no `<` from the input survives — `>` is deliberately
+    # left alone, because it cannot open a tag on its own and escaping it would
+    # mangle ordinary copy. So assert on the thing that actually matters.
+    assert "<img" not in body, "the heading is interpolated raw"
+    assert "<script" not in body, "the sentence is interpolated raw"
+    assert "&lt;img src=x onerror=alert(1)&gt;" in body or "&lt;img src=x onerror=alert(1)>" in body
+    assert "&lt;script>alert(2)" in body
+    assert "&amp;" in body and "&quot;quoted&quot;" in body

@@ -493,9 +493,11 @@ def handle_signup(body, origin, correlation_id):
             # get the boundaries right, which is a harder question than the one
             # being answered.
             #
-            # The dispatcher re-checks suppression and status at send time, so a
-            # user who bounces or gets admitted tomorrow simply never receives
-            # these; nothing has to be cancelled.
+            # The dispatcher re-checks SUPPRESSION at send time — email_status
+            # and email_verified — so a user who bounces tomorrow never receives
+            # these and nothing has to be cancelled. It does NOT check lifecycle
+            # status: only the E3 chain filters on 'waiting', so a queued
+            # e2_survey does still reach someone admitted in the meantime.
             psycopg2.extras.execute_values(
                 cur,
                 "INSERT INTO email_jobs (user_id, template, scheduled_at) VALUES %s",

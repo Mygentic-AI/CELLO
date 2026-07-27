@@ -1207,3 +1207,84 @@ def test_two_confirm_mails_for_one_person_never_drain_in_one_batch(database):
         "SELECT count(*) FROM email_jobs WHERE user_id = %s AND template = 'e_magic_link'",
         (uid,),
     )[0][0] == 0, "an unverified user must not be sent a sign-in link"
+
+
+def test_a_stranded_sending_job_still_counts_as_a_mail_on_its_way(database):
+    """THE CASE THE RULE EXISTS FOR, and the one a first attempt inverted.
+
+    `claim_jobs` commits the 'sending' transition BEFORE the SES call, so a
+    Lambda timeout or OOM strands a row for the whole reclaim window. That
+    outage is exactly when somebody clicks resend. If a stranded row does not
+    count as "a mail is coming", a second job is queued, the dispatcher
+    recovers and claims both, and the first mail ships carrying a token the
+    second's minting already burned — then tells the person they have already
+    used a link they never opened.
+
+    Parameterised over the whole window: freshly claimed, and long past reclaim.
+    A predicate that compares `sent_at` at all gets exactly one of these wrong.
+    """
+    for minutes, label in ((0, "just claimed"), (120, "long past reclaim")):
+        uid = make_user(f"stranded{minutes}@example.test", email_verified=False)
+        query(
+            "INSERT INTO email_jobs (user_id, template, status, sent_at, scheduled_at) "
+            "VALUES (%s, 'e1_confirm', 'sending', now() - make_interval(mins => %s), now())",
+            (uid, minutes),
+        )
+
+        conn = psycopg2.connect(PGURL)
+        conn.autocommit = False
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT waitlist_id, email, email_verified, email_status "
+                    "FROM waitlist_users WHERE waitlist_id = %s",
+                    (uid,),
+                )
+                outcome = resend_link(cur, cur.fetchone(), "test", lambda *a, **k: None)
+            conn.commit()
+        finally:
+            conn.close()
+
+        assert outcome == "confirm"
+        claimable = query(
+            "SELECT count(*) FROM email_jobs WHERE user_id = %s AND template = 'e1_confirm' "
+            "AND status IN ('pending', 'sending')",
+            (uid,),
+        )[0][0]
+        assert claimable == 1, (
+            f"{label}: {claimable} claimable confirm jobs — the dispatcher will send both "
+            "and the first ships a dead link"
+        )
+
+
+def test_a_confirmation_racing_the_resend_does_not_send_a_confirm_mail(database):
+    """The decision must come from the row read UNDER the lock.
+
+    A confirmation committing between the caller's SELECT and the lock leaves a
+    stale `email_verified=False` in hand. e1_confirm is not gated on
+    email_verified at send time, so the mail ships anyway — and burns the live
+    confirm token as it mints a new one.
+    """
+    uid = make_user("racer@example.test", email_verified=False)
+    stale = {
+        "waitlist_id": uid,
+        "email": "racer@example.test",
+        "email_verified": False,   # what the caller read
+        "email_status": "active",
+    }
+    # ...and then the confirmation lands.
+    query("UPDATE waitlist_users SET email_verified = true WHERE waitlist_id = %s", (uid,))
+
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = False
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            outcome = resend_link(cur, stale, "test", lambda *a, **k: None)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert outcome == "signin", "the locked row says verified; the stale one said otherwise"
+    assert query(
+        "SELECT count(*) FROM email_jobs WHERE user_id = %s AND template = 'e1_confirm'", (uid,)
+    )[0][0] == 0, "a confirm mail to a confirmed user burns their live token for nothing"

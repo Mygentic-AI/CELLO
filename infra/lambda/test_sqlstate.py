@@ -139,3 +139,52 @@ def test_a_rejected_password_names_the_credential_not_the_network():
         "a rotated password reported as an unreachable server sends the operator to the VPC"
     )
     assert "credential" in message
+
+
+def test_every_real_connection_failure_lands_in_its_own_bucket():
+    """One table, six REAL libpq failures, no synthetic exceptions.
+
+    Each of these wants a different reaction — create the database, rotate the
+    secret, check the network, back off — and the first version of this
+    classifier collapsed several into "could not reach", which is the one
+    answer that sends an operator to the VPC for all of them.
+    """
+    import psycopg2
+
+    from waitlist_testdb import PGURL
+
+    base = PGURL.rsplit("/", 1)[0]
+    cases = [
+        ("wrong password", PGURL.replace("m11:m11@", "m11:nope@", 1), "database_credential_rejected"),
+        ("unknown role", PGURL.replace("m11:m11@", "nobodyhere:x@", 1), "database_credential_rejected"),
+        ("missing database", f"{base}/no_such_portal_db", "database_not_found"),
+        ("refused port", PGURL.replace(":55432/", ":55499/", 1), "database_unreachable"),
+    ]
+
+    for label, url, expected in cases:
+        try:
+            psycopg2.connect(url, sslmode="disable", connect_timeout=3)
+        except psycopg2.Error as err:
+            status, code, _ = classify(err)
+        else:
+            raise AssertionError(f"{label}: the connection should have been refused")
+
+        assert status == 503, f"{label}: {status}"
+        assert code == expected, f"{label}: classified as {code}, expected {expected}"
+
+
+def test_a_connection_cap_is_capacity_not_an_unreachable_server():
+    """`too many clients already` arrives at CONNECT time, so it carries no
+    SQLSTATE and the class-53 branch can never see it. It is the likeliest
+    transient this stack has — a Lambda fanning out against an RDS connection
+    cap — and calling it unreachable sends the operator to the network instead
+    of telling the caller to back off."""
+    import psycopg2
+
+    err = psycopg2.OperationalError(
+        'connection to server at "db" failed: FATAL:  sorry, too many clients already\n'
+    )
+    status, code, message = classify(err)
+
+    assert (status, code) == (503, "database_overloaded")
+    assert "capacity" in message

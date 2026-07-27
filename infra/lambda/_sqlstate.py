@@ -42,14 +42,26 @@ def classify(err):
             detail = str(err).lower()
             if "database" in detail and "does not exist" in detail:
                 # PORTAL_DB_NAME is wrong, or the portal database has not been
-                # created in this region yet. Nothing to do with credentials —
-                # and an alarm on the credential code would page somebody about
-                # an RDS rotation that never happened.
+                # created in this region yet. Nothing to do with credentials, and
+                # the two want opposite reactions: create the database, versus
+                # rotate or re-read a secret.
                 return (
                     503,
                     "database_not_found",
                     "The waitlist database this function is pointed at does not exist. This is a "
                     "configuration problem on our side.",
+                )
+            if "too many clients" in detail:
+                # 53300 by nature, but there is no SQLSTATE at connect time, so
+                # the cls == "53" branch below can never see it — and this is the
+                # single likeliest transient this stack has: a Lambda fanning out
+                # against an RDS connection cap. Reported as "unreachable" it
+                # sends the operator to the VPC; reported as capacity it says
+                # back off, which is the actual fix.
+                return (
+                    503,
+                    "database_overloaded",
+                    "The waitlist is briefly over capacity on our side. Give it a minute — we are alerted either way.",
                 )
             if "password authentication failed" in detail or "no password supplied" in detail:
                 # A missing ROLE lands here too, not on a "does not exist"

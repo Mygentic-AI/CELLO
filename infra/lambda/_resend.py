@@ -59,8 +59,6 @@ def resend_link(cur, user, correlation_id, log):
     your address.
     """
     user_id = user["waitlist_id"]
-    kind = "signin" if user["email_verified"] else "confirm"
-    template = "e_magic_link" if kind == "signin" else "e1_confirm"
 
     # SERIALISE ON THE USER ROW. Everything below is read-then-write — the rate
     # limit, the token burn, and the "is a mail already coming?" check — and two
@@ -73,14 +71,34 @@ def resend_link(cur, user, correlation_id, log):
     # every caller has already selected it, and taking it here rather than in
     # each caller keeps the ordering in one place where a deadlock cannot be
     # introduced by a new call site.
-    cur.execute("SELECT 1 FROM waitlist_users WHERE waitlist_id = %s FOR UPDATE", (user_id,))
+    # RE-READ UNDER THE LOCK. Taking the lock and then deciding from the
+    # caller's earlier read is not a serialisation: a confirmation committing in
+    # between leaves kind='confirm' for a user who is already verified, and
+    # `should_send` does not gate e1_confirm on email_verified, so the mail
+    # ships — and burns their live confirm token at send time. That is this
+    # module's own "dead link dressed as a welcome". The columns cost nothing;
+    # the lock is already being paid for.
+    cur.execute(
+        "SELECT email_verified, email_status FROM waitlist_users "
+        "WHERE waitlist_id = %s FOR UPDATE",
+        (user_id,),
+    )
+    locked = cur.fetchone()
+    if locked is None:
+        # The row vanished between the caller's read and this lock. Nothing to
+        # send to, and nothing to say about it.
+        log("waitlist.resend.user_absent", correlation_id, level="WARN", waitlistId=str(user_id))
+        return "suppressed"
 
-    if user["email_status"] != "active":
+    kind = "signin" if locked["email_verified"] else "confirm"
+    template = "e_magic_link" if kind == "signin" else "e1_confirm"
+
+    if locked["email_status"] != "active":
         log(
             "waitlist.resend.withheld",
             correlation_id,
             waitlistId=str(user_id),
-            reason=f"email_status_{user['email_status']}",
+            reason=f"email_status_{locked['email_status']}",
         )
         return "suppressed"
 
@@ -96,24 +114,31 @@ def resend_link(cur, user, correlation_id, log):
     # Skipping is also the honest answer: a mail for this person IS coming, so
     # "check your inbox" stays true.
     #
-    # CLAIMABLE, not `status = 'pending'`. A job stranded in 'sending' is still
-    # inside its reclaim window and the dispatcher will pick it up again, so it
-    # counts — and the outage that strands the first job is exactly the one that
-    # stops the second from draining, which is when they would co-exist. A job
-    # past MAX_ATTEMPTS is the opposite case: unclaimable forever, so treating
-    # it as pending would gag the remedy permanently while this function kept
-    # answering "check your inbox".
+    # CLAIMABLE, not `status = 'pending'`. A row in 'sending' is either in
+    # flight or waiting to be reclaimed, and BOTH mean a mail is coming — so
+    # neither may license queueing another.
+    #
+    # NO `sent_at` COMPARISON. A first attempt here mirrored the dispatcher's
+    # reclaim clause, `sent_at < now() - reclaim`, but with the inequality the
+    # other way round — and `<` and `>` partition the 'sending' rows into two
+    # disjoint halves. This counted the in-flight half and declared the
+    # reclaimable half "no mail coming", which is the precise case the rule
+    # exists for: `claim_jobs` commits the 'sending' transition BEFORE the SES
+    # call, so a Lambda timeout strands a row, and the outage that strands it is
+    # the same one that makes somebody click resend. Both then drained together
+    # and the first mail shipped a token the second had already burned.
+    #
+    # `attempts < MAX_ATTEMPTS` is the one real exclusion: past that a job is
+    # unclaimable forever, so treating it as coming would gag the remedy
+    # permanently while this function kept answering "check your inbox".
     cur.execute(
         """
         SELECT 1 FROM email_jobs
         WHERE user_id = %s AND template = %s
           AND attempts < %s
-          AND (
-                status = 'pending'
-                OR (status = 'sending' AND sent_at > now() - make_interval(mins => %s))
-              )
+          AND status IN ('pending', 'sending')
         """,
-        (user_id, template, MAX_ATTEMPTS, RECLAIM_AFTER_MINUTES),
+        (user_id, template, MAX_ATTEMPTS),
     )
     if cur.fetchone() is not None:
         log(

@@ -83,8 +83,19 @@ def award_referrer_for(cur, referred_user_id, correlation_id, log):
         # session transaction and a WARN on every sign-in forever.
         #
         # The `referrals` row survives regardless, and it is the record that
-        # this is owed: a referral with no matching `points_ledger` entry IS the
-        # unpaid set, findable by one join whenever the cap moves.
+        # this is owed — but the recovery query needs one more clause than it
+        # looks like it needs:
+        #
+        #     referrals r
+        #       JOIN waitlist_users u ON u.waitlist_id = r.referred_user_id
+        #      WHERE u.email_verified                      -- ← THIS
+        #        AND NOT EXISTS (SELECT 1 FROM points_ledger …)
+        #
+        # WITHOUT `u.email_verified` the result is not the capped set, it is
+        # mostly referrals whose referee NEVER CONFIRMED — because the referrals
+        # row is written at signup and the payout only ever runs on the confirm
+        # click. Paying that set out is precisely the farming this module exists
+        # to prevent, arriving as a recovery procedure.
         log(
             "waitlist.referral.points_capped",
             correlation_id,
