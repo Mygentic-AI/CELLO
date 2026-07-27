@@ -269,6 +269,15 @@ Resources:
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
+      # NAMED, not left to CloudFormation's generated "cello-Targe-XXXX".
+      #
+      # An anonymous target group on a SHARED load balancer is how the portal
+      # broke: hibernate selected "the first port-3000 target group containing
+      # 'cello'", this one matched and sorted first, and wake rebuilt the portal
+      # listener with its default action pointing here. Every portal request
+      # served the ops dashboard. A name that says what it is makes that class of
+      # lookup unambiguous. (2026-07-27)
+      Name: !Sub "cello-ops-dashboard-${Environment}-tg"
       Port: 3000
       Protocol: HTTP
       TargetType: ip

@@ -246,11 +246,28 @@ for REGION in "${TARGET_REGIONS[@]}"; do
         --output text 2>/dev/null || echo "None")
       [[ "$portal_acm_cert_arn" != "None" ]] && ok "  Portal ACM cert: ${portal_acm_cert_arn}"
 
-      # Portal target group (port 3000)
+      # PORTAL TARGET GROUP — BY EXACT NAME, never by a filter.
+      #
+      # This used to be "the first port-3000 target group whose name contains
+      # cello". That was unambiguous while exactly one existed, and it broke
+      # SILENTLY the moment a second service joined this ALB: the ops dashboard's
+      # target group is also port 3000 and also matches, it sorted first, and so
+      # wake rebuilt the portal listener with its DEFAULT action pointing at the
+      # DASHBOARD. Every request to portal.cello.mygentic.ai served the ops app —
+      # a redirect to the operations sign-in, or a 404. (2026-07-27)
+      #
+      # A filter that is correct only while one thing matches is a landmine for
+      # whoever adds the second thing. Exact name, and REFUSE if it is missing,
+      # because a wrong default action is worse than a failed hibernate.
       portal_tg_arn=$(aws elbv2 describe-target-groups --region "${REGION}" \
-        --query "TargetGroups[?Port==\`3000\` && contains(TargetGroupName,'cello')].TargetGroupArn | [0]" \
-        --output text 2>/dev/null || echo "None")
-      [[ "$portal_tg_arn" != "None" ]] && ok "  Portal TG: ${portal_tg_arn}"
+        --names "cello-portal-${ENVIRONMENT}-tg" \
+        --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
+      if [[ "$portal_tg_arn" == "None" || -z "$portal_tg_arn" ]]; then
+        err "  Portal TG 'cello-portal-${ENVIRONMENT}-tg' not found — refusing to capture a guess."
+        err "  Wake would rebuild the portal listener pointing at the wrong service."
+        exit 1
+      fi
+      ok "  Portal TG: ${portal_tg_arn}"
     fi
 
     # Demo agent EC2 instance
