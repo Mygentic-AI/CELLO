@@ -27,6 +27,29 @@ def classify(err):
         import psycopg2
 
         if isinstance(err, (psycopg2.OperationalError, psycopg2.InterfaceError)):
+            # A REJECTED CREDENTIAL LOOKS EXACTLY LIKE AN UNREACHABLE SERVER
+            # from here, and it is neither. libpq fails the connection before a
+            # session exists, so there is no SQLSTATE to switch on — which is
+            # why the class-28 branch below cannot catch it, and why a first
+            # attempt at this was unreachable code under a comment claiming it
+            # handled the case.
+            #
+            # This is the shape of the 2026-07-26 outage: RDS rotated
+            # `portal_admin` while every waitlist function still held the 19
+            # July password. Calling that "we could not reach the database"
+            # sends an operator to the VPC, the security groups and the subnet
+            # routing, none of which are broken.
+            detail = str(err).lower()
+            if (
+                "password authentication failed" in detail
+                or "no password supplied" in detail
+                or "does not exist" in detail  # role dropped or renamed
+            ):
+                return (
+                    503,
+                    "database_credential_rejected",
+                    "We could not sign in to the waitlist database. This is a credential on our side, not anything you did.",
+                )
             return (
                 503,
                 "database_unreachable",
@@ -101,12 +124,10 @@ def classify(err):
         )
 
     if cls == "28":
-        # Invalid authorization — 28P01 password authentication failed above
-        # all. RDS rotates the portal credential on a schedule, and on
-        # 2026-07-26 it did: every waitlist function was still holding the 19
-        # July password and the whole list went down. Falling through to the
-        # generic branch called that "the database rejected the request", which
-        # sends an operator to read the query. Nothing is wrong with the query.
+        # Invalid authorization WITH a SQLSTATE, which means a session already
+        # existed — a role altered or revoked under a live connection. The
+        # commoner case by far, a rotated password at connect time, carries no
+        # SQLSTATE at all and is caught above.
         return (
             503,
             "database_credential_rejected",

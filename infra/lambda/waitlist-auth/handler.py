@@ -262,13 +262,20 @@ def _issue_link_if_eligible(email, correlation_id):
     try:
         conn.autocommit = False
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # Count PRIOR requests, then record this one. Inserting first
-            # makes the current request count against itself, so a limit of
-            # N issues only N-1 links.
+            # A REFUSED request is NOT recorded, and that is the whole point.
+            # Counting refusals lets the window extend itself, so somebody
+            # asking again every few minutes is refused forever — and it lets a
+            # third party pin your budget at the ceiling with one
+            # unauthenticated request every few minutes, locking you out of the
+            # sign-in link, the resend button and the signup form's remedy path
+            # alike. This counter is SHARED with the resend door (LINK_LIMIT),
+            # so a refusal recorded here would extend that window too.
+            #
+            # Nothing observable changes: the response is OPAQUE_RESPONSE behind
+            # a timing floor whether or not a link was issued, and the count
+            # query is identical for a known and an unknown address, so this
+            # does not become a membership oracle.
             throttled = rate_limited(cur, email)
-            cur.execute(
-                "INSERT INTO auth_link_requests (email_requested) VALUES (%s)", (email,)
-            )
 
             cur.execute(
                 "SELECT waitlist_id, email_status FROM waitlist_users WHERE lower(email) = %s",
@@ -277,6 +284,11 @@ def _issue_link_if_eligible(email, correlation_id):
             user = cur.fetchone()
 
             if user and not throttled and user["email_status"] == "active":
+                # Recorded HERE, on the path that actually issues a link, so the
+                # count bounds sends rather than attempts.
+                cur.execute(
+                    "INSERT INTO auth_link_requests (email_requested) VALUES (%s)", (email,)
+                )
                 # Burn any earlier unused link first. Otherwise N requests
                 # leave N-1 live credentials for the same person, and the
                 # single-use guarantee only covers each token in isolation
@@ -381,7 +393,7 @@ def _page(status, heading, sentence, origin, *, resend_token=None, front_door=Fa
             '<div style="background:#fff;border-radius:16px;padding:48px 40px;max-width:460px;'
             'text-align:center;">'
             f'<h1 style="margin:0 0 12px;font-size:24px;color:#111;">{heading}</h1>'
-            f'<p style="margin:0 0 28px;font-size:16px;color:#666;line-height:1.6;">{sentence}</p>'
+            f'<p style="margin:0 0 28px;font-size:16px;color:#666;line-height:1.6;">{esc_attr(sentence)}</p>'
             f"{action}</div></body></html>"
         ),
     }
@@ -626,10 +638,39 @@ def handle_verify(params, origin, correlation_id):
                 # AND THE REFERRER IS PAID HERE, for the same reason the code is
                 # minted here. A signup is a typed address; paying out on one
                 # makes the queue farmable by the effort of inventing addresses,
-                # and the queue is the product. Idempotent against the ledger,
-                # because a magic-link sign-in runs this path too and one
-                # referral must not become an income stream.
-                award_referrer_for(cur, user_id, correlation_id, log)
+                # and the queue is the product.
+                #
+                # Only on the click that MAKES the member, unlike the code above.
+                # A magic-link sign-in runs this same path, and re-attempting
+                # there meant a referrer sitting at their 30-point cap took a row
+                # lock inside the session transaction and logged a WARN on every
+                # single sign-in, forever — a signal that fires on the designed
+                # benign case is not a signal. Nothing is owed retroactively:
+                # anyone verified before this rule was already paid at signup
+                # under the old one. The ledger check inside stays, because two
+                # devices can confirm the same link at once.
+                if just_verified:
+                    award_referrer_for(cur, user_id, correlation_id, log)
+
+                    # And a premium invite becomes an actual admission here, for
+                    # the same reason. The claim was recorded at signup and the
+                    # code burned there; skipping the queue waits on proof of
+                    # the mailbox, exactly as the referrer's points do.
+                    cur.execute(
+                        """
+                        UPDATE waitlist_users
+                        SET status = 'admitted', admitted_at = now()
+                        WHERE waitlist_id = %s AND premium_referred AND status = 'waiting'
+                        """,
+                        (user_id,),
+                    )
+                    if cur.rowcount:
+                        log(
+                            "waitlist.premium.admitted",
+                            correlation_id,
+                            waitlistId=str(user_id),
+                            reason="email_verified",
+                        )
 
             raw, expires_at = mint_session(cur, user_id)
             log(

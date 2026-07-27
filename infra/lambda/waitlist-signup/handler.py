@@ -339,12 +339,17 @@ def apply_referral(cur, code, new_user_id, correlation_id):
                 "premium_code_already_used",
                 "That invite code has already been used.",
             )
+        # THE CLAIM IS RECORDED; THE ADMISSION IS NOT GRANTED YET. Same rule as
+        # the referrer's points twenty lines up: a signup is a typed address,
+        # and admitting one skips the queue on no proof of a mailbox. Typing a
+        # stranger's address with a premium code would have spent the code AND
+        # admitted them. `status` flips to 'admitted' when the address is
+        # confirmed (waitlist-auth), which is also where the referrer is paid.
+        #
+        # The code is still BURNED here, in this transaction, so a bearer
+        # capability cannot be claimed twice while a confirmation is pending.
         cur.execute(
-            """
-            UPDATE waitlist_users
-            SET premium_referred = true, status = 'admitted', admitted_at = now()
-            WHERE waitlist_id = %s
-            """,
+            "UPDATE waitlist_users SET premium_referred = true WHERE waitlist_id = %s",
             (new_user_id,),
         )
         log("waitlist.referral.premium_burned", correlation_id, code=code)

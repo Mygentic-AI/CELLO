@@ -110,3 +110,32 @@ def test_an_interface_error_is_also_a_connection_failure():
 
     assert status == 503
     assert code == "database_unreachable"
+
+
+def test_a_rejected_password_names_the_credential_not_the_network():
+    """Constructed from a REAL failed connection, not a synthetic exception.
+
+    The first attempt at this branch keyed on SQLSTATE class 28 and was
+    unreachable: libpq fails the connection before a session exists, so
+    `pgcode` is None and the no-SQLSTATE branch answers first. A hand-built
+    `psycopg2.Error` with `pgcode = "28P01"` would have passed while the real
+    thing — the 2026-07-26 rotation — still returned "could not reach".
+    """
+    import psycopg2
+
+    from waitlist_testdb import PGURL
+
+    wrong = PGURL.replace("m11:m11@", "m11:definitely-not-the-password@", 1)
+    try:
+        psycopg2.connect(wrong, sslmode="disable")
+    except psycopg2.Error as err:
+        assert err.pgcode is None, "if this ever carries a SQLSTATE, the branch above can be simpler"
+        status, code, message = classify(err)
+    else:
+        raise AssertionError("the connection should have been refused")
+
+    assert status == 503
+    assert code == "database_credential_rejected", (
+        "a rotated password reported as an unreachable server sends the operator to the VPC"
+    )
+    assert "credential" in message

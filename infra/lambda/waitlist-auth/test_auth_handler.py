@@ -175,17 +175,42 @@ def test_no_token_or_job_is_created_for_an_unknown_address(auth):
     assert query("SELECT count(*) FROM email_jobs")[0][0] == 0
 
 
-def test_rate_limiting_counts_unknown_addresses_too(auth):
+def test_an_unknown_address_is_throttled_on_the_same_terms_as_a_real_one(auth):
     """Throttling only real addresses would leak existence through the rate
-    limiter — the identical body would be undone by a differing 429 threshold."""
+    limiter. What must be identical is the RESPONSE and the counting RULE — not
+    the row count, which now tracks links issued rather than requests made."""
     for _ in range(auth.RATE_LIMIT_MAX + 2):
         _, body = request_link(auth, "spam@example.test")
         assert body == auth.OPAQUE_RESPONSE
 
-    logged = query(
+    # No link can be issued to an address nobody holds, so nothing is recorded —
+    # and nothing is sent, which is the only thing the counter exists to bound.
+    assert query(
         "SELECT count(*) FROM auth_link_requests WHERE lower(email_requested) = 'spam@example.test'"
+    )[0][0] == 0
+    assert query("SELECT count(*) FROM auth_tokens")[0][0] == 0
+    assert query("SELECT count(*) FROM email_jobs")[0][0] == 0
+
+
+def test_a_third_party_cannot_pin_your_budget_at_the_ceiling(auth):
+    """The hole the resend door closed, one door over.
+
+    /auth/request is unauthenticated and takes any address. If a REFUSED request
+    were recorded, five requests would mail-bomb the victim and then one request
+    every few minutes would hold the shared window open indefinitely — locking
+    the real owner out of the sign-in link, the resend button and the signup
+    form's remedy path at once.
+    """
+    make_user("victim@example.test")
+    for _ in range(auth.RATE_LIMIT_MAX * 3):
+        request_link(auth, "victim@example.test")
+
+    logged = query(
+        "SELECT count(*) FROM auth_link_requests WHERE lower(email_requested) = 'victim@example.test'"
     )[0][0]
-    assert logged == auth.RATE_LIMIT_MAX + 2
+    assert logged == auth.RATE_LIMIT_MAX, (
+        f"{logged} rows for {auth.RATE_LIMIT_MAX} links — refusals must not keep the window alive"
+    )
 
 
 def test_a_real_user_past_the_rate_limit_stops_getting_links(auth):
@@ -355,10 +380,15 @@ def test_a_refused_resend_says_it_refused_and_does_not_extend_its_own_window(aut
     flood = make_user("flood@example.test")
     flood_token = expired_token(flood)
 
-    pages = [
-        call(auth, "POST", "/waitlist/auth/resend", form={"token": str(flood_token)})[1]["html"]
-        for _ in range(auth.RATE_LIMIT_MAX + 4)
-    ]
+    pages = []
+    for _ in range(auth.RATE_LIMIT_MAX + 4):
+        # The dispatcher runs every 60s. Only one pending job per template may
+        # exist at a time, so without draining the queue limits itself and the
+        # rate limit under test is never reached.
+        query("UPDATE email_jobs SET status = 'sent', sent_at = now() WHERE status = 'pending'")
+        pages.append(
+            call(auth, "POST", "/waitlist/auth/resend", form={"token": str(flood_token)})[1]["html"]
+        )
 
     queued = query("SELECT count(*) FROM email_jobs WHERE user_id = %s", (flood,))[0][0]
     assert queued == auth.RATE_LIMIT_MAX, (
@@ -1020,3 +1050,41 @@ def test_the_click_that_makes_you_a_member_says_so(auth):
     )
     assert second["headers"]["Location"].endswith("/status")
     assert "welcome" not in second["headers"]["Location"]
+
+
+def test_a_premium_invite_admits_only_once_the_address_is_confirmed(auth):
+    """Recorded at signup, granted at the click. Admitting a typed address
+    skips the queue on no proof of a mailbox — someone could spend a scarce
+    invite on a stranger's address and admit them."""
+    uid = make_user("fastdoor@example.test")
+    query("UPDATE waitlist_users SET premium_referred = true WHERE waitlist_id = %s", (uid,))
+    assert query("SELECT status FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] == "waiting"
+
+    token = query(
+        "INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at) "
+        "VALUES (%s, 'email_verify', now() + interval '24 hours') RETURNING token",
+        (uid,),
+    )[0][0]
+    result, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
+
+    assert result["statusCode"] == 302
+    row = query(
+        "SELECT status, admitted_at FROM waitlist_users WHERE waitlist_id = %s", (uid,)
+    )[0]
+    assert row[0] == "admitted"
+    assert row[1] is not None, "admitted_at is what the wave reporting counts on"
+
+
+def test_confirming_without_a_premium_invite_does_not_admit(auth):
+    """The UPDATE is guarded on premium_referred. Without that guard every
+    confirmation would admit its user and the waves would have nobody left to
+    admit."""
+    uid = make_user("ordinary@example.test")
+    token = query(
+        "INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at) "
+        "VALUES (%s, 'email_verify', now() + interval '24 hours') RETURNING token",
+        (uid,),
+    )[0][0]
+    call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
+
+    assert query("SELECT status FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] == "waiting"

@@ -16,6 +16,7 @@ from pathlib import Path
 import psycopg2
 import pytest
 
+from _resend import resend_link
 from waitlist_testdb import PGURL, query, load_lambda
 
 
@@ -1151,3 +1152,41 @@ def test_minting_a_confirm_token_burns_its_predecessors(database):
     )
     assert len(live) == 1, f"{len(live)} live confirm credentials for one person"
     assert live[0][0] == tokens[-1], "the survivor must be the newest one"
+
+
+def test_two_confirm_mails_for_one_person_never_drain_in_one_batch(database):
+    """The burn in mint_verify_token happens per job, and the whole batch
+    commits at once. Two pending e1_confirm jobs for one user therefore means
+    job one mints a token, job two burns it and mints another, and BOTH mails
+    ship — the first carrying a link that was dead before it left. Clicking it
+    says "you've already used that link", which the person has not.
+
+    Guarded at the source: the resend path refuses to queue a second pending job
+    of the same template. This asserts the invariant the dispatcher relies on.
+    """
+    uid = make_user("nodupes@example.test")
+    query(
+        "INSERT INTO email_jobs (user_id, template, scheduled_at) VALUES (%s, 'e1_confirm', now())",
+        (uid,),
+    )
+
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = False
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT waitlist_id, email, email_verified, email_status FROM waitlist_users "
+            "WHERE waitlist_id = %s",
+            (uid,),
+        )
+        user = cur.fetchone()
+        for _ in range(3):
+            resend_link(cur, user, "test", lambda *a, **k: None)
+    conn.commit()
+    conn.close()
+
+    pending = query(
+        "SELECT count(*) FROM email_jobs WHERE user_id = %s AND template = 'e1_confirm' "
+        "AND status = 'pending'",
+        (uid,),
+    )[0][0]
+    assert pending == 1, f"{pending} pending confirm mails — one of them will ship a dead link"

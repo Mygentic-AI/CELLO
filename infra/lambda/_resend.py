@@ -107,6 +107,33 @@ def resend_link(cur, user, correlation_id, log):
     else:
         template = "e1_confirm"
 
+    # ONE PENDING JOB PER TEMPLATE, per person. Two e1_confirm jobs draining in
+    # the same batch is not hypothetical — the budget allows several requests
+    # per window — and the dispatcher mints the confirm token at SEND time and
+    # burns its predecessors as it does. So job one mints a token, job two burns
+    # it and mints another, and BOTH mails go out: the first carries a link that
+    # was dead before it left, and clicking it tells the person "you've already
+    # used that link", which they have not. The system lying about what they did
+    # is worse than the duplicate mail.
+    #
+    # Skipping is also the honest answer: a mail for this person IS pending, so
+    # "check your inbox" stays true.
+    cur.execute(
+        """
+        SELECT 1 FROM email_jobs
+        WHERE user_id = %s AND template = %s AND status = 'pending'
+        """,
+        (user_id, template),
+    )
+    if cur.fetchone() is not None:
+        log(
+            "waitlist.resend.already_pending",
+            correlation_id,
+            waitlistId=str(user_id),
+            template=template,
+        )
+        return kind
+
     cur.execute(
         "INSERT INTO email_jobs (user_id, template, scheduled_at) VALUES (%s, %s, now())",
         (user_id, template),

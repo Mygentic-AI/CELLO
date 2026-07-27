@@ -68,6 +68,17 @@ def seed_code(code, *, kind="share", owner_email=None, creator=None, active=True
     return owner
 
 
+def drain():
+    """What the dispatcher does every 60 seconds.
+
+    Only ONE pending job per template per person may exist at a time — a second
+    one draining in the same batch ships a mail whose token the next job burns
+    before it leaves. So a test asking for repeated sends has to let the queue
+    empty in between, exactly as production does.
+    """
+    query("UPDATE email_jobs SET status = 'sent', sent_at = now() WHERE status = 'pending'")
+
+
 def signup_body(email, **extra):
     return {"email": email, "anon_id": str(uuid.uuid4()), "touchpoints": [], **extra}
 
@@ -92,16 +103,25 @@ def test_premium_code_burns_on_first_signup_and_rejects_the_second(handler):
 
     assert query("SELECT active FROM referral_codes WHERE code = 'GOLDEN1'")[0][0] is False
     assert (
-        query("SELECT status FROM waitlist_users WHERE email = 'second@example.test'")[0][0]
-        == "waiting"
-    ), "a spent code must not admit anyone"
-    admitted = query("SELECT count(*) FROM waitlist_users WHERE status = 'admitted'")[0][0]
-    assert admitted == 1, "a burned premium code must not admit a second user"
+        query("SELECT premium_referred FROM waitlist_users WHERE email = 'second@example.test'")[0][0]
+        is False
+    ), "a spent code must not give anyone the fast door"
+    claimed = query("SELECT count(*) FROM waitlist_users WHERE premium_referred")[0][0]
+    assert claimed == 1, "a burned premium code must not be claimed by a second user"
+    # And nobody is admitted on a typed address — the claim is recorded, the
+    # admission waits on the confirm click.
+    assert query("SELECT count(*) FROM waitlist_users WHERE status = 'admitted'")[0][0] == 0
 
 
 def test_premium_admission_is_distinguishable_from_a_wave_admission(handler):
     """H9: collapsing premium_referred into status='admitted' loses the only
-    signal that says which door a user came through."""
+    signal that says which door a user came through.
+
+    The claim and the admission are now separate in TIME as well: the claim is
+    recorded at signup and burns the code, the admission waits on the confirm
+    click. Admitting a typed address skips the queue on no proof of a mailbox —
+    the same rule that moved the referrer's points.
+    """
     seed_code("GOLDEN2", kind="premium", owner_email="inviter2@example.test")
     invoke(handler, signup_body("fast@example.test", invite_code="GOLDEN2"))
 
@@ -110,7 +130,7 @@ def test_premium_admission_is_distinguishable_from_a_wave_admission(handler):
         "WHERE email = 'fast@example.test'"
     )[0]
     assert row[0] is True
-    assert row[1] == "admitted"
+    assert row[1] == "waiting", "an unconfirmed address must not hold an admission"
     assert row[2] == "GOLDEN2"
 
 
@@ -175,22 +195,12 @@ def test_a_share_referral_records_the_attribution_but_pays_nothing_yet(handler):
     )
 
 
-def test_a_referrer_at_their_cap_does_not_lose_the_new_user_their_signup(handler):
-    """The cap is real and must fire — but it is an expected outcome, not a
-    failure, and it must never take the new user's signup down with it. The
-    payout moved to confirmation, so this now guards the attribution write
-    rather than the ledger write; the invariant it protects is the same one."""
-    owner = seed_code("SHARE2", kind="share", owner_email="popular@example.test")
-    query(
-        "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, 30, 'share_conversion')",
-        (owner,),
-    )
-
-    status, body = invoke(handler, signup_body("newcomer@example.test", invite_code="SHARE2"))
-
-    assert status == 200, body
-    assert query("SELECT count(*) FROM waitlist_users WHERE email = 'newcomer@example.test'")[0][0] == 1
-    assert query("SELECT points_total FROM waitlist_users WHERE waitlist_id = %s", (owner,))[0][0] == 30
+# The cap test that used to live here moved with its subject. Nothing in
+# apply_referral writes to points_ledger any longer, so a pre-seeded cap could
+# not influence any statement this path executes — it passed for no reason
+# related to its name. The invariant it protected is now asserted where the
+# payout happens, against the transaction that actually has something to lose:
+# waitlist-auth's test_a_capped_referrer_still_lets_the_invitee_confirm.
 
 
 # ── H8 / M10 / M11: validation on a public endpoint ───────────────────────────
@@ -317,6 +327,7 @@ def test_an_unconfirmed_duplicate_gets_the_confirm_mail_again(handler):
     remedy, and calling it an error strands them permanently: e1_confirm was
     enqueued exactly once, at signup."""
     invoke(handler, signup_body("pending@example.test"))
+    drain()
     status, body = invoke(handler, signup_body("pending@example.test"))
 
     assert status == 200, body
@@ -365,9 +376,11 @@ def test_the_resend_path_is_rate_limited_and_says_when_it_refuses(handler):
     invoke(handler, signup_body("floody@example.test"))
     outcomes = []
     for _ in range(LINK_LIMIT + 4):
+        drain()  # the dispatcher runs every 60s; without it the queue self-limits
         status, body = invoke(handler, signup_body("floody@example.test"))
         assert status == 200, body
         outcomes.append(body["sent"])
+    drain()
 
     sent = query(
         "SELECT count(*) FROM email_jobs j JOIN waitlist_users u ON u.waitlist_id = j.user_id "

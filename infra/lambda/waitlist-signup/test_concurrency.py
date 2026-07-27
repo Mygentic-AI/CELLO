@@ -122,8 +122,11 @@ def test_two_simultaneous_redemptions_of_one_premium_code(signup):
     statuses = sorted(r[0] for r in results.values() if isinstance(r, tuple))
     assert statuses == [200, 200], f"both claimants must join the waitlist, got {results}"
 
-    admitted = query("SELECT count(*) FROM waitlist_users WHERE status = 'admitted'")[0][0]
-    assert admitted == 1, "exactly one may be admitted — the code is single-use"
+    claimed = query("SELECT count(*) FROM waitlist_users WHERE premium_referred")[0][0]
+    assert claimed == 1, "exactly one may claim it — the code is single-use"
+    # The admission itself waits on the confirm click, so neither racer holds
+    # one yet; what must not happen is BOTH claiming the capability.
+    assert query("SELECT count(*) FROM waitlist_users WHERE status = 'admitted'")[0][0] == 0
 
     assert query("SELECT active FROM referral_codes WHERE code = 'RACE0001'")[0][0] is False
     assert query("SELECT count(*) FROM waitlist_users")[0][0] == 3, (
