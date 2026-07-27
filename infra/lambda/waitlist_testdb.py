@@ -79,10 +79,18 @@ def clean_tables(database):
 
 
 def query(sql, params=()):
+    """Run one statement and return its rows. COMMITS.
+
+    The commit is not decoration. Without it every write made through this
+    helper was rolled back on close, so a test that set up state with an UPDATE
+    ran against the untouched row and quietly asserted the wrong scenario —
+    passing or failing for reasons that had nothing to do with the code.
+    """
     conn = psycopg2.connect(PGURL)
     with conn.cursor() as cur:
         cur.execute(sql, params)
         rows = cur.fetchall() if cur.description else []
+    conn.commit()
     conn.close()
     return rows
 

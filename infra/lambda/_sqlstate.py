@@ -30,14 +30,14 @@ def classify(err):
             return (
                 503,
                 "database_unreachable",
-                "The waitlist database could not be reached. Please try again.",
+                "We could not reach the waitlist just now. This is on our side — nothing you do differently will help, and we are alerted.",
             )
 
     if cls == "08":
         return (
             503,
             "database_unreachable",
-            "The waitlist database could not be reached. Please try again.",
+            "We could not reach the waitlist just now. This is on our side — nothing you do differently will help, and we are alerted.",
         )
 
     if sqlstate == "42501":
@@ -87,7 +87,7 @@ def classify(err):
         return (
             503,
             "database_overloaded",
-            "The waitlist database is at capacity. Please try again shortly.",
+            "The waitlist is briefly over capacity on our side. Give it a minute — we are alerted either way.",
         )
 
     if cls == "57":
@@ -97,7 +97,7 @@ def classify(err):
         return (
             503,
             "database_starting",
-            "The waitlist database is not accepting connections yet. Please try again shortly.",
+            "The waitlist is still starting up on our side. Give it a minute — we are alerted either way.",
         )
 
     if cls == "40":
@@ -105,7 +105,7 @@ def classify(err):
         return (
             503,
             "transaction_conflict",
-            "That request collided with another. Please try again.",
+            "That request collided with another one of yours. Send it once more and it will go through.",
         )
 
     return (500, "database_error", "The waitlist database rejected the request.")

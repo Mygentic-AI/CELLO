@@ -296,13 +296,87 @@ def test_a_plain_signup_creates_the_user_a_share_code_and_an_e1_job(handler):
     assert query("SELECT count(*) FROM email_jobs WHERE template = 'e1_confirm'")[0][0] == 1
 
 
-def test_a_duplicate_email_is_a_409_naming_the_cause(handler):
-    invoke(handler, signup_body("dupe@example.test"))
-    status, body = invoke(handler, signup_body("dupe@example.test"))
+# ── The re-entry path: typing your address again is normal, not an error ──────
+#
+# /waitlist is the only URL a returning person remembers, and nothing on the
+# site links to /auth. So the second most common thing anyone does here is type
+# an address that already exists. A 409 dead-ended exactly that person: the copy
+# said "already on the waitlist" and offered no way to reach their status page.
+#
+# The form now decides what to send instead of refusing. Same one field, same
+# reply — only the mail differs.
 
-    assert status == 409
-    assert body["error"] == "email_already_registered"
-    assert query("SELECT count(*) FROM waitlist_users WHERE email = 'dupe@example.test'")[0][0] == 1
+
+def test_an_unconfirmed_duplicate_gets_the_confirm_mail_again(handler):
+    """Somebody who never clicked the first link. Sending it again is the entire
+    remedy, and calling it an error strands them permanently: e1_confirm was
+    enqueued exactly once, at signup."""
+    invoke(handler, signup_body("pending@example.test"))
+    status, body = invoke(handler, signup_body("pending@example.test"))
+
+    assert status == 200, body
+    assert body["returning"] is True
+    assert body["sent"] == "confirm"
+    assert query("SELECT count(*) FROM waitlist_users WHERE email = 'pending@example.test'")[0][0] == 1
+    assert query(
+        "SELECT count(*) FROM email_jobs j JOIN waitlist_users u ON u.waitlist_id = j.user_id "
+        "WHERE u.email = 'pending@example.test' AND j.template = 'e1_confirm'"
+    )[0][0] == 2
+
+
+def test_a_confirmed_duplicate_gets_a_sign_in_link_not_a_second_confirm(handler):
+    """A member typing their address into the signup form is asking to get back
+    in. Re-sending a confirm mail to somebody already confirmed is a dead link
+    dressed as a welcome."""
+    invoke(handler, signup_body("member@example.test"))
+    query("UPDATE waitlist_users SET email_verified = true WHERE email = 'member@example.test'")
+
+    status, body = invoke(handler, signup_body("member@example.test"))
+
+    assert status == 200, body
+    assert body["sent"] == "signin"
+    assert query(
+        "SELECT count(*) FROM email_jobs j JOIN waitlist_users u ON u.waitlist_id = j.user_id "
+        "WHERE u.email = 'member@example.test' AND j.template = 'e_magic_link'"
+    )[0][0] == 1
+    # e_magic_link renders a token it does not mint. Enqueueing the job without
+    # one sends a mail with no link in it.
+    assert query(
+        "SELECT count(*) FROM auth_tokens t JOIN waitlist_users u ON u.waitlist_id = t.waitlist_user_id "
+        "WHERE u.email = 'member@example.test' AND t.kind = 'magic_link' AND t.used_at IS NULL"
+    )[0][0] == 1
+
+
+def test_the_resend_path_is_rate_limited_on_the_address(handler):
+    """Otherwise the form is an open mail cannon: anyone can point it at an
+    address they do not own and send it a message per request, from our domain,
+    until the sending reputation is gone."""
+    invoke(handler, signup_body("floody@example.test"))
+    for _ in range(8):
+        status, body = invoke(handler, signup_body("floody@example.test"))
+        assert status == 200, body
+
+    sent = query(
+        "SELECT count(*) FROM email_jobs j JOIN waitlist_users u ON u.waitlist_id = j.user_id "
+        "WHERE u.email = 'floody@example.test' AND j.template = 'e1_confirm'"
+    )[0][0]
+    # One from the signup itself, then at most the per-window allowance.
+    assert sent <= 1 + handler.RESEND_LIMIT, f"{sent} confirm mails queued for one address"
+
+
+def test_a_suppressed_address_is_never_re_mailed_by_the_form(handler):
+    """Unsubscribing and bouncing are one-way. A signup form that re-enrols a
+    suppressed address is how a domain ends up on a blocklist."""
+    invoke(handler, signup_body("gone@example.test"))
+    query("UPDATE waitlist_users SET email_status = 'unsubscribed' WHERE email = 'gone@example.test'")
+
+    status, body = invoke(handler, signup_body("gone@example.test"))
+
+    assert status == 200, body
+    assert query(
+        "SELECT count(*) FROM email_jobs j JOIN waitlist_users u ON u.waitlist_id = j.user_id "
+        "WHERE u.email = 'gone@example.test' AND j.template IN ('e1_confirm', 'e_magic_link')"
+    )[0][0] == 1, "only the original signup mail; the form must not resend"
 
 
 def test_an_explicit_first_touch_survives_the_twenty_entry_cap(handler):

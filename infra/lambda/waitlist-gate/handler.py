@@ -173,7 +173,8 @@ def burn(cur, token, telegram_id, agent_pubkey, correlation_id):
         raise GateError(
             "telegram_account_already_linked",
             "That Telegram account was linked to CELLO a moment ago. "
-            "Your access token has not been used — try again.",
+            "Your access token has not been spent — start the link again and it "
+            "will go through.",
         )
 
     if agent_pubkey:
