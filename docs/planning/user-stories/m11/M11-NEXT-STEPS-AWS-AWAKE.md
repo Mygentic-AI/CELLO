@@ -17,10 +17,16 @@ description: The ordered list of AWS-dependent steps that convert M11's 🟡 lin
 > `/status` bounced them to `/auth`. Both doors led back to the sign-in form. Nothing below has run
 > against the deployed API.
 >
-> **1. Trace before trusting.** Sign up a simulator address, drain the email queue, then follow one
-> real token with `curl -i` — capture the `Set-Cookie` and the `Location`, then call
-> `/waitlist/auth/session` with that cookie and read the CORS headers. Three fixes shipped on
-> untraced hypotheses before this one; do not add a fourth.
+> **1. Trace before trusting — this is now one command:**
+>
+> ```
+> ./infra/scripts/verify-capture-loop.sh <token-from-a-confirm-email>
+> ```
+>
+> It follows one real token through both hops and prints every header, then says which hop drops
+> the session. Exit 0 only if the session survives the redirect. It was checked against a
+> known-broken stand-in as well as a working one, so a green run means something. Three fixes
+> shipped on untraced hypotheses before this; do not add a fourth.
 >
 > **2. `./infra/deploy.sh`** — `cello-waitlist.yaml` gained `POST /waitlist/auth/resend`. Without it
 > the one button on every dead-link page 404s. (Note the standing blocker below: deploy.sh exits on
