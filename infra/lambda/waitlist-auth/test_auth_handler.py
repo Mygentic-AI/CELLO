@@ -847,3 +847,91 @@ def test_notes_is_always_present_even_when_empty(auth):
     _, cookie = signed_in(auth, "nonotes@example.test")
 
     assert session_body(auth, cookie)["notes"] == []
+
+
+# ── Flow E: the referrer is paid at CONFIRMATION, not at signup ───────────────
+#
+# A signup is a typed address and nothing more. Paying out on one makes the
+# queue farmable by exactly the effort of inventing addresses, and the queue is
+# the product. Same rule that already moved code MINTING to verification.
+
+
+def _referred_pair(referrer_email, referred_email):
+    referrer = make_user(referrer_email)
+    referred = make_user(referred_email)
+    query(
+        "INSERT INTO referral_codes (code, owner_waitlist_user_id, type) VALUES ('PAYME001', %s, 'share')",
+        (referrer,),
+    )
+    query(
+        "INSERT INTO referrals (referrer_user_id, referred_user_id, referral_code) "
+        "VALUES (%s, %s, 'PAYME001')",
+        (referrer, referred),
+    )
+    return referrer, referred
+
+
+def _points(uid):
+    return query("SELECT points_total FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0]
+
+
+def test_confirming_pays_the_referrer(auth):
+    referrer, referred = _referred_pair("payee@example.test", "newbie@example.test")
+    assert _points(referrer) == 0, "nothing is owed until the invitee proves the address"
+
+    token = query(
+        "INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at) "
+        "VALUES (%s, 'email_verify', now() + interval '24 hours') RETURNING token",
+        (referred,),
+    )[0][0]
+    result, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
+
+    assert result["statusCode"] == 302
+    assert _points(referrer) == 10
+
+
+def test_a_second_confirmation_cannot_pay_the_referrer_twice(auth):
+    """A magic-link sign-in also runs the verify path. Paying on every one of
+    them turns one referral into an income stream."""
+    referrer, referred = _referred_pair("once@example.test", "repeat@example.test")
+
+    for _ in range(3):
+        token = query(
+            "INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at) "
+            "VALUES (%s, 'magic_link', now() + interval '15 minutes') RETURNING token",
+            (referred,),
+        )[0][0]
+        call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
+
+    assert _points(referrer) == 10
+    assert query(
+        "SELECT count(*) FROM points_ledger WHERE waitlist_user_id = %s", (referrer,)
+    )[0][0] == 1
+
+
+def test_a_capped_referrer_still_lets_the_invitee_confirm(auth):
+    """The cap is an expected outcome, not a failure. Without the SAVEPOINT the
+    violation aborts the whole transaction — and the transaction it is now
+    inside is the one that verifies the email, mints the referral code and
+    creates the session. A working cap would silently cost someone their
+    confirmation."""
+    referrer, referred = _referred_pair("atcap@example.test", "blocked@example.test")
+    query(
+        "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, 30, 'share_conversion')",
+        (referrer,),
+    )
+
+    token = query(
+        "INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at) "
+        "VALUES (%s, 'email_verify', now() + interval '24 hours') RETURNING token",
+        (referred,),
+    )[0][0]
+    result, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
+
+    assert result["statusCode"] == 302, "the invitee must still get in"
+    assert query("SELECT email_verified FROM waitlist_users WHERE waitlist_id = %s", (referred,))[0][0] is True
+    assert query(
+        "SELECT count(*) FROM referral_codes WHERE owner_waitlist_user_id = %s AND type = 'share'",
+        (referred,),
+    )[0][0] == 1, "their own code must still be minted"
+    assert _points(referrer) == 30, "the cap holds"

@@ -58,7 +58,6 @@ MAX_URL_LEN = 2048
 MAX_SHORT_LEN = 128
 MAX_EMAIL_LEN = 254  # RFC 5321 maximum forward-path length.
 MAX_DISPLAY_NAME_LEN = 100
-REFERRAL_POINTS = 10
 MAX_CODE_ATTEMPTS = 10
 
 # Deliberately permissive: this is a shape check to reject obvious junk before it
@@ -317,39 +316,11 @@ def apply_referral(cur, code, new_user_id, correlation_id):
         (code, new_user_id),
     )
 
-    # The referrer's +10. A referrer who has already earned their 30-point cap is
-    # an ordinary, expected outcome — the cap trigger raises, and that must not
-    # take down the new user's signup with it. SAVEPOINT scopes the failure to
-    # this statement; without it Postgres aborts the whole transaction and every
-    # later statement dies with 25P02.
-    points_awarded = 0
-    cur.execute("SAVEPOINT referral_points")
-    try:
-        cur.execute(
-            """
-            INSERT INTO points_ledger (waitlist_user_id, points, reason, meta)
-            VALUES (%s, %s, 'share_conversion', %s)
-            """,
-            (
-                owner_id,
-                REFERRAL_POINTS,
-                psycopg2.extras.Json({"referred_user_id": str(new_user_id), "code": code}),
-            ),
-        )
-        cur.execute("RELEASE SAVEPOINT referral_points")
-        points_awarded = REFERRAL_POINTS
-    except psycopg2.errors.CheckViolation as err:
-        cur.execute("ROLLBACK TO SAVEPOINT referral_points")
-        # The cause survives into the log. "check violation" alone would send an
-        # operator hunting a schema bug rather than reading a working cap.
-        log(
-            "waitlist.referral.points_capped",
-            correlation_id,
-            level="WARN",
-            code=code,
-            referrerId=str(owner_id),
-            detail=str(err).strip(),
-        )
+    # NO POINTS HERE. The referrer is paid when this person CONFIRMS their
+    # address (waitlist-auth), not when it is typed — otherwise the queue is
+    # farmable by the effort of inventing addresses. The attribution above is
+    # written now, because who introduced whom is a fact about the signup; only
+    # the payout waits. See _referral.py.
 
     is_premium = row["type"] == "premium"
     if is_premium:
@@ -383,13 +354,11 @@ def apply_referral(cur, code, new_user_id, correlation_id):
         correlation_id,
         code=code,
         kind="premium" if is_premium else "share",
-        pointsAwarded=points_awarded,
     )
-    return {
-        "applied": True,
-        "kind": "premium" if is_premium else "share",
-        "points_awarded": points_awarded,
-    }
+    # `points_awarded` is deliberately absent rather than reported as 0. Zero
+    # here would read as "the referrer earned nothing", when what happened is
+    # that nothing is owed YET — a distinction the operator reading this needs.
+    return {"applied": True, "kind": "premium" if is_premium else "share"}
 
 
 # ── Signup ────────────────────────────────────────────────────────────────────

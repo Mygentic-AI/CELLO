@@ -156,30 +156,34 @@ def test_creator_referral_records_attribution_and_still_creates_the_user(handler
     )
 
 
-# ── H4: the referrer's +10, and the cap ───────────────────────────────────────
+# ── H4: attribution at signup, payment at confirmation ────────────────────────
 
 
-def test_share_referral_awards_ten_points_to_the_referrer(handler):
+def test_a_share_referral_records_the_attribution_but_pays_nothing_yet(handler):
+    """Who introduced whom is a fact about the signup, so it is written now. The
+    POINTS are not: a signup is a typed address, and paying out on one makes the
+    queue farmable by the effort of inventing addresses. The referrer is paid
+    when the invitee confirms (waitlist-auth, _referral.py)."""
     owner = seed_code("SHARE1", kind="share", owner_email="referrer@example.test")
     invoke(handler, signup_body("invitee@example.test", invite_code="SHARE1"))
 
-    assert query("SELECT points_total FROM waitlist_users WHERE waitlist_id = %s", (owner,))[0][0] == 10
     assert query("SELECT count(*) FROM referrals")[0][0] == 1
+    assert query("SELECT referred_by_code FROM waitlist_users WHERE email = 'invitee@example.test'")[0][0] == "SHARE1"
+    assert query("SELECT points_total FROM waitlist_users WHERE waitlist_id = %s", (owner,))[0][0] == 0, (
+        "an unconfirmed signup must not move anybody up the queue"
+    )
 
 
 def test_a_referrer_at_their_cap_does_not_lose_the_new_user_their_signup(handler):
     """The cap is real and must fire — but it is an expected outcome, not a
-    failure. Without the SAVEPOINT the cap violation aborts the transaction and
-    the new user's signup is rolled back with it."""
+    failure, and it must never take the new user's signup down with it. The
+    payout moved to confirmation, so this now guards the attribution write
+    rather than the ledger write; the invariant it protects is the same one."""
     owner = seed_code("SHARE2", kind="share", owner_email="popular@example.test")
-    conn = psycopg2.connect(PGURL)
-    conn.autocommit = True
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, 30, 'share_conversion')",
-            (owner,),
-        )
-    conn.close()
+    query(
+        "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, 30, 'share_conversion')",
+        (owner,),
+    )
 
     status, body = invoke(handler, signup_body("newcomer@example.test", invite_code="SHARE2"))
 

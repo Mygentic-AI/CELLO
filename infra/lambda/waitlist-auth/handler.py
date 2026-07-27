@@ -33,6 +33,7 @@ from _dburl import portal_database_url
 import psycopg2.extras
 
 from _session import COOKIE_NAME, cookie_from, hash_token, read_session, revoke_all_for_user
+from _referral import award_referrer_for
 from _resend import resend_link
 from _sqlstate import classify
 
@@ -572,6 +573,14 @@ def handle_verify(params, origin, correlation_id):
                         waitlistId=str(user_id),
                         reason="email_verified",
                     )
+
+                # AND THE REFERRER IS PAID HERE, for the same reason the code is
+                # minted here. A signup is a typed address; paying out on one
+                # makes the queue farmable by the effort of inventing addresses,
+                # and the queue is the product. Idempotent against the ledger,
+                # because a magic-link sign-in runs this path too and one
+                # referral must not become an income stream.
+                award_referrer_for(cur, user_id, correlation_id, log)
 
             raw, expires_at = mint_session(cur, user_id)
             log(
