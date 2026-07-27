@@ -3746,3 +3746,48 @@ coverage until you delete one. The reviewer's sentence for the simpler version
 of this was *a comment cannot fail*; the sweep's version is that a test suite
 can be green because two defects would be needed to break it, which is not the
 same as being right.
+
+
+## 2026-07-28 (later) — the pages had never been rendered
+
+The last review named this and I had left it: both corp-cello-site changes
+shipped with **zero coverage under `app/`**, so "the gate is green" there meant
+lint, `tsc` and `next build` — none of which can tell you a branch renders
+nothing. The front door's whole job is choosing which of six screens a visitor
+sees, every one of those choices was written that night, and not one had been
+rendered even once.
+
+jsdom and vitest were already here; `@testing-library/react` and
+`@vitejs/plugin-react` were not, and `include` did not cover `app/`. Two dev
+dependencies and a config line closed that.
+
+Thirteen tests over the decisions rather than the markup: the session gate hides
+the headline as well as the card (a signed-in member must not watch "Join the
+Waitlist" flash past in 48px type), a member is offered `/status` instead of a
+form, a failed probe still shows the form and says why while the ordinary
+not-signed-in case says nothing, and each of confirm / signin / suppressed /
+throttled renders its own screen — with "you are not on the waitlist until you
+click that link" appearing ONLY for someone genuinely not on it yet. Plus the
+just-confirmed state and the flag being stripped from the URL.
+
+Each verified by putting the defect back: remove the gate, show the
+not-on-the-list line unconditionally, raise the probe notice on every visit,
+leave `?welcome=1` in the URL — each fails exactly one test and nothing else.
+
+**Two pre-existing hygiene defects surfaced on the way, both leaked global
+state.** `tracking.spec.ts` did `global.window = { location: … }`, replacing the
+whole object — one worker means one process, so that wiped `window.history` for
+every file running after it, and the symptom landed in an unrelated component
+test as *"Cannot read properties of undefined (reading 'replaceState')"*. That
+reads as a component bug and would have cost real time to trace. And the lib
+spec could leave fake timers running if a test failed before restoring them,
+stalling every later file on a clock that never advances. `restoreMocks` and
+`unstubGlobals` are on now, so global state resets by default rather than by
+each file remembering to.
+
+**Gate:** 481 Python tests; corp-cello-site 34 tests, typecheck, lint, build.
+
+**This is the end of what can be verified without AWS.** Every remaining
+question about the capture loop is a question about the deployed system, and
+the answer to all of them is the same three commands at the top of
+[[M11-NEXT-STEPS-AWS-AWAKE]].

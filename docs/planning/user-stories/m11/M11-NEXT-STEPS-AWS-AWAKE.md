@@ -38,7 +38,7 @@ description: The ordered list of AWS-dependent steps that convert M11's 🟡 lin
 > there is no cold ImportError waiting.
 >
 > **4. ONLY THEN push corp-cello-site.** Commits `63fe0d4`, `81518b3`, `ba2c26b`, `7e1f1e1`,
-> `ec05c69` and `c56eecc` are deliberately UNPUSHED.
+> `ec05c69`, `c56eecc` and `d17377f` are deliberately UNPUSHED.
 > The page now expects `sent` and `returning` from `POST /waitlist/signup`; against the old endpoint a
 > repeat address still returns 409 and would surface as a red error instead of a screen. Pushing
 > `main` there auto-deploys the live site, so the order is not advisory.

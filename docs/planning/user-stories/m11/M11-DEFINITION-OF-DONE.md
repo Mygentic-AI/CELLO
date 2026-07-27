@@ -147,6 +147,11 @@ Every DoD line carries a `[repo]` tag immediately after its ID. Use this table t
   coverage. Kept at `infra/scripts/mutation-sweep.py`. 481 tests, still 🟡
   → Journal 2026-07-28
 
+  **The pages themselves now have render coverage** — 13 component tests over the six screens the
+  front door chooses between and the just-confirmed state, each mutation-verified. That closes the
+  last thing checkable without AWS; everything still open on this line is a question about the
+  deployed system. 481 Python + 34 site tests, still 🟡 → Journal 2026-07-28 (later)
+
   **2026-07-27 (later) — the rest of the agreed flow, also code-only.** `/waitlist` is now the front
   door: it detects a live session and offers `/status` instead of a signup form, and one field decides
   whether the server sends a confirm mail, a sign-in link, or nothing (suppressed) — the 409 that
