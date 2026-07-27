@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 
 import psycopg2
+import psycopg2.extras
 import pytest
 
 from _resend import resend_link
@@ -1164,29 +1165,45 @@ def test_two_confirm_mails_for_one_person_never_drain_in_one_batch(database):
     Guarded at the source: the resend path refuses to queue a second pending job
     of the same template. This asserts the invariant the dispatcher relies on.
     """
-    uid = make_user("nodupes@example.test")
+    # UNVERIFIED, explicitly. This file's make_user defaults to verified, which
+    # sent an earlier version of this test down the signin branch: it queued
+    # e_magic_link, never executed the guard it names, and passed with
+    # resend_link deleted outright.
+    uid = make_user("nodupes@example.test", email_verified=False)
     query(
         "INSERT INTO email_jobs (user_id, template, scheduled_at) VALUES (%s, 'e1_confirm', now())",
         (uid,),
     )
 
+    # try/finally, not a bare close. resend_link takes a row lock; an exception
+    # escaping here left the connection open holding it, and the next test's
+    # TRUNCATE blocked forever — a code defect surfacing as a hung suite rather
+    # than as a failure. That is how the NameError this file caught was found.
     conn = psycopg2.connect(PGURL)
     conn.autocommit = False
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            "SELECT waitlist_id, email, email_verified, email_status FROM waitlist_users "
-            "WHERE waitlist_id = %s",
-            (uid,),
-        )
-        user = cur.fetchone()
-        for _ in range(3):
-            resend_link(cur, user, "test", lambda *a, **k: None)
-    conn.commit()
-    conn.close()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT waitlist_id, email, email_verified, email_status FROM waitlist_users "
+                "WHERE waitlist_id = %s",
+                (uid,),
+            )
+            user = cur.fetchone()
+            outcomes = [resend_link(cur, user, "test", lambda *a, **k: None) for _ in range(3)]
+        conn.commit()
+    finally:
+        conn.close()
 
+    assert outcomes == ["confirm", "confirm", "confirm"], (
+        f"the confirm branch is what this test is about; it took {outcomes}"
+    )
     pending = query(
         "SELECT count(*) FROM email_jobs WHERE user_id = %s AND template = 'e1_confirm' "
         "AND status = 'pending'",
         (uid,),
     )[0][0]
     assert pending == 1, f"{pending} pending confirm mails — one of them will ship a dead link"
+    assert query(
+        "SELECT count(*) FROM email_jobs WHERE user_id = %s AND template = 'e_magic_link'",
+        (uid,),
+    )[0][0] == 0, "an unverified user must not be sent a sign-in link"

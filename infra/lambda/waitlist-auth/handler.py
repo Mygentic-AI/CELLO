@@ -386,14 +386,14 @@ def _page(status, heading, sentence, origin, *, resend_token=None, front_door=Fa
         "body": (
             '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f"<title>{esc_attr(heading)} | CELLO</title></head>"
+            f"<title>{esc(heading)} | CELLO</title></head>"
             '<body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\','
             "Roboto,sans-serif;background:#f5f5f5;display:flex;align-items:center;"
             'justify-content:center;min-height:100vh;">'
             '<div style="background:#fff;border-radius:16px;padding:48px 40px;max-width:460px;'
             'text-align:center;">'
-            f'<h1 style="margin:0 0 12px;font-size:24px;color:#111;">{heading}</h1>'
-            f'<p style="margin:0 0 28px;font-size:16px;color:#666;line-height:1.6;">{esc_attr(sentence)}</p>'
+            f'<h1 style="margin:0 0 12px;font-size:24px;color:#111;">{esc(heading)}</h1>'
+            f'<p style="margin:0 0 28px;font-size:16px;color:#666;line-height:1.6;">{esc(sentence)}</p>'
             f"{action}</div></body></html>"
         ),
     }
@@ -652,25 +652,24 @@ def handle_verify(params, origin, correlation_id):
                 if just_verified:
                     award_referrer_for(cur, user_id, correlation_id, log)
 
-                    # And a premium invite becomes an actual admission here, for
-                    # the same reason. The claim was recorded at signup and the
-                    # code burned there; skipping the queue waits on proof of
-                    # the mailbox, exactly as the referrer's points do.
-                    cur.execute(
-                        """
-                        UPDATE waitlist_users
-                        SET status = 'admitted', admitted_at = now()
-                        WHERE waitlist_id = %s AND premium_referred AND status = 'waiting'
-                        """,
-                        (user_id,),
-                    )
-                    if cur.rowcount:
-                        log(
-                            "waitlist.premium.admitted",
-                            correlation_id,
-                            waitlistId=str(user_id),
-                            reason="email_verified",
-                        )
+
+                # A PREMIUM INVITE IS NOT ADMITTED HERE, and deliberately not.
+                #
+                # Setting status='admitted' looks like the fast door and grants
+                # nothing: `waitlist_tokens` is minted in exactly one place —
+                # the wave assembly — atomically with the invitation email, and
+                # the Telegram gate burns a token and never reads `status`. So
+                # an admission written here is a label. The holder gets no
+                # invite, no token, and is refused at the gate.
+                #
+                # Leaving them at 'waiting' with email_verified and
+                # premium_referred puts them in the wave's PREMIUM COHORT, which
+                # is selected first and up to the full capacity — and which was
+                # unreachable while this flipped the status in the same
+                # transaction that set email_verified, so no other transaction
+                # could ever observe the combination it requires. They skip the
+                # queue, which is what the invite buys, and they get a token and
+                # a mail, which is what makes it real.
 
             raw, expires_at = mint_session(cur, user_id)
             log(
@@ -978,8 +977,19 @@ def _confirm_page(user_id, scope):
     )
 
 
-def esc_attr(value):
+def esc(value):
+    """Escape for HTML, in an attribute or in element content.
+
+    `>` is deliberately left alone: it is only meaningful after an unescaped
+    `<`, and `<` is escaped here. Named `esc` rather than `esc_attr` because it
+    is used for both, and a name that says "attribute" is why the heading went
+    unescaped while the sentence beside it did not.
+    """
     return str(value).replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+
+
+# Kept as an alias: the unsubscribe pages call it by the old name.
+esc_attr = esc
 
 
 def _unsubscribed_page(scope):

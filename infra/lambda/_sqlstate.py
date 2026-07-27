@@ -40,11 +40,22 @@ def classify(err):
             # sends an operator to the VPC, the security groups and the subnet
             # routing, none of which are broken.
             detail = str(err).lower()
-            if (
-                "password authentication failed" in detail
-                or "no password supplied" in detail
-                or "does not exist" in detail  # role dropped or renamed
-            ):
+            if "database" in detail and "does not exist" in detail:
+                # PORTAL_DB_NAME is wrong, or the portal database has not been
+                # created in this region yet. Nothing to do with credentials —
+                # and an alarm on the credential code would page somebody about
+                # an RDS rotation that never happened.
+                return (
+                    503,
+                    "database_not_found",
+                    "The waitlist database this function is pointed at does not exist. This is a "
+                    "configuration problem on our side.",
+                )
+            if "password authentication failed" in detail or "no password supplied" in detail:
+                # A missing ROLE lands here too, not on a "does not exist"
+                # message: scram refuses an unknown role with the same
+                # "password authentication failed" text, deliberately, so the
+                # server does not confirm which usernames are real.
                 return (
                     503,
                     "database_credential_rejected",

@@ -26,6 +26,13 @@ import os
 LINK_LIMIT = int(os.environ.get("AUTH_RATE_LIMIT_MAX", "5"))
 LINK_WINDOW_MINUTES = int(os.environ.get("AUTH_RATE_LIMIT_WINDOW_MINUTES", "15"))
 
+# Read from the SAME environment the dispatcher reads, so the "is a mail already
+# coming?" question below is answered with the dispatcher's own definition of a
+# claimable job. Duplicating the numbers instead of the source is how the two
+# would drift into disagreeing about whether a job is alive.
+MAX_ATTEMPTS = int(os.environ.get("EMAIL_MAX_ATTEMPTS", "5"))
+RECLAIM_AFTER_MINUTES = int(os.environ.get("EMAIL_RECLAIM_AFTER_MINUTES", "15"))
+
 
 def resend_link(cur, user, correlation_id, log):
     """Queue the right mail for `user`. Returns what was sent.
@@ -53,6 +60,20 @@ def resend_link(cur, user, correlation_id, log):
     """
     user_id = user["waitlist_id"]
     kind = "signin" if user["email_verified"] else "confirm"
+    template = "e_magic_link" if kind == "signin" else "e1_confirm"
+
+    # SERIALISE ON THE USER ROW. Everything below is read-then-write — the rate
+    # limit, the token burn, and the "is a mail already coming?" check — and two
+    # concurrent callers (a double-submitted form, a resend and a signup racing)
+    # would both read the pre-state and both act on it. Verified reachable: two
+    # barrier-synchronised calls queued two confirm jobs, which is precisely the
+    # dead-link-in-a-sent-mail case the check below exists to prevent.
+    #
+    # The user row is the natural lock: it is the thing all of this is about,
+    # every caller has already selected it, and taking it here rather than in
+    # each caller keeps the ordering in one place where a deadlock cannot be
+    # introduced by a new call site.
+    cur.execute("SELECT 1 FROM waitlist_users WHERE waitlist_id = %s FOR UPDATE", (user_id,))
 
     if user["email_status"] != "active":
         log(
@@ -63,8 +84,54 @@ def resend_link(cur, user, correlation_id, log):
         )
         return "suppressed"
 
+    # ONE CLAIMABLE JOB PER TEMPLATE, per person. Two e1_confirm jobs draining
+    # in the same batch is not hypothetical — the budget allows several requests
+    # per window, and BATCH_SIZE is 25 — and the dispatcher mints the confirm
+    # token at SEND time, burning its predecessors as it goes. So job one mints
+    # a token, job two burns it and mints another, and BOTH mails go out: the
+    # first carries a link that was dead before it left, and clicking it tells
+    # the person "you've already used that link", which they have not. The
+    # system lying about what they did is worse than the duplicate mail.
+    #
+    # Skipping is also the honest answer: a mail for this person IS coming, so
+    # "check your inbox" stays true.
+    #
+    # CLAIMABLE, not `status = 'pending'`. A job stranded in 'sending' is still
+    # inside its reclaim window and the dispatcher will pick it up again, so it
+    # counts — and the outage that strands the first job is exactly the one that
+    # stops the second from draining, which is when they would co-exist. A job
+    # past MAX_ATTEMPTS is the opposite case: unclaimable forever, so treating
+    # it as pending would gag the remedy permanently while this function kept
+    # answering "check your inbox".
+    cur.execute(
+        """
+        SELECT 1 FROM email_jobs
+        WHERE user_id = %s AND template = %s
+          AND attempts < %s
+          AND (
+                status = 'pending'
+                OR (status = 'sending' AND sent_at > now() - make_interval(mins => %s))
+              )
+        """,
+        (user_id, template, MAX_ATTEMPTS, RECLAIM_AFTER_MINUTES),
+    )
+    if cur.fetchone() is not None:
+        log(
+            "waitlist.resend.already_pending",
+            correlation_id,
+            waitlistId=str(user_id),
+            template=template,
+        )
+        return kind
+
     # Count PRIOR requests, then record this one. Inserting first makes the
     # current request count against itself, so a limit of N sends only N-1.
+    #
+    # Reached only when a mail is actually going to be queued — the
+    # already-coming check above returns first — so the budget is spent on
+    # SENDS. Counting the repeat clicks instead let five taps of one button
+    # burn a whole window while queueing a single mail, and then refuse the
+    # person a genuinely new link for fifteen minutes.
     cur.execute(
         """
         SELECT count(*) AS n FROM auth_link_requests
@@ -103,36 +170,7 @@ def resend_link(cur, user, correlation_id, log):
             "VALUES (%s, 'magic_link', now() + interval '15 minutes')",
             (user_id,),
         )
-        template = "e_magic_link"
-    else:
-        template = "e1_confirm"
 
-    # ONE PENDING JOB PER TEMPLATE, per person. Two e1_confirm jobs draining in
-    # the same batch is not hypothetical — the budget allows several requests
-    # per window — and the dispatcher mints the confirm token at SEND time and
-    # burns its predecessors as it does. So job one mints a token, job two burns
-    # it and mints another, and BOTH mails go out: the first carries a link that
-    # was dead before it left, and clicking it tells the person "you've already
-    # used that link", which they have not. The system lying about what they did
-    # is worse than the duplicate mail.
-    #
-    # Skipping is also the honest answer: a mail for this person IS pending, so
-    # "check your inbox" stays true.
-    cur.execute(
-        """
-        SELECT 1 FROM email_jobs
-        WHERE user_id = %s AND template = %s AND status = 'pending'
-        """,
-        (user_id, template),
-    )
-    if cur.fetchone() is not None:
-        log(
-            "waitlist.resend.already_pending",
-            correlation_id,
-            waitlistId=str(user_id),
-            template=template,
-        )
-        return kind
 
     cur.execute(
         "INSERT INTO email_jobs (user_id, template, scheduled_at) VALUES (%s, %s, now())",

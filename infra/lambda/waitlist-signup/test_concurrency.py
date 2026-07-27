@@ -19,6 +19,7 @@ import uuid
 from pathlib import Path
 
 import psycopg2
+import psycopg2.extras
 import pytest
 
 from waitlist_testdb import PGURL, query, load_lambda
@@ -260,3 +261,46 @@ def test_two_simultaneous_dispatcher_runs_send_each_email_once(database):
         f"each address exactly once; got {sorted(all_sent)}"
     )
     assert len(all_sent) == len(set(all_sent)), "no address may receive a duplicate"
+
+
+# ── The resend guard under two simultaneous callers ───────────────────────────
+
+
+def test_two_simultaneous_resends_queue_one_mail(database):
+    """A read-then-write guard is not a guard.
+
+    Both callers read "nothing pending" and both insert, so two e1_confirm jobs
+    land in one batch — and the dispatcher mints the confirm token at SEND time,
+    burning predecessors as it goes. Job one's mail ships carrying a token job
+    two already killed, and clicking it says "you've already used that link",
+    which the person has not. Reachable from a double-submitted form.
+    """
+    uid = make_user("doubleclick@example.test")
+
+    def resend():
+        def inner():
+            from _resend import resend_link
+
+            conn = psycopg2.connect(PGURL)
+            conn.autocommit = False
+            try:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT waitlist_id, email, email_verified, email_status "
+                        "FROM waitlist_users WHERE waitlist_id = %s",
+                        (uid,),
+                    )
+                    outcome = resend_link(cur, cur.fetchone(), "race", lambda *a, **k: None)
+                conn.commit()
+                return outcome
+            finally:
+                conn.close()
+
+        return inner
+
+    run_both(resend(), resend())
+
+    queued = query(
+        "SELECT count(*) FROM email_jobs WHERE user_id = %s AND template = 'e1_confirm'", (uid,)
+    )[0][0]
+    assert queued == 1, f"{queued} confirm mails queued — one of them ships a dead link"

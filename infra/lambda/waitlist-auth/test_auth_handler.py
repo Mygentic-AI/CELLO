@@ -1052,13 +1052,21 @@ def test_the_click_that_makes_you_a_member_says_so(auth):
     assert "welcome" not in second["headers"]["Location"]
 
 
-def test_a_premium_invite_admits_only_once_the_address_is_confirmed(auth):
-    """Recorded at signup, granted at the click. Admitting a typed address
-    skips the queue on no proof of a mailbox — someone could spend a scarce
-    invite on a stranger's address and admit them."""
+def test_a_confirmed_premium_claimant_lands_in_the_wave_premium_cohort(auth):
+    """Not admitted here — QUEUED FOR THE FAST DOOR.
+
+    status='admitted' written at confirmation grants nothing: waitlist_tokens is
+    minted only by the wave, atomically with the invitation mail, and the
+    Telegram gate burns a token and never reads status. Writing the label leaves
+    the holder with no invite, no token, and a refusal at the gate.
+
+    What the wave's premium cohort actually requires is
+    `status='waiting' AND email_verified AND premium_referred` — a combination
+    no transaction could observe while confirmation flipped the status and set
+    email_verified together.
+    """
     uid = make_user("fastdoor@example.test")
     query("UPDATE waitlist_users SET premium_referred = true WHERE waitlist_id = %s", (uid,))
-    assert query("SELECT status FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] == "waiting"
 
     token = query(
         "INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at) "
@@ -1066,20 +1074,30 @@ def test_a_premium_invite_admits_only_once_the_address_is_confirmed(auth):
         (uid,),
     )[0][0]
     result, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
-
     assert result["statusCode"] == 302
+
     row = query(
-        "SELECT status, admitted_at FROM waitlist_users WHERE waitlist_id = %s", (uid,)
+        "SELECT status, email_verified, premium_referred FROM waitlist_users WHERE waitlist_id = %s",
+        (uid,),
     )[0]
-    assert row[0] == "admitted"
-    assert row[1] is not None, "admitted_at is what the wave reporting counts on"
+    assert row == ("waiting", True, True), (
+        "this exact triple is the wave's premium cohort predicate; anything else "
+        "silently drops them out of the fast door"
+    )
+    assert query(
+        "SELECT count(*) FROM waitlist_tokens WHERE waitlist_user_id = %s", (uid,)
+    )[0][0] == 0, "only the wave mints a token, together with the invitation mail"
 
 
-def test_confirming_without_a_premium_invite_does_not_admit(auth):
-    """The UPDATE is guarded on premium_referred. Without that guard every
-    confirmation would admit its user and the waves would have nobody left to
-    admit."""
-    uid = make_user("ordinary@example.test")
+def test_the_premium_cohort_query_actually_selects_a_confirmed_claimant(auth):
+    """The predicate above, run as the wave runs it.
+
+    Asserting the three columns is not enough on its own — it would still pass
+    if the wave's own query drifted. This runs the wave's cohort SQL and
+    requires the user to come back from it.
+    """
+    uid = make_user("cohort@example.test")
+    query("UPDATE waitlist_users SET premium_referred = true WHERE waitlist_id = %s", (uid,))
     token = query(
         "INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at) "
         "VALUES (%s, 'email_verify', now() + interval '24 hours') RETURNING token",
@@ -1087,4 +1105,56 @@ def test_confirming_without_a_premium_invite_does_not_admit(auth):
     )[0][0]
     call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
 
-    assert query("SELECT status FROM waitlist_users WHERE waitlist_id = %s", (uid,))[0][0] == "waiting"
+    selected = query(
+        """
+        SELECT waitlist_id FROM waitlist_users
+        WHERE status = 'waiting' AND email_verified AND premium_referred
+          AND NOT EXISTS (
+              SELECT 1 FROM waitlist_tokens t
+              WHERE t.waitlist_user_id = waitlist_users.waitlist_id
+                AND t.used_at IS NULL AND t.retired_at IS NULL
+          )
+        """
+    )
+    assert [r[0] for r in selected] == [uid], "the next wave must be able to see them"
+
+
+# `test_confirming_without_a_premium_invite_does_not_admit` was deleted with its
+# subject. Confirmation no longer writes `status` at all, so nothing it could
+# assert about an ordinary user's status is a property of this code — it would
+# have passed against a handler with the whole branch removed.
+
+
+
+def test_five_rapid_clicks_send_one_mail_and_say_so(auth):
+    """The COMMON case, and the one the rate-limit tests do not describe.
+
+    Those drain the queue between calls, which is what the 60-second dispatcher
+    does over minutes — not what a person does in ten seconds. Clicking the
+    resend button five times in a row hits the one-claimable-job guard long
+    before the rate limit, so the honest answer to clicks two through five is
+    "a mail is already coming", not five mails and not a refusal.
+    """
+    uid = make_user("impatient@example.test")
+    token = expired_token(uid, kind="email_verify")
+
+    pages = [
+        call(auth, "POST", "/waitlist/auth/resend", form={"token": str(token)})[1]["html"]
+        for _ in range(5)
+    ]
+
+    assert query(
+        "SELECT count(*) FROM email_jobs WHERE user_id = %s AND template = 'e1_confirm'", (uid,)
+    )[0][0] == 1, "five clicks must not become five mails"
+
+    # And nobody is refused: a mail genuinely is on its way, so every one of
+    # those five is told the truth.
+    assert all("check your inbox" in page.lower() for page in pages), (
+        "the guard must not read as a rate-limit refusal — nothing was declined"
+    )
+
+    # The rate limit is untouched by the repeat clicks, so the budget is still
+    # there for a genuinely new request once this mail has gone out.
+    assert query(
+        "SELECT count(*) FROM auth_link_requests WHERE lower(email_requested) = 'impatient@example.test'"
+    )[0][0] == 1

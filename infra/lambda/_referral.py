@@ -76,6 +76,15 @@ def award_referrer_for(cur, referred_user_id, correlation_id, log):
         cur.execute("ROLLBACK TO SAVEPOINT referral_points")
         # The cause survives into the log. "check violation" alone would send an
         # operator hunting a schema bug rather than reading a working cap.
+        # NOT LOST, and this is worth knowing before anyone raises the cap.
+        # The payout is attempted once, on the click that makes the member, so a
+        # referrer who is at their ceiling that day forfeits it — there is no
+        # retry on later sign-ins, because retrying meant a row lock inside the
+        # session transaction and a WARN on every sign-in forever.
+        #
+        # The `referrals` row survives regardless, and it is the record that
+        # this is owed: a referral with no matching `points_ledger` entry IS the
+        # unpaid set, findable by one join whenever the cap moves.
         log(
             "waitlist.referral.points_capped",
             correlation_id,
