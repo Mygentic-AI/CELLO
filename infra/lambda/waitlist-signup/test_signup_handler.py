@@ -23,6 +23,7 @@ import psycopg2
 import pytest
 
 
+from _resend import LINK_LIMIT
 from waitlist_testdb import PGURL, query, load_lambda  # fixtures come from conftest.py alongside it
 
 
@@ -351,21 +352,40 @@ def test_a_confirmed_duplicate_gets_a_sign_in_link_not_a_second_confirm(handler)
     )[0][0] == 1
 
 
-def test_the_resend_path_is_rate_limited_on_the_address(handler):
-    """Otherwise the form is an open mail cannon: anyone can point it at an
-    address they do not own and send it a message per request, from our domain,
-    until the sending reputation is gone."""
+def test_the_resend_path_is_rate_limited_and_says_when_it_refuses(handler):
+    """Two things at once.
+
+    Without a limit this form is an open mail cannon: point it at an address you
+    do not own and send it a message per request, from our domain, until the
+    sending reputation is gone. And a refusal must be reported AS a refusal —
+    answering "check your inbox" to somebody we just declined to email leaves
+    them refreshing an empty mailbox, which is the exact stranding this whole
+    branch exists to remove.
+    """
     invoke(handler, signup_body("floody@example.test"))
-    for _ in range(8):
+    outcomes = []
+    for _ in range(LINK_LIMIT + 4):
         status, body = invoke(handler, signup_body("floody@example.test"))
         assert status == 200, body
+        outcomes.append(body["sent"])
 
     sent = query(
         "SELECT count(*) FROM email_jobs j JOIN waitlist_users u ON u.waitlist_id = j.user_id "
         "WHERE u.email = 'floody@example.test' AND j.template = 'e1_confirm'"
     )[0][0]
-    # One from the signup itself, then at most the per-window allowance.
-    assert sent <= 1 + handler.RESEND_LIMIT, f"{sent} confirm mails queued for one address"
+    # One from the signup itself, then exactly the per-window allowance.
+    assert sent == 1 + LINK_LIMIT, f"{sent} confirm mails queued for one address"
+
+    assert outcomes[0] == "confirm"
+    assert outcomes[-1] == "throttled", (
+        "a refusal reported as a send is a promise of mail that will not arrive"
+    )
+    # And the refusals were not recorded, so clicking cannot keep its own window
+    # alive and a third party cannot burn somebody else's budget.
+    logged = query(
+        "SELECT count(*) FROM auth_link_requests WHERE lower(email_requested) = 'floody@example.test'"
+    )[0][0]
+    assert logged == LINK_LIMIT, f"{logged} rows for {LINK_LIMIT} sends"
 
 
 def test_a_suppressed_address_is_never_re_mailed_by_the_form(handler):

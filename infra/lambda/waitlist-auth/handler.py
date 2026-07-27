@@ -34,7 +34,7 @@ import psycopg2.extras
 
 from _session import COOKIE_NAME, cookie_from, hash_token, read_session, revoke_all_for_user
 from _referral import award_referrer_for
-from _resend import resend_link
+from _resend import LINK_LIMIT, LINK_WINDOW_MINUTES, resend_link
 from _sqlstate import classify
 
 # Kept only so an explicit override still works. The live value is resolved
@@ -53,8 +53,12 @@ RESPONSE_FLOOR_MS = int(os.environ.get("AUTH_RESPONSE_FLOOR_MS", "400"))
 
 # Per address, per window. Counted on the address REQUESTED regardless of whether
 # it exists, so the throttle itself cannot be used to probe.
-RATE_LIMIT_MAX = int(os.environ.get("AUTH_RATE_LIMIT_MAX", "5"))
-RATE_LIMIT_WINDOW_MINUTES = int(os.environ.get("AUTH_RATE_LIMIT_WINDOW_MINUTES", "15"))
+#
+# THE SAME NUMBERS the resend door uses, imported rather than restated: both
+# count the same `auth_link_requests` rows, and two limits over one counter
+# meant traffic through one door silently consumed the other's budget.
+RATE_LIMIT_MAX = LINK_LIMIT
+RATE_LIMIT_WINDOW_MINUTES = LINK_WINDOW_MINUTES
 
 ALLOWED_ORIGINS = frozenset(
     {"https://cello.mygentic.ai", "https://www.cello.mygentic.ai", "http://localhost:3000"}
@@ -100,7 +104,13 @@ def resp(status, body, origin, extra_headers=None):
     headers = cors_headers(origin)
     if extra_headers:
         headers.update(extra_headers)
-    return {"statusCode": status, "headers": headers, "body": json.dumps(body)}
+    # ensure_ascii=False so an em dash in a real sentence stays an em dash
+    # rather than arriving as a literal \u2014.
+    return {
+        "statusCode": status,
+        "headers": headers,
+        "body": json.dumps(body, ensure_ascii=False),
+    }
 
 
 # ── Sessions ──────────────────────────────────────────────────────────────────
@@ -325,6 +335,15 @@ def _issue_link_if_eligible(email, correlation_id):
 # result of that click, so it has to be a page.
 
 
+# The routes a PERSON lands on, as opposed to the ones script calls. Anything
+# here answers in HTML on every path, including its failures.
+BROWSER_ROUTES = ("/auth/verify", "/auth/resend", "/unsubscribe")
+
+
+def _is_browser_route(path):
+    return any(path.endswith(suffix) for suffix in BROWSER_ROUTES)
+
+
 def _page(status, heading, sentence, origin, *, resend_token=None, front_door=False):
     """One shell for every dead-link outcome, with at most one thing to do.
 
@@ -376,9 +395,14 @@ def handle_resend(params, origin, correlation_id):
 
     Takes a TOKEN, not an address, which is what makes it safe to answer without
     a session: the caller has already demonstrated possession of something we
-    issued to that mailbox. It is not an enumeration oracle by construction —
-    and must not become one by answering differently for a token that exists and
-    one that does not.
+    issued to that mailbox.
+
+    Body, status and headers are identical for a token we hold and one we do
+    not. The TIMING is not — a known token costs several queries and a commit —
+    and there is deliberately no floor here, unlike /auth/request. The input is
+    a server-minted UUID rather than an address anyone can choose, so a stopwatch
+    tells an attacker only that a UUID they cannot guess exists. Adding a floor
+    would buy nothing and slow the one path a real person is waiting on.
     """
     token = (params or {}).get("token")
     inbox = _page(
@@ -429,6 +453,18 @@ def handle_resend(params, origin, correlation_id):
             "earlier CELLO email and we'll put you back on.",
             origin,
         )
+    if sent == "throttled":
+        # Nothing was sent, so nothing may claim otherwise. Saying "check your
+        # inbox" to somebody we just refused is how a person ends up refreshing
+        # an empty mailbox — and the refusal is not recorded, so waiting really
+        # does clear it.
+        return _page(
+            200,
+            "We've sent you a few already.",
+            f"There are recent links in your inbox — check your spam folder for them. "
+            f"You can ask for another in about {LINK_WINDOW_MINUTES} minutes.",
+            origin,
+        )
     return inbox
 
 
@@ -438,7 +474,18 @@ def handle_resend(params, origin, correlation_id):
 def handle_verify(params, origin, correlation_id):
     token = (params or {}).get("token")
     if not token:
-        raise AuthError(400, "missing_token", "This link is missing its token.")
+        # Reached by a browser, so it gets a page. An email client that wraps
+        # and truncates a long URL drops the query string first — which is the
+        # single most likely way to arrive here — and answering that with the
+        # API's JSON envelope leaves the person holding a blob.
+        return _page(
+            400,
+            "That link came through incomplete.",
+            "Email clients sometimes cut long links in half. Starting again from "
+            "the waitlist page takes one field.",
+            origin,
+            front_door=True,
+        )
 
     conn = connect()
     try:
@@ -973,6 +1020,8 @@ def lambda_handler(event, context):
             code=err.code,
             status=err.status,
         )
+        if _is_browser_route(path):
+            return _page(err.status, "That didn't work.", err.message, origin)
         return resp(err.status, {"error": err.code, "message": err.message}, origin)
 
     except psycopg2.Error as err:
@@ -984,4 +1033,10 @@ def lambda_handler(event, context):
             detail=str(err).strip(),
         )
         status, code, message = classify(err)
+        # /auth/verify, /auth/resend and /unsubscribe are reached by a person
+        # clicking something, so a database fault on one of them must be a page
+        # too. The sentence classify() writes is good; delivering it as a JSON
+        # envelope to somebody who pressed a button is not.
+        if _is_browser_route(path):
+            return _page(status, "Something went wrong on our side.", message, origin)
         return resp(status, {"error": code, "message": message}, origin)

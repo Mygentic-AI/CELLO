@@ -31,7 +31,7 @@ import psycopg2
 from _dburl import portal_database_url
 import psycopg2.extras
 
-from _resend import RESEND_LIMIT, resend_link
+from _resend import resend_link
 from _sqlstate import classify
 
 # ── Configuration ─────────────────────────────────────────────────────────────

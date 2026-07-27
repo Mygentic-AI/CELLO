@@ -279,7 +279,21 @@ def premium_codes(cur, user_id):
 
 
 def mint_verify_token(cur, user_id):
-    """A single-use 24-hour credential for the E1 confirm link."""
+    """A single-use 24-hour credential for the E1 confirm link.
+
+    Burns this user's earlier unused confirm tokens first. e1_confirm was once
+    enqueued exactly once, at signup, so exactly one could ever be live; now
+    that a returning visitor can ask for another, N jobs would otherwise mint N
+    live 24-hour credentials, each of which creates a fresh 30-day session on
+    click. The magic-link path has always burned its predecessors — same
+    argument, and the burn belongs HERE rather than at the point the job is
+    queued, because this is where the credential comes into existence.
+    """
+    cur.execute(
+        "UPDATE auth_tokens SET used_at = now() "
+        "WHERE waitlist_user_id = %s AND kind = 'email_verify' AND used_at IS NULL",
+        (user_id,),
+    )
     cur.execute(
         """
         INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at)

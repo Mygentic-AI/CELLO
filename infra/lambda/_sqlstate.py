@@ -100,6 +100,20 @@ def classify(err):
             "The waitlist is still starting up on our side. Give it a minute — we are alerted either way.",
         )
 
+    if cls == "28":
+        # Invalid authorization — 28P01 password authentication failed above
+        # all. RDS rotates the portal credential on a schedule, and on
+        # 2026-07-26 it did: every waitlist function was still holding the 19
+        # July password and the whole list went down. Falling through to the
+        # generic branch called that "the database rejected the request", which
+        # sends an operator to read the query. Nothing is wrong with the query.
+        return (
+            503,
+            "database_credential_rejected",
+            "We could not sign in to the waitlist database. This is a credential on our "
+            "side, not anything you did.",
+        )
+
     if cls == "40":
         # Serialization failure or deadlock — genuinely retryable, unlike 42.
         return (

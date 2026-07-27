@@ -143,8 +143,9 @@ deploy_rds_rotation_to_region() {
 
 # ── M11 waitlist Lambdas ─────────────────────────────────────────────────────
 #
-# Twelve functions sharing three modules that live one directory up
-# (_logging.py, _session.py, _sqlstate.py). Nothing here is a hand-maintained
+# Thirteen functions sharing the `_*.py` modules that live one directory up.
+# The count is deliberately not written down here: it has been wrong twice.
+# Nothing here is a hand-maintained
 # file list: the sources are globbed, and after staging we ASSERT that every
 # local import the staged code makes is present in the archive. A hand list is
 # how a new shared module gets forgotten and the function ImportErrors on its

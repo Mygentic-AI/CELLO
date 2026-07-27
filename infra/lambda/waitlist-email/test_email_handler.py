@@ -1123,3 +1123,31 @@ def test_the_fake_refuses_a_parameter_the_real_api_would_refuse(mailer):
             RawMessage={"Data": b"x"},
             Headers=[{"Name": "X", "Value": "y"}],
         )
+
+
+def test_minting_a_confirm_token_burns_its_predecessors(database):
+    """e1_confirm used to be enqueued exactly once, at signup, so exactly one
+    24-hour credential could be live. It is resendable now, and each job mints
+    at SEND time — so without a burn here, N jobs leave N live credentials for
+    one person, each creating a fresh 30-day session on click.
+
+    Asserted against the mint, not against the resend that queues it: the burn
+    belongs where the credential comes into existence, or the next caller of
+    this function reintroduces the same defect.
+    """
+    mod = load_lambda(Path(__file__).parent, "email_mint_burn")
+    uid = make_user("minted@example.test")
+
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        tokens = [mod.mint_verify_token(cur, uid) for _ in range(3)]
+    conn.close()
+
+    live = query(
+        "SELECT token FROM auth_tokens WHERE waitlist_user_id = %s "
+        "AND kind = 'email_verify' AND used_at IS NULL",
+        (uid,),
+    )
+    assert len(live) == 1, f"{len(live)} live confirm credentials for one person"
+    assert live[0][0] == tokens[-1], "the survivor must be the newest one"

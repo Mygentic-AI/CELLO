@@ -28,3 +28,9 @@ packages/directory/test-sigterm-*.mjs
 # Hibernate/wake operational files (live state, not source)
 infra/hibernation-state.json
 infra/hibernation-snapshots/
+
+# Python bytecode. ~30 of these were committed by accident on 2026-07-27;
+# they never shipped (deploy-lambdas.sh stages *.py only) but they turned every
+# test run into a dirty tree.
+__pycache__/
+*.pyc

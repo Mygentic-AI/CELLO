@@ -214,6 +214,13 @@ def test_a_valid_link_burns_the_token_and_sets_a_session_cookie(auth):
     assert result["headers"]["Location"].startswith("https://cello.mygentic.ai/status")
     cookie = result["headers"]["Set-Cookie"]
     assert "HttpOnly" in cookie and "Secure" in cookie and "SameSite=Lax" in cookie
+
+    # The payload-2.0 `cookies` field is the DOCUMENTED carrier, and it is
+    # emitted alongside the header rather than instead of it. Both are honoured
+    # and the browser takes the last one, which is safe only while the value is
+    # deterministic — assert they are byte-identical, so a future per-call nonce
+    # in session_cookie() fails here rather than silently picking a winner.
+    assert result["cookies"] == [cookie]
     assert query("SELECT used_at IS NOT NULL FROM auth_tokens WHERE token = %s", (token,))[0][0]
 
 
@@ -325,22 +332,72 @@ def test_resending_for_a_confirmed_user_sends_a_sign_in_link_with_a_token(auth):
     )[0][0] == 1
 
 
-def test_resending_is_rate_limited_and_never_re_mails_a_suppressed_address(auth):
+def test_a_suppressed_address_is_told_the_truth_not_pointed_at_an_empty_inbox(auth):
     unsub = make_user("quit@example.test")
     query("UPDATE waitlist_users SET email_status = 'unsubscribed' WHERE waitlist_id = %s", (unsub,))
     token = expired_token(unsub)
 
     result, body = call(auth, "POST", "/waitlist/auth/resend", form={"token": str(token)})
+
     assert result["statusCode"] == 200
     assert "unsubscrib" in body["html"].lower(), "saying 'check your inbox' here is a lie"
     assert query("SELECT count(*) FROM email_jobs WHERE user_id = %s", (unsub,))[0][0] == 0
 
+
+def test_a_refused_resend_says_it_refused_and_does_not_extend_its_own_window(auth):
+    """Two bugs in one shape.
+
+    Reporting a refusal as a send leaves someone refreshing an empty mailbox —
+    and it is not transient, because the counter counts REQUESTS: if a refused
+    request were recorded, clicking the button would keep the window alive
+    forever and every click would promise a mail.
+    """
     flood = make_user("flood@example.test")
     flood_token = expired_token(flood)
-    for _ in range(9):
-        call(auth, "POST", "/waitlist/auth/resend", form={"token": str(flood_token)})
+
+    pages = [
+        call(auth, "POST", "/waitlist/auth/resend", form={"token": str(flood_token)})[1]["html"]
+        for _ in range(auth.RATE_LIMIT_MAX + 4)
+    ]
+
     queued = query("SELECT count(*) FROM email_jobs WHERE user_id = %s", (flood,))[0][0]
-    assert queued <= 3, f"an open mail cannon: {queued} queued from one dead link"
+    assert queued == auth.RATE_LIMIT_MAX, (
+        f"expected exactly {auth.RATE_LIMIT_MAX} sends, got {queued}"
+    )
+
+    # The page a refused caller sees must NOT be the page a served caller sees.
+    served, refused = pages[0], pages[-1]
+    assert "check your inbox" in served.lower()
+    assert "check your inbox" not in refused.lower(), (
+        "a refusal that says a mail is coming is the stranding this endpoint exists to remove"
+    )
+
+    # And the refusals were not recorded, so the window is genuinely bounded by
+    # the sends rather than by the clicking.
+    logged = query(
+        "SELECT count(*) FROM auth_link_requests WHERE lower(email_requested) = 'flood@example.test'"
+    )[0][0]
+    assert logged == auth.RATE_LIMIT_MAX, (
+        f"{logged} rows for {auth.RATE_LIMIT_MAX} sends — a refused request must not "
+        "keep its own window alive"
+    )
+
+
+def test_a_resent_sign_in_link_replaces_the_old_one_rather_than_adding_to_it(auth):
+    """N requests must not leave N live credentials for one person."""
+    uid = make_user("resender@example.test")
+    query("UPDATE waitlist_users SET email_verified = true WHERE waitlist_id = %s", (uid,))
+    token = expired_token(uid)
+
+    for _ in range(3):
+        call(auth, "POST", "/waitlist/auth/resend", form={"token": str(token)})
+
+    live = query(
+        "SELECT count(*) FROM auth_tokens WHERE waitlist_user_id = %s "
+        "AND kind = 'magic_link' AND used_at IS NULL",
+        (uid,),
+    )[0][0]
+    assert live == 1, f"{live} live sign-in credentials for one person"
 
 
 def test_an_unknown_token_cannot_be_used_to_probe_for_members(auth):
@@ -733,10 +790,13 @@ def test_unsubscribing_twice_is_harmless(auth):
 
 
 def test_a_malformed_unsubscribe_link_says_so(auth):
+    """As a PAGE. Unsubscribe is reached from an email client, so every one of
+    its outcomes is something a person reads, not something script parses."""
     result, body = call(auth, "GET", "/waitlist/unsubscribe", params={"u": "not-a-uuid"})
 
     assert result["statusCode"] == 400
-    assert body["error"] == "invalid_user"
+    assert result["headers"]["Content-Type"].startswith("text/html")
+    assert "not valid" in body["html"].lower()
 
 
 def test_a_get_does_not_unsubscribe_anyone(auth):
