@@ -429,6 +429,16 @@ Resources:
       RouteKey: "POST /waitlist/auth/logout"
       Target: !Sub "integrations/${AuthFunctionIntegration}"
 
+  # The one button on the dead-link page. Posted by a real <form> served from
+  # this same API, so it is same-origin and never preflights — no OPTIONS route
+  # is needed or wanted here.
+  AuthResendRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WaitlistApi
+      RouteKey: "POST /waitlist/auth/resend"
+      Target: !Sub "integrations/${AuthFunctionIntegration}"
+
   UnsubGetRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:

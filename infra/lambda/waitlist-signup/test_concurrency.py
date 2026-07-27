@@ -12,6 +12,7 @@ the JOINT outcome — the thing a sequential test structurally cannot see.
 
 import hashlib
 import json
+import os
 import secrets
 import threading
 import uuid
@@ -52,6 +53,15 @@ def run_both(fn_a, fn_b):
         t.start()
     for t in threads:
         t.join(timeout=30)
+
+    # A thread that DIED is not a race outcome. Captured above so a genuine
+    # lock-contention error can be asserted on, but a caller that never looks at
+    # `results` would otherwise read a crashed thread as "did nothing" — which
+    # is exactly how a broken dispatcher reported itself as "sent no duplicate
+    # emails" and passed.
+    for name, outcome in results.items():
+        if isinstance(outcome, Exception):
+            raise AssertionError(f"thread {name} failed: {outcome!r}") from outcome
     return results
 
 
@@ -189,6 +199,11 @@ def test_two_simultaneous_dispatcher_runs_send_each_email_once(database):
     send the same job twice. Nothing tested it, and deleting the clause left the
     suite green. A duplicate email cannot be recalled."""
     email_dir = Path(__file__).resolve().parents[1] / "waitlist-email"
+    # Set HERE, not inherited. The dispatcher refuses to send without a
+    # configuration set, and this file used to borrow the variable from
+    # waitlist-email's own suite — so running it alone crashed both threads and
+    # the test read that as "no duplicates sent" and passed on the crash.
+    os.environ.setdefault("WAITLIST_SES_CONFIG_SET", "cello-waitlist-test")
 
     users = [make_user(f"race{i}@example.test") for i in range(6)]
     conn = psycopg2.connect(PGURL)

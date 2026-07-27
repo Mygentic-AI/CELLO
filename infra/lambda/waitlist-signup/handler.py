@@ -31,6 +31,7 @@ import psycopg2
 from _dburl import portal_database_url
 import psycopg2.extras
 
+from _resend import RESEND_LIMIT, resend_link
 from _sqlstate import classify
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -394,114 +395,26 @@ def apply_referral(cur, code, new_user_id, correlation_id):
 # ── Signup ────────────────────────────────────────────────────────────────────
 
 
-# Per address, per window, counted in the same `auth_link_requests` table the
-# /auth endpoint uses — so the two doors share one budget and cannot be played
-# off against each other. Without a limit this form is an open mail cannon:
-# anyone can point it at an address they do not own and send a message from our
-# domain per request until the sending reputation is gone.
-RESEND_LIMIT = int(os.environ.get("SIGNUP_RESEND_LIMIT", "3"))
-RESEND_WINDOW_MINUTES = int(os.environ.get("SIGNUP_RESEND_WINDOW_MINUTES", "15"))
-
-
 def resend_for_returning_visitor(cur, email, correlation_id):
-    """Send whatever this returning address actually needs. Returns what was sent.
+    """Look this address up and send it whatever it needs. Returns what was sent.
 
-    Three outcomes, and the caller shows a different sentence for each:
-
-      "confirm"    — signed up, never clicked. Re-send the confirm mail; that IS
-                     the remedy. e1_confirm is enqueued exactly once at signup
-                     and its token lasts 24 hours, so without this path anyone
-                     who missed that window was stranded permanently.
-      "signin"     — already confirmed. Re-sending a confirm mail to a confirmed
-                     user is a dead link dressed as a welcome; what they are
-                     asking for is a way back in.
-      "suppressed" — unsubscribed or bounced. Nothing is sent and nothing is
-                     re-enrolled: suppression is one-way. Saying "check your
-                     inbox" here would be a lie that never resolves, so the
-                     caller tells them plainly instead.
-
-    A throttled request returns the kind that is ALREADY in their inbox rather
-    than a fourth outcome — a link was genuinely sent moments ago, so "check
-    your inbox" remains true and the person is not told to do anything useless.
+    The decision itself lives in _resend so the signup form and the verify
+    endpoint — the same person, outside, by two different doors — cannot drift
+    apart on it.
     """
     cur.execute(
-        "SELECT waitlist_id, email_verified, email_status FROM waitlist_users "
+        "SELECT waitlist_id, email, email_verified, email_status FROM waitlist_users "
         "WHERE lower(email) = lower(%s)",
         (email,),
     )
     user = cur.fetchone()
     if user is None:
         # The INSERT lost its race to a concurrent signup and the row is not
-        # visible in this snapshot. Refusing would be worse than doing nothing:
-        # that signup has already queued this address its confirm mail.
+        # visible in this snapshot. Doing nothing is right: that signup has
+        # already queued this address its confirm mail.
         log("waitlist.signup.duplicate_row_absent", correlation_id, level="WARN")
         return "confirm"
-
-    kind = "signin" if user["email_verified"] else "confirm"
-
-    if user["email_status"] != "active":
-        log(
-            "waitlist.signup.resend_withheld",
-            correlation_id,
-            waitlistId=str(user["waitlist_id"]),
-            reason=f"email_status_{user['email_status']}",
-        )
-        return "suppressed"
-
-    # Count PRIOR requests, then record this one — inserting first makes the
-    # current request count against itself, so a limit of N sends only N-1.
-    cur.execute(
-        """
-        SELECT count(*) AS n FROM auth_link_requests
-        WHERE lower(email_requested) = lower(%s)
-          AND requested_at > now() - interval '%s minutes'
-        """
-        % ("%s", RESEND_WINDOW_MINUTES),
-        (email,),
-    )
-    throttled = cur.fetchone()["n"] >= RESEND_LIMIT
-    cur.execute("INSERT INTO auth_link_requests (email_requested) VALUES (%s)", (email,))
-
-    if throttled:
-        log(
-            "waitlist.signup.resend_withheld",
-            correlation_id,
-            waitlistId=str(user["waitlist_id"]),
-            reason="rate_limited",
-        )
-        return kind
-
-    if kind == "signin":
-        # Burn any earlier unused link first, so N requests do not leave N-1
-        # live credentials for the same person. e_magic_link RENDERS a token it
-        # does not mint — enqueueing the job without one sends a mail with no
-        # link in it.
-        cur.execute(
-            "UPDATE auth_tokens SET used_at = now() "
-            "WHERE waitlist_user_id = %s AND kind = 'magic_link' AND used_at IS NULL",
-            (user["waitlist_id"],),
-        )
-        cur.execute(
-            "INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at) "
-            "VALUES (%s, 'magic_link', now() + interval '15 minutes')",
-            (user["waitlist_id"],),
-        )
-        template = "e_magic_link"
-    else:
-        # e1_confirm mints its own 24-hour token at send time.
-        template = "e1_confirm"
-
-    cur.execute(
-        "INSERT INTO email_jobs (user_id, template, scheduled_at) VALUES (%s, %s, now())",
-        (user["waitlist_id"], template),
-    )
-    log(
-        "waitlist.signup.resent",
-        correlation_id,
-        waitlistId=str(user["waitlist_id"]),
-        template=template,
-    )
-    return kind
+    return resend_link(cur, user, correlation_id, log)
 
 
 def handle_signup(body, origin, correlation_id):

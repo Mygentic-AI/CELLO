@@ -33,6 +33,7 @@ from _dburl import portal_database_url
 import psycopg2.extras
 
 from _session import COOKIE_NAME, cookie_from, hash_token, read_session, revoke_all_for_user
+from _resend import resend_link
 from _sqlstate import classify
 
 # Kept only so an explicit override still works. The live value is resolved
@@ -316,6 +317,120 @@ def _issue_link_if_eligible(email, correlation_id):
 
 
 
+# ── Pages ─────────────────────────────────────────────────────────────────────
+#
+# /auth/verify and /auth/resend are reached by a person clicking something, not
+# by script calling an API. What they return is rendered as the entire visible
+# result of that click, so it has to be a page.
+
+
+def _page(status, heading, sentence, origin, *, resend_token=None, front_door=False):
+    """One shell for every dead-link outcome, with at most one thing to do.
+
+    `resend_token` turns the page into a one-button form. The dead token
+    identifies the user by itself, so nobody is asked to re-key an address we
+    are already holding — which is the whole difference between "expired, start
+    over" and "expired, here you go".
+    """
+    action = ""
+    if resend_token:
+        action = (
+            f'<form method="POST" action="{SITE_API}/auth/resend" style="margin:0;">'
+            f'<input type="hidden" name="token" value="{esc_attr(resend_token)}">'
+            '<button type="submit" style="padding:14px 32px;background:#E0147A;color:#fff;'
+            'border:0;border-radius:100px;font-size:15px;font-weight:600;cursor:pointer;">'
+            "Email me a new link</button></form>"
+        )
+    elif front_door:
+        action = (
+            f'<a href="{SITE}/waitlist" style="display:inline-block;padding:14px 32px;'
+            'background:#E0147A;color:#fff;text-decoration:none;border-radius:100px;'
+            'font-size:15px;font-weight:600;">Go to the waitlist</a>'
+        )
+
+    return {
+        "statusCode": status,
+        "headers": {**cors_headers(origin), "Content-Type": "text/html; charset=utf-8"},
+        "body": (
+            '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            f"<title>{esc_attr(heading)} | CELLO</title></head>"
+            '<body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\','
+            "Roboto,sans-serif;background:#f5f5f5;display:flex;align-items:center;"
+            'justify-content:center;min-height:100vh;">'
+            '<div style="background:#fff;border-radius:16px;padding:48px 40px;max-width:460px;'
+            'text-align:center;">'
+            f'<h1 style="margin:0 0 12px;font-size:24px;color:#111;">{heading}</h1>'
+            f'<p style="margin:0 0 28px;font-size:16px;color:#666;line-height:1.6;">{sentence}</p>'
+            f"{action}</div></body></html>"
+        ),
+    }
+
+
+# ── POST /waitlist/auth/resend ────────────────────────────────────────────────
+
+
+def handle_resend(params, origin, correlation_id):
+    """Send a new link to whoever owns a dead one.
+
+    Takes a TOKEN, not an address, which is what makes it safe to answer without
+    a session: the caller has already demonstrated possession of something we
+    issued to that mailbox. It is not an enumeration oracle by construction —
+    and must not become one by answering differently for a token that exists and
+    one that does not.
+    """
+    token = (params or {}).get("token")
+    inbox = _page(
+        200,
+        "Check your inbox.",
+        "If that link was ours, a new one is on its way. It works once.",
+        origin,
+    )
+    if not token:
+        return inbox
+
+    conn = connect()
+    try:
+        conn.autocommit = False
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT u.waitlist_id, u.email, u.email_verified, u.email_status
+                FROM auth_tokens t
+                JOIN waitlist_users u ON u.waitlist_id = t.waitlist_user_id
+                WHERE t.token = %s
+                """,
+                (token,),
+            )
+            user = cur.fetchone()
+            if user is None:
+                conn.rollback()
+                log("waitlist.auth.resend.unknown_token", correlation_id, level="WARN")
+                return inbox
+
+            sent = resend_link(cur, user, correlation_id, log)
+        conn.commit()
+    except psycopg2.errors.InvalidTextRepresentation:
+        # Not a UUID. Same answer as any other token we do not hold.
+        conn.rollback()
+        return inbox
+    finally:
+        conn.close()
+
+    if sent == "suppressed":
+        # "Check your inbox" here would be a lie that never resolves: this
+        # address asked us to stop, and nothing will arrive however long they
+        # wait. Suppression is one-way and this endpoint does not undo it.
+        return _page(
+            200,
+            "That address has unsubscribed.",
+            "You asked us to stop emailing, so we haven't sent anything. Reply to any "
+            "earlier CELLO email and we'll put you back on.",
+            origin,
+        )
+    return inbox
+
+
 # ── GET /waitlist/auth/verify ─────────────────────────────────────────────────
 
 
@@ -344,20 +459,49 @@ def handle_verify(params, origin, correlation_id):
 
             if row is None:
                 # Distinguish the causes for the USER, who needs to know whether
-                # to click again or request a new link. These are not secrets —
+                # to click again or ask for a new link. These are not secrets —
                 # possession of the token is already assumed.
+                #
+                # ANSWERED AS A PAGE, NOT AS JSON. This route is reached by
+                # clicking a button in an email, so whatever comes back IS the
+                # visible outcome of that click. Returning the API envelope
+                # showed the most likely unhappy-path visitor there is — someone
+                # whose link aged out — a raw {"error":"token_expired"} and no
+                # way forward.
                 cur.execute(
                     "SELECT used_at, expires_at FROM auth_tokens WHERE token = %s", (token,)
                 )
                 existing = cur.fetchone()
                 conn.rollback()
                 if existing is None:
-                    raise AuthError(404, "token_not_found", "This sign-in link is not valid.")
-                if existing["used_at"] is not None:
-                    raise AuthError(
-                        410, "token_already_used", "This sign-in link has already been used."
+                    # No row means nobody to resend to. A button that cannot
+                    # work is worse than none: it turns a dead end into a dead
+                    # end that looks like a way out.
+                    return _page(
+                        404,
+                        "That link isn't valid.",
+                        "It may have been mistyped, or truncated by an email client. "
+                        "Starting again from the waitlist page takes one field.",
+                        origin,
+                        front_door=True,
                     )
-                raise AuthError(410, "token_expired", "This sign-in link has expired.")
+                if existing["used_at"] is not None:
+                    return _page(
+                        410,
+                        "You've already used that link.",
+                        "Each one works once. Send yourself a fresh one and it will take "
+                        "you straight through.",
+                        origin,
+                        resend_token=token,
+                    )
+                return _page(
+                    410,
+                    "That link has expired.",
+                    "Links are short-lived on purpose. Send yourself a new one — "
+                    "we already know who you are, so there is nothing to fill in.",
+                    origin,
+                    resend_token=token,
+                )
 
             user_id = row["waitlist_user_id"]
 
@@ -783,6 +927,13 @@ def lambda_handler(event, context):
 
         if method == "POST" and path.endswith("/auth/logout"):
             return handle_logout(event, origin, correlation_id)
+
+        if method == "POST" and path.endswith("/auth/resend"):
+            # A real <form> posts urlencoded, never JSON.
+            from urllib.parse import parse_qs
+
+            form = {k: v[0] for k, v in parse_qs(event.get("body") or "").items()}
+            return handle_resend(form, origin, correlation_id)
 
         if path.endswith("/unsubscribe") and method in ("GET", "POST"):
             params = event.get("queryStringParameters") or {}

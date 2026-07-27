@@ -9,6 +9,7 @@ membership oracle for the whole list.
 
 import json
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -41,7 +42,7 @@ def make_user(email, email_status="active"):
     return uid
 
 
-def call(auth, method, path, *, body=None, params=None, cookie=None):
+def call(auth, method, path, *, body=None, params=None, cookie=None, form=None):
     """Builds the event API Gateway actually sends, not a convenient shape.
 
     Payload format 2.0 lifts request cookies OUT of `headers` into a top-level
@@ -55,7 +56,15 @@ def call(auth, method, path, *, body=None, params=None, cookie=None):
         "headers": headers,
         "cookies": [cookie] if cookie else [],
         "requestContext": {"http": {"method": method, "path": path}},
-        "body": json.dumps(body) if body is not None else None,
+        # A browser submitting a real <form> sends urlencoded, not JSON. Building
+        # the resend cases as JSON would test a request nothing ever makes.
+        "body": (
+            urllib.parse.urlencode(form)
+            if form is not None
+            else json.dumps(body)
+            if body is not None
+            else None
+        ),
         "queryStringParameters": params,
     }
     result = auth.lambda_handler(event, None)
@@ -208,6 +217,33 @@ def test_a_valid_link_burns_the_token_and_sets_a_session_cookie(auth):
     assert query("SELECT used_at IS NOT NULL FROM auth_tokens WHERE token = %s", (token,))[0][0]
 
 
+# ── A dead link is a page, not a JSON body ────────────────────────────────────
+#
+# /auth/verify is reached by CLICKING A BUTTON IN AN EMAIL. Whatever it returns
+# is rendered by a browser as the whole visible outcome of that click. Every
+# failure here used to answer with the API's JSON envelope, so a person whose
+# link had expired — the single most likely way to arrive at this route on the
+# unhappy path — was shown {"error":"token_expired",...} and had nowhere to go.
+
+
+def expired_token(uid, kind="magic_link"):
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            # Inside the window the DB enforces for the kind (15 minutes for a
+            # magic_link, 24 hours for a confirm link) — expired by wall clock,
+            # not by minting a credential the schema would refuse.
+            "INSERT INTO auth_tokens (waitlist_user_id, kind, created_at, expires_at) "
+            "VALUES (%s, %s, now() - interval '2 hours', now() - interval '1 hour 50 minutes') "
+            "RETURNING token",
+            (uid, kind),
+        )
+        token = cur.fetchone()[0]
+    conn.close()
+    return token
+
+
 def test_the_same_link_cannot_be_used_twice(auth):
     uid = make_user("reuse@example.test")
     request_link(auth, "reuse@example.test")
@@ -217,39 +253,105 @@ def test_the_same_link_cannot_be_used_twice(auth):
     result, body = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
 
     assert result["statusCode"] == 410
-    assert body["error"] == "token_already_used", (
-        "the cause must be named — the user needs to know whether to request a new link"
+    assert result["headers"]["Content-Type"].startswith("text/html")
+    assert "already" in body["html"].lower(), (
+        "the cause must be named — the user needs to know whether to click again "
+        "or ask for a new link"
     )
     assert query("SELECT count(*) FROM waitlist_sessions")[0][0] == 1
 
 
-def test_an_expired_link_names_expiry_rather_than_a_generic_failure(auth):
+def test_an_expired_link_offers_a_new_one_without_retyping_the_address(auth):
+    """The dead token identifies the user. Asking them for their email again is
+    asking them to re-key information we are holding."""
     uid = make_user("stale@example.test")
-    conn = psycopg2.connect(PGURL)
-    conn.autocommit = True
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO auth_tokens (waitlist_user_id, kind, created_at, expires_at) "
-            "VALUES (%s, 'magic_link', now() - interval '1 hour', now() - interval '45 minutes') "
-            "RETURNING token",
-            (uid,),
-        )
-        token = cur.fetchone()[0]
-    conn.close()
+    token = expired_token(uid)
 
     result, body = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
 
     assert result["statusCode"] == 410
-    assert body["error"] == "token_expired"
+    assert result["headers"]["Content-Type"].startswith("text/html")
+    assert "expired" in body["html"].lower()
+    assert "/auth/resend" in body["html"], "one button, no form to fill in"
+    assert str(token) in body["html"]
+    assert 'type="email"' not in body["html"], "the address must not be asked for again"
 
 
-def test_an_unknown_token_is_distinguishable_from_an_expired_one(auth):
+def test_an_unknown_token_says_so_and_does_not_offer_a_resend(auth):
+    """There is nobody to resend TO. A button that cannot work is worse than no
+    button: it turns a dead end into a dead end that looks like a way out."""
     result, body = call(
         auth, "GET", "/waitlist/auth/verify", params={"token": str(uuid.uuid4())}
     )
 
     assert result["statusCode"] == 404
-    assert body["error"] == "token_not_found"
+    assert result["headers"]["Content-Type"].startswith("text/html")
+    assert "/auth/resend" not in body["html"]
+    assert "/waitlist" in body["html"], "the only thing left to offer is the front door"
+
+
+def test_resending_from_an_expired_confirm_link_queues_another_confirm(auth):
+    uid = make_user("neverclicked@example.test")
+    token = expired_token(uid, kind="email_verify")
+
+    result, body = call(
+        auth, "POST", "/waitlist/auth/resend", form={"token": str(token)}
+    )
+
+    assert result["statusCode"] == 200
+    assert "inbox" in body["html"].lower()
+    assert query(
+        "SELECT count(*) FROM email_jobs WHERE user_id = %s AND template = 'e1_confirm'", (uid,)
+    )[0][0] == 1
+
+
+def test_resending_for_a_confirmed_user_sends_a_sign_in_link_with_a_token(auth):
+    """e_magic_link renders a token it does not mint. Queueing the job without
+    one sends a mail with no link in it."""
+    uid = make_user("confirmed@example.test")
+    query("UPDATE waitlist_users SET email_verified = true WHERE waitlist_id = %s", (uid,))
+    token = expired_token(uid)
+
+    result, _ = call(auth, "POST", "/waitlist/auth/resend", form={"token": str(token)})
+
+    assert result["statusCode"] == 200
+    assert query(
+        "SELECT count(*) FROM email_jobs WHERE user_id = %s AND template = 'e_magic_link'", (uid,)
+    )[0][0] == 1
+    assert query(
+        "SELECT count(*) FROM auth_tokens WHERE waitlist_user_id = %s "
+        "AND kind = 'magic_link' AND used_at IS NULL",
+        (uid,),
+    )[0][0] == 1
+
+
+def test_resending_is_rate_limited_and_never_re_mails_a_suppressed_address(auth):
+    unsub = make_user("quit@example.test")
+    query("UPDATE waitlist_users SET email_status = 'unsubscribed' WHERE waitlist_id = %s", (unsub,))
+    token = expired_token(unsub)
+
+    result, body = call(auth, "POST", "/waitlist/auth/resend", form={"token": str(token)})
+    assert result["statusCode"] == 200
+    assert "unsubscrib" in body["html"].lower(), "saying 'check your inbox' here is a lie"
+    assert query("SELECT count(*) FROM email_jobs WHERE user_id = %s", (unsub,))[0][0] == 0
+
+    flood = make_user("flood@example.test")
+    flood_token = expired_token(flood)
+    for _ in range(9):
+        call(auth, "POST", "/waitlist/auth/resend", form={"token": str(flood_token)})
+    queued = query("SELECT count(*) FROM email_jobs WHERE user_id = %s", (flood,))[0][0]
+    assert queued <= 3, f"an open mail cannon: {queued} queued from one dead link"
+
+
+def test_an_unknown_token_cannot_be_used_to_probe_for_members(auth):
+    """This endpoint takes a token, not an address, so it is not an enumeration
+    oracle by construction — but it must not become one by answering
+    differently for a token that exists and one that does not."""
+    result, body = call(auth, "POST", "/waitlist/auth/resend", form={"token": str(uuid.uuid4())})
+
+    assert result["statusCode"] == 200
+    assert "inbox" in body["html"].lower()
+    assert query("SELECT count(*) FROM email_jobs")[0][0] == 0
 
 
 def test_either_link_kind_verifies_the_address(auth):
@@ -391,7 +493,7 @@ def test_requesting_a_second_link_invalidates_the_first(auth):
 
     result, body = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(first)})
     assert result["statusCode"] == 410
-    assert body["error"] == "token_already_used"
+    assert "already" in body["html"].lower()
 
     result, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(second)})
     assert result["statusCode"] == 302, "the newest link must still work"
