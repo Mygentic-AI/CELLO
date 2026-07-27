@@ -17,25 +17,32 @@ description: The ordered list of AWS-dependent steps that convert M11's 🟡 lin
 > `/status` bounced them to `/auth`. Both doors led back to the sign-in form. Nothing below has run
 > against the deployed API.
 >
-> **1. Trace before trusting — this is now one command:**
+> **1. `./infra/deploy.sh`** — `cello-waitlist.yaml` gained `POST /waitlist/auth/resend`. Without it
+> the one button on every dead-link page 404s. (Note the standing blocker below: deploy.sh exits on
+> `cello-ecs-directory-dev`. The waitlist stack can be deployed directly, as it was on 07-25.)
+>
+> **2. Deploy the Lambdas** — `./infra/deploy-lambdas.sh dev`. Shared `_resend.py` and `_referral.py`
+> are new; auth, signup, email, actions and gallery all changed. Packaging was verified offline —
+> both new modules land in every function and every import resolves against the staged package, so
+> there is no cold ImportError waiting.
+>
+> **3. NOW trace it — one command:**
 >
 > ```
 > ./infra/scripts/verify-capture-loop.sh <token-from-a-confirm-email>
 > ```
 >
-> It follows one real token through both hops and prints every header, then says which hop drops
-> the session. Exit 0 only if the session survives the redirect. It was checked against a
-> known-broken stand-in as well as a working one, so a green run means something. Three fixes
-> shipped on untraced hypotheses before this; do not add a fourth.
+> Get a token by signing up an address you can read, or by reading `auth_tokens` in the PORTAL
+> database. The script follows it through both hops, prints every header, and names the hop that
+> drops the session. Exit 0 only if the session survives the redirect.
 >
-> **2. `./infra/deploy.sh`** — `cello-waitlist.yaml` gained `POST /waitlist/auth/resend`. Without it
-> the one button on every dead-link page 404s. (Note the standing blocker below: deploy.sh exits on
-> `cello-ecs-directory-dev`. The waitlist stack can be deployed directly, as it was on 07-25.)
+> **The order matters and this is why:** run it BEFORE steps 1–2 and it fails, because the deployed
+> Lambdas still carry the bug — which would read as "the fix does not work" when it simply is not
+> there yet. If you want the before-and-after, run it first deliberately and expect a red
+> `401 no_active_session` at hop 2; that is the death loop, reproduced. Then deploy and run it again.
 >
-> **3. Deploy the Lambdas** — `./infra/deploy-lambdas.sh dev`. Shared `_resend.py` and `_referral.py`
-> are new; auth, signup, email, actions and gallery all changed. Packaging was verified offline —
-> both new modules land in every function and every import resolves against the staged package, so
-> there is no cold ImportError waiting.
+> The script was checked against a known-broken stand-in as well as a working one, so a green run
+> means something. Three fixes shipped on untraced hypotheses before this; do not add a fourth.
 >
 > **4. ONLY THEN push corp-cello-site.** Commits `63fe0d4`, `81518b3`, `ba2c26b`, `7e1f1e1`,
 > `ec05c69`, `c56eecc` and `d17377f` are deliberately UNPUSHED.
