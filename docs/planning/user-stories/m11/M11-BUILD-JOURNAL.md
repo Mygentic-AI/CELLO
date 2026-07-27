@@ -3302,3 +3302,71 @@ against the hostname.
 infrastructure. And a CFN rollback restores live configuration from stored parameters — so a value
 repaired by hand outside the stack cannot survive the next failed deploy, which is exactly why the
 hand-repair had to become a template change.
+
+---
+
+## 2026-07-27 — the capture loop was dead because nothing read the cookie
+
+**The symptom Andre reported four times.** Click *Confirm email* in the E1 mail → land on a sign-in
+form. Request a magic link → click it → land on the same sign-in form. No route into `/status` at
+all. Three fixes had shipped against this without moving it, the last being a missing cookie
+`Domain` — a real defect, deployed, retested, loop unchanged.
+
+**The cause, and why every earlier fix was aimed at the wrong half.** The session cookie was being
+minted correctly and scoped correctly. The endpoint that CHECKS it was reading the wrong place.
+
+API Gateway HTTP API **payload format 2.0** — which every route in `cello-waitlist.yaml` uses —
+lifts request cookies OUT of `headers` and into a top-level `cookies` LIST. `_session.cookie_from()`
+read `headers["cookie"]`, which the real gateway never populates. So `read_session` got `None` on
+every request that ever reached production: `/auth/session` answered 401 to signed-in users,
+`/status` bounced them to `/auth`, and both doors led back to the same form.
+
+The tell was visible in the shape of what worked: **every endpoint that reads no cookie was fine**
+— signup, unsubscribe, the gallery reads. Only the cookie-reading ones were dead. That is a wiring
+failure, not an auth failure, and it is why it read as "the cookie is not travelling".
+
+**Why the suite never saw it.** All three fixtures built the event they wished for:
+`headers["cookie"] = ...`. They tested a gateway that does not exist. Rewriting them to the real 2.0
+shape turned **9 tests red with `no_active_session`** — the reported symptom, reproduced locally
+against a real Postgres — before a line of handler code changed. `cookie_from` now takes the event
+and reads `cookies` first, falling back to the header for payload 1.0 and direct invocation.
+
+**What else was in the loop, found while tracing it.**
+
+- **A 409 on the most likely re-entry path.** `/waitlist` is the only URL anyone remembers and
+  nothing on the site links to `/auth`, so an address we already hold is one of the most common
+  things signup sees. It answered "already on the waitlist" and offered nothing onward. The form now
+  decides what to send: confirm mail again (unconfirmed), sign-in link (confirmed), or nothing at
+  all (suppressed) — and says which. Rate-limited on the address against the same
+  `auth_link_requests` table `/auth` uses, so the doors share one budget rather than being played
+  off against each other.
+- **A dead link rendered raw JSON.** `/auth/verify` is reached by clicking a button in an email, so
+  what it returns IS the visible outcome of that click. Someone whose link aged out — the most
+  likely unhappy path there is — was shown `{"error":"token_expired"}` with nowhere to go. Each
+  outcome is now a page with at most one thing to do, and expired/used carry a one-button resend.
+  The dead token identifies the user, so the address is never asked for again. An unknown token gets
+  no button, because there is nobody to send to and a button that cannot work is worse than none.
+- **`/waitlist` now detects a live session** and offers `/status` instead of a signup form — the
+  form was what made returning members believe they had lost their place and sign up twice.
+- **No user-facing copy tells anyone to try again.** If we broke it, repeating themselves cannot fix
+  it. `_sqlstate.py`, `/status`, `/auth`, `/beta/apply`, `/agent/interest` all rewritten.
+
+**Two pre-existing test defects fixed in passing.** `waitlist_testdb.query()` never committed, so
+every write made through it was rolled back on close and any test that set up state with an `UPDATE`
+silently ran the wrong scenario. And `test_concurrency.run_both` captured a thread's exception
+without ever re-raising it, so a crashed dispatcher read as "sent no duplicate emails" and passed —
+it was borrowing `WAITLIST_SES_CONFIG_SET` from another suite and crashed whenever run alone.
+
+**Gate:** 456 Python tests pass; corp-cello-site lint, typecheck, 19 vitest and `npm run build` all
+green.
+
+**NOT PROVEN LIVE.** Infrastructure is hibernated; none of this has run against the deployed API.
+The first thing to do on wake is trace one real token end to end with `curl -i` and confirm the
+`Set-Cookie` and the subsequent `/auth/session` — the whole reason this took a day is that fixes
+shipped on hypotheses that were never traced to ground.
+
+**Deploy order, which matters.** `./infra/deploy.sh` (new `POST /waitlist/auth/resend` route) and
+the Lambda deploy must land BEFORE corp-cello-site is pushed. The page now expects `sent` and
+`returning` from signup; against the old endpoint a repeat address still 409s and would surface as a
+red error instead of a screen. corp-cello-site commit `63fe0d4` is deliberately UNPUSHED for that
+reason.
