@@ -37,8 +37,8 @@ description: The ordered list of AWS-dependent steps that convert M11's 🟡 lin
 > both new modules land in every function and every import resolves against the staged package, so
 > there is no cold ImportError waiting.
 >
-> **4. ONLY THEN push corp-cello-site.** Commits `63fe0d4`, `81518b3`, `ba2c26b`, `7e1f1e1` and
-> `ec05c69` are deliberately UNPUSHED.
+> **4. ONLY THEN push corp-cello-site.** Commits `63fe0d4`, `81518b3`, `ba2c26b`, `7e1f1e1`,
+> `ec05c69` and `c56eecc` are deliberately UNPUSHED.
 > The page now expects `sent` and `returning` from `POST /waitlist/signup`; against the old endpoint a
 > repeat address still returns 409 and would surface as a red error instead of a screen. Pushing
 > `main` there auto-deploys the live site, so the order is not advisory.
@@ -46,6 +46,19 @@ description: The ordered list of AWS-dependent steps that convert M11's 🟡 lin
 > **5. While you are in the Lambda console:** set `PORTAL_DB_SECRET_ID` on all 13 waitlist functions
 > and deploy the ops dashboard, so the next RDS rotation does not repeat 2026-07-26. The URL must keep
 > `?sslmode=no-verify`.
+>
+> **5b. One count before the waitlist takes traffic.** Rows admitted under the pre-M11-D32
+> behaviour are unreachable to every wave cohort — they hold `status='admitted'` with no
+> `waitlist_tokens` grant, so they cannot pass the Telegram gate and no wave will pick them up:
+>
+> ```sql
+> SELECT count(*) FROM waitlist_users u
+>  WHERE u.status = 'admitted'
+>    AND NOT EXISTS (SELECT 1 FROM waitlist_tokens t WHERE t.waitlist_user_id = u.waitlist_id);
+> ```
+>
+> Expected to be zero (the environment has been hibernated), but that is an assumption until it is
+> a number. Anything found needs `status` reset to `'waiting'` so the next wave admits them properly.
 >
 > **6. `operations.cello.mygentic.ai` needs one redeploy after every wake** — its host rule and SNI
 > cert live on the portal ALB, which hibernate deletes.

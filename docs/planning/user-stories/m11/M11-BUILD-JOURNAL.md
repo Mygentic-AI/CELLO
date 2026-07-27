@@ -3611,3 +3611,76 @@ was something I had written, tested and believed, where the test asserted the
 shape of the fix rather than the behaviour under the real condition. The
 reviewer found them by executing: a real refused connection, a real cohort
 query, a real barrier race. Reading my own code back has caught none of them.
+
+
+---
+
+## 2026-07-27 (fourth review) — the blocker was in the clause that fixed the last one
+
+Fourth pass, and it confirmed the core loop works end to end while finding that
+the fix from round three was wrong in the direction its own comment claimed to
+have handled.
+
+**The claimable predicate was inverted against the dispatcher.** The dispatcher
+reclaims a stranded job with `sent_at < now() - reclaim`. My "is a mail already
+coming?" check asked `sent_at > now() - reclaim`. Those partition the `sending`
+rows into two DISJOINT halves: I counted the in-flight half and declared the
+reclaimable half "no mail coming" — the exact case the rule exists for.
+`claim_jobs` commits the `sending` transition before the SES call, so a Lambda
+timeout strands a row, and the outage that strands it is the same one that makes
+somebody click resend. The reviewer executed it: two mails, one batch, the first
+carrying a token the second had burned, and the person told they had used a link
+they never opened. There is no `sent_at` comparison now — a row in `sending` is
+either in flight or awaiting reclaim, and both mean a mail is coming.
+
+**The lock threw away the row it locked.** `SELECT 1 ... FOR UPDATE` serialises
+nothing useful if the decision still comes from the caller's earlier read: a
+confirmation committing in between left `kind='confirm'` for a verified user,
+and `e1_confirm` is not gated on `email_verified` at send time, so the mail
+shipped and burned their live token.
+
+**A comment in `_referral.py` was an instruction that would inflate the queue.**
+It said a referral with no ledger row IS the unpaid set. False — the referrals
+row is written at signup and the payout only runs at confirmation, so that set
+is mostly referrals whose referee never confirmed. Following it when the cap
+moves would pay out for typed addresses nobody proved. The missing clause is now
+written out in full.
+
+**And a deadline needed a browser newer than the build target.**
+`AbortSignal.timeout()` wants Safari 16; there is no browserslist, so Next's
+default target is far older and nothing polyfills it. On an older device the
+call throws synchronously and `/status` shows the visitor the name of a
+JavaScript API. The change that added a timeout would have broken the last step
+of the loop on those devices.
+
+**What the reviewer found that matters more than any single defect.** Two
+mutations survived the entire suite — the claimable predicate and the escaped
+heading — and both were clauses with long, confident comments arguing for them.
+Its sentence: *the comments are doing the work the tests should do, and a
+comment cannot fail.*
+
+So every behavioural clause in this round was verified by **putting the defect
+back**: the inverted comparison, the pending-only predicate, the unlocked read,
+both `_page` escapes, the never-firing abort signal, and the `AbortSignal.timeout`
+dependency each fail exactly one test and nothing else. Two of the tests I wrote
+this round were themselves hollow and only mutation testing showed it — one
+asserted that an abort signal EXISTED (a signal that never fires satisfies "gives
+up rather than hanging forever"), and one used `expect(...).not.toThrow()` on an
+async function, where a synchronous throw becomes a rejected promise the
+assertion never sees. That one passed against the very implementation it was
+written to reject.
+
+**The core loop itself was verified working by execution**, including the
+premium path end to end: cohort selects the confirmed claimant, the wave mints
+the token and queues the invitation, and the Telegram gate burns it.
+
+**Gate:** 477 Python tests; corp-cello-site lint, typecheck, 21 vitest, build.
+Still nothing run against AWS.
+
+**Adjacent items left open, deliberately** (none blocks launch, all journaled):
+`/auth/request` has no already-coming guard, so it can still stack a second
+magic-link job on a pending one — the duplicate now refused at `/auth/resend`.
+And any row stranded by the pre-M11-D32 behaviour (`status='admitted'`,
+`wave_number IS NULL`, no token) is unreachable to every wave cohort; that
+should be a `SELECT count(*)` before the waitlist takes traffic, not an
+assumption. Both are on the wake-up checklist.

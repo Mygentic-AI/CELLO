@@ -134,6 +134,13 @@ Every DoD line carries a `[repo]` tag immediately after its ID. Use this table t
   (M11-D32); the one-job guard was read-then-write and racy; and the guard's only test never
   reached the branch it named. 472 tests. Still 🟡 → Journal 2026-07-27 (third review)
 
+  **A fourth pass verified the loop works end to end by execution** — signup → E1 → confirm →
+  logged-in `/status` with a real queue position and referral link, and the premium path through to
+  the Telegram gate burning its token. It also found the round-3 fix was inverted against the
+  dispatcher it was written to mirror, and that two clauses with long defending comments had no
+  test that failed when the clause was removed. Every behavioural clause is now mutation-verified.
+  477 tests. **Still 🟡 — nothing has run against AWS** → Journal 2026-07-27 (fourth review)
+
   **2026-07-27 (later) — the rest of the agreed flow, also code-only.** `/waitlist` is now the front
   door: it detects a live session and offers `/status` instead of a signup form, and one field decides
   whether the server sends a confirm mail, a sign-in link, or nothing (suppressed) — the 409 that
