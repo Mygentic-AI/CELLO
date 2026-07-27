@@ -56,11 +56,13 @@ Parameters:
     Type: String
     Description: Canonical hosted zone ID of the portal ALB, for the alias record.
 
-  DatabaseUrlSecretArn:
+  DatabaseMasterSecretArn:
     Type: String
     Description: >
-      Secrets Manager ARN for the PORTAL database URL. The dashboard shares the portal's
-      database (DOD-INV-SINGLE-DB) and must never be pointed at the directory's.
+      ARN of the RDS-MANAGED master secret for the portal database. The password is read
+      from its `password` key at task start, so a rotation needs no redeploy and nothing
+      is hand-copied. The dashboard shares the portal's database (DOD-INV-SINGLE-DB) and
+      must never be pointed at the directory's.
 
   # A PARAMETER because nothing reserves it. The portal's 443 listener currently
   # has no numbered rules at all — checked live — so 100 is free today. It is not
@@ -181,7 +183,7 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource: !Ref DatabaseUrlSecretArn
+                Resource: !Ref DatabaseMasterSecretArn
 
   TaskRole:
     Type: AWS::IAM::Role
@@ -255,9 +257,34 @@ Resources:
               Value: "3000"
             - Name: HOSTNAME
               Value: 0.0.0.0
+            # pg reads these when no DATABASE_URL is present. Only the password
+            # is a secret; the rest are plain configuration.
+            - Name: PGHOST
+              Value: !ImportValue
+                Fn::Sub: "cello-${Environment}-portal-db-endpoint"
+            - Name: PGPORT
+              Value: !ImportValue
+                Fn::Sub: "cello-${Environment}-portal-db-port"
+            - Name: PGUSER
+              Value: portal_admin
+            - Name: PGDATABASE
+              Value: cello_portal
+            # RDS's chain is not in Node's trust store. This matches the value
+            # the working connection string carried (sslmode=no-verify);
+            # dropping it is what broke TLS during the 2026-07-27 repair.
+            - Name: PGSSLMODE
+              Value: no-verify
           Secrets:
-            - Name: DATABASE_URL
-              ValueFrom: !Ref DatabaseUrlSecretArn
+            # THE PASSWORD, STRAIGHT FROM THE RDS-MANAGED SECRET.
+            #
+            # `:password::` selects one JSON key, so this reads whatever RDS
+            # rotated to — no hand-copied connection string to drift. The
+            # previous arrangement pointed at cello/{env}/portal/database-url,
+            # which is maintained by hand while RDS rotates on a schedule; on
+            # 2026-07-27 they diverged and both this dashboard and the portal
+            # stopped authenticating.
+            - Name: PGPASSWORD
+              ValueFrom: !Sub "${DatabaseMasterSecretArn}:password::"
           LogConfiguration:
             LogDriver: awslogs
             Options:

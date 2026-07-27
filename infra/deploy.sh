@@ -1293,9 +1293,15 @@ if [[ "${DEPLOY_OPS_DASHBOARD:-0}" == "1" && "${REGION}" == "us-east-1" ]]; then
   # this script printed success; and the first operator to open `/` got a generic
   # 500. The portal's own task definition uses `cello/{env}/portal/database-url`,
   # which already exists — both neighbours knew, and this block did not.
-  OPS_DB_SECRET_ARN=$(aws secretsmanager describe-secret \
-    --secret-id "cello/${ENVIRONMENT}/portal/database-url" --region "${REGION}" \
-    --query 'ARN' --output text 2>/dev/null || true)
+  # THE RDS-MANAGED MASTER SECRET, not the hand-maintained URL.
+  #
+  # cello/{env}/portal/database-url is copied by hand while RDS rotates
+  # portal_admin on a schedule. On 2026-07-27 they diverged and both the
+  # dashboard and the portal stopped authenticating — the dashboard reads the
+  # `password` key of this secret directly now, so a rotation needs no redeploy.
+  OPS_DB_SECRET_ARN=$(aws cloudformation list-exports --region "${REGION}" \
+    --query "Exports[?Name=='cello-${ENVIRONMENT}-portal-db-master-secret-arn'].Value" \
+    --output text 2>/dev/null || true)
 
   # CELLO_IMAGE_TAG, not IMAGE_TAG. IMAGE_TAG defaults to "stub" near the top of
   # this script, so guarding on it was dead code — and with it the entire reason
@@ -1333,7 +1339,7 @@ if [[ "${DEPLOY_OPS_DASHBOARD:-0}" == "1" && "${REGION}" == "us-east-1" ]]; then
     "PortalAlbListenerArn=${OPS_LISTENER_ARN}" \
     "PortalAlbDnsName=${OPS_ALB_DNS}" \
     "PortalAlbHostedZoneId=${OPS_ALB_ZONE}" \
-    "DatabaseUrlSecretArn=${OPS_DB_SECRET_ARN}"
+    "DatabaseMasterSecretArn=${OPS_DB_SECRET_ARN}"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
