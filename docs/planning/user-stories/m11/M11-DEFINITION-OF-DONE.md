@@ -123,6 +123,21 @@ Every DoD line carries a `[repo]` tag immediately after its ID. Use this table t
   the API's JSON envelope. **Still 🟡 and must not be flipped on test evidence** — infra is
   hibernated and none of it has run against the deployed API → Journal 2026-07-27
 
+  **2026-07-27 (later) — the rest of the agreed flow, also code-only.** `/waitlist` is now the front
+  door: it detects a live session and offers `/status` instead of a signup form, and one field decides
+  whether the server sends a confirm mail, a sign-in link, or nothing (suppressed) — the 409 that
+  dead-ended the most likely re-entry path is gone. A dead link renders a PAGE with a one-click
+  resend that never asks for the address again. The referrer is paid at CONFIRMATION, not at signup,
+  so an unverified address cannot move anyone up the queue. Confirming carries `?welcome=1` so the
+  click that makes you a member says so. 460 tests; corp-cello-site green. All 🟡 → Journal 2026-07-27
+
+  **PARKED — the returning-visitor hint cookie.** Andre asked for a non-HttpOnly "this browser has
+  been here" marker so `/waitlist` could choose its copy before any network call. Not built: the
+  session probe added above already answers the same question AUTHORITATIVELY, and the hint's only
+  remaining value is avoiding a brief flash of the signup form. A second, forgeable signal that can
+  disagree with the real one is not worth that. Revisit only if the flash is judged bad enough to
+  matter.
+
 - **DOD-STATUS-STUB-1** [corp-cello-site] — P0 stub `/status` page (authenticated, session-gated). Shows: confirmation they're on the waitlist, their queue position (live computed), their personal referral link with a copy button. No survey, no OAuth buttons, no points breakdown — those are P1 (DOD-STATUS-PAGE-1 replaces this stub). Corp site branding. — 🟡 `/status` + `/auth` built as static pages calling the auth Lambda; both emit to `out/`; position rendered only when the server returns one. Owed: a live run against the deployed API → Journal Entry 15
 
 - **DOD-EMAIL-INFRA-1** [trustless-cello, corp-cello-site] — SES + Lambda email pipeline. **Existing:** SES domain verification and DKIM/DMARC are already live (Lambda at `h8dh7rbhb1.execute-api.us-east-1.amazonaws.com` is in production sending E1 today). **P0 remaining work:** (a) confirm SES production access is already granted (not sandbox); (b) wire the new `email_jobs` table → SQS → Lambda → SES path (the existing Lambda is not driven by `email_jobs` — it responds to direct API calls; this replaces that pattern); (c) add bounce + complaint SNS handling if not already present. Lambda code + CloudFormation (SQS queue, SNS topic, EventBridge rule) in trustless-cello. The `email_jobs` table + enqueue calls in corp-cello-site. If SES prod access is confirmed and DKIM/DMARC are set, the domain-verification AC is ✅ as-is. — ✅ dispatcher Lambda built (`infra/lambda/waitlist-email/`) draining `email_jobs` with suppression + segment enforcement, 14 tests green. CFN deployed to us-east-1 2026-07-25 (EventBridge drain rule, VPC attach to the PORTAL db, SNS topic with an SES configuration set publishing to it) and all 12 function bodies with it. SES production access CONFIRMED — see DOD-SES-PROD-1. The first real send then found a defect no unit test could see: the dispatcher passed `Headers=` to an SES API that has no such parameter, so EVERY send raised ParamValidationError; fixed by building a MIME message and using `send_raw_email` (Entry 52). Owed: the corrected send actually landing → Journal Entries 12, 40, 44, 52

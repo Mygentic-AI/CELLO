@@ -9,6 +9,42 @@ description: The ordered list of AWS-dependent steps that convert M11's 🟡 lin
 
 # M11 — what to run now that infra is awake
 
+> ## ⚠️ 2026-07-28 — DO THIS FIRST, AND IN THIS ORDER
+>
+> The core capture loop was **broken at the check, not at the mint**, and is fixed in code only.
+> API Gateway payload format 2.0 delivers request cookies in a top-level `cookies` list, not in
+> `headers`; `cookie_from()` read the header, so `/auth/session` 401'd every signed-in user and
+> `/status` bounced them to `/auth`. Both doors led back to the sign-in form. Nothing below has run
+> against the deployed API.
+>
+> **1. Trace before trusting.** Sign up a simulator address, drain the email queue, then follow one
+> real token with `curl -i` — capture the `Set-Cookie` and the `Location`, then call
+> `/waitlist/auth/session` with that cookie and read the CORS headers. Three fixes shipped on
+> untraced hypotheses before this one; do not add a fourth.
+>
+> **2. `./infra/deploy.sh`** — `cello-waitlist.yaml` gained `POST /waitlist/auth/resend`. Without it
+> the one button on every dead-link page 404s. (Note the standing blocker below: deploy.sh exits on
+> `cello-ecs-directory-dev`. The waitlist stack can be deployed directly, as it was on 07-25.)
+>
+> **3. Deploy the Lambdas** — `./infra/deploy-lambdas.sh dev`. Shared `_resend.py` and `_referral.py`
+> are new; auth, signup, actions and gallery all changed.
+>
+> **4. ONLY THEN push corp-cello-site.** Commits `63fe0d4` and `81518b3` are deliberately UNPUSHED.
+> The page now expects `sent` and `returning` from `POST /waitlist/signup`; against the old endpoint a
+> repeat address still returns 409 and would surface as a red error instead of a screen. Pushing
+> `main` there auto-deploys the live site, so the order is not advisory.
+>
+> **5. While you are in the Lambda console:** set `PORTAL_DB_SECRET_ID` on all 13 waitlist functions
+> and deploy the ops dashboard, so the next RDS rotation does not repeat 2026-07-26. The URL must keep
+> `?sslmode=no-verify`.
+>
+> **6. `operations.cello.mygentic.ai` needs one redeploy after every wake** — its host rule and SNI
+> cert live on the portal ALB, which hibernate deletes.
+>
+> Full account: `discussion_logs/2026-07-27_2030_waitlist-auth-flow-design-and-death-loop.md` and the
+> 2026-07-27 journal entry.
+
+
 > **STATUS 2026-07-25 07:40 UTC — §0 through §4 are DONE.** SES production access confirmed, the stack
 > deployed, all 12 function bodies plus a 13th (migrate) shipped, all 22 migrations applied, a real
 > signup and a real send completed, and the bounce path proven end to end. What remains is §5 (ops

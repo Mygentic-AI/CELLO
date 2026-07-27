@@ -3370,3 +3370,38 @@ the Lambda deploy must land BEFORE corp-cello-site is pushed. The page now expec
 `returning` from signup; against the old endpoint a repeat address still 409s and would surface as a
 red error instead of a screen. corp-cello-site commit `63fe0d4` is deliberately UNPUSHED for that
 reason.
+
+
+---
+
+## 2026-07-27 (later) — the rest of the agreed flow
+
+Four more pieces of the design Andre signed off, all still code-only.
+
+**The referrer is paid at confirmation.** A signup is a typed address and nothing more, so paying out
+on one made the queue farmable by exactly the effort of inventing addresses — ten points per invented
+address, no mailbox required, on the mechanism the whole product ranks by. The payout moved into the
+same transaction that verifies the email, and it is idempotent against the ledger because a
+magic-link sign-in runs that path too and one referral must not become an income stream. Attribution
+still happens at signup; who introduced whom is a fact about the signup. The cap moved with it,
+SAVEPOINT and all — which matters *more* here than it did before, because an unguarded cap violation
+would now cost an invitee their confirmation, their referral code and their session because somebody
+else was popular. There is a test asserting all three survive.
+
+**`points_awarded` left the signup response** rather than being reported as 0. Zero reads as "the
+referrer earned nothing"; what happened is that nothing is owed yet.
+
+**Confirming says so.** The click that MAKES someone a member landed them on the same page a
+returning visitor sees, with nothing to say the confirm had worked — and a person who cannot tell
+whether it worked signs up again, which is what Andre watched happen. The redirect now carries
+`?welcome=1`, but only on the navigation that actually flipped `email_verified`; a later sign-in runs
+the same code and is not a first confirmation.
+
+**The hint cookie is PARKED, deliberately.** Andre asked for a non-HttpOnly "this browser has been
+here" marker. The session probe now on `/waitlist` answers the same question authoritatively, so the
+hint's only remaining value is avoiding a brief flash of the signup form — and a second, forgeable
+signal that can disagree with the real one is not worth that. Written down rather than dropped.
+
+**Gate:** 460 Python tests; corp-cello-site lint, typecheck, 19 vitest, build. Still nothing run
+against AWS. The wake-up order is at the top of `M11-NEXT-STEPS-AWS-AWAKE.md` and it is not
+advisory — the site expects response fields the deployed Lambdas do not yet return.
