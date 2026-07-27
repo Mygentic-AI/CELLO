@@ -27,11 +27,17 @@ import uuid
 from datetime import datetime, timezone
 
 import psycopg2
+
+from _dburl import portal_database_url
 import psycopg2.extras
 
 from _session import COOKIE_NAME, cookie_from, hash_token, read_session, revoke_all_for_user
 from _sqlstate import classify
 
+# Kept only so an explicit override still works. The live value is resolved
+# lazily by portal_database_url(), because binding the environment variable here
+# is exactly what let the 2026-07-27 rotation take the whole waitlist down: the
+# password was baked in at deploy time and aged out. See _dburl.py.
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SITE = os.environ.get("WAITLIST_SITE", "https://cello.mygentic.ai")
 SITE_API = os.environ.get("WAITLIST_API_BASE", "https://api.cello.mygentic.ai/waitlist")
@@ -70,9 +76,9 @@ from _logging import emit as log  # noqa: E402 — see _logging.py
 
 
 def connect():
-    if not DATABASE_URL:
+    if not DATABASE_URL and not os.environ.get("PORTAL_DB_SECRET_ID"):
         raise AuthError(500, "database_url_not_configured", "DATABASE_URL is not set.")
-    return psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE", "require"))
+    return psycopg2.connect(DATABASE_URL or portal_database_url(), sslmode=os.environ.get("PGSSLMODE", "require"))
 
 
 def cors_headers(origin):

@@ -26,11 +26,17 @@ import secrets
 import uuid
 
 import psycopg2
+
+from _dburl import portal_database_url
 import psycopg2.extras
 
 from _logging import emit as log
 from _sqlstate import classify
 
+# Kept only so an explicit override still works. The live value is resolved
+# lazily by portal_database_url(), because binding the environment variable here
+# is exactly what let the 2026-07-27 rotation take the whole waitlist down: the
+# password was baked in at deploy time and aged out. See _dburl.py.
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 NO_RESPONSE_DAYS = int(os.environ.get("OUTREACH_NO_RESPONSE_DAYS", "6"))
@@ -50,9 +56,9 @@ class OutreachError(Exception):
 
 
 def connect():
-    if not DATABASE_URL:
+    if not DATABASE_URL and not os.environ.get("PORTAL_DB_SECRET_ID"):
         raise OutreachError("database_url_not_configured", "DATABASE_URL is not set.")
-    conn = psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE", "require"))
+    conn = psycopg2.connect(DATABASE_URL or portal_database_url(), sslmode=os.environ.get("PGSSLMODE", "require"))
     conn.autocommit = False
     return conn
 

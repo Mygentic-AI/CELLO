@@ -40,8 +40,14 @@ import pathlib
 
 import psycopg2
 
+from _dburl import portal_database_url
+
 from _logging import emit as log
 
+# Kept only so an explicit override still works. The live value is resolved
+# lazily by portal_database_url(), because binding the environment variable here
+# is exactly what let the 2026-07-27 rotation take the whole waitlist down: the
+# password was baked in at deploy time and aged out. See _dburl.py.
 DATABASE_URL = os.environ.get("DATABASE_URL")
 MIGRATIONS_DIR = pathlib.Path(os.environ.get("MIGRATIONS_DIR", "/var/task/migrations"))
 
@@ -67,12 +73,12 @@ def checksum(sql: str) -> str:
 
 
 def connect():
-    if not DATABASE_URL:
+    if not DATABASE_URL and not os.environ.get("PORTAL_DB_SECRET_ID"):
         # ABSENT IS NOT FINE. libpq would otherwise fall through to its defaults
         # and connect to some other database, then report a connection error
         # naming the wrong subsystem.
         raise MigrationError("DATABASE_URL is not set on this function.")
-    conn = psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE", "require"))
+    conn = psycopg2.connect(DATABASE_URL or portal_database_url(), sslmode=os.environ.get("PGSSLMODE", "require"))
     conn.autocommit = False
     return conn
 

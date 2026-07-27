@@ -32,8 +32,14 @@ import uuid
 from datetime import datetime, timezone
 
 import psycopg2
+
+from _dburl import portal_database_url
 import psycopg2.extras
 
+# Kept only so an explicit override still works. The live value is resolved
+# lazily by portal_database_url(), because binding the environment variable here
+# is exactly what let the 2026-07-27 rotation take the whole waitlist down: the
+# password was baked in at deploy time and aged out. See _dburl.py.
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 PERMANENT = "Permanent"
@@ -43,9 +49,9 @@ from _logging import emit as log  # noqa: E402 — see _logging.py
 
 
 def connect():
-    if not DATABASE_URL:
+    if not DATABASE_URL and not os.environ.get("PORTAL_DB_SECRET_ID"):
         raise RuntimeError("DATABASE_URL is not set on this function.")
-    return psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE", "require"))
+    return psycopg2.connect(DATABASE_URL or portal_database_url(), sslmode=os.environ.get("PGSSLMODE", "require"))
 
 
 def classify(notification):

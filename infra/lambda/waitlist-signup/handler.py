@@ -27,6 +27,8 @@ import uuid
 from datetime import datetime, timezone
 
 import psycopg2
+
+from _dburl import portal_database_url
 import psycopg2.extras
 
 from _sqlstate import classify
@@ -36,6 +38,10 @@ from _sqlstate import classify
 # through to libpq's defaults — which would silently connect to *something else*
 # (PGHOST, or localhost as the OS user) and surface as a generic connection
 # error pointing at the wrong subsystem.
+# Kept only so an explicit override still works. The live value is resolved
+# lazily by portal_database_url(), because binding the environment variable here
+# is exactly what let the 2026-07-27 rotation take the whole waitlist down: the
+# password was baked in at deploy time and aged out. See _dburl.py.
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 ALLOWED_ORIGINS = frozenset(
@@ -530,7 +536,7 @@ def json_dumps(value):
 
 
 def connect():
-    if not DATABASE_URL:
+    if not DATABASE_URL and not os.environ.get("PORTAL_DB_SECRET_ID"):
         raise SignupError(
             500,
             "database_url_not_configured",
@@ -538,7 +544,7 @@ def connect():
         )
     # RDS enforces rds.force_ssl. Without this the connection is refused and the
     # failure reads as a generic connection error.
-    return psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE", "require"))
+    return psycopg2.connect(DATABASE_URL or portal_database_url(), sslmode=os.environ.get("PGSSLMODE", "require"))
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
