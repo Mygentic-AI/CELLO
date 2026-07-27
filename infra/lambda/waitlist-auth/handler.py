@@ -524,13 +524,15 @@ def handle_verify(params, origin, correlation_id):
             #
             # The counterfactual is weaker than it sounds: to redeem a magic
             # link you must already read the mailbox, which is the whole claim.
+            just_verified = False
             if row["kind"] in ("email_verify", "magic_link"):
                 cur.execute(
                     "UPDATE waitlist_users SET email_verified = true "
                     "WHERE waitlist_id = %s AND NOT email_verified",
                     (user_id,),
                 )
-                if cur.rowcount:
+                just_verified = bool(cur.rowcount)
+                if just_verified:
                     log(
                         "waitlist.auth.email.verified",
                         correlation_id,
@@ -598,7 +600,13 @@ def handle_verify(params, origin, correlation_id):
         "statusCode": 302,
         "headers": {
             **cors_headers(origin),
-            "Location": f"{SITE}/status",
+            # The click that MAKES someone a member deserves to be acknowledged
+            # as such. Without this they land on the same page a returning
+            # visitor sees and are left wondering whether the confirm worked —
+            # which is what sent people back to sign up a second time. A query
+            # flag, not a cookie: it describes this navigation, not this
+            # browser, and it must not survive a refresh.
+            "Location": f"{SITE}/status?welcome=1" if just_verified else f"{SITE}/status",
             "Set-Cookie": session_cookie(raw),
         },
         # The documented carrier for payload format 2.0. Sent ALONGSIDE the

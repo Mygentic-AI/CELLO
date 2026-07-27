@@ -211,7 +211,7 @@ def test_a_valid_link_burns_the_token_and_sets_a_session_cookie(auth):
     result, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
 
     assert result["statusCode"] == 302
-    assert result["headers"]["Location"].endswith("/status")
+    assert result["headers"]["Location"].startswith("https://cello.mygentic.ai/status")
     cookie = result["headers"]["Set-Cookie"]
     assert "HttpOnly" in cookie and "Secure" in cookie and "SameSite=Lax" in cookie
     assert query("SELECT used_at IS NOT NULL FROM auth_tokens WHERE token = %s", (token,))[0][0]
@@ -935,3 +935,28 @@ def test_a_capped_referrer_still_lets_the_invitee_confirm(auth):
         (referred,),
     )[0][0] == 1, "their own code must still be minted"
     assert _points(referrer) == 30, "the cap holds"
+
+
+def test_the_click_that_makes_you_a_member_says_so(auth):
+    """Landing on the same page a returning visitor sees leaves someone
+    wondering whether the confirm worked — which is what sent people back to
+    sign up a second time."""
+    uid = make_user("firsttime@example.test")
+    token = query(
+        "INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at) "
+        "VALUES (%s, 'email_verify', now() + interval '24 hours') RETURNING token",
+        (uid,),
+    )[0][0]
+
+    first, _ = call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
+    assert first["headers"]["Location"].endswith("/status?welcome=1")
+
+    # A later sign-in is not a first confirmation. Congratulating someone on
+    # joining every time they log in is the kind of thing that makes a product
+    # feel like it is not paying attention.
+    request_link(auth, "firsttime@example.test")
+    second, _ = call(
+        auth, "GET", "/waitlist/auth/verify", params={"token": str(token_for(uid))}
+    )
+    assert second["headers"]["Location"].endswith("/status")
+    assert "welcome" not in second["headers"]["Location"]
