@@ -66,11 +66,11 @@ def connect_platform(user_id, platform="x", handle=None):
 
 
 def call(actions, path, body, cookie=None):
-    headers = {"origin": "https://cello.mygentic.ai"}
-    if cookie:
-        headers["cookie"] = cookie
+    # Payload format 2.0: cookies arrive in a top-level list, never in `headers`.
     event = {
-        "headers": headers,
+        "version": "2.0",
+        "headers": {"origin": "https://cello.mygentic.ai"},
+        "cookies": [cookie] if cookie else [],
         "requestContext": {"http": {"method": "POST", "path": path}},
         "body": json.dumps(body),
     }

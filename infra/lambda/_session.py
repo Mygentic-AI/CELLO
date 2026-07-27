@@ -24,7 +24,27 @@ def hash_token(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def cookie_from(headers):
+def cookie_from(event):
+    """The session token out of an API Gateway HTTP API event, or None.
+
+    TAKES THE EVENT, NOT THE HEADERS. Payload format 2.0 — which every route in
+    cello-waitlist.yaml uses — lifts request cookies OUT of `headers` and into a
+    top-level `cookies` LIST. Reading `headers["cookie"]` therefore finds
+    nothing on every real request: `/auth/session` answered 401 to signed-in
+    users, `/status` bounced them to `/auth`, and confirming an email or
+    clicking a magic link led straight back to a sign-in form with no way
+    through. Every endpoint that reads no cookie kept working, which is why the
+    failure looked like an auth bug rather than a wiring one.
+
+    The `headers` fallback is kept for payload format 1.0 and for direct
+    invocation, where the header is the only carrier.
+    """
+    for raw in event.get("cookies") or []:
+        name, _, value = raw.strip().partition("=")
+        if name == COOKIE_NAME:
+            return value
+
+    headers = event.get("headers") or {}
     raw = headers.get("cookie") or headers.get("Cookie") or ""
     for part in raw.split(";"):
         name, _, value = part.strip().partition("=")

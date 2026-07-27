@@ -448,6 +448,13 @@ def handle_verify(params, origin, correlation_id):
             "Location": f"{SITE}/status",
             "Set-Cookie": session_cookie(raw),
         },
+        # The documented carrier for payload format 2.0. Sent ALONGSIDE the
+        # header, not instead of it: both are honoured, they carry the identical
+        # value, and the header form is what is deployed today. Dropping it on
+        # the strength of a reading of the docs — in the one flow that has
+        # already cost a day — is a bet with no upside. Collapse to one after a
+        # live trace shows which arrives.
+        "cookies": [session_cookie(raw)],
         "body": "",
     }
 
@@ -483,11 +490,11 @@ def qualitative_band(position, size):
 # ── GET /waitlist/auth/session ────────────────────────────────────────────────
 
 
-def handle_session(headers, origin, correlation_id):
+def handle_session(event, origin, correlation_id):
     conn = connect()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            session = read_session(cur, cookie_from(headers))
+            session = read_session(cur, cookie_from(event))
             if session is None:
                 # 401 with a named cause. The status page redirects to /auth on
                 # this; a 200 with an empty body would make "logged out" and
@@ -570,7 +577,7 @@ def handle_session(headers, origin, correlation_id):
 # ── POST /waitlist/auth/logout ────────────────────────────────────────────────
 
 
-def handle_logout(headers, origin, correlation_id):
+def handle_logout(event, origin, correlation_id):
     """Ends every live session for this user, not just the one presenting.
 
     `revoked_at` had readers and no writer: a leaked cookie was live for thirty
@@ -581,7 +588,7 @@ def handle_logout(headers, origin, correlation_id):
     Idempotent, and it never reveals whether the cookie was valid: 204 either
     way, so this cannot be used to test whether a stolen token is still live.
     """
-    token = cookie_from(headers)
+    token = cookie_from(event)
     cleared = 0
 
     if token:
@@ -772,10 +779,10 @@ def lambda_handler(event, context):
             return handle_verify(event.get("queryStringParameters"), origin, correlation_id)
 
         if method == "GET" and path.endswith("/auth/session"):
-            return handle_session(headers, origin, correlation_id)
+            return handle_session(event, origin, correlation_id)
 
         if method == "POST" and path.endswith("/auth/logout"):
-            return handle_logout(headers, origin, correlation_id)
+            return handle_logout(event, origin, correlation_id)
 
         if path.endswith("/unsubscribe") and method in ("GET", "POST"):
             params = event.get("queryStringParameters") or {}

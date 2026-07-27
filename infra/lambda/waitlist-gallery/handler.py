@@ -174,7 +174,7 @@ def get_receipt(receipt_hash, correlation_id):
     return resp(200, serialise(row), cache="public, max-age=86400, immutable")
 
 
-def publish(body, headers, correlation_id):
+def publish(body, event, correlation_id):
     """Publishing writes a permanent, irrevocable, indexed page asserting that a
     session happened and that N of M directory nodes attested to it.
 
@@ -236,7 +236,7 @@ def publish(body, headers, correlation_id):
     conn = connect()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            session = read_session(cur, cookie_from(headers))
+            session = read_session(cur, cookie_from(event))
             if session is None:
                 raise GalleryError(
                     401,
@@ -333,7 +333,7 @@ def lambda_handler(event, context):
                 body = json.loads(event.get("body") or "{}")
             except (json.JSONDecodeError, TypeError) as err:
                 raise GalleryError(400, "invalid_json", f"Request body is not valid JSON: {err}")
-            return publish(body, event.get("headers") or {}, correlation_id)
+            return publish(body, event, correlation_id)
 
         raise GalleryError(404, "not_found", f"No route for {method} {path}.")
 

@@ -265,8 +265,11 @@ def _sign_in(user_email="owner@example.test", pubkey="pk-owner"):
 
 
 def call_with_cookie(gallery, path, body, cookie=None):
+    # Payload format 2.0: cookies arrive in a top-level list, never in `headers`.
     event = {
-        "headers": {"cookie": cookie} if cookie else {},
+        "version": "2.0",
+        "headers": {},
+        "cookies": [cookie] if cookie else [],
         "requestContext": {"http": {"method": "POST", "path": path}},
         "body": json.dumps(body),
     }

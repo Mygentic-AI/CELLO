@@ -97,8 +97,8 @@ def resp(status, body, origin):
     return {"statusCode": status, "headers": cors_headers(origin), "body": json.dumps(body)}
 
 
-def require_session(cur, headers):
-    session = read_session(cur, cookie_from(headers))
+def require_session(cur, event):
+    session = read_session(cur, cookie_from(event))
     if session is None:
         raise ActionError(401, "no_active_session", "Sign in to take this action.")
 
@@ -347,7 +347,7 @@ def lambda_handler(event, context):
         try:
             conn.autocommit = False
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                user_id = require_session(cur, headers)
+                user_id = require_session(cur, event)
                 result = route(cur, user_id, body, correlation_id)
             conn.commit()
         except Exception:

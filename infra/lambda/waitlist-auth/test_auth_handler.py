@@ -42,11 +42,18 @@ def make_user(email, email_status="active"):
 
 
 def call(auth, method, path, *, body=None, params=None, cookie=None):
+    """Builds the event API Gateway actually sends, not a convenient shape.
+
+    Payload format 2.0 lifts request cookies OUT of `headers` into a top-level
+    `cookies` LIST. A fixture that puts them back in `headers` tests a gateway
+    that does not exist — and that is precisely how every cookie-reading
+    endpoint shipped broken while this suite stayed green.
+    """
     headers = {"origin": "https://cello.mygentic.ai"}
-    if cookie:
-        headers["cookie"] = cookie
     event = {
+        "version": "2.0",
         "headers": headers,
+        "cookies": [cookie] if cookie else [],
         "requestContext": {"http": {"method": method, "path": path}},
         "body": json.dumps(body) if body is not None else None,
         "queryStringParameters": params,
