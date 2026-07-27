@@ -3405,3 +3405,59 @@ signal that can disagree with the real one is not worth that. Written down rathe
 **Gate:** 460 Python tests; corp-cello-site lint, typecheck, 19 vitest, build. Still nothing run
 against AWS. The wake-up order is at the top of `M11-NEXT-STEPS-AWS-AWAKE.md` and it is not
 advisory — the site expects response fields the deployed Lambdas do not yet return.
+
+
+---
+
+## 2026-07-27 (review) — the reviewer found the same bug one layer down
+
+`cello-unit-reviewer` on the capture-loop diff. Two blockers, and both were the
+defect I had just spent the day removing, re-created inside the fix.
+
+**A refused resend told the person mail was coming.** The throttled path
+returned `"confirm"`/`"signin"`, so both surfaces rendered "check your inbox"
+for a request that queued nothing. My docstring justified it: a link went out
+moments ago, so it is still true. It was not. The counter counts REQUESTS, not
+sends, and the refused request was itself recorded — so the window extended
+itself, and somebody clicking "Email me a new link" every few minutes would be
+refused forever while every refusal promised a mail. A third party could also
+exhaust your budget by asking for links to your address three times. Throttling
+is its own outcome now, said plainly at both doors, and a refusal leaves no row.
+
+**Making the confirm mail resendable made its credential unbounded.**
+`e1_confirm` was enqueued exactly once, at signup, so exactly one 24-hour token
+could ever be live. N resends drain to N jobs and each mints at SEND time — N
+live credentials, each creating a fresh 30-day session on click. The magic-link
+path had always burned its predecessors; I applied the argument to one branch
+and not the other. The burn now lives in `mint_verify_token`, where the
+credential actually comes into existence, rather than where the job is queued —
+otherwise the next caller of that function reintroduces it.
+
+**The two tests over that path were hollow, and that is the part worth keeping.**
+Both asserted only that mail was *not* sent (`<= 3`) and never what the caller
+was told. They executed the lie six times and passed, and would equally have
+passed against an implementation that never sends anything at all. Same failure
+shape as the fixture bug that started the day: a test that constrains the
+absence of something instead of the presence of the behaviour it names. They now
+assert the exact count, that a refusal reads differently from a send, and that
+refusals leave no rows.
+
+Nine further findings fixed: one rate limit across both doors (two numbers over
+one counter meant `/auth` traffic silently ate the resend budget, and the env
+override had been dropped in the refactor); `missing_token` and every DB fault
+on the three browser-facing routes now render as pages rather than JSON with a
+literal `\u2014` where an em dash belongs; SQLSTATE class 28 names the
+credential instead of blaming the query, which is exactly what the 2026-07-26
+rotation returned; the verify response's `cookies` array had no test at all and
+could have been deleted silently; `/waitlist` no longer flashes a signup form
+while the probe is in flight, and a probe that fails for any reason other than
+"not signed in" now tells the visitor instead of swallowing a named cause;
+`__pycache__` untracked. The reviewer also confirmed the request-side fix
+against the AWS payload-2.0 reference and that the three rewritten fixtures
+survive the revert test.
+
+One finding became a decision rather than a change: **M11-D30**, the signup
+form disclosing which mail it sent.
+
+**Gate:** 463 Python tests; corp-cello-site lint, typecheck, 19 vitest, build.
+Still nothing run against AWS.

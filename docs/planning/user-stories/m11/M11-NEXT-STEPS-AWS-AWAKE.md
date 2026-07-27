@@ -29,7 +29,7 @@ description: The ordered list of AWS-dependent steps that convert M11's 🟡 lin
 > **3. Deploy the Lambdas** — `./infra/deploy-lambdas.sh dev`. Shared `_resend.py` and `_referral.py`
 > are new; auth, signup, actions and gallery all changed.
 >
-> **4. ONLY THEN push corp-cello-site.** Commits `63fe0d4` and `81518b3` are deliberately UNPUSHED.
+> **4. ONLY THEN push corp-cello-site.** Commits `63fe0d4`, `81518b3` and `ba2c26b` are deliberately UNPUSHED.
 > The page now expects `sent` and `returning` from `POST /waitlist/signup`; against the old endpoint a
 > repeat address still returns 409 and would surface as a red error instead of a screen. Pushing
 > `main` there auto-deploys the live site, so the order is not advisory.
