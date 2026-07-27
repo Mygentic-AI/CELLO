@@ -1288,3 +1288,50 @@ def test_a_confirmation_racing_the_resend_does_not_send_a_confirm_mail(database)
     assert query(
         "SELECT count(*) FROM email_jobs WHERE user_id = %s AND template = 'e1_confirm'", (uid,)
     )[0][0] == 0, "a confirm mail to a confirmed user burns their live token for nothing"
+
+
+def test_a_job_past_max_attempts_does_not_gag_the_remedy(database):
+    """`attempts < MAX_ATTEMPTS` is the one real exclusion in the claimable
+    check, and a mutation sweep found nothing tested it.
+
+    A job that has exhausted its attempts is unclaimable FOREVER — the
+    dispatcher will never pick it up again. Counting it as "a mail is coming"
+    means this person can never be sent another confirm link while the row
+    exists, and every resend answers "check your inbox" for a mail that will
+    never arrive. That is a permanent, silent dead end, and it is reachable by
+    lowering EMAIL_MAX_ATTEMPTS, which is deliberately env-tunable without a
+    deploy.
+    """
+    from _resend import MAX_ATTEMPTS
+
+    uid = make_user("exhausted@example.test", email_verified=False)
+    query(
+        "INSERT INTO email_jobs (user_id, template, status, attempts, scheduled_at) "
+        "VALUES (%s, 'e1_confirm', 'pending', %s, now())",
+        (uid, MAX_ATTEMPTS),
+    )
+
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = False
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT waitlist_id, email, email_verified, email_status "
+                "FROM waitlist_users WHERE waitlist_id = %s",
+                (uid,),
+            )
+            outcome = resend_link(cur, cur.fetchone(), "test", lambda *a, **k: None)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert outcome == "confirm"
+    claimable = query(
+        "SELECT count(*) FROM email_jobs WHERE user_id = %s AND template = 'e1_confirm' "
+        "AND attempts < %s AND status IN ('pending', 'sending')",
+        (uid, MAX_ATTEMPTS),
+    )[0][0]
+    assert claimable == 1, (
+        "the dead job must not count as a mail on its way — this person would "
+        "never receive another confirm link"
+    )

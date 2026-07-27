@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 
 import psycopg2
+import psycopg2.extras
 import pytest
 
 from waitlist_testdb import PGURL, query, load_lambda
@@ -1185,3 +1186,104 @@ def test_a_dead_link_page_escapes_what_it_renders(auth):
     assert "&lt;img src=x onerror=alert(1)&gt;" in body or "&lt;img src=x onerror=alert(1)>" in body
     assert "&lt;script>alert(2)" in body
     assert "&amp;" in body and "&quot;quoted&quot;" in body
+
+
+def test_the_ledger_alone_prevents_a_second_payment(auth):
+    """Pins the idempotency INDEPENDENTLY of the just_verified gate.
+
+    Two guards stand between one referral and two payouts: `just_verified` in
+    the caller, and the ledger check inside award_referrer_for. A mutation sweep
+    showed they MASK EACH OTHER — removing either alone kept the whole suite
+    green, because the survivor caught it. Neither was individually tested, so a
+    later change that dropped both would have looked safe twice over.
+
+    This calls the function directly, where the gate cannot help, so the ledger
+    check has to hold on its own. The case is real: two devices opening the same
+    confirm link at once both arrive with just_verified true.
+    """
+    from _referral import award_referrer_for
+
+    referrer, referred = _referred_pair("ledger@example.test", "twice@example.test")
+
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = False
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            paid = [
+                award_referrer_for(cur, referred, "test", lambda *a, **k: None)
+                for _ in range(3)
+            ]
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert paid == [10, 0, 0], f"paid {paid} — the ledger check is the only thing standing here"
+    assert query(
+        "SELECT count(*) FROM points_ledger WHERE waitlist_user_id = %s", (referrer,)
+    )[0][0] == 1
+    assert _points(referrer) == 10
+
+
+def test_a_sign_in_after_confirmation_pays_nothing_further(auth):
+    """The other half of the pair, pinned on its own.
+
+    award_referrer_for runs only on the click that MAKES the member. Without
+    that gate a referrer at their cap takes a row lock inside the session
+    transaction and logs a WARN on every sign-in forever — a signal that fires
+    on the designed benign case. Asserted here by the ledger row COUNT rather
+    than the points total, because the total is what the idempotency check
+    protects and would hide the difference.
+    """
+    referrer, referred = _referred_pair("gated@example.test", "signsin@example.test")
+
+    for kind, expiry in (("email_verify", "24 hours"), ("magic_link", "15 minutes"), ("magic_link", "15 minutes")):
+        token = query(
+            "INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at) "
+            f"VALUES (%s, %s, now() + interval '{expiry}') RETURNING token",
+            (referred, kind),
+        )[0][0]
+        call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
+
+    assert query(
+        "SELECT count(*) FROM points_ledger WHERE waitlist_user_id = %s", (referrer,)
+    )[0][0] == 1, "one referral, one ledger row, however many times they sign in"
+
+
+def test_a_capped_referral_is_not_retried_on_every_later_sign_in(auth, caplog):
+    """The one case the ledger check CANNOT mask, which is why it belongs here.
+
+    When the payout hits the cap, no ledger row is written — so the idempotency
+    check never short-circuits and the attempt repeats on every subsequent
+    call. Without the just_verified gate that means a row lock on the referrer
+    inside the session-minting transaction, and a WARN, on every sign-in
+    forever. A signal that fires on the designed benign case is not a signal.
+
+    A mutation sweep found the gate and the ledger check masked each other:
+    removing either alone left the whole suite green.
+    """
+    referrer, referred = _referred_pair("atcapagain@example.test", "invitee@example.test")
+    query(
+        "INSERT INTO points_ledger (waitlist_user_id, points, reason) VALUES (%s, 30, 'share_conversion')",
+        (referrer,),
+    )
+
+    def confirm(kind, expiry):
+        token = query(
+            "INSERT INTO auth_tokens (waitlist_user_id, kind, expires_at) "
+            f"VALUES (%s, %s, now() + interval '{expiry}') RETURNING token",
+            (referred, kind),
+        )[0][0]
+        return call(auth, "GET", "/waitlist/auth/verify", params={"token": str(token)})
+
+    with caplog.at_level("WARNING"):
+        confirm("email_verify", "24 hours")
+        first = caplog.text.count("waitlist.referral.points_capped")
+        confirm("magic_link", "15 minutes")
+        confirm("magic_link", "15 minutes")
+        total = caplog.text.count("waitlist.referral.points_capped")
+
+    assert first == 1, "the cap should be reported once, when it is actually hit"
+    assert total == 1, (
+        f"{total} capped-payout attempts — every later sign-in is re-trying a payment "
+        "that cannot succeed, and locking the referrer's row to do it"
+    )

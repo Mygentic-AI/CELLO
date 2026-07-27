@@ -584,6 +584,14 @@ def handle_verify(params, origin, correlation_id):
             # The counterfactual is weaker than it sounds: to redeem a magic
             # link you must already read the mailbox, which is the whole claim.
             just_verified = False
+            # Both kinds, and today that is EVERY kind: the
+            # `auth_tokens_kind_valid` CHECK admits only these two, so this
+            # guard is currently anticipatory rather than load-bearing — a
+            # mutation replacing it with `if True` is behaviourally identical
+            # and no test can distinguish them. It stays because the moment a
+            # third kind is added, "which credentials attest to controlling the
+            # address?" becomes a real question, and the answer should be
+            # written where it is asked rather than rediscovered.
             if row["kind"] in ("email_verify", "magic_link"):
                 cur.execute(
                     "UPDATE waitlist_users SET email_verified = true "
