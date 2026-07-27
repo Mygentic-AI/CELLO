@@ -21,6 +21,7 @@ than RESPONSE_FLOOR_MS after the request began.
 
 import json
 import os
+import urllib.parse
 import secrets
 import time
 import uuid
@@ -121,13 +122,60 @@ def mint_session(cur, user_id):
     return raw, cur.fetchone()["expires_at"]
 
 
+
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no I/O/0/1 — these get read aloud
+CODE_LENGTH = 12
+MAX_CODE_ATTEMPTS = 8
+
+
+def mint_share_code(cur):
+    """A share code, unique against the table it is inserted into.
+
+    Same alphabet and length as the signup generator it replaces: 12 characters
+    over 32 symbols, 5 bits each. Generated from the target alphabet rather than
+    by upper-casing a token, because .upper() collapses 52 letters onto 26 after
+    generation and the realised space is far smaller than the byte count suggests.
+    """
+    for _ in range(MAX_CODE_ATTEMPTS):
+        code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+        cur.execute("SELECT 1 FROM referral_codes WHERE code = %s", (code,))
+        if cur.fetchone() is None:
+            return code
+    raise AuthError(503, "code_generation_exhausted",
+                    f"Could not mint an unused referral code in {MAX_CODE_ATTEMPTS} attempts.")
+
+
+def cookie_domain():
+    """The registrable domain, so the cookie survives the hop to the site.
+
+    WITHOUT THIS THE WHOLE SIGN-IN FLOW IS A LOOP. This endpoint lives on
+    api.cello.mygentic.ai and redirects to cello.mygentic.ai/status. A Set-Cookie
+    with no Domain attribute is HOST-ONLY: the browser stores it against the API
+    host and never sends it to the site. So /status saw no session, bounced to
+    /auth, and every link — the confirm link and the magic link alike — appeared
+    to "do nothing but return you to sign in". Nothing was expired and no token
+    was wrong; the cookie simply was not travelling.
+
+    Derived from WAITLIST_SITE rather than hardcoded, so a staging host does not
+    silently scope cookies to production.
+    """
+    host = urllib.parse.urlparse(SITE).hostname or "cello.mygentic.ai"
+    return host
+
+
 def session_cookie(raw_token):
     # HttpOnly so script cannot read it; Secure so it never crosses plaintext;
     # SameSite=Lax so a cross-site POST cannot ride it, while a link from an
     # email still arrives authenticated.
+    #
+    # Domain is set to the registrable domain so the cookie reaches the site
+    # after the redirect. It is therefore also sent to other subdomains; that is
+    # acceptable here because the name is distinct from the operations console's
+    # (`cello_ops_session`), so neither can be mistaken for the other, and a
+    # waitlist session grants nothing there.
     return (
         f"{COOKIE_NAME}={raw_token}; Max-Age={SESSION_DAYS * 24 * 3600}; "
-        f"Path=/; HttpOnly; Secure; SameSite=Lax"
+        f"Path=/; Domain={cookie_domain()}; HttpOnly; Secure; SameSite=Lax"
     )
 
 
@@ -345,6 +393,42 @@ def handle_verify(params, origin, correlation_id):
                         via=row["kind"],
                     )
 
+                # THE REFERRAL CODE IS MINTED HERE, NOT AT SIGNUP.
+                #
+                # Signup used to mint one immediately and show it on the
+                # confirmation page and in the confirmation email — to an
+                # address nobody had proved control of. That is a free supply of
+                # working referral codes to anyone willing to type strangers'
+                # addresses, and every code carries points. A code cannot exist
+                # before the one fact it depends on: that this person reads this
+                # mailbox.
+                #
+                # Guarded by NOT EXISTS rather than by the rowcount above, so a
+                # user verified before this change still gets their code on
+                # their next sign-in instead of never.
+                cur.execute(
+                    """
+                    SELECT 1 FROM referral_codes
+                    WHERE owner_waitlist_user_id = %s AND type = 'share'
+                    """,
+                    (user_id,),
+                )
+                if cur.fetchone() is None:
+                    code = mint_share_code(cur)
+                    cur.execute(
+                        """
+                        INSERT INTO referral_codes (code, owner_waitlist_user_id, creator_handle, type)
+                        VALUES (%s, %s, NULL, 'share')
+                        """,
+                        (code, user_id),
+                    )
+                    log(
+                        "waitlist.referral_code.minted",
+                        correlation_id,
+                        waitlistId=str(user_id),
+                        reason="email_verified",
+                    )
+
             raw, expires_at = mint_session(cur, user_id)
             log(
                 "waitlist.auth.session.created",
@@ -524,7 +608,7 @@ def handle_logout(headers, origin, correlation_id):
             **cors_headers(origin),
             # Max-Age=0 so the browser drops it even if the server-side revoke
             # somehow did not land.
-            "Set-Cookie": f"{COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax",
+            "Set-Cookie": f"{COOKIE_NAME}=; Max-Age=0; Path=/; Domain={cookie_domain()}; HttpOnly; Secure; SameSite=Lax",
         },
         "body": "",
     }

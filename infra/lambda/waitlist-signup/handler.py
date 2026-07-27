@@ -462,14 +462,10 @@ def handle_signup(body, origin, correlation_id):
                     ],
                 )
 
-            own_code = generate_code(cur, correlation_id)
-            cur.execute(
-                """
-                INSERT INTO referral_codes (code, owner_waitlist_user_id, creator_handle, type)
-                VALUES (%s, %s, NULL, 'share')
-                """,
-                (own_code, user_id),
-            )
+            # NO REFERRAL CODE HERE. It is minted when the email is verified
+            # (waitlist-auth), because a code issued to an unproven address is a
+            # working, point-earning credential handed to whoever typed the
+            # address — which need not be its owner. See the note there.
 
             referral = {"applied": False}
             inbound = clean(body.get("invite_code"), MAX_SHORT_LEN) or latest_ref(touchpoints)
@@ -518,7 +514,6 @@ def handle_signup(body, origin, correlation_id):
             {
                 "success": True,
                 "waitlist_id": str(user_id),
-                "referral_code": own_code,
                 "referral": referral,
             },
             origin,

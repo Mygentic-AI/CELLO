@@ -280,7 +280,9 @@ def test_a_plain_signup_creates_the_user_a_share_code_and_an_e1_job(handler):
     )
 
     assert status == 200, body
-    assert body["referral_code"], "the new user must be told their own code — the UI shows it"
+    # NO referral code at signup. It is minted when the email is verified, so an
+    # unproven address cannot be handed a working, point-earning credential.
+    assert "referral_code" not in body, "an unverified address must not receive a code"
 
     row = query(
         "SELECT display_name, first_touch_source, last_touch_source, status "
@@ -288,8 +290,9 @@ def test_a_plain_signup_creates_the_user_a_share_code_and_an_e1_job(handler):
     )[0]
     assert row == ("Plain", "reddit", "x", "waiting")
 
-    codes = query("SELECT type, owner_waitlist_user_id IS NOT NULL, creator_handle IS NULL FROM referral_codes")
-    assert codes == [("share", True, True)]
+    assert query("SELECT count(*) FROM referral_codes")[0][0] == 0, (
+        "no code exists until the email is verified"
+    )
     assert query("SELECT count(*) FROM email_jobs WHERE template = 'e1_confirm'")[0][0] == 1
 
 
@@ -324,7 +327,21 @@ def test_an_explicit_first_touch_survives_the_twenty_entry_cap(handler):
 def test_self_referral_is_refused(handler):
     status, _ = invoke(handler, signup_body("solo@example.test"))
     assert status == 200
-    own = query("SELECT code FROM referral_codes LIMIT 1")[0][0]
+    # Signup no longer mints, so the referrer's code is seeded here — standing in
+    # for the verification step that mints it in production.
+    solo = query("SELECT waitlist_id FROM waitlist_users WHERE email = 'solo@example.test'")[0][0]
+    # query() does not commit, so the insert has to carry its own transaction —
+    # otherwise the row is rolled back and the referral silently finds no code.
+    import psycopg2
+    from waitlist_testdb import PGURL
+    _c = psycopg2.connect(PGURL); _c.autocommit = True
+    with _c.cursor() as _cur:
+        _cur.execute(
+            "INSERT INTO referral_codes (code, owner_waitlist_user_id, creator_handle, type) "
+            "VALUES ('SOLOCODE1234', %s, NULL, 'share')", (solo,),
+        )
+    _c.close()
+    own = "SOLOCODE1234"
 
     invoke(handler, signup_body("other@example.test", invite_code=own))
     assert query("SELECT count(*) FROM referrals")[0][0] == 1, "a genuine referral still lands"
