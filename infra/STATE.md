@@ -9,6 +9,28 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🔴 Hibernate complete — all 3 regions down (2026-07-27, 19:14–19:26 UTC)
+
+Uptime this cycle: ~35 h (woken 2026-07-26 08:04 UTC). ECS→0 (directory + relay ×3, portal,
+ops-agent), 4 RDS stopped, demo EC2 stopped, 7 ALBs + 3 NAT Gateways (EIPs retained) + 3
+ssmmessages endpoints deleted, `directory-*`/`relay-*`/`portal` blackholed to `198.51.100.1`.
+
+**Two hibernate.sh defects found and fixed in this session — hibernate had been unrunnable for ~32 h:**
+- `04fe0d83` — `a7cef102` (2026-07-26 11:11) added the portal listener-rule/SNI-cert capture *above*
+  the block that assigns `portal_alb_arn`; under `set -u` that aborted every run on the first region.
+  No hibernate had been attempted between that commit and now, so nobody saw it. Also added the
+  missing `jq -c` compaction for `portal_extra_certs` (multi-line JSON breaks `--argjson`).
+  This run captured **2 portal listener rules + 1 extra SNI cert** — including the
+  `operations.cello.mygentic.ai` host-header rule → `cello-Targe-SMBCCDNKD2RR`, which is what lets
+  wake restore the ops dashboard without a manual redeploy.
+- `fa227c69` — `operations.*` was never in the blackhole list, so it answers NXDOMAIN for the whole
+  down-window. **Known live gap for THIS cycle**: the fix landed after the blackhole pass had already
+  run, so `operations.cello.mygentic.ai` is NXDOMAIN until wake. Every future hibernate blackholes it.
+
+**ECS Exec unavailable while hibernated.** No AWS changes until `wake.sh --execute` has run.
+
+---
+
 ## ✅ DIRECTORY CI REACHES ALL THREE REGIONS AGAIN (2026-07-26, first time since ~2026-07-16)
 
 Pipeline `07d82775` after the wake: **Source → Build → StagingDeploy → SmokeTest → ProductionDeploy,

@@ -1,5 +1,5 @@
 {
-  "hibernated_at": "2026-07-25T20:10:26Z",
+  "hibernated_at": "2026-07-27T19:26:18Z",
   "environment": "dev",
   "cluster": "cello-dev",
   "hosted_zone_id": "Z02692523DOH7NW521CL8",
@@ -10,13 +10,13 @@
       "region": "us-east-1",
       "vpc_id": "vpc-042c7b8ac97f6a38b",
       "nat": {
-        "id": "nat-0bb8e44f16d09bbf1",
+        "id": "nat-0b89295c9a631b2df",
         "subnet": "subnet-00780580ba49e6eb0",
         "eip_alloc": "eipalloc-0888c12071c5b5f2a",
         "public_ip": "54.156.211.228",
         "vpc": "vpc-042c7b8ac97f6a38b"
       },
-      "nat_id": "nat-0bb8e44f16d09bbf1",
+      "nat_id": "nat-0b89295c9a631b2df",
       "private_route_table": "rtb-0463fe7bcbba06ecb",
       "nat_tags": [
         {
@@ -48,13 +48,17 @@
         {
           "name": "cello-operations-agent-dev",
           "desired": 1
+        },
+        {
+          "name": "cello-ops-dashboard-dev",
+          "desired": 1
         }
       ],
       "rds_id": "cello-dev",
       "portal_rds_id": "cello-portal-dev",
-      "alb_dir_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:loadbalancer/app/cello-dir-dev/d1e5394ec675ac52",
-      "alb_relay_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:loadbalancer/app/cello-relay-dev/07a7567419984156",
-      "portal_alb_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:loadbalancer/app/cello-portal-dev/16a95cccbe7811f9",
+      "alb_dir_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:loadbalancer/app/cello-dir-dev/b8a202c3dccc19ed",
+      "alb_relay_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:loadbalancer/app/cello-relay-dev/ea95ddd4bc4b9c30",
+      "portal_alb_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:loadbalancer/app/cello-portal-dev/e08f1bed802801fc",
       "dir_alb_config": {
         "subnets": [
           "subnet-00780580ba49e6eb0",
@@ -90,7 +94,7 @@
         "idle_timeout_seconds": "60"
       },
       "portal_acm_cert_arn": "arn:aws:acm:us-east-1:257394457473:certificate/de0d5927-601e-450e-914a-f58ff7a80200",
-      "portal_tg_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:targetgroup/cello-Targe-SMBCCDNKD2RR/c0eac2e1277f8a56",
+      "portal_tg_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:targetgroup/cello-portal-dev-tg/d6e982c52d62d927",
       "demo_ec2_id": "i-0ad3e7c22470f266e",
       "dir_listener_rules": [
         {
@@ -98,6 +102,7 @@
           "paths": [
             "/agent-lookup"
           ],
+          "field": "path-pattern",
           "tg_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:targetgroup/cello-Boots-DVJVALYFFUUE/edb33ac388169744"
         },
         {
@@ -105,6 +110,7 @@
           "paths": [
             "/bootstrap"
           ],
+          "field": "path-pattern",
           "tg_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:targetgroup/cello-Boots-DVJVALYFFUUE/edb33ac388169744"
         },
         {
@@ -112,6 +118,7 @@
           "paths": [
             "/internal/*"
           ],
+          "field": "path-pattern",
           "tg_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:targetgroup/cello-Inter-NGUXYYHZ8DXN/4aecf9e61e8ecf06"
         },
         {
@@ -119,11 +126,13 @@
           "paths": [
             "/manifest"
           ],
+          "field": "path-pattern",
           "tg_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:targetgroup/cello-Boots-DVJVALYFFUUE/edb33ac388169744"
         },
         {
           "priority": "default",
           "paths": null,
+          "field": null,
           "tg_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:targetgroup/cello-Targe-9LAMCJEUGDHR/5f37043a60a3582d"
         }
       ],
@@ -131,8 +140,28 @@
         {
           "priority": "default",
           "paths": null,
+          "field": null,
           "tg_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:targetgroup/cello-Relay-0FM8MFRFOPNW/0895408543d965bb"
         }
+      ],
+      "portal_listener_rules": [
+        {
+          "priority": "100",
+          "paths": [
+            "operations.cello.mygentic.ai"
+          ],
+          "field": "host-header",
+          "tg_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:targetgroup/cello-Targe-SMBCCDNKD2RR/c0eac2e1277f8a56"
+        },
+        {
+          "priority": "default",
+          "paths": null,
+          "field": null,
+          "tg_arn": "arn:aws:elasticloadbalancing:us-east-1:257394457473:targetgroup/cello-portal-dev-tg/d6e982c52d62d927"
+        }
+      ],
+      "portal_extra_certs": [
+        "arn:aws:acm:us-east-1:257394457473:certificate/4b6a3413-5195-4fa4-9b9f-c0fe8998983d"
       ],
       "target_groups": {
         "main": "arn:aws:elasticloadbalancing:us-east-1:257394457473:targetgroup/cello-Targe-9LAMCJEUGDHR/5f37043a60a3582d",
@@ -141,9 +170,9 @@
         "relay": "arn:aws:elasticloadbalancing:us-east-1:257394457473:targetgroup/cello-Relay-0FM8MFRFOPNW/0895408543d965bb"
       },
       "ssmmessages_endpoint": {
-        "id": "vpce-0e0a476c25ee342d6",
+        "id": "vpce-03e7fe8c577d7b369",
         "config": {
-          "id": "vpce-0e0a476c25ee342d6",
+          "id": "vpce-03e7fe8c577d7b369",
           "subnets": [
             "subnet-05552d24bb15a7782",
             "subnet-0dba876a5a923404b"
@@ -164,13 +193,13 @@
       "region": "eu-central-1",
       "vpc_id": "vpc-04305bc6b6fe43406",
       "nat": {
-        "id": "nat-0bd5102b9d248fed2",
+        "id": "nat-0381c34e2bfc2cfe6",
         "subnet": "subnet-019bf77e7151de0ed",
         "eip_alloc": "eipalloc-068cb54e9eb4cf2e8",
         "public_ip": "63.181.239.142",
         "vpc": "vpc-04305bc6b6fe43406"
       },
-      "nat_id": "nat-0bd5102b9d248fed2",
+      "nat_id": "nat-0381c34e2bfc2cfe6",
       "private_route_table": "rtb-0ae553aa68ff6b39c",
       "nat_tags": [
         {
@@ -198,8 +227,8 @@
       ],
       "rds_id": "cello-dev",
       "portal_rds_id": "None",
-      "alb_dir_arn": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:loadbalancer/app/cello-dir-dev/057d71afe844094e",
-      "alb_relay_arn": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:loadbalancer/app/cello-relay-dev/6f40b038cbd0bc72",
+      "alb_dir_arn": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:loadbalancer/app/cello-dir-dev/64514be1a199aa87",
+      "alb_relay_arn": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:loadbalancer/app/cello-relay-dev/a660da4ac50c6648",
       "portal_alb_arn": "None",
       "dir_alb_config": {
         "subnets": [
@@ -234,6 +263,7 @@
           "paths": [
             "/agent-lookup"
           ],
+          "field": "path-pattern",
           "tg_arn": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:targetgroup/cello-Boots-NFY43TC8F5R1/2ad5e11a35011679"
         },
         {
@@ -241,6 +271,7 @@
           "paths": [
             "/bootstrap"
           ],
+          "field": "path-pattern",
           "tg_arn": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:targetgroup/cello-Boots-NFY43TC8F5R1/2ad5e11a35011679"
         },
         {
@@ -248,6 +279,7 @@
           "paths": [
             "/internal/*"
           ],
+          "field": "path-pattern",
           "tg_arn": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:targetgroup/cello-Inter-R4G0KQBKGRTY/c175bd3936faa15a"
         },
         {
@@ -255,11 +287,13 @@
           "paths": [
             "/manifest"
           ],
+          "field": "path-pattern",
           "tg_arn": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:targetgroup/cello-Boots-NFY43TC8F5R1/2ad5e11a35011679"
         },
         {
           "priority": "default",
           "paths": null,
+          "field": null,
           "tg_arn": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:targetgroup/cello-Targe-2EHEEJO8UKLV/815911def6460f9c"
         }
       ],
@@ -267,9 +301,12 @@
         {
           "priority": "default",
           "paths": null,
+          "field": null,
           "tg_arn": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:targetgroup/cello-Relay-NBJEYKYPIFJS/cfa9d1d53d9e291a"
         }
       ],
+      "portal_listener_rules": [],
+      "portal_extra_certs": [],
       "target_groups": {
         "main": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:targetgroup/cello-Targe-2EHEEJO8UKLV/815911def6460f9c",
         "bootstrap": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:targetgroup/cello-Boots-NFY43TC8F5R1/2ad5e11a35011679",
@@ -277,9 +314,9 @@
         "relay": "arn:aws:elasticloadbalancing:eu-central-1:257394457473:targetgroup/cello-Relay-NBJEYKYPIFJS/cfa9d1d53d9e291a"
       },
       "ssmmessages_endpoint": {
-        "id": "vpce-0600238652400a369",
+        "id": "vpce-04392e6c489b53496",
         "config": {
-          "id": "vpce-0600238652400a369",
+          "id": "vpce-04392e6c489b53496",
           "subnets": [
             "subnet-069064d143f5913dc",
             "subnet-06e32e9f16fff5a35"
@@ -300,13 +337,13 @@
       "region": "ap-northeast-1",
       "vpc_id": "vpc-09a2484e197738d18",
       "nat": {
-        "id": "nat-0a1ff6ccc1769d3ef",
+        "id": "nat-03232ea11c7967d99",
         "subnet": "subnet-0f6aff3a5b4bd84fd",
         "eip_alloc": "eipalloc-039627cbf41fb215f",
         "public_ip": "54.199.97.198",
         "vpc": "vpc-09a2484e197738d18"
       },
-      "nat_id": "nat-0a1ff6ccc1769d3ef",
+      "nat_id": "nat-03232ea11c7967d99",
       "private_route_table": "rtb-0e890d359a5e7343c",
       "nat_tags": [
         {
@@ -334,8 +371,8 @@
       ],
       "rds_id": "cello-dev",
       "portal_rds_id": "None",
-      "alb_dir_arn": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:loadbalancer/app/cello-dir-dev/a11cbd18fd6e29af",
-      "alb_relay_arn": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:loadbalancer/app/cello-relay-dev/ca7982bdcd866b4e",
+      "alb_dir_arn": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:loadbalancer/app/cello-dir-dev/cd8b6b63899b53b0",
+      "alb_relay_arn": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:loadbalancer/app/cello-relay-dev/c2a2a3cc1acac8da",
       "portal_alb_arn": "None",
       "dir_alb_config": {
         "subnets": [
@@ -370,6 +407,7 @@
           "paths": [
             "/agent-lookup"
           ],
+          "field": "path-pattern",
           "tg_arn": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:targetgroup/cello-Boots-LX3AIOMBORGQ/c4dea0509d0f64b6"
         },
         {
@@ -377,6 +415,7 @@
           "paths": [
             "/bootstrap"
           ],
+          "field": "path-pattern",
           "tg_arn": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:targetgroup/cello-Boots-LX3AIOMBORGQ/c4dea0509d0f64b6"
         },
         {
@@ -384,6 +423,7 @@
           "paths": [
             "/internal/*"
           ],
+          "field": "path-pattern",
           "tg_arn": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:targetgroup/cello-Inter-ZI0SQORSMMWW/35f8f1d18f28ac62"
         },
         {
@@ -391,11 +431,13 @@
           "paths": [
             "/manifest"
           ],
+          "field": "path-pattern",
           "tg_arn": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:targetgroup/cello-Boots-LX3AIOMBORGQ/c4dea0509d0f64b6"
         },
         {
           "priority": "default",
           "paths": null,
+          "field": null,
           "tg_arn": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:targetgroup/cello-Targe-CMNY5CWKIQHB/744878be56f53610"
         }
       ],
@@ -403,9 +445,12 @@
         {
           "priority": "default",
           "paths": null,
+          "field": null,
           "tg_arn": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:targetgroup/cello-Relay-ZM6XE3X78K0Q/60b17c9cdfa06d0e"
         }
       ],
+      "portal_listener_rules": [],
+      "portal_extra_certs": [],
       "target_groups": {
         "main": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:targetgroup/cello-Targe-CMNY5CWKIQHB/744878be56f53610",
         "bootstrap": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:targetgroup/cello-Boots-LX3AIOMBORGQ/c4dea0509d0f64b6",
@@ -413,9 +458,9 @@
         "relay": "arn:aws:elasticloadbalancing:ap-northeast-1:257394457473:targetgroup/cello-Relay-ZM6XE3X78K0Q/60b17c9cdfa06d0e"
       },
       "ssmmessages_endpoint": {
-        "id": "vpce-0ac8e45132195e2f9",
+        "id": "vpce-0b63bc5bb9745ea9b",
         "config": {
-          "id": "vpce-0ac8e45132195e2f9",
+          "id": "vpce-0b63bc5bb9745ea9b",
           "subnets": [
             "subnet-0bf9a32c30489202b",
             "subnet-044662950bc5caa85"
