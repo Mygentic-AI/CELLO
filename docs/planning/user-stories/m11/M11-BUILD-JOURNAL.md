@@ -3539,3 +3539,75 @@ than the behaviour under the real condition — a synthetic `pgcode`, a bound on
 mail that was never sent. That is the same failure as the fixture that tested a
 gateway which does not exist. Reviewing my own fix with the same instrument that
 missed the original bug is not a check.
+
+
+---
+
+## 2026-07-27 (third review) — the fast door had no door
+
+Third pass. Three of the seven items came back different from what my comments
+claimed, and all three were found by running the code.
+
+**The premium invite granted nothing, and my fix made it worse.** Confirmation
+set `status = 'admitted'`. `waitlist_tokens` is minted in exactly one place —
+the wave assembly, atomically with the invitation mail — and the Telegram gate
+burns a token and never reads `status`. So a premium holder had a label, no
+invite, no token, and a refusal at the gate. Setting it at confirmation was
+additionally self-defeating: the wave's premium cohort requires
+`status='waiting' AND email_verified AND premium_referred`, and I was flipping
+status in the same transaction that set `email_verified`, so no transaction
+could ever observe that combination. The reviewer ran the cohort query against
+a seeded database and got zero rows.
+
+Confirmation now writes no status at all. A confirmed claimant sits in the
+cohort, the wave admits them first, and the wave mints the token and sends the
+mail. That is the first time a premium invite has worked end to end — the old
+behaviour hit the same dead end at signup. **M11-D32 supersedes M11-D31.**
+
+**The one-job guard was read-then-write.** Two barrier-synchronised calls both
+saw nothing pending and both inserted: two confirm jobs in one batch, which is
+exactly the dead-link-in-a-sent-mail case the guard exists to prevent. It
+serialises on the user row now. Its predicate was wrong in both directions too —
+`status = 'pending'` missed a job stranded in `'sending'` inside its reclaim
+window, and counted one past `MAX_ATTEMPTS` that can never be claimed, which
+would gag the remedy permanently while still answering "check your inbox". It
+asks the dispatcher's question now, from the dispatcher's own environment.
+
+**Repeat clicks spent the budget without sending anything.** My own new test
+caught this one: five taps of the resend button burned a whole rate-limit window
+to queue a single mail, then refused a genuinely new link for fifteen minutes.
+The already-coming check now runs before the counter. The reviewer's related
+point stands and is now covered — the rate-limit tests drain between calls,
+which models the 60-second dispatcher over minutes, not a person clicking five
+times in ten seconds. That common case had no test at all.
+
+**And the guard's only test never reached the branch it names.** `make_user` in
+the email suite defaults to `email_verified=True`, so it took the signin path,
+queued `e_magic_link`, and passed with `resend_link` deleted outright. Third
+round, third hollow test, same shape every time: the test exercised a path
+adjacent to the one it was named for.
+
+**Smaller:** `"does not exist"` in the credential classifier swallowed the
+wrong-database fault and reported it as a rejected credential — an alarm on that
+code would page someone about a rotation that never happened. All four real
+connection failures now classify distinctly, checked against live libpq.
+`_page` escaped its sentence and not its heading. `fetchSession` had no
+deadline, and since `/waitlist` now gates its first render on it, a request that
+never settles left the top-of-funnel page showing "One moment." forever with
+nothing to report because nothing rejected.
+
+**Found while fixing, not by the reviewer.** Moving the pending check above
+where `template` was assigned raised `NameError`, and one test closed its
+connection without `try/finally` — so the row lock leaked and the next
+`TRUNCATE` blocked forever. The defect surfaced as a hung suite rather than a
+failing test, which is its own lesson: a test that holds a lock needs
+`try/finally`, or the next failure is unreadable.
+
+**Gate:** 472 Python tests; corp-cello-site lint, typecheck, 20 vitest, build.
+Still nothing run against AWS.
+
+**Three rounds, and the pattern has not changed.** Every blocker in all three
+was something I had written, tested and believed, where the test asserted the
+shape of the fix rather than the behaviour under the real condition. The
+reviewer found them by executing: a real refused connection, a real cohort
+query, a real barrier race. Reading my own code back has caught none of them.
