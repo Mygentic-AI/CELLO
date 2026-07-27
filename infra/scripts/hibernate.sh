@@ -560,7 +560,10 @@ for REGION in "${TARGET_REGIONS[@]}"; do
   }
   blackhole_r53 "$(dir_subdomain "${REGION}")"
   blackhole_r53 "$(relay_subdomain "${REGION}")"
-  [[ "${REGION}" == "us-east-1" ]] && blackhole_r53 "portal"
+  # operations.* rides the portal ALB as a host rule and has its own alias record,
+  # so it goes NXDOMAIN the moment that ALB is deleted — same negative-cache trap
+  # as the rest. wake.sh already UPSERTs it back to the new portal ALB alias.
+  [[ "${REGION}" == "us-east-1" ]] && { blackhole_r53 "portal"; blackhole_r53 "operations"; }
 
   # -- 3d. Delete ssmmessages VPC endpoint -------------------------------------
   ep_id=$(echo "$R" | jq -r '.ssmmessages_endpoint.id')
