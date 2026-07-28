@@ -503,6 +503,25 @@ the discussion-of-record. Restated here because this is the milestone that imple
   anonymous endorsements."* D-8a governs signals that have both variants; an endorsement's worth is the
   recipient recognising the issuer (`DOD-END-FLOOR-2` joins on exactly that), so an anonymous one is an
   unattributable claim — worth nothing, and precisely what a farm would emit.
+- **M10B-D9 (2026-07-28) — an ACCOUNT-subject endorsement is accepted by any one agent under that
+  account, in MCP/CLI; no portal acceptance UI ships in M10B.** The question the consent mechanism
+  raises but D-23 does not answer: an agent-subject endorsement is obviously accepted by that agent, but
+  who consents for the account? Choice: any agent under the account, because M10's account-level signals
+  (phone, email) ALREADY fan out to every agent under the account — consent following the same shape
+  adds no new concept, and keeps the entire operator surface in MCP/CLI where `DOD-END-SURFACE-1` puts
+  it. Rejected: an acceptance screen in the portal — it is a second surface for one verb, and the M8C
+  parity rule would then demand it everywhere. Reverse: cheap; adding a portal view later reads the same
+  state. Reviewer note: acceptance is recorded once per account-subject signal, not once per agent, or
+  four agents produce four consent states for one object.
+- **M10B-D10 (2026-07-28) — endorsing requires NO prior session or contact relationship.** Nothing in
+  the design gates issuance on having met, and adding that gate would be a new protocol constraint with
+  a real cost (you cannot endorse someone you know offline, or vouch for a new agent before it has
+  connected — which is exactly the bootstrap case the 2026-04-10 log wanted endorsements FOR). The
+  defense is elsewhere and is already sufficient: a stranger's endorsement is **worth nothing to the
+  recipient anyway**, because value comes from the recipient's own tier join on the issuer
+  (`DOD-END-FLOOR-2`, D-27) — an endorsement from someone Charlie has never heard of does not move
+  Charlie. Farming is capped by `DOD-END-QUOTA-1` and by `INV-NO-SELF-STANDING`. Reverse: adding a
+  relationship requirement later is a policy change at intake, not a migration.
 - **M10B-D1 (2026-07-28) — the milestone is a SOURCE plus two MECHANISMS, not a feature.** Fork: ship
   "endorsements" as a feature, versus generalise the client-supplied source and the consent/withdrawal
   mechanisms so the attestation family opens behind them. Chose the latter; `DOD-END-PLAYBOOK-1` is the
@@ -566,8 +585,16 @@ determination's job.
 - [[M10-TRUST-SIGNAL-TAXONOMY]] — spec-of-record (WHAT): Class 2, and why it contains only endorsements.
 - [[2026-07-27_2049_policy-surface-audit-touchpoints-and-open-decisions]] — the decisions above,
   §13 the intake-owes list, §12 D-19 through D-29.
-- [[2026-04-10_1000_connection-endorsements-and-attestations]] — the origin: endorsement ⊂ attestation,
-  and the superseded same-owner rejection rule.
+- [[2026-04-10_1000_connection-endorsements-and-attestations]] — the origin: endorsement ⊂ attestation.
+  **Read it for the reasoning, NOT for the shape — three things in it are superseded and one of them is
+  a trap.** (i) Its blanket same-owner rejection is superseded by D-29 (agent-subject is minted and
+  flagged; only account-subject is refused) — the log marks this itself. (ii) Its **two protocol types**
+  (`connection_endorsement`, gated at the connection layer, vs `attestation`, informational) are
+  superseded by `M10B-D7`: there is ONE type, and the gating that split was for is now done by floor
+  predicates over `issuer_kind`/tier/count (`DOD-END-FLOOR-2`). Building the two-type split would be a
+  direct `DOD-END-INV-ZEROBUMP` violation — this is the trap. (iii) It puts endorsement intake and rate
+  limiting at the **directory**; the §6 2026-07-11 amendment and `M10B-D6` put minting and the quota at
+  the portal.
 - [[2026-07-10_2110_cello-is-a-cryptographic-notary]] — the frame: an attestation is an issuer's signed
   claim about a subject or event, notarized.
 - [[M10B-BUILD-JOURNAL]] — evidence, forensics, and playbook-run records.
