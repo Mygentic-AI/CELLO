@@ -297,6 +297,20 @@ description: >
   Parameter-Store equivalent. Confirm with a live empty-registry boot in P2 (DOD-NODE-DIR-GCP-1);
   until then the adapter set is **GCS cloud-storage + GCS audit-log + Cloud KMS envelope key**
   (three, not four).
+- **M12-D10** (2026-07-28): **`m12/adapter-gcp` is SUPERSEDED — do not merge it.** Entry 19 listed
+  four branches awaiting Wave 2; there are three. The branch is an early draft that lacks the KMS
+  provider and the audit shipper entirely and carries an older GCS provider; the shipped, reviewed
+  adapter set lives on `m12/ae-append` (Entries 16, 18). Verified: `git diff HEAD m12/adapter-gcp`
+  removes 486 lines and adds 48, and the one file it holds that HEAD lacks
+  (`gcs-cloud-storage-provider.test.ts`) is subsumed by `gcp-adapters.test.ts`, which covers all
+  three adapters. Live branches: `m12/role-manifest`, `m12/multiaddr`, `m12/ae-append`, and now
+  `m12/node-dir-gcp` (the integration branch — the other three are merged into it). → Entry 20
+- **M12-D11** (2026-07-28): **the first GCP node's boot code merges all M12 branches rather than
+  deploying from one.** The four P1 units were built on independent branches off different bases,
+  so no single one produces a runnable M12 node. `m12/node-dir-gcp` is that integration branch.
+  The semantic merge that mattered: `computeDkgTopology` (role-manifest, validator-only counting)
+  now takes its node set from `getVerifiedManifest()` (M12-D8), not the served copy — both
+  concerns survive rather than one silently winning. → Entry 20
 - Decisions 1–11 of the spec-of-record are restated there, not here — this section holds only
   decisions made DURING the milestone.
 
@@ -322,6 +336,16 @@ description: >
   burn-OR propagates it irreversibly. No worse than today's mesh, but the real trust boundary.
   Hardening = end-to-end owner-signed suspension authorization, mirroring the M8B FROST-stream
   auth deferral. Out of M12.
+- **M12-P7** — **`verifyChain('user_accounts')` cannot pass on a shared test database.**
+  `account-001` AC-005/AC-007 verify the chain over the WHOLE table, but ~10 test files
+  `DELETE FROM user_accounts` as cleanup, and `verifyChain` recomputes each row's hash from its
+  predecessor starting at `CHAIN_GENESIS` — so one deleted row invalidates every row after it.
+  Measured on a fresh database mid-run: 2 rows survive, at `id` 10 and 37. The assertion is
+  therefore order- and history-dependent, which is why it is green in one checkout and red in
+  another. **The product is correct** — the defect is that tests delete from a table the design
+  calls append-only. Fix is either hermetic isolation (point the store's pool at a scratch
+  `search_path` holding a `LIKE public.user_accounts INCLUDING ALL` copy) or stopping the deletes.
+  Not in M12's path; recorded so the two reds are known-and-explained, not ambient. → Entry 20
 - **M12-P4** — **Replica nodes at launch.** The role split ships in P1, but whether any
   replica-role nodes actually deploy at launch (vs the capability lying dormant) is undecided —
   zero replicas is a valid launch shape.

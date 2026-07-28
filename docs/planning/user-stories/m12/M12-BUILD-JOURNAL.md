@@ -801,3 +801,110 @@ The `cello-done-auditor` ruled all three AE status flips **OVERSTATED** before t
 each had a named AC clause with no test behind it. Two were fixed with real tests, one (APPEND-1's
 O(compare)) was demoted, then genuinely implemented in Entry 17. **Run the auditor on every status
 flip; it caught what three unit reviews did not.**
+
+---
+
+## Entry 20 — 2026-07-28 — Integration branch + a green floor: three boot defects fixed before touching GCP
+
+Opening `DOD-NODE-DIR-GCP-1`. Before writing any GCP code I needed a runnable M12 node and a
+trustworthy gate. Neither existed.
+
+### The four P1 branches do not stack — none of them is a deployable M12 node
+
+Entry 19 recorded "four branches awaiting Wave 2" as if they were sequential. They are not: each
+was cut from a different base, and none contains the others.
+
+| branch | base (merge-base with ae-append) | contains |
+|---|---|---|
+| `m12/role-manifest` | `d9da3f0d` | `computeDkgTopology`, replica-only guard |
+| `m12/multiaddr` | `a060395c` | `buildBootstrapMultiaddr` |
+| `m12/adapter-gcp` | `a7c2cc21` | **early draft — superseded** |
+| `m12/ae-append` | — | anti-entropy + the FULL GCP adapter set |
+
+So `m12/node-dir-gcp` is an integration branch off `ae-append` with role-manifest and multiaddr
+merged in (**M12-D11**). `m12/adapter-gcp` is NOT merged and never will be (**M12-D10**): diffing
+it against HEAD removes 486 lines and adds 48 — it has no KMS provider and no audit shipper at
+all, and its one unique file (`gcs-cloud-storage-provider.test.ts`) is subsumed by
+`gcp-adapters.test.ts`, which covers all three adapters. Entry 19's branch list was wrong; three
+branches are live, not four.
+
+**The one semantic conflict, in `directory-node.ts`.** role-manifest routed the DKG topology
+through `computeDkgTopology(getCurrentManifest().nodes)`; ae-append had changed the same read to
+`getVerifiedManifest()` (M12-D8). Taking either side wholesale silently drops the other's
+security property. Resolved to `computeDkgTopology(getVerifiedManifest()?.nodes ?? [])` — validator-
+only counting AND the verified node set. A merge that "auto-resolves" this cleanly is a merge that
+lost something.
+
+### Establishing the baseline BEFORE claiming anything
+
+Full directory suite on the merged tree: **9 failures**. Rather than attribute them, I checked out
+`m12/ae-append` and ran the same six files: **the same 9 failures, identical list.** The merge
+introduced zero. That is the only way the rest of this entry is honest.
+
+Isolation note: the primary checkout already owns port 5433 and an endorsements agent is using
+that database, so this worktree runs its own Postgres on **5434** (`COMPOSE_PROJECT_NAME=cellom12`
+plus a `ports: !override` file — compose *appends* port lists by default, which is why a naive
+override tried to bind both). Four of the nine failures were that isolation: tests shelling out to
+`docker compose` / `docker logs` resolve the DEFAULT project. Exporting `COMPOSE_PROJECT_NAME` and
+`COMPOSE_FILE` for the run fixes those without touching code.
+
+### Three real defects, and one of them was aimed at tonight
+
+**1. An unreachable database killed the node with a raw stack and no CELLO event.**
+`await s.loadProfiles()` was unguarded in both branches of the store factory. Reproduced directly:
+
+```
+{"event":"adapter.initialised", ... "implementation":"LocalAuditLogShipper"}
+/…/pg-pool/index.js:45
+    Error.captureStackTrace(err)
+error: database "cello_nonexistent_test_db" does not exist
+    at async PgDirectoryStore.loadProfiles (…/pg-directory-store.ts:233:20)
+```
+
+No `directory.*` event at all. This is *the* first-boot failure mode for a node pointed at a
+freshly provisioned managed database — wrong host, wrong password, missing network grant — and on
+a COS VM it lands in the serial console as an unattributable crash. I would have debugged it blind
+tonight. Now: `directory.db.unavailable` carrying host, port, database and reason. The connection
+string is never logged; it carries the password.
+
+**2. The AC-010 schema-version guard was unreachable.** It ran *after* the store had loaded the
+profile cache, so an un-migrated database always failed earlier on `relation "agent_profiles" does
+not exist` — the symptom — and the guard whose entire job is to name the cause never ran. Moved
+into `openStore()` ahead of the first schema read, behind an explicit `SELECT 1` probe so
+"cannot connect" and "schema behind" remain **different causes with different events**. Confirmed
+by the fix sequence itself: with the connectivity guard in but the reorder not yet done, an empty
+database reported `directory.db.unavailable … reason: relation "agent_profiles" does not exist` —
+right event mechanism, wrong cause. That output is what proved the ordering was the real bug.
+
+**3. `DEPLOY-002 SI-002` was violated by the GCP adapter work.** The `CELLO_CLOUD` validation
+interpolated `process.env["CELLO_CLOUD"]` directly inside a `logger.error` call. The rule is
+enforced on the *syntax*, not on whether that particular key holds a secret — that is the point of
+it. Hoisted to a local.
+
+**Tests, corrected to test what they claim.** `persist-001` and `persist-002` both pointed at a
+*non-existent* database while asserting `migration.out.of.date` — two different causes conflated.
+Both now create a real un-migrated database and drop it after. `persist-001` gains the
+connectivity case, which asserts the named event, asserts the credentials do **not** appear in the
+output, and asserts it is not an unhandled rejection. Both derive Postgres coordinates from
+`DATABASE_URL`, so a second worktree stops silently testing the other checkout's database.
+
+`DEPLOY-001`'s key scan had flagged the consortium officer ROOT **public** key, which belongs in
+the template. The blind "every 64-hex literal must be zeros or PLACEHOLDER" rule cannot tell a
+public key from a private one, so it now consults an allowlist of exact literals, each documented
+with where its private counterpart lives. Teeth preserved: a private key pasted anywhere — including
+into that same parameter — still fails.
+
+### Where it stands
+
+**9 → 2.** The remaining two are `account-001` AC-005/AC-007, parked as **M12-P7** with the root
+cause proven, not guessed: `verifyChain` recomputes each row's hash from its predecessor starting
+at `CHAIN_GENESIS`, and ~10 test files `DELETE FROM user_accounts` as cleanup. Measured mid-run on
+a *fresh* database: 2 surviving rows, at `id` 10 and 37 — 35 deleted. A whole-table chain assertion
+cannot hold on a table the suite deletes from, so the test is green or red depending on file order
+and database history. The product is correct; the defect is that tests delete from a table the
+design calls append-only.
+
+`pnpm run lint` clean, `tsc --noEmit` clean on the directory package.
+
+**NEXT:** the unit proper — Cloud SQL credential path for `CELLO_CLOUD=gcp` (a `gcp`+`dev` node
+still cannot boot), then the Terraform node module.
