@@ -37,6 +37,11 @@ variable "directory_nodes" {
     machine_type = string
     db_tier      = string
     hostname     = string
+    # What a client can actually DIAL. A GCP node has no load balancer in front of it, so it
+    # advertises the port it listens on; the AWS shape (80/ws fronted by an ALB) is the default
+    # the code falls back to, not something to repeat here.
+    public_port      = number
+    public_transport = string
   }))
   default = {}
 }

@@ -25,6 +25,13 @@ write_files:
       CELLO_DIRECTORY_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4000
       CELLO_DIRECTORY_WS_LISTEN_ADDR=/ip4/0.0.0.0/tcp/8080/ws
       CELLO_DIRECTORY_HOSTNAME=${hostname}
+      # The advertised bootstrap address must match what a client can actually DIAL. The default
+      # (port 80 / ws) describes the AWS shape, where an ALB fronts 80 → 8080. A GCP node has no
+      # load balancer in front of it: it listens on 8080 itself. Advertising 80 here would publish
+      # an address nothing is bound to, and the failure would surface only as clients unable to
+      # connect — far from this file. Becomes 443/wss once TLS terminates in front of the node.
+      CELLO_DIRECTORY_PUBLIC_PORT=${public_port}
+      CELLO_DIRECTORY_PUBLIC_TRANSPORT=${public_transport}
       CELLO_AUDIT_BUCKET=${audit_bucket}
       RELAY_MANIFEST_BUCKET=${relay_bucket}
       RELAY_MANIFEST_POLL_INTERVAL_MS=120000
