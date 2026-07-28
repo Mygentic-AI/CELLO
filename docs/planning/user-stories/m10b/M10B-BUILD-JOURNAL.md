@@ -180,3 +180,49 @@ what a coder would hit at 3am that no document answers:
 answer, and the first unit (`DOD-END-ARCH-1`) has a bounded question list rather than an architecture
 choice. What remains inside the determination is engineering detail a competent coder settles and
 journals — not decisions requiring Andre.
+
+---
+
+## Entry 3 — the hibernation gap (2026-07-28)
+
+Andre is about to hibernate the dev environment and asked whether the overnight run can still proceed.
+It can — but the docs would have handled it badly, and the failure mode was worse than a stall.
+
+**The gap.** `M10B-PROCEDURE.md` had zero occurrences of "hibernat", while its REALITY CHECK said
+flatly *"AWS + publish actions are AUTHORIZED (dev deploys, ECS, SSM, migrations)."* An unsupervised
+coder reads that as a green light and runs `infra/deploy.sh` against a torn-down stack. Per global
+CLAUDE.md that **corrupts the inventory `wake.sh` restores from** — `hibernate.sh` DELETES the ALBs,
+NAT gateways and ssmmessages endpoints and rebuilds them on wake from `hibernation-state.json`, so a
+CFN mutation in between writes state that file has no record of. The secondary failure is cheaper but
+likelier: an hour spent debugging a blackholed endpoint as if it were a code bug.
+
+**Verified, not assumed:**
+
+- **`infra/hibernation-state.json` is NOT a liveness signal.** It currently reads
+  `hibernated_at: 2026-07-27T19:26:18Z` while the environment is demonstrably UP — `wake.sh` never
+  clears the file. The reliable check is DNS: `hibernate.sh` UPSERTs every dir/relay/portal name to a
+  TEST-NET-2 (`198.51.100.x`) blackhole, deliberately, so the names resolve instead of seeding negative
+  DNS caches (the 2026-07-24 post-wake incident). `dig +short directory-us1.cello.mygentic.ai` → real
+  ALB IPs = live. Confirmed live at the time of writing.
+- **The live journey does NOT need AWS.** `packages/e2e-tests/src/spine/live-harness.ts` brings up
+  docker-compose Postgres + Flyway and runs real directory/relay/daemon binaries on localhost. M10's
+  T2 and T3 journeys (Entries 46–47) went green exactly this way. The one M10 journey that did need
+  deployed infra — `DOD-T1-JOURNEY-1` — is also the one that never got past 🟠. So "live, across real
+  processes" means real OS processes, not deployed AWS, and `DOD-END-JOURNEY-1` /
+  `DOD-END-PLAYBOOK-1` are reachable hibernated.
+- **ECS Exec dies with hibernation** — the ssmmessages VPC interface endpoint is deleted, so
+  `cello-db-query` and `cello-portal-db-query` fail. This one needed calling out by name because it
+  presents as a broken skill rather than as a hibernated environment.
+- **KMS keys are KEPT** through hibernation, so the portal's real signer still works from local
+  credentials against a local Postgres.
+
+**What actually blocks:** the batched directory deploy (`DOD-END-QUEUE-1` migration +
+`DOD-END-REVOKE-2`), the portal deploy, the two DB-query skills, and the demo agent. That is it —
+everything else in M10B is local work.
+
+**Written up as `M10B-PROCEDURE` §2e** (with a pointer from the REALITY CHECK bullet that would
+otherwise mislead, and one from the DoD's status legend). The rule it lands on: a hibernated
+environment is not a stopping condition any more than a cron tick is — the affected lines go 🟡 with
+the pending deploy command journaled next to the deferred `latest` promotion, and the run pulls the
+next DoD line in the same turn. **Waking the environment is Andre's call, never the run's** — it costs
+money and reaches outward.

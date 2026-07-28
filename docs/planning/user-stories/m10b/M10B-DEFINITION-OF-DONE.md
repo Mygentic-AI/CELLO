@@ -44,6 +44,13 @@ description: >
 ## Status legend
 ✅ PROVEN (enforcer-green) · 🟡 BUILT/UNVERIFIED-LIVE · 🟠 PARTIAL · ❌ NOT BUILT · 🅿️ PARKED
 
+> **If the dev environment is hibernated** ([[M10B-PROCEDURE]] §2e — check with
+> `dig +short directory-us1.cello.mygentic.ai`, `198.51.100.x` = hibernated), the only lines that
+> cannot reach ✅ are the two needing the directory deploy (`DOD-END-QUEUE-1`, `DOD-END-REVOKE-2`) and
+> anything needing the deployed portal. They go 🟡 with the deploy recorded as owed. **Everything else
+> still reaches ✅, including the live journey and the playbook run** — their enforcer is the local
+> spine harness (real processes on localhost), not deployed AWS. No AWS mutation while hibernated.
+
 ---
 
 ## Orientation — what is actually new (read this before any line)

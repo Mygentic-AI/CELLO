@@ -25,6 +25,10 @@ One user: Andre, also the only developer. CELLO is **alpha — no production, no
 - **AWS + publish actions are AUTHORIZED** (beta npm publish via the cascade, dev deploys, ECS, SSM,
   migrations). Discipline is SEQUENCING + BATCHING only: prove locally first; batch directory pushes
   (~25–30 min each); publish via /cello-publish, never from memory.
+  **⚠️ ONE EXCEPTION, CHECK IT FIRST: if the dev environment is HIBERNATED, every AWS mutation is
+  FORBIDDEN — a deploy corrupts the inventory `wake.sh` restores from, and waking is Andre's call, not
+  yours. `dig +short directory-us1.cello.mygentic.ai` → `198.51.100.x` means hibernated. See §2e, which
+  also lists what stays runnable (almost everything, including the live journey).**
 
 ### THE FOUR WAYS A RUN DIES — read these as hard rules, not advice
 
@@ -257,6 +261,62 @@ M10B touches this through `DOD-END-QUEUE-1` + `DOD-END-REVOKE-2` — one batched
 3 regions, with a new Flyway migration that must also bump `OpsAgentExpectedMigrationVersion`
 (`infra/CLAUDE.md`; skipping it crash-loops the ops-agent on fresh deployments). A session that changes
 AWS without updating STATE.md is incomplete, no matter what else went green.
+
+## 2e. IS THE INFRASTRUCTURE HIBERNATED? — check FIRST, before believing §2c/§2d
+
+The dev environment is hibernated between working sessions to cut cost, and **it may well be hibernated
+for this run.** §2c and the REALITY CHECK say AWS actions are authorized; that authorization assumes
+the environment is UP. **Run this check at the start of the run and do not skip it** — the failure mode
+otherwise is either an hour lost debugging a dead endpoint as if it were a code bug, or something far
+worse (below).
+
+```bash
+dig +short directory-us1.cello.mygentic.ai      # real ALB IPs = LIVE · 198.51.100.x = HIBERNATED
+dig +short portal.cello.mygentic.ai
+```
+
+**Do NOT use `infra/hibernation-state.json` as the signal.** `wake.sh` does not clear it, so its
+`hibernated_at` timestamp survives a wake and reads as hibernated when the environment is live.
+DNS is the truth: `hibernate.sh` UPSERTs every dir/relay/portal name to a TEST-NET-2 (`198.51.100.x`)
+blackhole address, deliberately, so the names still resolve instead of poisoning negative DNS caches.
+
+**If hibernated, this is the ONE case where "AWS actions are authorized" does not apply.**
+
+> **NEVER run `infra/deploy.sh`, a CloudFormation operation, or any AWS mutation while hibernated.**
+> `wake.sh` reconstructs the deleted resources (ALBs, NAT gateways, the ssmmessages endpoint) from
+> `hibernation-state.json`. A deploy against a hibernated stack writes state that file does not know
+> about and **corrupts the inventory the wake depends on** (global CLAUDE.md). Missing resources during
+> hibernate are INTENTIONAL — they are not failures to diagnose or repair. Waking the environment is
+> **Andre's call, never yours**: it costs real money and it is an outward infrastructure action.
+
+**What is blocked while hibernated — treat each as a KNOWN condition, not a bug to investigate:**
+
+1. **The batched directory deploy** (`DOD-END-QUEUE-1` migration + `DOD-END-REVOKE-2` +
+   `OpsAgentExpectedMigrationVersion`). Write it, prove it locally, commit it, **do not push the
+   deploy.**
+2. **The portal deploy.** The portal ALB is deleted and `portal.cello.mygentic.ai` is blackholed.
+3. **`cello-db-query` and `cello-portal-db-query`.** Hibernate deletes the ssmmessages VPC interface
+   endpoint, so **ECS Exec does not work.** These skills will fail in a way that looks like a broken
+   skill. It is not broken. Use the local docker-compose Postgres instead.
+4. **The demo agent** — the directory is at `desiredCount 0`, so it has nothing to register with.
+
+**What is NOT blocked — which is most of M10B, so there is no excuse to stall:**
+
+- All code, tests, lint, typecheck, build in all three repos.
+- The **portal** on local Postgres (`pnpm db:up`, `pnpm migrate`). KMS keys are KEPT through
+  hibernation, so the real signer still works from local credentials.
+- **The live journey and the playbook run.** `DOD-END-JOURNEY-1` and `DOD-END-PLAYBOOK-1` are enforced
+  by the spine harness, which is **already local**: `packages/e2e-tests/src/spine/live-harness.ts`
+  brings up docker-compose Postgres + Flyway and runs real directory/relay/daemon binaries on
+  localhost. This is how M10's T2 and T3 journeys actually went green (M10 journal Entries 46–47) —
+  not against AWS. "Live, across real processes" means real OS processes, **not deployed AWS.**
+- **The beta npm publish** (§2c) — no AWS involved.
+
+**So the run continues; it just ends with a deploy owed.** When a DoD line's only remaining gap is the
+deploy, mark it 🟡 BUILT/UNVERIFIED-LIVE with the evidence it *does* have, write the exact pending
+deploy command into the journal and the handoff — alongside the deferred `latest` promotion (§2c) —
+and **pull the next DoD line in the same turn.** A hibernated environment is not a stopping condition
+any more than a cron tick is (§0 rule 1).
 
 ## 3. Cadence
 - **Commit constantly** — never >~15 min without one. CELLO docs commit straight to main. This is
