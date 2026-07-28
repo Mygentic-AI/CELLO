@@ -20,10 +20,9 @@ steps:
       - packages/directory/Dockerfile
       - -t
       - ${_REGISTRY}/directory:${_TAG}
-      - -t
-      - ${_REGISTRY}/directory:latest
       - .
 
+# No :latest tag on purpose: two concurrent builds finishing out of order would leave :latest
+# older than main. Every consumer pins an immutable ${_TAG} (= commit SHA) tag.
 images:
   - ${_REGISTRY}/directory:${_TAG}
-  - ${_REGISTRY}/directory:latest

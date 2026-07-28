@@ -20,10 +20,9 @@ steps:
       - packages/relay/Dockerfile
       - -t
       - ${_REGISTRY}/relay:${_TAG}
-      - -t
-      - ${_REGISTRY}/relay:latest
       - .
 
+# No :latest tag on purpose: two concurrent builds finishing out of order would leave :latest
+# older than main. Every consumer pins an immutable ${_TAG} (= commit SHA) tag.
 images:
   - ${_REGISTRY}/relay:${_TAG}
-  - ${_REGISTRY}/relay:latest

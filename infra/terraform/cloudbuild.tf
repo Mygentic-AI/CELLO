@@ -8,6 +8,8 @@ resource "google_cloudbuildv2_connection" "github" {
   location = "us-east1"
   name     = "cello-github"
 
+  # Reinstalling the GitHub App or recreating the connection changes BOTH values below —
+  # update them here; plan will show loud drift, which is intended (no ignore_changes).
   github_config {
     app_installation_id = 149532787
     authorizer_credential {
@@ -69,6 +71,10 @@ resource "google_cloudbuild_trigger" "image" {
   filename        = each.value.config
   included_files  = each.value.included_files
   service_account = google_service_account.workload["cloud-build"].id
+
+  substitutions = {
+    _REGISTRY = "us-east1-docker.pkg.dev/${var.project_id}/cello"
+  }
 
   repository_event_config {
     repository = google_cloudbuildv2_repository.cello.id

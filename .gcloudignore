@@ -1,6 +1,5 @@
-# Controls what `gcloud builds submit` uploads as build source.
-# Keep this aligned with what the Dockerfiles actually COPY (repo-root context,
-# package.json/lockfile/tsconfig + packages/ sources).
+#!include:.gitignore
+# Plus (gitignore covers build artifacts; these are upload-size/noise exclusions):
 .git
 node_modules
 **/node_modules
