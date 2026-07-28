@@ -17,10 +17,13 @@ description: >
 
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
-- **Next red:** DOD-ROLE-MANIFEST-1 (story branch per M12-D4; manifest schema bump carries
-  `role` + `peerId` together — needs `/cello-publish` for the cello-client packages).
-- **Tier:** P1 — AE-DESIGN-1 ✅ (reviewed, Entry 9). ROLE-MANIFEST-1 next; then AE-APPEND/MUTABLE/
-  LOCAL-E2E, MULTIADDR, ADAPTER-GCP.
+- **Next red:** ROLE-MANIFEST-1 directory half — BLOCKED on the beta publish of protocol-types
+  (+crypto) and the trustless-cello re-pin. Load `/cello-publish` for the cascade; Andre runs
+  `latest`. Then directory `consortiumNodeCount`=validators + review, then merge both branches.
+- **Tier:** P1 — AE-DESIGN-1 ✅, ROLE-MANIFEST-1 client half ✅ (reviewed+fixed, Entry 10);
+  remaining P1: ROLE-MANIFEST-1 dir half, AE-APPEND/MUTABLE/LOCAL-E2E, MULTIADDR, ADAPTER-GCP.
+- **Branches:** cello-client `m12/role-manifest` (3ca8560, reviewed green, unmerged);
+  trustless-cello `m12/role-manifest` (empty so far).
 - **Blocked on Andre:** nothing.
 - **HEAD:** trustless-cello `main` (see git log); cello-client untouched by M12 so far.
 - **Cloud state:** AWS = 3 regions awake (woken 2026-07-28, see infra/STATE.md). GCP =
