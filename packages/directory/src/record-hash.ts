@@ -22,8 +22,16 @@ import { createHash } from "node:crypto";
 /** Domain tag for AE record hashes. Bump the version only on a deliberate hash-format change. */
 export const RECORD_HASH_DOMAIN = "cello-ae-record-v1";
 
-/** A field value that participates in a record hash. */
-export type CanonicalValue = string | number | boolean | null;
+/**
+ * A field value that participates in a record hash.
+ *
+ * **No `number`** — deliberately. A JS `number` silently loses precision above 2^53, so two
+ * DIFFERENT BIGINT/NUMERIC column values (e.g. `9007199254740992` and `…993`) would collapse to
+ * one content address and one would never converge — silent data loss. The encoder passes ALL
+ * numerics as strings (`pg` already returns BIGINT as a string for exactly this reason), which
+ * also removes the `NaN`/`Infinity` → `null` collapse. Booleans and null are precision-safe.
+ */
+export type CanonicalValue = string | boolean | null;
 
 /**
  * JSON.stringify replacer that sorts object keys lexicographically at every level, so the
@@ -36,6 +44,13 @@ function sortedReplacer(_key: string, value: unknown): unknown {
       sorted[k] = (value as Record<string, unknown>)[k];
     }
     return sorted;
+  }
+  // NFC-normalize every string so two nodes that ingested the same logical text in different
+  // Unicode forms (NFC vs NFD — Postgres does not normalize on store) compute the SAME hash and
+  // converge, instead of re-exchanging that record forever. Centralized here so no per-table
+  // encoder can forget it.
+  if (typeof value === "string") {
+    return value.normalize("NFC");
   }
   return value;
 }

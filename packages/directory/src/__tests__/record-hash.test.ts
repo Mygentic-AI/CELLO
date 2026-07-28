@@ -53,11 +53,26 @@ describe("DOD-AE-APPEND-1: recordHash", () => {
     expect(three).not.toBe(two);
   });
 
-  it("distinguishes value types — number 1 vs string '1' vs boolean true", () => {
-    const asNum = recordHash("t", { v: 1 });
+  it("distinguishes value types — string '1' vs boolean true vs null", () => {
     const asStr = recordHash("t", { v: "1" });
     const asBool = recordHash("t", { v: true });
-    expect(new Set([asNum, asStr, asBool]).size).toBe(3);
+    const asNull = recordHash("t", { v: null });
+    expect(new Set([asStr, asBool, asNull]).size).toBe(3);
+  });
+
+  it("large BIGINT values passed as strings do NOT collide (no 2^53 precision aliasing)", () => {
+    // number is forbidden in CanonicalValue precisely because 2^53+1 would alias to 2^53 as a JS
+    // number; as strings the two distinct BIGINTs hash distinctly. This pins the encoder contract.
+    const a = recordHash("agent_suspensions", { suspension_seq: "9007199254740992" });
+    const b = recordHash("agent_suspensions", { suspension_seq: "9007199254740993" });
+    expect(a).not.toBe(b);
+  });
+
+  it("NFC-normalizes strings so the same logical text in NFC vs NFD converges", () => {
+    const nfc = "café"; // é as one code point
+    const nfd = "café"; // e + combining acute
+    expect(nfc).not.toBe(nfd); // genuinely different byte sequences
+    expect(recordHash("t", { name: nfc })).toBe(recordHash("t", { name: nfd }));
   });
 
   it("handles null field values deterministically", () => {
