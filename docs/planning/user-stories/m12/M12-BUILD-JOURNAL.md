@@ -17,9 +17,14 @@ description: >
 
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
-- **Next red:** ROLE-MANIFEST-1 directory half — BLOCKED on the beta publish of protocol-types
-  (+crypto) and the trustless-cello re-pin. Load `/cello-publish` for the cascade; Andre runs
-  `latest`. Then directory `consortiumNodeCount`=validators + review, then merge both branches.
+- **Next red:** DOD-MULTIADDR-1 (independent, trustless-cello only). ROLE-MANIFEST-1 dir half is
+  PARKED on the publish (see below).
+- **PARKED — publish cascade (awaiting Andre's go):** ROLE-MANIFEST-1 dir half needs the changed
+  cello-client packages on beta + a trustless-cello re-pin. Plan ready (Entry 11): merge
+  `m12/role-manifest`→main, bump 7-pkg cascade (crypto 0.0.23, protocol-types 0.0.25, transport
+  0.0.25, client 0.0.51, daemon 0.0.76, cli 0.0.77, connect 0.0.87), tag v0.0.129, CI→beta,
+  verify, THEN Andre promotes `latest`. `/cello-publish` loaded. Not started: merge-to-main of an
+  unclosed unit + an npm cascade is Andre's call, and it ends in his latest-promotion regardless.
 - **Tier:** P1 — AE-DESIGN-1 ✅, ROLE-MANIFEST-1 client half ✅ (reviewed+fixed, Entry 10);
   remaining P1: ROLE-MANIFEST-1 dir half, AE-APPEND/MUTABLE/LOCAL-E2E, MULTIADDR, ADAPTER-GCP.
 - **Branches:** cello-client `m12/role-manifest` (3ca8560, reviewed green, unmerged);
