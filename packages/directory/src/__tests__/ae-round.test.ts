@@ -29,7 +29,10 @@ describe("DOD-AE-APPEND-1: planRound", () => {
     expect(plan.tierA.get("agent_profiles")).toEqual([h(3)]);
   });
 
-  it("skips a Tier-A table whose digest matches (converged in one comparison, no drill-down)", () => {
+  it("a converged Tier-A table (matching digest) produces no pull", () => {
+    // NB: the digest-match `continue` is a compute/wire optimization with NO observable difference
+    // from the drill-down path (on a match the peer sends recordHashes:[], so missingLocally→[]);
+    // no test can isolate the skip itself. This pins the outcome.
     const same = [h(1), h(2)];
     const local: LocalRoundState = { tierA: new Map([["t", same]]), tierB: new Map() };
     const peer: PeerRoundState = {
@@ -51,6 +54,30 @@ describe("DOD-AE-APPEND-1: planRound", () => {
     };
     const plan = planRound(local, peer);
     expect(new Set(plan.tierB.get("agent_suspensions"))).toEqual(new Set(["ag2", "ag3"]));
+  });
+
+  it("differing digest but peer is a SUBSET → nothing to pull, table absent from plan (F2 guard)", () => {
+    // Digests differ (local has an extra record), but the peer has nothing the local node lacks.
+    // The `pull.length > 0` guard must omit the table (the reverse is the peer's own round).
+    const local: LocalRoundState = { tierA: new Map([["t", [h(1), h(2)]]]), tierB: new Map([["u", new Map([["k1", "v1"], ["k2", "v2"]])]]) };
+    const peer: PeerRoundState = {
+      tierA: new Map([["t", { digest: "differs", recordHashes: [h(1)] }]]),
+      tierB: new Map([["u", { digest: "differs", versions: new Map([["k1", "v1"]]) }]]),
+    };
+    const plan = planRound(local, peer);
+    expect(plan.tierA.has("t")).toBe(false);
+    expect(plan.tierB.has("u")).toBe(false);
+  });
+
+  it("an untracked table advertised EMPTY → digests match → skip (F3)", () => {
+    const local: LocalRoundState = { tierA: new Map(), tierB: new Map() };
+    const peer: PeerRoundState = {
+      tierA: new Map([["t", { digest: computeTableDigest([]), recordHashes: [] }]]),
+      tierB: new Map([["u", { digest: tierBTableDigest(new Map()), versions: new Map() }]]),
+    };
+    const plan = planRound(local, peer);
+    expect(plan.tierA.has("t")).toBe(false);
+    expect(plan.tierB.has("u")).toBe(false);
   });
 
   it("skips a Tier-B table whose digest matches", () => {
