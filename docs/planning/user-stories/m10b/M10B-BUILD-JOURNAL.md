@@ -1142,3 +1142,52 @@ non-discoverability. **Andre's call.** → `DOD-END-DISCOVER-1` is marked 🅿�
 (`DOD-END-SCOPE-FIX-1`), and one architectural question is parked for Andre. Tier 1 does not start.
 Two failed review passes on a determination is not a process failure — it is the determination doing
 its job before any code exists to throw away.
+
+---
+
+## Entry 11 — `M10B-D12r3`: the revoke expression, RUN rather than argued — 2026-07-28
+
+The second review falsified `M10B-D12r` by running it on Postgres instead of reasoning about it. So
+`M10B-D12r2` got the same treatment before it went any further — against local docker-compose Postgres,
+the six group shapes the review enumerated, comparing three candidate expressions against today's
+`BOOL_OR(status = 'revoked')`.
+
+**`D12r2` (my three ordered branches) was still wrong.** It fixed tombstone-only (h1: `active` →
+`revoked`) and the rotated-portal-key case (h6), but **h5 — an agent-issued record with a LEGACY
+tombstone (`revoker_pubkey IS NULL`) — still read `active`.** That is the silent un-revocation the
+review warned about, surviving in the fix that was supposed to close it.
+
+I nearly dismissed it: `issuer_kind: agent` does not exist in production yet, so no legacy tombstone
+can target an agent record and h5 is unreachable today. That is exactly the reasoning §5a forbids —
+*"a defect even when it is currently unreachable; unreachable is a property of today's SQL, not of the
+code."*
+
+**The fix is a fourth branch, ordered second:** `BOOL_OR(is_tombstone AND revoker_pubkey IS NULL)` →
+`revoked`. A tombstone with no recorded revoker was written under the old role-based rule and had its
+authority checked under that rule; it keeps its old semantics rather than being re-judged by a rule
+that did not exist when it was written.
+
+**Measured, all six shapes (`d12r3` vs. today):**
+
+| group | today | D-12r | D-12r2 | **D-12r3** |
+| :-- | :-- | :-- | :-- | :-- |
+| h1 tombstone only | revoked | **active** ⚠️ | revoked | **revoked** |
+| h2 record only | active | active | active | **active** |
+| h3 revoker = issuer | revoked | revoked | revoked | **revoked** |
+| h4 revoker ≠ issuer (**the F6 defect**) | revoked | active | active | **active** ✅ |
+| h5 legacy tombstone, NULL revoker | revoked | **active** ⚠️ | **active** ⚠️ | **revoked** |
+| h6 portal record, rotated KMS key | revoked | **active** ⚠️ | revoked | **revoked** |
+
+**`D-12r3` differs from today's behavior on exactly one row — h4 — and h4 is the defect being fixed.**
+That is the strongest evidence this change can have: the blast radius is one case, it is the intended
+one, and every convergence and rotation property V46 and `signal-write.ts` fought for is preserved
+unchanged.
+
+**Method note, because it is the lesson of the whole determination.** Three consecutive versions of
+this expression were wrong, and each was wrong in a way that reads fine in prose: `NULL` aggregates
+falling through a `CASE`, `{NULL} && {'x'}` being `false`, a legacy row judged by a rule younger than
+it is. None of those are visible by inspection; all three took ten seconds to expose by running them.
+**Any SQL that decides a security property gets run against real Postgres before it enters a decision,
+not after a reviewer catches it.** That now applies to `signal_records_effective`'s real definition
+too — this validated the *expression*, not yet its substitution into V46's actual `CASE`, which is the
+first task when Tier 3 starts.

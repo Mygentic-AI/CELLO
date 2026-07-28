@@ -708,9 +708,19 @@ the discussion-of-record. Restated here because this is the milestone that imple
   `M10B-D12` had correctly kept. **Required shape, in this order:**
   1. `COUNT(*) FILTER (WHERE NOT is_tombstone) = 0 AND BOOL_OR(is_tombstone)` → `'revoked'`
      (tombstone-only, fail-closed, preserving today's behavior).
-  2. The portal escape: a role-authorized tombstone kills an `issuer_kind='portal'` record, so key
+  2. **`BOOL_OR(is_tombstone AND revoker_pubkey IS NULL)` → `'revoked'`** — added as `M10B-D12r3`
+     (Entry 11) after running D-12r2 on Postgres showed it **still silently un-revoked** an
+     agent-issued record carrying a legacy tombstone. A tombstone with no recorded revoker was written
+     under the old role-based rule and had its authority checked then; it keeps its old semantics
+     rather than being re-judged by a rule younger than it is. Unreachable today (no `issuer_kind:
+     agent` records exist yet) — which is precisely why §5a says to fix it anyway.
+  3. The portal escape: a role-authorized tombstone kills an `issuer_kind='portal'` record, so key
      rotation keeps working (determination §3.5).
-  3. `COALESCE(<overlap>, false)` for the agent case.
+  4. `COALESCE(<overlap>, false)` for the agent case.
+  **MEASURED on live Postgres, all six group shapes (Entry 11): `D-12r3` differs from today's
+  `BOOL_OR(status='revoked')` on exactly ONE row — the `revoker ≠ issuer` case, which is the F6 defect
+  being fixed.** Every convergence and rotation property is preserved unchanged. This validated the
+  *expression*; substituting it into V46's real `CASE` is the first task of Tier 3.
   It **supplements** `BOOL_OR(r.status = 'revoked')`, never replaces it — the naive replace reading
   breaks portal revocation entirely. `revoker_pubkey` must be **`TEXT`**: `bytea[] && text[]` and
   `text[] && varchar[]` both error at `CREATE VIEW` time. Two things D-12r got right and are confirmed:
