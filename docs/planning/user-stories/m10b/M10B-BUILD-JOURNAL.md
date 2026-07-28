@@ -748,3 +748,160 @@ through below because it is the milestone's most safety-critical view.
 (`M10B-D12r`, `D14r`, `D18`, `D19`), the DoD status line that falsely claimed the account-resolution
 clause was settled is corrected, and the determination goes back for a second review pass. Not flipping
 a tag on a unit whose reviewer said do not flip it is the whole point of having the reviewer.
+
+---
+
+## Entry 8 — DESIGN NOTE — `DOD-END-QUEUE-1` (written before any code) — 2026-07-28
+
+**Closes the three `DOD-END-ARCH-1` clauses the review found unsettled** (exact table shape, ack/poison
+semantics, drained-row retention), so read it as part of the determination rather than after it.
+
+**Target behavior (one sentence).** A directory node accepts a sealed blob it cannot read, holds it
+until the portal drains it, and then forgets it — while a directory operator with full database access
+learns nothing about who endorsed whom.
+
+**Spec anchors.** `M10B-D2` (the queue exists at all), `M10B-D11` (`key_id` on the row),
+`M10B-D19` (the sealed return path, `submission_id`), spec §2 (the dumb directory), `INV-DIR-DUMB`,
+`DOD-END-DISCOVER-1` (*"the negative test targets everyone else, including the sealed submission queue,
+which must not let a directory operator infer who endorsed whom"*), M10-D22 (the mirror-image posture).
+
+### The exact column set — and it is deliberately smaller than `pickup_queue`'s
+
+```sql
+-- V49
+CREATE TABLE submission_queue (
+  submission_id   TEXT        PRIMARY KEY,   -- sha256 of the SIGNED submission body (see D-20)
+  intake_key_id   TEXT        NOT NULL,      -- which portal intake key this is sealed to (M10B-D11)
+  ciphertext      BYTEA       NOT NULL,      -- the sealed blob; opaque, never opened here
+  owning_node_id  TEXT        NOT NULL,      -- node-scoped sweeps, mirroring pickup_queue
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+**Five columns, and the absences are the design.** No `agent_id`, no submitter, no subject, no
+`signal_kind`, no `type`, no plaintext, no reason column, no `acked_at`. Compare `pickup_queue`, which
+carries `agent_id` because delivery must be *addressed* — the submission queue is not addressed, it is
+**collected**, so it needs no addressee. That difference is what makes the privacy property achievable
+rather than aspirational.
+
+Per the review's test-teeth finding, the schema test asserts **the exact column set**, not the absence
+of named columns — an absence-list passes trivially against a column called `meta` holding the same
+data.
+
+**No `submitting_agent_id`, and the tradeoff is stated rather than hidden.** Persisting it would give a
+directory operator "Bob submitted five endorsements" — not *to whom*, but still the metadata shape
+`DOD-END-DISCOVER-1` is written against. Flood protection therefore runs at the **authenticated write
+handler** off the live connection identity, never off a persisted column. Accepted cost: a node restart
+resets flood counters. That is tolerable because it is not the real limit — `DOD-END-QUOTA-1` at the
+portal is, and it is per-account and durable.
+
+**The reply needs no routing column either.** The portal opens the seal, learns Bob's agent identity
+from the verified signature, and seals the result to him over the existing pickup path (`M10B-D19`).
+The daemon correlates it by `submission_id` **inside** the sealed reply. Nothing about the pairing is
+ever in the clear.
+
+### Replication: NO. The queue is not consortium state.
+
+`submission_queue` is **not** added to `cello_pub`. Precedent for a deliberately unreplicated table
+exists — `V40__pre_auth_nonce_bindings.sql` says so in its header and explains why. Reasons here:
+1. **Exactly-once gets far simpler.** A replicated queue means the portal can drain the same row from
+   node B while its ack to node A is still in flight — a double-drain, hence a double-mint and double
+   quota consumption.
+2. **Fewer copies of a sealed secret.** Replication would put Bob's blob on all three nodes.
+3. It is a mailbox, not shared state. Replicating it would be the directory *composing* something.
+
+**Cost, accepted:** a submission written to a node that then dies permanently is lost. It is not lost
+in the ordinary outage case — it waits — and the daemon's retry (below) covers the rest. Losing an
+unminted submission is recoverable by re-submitting; the thing that must never be lost is a *notarized*
+record, and that is `signal_records`, which **is** replicated.
+
+**Consequence for the portal: it drains every node, it does not fail over between them.** Failover
+means "try until one succeeds"; draining means "collect from all". This is a different usage of
+`FailoverDirectoryClient` and the drain must not be built on `#tryEach`, which would silently collect
+from one node and call it done. That is a specific, easy, silent bug and it goes in the reviewer
+dispatch for `DOD-END-INGRESS-1`.
+
+### Exactly-once, ack, and poison
+
+**Exactly-once is a PORTAL-side property, not a queue-side one, and pretending otherwise is how this
+gets built wrong.** Even with a perfect queue the portal can crash between minting and acking, then
+re-drain the same row. So: the portal keeps a processed-submissions table keyed on `submission_id` with
+its outcome, and a mint is idempotent on it. The queue's job is only at-least-once delivery.
+
+**`submission_id` = sha256 of the signed submission body** (`M10B-D20`). Content-derived, so a daemon
+retry to a different node produces the *same* id and the portal mints once — which is what makes
+retry-on-node-failure safe rather than a duplication mechanism. It cannot be chosen by the submitter to
+collide with someone else's, because it is a hash of bytes they signed. And a legitimate re-issue after
+a refusal has a different `issued_at` inside the signed body, so it gets a different id and correctly
+does **not** dedup.
+
+**Three terminal outcomes, all of which remove the row exactly once:**
+
+| Outcome | Meaning | Row | Reply to submitter |
+| :-- | :-- | :-- | :-- |
+| **minted** | opened, verified, scanned, minted | DELETE | sealed `accepted` + the signal hash |
+| **rejected** | opened and attributed, then refused (scan / quota / same-operator / `operator_linkage_unresolved`) | DELETE | sealed refusal **naming the check** |
+| **poison** | cannot be opened or the signature does not verify | DELETE | **none possible** — see below |
+
+**Poison is the honest edge case, and it must not be papered over.** If the blob will not open, or the
+inner signature fails, the portal **does not know who sent it** — the identity is derived from the
+signature, so an unverifiable submission is unattributable by construction. There is nobody to reply
+to. The row is deleted with a directory-side and portal-side log event only
+(`signal.ingress.poison` + the cause), never retried, and never left to block the queue. The DoD's
+"with its reason preserved" is satisfiable for *rejected* and not for *poison*, and saying so is better
+than inventing a reply channel to an unknown party.
+
+**Retention.** A drained row is DELETEd, matching `ackPickupDelete`'s hard delete and its reason ("no
+sealed ciphertext lingers"). An **undrained** row is swept by a node-scoped sweep mirroring
+`sweepUndeliverablePickups`, but at a TTL that must be **longer than the intake-key retention window**
+(review F5) — otherwise the sweep and the key rotation can strand a submission between them. And
+because a swept row generates no reply, **the daemon owns its own timeout**: if no sealed result
+arrives within its own window it reports `submission_result_timeout` locally, naming the node it wrote
+to. That closes the review's "swept unanswered" gap from the only side that can close it.
+
+**Invariants at stake.** `INV-DIR-DUMB` — the directory never opens, parses, or interprets the blob;
+the schema has nowhere to put anything it learned. `INV-CONSENT`/`DOD-END-DISCOVER-1` — no column pairs
+a submitter with a subject, so the operator-inference test has nothing to find. `INV-ZEROBUMP` — there
+is no `type` or `signal_kind` column here at all; the queue cannot branch on something it does not
+store.
+
+**Approach + rejected alternative.** Mirror `pickup_queue`'s *operational* shape (node-scoped, hard
+delete on ack, sweep for the undrained) while carrying strictly less identity. **Rejected: reuse
+`pickup_queue` itself with a direction flag.** It would inherit `agent_id NOT NULL` — the exact column
+the privacy property requires be absent — and V37's one-pending-per-`(agent_id, signal_kind)` index,
+which Entry 6 already shows is wrong for many-per-kind objects. Reusing it would import both defects to
+save one migration.
+
+**Falsification pass.**
+1. *Does the drain have what it needs?* The portal reaches directory internal routes over
+   `DirectoryClient`; this adds a route in the same family as `/internal/account-by-email-stub`. Checked
+   the interface has three implementations that all must gain the method, or the stub client diverges
+   from production and the local harness proves nothing.
+2. *Does responsibility sit right?* Exactly-once was initially drafted as a queue property; it cannot
+   be, because the portal-crash window sits outside the queue entirely. Moved to the portal.
+3. *Redundancy?* `submission_id` as PK also serves as the natural dedup key for a daemon retry — one
+   mechanism, two jobs, rather than a separate nonce.
+4. *What else breaks?* Not replicating means the portal's drain loop must enumerate nodes from the
+   manifest rather than take the first healthy one. If that is built on `#tryEach` it silently drains
+   one node forever — named above as a dispatch item.
+
+**Decisions this note makes.**
+- **M10B-D20 — `submission_id` is the sha256 of the signed submission body, and it is the PK.**
+  Content-derived so a retry to another node dedups at the portal; different across a legitimate
+  re-issue because `issued_at` is inside the signed body; uncollidable because the submitter would have
+  to sign someone else's bytes.
+- **M10B-D21 — `submission_queue` is NOT replicated (`cello_pub` unchanged), and the portal drains
+  every node rather than failing over between them.** Reasons and the accepted loss case above.
+- **M10B-D22b — poison is unattributable by construction and therefore gets no reply.** Named
+  explicitly so nobody builds a fake return channel for it. (Suffixed `b` to avoid colliding with
+  M10's D-22.)
+
+**Nothing parked.**
+
+**Test plan sketch (red first).** Exact-column-set assertion (not an absence list). A `cello_pub`
+membership test asserting `submission_queue` is absent — replication is a property that gets added by
+accident. Retry-to-another-node produces one mint, two queue rows, one processed record. Re-issue after
+refusal produces a *different* `submission_id`. Poison leaves the queue and emits its event with no
+reply attempted. Sweep TTL exceeds intake-key retention (asserted on the constants, so the F5 window
+cannot silently invert). Drain enumerates all nodes — the revert test here is a two-node fixture where
+a `#tryEach`-based drain collects only one.
