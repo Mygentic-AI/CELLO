@@ -294,7 +294,12 @@ the additions M10B is accountable for.
   cause, the cap, and **when the window frees up** — `issuance_quota_exceeded`, never a bare
   `intake_rejected` (§5b ERRORS NAME THEIR CAUSE). A re-issue after a refusal counts against the quota
   like any other (`M10B-D4`); exempting it would make refuse-and-retry an unbounded loop. Named events:
-  `signal.quota.checked`, `signal.quota.exceeded`. — ❌
+  `signal.quota.checked`, `signal.quota.exceeded`.
+  > **BLOCKED ON `M10B-D18` (review F1).** "Per account" is not computable today: a submission's only
+  > identity is an agent pubkey, and **no agent-pubkey → account resolution exists** — the directory
+  > has only the forward direction (`/internal/agents-by-account`). Without D-18's route this cap
+  > degrades to per-agent, which is the exact farming hole the line's own parenthetical says it must
+  > close. Build D-18 first, or this line ships the vulnerability it was written to prevent. — ❌
 
 ---
 
@@ -308,7 +313,16 @@ the additions M10B is accountable for.
   per-agent and queues; if the subject's daemon is down the envelope **sits there** and lands when the
   daemon next comes online. A subject who never acts is the normal case, not an error case, and nothing
   about delivery may assume the subject is present. The one thing that IS new is cross-account fan-out:
-  the portal seals to the *subject's* agents, not the submitter's. — ❌
+  the portal seals to the *subject's* agents, not the submitter's.
+  > **CORRECTED 2026-07-28 (Entries 6 + 9) — one clause above is FALSE and must not be built on.**
+  > "Reuses the generic delivery path … with no type-specific handling" does not hold: the generic path
+  > enforces **one pending pickup per `(agent_id, signal_kind)`** (`enqueuePickup`'s `ON CONFLICT` +
+  > V37's partial unique index), so **the second endorsement of a subject silently overwrites the
+  > first** — no error, success returned, and journey case (a2) is precisely the scenario that triggers
+  > it. Correct per `M10B-D23`: re-key to `(agent_id, signal_kind, signal_hash)` as **V50**, riding the
+  > same batched deploy. The DoD's "no new trigger and no new transport" claim **survives** — this is a
+  > cardinality fix, not a transport one — but this line carries **directory work and a migration**, so
+  > it is not the free ride the paragraph above implies. Fan-out resolution is `M10B-D24`. — ❌
 - **DOD-END-PENDING-1** — **the pending-consent queue: its own surface, NOT the transcript inbox**
   (`M10B-D5`). The inbox is cleared by reading or dismissing a transcript; an endorsement awaiting
   consent has no transcript, so putting it there gives the operator an item they cannot clear the normal
