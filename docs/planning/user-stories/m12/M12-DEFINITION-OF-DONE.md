@@ -95,9 +95,10 @@ description: >
   that → Entry 3
 - **DOD-IAC-BASE-1** [trustless-cello] — the IaC skeleton (tool per M12-D2) stands up and tears
   down one disposable COS VM in a MIG(size 1) with a static IP, firewall rule, and attached
-  service account, entirely from code. IaC enforcer green on this skeleton. — 🟡 enforcer green
-  both directions (`disposable_probe=true` → RUNNING w/ static IP 34.26.220.192; default →
-  4 destroyed, zero instances, plan clean). Owed: unit review → Entry 4
+  service account, entirely from code. IaC enforcer green on this skeleton. — ✅ enforcer green
+  both directions; unit review: SPEC FAITHFUL, nothing blocking, all three suggested edits
+  applied (copy-trap comment on the block, no-surge policy, CIDR scheme as `region_subnets`
+  map, deliberate SA reuse = M12-D3) → Entries 4, 5
 
 ## Tier P1 — Protocol code (local-provable, no cloud dependency)
 
@@ -206,6 +207,17 @@ description: >
   GCP; gcloud-script IaC has no state/drift model; Terraform is the practice least likely to need
   reversing and can eventually absorb the AWS side). Overturn before DOD-IAC-BASE-1 if Andre
   objects.
+- **M12-D3** (2026-07-28): the disposable probe deliberately runs as the real `directory-node`
+  SA — the probe exists to prove the exact node shape including workload identity; lifecycle is
+  minutes; org blocks SA keys so the exposure window is IAP-SSH only.
+- **M12-D4** (2026-07-28, Andre): **the GCP system runs in PARALLEL with the live AWS dev
+  system until Wave 2 cutover.** Zero shared runtime state: own project, own images, own
+  Cloud SQL, own signed manifest, own DNS names. The client-side toggle is the bootstrap
+  manifest endpoint (+ a separate local daemon DB profile — a different consortium means a
+  fresh registration, which is the rebuild test anyway). Protocol-code units (P1+) happen on
+  story branches rebased from main regularly — parallel AI coders keep working on main; Cloud
+  Build builds test images FROM the story branch; merge to main only when units close. The AWS
+  system never runs M12 code until Wave 2.
 - Decisions 1–11 of the spec-of-record are restated there, not here — this section holds only
   decisions made DURING the milestone.
 

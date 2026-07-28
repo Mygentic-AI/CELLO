@@ -15,10 +15,10 @@ description: >
 
 ## RESUME STATE (keep current — overwrite this block only)
 
-- **Tier:** P0 — PROJECT-1 ✅, IAM-1 ✅ (reviewed, all findings fixed), CI-REGISTRY-1 🟠
-  (registry + proven directory build; relay building; triggers blocked on GitHub OAuth),
-  IAC-BASE-1 seeded (owes the disposable MIG up/down proof).
-- **Next red:** DOD-IAC-BASE-1 while CI-REGISTRY-1 waits on the OAuth click.
+- **Tier:** P0 — PROJECT-1 ✅, IAM-1 ✅, IAC-BASE-1 ✅ (all reviewed, findings fixed);
+  CI-REGISTRY-1 🟠 (both images built by Cloud Build; ONLY the path-filtered triggers remain,
+  blocked on GitHub OAuth).
+- **Next red:** P1 — DOD-ROLE-MANIFEST-1 / DOD-AE-DESIGN-1 (story branch per M12-D4).
 - **Blocked on Andre:** complete the `cello-github` connection OAuth (link in Entry 3 / terminal).
 - **HEAD:** trustless-cello `main` (see git log); cello-client untouched by M12 so far.
 - **Cloud state:** AWS = 3 regions awake (woken 2026-07-28, see infra/STATE.md). GCP =
@@ -160,3 +160,21 @@ Post-fix: apply clean, `terraform plan` No changes. IAM-1 → ✅.
 - Unit review dispatched; findings land in Entry 5.
 
 **Next:** fix review findings; triggers unit blocked on Andre's GitHub OAuth.
+
+---
+
+## Entry 5 — 2026-07-28 — Probe review: nothing blocking; fixes applied; IAC-BASE-1 ✅
+
+Review verdict: SPEC FAITHFUL, no silent fallbacks, enforcer survives the revert test. Edits:
+- F1: copy-trap comment moved onto the `access_config` block itself + explicit no-surge
+  `update_policy` (OPPORTUNISTIC/REPLACE/surge 0) so "never surge" is declared, not defaulted.
+- F2: subnets are now a `region_subnets` map (`10.10.<n>.0/24`, n in region-add order) —
+  region expansion is structurally one map entry, zero manual steps. `terraform state mv` for
+  the address change; plan clean.
+- F3: SA reuse recorded as deliberate (M12-D3).
+- Carried forward from review: first DOD-NODE-* unit must include ONE `--tunnel-through-iap`
+  login as evidence (the IAP firewall path was created but never exercised).
+
+Also logged M12-D4 (Andre): parallel-run strategy — GCP system stands up beside the live AWS
+dev system; client toggles via bootstrap manifest endpoint + separate daemon DB; P1+ code on
+story branches rebased from main; AWS never runs M12 code until Wave 2 cutover.

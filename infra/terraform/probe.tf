@@ -41,13 +41,17 @@ resource "google_compute_instance_template" "probe" {
   }
 
   network_interface {
-    subnetwork = google_compute_subnetwork.us_east1.id
+    subnetwork = google_compute_subnetwork.regional["us-east1"].id
+    # PROBE-ONLY PATTERN — do not copy. A template-pinned address deadlocks any surge-based
+    # rolling replace (IP_IN_USE). Real nodes use a stateful-IP MIG policy (DOD-NODE-*).
     access_config {
       nat_ip = google_compute_address.probe[0].address
     }
   }
 
   service_account {
+    # Deliberate reuse of the real directory-node SA (M12-D3): the probe exists to prove the
+    # exact node shape, incl. the attached workload identity. Probe lifecycle is minutes.
     email  = google_service_account.workload["directory-node"].email
     scopes = ["cloud-platform"]
   }
@@ -67,5 +71,13 @@ resource "google_compute_instance_group_manager" "probe" {
 
   version {
     instance_template = google_compute_instance_template.probe[0].id
+  }
+
+  # Never surge: a surged instance would fight the pinned address. Recreate-only, one at a time.
+  update_policy {
+    type                  = "OPPORTUNISTIC"
+    minimal_action        = "REPLACE"
+    max_surge_fixed       = 0
+    max_unavailable_fixed = 1
   }
 }

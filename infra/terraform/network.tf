@@ -7,11 +7,11 @@ resource "google_compute_network" "cello_vpc" {
   auto_create_subnetworks = false
 }
 
-# First regional subnet — one node = one region; more subnets land here as regions are added.
-resource "google_compute_subnetwork" "us_east1" {
-  name          = "cello-us-east1"
+resource "google_compute_subnetwork" "regional" {
+  for_each      = var.region_subnets
+  name          = "cello-${each.key}"
   project       = var.project_id
-  region        = "us-east1"
+  region        = each.key
   network       = google_compute_network.cello_vpc.id
-  ip_cidr_range = "10.10.0.0/24"
+  ip_cidr_range = each.value
 }

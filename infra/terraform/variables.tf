@@ -9,3 +9,11 @@ variable "disposable_probe" {
   type        = bool
   default     = false
 }
+
+variable "region_subnets" {
+  description = "Regional subnets in cello-vpc. Scheme: 10.10.<n>.0/24, n assigned in region-add order (us-east1 = 0). One node = one region; adding a region = adding one entry here."
+  type        = map(string)
+  default = {
+    us-east1 = "10.10.0.0/24"
+  }
+}
