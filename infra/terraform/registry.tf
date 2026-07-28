@@ -7,6 +7,14 @@ resource "google_artifact_registry_repository" "cello" {
   repository_id = "cello"
   description   = "CELLO directory and relay images — pushed by Cloud Build only"
   format        = "DOCKER"
+
+  # Commit-SHA tags are only an answer to "which code is live" if they cannot MOVE. Without this a
+  # tag can be repointed at a different image and every node pinning it silently changes what it
+  # runs — and the registry's own history already showed one tag being moved (manual-dedc55ac,
+  # createTime != updateTime). This makes the pin real rather than a convention.
+  docker_config {
+    immutable_tags = true
+  }
 }
 
 # A node pulls its own image at every boot and every restart, so without this it crash-loops on
