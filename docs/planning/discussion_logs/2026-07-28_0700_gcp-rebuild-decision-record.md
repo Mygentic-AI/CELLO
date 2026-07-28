@@ -67,9 +67,11 @@ considered); this one holds what was decided. Where they disagree, this document
    longer exists).
 
 6. **GCP project: create `cello-infra`, link to billing account `012EFA-590A2E-2A82B4`.**
-   Verified 2026-07-28: `projectCreator` + `billing.creator` are domain-wide grants and Andre
-   holds `billing.admin` on the account — creation and linking will work. The
-   rename-`claude-code-vertex-mygentic` fallback is dropped.
+   **DONE 2026-07-28.** One correction to what was "verified": IAM was sufficient, but the
+   billing account hard-caps at **5 linked projects** (`FAILED_PRECONDITION` — the constraint
+   Andre lost days to previously, reproduced in seconds). It is a slot limit, not a wall: the
+   empty `claude-code-vertex-mygentic` was unlinked to free a slot and `cello-infra` took it.
+   Slot ledger + all bootstrap state: `infra/GCP-STATE.md`. The rename fallback stays dropped.
 
 7. **`NODE_ID = <cloud>-<region>`** (e.g. `aws-use1`, `gcp-usc1`) from first boot, permanent.
    `NODE_ID` feeds `Identifier.derive()` — it is the FROST participant identifier, not a label.
