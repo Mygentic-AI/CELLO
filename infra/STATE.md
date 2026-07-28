@@ -9,6 +9,32 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🟢 Wake complete — all 3 regions live (2026-07-28, 03:36:06–03:51:29 UTC)
+
+**Elapsed: 15 min 23 sec.** All 3 inventory diffs IDENTICAL. RDS cleared in ~9 min.
+
+**✅ THE OPS DASHBOARD SURVIVED A WAKE WITH NO MANUAL REDEPLOY — first time.** This was the first
+wake to consume the portal listener rules captured by the repaired `hibernate.sh` (`04fe0d83`).
+Verified directly against AWS, not just the script's own log:
+- portal ALB HTTPS listener rule `priority 100 · host-header · operations.cello.mygentic.ai` — restored
+- extra SNI cert `4b6a3413-5195-4fa4-9b9f-c0fe8998983d` — re-attached
+- `operations.cello.mygentic.ai` resolves to the new portal ALB and answers **HTTP 307** (TLS
+  handshake succeeded, host rule matched, app redirecting to auth — i.e. serving, not `000`/`502`)
+
+The `wake.sh` post-wake checklist item "0. REDEPLOY THE OPS DASHBOARD" (line ~676) is now stale and
+should be removed — it predates the rule capture.
+
+**ALB DNS names after this wake (always query AWS — these rotate each wake):**
+- **us-east-1:** dir `cello-dir-dev-169398503.us-east-1.elb.amazonaws.com` / relay `cello-relay-dev-2053577298.us-east-1.elb.amazonaws.com` / portal `cello-portal-dev-1749119977.us-east-1.elb.amazonaws.com`
+- **eu-central-1:** dir `cello-dir-dev-794544796.eu-central-1.elb.amazonaws.com` / relay `cello-relay-dev-855471523.eu-central-1.elb.amazonaws.com`
+- **ap-northeast-1:** dir `cello-dir-dev-1996262482.ap-northeast-1.elb.amazonaws.com` / relay `cello-relay-dev-1927652707.ap-northeast-1.elb.amazonaws.com`
+
+**Verified independently:** all 8 DNS names (7 + `operations`) resolve to real ALB addresses, no
+`198.51.100.1` remaining; 7 ALBs `active`; all 8 ECS services 1/1 `COMPLETED`; 4 RDS `available`;
+demo agent EC2 `running`. ECS Exec available again.
+
+---
+
 ## 🔴 Hibernate complete — all 3 regions down (2026-07-27, 19:14–19:26 UTC)
 
 Uptime this cycle: ~35 h (woken 2026-07-26 08:04 UTC). ECS→0 (directory + relay ×3, portal,
