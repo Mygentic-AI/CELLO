@@ -107,3 +107,17 @@ resource "google_storage_bucket_iam_member" "relay_manifest_reader" {
   role     = "roles/storage.objectViewer"
   member   = "serviceAccount:${google_service_account.workload["directory-node"].email}"
 }
+
+# objectViewer grants storage.objects.* but NOT storage.buckets.get, and the provider needs the
+# latter: GCS returns 404 for a missing BUCKET exactly as it does for a missing OBJECT (unlike S3,
+# which distinguishes NoSuchBucket from NoSuchKey). GcsCloudStorageProvider therefore probes
+# bucket.exists() on a 404, because returning "not found" for a mistyped bucket would report a
+# config error as "no manifest published yet" — a state the relay-pool loader treats as benign and
+# never retries. bucketViewer is the minimal role carrying that permission
+# (storage.buckets.get + list); it grants nothing over objects.
+resource "google_storage_bucket_iam_member" "relay_manifest_bucket_reader" {
+  for_each = var.directory_nodes
+  bucket   = google_storage_bucket.relay_manifest[each.key].name
+  role     = "roles/storage.bucketViewer"
+  member   = "serviceAccount:${google_service_account.workload["directory-node"].email}"
+}

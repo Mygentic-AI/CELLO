@@ -442,7 +442,7 @@ const envelopeKeyProvider = await (async (): Promise<import("@cello-protocol/int
       keyRingId: requireEnv("CELLO_KMS_KEYRING"),
       cryptoKeyId: requireEnv("CELLO_KMS_KEY"),
     };
-    const p = new KmsEnvelopeKeyProvider(cfg, new kms.KeyManagementServiceClient() as never);
+    const p = new KmsEnvelopeKeyProvider(cfg, new kms.KeyManagementServiceClient());
     logger.info("adapter.initialised", {
       adapterName: "EnvelopeKeyProvider", implementation: "KmsEnvelopeKeyProvider", env,
       project: cfg.projectId, location: cfg.locationId, keyRing: cfg.keyRingId, cryptoKey: cfg.cryptoKeyId,

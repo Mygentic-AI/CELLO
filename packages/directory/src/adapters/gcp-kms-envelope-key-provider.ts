@@ -29,10 +29,19 @@ export interface GcpKmsConfig {
   readonly cryptoKeyId: string;
 }
 
-/** The slice of `@google-cloud/kms` this adapter uses (injectable for tests). */
+/**
+ * The slice of `@google-cloud/kms` this adapter uses (injectable for tests).
+ *
+ * The trailing `...unknown[]` is load-bearing: the real client resolves to a THREE-element tuple
+ * (response, raw request, call options), and declaring a one-element tuple made the real client
+ * un-assignable — which was previously papered over with an `as never` cast at the composition
+ * root, erasing the only structural check this adapter has. Written this way, a real
+ * `KeyManagementServiceClient` satisfies the interface directly and a drift in the response shape
+ * is a type error rather than a runtime surprise on share material.
+ */
 export interface KmsLike {
-  encrypt(req: { name: string; plaintext: Buffer }): Promise<[{ ciphertext?: Buffer | Uint8Array | string | null }]>;
-  decrypt(req: { name: string; ciphertext: Buffer }): Promise<[{ plaintext?: Buffer | Uint8Array | string | null }]>;
+  encrypt(req: { name: string; plaintext: Buffer }): Promise<[{ ciphertext?: Buffer | Uint8Array | string | null }, ...unknown[]]>;
+  decrypt(req: { name: string; ciphertext: Buffer }): Promise<[{ plaintext?: Buffer | Uint8Array | string | null }, ...unknown[]]>;
   cryptoKeyPath(project: string, location: string, keyRing: string, cryptoKey: string): string;
 }
 
