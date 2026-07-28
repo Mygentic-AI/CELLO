@@ -20,7 +20,8 @@ description: >
 - **Next red:** AE-APPEND-1 per-table encoders (which stable columns per Tier-A table — pure,
   publish-independent, builds on record-hash) → then the /cello/anti-entropy/1.0.0 channel +
   mutual handshake (needs a crypto TBS → publish). ROLE-MANIFEST-1 DONE; AE-APPEND-1 parts 1+2 DONE.
-- **Blocked on Andre:** `latest` promotion (commands given), and the AE channel's next publish.
+- **Blocked on Andre:** nothing now (latest promoted). Next publish is the AE channel's crypto TBS
+  when that unit lands.
 - **ROLE-MANIFEST-1 ✅ FULLY CLOSED** — client (beta v0.0.129) + directory (branch, reviewed).
 - **Done since P0:** AE-DESIGN-1 ✅, ROLE-MANIFEST-1 client half ✅ (branch), MULTIADDR-1 ✅
   (branch), ADAPTER-GCP-1 GCS cloud-storage ✅+reviewed (branch m12/adapter-gcp e1028109).
@@ -33,11 +34,10 @@ description: >
   crypto-at-rest-severe (reviewer's caution): wrong not-found/permission mapping corrupts share
   encryption, not a benign empty pool. Re-verify the KMS SDK error taxonomy against installed
   source; typed/coded errors, not message-substring.
-- **PUBLISH DONE (beta) — Entry 14.** v0.0.129 CI green incl. smoke-tag. All 7 on beta:
-  crypto 0.0.23, protocol-types 0.0.25, transport 0.0.25, gateway 0.0.5, daemon 0.0.76, cli 0.0.77,
-  connect 0.0.87. Verified against tarballs (validatorNodes in protocol-types dist; guard in crypto
-  dist; cross-pins all real). **AWAITING ANDRE: the `latest` promotion** (operator-facing; command
-  in Entry 14). NOT blocking the dir half — semver ranges resolve against published versions.
+- **PUBLISH FULLY COMPLETE — Entry 14/18.** v0.0.129 beta + **`latest` promoted by Andre
+  2026-07-28** (all 7 `+latest:` confirmed; latest now resolves connect 0.0.87 / cli 0.0.77 /
+  daemon 0.0.76 / transport 0.0.25 / protocol-types 0.0.25 / crypto 0.0.23 / gateway 0.0.5). Andre
+  reinstalled cli+connect@latest, logout/login — operator on the new binary. Nothing owed.
 - **Tier:** P1 — AE-DESIGN-1 ✅, ROLE-MANIFEST-1 client half ✅ (reviewed+fixed, Entry 10);
   remaining P1: ROLE-MANIFEST-1 dir half, AE-APPEND/MUTABLE/LOCAL-E2E, MULTIADDR, ADAPTER-GCP.
 - **Branches:** cello-client `m12/role-manifest` (3ca8560, reviewed green, unmerged);
