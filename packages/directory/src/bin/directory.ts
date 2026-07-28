@@ -127,12 +127,16 @@ if (env === "local" && !relayAddr) {
 // its current behavior with no env change; a GCP node sets CELLO_CLOUD=gcp. Validated fatally —
 // a typo must not silently fall back to AWS adapters on a node with no AWS credentials, which
 // would surface much later as opaque SDK timeouts.
-const cloudProvider = (process.env["CELLO_CLOUD"] ?? "aws").toLowerCase();
+// The raw value is read into a local first: DEPLOY-002 SI-002 forbids `process.env[...]` inside any
+// logger call, because that shape is how a secret-bearing variable ends up in a log line. The rule is
+// enforced on the syntax, not on which key it happens to be.
+const cloudProviderRaw = process.env["CELLO_CLOUD"];
+const cloudProvider = (cloudProviderRaw ?? "aws").toLowerCase();
 if (cloudProvider !== "aws" && cloudProvider !== "gcp") {
   logger.error("adapter.config.invalid", {
     configKey: "CELLO_CLOUD",
     env,
-    reason: `must be 'aws' or 'gcp'; got '${process.env["CELLO_CLOUD"]}'`,
+    reason: `must be 'aws' or 'gcp'; got '${cloudProviderRaw}'`,
   });
   process.exit(1);
 }
@@ -185,14 +189,85 @@ let pgPool: pg.Pool | undefined;
 // directory.pool.max.high WARN if the value exceeds 100.
 const poolMax = resolvePoolMax(process.env, logger);
 
+/**
+ * Open the pool and load the profile cache, or die naming the cause.
+ *
+ * The first read is where an unreachable/misconfigured database actually surfaces — a pool is lazy,
+ * so `new pg.Pool()` succeeds against a host that does not exist. Left unguarded this threw an
+ * unhandled rejection out of `loadProfiles()` and the process died on a pg-pool stack trace with no
+ * CELLO event at all: on a cloud VM that is an unattributable crash in the serial console, and it is
+ * the most likely first-boot failure against a freshly provisioned managed database.
+ *
+ * The connection string carries the password, so it is NEVER logged — only host, port and database
+ * name, which are what an operator needs to tell "wrong host" from "wrong database" from "no route".
+ */
+async function openStore(databaseUrl: string): Promise<PgDirectoryStore> {
+  pgPool = new pg.Pool({ connectionString: databaseUrl, max: poolMax });
+  let target: { host?: string; port?: string; database?: string } = {};
+  try {
+    const u = new URL(databaseUrl);
+    target = { host: u.hostname, port: u.port || "5432", database: u.pathname.replace(/^\//, "") };
+  } catch {
+    // An unparsable URL is itself the fault; report what we can rather than masking the real error.
+  }
+  // 1. Connectivity. A pool is lazy, so this is the first statement that can prove the server is
+  //    reachable and the database exists. Separating it from everything below is what lets the
+  //    later failures name a SCHEMA cause instead of being reported as an outage.
+  try {
+    await pgPool.query("SELECT 1");
+  } catch (err: unknown) {
+    logger.error("directory.db.unavailable", {
+      ...target,
+      nodeId,
+      env,
+      reason: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(1);
+  }
+
+  // 2. AC-010 schema version guard — BEFORE the first schema read. The store's profile cache selects
+  //    from agent_profiles, so on an un-migrated database that read fails first and reports a
+  //    missing relation, which is a symptom; "your migrations have not run" is the cause.
+  //    Flyway runs in docker-entrypoint.sh ahead of this process; this is the safety net.
+  const migrationsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../db/migrations");
+  const expectedVersion = readdirSync(migrationsDir).filter((f) => /^V\d+__.*\.sql$/.test(f)).length;
+  let appliedVersion = 0;
+  try {
+    const result = await pgPool.query<{ max_rank: number | null }>(
+      `SELECT MAX(installed_rank) AS max_rank FROM flyway_schema_history WHERE success = true`,
+    );
+    appliedVersion = result.rows[0]?.max_rank ?? 0;
+  } catch (err) {
+    // flyway_schema_history absent (never migrated) or cello_service lacks SELECT on it.
+    logger.error("migration.version.query.failed", { reason: String(err), env });
+    appliedVersion = 0;
+  }
+  if (appliedVersion < expectedVersion) {
+    logger.error("migration.out.of.date", { currentVersion: appliedVersion, requiredVersion: expectedVersion, env });
+    await pgPool.end();
+    process.exit(1);
+  }
+
+  // 3. Schema is current — now the profile cache can be loaded.
+  const s = new PgDirectoryStore(pgPool, logger, nodeId, awsRegion);
+  try {
+    await s.loadProfiles();
+  } catch (err: unknown) {
+    logger.error("directory.db.unavailable", {
+      ...target,
+      nodeId,
+      env,
+      reason: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(1);
+  }
+  logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env, poolMax });
+  return s;
+}
+
 const store = await (async () => {
   if (env === "local") {
-    const databaseUrl = requireEnv("DATABASE_URL");
-    pgPool = new pg.Pool({ connectionString: databaseUrl, max: poolMax });
-    const s = new PgDirectoryStore(pgPool, logger, nodeId, awsRegion);
-    await s.loadProfiles();
-    logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env, poolMax });
-    return s;
+    return openStore(requireEnv("DATABASE_URL"));
   }
   // dev/staging/production: PgDirectoryStore backed by RDS credentials from Secrets Manager
   const rdsSecretArn = requireEnv("RDS_CREDENTIALS_SECRET_ARN");
@@ -217,40 +292,11 @@ const store = await (async () => {
     logSecretsUnavailable(logger, { nodeId, region: awsRegion, reason });
     process.exit(1);
   }
-  pgPool = new pg.Pool({ connectionString: databaseUrl, max: poolMax });
-  const s = new PgDirectoryStore(pgPool, logger, nodeId, awsRegion);
-  await s.loadProfiles();
-  logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env, poolMax });
-  return s;
+  return openStore(databaseUrl);
 })();
 
-// ─── AC-010: Schema version guard ────────────────────────────────────────────
-// Query flyway_schema_history and refuse to start if migrations haven't been applied.
-// For dev/staging/production, Flyway runs via docker-entrypoint.sh before this process starts,
-// but we still verify as a safety net.
-if (pgPool) {
-  const migrationsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../db/migrations");
-  const migrationFiles = readdirSync(migrationsDir).filter((f) => /^V\d+__.*\.sql$/.test(f));
-  const expectedVersion = migrationFiles.length;
-
-  let appliedVersion = 0;
-  try {
-    const result = await pgPool.query<{ max_rank: number | null }>(
-      `SELECT MAX(installed_rank) AS max_rank FROM flyway_schema_history WHERE success = true`,
-    );
-    appliedVersion = result.rows[0]?.max_rank ?? 0;
-  } catch (err) {
-    // flyway_schema_history doesn't exist or cello_service lacks SELECT — log the actual error
-    logger.error("migration.version.query.failed", { reason: String(err), env });
-    appliedVersion = 0;
-  }
-
-  if (appliedVersion < expectedVersion) {
-    logger.error("migration.out.of.date", { currentVersion: appliedVersion, requiredVersion: expectedVersion, env });
-    await pgPool.end();
-    process.exit(1);
-  }
-}
+// The AC-010 schema version guard runs inside openStore(), ahead of the first schema read —
+// see step 2 there. It cannot live here: by this point the profile cache has already been loaded.
 
 // ─── PERSIST-003: RLS startup check ─────────────────────────────────────────
 // Verify that every append-only table has row-level security enabled.

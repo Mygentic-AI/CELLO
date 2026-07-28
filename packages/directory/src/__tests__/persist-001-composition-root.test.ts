@@ -13,10 +13,23 @@ import { resolve, join } from "node:path";
 import { createRequire } from "node:module";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import pg from "pg";
+
+/** Throwaway database created and dropped by the migration-guard test. */
+const EMPTY_DB = "cello_nomigrations_persist001";
 
 const PKG = resolve(import.meta.dirname, "../..");
 // Resolve tsx/esm absolute path so the subprocess can import it without relying on shell PATH
 const tsxEsm = createRequire(import.meta.url).resolve("tsx/esm");
+
+// Postgres coordinates come from DATABASE_URL when present so the suite runs against whichever
+// instance this checkout brought up — a second worktree cannot bind the same port, so hardcoding
+// one silently pointed these tests at the OTHER checkout's database.
+const PG_URL = process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
+/** Same server, different database name. */
+function pgUrlFor(dbName: string): string {
+  return PG_URL.replace(/\/[^/?]+(\?|$)/, `/${dbName}$1`);
+}
 
 // Track temp directories for cleanup
 const tempDirs: string[] = [];
@@ -139,16 +152,62 @@ describeIntegration("AC-002: CELLO_ENV=local startup — all adapters initialise
     const dir = await mkdtemp(join(tmpdir(), "cello-test-"));
     tempDirs.push(dir);
     const auditPath = join(dir, "audit.jsonl");
+
+    // A database that EXISTS but has never been migrated — which is what this test claims to
+    // cover. Pointing at a database that does not exist tests the connection failure instead,
+    // and the two have different causes and different correct events (see the next test).
+    const admin = new pg.Pool({ connectionString: pgUrlFor("postgres") });
+    try {
+      await admin.query(`DROP DATABASE IF EXISTS ${EMPTY_DB}`);
+      await admin.query(`CREATE DATABASE ${EMPTY_DB}`);
+    } finally {
+      await admin.end();
+    }
+
+    try {
+      const result = runBin({
+        CELLO_ENV: "local",
+        DATABASE_URL: pgUrlFor(EMPTY_DB),
+        DEV_ENVELOPE_KEY: "0".repeat(64),
+        AUDIT_LOG_PATH: auditPath,
+        CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWTest",
+      });
+      expect(result.code).toBe(1);
+      const out = result.stdout + result.stderr;
+      expect(out).toContain("migration.out.of.date");
+    } finally {
+      const cleanup = new pg.Pool({ connectionString: pgUrlFor("postgres") });
+      await cleanup.query(`DROP DATABASE IF EXISTS ${EMPTY_DB}`).catch(() => { /* best effort */ });
+      await cleanup.end();
+    }
+  });
+
+  // M12 DOD-NODE-DIR-GCP-1: a node whose database is unreachable must say SO. It previously died
+  // on an unhandled rejection from loadProfiles(), dumping a pg-pool stack with no CELLO event —
+  // on a cloud VM that lands in a serial console as an unattributable crash, and it is the single
+  // most likely first-boot failure against a freshly created managed database (wrong host, wrong
+  // password, missing network grant).
+  it("exits 1 with a NAMED directory.db.unavailable — not a raw pg stack — when the database is unreachable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cello-test-"));
+    tempDirs.push(dir);
+    const auditPath = join(dir, "audit.jsonl");
     const result = runBin({
       CELLO_ENV: "local",
-      DATABASE_URL: "postgresql://postgres:dev@localhost:5433/cello_nonexistent_test_db",
+      DATABASE_URL: pgUrlFor("cello_absent_db_persist001"),
       DEV_ENVELOPE_KEY: "0".repeat(64),
       AUDIT_LOG_PATH: auditPath,
       CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWTest",
     });
     expect(result.code).toBe(1);
     const out = result.stdout + result.stderr;
-    expect(out).toContain("migration.out.of.date");
+    // Names the cause…
+    expect(out).toContain("directory.db.unavailable");
+    expect(out).toContain("cello_absent_db_persist001");
+    // …and does not leak the credentials it was handed.
+    expect(out).not.toContain("dev@");
+    // …and is not an unhandled rejection.
+    expect(out).not.toContain("pg-pool/index.js");
+    expect(out).not.toContain("Error.captureStackTrace");
   });
 });
 

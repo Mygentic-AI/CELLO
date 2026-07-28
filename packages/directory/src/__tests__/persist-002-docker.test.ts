@@ -190,14 +190,24 @@ describeIntegration("PERSIST-002: Docker Compose + Flyway", () => {
     }
   });
 
-  it("AC-010: directory exits 1 with migration.out.of.date when no migrations have been applied", () => {
-    // Drop flyway_schema_history in a temp schema to simulate a fresh (unmigrated) DB.
-    // Instead we test the guard by passing a DATABASE_URL pointing to a db with no history.
-    // The simplest approach: run the binary against a non-existent database.
+  it("AC-010: directory exits 1 with migration.out.of.date when no migrations have been applied", async () => {
+    // A database that EXISTS but has never been migrated. Pointing at a database that does not
+    // exist would exercise the CONNECTIVITY guard instead (directory.db.unavailable) — a different
+    // cause with a different event, covered in persist-001.
+    const emptyDb = "cello_nomigrations_persist002";
+    const adminUrl = DATABASE_URL.replace(/\/[^/?]+(\?|$)/, "/postgres$1");
+    const admin = new pg.Pool({ connectionString: adminUrl });
+    try {
+      await admin.query(`DROP DATABASE IF EXISTS ${emptyDb}`);
+      await admin.query(`CREATE DATABASE ${emptyDb}`);
+    } finally {
+      await admin.end();
+    }
+
     const merged: NodeJS.ProcessEnv = {
       ...process.env,
       CELLO_ENV: "local",
-      DATABASE_URL: "postgresql://postgres:dev@localhost:5433/cello_nonexistent_test_db",
+      DATABASE_URL: DATABASE_URL.replace(/\/[^/?]+(\?|$)/, `/${emptyDb}$1`),
       DEV_ENVELOPE_KEY: "0".repeat(64),
       AUDIT_LOG_PATH: "/tmp/cello-test-audit.log",
       CELLO_RELAY_MULTIADDR: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWTest",
@@ -217,6 +227,10 @@ describeIntegration("PERSIST-002: Docker Compose + Flyway", () => {
       output = (e.stdout ?? "") + (e.stderr ?? "");
       code = e.status ?? 1;
     }
+    const cleanup = new pg.Pool({ connectionString: adminUrl });
+    await cleanup.query(`DROP DATABASE IF EXISTS ${emptyDb}`).catch(() => { /* best effort */ });
+    await cleanup.end();
+
     expect(code).toBe(1);
     expect(output).toContain("migration.out.of.date");
   });

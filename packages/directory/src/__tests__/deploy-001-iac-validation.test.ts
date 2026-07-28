@@ -51,6 +51,20 @@ import { parse as parseYaml } from "yaml";
 // Path to CloudFormation templates — resolve from repo root
 const CFN_DIR = resolve(import.meta.dirname, "../../../../infra/cloudformation");
 
+/**
+ * 64-hex literals that are PUBLIC key material and therefore belong in a template.
+ * Each entry names what it is and where its private counterpart lives. Adding a value here is
+ * a deliberate act: if you cannot state the secret's separate home, it does not belong here.
+ *
+ *  - Consortium officer ROOT public key (M12 §1b, `/cello/{env}/consortium/root-keys`). The
+ *    directory verifies its consortium manifest against it; the client bundles the same constant
+ *    (cello-client core/daemon/src/bundled-consortium-manifest.ts). The signing seed lives in
+ *    Secrets Manager `cello/{env}/consortium/officer-key-0` and appears in no template.
+ */
+const PUBLIC_KEY_LITERALS = new Set<string>([
+  "8e9b99e5aa5505f2f50ec9f933f497a64956614575edce3427ec8a096c864199",
+]);
+
 function loadTemplate(name: string): Record<string, unknown> {
   const filePath = join(CFN_DIR, name);
   const content = readFileSync(filePath, "utf-8");
@@ -405,8 +419,13 @@ describe("DEPLOY-001: SI-001 no secret values in templates", () => {
         // A private key line would have a hex string as the value
         const match = line.match(/:\s*["']?([0-9a-f]{64})["']?\s*$/i);
         if (match) {
-          // If found, it must be 0-padded placeholder or template ref
-          expect(match[1]).toMatch(/^0+$|PLACEHOLDER/);
+          // A 64-hex literal is a private key UNLESS it is a value we have deliberately
+          // declared public. Allowlisting the exact bytes (not the parameter name, not a
+          // path pattern) keeps the teeth: a private key pasted anywhere still fails,
+          // including into the very parameter that holds a public one today.
+          if (PUBLIC_KEY_LITERALS.has(match[1]!.toLowerCase())) continue;
+          // Otherwise it must be a 0-padded placeholder or a template ref
+          expect(match[1], `${name}: unexplained 64-hex literal`).toMatch(/^0+$|PLACEHOLDER/);
         }
       }
     }
