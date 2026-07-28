@@ -46,6 +46,11 @@ export interface ManifestVerifyOptions {
   readonly threshold: number;
 }
 
+/** A manifest that FAILED VERIFICATION (signatures/window/distinctness) — distinct from a
+ *  read/parse error so the reload path can emit the precise event (a file-permission blip must
+ *  not page as a verification failure). */
+class ManifestVerificationError extends Error {}
+
 export class FileDirectoryManifestStore implements DirectoryManifestStore {
   readonly #path: string;
   readonly #logger: FileDirectoryManifestStoreLogger | undefined;
@@ -93,7 +98,7 @@ export class FileDirectoryManifestStore implements DirectoryManifestStore {
       // In verify mode the failure names its cause under the §6 event taxonomy.
       const reason = err instanceof Error ? err.message : String(err);
       this.#logger?.warn(
-        this.#verify ? "directory.manifest.verify.failed" : "directory.manifest.store.reload.failed",
+        err instanceof ManifestVerificationError ? "directory.manifest.verify.failed" : "directory.manifest.store.reload.failed",
         { path: this.#path, servedVersion: this.#lastGood.version, reason },
       );
       return this.#lastGood;
@@ -114,15 +119,35 @@ export class FileDirectoryManifestStore implements DirectoryManifestStore {
       throw new Error(`consortium manifest at ${this.#path} is malformed (missing version/nodes/signatures)`);
     }
     if (this.#verify) {
+      // Signed validity window: verifyManifest checks signatures, not freshness — but the body
+      // SIGNS not_before/expires, and an expired-yet-validly-signed manifest is exactly how
+      // retired node keys would be resurrected (the freshness door to the same attack the
+      // anti-rollback check closes on the version door). Reject outside the window.
+      const nowMs = Date.now();
+      const notBefore = Date.parse(String((parsed as { not_before?: unknown }).not_before ?? ""));
+      const expires = Date.parse(String((parsed as { expires?: unknown }).expires ?? ""));
+      if (!Number.isFinite(notBefore) || !Number.isFinite(expires)) {
+        throw new ManifestVerificationError(`consortium manifest at ${this.#path} failed verification: missing/unparseable not_before or expires`);
+      }
+      if (nowMs < notBefore || nowMs > expires) {
+        throw new ManifestVerificationError(
+          `consortium manifest at ${this.#path} failed verification: outside validity window (not_before ${String((parsed as { not_before?: unknown }).not_before)}, expires ${String((parsed as { expires?: unknown }).expires)})`,
+        );
+      }
       // §1c distinctness: duplicate identities across entries break the handshake's
-      // anti-reflection guarantee (verification must use provably-distinct keys).
+      // anti-reflection guarantee (verification must use provably-distinct keys). nodeId and
+      // pubkey are REQUIRED on every entry (absent/empty is a malformed manifest, not a skip);
+      // peerId alone may be absent on a pre-M12 entry — dupes are checked among present values.
       for (const field of ["nodeId", "pubkey", "peerId"] as const) {
         const seen = new Set<string>();
         for (const node of parsed.nodes) {
           const value = (node as unknown as Record<string, unknown>)[field];
-          if (typeof value !== "string" || value.length === 0) continue; // absent peerId (pre-M12 entry) is not a dupe
+          if (typeof value !== "string" || value.length === 0) {
+            if (field === "peerId") continue; // pre-M12 entry
+            throw new ManifestVerificationError(`consortium manifest at ${this.#path} has a node with missing/empty ${field}`);
+          }
           if (seen.has(value)) {
-            throw new Error(`consortium manifest at ${this.#path} has a duplicate ${field}: ${value}`);
+            throw new ManifestVerificationError(`consortium manifest at ${this.#path} has a duplicate ${field}: ${value}`);
           }
           seen.add(value);
         }
@@ -133,7 +158,7 @@ export class FileDirectoryManifestStore implements DirectoryManifestStore {
         this.#verify.threshold,
       );
       if (!result.ok) {
-        throw new Error(
+        throw new ManifestVerificationError(
           `consortium manifest at ${this.#path} failed verification: ${result.reason}${result.detail ? ` (${result.detail})` : ""}`,
         );
       }

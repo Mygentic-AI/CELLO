@@ -118,7 +118,7 @@ describe("M12 §1b: FileDirectoryManifestStore verify-at-load", () => {
     expect(store.getCurrentManifest().version).toBe(1); // last-good stays active
     expect(logger.warn).toHaveBeenCalledWith(
       "directory.manifest.verify.failed",
-      expect.objectContaining({ reason: expect.stringContaining("manifest") }),
+      expect.objectContaining({ reason: expect.stringContaining("failed verification") }),
     );
   });
 
@@ -138,6 +138,24 @@ describe("M12 §1b: FileDirectoryManifestStore verify-at-load", () => {
       "directory.manifest.verify.failed",
       expect.objectContaining({ reason: expect.stringContaining("rollback") }),
     );
+  });
+
+  it("REJECTS an EXPIRED but validly-signed manifest (the freshness door to retired-key resurrection)", () => {
+    const nodes = (makeManifest().nodes as NodeEntry[]);
+    const body = { version: 1, not_before: "2020-01-01T00:00:00Z", expires: "2021-01-01T00:00:00Z", nodes };
+    const canonical = canonicalManifestBody(body as unknown as ConsortiumManifestInput);
+    const signatures = [0, 1].map((i) => ({ officerIndex: i, signature: Buffer.from(ed25519.sign(canonical, OFFICER_SEEDS[i])).toString("hex") }));
+    writeFileSync(path, JSON.stringify({ ...body, signatures }));
+    expect(() => new FileDirectoryManifestStore(path, logger, verify)).toThrow(/validity window/i);
+  });
+
+  it("REJECTS a node entry with a missing/empty pubkey (required fields never skip distinctness)", () => {
+    const nodes: NodeEntry[] = [
+      { nodeId: "aws-use1", pubkey: "", region: "r1", provider: "aws", endpoint: "https://a", role: "validator" },
+      { nodeId: "gcp-usc1", pubkey: "", region: "r2", provider: "gcp", endpoint: "https://b", role: "validator" },
+    ];
+    writeFileSync(path, JSON.stringify(makeManifest({ nodes })));
+    expect(() => new FileDirectoryManifestStore(path, logger, verify)).toThrow(/missing\/empty pubkey/i);
   });
 
   it("transport-only mode (no verify opts) still loads an UNSIGNED manifest (M7 compat)", () => {
