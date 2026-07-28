@@ -701,3 +701,103 @@ real KMS client erases the only structural check that unit has; `nodeId`/`region
 `AWS_REGION` so a GCP node mislabels itself; and the SSM-registry failure prints AWS remediation
 advice on a node that has no SSM by design. All are latent today because **nothing calls
 `AuditLogShipper.ship()` in production** — a pre-existing no-consumer gap across all three shippers.
+
+---
+
+## Entry 19 — 2026-07-28 — STANDING STATE (read this first after a compaction)
+
+Capstone entry. Entries 1-18 are the narrative; this one is the machine state a cold context needs
+before touching anything.
+
+### Where the code lives — WORKTREES (changed 2026-07-28, do not get this wrong)
+
+An endorsements agent runs overnight in the PRIMARY checkouts. M12 work moved into worktrees so we
+do not fight over branch switching:
+
+| Repo | Primary checkout (endorsements agent — DO NOT USE) | M12 worktree (use this) | Branch |
+|---|---|---|---|
+| trustless-cello | `/Users/andrep/Documents/code/trustless-cello` → `main` | `/Users/andrep/Documents/code/trustless-cello-m12` | `m12/ae-append` |
+| cello-client | `/Users/andrep/Documents/code/cello-client` → `main` | `/Users/andrep/Documents/code/cello-client-m12` | `m12/ae-client` (fresh, no commits yet) |
+
+`cello-client-m9` (`m9-switch-on`) also exists — unrelated, leave it.
+The M12 worktree needed `packages/interfaces` built locally (`cd packages/interfaces && npx tsc
+--build`) before `tsc --noEmit` passes in `packages/directory`; vitest works without it (TS source).
+
+### Branch state — NOTHING IS MERGED
+
+`m12/ae-append` HEAD = `4357697c`. Unmerged M12 branches awaiting ONE batched directory deploy at
+Wave 2 (deploys take 25-30 min across 3 regions — never ship these one at a time):
+`m12/role-manifest`, `m12/multiaddr`, `m12/adapter-gcp`, `m12/ae-append`.
+
+### Published to npm beta from cello-client MAIN (already live, already pinned)
+
+`transport 0.0.27`, `daemon 0.0.78`, `cli 0.0.79`, `connect 0.0.89`, tag `v0.0.131` (CI green,
+binary-verified). trustless-cello pins `@cello-protocol/transport ^0.0.27`. **Next free tag is
+`v0.0.132`** — the endorsements agent must not reuse `v0.0.131`.
+**`latest` promotion NOT run — that is Andre's step, always.** Nothing here blocks on it.
+Note: those two commits went to cello-client `main` directly. Andre ruled that acceptable (nothing
+live, pre-launch) but M12 client work is on `m12/ae-client` from now on.
+
+### Crons: NONE ARMED. Re-arm both on resume
+
+The M12 heartbeat + "have you stopped?" defibrillator were session-scoped and are gone. M12-PROCEDURE
+§3b expects them.
+
+### DoD status — P1 (protocol code) is COMPLETE
+
+All ✅ and audited: `GCP-PROJECT-1`, `GCP-IAM-1`, `CI-REGISTRY-1`, `IAC-BASE-1` (P0);
+`ROLE-MANIFEST-1`, `AE-DESIGN-1`, `AE-APPEND-1`, `AE-MUTABLE-1`, `AE-LOCAL-E2E-1`, `MULTIADDR-1` (P1).
+`ADAPTER-GCP-1` is 🟡 BUILT-not-live-verified (unit-proven with injected clients; real GCS/KMS proof
+belongs to `DOD-NODE-DIR-GCP-1`).
+
+**NEXT LINE: `DOD-NODE-DIR-GCP-1`** — first GCP directory live (`gcp-<region>`): MIG(1) + COS running
+the CI-built image, its own Cloud SQL (node-only access), Secret Manager secrets, IAP-login, and a
+live EMPTY-REGISTRY BOOT (the thing M12-D6 said to confirm in P2). This is also where the GCP
+adapters finally get real-cloud proof, and it needs IaC for the GCS bucket + KMS key ring.
+
+### How to verify the AE stack in one command each
+
+```
+# unit (fast) — from the M12 worktree, packages/directory
+CELLO_ENV=local DATABASE_URL="postgresql://postgres:dev@localhost:5433/cello_dev" \
+  npx vitest run src/__tests__/ae-*.test.ts src/__tests__/anti-entropy-engine.test.ts \
+  src/__tests__/pg-ae-store.live.test.ts src/__tests__/gcp-adapters.test.ts
+
+# the enforcer (3 real directory binaries, ~5 min) — from packages/e2e-tests
+CELLO_ENV=local npx vitest run --config vitest.spine.config.ts src/spine/j-antientropy.spine.test.ts
+```
+Both need docker postgres on :5433 (`docker compose up -d`).
+
+### Owed items — journaled, NOT forgotten
+
+- **GCS audit shipper has no RETRY loop** (the S3 one has backoff + `audit.shipper.recovered`). One
+  transient 503 parks it in degraded mode for the process lifetime. Latent: **nothing calls
+  `AuditLogShipper.ship()` in production** — a pre-existing no-consumer gap across all 3 shippers.
+- KMS **crc32c** neither sent nor verified; the `as never` cast on the real KMS client erases the
+  only structural check that unit has (the real `encrypt` returns a 3-tuple, `KmsLike` declares 1).
+- `nodeId`/`region` default to `AWS_REGION`, so a GCP node self-labels `us-east-1` on every log line.
+- The SSM-registry failure prints AWS remediation advice on a GCP node that has no SSM by design.
+- `CELLO_CLOUD=gcp` + `CELLO_ENV=dev` **cannot boot**: the RDS credential path is still AWS Secrets
+  Manager. Cloud SQL wiring belongs to `DOD-NODE-DIR-GCP-1`.
+- §1c "accept the immediately-previous manifest during rotation" — the retry-once half is built; the
+  previous-manifest-retention half is owed with `DOD-MANIFEST-GCP-1`.
+- Two hash-chained Tier-A tables (`user_accounts`, `seal_notarizations`) are deliberately NOT synced:
+  their apply must reuse the canonical local chain writer (`insertWithChain`).
+- `stopAeSync()`-in-shutdown and the `CELLO_AE_INTERVAL_MS` bounds have no tests of their own.
+
+### Decisions this run (full text in the DoD's decision list)
+
+- **M12-D8** — the manifest has TWO roles. `getCurrentManifest()` SERVE = dumb transport (clients
+  verify independently; officer rotation must not be blocked by this node's anchor);
+  `getVerifiedManifest()` USE = threshold-verified, windowed, distinct, anti-rollback. Collapsing
+  them broke J-AUTH. Both required on the interface — no optional method that silently degrades.
+- **M12-D9** — boot stays FATAL on an unverifiable manifest. Booting serve-only would leave the DKG
+  quorum deriving from an empty node set, which the code treats as single-node back-compat: a SILENT
+  THRESHOLD DOWNGRADE is worse than a loud crash loop.
+
+### Process note that earned its place
+
+The `cello-done-auditor` ruled all three AE status flips **OVERSTATED** before they were committed —
+each had a named AC clause with no test behind it. Two were fixed with real tests, one (APPEND-1's
+O(compare)) was demoted, then genuinely implemented in Entry 17. **Run the auditor on every status
+flip; it caught what three unit reviews did not.**
