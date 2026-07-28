@@ -54,6 +54,23 @@ navigation.
 **No data changes.** Anyone with an old `cello_wl_session` is simply signed out once (different
 name) and signs in again; with zero real users there is nothing to migrate.
 
+### Follow-on — migration 0023, content alerts became a paid action (12:55–13:20 UTC)
+
+- **`0023_content_alerts_points.sql` APPLIED** to the portal RDS via
+  `aws lambda invoke --function-name cello-waitlist-migrate-dev` (dry-run first, as that
+  function requires: it reported exactly 1 pending, 22 already applied). Adds `content_alerts`
+  to the `points_ledger` reason CHECK **and** to the once-per-user partial index from 0009 —
+  the second part is what stops a toggle-attached award being farmed by clicking a checkbox.
+  Verified after applying: both the constraint and the index name it.
+- **`./infra/deploy-lambdas.sh dev waitlist`** (4th run, 12:55) — `handle_content_alerts` now
+  awards 10 on opt-IN only, once, no claw-back on opt-out.
+- **corp-cello-site** — the "Follow the build" card's slot now flips `+10 to your rank` →
+  `+10 added`, and `setContentAlerts` returns the award rather than a bare boolean.
+- **ONE DATA CHANGE:** 1 row backfilled. Anyone who had `content_alerts = true` BEFORE 0023
+  shipped had done the paid action but held no ledger row, so the page showed an unclaimed
+  offer beside an already-ticked box. `INSERT … WHERE content_alerts = true ON CONFLICT DO
+  NOTHING`, made safe by the same once-per-user index. Andre's total went 70 → 80.
+
 ### Follow-on deploy — survey moved onto /status (07:37–09:35 UTC)
 
 - **`./infra/deploy-lambdas.sh dev waitlist`** (3rd run, 07:37). `handle_survey` now treats a repeat
