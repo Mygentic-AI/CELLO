@@ -387,3 +387,27 @@ seal_notarizations) · suspension merge · presence merge · Tier-B version summ
    summaries + merges + apply). The big integration unit.
 3. The apply transaction (Tier-A insert-if-absent FK-ordered; Tier-B pull-by-key + merge; tombstones).
 4. DOD-AE-LOCAL-E2E-1: the 3-process loopback convergence enforcer (partition/restart/rejoin).
+
+## Entry 24 — 2026-07-28 — AE foundation reviews all resolved; crypto TBS publishing (v0.0.130)
+
+version-reconcile review: FAITHFUL, no findings (reviewer confirmed termination rests on merge
+IDEMPOTENCY, not just commutativity — carried to the e2e unit: assert round-2 pulls nothing).
+
+AE peer-auth TBS review: SPEC faithful; fix-before-ship security items applied (the primitive
+ships ahead of its channel, must self-defend): F1 injective TBS — reject embedded newlines + pin
+nonces to 32-byte hex so the newline-join can't alias two param sets (verify fails CLOSED on a
+bad set); F2 reject A==B (a self-handshake let one sig satisfy both directions); F3 extracted
+shared hex.ts (manifest.ts now imports it, its 46 tests green); F4 documented the channel's
+non-enforceable obligations (CSPRNG nonce, single-use store, timestamp window, peerIds from the
+LOCAL Noise connection). crypto suite 291 green.
+
+**Every AE foundation unit is now built + reviewed + findings fixed.** Publishing the crypto TBS:
+merged cello-client m12/ae-peer-auth → main, bumped the 7-pkg cascade (crypto 0.0.24,
+protocol-types 0.0.26, transport 0.0.26, gateway 0.0.6, daemon 0.0.77, cli 0.0.78, connect
+0.0.88), tagged v0.0.130 — CI publishing beta now. This ships buildAePeerAuthTbs/verifyAePeerAuth
+so the directory anti-entropy channel can compile against them.
+
+Next after beta verify: re-pin trustless-cello directory to crypto ^0.0.24, then build the
+`/cello/anti-entropy/1.0.0` channel (libp2p handler + dial/reconnect + the mutual handshake +
+the round driver wiring reconciliation/version-summaries/merges/apply). The `latest` promotion
+for v0.0.130 is operator-facing (Andre's) and NOT needed for the channel build.
