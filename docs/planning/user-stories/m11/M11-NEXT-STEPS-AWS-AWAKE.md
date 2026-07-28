@@ -18,8 +18,47 @@ description: The ordered list of AWS-dependent steps that convert M11's 🟡 lin
 > against the deployed API.
 >
 > **1. `./infra/deploy.sh`** — `cello-waitlist.yaml` gained `POST /waitlist/auth/resend`. Without it
-> the one button on every dead-link page 404s. (Note the standing blocker below: deploy.sh exits on
-> `cello-ecs-directory-dev`. The waitlist stack can be deployed directly, as it was on 07-25.)
+> the one button on every dead-link page 404s.
+>
+> **If deploy.sh dies before it gets there — and on 07-25 it did** — the waitlist is STEP 15 and
+> deliberately last, so a failure at `cello-ecs-directory-dev` means it never ran. Deploy just that
+> stack. This resolves the same four parameters from the same authoritative sources STEP 15 uses:
+>
+> ```bash
+> ENV=dev; REGION=us-east-1
+> ex() { aws cloudformation list-exports --region "$REGION" \
+>   --query "Exports[?Name=='$1'].Value" --output text; }
+> DB_HOST=$(ex "cello-$ENV-portal-db-endpoint")
+> DB_PORT=$(ex "cello-$ENV-portal-db-port")
+> SECRET_ARN=$(ex "cello-$ENV-portal-db-master-secret-arn")
+> DB_PW=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id "$SECRET_ARN" \
+>   --query SecretString --output text | python3 -c 'import json,sys;print(json.load(sys.stdin)["password"])')
+> ZONE=$(aws route53 list-hosted-zones-by-name --dns-name cello.mygentic.ai \
+>   --query 'HostedZones[0].Id' --output text | sed 's|/hostedzone/||')
+>
+> # Every one of these must be non-empty. An empty parameter deploys a stack that
+> # reports healthy and cannot do its job — infra/CLAUDE.md's required-config rule.
+> for v in DB_HOST DB_PORT DB_PW ZONE; do [[ -n "${!v}" ]] || echo "MISSING: $v"; done
+>
+> aws cloudformation deploy --region "$REGION" \
+>   --stack-name "cello-waitlist-$ENV" \
+>   --template-file infra/cloudformation/cello-waitlist.yaml \
+>   --capabilities CAPABILITY_NAMED_IAM \
+>   --parameter-overrides \
+>     "Environment=$ENV" \
+>     "WaitlistDatabaseUrl=postgresql://portal_admin:$DB_PW@$DB_HOST:$DB_PORT/cello_portal" \
+>     "ApiDomainName=api.cello.mygentic.ai" \
+>     "HostedZoneId=$ZONE"
+> ```
+>
+> `portal_admin` / `cello_portal` — the PORTAL instance, not the directory's `cello-$ENV-rds-*`
+> exports. The names are one word apart and the wrong pair produces `42P01 undefined_table` on
+> `waitlist_users`, which sends you to the migration subsystem rather than to "you are connected to
+> the wrong database".
+>
+> **This duplicates deploy.sh STEP 15 and can drift from it.** It is a fallback for a blocked run,
+> not a second deploy path — if STEP 15's parameters change, this changes with them, and the real
+> fix is for the directory stack to stop failing.
 >
 > **2. Deploy the Lambdas** — `./infra/deploy-lambdas.sh dev`. Shared `_resend.py` and `_referral.py`
 > are new; auth, signup, email, actions and gallery all changed. Packaging was verified offline —
