@@ -783,6 +783,32 @@ the discussion-of-record. Restated here because this is the milestone that imple
   *Correction to D-14r's reasoning, for accuracy:* its "`cello_restore`, a backup import" second write
   path **does not exist** — those commands are stubs. Fail-closed is still right; that was a future
   hazard stated as a present defect.
+- **M10B-D28 (2026-07-28, from second-review H6 — Entry 13) — the WITHDRAWAL rides the submission queue
+  as an `op`-discriminated sealed body, and its inner authorization is TIME-BOUND and PERSISTED.**
+  `M10B-D12r3` fixed the revoke *predicate*; `M10B-D25r` fixed the *result* path. Neither carried Bob's
+  withdrawal **to** the portal — the daemon never talks to the portal (`M10B-D2`), and Entry 8 designed
+  the queue only around mint-shaped outcomes. Three parts:
+  1. **Carrier.** The sealed body becomes `{v:1, op:"submit"|"withdraw", …}`, reusing the discrimination
+     `signal-write.ts` already applies to `SignalSubmitRequest`/`SignalRevokeRequest`. **Not an
+     `INV-ZEROBUMP` violation:** `op` is an *operation*, not a signal *type* — the directory already
+     branches on `op`, nothing tests a `type` string, and a future client-sourced type inherits both ops
+     for free. The queue's five-column shape is unchanged because `op` lives *inside* the sealed
+     ciphertext, so the directory still cannot tell a withdrawal from an endorsement.
+  2. **Replay bound.** The inner TBS becomes `(domain-tag ‖ signal_hash ‖ issued_at)`, bounded by the
+     existing `CLOCK_SKEW_SECONDS = 600`. As previously sketched — `(domain ‖ signal_hash)` with no
+     timestamp — it was **a permanent bearer capability to revoke that hash at every node forever**.
+     `SignalRevokeRequest` already carries `issued_at`, so this is the existing pattern, not a new
+     primitive. The TBS builder must live in `@cello-protocol/protocol-types` (daemon and portal must
+     produce identical bytes), and the domain tag must not collide with `CELLO-TSIG-v1` or
+     `CELLO-TSIG-REQ-v1`. Adds a third cello-client package to the publish debt.
+  3. **Self-certifying at rest.** The tombstone persists the inner **signature** alongside
+     `revoker_pubkey`. Logical replication applies rows and never re-runs `revokeSignal`, so without
+     this a peer node accepts whatever revoker the originating node wrote — one compromised node could
+     forge any revoker and the other two would treat it as authoritative, which is exactly where
+     `M10B-D12r3`'s read-time defense stops working.
+  **Also settled:** a withdrawal does **not** count against `DOD-END-QUOTA-1`. The quota caps issuance
+  and a withdrawal issues nothing; charging it would penalise the correct behavior of retracting a bad
+  endorsement.
 - **M10B-D26 (2026-07-28, from second-review H3) — `agent_profiles.account_id` is NULLABLE BY DESIGN,
   so `M10B-D18` surfaces the gap rather than closing it; the completeness prerequisite must be decided
   in writing.** `V23`: *"account_id is nullable — pre-M6 agents have no account. NULL means 'not yet

@@ -1251,3 +1251,59 @@ ignored rather than fatal on the daemon's inbound path — **that is the one thi
 building**, because if unknown frames throw, shipping this frame to an un-upgraded daemon breaks its
 signaling stream, and every operator upgrades on their own schedule (CLAUDE.md: "upgrades are not
 transparent"). Named as the first task of the unit, not assumed here.
+
+---
+
+## Entry 13 — `M10B-D28`: the WITHDRAWAL carrier — the half of F4/H6 that D-12r3 did not touch — 2026-07-28
+
+`M10B-D12r3` fixed the revoke *predicate* and proved it on Postgres. `M10B-D25r` fixed the *result*
+path (portal → Bob). **Neither carries Bob's withdrawal to the portal in the first place** — the second
+review's H6, and it is a transport hole exactly like the one that killed `M10B-D19`. Closing it before
+a third reviewer has to say so again.
+
+**The problem.** `DOD-END-SURFACE-1` puts *"withdraw one I issued"* in MCP/CLI, so the withdrawal
+originates in the **daemon**. `M10B-D2` establishes the daemon never talks to the portal. `M10B-D12r3`
+assumes the portal verifies Bob's inner authorization before signing the revoke — and nothing decided
+how the portal obtains it. Entry 8 designed the submission queue exclusively around mint-shaped
+outcomes (minted / rejected / poison), with no notion of an action.
+
+**The answer is one field, and the pattern already exists one layer down.** `signal-write.ts` already
+discriminates its request bodies on an `op`: `SignalSubmitRequest {v:1, op:"submit", …}` and
+`SignalRevokeRequest {v:1, op:"revoke", signal_hash, issued_at}`. The sealed submission body takes the
+same shape — `{v:1, op:"submit"|"withdraw", …}` — and a withdrawal rides the queue it already has.
+
+**Why this is not a `INV-ZEROBUMP` violation, stated because it looks adjacent to one.** `op` is an
+*operation*, not a signal *type*. The directory already branches on `op` and always has. Nothing here
+tests a `type` string, and a future client-sourced type inherits both ops for free. The forbidden thing
+is branching on what a signal *means*; branching on what the caller is *asking for* is what a protocol
+verb is.
+
+**Replay, which the second review raised and D-12r3 did not answer.** The inner TBS as sketched was
+`(domain-tag ‖ signal_hash)` — no timestamp, no nonce, no target node — i.e. **a permanent bearer
+capability to revoke that hash at every node forever.** `SignalRevokeRequest` already carries
+`issued_at` and the outer path already bounds it with `CLOCK_SKEW_SECONDS = 600`. So the inner
+authorization does the same: **TBS = `(domain-tag ‖ signal_hash ‖ issued_at)`, bounded by the same
+window.** No new primitive — `buildSignalRequestTbs` is a byte-for-byte template — and the new domain
+tag must not collide with `CELLO-TSIG-v1` or `CELLO-TSIG-REQ-v1`. Because the daemon and the portal
+must build these bytes identically, the builder belongs in `@cello-protocol/protocol-types`, not a
+local copy on each side. That is a third cello-client package touched, and it joins the publish debt.
+
+**The tombstone must be self-certifying at rest, which is the subtler half.** `M10B-D12r3` verifies the
+inner authorization at write time and then records only `revoker_pubkey`. But **logical replication
+applies rows; it never re-runs `revokeSignal`** — so a peer node accepts whatever `revoker_pubkey` the
+originating node wrote. One compromised node could write any revoker it liked and the other two would
+treat it as authoritative, which is precisely where the read-time defense-in-depth stops working. So
+the tombstone **persists the inner signature alongside the pubkey**, and a node may re-verify what it
+was handed. This is the difference between "we checked it once" and "anyone can check it" — and for a
+federated notary the second is the only one worth having.
+
+**Falsification.** Does the queue's five-column shape still hold? Yes — `op` lives **inside** the
+sealed body, which is opaque `ciphertext` to the directory. The queue schema does not change and gains
+no discriminator column, so `DOD-END-QUEUE-1`'s exact-column-set test is unaffected and the directory
+still cannot tell a withdrawal from an endorsement. Does the portal need a new route? No — it drains
+the same queue and branches after opening. Does `DOD-END-QUOTA-1` count withdrawals? **No** — the quota
+caps issuance, and a withdrawal issues nothing; counting it would penalise the correct behavior of
+retracting a bad endorsement. Stated because it is exactly the kind of thing that gets implemented as
+"every op counts" by default.
+
+**Decision → `M10B-D28`.** Nothing parked.
