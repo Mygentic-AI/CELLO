@@ -179,7 +179,7 @@ Coverage column: **Full** = complete story with ACs exists; **Partial** = covere
 | Room violation log and auto-mute status | None |
 | Room settings editor | None |
 
-**Notes:** Group rooms land at M12. Lower priority for the initial portal design sprint.
+**Notes:** Group rooms land at M15. Lower priority for the initial portal design sprint.
 
 ---
 
