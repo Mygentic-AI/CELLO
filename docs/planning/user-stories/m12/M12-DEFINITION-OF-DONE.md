@@ -75,7 +75,9 @@ description: >
   account `012EFA-590A2E-2A82B4`, with ONLY the needed APIs enabled (compute, artifactregistry,
   cloudbuild, sqladmin, secretmanager, storage, logging, monitoring — final list recorded);
   custom-mode VPC created (no default network); `infra/GCP-STATE.md` created in M11's STATE.md
-  format and committed. — ❌
+  format and committed. — 🟡 all clauses done live 2026-07-28 (project 955736313934, billing
+  linked via slot swap — see the ledger in GCP-STATE.md; 11 APIs; default net deleted,
+  `cello-vpc` custom-mode). Owed: Terraform import at DOD-IAC-BASE-1 → Entry 1
 - **DOD-GCP-IAM-1** [trustless-cello] — per-workload service accounts (directory-node, relay-node,
   ops-agent, portal, cloud-build) with explicit minimal grants; the compute default SA is used by
   nothing; every grant is recorded in IaC. Org constraints (no SA keys — WIF only; zero default
