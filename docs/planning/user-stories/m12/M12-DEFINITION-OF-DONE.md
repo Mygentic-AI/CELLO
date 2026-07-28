@@ -214,7 +214,21 @@ description: >
   fresh transport key (`openssl rand -hex 32`, never copied), static IP, `pg_dump`-to-GCS backup
   timer (shares exist nowhere else). Entirely from IaC. **Evidence must include one
   `gcloud compute ssh --tunnel-through-iap` login** — the IAP firewall path has never been
-  exercised (Entry 5 carry-forward). — ❌
+  exercised (Entry 5 carry-forward). — ✅ LIVE. `{"status":"ok","nodeId":"gcp-use1","schemaVersion":49}`,
+  MIG instance HEALTHY, `directory.service.started nodeId=gcp-use1 region=us-east1`. **Node-only DB
+  access verified independently of the IaC that produced it:** 0 VPC peerings, 0 VPN tunnels, Cloud
+  SQL `ipv4Enabled=false`, `pscEnabled=true`, **no IP address at all** — DOD-INV-NO-VPN holds by
+  construction, not by assertion. **Transport key never copied, never regenerated:** peerId
+  `12D3KooWMH58hm8xpuwgwaNSvnvXBuc126jfuUMVbrGNcU2MeEAX` unchanged across FOUR instance
+  replacements, because it comes from Secret Manager rather than per-boot generation. **Backup timer
+  PROVEN, not merely installed:** `gs://cello-backups-gcp-use1/gcp-use1/20260728T214552Z.sql.gz`,
+  16179 bytes, read back and decompressed from OUTSIDE the node, carrying the core CELLO schema.
+  **IAP login:** `=== IAP LOGIN OK: cello-gcp-use1-8cpn Tue Jul 28 21:07:28 UTC 2026 ===`.
+  **EMPTY-REGISTRY BOOT confirmed** (M12-D6 deferred this to P2): `node.registry.skipped`, no relay
+  in the pool, node healthy and serving. Six defects stood between "applied" and "working" — two
+  missing implicit grants, the COS HOST firewall (policy DROP; a VPC rule alone reaches nothing), an
+  undialable advertised address, and two in the backup (pg_dump 15 vs server 17, and a pipeline
+  reporting gzip's exit status). → Entries 21, 22
 - **DOD-NODE-DIR-GCP-2** [trustless-cello] — second GCP directory in a different region; same
   artifact, zero manual steps (IaC enforcer green on the repeat). — ❌
 - **DOD-NODE-DIR-GCP-3** [trustless-cello] — third GCP directory (temporary Wave-1 member so the
