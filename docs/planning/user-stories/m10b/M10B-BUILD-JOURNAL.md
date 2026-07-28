@@ -1010,3 +1010,135 @@ alongside its predecessor leaves the wallet with the predecessor marked `superse
 behavior, asserted so the V50 change cannot regress it silently. Account-subject fan-out to three agents
 produces three deliveries and **one** consent state (`M10B-D9`). A subject whose account will not
 resolve gets a refusal, not a delivery.
+
+---
+
+## Entry 10 — SECOND REVIEW: three of four replacement decisions do not survive contact with the code — 2026-07-28
+
+Second `cello-unit-reviewer` pass on `DOD-END-ARCH-1`. Verdict: **still 🟡, Tier 1 still does not
+start.** Twelve findings, seven of them HIGH-blocking. The pass **ran live Postgres 18** to falsify one
+of my decisions rather than arguing about it, which is the standard the rest of this milestone should
+be held to.
+
+**The honest summary: Entry 7 replaced four bad decisions with three that are also wrong, and one that
+is right but incomplete.** Each failed the same way — I reasoned about a mechanism instead of reading
+its consumer.
+
+### What I verified myself before accepting (the two load-bearing ones)
+
+- **`listPresentable` is dead code. Confirmed.** `grep` across `cello-client/core`, excluding tests and
+  `dist`, finds only its own definition and two comments. The live presentation path is
+  `listAllActive`, called once, at `outbound-sessions.ts:186`. So `M10B-D14r` put the consent filter in
+  a function nothing calls — it would have shipped as dead code with a green suite while the live path
+  presented unconsented endorsements.
+- **And it drags an M10 defect out with it.** `listAllActive` takes **no `agentId`/`accountId`** and
+  the call site passes none. The subject scoping that `listPresentable` implements (M10-D5/M10-D14 —
+  account-subject rows presentable by any agent under the account, agent-subject only by its own
+  subject) **is not enforced on the live wire path at all.** Every active wallet signal is offered
+  regardless of which agent is presenting. That is `INV-AGENT-SCOPED`, live, today, in M10 — not M10B.
+  Per the standing rule that a real defect found outside the diff gets fixed rather than deferred, it
+  is now `DOD-END-SCOPE-FIX-1` and it must land **before** the consent column, or consent is bolted on
+  top of a scoping hole.
+- **Consequence for Entry 4:** my `expires_at` verification cited `trust-signal-store.ts:437` — inside
+  the dead function. The conclusion survives (the live `listAllActive` carries the identical
+  `expires_at IS NULL OR expires_at > ?` predicate) but the citation was to code that never runs.
+  Corrected to `:505`. **Verifying against a function without checking it has callers is the exact
+  mistake this milestone keeps making.**
+
+### The decisions that fail, and why
+
+**`M10B-D12r` — fails OPEN, proven on Postgres, reopening the defect it claimed to close.**
+`ARRAY_AGG(x) FILTER (WHERE p)` over zero matching rows returns **`NULL`, not `'{}'`**; `NULL && anything`
+is `NULL`; a `NULL` `WHEN` falls through to `ELSE 'active'`. So a tombstone-only group reads **`active`**
+— the directory would confirm as live a hash it has only ever seen a revocation for, which is F4(b)
+verbatim. My clause 4 asserted the opposite. Two more fail-opens I did not see: legacy tombstones have
+`revoker_pubkey IS NULL` and `{NULL} && {'bobkey'}` is `false`, so **the migration silently un-revokes
+every existing revocation**; and array overlap *is* exact-pubkey matching, so dropping the
+`issuer_kind='portal'` escape strands every portal record the moment the KMS key rotates — which
+`signal-write.ts:539–546` exists to prevent and which struck-D-12 had kept. → **`M10B-D12r2`**.
+
+**`M10B-D19` — unbuildable on its stated carrier, at both ends.** I claimed the result "rides the
+M10-D22 sealed pickup path". It cannot: `deliverSignal` refuses to enqueue anything whose
+`signal_hash` is not already a notarized non-tombstone record (`signal-write.ts:459–465`), and a
+refusal notice has no record — notarizing one to pass the gate would write every rejection into
+replicated `signal_records`, destroying D-19's own privacy rationale. At the far end the daemon funnels
+every pickup through `decodeTrustSignalEnvelope`, a fixed 11-element CBOR array, so a `submission_result`
+throws and **returns without ACK** — and since ACK is what deletes, the row is redelivered forever
+while occupying the one pending slot. And V37's upsert would destroy the second result anyway, which is
+the very failure F2 was raised to close, re-created by my chosen carrier. → **`M10B-D25`** (also
+renamed: `M10B-D19` collided with spec `D-19`, referenced bare twice in the same file).
+
+**`M10B-D14r` — the backfill clobbers real consent decisions on every daemon boot.** The client DB has
+**no migration versioning at all**, and `ensureTrustSignalSchema` runs on every `startDaemon` with a
+bare `catch {}`. My literal text — `ALTER …; UPDATE … SET consent_state = 'accepted';` as siblings —
+makes the UPDATE unconditional and unguarded: **an operator who refuses an endorsement has it flipped
+back to `accepted` on the next restart**, silently, and it becomes presentable. The repo already has
+the correct pattern with a comment warning against exactly this (`contacts-tier-migration.ts:116–177`:
+`PRAGMA table_info` birth gate, ALTER + backfill in one transaction, **rethrow** on failure, and no
+column DEFAULT so the backfill has a real discriminator). Adopting it means dropping
+`NOT NULL DEFAULT 'pending'`. → **`M10B-D14r2`**.
+
+**One correction to the reviewer, and it matters for accuracy:** D-14r justified itself partly on
+"`cello_restore`, a backup import" as a second write path. The reviewer is right that this path does
+not exist — `cello_backup`/`cello_restore` are stubs. The conclusion (fail-closed) is still correct;
+the *reason* was a future hazard stated as a present defect, and it should have been labelled as one.
+
+**`M10B-D18` — premise fully verified, conclusion still does not follow.** The reviewer checked the
+`account-by-email-stub` precedent line by line and it holds, including that the failover genuinely
+loops all candidates rather than degrading to null. But **`agent_profiles.account_id` is nullable by
+design** (`V23`: *"pre-M6 agents have no account. NULL means 'not yet linked'"*), and two live paths
+reach NULL — registration without a pre-auth token, and a swallowed resolution failure that logs
+`preauth.account.link.failed` and proceeds deliberately. So under §5a's absent⇒refuse, **an entire
+class of registered agents can never issue an endorsement**, and their quota is uncomputable. →
+**`M10B-D26`** must decide which, in writing.
+
+### Corrections to Entry 8 (the queue note)
+
+- **My retention rule was backwards.** I wrote sweep TTL **longer** than the key-retention window; that
+  is the direction that *guarantees* the stranding, because a row can outlive the key it is sealed to
+  and become undecryptable → poison → no reply → silent loss. Safe is `T ≤ W`. Worse, it contradicts
+  `M10B-D11`, which already had the correct queue-driven form, and I replaced it with an inverted
+  timer-driven one. Neither constant exists to assert over. → **`M10B-D27`**.
+- **`owning_node_id` has no consumer on an unreplicated table** — its whole purpose (`V39`) is stopping
+  a non-converged replica from sweeping rows it did not write, which cannot arise here. NO CONSUMER, NO
+  SHIP: dropped. And my "mirrors `sweepUndeliverablePickups`" claim was simply wrong — that sweep is
+  not age-based at all, it targets `signal_hash IS NULL` legacy orphans, so a normal pickup row is
+  never swept.
+- **`submission_id` is caller-supplied and unverifiable at the directory** — the directory cannot open
+  the seal, so it cannot check the PK. D-20 described what the id *is*, not what anyone *checks*. A
+  daemon writing the same body under two ids to two nodes gets **two mints**. The portal must derive
+  the id from the opened body and treat the row's id as a routing hint only.
+- **Flood protection** is sound on the libp2p signaling frame (challenge-response yields a verified
+  `authedPubkeyHex`) and collapses on HTTP, where `verifySignedRequest` only proves "some submitter-role
+  key signed this". The note must say *signaling frame*, and note the `getAgentIdByPubkey` hop.
+
+### H8 — PARKED, and it is the one Andre needs to see
+
+Entry 8 justified the queue's five-column minimalism as what makes `DOD-END-DISCOVER-1` achievable.
+**That justification is falsified by the notarization path sitting next to it.** `signal_records`
+stores `subject` and `issuer_pubkey` **in plaintext**, is **replicated to all three sovereign nodes**,
+and `subject` is the counterparty's `k_local_pubkey` — there is even an index on it. So the moment an
+endorsement is *minted*, `SELECT subject, issuer_pubkey FROM signal_records WHERE issuer_kind='agent'`
+hands any directory operator **the complete endorsement graph**. The queue's minimalism protects the
+pairing only for submissions that are *refused*.
+
+`DOD-END-DISCOVER-1`'s stated defense — *"the directory's fingerprint is useless without the text, and
+only the subject holds the text"* — is true of the **payload** and false of the **parties**. D-24 says
+"nothing about you is discoverable"; who endorsed you is discoverable to every node operator.
+
+**This is parked, not decided, because the resolution is a policy call and both options are
+expensive:** either `DOD-END-DISCOVER-1` is rescoped in writing to "content is undiscoverable; the
+existence and parties of a notarized signal are visible to node operators" — which is arguably already
+true of every M10 signal and may be the honest reading of a federated notary — or the mint stops
+storing plaintext parties for `issuer_kind: agent`, which is a change to the hash-adjacent storage
+model and a migration. It is out of the reviewed diff (V46 pre-exists M10B) and it does not block
+Tier 1 mechanically, but it is load-bearing for a milestone whose whole premise is consent and
+non-discoverability. **Andre's call.** → `DOD-END-DISCOVER-1` is marked 🅿️ pending it.
+
+### Status
+
+`DOD-END-ARCH-1` **stays 🟡**, now on its second failed review. Six decisions land or change
+(`D-12r2`, `D-14r2`, `D-25`, `D-26`, `D-27`, plus the D-20 correction), one new unit is created
+(`DOD-END-SCOPE-FIX-1`), and one architectural question is parked for Andre. Tier 1 does not start.
+Two failed review passes on a determination is not a process failure — it is the determination doing
+its job before any code exists to throw away.
