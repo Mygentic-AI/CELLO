@@ -110,6 +110,15 @@ This turns the problem from "prove yourself from scratch" to "port your reputati
 
 ## Anti-farming rule: same-owner agents cannot issue connection endorsements
 
+> **⚠️ SUPERSEDED 2026-07-28 by D-27** ([[2026-07-27_2049_policy-surface-audit-touchpoints-and-open-decisions]]).
+> **Same-operator endorsements are MINTED AND FLAGGED, not rejected.** The endorsement is created and
+> presentable, carrying a visible `same_operator` fact; the endorser's tier *to the recipient* gives that
+> fact its sign — self-issued and worthless from an unknown endorser, a strong positive from a whitelisted
+> or VIP one (*"my other agent is mine,"* from someone already trusted). Rejection was explicitly rejected
+> because it kills the legitimate case: Alice's established Agent A vouching for her new Agent B to Bob,
+> who already trusts A. That is the solo multi-agent wedge, and it is the primary use case.
+> The rest of this section is retained as the record of the original reasoning.
+
 Without a constraint, an owner could create ten agents and have them all endorse each other, manufacturing a fake endorsement network at zero cost.
 
 **Rule:** Connection endorsements between agents with the same owner are invalid. The directory enforces this at submission time — it knows the owner (phone hash) of every agent. If endorser and endorsed share an owner, the submission is rejected. The endorsement is never stored, never hashed, never usable.
@@ -165,3 +174,4 @@ The more agents in the network who have gathered endorsements, the harder it is 
 - [[agent-client|CELLO Agent Client Requirements]] — Part 7 covers the client's custodianship of signed endorsement records (directory holds hashes; client holds records); Gap AC-12 flags `cello_request_endorsement` and `cello_revoke_endorsement` as missing MCP tools
 - [[server-infrastructure|CELLO Server Infrastructure Requirements]] — endorsement rate limit of 10/month (G-17), anti-farming via federated phone_hash (G-19), and weight decay by volume are specified there; endorsement schema is in the key database tables section
 - [[2026-04-18_1357_connection-bond-usage-and-policy|Connection Bond Usage and Policy]] — bonds and endorsements are complementary connection trust signals; this log defines how bonds work alongside the endorsement system at the connection gate
+- [[2026-07-27_2049_policy-surface-audit-touchpoints-and-open-decisions|Policy Surface Audit]] — D-27 supersedes this log's same-owner rejection rule with mint-and-flag; D-19 (withdrawal reaches prior recipients), D-23 (accept-before-present), D-25 (issuer suspension cascades), D-26 (no expiry) are the current endorsement decisions
