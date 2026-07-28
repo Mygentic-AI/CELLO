@@ -367,3 +367,35 @@ Only gap was test teeth: added a **two-concurrent-pauses → distinct-seqs** tes
 
 Result: pg-ae-store 12 live tests green, write-path 5 green; typecheck/lint/build clean. Both units'
 findings fully resolved. Ready to commit once the full directory suite confirms no regression.
+
+---
+
+## Entry 11 — 2026-07-28 — engine↔pg bridge (+fork signature) and §1b manifest verify-at-load
+
+**Bridge (cc354cc0).** AeStoreView went sync→MaybePromise so the async PgAeStore can implement it
+(compile-pinned `implements`); names aligned (serveTierA/B); apply methods return CHANGED counts.
+A real `runAntiEntropyRound` with PgAeStore as local is proven over docker pg (pull lands, round 2
+is empty). Review found one blocking gap: with only changed-counts, a permanent same-key Tier-A
+fork (two nodes, same natural key, different content — insert-if-absent can never converge it)
+reported `{0,0}` — indistinguishable from convergence. **Fixed:** RoundResult now reports
+pulled AND applied; termination tests pin `pulled: 0`; a new test asserts the fork signature
+(`pulled>0 && applied===0`) persists across rounds. The transport handler must treat that repeating
+signature as `ae.round.fork_suspected`, never as health. Also restored (as a proof, not an
+obligation) why no advertise/serve snapshot txn is needed: Tier-A is append-only and Tier-B apply
+re-reads FOR UPDATE and merges — a mid-round write costs one extra round, never divergence.
+
+**§1b manifest verify-at-load (fdd2a996).** "The store is only a transport" ends: with verify opts
+(officer rootKeys+threshold — env names shared with the client daemon), FileDirectoryManifestStore
+enforces at construction AND on reload: verifyManifest (RFC 8032 threshold), §1c distinctness (no
+duplicate nodeId/pubkey/peerId — the handshake's anti-reflection guarantee), anti-rollback (a
+validly-signed OLDER version is refused — it could resurrect retired node keys). Bad at boot →
+exit 1; bad on reload → `directory.manifest.verify.failed` naming the cause, last VERIFIED manifest
+stays active. bin fails loud if the manifest path is set without the anchor (no unverified
+fallback). Infra rides the same branch so Wave 2 deploys both sides together:
+`/cello/{env}/consortium/root-keys` + `root-threshold` SSM params (IaC, public officer pubkey
+matching the client's bundled constants) resolved into the directory task env; deploy.sh ordering
+(ssm-params step 2b → directory step 7) already correct. 8 new tests, real Ed25519 signatures over
+the real canonicalManifestBody — no mocked crypto. Review dispatched.
+
+Next: §1a — populate `peerId` in the manifest entries (schema already carries the field from
+ROLE-MANIFEST-1) + then the `/cello/anti-entropy/1.0.0` channel handler.
