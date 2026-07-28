@@ -1230,3 +1230,38 @@ removes. This is the surface D-4 commits to building.
    existing `agent_settings` store, which needs no new mechanism — only new keys in the validated namespace.
 4. **The one that has no home yet is `policy.markdown`** — the operator's prose policy — because D-12
    decides whether it can overrule the deterministic floor or only narrow it. Everything else can proceed.
+
+---
+
+## 15. THE WORK — everything that falls out, besides endorsements
+
+Endorsement intake has its own list (§13). This is the rest, in dependency order.
+
+**Security layer**
+
+1. Connect it — enforcing, minus the injection model. *(D-2)*
+2. Move its config and records into the encrypted database. *(D-3)*
+3. Build its control surface, plus the CLI confirm for anything that weakens a rule. *(D-4)*
+4. Remove the environment-variable overrides. *(D-5)*
+
+**Refusals and visibility**
+
+5. A real "no" frame — deterministic, never the LLM. Includes fixing the caller currently being told `ok`
+   when they were refused. *(D-1)*
+6. The "no innocent use" concealment list that refuses on sight. *(D-16)*
+7. Notify on refusal, plus a tool that says which policy fired and why. *(D-17)*
+8. One command showing what your policy did. *(D-11)*
+
+**Reachability**
+
+9. Blocked outbound becomes a stop sign — refuse, explain, one-time override that doesn't unblock. *(D-7)*
+10. Always present email + phone, even to strangers. Fixes today's rule that sends them nothing. *(D-8)*
+11. Floor becomes a setting, applied to strangers only. *(D-8, D-20)*
+12. Offline mailbox open to everyone, with a per-sender allowance. *(D-13, D-18)*
+13. Session expiry becomes a setting. *(TTL)*
+
+**Shape:** 1–4 are one unit. 5–8 are another. 9–13 are mostly small additions to machinery that already
+exists.
+
+**Not on this list, deliberately:** anything gated on D-12 (the tabled question), and anything requiring an
+operator's prose policy to exist.
