@@ -569,3 +569,66 @@ for a policy component. **Rejected: reuse `InboundScreener` wholesale** — F3.
 - Zero-bump: the scanner's signature takes text, not a signal.
 - **Revert test:** each reject case must go green only because of the check it targets.
 - Enforcer: `DOD-END-JOURNEY-1` end-to-end; the unit itself is harness-provable offline.
+
+---
+
+## Entry 6 — FINDING (blocker for `DOD-END-DELIVER-1`) — the delivery path SILENTLY DROPS the second endorsement — 2026-07-28
+
+**Not a design note — a defect found while reading the producer of the path the DoD says to reuse.**
+It has to be recorded before it is lost, because it falsifies a sentence in the DoD.
+
+**What the DoD says.** `DOD-END-DELIVER-1`: *"Reuses the generic delivery path … with no type-specific
+handling"*, and `M10B-D2`/Andre are explicit that delivery needs **no new trigger and no new
+transport** — the M10-D22 sealed pickup path behaving exactly as it does for every other signal.
+
+**What the path actually does.** `enqueuePickup`
+(`packages/directory/src/agent-write-repository.ts:101–114`) upserts:
+
+```sql
+INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id, signal_hash) …
+ON CONFLICT (agent_id, signal_kind) WHERE acked_at IS NULL
+DO UPDATE SET ciphertext = EXCLUDED.ciphertext, signal_hash = EXCLUDED.signal_hash, created_at = now()
+```
+
+backed by a DB-enforced partial unique index (`V37__pickup_queue_one_pending_per_kind.sql:30–31`):
+**one pending pickup per `(agent_id, signal_kind)`.**
+
+**The consequence.** Two different people endorse Alice while her daemon is offline. Both deliveries are
+`(alice_agent, 'endorsement')`. The second **overwrites the first**, and the first endorsement is gone —
+no error, no log, and the portal's write reports success. Worse, journey case **(a2) is precisely the
+scenario that triggers it**: (a2) exists to prove a subject who is offline at mint loses nothing.
+
+**Why it was correct before and is wrong now.** V37's stated rationale is sound for M10: it *"mirrors
+`identity_tree_entries`' PK (agent_id, signal_kind) — the single anchor per kind — so the queue and the
+anchor agree on cardinality"*, and it closes a real READ-COMMITTED race where two concurrent enqueues
+both survived and re-armed a `hash_mismatch` poison pill. Every M10 signal is genuinely one-per-kind:
+one phone, one email, a track_record that supersedes its predecessor. **Endorsements are inherently
+many-per-kind** — that is the whole point of a count predicate (`DOD-END-COUNT-1`, `min_count` floors).
+So an invariant that was a faithful model of the data has become a silent data-loss bug against the new
+data. This is the M10→M10B seam that "reuse the generic path" hid.
+
+**Proposed resolution (assigned to `DOD-END-DELIVER-1`'s design note; NOT decided here).** Re-key the
+partial unique index and the `ON CONFLICT` target on **`(agent_id, signal_kind, signal_hash)`** —
+content-addressed, matching `wallet_trust_signals`' own PK (`signal_hash`) and the fact that the wallet
+is content-addressed *"which is what makes duplicate delivery a no-op"*. Then many endorsements coexist
+as distinct pending rows, and a genuine re-enqueue of the identical envelope still dedups, so V37's
+poison-pill race stays closed.
+
+**What that costs, stated plainly rather than glossed:** it drops the *replacement* behavior for
+supersession — a re-minted phone signal would leave the old pending row instead of overwriting it. That
+is acceptable **only because supersession is already carried correctly elsewhere**: `supersedes_hash` is
+inside the envelope, `signal_records_effective` marks the predecessor superseded, and the daemon
+cascades it on receipt — all three proven green by M10 Entry 47's `j-track-record` journey. The pickup
+row's replacement is a second, weaker mechanism doing the same job. **But that reasoning must be tested,
+not asserted:** V37 also exists to stop a stale row re-firing `hash_mismatch` forever, and whether that
+poison pill can return under content-addressing is the specific question the DELIVER-1 note must answer
+before this index changes. Do not ship the index change on the strength of this paragraph.
+
+**Zero-bump note.** The fix keys on `signal_hash`, which is content, not type. No branch on
+`'endorsement'` appears anywhere in it — the cardinality change applies to every signal family
+uniformly, which is the correct generalisation.
+
+**Scope impact.** This is a **directory migration** (V50, after the queue's V49), so it joins the one
+batched deploy and lands 🟡 tonight. It also means `DOD-END-DELIVER-1` is NOT the free ride the DoD
+implies — it has real directory work, and the DoD's "no new transport" claim survives while its "no
+type-specific handling / reuses the generic path unchanged" claim does not.
