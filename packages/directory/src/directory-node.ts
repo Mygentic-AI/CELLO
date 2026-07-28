@@ -115,6 +115,7 @@ import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, CON
 
 import type { KeyProvider, LeafInput, IThresholdSigner, RefreshContribution } from "@cello-protocol/crypto";
 import { encodeStructure2, computeGenesisPrevRoot, buildSealTbs, buildPrimaryTransferTbs } from "@cello-protocol/protocol-types";
+import { computeDkgTopology } from "./dkg-topology.js";
 import { reconstructCarriedSealLeaves } from "./seal-unilateral-verify.js";
 import type { AgentProfile } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
@@ -2800,26 +2801,30 @@ export class CelloDirectoryNode {
     // Q = R ∩ manifest, and we register among Q (+ client) with T = majority(N). So registration
     // survives (N − |Q|) directory outages, and the agent seals with any T of Q+1. Absent R (older
     // client / no manifest) → Q = all manifest nodes (all-N back-compat). Single-node manifest → 2-of-2.
-    const manifestNodes = this.#directoryManifestStore?.getCurrentManifest()?.nodes ?? [];
-    // No consortium manifest → single-node back-compat (M6/M7): 1 directory, 2-of-2. The quorum logic
-    // only applies when a manifest with nodes exists (else quorumNodeIds is [] and participants would be 0).
-    const hasManifest = manifestNodes.length > 0;
-    const consortiumNodeCount = manifestNodes.length || 1;
+    // M12 ROLE-MANIFEST-1: the DKG topology counts VALIDATOR-role nodes only (DOD-INV-THRESHOLD).
+    // Replicas hold no shares and take no part in a DKG; a role-less manifest (pre-M12) counts
+    // every node as a validator, so today's behavior is unchanged. T = majority(validators),
+    // counting the client (runNetworkDkg adds it as +1), so directory signatures needed = T−1.
+    const allManifestNodes = this.#directoryManifestStore?.getCurrentManifest()?.nodes ?? [];
     const reachableNodeIds = (frame as unknown as Record<string, unknown>)["reachable_node_ids"] as
       | string[]
       | undefined;
-    const manifestNodeIds = manifestNodes.map((n) => n.nodeId);
-    const quorumNodeIds =
-      reachableNodeIds !== undefined
-        ? manifestNodeIds.filter((id) => reachableNodeIds.includes(id))
-        : manifestNodeIds;
-    // T = majority(N): N=1 keeps 2-of-2 (single-node back-compat); N≥2 → floor(N/2)+1. T counts the
-    // client (runNetworkDkg adds it as +1), so directory signatures needed = T−1.
-    const dkgThreshold = consortiumNodeCount === 1 ? 2 : Math.floor(consortiumNodeCount / 2) + 1;
-    // Manifest present → the quorum size |Q|; no manifest → the single primary directory (2-of-2).
-    const dkgParticipants = hasManifest ? quorumNodeIds.length : 1;
+    const topo = computeDkgTopology(allManifestNodes, reachableNodeIds);
+    const { consortiumNodeCount, dkgThreshold, dkgParticipants } = topo;
+
+    // A manifest with nodes but zero validators is a non-functional consortium — no share-holder
+    // could ever co-sign. Refuse loudly rather than DKG against a share-less set.
+    if (topo.replicaOnly) {
+      this.#logger?.warn("directory.dkg.replica_only", {
+        agent: truncHex(frame.k_local_pubkey),
+        manifestNodes: allManifestNodes.length,
+      });
+      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
+      this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_failed" }));
+      return;
+    }
     // Floor: |Q| ≥ T. Too few reachable directories ⇒ refuse rather than DKG a below-quorum group.
-    if (consortiumNodeCount > 1 && dkgParticipants < dkgThreshold) {
+    if (topo.belowQuorum) {
       this.#logger?.warn("directory.dkg.below_quorum", {
         agent: truncHex(frame.k_local_pubkey),
         reachable: dkgParticipants,
