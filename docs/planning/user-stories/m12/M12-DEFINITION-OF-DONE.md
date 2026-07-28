@@ -78,14 +78,18 @@ description: >
   format and committed. — 🟡 all clauses done live 2026-07-28 (project 955736313934, billing
   linked via slot swap — see the ledger in GCP-STATE.md; 11 APIs; default net deleted,
   `cello-vpc` custom-mode). — ✅ owed import done: APIs/VPC/state bucket Terraform-managed,
-  plan clean → Entries 1, 2
+  plan clean. Done-audit correction: "only needed APIs" was live-false (33 enabled incl.
+  project-creation defaults); defaults disabled → 20 live = 11 managed + 9 undisable-able
+  platform deps, recorded in GCP-STATE → Entries 1, 2, 7
 - **DOD-GCP-IAM-1** [trustless-cello] — per-workload service accounts (directory-node, relay-node,
   ops-agent, portal, cloud-build) with explicit minimal grants; the compute default SA is used by
   nothing; every grant is recorded in IaC. Org constraints (no SA keys — WIF only; zero default
   grants) are documented in GCP-STATE.md so the silent-403 trap is expected, not discovered. —
   ✅ 5 SAs live via `infra/terraform/iam.tf`, plan clean; unit review run and ALL findings
-  fixed (secret access now per-secret only; CI bucket-scoped; tfstate hardened; drift caveat
-  documented) → Entries 2, 3
+  fixed (secret access per-secret only; CI bucket-scoped; tfstate hardened; drift caveat
+  documented). Done-audit correction: one out-of-band grant found and removed (legacy Cloud
+  Build SA `builds.builder`, Google auto-grant, unused) — the F3 tier-boundary audit doing its
+  job → Entries 2, 3, 7
 - **DOD-CI-REGISTRY-1** [trustless-cello] — Artifact Registry repo exists; Cloud Build builds the
   directory and relay images from the GitHub repo (path-filtered triggers per package) and pushes
   to Artifact Registry. No local docker push is possible or needed. AWS CodePipeline remains
@@ -142,7 +146,9 @@ description: >
 - **DOD-NODE-DIR-GCP-1** [trustless-cello] — first GCP directory live (`gcp-<region>`): MIG(1) +
   COS running the CI-built image, its own Cloud SQL (node-only access), Secret Manager secrets,
   fresh transport key (`openssl rand -hex 32`, never copied), static IP, `pg_dump`-to-GCS backup
-  timer (shares exist nowhere else). Entirely from IaC. — ❌
+  timer (shares exist nowhere else). Entirely from IaC. **Evidence must include one
+  `gcloud compute ssh --tunnel-through-iap` login** — the IAP firewall path has never been
+  exercised (Entry 5 carry-forward). — ❌
 - **DOD-NODE-DIR-GCP-2** [trustless-cello] — second GCP directory in a different region; same
   artifact, zero manual steps (IaC enforcer green on the repeat). — ❌
 - **DOD-NODE-DIR-GCP-3** [trustless-cello] — third GCP directory (temporary Wave-1 member so the

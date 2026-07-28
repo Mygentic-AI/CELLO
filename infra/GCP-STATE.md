@@ -44,12 +44,12 @@ tier boundary.
 | Resource | Value | Created | How |
 |---|---|---|---|
 | Project `cello-infra` | number 955736313934 | 2026-07-28 | gcloud (bootstrap layer — managed as data source in TF) |
-| Enabled APIs | 11 (list in `terraform/project.tf`) | 2026-07-28 | Terraform (`google_project_service`) |
+| Enabled APIs | **20 live** = 11 TF-managed (`terraform/project.tf`) + 9 platform dependencies that cannot be disabled (containerregistry, iamcredentials, oslogin, pubsub ← cloudbuild; servicemanagement, sql-component, storage-api, storage-component, telemetry). Project-creation defaults (BigQuery suite, Datastore, Trace, dataform/dataplex/analyticshub, `cloudapis` bundle) DISABLED 2026-07-28 per done-audit | 2026-07-28 | Terraform + audit cleanup |
 | VPC `cello-vpc` | custom-mode. Default network + its 4 firewall rules DELETED. Subnets: `cello-us-east1` 10.10.0.0/24 | 2026-07-28 | Terraform (imported) |
 | Bucket `cello-infra-tfstate` | us-east1, versioned, UBLA | 2026-07-28 | gcloud bootstrap, imported into TF |
 | Service accounts | `cello-directory-node`, `cello-relay-node`, `cello-ops-agent`, `cello-portal`, `cello-cloud-build` — minimal grants per `terraform/iam.tf`. **Secret access is per-secret only, never project-level** (unit-review finding); CI reads only the staging bucket, never tfstate | 2026-07-28 | Terraform |
-| Cloud Build P4SA grants | `cloudbuild.serviceAgent` + `secretmanager.admin` (org policy strips ALL automatic service-agent grants — both had to be granted explicitly for the GitHub connection) | 2026-07-28 | Terraform |
-| Artifact Registry `cello` | `us-east1-docker.pkg.dev/cello-infra/cello` — docker; images pushed by Cloud Build ONLY. Contains `directory:manual-dedc55ac` and `relay:manual-50e06e3d` (+latest tags) — both built by Cloud Build | 2026-07-28 | Terraform |
+| Cloud Build P4SA grants | `cloudbuild.serviceAgent` + `secretmanager.admin` (org policy strips ALL automatic service-agent grants — both had to be granted explicitly for the GitHub connection). Legacy SA's auto-granted `cloudbuild.builds.builder` REMOVED 2026-07-28 (unrecorded, unused — done-audit catch) | 2026-07-28 | Terraform |
+| Artifact Registry `cello` | `us-east1-docker.pkg.dev/cello-infra/cello` — docker; images pushed by Cloud Build ONLY. Tags: `directory:{manual-dedc55ac, e8842f33…}`, `relay:{manual-dedc55ac, 4333c70e…, e8842f33…}` — all Cloud Build. **No `:latest` exists** (stale ones deleted per done-audit; consumers pin commit-SHA tags) | 2026-07-28 | Terraform |
 | Bucket `cello-infra_cloudbuild` | Cloud Build staging (auto-created by first submit) | 2026-07-28 | service-created |
 | Cloud Build connection `cello-github` | us-east1, **COMPLETE** (OAuth by Andre 2026-07-28; GitHub App installation 149532787 on Mygentic-AI, repo CELLO only; token secret P4SA-managed) | 2026-07-28 | gcloud bootstrap, imported into TF |
 | Cloud Build repo link `CELLO` | → https://github.com/Mygentic-AI/CELLO.git | 2026-07-28 | Terraform |

@@ -15,8 +15,8 @@ description: >
 
 ## RESUME STATE (keep current — overwrite this block only)
 
-- **Tier:** P0 COMPLETE — 4/4 ✅ (all unit-reviewed, findings fixed). Checkpoint (done-auditor)
-  in progress/next.
+- **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
+  Entry 7).
 - **Next red:** P1 — DOD-AE-DESIGN-1 + DOD-ROLE-MANIFEST-1 (story branch per M12-D4).
 - **Blocked on Andre:** nothing.
 - **HEAD:** trustless-cello `main` (see git log); cello-client untouched by M12 so far.
@@ -208,3 +208,31 @@ mid-unit; fast-forward push worked — M12-D4's rebase discipline already exerci
 
 **Next:** tier-boundary checkpoint (`cello-done-auditor` on the four P0 flips), then P1 on a
 story branch: DOD-ROLE-MANIFEST-1 + DOD-AE-DESIGN-1.
+
+---
+
+## Entry 7 — 2026-07-28 — P0 done-audit: 2 EARNED, 2 OVERSTATED; all corrections applied
+
+Auditor anchored to live GCP state + admin activity logs + fresh `terraform plan`, not journal
+prose. IAC-BASE-1 and CI-REGISTRY-1 EARNED outright (probe up/down proven from GCP's own audit
+log; trigger evidence incl. timing check on the negative case). Two overstatements, both
+failures of clauses the lines themselves wrote:
+
+- **PROJECT-1 "only needed APIs":** live project had **33** enabled — project-creation defaults
+  (BigQuery suite, Datastore, Trace, dataform/dataplex/analyticshub, the `cloudapis` bundle)
+  nobody disabled. Entry 1's "exactly 11 ✓" was never live-true. **Fixed:** defaults disabled
+  (the `cloudapis` meta-bundle had to go first — it "depends on" its members); final live set =
+  **20** = 11 TF-managed + 9 undisable-able platform deps, recorded with rationale in GCP-STATE.
+- **IAM-1 "every grant recorded in IaC":** live policy had `cloudbuild.builds.builder` →
+  legacy Cloud Build SA — Google's auto-grant on API enablement, in neither iam.tf nor
+  GCP-STATE, used by nothing (all builds ran as cello-cloud-build). **Fixed: removed.** This was
+  caught by exactly the `get-iam-policy` tier-boundary audit that review finding F3 prescribed.
+- **CI cleanup:** stale `directory:latest`/`relay:latest` tags (pre-F1 builds) deleted — they
+  pointed at older-than-main images, the precise hazard F1 named. GCP-STATE registry row had a
+  phantom `relay:manual-50e06e3d` (real tag: `manual-dedc55ac`) — corrected.
+- **Carry-forward rescued:** the IAP-tunneled-login requirement now lives IN the
+  DOD-NODE-DIR-GCP-1 line, not just Entry 5's body.
+
+Post-fix: `terraform plan` No changes. **P0 closes at 4/4 ✅, audit-corrected.**
+
+**Next:** P1 story branch — DOD-AE-DESIGN-1 + DOD-ROLE-MANIFEST-1.
