@@ -1140,3 +1140,93 @@ SUBSTITUTES for requirement X"* — which is the tabled question exactly.
 - **The system-default away text stays deliberately uninformative** to an unknown sender — it says the agent
   is away and the message is queued, and nothing about when the operator returns. Operators who want to say
   more set their own per-tier text (D-9's ladder).
+
+---
+
+## 14. THE SETTINGS REGISTER — every knob, where it lives, how it changes
+
+The single list this document previously lacked. Verified against code, not against the plan. Four homes
+today, and per Andre's storage invariant (§6) **all of them must end up in the encrypted database** — one of
+them currently is not.
+
+### 14.1 Per-agent reachability policy — `agent_settings` table
+
+Encrypted daemon DB · keyed on `agent_id` · **changed via `cello_settings_get/set` (MCP) or
+`cello settings get|set` (CLI)** · an unset key falls back to the hardcoded default, so the daemon runs
+correctly on defaults alone. Unknown keys are REFUSED, never silently stored.
+
+| Key | Controls | State |
+|---|---|---|
+| `bounds.<tier>.max_sessions` | Max concurrent sessions this agent will hold from ONE sender at that tier | ✅ built |
+| `bounds.<tier>.max_bytes` | Max cumulative received bytes for a single session at that tier | ✅ built |
+| `away.default` | The agent's own away text, below any per-tier text | ✅ built |
+| `away.tier.<tier>` | Away text for one tier | ✅ built |
+| *(new — D-12 tabled)* `policy.markdown` | The operator's own policy, in prose, evaluated by the LLM | ❌ the destination; blocked on D-12 |
+| *(new — TTL)* `session.request_ttl` | How long an unanswered session request lives (default 24h) | ❌ decided today, not built |
+| *(new — D-8)* `floor.<tier>` | What a sender at that tier must present (default: verified email + phone for unknown; nothing above `known` per D-20) | ❌ hardcoded as `DEFAULT_UNKNOWN_POLICY` today |
+| *(new — D-18)* `mailbox.<tier>.allowance` | How much an offline sender at that tier may leave | ❌ new |
+
+`<tier>` is a NAME — `unknown` / `known` / `whitelisted` / `vip`. **`blocked` is deliberately not settable**
+(0/0 is fixed — you cannot "raise" a block, and a blocked sender is refused before any reply). Bound values
+must be finite positive integers: `0`, negatives, decimals and `Infinity` are rejected at the handler, which
+is INV-TIER-BOUND enforced at the surface (a setting may raise a bound, never remove one).
+
+### 14.2 Per-contact policy — `contacts` table
+
+Encrypted daemon DB · one row per (agent, counterparty pubkey).
+
+| Column | Controls | Changed via | State |
+|---|---|---|---|
+| `tier` | This contact's reachability level | `cello_contact_set_tier` / `cello contact <pubkey> set-tier` | ✅ built |
+| `away_message` | An away message for this ONE person — the most specific level of D-9's ladder | `cello_contact_set_away` / `cello contact away` | ✅ built |
+| `moniker` | Your name for them; sacrosanct once stored, never auto-overwritten | `cello_contact_set_moniker` | ✅ built |
+| `last_offered_moniker` | The last name THEY claimed — drives the rename notice | system-maintained, not a setting | ✅ built |
+| `provenance` | How the row arose (I initiated / I accepted / imported / introduced by ⟨pubkey⟩) | system-maintained, not a setting | ✅ built |
+| *(new — D-7)* outbound one-time override | Permission to place ONE call to a blocked contact; expires immediately, does NOT unblock | a CLI command, not a stored setting | ❌ new |
+
+### 14.3 Channel settings — `telegram_settings` table
+
+Encrypted daemon DB · single row. `bot_token`, `allowlisted_chat_id`. ✅ built. Out of scope for this
+document except that it is a fourth settings home and should be reconciled with §14.1 rather than growing
+its own surface.
+
+### 14.4 Security and governance policy — the layer's own config store
+
+**⚠️ The problem case. Plaintext `node:sqlite`, a separate file OUTSIDE the encrypted database and outside
+the backup — the exact thing §6 forbids (`DOD-CRYPTO-AT-REST-1`). D-3 moves it in.**
+
+Versioned + hash-chained + append-only, and it enforces the tighten-free / loosen-confirmed asymmetry:
+a change that makes the layer MORE restrictive applies immediately; one that makes it LESS restrictive is
+REJECTED unless confirmed (D-4: CLI prompt at launch, passkey later).
+
+**Changed via: NOTHING TODAY.** No CLI, no MCP tool, no portal. Only an environment variable — which D-5
+removes. This is the surface D-4 commits to building.
+
+| Key | Controls | Tightest default |
+|---|---|---|
+| `autonomous_override` | Whether the agent may self-authorise sending a flagged value with no human present | `false` |
+| `pii_whitelist` | Values (e.g. your own email) that pass without a warning | empty |
+| `language_allow` | Which languages are accepted inbound | English only |
+| `rate_max_per_window` | Outbound message cap per window | most restrictive |
+| `rate_window_ms` | The window that cap applies to — a SHORTER window is a loosening, gated like raising the cap | most restrictive |
+
+### 14.5 Hardcoded — no setting exists, and mostly shouldn't
+
+| Thing | Where it lives | Should it become a setting? |
+|---|---|---|
+| Injection score thresholds (block ≥70 / flag ≥35) | code | Not at launch — it is a dial that becomes a scoring system (D-12's trap). |
+| The "no innocent use" concealment list (D-16) | code | **No** — a wire-level denylist, maintained by us, not the operator. |
+| Deterministic inbound sanitize checks | code | No. |
+| System-default away text | code | No — operators override via §14.1. |
+| `DEFAULT_UNKNOWN_POLICY` (the floor) | code | **Yes** — becomes `floor.<tier>` in §14.1 (D-8). |
+
+### 14.6 What this register says about the work
+
+1. **§14.1 and §14.2 are real, reachable and encrypted.** They are the model the others should match.
+2. **§14.4 is built, encrypted-in-name-only, and reachable by nobody.** Two of today's decisions land
+   squarely on it: D-3 (move it into the database) and D-4 (give it a surface). Until both, every key in
+   that table is decoration.
+3. **Eight new settings** fall out of today's decisions (marked *(new)* above). Six of them belong in the
+   existing `agent_settings` store, which needs no new mechanism — only new keys in the validated namespace.
+4. **The one that has no home yet is `policy.markdown`** — the operator's prose policy — because D-12
+   decides whether it can overrule the deterministic floor or only narrow it. Everything else can proceed.
