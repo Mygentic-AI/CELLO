@@ -419,3 +419,153 @@ in client config — it makes rotation a client release.
 
 **Owed to the deploy (hibernated — Entry 3):** V49 + the revoke change are directory-side, so they will
 be written, locally proven and committed, and land 🟡 pending the one batched deploy.
+
+---
+
+## Entry 5 — DESIGN NOTE — `DOD-END-SCAN-1` (written before any code) — 2026-07-28
+
+**Target behavior (one sentence).** Bob's endorsement text is run through a deterministic, versioned,
+fail-closed rule suite at the portal *before* it is hashed; on pass the version that cleared it travels
+inside the signed submission, and on fail the submission is rejected naming which check refused it.
+
+**Spec anchors.** Spec §6 ("scan BEFORE hash" — the collision vanishes because only clean content is
+ever hashed), §7 ("**No LLM.** The intake role runs the *deterministic* scanner suite (injection
+patterns, secrets, charset, length, URL handling) … Bytes in, pass/reject out"), §7 constraint 2
+(versioned, byte-identical, "the scanner is a versioned shared component"), §7 constraint 3 (reject
+always / flag only on a pattern — that half is `DOD-END-ACCOUNTABILITY-1`, not this line), §14.1
+("notarized ⇒ scanned-clean-at-birth"). Policy D-16. `DOD-DIR-WRITE-1` already makes `scanner_version`
+a **signed** field precisely because the directory cannot re-run the scan and a forged version "is a
+lie stored as evidence."
+
+### The findings — the shipped scanner is reusable, but not the way you would first reach for it
+
+**F1 — the DeBERTa Layer-2 scanner is disqualified, by spec and by posture, and this needed checking
+rather than assuming "we already have a scanner."** `core/gateway/src/detect/injection-scanner.ts` is an
+in-process DeBERTa-v3-small ONNX classifier. Three independent reasons it cannot be intake's scanner:
+1. Spec §7 says **"No LLM"** and "rule-based"; a transformer classifier is exactly what that excludes.
+2. It **degrades open by design**: *"When it is absent, Layer-2 is OFF and Layer-1 still runs — the
+   gateway degrades gracefully, it never fails closed on a missing optional model."* Intake must
+   fail **closed**. A scanner that can be silently OFF cannot back a signed `scanner_version`
+   assertion — the record would claim it was scanned when it was not.
+3. Its verdicts are score-thresholded (`BLOCK_THRESHOLD` 70 / `FLAG_THRESHOLD` 35) over a model whose
+   weights are downloaded per-operator with a pinned hash. "Byte-identical across nodes" (§7
+   constraint 2) is not a property that survives that.
+
+**F2 — the Layer-1 detectors ARE the right basis, and they are already shared-component-shaped.**
+`detect/injection-patterns.ts` compiles a role-marker / override / persona / jailbreak / fake-turn
+corpus through **RE2** (`linear-regex.ts`), so a crafted submission cannot cause catastrophic
+backtracking — a real consideration when the input is attacker-authored free text. `detect/secrets.ts`
+carries the gitleaks rule set. Both are pure, deterministic, and already exported from the package
+root. `@cello-protocol/gateway` is **public** (`0.0.6`, not private) with exactly one runtime dep
+(`re2-wasm`, WASM — no native compile), so consuming it from the portal is cheap.
+
+**F3 — but the gateway's verdict SEMANTICS are the opposite of intake's, and copying them would be a
+silent category error.** From `injection-patterns.ts`: *"Step-9 reports the matches as a signal … it is
+not, by itself, an auto-block. CELLO is not a moderation tool; this surfaces evidence, it does not
+police content."* That is correct for the inbound gateway — the operator's agent decides. Intake is the
+other posture entirely: §7 is reject-always, fail-closed. **So intake reuses the rule CORPUS and owns
+its own verdict policy.** Reusing `InboundScreener`'s disposition would produce a scanner that passes
+its tests and never rejects anything.
+
+**F4 — a barrel import drags `node:sqlite` into the portal. Verified.** `gateway/src/index.ts:37–40`
+re-exports `GatewayConfigStore` and `GatewayRecordStore`, and both do a static
+`import { DatabaseSync } from "node:sqlite"` (`config/config-store.ts:21`, `records/record-store.ts:19`)
+— the two known CLAUDE.md violations. The package `exports` map today exposes only `"."` and
+`"./package.json"`, so there is **no deep-import escape**: `import { scanInjectionPatterns } from
+"@cello-protocol/gateway"` evaluates the whole barrel and pulls `node:sqlite`, the gateway server, and
+the sidecar spawner into a Next.js server bundle. Consequence: **the gateway needs an additive
+`"./detect"` subpath export** before the portal can consume it. Small, non-breaking, and it is the
+correct package boundary anyway.
+
+**F5 — there is no scanner version constant anywhere today.** Grepped `injection-patterns.ts` and
+`secrets.ts`: nothing. The only version string in the system is the portal's
+`INTERNAL_SCANNER_VERSION = "portal-internal-v1"` (`mint.ts:60`), which exists to record that internal
+facts had no external content to scan. So versioning is net-new work, and its design matters more than
+it looks — see D-15.
+
+**Producer/consumer chain.**
+
+| Thing | Producer | Consumer | If wrong |
+| :-- | :-- | :-- | :-- |
+| rule corpus | `@cello-protocol/gateway/detect` | portal intake | drift between versions ⇒ same text passes here, fails there (§7 constraint 2's node-shopping bug) |
+| `scanner_version` | derived from the corpus (D-15) | signed submission → `signal_records` | a stale/hand-bumped value is a lie stored as permanent evidence |
+| pass/reject verdict | intake scanner | drain → mint | reject-that-passes breaks §14.1's "scanned-clean-at-birth" for every downstream consumer |
+| reject reason | intake scanner | the submitting agent | a bare `intake_rejected` sends the operator guessing (§5b) |
+
+**The seam.** `cello-client/core/gateway` — additive `"./detect"` subpath export (no source change to
+the detectors themselves). `cello-portal/src/server/trust/` — a new `intake-scan.ts` owning the verdict
+policy, the charset/length/URL checks §7 names but the gateway does not implement, and the version
+derivation; consumed by `DOD-END-INGRESS-1`'s drain before it calls `composeEndorsement`. **It must not
+know** what a signal type is, who the subject is, or anything about the envelope — bytes in, verdict
+out.
+
+**Invariants at stake.**
+- **INV-UNTRUSTED** — the scanner is what makes "scanned-clean-at-birth" true; it does not do the
+  framing (that is `M10B-D13`), but a scanner that clean-and-continues would launder attacker text into
+  a signed payload. Hence reject-only, never sanitize-and-pass (D-16 and §6 both say so).
+- **INV-ZEROBUMP** — the scanner takes bytes and returns a verdict. It never sees `type`. There is
+  nothing here to make type-shaped, and a reviewer should confirm the signature really is
+  `(text) => verdict` and not `(signal) => verdict`.
+- **INV-ATTRIBUTION** — not at stake directly, but the scanner runs *after* signature verification in
+  the drain, so a rejected submission is still attributable for `DOD-END-ACCOUNTABILITY-1`. Ordering is
+  load-bearing: scan-then-attribute would give an anonymous reject.
+
+**Approach + rejected alternatives.** Consume the deterministic Layer-1 corpus from
+`@cello-protocol/gateway/detect` as a shared versioned component (§7 constraint 2's literal ask), add
+the checks §7 names that the gateway does not carry (constrained charset, length cap, URL handling),
+and own the reject policy at the portal. **Rejected: reimplement the corpus in the portal.** It is less
+cross-repo friction and it is exactly the failure §7 constraint 2 exists to prevent — two corpora drift,
+and the same endorsement passes one and fails the other. **Rejected: put the scanner in
+`@cello-protocol/protocol-types`** (which the portal already depends on, so no new dependency). It
+would force `re2-wasm` onto every protocol-types consumer, and a wire-format package is the wrong home
+for a policy component. **Rejected: reuse `InboundScreener` wholesale** — F3.
+
+**Falsification pass.**
+1. *Does the call site have access?* No — checked the `exports` map, not just the source tree. Deep
+   imports are blocked, so this design REQUIRES the subpath export first (F4). Had I not checked, this
+   would have failed at the portal's first import.
+2. *Does the fix location match responsibility?* The verdict policy sits at the portal, not in the
+   gateway, because the gateway's own doc comment says it deliberately does not police content (F3).
+   Pushing intake's fail-closed policy into the shared package would change the gateway's behavior for
+   its existing consumer.
+3. *What redundancy?* `INTERNAL_SCANNER_VERSION` already exists for the portal-composed arms and stays
+   exactly as-is — the endorsement arm gets its own version string. Two arms, two provenances, one
+   field; that is the field working as designed, not duplication.
+4. *What else breaks?* Adding a subpath export cannot break existing consumers (the `"."` entry is
+   untouched). But it is a cello-client change ⇒ a gateway version bump ⇒ a publish, which is
+   **deferred tonight** (§2e-1). So `DOD-END-SCAN-1`'s portal half lands 🟡 behind a publish the same
+   way the directory lines land 🟡 behind a deploy.
+
+**Decisions this note makes.**
+- **M10B-D15 — `scanner_version` is DERIVED FROM THE RULE CORPUS, never hand-maintained.** Shape:
+  `intake-v1+<first 12 hex of sha256 over the canonical serialization of the active rule set>` (pattern
+  ids + sources, secret rule ids, charset class, length cap, URL policy). A hand-bumped constant is a
+  version that silently goes stale the first time someone edits a regex and forgets — and because the
+  directory cannot re-run the scan, that stale value is notarized as evidence of a scan that did not
+  happen. Deriving it makes drift impossible by construction, and it gives §7 constraint 2 a
+  mechanically checkable definition of "byte-identical": two intakes agree iff their derived versions
+  agree. Test: mutating one pattern source changes the version.
+- **M10B-D16 — intake reuses the gateway's rule CORPUS but owns its own VERDICT POLICY.** The gateway
+  surfaces evidence and never auto-blocks by design; intake rejects, fail-closed. Reusing the corpus
+  satisfies §7 constraint 2; reusing the disposition would produce a scanner that never refuses
+  anything.
+- **M10B-D17 — `@cello-protocol/gateway` gains an additive `"./detect"` subpath export**, and the
+  portal imports ONLY that. Barrel import is forbidden: it pulls `node:sqlite` (VERBOTEN, CLAUDE.md),
+  the gateway HTTP server, and the sidecar spawner into a Next.js Fargate app. This also makes the
+  gateway a **sixth** cello-client package the other repos pin, so the cross-repo version-bump AC
+  discipline now covers it.
+
+**Nothing parked.**
+
+**Test plan sketch (red first).**
+- Version derivation: mutating a single pattern source changes `scanner_version`; the same corpus in
+  two processes derives the same string.
+- Reject cases, each naming its own cause: a role-marker injection, a live-shaped secret, a control
+  character, over-length, a URL under the chosen policy. `intake_rejected` alone is a failing
+  assertion — the reason must name the check.
+- Fail-closed: an unavailable/uninitialised rule engine REFUSES; it must not pass content through.
+  (This is the F1 posture inversion, asserted directly.)
+- Scan-before-hash ordering: a rejected submission produces **no** envelope and **no** hash anywhere.
+- Zero-bump: the scanner's signature takes text, not a signal.
+- **Revert test:** each reject case must go green only because of the check it targets.
+- Enforcer: `DOD-END-JOURNEY-1` end-to-end; the unit itself is harness-provable offline.
