@@ -659,3 +659,45 @@ shared + 1 differing record pulls exactly 1. Enforcer re-run against the new pro
 so the change is proven across three live processes, not just in-process.
 
 DOD-AE-APPEND-1 → ✅. All three AE DoD lines are now audited-earned.
+
+---
+
+## Entry 18 — 2026-07-28 — GCP adapter review: 5 HIGH fixed, 1 blocking hollow test closed
+
+Review of the adapters found real defects. Fixed:
+- **The fail-closed KMS guard was HOLLOW** [blocking]. The "THROWS on a failed decrypt" test passed
+  because the fake CLIENT threw — it never reached the null guard. Deleting the guard left all 10
+  tests green while `decrypt` returned `new Uint8Array(undefined)`: a ZERO-LENGTH buffer handed to
+  the share store as if it were real K_server material. Added tests that return a well-formed-but-
+  empty KMS response (`[{}]` and `[{plaintext: null}]`) so the guard itself is what fails.
+  **Revert-verified:** deleting the guard now turns those two tests red.
+- **A missing BUCKET read as "nothing published yet."** GCS 404s a missing bucket exactly as it
+  404s a missing object (S3 distinguishes NoSuchBucket from NoSuchKey). A mistyped
+  `RELAY_MANIFEST_BUCKET` — the likeliest first-boot error on a GCP node whose bucket IaC is still
+  owed — surfaced as `relay.manifest.not_found { reason: "no manifest published yet" }` at INFO,
+  which the loader treats as a designed benign state and never retries: the node boots healthy and
+  assigns no relays forever. Now a 404 checks `bucket.exists()` and throws naming the bucket.
+- **`save()` silently disabled retries for the whole client.** `File.save()` without preconditions
+  sets `maxRetries=0` AND mutates `retryOptions.autoRetry=false` on the SHARED `Storage` instance —
+  so one manifest upload would strip retries from every later download, including the 120s poll
+  loop. Both call sites now construct with `IdempotencyStrategy.RetryAlways`.
+- **`flush()` erased entries enqueued during its own await** (`buffer.length = 0` after an async
+  write) while reporting success. Now `splice(0, pending.length)`.
+- **Audit key collision.** `audit/${ISO}-${perInstanceSeq}` + `save()`'s default overwrite meant two
+  tasks booting in the same millisecond silently destroyed one another's audit object — in a bucket
+  whose purpose is tamper-evidence. Now date-partitioned with a UUID and `ifGenerationMatch: 0`.
+- **Event-name parity.** First-failure logged a GCS-only `audit.shipper.failed`; an alarm keyed on
+  the S3 shipper's `audit.shipper.degraded` would never have matched. Same event + field set now,
+  and the test asserts the NAME rather than "something was logged".
+- `#bufferOldestTs` is re-based after an overflow drop (it reported the age of a deleted entry).
+- The `CELLO_CLOUD` comment claimed "every dev+ adapter family". It is not: the RDS credential path
+  is still AWS Secrets Manager, so a GCP dev node cannot boot until DOD-NODE-DIR-GCP-1 wires Cloud
+  SQL. Comment corrected to say so.
+
+**Still owed (journaled, not silently dropped):** the S3 shipper's backoff RETRY loop and
+`audit.shipper.recovered` have no GCS equivalent — one transient 503 parks the shipper in degraded
+mode for the process lifetime; KMS crc32c is neither sent nor verified; the `as never` cast on the
+real KMS client erases the only structural check that unit has; `nodeId`/`region` default to
+`AWS_REGION` so a GCP node mislabels itself; and the SSM-registry failure prints AWS remediation
+advice on a node that has no SSM by design. All are latent today because **nothing calls
+`AuditLogShipper.ship()` in production** — a pre-existing no-consumer gap across all three shippers.

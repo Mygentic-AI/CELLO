@@ -27,7 +27,7 @@ import type { AuditLogEntry } from "@cello-protocol/interfaces";
 const noopLogger = { info() {}, warn() {}, error() {}, debug() {} } as never;
 
 /** A fake GCS bucket/file surface — the slice of @google-cloud/storage the adapters use. */
-function fakeStorage(opts?: { missing?: boolean; failSave?: boolean }) {
+function fakeStorage(opts?: { missing?: boolean; failSave?: boolean; bucketMissing?: boolean }) {
   const saved = new Map<string, Buffer>();
   const file = (name: string) => ({
     save: async (data: Buffer) => {
@@ -44,7 +44,7 @@ function fakeStorage(opts?: { missing?: boolean; failSave?: boolean }) {
       return [saved.get(name)!];
     },
   });
-  return { saved, storage: { bucket: () => ({ file }) } as never };
+  return { saved, storage: { bucket: () => ({ file, exists: async (): Promise<[boolean]> => [opts?.bucketMissing !== true] }) } as never };
 }
 
 describe("DOD-ADAPTER-GCP-1: GcsCloudStorageProvider", () => {
@@ -64,11 +64,22 @@ describe("DOD-ADAPTER-GCP-1: GcsCloudStorageProvider", () => {
     await expect(p.download("absent.json")).resolves.toBeUndefined();
   });
 
+  it("a MISSING BUCKET throws instead of reading as an empty bucket (GCS 404s both)", async () => {
+    // GCS returns 404 for a missing bucket exactly as it does for a missing object — unlike S3,
+    // where NoSuchBucket and NoSuchKey are distinct. Mapping this to `undefined` would report a
+    // mistyped bucket as "no manifest published yet", which the relay-pool loader treats as a
+    // benign designed state and NEVER retries: the node boots healthy and assigns no relays.
+    const { storage } = fakeStorage({ missing: true, bucketMissing: true });
+    const p = new GcsCloudStorageProvider("cello-typo-bucket", storage);
+    await expect(p.download("relay-manifest.json")).rejects.toThrow(/bucket 'cello-typo-bucket' does not exist/);
+  });
+
   it("propagates a NON-404 failure instead of masking it as 'not found'", async () => {
     // A permissions error must never look like an empty bucket: the relay pool would silently
     // read as "no relays" and every session assignment would fail with no cause named.
     const storage = {
       bucket: () => ({
+        exists: async (): Promise<[boolean]> => [true],
         file: () => ({
           save: async () => {},
           download: async () => { const e = new Error("permission denied") as Error & { code: number }; e.code = 403; throw e; },
@@ -106,6 +117,7 @@ describe("DOD-ADAPTER-GCP-1: GcsAuditLogShipper", () => {
     const saved = new Map<string, Buffer>();
     const storage = {
       bucket: () => ({
+        exists: async (): Promise<[boolean]> => [true],
         file: (name: string) => ({
           save: async (data: Buffer) => {
             if (failing) throw new Error("gcs save failed");
@@ -118,7 +130,12 @@ describe("DOD-ADAPTER-GCP-1: GcsAuditLogShipper", () => {
 
     const s = new GcsAuditLogShipper("cello-audit", logger as never, storage);
     await s.ship(entry(1));
-    expect(logger.error).toHaveBeenCalled(); // failure is LOUD, not swallowed
+    // Assert the EVENT NAME, not just "something was logged": an alarm is keyed on
+    // `audit.shipper.degraded`, and a GCS-only event name would silently never match it.
+    expect(logger.warn).toHaveBeenCalledWith(
+      "audit.shipper.degraded",
+      expect.objectContaining({ bufferedCount: 1, oldestEntryAge: expect.any(Number) }),
+    );
     expect(saved.size).toBe(0);
 
     // A flush while still failing must RETAIN the buffer, not clear it optimistically.
@@ -181,6 +198,48 @@ describe("DOD-ADAPTER-GCP-1: KmsEnvelopeKeyProvider (Cloud KMS)", () => {
     // real K_server share; every later ceremony would fail with an unrelated-looking error.
     const p = new KmsEnvelopeKeyProvider(cfg, fakeKms({ failDecrypt: true }));
     await expect(p.decrypt(new Uint8Array([1, 2, 3]), "k-server-share")).rejects.toThrow(/kms decrypt/);
+  });
+
+  it("THROWS when KMS returns a response with NO plaintext (the guard, not the client, failing)", async () => {
+    // The previous decrypt test passed because the fake CLIENT threw — it never reached the null
+    // guard. This one returns a well-formed-but-empty response, which is the shape that would
+    // otherwise yield `new Uint8Array(undefined)`: a zero-length buffer handed to the share store
+    // as if it were real K_server material.
+    const emptyResponse = {
+      encrypt: async () => [{}],
+      decrypt: async () => [{}],
+      cryptoKeyPath: () => "projects/p/locations/l/keyRings/r/cryptoKeys/k",
+    } as never;
+    const p = new KmsEnvelopeKeyProvider(cfg, emptyResponse);
+    await expect(p.decrypt(new Uint8Array([1]), "k-server-share")).rejects.toThrow(/failing closed/);
+    await expect(p.encrypt(new Uint8Array([1]), "k-server-share")).rejects.toThrow(/refusing to persist/);
+  });
+
+  it("THROWS when KMS returns an explicit null plaintext", async () => {
+    const nullResponse = {
+      encrypt: async () => [{ ciphertext: null }],
+      decrypt: async () => [{ plaintext: null }],
+      cryptoKeyPath: () => "projects/p/locations/l/keyRings/r/cryptoKeys/k",
+    } as never;
+    const p = new KmsEnvelopeKeyProvider(cfg, nullResponse);
+    await expect(p.decrypt(new Uint8Array([1]), "k-server-share")).rejects.toThrow(/failing closed/);
+    await expect(p.encrypt(new Uint8Array([1]), "k-server-share")).rejects.toThrow(/refusing to persist/);
+  });
+
+  it("decodes a BASE64-STRING response (the REST transport shape, not just Buffer)", async () => {
+    // gRPC yields Buffers; the REST/fallback transport yields base64 strings. That branch is live
+    // in production, so it must not be proven only against the Buffer path.
+    const plaintext = new Uint8Array([4, 5, 6]);
+    const b64 = {
+      encrypt: async ({ plaintext: pt }: { plaintext: Buffer }) => [{ ciphertext: Buffer.from(pt).toString("base64") }],
+      decrypt: async ({ ciphertext }: { ciphertext: Buffer }) => [{ plaintext: Buffer.from(ciphertext).toString("base64") }],
+      cryptoKeyPath: () => "projects/p/locations/l/keyRings/r/cryptoKeys/k",
+    } as never;
+    const p = new KmsEnvelopeKeyProvider(cfg, b64);
+    const ct = await p.encrypt(plaintext, "k");
+    expect(new Uint8Array(Buffer.from(Buffer.from(ct).toString("utf8"), "base64"))).toBeDefined();
+    // Round-trip through the string branch on BOTH sides returns the original bytes.
+    expect(await p.decrypt(ct, "k")).toEqual(ct);
   });
 
   it("rotate() is a no-op that does not throw (Cloud KMS rotates key VERSIONS server-side)", async () => {

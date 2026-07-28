@@ -121,7 +121,9 @@ if (env === "local" && !relayAddr) {
 }
 
 // ─── M12 DOD-ADAPTER-GCP-1: which cloud's adapters this node uses ─────────
-// One switch for every dev+ adapter family. Defaults to "aws" so every existing deployment keeps
+// Covers the THREE families M12-D6 scopes: object storage, audit shipping, and the envelope key.
+// NOT the RDS/Cloud SQL credential path — that is still AWS Secrets Manager and a GCP dev node
+// cannot boot until DOD-NODE-DIR-GCP-1 wires Cloud SQL. Defaults to "aws" so every deployment keeps
 // its current behavior with no env change; a GCP node sets CELLO_CLOUD=gcp. Validated fatally —
 // a typo must not silently fall back to AWS adapters on a node with no AWS credentials, which
 // would surface much later as opaque SDK timeouts.
@@ -160,7 +162,11 @@ const auditLogShipper: AuditLogShipper = await (async (): Promise<AuditLogShippe
       import("../adapters/gcs-audit-log-shipper.js"),
       import("@google-cloud/storage"),
     ]);
-    const s = new GcsAuditLogShipper(auditBucket, logger, new Storage());
+    const { IdempotencyStrategy } = await import("@google-cloud/storage");
+    // RetryAlways: `File.save()` without preconditions sets maxRetries=0 AND mutates
+    // `storage.retryOptions.autoRetry = false` on the SHARED client — so one upload would silently
+    // disable retries for every later download on that instance. Opt in explicitly instead.
+    const s = new GcsAuditLogShipper(auditBucket, logger, new Storage({ retryOptions: { idempotencyStrategy: IdempotencyStrategy.RetryAlways } }));
     logger.info("adapter.initialised", { adapterName: "AuditLogShipper", implementation: "GcsAuditLogShipper", env, bucket: auditBucket });
     return s;
   }
@@ -706,7 +712,10 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
       import("../adapters/gcs-cloud-storage-provider.js"),
       import("@google-cloud/storage"),
     ]);
-    storage = new GcsCloudStorageProvider(manifestBucket, new Storage());
+    const { IdempotencyStrategy } = await import("@google-cloud/storage");
+    // RetryAlways — see the audit-shipper note: a default-mode save() turns off auto-retry on the
+    // shared client, which would strip retries from the 120s manifest poll loop.
+    storage = new GcsCloudStorageProvider(manifestBucket, new Storage({ retryOptions: { idempotencyStrategy: IdempotencyStrategy.RetryAlways } }));
     logger.info("adapter.initialised", { adapterName: "RelayPoolManager", implementation: "GcsCloudStorageProvider", env, bucket: manifestBucket });
   } else {
     const { S3CloudStorageProvider } = await import("../adapters/s3-cloud-storage-provider.js");

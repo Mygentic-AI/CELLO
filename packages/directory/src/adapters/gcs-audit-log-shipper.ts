@@ -19,6 +19,7 @@
  * SA keys), so this module handles no key material.
  */
 
+import { randomUUID } from "node:crypto";
 import type { AuditLogEntry, AuditLogShipper, Logger } from "@cello-protocol/interfaces";
 import type { GcsLike } from "./gcs-cloud-storage-provider.js";
 
@@ -56,9 +57,12 @@ export class GcsAuditLogShipper implements AuditLogShipper {
       this.#logger.info("audit.shipper.shipped", { entryCount: 1 });
     } catch (err: unknown) {
       this.#enqueue(entry);
-      this.#logger.error("audit.shipper.failed", {
+      // Same event + field set as the S3 shipper — an alarm keyed on `audit.shipper.degraded`
+      // must fire for either cloud, and a GCS-only event name would silently never match.
+      this.#logger.warn("audit.shipper.degraded", {
         reason: err instanceof Error ? err.message : String(err),
         bufferedCount: this.#buffer.length,
+        oldestEntryAge: Date.now() - this.#bufferOldestTs,
       });
     }
   }
@@ -77,8 +81,11 @@ export class GcsAuditLogShipper implements AuditLogShipper {
       });
       return 0;
     }
-    this.#buffer.length = 0;
-    this.#bufferOldestTs = 0;
+    // Remove exactly what was shipped — NOT the whole buffer. An entry enqueued while the write
+    // above was in flight has not been written, and clearing wholesale would erase it unwritten
+    // while this call reports success.
+    this.#buffer.splice(0, pending.length);
+    this.#bufferOldestTs = this.#buffer.length > 0 ? Date.now() : 0;
     this.#logger.info("audit.shipper.flushed", { entryCount: pending.length });
     return pending.length;
   }
@@ -87,15 +94,28 @@ export class GcsAuditLogShipper implements AuditLogShipper {
     if (this.#buffer.length >= MAX_BUFFER) {
       this.#buffer.shift(); // drop OLDEST — bounded memory on an already-degraded node
       this.#logger.error("audit.shipper.buffer.overflow", { maxBuffer: MAX_BUFFER });
+      // The dropped entry WAS the oldest, so the age must be re-based; otherwise oldestEntryAge
+      // keeps reporting the age of a long-deleted entry and grows without bound.
+      this.#bufferOldestTs = this.#buffer.length > 0 ? Date.now() : 0;
     }
     this.#buffer.push(entry);
     if (this.#bufferOldestTs === 0) this.#bufferOldestTs = Date.now();
   }
 
-  /** One object per write, JSON-lines — the same on-disk shape the S3 shipper produces. */
+  /**
+   * One object per write, JSON-lines, date-partitioned — the same on-disk shape the S3 shipper
+   * produces. The key carries a UUID because `#seq` is PER-INSTANCE: two directory tasks writing to
+   * one bucket in the same millisecond would otherwise collide on the same key, and `save()`
+   * overwrites by default — silently destroying one task's audit object in a bucket whose whole
+   * purpose is tamper-evidence. `ifGenerationMatch: 0` makes any residual collision an ERROR
+   * rather than an overwrite.
+   */
   async #write(entries: AuditLogEntry[]): Promise<void> {
     const body = entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
-    const key = `audit/${new Date().toISOString()}-${this.#seq++}.jsonl`;
-    await this.#storage.bucket(this.#bucket).file(key).save(Buffer.from(body, "utf8"));
+    const now = new Date();
+    const key = `audit/${now.toISOString().slice(0, 10)}/${now.toISOString()}-${randomUUID()}-${this.#seq++}.jsonl`;
+    await this.#storage.bucket(this.#bucket).file(key).save(Buffer.from(body, "utf8"), {
+      preconditionOpts: { ifGenerationMatch: 0 },
+    });
   }
 }

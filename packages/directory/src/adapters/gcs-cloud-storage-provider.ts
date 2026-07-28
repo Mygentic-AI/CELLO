@@ -20,8 +20,9 @@ import type { CloudStorageProvider } from "@cello-protocol/interfaces";
 /** The slice of `@google-cloud/storage` this adapter uses (injectable for tests). */
 export interface GcsLike {
   bucket(name: string): {
+    exists(): Promise<[boolean]>;
     file(name: string): {
-      save(data: Buffer): Promise<unknown>;
+      save(data: Buffer, opts?: unknown): Promise<unknown>;
       download(): Promise<[Buffer]>;
     };
   };
@@ -51,8 +52,16 @@ export class GcsCloudStorageProvider implements CloudStorageProvider {
       const [buf] = await this.#storage.bucket(this.#bucket).file(key).download();
       return new Uint8Array(buf);
     } catch (err: unknown) {
-      if (isNotFound(err)) return undefined; // absent — the interface's documented signal
-      throw err; // 403/500/network — never masquerade as an empty bucket
+      if (!isNotFound(err)) throw err; // 403/500/network — never masquerade as an empty bucket
+      // GCS 404s a MISSING BUCKET the same way it 404s a missing object — unlike S3, where
+      // NoSuchBucket and NoSuchKey are distinct. Returning `undefined` for a mistyped bucket would
+      // report a config error as "nothing published yet", which the relay-pool loader treats as a
+      // benign designed state and never retries. Distinguish them.
+      const [bucketExists] = await this.#storage.bucket(this.#bucket).exists();
+      if (!bucketExists) {
+        throw new Error(`gcs: bucket '${this.#bucket}' does not exist — check the bucket name/IaC, this is NOT an empty bucket`);
+      }
+      return undefined; // the object really is absent — the interface's documented signal
     }
   }
 }
