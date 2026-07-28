@@ -288,3 +288,82 @@ rules, bucketed-digest reconciliation + write-hints, kill-switch convergence rul
 adversarial scenario list for DOD-AE-MUTABLE-1, checkpoint scope ruling, observability ACs,
 mesh retirement list). Unit review dispatched — the DoD line requires review before
 implementation starts.
+
+---
+
+## Entry 9 — 2026-07-28 — AE logic layer complete; pg-store (DB half) built + reviewed; V49 prerequisite
+
+**Logic layer — DONE and PROVEN.** Entries 10–25's detail lives in the git commit messages (the
+prepend-anchor integrity note above). Net state of the transport-/DB-agnostic AE stack, all unit-
+reviewed with every finding fixed:
+- `record-hash.ts` (content addressing; `number` forbidden — BIGINT>2^53 aliasing), `set-reconciliation.ts`
+  (256-bucket digests + `validatedSet`), `ae-table-encoders.ts` (Tier-A immutable/mutable column split),
+  `ae-mutable-version.ts` (Tier-B version summaries; suspension EXCLUDES updated_at, presence INCLUDES).
+- Merges: `suspension-merge.ts` (kill switch — burn=OR monotonic, higher-seq-wins, equal-seq
+  suspended-wins + content tiebreak, wall-clock NEVER an input), `presence-merge.ts` (LWW, NaN→-Infinity
+  commutativity fix).
+- `ae-handshake.ts` + crypto `ae-peer-auth.ts` (manifest-pinned mutual handshake, both PeerIds channel-
+  bound in the TBS, gates on the nonce WE minted — the H1 replay fix, fails closed).
+- `anti-entropy-engine.ts` + the two-node in-memory convergence test wiring the REAL encoders + merges:
+  Tier-A union, Tier-B higher-seq merge, monotonic burn on BOTH nodes, and **termination** (a further
+  round applies 0). This is the convergence proof the reviewers deferred to "the e2e unit."
+
+**pg-store — the DB half (this entry's build).** `pg-ae-store.ts` + `pg-ae-store.live.test.ts` (9 tests,
+green against docker pg :5433). Round-trips the four tables it can advertise+serve+apply with no external
+coupling: Tier-A `agent_profiles`/`agent_revocations` (insert-if-absent by natural key, ON CONFLICT DO
+NOTHING, returns rows actually inserted), Tier-B `agent_suspensions` (kill switch) + `agent_presence`
+(atomic merge-upsert: per-key `pg_advisory_xact_lock` on a dedicated connection → read locked row → audited
+merge → upsert; returns rows that actually CHANGED, so a converged re-apply = 0 = termination signal). Type
+obligations owned HERE (the only pg-aware layer): BYTEA `encode/decode(_,'hex')`; timestamps `AT TIME ZONE
+'UTC'` epoch-millis on read AND write (the columns are `timestamp` without tz → session-TZ-independent);
+BIGINT/UUID→string, boolean native. Deliberately EXCLUDES the two hash-chained Tier-A tables
+(`user_accounts`, `seal_notarizations`) rather than half-wire them — their apply must reuse the canonical
+local chain writer (`insertWithChain`; chains are node-local audit trails per design §2). That is the next unit.
+
+**Schema prerequisite — V49 (additive, applied to docker pg, idempotent).** The suspension merge/version
+reference `suspension_seq` + `origin_node`, absent from V34. `V49__agent_suspensions_ae_seq.sql` adds them
+(`ADD COLUMN IF NOT EXISTS`, `suspension_seq BIGINT NOT NULL DEFAULT 0`, `origin_node TEXT`). Existing rows
+→ seq 0 (safe: merge falls to suspended-wins + tiebreak, a pause is never lost). `OpsAgentExpectedMigrationVersion`
+bumped 48→49 in `cello-ssm-parameters.yaml` (skipping this crash-loops the ops-agent on deploy). STILL OWED:
+the pause/burn WRITE path must mint `suspension_seq = max(local)+1` + set `origin_node` (today it doesn't
+touch these columns) — the next unit alongside the chained-table apply.
+
+Unit review dispatched on the pg-store (security-critical write path) — commit after findings are fixed.
+
+---
+
+## Entry 10 — 2026-07-28 — Both AE-DB units reviewed; 2 HIGH kill-switch bugs found + fixed
+
+Two `cello-unit-reviewer` passes (Opus) returned on the Entry-9 units.
+
+**Write-path (seq minting) — SPEC FAITHFUL.** All five weighted properties hold: every accepted
+write advances suspension_seq once, no-op clears don't, `current+1` is a sound `max(local)+1` (agent_id
+PK = one row), pre-V49 seq=0 rows advance via the DO UPDATE branch (never skip +1), burn stays
+terminal. The reviewer confirmed `INSERT … ON CONFLICT DO UPDATE SET seq = seq+1` is atomic under
+READ COMMITTED (the loser blocks on the row lock and re-reads the committed seq → {1,2}, never {1,1}).
+Only gap was test teeth: added a **two-concurrent-pauses → distinct-seqs** test.
+
+**pg-store — 2 HIGH + 1 MEDIUM, all fixed (kill-switch correctness).**
+- **HIGH — un-lock race (un-burn).** applyTierB read was a plain `SELECT`; the write-seam mutates the
+  same row without the AE lock, so an AE apply of a losing record could revert a concurrent burn
+  (burned→false, seq regress). **Fix:** `SELECT … FOR UPDATE` + existing→UPDATE / absent→INSERT-with-
+  unique-violation-**retry** (the retry finds the row under FOR UPDATE and merges it, so a burn that
+  lands in the insert window is preserved by the merge's OR). No merge logic duplicated in SQL, seam
+  unchanged. Removed the old advisory lock (it only serialized AE-vs-AE; FOR UPDATE subsumes it).
+  Teeth: a test holds an uncommitted seam burn, fires the AE apply (blocks on FOR UPDATE), commits →
+  asserts burned stays true, seq stays 6.
+- **HIGH — origin_node NULL↔'' split.** Advertise hashed the RAW row (`null`) while serve/apply went
+  through rowToBody (`''`), so a pre-V49 (null-origin) row advertised a different version than a peer
+  computed → perpetual re-pull on the kill-switch table. **Fix:** `COALESCE(origin_node,'')` at the
+  SELECT so all three paths encode `''`. Teeth: assert advertise-version == served-body-version for a
+  NULL-origin row.
+- **MEDIUM — presence timestamp TZ.** The columns are TIMESTAMPTZ (not `timestamp` as the header
+  wrongly said); the `AT TIME ZONE 'UTC'` on the WRITE down-cast to a bare timestamp and reinterpreted
+  it in the session TZ → instant corruption + version divergence on a non-UTC node. **Fix:** dropped
+  `AT TIME ZONE` on both read (`EXTRACT(EPOCH FROM col)*1000`) and write (`to_timestamp(ms/1000.0)`) —
+  correct + TZ-independent for TIMESTAMPTZ. Teeth: a second pool pinned to `America/New_York` writes +
+  reads the exact millis; a UTC pool reads the same millis for that row.
+- Also added the agent_profiles Tier-A insert-if-absent coverage the reviewer flagged.
+
+Result: pg-ae-store 12 live tests green, write-path 5 green; typecheck/lint/build clean. Both units'
+findings fully resolved. Ready to commit once the full directory suite confirms no regression.

@@ -419,7 +419,7 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
         const w = validation.write;
         switch (w.kind) {
           case "revocation_flag": {
-            const result = await applyRevocationFlag(pool, { agentId, mode: w.mode, accountId });
+            const result = await applyRevocationFlag(pool, { agentId, mode: w.mode, accountId, originNode: owningNodeId });
             if (result === "burned_immutable") {
               // A burn is permanent — a clear cannot lift it (DOD-LEVER-2). Distinct rejection.
               logger.warn("directory.write.rejected", { accountId, agentId, reason: "burned_immutable", correlationId });

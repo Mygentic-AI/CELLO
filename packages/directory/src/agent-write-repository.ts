@@ -44,14 +44,22 @@ export async function isAgentOwnedByAccount(
  */
 export async function applyRevocationFlag(
   pool: Queryable,
-  args: { agentId: string; mode: "pause" | "clear" | "burn"; accountId: string },
+  args: { agentId: string; mode: "pause" | "clear" | "burn"; accountId: string; originNode: string },
 ): Promise<"applied" | "burned_immutable"> {
+  // M12 DOD-AE-MUTABLE-1: every ACCEPTED write advances suspension_seq (per-agent monotonic — the
+  // row's PK is agent_id, so max(local)+1 is just current+1) and stamps the accepting node's id, so
+  // the anti-entropy §4 merge can order concurrent writes across nodes. A no-op write (a clear that
+  // matches no un-burned row) must NOT advance the seq — it changed nothing to order.
   if (args.mode === "clear") {
     // Only an un-burned row may be cleared. The WHERE burned=false guard makes a burn terminal.
     const res = await pool.query(
-      `UPDATE agent_suspensions SET paused = false, updated_at = now()
+      `UPDATE agent_suspensions
+          SET paused = false,
+              suspension_seq = suspension_seq + 1,
+              origin_node = $2,
+              updated_at = now()
         WHERE agent_id = $1 AND burned = false`,
-      [args.agentId],
+      [args.agentId, args.originNode],
     );
     if ((res.rowCount ?? 0) === 0) {
       const existing = await pool.query<{ burned: boolean }>(
@@ -66,15 +74,18 @@ export async function applyRevocationFlag(
 
   const burn = args.mode === "burn";
   // pause or burn: paused=true. burned is monotonic — once set it never clears (OR with the prior).
+  // seq starts at 1 on insert and advances by 1 on every conflict-update.
   await pool.query(
-    `INSERT INTO agent_suspensions (agent_id, paused, burned, authorized_by_account, updated_at)
-     VALUES ($1, true, $2, $3, now())
+    `INSERT INTO agent_suspensions (agent_id, paused, burned, authorized_by_account, suspension_seq, origin_node, updated_at)
+     VALUES ($1, true, $2, $3, 1, $4, now())
      ON CONFLICT (agent_id) DO UPDATE
        SET paused = true,
            burned = agent_suspensions.burned OR EXCLUDED.burned,
            authorized_by_account = EXCLUDED.authorized_by_account,
+           suspension_seq = agent_suspensions.suspension_seq + 1,
+           origin_node = EXCLUDED.origin_node,
            updated_at = now()`,
-    [args.agentId, burn, args.accountId],
+    [args.agentId, burn, args.accountId, args.originNode],
   );
   return "applied";
 }
