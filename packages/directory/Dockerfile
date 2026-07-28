@@ -78,6 +78,13 @@ COPY packages/directory/db/migrations/ /app/packages/directory/db/migrations/
 COPY packages/directory/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
+# Operational scripts run by systemd units on the node (the GCP backup timer overrides the
+# entrypoint to reach pg-backup-to-gcs.sh). They must SHIP, not merely exist in the repo — the
+# unit references an absolute path inside the image, and a missing file there fails at 04:17 UTC
+# on a node nobody is watching.
+COPY packages/directory/scripts/ /app/packages/directory/scripts/
+RUN chmod +x /app/packages/directory/scripts/*.sh
+
 # Non-root user for security
 RUN useradd -r -s /bin/false cello
 USER cello
