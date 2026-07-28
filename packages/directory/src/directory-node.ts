@@ -2874,11 +2874,17 @@ export class CelloDirectoryNode {
     const dkgParticipants = hasManifest ? quorumNodeIds.length : 1;
     // Floor: |Q| ≥ T. Too few reachable directories ⇒ refuse rather than DKG a below-quorum group.
     if (consortiumNodeCount > 1 && dkgParticipants < dkgThreshold) {
+      // Name the MANIFEST in this event. A node running on a stale/unverifiable manifest derives a
+      // stale node set, which under-intersects the client's reachable set and surfaces to the
+      // client as the exit-point label "dkg_failed" — sending the operator to debug FROST when the
+      // actual cause is a file on disk. manifestVersion correlates this line with the
+      // directory.manifest.verify.failed / .expired.serving_stale warn that preceded it.
       this.#logger?.warn("directory.dkg.below_quorum", {
         agent: truncHex(frame.k_local_pubkey),
         reachable: dkgParticipants,
         threshold: dkgThreshold,
         manifestNodes: consortiumNodeCount,
+        manifestVersion: this.#directoryManifestStore?.getVerifiedManifest()?.version,
       });
       this.#pendingPreAuthData.delete(frame.k_local_pubkey);
       this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_failed" }));

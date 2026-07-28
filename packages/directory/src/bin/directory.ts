@@ -888,11 +888,16 @@ const aeIntervalRaw = process.env["CELLO_AE_INTERVAL_MS"];
 let aeIntervalMs: number | undefined;
 if (aeIntervalRaw !== undefined && aeIntervalRaw !== "") {
   const parsed = Number(aeIntervalRaw);
-  if (!Number.isFinite(parsed) || parsed < 1000) {
-    logger.error("adapter.config.missing", {
-      missingKey: "CELLO_AE_INTERVAL_MS",
+  // The ceiling is NOT cosmetic: Node coerces any setInterval delay above 2^31-1 to **1 ms**, so a
+  // plausible-looking "30 days" (2592000000) would produce the exact ~1ms busy loop this guard
+  // exists to prevent — re-reading + re-verifying the manifest every tick and, once peerIds are
+  // pinned, a dial storm against every peer. Bound both ends.
+  const MAX_INTERVAL_MS = 2_147_483_647; // Node's setInterval ceiling (2^31-1)
+  if (!Number.isInteger(parsed) || parsed < 1000 || parsed > MAX_INTERVAL_MS) {
+    logger.error("adapter.config.invalid", {
+      configKey: "CELLO_AE_INTERVAL_MS",
       env,
-      reason: `must be a number >= 1000 (ms); got '${aeIntervalRaw}'. An invalid value would clamp setInterval to ~1ms — a silent busy loop.`,
+      reason: `must be an integer between 1000 and ${MAX_INTERVAL_MS} (ms); got '${aeIntervalRaw}'. Outside that range setInterval clamps to ~1ms — a silent busy loop.`,
     });
     process.exit(1);
   }

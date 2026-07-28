@@ -26,6 +26,15 @@
  * replacement later is refused with a cause-naming `directory.manifest.verify.failed` warn while
  * the last VERIFIED manifest stays active.
  *
+ * **Boot is fatal even though SERVE is unverified (M12-D9 — deliberate, not an oversight).** The
+ * rotation argument above is about a node ALREADY RUNNING when officers rotate: it keeps relaying
+ * the new manifest to clients while declining to act on it. It does NOT extend to boot. Booting
+ * into "serve-only, can never act" would leave `getVerifiedManifest()` with nothing to return, and
+ * the DKG quorum path treats an empty node set as single-node back-compat — i.e. a SILENT
+ * THRESHOLD DOWNGRADE, which is far worse than a loud crash loop. An officer rotation must update
+ * `CELLO_CONSORTIUM_ROOT_KEYS` on every node anyway (it is IaC/SSM, stage-1 resolved), so a node
+ * that cannot verify at boot is a half-finished rotation — exactly the thing that should be loud.
+ *
  * Without `verify` options both getters behave identically (transport semantics). That mode exists
  * only for tests/back-compat: the composition root REQUIRES the anchor whenever a manifest path is
  * set, so production always runs verified (fail-loud wiring in bin/directory.ts).
@@ -55,6 +64,10 @@ export interface ManifestVerifyOptions {
  *  not page as a verification failure). */
 class ManifestVerificationError extends Error {}
 
+/** The manifest is intact and validly signed but PAST `expires` — an operational staleness signal,
+ *  not a tampering signal. Separated so an alarm on forgery/rollback is not drowned by expiry. */
+class ManifestExpiredError extends ManifestVerificationError {}
+
 export class FileDirectoryManifestStore implements DirectoryManifestStore {
   readonly #path: string;
   readonly #logger: FileDirectoryManifestStoreLogger | undefined;
@@ -63,6 +76,10 @@ export class FileDirectoryManifestStore implements DirectoryManifestStore {
   #lastReadable: ConsortiumManifest;
   /** Last manifest that VERIFIED — the USE fallback + the anti-rollback floor. */
   #lastVerified: ConsortiumManifest;
+  /** Node-set fingerprint of #lastVerified — detects a same-version content swap (F5). */
+  #lastVerifiedFingerprint: string;
+  /** When #lastVerified last verified — drives the staleness age on the refusal warn (F3). */
+  #lastVerifiedAtMs: number;
 
   constructor(path: string, logger?: FileDirectoryManifestStoreLogger, verify?: ManifestVerifyOptions) {
     this.#path = path;
@@ -71,6 +88,8 @@ export class FileDirectoryManifestStore implements DirectoryManifestStore {
     // Initial read is mandatory — a bad path (or, in verify mode, a bad manifest) is a
     // startup misconfiguration, fail loudly.
     this.#lastVerified = this.#readVerified();
+    this.#lastVerifiedFingerprint = JSON.stringify(this.#lastVerified.nodes);
+    this.#lastVerifiedAtMs = Date.now();
     this.#lastReadable = this.#lastVerified;
     this.#logger?.info("directory.manifest.store.loaded", {
       path,
@@ -109,23 +128,39 @@ export class FileDirectoryManifestStore implements DirectoryManifestStore {
         });
         return this.#lastVerified;
       }
-      if (fresh.version !== this.#lastVerified.version) {
+      // Key the reload event on CONTENT, not version: a validly-signed republish at the SAME
+      // version with different peerId/pubkey entries silently swaps the AE trust anchor and the
+      // DKG quorum. Officer signatures make that not-a-forgery, but it must never be invisible.
+      const freshFingerprint = JSON.stringify(fresh.nodes);
+      if (freshFingerprint !== this.#lastVerifiedFingerprint) {
         this.#logger?.info("directory.manifest.store.reloaded", {
           path: this.#path,
           oldVersion: this.#lastVerified.version,
           newVersion: fresh.version,
+          sameVersionContentChange: fresh.version === this.#lastVerified.version,
         });
       }
       this.#lastVerified = fresh;
+      this.#lastVerifiedFingerprint = freshFingerprint;
+      this.#lastVerifiedAtMs = Date.now();
       return fresh;
     } catch (err: unknown) {
       // Never throw (interface contract): keep the last VERIFIED manifest active and name the
       // cause — a read/parse blip must not page as a verification failure.
       const reason = err instanceof Error ? err.message : String(err);
-      this.#logger?.warn(
-        err instanceof ManifestVerificationError ? "directory.manifest.verify.failed" : "directory.manifest.store.reload.failed",
-        { path: this.#path, servedVersion: this.#lastVerified.version, reason },
-      );
+      const event = err instanceof ManifestExpiredError
+        ? "directory.manifest.expired.serving_stale" // stale, not forged — its own alarm
+        : err instanceof ManifestVerificationError
+          ? "directory.manifest.verify.failed"
+          : "directory.manifest.store.reload.failed"; // a read/parse blip is neither
+      this.#logger?.warn(event, {
+        path: this.#path,
+        servedVersion: this.#lastVerified.version,
+        // The node keeps ACTING on this manifest — surface how long it has been unverifiable so
+        // an operator sees drift accumulating rather than a repeating undifferentiated warn.
+        staleSinceMs: Date.now() - this.#lastVerifiedAtMs,
+        reason,
+      });
       return this.#lastVerified;
     }
   }
@@ -161,9 +196,17 @@ export class FileDirectoryManifestStore implements DirectoryManifestStore {
       if (!Number.isFinite(notBefore) || !Number.isFinite(expires)) {
         throw new ManifestVerificationError(`consortium manifest at ${this.#path} failed verification: missing/unparseable not_before or expires`);
       }
-      if (nowMs < notBefore || nowMs > expires) {
+      if (nowMs > expires) {
+        // Distinct from a signature/rollback failure: nothing was tampered with, the operators
+        // simply have not rotated. Same refusal, different alarm — `verify.failed` must not be
+        // ambiguous between "someone forged this" and "we are running stale".
+        throw new ManifestExpiredError(
+          `consortium manifest at ${this.#path} EXPIRED at ${String((parsed as { expires?: unknown }).expires)} (now ${new Date(nowMs).toISOString()}) — officers must publish a fresh manifest`,
+        );
+      }
+      if (nowMs < notBefore) {
         throw new ManifestVerificationError(
-          `consortium manifest at ${this.#path} failed verification: outside validity window (not_before ${String((parsed as { not_before?: unknown }).not_before)}, expires ${String((parsed as { expires?: unknown }).expires)})`,
+          `consortium manifest at ${this.#path} failed verification: not yet valid (not_before ${String((parsed as { not_before?: unknown }).not_before)})`,
         );
       }
       // §1c distinctness: duplicate identities across entries break the handshake's

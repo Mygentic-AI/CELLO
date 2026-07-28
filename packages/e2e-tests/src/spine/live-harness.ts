@@ -380,6 +380,12 @@ export interface SpineCluster {
   directoryUrls: string[];
   /** The Postgres URL of every sovereign node's OWN database (per-node K_server share). */
   databaseUrls: string[];
+  /**
+   * M12 anti-entropy dial identities, present only with `directoryFixedTransport`. Each node's
+   * libp2p PeerId (pre-derived from a fixed transport seed) + the ws endpoint URL it listens on.
+   * A consortium manifest pinning these lets the directories authenticate + sync with each other.
+   */
+  directoryAeIdentities?: Array<{ peerId: string; endpoint: string }>;
   stop: () => Promise<void>;
 }
 
@@ -500,6 +506,15 @@ export interface StartSpineClusterOpts {
    */
   directoryConsortiumManifestPath?: string;
   /**
+   * M12 DOD-AE-LOCAL-E2E-1: give every directory a FIXED transport seed (→ deterministic PeerId)
+   * and a FIXED ws port, so a peerId-pinned consortium manifest can be written BEFORE any node
+   * boots — the anti-entropy handshake channel-binds against exactly those values. Without this
+   * the transport key is random and the ws port is ephemeral, so the manifest cannot pin them.
+   */
+  directoryFixedTransport?: boolean;
+  /** AE dial-loop period for the cluster (ms, >=1000). Defaults to 2000 with fixed transport. */
+  directoryAeIntervalMs?: number;
+  /**
    * DOD-DKG-1: called once after every directory's bootstrap URL is known (health ports
    * pre-allocated) but BEFORE any directory spawns. A consortium directory reads its
    * manifest at STARTUP (and exits if the file is missing), and that manifest must carry
@@ -507,7 +522,11 @@ export interface StartSpineClusterOpts {
    * directoryConsortiumManifestPath) before the directories boot. Receives the ordered
    * directoryUrls (== the eventual cluster.directoryUrls).
    */
-  onDirectoryUrlsReady?: (directoryUrls: string[]) => void | Promise<void>;
+  onDirectoryUrlsReady?: (
+    directoryUrls: string[],
+    /** Present with `directoryFixedTransport` — the AE dial identities to pin in the manifest. */
+    aeIdentities?: Array<{ peerId: string; endpoint: string }>,
+  ) => void | Promise<void>;
   /**
    * DOD-LEG-2 negative test: when set (>0), the directory inflates every party's published
    * content_frontier_seq by this amount in the FROST-signed legibility — simulating a buggy/
@@ -624,7 +643,28 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
     const healthPorts: number[] = [];
     for (let i = 0; i < count; i++) healthPorts.push(await freePort());
     for (let i = 0; i < count; i++) directoryUrls.push(`http://127.0.0.1:${healthPorts[i]}`);
-    if (opts.onDirectoryUrlsReady) await opts.onDirectoryUrlsReady([...directoryUrls]);
+    // M12: fixed transport identity + ws port per node, so a manifest can PIN the dial identity
+    // before boot (the AE handshake binds the manifest peerId to the live Noise connection).
+    const dirTransportSeedsHex: string[] = [];
+    const dirWsPorts: number[] = [];
+    let aeIdentities: Array<{ peerId: string; endpoint: string }> | undefined;
+    if (opts.directoryFixedTransport) {
+      aeIdentities = [];
+      for (let i = 0; i < count; i++) {
+        const seed = new Uint8Array(randomBytes(32));
+        dirTransportSeedsHex.push(Buffer.from(seed).toString("hex"));
+        const wsPort = await freePort();
+        dirWsPorts.push(wsPort);
+        aeIdentities.push({
+          peerId: await peerIdFromTransportSeed(seed),
+          // The AE endpoint is the node's OWN ws listener. (In AWS the manifest endpoint is the
+          // ALB, which forwards :80 → the container's ws port; on loopback there is no ALB, so
+          // the manifest points straight at the listener.)
+          endpoint: `http://127.0.0.1:${wsPort}`,
+        });
+      }
+    }
+    if (opts.onDirectoryUrlsReady) await opts.onDirectoryUrlsReady([...directoryUrls], aeIdentities ? [...aeIdentities] : undefined);
     for (let i = 0; i < count; i++) {
       // Provision THIS node's signing key in the binary's own format, read its pubkey.
       const dirKeyFile = join(tmpDir, `directory-key-${i}`);
@@ -651,7 +691,18 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
         CELLO_DIRECTORY_KEY_FILE: dirKeyFile,
         CELLO_DIRECTORY_TRANSPORT_KEY_FILE: join(tmpDir, `directory-transport-key-${i}`),
         CELLO_DIRECTORY_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0",
-        CELLO_DIRECTORY_WS_LISTEN_ADDR: "/ip4/127.0.0.1/tcp/0/ws",
+        // Fixed ws port + transport seed when the manifest must pin this node's dial identity.
+        CELLO_DIRECTORY_WS_LISTEN_ADDR: opts.directoryFixedTransport
+          ? `/ip4/127.0.0.1/tcp/${dirWsPorts[i]}/ws`
+          : "/ip4/127.0.0.1/tcp/0/ws",
+        ...(opts.directoryFixedTransport
+          ? {
+              CELLO_DIRECTORY_TRANSPORT_KEY_HEX: dirTransportSeedsHex[i]!,
+              // Tighten the AE dial loop for tests — production defaults to 60s, which would make
+              // every convergence assertion wait a minute per round. (The binary rejects <1000ms.)
+              CELLO_AE_INTERVAL_MS: String(opts.directoryAeIntervalMs ?? 2000),
+            }
+          : {}),
         HEALTH_PORT: String(healthPort),
         // Step-5 signing identity. count===1 (J-AUTH): the single directoryNodeKeyHex signs
         // as nodeId "local". count>1 (DOD-MANIFEST-1): node i signs as spineNodeId(i) with its
@@ -753,6 +804,7 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       },
       restartDirectory,
       relayMultiaddr,
+      directoryAeIdentities: aeIdentities,
       directoryUrl: directoryUrls[0],
       directoryUrls,
       databaseUrls,

@@ -32,6 +32,10 @@ export interface ConsortiumNodeEntry {
   region: string;
   provider: "aws" | "gcp" | "azure";
   endpoint: string;
+  /** M12 ROLE-MANIFEST-1: validator (holds shares, enters threshold arithmetic) or replica. */
+  role?: "validator" | "replica";
+  /** M12 §1a: the node's libp2p PeerId — the AE handshake channel-binds against this. */
+  peerId?: string;
 }
 
 export interface SignedManifest {
@@ -97,7 +101,12 @@ export function spineNodeKeypair(i: number): { privateKeyHex: string; publicKeyH
  * directoryUrls[i]). The daemon resolves each entry's endpoint to a live multiaddr
  * (manifestNodesToEndpoints) and verifies node i's step-5 identity against `pubkey`.
  */
-export function spineDirectoryNode(i: number, endpoint: string): ConsortiumNodeEntry {
+export function spineDirectoryNode(
+  i: number,
+  endpoint: string,
+  /** M12: pin the node's dial identity so directories can anti-entropy with each other. */
+  ae?: { peerId: string },
+): ConsortiumNodeEntry {
   const providers: ConsortiumNodeEntry["provider"][] = ["aws", "gcp", "azure"];
   return {
     nodeId: spineNodeId(i),
@@ -105,6 +114,7 @@ export function spineDirectoryNode(i: number, endpoint: string): ConsortiumNodeE
     region: `region-${i}`,
     provider: providers[i % providers.length]!,
     endpoint,
+    ...(ae ? { role: "validator" as const, peerId: ae.peerId } : {}),
   };
 }
 

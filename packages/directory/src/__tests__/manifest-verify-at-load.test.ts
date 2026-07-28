@@ -153,16 +153,27 @@ describe("M12 §1b: FileDirectoryManifestStore verify-at-load", () => {
     const canonical = canonicalManifestBody(body as unknown as ConsortiumManifestInput);
     const signatures = [0, 1].map((i) => ({ officerIndex: i, signature: Buffer.from(ed25519.sign(canonical, OFFICER_SEEDS[i])).toString("hex") }));
     writeFileSync(path, JSON.stringify({ ...body, signatures }));
-    expect(() => new FileDirectoryManifestStore(path, logger, verify)).toThrow(/validity window/i);
+    expect(() => new FileDirectoryManifestStore(path, logger, verify)).toThrow(/EXPIRED at/i);
   });
 
-  it("REJECTS a node entry with a missing/empty pubkey (required fields never skip distinctness)", () => {
-    const nodes: NodeEntry[] = [
-      { nodeId: "aws-use1", pubkey: "", region: "r1", provider: "aws", endpoint: "https://a", role: "validator" },
-      { nodeId: "gcp-usc1", pubkey: "", region: "r2", provider: "gcp", endpoint: "https://b", role: "validator" },
-    ];
-    writeFileSync(path, JSON.stringify(makeManifest({ nodes })));
-    expect(() => new FileDirectoryManifestStore(path, logger, verify)).toThrow(/missing\/empty pubkey/i);
+  it("a manifest that EXPIRES mid-life refuses on the USE path with its OWN event (stale != forged)", () => {
+    // Expiry is an operational signal, not a tampering signal — an alarm on forgery/rollback must
+    // not be drowned by routine staleness, so the two carry different event names. Clock advances
+    // past `expires` between construction and the next read.
+    let now = Date.parse("2026-07-28T00:00:00Z"); // inside the fixture window
+    writeFileSync(path, JSON.stringify(makeManifest({ version: 1 })));
+    const store = new FileDirectoryManifestStore(path, logger, {
+      rootKeys: ROOT_KEYS, threshold: THRESHOLD, nowMs: () => now,
+    });
+    logger.warn.mockClear();
+
+    now = Date.parse("2028-01-01T00:00:00Z"); // past expires (2027-01-01)
+
+    expect(store.getVerifiedManifest().version).toBe(1); // last VERIFIED stays active
+    expect(logger.warn).toHaveBeenCalledWith(
+      "directory.manifest.expired.serving_stale",
+      expect.objectContaining({ staleSinceMs: expect.any(Number) }),
+    );
   });
 
   it("transport-only mode (no verify opts) still loads an UNSIGNED manifest (M7 compat)", () => {

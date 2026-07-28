@@ -490,3 +490,59 @@ made a path-without-anchor a fail-loud exit(1)).
 Next after that: re-run j-auth (expect 6/6) and the wider spine suite, then DOD-AE-LOCAL-E2E-1
 (three-process loopback convergence via the extended harness — the harness already provisions one DB
 per sovereign node, which is the substrate that enforcer needs).
+
+---
+
+## Entry 14 — 2026-07-28 — DOD-AE-LOCAL-E2E-1 GREEN: three live directories converge on loopback
+
+**The enforcer passes.** `packages/e2e-tests/src/spine/j-antientropy.spine.test.ts`, 4/4 against three
+REAL directory binaries (separate OS processes, separate databases, real TCP + Noise):
+1. peers authenticate against the manifest-pinned identity (and no node logs an auth failure —
+   without this gate every convergence assertion below would be vacuous);
+2. divergent seeded state converges to the union on ALL THREE nodes (Tier-A);
+3. a node killed mid-sync catches up on restart, no operator action (the outage-tolerance the
+   sovereign-node model promises);
+4. a burn written on ONE node converges to the others and STAYS burned against a concurrent
+   higher-seq un-pause — `burned=true paused=false seq=9` on all three. That is the §4 kill-switch
+   property proven across a federation, which is the whole reason this milestone exists.
+
+Harness extended (never a from-scratch fixture): `directoryFixedTransport` gives each node a fixed
+transport seed → deterministic PeerId and a fixed ws port, so a peerId-pinned manifest can be
+written BEFORE any node boots (AE channel-binds against exactly those values); `onDirectoryUrlsReady`
+now also yields the AE dial identities; `spineDirectoryNode` takes role+peerId. `CELLO_AE_INTERVAL_MS`
+is tightened to 2s for tests.
+
+**Note on the one red run: the product was right, the test was wrong.** The suspension assertion
+compared psql's `boolean || text` output to `t:9`; that cast renders `true`, not `t`. Diagnostics
+printed the real per-node state and showed correct convergence on all three nodes. Fixed the
+assertion (now `true:false:9`, which also pins `paused`), and the diagnostics helper stayed in — a
+convergence timeout should always print what each node actually holds.
+
+**M12-D8 review (Opus) — fixes applied:**
+- **HIGH (empirically reproduced by the reviewer):** `CELLO_AE_INTERVAL_MS` was bounded below but
+  not above, and Node coerces any `setInterval` delay > 2^31−1 to **1 ms** — so a plausible
+  "30 days" produced the exact busy loop the guard existed to prevent. Now bounded both ends
+  (integer, 1000 … 2147483647) and reported as `adapter.config.invalid` (the key is present but bad).
+- **Expiry is no longer conflated with tampering:** an expired-but-validly-signed manifest now
+  raises `directory.manifest.expired.serving_stale` with a `staleSinceMs` age, so an alarm on
+  forgery/rollback is not drowned by routine staleness.
+- **A same-version content swap is no longer silent:** the reload event keys on a node-set
+  fingerprint, not the version, so republishing different peerIds/pubkeys at the same version can
+  never swap the AE anchor + DKG quorum invisibly.
+- **`dkg_failed` now carries `manifestVersion`,** correlating the client-facing label with the
+  manifest warn that actually caused it (the operator was being sent to debug FROST).
+
+**M12-D9 — boot stays FATAL on an unverifiable manifest (reviewer proposed otherwise; declined,
+with reasoning).** The reviewer argued construction should succeed so the SERVE role survives, since
+§1b's rotation rationale says a rotated manifest must still reach clients. That rationale is about a
+node ALREADY RUNNING. Extending it to boot would leave `getVerifiedManifest()` with nothing to
+return, and the DKG quorum path treats an empty node set as single-node back-compat — i.e. a SILENT
+THRESHOLD DOWNGRADE, which is strictly worse than a loud crash loop. An officer rotation must update
+`CELLO_CONSORTIUM_ROOT_KEYS` on every node anyway (IaC/SSM, stage-1), so a node that cannot verify at
+boot is a half-finished rotation and should be loud. Recorded in the store's class doc so the file no
+longer contradicts itself.
+
+**Still owed on this line:** a test that pins the DKG-quorum→verified-manifest routing (the
+reviewer's strongest remaining point: revert that one line and the suite stays green, because
+`TestDirectoryManifestStore` returns the same manifest from both getters by design — it needs a
+two-faced double). Also owed: `stopAeSync()`-in-shutdown and the interval validation have no tests.
