@@ -1067,3 +1067,76 @@ longer vouched** — and comes back if the account is restored. Permanent revoca
 only blocked *future* issuance, everything minted before the switch was pulled keeps vouching for them and
 the kill switch never reaches the damage. Reversibility is what stops a precautionary suspension from
 permanently destroying honest endorsements.
+
+### D-26 — DECIDED: endorsements do not expire; the issue date travels with them
+
+Age is the point. *"Two years and no incident"* is worth more than a fresh endorsement, and an expiry would
+destroy precisely the signal worth having. An endorser who has changed their mind withdraws it (D-19).
+Rejected: renewal, which puts a chore on endorsers that most will never do — so good endorsements quietly
+evaporate.
+
+### D-27 — DECIDED: a same-operator endorsement is minted and MARKED — and the mark is not a warning
+
+The operator linkage (via the verified phone stub) makes this a cheap deterministic check at intake. The
+endorsement is created and presentable, carrying a visible `same_operator` fact.
+
+**Andre's correction, which is the substance:** the mark is **not** primarily "watch out, this person is
+endorsing himself." **Its sign depends on the recipient's relationship to the ENDORSER.**
+
+> *"I'm Alice. Bob knows Agent A but not Agent B, which I've just created. Agent A endorses Agent B, also
+> under me. Same-operator is also a POSITIVE signal if the endorser is already someone in your whitelist or
+> VIP — it's letting you know, hey, this is me, who you've already approved."*
+
+So:
+
+| endorser's tier, to the recipient | what `same_operator` means |
+| :-- | :-- |
+| unknown | self-issued; worth nothing |
+| **whitelisted / vip** | **a strong positive — "my other agent is mine", from someone already trusted** |
+
+This is Andre's own primary use case (the solo multi-agent wedge: your own agents introducing each other),
+and it generalises the design's existing rendering rule: a third-party assertion is *"worth exactly what X
+is worth."* The flag is a FACT; the endorser's tier gives it its SIGN. Rejected: refusing to mint (kills the
+legitimate case) and doing nothing (self-endorsement then looks identical to a real vouch).
+
+### D-28 — DECIDED: spend protection for service-providing agents is post-launch
+
+Identity-bound spend caps, global daily ceilings, and relay-pushed blocklists
+([[2026-07-04_edos_rate_limiting]]) wait. Launch is agents connecting and talking, not selling services;
+the per-sender limits already decided (D-18, tier bounds) cover abuse volume, and nobody is yet paying for
+inference on a counterparty's behalf. Revisit when a real service agent exists — it also needs a way to
+express what a query costs, which does not exist.
+
+---
+
+## 13. What endorsement intake now OWES — the actionable list
+
+Endorsements land today or tomorrow. Everything below is a direct consequence of the decisions above, and
+none of it exists yet:
+
+1. **Accept-before-present (D-23).** The subject reads and accepts before the endorsement is presentable.
+   No mechanism today.
+2. **Revoke authorisation fix** (M10 REVOKE-1 F6, *"revisit with intake"*). Exact-pubkey auth; the
+   tombstone must respect the target's real `issuer_kind`. Without it one `submitter` key can tombstone
+   another party's endorsement — which would make D-19 nominal.
+3. **`same_operator` flag at intake (D-27)** — a deterministic check off the existing phone-stub operator
+   linkage, plus the presentation-side rendering that takes its sign from the endorser's tier.
+4. **Issuer-suspension cascade (D-25)** — suspending an account marks everything it issued as no longer
+   vouched, reversibly.
+5. **Verify non-discoverability (D-24)** — confirm no path lets a third party enumerate endorsements about
+   a subject who has not presented them.
+6. **Intake scanning** — the deterministic, versioned scanner M10 already specifies. An endorsement is the
+   first CELLO content authored by one party and displayed to a third; it is the natural injection carrier.
+
+**Not blocking intake:** D-12's substitution question. Endorsements can ship and be presented, held,
+withdrawn and weighed without it. What cannot ship before D-12 is any rule of the form *"an endorsement
+SUBSTITUTES for requirement X"* — which is the tabled question exactly.
+
+### Decided without asking (small, stated for the record)
+
+- **Session-request TTL becomes a per-agent setting** on the existing settings store; the 24h default is
+  unchanged. This was `DOD-TTL-1`'s own parked clause (M8C D17) and needs no further decision now that a
+  settings surface exists.
+- **The system-default away text stays deliberately uninformative** to an unknown sender — it says the agent
+  is away and the message is queued, and nothing about when the operator returns. Operators who want to say
+  more set their own per-tier text (D-9's ladder).
