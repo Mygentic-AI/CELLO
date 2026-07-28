@@ -27,7 +27,15 @@ async function main(): Promise<void> {
     },
   };
 
-  process.stdout.write(await buildGcpBootEnv(process.env, secrets));
+  const { script, skipped } = await buildGcpBootEnv(process.env, secrets);
+  // A skipped OPTIONAL secret is a weaker configuration than the default, so it is announced —
+  // on stderr, because stdout is evaluated.
+  for (const target of skipped) {
+    process.stderr.write(
+      JSON.stringify({ event: "directory.gcp.boot_env.binding_skipped", level: "warn", target }) + "\n",
+    );
+  }
+  process.stdout.write(script);
 }
 
 main().catch((err: unknown) => {

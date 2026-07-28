@@ -106,16 +106,12 @@ if (env !== "local" && env !== "dev" && env !== "staging" && env !== "production
 // CELLO-M6B-019: CELLO_RELAY_MULTIADDR is only used for CELLO_ENV=local.
 // For dev/staging/production, relay addressing comes from SSM node registry at startup.
 const relayAddr = process.env["CELLO_RELAY_MULTIADDR"];
-// AWS_REGION is the AWS SDK's own variable — it configures WHERE SDK clients talk, and nothing
-// else should read it as "where this node is". On a GCP node it is absent, and using it as the
-// node's region made every log line, every directory_nodes row and every node id claim us-east-1.
+// AWS_REGION configures WHERE AWS SDK clients talk. It is not "where this node is", and reading it
+// as such is what made a GCP node stamp us-east-1 on every log line and every directory_nodes row.
 const awsRegion = process.env["AWS_REGION"] ?? "us-east-1";
-// CELLO_REGION is the cloud-neutral answer to "where is this node". It falls back to AWS_REGION so
-// existing AWS deployments are byte-for-byte unchanged without touching their task definitions.
+// CELLO_REGION is the cloud-neutral answer. It falls back to AWS_REGION so existing AWS
+// deployments are unchanged without touching their task definitions.
 const nodeRegion = process.env["CELLO_REGION"] ?? process.env["AWS_REGION"] ?? (env === "local" ? "local" : "us-east-1");
-// NODE_ID is `<cloud>-<region>` (Decision 7) and is the FROST participant identifier — never a
-// label, never renamed. Deriving it from a region is legacy AWS behavior kept for back-compat.
-const nodeId = process.env["NODE_ID"] ?? (env === "local" ? "local" : nodeRegion);
 // AC-007 (REPOSPLIT-001): health server moved to port 9090 so port 8080 is free for
 // the libp2p WS listener. ALB target group health check updated to port 9090.
 const healthPort = parseInt(process.env["HEALTH_PORT"] ?? "9090", 10);
@@ -145,6 +141,21 @@ if (cloudProvider !== "aws" && cloudProvider !== "gcp") {
     configKey: "CELLO_CLOUD",
     env,
     reason: `must be 'aws' or 'gcp'; got '${cloudProviderRaw}'`,
+  });
+  process.exit(1);
+}
+
+// NODE_ID is `<cloud>-<region>` (spec-of-record decision 7) and feeds Identifier.derive() — it IS
+// the FROST participant identifier, not a label. Renaming it later is a decommission, so a node
+// must never be born with a guessed one. The AWS default (bare region) is legacy back-compat for
+// nodes already registered under it; any other cloud must state it, or refuse.
+const nodeId = process.env["NODE_ID"] ?? (env === "local" ? "local" : cloudProvider === "aws" ? nodeRegion : "");
+if (!nodeId) {
+  logger.error("adapter.config.missing", {
+    missingKey: "NODE_ID",
+    env,
+    cloud: cloudProvider,
+    reason: "NODE_ID is the permanent FROST participant identifier and must be set explicitly as <cloud>-<region>; only the legacy AWS path may derive it from a region",
   });
   process.exit(1);
 }
@@ -200,15 +211,41 @@ const poolMax = resolvePoolMax(process.env, logger);
 /**
  * Open the pool and load the profile cache, or die naming the cause.
  *
- * The first read is where an unreachable/misconfigured database actually surfaces — a pool is lazy,
- * so `new pg.Pool()` succeeds against a host that does not exist. Left unguarded this threw an
- * unhandled rejection out of `loadProfiles()` and the process died on a pg-pool stack trace with no
- * CELLO event at all: on a cloud VM that is an unattributable crash in the serial console, and it is
- * the most likely first-boot failure against a freshly provisioned managed database.
+ * A pool is lazy: `new pg.Pool()` succeeds against a host that does not exist, so the first STATEMENT
+ * is where an unreachable or misconfigured database surfaces. Every such failure must carry a CELLO
+ * event — on a cloud VM an unhandled rejection is an unattributable crash in the serial console, and
+ * this is the most likely first-boot failure against a freshly provisioned managed database.
  *
  * The connection string carries the password, so it is NEVER logged — only host, port and database
  * name, which are what an operator needs to tell "wrong host" from "wrong database" from "no route".
  */
+/**
+ * Postgres signals connection failures with SQLSTATE class 08, and node's socket layer with these
+ * codes. Anything else from a query is the query's own fault, not the link's.
+ */
+function isConnectionError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code !== "string") return false;
+  return code.startsWith("08") || ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "ENOTFOUND", "EHOSTUNREACH"].includes(code);
+}
+
+/**
+ * Report an unreachable database and stop. The pool is closed first for a reason that is not
+ * tidiness: StdoutLogger writes to stdout, which is ASYNCHRONOUS when stdout is a pipe — as it is
+ * under Docker — so `process.exit` immediately after logging can discard the very line an operator
+ * needs. Awaiting the pool teardown yields the event loop long enough for the write to drain.
+ */
+async function dieUnavailable(err: unknown, target: Record<string, string | undefined>): Promise<never> {
+  logger.error("directory.db.unavailable", {
+    ...target,
+    nodeId,
+    env,
+    reason: err instanceof Error ? err.message : String(err),
+  });
+  await pgPool?.end().catch(() => { /* already broken; the cause is logged above */ });
+  process.exit(1);
+}
+
 async function openStore(databaseUrl: string): Promise<PgDirectoryStore> {
   pgPool = new pg.Pool({ connectionString: databaseUrl, max: poolMax });
   let target: { host?: string; port?: string; database?: string } = {};
@@ -224,13 +261,7 @@ async function openStore(databaseUrl: string): Promise<PgDirectoryStore> {
   try {
     await pgPool.query("SELECT 1");
   } catch (err: unknown) {
-    logger.error("directory.db.unavailable", {
-      ...target,
-      nodeId,
-      env,
-      reason: err instanceof Error ? err.message : String(err),
-    });
-    process.exit(1);
+    await dieUnavailable(err, target);
   }
 
   // 2. AC-010 schema version guard — BEFORE the first schema read. The store's profile cache selects
@@ -246,7 +277,13 @@ async function openStore(databaseUrl: string): Promise<PgDirectoryStore> {
     );
     appliedVersion = result.rows[0]?.max_rank ?? 0;
   } catch (err) {
-    // flyway_schema_history absent (never migrated) or cello_service lacks SELECT on it.
+    // Two very different causes reach here. A connection-class failure (Postgres class 08, or a
+    // socket error) means the server went away between the probe above and now — reporting that as
+    // "migrations have not run" sends the operator to Flyway for a network problem.
+    if (isConnectionError(err)) {
+      await dieUnavailable(err, target);
+    }
+    // Otherwise: flyway_schema_history absent (never migrated) or cello_service lacks SELECT on it.
     logger.error("migration.version.query.failed", { reason: String(err), env });
     appliedVersion = 0;
   }
@@ -261,13 +298,7 @@ async function openStore(databaseUrl: string): Promise<PgDirectoryStore> {
   try {
     await s.loadProfiles();
   } catch (err: unknown) {
-    logger.error("directory.db.unavailable", {
-      ...target,
-      nodeId,
-      env,
-      reason: err instanceof Error ? err.message : String(err),
-    });
-    process.exit(1);
+    await dieUnavailable(err, target);
   }
   logger.info("adapter.initialised", { adapterName: "PgDirectoryStore", implementation: "PgDirectoryStore", env, poolMax });
   return s;

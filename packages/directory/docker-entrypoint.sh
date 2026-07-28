@@ -23,14 +23,35 @@ set -e
 
 # ─── M12 DOD-NODE-DIR-GCP-1: resolve the boot environment on a GCP node ────
 # CELLO_CLOUD=gcp has no ECS-style secret injector, so the node fetches its own secrets from
-# Secret Manager with the VM's attached workload identity. gcp-boot-env writes ONLY `export`
-# lines to stdout (it is eval'd), diagnostics to stderr, and exits non-zero on any missing,
-# empty or inaccessible secret — with `set -e` that is a refusal to start, never a partial boot.
-# This runs before Flyway so both Flyway and the node use the same resolved credentials.
+# Secret Manager with the VM's attached workload identity. This runs before Flyway so both Flyway
+# and the node use the same resolved credentials — one fetch, not two paths that can drift.
+#
+# The comparison is case-folded because directory.ts lowercases CELLO_CLOUD before validating it:
+# a value of "GCP" would otherwise pass there and skip resolution here, and the node would fail
+# much later wearing an AWS-shaped error.
 
-if [ "$CELLO_CLOUD" = "gcp" ]; then
+if [ "$(printf '%s' "${CELLO_CLOUD:-}" | tr '[:upper:]' '[:lower:]')" = "gcp" ]; then
   echo '{"event":"directory.gcp.boot_env.resolving","level":"info"}'
-  eval "$(node /app/packages/directory/dist/bin/gcp-boot-env.js)"
+
+  # Capture BEFORE evaluating. `eval "$(cmd)"` reports eval's own status, not cmd's — and
+  # `eval ""` succeeds — so a failed secret resolution would be swallowed, `set -e` would never
+  # fire, and the boot would die 40 lines later on an unrelated AWS-flavoured cause.
+  if ! BOOT_ENV=$(node /app/packages/directory/dist/bin/gcp-boot-env.js); then
+    echo '{"event":"directory.gcp.boot_env.failed","level":"error","reason":"gcp-boot-env exited non-zero; its own error line above names the cause"}'
+    exit 1
+  fi
+
+  # The output is EVALUATED, so any line that is not an export assignment would execute. The
+  # binary promises to emit only those; this is the enforcement, because a promise made in a
+  # comment is not a control. A value containing a newline also lands here as a non-export line,
+  # and refusing is the right answer for a secret we cannot safely quote.
+  if printf '%s\n' "$BOOT_ENV" | grep -v '^$' | grep -qvE "^export [A-Z_][A-Z0-9_]*='"; then
+    echo '{"event":"directory.gcp.boot_env.failed","level":"error","reason":"gcp-boot-env emitted a line that is not an export assignment — refusing to evaluate it"}'
+    exit 1
+  fi
+
+  eval "$BOOT_ENV"
+  unset BOOT_ENV
   echo '{"event":"directory.gcp.boot_env.resolved","level":"info"}'
 fi
 
@@ -88,10 +109,16 @@ fi
 # When using RDS_CREDENTIALS_SECRET_ARN, raw credentials are exported above —
 # parsing them back from the URL would yield URL-encoded values (wrong password).
 
-DB_HOST_PORT_NAME=$(echo "$DATABASE_URL" | sed 's|^postgres\(ql\)\?://[^@]*@||')
-FLYWAY_URL="jdbc:postgresql://${DB_HOST_PORT_NAME}"
-: "${FLYWAY_USER:=$(echo "$DATABASE_URL" | sed 's|^postgres\(ql\)\?://||' | sed 's|:.*||')}"
-: "${FLYWAY_PASSWORD:=$(echo "$DATABASE_URL" | sed 's|^postgres\(ql\)\?://[^:]*:||' | sed 's|@.*||')}"
+# Only derive what has not already been resolved. On GCP the block at the top of this script has
+# set all three from Secret Manager, and re-deriving FLYWAY_URL from DATABASE_URL would append
+# `?sslmode=no-verify` — a libpq value that pgjdbc rejects outright (`Invalid sslmode value`),
+# failing the very first migration on a brand-new node.
+if [ -z "${FLYWAY_URL:-}" ]; then
+  DB_HOST_PORT_NAME=$(echo "$DATABASE_URL" | sed -E 's|^postgres(ql)?://[^@]*@||')
+  FLYWAY_URL="jdbc:postgresql://${DB_HOST_PORT_NAME}"
+fi
+: "${FLYWAY_USER:=$(echo "$DATABASE_URL" | sed -E 's|^postgres(ql)?://||' | sed 's|:.*||')}"
+: "${FLYWAY_PASSWORD:=$(echo "$DATABASE_URL" | sed -E 's|^postgres(ql)?://[^:]*:||' | sed 's|@.*||')}"
 
 export FLYWAY_URL
 export FLYWAY_USER

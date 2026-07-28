@@ -148,6 +148,38 @@ describeIntegration("AC-002: CELLO_ENV=local startup — all adapters initialise
     expect(out).not.toContain("amazonaws.com");
   });
 
+  // M12 DOD-INV-NODEID: every node is born `<cloud>-<region>` and is NEVER renamed — NODE_ID feeds
+  // Identifier.derive(), so it is the FROST participant identifier, not a label. A node that
+  // guessed one would sign frames and register shares under it permanently.
+  it("REFUSES to start on a non-AWS cloud when NODE_ID is unset, rather than guessing one", () => {
+    const result = runBin({
+      CELLO_ENV: "dev",
+      CELLO_CLOUD: "gcp",
+      CELLO_REGION: "us-central1",
+      NODE_ID: undefined,
+    });
+    expect(result.code).toBe(1);
+    const out = result.stdout + result.stderr;
+    expect(out).toContain("adapter.config.missing");
+    expect(out).toContain("NODE_ID");
+    // Specifically: it must not have quietly adopted the bare region as its identity.
+    expect(out).not.toContain('"nodeId":"us-central1"');
+  });
+
+  it("still derives NODE_ID from the region on AWS — nodes already registered under it must not break", () => {
+    // The legacy default is back-compat, not a pattern. Reaching the DATABASE_URL/RDS check proves
+    // the NODE_ID guard did not fire.
+    const result = runBin({
+      CELLO_ENV: "dev",
+      AWS_REGION: "eu-central-1",
+      NODE_ID: undefined,
+      CELLO_CLOUD: undefined,
+    });
+    expect(result.code).toBe(1); // no AWS credentials here — but for a LATER reason
+    const out = result.stdout + result.stderr;
+    expect(out).not.toContain('"missingKey":"NODE_ID"');
+  });
+
   it("exits 1 with migration.out.of.date when pointing at a database with no migrations", async () => {
     const dir = await mkdtemp(join(tmpdir(), "cello-test-"));
     tempDirs.push(dir);
