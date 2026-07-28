@@ -9,6 +9,53 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🟢 SIGN-IN LOOP CLOSED — same-origin API + host-only cookie (2026-07-28, 06:18–06:45 UTC)
+
+**The loop that survived five fix attempts was never an auth bug.** Sessions were minted correctly
+on every click — three live ones sat on `apemmelaar@gmail.com` while `/auth/session` answered 401.
+The cause was **two cookies sharing one name**. An earlier build set the session host-only on
+`api.cello.mygentic.ai`; the fix for the cross-host hop set it with `Domain=cello.mygentic.ai`.
+RFC 6265 keys a cookie on (name, domain, path), so those are distinct and neither can overwrite the
+other. The browser sent both, oldest first, and `_session.py` returned the first match and stopped.
+Found by reading the live cookie jar over CDP, not from code — the deployed package was
+byte-identical to HEAD and every log looked healthy.
+
+- **corp-cello-site `6bbaf2d`** — nginx now proxies `/api/waitlist/` → `api.cello.mygentic.ai`
+  (`deploy/cello-site.conf`, server level, `^~`). The browser sees ONE origin, so the cookie needs
+  no `Domain`. `waitlistApi.ts` BASE is now the relative `/api/waitlist`. Shipped by the
+  **Deploy Corp Site** GitHub Action (run `30334383979`), which runs `nginx -t` before reload.
+  **The static export is unchanged — SEO unaffected.**
+- **`cello-waitlist-dev` stack UPDATED** — new parameter `SiteDomainName` (Default
+  `cello.mygentic.ai`). `WAITLIST_API_BASE` is now `https://cello.mygentic.ai/api/waitlist` and
+  `WAITLIST_SITE` derives from the same parameter so the two cannot drift. Verified live on
+  `cello-waitlist-{email,auth}-dev`.
+  **Deployed DIRECTLY, not via deploy.sh** — see the failure note below.
+- **`./infra/deploy-lambdas.sh dev waitlist`** run TWICE (06:23, 06:42). Cookie is now
+  `__Host-cello_wl_session`, host-only, no `Domain`. The `__Host-` prefix is browser-enforced:
+  Chrome rejects the cookie outright if a `Domain` attribute ever returns, turning a silent
+  three-day auth loop into an immediate failure. `read_session` now tries EVERY cookie the browser
+  sent instead of the first — ordering cannot save us, RFC 6265 leads with the OLDEST.
+
+**⚠️ `deploy.sh dev us-east-1` FAILED AGAIN at `cello-ecs-directory-dev` (06:34 UTC), as on 07-25.**
+`RegistryPathRule` → `"One or more listeners not found" (ElasticLoadBalancingV2, 400)`. Stack rolled
+back cleanly to `UPDATE_ROLLBACK_COMPLETE`. **Pre-existing defect, not caused by this session** —
+pre- and post-change health checks both showed all 6 ECS services 1/1 `COMPLETED` and all 6 DNS
+names resolving. It still blocks STEP 15, so the waitlist stack again needed the documented direct
+command in `docs/planning/user-stories/m11/M11-NEXT-STEPS-AWS-AWAKE.md` (now also needs
+`SiteDomainName=cello.mygentic.ai`). **This is the second time it has cost a session; the listener
+reference is worth fixing on its own.**
+
+**Verified in a real browser over CDP, not on a green suite:** clicked the emailed sign-in link →
+landed on `https://cello.mygentic.ai/status` (not `/auth`), signed in, #12 of 12. The orphaned
+`cello_wl_session` on `.cello.mygentic.ai` is STILL in the jar and no longer interferes — which is
+the actual proof the collision class is gone. `/status` and `/waitlist` both hold the session across
+navigation.
+
+**No data changes.** Anyone with an old `cello_wl_session` is simply signed out once (different
+name) and signs in again; with zero real users there is nothing to migrate.
+
+---
+
 ## 🟢 CAPTURE-LOOP FIX DEPLOYED — 13 waitlist Lambdas + stack update (2026-07-28, 03:51–04:20 UTC)
 
 **What changed in AWS, and why it is here:** the M11 core capture loop was broken in production —
