@@ -58,6 +58,28 @@ describe("DOD-AE-MUTABLE-1: mergePresence (LWW)", () => {
     expect(mergePresence(a, a)).toEqual(a);
   });
 
+  it("a malformed (non-finite) updated_at loses to a valid one, commutatively (adversarial peer)", () => {
+    // AE input comes from other sovereign nodes — a malformed/hostile row must not win nor break
+    // convergence. Non-finite normalizes to -Infinity: valid always wins, both orders agree.
+    const bad = rec({ updated_at: "not-a-number", owning_node_id: "n-bad", online: true });
+    const good = rec({ updated_at: "2000", owning_node_id: "n-good", online: false });
+    expect(mergePresence(bad, good)).toEqual(mergePresence(good, bad)); // commutative (was broken)
+    expect(mergePresence(bad, good).owning_node_id).toBe("n-good"); // valid wins regardless of slot
+    expect(mergePresence(good, bad).owning_node_id).toBe("n-good");
+    // two invalids converge deterministically via the canonical tiebreak, either order:
+    const bad2 = rec({ updated_at: "", owning_node_id: "n-2" }); // "" → 0 finite, distinct case
+    const badX = rec({ updated_at: "xyz", owning_node_id: "n-x" });
+    const badY = rec({ updated_at: "qrs", owning_node_id: "n-y" });
+    expect(mergePresence(badX, badY)).toEqual(mergePresence(badY, badX));
+    expect(bad2).toBeDefined();
+  });
+
+  it("distinct near-MAX_SAFE_INTEGER timestamps do NOT collapse (locks the millis contract)", () => {
+    const a = rec({ updated_at: String(Number.MAX_SAFE_INTEGER - 2), owning_node_id: "n-a" });
+    const b = rec({ updated_at: String(Number.MAX_SAFE_INTEGER - 1), owning_node_id: "n-b" });
+    expect(mergePresence(a, b).owning_node_id).toBe("n-b"); // the larger wins, not a tiebreak
+  });
+
   it("order-independent across three writes (converges to the max updated_at)", () => {
     const w1 = rec({ updated_at: "1", online: true, owning_node_id: "n1" });
     const w2 = rec({ updated_at: "2", online: false, owning_node_id: "n2" });

@@ -32,11 +32,18 @@ function canonical(r: PresenceRecord): string {
 }
 
 export function mergePresence(a: PresenceRecord, b: PresenceRecord): PresenceRecord {
-  const ta = Number(a.updated_at);
-  const tb = Number(b.updated_at);
+  // updated_at is epoch-MILLIS (~1.7e12, safe under 2^53 — distinct ms never collapse under
+  // Number()). If a nanos/micros migration ever pushes it past 2^53, revisit this compare.
+  // A non-finite value (a malformed or hostile peer row — AE input comes from OTHER sovereign
+  // nodes) normalizes to -Infinity so it ALWAYS loses to a valid timestamp and two invalids fall
+  // to the deterministic canonical tiebreak. Without this, NaN makes `>` always-false → the merge
+  // returns the second arg → non-commutative, and a bad row could persist over a valid one.
+  const norm = (s: string): number => (Number.isFinite(Number(s)) ? Number(s) : -Infinity);
+  const ta = norm(a.updated_at);
+  const tb = norm(b.updated_at);
   if (ta !== tb) {
     return ta > tb ? a : b; // higher wall-clock wins wholesale
   }
-  // Exact tie: deterministic, commutative tiebreak over the entire row.
+  // Equal (incl. both-invalid): deterministic, commutative tiebreak over the entire row.
   return canonical(a) >= canonical(b) ? a : b;
 }
