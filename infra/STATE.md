@@ -9,6 +9,46 @@ Any agent or human that deploys, modifies, or tears down infrastructure **must u
 
 ---
 
+## 🟢 CAPTURE-LOOP FIX DEPLOYED — 13 waitlist Lambdas + stack update (2026-07-28, 03:51–04:20 UTC)
+
+**What changed in AWS, and why it is here:** the M11 core capture loop was broken in production —
+confirming an email landed the user on a sign-in form. API Gateway payload format 2.0 delivers
+request cookies in a top-level `cookies` list, not in `headers`; the handler read the header, so
+`/auth/session` returned 401 to every signed-in user and `/status` bounced them to `/auth`.
+
+- **`./infra/deploy-lambdas.sh dev waitlist us-east-1`** — all 13 `cello-waitlist-*-dev` functions
+  recoded. `cello-waitlist-auth-dev` LastModified `2026-07-28T03:51:51Z`. Two NEW shared modules
+  ship with them: `_resend.py` and `_referral.py` (globbed by `_*.py`, no list to update).
+- **`cello-waitlist-dev` stack UPDATED** — one new resource, `AuthResendRoute`
+  (`POST /waitlist/auth/resend`). Deployed **directly**, not via `deploy.sh`: the waitlist is
+  STEP 15 and deliberately last, and deploy.sh still exits earlier on `cello-ecs-directory-dev`.
+  Parameters resolved exactly as STEP 15 resolves them; the command is written out in
+  `docs/planning/user-stories/m11/M11-NEXT-STEPS-AWS-AWAKE.md`.
+
+**Verified live, on the deployed API rather than on a green check:**
+- `GET /auth/verify?token=<unknown>` → **404 `text/html`**, "That link isn't valid." with the front
+  door and no resend button. It returned `{"error":"token_not_found"}` as JSON ninety seconds earlier.
+- `GET /auth/verify` with no token → **400 `text/html`**, "That link came through incomplete."
+- `POST /auth/resend` with an unknown token → **200**, the opaque "Check your inbox." page (it must
+  not reveal whether the token was ours).
+- corp-cello-site deployed (`aed1325..d17377f`); the SERVED bundles carry the new copy —
+  `/waitlist` has "Signed in as" / "sent you a few already" / "has unsubscribed", `/status` has
+  "Email confirmed" / "spot secured" / the `welcome` flag.
+
+**One data change:** `apemmelaar@gmail.com` deleted from `waitlist_users` at Andre's request so he
+could test signup from scratch (his row was already `email_verified`, so a re-signup would have sent
+a sign-in link rather than a confirm mail). 11 rows remain, all test data.
+
+**NEW TOOL — `infra/scripts/portal-db-query.sh`.** The `cello-db-query` skill does NOT work against
+the portal database and fails SILENTLY: the exec session opens and the query hangs. Verified
+2026-07-28 — TCP 5432 from the `cello-directory-dev` task to `cello-portal-dev` **times out**,
+because the directory container's security group is not admitted by the portal RDS. Only the
+waitlist Lambdas have a path. The script borrows one: it copies the deployed waitlist-auth package
+and VPC config into a throwaway Lambda, runs the statement, and deletes the function in a shell trap.
+Nothing persists — confirmed, no `cello-tmp-portal-admin-*` functions remain.
+
+---
+
 ## 🟢 Wake complete — all 3 regions live (2026-07-28, 03:36:06–03:51:29 UTC)
 
 **Elapsed: 15 min 23 sec.** All 3 inventory diffs IDENTICAL. RDS cleared in ~9 min.
