@@ -13,7 +13,7 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.2
-        version: 3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.0.0
         version: 8.59.1(@typescript-eslint/parser@8.59.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4)(typescript@5.9.3)
@@ -56,6 +56,9 @@ importers:
       '@google-cloud/kms':
         specifier: ^5.7.0
         version: 5.7.0
+      '@google-cloud/secret-manager':
+        specifier: ^6.1.0
+        version: 6.3.0
       '@google-cloud/storage':
         specifier: ^7.21.0
         version: 7.21.0
@@ -83,7 +86,7 @@ importers:
         version: link:../relay
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.2)
@@ -122,7 +125,7 @@ importers:
         version: 0.0.23
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.2)
@@ -227,7 +230,7 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
 
   packages/test-fixtures:
     dependencies:
@@ -237,7 +240,7 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@types/node':
         specifier: ^25.6.2
         version: 25.6.2
@@ -1013,6 +1016,10 @@ packages:
   '@google-cloud/promisify@4.0.0':
     resolution: {integrity: sha512-Orxzlfb9c67A15cq2JQEyVc7wEsmFBmHjZWZYQMUyJ1qivXyMwdyNOs9odi79hze+2zqdTtu1E19IM/FtqZ10g==}
     engines: {node: '>=14'}
+
+  '@google-cloud/secret-manager@6.3.0':
+    resolution: {integrity: sha512-TUuzu8CchbCd2cXd0pYJSXvDBsEVX3wpZu4iOpdLrXLbYbvCDKhdjDyOyC7vo14qQRE9J6Z0AL2hfX08H+fh3A==}
+    engines: {node: '>=18'}
 
   '@google-cloud/storage@7.21.0':
     resolution: {integrity: sha512-l+IFTkd+6Y5LoAuXyYCKNAKtw/Ci+rAMqgdTB1jv4iZiLhw0rtq+0qjIRbBizXkNzEFmXiXUW0H7sZQQvk1ffA==}
@@ -4922,14 +4929,14 @@ snapshots:
 
   '@claude-flow/swarm@3.0.0-alpha.1': {}
 
-  '@claude-flow/testing@3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
+  '@claude-flow/testing@3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
     dependencies:
       '@claude-flow/memory': 3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2)
       '@claude-flow/shared': 3.0.0-alpha.1
       '@claude-flow/swarm': 3.0.0-alpha.1
       vitest: 3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0)
 
-  '@claude-flow/testing@3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
+  '@claude-flow/testing@3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
     dependencies:
       '@claude-flow/memory': 3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2)
       '@claude-flow/shared': 3.0.0-alpha.1
@@ -5160,6 +5167,12 @@ snapshots:
   '@google-cloud/projectify@4.0.0': {}
 
   '@google-cloud/promisify@4.0.0': {}
+
+  '@google-cloud/secret-manager@6.3.0':
+    dependencies:
+      google-gax: 5.0.8
+    transitivePeerDependencies:
+      - supports-color
 
   '@google-cloud/storage@7.21.0':
     dependencies:
@@ -7454,7 +7467,7 @@ snapshots:
 
   is-core-module@2.16.1:
     dependencies:
-      hasown: 2.0.3
+      hasown: 2.0.4
     optional: true
 
   is-electron@2.2.2: {}

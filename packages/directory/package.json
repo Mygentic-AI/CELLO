@@ -47,6 +47,7 @@
     "@cello-protocol/protocol-types": "^0.0.26",
     "@cello-protocol/transport": "^0.0.27",
     "@google-cloud/kms": "^5.7.0",
+    "@google-cloud/secret-manager": "^6.1.0",
     "@google-cloud/storage": "^7.21.0",
     "@libp2p/interface": "^3.0.0",
     "@noble/curves": "2.2.0",

@@ -106,8 +106,16 @@ if (env !== "local" && env !== "dev" && env !== "staging" && env !== "production
 // CELLO-M6B-019: CELLO_RELAY_MULTIADDR is only used for CELLO_ENV=local.
 // For dev/staging/production, relay addressing comes from SSM node registry at startup.
 const relayAddr = process.env["CELLO_RELAY_MULTIADDR"];
+// AWS_REGION is the AWS SDK's own variable — it configures WHERE SDK clients talk, and nothing
+// else should read it as "where this node is". On a GCP node it is absent, and using it as the
+// node's region made every log line, every directory_nodes row and every node id claim us-east-1.
 const awsRegion = process.env["AWS_REGION"] ?? "us-east-1";
-const nodeId = process.env["NODE_ID"] ?? (env === "local" ? "local" : awsRegion);
+// CELLO_REGION is the cloud-neutral answer to "where is this node". It falls back to AWS_REGION so
+// existing AWS deployments are byte-for-byte unchanged without touching their task definitions.
+const nodeRegion = process.env["CELLO_REGION"] ?? process.env["AWS_REGION"] ?? (env === "local" ? "local" : "us-east-1");
+// NODE_ID is `<cloud>-<region>` (Decision 7) and is the FROST participant identifier — never a
+// label, never renamed. Deriving it from a region is legacy AWS behavior kept for back-compat.
+const nodeId = process.env["NODE_ID"] ?? (env === "local" ? "local" : nodeRegion);
 // AC-007 (REPOSPLIT-001): health server moved to port 9090 so port 8080 is free for
 // the libp2p WS listener. ALB target group health check updated to port 9090.
 const healthPort = parseInt(process.env["HEALTH_PORT"] ?? "9090", 10);
@@ -249,7 +257,7 @@ async function openStore(databaseUrl: string): Promise<PgDirectoryStore> {
   }
 
   // 3. Schema is current — now the profile cache can be loaded.
-  const s = new PgDirectoryStore(pgPool, logger, nodeId, awsRegion);
+  const s = new PgDirectoryStore(pgPool, logger, nodeId, nodeRegion);
   try {
     await s.loadProfiles();
   } catch (err: unknown) {
@@ -269,7 +277,15 @@ const store = await (async () => {
   if (env === "local") {
     return openStore(requireEnv("DATABASE_URL"));
   }
-  // dev/staging/production: PgDirectoryStore backed by RDS credentials from Secrets Manager
+  // M12 DOD-NODE-DIR-GCP-1: a GCP node's credentials come from Secret Manager, resolved by
+  // docker-entrypoint.sh (see gcp-boot-env) so Flyway and this process share one fetch. By the
+  // time we get here DATABASE_URL is either populated or the entrypoint already refused to start;
+  // requireEnv makes that contract explicit rather than falling through to the AWS path, which
+  // would fail much later as an opaque SDK timeout on a node holding no AWS credentials.
+  if (cloudProvider === "gcp") {
+    return openStore(requireEnv("DATABASE_URL"));
+  }
+  // dev/staging/production on AWS: PgDirectoryStore backed by RDS credentials from Secrets Manager
   const rdsSecretArn = requireEnv("RDS_CREDENTIALS_SECRET_ARN");
   let databaseUrl: string;
   try {
@@ -607,8 +623,22 @@ if (env === "local") {
 
   relayMultiaddrs = [relayAddr!];
   logger.info("node.registry.loaded", { relayCount: 1, directoryCount: 0, source: "env" });
+} else if (cloudProvider === "gcp") {
+  // M12-D6: a GCP node has NO Parameter-Store equivalent, and does not need one. Relay addressing
+  // comes from the officer-signed relay manifest in GCS (RelayPoolManager, below) plus live
+  // `relay_register` self-registration. Reaching for SSM here would fail on a node with no AWS
+  // credentials and print AWS remediation advice for infrastructure that deliberately does not
+  // exist — an error naming its exit point instead of its cause. This is a designed absence, so it
+  // is logged as such and the boot continues.
+  relayPeerId = "";
+  relayMultiaddrs = [];
+  logger.info("node.registry.skipped", {
+    env,
+    cloud: cloudProvider,
+    reason: "no SSM node registry on GCP (M12-D6) — relay addressing comes from the signed relay manifest and relay_register",
+  });
 } else {
-  // dev/staging/production: read SSM node registry
+  // dev/staging/production on AWS: read SSM node registry
   // Dynamic import to avoid loading @aws-sdk in CELLO_ENV=local
   const { SSMClient, GetParametersByPathCommand } = await import("@aws-sdk/client-ssm");
   const ssmClient = new SSMClient({ region: awsRegion });
@@ -1313,7 +1343,7 @@ healthServer.listen(healthPort, () => {
 // ─── DEPLOY-002: directory.service.started ─────────────────────────────────────
 logServiceStarted(logger, {
   nodeId,
-  region: awsRegion,
+  region: nodeRegion,
   environment: env,
   schemaVersion,
 });
@@ -1322,7 +1352,7 @@ logServiceStarted(logger, {
 
 const shutdown = () => {
   const uptimeMs = Date.now() - startedAt;
-  logServiceStopped(logger, { nodeId, region: awsRegion, environment: env, uptimeMs });
+  logServiceStopped(logger, { nodeId, region: nodeRegion, environment: env, uptimeMs });
 
   healthServer.close();
   checkpointCoordinator.stop();
@@ -1351,7 +1381,7 @@ process.on("uncaughtException", (err) => {
   consecutiveFailures++;
   logServiceCrashed(logger, {
     nodeId,
-    region: awsRegion,
+    region: nodeRegion,
     reason: err.message,
     consecutiveFailures,
   });

@@ -21,6 +21,19 @@
 
 set -e
 
+# ─── M12 DOD-NODE-DIR-GCP-1: resolve the boot environment on a GCP node ────
+# CELLO_CLOUD=gcp has no ECS-style secret injector, so the node fetches its own secrets from
+# Secret Manager with the VM's attached workload identity. gcp-boot-env writes ONLY `export`
+# lines to stdout (it is eval'd), diagnostics to stderr, and exits non-zero on any missing,
+# empty or inaccessible secret — with `set -e` that is a refusal to start, never a partial boot.
+# This runs before Flyway so both Flyway and the node use the same resolved credentials.
+
+if [ "$CELLO_CLOUD" = "gcp" ]; then
+  echo '{"event":"directory.gcp.boot_env.resolving","level":"info"}'
+  eval "$(node /app/packages/directory/dist/bin/gcp-boot-env.js)"
+  echo '{"event":"directory.gcp.boot_env.resolved","level":"info"}'
+fi
+
 # ─── Resolve DATABASE_URL ──────────────────────────────────────────────────
 # If DATABASE_URL is not set but RDS_CREDENTIALS_SECRET_ARN is, fetch credentials
 # from Secrets Manager using the AWS CLI and combine with RDS_ENDPOINT/PORT/DB_NAME.
