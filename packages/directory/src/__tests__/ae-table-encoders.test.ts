@@ -60,10 +60,23 @@ describe("DOD-AE-APPEND-1: Tier-A table encoders", () => {
     expect(mutated).toBe(base);
   });
 
-  it("an IMMUTABLE column change DOES change the hash (a real content change propagates)", () => {
+  it("EVERY hashed column change changes the hash — a dropped immutable column would be caught", () => {
+    // Parametrized over all of AGENT_PROFILES_SPEC.immutableColumns so dropping ANY of them from
+    // the spec (which would silently converge two nodes differing in that column) fails here.
     const base = encodeTierARecord(AGENT_PROFILES_SPEC, profileRow).hash;
-    expect(encodeTierARecord(AGENT_PROFILES_SPEC, { ...profileRow, primary_pubkey: "00".repeat(32) }).hash).not.toBe(base);
-    expect(encodeTierARecord(AGENT_PROFILES_SPEC, { ...profileRow, registered_at: "1785200000001" }).hash).not.toBe(base);
+    for (const col of AGENT_PROFILES_SPEC.immutableColumns) {
+      const mutated = { ...profileRow, [col]: (profileRow[col as keyof typeof profileRow] ?? "x") + "_changed" };
+      expect(encodeTierARecord(AGENT_PROFILES_SPEC, mutated).hash, `flipping ${col} must change the hash`).not.toBe(base);
+    }
+  });
+
+  it("EVERY hashed column of agent_revocations is reflected in the hash", () => {
+    const revRow = { agent_id: "a", epoch_id: "e", reason: "r", signature: "00", revoked_at: "1" };
+    const base = encodeTierARecord(AGENT_REVOCATIONS_SPEC, revRow).hash;
+    for (const col of AGENT_REVOCATIONS_SPEC.immutableColumns) {
+      const mutated = { ...revRow, [col]: String(revRow[col as keyof typeof revRow]) + "_changed" };
+      expect(encodeTierARecord(AGENT_REVOCATIONS_SPEC, mutated).hash, `flipping ${col} must change the hash`).not.toBe(base);
+    }
   });
 
   it("agent_revocations: tombstone encodes on agent_id, excludes created_at", () => {
@@ -71,7 +84,7 @@ describe("DOD-AE-APPEND-1: Tier-A table encoders", () => {
       agent_id: "agent-x",
       epoch_id: "e1",
       reason: "compromise",
-      signature: "ab".repeat(64), // BYTEA hex-encoded by the query layer
+      signature: "ab".repeat(64), // BYTEA — the consumer hex-encodes it before this call (pg returns a Buffer)
       revoked_at: "1785200000000",
       created_at: "2026-07-28T10:00:00Z", // per-node — excluded
     };
