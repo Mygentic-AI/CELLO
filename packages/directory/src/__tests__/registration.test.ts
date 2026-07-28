@@ -50,6 +50,8 @@ import {
 import type { RelayAdapter } from "../directory-node.js";
 import type { RelaySessionAssignment } from "../directory-types.js";
 import { NetworkDirectoryNode, runNetworkDkg } from "@cello-protocol/daemon";
+import { TestDirectoryManifestStore } from "@cello-protocol/interfaces/stubs";
+import type { ConsortiumManifest } from "@cello-protocol/protocol-types";
 
 setupV3Tests();
 
@@ -489,6 +491,53 @@ describe("REG-001: Directory registration", () => {
     expect(frame["reason"]).toBe("dkg_failed");
 
     // No profile created
+    expect(directory.hasProfile(Buffer.from(pub).toString("hex"))).toBe(false);
+  });
+
+  it("M12 ROLE-MANIFEST-1: replica-only manifest → register rejected loudly, no profile", async () => {
+    // A manifest with nodes but ZERO validators is a non-functional consortium. The handler must
+    // refuse at the replicaOnly guard BEFORE dkg_ready — F1: the helper flag alone isn't enough,
+    // this pins the actual handler rejection so a dropped `if (topo.replicaOnly)` can't ship green.
+    const replicaOnlyManifest: ConsortiumManifest = {
+      version: 1,
+      not_before: new Date().toISOString(),
+      expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+      nodes: [
+        { nodeId: "gcp-usc1", pubkey: "a".repeat(64), region: "us-central1", provider: "gcp", endpoint: "https://a.example.com", role: "replica" },
+        { nodeId: "gcp-euw1", pubkey: "b".repeat(64), region: "europe-west1", provider: "gcp", endpoint: "https://b.example.com", role: "replica" },
+      ],
+      signatures: [],
+    };
+    const dirKey = generateKeypair();
+    const { directory, node: dirNode, stop: stopDir } = await createDirectoryNode({
+      keyProvider: dirKey,
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "12D3KooWFakeRelay", multiaddrs: ["/ip4/127.0.0.1/tcp/19999"] },
+      directoryManifestStore: new TestDirectoryManifestStore(replicaOnlyManifest),
+    });
+    scope.addCleanup(stopDir);
+
+    const clientKey = generateKeypair();
+    const clientNode = await createNode({ keyProvider: clientKey, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await clientNode.start();
+    scope.addCleanup(() => clientNode.stop());
+    await clientNode.dial(dirNode.listenAddresses()[0]!);
+
+    const { stream, reader } = await doAuth(clientNode, dirNode.getPeerId(), clientKey);
+    const mlDsa = await mlDsaKeygen();
+    const pub = await clientKey.getPublicKey();
+
+    sendFrame(stream, CBOR_ENC.encode({
+      type: "register_request",
+      phone_stub: "+7777777777",
+      k_local_pubkey: Buffer.from(pub).toString("hex"),
+      ml_dsa_pubkey: Buffer.from(await mlDsa.getPublicKey()).toString("hex"),
+    }));
+
+    const frame = await reader.readFrameWithTimeout(10000);
+    expect(frame["type"]).toBe("register_error");
+    expect(frame["reason"]).toBe("dkg_failed");
+    // No profile created from a replica-only consortium.
     expect(directory.hasProfile(Buffer.from(pub).toString("hex"))).toBe(false);
   });
 
