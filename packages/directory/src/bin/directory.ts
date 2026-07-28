@@ -71,6 +71,7 @@ import type { ICheckpointTransport, CloudStorageProvider } from "@cello-protocol
 import { LocalCloudStorageProvider } from "@cello-protocol/interfaces/stubs";
 import { FileDirectoryManifestStore } from "../file-directory-manifest-store.js";
 import { PgAeStore } from "../pg-ae-store.js";
+import { resolveRelayManifestSigner } from "../relay-manifest-signer.js";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();
@@ -811,9 +812,16 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
     return mgr;
   }
 
-  // dev/staging/production: S3-backed manifest (required)
+  // dev/staging/production: object-store-backed manifest (required)
   const manifestBucket = requireEnv("RELAY_MANIFEST_BUCKET");
-  const signerPubkeyHex = requireEnv("RELAY_MANIFEST_SIGNER_PUBKEY");
+  // The signer is this node's own key unless configured otherwise — see relay-manifest-signer for
+  // why that derivation can only cause refusal, never acceptance.
+  const signer = resolveRelayManifestSigner(
+    process.env["RELAY_MANIFEST_SIGNER_PUBKEY"],
+    Buffer.from(dirPubkey).toString("hex"),
+    logger,
+  );
+  const signerPubkeyHex = signer.pubkeyHex;
   if (cloudProvider === "gcp") {
     const [{ GcsCloudStorageProvider }, { Storage }] = await Promise.all([
       import("../adapters/gcs-cloud-storage-provider.js"),
