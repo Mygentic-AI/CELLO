@@ -38,8 +38,17 @@ by a third party can land in your wallet unbidden, so presentability requires ac
 that, `endorsement` itself is an ordinary [[M10-TYPE-PLAYBOOK]] run, and so is every attestation type
 after it.
 
-**What this milestone is NOT.** It does not add an issuer, a signing key, a chokepoint, or a write path.
-Spec §6's 2026-07-11 amendment settles that: all three flows route through the portal backend, and the
+**How the client hands its plaintext over — settled, `M10B-D2`, do not re-litigate it.** A
+**directory-mediated sealed submission queue**: Bob's daemon signs the submission with his agent key,
+seals it to the portal's intake key, and writes it to any directory node; the portal drains, verifies
+the signature (deriving `issuer_pubkey` from it), scans, mints. The mirror image of the M10-D22 sealed
+pickup transport — the directory carries a blob it cannot read, in the other direction. The daemon never
+calls the portal directly. If a plan starts with a daemon→portal HTTP call or a libp2p agent inside the
+Next.js app, it has ignored a decision.
+
+**What this milestone is NOT.** It does not add an issuer, a signing key, a chokepoint, or a new
+**notarization** path (the queue is transport; nothing new writes `signal_records`). Spec §6's
+2026-07-11 amendment settles the rest: all three flows route through the portal backend, and the
 directory's authorized-issuer key set collapses to portal keys. Any plan that starts by enrolling agent
 keys as authorized issuers has mis-scoped the milestone.
 
@@ -57,7 +66,11 @@ keys as authorized issuers has mis-scoped the milestone.
    - **Portal-voice restatement** — the endorser's words re-emitted inside the portal's attested
      `claim`, laundering untrusted text into portal-grade authority.
    - **Self-standing** — `same_operator` endorsements clearing a `min_count` floor, so ten agents under
-     one operator manufacture standing.
+     one operator manufacture standing. Includes a quota enforced per AGENT rather than per ACCOUNT
+     (`M10B-D6`) — same hole, different door.
+   - **Unsealed submission** — a daemon that falls back to sending the submission unsealed, or a
+     directory queue row that turns out to hold readable plaintext. The queue's whole claim is that the
+     directory cannot read it.
    - **Revoke authority** — one `submitter` key tombstoning another party's endorsement.
    - Plus the standing M10 set: a hash entering outside the signed chokepoint; payload to an LLM without
      `issuer_kind` framing; per-type code creeping into client or directory; cross-agent signal bleed.
@@ -129,10 +142,13 @@ composition, and the mint arm are all portal code.
   predicate. Publish cascade applies (§2c). All new columns/tables key on `agent_id` (never
   `agent_name`), SQLCipher only (`node:sqlite` VERBOTEN), payload stays opaque — hoisting a payload
   field into a column is BLOCKING (spec §3 guardrail).
-- **trustless-cello** (directory) — **verify before assuming there is work here.** `DOD-DIR-WRITE-1`
-  was built deliberately seam-ready for `issuer_kind: agent` ("the set is DATA, not a hardcoded 'portal
-  only'"), so the write path may need nothing. The one known directory unit is `DOD-END-REVOKE-2` (the
-  REVOKE-1 F6 authority fix). Batch ALL directory changes into ONE deploy (~25–30 min × 3 regions).
+- **trustless-cello** (directory) — bigger than it looks, because `M10B-D2` puts the submission queue
+  here: `DOD-END-QUEUE-1` (the sealed mailbox + its migration) and `DOD-END-REVOKE-2` (the REVOKE-1 F6
+  authority fix). The **notarization** path may still need nothing — `DOD-DIR-WRITE-1` was built
+  deliberately seam-ready for `issuer_kind: agent` ("the set is DATA, not a hardcoded 'portal only'") —
+  **verify that before planning any work on it.** Batch ALL directory changes into ONE deploy
+  (~25–30 min × 3 regions): the queue migration and the revoke fix ship together, so sequence the work
+  to have both ready before pushing.
   Any new Flyway migration updates `OpsAgentExpectedMigrationVersion` (infra/CLAUDE.md). Read
   `infra/STATE.md` before, update after, any AWS-touching session.
 
@@ -155,7 +171,10 @@ repo(s). Standing M10B-specific instructions to include:
 - **Consent lens.** Flag any path that lets a PENDING or REFUSED endorsement be presented, counted,
   enumerated, or inferred — including through an error message, a count that leaks by differing, or a
   timing difference. A refused endorsement must be indistinguishable from one that never existed.
-  BLOCKING.
+  BLOCKING. **Scope it correctly: the ISSUER is not a third party.** Bob knows what he issued, and
+  `M10B-D4` lets Alice send him a refusal message at her option — that path is the feature, not a leak.
+  Flag it only if the issuer learns MORE than the subject chose to tell him (e.g. a refusal that
+  notifies him when Alice sent no message, or a status field that differs between pending and refused).
 - **Untrusted-content lens.** The endorser's words must reach a consuming LLM quoted and attributed,
   never restated inside the portal's attested `claim`. Flag any composition that merges the two voices.
   BLOCKING — this is how `INV-FRAMING` dies quietly.
@@ -204,10 +223,12 @@ in the DoD Decisions section, proceed (redo > block, always). Genuine undecidabl
 Parked + journal) and pull the next unit, saying so. Arm both crons at kickoff; re-arm after every
 restart/compaction.
 
-**The four already-flagged forks** (DoD "Open questions") are PARK candidates, not blockers: whether the
-endorser learns of a refusal; whether `same_operator` lives inside the hash or alongside; the
-attestation-vs-endorsement vocabulary; issuance rate limiting. If one blocks a unit, take the reversible
-option, log an `M10B-D*` entry, and keep moving.
+**The four forks this milestone opened are CLOSED** — Andre answered all of them on 2026-07-28, plus the
+ingress shape and anonymous variants. See DoD Decisions `M10B-D2` through `M10B-D8`. Do not re-open, do
+not park, do not treat any of them as a fork: refusal messaging, `same_operator` placement, vocabulary,
+rate limiting, ingress shape, anonymous endorsements. What is still open is scoped INTO
+`DOD-END-ARCH-1` (intake-key distribution and rotation; queue ack/poison + retention; naming an account
+subject) and is the determination's job, not a blocker.
 
 ## 3b. Watchdog crons — arm both (self-contained; no other doc needed)
 Cron jobs in this environment are **session-only**: gone on restart or compaction, and they fire ONLY
@@ -268,12 +289,15 @@ only here.
 ## 4. First actions (order matters)
 1. **`DOD-END-ARCH-1`** — the determination. It gates every build line and carries the four open forks.
    Its output is the architecture section the whole milestone builds against.
-2. **Verify the trustless-cello surface before planning any directory work.** `DOD-DIR-WRITE-1` claims
-   the authorized-issuer model is data-driven and seam-ready for `issuer_kind: agent`. Read it and prove
-   it, in the journal, before assuming either that it works or that it needs changing. If it holds, the
-   only directory unit is `DOD-END-REVOKE-2` and the milestone needs ONE directory deploy.
-3. **Design notes owed before their units** (§6): the scanner suite + versioning (before Tier 1); the
-   consent state model (before Tier 2); the revocation authority model (before Tier 3).
+2. **Verify the trustless-cello NOTARIZATION surface before planning work on it.** `DOD-DIR-WRITE-1`
+   claims the authorized-issuer model is data-driven and seam-ready for `issuer_kind: agent`. Read it and
+   prove it, in the journal, before assuming either that it works or that it needs changing. Note this is
+   now a narrower question than it was: `M10B-D2` already puts the submission queue in the directory, so
+   the milestone has directory work regardless — `DOD-END-QUEUE-1` + `DOD-END-REVOKE-2`, batched into
+   ONE deploy. What you are verifying is whether the *write/notarization* path needs anything on top.
+3. **Design notes owed before their units** (§6): the queue (before Tier 1); the scanner suite +
+   versioning (before Tier 1); the consent state model (before Tier 2); the revocation authority model
+   (before Tier 3).
 4. Then the loop, tier order strict.
 
 ## 5. Hard rules (non-negotiable)
@@ -358,10 +382,20 @@ only here.
 
 ## 6. Design-significant units — design note in the journal FIRST, then the loop
 
+**Every design note names its unit's FULL observability event set** (`domain.noun.verb`, context fields,
+correlationId threading, error paths) before any code — the DoD lines name only headline events, and the
+reviewer verifies the implementation against the design note.
+
 These units are NOT mechanical; each gets a **design note in the journal before any code**:
-- **`DOD-END-ARCH-1`** — the determination (ingress shape, payload split, where `same_operator` lives,
-  where the consent state lives, vocabulary, expiry). Its OUTPUT is the architecture the milestone
-  builds against.
+- **`DOD-END-ARCH-1`** — the determination. The ingress SHAPE is settled (`M10B-D2`) and so are
+  `same_operator` placement (`M10B-D3`), the pending surface (`M10B-D5`) and vocabulary (`M10B-D7`) —
+  what remains is the detail those decisions opened: the intake-key distribution + rotation question,
+  the queue's ack/poison and retention semantics, how an account subject is named at intake, the payload
+  split, where the consent state physically lives, and expiry. Its OUTPUT is the architecture the
+  milestone builds against.
+- **`DOD-END-QUEUE-1`** — the sealed submission queue: schema (and the test asserting no plaintext, no
+  payload, no PII), exactly-once drain, poison handling, retention. It carries the milestone's directory
+  migration, so it is designed BEFORE the deploy is batched, not during.
 - **`DOD-END-SCAN-1`** — the deterministic scanner suite, its versioning, and what "byte-identical
   across nodes" obliges when intake is a portal singleton at launch.
 - **`DOD-END-ACCEPT-1`** — the consent state model: where it lives, what transitions exist, and how a

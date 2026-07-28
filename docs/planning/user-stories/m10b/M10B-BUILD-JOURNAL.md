@@ -75,3 +75,65 @@ someone else's. Carried as `DOD-END-REVOKE-2`, and without it D-19 is nominal.
 **Next unit:** `DOD-END-ARCH-1` — the determination. It gates every build line, and it carries the
 three flagged forks (endorser-learns-of-refusal, where `same_operator` lives, and the
 attestation-vs-endorsement vocabulary).
+
+---
+
+## Entry 1 — DoD review + every open fork closed (2026-07-28)
+
+**What this was.** A pre-build read of the DoD against the code as it actually is, looking for what
+would stall or mislead an unsupervised overnight run. Andre then answered every open fork in one pass,
+so the milestone starts with nothing parked. Decisions landed in the DoD as `M10B-D2` … `M10B-D8`; this
+entry records what the review found and what was verified, not the decisions themselves.
+
+**The finding that mattered most: the ingress shape had no plumbing on either candidate path, and the
+DoD presented it as a fork for the coder to settle.** Verified rather than assumed:
+
+- cello-portal has **no transport stack** — `package.json` carries `@cello-protocol/crypto` and
+  `protocol-types` only; no libp2p, no `client`, no `transport`. A "portal-backed intake agent" in
+  spec §7's literal sense means running a persistent libp2p daemon inside a Next.js app on Fargate.
+- The daemon has **no portal-facing anything** — no portal URL, no portal HTTP client, no portal
+  package, in any `core/*/src`. A daemon→portal call would be the first such coupling in the system.
+
+So both candidates were greenfield, and the DoD asked a coder to pick one at 3am under a spec sentence
+that reads like a mandate. That is how a night gets burned.
+
+**Andre's call, and why it beat the recommendation.** The initial recommendation here was the direct
+signed portal API call (smallest diff). Andre pushed back — *"shouldn't this go through the directory…
+I'm kind of loath to put that directly into the portal"* — and the instinct was right. The deciding
+argument is the **migration trap**, which the small-diff framing had missed: spec §7's destination is
+per-node intake, and the amendment's promise that moving there is *"a routing change, not a migration"*
+holds only if the CLIENT's wire contract already points at the directory. With a daemon→portal call,
+moving intake later changes every installed client — stranding exactly the operators the launch-triage
+lens says not to strand. Full reasoning and the rejected alternatives: `M10B-D2`.
+
+**Six other gaps, all closed in the DoD:**
+
+1. `DOD-END-PLAYBOOK-1` demanded "a SECOND client-sourced type" while the scope fence called a second
+   type scope creep. Resolved the way M10's canary did — a throwaway (`client_canary`), registry-retired
+   after the run, with an explicit "do not reach into the parked commercial family" fence.
+2. Delivery to a subject who never acted was unspecified. Andre: it is the existing pickup path, no new
+   trigger — if the daemon is down the envelope sits and lands on next start. Added, with the
+   subject-offline case as journey step (a2). The one genuinely new thing is cross-account fan-out.
+3. The D-8a anonymous-default clause was unimplementable — an endorsement has no anonymous variant, and
+   a spec-fidelity reviewer would have blocked on it. Closed by `M10B-D8`.
+4. Observability ACs were declared blocking on every line but named on one. The DoD now delegates the
+   full event set to each unit's design note, which is where it can actually be enforced.
+5. How Bob names an account subject when he only holds an agent pubkey — required by journey case (c),
+   answerable nowhere. Scoped into the determination with a working answer (portal resolves agent →
+   account; no account handle crosses the wire).
+6. `DOD-END-SUSPEND-1` named no mechanism. It rides the same TTL-re-check as withdrawal, with
+   reversibility as the distinguishing constraint, plus a verify-first note on whether the directory can
+   join a suspended account to its agents' issued signals.
+
+**Two calls made here rather than escalated.** The quota is enforced **per account**, not per agent —
+Andre's number stands, but a per-agent cap is bypassed by spinning up agents, which is the identical
+farming hole `INV-NO-SELF-STANDING` exists to close. And a re-issue after refusal **counts** against the
+quota, or refuse-and-retry is an unbounded loop. Both recorded in `M10B-D6`.
+
+**One inherited inconsistency to close when `DOD-END-QUOTA-1` lands:** `server-infrastructure.md` G-17
+still specifies 10 endorsements/month per agent. `M10B-D6` supersedes it. Two live numbers for one knob
+is how the wrong one gets implemented.
+
+**Next unit:** `DOD-END-ARCH-1`, now narrower — the shape is decided, and what it owes is the detail
+those decisions opened: intake-key distribution and rotation, queue ack/poison and retention, account-
+subject naming, the payload split, where the consent state physically lives, and expiry.
