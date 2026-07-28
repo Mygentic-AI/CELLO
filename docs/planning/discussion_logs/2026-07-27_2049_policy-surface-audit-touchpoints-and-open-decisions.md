@@ -719,3 +719,58 @@ Andre's clarifications, which are the substance of the decision:
 Supporting fact that settles the privacy objection to always-answering: the directory already tells any
 querier whether an agent is online (the same finding that deferred `DOD-CONTACT-1`'s presence clause,
 M8C D16). Silence therefore hides nothing that is not already public.
+
+### D-6 — DECIDED: no Do-Not-Disturb state at launch
+
+Away mode already delivers the substance — the operator is not interrupted, the sender is not left
+hanging. Skipping DND drops the inbound matrix from sixteen cells to twelve and parks the VIP-bypass
+question rather than shipping it. **VIP remains a limits/priority tier with no bypass power** — consistent
+with INV-TIER-BOUND and with Andre's rule that the trust gradient and the scrutiny gradient must not point
+the same way.
+
+### D-7 — DECIDED: blocked is a wall inbound, a stop sign outbound
+
+**One flag, two behaviours**, because the risk differs by direction: inbound you are defending against
+*them*; outbound you are defending against *your own agent* being talked into it.
+
+- **Inbound:** absolute. A blocked sender gets a definite no. No override.
+- **Outbound:** your agent REFUSES and tells you why — *"you blocked them on ⟨date⟩; to call anyway, run
+  this."*
+- **The override makes ONE call and expires. It does NOT unblock them.** Unblocking stays a separate,
+  deliberate act.
+- **Both the refusal and the override are logged**, so "I called someone I had blocked" leaves a trail.
+
+Rejected: a second `blocked_outbound` setting (needless), and no-override-at-all (forces an unblock the
+operator may not want).
+
+### D-8 — DECIDED: the default floor is verified email + verified phone
+
+Not "require nothing." **Andre: it is impossible to have truly nothing** — every registered agent holds two
+automatic trust signals, a verified email and a verified phone. You cannot sign up without them.
+**Absence of those two therefore means a rogue agent, not a shy stranger**, and is the correct thing for
+the floor to refuse.
+
+**Collision found while deciding this, and fixed by the same decision:** disclosure is currently gated at
+`tier >= KNOWN` (`outbound-sessions.ts:183`), so an unknown sender presents NOTHING — and would fail a
+floor asking for the two things they actually have. Both sides behave correctly and first contact becomes
+impossible. So:
+
+- **Baseline signals (email + phone) are always presented, to everyone.** They are the price of admission,
+  not a selective disclosure.
+- **Everything else stays operator-chosen** (see the disclosure policy below).
+
+To confirm at build time: presenting these must prove *"this agent has a verified email"* without
+revealing the address — that is what the no-PII rule requires and what makes always-present safe.
+
+### D-8a — DECIDED: outbound trust-signal disclosure policy (Andre, stated directly)
+
+- Per-send controls to include or omit individual signals **already exist**.
+- **Default: everything goes out.**
+- **For any signal with an anonymous and an identified variant, the default is the ANONYMOUS one.**
+  Identified means it carries the account name (e.g. your GitHub handle, so someone can go look at it);
+  anonymous attests to properties of the account without naming it.
+
+**Defect logged against this policy:** the current `tier >= KNOWN` disclosure gate contradicts "everything
+goes out by default" — it sends a stranger nothing at all. The gate's instinct is backwards for first
+contact: withholding from someone you already distrust is reasonable, withholding from someone who has
+never met you just means they cannot verify you. Fix with D-8's baseline split.
