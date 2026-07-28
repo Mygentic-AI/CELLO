@@ -185,7 +185,7 @@ description: >
   (`packages/interfaces/`), selected by `CELLO_ENV`/config at the composition root, lazy-imported
   (M12-D5), with local stubs. Set per M12-D6: **GCS cloud-storage + GCS audit-log + Cloud KMS
   envelope key** (Parameter Manager dropped — the directory boots from the manifest + relay
-  self-registration; empty-registry is non-fatal). — 🟡 BUILT, NOT YET LIVE-VERIFIED. All three
+  self-registration; empty-registry is non-fatal). — ✅ PROVEN ON REAL CLOUD. All three
   adapters implemented behind the existing interfaces with injected clients, 10 unit tests green:
   `GcsCloudStorageProvider` (404→`undefined` parity with S3's NoSuchKey; a 403 PROPAGATES rather
   than masquerading as an empty bucket), `GcsAuditLogShipper` (write-through per entry like the S3
@@ -195,9 +195,17 @@ description: >
   Cloud KMS rotates versions server-side). Composition root selects on a new `CELLO_CLOUD`
   (`aws`|`gcp`, default `aws` so every existing deployment is unchanged; an invalid value exits 1
   rather than silently falling back to AWS adapters on a node with no AWS credentials). All GCP
-  imports are lazy (M12-D5) so no AWS node or local run loads the GCP SDK. **Owed:** live proof
-  against real GCS/KMS — that belongs to DOD-NODE-DIR-GCP-1 (first real GCP directory), plus the
-  IaC for the bucket + key ring. → Entry 16
+  imports are lazy (M12-D5) so no AWS node or local run loads the GCP SDK. — ✅ **REAL-CLOUD PROOF
+  RUN** on the live `gcp-use1` node, inside its own container, as its own workload identity, against
+  its own resources. **KMS:** `{"kms_roundtrip_ok":true,"plaintext_bytes":32,"ciphertext_bytes":112,
+  "ciphertext_is_not_plaintext":true}` and, on garbage ciphertext, `{"fail_closed":true,
+  "threw":"3 INVALID_ARGUMENT: Decryption failed: the ciphertext is invalid."}`. **GCS storage:**
+  `{"missing_object_is_undefined":true,"missing_bucket_throws":true}` — the S3-parity distinction
+  holding against the real service. **GCS audit:** object present at
+  `gs://cello-audit-gcp-use1/audit/2026-07-28/…jsonl` (123 bytes), verified from OUTSIDE the node.
+  IaC for the buckets + key ring landed with DOD-NODE-DIR-GCP-1 (`storage.tf`, `kms.tf`). The
+  `as never` cast on the real KMS client is gone — `KmsLike` now declares the client's real
+  3-tuple return, so the adapter has a structural check again. → Entries 16, 18, 22
 
 ## Tier P2 — Wave 1: complete CELLO on GCP, standalone
 
