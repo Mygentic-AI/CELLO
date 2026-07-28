@@ -233,9 +233,25 @@ the additions M10B is accountable for.
       §5a directly.
     - **The submitter return path** was missing entirely → `M10B-D19`. "Nothing parked" in Entry 4 was
       wrong.
-    Still owed before this line can go ✅: the queue table shape as an exact column set, ack/poison
-    semantics, and drained-row retention (all now folded into `M10B-D19` + the queue design note), then
-    a second reviewer pass. — 🟡 reviewed, four findings open
+    **THREE REVIEW PASSES, ALL "DO NOT FLIP" (Entries 7, 10, 14). Read the decisions, not this
+    summary — many are on their second or third revision.** Superseded, do not build: `M10B-D12`,
+    `D-12r`, `D-12r2`, `D-12r3` → **`D-12r4`**; `D-14`, `D-14r` → **`D-14r2`**; `D-19` → **`D-25r2`**;
+    `D-26r` → **`D-26r2`**.
+    **The four items still open before this line can go ✅** (third review, Entry 14):
+    1. **F3** — re-run the corrected `D-12r4` expression **inside V46's real `CASE`**, with the
+       supersession ordering, and re-measure. The previous table was measured on a different expression
+       than the DoD prescribed, and the prescribed one was a **no-op**.
+    2. **F1** — `submission_results` PK gains its node component (`D-25r2`), or a natural-key duplicate
+       through the designed failover path wedges **all** federation.
+    3. **F4** — wire `linkAgentToAccount()` to a portal route, or `operator_linkage_unresolved` is a
+       dead end (`D-26r2`).
+    4. **F5** — `DOD-END-SCOPE-FIX-1` rescoped to the agent-subject half; the account-subject half needs
+       a decision on where the daemon gets its own `accountId`.
+    **Closed and verified across the three passes:** the notarization path needs no work; the intake key
+    rides the manifest; `expires_at: null` is safe (cite `listAllActive`, **not** the dead
+    `listPresentable`); an unknown inbound frame is **ignored, not fatal**, so a new frame kind is
+    genuinely additive; the withdrawal carrier (`D-28`). **Parked for Andre:** `DOD-END-DISCOVER-1`.
+    — 🟡 three passes, four findings open
 
 ---
 
@@ -376,7 +392,15 @@ the additions M10B is accountable for.
   signal regardless of which agent is presenting** — `INV-AGENT-SCOPED`, live, in M10, today. This
   lands **before** the consent column (`M10B-D14r2`), or consent is bolted on top of a scoping hole and
   the negative consent tests would pass against a path that was never scoped. Fix in the SQL, not a JS
-  branch. Standing rule: a real defect found outside the diff gets fixed, not deferred. — ❌
+  branch. Standing rule: a real defect found outside the diff gets fixed, not deferred.
+  > **RESCOPED (third review F5) — as first written this unit COULD NOT START, and it is sequenced
+  > first.** `listPresentable`'s SQL needs `opts.accountId`, and **`accountId` does not exist anywhere
+  > in the daemon's production code** — which is precisely *why* the function has no callers.
+  > `M10B-D18` resolves agent→account on a directory route **for the portal**, not for the daemon.
+  > **Scope now: the `subject_kind='agent'` half only** — it needs no account and closes the
+  > agent-subject scoping hole immediately. The account-subject half is **deferred behind a named
+  > prerequisite** (decide where the daemon obtains its own `accountId` — persisted at registration, or
+  > returned on the signaling auth response) rather than assumed into existence. — ❌
 
 ---
 
@@ -721,8 +745,29 @@ the discussion-of-record. Restated here because this is the milestone that imple
   `BOOL_OR(status='revoked')` on exactly ONE row — the `revoker ≠ issuer` case, which is the F6 defect
   being fixed.** Every convergence and rotation property is preserved unchanged. This validated the
   *expression*; substituting it into V46's real `CASE` is the first task of Tier 3.
-  It **supplements** `BOOL_OR(r.status = 'revoked')`, never replaces it — the naive replace reading
-  breaks portal revocation entirely. `revoker_pubkey` must be **`TEXT`**: `bytea[] && text[]` and
+  > ### 🚨 `M10B-D12r4` — CORRECTED (third review F3). The clause below was WRONG and mandated a NO-OP.
+  > **It REPLACES the `BOOL_OR(r.status = 'revoked')` branch. It does NOT supplement it.** The original
+  > text said the opposite, while citing Entry 11's table — which was **measured on the replacement
+  > form**. Mechanism: `signal-write.ts:634–641` inserts the tombstone with `status='revoked'` and
+  > **deliberately leaves the real notarization row `active`**, so `BOOL_OR(r.status='revoked')` fires
+  > on *every* tombstone regardless of authority. Keep it as a leading branch and the authority
+  > branches are **never reached** — the unauthorized-tombstone case still reads `revoked` and the F6
+  > fix does nothing. **Re-measured (Entry 14): supplement → `revoked` (no-op); replace → `active`
+  > (correct).**
+  > **Two further corrections:**
+  > - **A FIFTH branch is required**, ordered second: `BOOL_OR(status='revoked' AND NOT is_tombstone)`
+  >   → `'revoked'`. A real non-tombstone row carrying `status='revoked'` reads `revoked` today and
+  >   would read `active` under the bare replacement. No writer produces it now — but `UPDATE` is
+  >   granted, `'revoked'` is in the column `CHECK`, and `signal-write.ts:293` already does
+  >   `UPDATE … SET status='superseded'`. This is the **identical** §5a argument used to justify branch
+  >   2 for the legacy-tombstone case, which was not applied to this expression.
+  > - **The branch-order claim was misstated.** All of these branches yield `'revoked'`, so order
+  >   *among them* is immaterial. What IS load-bearing and was unstated: **the revoke branches must all
+  >   precede the SUPERSESSION branches**, or a revoked-and-superseded record reads `superseded`,
+  >   contradicting V46's rule that revoked is the strongest statement.
+  > **Scope of the evidence, honestly:** "differs from today on exactly one of six shapes" was true only
+  > of the six shapes chosen. Re-run the full table on the corrected expression **inside V46's real
+  > `CASE`** as the first task of Tier 3. `revoker_pubkey` must be **`TEXT`**: `bytea[] && text[]` and
   `text[] && varchar[]` both error at `CREATE VIEW` time. Two things D-12r got right and are confirmed:
   the tombstone INSERT is genuinely blind (no `SELECT` between auth and insert), and a multi-issuer
   hash group cannot exist because `issuer_pubkey` is inside the preimage — so there is no
@@ -744,7 +789,25 @@ the discussion-of-record. Restated here because this is the milestone that imple
   > replicated table.** `directory-frames.ts` is an open additive set (~25 outbound encoders), and
   > `trust_signal_pickup` + `TrustSignalAck` is the exact push-then-ack-deletes precedent. Table:
   > `submission_results (agent_id, submission_id, sealed_result, created_at)`, PK
-  > `(agent_id, submission_id)`, **one row per event, NO supersede-by-kind** (that upsert is what killed
+  > `(agent_id, submission_id)`, **one row per event, NO supersede-by-kind**
+  > — **PK CORRECTED to `(agent_id, submission_id, writing_node)` as `M10B-D25r2` (third review F1).**
+  > A natural-key PK on a **replicated** table can **wedge ALL federation**: a subscriber's apply worker
+  > enforces PK/UNIQUE, so one duplicate stops the *entire* subscription — every published table, not
+  > just this one (V46's header documents this, measured). And the duplicate arrives through the
+  > **designed** path: the portal reaches the directory via an ordered failover list, so write-to-A →
+  > response lost → fail over to B → two rows, identical natural key, both replicate.
+  > `ON CONFLICT DO NOTHING` does not help — replication applies the **row**, not the statement.
+  > **The `pickup_queue` precedent does not transfer:** it is safe because it is `BIGSERIAL` and
+  > `setup-replication.sh` staggers sequences into per-node residue classes so cross-node collision
+  > cannot occur — a property a natural key does not inherit. Mirror V46's own
+  > `(signal_hash, accepting_node)`; dedupe by `(agent_id, submission_id)` on the drain; ack deletes
+  > all copies for the pair.
+  > **Also (third review F2) — name the skew symptom:** `decodeInboundSignalingFrame` returning `null`
+  > replies `not_authenticated`, so an upgraded daemon acking to a directory node that has not yet taken
+  > this migration gets an **auth-flavoured name for a version-skew bug**. Directory nodes are sovereign
+  > and deploy independently per region, so this is the *normal* rollout case, not an edge. Add an
+  > `unsupported_frame` reply carrying the received `type`; until then it is a documented symptom so the
+  > first operator to hit it is not sent to debug keys. (that upsert is what killed
   > `M10B-D19`), ack scoped to `(submission_id, agent_id)` like `ackPickupDelete` — an id-only delete
   > would let any authenticated agent wipe another's undelivered results.
   > **It IS replicated, unlike `submission_queue` (`M10B-D21`), and the asymmetry is direction not
@@ -806,6 +869,13 @@ the discussion-of-record. Restated here because this is the milestone that imple
      this a peer node accepts whatever revoker the originating node wrote — one compromised node could
      forge any revoker and the other two would treat it as authoritative, which is exactly where
      `M10B-D12r3`'s read-time defense stops working.
+     > **CORRECTED (third review F6) — this is AUDIT EVIDENCE, not a defense, and must be labelled as
+     > such.** Nothing verifies the persisted signature: `M10B-D12r4`'s read path is a **SQL view**, and
+     > a view cannot check Ed25519. So a forged tombstone still reads `revoked` on all three nodes — the
+     > column makes forgery *detectable in principle* and prevents nothing. NO CONSUMER, NO SHIP applies:
+     > either name the verifier (a subscriber-side validation pass, or verify-on-read before serving a
+     > `revoked` verdict) or state plainly that the compromised-node case remains **open**. Claiming a
+     > mitigation that mitigates nothing is worse than naming the residual.
   **Also settled:** a withdrawal does **not** count against `DOD-END-QUOTA-1`. The quota caps issuance
   and a withdrawal issues nothing; charging it would penalise the correct behavior of retracting a bad
   endorsement.
@@ -833,6 +903,19 @@ the discussion-of-record. Restated here because this is the milestone that imple
   > `operator_linkage_unresolved` must tell the operator to link an account in the portal, or a bare
   > cause reads as a bug in a path they cannot see. Reverse: cheap — requiring an account later is a
   > registration policy change, not a data migration.
+  > **CORRECTED as `M10B-D26r2` (third review F4). The refuse-at-intake choice STANDS; two claims
+  > around it were wrong.**
+  > - **The near-zero blast-radius claim is WITHDRAWN — and it is falsified by the very code D-26r
+  >   cites.** A *pre-auth* registration whose `resolveAccountId` throws is caught, logged
+  >   `preauth.account.link.failed`, falls through with `accountId` still `null`, and returns
+  >   `register_success`. So one transient DB error at registration produces an account-less agent on
+  >   the **modern** path, not only the legacy one.
+  > - **The refusal currently points at a flow that DOES NOT EXIST.** `linkAgentToAccount()` exists and
+  >   `V28` grants the UPDATE it needs, but it has **zero production callers** and no portal route
+  >   touches `agent_profiles.account_id`. So "link an account in the portal" is a dead end — the exact
+  >   error-fidelity failure D-26r claimed to avoid. **Prerequisite:** wire `linkAgentToAccount()` to a
+  >   portal route before `operator_linkage_unresolved` ships, or the refusal is unactionable and a
+  >   transient error becomes a permanent, unannounced disqualification.
 - **M10B-D27 (2026-07-28, from second-review H4) — the retention ordering in Entry 8 was BACKWARDS; the
   queue-driven rule in `M10B-D11` stands.** Entry 8 wrote "sweep TTL **longer** than the intake-key
   retention window" — the direction that *guarantees* stranding, because a row then outlives the key it
