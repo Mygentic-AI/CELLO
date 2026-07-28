@@ -905,3 +905,108 @@ refusal produces a *different* `submission_id`. Poison leaves the queue and emit
 reply attempted. Sweep TTL exceeds intake-key retention (asserted on the constants, so the F5 window
 cannot silently invert). Drain enumerates all nodes — the revert test here is a two-node fixture where
 a `#tryEach`-based drain collects only one.
+
+---
+
+## Entry 9 — DESIGN NOTE — `DOD-END-DELIVER-1` (written before any code) — 2026-07-28
+
+**This note exists to answer the one question Entry 6 deliberately refused to answer**, plus the
+cross-account fan-out the DoD names as the only genuinely new thing in delivery.
+
+**Target behavior (one sentence).** Two different people endorse Alice while her daemon is offline;
+when she next starts, **both** endorsements are waiting, pending her decision, and nothing errored.
+
+**Spec anchors.** M10-D22 (the sealed pickup transport), `M10B-D14r` (consent state), spec §7 (*"Bob's
+role ends at submission"*), journey cases (a2) and (b). Entry 6 is the finding this closes.
+
+### Entry 6's open question, now ANSWERED — the poison pill cannot return
+
+Entry 6 proposed re-keying the pickup uniqueness on `(agent_id, signal_kind, signal_hash)` but refused
+to ship it, because `V37__pickup_queue_one_pending_per_kind.sql` exists for **two** reasons and only one
+of them was obviously satisfied. Both are now checked against the code as it actually is.
+
+**Reason 1 — the poison pill. It is structurally impossible now.** V37's stated fear: a stale
+undelivered row *"hashes to the SUPERSEDED identity-tree anchor and re-fires `hash_mismatch` forever."*
+That failure needs a **separate anchor** for the row's hash to disagree with. There isn't one:
+- `V48__drop_identity_tree_entries.sql` **dropped the anchor table outright** — *"M10's architecture
+  replaced this with a self-contained delivery (`pickup_queue.signal_hash`, V47) anchored to
+  `signal_records` (V46)."*
+- Zero live references remain: `grep identity_tree_entries packages/directory/src` outside tests
+  returns nothing.
+- The daemon's surviving `hash_mismatch` (`trust-signal-store.ts:328–331`) now compares the delivered
+  envelope against **the claimed hash carried on its own pickup row**. A mismatch therefore means the
+  row's hash disagrees with the row's own ciphertext — corruption or tampering, never staleness. A
+  stale-but-internally-consistent row cannot produce it.
+
+So the poison pill was a property of the **JOIN**, and M10 removed the JOIN. V37 outlived its reason by
+one migration.
+
+**Reason 2 — the READ COMMITTED race. Preserved exactly.** V37's other job was stopping two concurrent
+same-`(agent, kind)` enqueues from both surviving. Under `(agent_id, signal_kind, signal_hash)` two
+concurrent enqueues of the *same* content still collide on the unique index and one takes the
+`DO UPDATE` — the duplicate-row race stays closed. Two concurrent enqueues of *different* content both
+survive, which is now the required behavior rather than the bug.
+
+**Therefore `M10B-D23`** (below): re-key it. Entry 6's caution is discharged by evidence, not by
+argument.
+
+### The genuinely new thing: cross-account fan-out
+
+Every M10 delivery seals to the *subject's own* agents, and the subject is the account that caused the
+mint. An endorsement inverts this: the portal mints because **Bob** submitted, and seals to **Alice's**
+agents. Two consequences worth stating because they are easy to get wrong:
+1. The fan-out set is resolved from the **subject**, never from the submitter — the same
+   `listAgents(accountId)` the portal already has, but keyed off the resolved subject account
+   (`M10B-D18`). Using the submitter's set would deliver Bob's endorsement to Bob.
+2. For `subject_kind: agent` the fan-out is a single agent; for `subject_kind: account` it is every
+   agent under the account, and per `M10B-D9` **consent is recorded once per signal, not once per
+   agent** — four agents must not produce four consent states for one object. The delivery is
+   per-agent; the decision is per-signal.
+
+**Invariants at stake.** `INV-CONSENT` — delivery lands `pending` (`M10B-D14r`), so an undecided
+endorsement is unpresentable from the instant it arrives, with no window where the default is wrong.
+`INV-AGENT-SCOPED` — the fan-out is bounded by the subject's own account; a mis-resolved subject is a
+cross-tenant delivery, so the resolution failure must **refuse**, never fall back to the submitter.
+`INV-ZEROBUMP` — the re-key is on `signal_hash`, which is content; the cardinality change applies to
+every signal family uniformly and no branch on `'endorsement'` appears.
+
+**Approach + rejected alternative.** Change the uniqueness, keep everything else. **Rejected: leave V37
+alone and give endorsements a distinct `signal_kind` per submission** (e.g. `endorsement:<hash>`) so
+they never collide. It needs no migration — and it is a type-shaped hack that smuggles content into a
+kind field, breaks the kind's meaning for every other consumer, and would be a blocking
+`INV-ZEROBUMP` finding. Cheap and wrong.
+
+**Falsification pass.**
+1. *Does the drain still work?* `drainPickupForAgent` orders by `created_at, id` and has no per-kind
+   assumption — it returns rows, plural, already. Checked the query, not the comment.
+2. *Responsibility?* The cardinality belongs in the schema, not in application code: V37's own header
+   says app-level supersede alone was best-effort under READ COMMITTED. Keep it DB-enforced, just with
+   the right key.
+3. *Redundancy?* Supersession is now expressed once (via `supersedes_hash` → `signal_records_effective`
+   → the daemon cascade, proven by M10 Entry 47), instead of twice with the weaker copy silently
+   dropping data.
+4. *What else breaks?* A re-minted phone signal now leaves its predecessor's pending row instead of
+   overwriting it, so the daemon may receive both. That is safe — the wallet is content-addressed, both
+   rows verify, and the cascade marks the older superseded — but it is the assertion the test plan has
+   to prove rather than assume.
+
+**Decisions this note makes.**
+- **M10B-D23 — `pickup_queue`'s pending uniqueness re-keys to `(agent_id, signal_kind, signal_hash)`**
+  (V50, riding the same batched deploy). Both of V37's rationales are discharged: the poison pill needed
+  the `identity_tree_entries` anchor, which V48 dropped, and the duplicate-row race stays closed because
+  identical content still collides. Without this, the second endorsement of any subject is **silently
+  destroyed** (Entry 6).
+- **M10B-D24 — the fan-out set is resolved from the SUBJECT's account, and a failed resolution
+  REFUSES delivery** with a named cause rather than falling back to any other agent set. Per §5a, and
+  because the fallback failure mode here is a cross-tenant delivery of a third party's endorsement.
+
+**Nothing parked.**
+
+**Test plan sketch (red first).** **The headline test, and it must be red first against today's schema:**
+two distinct endorsements for one offline subject → both rows persist → both arrive on next start →
+both land `pending`. Re-mint of the same envelope still dedups to one row. Concurrent enqueues of
+identical content produce one row (V37's race, still closed). A superseding phone signal delivered
+alongside its predecessor leaves the wallet with the predecessor marked `superseded` — the M10 Entry 47
+behavior, asserted so the V50 change cannot regress it silently. Account-subject fan-out to three agents
+produces three deliveries and **one** consent state (`M10B-D9`). A subject whose account will not
+resolve gets a refusal, not a delivery.
