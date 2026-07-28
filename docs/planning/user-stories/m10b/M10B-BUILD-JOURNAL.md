@@ -632,3 +632,119 @@ uniformly, which is the correct generalisation.
 batched deploy and lands 🟡 tonight. It also means `DOD-END-DELIVER-1` is NOT the free ride the DoD
 implies — it has real directory work, and the DoD's "no new transport" claim survives while its "no
 type-specific handling / reuses the generic path unchanged" claim does not.
+
+---
+
+## Entry 7 — `DOD-END-ARCH-1` REVIEW: four blocking findings, all upheld; D-12 and D-14 replaced — 2026-07-28
+
+`cello-unit-reviewer` (no model override) returned **do not flip 🟡 → ✅**, with four blocking findings.
+It independently re-derived every code claim in Entry 4 and all of them held. The findings are against
+the **decisions**, not the evidence — which is the right outcome for a determination review, and it
+means Entry 4's verification work stands while three of its conclusions do not.
+
+**Both findings I could falsify, I tried to falsify, and could not:**
+- §5a really does say, verbatim: *"a missing or unrecognized consent state must make an endorsement
+  UNPRESENTABLE, never presentable-by-default; a missing operator-linkage lookup must refuse the mint,
+  never mint unflagged"* (`M10B-PROCEDURE.md:469–470`). `M10B-D14` violated the milestone's own rule.
+- The agent-pubkey → account resolution genuinely does not exist. The directory has
+  `/internal/agents-by-account` (the **forward** direction) and the reverse join lives in SQL at
+  `internal-api-server.ts:791` but is not exposed on any route.
+
+**One correction to the reviewer, on a point of fact.** It reports V1 and `M10B-D12` as "in direct
+contradiction" because D-12 is write-path work while V1 says the write path "needs NOTHING". V1 was
+scoped to the **notarization/submit** path (`submitSignal`), and `DOD-END-REVOKE-2` was always
+separately scoped as directory work inside the same batched deploy. So that specific criticism is
+overstated. **The substance of F4(a) stands entirely** and is the most valuable finding of the review —
+it is just not a contradiction with V1.
+
+### F1 (upheld) — the account resolution is missing, and it blocks four lines, not one
+
+The reviewer is right that Entry 4 declared this clause settled without addressing it, and right that
+the blast radius is bigger than the DoD frames: `DOD-END-SUBJECTKIND-1` (both branches — `same_operator`
+needs *both* parties' accounts), `DOD-END-QUOTA-1` (a per-**account** quota, from a submission whose
+only identity is an agent pubkey — without the lookup the cap degrades to per-agent, which is precisely
+the farming hole `INV-NO-SELF-STANDING` exists to close), `DOD-END-SUSPEND-1`, and `M10B-D3`'s
+composition point. Under §5a every mint refuses today.
+
+**Where the reviewer under-sold it: this is not net-new architecture.** There is an exact working
+precedent — `/internal/account-by-email-stub`, consumed through `resolveAccountByEmailStub` on the
+`DirectoryClient` interface with all three implementations already in place (`http-client.ts:47`,
+`failover-client.ts:24`, `stub-client.ts:62`, plus the interface at `client.ts:62`). The new route is
+that shape with a different lookup column, and it inherits the failover the sovereign-node invariant
+requires for free. → **`M10B-D18`**.
+
+### F2 (upheld) — there is no return path to the submitter, and it is a decision of D-11's weight
+
+Entry 4 gave the intake key a full decision with rejected alternatives and gave the *reverse* direction
+nothing — while three DoD lines require a named cause to reach the submitting agent
+(`DOD-END-INGRESS-1`, `DOD-END-QUOTA-1`, `DOD-END-SUBJECTKIND-1`). The reviewer's error-path trace is
+correct and is the thing to keep: Bob's last log line is `signal.submission.queued`, and 24 hours later
+the row is swept. **A designed-in silent failure on the milestone's primary flow.** I had noticed this
+question while reading `pickup_queue` and did not carry it into the note — that is the actual process
+failure here, and it is why "Nothing parked" was wrong. → **`M10B-D19`**.
+
+### F3 (upheld) — `DEFAULT 'accepted'` is fail-open, on a false dichotomy
+
+The reviewer dissolved my falsification-pass #4 with one line of SQL: `DEFAULT 'pending'` **plus a
+backfill `UPDATE` in the same migration** preserves every existing row *and* leaves future inserts
+fail-closed. My reasoning evaluated only the migration-time consequence and never the ongoing-insert
+one — with `DEFAULT 'accepted'`, `INV-CONSENT` holds only because the delivery path *remembers* to
+write `'pending'`, so any second write path (`cello_restore`, a future client-sourced type, a refactor)
+silently makes an unconsented signal presentable. That is the silent-fallback shape on the milestone's
+headline invariant. → **`M10B-D14` REPLACED**.
+
+### F4 (upheld, and the review's best finding) — D-12 made withdrawal impossible
+
+The argument, which I missed entirely: `revokeSignal` gates on `verifySignedRequest(..., "submitter")`,
+and per V1 **the portal is the only submitter — Bob never submits.** So Bob's withdrawal reaches the
+directory signed by the *portal's* key. D-12's predicate (`tombstone.requester == record.issuer_pubkey`)
+therefore never matches for an agent-issued record, and **every withdrawal is inert, silently.**
+`DOD-END-WITHDRAW-1` and D-19 — one of the two mechanisms `M10B-D1` says the milestone *is* — become a
+no-op that raises no error.
+
+F4(b) (a tombstone-only hash would read `active`, so the directory would confirm a hash it has only
+ever seen a revocation for — F4 reborn) and F4(c) (`BOOL_OR(… = MIN(…) FILTER …)` is a **nested
+aggregate**, which SQL forbids) are both correct. → **`M10B-D12` REPLACED by `M10B-D12r`**, worked
+through below because it is the milestone's most safety-critical view.
+
+**Why `M10B-D12r` works where D-12 did not.**
+1. **Bob's identity reaches the directory by being self-certifying, not by being the transport signer.**
+   The revoke body carries an inner authorization signed by the *claimed issuer's* key over
+   `(domain-tag ‖ signal_hash)`. The directory verifies that signature standalone — **no record lookup,
+   so the blind INSERT and its F3/F4 ordering freedom survive untouched.** The transport signer stays
+   the portal; the *authority* is Bob's.
+2. **A new `revoker_pubkey` column**, not an overload of `issuer_pubkey`. The reviewer is right that
+   overloading it collides with the view's placeholder treatment and with
+   `CHECK (issuer_kind IN (…))`.
+3. **The view is expressible in one aggregation level.** Not `BOOL_OR(x = MIN(y))` but array overlap:
+   `ARRAY_AGG(revoker_pubkey) FILTER (WHERE is_tombstone) && ARRAY_AGG(issuer_pubkey) FILTER (WHERE NOT is_tombstone)`
+   — two aggregates combined by an operator, which is legal, unlike an aggregate inside an aggregate.
+4. **Tombstone-only stays fail-closed** (closing F4(b)): if the group has no non-tombstone row, the
+   tombstone is effective, exactly as today. It converges when the record replicates in — and it
+   converges in the **deny → allow** direction, which is the safe direction for a late correction.
+   **The accepted residual, stated rather than buried:** a daemon that checked during that window
+   recorded `revoked`, and client-side revocation is terminal, so an unauthorized tombstone can
+   permanently kill a signal in that daemon. This is bounded by who can write a tombstone at all — only
+   a `submitter`-role key, i.e. the portal — so the read-time check is **defense-in-depth against a
+   compromised or second submitter key**, while primary enforcement is the portal verifying Bob's inner
+   authorization before it signs. That bound must be written into the DoD line, not left implicit.
+
+### Test-teeth findings — all three upheld, and they change the test plan
+
+- The schema-posture test must assert **the exact column set**, not the absence of named columns. As
+  sketched it passes against a column called `meta` holding the same data — it fails the revert test.
+  `DOD-DIR-WRITE-1`'s posture test already does it the strict way; match it.
+- The attribution test must construct **hostile CBOR bytes** carrying an `issuer_pubkey` field and
+  assert the minted record uses the signature-derived value. "Impossible to express" is a type-level
+  claim, not a test.
+- The D-13 projection test is correctly revert-testable — **keep it**, and add the inverse (a `portal`
+  signal must still land in `claim`), or an implementation that drops `claim` for everyone passes.
+- F7's default direction is now an explicit AC: an **unrecognized `issuer_kind` must fall to the
+  untrusted framing**, never to `platform-verified`. Today's ternary does the safe thing by accident;
+  D-13's rewrite must do it on purpose. (The DB `CHECK` admits `directory` while the TS union does not
+  — pre-existing, logged.)
+
+**Status: `DOD-END-ARCH-1` stays 🟡 and Tier 1 does not start.** Four decisions land or change
+(`M10B-D12r`, `D14r`, `D18`, `D19`), the DoD status line that falsely claimed the account-resolution
+clause was settled is corrected, and the determination goes back for a second review pass. Not flipping
+a tag on a unit whose reviewer said do not flip it is the whole point of having the reviewer.
