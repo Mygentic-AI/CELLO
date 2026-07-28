@@ -31,6 +31,14 @@ function canonical(r: PresenceRecord): string {
   return JSON.stringify([r.k_local_pubkey, r.online, r.owning_node_id, r.last_seen_at, r.updated_at]);
 }
 
+/**
+ * The columns this merge consults (updated_at compared; the whole row in the canonical tiebreak).
+ * The Tier-B version summary's `versionColumns` MUST be a superset of this. Asserted in tests.
+ */
+export const PRESENCE_MERGE_COLUMNS: readonly string[] = [
+  "k_local_pubkey", "online", "owning_node_id", "last_seen_at", "updated_at",
+];
+
 export function mergePresence(a: PresenceRecord, b: PresenceRecord): PresenceRecord {
   // updated_at is epoch-MILLIS (~1.7e12, safe under 2^53 — distinct ms never collapse under
   // Number()). If a nanos/micros migration ever pushes it past 2^53, revisit this compare.

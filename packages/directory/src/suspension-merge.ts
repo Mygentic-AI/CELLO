@@ -56,6 +56,15 @@ function tiebreakHash(r: SuspensionRecord): string {
  * Merge two suspension records for the same agent into their converged value. Total, deterministic,
  * commutative, idempotent. See the file header for the order.
  */
+/**
+ * The columns this merge actually consults (OR'd, compared, copied, or tie-broken). The Tier-B
+ * version summary's `versionColumns` MUST be a superset of this — a merge-consulted column absent
+ * from the version hash would leave two nodes silently divergent. Asserted in the version tests.
+ */
+export const SUSPENSION_MERGE_COLUMNS: readonly string[] = [
+  "agent_id", "paused", "burned", "reason", "authorized_by_account", "suspension_seq", "origin_node",
+];
+
 export function mergeSuspension(a: SuspensionRecord, b: SuspensionRecord): SuspensionRecord {
   // Rule 1: burn is monotonic OR, applied regardless of which record wins the seq contest.
   const burned = a.burned || b.burned;

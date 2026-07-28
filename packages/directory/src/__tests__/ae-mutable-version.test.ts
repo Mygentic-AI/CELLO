@@ -16,6 +16,8 @@ import {
   SUSPENSION_VERSION_SPEC,
   PRESENCE_VERSION_SPEC,
 } from "../ae-mutable-version.js";
+import { SUSPENSION_MERGE_COLUMNS } from "../suspension-merge.js";
+import { PRESENCE_MERGE_COLUMNS } from "../presence-merge.js";
 
 describe("DOD-AE-MUTABLE-1: Tier-B version summaries", () => {
   const suspRow = {
@@ -68,5 +70,29 @@ describe("DOD-AE-MUTABLE-1: Tier-B version summaries", () => {
     for (const spec of TIER_B_SPECS) {
       for (const k of spec.key) expect(spec.versionColumns).toContain(k);
     }
+  });
+
+  it("versionColumns ⊇ the merge-consulted set (the load-bearing direction)", () => {
+    // Guards the real invariant: a column the MERGE reads but the version hash omits would leave
+    // two nodes silently divergent. Asserts against the columns each merge module declares it uses,
+    // so adding a field to a merge without adding it to versionColumns fails here.
+    for (const c of SUSPENSION_MERGE_COLUMNS) expect(SUSPENSION_VERSION_SPEC.versionColumns).toContain(c);
+    for (const c of PRESENCE_MERGE_COLUMNS) expect(PRESENCE_VERSION_SPEC.versionColumns).toContain(c);
+  });
+
+  it("normalizes representation — boolean, Date, and their string forms hash identically", () => {
+    // paused/burned/online are BOOLEAN (pg → JS boolean); last_seen_at/updated_at are TIMESTAMPTZ
+    // (pg → JS Date). Two nodes on different drivers/casts must still agree. Was a silent-divergence
+    // bug before normalization.
+    const boolRow = { agent_id: "a", paused: true, burned: false, reason: null, authorized_by_account: null, suspension_seq: "1", origin_node: "n1" };
+    const strRow = { ...boolRow, paused: "true", burned: "false" };
+    expect(encodeTierBVersion(SUSPENSION_VERSION_SPEC, boolRow).versionHash)
+      .toBe(encodeTierBVersion(SUSPENSION_VERSION_SPEC, strRow).versionHash);
+
+    const ms = 1785200000000;
+    const dateRow = { k_local_pubkey: "aa", online: true, owning_node_id: "n1", last_seen_at: new Date(ms), updated_at: new Date(ms) };
+    const strTsRow = { k_local_pubkey: "aa", online: "true", owning_node_id: "n1", last_seen_at: String(ms), updated_at: String(ms) };
+    expect(encodeTierBVersion(PRESENCE_VERSION_SPEC, dateRow).versionHash)
+      .toBe(encodeTierBVersion(PRESENCE_VERSION_SPEC, strTsRow).versionHash);
   });
 });
