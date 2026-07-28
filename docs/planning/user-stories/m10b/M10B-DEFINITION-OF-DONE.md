@@ -216,15 +216,26 @@ the additions M10B is accountable for.
   - **Expiry.** D-26 gives endorsements no expiry, which is a deliberate exception to Playbook §0's
     "validity window: `expires_at` policy." Confirm `expires_at: null` flows correctly through
     `DOD-VERIFY-1`'s freshness path (spec §14.7) rather than being read as already-expired.
-  - **WRITTEN 2026-07-28 → Entry 4.** Every item above is settled: intake key → `M10B-D11`; revoke
-    authority → `M10B-D12`; the projection split → `M10B-D13`; consent state → `M10B-D14`; payload
-    split, `same_operator` wording, account-subject naming and expiry settled in the note. Nothing
-    parked. Three verified findings changed the plan: the **notarization path needs no work at all**
-    (the portal stays the only submitter — the §4 first-action question dissolves rather than being
-    answered); the revoke fix **cannot be done at write time** (the blind tombstone INSERT is the
-    F3/F4 convergence fix, so the authority join moves into `signal_records_effective`); and
-    `DOD-END-INV-UNTRUSTED` **needs a projection change no DoD line owned**. Directory is at V48 → the
-    queue is **V49**, `OpsAgentExpectedMigrationVersion` → **49**. — 🟡 written, reviewer pending
+  - **WRITTEN 2026-07-28 → Entry 4. REVIEWED, FOUR BLOCKING FINDINGS → Entry 7. STILL 🟡 — Tier 1 does
+    not start.** The reviewer independently re-derived every code claim in Entry 4 and **all of them
+    held**; the findings are against the *decisions*. Standing: the **notarization path needs no work
+    at all** (the portal stays the only submitter — the §4 first-action question dissolves rather than
+    being answered); `DOD-END-INV-UNTRUSTED` **needs a projection change no DoD line owned**
+    (`M10B-D13`); the intake key rides the manifest (`M10B-D11`); expiry closes with no work
+    (`trust-signal-store.ts:437`). Directory is at V48 → the queue is **V49**,
+    `OpsAgentExpectedMigrationVersion` → **49**.
+    **Corrected by the review — do not read Entry 4 alone:**
+    - **The account-subject naming clause was declared settled and was never addressed.** The
+      resolution does not exist; it is `M10B-D18`, and it blocks four lines.
+    - **Revoke authority** → `M10B-D12r`, because `M10B-D12` made every agent-issued withdrawal
+      silently inert (Bob is not a `submitter`, so the portal signs and the predicate never matches).
+    - **Consent state** → `M10B-D14r`; `M10B-D14`'s `DEFAULT 'accepted'` was fail-open and violated
+      §5a directly.
+    - **The submitter return path** was missing entirely → `M10B-D19`. "Nothing parked" in Entry 4 was
+      wrong.
+    Still owed before this line can go ✅: the queue table shape as an exact column set, ack/poison
+    semantics, and drained-row retention (all now folded into `M10B-D19` + the queue design note), then
+    a second reviewer pass. — 🟡 reviewed, four findings open
 
 ---
 
@@ -554,8 +565,37 @@ the discussion-of-record. Restated here because this is the milestone that imple
   — less code, but an unauthenticated distribution channel for a *sealing* key is not a shortcut, it is
   the vulnerability: a substituted intake key means every endorsement Bob writes is sealed to the
   attacker. Also rejected: pinning it in client config, which makes rotation a client release.
-- **M10B-D12 (2026-07-28, `DOD-END-ARCH-1`) — revoke authority is evaluated WHERE THE RECORD IS, not
-  where the revoke lands.** Verified defect (`packages/directory/src/signal-write.ts:561–649`):
+- **M10B-D12r (2026-07-28, `DOD-END-ARCH-1`, REPLACES `M10B-D12` — see Entry 7) — the revoke carries an
+  INNER, SELF-CERTIFYING authorization signed by the claimed issuer.** `M10B-D12` (struck through
+  below) was fatally wrong and the reviewer caught it: `revokeSignal` gates on
+  `verifySignedRequest(..., "submitter")`, and per Entry 4's own V1 **the portal is the only submitter —
+  Bob never submits.** So Bob's withdrawal reaches the directory signed by the *portal's* key, D-12's
+  predicate `tombstone.requester == record.issuer_pubkey` never matches an agent-issued record, and
+  **every withdrawal is inert and silent** — `DOD-END-WITHDRAW-1` and D-19, one of the two mechanisms
+  `M10B-D1` says this milestone *is*, become a no-op that raises no error. The replacement:
+  1. The revoke body carries an inner authorization signed by the **claimed issuer's** key over
+     `(domain-tag ‖ signal_hash)`. The directory verifies it **standalone — no record lookup** — so the
+     blind INSERT and its F3/F4 ordering freedom survive untouched. Transport signer stays the portal;
+     the *authority* is Bob's.
+  2. A new **`revoker_pubkey` column**, never an overload of `issuer_pubkey` (which the view treats as a
+     placeholder and which `CHECK (issuer_kind IN (…))` constrains).
+  3. The effective-status join is **one aggregation level**:
+     `ARRAY_AGG(revoker_pubkey) FILTER (WHERE is_tombstone) && ARRAY_AGG(issuer_pubkey) FILTER (WHERE NOT is_tombstone)`
+     — two aggregates combined by an operator. `BOOL_OR(x = MIN(y))` is a **nested aggregate and is
+     illegal SQL**, which is what D-12 implicitly required.
+  4. **Tombstone-only stays fail-closed**: with no non-tombstone row in the group the tombstone is
+     effective, exactly as today, and it converges deny→allow when the record replicates in. Without
+     this a tombstone-only hash would read `active` and the directory would confirm as live a hash it
+     has only ever seen a revocation for — the F4 failure reborn.
+  **Accepted residual, to be stated in the DoD line and not left implicit:** a daemon that checked
+  during the pre-convergence window recorded `revoked`, and client-side revocation is terminal, so an
+  unauthorized tombstone can permanently kill a signal in that daemon. This is bounded by who can write
+  a tombstone at all — only a `submitter`-role key — so the read-time check is **defense-in-depth
+  against a compromised or second submitter key**, with primary enforcement at the portal verifying
+  Bob's inner authorization before it signs.
+- ~~**M10B-D12** — revoke authority is evaluated WHERE THE RECORD IS, not
+  where the revoke lands.~~ **SUPERSEDED by `M10B-D12r`. Do not build this.** Retained only for the
+  verified defect statement it carries (`packages/directory/src/signal-write.ts:561–649`):
   `revokeSignal` authorises on any active `submitter` key and writes a tombstone that hardcodes
   `'portal'` / `'(tombstone)'`, never reading the target — so one submitter key can kill anyone's
   endorsement. **The complication the DoD does not name:** the blind INSERT is load-bearing. It is the
@@ -582,8 +622,27 @@ the discussion-of-record. Restated here because this is the milestone that imple
   active) rather than implying the content is true. This is the concrete form of "how `INV-FRAMING`
   dies quietly", and it generalises to the whole client-sourced family because it keys on
   `issuer_kind`.
-- **M10B-D14 (2026-07-28, `DOD-END-ARCH-1`) — consent is required by `issuer_kind: agent`, never by
-  type; `consent_state` defaults to `accepted`.** A new column on `wallet_trust_signals` (which already
+- **M10B-D14r (2026-07-28, `DOD-END-ARCH-1`, REPLACES `M10B-D14` — see Entry 7) — consent is required by
+  `issuer_kind: agent`, never by type; `consent_state` is `NOT NULL DEFAULT 'pending'` **with an
+  explicit backfill `UPDATE` in the same migration**, and `listPresentable` treats anything that is not
+  exactly `'accepted'` as unpresentable.** `M10B-D14`'s `DEFAULT 'accepted'` was fail-open on the
+  milestone's headline invariant and violated `M10B-PROCEDURE` §5a in as many words — *"a missing or
+  unrecognized consent state must make an endorsement UNPRESENTABLE, never presentable-by-default"*
+  (verified at `M10B-PROCEDURE.md:469–470`). Its defence rested on a false dichotomy: one extra line of
+  SQL gets **both** properties —
+  ```sql
+  ALTER TABLE wallet_trust_signals ADD COLUMN consent_state TEXT NOT NULL DEFAULT 'pending';
+  UPDATE wallet_trust_signals SET consent_state = 'accepted';  -- pre-existing rows are all portal-issued
+  ```
+  The original reasoning evaluated only the **migration-time** consequence and never the **ongoing-insert**
+  one: under `DEFAULT 'accepted'`, `INV-CONSENT` holds only because the delivery path *remembers* to
+  write `'pending'`, so any second write path — `cello_restore`, a backup import, a future
+  client-sourced type, a refactor — silently makes an unconsented agent-issued signal presentable, with
+  no error and no log. Everything else in D-14 stands: keying on `issuer_kind` (not
+  `type == "endorsement"`) is the generalisation `M10B-D1` demands, and `consent_state` stays distinct
+  from `default_present` (*may* it be presented vs. *include it by default*).
+- ~~**M10B-D14** — `consent_state` defaults to `accepted`.~~ **SUPERSEDED by `M10B-D14r`. Do not build
+  this — it is fail-open.** Original text retained for the reasoning trail: A new column on `wallet_trust_signals` (which already
   carries additive `ALTER TABLE … ADD COLUMN` migrations — `trust-signal-store.ts:184–188`), with
   `listPresentable` filtering on it. **The default direction is a correctness decision, not a style
   one:** `DEFAULT 'accepted'` leaves every existing portal-issued row presentable, and only the
@@ -593,6 +652,36 @@ the discussion-of-record. Restated here because this is the milestone that imple
   generalisation `M10B-D1` demands: every future client-sourced type inherits consent for free. Note
   `consent_state` and the existing `default_present` answer different questions — *may* it be
   presented, versus *include it by default* — and conflating them is the trap.
+- **M10B-D18 (2026-07-28, `DOD-END-ARCH-1`, from review F1) — a new directory internal route resolves
+  AGENT PUBKEY → ACCOUNT, mirroring `/internal/account-by-email-stub` exactly.** The clause
+  `DOD-END-ARCH-1` marked *"confirm that resolution exists before relying on it"* was declared settled
+  without being addressed; it does not exist. The directory has only the **forward** direction
+  (`/internal/agents-by-account`), and the reverse join lives in SQL at `internal-api-server.ts:791`
+  but is exposed on no route. **This blocks four lines, not one:** `DOD-END-SUBJECTKIND-1` (both
+  branches — `same_operator` needs *both* parties' accounts), `DOD-END-QUOTA-1` (a per-**account**
+  quota computed from a submission whose only identity is an agent pubkey — without this the cap
+  degrades to per-agent, the exact farming hole `INV-NO-SELF-STANDING` closes), `DOD-END-SUSPEND-1`,
+  and `M10B-D3`'s composition point. Under §5a every mint refuses until it lands. **It is not new
+  architecture:** `resolveAccountByEmailStub` is the working precedent, with the `DirectoryClient`
+  interface (`client.ts:62`) and all three implementations already in place (`http-client.ts:47`,
+  `failover-client.ts:24`, `stub-client.ts:62`) — so the new method inherits the failover the
+  sovereign-node invariant requires. Rides the one batched directory deploy with V49 and the revoke
+  change. Missing resolution ⇒ named refusal `operator_linkage_unresolved`, never a bare
+  `intake_rejected`.
+- **M10B-D19 (2026-07-28, `DOD-END-ARCH-1`, from review F2) — the intake RESULT returns to the
+  submitting agent over the sealed pickup path, sealed to the submitter.** Entry 4 gave the intake key
+  a full decision and gave the reverse direction nothing, while three lines require a named cause to
+  reach the submitter (`DOD-END-INGRESS-1`, `DOD-END-QUOTA-1`, `DOD-END-SUBJECTKIND-1`). There is
+  exactly one possible carrier: `M10B-D2` establishes that the daemon never talks to the portal and
+  the portal has no transport stack, so the result rides the **M10-D22 sealed pickup path** as a sealed
+  `submission_result{key_id, submission_id, outcome, cause, detail}`. **It must be sealed** — a
+  plaintext reason in a directory-readable column ("scanner rejected your endorsement of ⟨subject⟩")
+  leaks who endorsed whom, which is what `DOD-END-QUEUE-1` and D-24 exist to prevent. The queue row
+  therefore carries an opaque `submission_id` plus the sealed-reply routing. Also settles what the DoD
+  left open: the poison transition (a row that can never succeed leaves the queue exactly once with its
+  reason sealed and returned), the sweep TTL, and what the daemon reports when its submission is swept
+  unanswered. **Without this the primary flow fails silently** — the reviewer's trace: Bob's last log
+  line is `signal.submission.queued`, and 24h later the row is swept with no event of any kind.
 - **M10B-D15 (2026-07-28, `DOD-END-SCAN-1`) — `scanner_version` is DERIVED FROM THE RULE CORPUS, never
   hand-maintained.** Shape: `intake-v1+<12 hex of sha256 over the canonical serialization of the active
   rule set>` (pattern ids + sources, secret rule ids, charset class, length cap, URL policy). A
