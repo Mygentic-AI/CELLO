@@ -399,6 +399,25 @@ the additions M10B is accountable for.
   > which changes the storage model and needs a migration. Pre-existing (V46 predates M10B) and it does
   > not block Tier 1 mechanically — but it is load-bearing for a milestone whose premise is consent and
   > non-discoverability, so it must not be closed silently. — 🅿️
+- **DOD-END-ACCOUNTLINK-1** — **the agent→account repair path, and it must be built SAFELY (fourth
+  review HIGH-1, Entry 16).** `M10B-D26r2` refuses endorsement intake when an agent has no
+  `account_id`, and tells the operator to link one — but no such flow exists. `linkAgentToAccount()`
+  exists with the grant it needs and **zero production callers**, and wiring it *as-is* would be an
+  **authorization bypass on the kill switch**: it is `UPDATE agent_profiles SET account_id WHERE
+  k_local_pubkey` with **no ownership check**, over a public value, and `resolveAccountId` *creates*
+  an account for whatever phone stub is supplied — while `account_id` is the authorization root the
+  write seam derives pause/**burn** scoping from. ACs:
+  - **Proof of control over the agent key** — a signature from `k_local` over a session-bound
+    challenge. Possession of the *public* half proves nothing; that is the whole defect.
+  - **Link to the authenticated SESSION's account.** Never `resolveAccountId`'s create path — the
+    account must already exist and belong to the caller.
+  - **Remove the dead `agentProfileId`** from the params interface (unused — it is the tell that the
+    body was never read).
+  - **Negative test, blocking:** a caller cannot link an agent they do not control, and the attempt is
+    refused with a named cause and logged.
+  - Refusing to link must never silently leave the agent unlinked *and* report success.
+  Without this line, `operator_linkage_unresolved` points at nothing and a transient registration error
+  becomes a permanent, unannounced disqualification. — ❌
 - **DOD-END-SCOPE-FIX-1** — **an M10 defect this milestone surfaced and must fix FIRST (Entry 10).**
   `listPresentable` — which implements M10-D5/M10-D14 subject scoping (account-subject rows presentable
   by any agent under the account; agent-subject only by its own subject) — has **zero production
@@ -801,8 +820,14 @@ the discussion-of-record. Restated here because this is the milestone that imple
   >   `issuer_kind = 'portal'`, so a `directory`-issued record gets exact-pubkey matching with no
   >   rotation escape. V46 deliberately admits `'directory'`; nothing issues it today — which is the
   >   **identical §5a argument used twice already** to add branches 2 and 5, and I failed to apply it a
-  >   third time. Decide: extend branch 4 to `IN ('portal','directory')`, or state why `directory` is
-  >   deliberately excluded.
+  >   third time. **DECIDED: extend branch 4 to `issuer_kind IN ('portal','directory')`.** The escape
+  >   exists because *"the portal is ONE logical issuer; its keys are rotating instruments"* — and that
+  >   is equally true of the directory, whose node keys also rotate and whose records would otherwise
+  >   become permanently unrevocable on the first rotation. The general rule, stated so the next
+  >   `issuer_kind` is not another one-off: **role-based authority for INSTITUTIONAL issuers (portal,
+  >   directory); exact-pubkey authority for AGENT issuers, where the key IS the identity.** An
+  >   unrecognized future `issuer_kind` must fall to the **agent** (stricter) side, never to the
+  >   institutional escape.
   > - **It BREAKS V46's documented monotonicity invariant, and that must be stated in the migration.**
   >   V46's header says *"revoked — if ANY node's copy says revoked. Revocation is monotonic … this
   >   converges regardless of arrival order."* Under `D-12r4` an unauthorized tombstone that lands
