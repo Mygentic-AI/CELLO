@@ -550,6 +550,54 @@ def test_content_alerts_opt_in_and_out(actions):
     assert off["content_alerts"] is False
 
 
+def test_opting_in_to_content_alerts_is_paid(actions):
+    """ASSERTS THE POINTS LANDED, not just that the call returned.
+
+    `award` catches CheckViolation and returns 0, so if 0023 had not added
+    'content_alerts' to the reason CHECK this would pay nothing and every
+    existing content-alert test would still pass. The award has to be checked
+    against the balance, or the failure is invisible.
+    """
+    uid = make_user()
+    cookie = sign_in(uid)
+
+    _, on = call(actions, "/waitlist/content-alerts", {"enabled": True}, cookie)
+
+    assert on["awarded"] == 10
+    assert total(uid) == 10
+
+
+def test_toggling_content_alerts_cannot_be_farmed(actions):
+    """The opt-in is a TOGGLE attached to an award, which is the dangerous shape:
+    off/on/off/on would pay every time and make the balance a function of how
+    many times somebody clicked a checkbox. 0023's once-per-user index stops it
+    in the database, so it holds however the endpoint is called."""
+    uid = make_user()
+    cookie = sign_in(uid)
+
+    call(actions, "/waitlist/content-alerts", {"enabled": True}, cookie)
+    call(actions, "/waitlist/content-alerts", {"enabled": False}, cookie)
+    _, again = call(actions, "/waitlist/content-alerts", {"enabled": True}, cookie)
+
+    assert again["awarded"] == 0
+    assert total(uid) == 10
+
+
+def test_opting_out_keeps_the_points_and_pays_nothing(actions):
+    """No claw-back (0023): the ledger is append-only and making the balance
+    non-monotonic over ten points is the worse trade. Opting out must also not
+    award — only opting IN is the action being paid for."""
+    uid = make_user()
+    cookie = sign_in(uid)
+    call(actions, "/waitlist/content-alerts", {"enabled": True}, cookie)
+
+    _, off = call(actions, "/waitlist/content-alerts", {"enabled": False}, cookie)
+
+    assert off["awarded"] == 0
+    assert off["content_alerts"] is False
+    assert total(uid) == 10
+
+
 def test_the_default_is_off(actions):
     """Unchecked by default — DOD-CONTENT-ALERTS-1 is explicit, and a list that
     accepts up to twice a day must be asked for."""

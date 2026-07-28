@@ -44,6 +44,9 @@ SURVEY_STRUCTURED_POINTS = 20
 SURVEY_FREEFORM_POINTS = 10
 READINESS_POINTS = 20
 INTERVIEW_COMMIT_POINTS = 30
+# Paid once, on opt-in. Uncapped by amount because the once-per-user index in
+# 0023 means there is only ever one row.
+CONTENT_ALERTS_POINTS = 10
 
 MAX_FREEFORM_LEN = 4000
 MAX_URL_LEN = 2048
@@ -345,13 +348,34 @@ def handle_content_alerts(cur, user_id, body, correlation_id):
         "UPDATE waitlist_users SET content_alerts = %s WHERE waitlist_id = %s RETURNING content_alerts",
         (enabled, user_id),
     )
+    stored = cur.fetchone()["content_alerts"]
     log(
         "waitlist.content_alerts.set",
         correlation_id,
         waitlistId=str(user_id),
         enabled=enabled,
     )
-    return {"content_alerts": cur.fetchone()["content_alerts"]}
+
+    # PAID ON OPT-IN ONLY, and paid once. The ask is real — up to two emails a
+    # day during launch — so it is credited like every other action rather than
+    # being the one thing on the page expected for free.
+    #
+    # Opting out does NOT claw back (0023): the ledger is append-only by design,
+    # and making the balance non-monotonic over ten points is a worse trade than
+    # letting somebody keep them. The once-per-user index is what stops the
+    # obvious abuse — off/on/off/on cannot pay more than once, so the award is
+    # not a function of how many times a checkbox was clicked.
+    awarded = 0
+    if enabled:
+        awarded = award(
+            cur, user_id, CONTENT_ALERTS_POINTS, "content_alerts", {}, correlation_id
+        )
+
+    return {
+        "content_alerts": stored,
+        "awarded": awarded,
+        "points_total": points_total(cur, user_id),
+    }
 
 
 ROUTES = {
