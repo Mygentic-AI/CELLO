@@ -593,6 +593,32 @@ the discussion-of-record. Restated here because this is the milestone that imple
   generalisation `M10B-D1` demands: every future client-sourced type inherits consent for free. Note
   `consent_state` and the existing `default_present` answer different questions — *may* it be
   presented, versus *include it by default* — and conflating them is the trap.
+- **M10B-D15 (2026-07-28, `DOD-END-SCAN-1`) — `scanner_version` is DERIVED FROM THE RULE CORPUS, never
+  hand-maintained.** Shape: `intake-v1+<12 hex of sha256 over the canonical serialization of the active
+  rule set>` (pattern ids + sources, secret rule ids, charset class, length cap, URL policy). A
+  hand-bumped constant goes stale the first time someone edits a regex and forgets — and because the
+  directory cannot re-run the scan, that stale value is notarized as **evidence of a scan that did not
+  happen** (`DOD-DIR-WRITE-1`'s own reason for making the field signed). Deriving it makes drift
+  impossible by construction and gives spec §7 constraint 2 a mechanically checkable definition of
+  "byte-identical": two intakes agree iff their derived versions agree. Verified: no scanner version
+  constant exists anywhere today.
+- **M10B-D16 (2026-07-28, `DOD-END-SCAN-1`) — intake reuses the gateway's rule CORPUS but owns its own
+  VERDICT POLICY.** The deterministic Layer-1 detectors (`detect/injection-patterns.ts` over RE2,
+  `detect/secrets.ts`) are the right shared component and satisfy §7 constraint 2. But the gateway's
+  disposition is deliberately inverted from intake's: *"it is not, by itself, an auto-block. CELLO is
+  not a moderation tool; this surfaces evidence, it does not police content."* Intake is reject-always,
+  fail-closed (§7 constraint 3, §14.1). Reusing `InboundScreener`'s verdict would produce a scanner
+  that passes its tests and never refuses anything. **The DeBERTa Layer-2 scanner is excluded
+  outright** — §7 says "No LLM"; it degrades OPEN when the model is absent (intake must fail closed);
+  and a per-operator downloaded model cannot be byte-identical across nodes.
+- **M10B-D17 (2026-07-28, `DOD-END-SCAN-1`) — `@cello-protocol/gateway` gains an additive `"./detect"`
+  subpath export; the portal imports ONLY that, never the barrel.** Verified: `gateway/src/index.ts`
+  re-exports `GatewayConfigStore`/`GatewayRecordStore`, both of which statically
+  `import { DatabaseSync } from "node:sqlite"` — and the package `exports` map exposes only `"."`, so
+  there is no deep-import escape today. A barrel import would pull `node:sqlite` (**VERBOTEN**), the
+  gateway HTTP server, and the sidecar spawner into a Next.js Fargate app. Consequence for process:
+  this makes `gateway` a **sixth** cello-client package the other repos pin, so the cross-repo
+  version-bump AC discipline (CLAUDE.md) now covers it.
 - **M10B-D1 (2026-07-28) — the milestone is a SOURCE plus two MECHANISMS, not a feature.** Fork: ship
   "endorsements" as a feature, versus generalise the client-supplied source and the consent/withdrawal
   mechanisms so the attestation family opens behind them. Chose the latter; `DOD-END-PLAYBOOK-1` is the
