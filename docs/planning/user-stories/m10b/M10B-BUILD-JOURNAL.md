@@ -137,3 +137,46 @@ is how the wrong one gets implemented.
 **Next unit:** `DOD-END-ARCH-1`, now narrower — the shape is decided, and what it owes is the detail
 those decisions opened: intake-key distribution and rotation, queue ack/poison and retention, account-
 subject naming, the payload split, where the consent state physically lives, and expiry.
+
+---
+
+## Entry 2 — G-17 reconciled; two residual gaps closed; implementation-ready (2026-07-28)
+
+**G-17 fixed in `server-infrastructure.md`** (both the spec line and the gap table). Was *10 new
+endorsements per month per owner (phone number), at the directory*; now *100 per rolling 30 days per
+owner, cap and window configurable, enforced at the portal*. Two things worth recording:
+
+- **The per-owner scope was already correct in the original.** G-17 read *"per owner (phone number) —
+  shared across all agents under that owner to prevent farming via multiple agents."* So `M10B-D6`'s
+  per-ACCOUNT enforcement is not a reinterpretation of Andre's number — it restores the original intent,
+  which the M10B DoD had drifted from by phrasing the open question as "per agent." Good outcome from
+  checking the source rather than reasoning from the DoD's own summary.
+- **Enforcement moved layers.** G-17 put the limit at the directory, which was coherent when the
+  directory accepted endorsements directly. Under the §6 2026-07-11 amendment the directory notarizes a
+  hash and cannot read what it stores — it literally cannot count endorsements. The quota has to live
+  where minting happens.
+
+**A doc trap found while verifying, now annotated in the DoD.** The 2026-04-10 origin log is in the
+DoD's Related Documents, and it specifies **two protocol types** — `connection_endorsement` (gated at
+the connection layer) versus `attestation` (informational). A coder reading it as current would build
+that split, which is a direct `DOD-END-INV-ZEROBUMP` violation. It is superseded by `M10B-D7`: one type,
+with the gating that split was for now done by floor predicates over `issuer_kind`/tier/count. The
+Related Documents entry now marks all three of that log's superseded parts, and names this one as the
+trap. General lesson, and it is the reason to annotate rather than delete: a linked historical document
+is an instruction to an agent, not just provenance ([[project_audit_what_ships_not_what_compiles]]).
+
+**Two residual questions closed rather than escalated** (`M10B-D9`, `M10B-D10`), both surfaced by asking
+what a coder would hit at 3am that no document answers:
+
+1. **Who consents to an ACCOUNT-subject endorsement?** D-23 says the subject accepts; for an agent
+   subject that is obvious, for an account it is not. Chosen: any one agent under the account, in
+   MCP/CLI, because M10's account-level signals already fan out to every agent — consent following the
+   same shape adds no new concept and needs no portal surface.
+2. **Must the endorser have met the subject?** No. A relationship gate would break the bootstrap case
+   endorsements exist for, and it is unnecessary: a stranger's endorsement is worth nothing to the
+   recipient anyway, since value comes from the recipient's own tier join on the issuer.
+
+**State: implementation-ready.** Every fork opened by the DoD is closed, nothing is parked pending an
+answer, and the first unit (`DOD-END-ARCH-1`) has a bounded question list rather than an architecture
+choice. What remains inside the determination is engineering detail a competent coder settles and
+journals — not decisions requiring Andre.
