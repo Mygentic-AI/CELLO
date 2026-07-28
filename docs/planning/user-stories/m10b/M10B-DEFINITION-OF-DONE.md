@@ -11,7 +11,10 @@ description: >
   canary. M10B adds the THIRD raw-plaintext source (the client), plus the two mechanisms §15.3 admits
   as legitimate bumps — subject consent and issuer-side withdrawal — after which `endorsement` itself
   lands as a normal Type Playbook run. Carries the endorsement decisions imported from the 2026-07-27
-  policy surface audit (D-19, D-22..D-27, D-29). Spec-of-record remains
+  policy surface audit (D-19, D-22..D-27, D-29) plus M10B-D2..D8 (2026-07-28): the directory-mediated
+  sealed submission queue, same_operator frozen in the hash, refusal-with-message, the pending-consent
+  surface, the 100-per-rolling-30-days account quota, endorsement-not-attestation, and no anonymous
+  variant. Spec-of-record remains
   M10-TRUST-SIGNAL-STORAGE-AND-CREATION (§6 the three issuer flows, §7 intake, §15 zero-bump) +
   M10-TRUST-SIGNAL-TAXONOMY (Class 2).
 ---
@@ -29,7 +32,12 @@ description: >
   once M10B's machinery exists, the `endorsement` type itself required no further client or directory
   change.
 - Every line carries **observability ACs**: named `domain.noun.verb` events, required context fields,
-  correlationId threading, error-path coverage. Missing events are blocking.
+  correlationId threading, error-path coverage. Missing events are blocking. The lines below name only
+  their *headline* events; **each unit's design note ([[M10B-PROCEDURE]] §6) names that unit's FULL event
+  set before any code is written**, and the reviewer verifies the implementation against the design
+  note. "The DoD line didn't list an event" is never a reason one is missing. Lines below name only
+  their headline events; **each unit's design note ([[M10B-PROCEDURE]] §6) names the unit's FULL event
+  set before code**, and the reviewer verifies against the design note, never against memory.
 - Client-side lines ship via the publish cascade (/cello-publish); a line needing a published artifact
   is not ✅ until the published artifact works.
 
@@ -61,8 +69,14 @@ plaintext came from before it entered the pipe (spec §6, "The three issuer flow
 | **The client** ← **THIS MILESTONE** | an operator's agent supplies the raw plaintext; the portal still mints | `endorsement`, and the attestation family after it | ❌ |
 
 **In all three the portal mints, the directory stores the hash and passes it on.** M10B adds a third
-inbound arm to the portal's mint function. It does not add an issuer, a key, a chokepoint, or a write
-path.
+inbound arm to the portal's mint function. It does not add an issuer, a signing key, a chokepoint, or a
+new **notarization** path.
+
+It *does* add one transport surface — the `M10B-D2` **sealed submission queue** — and the distinction
+matters, because "no new write path" read literally would forbid the thing this milestone is built on.
+The queue is the mirror image of the M10-D22 sealed pickup transport: the directory carries a blob it
+cannot read, in the other direction. Nothing new writes to `signal_records`; the signed-submission
+chokepoint stays unique, and the directory still composes nothing.
 
 ### Why this is nevertheless not a pure Type Playbook run
 
@@ -96,15 +110,20 @@ the count predicate, and the tier-signed rendering.
 
 ## Scope fence
 
-**IN:** the client→portal ingress; intake scanning; the consent mechanism (deliver → accept/refuse →
+**IN:** the client→directory→portal ingress (`M10B-D2`); intake scanning; the issuance quota
+(`M10B-D6`); the consent mechanism (deliver → pending-consent queue → accept/refuse-with-message →
 presentable); issuer-side withdrawal and its propagation; issuer-suspension cascade; the same-operator
 rules (D-27, D-29); floor/count handling; the operator surface; `endorsement` as the first type through
 the new arm, proven live.
 
 **OUT (parked below):** PSI and endorser-overlap; substitution logic (blocked on policy D-12, tabled);
-the endorsement *request/negotiation* flow (Bob endorses unprompted for v1); multi-hop referral,
-the referral callback loop, and the wider commerce family; per-node intake (launch is portal-routed by
-the §7 amendment, deliberately); issuance rate limiting.
+the endorsement *request/negotiation* flow (Bob endorses unprompted for v1); **editing** an issued
+endorsement (refuse-and-reissue is the v1 correction loop, `M10B-D4`); multi-hop referral, the referral
+callback loop, and the wider commerce family; per-node intake (launch is portal-routed by the §7
+amendment, deliberately).
+
+> **Changed 2026-07-28:** issuance rate limiting moved from OUT to IN — Andre, answering the open
+> question directly: *"Okay, but the other one I really need."* It is now `DOD-END-QUOTA-1`.
 
 ---
 
@@ -127,7 +146,10 @@ the additions M10B is accountable for.
   a lie the hash then makes permanent. — ❌
 - **DOD-END-INV-CONSENT** — nothing about a subject is presentable, discoverable, or countable without
   that subject's explicit acceptance (D-23, D-24). A refused or still-pending endorsement is
-  indistinguishable, to every third party, from one that was never created. — ❌
+  indistinguishable, to every third party, from one that was never created. **The issuer is not a third
+  party** — Bob knows what he issued, and `M10B-D4` lets Alice send him a refusal message *at her
+  option*. The invariant governs everyone else, and it is never satisfied by telling Bob less than
+  Alice chose to tell him. — ❌
 - **DOD-END-INV-UNTRUSTED** — endorsement plaintext reaches a consuming LLM only as quoted-untrusted
   ("Bob says: …"), never with portal-attested framing, byte-for-byte or not at all. This is M10's
   `INV-FRAMING` applied to the first content that genuinely needs it; `issuer_kind` is inside the hash
@@ -144,44 +166,75 @@ the additions M10B is accountable for.
 - **DOD-END-ARCH-1** — **the design determination, written before any code, reviewed like any unit.**
   Written AGAINST spec §6 (three issuer flows + the 2026-07-11 amendment), §7 (intake), §15 (zero-bump),
   and the decisions section below. Must settle, with evidence from the code as it actually is:
-  - **The ingress shape.** How an operator's client hands the portal raw plaintext, and how the portal
-    authenticates the supplying operator. Two candidate shapes to weigh, not assume: an authenticated
-    CELLO session to a portal-backed intake agent (spec §7's flow, and what §14.2 already assumes for
-    revocation re-auth via `connecting_pubkey == issuer_pubkey`), or an authenticated portal API call
-    from the daemon. Whichever wins must satisfy `DOD-END-INV-ATTRIBUTION`.
+  - **The ingress shape — DECIDED, see `M10B-D2`. Do not re-open it; build against it.** Bob's daemon
+    signs the submission with his agent key, seals it to the portal's intake key, and writes it to a
+    directory node; the portal drains, verifies the signature, derives `issuer_pubkey` FROM that
+    signature, scans, and mints. What this unit still owes is the *detail*: the queue table shape, the
+    drain's ack/poison semantics (a submission that fails the scan must leave the queue, exactly once,
+    with its reason preserved), and the retention rule for drained rows.
+  - **How the daemon learns the portal's intake encryption key** (opened by `M10B-D2`, and the one
+    genuinely new distribution problem it creates). The manifest is the natural channel — it is already
+    the client's trusted, polled source of node-level facts — but nothing in it carries a portal key
+    today. Settle: where the key lives, how rotation works without stranding queued submissions, and
+    what a daemon does when the key is absent (per §5a **ABSENT IS NOT FINE**: refuse to submit and say
+    why — never fall back to sending unsealed).
   - **The payload split.** Playbook §2 says the plain-language `claim` is "composed BY THE PORTAL stating
     what was verified, how, and when." For an endorsement the portal verified *nothing about the
     assertion* — only that an authenticated operator said it. So the payload needs an explicit two-part
     shape: the portal's **attested wrapper** (who said it, when, that they were authenticated, the
     same-operator fact) and the endorser's **quoted words** (untrusted, scanned, never restated in the
     portal's voice). Getting this wrong is how `DOD-END-INV-UNTRUSTED` dies quietly.
-  - **Where `same_operator` lives** (policy D-29 sub-question 2): inside the hash — composed at intake
-    before hashing, consistent with scan-before-hash, unforgeable but frozen — or served alongside like
-    `status`, correctable but not covered by the hash. Operator linkage is **not** permanent
-    ([[2026-04-14_0700_agent-succession-and-ownership-transfer]]), so a `same_operator` fact minted today
-    can stop being true.
-  - **Where the consent state lives.** `wallet_trust_signals` (the holder's own presentable signals, M10-D4)
-    gains a consent column, versus a separate pending table. Must not violate `INV-AGENT-SCOPED`.
-  - **Naming.** Whether this milestone ships ONE type (`endorsement`) or opens an attestation *family*
-    (`endorsement` + siblings). Bearing on the answer: `attestation` has never been a wire term — the
-    envelope calls everything a signal and `type` is data — while the design vault has used
-    "attestation" as the umbrella since 2026-04-10 and "endorsement" for the vouch-shaped case. Decide
-    the vocabulary once, here, and make the docs consistent with it.
+  - **How the endorser names the subject.** Bob holds Alice's *agent* pubkey — that is what a contact
+    is. For `subject_kind: agent` that is the subject. But journey case (c) requires **account**-subject
+    submissions to reach intake, and Bob holds no account identifier for Alice: the directory is
+    hash-only by design ([[project_no_pii_in_directory_hash_only]]) and there is no account handle on the
+    wire. Settle how an account subject is named — the working answer is that Bob always submits the
+    agent pubkey he actually has plus the `subject_kind` he intends, and the **portal** resolves agent →
+    account at intake, so no new identifier is invented and no account handle ever crosses the wire.
+    Confirm that resolution exists before relying on it.
+  - **Where `same_operator` lives — DECIDED, see `M10B-D3`: inside the hash.** What this unit owes is
+    the wording and the composition point: a neutral one-line fact ("endorser and subject are owned by
+    the same account"), composed at intake before hashing, consistent with scan-before-hash. Note the
+    accepted residual: operator linkage is **not** permanent
+    ([[2026-04-14_0700_agent-succession-and-ownership-transfer]]), so a frozen fact can go stale after an
+    ownership transfer — it reads as of the mint date, which travels with it (D-26).
+  - **Where the consent state lives.** Constrained by `M10B-D5`: the pending-consent items are a
+    surface of their OWN, not the transcript inbox. Settle whether that is a consent column on
+    `wallet_trust_signals` (M10-D4) with the queue as a view over it, or a separate pending table that
+    promotes a row on acceptance. Must not violate `INV-AGENT-SCOPED`, and the queue must be named and
+    keyed by **consent state**, never by type (`INV-ZEROBUMP`).
+  - **Naming — DECIDED, see `M10B-D7`.** `endorsement` stays the only type string; "attestation" stays
+    a design-vault word and does not enter code. The code's name for the family is `issuer_kind: agent`.
+    Scope of any doc cleanup: the M10B documents and [[M10-TYPE-PLAYBOOK]] ONLY — do not sweep the vault.
   - **Expiry.** D-26 gives endorsements no expiry, which is a deliberate exception to Playbook §0's
     "validity window: `expires_at` policy." Confirm `expires_at: null` flows correctly through
     `DOD-VERIFY-1`'s freshness path (spec §14.7) rather than being read as already-expired. — ❌
 
 ---
 
-## Tier 1 — The third source: client → portal ingress
+## Tier 1 — The third source: client → directory → portal ingress
 
-- **DOD-END-INGRESS-1** — the client-supplied plaintext arm of the portal's mint function, per
-  `DOD-END-ARCH-1`. The operator's agent supplies `(subject_kind, subject, plaintext scope/body)`; the
-  portal authenticates the supplier and binds `issuer_kind: agent` + `issuer_pubkey` to that
-  authenticated identity (`DOD-END-INV-ATTRIBUTION`). Sits alongside the existing two arms (portal
-  verification code; the directory read path `queryAccountFacts` / `GET /internal/track-record/...`) and
-  reuses `mint.ts` + `submission-signer.ts` unchanged from there on. Named events:
-  `signal.ingress.received`, `signal.ingress.rejected` (+ reason), `signal.ingress.authenticated`. — ❌
+- **DOD-END-SUBMIT-1** — **the daemon side of the sealed submission queue (`M10B-D2`).** Bob's daemon
+  composes `(subject_kind, subject, plaintext body)`, **signs it with his agent key**, seals the whole
+  submission to the portal's intake key, and writes it to a directory node over the channel that already
+  exists — with the standard failover across nodes, since submission must not die on one node being
+  down. The daemon never talks to the portal directly, and never sends unsealed (`ABSENT IS NOT FINE`:
+  no intake key → refuse, name the reason). Named events: `signal.submission.sealed`,
+  `signal.submission.queued`, `signal.submission.refused` (+ cause). — ❌
+- **DOD-END-QUEUE-1** — **the directory side: a mailbox it cannot read.** A queue table holding the
+  sealed blob, its recipient (the portal intake key id), and delivery bookkeeping — **no plaintext, no
+  payload, no subject, no PII**, exactly the `DOD-DIR-WRITE-1` / M10-D22 posture, and a test asserts the
+  absence on the schema. Notarization is untouched: nothing here writes `signal_records`, and the
+  directory composes nothing (`INV-DIR-DUMB`). Rides the one batched directory deploy with
+  `DOD-END-REVOKE-2`; a new Flyway migration updates `OpsAgentExpectedMigrationVersion`. — ❌
+- **DOD-END-INGRESS-1** — **the portal drains and mints.** The third arm of the portal's mint function:
+  drain the queue, open the seal, **verify the submission signature and derive `issuer_pubkey` FROM it**
+  — never from a request field (`DOD-END-INV-ATTRIBUTION`) — then scan, compose, and hand off to
+  `mint.ts` + `submission-signer.ts` unchanged from there on. Sits alongside the existing two arms
+  (portal verification code; the directory read path `queryAccountFacts` /
+  `GET /internal/track-record/...`). Drain semantics are exactly-once with the failure reason preserved
+  to the submitter; a poisoned row leaves the queue rather than blocking it. Named events:
+  `signal.ingress.drained`, `signal.ingress.authenticated`, `signal.ingress.rejected` (+ cause). — ❌
 - **DOD-END-SCAN-1** — the deterministic intake scanner (spec §7): injection patterns (primary), secrets,
   constrained charset (a sentence — no control chars, no markup), length cap, URL handling. **Versioned
   and byte-identical**, and the version travels INSIDE the signed submission body — `DOD-DIR-WRITE-1`
@@ -202,7 +255,19 @@ the additions M10B is accountable for.
     recipient-relationship reading that rescues it; the verified email + phone baseline (policy D-8)
     already asserts everything it could.
   Default target is the specific agent unless requested and agreed (M10-D5). Supersedes the 2026-04-10
-  log's blanket same-owner rejection, which is marked superseded there. — ❌
+  log's blanket same-owner rejection, which is marked superseded there. The account-subject case depends
+  on the portal resolving agent pubkey → account (`DOD-END-ARCH-1`); if that resolution is missing the
+  mint is REFUSED with a named cause, never minted unflagged. — ❌
+- **DOD-END-QUOTA-1** — **the issuance quota (`M10B-D6`).** At most **100** endorsements per **rolling
+  30 days**, enforced **per account** (not per agent — a per-agent cap is bypassed by spinning up
+  agents, which is the same farming hole `INV-NO-SELF-STANDING` exists to close), counted at the portal
+  because that is where minting happens. The cap and the window are **configuration, not literals** —
+  raising it must be a config change with no code edit and no migration, and the DoD/journal records
+  where that knob lives. Over-quota is REFUSED, and the refusal reaches the submitting agent naming the
+  cause, the cap, and **when the window frees up** — `issuance_quota_exceeded`, never a bare
+  `intake_rejected` (§5b ERRORS NAME THEIR CAUSE). A re-issue after a refusal counts against the quota
+  like any other (`M10B-D4`); exempting it would make refuse-and-retry an unbounded loop. Named events:
+  `signal.quota.checked`, `signal.quota.exceeded`. — ❌
 
 ---
 
@@ -211,18 +276,42 @@ the additions M10B is accountable for.
 - **DOD-END-DELIVER-1** — the minted envelope is delivered to the **subject** — a third party who did not
   initiate it, and who is not the submitter (§7: "Bob's role ends at submission"). Reuses the generic
   delivery path (verify hash ∈ directory → insert envelope row) with no type-specific handling, landing
-  in `wallet_trust_signals` in a **pending** consent state. — ❌
+  in a **pending** consent state. **No new trigger and no new transport** (Andre, 2026-07-28): this is
+  the M10-D22 sealed pickup path behaving exactly as it does for every other signal — the portal seals
+  per-agent and queues; if the subject's daemon is down the envelope **sits there** and lands when the
+  daemon next comes online. A subject who never acts is the normal case, not an error case, and nothing
+  about delivery may assume the subject is present. The one thing that IS new is cross-account fan-out:
+  the portal seals to the *subject's* agents, not the submitter's. — ❌
+- **DOD-END-PENDING-1** — **the pending-consent queue: its own surface, NOT the transcript inbox**
+  (`M10B-D5`). The inbox is cleared by reading or dismissing a transcript; an endorsement awaiting
+  consent has no transcript, so putting it there gives the operator an item they cannot clear the normal
+  way. It is a distinct class of thing — items awaiting my decision — and it is keyed and named by
+  **consent state**, never by type (`INV-ZEROBUMP`; the generic name is what keeps this legal). Two
+  different lifetimes, and conflating them is the bug to avoid: the **item** persists until it is
+  accepted or refused, while the **notification** is raised once and stops once seen — an operator must
+  not be re-nagged on every `cello_use_agent`. On selecting an agent with pending items, the operator is
+  told they are waiting. Named events: `signal.consent.pending`, `signal.consent.notified`. — ❌
 - **DOD-END-ACCEPT-1** — accept-before-present (D-23). The subject reads the endorsement and accepts or
   refuses it; **only an accepted endorsement is presentable.** Andre's reason, recorded verbatim in the
   policy audit: *"Otherwise someone could create a rogue endorsement that says you're a piece of shit and
   never work with this person."* Acceptance is the second cheap check behind intake scanning, on the first
   CELLO content written by one party and displayed to a third. Negative AC: a pending or refused
-  endorsement cannot be presented by any path. — ❌
+  endorsement cannot be presented by any path. **Refusal carries an OPTIONAL message back to the issuer
+  (`M10B-D4`)** — Alice's choice, never automatic, because there is no edit in v1 and refuse-and-reissue
+  is the correction loop: *"what if Bob has given you an endorsement that mistakenly has said something
+  you don't want it to say… like a LinkedIn recommendation."* A refusal with no message tells Bob
+  nothing. Bob may then issue a corrected endorsement — re-issuance after refusal is explicitly allowed
+  (and counts against `DOD-END-QUOTA-1`). The message is operator-authored free text from the
+  *subject*, so it is scanned on the same path as the endorsement body — it is the same injection
+  surface pointed the other way. — ❌
 - **DOD-END-DISCOVER-1** — non-discoverability, proven by a negative test (D-24): no path lets any third
   party enumerate, count, or infer endorsements about a subject who has not presented them. The
   directory's fingerprint is useless without the text, and only the subject holds the text. Andre,
   generalising past endorsements: *"This is the case for absolutely everything in CELLO. You decide what
-  you want to present."* — ❌
+  you want to present."* Scope note: **the issuer is not a third party.** Bob knows he issued it, and
+  may learn of a refusal if Alice chose to tell him (`M10B-D4`) — that is consent working, not a leak.
+  The negative test targets everyone else, including the sealed submission queue (`DOD-END-QUEUE-1`),
+  which must not let a directory operator infer who endorsed whom. — ❌
 
 ---
 
@@ -245,7 +334,12 @@ the additions M10B is accountable for.
   revocation is what makes it final (D-25). Why it is not optional: an attacker holding a compromised key
   mints endorsements for their own sock puppets, and if suspension blocked only *future* issuance,
   everything minted before the switch was pulled keeps vouching for them and the kill switch never
-  reaches the damage. — ❌
+  reaches the damage. **Mechanism: the same `DOD-VERIFY-1` TTL-re-check-on-use path that carries
+  withdrawal** (spec §14.7) — this line builds no new transport either, it changes what the re-check
+  answers. Reversibility is the difference from withdrawal: a suspension lifts, so the state must be a
+  reversible mark on the issuer, never a tombstone written per-signal. **Verify before building** that
+  the directory can join a suspended account to the signals issued by its agents' pubkeys; if that join
+  does not exist, it is part of this unit and it is where the work actually is. — ❌
 
 ---
 
@@ -255,8 +349,12 @@ the additions M10B is accountable for.
   tier to the recipient gives it its sign** (D-27): from an `unknown` endorser it is self-issued and worth
   nothing; from a `whitelisted`/`vip` endorser it is a strong positive — *"my other agent is mine,"* from
   someone already trusted. Generalises the design's existing rule that a third-party assertion is worth
-  exactly what its issuer is worth. Also honours D-8a: for any signal with an anonymous and an identified
-  variant, the default presented variant is the ANONYMOUS one. — ❌
+  exactly what its issuer is worth. **D-8a (anonymous-by-default) does NOT apply to endorsements**
+  (`M10B-D8`, Andre 2026-07-28: *"No anonymous endorsements."*): D-8a governs signals that HAVE an
+  anonymous and an identified variant, and an endorsement has only one — its entire worth comes from
+  the recipient recognising the issuer, which is what `DOD-END-FLOOR-2`'s tier join computes. An
+  anonymous endorsement would be an unattributable claim, which is worth nothing and is exactly what a
+  farm would emit. Do not build an anonymous variant to satisfy a policy that does not reach here. — ❌
 - **DOD-END-COUNT-1** — floor/count handling (D-29 sub-question 1). `same_operator` is an envelope-visible
   fact, so a count predicate MUST bucket or exclude flagged endorsements; a naive `count >= N` otherwise
   passes on ten agents under one operator. Keeps `DOD-FLOOR-1`'s "envelope fields only" rule intact —
@@ -276,16 +374,24 @@ the additions M10B is accountable for.
 ## Tier 5 — Surfaces, and the proof
 
 - **DOD-END-SURFACE-1** — the operator surface, MCP and CLI at parity (the M8C parity rule): issue an
-  endorsement for a counterparty; list endorsements pending my acceptance; accept / refuse; list the ones
-  I hold and their status; withdraw one I issued; per-counterparty include/omit at presentation. Andre's
-  standing rule applies — **don't ship dead features**: an endorsement mechanism reachable only by daemon
-  IPC is the `DOD-SETTINGS-SURFACE-1` mistake repeated. — ❌
+  endorsement for a counterparty; list the items pending my consent (`DOD-END-PENDING-1`); accept;
+  **refuse, with an optional message back to the issuer** (`M10B-D4`); read a refusal message on an
+  endorsement I issued; list the ones I hold and their status; withdraw one I issued; per-counterparty
+  include/omit at presentation; **see my remaining issuance quota and when the window frees up**
+  (`DOD-END-QUOTA-1` — a quota the operator cannot see is a wall they hit blind). Andre's standing rule
+  applies — **don't ship dead features**: an endorsement mechanism reachable only by daemon IPC is the
+  `DOD-SETTINGS-SURFACE-1` mistake repeated. — ❌
 - **DOD-END-JOURNEY-1** — **live journey, across real processes.** Bob's agent supplies an endorsement for
   Alice → portal authenticates Bob, scans, mints, notarizes → Alice receives it PENDING → Alice accepts →
   Alice presents it to Charlie → Charlie verifies (hash ∈ directory, active) and consumes it with
   quoted-untrusted framing. **Four cases, all run, none assumed:**
-  - **(a) refusal** — Alice refuses; the endorsement is unpresentable and invisible to Charlie by every
-    path (`DOD-END-DISCOVER-1`).
+  - **(a) refusal, with the correction loop** — Alice refuses **with a message**; the endorsement is
+    unpresentable and invisible to Charlie by every path (`DOD-END-DISCOVER-1`); Bob receives her
+    message, issues a corrected endorsement, and Alice accepts that one (`M10B-D4`).
+  - **(a2) subject offline at mint** — Alice's daemon is DOWN when Bob submits. The envelope sits in the
+    pickup path, and lands as pending when her daemon next starts; on selecting the agent she is told an
+    item awaits her decision (`DOD-END-DELIVER-1`, `DOD-END-PENDING-1`). Nothing errors, nothing is lost,
+    and the notification does not repeat once seen.
   - **(b) same-operator positive** — Alice's established Agent A endorses her new Agent B; Bob, who has
     whitelisted Agent A, sees the `same_operator` fact rendered as a positive, and a `min_count` floor
     does not count it (`DOD-END-COUNT-1`).
@@ -298,7 +404,12 @@ the additions M10B is accountable for.
   [[M10-TYPE-PLAYBOOK]] run — **`git status --porcelain` clean and `git diff --stat` empty in cello-client
   AND trustless-cello for the entire exercise.** This is what proves the milestone built a *source* and
   two *mechanisms* rather than an endorsement feature: if the second type needs code, the generalisation
-  failed and the attestation family is not actually open. — ❌
+  failed and the attestation family is not actually open.
+  **The type is a THROWAWAY — `client_canary` — registry-retired the moment the run passes**, exactly as
+  `canary_test` was in `DOD-ZEROBUMP-CANARY-1`. This resolves what would otherwise contradict the scope
+  fence and [[M10B-PROCEDURE]] §5d ("attestation types beyond `endorsement` are OUT"): the proof needs a
+  second type, not a second *product*. **Do not reach into the parked commercial family for it** — a
+  referral or review type ships policy decisions that have not been made. — ❌
 
 ---
 
@@ -327,6 +438,71 @@ the discussion-of-record. Restated here because this is the milestone that imple
   it and is not re-litigated per call.
 - **M10-D5** — `subject_kind` is in the hash; endorsements may target the account or a specific agent,
   defaulting to the specific agent unless requested and agreed.
+- **M10B-D2 (2026-07-28) — the ingress is a DIRECTORY-MEDIATED SEALED SUBMISSION QUEUE, not a
+  daemon→portal call.** Andre, on being offered a direct portal API: *"shouldn't this go through the
+  directory… I'm kind of loath to put that directly into the portal."* Shape: Bob's daemon signs the
+  submission with his agent key, seals it to the portal's intake key, writes it to any directory node;
+  the portal drains, verifies the signature (deriving `issuer_pubkey` from it — `INV-ATTRIBUTION` comes
+  free), scans, mints, notarizes through the unchanged chokepoint. The directory holds a blob it cannot
+  read, the same posture as `pickup_queue`. **Three reasons it beats the direct call:** (1) it avoids a
+  migration trap — spec §7's destination is per-node intake, and the amendment's promise that moving
+  there is *"a routing change, not a migration"* is only true if the CLIENT's wire contract points at
+  the directory from day one; with a daemon→portal call, moving intake later means changing every
+  installed client. (2) Layering — the daemon has never called the portal (verified: no portal URL, no
+  HTTP client, no portal package anywhere in the daemon), and the portal has no transport stack (only
+  `crypto` + `protocol-types`); a direct ingress would be the first daemon→portal coupling ever and
+  would pin a portal URL into every client's config permanently. (3) Availability — submission rides the
+  3-node federated layer with existing failover, so a brief portal outage queues rather than failing at
+  the moment Bob submits. **Rejected:** a portal-side CELLO intake agent (spec §7's literal words) —
+  it requires a persistent libp2p daemon inside a Next.js app on Fargate, and §7's "intake agent" phrase
+  governs the DESTINATION, not the launch shape, exactly as its own constraint-1 amendment does; and the
+  direct daemon→portal API call, for (1) and (2) above. **Costs, accepted:** a directory migration and
+  a portal drain loop — both ride work the milestone already needs (the one batched directory deploy for
+  `DOD-END-REVOKE-2`). **Opens one new question**, assigned to `DOD-END-ARCH-1`: how the daemon learns
+  the portal's intake key (manifest is the candidate) and how that key rotates.
+- **M10B-D3 (2026-07-28) — `same_operator` is FROZEN INSIDE THE HASH, in neutral wording.** Andre:
+  *"Frozen inside the hash. It doesn't need to be long… endorser and endorsee owned by the same account
+  (neutral tone)."* Composed at intake before hashing, consistent with scan-before-hash. Accepted
+  residual: ownership transfer can make a frozen fact stale; it reads as of the mint date, which travels
+  with it (D-26). Neutral tone is load-bearing — D-27 already says the mark is a fact, not a warning.
+- **M10B-D4 (2026-07-28) — refusal carries an OPTIONAL message back to the issuer; there is no edit, so
+  refuse-and-reissue IS the correction loop.** Andre: *"When you refuse, you can include a message with
+  your refusal… what if Bob has given you an endorsement that mistakenly has said something you don't
+  want it to say. This is kinda like a LinkedIn recommendation… but we don't really have edit, so it's
+  just refuse and redo."* The message is the subject's CHOICE — a silent refusal tells the issuer
+  nothing, which is what keeps D-24 intact for anyone who wants it. Consequences: re-issuance after
+  refusal is explicitly allowed; it counts against `DOD-END-QUOTA-1` (exempting it makes retry
+  unbounded); and the message is operator-authored free text, so it is scanned like any other
+  client-supplied plaintext — the same injection surface pointed the other way.
+- **M10B-D5 (2026-07-28) — pending items get their OWN surface; they are NOT transcript-inbox items.**
+  Andre, reasoning to it live: *"the inbox normally is for transcripts, you get rid of them from your
+  inbox by reading the transcript or dismissing the transcript. This doesn't have a transcript. So…
+  maybe we should make it a completely different class."* Item lifetime and notification lifetime
+  differ: the item persists until accepted or refused; the notification is raised once and stops once
+  seen, so `cello_use_agent` does not re-nag. **Named by consent state, never by type** — that is what
+  keeps a whole new queue compatible with `INV-ZEROBUMP`.
+- **M10B-D6 (2026-07-28) — issuance quota: 100 per rolling 30 days, configurable, enforced per
+  ACCOUNT.** Andre: *"let's cap it at a hundred for now, but make that a parameter… rolling thirty days
+  is probably better than a calendar."* Moves rate limiting from OUT to IN. Rolling window over calendar
+  month (a calendar month gives a burst at every reset). Portal-enforced because that is where minting
+  happens. **Per-account is this document's call, not Andre's number changing meaning:** a per-agent cap
+  is bypassed by spinning up agents, which is the identical farming hole `INV-NO-SELF-STANDING` exists to
+  close — capping per agent would leave the front door open while bolting the back. The cap and window
+  are configuration so raising them is a config change, and the refusal names the cause, the cap, and
+  when the window frees up.
+- **M10B-D7 (2026-07-28) — `endorsement` stays the only type string; "attestation" does not enter
+  code.** Andre asked for a recommendation; this is it, and it is cheap to reverse now and expensive
+  after a second type ships. The reasoning is forced rather than aesthetic: the wire already HAS an
+  umbrella — everything is a signal and `type` is data — so "attestation" would be a third level
+  (signal → attestation → endorsement) with no code keying on it. And it could not gain code meaning
+  without something testing membership in the family, which is a type-shaped construct and a
+  `DOD-END-INV-ZEROBUMP` violation. The family already has a name in code, and it is `issuer_kind:
+  agent`. So: "attestation" stays the design-vault umbrella (as it has been since 2026-04-10),
+  "endorsement" stays the type. Doc cleanup is fenced to the M10B docs + [[M10-TYPE-PLAYBOOK]].
+- **M10B-D8 (2026-07-28) — no anonymous endorsements; D-8a does not reach this signal.** Andre: *"No
+  anonymous endorsements."* D-8a governs signals that have both variants; an endorsement's worth is the
+  recipient recognising the issuer (`DOD-END-FLOOR-2` joins on exactly that), so an anonymous one is an
+  unattributable claim — worth nothing, and precisely what a farm would emit.
 - **M10B-D1 (2026-07-28) — the milestone is a SOURCE plus two MECHANISMS, not a feature.** Fork: ship
   "endorsements" as a feature, versus generalise the client-supplied source and the consent/withdrawal
   mechanisms so the attestation family opens behind them. Chose the latter; `DOD-END-PLAYBOOK-1` is the
@@ -337,18 +513,21 @@ the discussion-of-record. Restated here because this is the milestone that imple
 
 ---
 
-## Open questions — flagged, not decided
+## Open questions
 
-1. **Does the endorser learn their endorsement was refused?** Telling Bob leaks Alice's decision and turns
-   refusal into a signal an attacker can probe; not telling him means honest endorsers never know their
-   endorsement landed. A genuine fork with a privacy side and a usability side. Bears on `DOD-END-ACCEPT-1`.
-2. **`same_operator`: inside the hash or served alongside?** Frozen-and-unforgeable versus
-   correctable-when-linkage-changes. Bears on `DOD-END-ARCH-1` and on agent succession.
-3. **Vocabulary: one type or a family?** Whether "attestation" becomes the umbrella term in code and docs,
-   or stays a design-vault word while the wire keeps calling everything a signal. Bears on `DOD-END-ARCH-1`.
-4. **Issuance rate limiting.** `server-infrastructure.md` G-17 specifies 10 endorsements/month per agent as
-   an anti-farming measure. Not scoped here; is the same-operator rule plus submitter accountability
-   sufficient for launch?
+**All four opened with this milestone were answered by Andre on 2026-07-28 — do not re-raise them.**
+Refusal messaging → `M10B-D4`. `same_operator` placement → `M10B-D3`. Vocabulary → `M10B-D7`. Rate
+limiting → `M10B-D6` (and it moved INTO scope as `DOD-END-QUOTA-1`). Anonymous variants → `M10B-D8`.
+Ingress shape → `M10B-D2`.
+
+Note on the prior number: `server-infrastructure.md` G-17 specifies **10** endorsements/month per agent.
+`M10B-D6` supersedes it — 100 per rolling 30 days, per account, configurable. Update G-17 or annotate it
+when `DOD-END-QUOTA-1` lands; two live numbers for one knob is how the wrong one gets implemented.
+
+What remains genuinely open is scoped INTO `DOD-END-ARCH-1` rather than left floating: the intake-key
+distribution and rotation question opened by `M10B-D2`, the queue's ack/poison and retention semantics,
+and how an account subject is named at intake. None of these blocks the milestone; all are the
+determination's job.
 
 ## Parked
 
