@@ -1037,3 +1037,110 @@ today). DNS (`directory-gcp-use1.cello.mygentic.ai`) is deliberately not created
 AWS, which is hibernated, and the node does not need it to boot.
 
 Directory suite: 2 failures of 1380, both the parked **M12-P7** chain assertion. lint + tsc clean.
+
+---
+
+## Entry 22 — 2026-07-28 — `gcp-use1` is LIVE, and the four things that stood between it and a boot
+
+### Live evidence
+
+```
+HEALTH: {"status":"ok","nodeId":"gcp-use1","schemaVersion":49}
+{"event":"directory.service.started","nodeId":"gcp-use1","region":"us-east1","environment":"dev","schemaVersion":49}
+{"event":"adapter.initialised","adapterName":"BootstrapEndpoint",
+ "multiaddr":"/dns4/directory-gcp-use1.cello.mygentic.ai/tcp/8080/ws/p2p/12D3KooWMH58hm8xpuwgwaNSvnvXBuc126jfuUMVbrGNcU2MeEAX"}
+```
+
+MIG instance health **HEALTHY**. Public address 34.75.172.108. Cloud SQL reachable only at the PSC
+address 10.10.0.3, from this node's subnet, with no public IP and no peering.
+
+`nodeId: gcp-use1` and `region: us-east1` — not `us-east-1`, which is what the `AWS_REGION` fix was
+for. And the peerId is **unchanged across three instance replacements**, because the transport key
+comes from Secret Manager rather than being generated per boot. That is the property that makes a
+MIG safe for a stateful identity.
+
+**EMPTY-REGISTRY BOOT confirmed** (M12-D6 asked for this in P2): `node.registry.skipped` with the
+reason named, no relay in the pool, node healthy and serving. A GCP directory boots and functions
+with no Parameter-Store equivalent, exactly as the decision predicted.
+
+**IAP login** (Entry 5 carry-forward): `=== IAP LOGIN OK: cello-gcp-use1-8cpn Tue Jul 28 21:07:28 UTC 2026 ===`
+
+### Four failures between "applied" and "booting", none of which reading would have found
+
+**1. The node could not pull its own image.** `artifactregistry.reader` is not implicit — org policy
+strips every automatic grant. Crash loop before a line of CELLO code ran.
+
+**2. `objectViewer` does not include `storage.buckets.get`.** `GcsCloudStorageProvider` probes
+`bucket.exists()` on a 404 because GCS 404s a missing BUCKET exactly as it 404s a missing OBJECT,
+and returning "not found" for a mistyped bucket would report a config error as "no manifest
+published yet" — which the relay-pool loader treats as benign and never retries. The probe is
+deliberate, so `storage.bucketViewer` is the fix rather than removing it.
+
+**3. Container-Optimized OS drops everything at the HOST firewall.** This is the one worth
+remembering:
+
+```
+Chain INPUT (policy DROP)
+1 ACCEPT all  state RELATED,ESTABLISHED
+2 ACCEPT all
+3 ACCEPT icmp
+4 ACCEPT tcp  dpt:22
+```
+
+The VPC firewall rules were correct and useless — the packet is allowed onto the wire and then
+dropped by the host. Every symptom pointed somewhere else: MIG health probes timed out, the
+autohealer reset the instance on a loop, `nc` to 4000/8080 hung, and the SSH host key changed on
+every attempt (COS regenerates host keys each boot from its read-only `/etc` overlay, so the
+host-key churn was a *symptom of the reset loop*, not a separate problem). `cello-firewall.service`
+now opens 4000/8080/9090, ordered `Before=cello-directory.service` so the probe path is open while
+the container is still pulling — otherwise a slow first pull looks like an unhealthy node and the
+autohealer fights the boot.
+
+**4. The advertised bootstrap address was undialable.** The node published `/tcp/80/ws`, which
+describes the AWS shape where an ALB fronts 80 → 8080. A GCP node has no load balancer and listens
+on 8080 itself. Nothing would have caught this until `DOD-MANIFEST-GCP-1`, as clients failing to
+connect with the cause two units away.
+
+### The GCP adapters, proven against real cloud
+
+Run inside the node's own container, as its own workload identity, against its own resources —
+which is the only version of this proof that means anything.
+
+**Cloud KMS** — `{"kms_roundtrip_ok":true,"plaintext_bytes":32,"ciphertext_bytes":112,"ciphertext_is_not_plaintext":true}`
+and, on garbage ciphertext, `{"fail_closed":true,"threw":"3 INVALID_ARGUMENT: Decryption failed: the ciphertext is invalid."}`.
+Share material wraps and unwraps; a bad ciphertext throws rather than yielding substitute bytes.
+
+**GCS storage** — `{"missing_object_is_undefined":true,"missing_bucket_throws":true}`. The
+distinction the adapter exists to make, holding against the real service.
+
+**GCS audit shipper** — object present in `gs://cello-audit-gcp-use1/audit/2026-07-28/…jsonl` (123
+bytes), verified from OUTSIDE the node.
+
+A process note: my first audit proof reported `audit_shipped_without_error: true` while the bucket
+stayed empty. The script had passed a logger whose `warn` was a no-op, and `ship()` reports a failed
+write via `warn("audit.shipper.degraded")` — so I had written a hollow assertion into my own proof.
+The bucket, checked independently, is what caught it. **Check the artifact, not the reporter.**
+
+### The backup timer: run it, do not merely install it
+
+Triggering `cello-backup.service` by hand found two independent defects, either of which alone
+produces a nightly backup containing nothing — on the only copy of a node's FROST shares that
+exists off the VM:
+
+- The image shipped **pg_dump 15** (bookworm's default) against **Cloud SQL 17**. pg_dump refuses on
+  a major mismatch. Fixed by installing `postgresql-client-17` from PGDG.
+- The failure was **masked**: `pg_dump … | gzip > f || fail` reports the status of the LAST command
+  in the pipeline. gzip compressed nothing and succeeded. Only the plausibility floor caught it —
+  `dump is implausibly small (20 bytes) — refusing to upload it` — a guard written as
+  belt-and-braces that turned out to be the only thing between this and a bucket of valid-looking
+  empty backups.
+
+Writing the tests then found the **same masking idiom a third time** in this unit, in the backup
+script's own credential parsing: `eval "$(python3 …)"` swallowed `missing field: host` and surfaced
+it as `DB_HOST: unbound variable`. Three instances of one shell idiom — `eval "$(cmd)"` and
+`a | b || fail` both report the wrong command's status — is not a coincidence. It is the idiom, and
+it is now tested by execution in three places rather than trusted by reading.
+
+### Suite
+
+2 failures of **1389**, both the parked M12-P7 chain assertion. lint + tsc clean.
