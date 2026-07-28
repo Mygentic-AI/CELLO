@@ -51,7 +51,9 @@ tier boundary.
 | Cloud Build P4SA grants | `cloudbuild.serviceAgent` + `secretmanager.admin` (org policy strips ALL automatic service-agent grants — both had to be granted explicitly for the GitHub connection) | 2026-07-28 | Terraform |
 | Artifact Registry `cello` | `us-east1-docker.pkg.dev/cello-infra/cello` — docker; images pushed by Cloud Build ONLY. Contains `directory:manual-dedc55ac` and `relay:manual-50e06e3d` (+latest tags) — both built by Cloud Build | 2026-07-28 | Terraform |
 | Bucket `cello-infra_cloudbuild` | Cloud Build staging (auto-created by first submit) | 2026-07-28 | service-created |
-| Cloud Build connection `cello-github` | us-east1, **PENDING_USER_OAUTH — Andre must complete the GitHub authorization link** before path-filtered triggers can be created | 2026-07-28 | gcloud (import to TF with the trigger unit) |
+| Cloud Build connection `cello-github` | us-east1, **COMPLETE** (OAuth by Andre 2026-07-28; GitHub App installation 149532787 on Mygentic-AI, repo CELLO only; token secret P4SA-managed) | 2026-07-28 | gcloud bootstrap, imported into TF |
+| Cloud Build repo link `CELLO` | → https://github.com/Mygentic-AI/CELLO.git | 2026-07-28 | Terraform |
+| Triggers `cello-directory-image` / `cello-relay-image` | branch `^main$`, path-filtered per package (+ shared root files), run as `cello-cloud-build` SA | 2026-07-28 | Terraform |
 
 **Nothing else exists in this project.** No VMs, no Cloud SQL, no firewall rules; compute
 default SA present but attached to nothing and granted nothing.
