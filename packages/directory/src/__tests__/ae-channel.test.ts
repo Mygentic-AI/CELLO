@@ -208,10 +208,70 @@ describe("ae-channel: mutual handshake + rounds over the wire", () => {
     expect(dialerResult.reason).toBe("peerid_mismatch");
   });
 
-  it("FAILS CLOSED: unknown nodeId → manifest_pubkey_mismatch", async () => {
+  it("FAILS CLOSED: a nodeId absent from the manifest → manifest_pubkey_mismatch", async () => {
     const ghost: AeNodeIdentity = { nodeId: "azure-xyz", peerId: "12D3KooWGhost", sign: (tbs) => ed25519.sign(tbs, seedB) };
     const { dialerResult } = await runBoth({ responderId: ghost });
     expect(dialerResult.ok).toBe(false);
+    if (dialerResult.ok) return;
+    expect(dialerResult.reason).toBe("manifest_pubkey_mismatch");
+  });
+
+  it("FAILS CLOSED: a VALID consortium member answering for a node we did not dial → node_id_mismatch", async () => {
+    // We dial expecting aws-use1 but the (legitimate, manifest-listed) gcp-usc1 answers — a
+    // routing/endpoint mis-binding. Deliberately NOT peerid_mismatch: the §1c rotation-skew retry
+    // keys on manifest/peerid mismatches and must never fire on a plain wrong-endpoint dial.
+    const [wireA, wireB] = wirePair();
+    const responder = serveAeResponder({
+      wire: wireB, manifest, identity: B, actualRemotePeerId: A.peerId, store: new MemStore(),
+      nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
+    });
+    const dialer = runAeDialer({
+      wire: wireA, manifest, identity: A, remoteNodeId: "aws-use1", actualRemotePeerId: B.peerId,
+      store: new MemStore(), nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
+    });
+    const [result] = await Promise.all([dialer, responder.catch(() => undefined)]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("node_id_mismatch");
+  });
+
+  it("RESPONDER-side fail closed: a dialer signing with the WRONG key is refused, nothing served", async () => {
+    // The mirror of the wrong-key dialer test — this one pins the RESPONDER's verification of
+    // ae_auth_a. Deleting the responder's verdict check would pass every dialer-side test; this
+    // one fails (the revert test the review demanded).
+    const evilA: AeNodeIdentity = { ...A, sign: (tbs) => ed25519.sign(tbs, new Uint8Array(32).fill(0xdd)) };
+    const [wireA, wireB] = wirePair();
+    const responderStore = new MemStore();
+    responderStore.revocations.set("agX", rev("agX"));
+    const responder = serveAeResponder({
+      wire: wireB, manifest, identity: B, actualRemotePeerId: A.peerId, store: responderStore,
+      nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
+    });
+    const dialer = runAeDialer({
+      wire: wireA, manifest, identity: evilA, remoteNodeId: B.nodeId, actualRemotePeerId: B.peerId,
+      store: new MemStore(), nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
+    });
+    const [respOutcome, dialOutcome] = await Promise.allSettled([responder, dialer]);
+    expect(respOutcome.status).toBe("rejected"); // responder refused the invalid counter-signature
+    if (respOutcome.status === "rejected") {
+      expect(String(respOutcome.reason)).toMatch(/signature_invalid/);
+    }
+    // And the dialer never got a served round (its state request met a closed wire).
+    if (dialOutcome.status === "fulfilled") {
+      expect(dialOutcome.value.ok).toBe(false);
+    }
+  });
+
+  it("FAILS CLOSED: a peer that goes silent after hello times out (frame deadline)", async () => {
+    const [wireA] = wirePair(); // responder end never driven — silence
+    const result = await runAeDialer({
+      wire: wireA, manifest, identity: A, remoteNodeId: B.nodeId, actualRemotePeerId: B.peerId,
+      store: new MemStore(), frameTimeoutMs: 50,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("protocol_error");
+    expect(result.detail).toMatch(/timed out/);
   });
 
   it("FAILS CLOSED: self-dial (nodeId_a === nodeId_b) is refused (anti-reflection)", async () => {

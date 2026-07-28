@@ -249,6 +249,11 @@ export class PgAeStore implements AeStoreView {
    * Tier-A: insert-if-absent by NATURAL key (ON CONFLICT DO NOTHING). Returns the number actually
    * inserted (not the number offered) — so a same-key/different-hash fork surfaces as a no-insert
    * rather than a silent overwrite. BYTEA columns are hex-decoded back to bytes.
+   *
+   * WIRE-INPUT DISCIPLINE: records may arrive from an authenticated PEER, and authentication is
+   * not honesty. Every record's hash is RECOMPUTED from its body — a record whose claimed hash
+   * does not match its content is a protocol violation and throws (fail loud; the caller's round
+   * fails rather than a poisoned row landing under a false content address).
    */
   async applyTierA(table: string, records: readonly TierARecord[]): Promise<number> {
     if (records.length === 0) return 0;
@@ -258,6 +263,12 @@ export class PgAeStore implements AeStoreView {
     let inserted = 0;
     for (const rec of records) {
       const body = rec.body as Record<string, unknown>;
+      const recomputed = encodeTierARecord(t.spec, body as TableRow).hash;
+      if (recomputed !== rec.hash) {
+        throw new Error(
+          `pg-ae-store: ${t.spec.table} record content does not match its claimed hash (claimed ${rec.hash.slice(0, 16)}…, actual ${recomputed.slice(0, 16)}…) — refusing to apply`,
+        );
+      }
       const placeholders = cols
         .map((c, i) => (t.bytea.includes(c) ? `decode($${i + 1},'hex')` : `$${i + 1}`))
         .join(", ");
@@ -289,6 +300,17 @@ export class PgAeStore implements AeStoreView {
   }
 
   async #applyOneTierB(t: TierBPg, rec: TierBRecord): Promise<number> {
+    // WIRE-INPUT DISCIPLINE (kill-switch critical): the row is LOCKED by rec.key but the merge
+    // output would be WRITTEN by the body's key column. If those disagree — a malicious
+    // authenticated peer sending {key: victimA, body: {agent_id: victimB, …}} — the write lands on
+    // an UNLOCKED, UNREAD row: the burn-OR was computed against the wrong row and victimB's
+    // burned=true could be overwritten. Key and body must agree or nothing is applied.
+    const bodyKey = (rec.body as Record<string, unknown>)[t.keyColumn];
+    if (bodyKey !== rec.key) {
+      throw new Error(
+        `pg-ae-store: ${t.spec.table} record key '${rec.key}' does not match its body ${t.keyColumn} '${String(bodyKey)}' — refusing to apply`,
+      );
+    }
     const MAX_ATTEMPTS = 3;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const client = await this.#pool.connect();

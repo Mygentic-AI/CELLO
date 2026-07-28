@@ -104,9 +104,16 @@ async function peerAdvertisement(peer: AeStoreView): Promise<PeerRoundState> {
 export async function runAntiEntropyRound(local: AeStoreView, peer: AeStoreView): Promise<RoundResult> {
   const plan = planRound(await localState(local), await peerAdvertisement(peer));
 
+  // Iterate in the LOCAL registry's table order — never the peer's advertisement order. Two
+  // reasons: (1) a table the local store doesn't know is simply never pulled (a hostile peer
+  // cannot steer an apply at an arbitrary table name); (2) apply order stays under OUR control,
+  // which is what design §3.3's FK-dependency ordering requires once FK-bearing tables join the
+  // sync set (profiles → suspensions; accounts → profiles).
   let tierAPulled = 0;
   let tierAApplied = 0;
-  for (const [table, hashes] of plan.tierA) {
+  for (const table of await local.tierATables()) {
+    const hashes = plan.tierA.get(table);
+    if (!hashes || hashes.length === 0) continue;
     const records = await peer.serveTierA(table, hashes);
     tierAPulled += records.length;
     tierAApplied += await local.applyTierA(table, records);
@@ -114,7 +121,9 @@ export async function runAntiEntropyRound(local: AeStoreView, peer: AeStoreView)
 
   let tierBPulled = 0;
   let tierBApplied = 0;
-  for (const [table, keys] of plan.tierB) {
+  for (const table of await local.tierBTables()) {
+    const keys = plan.tierB.get(table);
+    if (!keys || keys.length === 0) continue;
     const records = await peer.serveTierB(table, keys);
     tierBPulled += records.length;
     tierBApplied += await local.applyTierB(table, records);

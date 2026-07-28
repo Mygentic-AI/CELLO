@@ -65,14 +65,49 @@ function decodeFrame(bytes: Uint8Array): Record<string, unknown> {
  *  Always terminal for the stream; the message names what was violated. */
 export class AeProtocolError extends Error {}
 
-async function nextFrame(wire: AeWire, expectType: string): Promise<Record<string, unknown>> {
-  const bytes = await wire.next();
+/** Per-frame receive deadline. A peer that goes silent mid-conversation (post-hello, mid-round)
+ *  must not park this side forever — the wire is closed and the exchange fails. */
+const DEFAULT_FRAME_TIMEOUT_MS = 30_000;
+
+/** Upper bound on any wire-carried collection (hash lists, key lists, record batches, per-table
+ *  version maps). Far above real data volumes; exists so an authenticated-but-hostile peer cannot
+ *  stream an unbounded advertisement into memory. Exceeding it is a protocol violation. */
+const MAX_WIRE_ITEMS = 250_000;
+
+async function nextFrame(wire: AeWire, expectType: string, timeoutMs: number): Promise<Record<string, unknown>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new AeProtocolError(`timed out after ${timeoutMs}ms waiting for ${expectType}`)), timeoutMs);
+    timer.unref?.();
+  });
+  let bytes: Uint8Array | null;
+  try {
+    bytes = await Promise.race([wire.next(), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   if (bytes === null) throw new AeProtocolError(`wire closed while waiting for ${expectType}`);
-  const frame = decodeFrame(bytes);
+  let frame: Record<string, unknown>;
+  try {
+    frame = decodeFrame(bytes);
+  } catch {
+    throw new AeProtocolError(`malformed CBOR frame while waiting for ${expectType}`);
+  }
+  if (frame === null || typeof frame !== "object") {
+    throw new AeProtocolError(`non-map CBOR frame while waiting for ${expectType}`);
+  }
   if (frame["type"] !== expectType) {
     throw new AeProtocolError(`expected ${expectType}, got ${String(frame["type"])}`);
   }
   return frame;
+}
+
+/** Bound a wire-carried array (or map entry count) — see MAX_WIRE_ITEMS. */
+function bounded<T>(items: readonly T[], what: string): readonly T[] {
+  if (items.length > MAX_WIRE_ITEMS) {
+    throw new AeProtocolError(`${what} exceeds the wire bound (${items.length} > ${MAX_WIRE_ITEMS})`);
+  }
+  return items;
 }
 
 function str(frame: Record<string, unknown>, field: string): string {
@@ -111,16 +146,43 @@ async function buildWireState(store: AeStoreView): Promise<WireState> {
  */
 class RemoteStoreView implements AeStoreView {
   #wire: AeWire;
+  #timeoutMs: number;
   #state: WireState = { tierA: {}, tierB: {} };
-  constructor(wire: AeWire) { this.#wire = wire; }
+  constructor(wire: AeWire, timeoutMs: number) { this.#wire = wire; this.#timeoutMs = timeoutMs; }
 
-  /** Fetch a fresh advertisement — call once per round, BEFORE handing this view to the engine. */
+  /** Fetch a fresh advertisement — call once per round, BEFORE handing this view to the engine.
+   *  The state SHAPE is validated here (wire input): table→string[] and table→{key:hash}, all
+   *  strings, all bounded — a malformed advertisement fails the round, never reaches the engine. */
   async refresh(): Promise<void> {
     this.#wire.send(encodeAeFrame({ type: "ae_state_req" }));
-    const frame = await nextFrame(this.#wire, "ae_state");
-    const state = frame["state"] as WireState | undefined;
-    if (!state || typeof state !== "object") throw new AeProtocolError("ae_state missing state");
-    this.#state = state;
+    const frame = await nextFrame(this.#wire, "ae_state", this.#timeoutMs);
+    const raw = frame["state"];
+    if (raw === null || typeof raw !== "object") throw new AeProtocolError("ae_state missing state");
+    const tierARaw = (raw as { tierA?: unknown }).tierA;
+    const tierBRaw = (raw as { tierB?: unknown }).tierB;
+    if (tierARaw === null || typeof tierARaw !== "object" || tierBRaw === null || typeof tierBRaw !== "object") {
+      throw new AeProtocolError("ae_state tiers missing or not maps");
+    }
+    const tierA: Record<string, string[]> = {};
+    for (const [table, hashes] of Object.entries(tierARaw as Record<string, unknown>)) {
+      if (!Array.isArray(hashes) || hashes.some((h) => typeof h !== "string")) {
+        throw new AeProtocolError(`ae_state tierA['${table}'] is not a string array`);
+      }
+      tierA[table] = [...bounded(hashes as string[], `tierA['${table}'] hashes`)];
+    }
+    const tierB: Record<string, Record<string, string>> = {};
+    for (const [table, versions] of Object.entries(tierBRaw as Record<string, unknown>)) {
+      if (versions === null || typeof versions !== "object" || Array.isArray(versions)) {
+        throw new AeProtocolError(`ae_state tierB['${table}'] is not a map`);
+      }
+      const entries = Object.entries(versions as Record<string, unknown>);
+      bounded(entries, `tierB['${table}'] versions`);
+      if (entries.some(([, v]) => typeof v !== "string")) {
+        throw new AeProtocolError(`ae_state tierB['${table}'] has a non-string version`);
+      }
+      tierB[table] = Object.fromEntries(entries) as Record<string, string>;
+    }
+    this.#state = { tierA, tierB };
   }
 
   tierATables(): string[] { return Object.keys(this.#state.tierA); }
@@ -128,15 +190,23 @@ class RemoteStoreView implements AeStoreView {
   tierARecordHashes(table: string): string[] { return this.#state.tierA[table] ?? []; }
   tierBVersions(table: string): Map<string, string> { return new Map(Object.entries(this.#state.tierB[table] ?? {})); }
 
+  // Served records are WIRE INPUT from an authenticated-but-not-therefore-honest peer: keep only
+  // records we actually REQUESTED (pull discipline enforced locally, not assumed of the peer).
+  // Content-vs-address validation happens at the store (applyTierA recomputes hashes; applyTierB
+  // rejects key/body mismatches) — both layers must hold independently.
   async serveTierA(table: string, hashes: readonly string[]): Promise<TierARecord[]> {
     this.#wire.send(encodeAeFrame({ type: "ae_pull_a", table, hashes: [...hashes] }));
-    const frame = await nextFrame(this.#wire, "ae_records_a");
-    return (frame["records"] as TierARecord[] | undefined) ?? [];
+    const frame = await nextFrame(this.#wire, "ae_records_a", this.#timeoutMs);
+    const records = bounded((frame["records"] as TierARecord[] | undefined) ?? [], "ae_records_a");
+    const requested = new Set(hashes);
+    return records.filter((r) => typeof r?.hash === "string" && requested.has(r.hash));
   }
   async serveTierB(table: string, keys: readonly string[]): Promise<TierBRecord[]> {
     this.#wire.send(encodeAeFrame({ type: "ae_pull_b", table, keys: [...keys] }));
-    const frame = await nextFrame(this.#wire, "ae_records_b");
-    return (frame["records"] as TierBRecord[] | undefined) ?? [];
+    const frame = await nextFrame(this.#wire, "ae_records_b", this.#timeoutMs);
+    const records = bounded((frame["records"] as TierBRecord[] | undefined) ?? [], "ae_records_b");
+    const requested = new Set(keys);
+    return records.filter((r) => typeof r?.key === "string" && requested.has(r.key));
   }
   applyTierA(): never { throw new AeProtocolError("applyTierA is local-only, never remote"); }
   applyTierB(): never { throw new AeProtocolError("applyTierB is local-only, never remote"); }
@@ -157,11 +227,20 @@ export interface AeDialerInput {
   /** How many pull rounds to run after auth (each = fresh advertisement + pulls). */
   rounds?: number;
   nowMs?: () => number;
+  /** Per-frame receive deadline (default 30s) — a silent peer fails the exchange, never parks it. */
+  frameTimeoutMs?: number;
 }
 
 export type AeDialerResult =
   | { ok: true; rounds: RoundResult[] }
-  | { ok: false; reason: HandshakeFailReason | "protocol_error"; detail?: string };
+  | {
+      ok: false;
+      /** `node_id_mismatch`: a valid consortium member answered, but not the one we dialed —
+       *  a routing/endpoint mis-binding, NOT a channel-binding failure (distinct so the §1c
+       *  rotation-skew retry, keyed on peerid/pubkey mismatches, never fires on it). */
+      reason: HandshakeFailReason | "node_id_mismatch" | "protocol_error";
+      detail?: string;
+    };
 
 /**
  * Dial-side driver: handshake (slot A), then `rounds` anti-entropy rounds pulling the peer's
@@ -172,6 +251,7 @@ export async function runAeDialer(input: AeDialerInput): Promise<AeDialerResult>
   const { wire, manifest, identity, remoteNodeId, actualRemotePeerId, store } = input;
   const nowMs = input.nowMs ?? (() => Date.now());
   const roundCount = input.rounds ?? 1;
+  const timeoutMs = input.frameTimeoutMs ?? DEFAULT_FRAME_TIMEOUT_MS;
   try {
     // 1. hello with our freshly-minted nonce (the replay gate for OUR slot).
     const nonceA = randomBytes(32).toString("hex");
@@ -179,11 +259,11 @@ export async function runAeDialer(input: AeDialerInput): Promise<AeDialerResult>
 
     // 2. the responder's auth. It must claim the node we dialed — a valid OTHER consortium
     //    member answering here is still a mis-binding (DNS/endpoint confusion) and is refused.
-    const authB = await nextFrame(wire, "ae_auth_b");
+    const authB = await nextFrame(wire, "ae_auth_b", timeoutMs);
     const claimedNodeId = str(authB, "node_id");
     if (claimedNodeId !== remoteNodeId) {
       wire.close();
-      return { ok: false, reason: "peerid_mismatch", detail: `dialed ${remoteNodeId}, answered by ${claimedNodeId}` };
+      return { ok: false, reason: "node_id_mismatch", detail: `dialed ${remoteNodeId}, answered by ${claimedNodeId}` };
     }
     const params: AePeerAuthParams = {
       nodeIdA: identity.nodeId,
@@ -210,12 +290,24 @@ export async function runAeDialer(input: AeDialerInput): Promise<AeDialerResult>
       return { ok: false, reason: verdict.reason };
     }
 
-    // 3. our signature over the SAME TBS (throws on A==B — anti-reflection).
-    const sigA = await identity.sign(buildAePeerAuthTbs(params));
+    // 3. our signature over the SAME TBS. The builder's own input validation (bad nonce shape,
+    //    newline injection, A==B anti-reflection) throws on hostile wire values — every such
+    //    failure is a protocol violation by the peer, converted here rather than classified by
+    //    fragile message matching downstream.
+    let tbsA: Uint8Array;
+    try {
+      tbsA = buildAePeerAuthTbs(params);
+    } catch (err) {
+      throw new AeProtocolError(
+        `peer-supplied handshake values rejected by the TBS builder: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    // A sign() failure is OUR key infrastructure, not the peer — deliberately NOT converted.
+    const sigA = await identity.sign(tbsA);
     wire.send(encodeAeFrame({ type: "ae_auth_a", sig: sigA }));
 
     // 4. rounds: fresh advertisement each time, then the proven engine.
-    const remote = new RemoteStoreView(wire);
+    const remote = new RemoteStoreView(wire, timeoutMs);
     const rounds: RoundResult[] = [];
     for (let i = 0; i < roundCount; i++) {
       await remote.refresh();
@@ -227,10 +319,8 @@ export async function runAeDialer(input: AeDialerInput): Promise<AeDialerResult>
   } catch (err) {
     wire.close();
     if (err instanceof AeProtocolError) return { ok: false, reason: "protocol_error", detail: err.message };
-    // buildAePeerAuthTbs input validation (bad nonce shape, A==B) fails closed as a protocol error.
-    if (err instanceof Error && /nonce|nodeIdA|must differ|newline/.test(err.message)) {
-      return { ok: false, reason: "protocol_error", detail: err.message };
-    }
+    // Anything else (a local store/DB failure) is OUR fault, not the peer's — propagate so it
+    // surfaces as an operational error rather than being blamed on the wire.
     throw err;
   }
 }
@@ -246,6 +336,8 @@ export interface AeResponderInput {
   actualRemotePeerId: string;
   store: AeStoreView;
   nowMs?: () => number;
+  /** Per-frame receive deadline (default 30s). */
+  frameTimeoutMs?: number;
 }
 
 /**
@@ -256,23 +348,38 @@ export interface AeResponderInput {
 export async function serveAeResponder(input: AeResponderInput): Promise<void> {
   const { wire, manifest, identity, actualRemotePeerId, store } = input;
   const nowMs = input.nowMs ?? (() => Date.now());
+  const timeoutMs = input.frameTimeoutMs ?? DEFAULT_FRAME_TIMEOUT_MS;
   try {
     // 1. the dialer's hello. Any other first frame (including round frames from an
     //    unauthenticated peer) is a violation — refuse before serving ANYTHING.
-    const hello = await nextFrame(wire, "ae_hello");
+    const hello = await nextFrame(wire, "ae_hello", timeoutMs);
 
-    // 2. our auth: mint OUR nonce + the shared timestamp; sign the shared TBS (throws on A==B).
+    // 2. our auth: mint OUR nonce + the shared timestamp; sign the shared TBS.
+    //    peerIdA is the LIVE Noise-authenticated connection identity — NEVER the hello's wire
+    //    claim (the ae-peer-auth MUST). An honest dialer's claim equals it, so the TBS still
+    //    matches byte-for-byte; a dishonest claim makes our signature worthless to the attacker
+    //    instead of turning us into a signing oracle over attacker-chosen bytes.
     const nonceB = randomBytes(32).toString("hex");
     const params: AePeerAuthParams = {
       nodeIdA: str(hello, "node_id"),
       nodeIdB: identity.nodeId,
-      peerIdA: str(hello, "peer_id"),
+      peerIdA: actualRemotePeerId,
       peerIdB: identity.peerId,
       nonceAHex: str(hello, "nonce"),
       nonceBHex: nonceB,
       timestamp: new Date(nowMs()).toISOString(),
     };
-    const sigB = await identity.sign(buildAePeerAuthTbs(params));
+    let tbsB: Uint8Array;
+    try {
+      tbsB = buildAePeerAuthTbs(params);
+    } catch (err) {
+      // Hostile hello values (bad nonce shape, newline injection, A==B reflection) — the peer's
+      // violation, named as such.
+      throw new AeProtocolError(
+        `peer-supplied hello values rejected by the TBS builder: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    const sigB = await identity.sign(tbsB); // a sign() failure is OUR key infra — not converted
     wire.send(encodeAeFrame({
       type: "ae_auth_b",
       node_id: identity.nodeId,
@@ -284,7 +391,7 @@ export async function serveAeResponder(input: AeResponderInput): Promise<void> {
 
     // 3. the dialer's counter-signature over the SAME TBS — verified against the manifest and
     //    the live connection PeerId before a single round frame is served.
-    const authA = await nextFrame(wire, "ae_auth_a");
+    const authA = await nextFrame(wire, "ae_auth_a", timeoutMs);
     const verdict = verifyPeerAuthFrame({
       manifest,
       peerNodeId: params.nodeIdA,
@@ -300,23 +407,35 @@ export async function serveAeResponder(input: AeResponderInput): Promise<void> {
       throw new AeProtocolError(`handshake failed: ${verdict.reason}`);
     }
 
-    // 4. serve loop — one request/response at a time until ae_done or close.
+    // 4. serve loop — one request/response at a time until ae_done or close. No deadline here:
+    // BETWEEN requests an idle authenticated peer is legitimate (the dialer may be applying);
+    // the transport layer owns idle-connection lifecycle.
     for (;;) {
       const bytes = await wire.next();
       if (bytes === null) return;
-      const frame = decodeFrame(bytes);
+      let frame: Record<string, unknown>;
+      try {
+        frame = decodeFrame(bytes);
+      } catch {
+        throw new AeProtocolError("malformed CBOR frame in serve loop");
+      }
+      if (frame === null || typeof frame !== "object") {
+        throw new AeProtocolError("non-map CBOR frame in serve loop");
+      }
       switch (frame["type"]) {
         case "ae_state_req": {
           wire.send(encodeAeFrame({ type: "ae_state", state: await buildWireState(store) }));
           break;
         }
         case "ae_pull_a": {
-          const records = await store.serveTierA(str(frame, "table"), (frame["hashes"] as string[]) ?? []);
+          const hashes = bounded((frame["hashes"] as string[]) ?? [], "ae_pull_a hashes");
+          const records = await store.serveTierA(str(frame, "table"), hashes);
           wire.send(encodeAeFrame({ type: "ae_records_a", records: [...records] }));
           break;
         }
         case "ae_pull_b": {
-          const records = await store.serveTierB(str(frame, "table"), (frame["keys"] as string[]) ?? []);
+          const keys = bounded((frame["keys"] as string[]) ?? [], "ae_pull_b keys");
+          const records = await store.serveTierB(str(frame, "table"), keys);
           wire.send(encodeAeFrame({ type: "ae_records_b", records: [...records] }));
           break;
         }

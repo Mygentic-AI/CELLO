@@ -66,7 +66,9 @@ describe("M12 §1b: FileDirectoryManifestStore verify-at-load", () => {
   });
   afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
-  const verify = { rootKeys: ROOT_KEYS, threshold: THRESHOLD };
+  // Clock pinned inside the fixture manifests' 2026–2027 window, so these tests never rot when
+  // the wall clock passes the fixture expiry.
+  const verify = { rootKeys: ROOT_KEYS, threshold: THRESHOLD, nowMs: () => Date.parse("2026-07-28T00:00:00Z") };
 
   it("loads a valid threshold-signed manifest", () => {
     writeFileSync(path, JSON.stringify(makeManifest()));

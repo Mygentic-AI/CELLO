@@ -51,8 +51,8 @@ importers:
         specifier: ^0.0.26
         version: 0.0.26
       '@cello-protocol/transport':
-        specifier: ^0.0.26
-        version: 0.0.26
+        specifier: ^0.0.27
+        version: 0.0.27
       '@libp2p/interface':
         specifier: 3.2.2
         version: 3.2.2
@@ -180,8 +180,8 @@ importers:
         specifier: ^0.0.26
         version: 0.0.26
       '@cello-protocol/transport':
-        specifier: ^0.0.26
-        version: 0.0.26
+        specifier: ^0.0.27
+        version: 0.0.27
       '@chainsafe/libp2p-noise':
         specifier: ^17.0.0
         version: 17.0.0
@@ -586,8 +586,8 @@ packages:
     resolution: {integrity: sha512-K6gpZ+vtKaMO/Eyd8cjTF4TAh0cTS8q6wNZc8xkGCuXtG2sGUGdPYpEgG2wajdynF1rEpLZ1V6G+fobPqlcwtQ==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/transport@0.0.26':
-    resolution: {integrity: sha512-NL6MGNjt5DaSfVOYvD7M/SCvIVAlXlD6KYdjjPVquF8udCUF0qCIe0+c0ZLUVL6CESigcF/jPhEESTpoPJSlkA==}
+  '@cello-protocol/transport@0.0.27':
+    resolution: {integrity: sha512-grHyHrgtAyAD/fYByjnS+EhOZtGOyms7TlzSPl4a+pA3mK85ay143E8dzaLYmfDQStReYqFEZRLpsKYGNP9w9A==}
     engines: {node: '>=24'}
 
   '@chainsafe/as-chacha20poly1305@0.1.0':
@@ -4503,7 +4503,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@cello-protocol/transport@0.0.26':
+  '@cello-protocol/transport@0.0.27':
     dependencies:
       '@cello-protocol/crypto': 0.0.24
       '@cello-protocol/protocol-types': 0.0.26

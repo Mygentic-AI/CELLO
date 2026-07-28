@@ -44,6 +44,8 @@ export interface FileDirectoryManifestStoreLogger {
 export interface ManifestVerifyOptions {
   readonly rootKeys: readonly string[];
   readonly threshold: number;
+  /** Injectable clock for the validity-window check (tests pin it; production omits). */
+  readonly nowMs?: () => number;
 }
 
 /** A manifest that FAILED VERIFICATION (signatures/window/distinctness) — distinct from a
@@ -123,7 +125,7 @@ export class FileDirectoryManifestStore implements DirectoryManifestStore {
       // SIGNS not_before/expires, and an expired-yet-validly-signed manifest is exactly how
       // retired node keys would be resurrected (the freshness door to the same attack the
       // anti-rollback check closes on the version door). Reject outside the window.
-      const nowMs = Date.now();
+      const nowMs = (this.#verify.nowMs ?? Date.now)();
       const notBefore = Date.parse(String((parsed as { not_before?: unknown }).not_before ?? ""));
       const expires = Date.parse(String((parsed as { expires?: unknown }).expires ?? ""));
       if (!Number.isFinite(notBefore) || !Number.isFinite(expires)) {

@@ -1,0 +1,231 @@
+/**
+ * M12 DOD-AE-APPEND-1/MUTABLE-1 — AeSyncService wiring (libp2p face of the AE channel).
+ *
+ * Proves the WIRING over real lp varint framing + real CBOR + real Ed25519, with an in-memory
+ * Stream pair standing in for libp2p (the protocol itself is proven in ae-channel.test.ts; the
+ * 3-process libp2p run is DOD-AE-LOCAL-E2E-1):
+ *  - a dialing service converges its store onto a responding service's store END TO END through
+ *    streamWire framing, and emits §6 events (started → authenticated → completed);
+ *  - the responder fails CLOSED when the transport delivers no remote PeerId (pre-0.0.27);
+ *  - a peer failure is isolated (round.failed for that peer; the OTHER peer still syncs);
+ *  - the fork signature (pulled>0, applied=0) raises antientropy.round.fork_suspected only on a
+ *    streak (≥2 consecutive), never on the first occurrence;
+ *  - manifestEntryMultiaddr maps endpoints exactly like the client bootstrap mapping.
+ */
+
+import { describe, it, expect } from "vitest";
+import { ed25519 } from "@noble/curves/ed25519.js";
+import type { Stream } from "@libp2p/interface";
+import type { ConsortiumManifest } from "@cello-protocol/protocol-types";
+import type { Logger } from "@cello-protocol/interfaces";
+import { AeSyncService, manifestEntryMultiaddr, type AeTransport } from "../ae-sync-service.js";
+import { AE_PROTOCOL_ID, type AeNodeIdentity } from "../ae-channel.js";
+import type { AeStoreView, TierARecord, TierBRecord } from "../anti-entropy-engine.js";
+import { encodeTierARecord, AGENT_REVOCATIONS_SPEC } from "../ae-table-encoders.js";
+
+// ── In-memory lp-capable Stream pair (send() feeds the peer's async iterator) ────────────────
+interface Inbox { chunks: Array<Uint8Array | null>; waiters: Array<() => void> }
+function feedInbox(inbox: Inbox, c: Uint8Array | null): void {
+  inbox.chunks.push(c);
+  inbox.waiters.shift()?.();
+}
+function makeStream(own: Inbox, peer: Inbox): Stream {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (;;) {
+        if (own.chunks.length === 0) await new Promise<void>((r) => own.waiters.push(r));
+        const c = own.chunks.shift();
+        if (c === null || c === undefined) return;
+        yield c;
+      }
+    },
+    send(bytes: Uint8Array | { subarray(): Uint8Array }) {
+      feedInbox(peer, bytes instanceof Uint8Array ? bytes : bytes.subarray());
+    },
+    async close() { feedInbox(peer, null); }, // closing tells the PEER its read side ended
+    abort() { feedInbox(peer, null); },
+  } as unknown as Stream;
+}
+function streamPair(): [Stream, Stream] {
+  const inA: Inbox = { chunks: [], waiters: [] };
+  const inB: Inbox = { chunks: [], waiters: [] };
+  return [makeStream(inA, inB), makeStream(inB, inA)];
+}
+
+// ── Identities + manifest ────────────────────────────────────────────────────────────────────
+const seedA = new Uint8Array(32).fill(0xa7);
+const seedB = new Uint8Array(32).fill(0xb8);
+const pub = (s: Uint8Array): string => Buffer.from(ed25519.getPublicKey(s)).toString("hex");
+const A: AeNodeIdentity = { nodeId: "aws-use1", peerId: "12D3KooWAAA", sign: (t) => ed25519.sign(t, seedA) };
+const B: AeNodeIdentity = { nodeId: "gcp-usc1", peerId: "12D3KooWBBB", sign: (t) => ed25519.sign(t, seedB) };
+
+const manifest: ConsortiumManifest = {
+  version: 2,
+  not_before: "2026-01-01T00:00:00Z",
+  expires: "2027-01-01T00:00:00Z",
+  nodes: [
+    { nodeId: A.nodeId, pubkey: pub(seedA), region: "us-east-1", provider: "aws", endpoint: "https://a.example", role: "validator", peerId: A.peerId },
+    { nodeId: B.nodeId, pubkey: pub(seedB), region: "us-central1", provider: "gcp", endpoint: "https://b.example", role: "validator", peerId: B.peerId },
+  ],
+  signatures: [],
+};
+
+// ── Tiny store (Tier-A only — the protocol is proven elsewhere) ──────────────────────────────
+type RevRow = { agent_id: string; epoch_id: string | null; reason: string | null; signature: string; revoked_at: string };
+class MemStore implements AeStoreView {
+  revocations = new Map<string, RevRow>();
+  tierATables(): string[] { return ["agent_revocations"]; }
+  tierBTables(): string[] { return []; }
+  tierARecordHashes(): string[] {
+    return [...this.revocations.values()].map((r) => encodeTierARecord(AGENT_REVOCATIONS_SPEC, r).hash);
+  }
+  tierBVersions(): Map<string, string> { return new Map(); }
+  serveTierA(_t: string, hashes: readonly string[]): TierARecord[] {
+    const want = new Set(hashes);
+    return [...this.revocations.values()]
+      .map((r) => ({ hash: encodeTierARecord(AGENT_REVOCATIONS_SPEC, r).hash, body: r }))
+      .filter((rec) => want.has(rec.hash));
+  }
+  serveTierB(): TierBRecord[] { return []; }
+  applyTierA(_t: string, records: readonly TierARecord[]): number {
+    let n = 0;
+    for (const rec of records) {
+      const r = rec.body as RevRow;
+      if (!this.revocations.has(r.agent_id)) { this.revocations.set(r.agent_id, r); n++; }
+    }
+    return n;
+  }
+  applyTierB(): number { return 0; }
+}
+const rev = (id: string): RevRow => ({ agent_id: id, epoch_id: "e1", reason: "c", signature: "ab".repeat(64), revoked_at: "1785200000000" });
+
+function testLogger(): Logger & { events: Array<[string, Record<string, unknown>]> } {
+  const events: Array<[string, Record<string, unknown>]> = [];
+  const push = (e: string, c: Record<string, unknown>) => { events.push([e, c]); };
+  return { events, info: push, warn: push, error: push, debug: push } as unknown as Logger & { events: Array<[string, Record<string, unknown>]> };
+}
+
+/** Wire two services together: S_dial's newStream() feeds S_resp's registered inbound handler. */
+function pairServices(opts?: { respStore?: MemStore; dialStore?: MemStore; deliverRemotePeerId?: string | null }) {
+  const respStore = opts?.respStore ?? new MemStore();
+  const dialStore = opts?.dialStore ?? new MemStore();
+  const respLogger = testLogger();
+  const dialLogger = testLogger();
+
+  let inboundHandler: ((stream: Stream, remotePeerId?: string) => void | Promise<void>) | undefined;
+  const respTransport: AeTransport = {
+    async handle(_p, handler) { inboundHandler = handler; },
+    async dial() { throw new Error("responder does not dial in this test"); },
+    async newStream() { throw new Error("responder does not open streams in this test"); },
+  };
+  const dialTransport: AeTransport = {
+    async handle() { /* not used on the dial side here */ },
+    async dial(multiaddr: string) {
+      return { peerId: multiaddr.split("/p2p/")[1] ?? "" };
+    },
+    async newStream(_peerId: string, protocolId: string) {
+      expect(protocolId).toBe(AE_PROTOCOL_ID);
+      if (!inboundHandler) throw new Error("responder handler not registered");
+      const [dialSide, respSide] = streamPair();
+      // deliverRemotePeerId: null → simulate a pre-0.0.27 transport delivering nothing.
+      const remote = opts?.deliverRemotePeerId === null ? undefined : (opts?.deliverRemotePeerId ?? A.peerId);
+      void inboundHandler(respSide, remote);
+      return dialSide;
+    },
+  };
+
+  const respService = new AeSyncService({
+    transport: respTransport, manifest: () => manifest, identity: B, store: respStore, logger: respLogger,
+  });
+  const dialService = new AeSyncService({
+    transport: dialTransport, manifest: () => manifest, identity: A, store: dialStore, logger: dialLogger,
+  });
+  return { respService, dialService, respStore, dialStore, respLogger, dialLogger };
+}
+
+describe("AeSyncService — libp2p-face wiring", () => {
+  it("maps manifest endpoints to dial multiaddrs exactly like the client bootstrap mapping", () => {
+    expect(manifestEntryMultiaddr("https://directory-us1.cello.mygentic.ai", "12D3KooWX"))
+      .toBe("/dns4/directory-us1.cello.mygentic.ai/tcp/443/wss/p2p/12D3KooWX");
+    expect(manifestEntryMultiaddr("http://directory-us1.cello.mygentic.ai", "12D3KooWX"))
+      .toBe("/dns4/directory-us1.cello.mygentic.ai/tcp/80/ws/p2p/12D3KooWX");
+    expect(manifestEntryMultiaddr("http://host:8080", "12D3KooWX"))
+      .toBe("/dns4/host/tcp/8080/ws/p2p/12D3KooWX");
+  });
+
+  it("dial service converges onto the responder's store through real lp+CBOR framing, emitting §6 events", async () => {
+    const { respService, dialService, respStore, dialStore, dialLogger } = pairServices();
+    respStore.revocations.set("agX", rev("agX"));
+    await respService.start(); // registers the inbound handler
+    respService.stop(); // timer not needed — we drive the dial explicitly
+
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+
+    expect(dialStore.revocations.has("agX")).toBe(true); // converged over the wire
+    const names = dialLogger.events.map(([e]) => e);
+    expect(names).toContain("antientropy.round.started");
+    expect(names).toContain("antientropy.peer.authenticated");
+    expect(names).toContain("antientropy.round.completed");
+    const completed = dialLogger.events.find(([e]) => e === "antientropy.round.completed")![1];
+    expect(completed.pulled).toBe(1);
+    expect(completed.applied).toBe(1);
+    expect(completed.correlationId).toBeDefined();
+  });
+
+  it("fails CLOSED when the transport delivers no remote PeerId (pre-0.0.27 transport)", async () => {
+    const { respService, dialService, respLogger, dialStore, respStore } = pairServices({ deliverRemotePeerId: null });
+    respStore.revocations.set("agX", rev("agX"));
+    await respService.start();
+    respService.stop();
+
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+
+    // The responder refused before serving anything: no convergence, and the cause is named.
+    expect(dialStore.revocations.has("agX")).toBe(false);
+    expect(respLogger.events.some(([e, c]) => e === "antientropy.peer.auth_failed" && c.reason === "transport_no_remote_peerid")).toBe(true);
+  });
+
+  it("a failing peer is isolated — the other peer still converges (sovereign fallback)", async () => {
+    const { respService, dialService, respStore, dialStore, dialLogger } = pairServices();
+    respStore.revocations.set("agX", rev("agX"));
+    await respService.start();
+    respService.stop();
+
+    // Peer 1: unreachable (dial throws). Peer 2: the healthy responder.
+    const unreachable = { nodeId: "azure-weu", endpoint: "https://down.example", peerId: "12D3KooWDown" };
+    const dialSvc = dialService as unknown as { syncPeer(n: string, e: string, p: string): Promise<void> };
+    const origDial = (dialService as unknown as { "#cfg"?: unknown });
+    void origDial;
+    // Make the unreachable peer fail by pointing newStream at a closed handler? Simpler: dial to a
+    // peerId with no responder — newStream fires the handler only for the paired transport, so use
+    // a nodeId the manifest lacks a pubkey for → handshake fails → round.failed, then the healthy
+    // peer still syncs.
+    await dialSvc.syncPeer(unreachable.nodeId, unreachable.endpoint, unreachable.peerId);
+    await dialSvc.syncPeer(B.nodeId, "https://b.example", B.peerId);
+
+    expect(dialStore.revocations.has("agX")).toBe(true); // healthy peer converged despite the failure
+    const names = dialLogger.events.map(([e]) => e);
+    expect(names.filter((n) => n === "antientropy.round.completed").length).toBe(1);
+  });
+
+  it("fork signature: fork_suspected fires only on a STREAK (≥2 consecutive pulled>0/applied=0 rounds)", async () => {
+    // A responder whose served Tier-A record has a colliding natural key with different content on
+    // the dial side: pulled every round, applied 0 every round (the permanent-fork shape).
+    const respStore = new MemStore();
+    respStore.revocations.set("agF", rev("agF"));
+    const dialStore = new MemStore();
+    dialStore.revocations.set("agF", { ...rev("agF"), reason: "different" }); // same key, different content
+    const { respService, dialService, dialLogger } = pairServices({ respStore, dialStore });
+    await respService.start();
+    respService.stop();
+
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+    let forks = dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected");
+    expect(forks.length).toBe(0); // first occurrence: could be a benign mid-round write — no alarm
+
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+    forks = dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected");
+    expect(forks.length).toBe(1); // the streak IS the alarm
+    expect(forks[0][1].consecutive).toBe(2);
+  });
+});

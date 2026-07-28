@@ -45,7 +45,7 @@
     "@cello-protocol/crypto": "^0.0.24",
     "@cello-protocol/interfaces": "workspace:*",
     "@cello-protocol/protocol-types": "^0.0.26",
-    "@cello-protocol/transport": "^0.0.26",
+    "@cello-protocol/transport": "^0.0.27",
     "@libp2p/interface": "^3.0.0",
     "@noble/curves": "2.2.0",
     "cbor-x": "^1.6.4",
