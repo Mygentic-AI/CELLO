@@ -226,3 +226,196 @@ environment is not a stopping condition any more than a cron tick is — the aff
 the pending deploy command journaled next to the deferred `latest` promotion, and the run pulls the
 next DoD line in the same turn. **Waking the environment is Andre's call, never the run's** — it costs
 money and reaches outward.
+
+---
+
+## Entry 4 — DESIGN NOTE — `DOD-END-ARCH-1` (written before any code) — 2026-07-28
+
+**Target behavior (one sentence).** Bob's daemon seals a signed endorsement to the portal's intake key
+and drops it at any directory node; the portal drains it, proves who wrote it from the signature alone,
+scans it, mints it through the unchanged chokepoint, and it arrives in Alice's wallet needing her
+consent before anyone else can ever see it.
+
+**Spec anchors.** Spec §6 (three issuer flows + the 2026-07-11 amendment), §7 (intake + its four
+constraints), §14.1/§14.2 (notarized ⇒ scanned-at-birth; revocation), §14.7 (freshness/TTL re-check),
+§15.3 (what legitimately bumps the client), §4 (mandatory-disclosure hash preimage). Policy: D-19,
+D-22..D-27, D-29, M10-D5, M10-D22. Milestone: `M10B-D2`..`D10`. Crypto: Ed25519 → RFC 8032, CBOR →
+RFC 8949, SHA-256 → FIPS 180-4. **Clauses the spec does NOT pin, decided here:** where the portal
+intake key is published (D-11 below), how revoke authority is evaluated when the target row is absent
+(D-12), and that the LLM-facing projection must split by `issuer_kind` (D-13).
+
+### The verifications — first, because three of them change the plan
+
+**V1 — the notarization path needs NOTHING. Confirmed, and the reason is `M10B-D2` itself.**
+§4 first-action 2 asked whether `DOD-DIR-WRITE-1`'s authorized-issuer model is seam-ready for
+`issuer_kind: agent`. The question dissolves: under the sealed-queue ingress the **portal remains the
+only `submitter`-role key that ever calls the chokepoint.** Bob never submits. `issuer_kind: agent`
+lives *inside the envelope*, which `signal-write.ts` treats as opaque bytes it re-hashes and stores —
+it writes `envelope.issuer_kind` straight through to the column (`signal-write.ts:272–277`) with no
+validation, no enum, no branch. `SignalIssuerKind = "portal" | "agent"` already exists in
+`protocol-types/src/trust-signal.ts:54`, and `issuer_kind` is in the hash preimage. So the write path
+is not "seam-ready" — it is *already done*, and touching it would be the mistake.
+
+**V2 — `DOD-END-REVOKE-2` is real, and worse-shaped than the DoD describes.** Verified at
+`signal-write.ts:561–649`. `revokeSignal` authorises with `verifySignedRequest(..., "submitter")` —
+any active submitter-role key — and then writes a tombstone that **hardcodes `'portal'` as
+`issuer_kind` and `'(tombstone)'` as `issuer_pubkey`** (line 635). It never reads the target record at
+all. The moment an agent-issued endorsement exists, one submitter key tombstones anyone's endorsement.
+
+The complication the DoD does not mention: **the revoke path deliberately does not look the target up.**
+Blind-insert is load-bearing — it is the F3/F4 fix, so a revoke that arrives before its record under
+mesh replication still converges (`signal-write.ts:607–629`). So "check the requester against the
+record's `issuer_pubkey`" cannot simply be added at write time: at that moment the record may not be
+here. This is the central design problem of Tier 3, and it is settled by D-12 below.
+
+**V3 — `DOD-END-INV-UNTRUSTED` requires a change the DoD assigns to nobody.** The LLM-facing
+projection is `projectTrustSignals` (`cello-client/core/daemon/src/inbound-sessions.ts:78–98`). Two
+facts:
+- The framing axis **already exists and is already correct**: `issuer: s.issuerKind === "portal" ?
+  "platform-verified" : "peer-claimed"` (line 88). It keys on `issuer_kind`, not type — zero-bump-legal
+  as-is.
+- But the payload is handed over as **`claim: decodeCbor(s.payload)`** — one field, same shape for every
+  issuer — under a blanket `directory_attestation` sentence that opens *"The following trust signals
+  were each verified by the CELLO directory…"*.
+
+For a portal signal that is accurate. For an endorsement it is the exact failure `DOD-END-INV-UNTRUSTED`
+forbids: Bob's free text, in a field named `claim`, under a sentence an LLM reads as "verified", with
+one adjacent enum value as the only counterweight. **The payload split alone does not fix this** — a
+correctly split payload still arrives as an undifferentiated `claim` object. The projection must split
+too. That is D-13.
+
+**V4 — supporting facts, each checked rather than assumed:**
+- `expires_at: null` is handled correctly. `listPresentable` filters
+  `(expires_at IS NULL OR expires_at > ?)` (`trust-signal-store.ts:437`), so D-26's no-expiry
+  endorsements are never read as already-expired. **ARCH-1's expiry item closes with no work.**
+- The manifest can carry the intake key without a format break. `canonicalManifestBody` builds the
+  signed body from `Object.keys(manifest)` minus `signatures`, sorted (`crypto/src/manifest.ts:74–84`)
+  — an **open** field set, so a new top-level field is automatically inside the officer signatures, and
+  old manifests (which lack it) still verify byte-for-byte. Precedent for optional additive fields:
+  `role?` and `peerId?` on `ConsortiumNode`.
+- The wallet store takes a consent column on its existing additive-migration pattern —
+  `ensureTrustSignalSchema` already does try/catch `ALTER TABLE … ADD COLUMN`
+  (`trust-signal-store.ts:184–188`), and the table is content-addressed on `signal_hash` alone.
+- The portal's mint seam is a set of `compose*(…) → ComposedSignal` functions feeding one
+  `buildSubmission(composed, signer)` (`cello-portal/src/server/trust/mint.ts:71–78, 262`). The third
+  arm is one more `compose*` — no change to `buildSubmission` or `submission-signer.ts`.
+- Latest directory migration is **V48**; the queue is **V49**, and
+  `OpsAgentExpectedMigrationVersion` goes to **49**.
+
+**Producer/consumer chain.**
+
+| Thing | Producer | Consumer | If wrong |
+| :-- | :-- | :-- | :-- |
+| submission signature | Bob's daemon (agent key) | portal drain | `issuer_pubkey` becomes forgeable → INV-ATTRIBUTION dies, permanently, inside the hash |
+| seal to intake key | Bob's daemon | portal drain | directory can read endorsements → INV-CONSENT + D-24 die at the operator layer |
+| intake key + key id | manifest (officer-signed) | Bob's daemon | absent → daemon MUST refuse (`ABSENT IS NOT FINE`), never send unsealed |
+| queue row | directory (V49) | portal drain | plaintext/subject in a column → the directory learns who endorsed whom |
+| `same_operator` fact | portal, at intake, pre-hash | recipient rendering | composed after hashing → unhashed ⇒ relabellable ⇒ D-27 unenforceable |
+| consent state | Alice's daemon | `listPresentable` | defaults to accepted → a rogue endorsement is presentable before she ever sees it |
+| `issuer_kind` framing | portal (in hash) | `projectTrustSignals` | merged into `claim` → INV-UNTRUSTED dies quietly (V3) |
+
+**The seam (files, both repos).**
+- `cello-client/core/daemon` — new: compose+sign+seal+submit; manifest intake-key read; consent column,
+  transitions, pending surface; `listPresentable` consent filter; `projectTrustSignals` split.
+- `trustless-cello/packages/directory` — new: V49 queue table + repository (mirroring
+  `pickup-repository.ts`'s shape: drain oldest-first, ack-deletes, node-scoped sweep); `revokeSignal`
+  authority (D-12). **`submitSignal` is not touched.**
+- `cello-portal/src/server/trust` — new: drain loop, scanner, `composeEndorsement`, quota.
+  `buildSubmission` / `submission-signer.ts` / `directory-submit.ts` untouched.
+
+**Invariants at stake, and the property that prevents each violation.**
+- **INV-ATTRIBUTION** — `issuer_pubkey` is *derived from the verified signature over the submission
+  body*, never read from a field. There is no request field to trust: the drain's only input is a
+  sealed blob, and the identity falls out of verifying it. Same posture as `accepting_node`.
+- **INV-CONSENT** — consent is a column on the wallet row and `listPresentable` filters on it, so
+  presentability is gated at the one place that decides what may leave the daemon. Refused and pending
+  are indistinguishable to third parties because *neither is ever offered*, and no count or error
+  differs between them.
+- **INV-UNTRUSTED** — the endorser's words live in their own namespaced payload field and their own
+  projection field; the portal's `claim` string is composed by the portal and never interpolates
+  operator text. Enforced by D-13 + a test that asserts the endorser's bytes never appear inside
+  `claim`.
+- **INV-NO-SELF-STANDING** — account-subject same-operator refused at intake; agent-subject minted with
+  the `same_operator` fact *inside the hash*, and every count predicate excludes it. Quota is
+  per-account, so agent-farming does not multiply the cap.
+- **INV-ZEROBUMP** — every new construct keys on `issuer_kind`, consent state, or issuer identity. No
+  new code learns the string `endorsement`. Specifically: consent is required for `issuer_kind: agent`
+  (not for `type == "endorsement"`), the queue is named for consent state, and the projection splits on
+  `issuer_kind`. `DOD-END-PLAYBOOK-1` is the falsification.
+
+**Approach + rejected alternative.** Take the ingress exactly as `M10B-D2` fixes it and add nothing to
+the notarization path (V1). The one genuinely new distribution problem — the intake key — rides the
+manifest, because it is already the client's authenticated, polled, officer-signed source of
+consortium-level facts and its canonical body is open-ended (V4), so the key arrives *signed* with no
+new trust root and no new endpoint. **Rejected:** serving the intake key from the directory's
+`/bootstrap` or a new HTTP route. It is less code, but the key would arrive unauthenticated over the
+same channel an attacker would need to compromise anyway — and a substituted intake key means every
+endorsement Bob writes is sealed to the attacker. An unauthenticated key-distribution channel for a
+sealing key is not a shortcut, it is the whole vulnerability. **Also rejected:** pinning the intake key
+in client config — it makes rotation a client release.
+
+**Falsification pass (what I actually checked before proposing any of this).**
+1. *Does the call site have the method on the INTERFACE?* The daemon already polls and verifies
+   manifests (`http-manifest-poll.ts`) and holds the verified object, so reading one more field needs
+   no new interface — checked the poll module, not just the type.
+2. *Does the fix location match where responsibility lives?* For V3 I checked whether the payload split
+   alone suffices. It does not: `projectTrustSignals` decodes the whole payload into `claim`
+   regardless of shape, so a split payload still arrives undifferentiated. The projection is where the
+   responsibility actually sits.
+3. *What redundancy would this create?* A consent column plus the existing `default_present` are two
+   different questions ("may it be presented at all" vs "include it by default"). Conflating them is
+   the trap; they stay separate, and `listPresentable` — which is eligibility, not selection — is the
+   one that gains the consent filter.
+4. *What else breaks?* Adding `consent_state` with `DEFAULT 'accepted'` preserves every existing
+   portal-issued row's behavior; only the delivery path writes `'pending'`, and only for
+   `issuer_kind: agent`. If it defaulted to `'pending'`, every phone/email signal already in every
+   wallet would silently become unpresentable — a data-loss-shaped bug with no error.
+5. *Can revoke's authority check be added at write time?* No — proven above (V2): the target row may
+   not exist at that node. That falsification is what produced D-12.
+
+**Decisions this note makes.**
+- **M10B-D11 — the portal intake key is published in the consortium manifest**, as an optional
+  top-level field carrying `{key_id, pubkey}`. Rotation = publish a new manifest version with the new
+  key; the daemon's existing poll rolls forward (with its `manifest_version_rollback` guard). **Queued
+  submissions are not stranded** because every queue row records the `key_id` it was sealed to, and the
+  portal keeps a rotated-out private key until no undrained row references it — retention is driven by
+  the queue, not by a timer. Absent key ⇒ the daemon REFUSES to submit and names the reason; it never
+  falls back to unsealed.
+- **M10B-D12 — revoke authority is evaluated where the record is, not where the revoke lands.** The
+  tombstone keeps its unconditional blind INSERT (preserving F3/F4 convergence) but records **the
+  requester's real identity** instead of the hardcoded `'portal'`/`'(tombstone)'`. The authority join
+  moves into `signal_records_effective`: a tombstone kills a record only if the record's
+  `issuer_kind = 'portal'` (any submitter-role key — key rotation must keep working, determination
+  §3.5), **or** the tombstone's requester pubkey equals the record's `issuer_pubkey`. An unauthorised
+  tombstone is inert rather than rejected, which is what lets ordering stay free. Consequence to test:
+  a tombstone that arrives before its record must become effective the moment the record replicates in.
+- **M10B-D13 — `projectTrustSignals` splits on `issuer_kind`.** `portal` keeps today's shape. `agent`
+  emits the portal's attested wrapper in the attested position and the endorser's words in a distinctly
+  named untrusted field, with per-signal framing; and the blanket `directory_attestation` sentence is
+  reworded to state what the directory actually verified (this hash was notarized and is active) rather
+  than implying the content is true. Keys on `issuer_kind`, so it is zero-bump-legal and it generalises
+  to the whole client-sourced family, not to `endorsement`.
+- **M10B-D14 — consent is required by `issuer_kind: agent`, never by type.** New column
+  `consent_state` on `wallet_trust_signals`, `DEFAULT 'accepted'` so existing rows are untouched; the
+  delivery path writes `'pending'` for agent-issued signals; `listPresentable` filters on it. This is
+  the generalisation `M10B-D1` demands — every future client-sourced type inherits consent for free.
+
+**Nothing parked.**
+
+**Test plan sketch (red first).**
+- **Directory (V49 + revoke):** a schema test asserting the queue has no plaintext/subject/PII column
+  (mirrors the `DOD-DIR-WRITE-1` posture test); revoke tests for the four D-12 cases — portal record +
+  any submitter (kills), agent record + its own issuer (kills), agent record + a *different* submitter
+  (**inert** — the F6 regression, and it must still pass if the record arrives after the tombstone),
+  tombstone-before-record (becomes effective on replication).
+- **Client:** consent default preserves existing rows; a pending signal is absent from
+  `listPresentable`; a refused signal is absent by every path; `projectTrustSignals` on an agent-issued
+  signal never places the endorser's bytes inside `claim` (**the revert test**: reverting D-13 makes
+  this red).
+- **Portal:** signature-derived `issuer_pubkey` (a submission claiming a different pubkey in its body
+  is either impossible to express or ignored); scan-before-hash; quota per account across two agents.
+- **Enforcers:** `DOD-END-JOURNEY-1` for the end-to-end, `DOD-END-PLAYBOOK-1` for zero-bump. Both run
+  on the local spine harness — no AWS (Entry 3).
+
+**Owed to the deploy (hibernated — Entry 3):** V49 + the revoke change are directory-side, so they will
+be written, locally proven and committed, and land 🟡 pending the one batched deploy.
