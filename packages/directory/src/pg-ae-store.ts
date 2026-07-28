@@ -47,11 +47,9 @@ import {
 } from "./ae-mutable-version.js";
 import { mergeSuspension, type SuspensionRecord } from "./suspension-merge.js";
 import { mergePresence, type PresenceRecord } from "./presence-merge.js";
+import type { AeStoreView, TierARecord, TierBRecord } from "./anti-entropy-engine.js";
 
-/** An append-only record body addressed by its record hash. */
-export interface TierARecord { hash: string; body: unknown; }
-/** A mutable record body addressed by its natural key. */
-export interface TierBRecord { key: string; body: unknown; }
+export type { TierARecord, TierBRecord } from "./anti-entropy-engine.js";
 
 // ── Tier-A table registry ─────────────────────────────────────────────────────────────────────
 // Each entry pairs a logic-layer spec with the pg-specific knowledge (which columns are BYTEA).
@@ -195,7 +193,7 @@ function isUniqueViolation(err: unknown): boolean {
   return (err as { code?: string } | null)?.code === "23505";
 }
 
-export class PgAeStore {
+export class PgAeStore implements AeStoreView {
   readonly #pool: pg.Pool;
   constructor(pool: pg.Pool) { this.#pool = pool; }
 

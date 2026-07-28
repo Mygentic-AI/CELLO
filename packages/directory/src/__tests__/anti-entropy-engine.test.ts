@@ -34,27 +34,34 @@ class MemStore implements AeStoreView {
     }
     return m;
   }
-  getTierARecords(_t: string, hashes: readonly string[]): TierARecord[] {
+  serveTierA(_t: string, hashes: readonly string[]): TierARecord[] {
     const want = new Set(hashes);
     return [...this.revocations.values()]
       .map((r) => ({ hash: encodeTierARecord(AGENT_REVOCATIONS_SPEC, r).hash, body: r }))
       .filter((rec) => want.has(rec.hash));
   }
-  getTierBRecords(_t: string, keys: readonly string[]): TierBRecord[] {
+  serveTierB(_t: string, keys: readonly string[]): TierBRecord[] {
     return keys.filter((k) => this.suspensions.has(k)).map((k) => ({ key: k, body: this.suspensions.get(k)! }));
   }
-  applyTierA(_t: string, records: readonly TierARecord[]): void {
+  applyTierA(_t: string, records: readonly TierARecord[]): number {
+    let inserted = 0;
     for (const rec of records) {
       const r = rec.body as RevRow;
-      if (!this.revocations.has(r.agent_id)) this.revocations.set(r.agent_id, r); // insert-if-absent
+      if (!this.revocations.has(r.agent_id)) { this.revocations.set(r.agent_id, r); inserted++; } // insert-if-absent
     }
+    return inserted;
   }
-  applyTierB(_t: string, records: readonly TierBRecord[]): void {
+  applyTierB(_t: string, records: readonly TierBRecord[]): number {
+    let changed = 0;
     for (const rec of records) {
       const incoming = rec.body as SuspensionRecord;
       const existing = this.suspensions.get(incoming.agent_id);
-      this.suspensions.set(incoming.agent_id, existing ? mergeSuspension(existing, incoming) : incoming);
+      const merged = existing ? mergeSuspension(existing, incoming) : incoming;
+      // Changed iff the merge-relevant content moved (mirrors the pg store's version-hash check).
+      if (!existing || JSON.stringify(merged) !== JSON.stringify(existing)) changed++;
+      this.suspensions.set(incoming.agent_id, merged);
     }
+    return changed;
   }
 
   // suspension_seq is BIGINT-as-string for the version hash (recordHash forbids raw number).
@@ -72,7 +79,7 @@ const susp = (agent_id: string, seq: number, paused: boolean, extra?: Partial<Su
 });
 
 describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
-  it("converges divergent state in both tiers, then terminates (2nd round is a no-op)", () => {
+  it("converges divergent state in both tiers, then terminates (2nd round is a no-op)", async () => {
     const A = new MemStore();
     const B = new MemStore();
     // Tier-A: each node has a revocation the other lacks.
@@ -83,8 +90,8 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
     B.suspensions.set("agZ", susp("agZ", 3, false, { reason: "clear" }));
 
     // One round each direction.
-    runAntiEntropyRound(A, B);
-    runAntiEntropyRound(B, A);
+    await runAntiEntropyRound(A, B);
+    await runAntiEntropyRound(B, A);
 
     // Tier-A converged to the union:
     expect(new Set(A.revocations.keys())).toEqual(new Set(["agX", "agY"]));
@@ -96,18 +103,18 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
     }
 
     // Termination: a further round in either direction applies nothing.
-    expect(runAntiEntropyRound(A, B)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
-    expect(runAntiEntropyRound(B, A)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(A, B)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(B, A)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
   });
 
-  it("burn propagates and is monotonic across a round (kill switch converges irreversibly)", () => {
+  it("burn propagates and is monotonic across a round (kill switch converges irreversibly)", async () => {
     const A = new MemStore();
     const B = new MemStore();
     A.suspensions.set("agZ", susp("agZ", 5, true, { burned: true })); // burned on A
     B.suspensions.set("agZ", susp("agZ", 9, false)); // higher-seq un-pause on B, not burned
 
-    runAntiEntropyRound(A, B);
-    runAntiEntropyRound(B, A);
+    await runAntiEntropyRound(A, B);
+    await runAntiEntropyRound(B, A);
 
     for (const s of [A.suspensions.get("agZ")!, B.suspensions.get("agZ")!]) {
       expect(s.burned).toBe(true); // burn survived the higher-seq un-pause on BOTH nodes
@@ -115,15 +122,15 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
       expect(s.suspension_seq).toBe(9);
     }
     // Terminal: the equal-seq idempotent merge converged — a further round applies nothing.
-    expect(runAntiEntropyRound(A, B)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
-    expect(runAntiEntropyRound(B, A)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(A, B)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(B, A)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
   });
 
-  it("an already-converged pair does nothing (idempotent)", () => {
+  it("an already-converged pair does nothing (idempotent)", async () => {
     const A = new MemStore();
     const B = new MemStore();
     A.revocations.set("agX", rev("agX"));
     B.revocations.set("agX", rev("agX"));
-    expect(runAntiEntropyRound(A, B)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(A, B)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
   });
 });

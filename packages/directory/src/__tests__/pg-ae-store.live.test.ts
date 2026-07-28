@@ -21,6 +21,7 @@ import pg from "pg";
 import { PgAeStore } from "../pg-ae-store.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC, AGENT_PROFILES_SPEC } from "../ae-table-encoders.js";
 import { encodeTierBVersion, SUSPENSION_VERSION_SPEC } from "../ae-mutable-version.js";
+import { runAntiEntropyRound, type AeStoreView } from "../anti-entropy-engine.js";
 import type { SuspensionRecord } from "../suspension-merge.js";
 import type { PresenceRecord } from "../presence-merge.js";
 import { configurePgTypes } from "../pg-type-config.js";
@@ -259,6 +260,42 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     const r = (await pool.query(`SELECT burned, suspension_seq FROM agent_suspensions WHERE agent_id=$1`, [id])).rows[0];
     expect(r.burned).toBe(true);            // the burn survived the concurrent losing AE apply
     expect(Number(r.suspension_seq)).toBe(6); // higher committed seq won; no regression to 5/3
+  });
+
+  // ── Engine wiring: a real anti-entropy round with the pg store as LOCAL ──────────────────────
+  it("runAntiEntropyRound(pg, peer) pulls a newer suspension into pg, then terminates", async () => {
+    const id = `${P}engine`;
+    await pool.query(
+      `INSERT INTO agent_suspensions (agent_id, paused, burned, suspension_seq, origin_node, authorized_by_account, updated_at)
+       VALUES ($1, true, false, 2, 'local', $2, now())`, [id, ACC],
+    );
+    // A minimal in-memory peer advertising ONLY the suspension table, holding a newer (seq 3) clear.
+    const newer: SuspensionRecord = {
+      agent_id: id, paused: false, burned: false, reason: "clear", authorized_by_account: ACC, suspension_seq: 3, origin_node: "peer",
+    };
+    const peer: AeStoreView = {
+      tierATables: () => [],
+      tierBTables: () => ["agent_suspensions"],
+      tierARecordHashes: () => [],
+      tierBVersions: () => new Map([[id, encodeTierBVersion(SUSPENSION_VERSION_SPEC, {
+        agent_id: newer.agent_id, paused: newer.paused, burned: newer.burned, reason: newer.reason,
+        authorized_by_account: newer.authorized_by_account, suspension_seq: String(newer.suspension_seq),
+        origin_node: newer.origin_node,
+      }).versionHash]]),
+      serveTierA: () => [],
+      serveTierB: (_t, keys) => keys.filter((k) => k === id).map((k) => ({ key: k, body: newer })),
+      applyTierA: () => 0,
+      applyTierB: () => 0,
+    };
+
+    const first = await runAntiEntropyRound(store, peer);
+    expect(first.tierBApplied).toBe(1); // the newer clear landed in pg through the real engine plan
+    const r = (await pool.query(`SELECT paused, suspension_seq FROM agent_suspensions WHERE agent_id=$1`, [id])).rows[0];
+    expect(r.paused).toBe(false);
+    expect(Number(r.suspension_seq)).toBe(3);
+
+    const second = await runAntiEntropyRound(store, peer);
+    expect(second.tierBApplied).toBe(0); // converged — pg's advertised version now matches the peer's
   });
 
   // ── Tier-A coverage: agent_profiles insert-if-absent ─────────────────────────────────────────
