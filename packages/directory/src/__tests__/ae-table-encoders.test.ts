@@ -147,6 +147,27 @@ describe("DOD-AE-APPEND-1: Tier-A table encoders", () => {
     expect(encodeTierARecord(SEAL_NOTARIZATIONS_SPEC, { ...row, frost_signature: "00".repeat(64) }).hash).not.toBe(hash);
   });
 
+  it("EVERY hashed column of user_accounts + seal_notarizations is reflected in the hash", () => {
+    // Full-column sweep (matches the part-3 specs) so dropping ANY immutable column from either
+    // new spec — which would silently converge two nodes differing in that column — fails here.
+    const uaRow = { account_id: "uuid-1", phone_stub_hash: "ph".repeat(16) };
+    const uaBase = encodeTierARecord(USER_ACCOUNTS_SPEC, uaRow).hash;
+    for (const col of USER_ACCOUNTS_SPEC.immutableColumns) {
+      const mutated = { ...uaRow, [col]: String(uaRow[col as keyof typeof uaRow]) + "_x" };
+      expect(encodeTierARecord(USER_ACCOUNTS_SPEC, mutated).hash, `ua.${col} must change the hash`).not.toBe(uaBase);
+    }
+    const snRow = {
+      session_id: "aa".repeat(32), seal_type: "bilateral", sealed_root: "bb".repeat(32),
+      participant_a_pubkey: "cc".repeat(32), participant_b_pubkey: "dd".repeat(32),
+      close_timestamp: "1785200000000", frost_signature: "ee".repeat(64),
+    };
+    const snBase = encodeTierARecord(SEAL_NOTARIZATIONS_SPEC, snRow).hash;
+    for (const col of SEAL_NOTARIZATIONS_SPEC.immutableColumns) {
+      const mutated = { ...snRow, [col]: String(snRow[col as keyof typeof snRow]) + "_x" };
+      expect(encodeTierARecord(SEAL_NOTARIZATIONS_SPEC, mutated).hash, `sn.${col} must change the hash`).not.toBe(snBase);
+    }
+  });
+
   it("no spec's immutable column set contains a known local/forking column", () => {
     // Local/mutable columns that must NEVER appear in any spec's hashed set: local surrogate/audit
     // columns, per-flow ids, local FKs, and known-backfilled columns (all fork or ride Tier B).

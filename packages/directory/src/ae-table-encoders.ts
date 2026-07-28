@@ -65,11 +65,15 @@ export const AGENT_REVOCATIONS_SPEC: TierATableSpec = {
 };
 
 /**
- * user_accounts (V22). Natural key `account_id` (UUID PK). Hashed: the columns set at INSERT.
- * EXCLUDED: `id`/`created_at`/`chain_hash` (local), and **`email_stub_hash`** — it is nullable,
- * absent from the initial INSERT, and BACKFILLED later (confirmed: `hash-chain.ts` already
- * excludes it from the chain via `user_accounts: {email_stub_hash}`), so it is mutable and rides
- * Tier B, exactly like agent_profiles.account_id.
+ * user_accounts (V22, RLS INSERT+SELECT only — no UPDATE path). Natural key `account_id` (UUID
+ * PK). Hashed: `account_id` + `phone_stub_hash` (both set at INSERT, immutable). EXCLUDED:
+ * `id`/`created_at`/`chain_hash` (local). **`email_stub_hash` is excluded conservatively** — it
+ * is nullable and often absent at INSERT (phone-only signups), and associating an email is a
+ * post-signup / portal-login concern (see `project_no_pii_in_directory_hash_only`), i.e. the field
+ * most likely to grow a backfill path later. Keeping it off the append-only identity hash means a
+ * future backfill can never fork the hash — it would ride Tier B. (No current UPDATE path exists;
+ * this is the safe direction, not a claim that it is mutable today. `hash-chain.ts` also omits it,
+ * but for a different reason — null-at-INSERT chain serialization, not mutability.)
  */
 export const USER_ACCOUNTS_SPEC: TierATableSpec = {
   table: "user_accounts",
@@ -81,10 +85,11 @@ export const USER_ACCOUNTS_SPEC: TierATableSpec = {
  * seal_notarizations (V12 + V31). Natural key `(session_id, seal_type)`. Append-only in
  * production (no UPDATE grant path; supersession INSERTs a new row with a different seal_type).
  * Hashed: the immutable notarization content. EXCLUDED: `id`/`chain_hash`/`created_at` (local),
- * `correlation_id` (per-flow debug id), and **`supersedes_notarization_id`** — a BIGINT foreign
- * key pointing at ANOTHER row's local BIGSERIAL `id`, which differs on every node and would fork
- * the hash. The BYTEA columns (session_id, sealed_root, participant pubkeys, frost_signature) are
- * hex-encoded by the consumer (see header).
+ * and **`supersedes_notarization_id`** — a BIGINT foreign key pointing at ANOTHER row's local
+ * BIGSERIAL `id`, which differs on every node and would fork the hash. The BYTEA columns
+ * (session_id, sealed_root, participant pubkeys, frost_signature) are hex-encoded by the consumer
+ * (see header). (`correlation_id` belongs to conversation_seal_staging, not this table; it is kept
+ * in the FORBIDDEN test set only as a defensive guard, not because it is a column here.)
  */
 export const SEAL_NOTARIZATIONS_SPEC: TierATableSpec = {
   table: "seal_notarizations",
