@@ -41,8 +41,19 @@ RUN pnpm --filter @cello-protocol/interfaces run typecheck && \
 FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS production
 
 # Install curl (health check), Java (Flyway), build tools (native addons), awscli (Secrets Manager fetch), psql (ECS Exec operations)
+#
+# postgresql-client-17 from PGDG, NOT Debian's default: bookworm ships client 15, and pg_dump
+# REFUSES to run against a newer server ("aborting because of server version mismatch"). Cloud SQL
+# here is Postgres 17, so the default client cannot back this node up at all — and the failure is a
+# nightly backup that produces nothing, on the only copy of that node's FROST shares that exists
+# off the VM. Pin the major to the server major when the server major changes.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl default-jre-headless python3 python3-pip make g++ unzip postgresql-client && \
+    apt-get install -y --no-install-recommends curl ca-certificates gnupg default-jre-headless python3 python3-pip make g++ unzip && \
+    install -d /usr/share/postgresql-common/pgdg && \
+    curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc && \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends postgresql-client-17 && \
     pip3 install --no-cache-dir awscli --break-system-packages && \
     rm -rf /var/lib/apt/lists/*
 

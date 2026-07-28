@@ -45,7 +45,11 @@ SECRET_JSON=$(curl -sf -H "Authorization: Bearer $TOKEN" \
 [ -n "$SECRET_JSON" ] || fail "database credential secret is empty"
 
 # Parsed in one pass so a malformed blob fails here rather than as four confusing empty variables.
-eval "$(printf '%s' "$SECRET_JSON" | python3 -c '
+#
+# Captured BEFORE evaluating, for the same reason as docker-entrypoint.sh: `eval "$(cmd)"` reports
+# eval's status, not cmd's, so a parse failure would be swallowed and surface further down as
+# `DB_HOST: unbound variable` — a symptom, naming nothing.
+DB_VARS=$(printf '%s' "$SECRET_JSON" | python3 -c '
 import json,shlex,sys
 c = json.load(sys.stdin)
 for f in ("username", "password", "host", "port", "dbname"):
@@ -56,24 +60,35 @@ print("DB_PASS=" + shlex.quote(str(c["password"])))
 print("DB_HOST=" + shlex.quote(str(c["host"])))
 print("DB_PORT=" + shlex.quote(str(c["port"])))
 print("DB_NAME=" + shlex.quote(str(c["dbname"])))
-')" || fail "database credential secret is not the expected {username,password,host,port,dbname} JSON"
+') || fail "database credential secret is not the expected {username,password,host,port,dbname} JSON"
+eval "$DB_VARS"
 
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 OBJECT="${NODE_ID:-unknown}/${STAMP}.sql.gz"
+RAW="/tmp/cello-backup-${STAMP}.sql"
 DUMP="/tmp/cello-backup-${STAMP}.sql.gz"
 
 log "directory.backup.started" "info" "$OBJECT"
 
+# NOT piped straight into gzip. A shell pipeline reports the LAST command's status, so
+# `pg_dump … | gzip > f || fail` reports GZIP's success and swallows pg_dump's failure entirely —
+# which is exactly how a server-version mismatch produced a 20-byte "backup" that only the size
+# guard below caught. Dump to a file, check the status, then compress.
+#
 # --no-owner/--no-acl: the roles are created by the migrations, not carried in the dump, so a
 # restore into a fresh instance does not fail on roles that do not exist yet.
 PGPASSWORD="$DB_PASS" pg_dump \
   --host="$DB_HOST" --port="$DB_PORT" --username="$DB_USER" --dbname="$DB_NAME" \
-  --no-owner --no-acl --format=plain \
-  | gzip -9 > "$DUMP" || fail "pg_dump failed"
+  --no-owner --no-acl --format=plain > "$RAW" || fail "pg_dump failed — see its error above"
+
+gzip -9 -c "$RAW" > "$DUMP" || fail "gzip failed"
+rm -f "$RAW"
 
 # A zero-length or trivially small dump means pg_dump wrote nothing useful; uploading it would
 # replace a real backup history with a plausible-looking empty one.
-SIZE=$(wc -c < "$DUMP")
+# `wc -c` pads its output with spaces on BSD; the value is interpolated into the failure message,
+# so trim it rather than reporting "     624 bytes".
+SIZE=$(wc -c < "$DUMP" | tr -d ' ')
 [ "$SIZE" -gt 1024 ] || fail "dump is implausibly small (${SIZE} bytes) — refusing to upload it as a backup"
 
 curl -sf -X POST \
