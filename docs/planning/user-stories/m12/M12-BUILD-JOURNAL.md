@@ -15,11 +15,10 @@ description: >
 
 ## RESUME STATE (keep current — overwrite this block only)
 
-- **Tier:** P0 — PROJECT-1 ✅, IAM-1 ✅, IAC-BASE-1 ✅ (all reviewed, findings fixed);
-  CI-REGISTRY-1 🟠 (both images built by Cloud Build; ONLY the path-filtered triggers remain,
-  blocked on GitHub OAuth).
-- **Next red:** P1 — DOD-ROLE-MANIFEST-1 / DOD-AE-DESIGN-1 (story branch per M12-D4).
-- **Blocked on Andre:** complete the `cello-github` connection OAuth (link in Entry 3 / terminal).
+- **Tier:** P0 COMPLETE — 4/4 ✅ (all unit-reviewed, findings fixed). Checkpoint (done-auditor)
+  in progress/next.
+- **Next red:** P1 — DOD-AE-DESIGN-1 + DOD-ROLE-MANIFEST-1 (story branch per M12-D4).
+- **Blocked on Andre:** nothing.
 - **HEAD:** trustless-cello `main` (see git log); cello-client untouched by M12 so far.
 - **Cloud state:** AWS = 3 regions awake (woken 2026-07-28, see infra/STATE.md). GCP =
   `cello-infra` live (project + billing + 11 APIs + empty custom `cello-vpc`); authoritative
@@ -178,3 +177,34 @@ Review verdict: SPEC FAITHFUL, no silent fallbacks, enforcer survives the revert
 Also logged M12-D4 (Andre): parallel-run strategy — GCP system stands up beside the live AWS
 dev system; client toggles via bootstrap manifest endpoint + separate daemon DB; P1+ code on
 story branches rebased from main; AWS never runs M12 code until Wave 2 cutover.
+
+---
+
+## Entry 6 — 2026-07-28 — DOD-CI-REGISTRY-1 ✅: trigger-path evidence complete; P0 closed
+
+Andre completed the GitHub OAuth (app installation 149532787, Mygentic-AI, repo CELLO only).
+Connection imported into TF; repo link + both triggers created via TF (branch `^main$`,
+per-package path filters, cello-cloud-build SA, TF-injected `_REGISTRY`).
+
+**Unit review highlights (all findings fixed):**
+- F1: `:latest` dropped from both images — out-of-order finishes could leave it older than
+  main; every consumer pins the commit-SHA tag. Comment in both YAMLs.
+- F2: `.gcloudignore` now starts with `#!include:.gitignore` — gitignored files can never ride
+  into the staging bucket.
+- F3: `_REGISTRY` injected from the trigger so TF owns the registry path.
+- Reviewer's key catch: the manual `builds submit` successes proved the Dockerfiles, NOT the
+  GitHub-sourced path — they would still pass with the whole unit deleted (revert test). The ✅
+  waited for real push evidence.
+
+**The evidence (revert-test-proof):**
+- Manual trigger run `ce24c926` (relay) SUCCESS — connection + repo fetch work.
+- Push `e8842f33` (touches both YAMLs → in both filters) fired BOTH triggers via real push
+  events → directory `0883f838` SUCCESS, relay `e38e3d3b` SUCCESS, tags = full commit SHA
+  (trigger-side substitution expansion confirmed).
+- Infra-only push `540fc175` fired NEITHER trigger — negative path-filter proof.
+
+**P0 is complete: 4/4 ✅.** Parallel-coder note: commit `e4ae7712` (not mine) landed on main
+mid-unit; fast-forward push worked — M12-D4's rebase discipline already exercised.
+
+**Next:** tier-boundary checkpoint (`cello-done-auditor` on the four P0 flips), then P1 on a
+story branch: DOD-ROLE-MANIFEST-1 + DOD-AE-DESIGN-1.

@@ -89,10 +89,11 @@ description: >
 - **DOD-CI-REGISTRY-1** [trustless-cello] — Artifact Registry repo exists; Cloud Build builds the
   directory and relay images from the GitHub repo (path-filtered triggers per package) and pushes
   to Artifact Registry. No local docker push is possible or needed. AWS CodePipeline remains
-  untouched and functional for the AWS node until P4. — 🟠 registry live (TF); directory image
-  BUILT+PUSHED by Cloud Build (`directory:manual-dedc55ac`, build SUCCESS); relay build running;
-  `cello-github` connection created but **PENDING_USER_OAUTH (Andre)** — triggers owed after
-  that → Entry 3
+  untouched and functional for the AWS node until P4. — ✅ full trigger-path evidence: push
+  `e8842f33` (touching both cloudbuild YAMLs) fired BOTH triggers via real push events →
+  both SUCCESS, images tagged with the commit SHA; infra-only push `540fc175` fired neither
+  (negative filter proof); review findings fixed (no `:latest`; gcloudignore inherits
+  gitignore; TF-owned `_REGISTRY`) → Entries 3, 6
 - **DOD-IAC-BASE-1** [trustless-cello] — the IaC skeleton (tool per M12-D2) stands up and tears
   down one disposable COS VM in a MIG(size 1) with a static IP, firewall rule, and attached
   service account, entirely from code. IaC enforcer green on this skeleton. — ✅ enforcer green
