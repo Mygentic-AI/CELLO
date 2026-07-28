@@ -652,6 +652,48 @@ the discussion-of-record. Restated here because this is the milestone that imple
   generalisation `M10B-D1` demands: every future client-sourced type inherits consent for free. Note
   `consent_state` and the existing `default_present` answer different questions — *may* it be
   presented, versus *include it by default* — and conflating them is the trap.
+- **M10B-D20 (2026-07-28, `DOD-END-QUEUE-1`) — `submission_id` = sha256 of the SIGNED submission body,
+  and it is the queue's primary key.** Content-derived, so a daemon retry to a different node produces
+  the same id and the portal mints once — which is what makes retry-on-node-failure safe rather than a
+  duplication mechanism. A legitimate re-issue after a refusal differs, because `issued_at` is inside
+  the signed body. Uncollidable: to collide you would have to sign someone else's bytes. **Exactly-once
+  is a PORTAL property, not a queue one** — even a perfect queue cannot cover the portal crashing
+  between minting and acking, so the queue promises at-least-once and the portal holds a
+  processed-submissions record keyed on this id.
+- **M10B-D21 (2026-07-28, `DOD-END-QUEUE-1`) — `submission_queue` is NOT replicated, and the portal
+  drains EVERY node rather than failing over between them.** Not added to `cello_pub`; precedent is
+  `V40__pre_auth_nonce_bindings.sql`, which is deliberately unreplicated and says so. A replicated queue
+  lets the portal drain the same row from node B while its ack to node A is in flight — double-drain,
+  double-mint, double quota consumption. **Accepted loss:** a submission on a permanently dead node.
+  Recoverable by re-submitting; the thing that must never be lost is the *notarized record*, and
+  `signal_records` **is** replicated. **Consequence for `DOD-END-INGRESS-1`, and it is a specific silent
+  bug:** draining means "collect from all", not "try until one succeeds" — a drain built on
+  `FailoverDirectoryClient#tryEach` collects from one node and reports success.
+- **M10B-D22b (2026-07-28, `DOD-END-QUEUE-1`) — poison is UNATTRIBUTABLE BY CONSTRUCTION and therefore
+  gets no reply.** Identity is derived from the submission signature, so a blob that will not open or
+  whose signature will not verify has no known sender — there is nobody to reply to. The row leaves the
+  queue exactly once with a `signal.ingress.poison` event and its cause, never retried, never left to
+  block. The DoD's "with its reason preserved" is satisfiable for *rejected* and not for *poison*, and
+  naming that is better than inventing a return channel to an unknown party. (Suffixed `b` to avoid
+  colliding with M10's D-22.)
+- **M10B-D23 (2026-07-28, `DOD-END-DELIVER-1`) — `pickup_queue`'s pending uniqueness re-keys to
+  `(agent_id, signal_kind, signal_hash)`** (V50, same batched deploy). Without it the second endorsement
+  of any subject is **silently destroyed** — `enqueuePickup`'s `ON CONFLICT (agent_id, signal_kind)`
+  plus V37's partial unique index means the second delivery overwrites the first with no error and a
+  success return, and journey case (a2) is exactly the scenario that triggers it (Entry 6). Both of
+  V37's rationales are discharged with evidence (Entry 9): the poison pill required the
+  `identity_tree_entries` anchor to disagree with, and **V48 dropped that table** — the daemon's
+  surviving `hash_mismatch` now compares a delivered envelope against the claimed hash on its *own* row,
+  so it fires on corruption, never staleness; and the READ COMMITTED duplicate-row race stays closed
+  because identical content still collides. **Rejected:** giving endorsements a per-submission
+  `signal_kind` (`endorsement:<hash>`) to dodge the migration — it smuggles content into a kind field
+  and is a blocking `INV-ZEROBUMP` finding.
+- **M10B-D24 (2026-07-28, `DOD-END-DELIVER-1`) — the fan-out set resolves from the SUBJECT's account,
+  and a failed resolution REFUSES delivery** with a named cause rather than falling back to any other
+  agent set (§5a). Resolving from the submitter would deliver Bob's endorsement to Bob; falling back on
+  failure would be a cross-tenant delivery of a third party's endorsement. For `subject_kind: account`
+  the delivery is per-agent but the **consent decision is per-signal** (`M10B-D9`) — four agents must
+  not produce four consent states for one object.
 - **M10B-D18 (2026-07-28, `DOD-END-ARCH-1`, from review F1) — a new directory internal route resolves
   AGENT PUBKEY → ACCOUNT, mirroring `/internal/account-by-email-stub` exactly.** The clause
   `DOD-END-ARCH-1` marked *"confirm that resolution exists before relying on it"* was declared settled
