@@ -970,3 +970,58 @@ someone regrets — or one obtained under false pretences — circulate forever.
 Cost: recipients must re-check rather than trusting what they stored. That is the same freshness/TTL
 machinery `DOD-VERIFY-1` already specifies (TTL re-check on use), so the mechanism exists; this decides
 what it is FOR.
+
+### D-20 — DECIDED: the credential floor applies to strangers only
+
+Once the operator has classified someone as `known` or above, they are past the floor — the decision was
+already made and does not get re-litigated on every call. Rejected: checking everyone every time, which
+would lock out a contact whose verification lapsed. Changes reach the operator through D-19's withdrawal
+notices, which inform, rather than through a gate that silently excludes.
+
+### D-21 — WITHDRAWN, not a decision: the ephemeral directory check is already settled
+
+I raised this from the address-book design's §5 open-questions list (*"does the directory see endorsement
+plaintext at share time?… worth deciding before implementation"*). **It is not open.** Andre, 2026-07-28:
+the design was settled in detail during the portal trust-signal work, and the settled answer is the
+**ephemeral check** — the directory receives the plaintext, verifies it against the stored hash, and does
+not store it. That is what shipped (`{hash, blob}` presented through the directory, verified and forwarded,
+nothing persisted directory-side — `DOD-PRESENT-1`).
+
+Strike the "conflict with what shipped" framing above. There is no conflict. The §5 note is stale relative
+to the portal work that superseded it.
+
+### D-22 — GOVERNING DECISION (Andre, "ironclad"): endorsements ARE trust signals
+
+> *"The way we do trust signals is the way we do endorsements"* — with one addition: **endorsements
+> originate at the CLIENT**, are then minted, hashed and stored by the directory, and **forwarded on to the
+> person being endorsed.** Everything else is identical to the trust-signal path.
+
+This is why M10 built the generic machinery and proved it with the canary: a new type ships data-only. So
+"endorsements are post-v1" does not mean "endorsements are a build" — v1 is complete and endorsements are
+the next type through the same pipe. **They land today or tomorrow, which is the reason for this whole
+policy exercise.**
+
+### The ONE thing that genuinely blocks endorsement intake
+
+Already logged in `M10-DEFINITION-OF-DONE` post-v1 as *"revisit with intake"* — intake is now:
+
+> **Revoke authorises on the generic `submitter` role and writes a `portal` tombstone regardless of the
+> target's real `issuer_kind`.** Harmless while every signal is portal-issued. The moment a person can
+> issue an endorsement, **one submitter key can tombstone someone else's endorsement.** Agent-issued
+> revocation must use exact-pubkey auth and the tombstone must respect the target's issuer_kind.
+> (REVOKE-1 review F6.)
+
+This is what makes D-19's "withdrawal takes effect everywhere" real rather than nominal — withdrawal is only
+meaningful if the right person, and only that person, can perform it.
+
+### The policy decisions that bear on endorsements directly
+
+- **D-10** — an endorsement NEVER moves someone's tier automatically. It informs, and may prompt
+  (*"Alice was introduced by Bob, whom you've whitelisted — promote her?"*). The operator presses the button.
+- **D-19** — withdrawal takes effect everywhere, including for recipients already holding a copy.
+- **D-8a** — a signal with an anonymous and an identified variant defaults to the ANONYMOUS one.
+- **D-8** — the baseline floor (verified email + phone) is what an endorsement layers ON TOP of, never a
+  substitute for.
+- **D-12 (TABLED)** — whether an endorsement can SUBSTITUTE for another requirement ("do overlapping
+  contacts negate the need for an aged GitHub?") is exactly the tabled question. Endorsements can ship
+  before it is answered; substitution logic cannot.
