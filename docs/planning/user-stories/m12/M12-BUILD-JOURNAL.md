@@ -321,3 +321,35 @@ bytes remain). Directory suite 754 green; typecheck + lint clean. Review in flig
 Still owed (deferred with reasons): relay_registrations (deregistered_at flip), signal_records
 (status amend), conversation_seals (+children), checkpoint tables (parked M12-P5). These need
 Tier-B logic or the checkpoint decision first.
+
+## Entry 22 — 2026-07-28 — AE pure-primitive layer complete (append + mutable) on m12/ae-append
+
+The full publish-independent pure foundation of the AE data plane is built + (being) reviewed on
+branch m12/ae-append. All are transport/DB-agnostic → unit-tested with no libp2p, no cloud:
+
+- **set-reconciliation** (Entry 16) — bucketed digest + delta. Reviewed ✅.
+- **record-hash** (Entry 17) — domain+table-separated content address. Reviewed ✅.
+- **Tier-A encoders** (Entries 19/21) — append-only per-table specs (agent_profiles,
+  agent_revocations, user_accounts, seal_notarizations), column classification schema-audited.
+  Reviewed ✅ (part 4 fixes applied).
+- **suspension-merge** (this session) — the kill-switch convergence (§4): burn=monotonic OR,
+  higher seq wins, equal-seq suspended-wins + record-hash tiebreak, wall-clock type-excluded.
+  Reviewed ✅ (semilattice proven by hand; hardening applied — INFO-1 invariant comment,
+  tied-max-seq fold test).
+- **presence-merge** (this session) — Tier-B liveness LWW (numeric updated_at, owning_node_id
+  travels with the value, whole-row tiebreak). Review in flight.
+- **ae-mutable-version** (this session) — Tier-B version summaries so a mutation on a shared key
+  is detected; versionColumns == the merge-consulted set (suspension excludes wall-clock, presence
+  includes it). Review in flight.
+
+Known consumer obligation surfacing across the mutable primitives: paused/burned/online are
+BOOLEAN columns — the consumer MUST normalize pg's JS-boolean vs string consistently before
+hashing, or version hashes diverge (flagged to the version-summary reviewer; will document the
+contract per the verdict).
+
+**What remains for the AE data plane (all integration, not pure primitives):**
+- The `/cello/anti-entropy/1.0.0` channel + mutual manifest-pinned handshake — needs a new crypto
+  TBS builder in @cello-protocol/crypto → the NEXT publish cascade (Andre's `latest` step at the end).
+- The apply transaction (insert-if-absent Tier A; pull-by-key + merge Tier B) — DB integration.
+- pickup_queue/notification tombstones with bounded GC (§2 Tier B).
+- The local 3-process convergence enforcer (DOD-AE-LOCAL-E2E-1) — ties it together.
