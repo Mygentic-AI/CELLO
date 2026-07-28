@@ -27,7 +27,7 @@ import psycopg2
 from _dburl import portal_database_url
 import psycopg2.extras
 
-from _session import COOKIE_NAME, cookie_from, hash_token, may_act, read_session
+from _session import COOKIE_NAME, session_tokens_from, hash_token, may_act, read_session
 from _sqlstate import classify
 
 # Kept only so an explicit override still works. The live value is resolved
@@ -98,7 +98,7 @@ def resp(status, body, origin):
 
 
 def require_session(cur, event):
-    session = read_session(cur, cookie_from(event))
+    session = read_session(cur, session_tokens_from(event))
     if session is None:
         raise ActionError(401, "no_active_session", "Sign in to take this action.")
 

@@ -13,6 +13,11 @@ from pathlib import Path
 import psycopg2
 import pytest
 
+# The cookie name lives in _session, never restated here: these tests hardcoded
+# it, so renaming it to the __Host- prefixed form broke 44 of them at once while
+# the production code was correct.
+from _session import COOKIE_NAME
+
 from waitlist_testdb import PGURL, query, load_lambda
 
 
@@ -261,7 +266,7 @@ def _sign_in(user_email="owner@example.test", pubkey="pk-owner"):
             (pubkey, uid),
         )
     conn.close()
-    return f"cello_wl_session={raw}", uid
+    return f"{COOKIE_NAME}={raw}", uid
 
 
 def call_with_cookie(gallery, path, body, cookie=None):

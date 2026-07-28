@@ -21,7 +21,6 @@ than RESPONSE_FLOOR_MS after the request began.
 
 import json
 import os
-import urllib.parse
 import secrets
 import time
 import uuid
@@ -32,7 +31,7 @@ import psycopg2
 from _dburl import portal_database_url
 import psycopg2.extras
 
-from _session import COOKIE_NAME, cookie_from, hash_token, read_session, revoke_all_for_user
+from _session import COOKIE_NAME, session_tokens_from, hash_token, read_session, revoke_all_for_user
 from _referral import award_referrer_for
 from _resend import LINK_LIMIT, LINK_WINDOW_MINUTES, resend_link
 from _sqlstate import classify
@@ -157,37 +156,29 @@ def mint_share_code(cur):
                     f"Could not mint an unused referral code in {MAX_CODE_ATTEMPTS} attempts.")
 
 
-def cookie_domain():
-    """The registrable domain, so the cookie survives the hop to the site.
-
-    WITHOUT THIS THE WHOLE SIGN-IN FLOW IS A LOOP. This endpoint lives on
-    api.cello.mygentic.ai and redirects to cello.mygentic.ai/status. A Set-Cookie
-    with no Domain attribute is HOST-ONLY: the browser stores it against the API
-    host and never sends it to the site. So /status saw no session, bounced to
-    /auth, and every link — the confirm link and the magic link alike — appeared
-    to "do nothing but return you to sign in". Nothing was expired and no token
-    was wrong; the cookie simply was not travelling.
-
-    Derived from WAITLIST_SITE rather than hardcoded, so a staging host does not
-    silently scope cookies to production.
-    """
-    host = urllib.parse.urlparse(SITE).hostname or "cello.mygentic.ai"
-    return host
-
-
 def session_cookie(raw_token):
-    # HttpOnly so script cannot read it; Secure so it never crosses plaintext;
-    # SameSite=Lax so a cross-site POST cannot ride it, while a link from an
-    # email still arrives authenticated.
-    #
-    # Domain is set to the registrable domain so the cookie reaches the site
-    # after the redirect. It is therefore also sent to other subdomains; that is
-    # acceptable here because the name is distinct from the operations console's
-    # (`cello_ops_session`), so neither can be mistaken for the other, and a
-    # waitlist session grants nothing there.
+    """The session cookie. HOST-ONLY, deliberately — there is NO Domain here.
+
+    HttpOnly so script cannot read it; Secure so it never crosses plaintext;
+    SameSite=Lax so a cross-site POST cannot ride it while a link clicked from an
+    email still arrives authenticated.
+
+    NEVER ADD A Domain ATTRIBUTE BACK. It was added once, for a real reason: the
+    API lived on api.cello.mygentic.ai and redirected to cello.mygentic.ai, and a
+    host-only cookie does not survive that hop. The cure was worse than the
+    disease — it created a SECOND cookie alongside the host-only one already in
+    every browser, the two could not overwrite each other, and the reader picked
+    the dead one. Three days of "the link just sends me back to sign in".
+
+    The hop no longer exists: the API is served same-origin at
+    /api/waitlist through nginx, so host-only is simply correct. The __Host-
+    prefix on COOKIE_NAME now makes this browser-enforced — Chrome will reject
+    this cookie outright if a Domain attribute ever reappears, which turns a
+    silent three-day auth loop into an immediate, obvious failure.
+    """
     return (
         f"{COOKIE_NAME}={raw_token}; Max-Age={SESSION_DAYS * 24 * 3600}; "
-        f"Path=/; Domain={cookie_domain()}; HttpOnly; Secure; SameSite=Lax"
+        f"Path=/; HttpOnly; Secure; SameSite=Lax"
     )
 
 
@@ -750,7 +741,7 @@ def handle_session(event, origin, correlation_id):
     conn = connect()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            session = read_session(cur, cookie_from(event))
+            session = read_session(cur, session_tokens_from(event))
             if session is None:
                 # 401 with a named cause. The status page redirects to /auth on
                 # this; a 200 with an empty body would make "logged out" and
@@ -844,15 +835,15 @@ def handle_logout(event, origin, correlation_id):
     Idempotent, and it never reveals whether the cookie was valid: 204 either
     way, so this cannot be used to test whether a stolen token is still live.
     """
-    token = cookie_from(event)
+    tokens = session_tokens_from(event)
     cleared = 0
 
-    if token:
+    if tokens:
         conn = connect()
         try:
             conn.autocommit = False
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                session = read_session(cur, token)
+                session = read_session(cur, tokens)
                 if session:
                     cleared = revoke_all_for_user(cur, session["waitlist_user_id"], "logout")
                     log(
@@ -871,7 +862,12 @@ def handle_logout(event, origin, correlation_id):
             **cors_headers(origin),
             # Max-Age=0 so the browser drops it even if the server-side revoke
             # somehow did not land.
-            "Set-Cookie": f"{COOKIE_NAME}=; Max-Age=0; Path=/; Domain={cookie_domain()}; HttpOnly; Secure; SameSite=Lax",
+            # Must mirror session_cookie's attributes exactly apart from the
+            # value and Max-Age: a browser matches the cookie to clear on
+            # (name, domain, path), so a Domain here would fail to clear the
+            # host-only cookie it is meant to kill and would be rejected outright
+            # under the __Host- prefix.
+            "Set-Cookie": f"{COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax",
         },
         "body": "",
     }

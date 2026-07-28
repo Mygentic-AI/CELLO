@@ -135,9 +135,27 @@ def test_signup_to_a_signed_in_status_page(stack):
     )[0][0] == 1
 
     set_cookie = result["headers"]["Set-Cookie"]
-    assert "Domain=cello.mygentic.ai" in set_cookie, (
-        "host-only would leave the cookie on the API host and never reach the site"
+    # THIS ASSERTION USED TO REQUIRE THE OPPOSITE, and the reversal is the point.
+    #
+    # It demanded Domain=cello.mygentic.ai, reasoning that host-only "would leave
+    # the cookie on the API host and never reach the site". That was true while
+    # the browser called api.cello.mygentic.ai directly — and the cure caused a
+    # worse disease. A domain-scoped cookie cannot overwrite a host-only one of
+    # the same name, so any browser that had used the earlier build then held two
+    # `cello_wl_session` values, sent both, and the API read the stale one first.
+    # Every confirm link and every sign-in link bounced the user back to the
+    # sign-in form for three days. This test passed the entire time, because it
+    # asserted the attribute rather than the outcome.
+    #
+    # The API is now same-origin behind nginx at /api/waitlist, so there is no
+    # hop to survive and host-only is simply correct. The __Host- prefix makes it
+    # browser-enforced: Chrome rejects the cookie outright if Domain ever returns.
+    assert "Domain=" not in set_cookie, (
+        "a Domain attribute is what allowed two cookies under one name; __Host- "
+        "also forbids it, so the browser would reject this cookie entirely"
     )
+    assert set_cookie.startswith("__Host-"), "the prefix is what enforces host-only"
+    assert "Secure" in set_cookie and "Path=/" in set_cookie, "__Host- requires both"
     assert result["cookies"] == [set_cookie], "the documented payload-2.0 carrier, byte-identical"
 
     # 4. THE HOP THAT WAS BROKEN. What the browser sends back is name=value —

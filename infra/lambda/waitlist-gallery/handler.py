@@ -189,7 +189,7 @@ def publish(body, event, correlation_id):
          "Ada ↔ Grace — verified by 3 of 3 nodes" for a session that never
          happened, and the schema deliberately has no delete path.
     """
-    from _session import cookie_from, read_session
+    from _session import session_tokens_from, read_session
 
     receipt_hash = (body.get("receipt_hash") or "").strip()
     if not HASH_RE.match(receipt_hash or ""):
@@ -236,7 +236,7 @@ def publish(body, event, correlation_id):
     conn = connect()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            session = read_session(cur, cookie_from(event))
+            session = read_session(cur, session_tokens_from(event))
             if session is None:
                 raise GalleryError(
                     401,

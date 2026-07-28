@@ -17,6 +17,11 @@ import psycopg2
 import psycopg2.extras
 import pytest
 
+# The cookie name lives in _session, never restated here: these tests hardcoded
+# it, so renaming it to the __Host- prefixed form broke 44 of them at once while
+# the production code was correct.
+from _session import COOKIE_NAME
+
 from waitlist_testdb import PGURL, query, load_lambda
 
 
@@ -43,19 +48,25 @@ def make_user(email, email_status="active"):
     return uid
 
 
-def call(auth, method, path, *, body=None, params=None, cookie=None, form=None):
+def call(auth, method, path, *, body=None, params=None, cookie=None, cookies=None, form=None):
     """Builds the event API Gateway actually sends, not a convenient shape.
 
     Payload format 2.0 lifts request cookies OUT of `headers` into a top-level
     `cookies` LIST. A fixture that puts them back in `headers` tests a gateway
     that does not exist — and that is precisely how every cookie-reading
     endpoint shipped broken while this suite stayed green.
+
+    `cookies` takes a LIST, for the case a single value cannot express: a browser
+    holding more than one cookie under the same name and sending all of them.
+    That is not exotic — it is what happens the moment a cookie's domain or path
+    changes — and being unable to construct it here is why the sign-in loop went
+    unreproduced for three days.
     """
     headers = {"origin": "https://cello.mygentic.ai"}
     event = {
         "version": "2.0",
         "headers": headers,
-        "cookies": [cookie] if cookie else [],
+        "cookies": list(cookies) if cookies else ([cookie] if cookie else []),
         "requestContext": {"http": {"method": method, "path": path}},
         # A browser submitting a real <form> sends urlencoded, not JSON. Building
         # the resend cases as JSON would test a request nothing ever makes.
@@ -529,10 +540,53 @@ def test_an_expired_session_is_rejected(auth):
         )
     conn.close()
 
-    result, body = call(auth, "GET", "/waitlist/auth/session", cookie="cello_wl_session=expired-token")
+    result, body = call(auth, "GET", "/waitlist/auth/session", cookie=f"{COOKIE_NAME}=expired-token")
 
     assert result["statusCode"] == 401
     assert body["error"] == "no_active_session"
+
+
+def test_a_stale_duplicate_cookie_cannot_mask_a_live_session(auth):
+    """THE REGRESSION TEST FOR THE THREE-DAY SIGN-IN LOOP.
+
+    A browser can hold several cookies under one name — they are distinct
+    whenever domain or path differ — and it sends all of them. That is exactly
+    what happened: an earlier build set the session host-only on the API host,
+    the fix set it with Domain=cello.mygentic.ai, and neither could overwrite the
+    other because RFC 6265 keys a cookie on (name, domain, path).
+
+    RFC 6265 orders them by path length and then by creation time, so the OLDEST
+    leads. The reader returned the first match and stopped, which meant the dead
+    cookie permanently masked the live session behind it. /auth/session answered
+    401 to a signed-in user, /status bounced them to /auth, and every confirm and
+    sign-in link appeared to do nothing at all.
+
+    Nothing in the logs looked wrong — sessions were being minted correctly on
+    every single click. Stale FIRST is the whole point of this test; reversed, it
+    passes against the broken implementation.
+    """
+    uid = make_user("masked@example.test")
+    conn = psycopg2.connect(PGURL)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO waitlist_sessions (waitlist_user_id, token_hash, expires_at) "
+            "VALUES (%s, %s, now() + interval '30 days')",
+            (uid, auth.hash_token("live-token")),
+        )
+    conn.close()
+
+    result, body = call(
+        auth,
+        "GET",
+        "/waitlist/auth/session",
+        cookies=[f"{COOKIE_NAME}=long-dead-token", f"{COOKIE_NAME}=live-token"],
+    )
+
+    assert result["statusCode"] == 200, (
+        f"a stale cookie masked the live session: {result['statusCode']} {body}"
+    )
+    assert body["email"] == "masked@example.test"
 
 
 def test_a_revoked_session_is_rejected(auth):
@@ -547,7 +601,7 @@ def test_a_revoked_session_is_rejected(auth):
         )
     conn.close()
 
-    result, _ = call(auth, "GET", "/waitlist/auth/session", cookie="cello_wl_session=revoked-token")
+    result, _ = call(auth, "GET", "/waitlist/auth/session", cookie=f"{COOKIE_NAME}=revoked-token")
 
     assert result["statusCode"] == 401
 
@@ -626,7 +680,7 @@ def test_logout_kills_every_session_not_just_the_one_presenting(auth):
 def test_logout_never_reveals_whether_the_cookie_was_valid(auth):
     """Otherwise it becomes an oracle for testing whether a stolen token is
     still live."""
-    valid, _ = call(auth, "POST", "/waitlist/auth/logout", cookie="cello_wl_session=nonsense")
+    valid, _ = call(auth, "POST", "/waitlist/auth/logout", cookie=f"{COOKIE_NAME}=nonsense")
     empty, _ = call(auth, "POST", "/waitlist/auth/logout")
 
     assert valid["statusCode"] == empty["statusCode"] == 204

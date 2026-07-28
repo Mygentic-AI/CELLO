@@ -39,11 +39,22 @@ Parameters:
     Type: String
     Default: api.cello.mygentic.ai
     Description: >
-      Custom domain for the waitlist API. LOAD-BEARING, not cosmetic: the session
-      cookie is SameSite=Lax, and a Lax cookie is never attached to a cross-SITE
-      fetch. Serving this API from execute-api.amazonaws.com while the app is on
-      cello.mygentic.ai means /status can never authenticate and every user loops
-      between /status and /auth forever.
+      Custom domain for the waitlist API. Still the real home of every route, and
+      still where nginx forwards to — but browsers no longer address it directly.
+      They reach the same routes same-origin at https://{SiteDomainName}/api/waitlist,
+      which is what allows the session cookie to be host-only. Keep this off
+      execute-api.amazonaws.com regardless: SameSite=Lax is never attached to a
+      cross-SITE request, so a raw execute-api host breaks the proxy too.
+
+  SiteDomainName:
+    Type: String
+    Default: cello.mygentic.ai
+    Description: >
+      The site users actually visit, and therefore the ONLY origin that appears
+      in a browser. Both WAITLIST_SITE and WAITLIST_API_BASE derive from it so
+      the two can never drift: every link we mail and every fetch the page makes
+      must resolve to this one origin, or the session cookie stops travelling and
+      the sign-in loop returns.
 
   HostedZoneId:
     Type: String
@@ -565,8 +576,8 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL: !Ref WaitlistDatabaseUrl
-          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
-          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
+          WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
       Code:
         ZipFile: |
@@ -608,8 +619,8 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL: !Ref WaitlistDatabaseUrl
-          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
-          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
+          WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
       Code:
         ZipFile: |
@@ -648,8 +659,8 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL: !Ref WaitlistDatabaseUrl
-          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
-          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
+          WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
       Code:
         ZipFile: |
@@ -691,8 +702,8 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL: !Ref WaitlistDatabaseUrl
-          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
-          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
+          WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
           # Only the dispatcher sends mail, so only the dispatcher needs this.
           WAITLIST_SES_CONFIG_SET: !Ref SesConfigurationSet
@@ -733,8 +744,8 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL: !Ref WaitlistDatabaseUrl
-          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
-          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
+          WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
       Code:
         ZipFile: |
@@ -828,8 +839,8 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL: !Ref WaitlistDatabaseUrl
-          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
-          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
+          WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
       Code:
         ZipFile: |
@@ -869,8 +880,8 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL: !Ref WaitlistDatabaseUrl
-          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
-          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
+          WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
       Code:
         ZipFile: |
@@ -917,8 +928,8 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL: !Ref WaitlistDatabaseUrl
-          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
-          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
+          WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
       Code:
         ZipFile: |
@@ -960,8 +971,8 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL: !Ref WaitlistDatabaseUrl
-          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
-          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
+          WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
       Code:
         ZipFile: |
@@ -1000,8 +1011,8 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL: !Ref WaitlistDatabaseUrl
-          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
-          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
+          WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
       Code:
         ZipFile: |
@@ -1041,8 +1052,8 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL: !Ref WaitlistDatabaseUrl
-          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
-          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
+          WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
       Code:
         ZipFile: |
@@ -1081,8 +1092,8 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL: !Ref WaitlistDatabaseUrl
-          WAITLIST_API_BASE: !Sub "https://${ApiDomainName}/waitlist"
-          WAITLIST_SITE: https://cello.mygentic.ai
+          WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
+          WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
       Code:
         ZipFile: |
