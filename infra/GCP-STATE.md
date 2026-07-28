@@ -85,6 +85,22 @@ copied transport key would give two nodes the same libp2p peer id.
 (`invalid_rapt`). Runs use `GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)`, which
 the gcloud CLI credential provides; it expires hourly, so re-export before each command.
 
+### Two things that were NOT obvious, both found by booting the node
+
+**Container-Optimized OS drops everything at the host firewall.** COS ships iptables `INPUT` with
+policy `DROP`, allowing only established connections, loopback, ICMP and tcp/22. A VPC firewall
+rule is necessary and NOT sufficient — the packet is allowed onto the wire and dropped by the host.
+Symptoms are all one cause and none of them name it: MIG health probes time out, the autohealer
+resets the instance on a loop, the SSH host key changes every time (COS regenerates host keys each
+boot from its read-only `/etc` overlay), and external connections to 4000/8080 hang. `cello-firewall.service`
+in the node's cloud-init opens 4000/8080/9090 and re-runs every boot because COS rebuilds the rules.
+
+**Two grants that org policy does not give implicitly**, both found as a crash loop rather than a
+warning: `artifactregistry.reader` on the repository (without it the node cannot pull its own
+image) and `storage.bucketViewer` on the relay-manifest bucket (`objectViewer` does not include
+`storage.buckets.get`, which `GcsCloudStorageProvider` needs to tell a missing bucket from a
+missing object — GCS 404s both).
+
 **Owed:** the DNS record `directory-gcp-use1.cello.mygentic.ai` is NOT created — Route53 lives in
 AWS, which is hibernated. The node does not need it to boot; it is needed by
 `DOD-MANIFEST-GCP-1`, when clients start dialling this node.
