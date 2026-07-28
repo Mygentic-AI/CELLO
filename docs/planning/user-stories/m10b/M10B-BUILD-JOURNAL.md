@@ -1425,3 +1425,53 @@ its behavior without reading whether its inputs exist or who consumes its output
 every one *before a line of code was written*, which is what it is for — but the cheaper fix is the
 habit: **for every mechanism named in a decision, grep its callers and its inputs before writing the
 sentence, not after a reviewer asks.**
+
+---
+
+## Entry 15 — F3 CLOSED: `M10B-D12r4` verified inside V46's REAL view — 2026-07-28
+
+F3 asked for the corrected expression to be re-measured **inside V46's real `CASE`**, with the
+supersession ordering, rather than as a standalone fragment. Done, against local Postgres 18, on the
+actual view shape read from `V46__signal_records.sql:197–221`.
+
+**Why the real view mattered and the fragment could not suffice.** V46's supersession branch is a
+**correlated `EXISTS` subquery**, not an aggregate —
+`EXISTS (SELECT 1 FROM signal_records s WHERE s.supersedes_hash = r.signal_hash AND s.status <> 'revoked')`.
+A standalone test of the revoke branches cannot exercise it at all, so the one ordering the third
+review identified as load-bearing — revoke must precede supersession — was **untestable in the previous
+fixture by construction**.
+
+**Nine shapes, eleven rows, new expression vs. V46 as it stands today:**
+
+| hash | shape | V46 today | `D-12r4` |
+| :-- | :-- | :-- | :-- |
+| h1 | tombstone only | revoked | revoked |
+| h2 | record only | active | active |
+| h3 | revoker = issuer | revoked | revoked |
+| **h4** | **revoker ≠ issuer (the F6 defect)** | **revoked** | **active** ← the only change |
+| h5 | legacy tombstone, NULL revoker | revoked | revoked |
+| h6 | portal record, rotated KMS key | revoked | revoked |
+| h7 | real non-tombstone row carrying `status='revoked'` | revoked | revoked |
+| **h8** | **revoked AND superseded** | **revoked** | **revoked** |
+| h8s | the successor row | active | active |
+| h9 | superseded only | superseded | superseded |
+| h9s | the successor row | active | active |
+
+**Exactly one row changes, and it is the defect being fixed.** Three things this proves that the
+previous table could not:
+- **h8 — the ordering is right.** A record that is both revoked and superseded still reads `revoked`,
+  honoring V46's rule that revoked is the strongest statement. Had the revoke group been placed after
+  the supersession branches it would read `superseded`, and a withdrawn endorsement that happened to
+  have a successor would quietly downgrade to a weaker status.
+- **h9 — supersession is untouched.** The five new branches do not swallow the supersession path.
+- **h7 — the fifth branch works**, closing the regression the third review found in the bare
+  replacement.
+
+**F3 is closed.** The other three (F1 `submission_results` PK, F4 `linkAgentToAccount` wiring, F5
+`SCOPE-FIX-1` rescope) are recorded as decisions and prerequisites in the DoD; none needs measurement —
+they need building.
+
+**Method note, now a standing rule for this milestone:** *a SQL expression is verified inside the real
+view it will live in, never as a fragment.* Four versions of this expression were wrong and each looked
+correct in isolation; the fragment test caught two, and only the real-view test could have caught the
+ordering.
