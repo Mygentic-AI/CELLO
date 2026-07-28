@@ -312,6 +312,29 @@ blackhole address, deliberately, so the names still resolve instead of poisoning
   not against AWS. "Live, across real processes" means real OS processes, **not deployed AWS.**
 - **The beta npm publish** (§2c) — no AWS involved.
 
+### 2e-1. COMMIT, DO NOT PUSH — the standing §3 push rule is SUSPENDED for this run
+
+**Andre's instruction, 2026-07-28, for the hibernated overnight run: commit constantly, push nothing.**
+This SUSPENDS the §3 cadence rule "push after every commit" for the duration. It is not a relaxation of
+the commit rule — commit *more* often, since a commit is now the only durable record.
+
+**Why.** A push to `trustless-cello` `main` triggers CodePipeline. With the environment hibernated the
+directory and relay services are at `desiredCount 0` and their ALBs are deleted, so a triggered pipeline
+either fails noisily or — worse — pushes images and mutates state that `wake.sh` has no record of. And
+there is **no upside**: nothing can be deployed tonight, so a push buys nothing and risks the wake.
+
+**The rule, concretely:**
+- **`trustless-cello` — NEVER push.** Not directory code, not relay code, not IaC, not docs. Blanket, so
+  there is no path-filter judgment call to get wrong at 3am.
+- **`cello-client` / `cello-portal` — do not push either.** These are pipeline-safe, but a beta publish
+  is pointless with nothing to test it against, and one rule is safer than two. Commit and hold.
+- **Commits accumulate on `main` locally.** That is the deliverable. Andre pushes in the morning when
+  the environment is awake, and the batched directory deploy runs then.
+- **The §3b cron self-audit items 6 and 8 say "Push it" — ignore that clause tonight.** Commit, then
+  keep working. Everything else in those items still applies.
+- **Never `git push --force`, never rewrite already-committed history** to "tidy up before Andre pushes."
+  The commit trail is the audit trail; a messy one is worth more than a rewritten one.
+
 **So the run continues; it just ends with a deploy owed.** When a DoD line's only remaining gap is the
 deploy, mark it 🟡 BUILT/UNVERIFIED-LIVE with the evidence it *does* have, write the exact pending
 deploy command into the journal and the handoff — alongside the deferred `latest` promotion (§2c) —
