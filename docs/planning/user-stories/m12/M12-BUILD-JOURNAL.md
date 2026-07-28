@@ -21,8 +21,15 @@ description: >
   publish). ROLE-MANIFEST-1 dir half PARKED on the publish (see below).
 - **Done since P0:** AE-DESIGN-1 ✅, ROLE-MANIFEST-1 client half ✅ (branch), MULTIADDR-1 ✅
   (branch), ADAPTER-GCP-1 GCS cloud-storage ✅+reviewed (branch m12/adapter-gcp e1028109).
-- **ADAPTER-GCP-1 remaining:** GCS audit-log-shipper + Cloud KMS envelope key (copy the reviewed
-  GCS pattern; re-verify each SDK's error shape against installed .d.ts; typed errors for KMS).
+- **ADAPTER-GCP-1 remaining — BOTH need deliberate starts, not tail-of-session mirrors:**
+  (a) GCS audit-log-shipper is NOT a mirror — `S3AuditLogShipper` is ~300 lines of cloud-agnostic
+  degraded-buffer + backoff-retry + flush-concurrency logic with only `#putToS3` S3-specific.
+  Right approach: EXTRACT the cloud-put into an injected sink (`put(key, body, contentType)`) so
+  S3 + GCS are both thin; a refactor of TESTED audit code where a subtle regression silently loses
+  audit entries — behavior-preservation review required. (b) Cloud KMS envelope key is
+  crypto-at-rest-severe (reviewer's caution): wrong not-found/permission mapping corrupts share
+  encryption, not a benign empty pool. Re-verify the KMS SDK error taxonomy against installed
+  source; typed/coded errors, not message-substring.
 - **PARKED — publish cascade (awaiting Andre's go):** ROLE-MANIFEST-1 dir half needs the changed
   cello-client packages on beta + a trustless-cello re-pin. Plan ready (Entry 11): merge
   `m12/role-manifest`→main, bump 7-pkg cascade (crypto 0.0.23, protocol-types 0.0.25, transport
