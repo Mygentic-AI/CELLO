@@ -183,8 +183,19 @@ description: >
   (`packages/interfaces/`), selected by `CELLO_ENV`/config at the composition root, lazy-imported
   (M12-D5), with local stubs. Set per M12-D6: **GCS cloud-storage + GCS audit-log + Cloud KMS
   envelope key** (Parameter Manager dropped — the directory boots from the manifest + relay
-  self-registration; empty-registry is non-fatal). — 🟠 M12-D6 decision recorded from code
-  evidence; adapters pending → Entry 13
+  self-registration; empty-registry is non-fatal). — 🟡 BUILT, NOT YET LIVE-VERIFIED. All three
+  adapters implemented behind the existing interfaces with injected clients, 10 unit tests green:
+  `GcsCloudStorageProvider` (404→`undefined` parity with S3's NoSuchKey; a 403 PROPAGATES rather
+  than masquerading as an empty bucket), `GcsAuditLogShipper` (write-through per entry like the S3
+  shipper — buffers on failure, never drops, retains the buffer across a failed flush, stays
+  degraded to preserve ordering), `KmsEnvelopeKeyProvider` (round-trips share material; FAILS
+  CLOSED on decrypt — never returns empty/substitute bytes; `rotate()` a documented no-op since
+  Cloud KMS rotates versions server-side). Composition root selects on a new `CELLO_CLOUD`
+  (`aws`|`gcp`, default `aws` so every existing deployment is unchanged; an invalid value exits 1
+  rather than silently falling back to AWS adapters on a node with no AWS credentials). All GCP
+  imports are lazy (M12-D5) so no AWS node or local run loads the GCP SDK. **Owed:** live proof
+  against real GCS/KMS — that belongs to DOD-NODE-DIR-GCP-1 (first real GCP directory), plus the
+  IaC for the bucket + key ring. → Entry 16
 
 ## Tier P2 — Wave 1: complete CELLO on GCP, standalone
 

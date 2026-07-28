@@ -120,6 +120,21 @@ if (env === "local" && !relayAddr) {
   process.exit(1);
 }
 
+// ─── M12 DOD-ADAPTER-GCP-1: which cloud's adapters this node uses ─────────
+// One switch for every dev+ adapter family. Defaults to "aws" so every existing deployment keeps
+// its current behavior with no env change; a GCP node sets CELLO_CLOUD=gcp. Validated fatally —
+// a typo must not silently fall back to AWS adapters on a node with no AWS credentials, which
+// would surface much later as opaque SDK timeouts.
+const cloudProvider = (process.env["CELLO_CLOUD"] ?? "aws").toLowerCase();
+if (cloudProvider !== "aws" && cloudProvider !== "gcp") {
+  logger.error("adapter.config.invalid", {
+    configKey: "CELLO_CLOUD",
+    env,
+    reason: `must be 'aws' or 'gcp'; got '${process.env["CELLO_CLOUD"]}'`,
+  });
+  process.exit(1);
+}
+
 // ─── SECOPS-001: AuditLogShipper instantiation ───────────────────────────
 // CELLO_ENV=local  → LocalAuditLogShipper (appends to AUDIT_LOG_PATH)
 // CELLO_ENV=dev+   → S3AuditLogShipper (ships to CELLO_AUDIT_BUCKET in AWS_REGION)
@@ -137,8 +152,18 @@ const auditLogShipper: AuditLogShipper = await (async (): Promise<AuditLogShippe
     logger.info("adapter.initialised", { adapterName: "AuditLogShipper", implementation: "LocalAuditLogShipper", env });
     return s;
   }
-  // dev/staging/production: S3AuditLogShipper (SECOPS-001)
+  // dev/staging/production: the cloud's object-store shipper (SECOPS-001).
   const auditBucket = requireEnv("CELLO_AUDIT_BUCKET");
+  if (cloudProvider === "gcp") {
+    // Lazy so the GCP SDK is never loaded on an AWS node (or in local mode) — M12-D5.
+    const [{ GcsAuditLogShipper }, { Storage }] = await Promise.all([
+      import("../adapters/gcs-audit-log-shipper.js"),
+      import("@google-cloud/storage"),
+    ]);
+    const s = new GcsAuditLogShipper(auditBucket, logger, new Storage());
+    logger.info("adapter.initialised", { adapterName: "AuditLogShipper", implementation: "GcsAuditLogShipper", env, bucket: auditBucket });
+    return s;
+  }
   const { S3AuditLogShipper } = await import("../adapters/s3-audit-log-shipper.js");
   const s = new S3AuditLogShipper(auditBucket, logger, undefined, { region: awsRegion });
   logger.info("adapter.initialised", { adapterName: "AuditLogShipper", implementation: "S3AuditLogShipper", env, bucket: auditBucket, region: awsRegion });
@@ -296,14 +321,35 @@ if (pgPool) {
 // dev/staging/production: KMS_KEY_ARN provides the key ARN for KmsEnvelopeKeyProvider.
 // For DEPLOY-002 we use LocalEnvelopeKeyProvider with DEV_ENVELOPE_KEY for dev/staging
 // until the KmsEnvelopeKeyProvider is fully implemented in a follow-up story.
-const envelopeKeyProvider = (() => {
+const envelopeKeyProvider = await (async (): Promise<import("@cello-protocol/interfaces").EnvelopeKeyProvider> => {
   if (env === "local") {
     const devKey = requireEnv("DEV_ENVELOPE_KEY");
     const p = new LocalEnvelopeKeyProvider(devKey, logger);
     logger.info("adapter.initialised", { adapterName: "EnvelopeKeyProvider", implementation: "LocalEnvelopeKeyProvider", env });
     return p;
   }
-  // dev/staging/production: use DEV_ENVELOPE_KEY until KmsEnvelopeKeyProvider is wired
+  // M12 DOD-ADAPTER-GCP-1: a GCP node wraps share material with Cloud KMS — the key never leaves
+  // Google's HSM boundary. (AWS keeps the DEV_ENVELOPE_KEY placeholder until KMS_KEY_ARN is wired;
+  // that is pre-existing debt on the AWS side, untouched here.)
+  if (cloudProvider === "gcp") {
+    const [{ KmsEnvelopeKeyProvider }, kms] = await Promise.all([
+      import("../adapters/gcp-kms-envelope-key-provider.js"),
+      import("@google-cloud/kms"),
+    ]);
+    const cfg = {
+      projectId: requireEnv("CELLO_KMS_PROJECT"),
+      locationId: requireEnv("CELLO_KMS_LOCATION"),
+      keyRingId: requireEnv("CELLO_KMS_KEYRING"),
+      cryptoKeyId: requireEnv("CELLO_KMS_KEY"),
+    };
+    const p = new KmsEnvelopeKeyProvider(cfg, new kms.KeyManagementServiceClient() as never);
+    logger.info("adapter.initialised", {
+      adapterName: "EnvelopeKeyProvider", implementation: "KmsEnvelopeKeyProvider", env,
+      project: cfg.projectId, location: cfg.locationId, keyRing: cfg.keyRingId, cryptoKey: cfg.cryptoKeyId,
+    });
+    return p;
+  }
+  // dev/staging/production on AWS: use DEV_ENVELOPE_KEY until KmsEnvelopeKeyProvider is wired
   const devKey = requireEnv("DEV_ENVELOPE_KEY");
   const p = new LocalEnvelopeKeyProvider(devKey, logger);
   logger.info("adapter.initialised", { adapterName: "EnvelopeKeyProvider", implementation: "LocalEnvelopeKeyProvider", env });
@@ -655,9 +701,18 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
   // dev/staging/production: S3-backed manifest (required)
   const manifestBucket = requireEnv("RELAY_MANIFEST_BUCKET");
   const signerPubkeyHex = requireEnv("RELAY_MANIFEST_SIGNER_PUBKEY");
-  const { S3CloudStorageProvider } = await import("../adapters/s3-cloud-storage-provider.js");
-  storage = new S3CloudStorageProvider(manifestBucket, awsRegion);
-  logger.info("adapter.initialised", { adapterName: "RelayPoolManager", implementation: "S3CloudStorageProvider", env, bucket: manifestBucket, region: awsRegion });
+  if (cloudProvider === "gcp") {
+    const [{ GcsCloudStorageProvider }, { Storage }] = await Promise.all([
+      import("../adapters/gcs-cloud-storage-provider.js"),
+      import("@google-cloud/storage"),
+    ]);
+    storage = new GcsCloudStorageProvider(manifestBucket, new Storage());
+    logger.info("adapter.initialised", { adapterName: "RelayPoolManager", implementation: "GcsCloudStorageProvider", env, bucket: manifestBucket });
+  } else {
+    const { S3CloudStorageProvider } = await import("../adapters/s3-cloud-storage-provider.js");
+    storage = new S3CloudStorageProvider(manifestBucket, awsRegion);
+    logger.info("adapter.initialised", { adapterName: "RelayPoolManager", implementation: "S3CloudStorageProvider", env, bucket: manifestBucket, region: awsRegion });
+  }
 
   const mgr = new RelayPoolManager({ storage, signerPublicKeyHex: signerPubkeyHex, logger });
   try {

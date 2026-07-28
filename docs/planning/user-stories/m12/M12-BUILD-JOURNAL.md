@@ -590,3 +590,40 @@ Also corrected in the DoD: the LOCAL-E2E line named `session-fixture.ts` as the 
 That file does not exist in either repo. `spine/live-harness.ts` is the live-binary harness ~30
 `j-*.spine.test.ts` files use, and the AE enforcer EXTENDS it (+67 lines) rather than forking —
 which is what fixture discipline actually asks for.
+
+---
+
+## Entry 16 — 2026-07-28 — DOD-ADAPTER-GCP-1: the three GCP adapters, built + wired
+
+Per M12-D6: `GcsCloudStorageProvider`, `GcsAuditLogShipper`, `KmsEnvelopeKeyProvider`. All behind
+the EXISTING `packages/interfaces` contracts, all with injected clients so 10 unit tests run with
+no credentials and no network. `@google-cloud/storage` + `@google-cloud/kms` added to the directory
+package per M12-D5 (server-side only, never shipped to operators) and imported LAZILY, so an AWS
+node or a local run never loads them.
+
+The adapters are thin; the value is BEHAVIORAL PARITY, because the composition root swaps them and
+nothing downstream knows which it got. The tests pin the differences that actually bite:
+- GCS signals "missing object" with a 404-coded generic error where S3 throws a typed `NoSuchKey`.
+  404 → `undefined` (the interface's contract); **every other error propagates** — masking a 403 as
+  "not found" would make a permissions mistake read as an empty relay pool, and every session
+  assignment would fail with no cause named anywhere.
+- The audit shipper mirrors the S3 shipper's semantics rather than inventing simpler ones: ships
+  write-through per entry (batch-on-flush loses everything a crash interrupts), buffers on failure
+  instead of dropping, RETAINS the buffer across a failed flush, and stays degraded while the
+  buffer is non-empty so ordering is preserved. A dropped audit entry is unrecoverable AND
+  invisible — nothing downstream ever notices a missing row.
+- The KMS provider FAILS CLOSED on decrypt. A fail-open envelope provider is the worst shape here:
+  the share store would hand out bytes that look like a real K_server share and the failure would
+  surface much later as an unrelated-looking ceremony error. `rotate()` is a documented no-op —
+  Cloud KMS rotates versions server-side and `decrypt` resolves the version from the ciphertext.
+
+Composition root: new `CELLO_CLOUD` (`aws`|`gcp`), default `aws` so every existing deployment is
+byte-identical with no env change. An invalid value exits 1 — a typo must not silently fall back to
+AWS adapters on a node with no AWS credentials, which would surface as opaque SDK timeouts.
+
+Status 🟡 not ✅: these are unit-proven, not live-proven. Live GCS/KMS verification belongs to
+DOD-NODE-DIR-GCP-1 along with the IaC for the bucket and key ring.
+
+Note: `persist-001-composition-root.test.ts` has ONE failing case ("exits 1 with
+migration.out.of.date…") — verified pre-existing by stashing the diff and re-running; it fails
+identically on a clean tree.
