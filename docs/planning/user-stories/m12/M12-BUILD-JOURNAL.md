@@ -20,7 +20,9 @@ description: >
 - **Next red:** DOD-ADAPTER-GCP-1 (Secret Manager + GCS adapters, trustless-cello only, no
   publish). ROLE-MANIFEST-1 dir half PARKED on the publish (see below).
 - **Done since P0:** AE-DESIGN-1 ✅, ROLE-MANIFEST-1 client half ✅ (branch), MULTIADDR-1 ✅
-  (branch).
+  (branch), ADAPTER-GCP-1 GCS cloud-storage ✅+reviewed (branch m12/adapter-gcp e1028109).
+- **ADAPTER-GCP-1 remaining:** GCS audit-log-shipper + Cloud KMS envelope key (copy the reviewed
+  GCS pattern; re-verify each SDK's error shape against installed .d.ts; typed errors for KMS).
 - **PARKED — publish cascade (awaiting Andre's go):** ROLE-MANIFEST-1 dir half needs the changed
   cello-client packages on beta + a trustless-cello re-pin. Plan ready (Entry 11): merge
   `m12/role-manifest`→main, bump 7-pkg cascade (crypto 0.0.23, protocol-types 0.0.25, transport
