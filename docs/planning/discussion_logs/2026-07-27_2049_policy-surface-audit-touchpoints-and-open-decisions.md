@@ -923,3 +923,50 @@ ability to review any refusals."* The requirement:
 This is the push half of D-11's pull surface: D-11 is "what did my policy do", D-17 is "your policy just
 refused someone, here's how to look." A false positive that nobody ever learns about is indistinguishable
 from a stranger who never called.
+
+### THE DEFAULTS PRINCIPLE (Andre, 2026-07-28) — governs every decision in this document
+
+> *"We don't want to hand you your policy, but we do want to give you starting defaults — and because of
+> the commercial necessity we need to give you starting defaults that are safe but that promote usage. At
+> the beginning almost everyone is going to be unknown."*
+
+Two consequences that should be applied when any default in this document is chosen:
+
+1. **A default that shuts out unknown senders shuts out everyone**, because at launch essentially every
+   counterparty is unknown. Friction-reducing defaults are a commercial requirement, not a preference.
+2. **Safety comes from BOUNDS, not BARRIERS.** The permissive default is made safe by limiting how much a
+   stranger can consume, never by refusing them outright. This is INV-TIER-BOUND restated as a product
+   principle: a tier may RAISE an allowance, never remove one, and no tier is unlimited.
+
+### D-13 — DECIDED: anyone may leave a message for an offline agent
+
+Overrides the inbound state matrix, which reserved the relay mailbox for `whitelisted` and `vip` only.
+Andre: *"Why would you want to limit that? We're trying to promote people using the system and reducing
+friction."* Closes the D19 offline hole for everyone, not just contacts.
+
+The matrix's restriction was written to protect shared infrastructure from spam. That protection now comes
+from D-18's allowance instead — a bound, not a barrier. **The operator must be able to change this**, per
+the defaults principle; permissive is the default, not the law.
+
+### D-18 — DECIDED: the offline mailbox is bounded per sender, and the allowance grows with tier
+
+Not one global cap (a single spammer would bounce your friends' messages) and not unlimited. Each sender
+gets their own allowance; contacts get a larger one; nobody is unlimited. Reuses the tier-bounds machinery
+already running on live sessions.
+
+**Implementation wrinkle, flagged not decided:** the relay does not know the operator's tiers — they live in
+the local address book, and the directory holds no contact data by design (M8C D16). So in practice **the
+relay enforces one stranger-sized allowance uniformly, and the operator's own tiers apply when their agent
+pulls the messages down.** Same effect; nothing private leaves the machine. This is the answer to the
+original D-13-as-written ("publishing policy so the relay can act on it") — the answer is *don't publish
+it*.
+
+### D-19 — DECIDED: withdrawing an endorsement takes effect everywhere, including for people who already saw it
+
+The endorsement stops being presentable, and any recipient holding a copy sees it marked withdrawn when
+they next check. Rejected: withdrawal affecting only future presentations, which would let an endorsement
+someone regrets — or one obtained under false pretences — circulate forever. *A reference, not a tattoo.*
+
+Cost: recipients must re-check rather than trusting what they stored. That is the same freshness/TTL
+machinery `DOD-VERIFY-1` already specifies (TTL re-check on use), so the mechanism exists; this decides
+what it is FOR.
