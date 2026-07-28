@@ -17,11 +17,9 @@ description: >
 
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
-- **Next red:** AE-APPEND-1 part 4 — the remaining Tier-A table specs (user_accounts,
-  relay_registrations, seal_notarizations, conversation_seals+children, directory_checkpoints,
-  checkpoint_node_signatures, signal_records — same framework, audit each column split) → then the
-  /cello/anti-entropy/1.0.0 channel + mutual handshake (needs a crypto TBS → publish).
-  ROLE-MANIFEST-1 DONE; AE-APPEND-1 parts 1-3 DONE (reconciliation, record-hash, encoder framework).
+- **Next red:** AE-APPEND-1 part 4 — remaining Tier-A specs (DELIBERATE-START unit, see Entry 20's
+  audit intelligence: non-obvious local exclusions per table). Then the /cello/anti-entropy/1.0.0
+  channel + mutual handshake (crypto TBS → publish). ROLE-MANIFEST-1 DONE; AE-APPEND-1 parts 1-3 DONE.
 - **Publish carry-forward for part 4 consumer:** the agent_revocations SELECT MUST hex-encode
   `signature` (pg returns BYTEA as Buffer; no type-parser override) — stated in the encoder header.
 - **Blocked on Andre:** nothing now (latest promoted). Next publish is the AE channel's crypto TBS
