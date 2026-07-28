@@ -59,6 +59,36 @@ describe("DOD-MULTIADDR-1: buildBootstrapMultiaddr", () => {
     ).toThrow(/transport/i);
   });
 
+  it("precedence: explicit override wins over hostname", () => {
+    const addr = buildBootstrapMultiaddr({
+      peerId: PEER,
+      explicit: "/dns4/override.example.com/tcp/443/wss",
+      hostname: "ignored.example.com",
+      port: "80",
+      transport: "ws",
+    });
+    expect(addr).toBe(`/dns4/override.example.com/tcp/443/wss/p2p/${PEER}`);
+  });
+
+  it("precedence: hostname wins over the ws fallback (the real AWS both-set runtime)", () => {
+    const addr = buildBootstrapMultiaddr({
+      peerId: PEER,
+      hostname: "directory-us1.cello.mygentic.ai",
+      fallbackWsAddr: "/ip4/0.0.0.0/tcp/8080/ws",
+    });
+    expect(addr).toBe(`/dns4/directory-us1.cello.mygentic.ai/tcp/80/ws/p2p/${PEER}`);
+  });
+
+  it("a set-but-empty port/transport is treated as unset, not spliced into a broken addr (F1)", () => {
+    const addr = buildBootstrapMultiaddr({
+      hostname: "d.example.com",
+      peerId: PEER,
+      port: "",
+      transport: "",
+    });
+    expect(addr).toBe(`/dns4/d.example.com/tcp/80/ws/p2p/${PEER}`);
+  });
+
   it("an https/wss endpoint round-trips through the explicit path (the unverified-manifest question)", () => {
     // A GCP node whose manifest endpoint is https:// advertises a wss multiaddr; the explicit
     // override is exactly how that value reaches /bootstrap unchanged.

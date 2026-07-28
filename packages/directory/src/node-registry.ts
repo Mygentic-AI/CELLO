@@ -113,11 +113,17 @@ export interface BuildBootstrapMultiaddrOpts {
    * is appended when absent. This is how a wss-shaped endpoint reaches /bootstrap unchanged.
    */
   explicit?: string;
-  /** Publicly-routable hostname (CELLO_DIRECTORY_HOSTNAME). */
+  /** Publicly-routable hostname (CELLO_DIRECTORY_HOSTNAME). Only meaningful with no `explicit`. */
   hostname?: string;
-  /** Public port (CELLO_DIRECTORY_PUBLIC_PORT). Default 80 — reproduces the pre-M12 AWS string. */
+  /**
+   * Public port (CELLO_DIRECTORY_PUBLIC_PORT). Default 80 — reproduces the pre-M12 AWS string.
+   * Only applies to the `hostname` branch. A set-but-empty value is treated as unset.
+   */
   port?: string | number;
-  /** Public transport (CELLO_DIRECTORY_PUBLIC_TRANSPORT). Default "ws". Must be ws|wss. */
+  /**
+   * Public transport (CELLO_DIRECTORY_PUBLIC_TRANSPORT). Default "ws". Must be ws|wss.
+   * Only applies to the `hostname` branch. A set-but-empty value is treated as unset.
+   */
   transport?: string;
   /** Local-dev fallback: the node's actual WS listen address (0.0.0.0 is made routeable). */
   fallbackWsAddr?: string;
@@ -140,8 +146,11 @@ export function buildBootstrapMultiaddr(opts: BuildBootstrapMultiaddrOpts): stri
   }
 
   if (opts.hostname) {
-    const port = opts.port ?? 80;
-    const transport = opts.transport ?? "ws";
+    // Coerce set-but-empty env values to unset. `??` alone would let CELLO_DIRECTORY_PUBLIC_PORT=""
+    // through as `""`, yielding an undialable `/tcp//ws` advertised silently — the exact trap the
+    // GCP-behind-TLS rollout (which sets these vars) would otherwise spring.
+    const port = opts.port === "" ? 80 : (opts.port ?? 80);
+    const transport = opts.transport === "" || opts.transport == null ? "ws" : opts.transport;
     if (!BOOTSTRAP_TRANSPORTS.has(transport)) {
       // Fail loud rather than advertise an undialable /tcp/{port}/{typo} address — a silent bad
       // transport would surface only as clients failing to connect, far from the cause.
