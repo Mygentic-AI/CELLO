@@ -31,6 +31,8 @@ import psycopg2
 from _dburl import portal_database_url
 import psycopg2.extras
 
+from _dispatch import nudge_dispatcher
+
 from _resend import resend_link
 from _sqlstate import classify
 
@@ -510,6 +512,11 @@ def handle_signup(body, origin, correlation_id):
             )
 
         conn.commit()
+        # The confirm mail is the entire signup — the screen says "check your
+        # inbox" and nothing else happens until they click it. Waiting up to a
+        # minute for the scheduled drain is the worst place in the whole funnel
+        # to spend that time.
+        nudge_dispatcher(correlation_id, log)
         log(
             "waitlist.signup.succeeded",
             correlation_id,

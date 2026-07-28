@@ -110,6 +110,24 @@ def cursor(conn):
 # ── Phase 1: claim ────────────────────────────────────────────────────────────
 
 
+def lag_ms(job):
+    """Milliseconds between this job becoming ELIGIBLE and actually being sent.
+
+    Measured from `scheduled_at`, not from an enqueue time — the table has no
+    created_at, and scheduled_at is the better clock regardless: a nurture mail
+    deliberately queued for next Tuesday should not report five days of lag. For
+    the auth mails, which are scheduled at now(), the two are the same thing.
+
+    Returns None rather than 0 when the timestamp is absent, because 0 is a
+    claim — "it went out instantly" — and an unknown is not that. A metric that
+    reports its own missing data as the best possible value is worse than none.
+    """
+    scheduled_at = job.get("scheduled_at")
+    if scheduled_at is None:
+        return None
+    return int((datetime.now(timezone.utc) - scheduled_at).total_seconds() * 1000)
+
+
 def claim_jobs(conn, limit, correlation_id):
     """Claim due jobs and COMMIT the claim before any network call.
 
@@ -158,6 +176,12 @@ def claim_jobs(conn, limit, correlation_id):
         cur.execute(
             """
             SELECT j.id, j.user_id, j.template, j.attempts, j.payload,
+                   -- Carried purely so the send can report how long the job sat
+                   -- waiting. Without it the only observable timestamp is the
+                   -- send itself, which cannot distinguish "SES was slow" from
+                   -- "we did not pick it up for a minute" — and it was the
+                   -- second one.
+                   j.scheduled_at,
                    u.email, u.display_name, u.email_status, u.content_alerts,
                    u.email_verified,
                    u.status AS user_status, u.wave_number,
@@ -714,6 +738,12 @@ def lambda_handler(event, context):
                 correlation_id,
                 jobId=str(job["id"]),
                 template=job["template"],
+                # THE AUDIT. How long this job waited between being enqueued and
+                # reaching SES — the interval nothing used to record, which is
+                # why "the link takes ages to arrive" could not be attributed to
+                # anything. A scheduled drain makes this 0–60s by construction,
+                # so it must be measured rather than assumed.
+                lagMs=lag_ms(job),
             )
     finally:
         conn.close()

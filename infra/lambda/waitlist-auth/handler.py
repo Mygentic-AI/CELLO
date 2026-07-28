@@ -34,6 +34,7 @@ import psycopg2.extras
 from _session import COOKIE_NAME, session_tokens_from, hash_token, read_session, revoke_all_for_user
 from _referral import award_referrer_for
 from _resend import LINK_LIMIT, LINK_WINDOW_MINUTES, resend_link
+from _dispatch import nudge_dispatcher
 from _sqlstate import classify
 
 # Kept only so an explicit override still works. The live value is resolved
@@ -249,6 +250,7 @@ def handle_request_link(body, origin, correlation_id):
 def _issue_link_if_eligible(email, correlation_id):
     """The whole known-address path, isolated so its failures cannot change the
     response shape."""
+    queued = False
     conn = connect()
     try:
         conn.autocommit = False
@@ -306,6 +308,7 @@ def _issue_link_if_eligible(email, correlation_id):
                     """,
                     (user["waitlist_id"],),
                 )
+                queued = True
                 log(
                     "waitlist.auth.link.issued",
                     correlation_id,
@@ -328,7 +331,11 @@ def _issue_link_if_eligible(email, correlation_id):
     finally:
         conn.close()
 
-
+    # AFTER the commit, never before: the nudge is only safe because the row is
+    # already durable. Invoking first would race the dispatcher against our own
+    # uncommitted transaction, and it would find nothing.
+    if queued:
+        nudge_dispatcher(correlation_id, log)
 
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
@@ -438,6 +445,11 @@ def handle_resend(params, origin, correlation_id):
 
             sent = resend_link(cur, user, correlation_id, log)
         conn.commit()
+        # Same rule as the request path: only after the row is durable. This one
+        # matters most of all — somebody clicking "send me another" has already
+        # waited once.
+        if sent:
+            nudge_dispatcher(correlation_id, log)
     except psycopg2.errors.InvalidTextRepresentation:
         # Not a UUID. Same answer as any other token we do not hold.
         conn.rollback()

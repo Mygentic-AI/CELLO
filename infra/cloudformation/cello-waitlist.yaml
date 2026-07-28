@@ -163,6 +163,21 @@ Resources:
                     # can send as anything SES will accept, which is a spoofing
                     # surface rather than a permission.
                     ses:FromAddress: noreply@mygentic.ai
+        - PolicyName: waitlist-nudge-dispatcher
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Lets the interactive paths (signup, /auth/request, resend) invoke
+              # the email dispatcher the moment they enqueue, instead of waiting
+              # for its rate(1 minute) tick. Measured: a sign-in link enqueued at
+              # 05:30:33 was not sent until 05:31:30.
+              #
+              # Scoped to the ONE function it may invoke. A blanket
+              # lambda:InvokeFunction on "*" would let any waitlist handler call
+              # any function in the account.
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cello-waitlist-email-${Environment}"
       Tags:
         - Key: Project
           Value: cello
@@ -579,6 +594,11 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
           WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          # Lets this function drain the queue immediately instead of leaving a
+          # confirm or sign-in link to wait for the dispatcher's next tick.
+          # Absent, _dispatch logs nudge.unconfigured and the scheduled run
+          # still sends it — degraded, never lost.
+          WAITLIST_EMAIL_FUNCTION: !Sub "cello-waitlist-email-${Environment}"
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-signup/handler.py
@@ -622,6 +642,11 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
           WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          # Lets this function drain the queue immediately instead of leaving a
+          # confirm or sign-in link to wait for the dispatcher's next tick.
+          # Absent, _dispatch logs nudge.unconfigured and the scheduled run
+          # still sends it — degraded, never lost.
+          WAITLIST_EMAIL_FUNCTION: !Sub "cello-waitlist-email-${Environment}"
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-auth/handler.py
@@ -662,6 +687,11 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
           WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          # Lets this function drain the queue immediately instead of leaving a
+          # confirm or sign-in link to wait for the dispatcher's next tick.
+          # Absent, _dispatch logs nudge.unconfigured and the scheduled run
+          # still sends it — degraded, never lost.
+          WAITLIST_EMAIL_FUNCTION: !Sub "cello-waitlist-email-${Environment}"
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-actions/handler.py
@@ -705,6 +735,11 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
           WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          # Lets this function drain the queue immediately instead of leaving a
+          # confirm or sign-in link to wait for the dispatcher's next tick.
+          # Absent, _dispatch logs nudge.unconfigured and the scheduled run
+          # still sends it — degraded, never lost.
+          WAITLIST_EMAIL_FUNCTION: !Sub "cello-waitlist-email-${Environment}"
           # Only the dispatcher sends mail, so only the dispatcher needs this.
           WAITLIST_SES_CONFIG_SET: !Ref SesConfigurationSet
       Code:
@@ -747,6 +782,11 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
           WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          # Lets this function drain the queue immediately instead of leaving a
+          # confirm or sign-in link to wait for the dispatcher's next tick.
+          # Absent, _dispatch logs nudge.unconfigured and the scheduled run
+          # still sends it — degraded, never lost.
+          WAITLIST_EMAIL_FUNCTION: !Sub "cello-waitlist-email-${Environment}"
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-bounce/handler.py
@@ -842,6 +882,11 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
           WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          # Lets this function drain the queue immediately instead of leaving a
+          # confirm or sign-in link to wait for the dispatcher's next tick.
+          # Absent, _dispatch logs nudge.unconfigured and the scheduled run
+          # still sends it — degraded, never lost.
+          WAITLIST_EMAIL_FUNCTION: !Sub "cello-waitlist-email-${Environment}"
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-waves/handler.py
@@ -883,6 +928,11 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
           WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          # Lets this function drain the queue immediately instead of leaving a
+          # confirm or sign-in link to wait for the dispatcher's next tick.
+          # Absent, _dispatch logs nudge.unconfigured and the scheduled run
+          # still sends it — degraded, never lost.
+          WAITLIST_EMAIL_FUNCTION: !Sub "cello-waitlist-email-${Environment}"
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-gate/handler.py
@@ -931,6 +981,11 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
           WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          # Lets this function drain the queue immediately instead of leaving a
+          # confirm or sign-in link to wait for the dispatcher's next tick.
+          # Absent, _dispatch logs nudge.unconfigured and the scheduled run
+          # still sends it — degraded, never lost.
+          WAITLIST_EMAIL_FUNCTION: !Sub "cello-waitlist-email-${Environment}"
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-firstwin/handler.py
@@ -974,6 +1029,11 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
           WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          # Lets this function drain the queue immediately instead of leaving a
+          # confirm or sign-in link to wait for the dispatcher's next tick.
+          # Absent, _dispatch logs nudge.unconfigured and the scheduled run
+          # still sends it — degraded, never lost.
+          WAITLIST_EMAIL_FUNCTION: !Sub "cello-waitlist-email-${Environment}"
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-feedback/handler.py
@@ -1014,6 +1074,11 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
           WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          # Lets this function drain the queue immediately instead of leaving a
+          # confirm or sign-in link to wait for the dispatcher's next tick.
+          # Absent, _dispatch logs nudge.unconfigured and the scheduled run
+          # still sends it — degraded, never lost.
+          WAITLIST_EMAIL_FUNCTION: !Sub "cello-waitlist-email-${Environment}"
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-outreach/handler.py
@@ -1055,6 +1120,11 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
           WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          # Lets this function drain the queue immediately instead of leaving a
+          # confirm or sign-in link to wait for the dispatcher's next tick.
+          # Absent, _dispatch logs nudge.unconfigured and the scheduled run
+          # still sends it — degraded, never lost.
+          WAITLIST_EMAIL_FUNCTION: !Sub "cello-waitlist-email-${Environment}"
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-utm/handler.py
@@ -1095,6 +1165,11 @@ Resources:
           WAITLIST_API_BASE: !Sub "https://${SiteDomainName}/api/waitlist"
           WAITLIST_SITE: !Sub "https://${SiteDomainName}"
           WAITLIST_FROM_EMAIL: !Ref FromEmailAddress
+          # Lets this function drain the queue immediately instead of leaving a
+          # confirm or sign-in link to wait for the dispatcher's next tick.
+          # Absent, _dispatch logs nudge.unconfigured and the scheduled run
+          # still sends it — degraded, never lost.
+          WAITLIST_EMAIL_FUNCTION: !Sub "cello-waitlist-email-${Environment}"
       Code:
         ZipFile: |
           # Placeholder. The authoritative source is infra/lambda/waitlist-gallery/handler.py
