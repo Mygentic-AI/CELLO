@@ -54,6 +54,21 @@ navigation.
 **No data changes.** Anyone with an old `cello_wl_session` is simply signed out once (different
 name) and signs in again; with zero real users there is nothing to migrate.
 
+### Follow-on deploy — survey moved onto /status (07:37–09:35 UTC)
+
+- **`./infra/deploy-lambdas.sh dev waitlist`** (3rd run, 07:37). `handle_survey` now treats a repeat
+  submission as an EDIT instead of discarding it — `award` rolls back on the once-per-user index, so
+  the second set of answers used to go nowhere while the caller got a 200. `/auth/session` gained
+  `survey_answers`, `survey_freeform` and `interview_committed`. **No stack change, no migration.**
+- **corp-cello-site `4eb06e4`** — survey rendered inline on `/status` above the fold; `/survey` is now
+  a client redirect (the `e2_survey` email links to it and cannot be edited). Deployed by the GitHub
+  Action, run `30339161070`.
+- **Verified live over CDP:** collapsed card at 417–479px and the expanded form's first question at
+  530px, both inside an 861px viewport. Edit reopens pre-filled from the server. Toggling a platform
+  and saving wrote `platforms: ["Codex"]` to `points_ledger.meta` and awarded 0 — the exact change
+  that was silently dropped before. **Andre's answers were restored to their original state
+  afterwards** (platforms empty, agent_count `3-9`); points unchanged at 60.
+
 ---
 
 ## 🟢 CAPTURE-LOOP FIX DEPLOYED — 13 waitlist Lambdas + stack update (2026-07-28, 03:51–04:20 UTC)
