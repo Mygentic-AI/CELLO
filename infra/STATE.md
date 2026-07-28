@@ -111,6 +111,20 @@ Nothing persists — confirmed, no `cello-tmp-portal-admin-*` functions remain.
 
 ---
 
+## 🔴 Hibernate complete — all 3 regions down (2026-07-28, 20:13–20:21 UTC)
+
+Uptime this cycle: ~16.5 h (woken 03:51 UTC). ECS→0 (directory + relay ×3, portal, ops-agent),
+4 RDS stopped, demo EC2 stopped, 7 ALBs + 3 NAT Gateways (EIPs retained) + 3 ssmmessages endpoints
+deleted. Portal capture: 2 listener rules + 1 SNI cert.
+
+**First clean cycle with both hibernate.sh fixes in place.** All **8** hostnames blackholed to
+`198.51.100.1` — `operations.cello.mygentic.ai` included for the first time (`fa227c69`), closing
+the last NXDOMAIN hole. Previous cycle left it negatively cacheable all night.
+
+**ECS Exec unavailable while hibernated.** No AWS changes until `wake.sh --execute` has run.
+
+---
+
 ## 🟢 Wake complete — all 3 regions live (2026-07-28, 03:36:06–03:51:29 UTC)
 
 **Elapsed: 15 min 23 sec.** All 3 inventory diffs IDENTICAL. RDS cleared in ~9 min.
