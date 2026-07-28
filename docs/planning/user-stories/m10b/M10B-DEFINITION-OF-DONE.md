@@ -444,9 +444,16 @@ the additions M10B is accountable for.
   > `WHERE subject_kind != 'agent' OR subject = agentId`, copies the fixture convention, and **goes
   > green — while matching ZERO rows in production**, silently un-presenting every agent-subject signal.
   > This unit is sequenced first, so that lands before anything else.
-  > **Required:** scope on the presenting agent's `k_local_pubkey` hex (available at the
-  > `outbound-sessions.ts:186` call site via `loadedAgents`), and **fix the fixture's UUID-as-subject
-  > convention first** — otherwise the new test does not survive the revert test: it passes with or
+  > **Required:** scope on the presenting agent's `k_local_pubkey` hex — **verified available and
+  > verified to be the RIGHT key**, which is the part that would otherwise fail silently:
+  > `loadedAgents: ReadonlyArray<{ name, pubkey }>` is already a dependency of `outbound-sessions.ts`
+  > (`:47`) with the exact lookup precedent in the same file (`:395`,
+  > `loadedAgents.find(a => a.name === ctx.agentName)`), and `agentName` is in scope at the call site.
+  > **It is K_local, not some other key:** `LoadedAgent.keyProvider` is documented as *"the agent's
+  > K_local signing key"* and `pubkey` is its public counterpart — and decisively, that same pubkey is
+  > what authenticates the signaling stream, which the directory resolves with
+  > `getAgentIdByPubkey(authedPubkeyHex)` against `agent_profiles.k_local_pubkey`. So it is the same
+  > value `subject` holds. **Fix the fixture's UUID-as-subject convention first** — otherwise the new test does not survive the revert test: it passes with or
   > without the scoping fix, because the fixture makes both paths return the seeded row. — ❌
 
 ---
