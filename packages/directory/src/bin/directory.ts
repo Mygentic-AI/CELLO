@@ -70,6 +70,7 @@ import { resolvePoolMax } from "../pg-pool-config.js";
 import type { ICheckpointTransport, CloudStorageProvider } from "@cello-protocol/interfaces";
 import { LocalCloudStorageProvider } from "@cello-protocol/interfaces/stubs";
 import { FileDirectoryManifestStore } from "../file-directory-manifest-store.js";
+import { PgAeStore } from "../pg-ae-store.js";
 
 const env = process.env["CELLO_ENV"];
 const logger = new StdoutLogger();
@@ -942,6 +943,19 @@ try {
     nonceBinder,
     directoryKeyProvider,
     directoryManifestStore,
+    // M12 DOD-AE-APPEND-1/MUTABLE-1: anti-entropy sync. Enabled whenever the three trust legs
+    // exist: the VERIFIED manifest (§1b store — the trust anchor AND the enablement switch: a
+    // pre-M12 manifest has no peerIds, so the dial loop no-ops and inbound handshakes fail closed
+    // until the manifest rotation lands), the node signing key, and the pg store. No env flag —
+    // the signed manifest controls the rollout.
+    aeSync: directoryManifestStore && directoryKeyProvider && pgPool
+      ? {
+          identity: { nodeId, sign: (tbs: Uint8Array) => directoryKeyProvider.sign(tbs) },
+          store: new PgAeStore(pgPool),
+          manifest: () => directoryManifestStore.getCurrentManifest(),
+          intervalMs: process.env.CELLO_AE_INTERVAL_MS ? Number(process.env.CELLO_AE_INTERVAL_MS) : undefined,
+        }
+      : undefined,
     pgPool: pgPool ?? undefined,
     // Deployment tunable: the delivery-grace window before a unilateral seal is
     // accepted (default 600s in CelloDirectoryNode). Lets test/dev shrink it.

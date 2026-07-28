@@ -109,6 +109,7 @@ import {
 import { getPrimaryHolder, upsertPrimaryHolder } from "./primary-holder-repository.js";
 import { bindPrimaryTransferNonce } from "./primary-transfer-nonce-repository.js";
 import { resolveDiscoveryState } from "./discovery-lookup.js";
+import { AeSyncService } from "./ae-sync-service.js";
 import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, CONTEXT_PRIMARY_RELEASE, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash, verifyCapability, decodeCapability } from "@cello-protocol/crypto";
@@ -525,6 +526,24 @@ export interface DirectoryNodeOptions {
    * When absent, manifest_poll_request frames are ignored.
    */
   directoryManifestStore?: import("@cello-protocol/interfaces").DirectoryManifestStore;
+  /**
+   * M12 DOD-AE-APPEND-1/MUTABLE-1: anti-entropy sync over /cello/anti-entropy/1.0.0.
+   * When provided, start() registers the responder handler and starts the per-peer dial loop
+   * (AeSyncService). The manifest getter MUST return an officer-VERIFIED manifest (§1b — wire it
+   * to the verifying FileDirectoryManifestStore, never a raw file read). When absent, the node
+   * neither serves nor dials AE (pre-M12 behavior).
+   */
+  aeSync?: CelloDirectoryNodeOptionsAeSync;
+}
+
+/** M12: the aeSync options shape shared by both option interfaces (see the field docs there). */
+interface CelloDirectoryNodeOptionsAeSync {
+  /** nodeId + node signing key. The libp2p peerId is NOT configurable — it is the transport's
+   *  own identity, filled from `#node.getPeerId()` at start() (a configured value could lie). */
+  identity: Omit<import("./ae-channel.js").AeNodeIdentity, "peerId">;
+  store: import("./anti-entropy-engine.js").AeStoreView;
+  manifest: () => import("@cello-protocol/protocol-types").ConsortiumManifest;
+  intervalMs?: number;
 }
 
 /** Orphan-sweep failures in a row before escalating to a distinct alarm event (~5 min at the 60s cadence). */
@@ -567,6 +586,9 @@ export class CelloDirectoryNode {
   readonly #directoryKeyProvider: import("@cello-protocol/interfaces").DirectoryKeyProvider | undefined;
   // M7-MANIFEST-002: manifest store for manifest_poll_request responses
   readonly #directoryManifestStore: import("@cello-protocol/interfaces").DirectoryManifestStore | undefined;
+  // M12: anti-entropy sync config + running service (constructed in start(), stopped via stopAeSync)
+  readonly #aeSyncConfig: CelloDirectoryNodeOptionsAeSync | undefined;
+  #aeSyncService: AeSyncService | undefined;
 
   // REG-001: forceDkgFailure — test injection for below-threshold DKG simulation
   readonly #forceDkgFailure: boolean;
@@ -726,6 +748,7 @@ export class CelloDirectoryNode {
     this.#pgPool = opts.pgPool;
     this.#directoryKeyProvider = opts.directoryKeyProvider;
     this.#directoryManifestStore = opts.directoryManifestStore;
+    this.#aeSyncConfig = opts.aeSync;
   }
 
   /**
@@ -841,6 +864,11 @@ export class CelloDirectoryNode {
     }
   }
 
+  stopAeSync(): void {
+    this.#aeSyncService?.stop();
+    this.#aeSyncService = undefined;
+  }
+
   stopPresenceHeartbeat(): void {
     if (this.#burnReconcile) {
       clearInterval(this.#burnReconcile);
@@ -871,6 +899,23 @@ export class CelloDirectoryNode {
       await this.#node.handle("/cello/checkpoint/1.0.0", (stream) => {
         void this.#handleCheckpointStream(stream);
       }, { maxInboundStreams: 8 });
+    }
+
+    // M12 DOD-AE-APPEND-1/MUTABLE-1: anti-entropy over /cello/anti-entropy/1.0.0 — responder
+    // handler + per-peer dial loop. All protocol/security logic lives in AeSyncService/ae-channel;
+    // this is pure lifecycle. Requires transport ≥0.0.27 (the handler's remotePeerId arg); an
+    // older transport fails CLOSED per stream inside the service, never open.
+    if (this.#aeSyncConfig && this.#logger) {
+      this.#aeSyncService = new AeSyncService({
+        transport: this.#node,
+        manifest: this.#aeSyncConfig.manifest,
+        // Own peerId comes from the LIVE transport, never config — a configured value could lie.
+        identity: { ...this.#aeSyncConfig.identity, peerId: this.#node.getPeerId() },
+        store: this.#aeSyncConfig.store,
+        logger: this.#logger,
+        intervalMs: this.#aeSyncConfig.intervalMs,
+      });
+      await this.#aeSyncService.start();
     }
 
     // PRESENCE-001: start the per-node liveness heartbeat (refreshes last_heartbeat_at on a coarse
@@ -5800,6 +5845,14 @@ export interface CreateDirectoryNodeOptions {
    * When absent, manifest_poll_request frames are ignored.
    */
   directoryManifestStore?: import("@cello-protocol/interfaces").DirectoryManifestStore;
+  /**
+   * M12 DOD-AE-APPEND-1/MUTABLE-1: anti-entropy sync over /cello/anti-entropy/1.0.0.
+   * When provided, start() registers the responder handler and starts the per-peer dial loop
+   * (AeSyncService). The manifest getter MUST return an officer-VERIFIED manifest (§1b — wire it
+   * to the verifying FileDirectoryManifestStore, never a raw file read). When absent, the node
+   * neither serves nor dials AE (pre-M12 behavior).
+   */
+  aeSync?: CelloDirectoryNodeOptionsAeSync;
 }
 
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
@@ -5841,6 +5894,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     pgPool: opts.pgPool,
     directoryKeyProvider: opts.directoryKeyProvider,
     directoryManifestStore: opts.directoryManifestStore,
+    aeSync: opts.aeSync,
   });
   await directory.start();
 
