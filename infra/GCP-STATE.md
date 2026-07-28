@@ -35,14 +35,20 @@ relink any time by demoting something else.
 
 ## Deployed resources
 
+**IaC:** `infra/terraform/` — Terraform, state in `gs://cello-infra-tfstate` (versioned).
+Everything below except the project object itself is Terraform-managed; `terraform plan` clean
+as of 2026-07-28.
+
 | Resource | Value | Created | How |
 |---|---|---|---|
-| Project `cello-infra` | number 955736313934 | 2026-07-28 | gcloud (bootstrap — import into Terraform at DOD-IAC-BASE-1) |
-| Enabled APIs | compute, artifactregistry, cloudbuild, sqladmin, secretmanager, storage, logging, monitoring, cloudresourcemanager, iam, serviceusage | 2026-07-28 | gcloud |
-| VPC `cello-vpc` | custom-mode, **no subnets yet** (per-region with node IaC). Default network + its 4 firewall rules DELETED. | 2026-07-28 | gcloud (bootstrap) |
+| Project `cello-infra` | number 955736313934 | 2026-07-28 | gcloud (bootstrap layer — managed as data source in TF) |
+| Enabled APIs | 11 (list in `terraform/project.tf`) | 2026-07-28 | Terraform (`google_project_service`) |
+| VPC `cello-vpc` | custom-mode, **no subnets yet** (per-region with node IaC). Default network + its 4 firewall rules DELETED. | 2026-07-28 | Terraform (imported) |
+| Bucket `cello-infra-tfstate` | us-east1, versioned, UBLA | 2026-07-28 | gcloud bootstrap, imported into TF |
+| Service accounts | `cello-directory-node`, `cello-relay-node`, `cello-ops-agent`, `cello-portal`, `cello-cloud-build` — minimal project-level grants per `terraform/iam.tf`; tighten to resource-scoped as resources appear | 2026-07-28 | Terraform |
 
-**Nothing else exists in this project.** No VMs, no Cloud SQL, no buckets, no service accounts
-beyond the compute default (unused by policy), no firewall rules.
+**Nothing else exists in this project.** No VMs, no Cloud SQL, no firewall rules; compute
+default SA present but attached to nothing and granted nothing.
 
 ## Quotas (verified 2026-07-28 — ample, no requests needed)
 

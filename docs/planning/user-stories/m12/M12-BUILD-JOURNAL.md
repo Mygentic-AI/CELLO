@@ -15,8 +15,9 @@ description: >
 
 ## RESUME STATE (keep current — overwrite this block only)
 
-- **Tier:** P0 — DOD-GCP-PROJECT-1 🟡 (owes only the Terraform import at DOD-IAC-BASE-1).
-- **Next red:** DOD-GCP-IAM-1 (per-workload service accounts, explicit minimal grants, in IaC).
+- **Tier:** P0 — PROJECT-1 ✅, IAM-1 🟡 (owes unit review), IAC-BASE-1 partially seeded
+  (skeleton + imports live; owes the disposable MIG up/down proof).
+- **Next red:** finish IAM-1 review, then DOD-CI-REGISTRY-1 (Artifact Registry + Cloud Build).
 - **HEAD:** trustless-cello `main` (see git log); cello-client untouched by M12 so far.
 - **Cloud state:** AWS = 3 regions awake (woken 2026-07-28, see infra/STATE.md). GCP =
   `cello-infra` live (project + billing + 11 APIs + empty custom `cello-vpc`); authoritative
@@ -80,3 +81,24 @@ not days, because the cap is a *slot* limit, not a wall: unlink `claude-code-ver
 gcloud, which is acceptable only as the documented bootstrap layer).
 
 **Next:** DOD-GCP-IAM-1.
+
+---
+
+## Entry 2 — 2026-07-28 — DOD-GCP-IAM-1 via Terraform (seeds DOD-IAC-BASE-1)
+
+Terraform chosen per M12-D2; doing IAM through it lands both lines' groundwork at once.
+
+- **State backend:** `gs://cello-infra-tfstate` (us-east1, versioned, UBLA) — bucket
+  bootstrap-created then imported, so TF manages its own state home.
+- **Adopted bootstrap:** 11 APIs as `google_project_service` (disable_on_destroy=false),
+  `cello-vpc` imported, project as data source (the one permanent bootstrap-layer object).
+- **DOD-GCP-IAM-1 clauses:** 5 per-workload SAs (`cello-directory-node`, `cello-relay-node`,
+  `cello-ops-agent`, `cello-portal`, `cello-cloud-build`) + 17 project-level minimal bindings
+  (secretAccessor / cloudsql.client / logWriter / metricWriter per workload; AR writer for CI).
+  Default compute SA: attached to nothing, granted nothing. Tightening to resource-scoped
+  bindings as resources appear is expected; WIDENING needs a journal entry.
+- **Evidence:** `terraform apply` — 33 added, 0 changed, 0 destroyed; follow-up
+  `terraform plan` — **No changes** (live == code). SA list verified via gcloud.
+- DOD-GCP-PROJECT-1's owed import → done → flipped ✅.
+
+**Next:** unit review on the terraform diff, then DOD-CI-REGISTRY-1.

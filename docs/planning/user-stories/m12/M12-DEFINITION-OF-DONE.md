@@ -77,11 +77,14 @@ description: >
   custom-mode VPC created (no default network); `infra/GCP-STATE.md` created in M11's STATE.md
   format and committed. — 🟡 all clauses done live 2026-07-28 (project 955736313934, billing
   linked via slot swap — see the ledger in GCP-STATE.md; 11 APIs; default net deleted,
-  `cello-vpc` custom-mode). Owed: Terraform import at DOD-IAC-BASE-1 → Entry 1
+  `cello-vpc` custom-mode). — ✅ owed import done: APIs/VPC/state bucket Terraform-managed,
+  plan clean → Entries 1, 2
 - **DOD-GCP-IAM-1** [trustless-cello] — per-workload service accounts (directory-node, relay-node,
   ops-agent, portal, cloud-build) with explicit minimal grants; the compute default SA is used by
   nothing; every grant is recorded in IaC. Org constraints (no SA keys — WIF only; zero default
-  grants) are documented in GCP-STATE.md so the silent-403 trap is expected, not discovered. — ❌
+  grants) are documented in GCP-STATE.md so the silent-403 trap is expected, not discovered. —
+  🟡 5 SAs + 17 minimal bindings live via `infra/terraform/iam.tf`, apply 33/0/0, plan clean;
+  org constraints in GCP-STATE.md. Owed: unit review → Entry 2
 - **DOD-CI-REGISTRY-1** [trustless-cello] — Artifact Registry repo exists; Cloud Build builds the
   directory and relay images from the GitHub repo (path-filtered triggers per package) and pushes
   to Artifact Registry. No local docker push is possible or needed. AWS CodePipeline remains
