@@ -411,3 +411,42 @@ Next after beta verify: re-pin trustless-cello directory to crypto ^0.0.24, then
 `/cello/anti-entropy/1.0.0` channel (libp2p handler + dial/reconnect + the mutual handshake +
 the round driver wiring reconciliation/version-summaries/merges/apply). The `latest` promotion
 for v0.0.130 is operator-facing (Andre's) and NOT needed for the channel build.
+
+## Entry 25 — 2026-07-28 — AE logic layer COMPLETE + two-node convergence proven
+
+Beta v0.0.130 published (crypto AE TBS) + verified against the tarball; directory re-pinned to
+crypto ^0.0.24 (buildAePeerAuthTbs importable, directory typechecks). Then built the remaining
+logic-layer units on m12/ae-append, each reviewed or in review:
+
+- **round planner** (planRound) — composes reconciliation + version-diff into per-table pull
+  decisions; digest-match skip both tiers. Reviewed: no blocking, no false-convergence hole; 3 LOW
+  test-teeth fixes applied.
+- **handshake verification** (verifyPeerAuthFrame) — the channel security core: manifest-pinned
+  pubkey + PeerId channel-binding + nonce + timestamp + signature, cause-naming reasons, fail
+  closed. Review in flight.
+- **anti-entropy engine** (runAntiEntropyRound) — one round of pull-and-apply over an injected
+  AeStoreView. Review in flight.
+- **two-node convergence PROOF** — in-memory test wiring the REAL encoders + merges: divergent
+  nodes converge (Tier-A union; Tier-B higher-seq-wins with monotonic burn on BOTH nodes) and
+  TERMINATE (2nd round applies 0). This is the convergence claim the earlier reviews deferred to
+  "the e2e unit", now proven at the logic level.
+
+Full directory suite: **806 passed, 0 failed.**
+
+**The entire logic-level AE data plane is built + proven:** reconciliation, record-hash, Tier-A
+encoders (4 specs), suspension/presence merges, Tier-B version summaries, version-reconcile,
+peer-auth TBS (published), round planner, handshake verification, and the engine + convergence
+proof. ~27 review passes across the session, every finding fixed, 2 publishes (v0.0.129 ROLE-
+MANIFEST, v0.0.130 AE TBS).
+
+**Remaining = infrastructure integration (needs the directory's live libp2p + Postgres):**
+1. A pg-backed AeStoreView (SELECT the synced tables → the encoders for advertise; INSERT-if-absent
+   / merge-upsert for apply — the pg store MUST replicate the MemStore semantics the proof used;
+   agent_revocations BYTEA `signature` hex-encoded per the encoder header).
+2. The `/cello/anti-entropy/1.0.0` libp2p handler: dial/reconnect, the handshake over the stream
+   (verifyPeerAuthFrame + our own signed frame), the digest→detail→pull round protocol + write-hints.
+3. Manifest gains `peerId` population + the directory VERIFYING its manifest at load (design §1a/§1b).
+4. DOD-AE-LOCAL-E2E-1: the live 3-process loopback enforcer (partition/restart/rejoin; assert
+   round-2 pulls nothing per the idempotency-termination note).
+This phase is proven by a multi-process integration test, not unit tests — a distinct mode from
+the logic layer above.
