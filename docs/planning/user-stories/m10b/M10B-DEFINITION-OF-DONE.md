@@ -352,7 +352,31 @@ the additions M10B is accountable for.
   you want to present."* Scope note: **the issuer is not a third party.** Bob knows he issued it, and
   may learn of a refusal if Alice chose to tell him (`M10B-D4`) — that is consent working, not a leak.
   The negative test targets everyone else, including the sealed submission queue (`DOD-END-QUEUE-1`),
-  which must not let a directory operator infer who endorsed whom. — ❌
+  which must not let a directory operator infer who endorsed whom.
+  > **🅿️ PARKED — ANDRE'S CALL (second review H8, Entry 10). This line is NOT achievable as written.**
+  > `signal_records` stores `subject` and `issuer_pubkey` **in plaintext**, is **replicated to all three
+  > sovereign nodes**, and `subject` IS the counterparty's `k_local_pubkey` (there is an index on it).
+  > So the moment an endorsement is *minted*,
+  > `SELECT subject, issuer_pubkey FROM signal_records WHERE issuer_kind='agent'` gives any node
+  > operator **the complete endorsement graph**. The queue's minimalism protects the pairing only for
+  > submissions that are *refused*. This line's own defense — "the directory's fingerprint is useless
+  > without the text" — is true of the **payload** and false of the **parties**.
+  > **Two resolutions, both expensive, and the choice is policy not engineering:** (a) rescope this
+  > line in writing to *"content is undiscoverable; the existence and parties of a notarized signal are
+  > visible to node operators"* — arguably already true of every M10 signal and possibly the honest
+  > reading of a federated notary; or (b) stop storing plaintext parties for `issuer_kind: agent`,
+  > which changes the storage model and needs a migration. Pre-existing (V46 predates M10B) and it does
+  > not block Tier 1 mechanically — but it is load-bearing for a milestone whose premise is consent and
+  > non-discoverability, so it must not be closed silently. — 🅿️
+- **DOD-END-SCOPE-FIX-1** — **an M10 defect this milestone surfaced and must fix FIRST (Entry 10).**
+  `listPresentable` — which implements M10-D5/M10-D14 subject scoping (account-subject rows presentable
+  by any agent under the account; agent-subject only by its own subject) — has **zero production
+  callers**. The live presentation path is `listAllActive` (`outbound-sessions.ts:186`), which takes
+  **no `agentId`/`accountId`** and is passed none. So the live wire path offers **every active wallet
+  signal regardless of which agent is presenting** — `INV-AGENT-SCOPED`, live, in M10, today. This
+  lands **before** the consent column (`M10B-D14r2`), or consent is bolted on top of a scoping hole and
+  the negative consent tests would pass against a path that was never scoped. Fix in the SQL, not a JS
+  branch. Standing rule: a real defect found outside the diff gets fixed, not deferred. — ❌
 
 ---
 
@@ -666,11 +690,109 @@ the discussion-of-record. Restated here because this is the milestone that imple
   generalisation `M10B-D1` demands: every future client-sourced type inherits consent for free. Note
   `consent_state` and the existing `default_present` answer different questions — *may* it be
   presented, versus *include it by default* — and conflating them is the trap.
+> ### ⚠️ SECOND REVIEW (Entry 10): `M10B-D12r`, `M10B-D14r` and `M10B-D19` are ALL SUPERSEDED
+> Three of Entry 7's four replacement decisions did not survive contact with the code. Read
+> `M10B-D12r2`, `M10B-D14r2` and `M10B-D25` below **instead of** them. Each failed the same way — the
+> mechanism was reasoned about without reading its consumer.
+
+- **M10B-D12r2 (2026-07-28, REPLACES `M10B-D12r` — Entry 10) — the effective-revoked expression needs
+  THREE ordered branches, and the array-overlap form alone FAILS OPEN.** Proven on live Postgres 18,
+  not argued: `ARRAY_AGG(x) FILTER (WHERE p)` over zero matching rows returns **`NULL`, not `'{}'`**;
+  `NULL && anything` is `NULL`; a `NULL` `WHEN` falls through to `ELSE 'active'`. So `M10B-D12r`'s
+  clause 4 claim that "tombstone-only stays fail-closed" is **false — it reads `active`**, which is
+  exactly the F4(b) defect it claimed to close. Two further fail-opens D-12r did not see: legacy
+  tombstones carry `revoker_pubkey IS NULL` and `{NULL} && {'bobkey'}` is `false`, so the migration
+  would **silently un-revoke every existing revocation**; and array overlap *is* exact-pubkey matching,
+  so dropping the `issuer_kind='portal'` escape strands every portal-issued record the moment the KMS
+  key rotates — the precise outcome `signal-write.ts:539–546` exists to prevent, and which the struck
+  `M10B-D12` had correctly kept. **Required shape, in this order:**
+  1. `COUNT(*) FILTER (WHERE NOT is_tombstone) = 0 AND BOOL_OR(is_tombstone)` → `'revoked'`
+     (tombstone-only, fail-closed, preserving today's behavior).
+  2. The portal escape: a role-authorized tombstone kills an `issuer_kind='portal'` record, so key
+     rotation keeps working (determination §3.5).
+  3. `COALESCE(<overlap>, false)` for the agent case.
+  It **supplements** `BOOL_OR(r.status = 'revoked')`, never replaces it — the naive replace reading
+  breaks portal revocation entirely. `revoker_pubkey` must be **`TEXT`**: `bytea[] && text[]` and
+  `text[] && varchar[]` both error at `CREATE VIEW` time. Two things D-12r got right and are confirmed:
+  the tombstone INSERT is genuinely blind (no `SELECT` between auth and insert), and a multi-issuer
+  hash group cannot exist because `issuer_pubkey` is inside the preimage — so there is no
+  cross-authorization hole.
+- **M10B-D25 (2026-07-28, REPLACES `M10B-D19` — Entry 10; also renamed, `M10B-D19` collided with spec
+  `D-19`) — the submitter return path needs its OWN carrier; it CANNOT ride the pickup path.**
+  `M10B-D19` claimed reuse; the path refuses it at both ends. (1) `deliverSignal` rejects anything whose
+  `signal_hash` is not already a notarized non-tombstone record (`signal-write.ts:459–465`) — a refusal
+  notice has none, and notarizing one to pass the gate writes every rejection into replicated
+  `signal_records`, destroying the privacy rationale. (2) The daemon funnels every pickup through
+  `decodeTrustSignalEnvelope`, a fixed 11-element CBOR array, so a `submission_result` throws and
+  **returns without ACK** — and ACK is what deletes, so the row redelivers on every reconnect forever
+  while holding the one pending slot. (3) V37's upsert destroys the second result, re-creating the
+  exact silent failure F2 was raised to close. (4) Pickup delivery is push-on-signaling-reauth only, so
+  a timeout would fire on a live connection. **Required instead:** a dedicated `submission_result`
+  table drained on the same reauth hook with its own ack semantics and **no supersede-by-kind** (one
+  message per event, not one current value per fact), or a new signaling frame kind. The decision must
+  also name the **client-side sink** — `wallet_trust_signals` is envelope-shaped and cannot hold
+  `{outcome, cause, detail}`, so this is a SQLCipher migration on operators' machines, which `D-19`
+  did not acknowledge.
+- **M10B-D14r2 (2026-07-28, REPLACES `M10B-D14r` — Entry 10) — the consent filter goes in the SQL of
+  `listAllActive`, and the backfill MUST follow `contacts-tier-migration.ts`.** Two independent defects
+  in `M10B-D14r`:
+  1. **It named a dead enforcement point.** `listPresentable` has **zero production callers**
+     (verified: only its own definition and two comments outside tests). The live wire path is
+     `listAllActive`, called once at `outbound-sessions.ts:186`. A filter written per D-14r ships as
+     dead code with a green suite while the live path presents unconsented endorsements. The predicate
+     goes in the **SQL** (`AND consent_state = 'accepted'`), not a JS branch — `listAllActive`'s
+     `include` branch already routes around `default_present`, and the identical shape would route
+     around consent.
+  2. **The backfill clobbers real consent on every daemon boot.** The client DB has **no migration
+     versioning**, and `ensureTrustSignalSchema` runs on every `startDaemon` behind a bare `catch {}`.
+     D-14r's `ALTER …; UPDATE … SET consent_state = 'accepted';` as siblings makes the UPDATE
+     unconditional: **an operator who REFUSES an endorsement has it flipped back to `accepted` on the
+     next restart**, silently, and it becomes presentable. Use the pattern the repo already carries and
+     documents (`contacts-tier-migration.ts:116–177`): `PRAGMA table_info` column-birth gate, ALTER +
+     backfill in one `BEGIN…COMMIT`, **rethrow** on failure, and **no column DEFAULT** so the backfill
+     has a real discriminator. Dropping the DEFAULT means D-14r's `NOT NULL DEFAULT 'pending'` goes
+     with it. The column must also be added to `CREATE_WALLET_SQL` or the fresh-vs-migrated DDL
+     equality test fails.
+  *Correction to D-14r's reasoning, for accuracy:* its "`cello_restore`, a backup import" second write
+  path **does not exist** — those commands are stubs. Fail-closed is still right; that was a future
+  hazard stated as a present defect.
+- **M10B-D26 (2026-07-28, from second-review H3) — `agent_profiles.account_id` is NULLABLE BY DESIGN,
+  so `M10B-D18` surfaces the gap rather than closing it; the completeness prerequisite must be decided
+  in writing.** `V23`: *"account_id is nullable — pre-M6 agents have no account. NULL means 'not yet
+  linked'."* Two live paths reach NULL: registration without a pre-auth token, and a resolution failure
+  that is deliberately swallowed (`preauth.account.link.failed`, logged, registration proceeds — the
+  comment says account resolution must not block registration). Under §5a's absent⇒refuse, **an entire
+  class of registered agents can never issue an endorsement**, and `DOD-END-QUOTA-1`'s per-account cap
+  is uncomputable for them. Decide one: registration requires an account (close both NULL paths), or
+  account-less agents are permanently refused with a named, surfaced cause. It is currently neither,
+  and D-18 alone does not unblock the four lines it was written for.
+- **M10B-D27 (2026-07-28, from second-review H4) — the retention ordering in Entry 8 was BACKWARDS; the
+  queue-driven rule in `M10B-D11` stands.** Entry 8 wrote "sweep TTL **longer** than the intake-key
+  retention window" — the direction that *guarantees* stranding, because a row then outlives the key it
+  is sealed to, becomes undecryptable, and is lost as poison with no reply. Safe is `T ≤ W`. It also
+  contradicted `M10B-D11`, which already had the correct **queue-driven** form ("retain the key until
+  no undrained row references it"); D-11 is authoritative and Entry 8's timer-driven replacement is
+  withdrawn. **Neither constant exists yet:** the pickup `24` is a default parameter duplicated in
+  three files, and nothing named `intake_key` exists in either repo — so Entry 8's proposed "assert on
+  the constants" test would have pinned an inverted invariant over constants that must first be
+  invented.
 - **M10B-D20 (2026-07-28, `DOD-END-QUEUE-1`) — `submission_id` = sha256 of the SIGNED submission body,
   and it is the queue's primary key.** Content-derived, so a daemon retry to a different node produces
   the same id and the portal mints once — which is what makes retry-on-node-failure safe rather than a
   duplication mechanism. A legitimate re-issue after a refusal differs, because `issued_at` is inside
-  the signed body. Uncollidable: to collide you would have to sign someone else's bytes. **Exactly-once
+  the signed body. Uncollidable: to collide you would have to sign someone else's bytes.
+  > **CORRECTED (second review H9) — the id is CALLER-SUPPLIED and the directory cannot verify it.** It
+  > cannot open the seal, so it cannot check the PK; the clause above describes what the id *is*, not
+  > what anyone *checks*. A daemon writing the same body under two different ids to two nodes gets
+  > **two mints and double quota consumption** — the exact outcome D-20 exists to prevent. Required:
+  > **the portal derives `submission_id` from the opened body**, treats the row's id as a routing hint
+  > only, and discards any row whose id disagrees. Attribution lens — never caller-supplied.
+  > **Also corrected:** `owning_node_id` is DROPPED from the column set (H10) — its entire purpose is
+  > stopping a non-converged replica from sweeping rows it did not write, which cannot arise on an
+  > unreplicated table. NO CONSUMER, NO SHIP. And Entry 8's "mirrors `sweepUndeliverablePickups`" was
+  > wrong: that sweep is not age-based, it targets `signal_hash IS NULL` legacy orphans only, so a
+  > normal pickup row is never swept.
+  **Exactly-once
   is a PORTAL property, not a queue one** — even a perfect queue cannot cover the portal crashing
   between minting and acking, so the queue promises at-least-once and the portal holds a
   processed-submissions record keyed on this id.
