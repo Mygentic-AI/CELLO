@@ -353,3 +353,37 @@ contract per the verdict).
 - The apply transaction (insert-if-absent Tier A; pull-by-key + merge Tier B) — DB integration.
 - pickup_queue/notification tombstones with bounded GC (§2 Tier B).
 - The local 3-process convergence enforcer (DOD-AE-LOCAL-E2E-1) — ties it together.
+
+## Entry 23 — 2026-07-28 — AE peer-auth TBS (crypto) + full AE foundation complete; three Tier-B reviews resolved
+
+Tier-B merge reviews all returned and their BLOCKING findings are fixed (branch m12/ae-append):
+- presence-merge: non-finite `updated_at` (malformed/hostile peer row) broke commutativity — NaN
+  made `>` always-false so the merge returned the 2nd arg unconditionally. Fixed: normalize
+  non-finite → -Infinity (valid always wins; two invalids → canonical tiebreak). +2 tests.
+- ae-mutable-version: BLOCKING representation coercion — paused/burned/online are BOOLEAN
+  (pg→JS boolean), last_seen_at/updated_at are TIMESTAMPTZ (pg→JS Date), NOT strings. Mixed
+  reps across nodes → divergent version hashes → silent divergence. Fixed: normalize at the
+  chokepoint (boolean→"true"/"false", Date→epoch-millis string). Plus the hollow-test gap: each
+  merge module now EXPORTS its consulted-column set and the version test asserts
+  `versionColumns ⊇ merge-consulted` (the load-bearing direction). +2 tests. Also fixed the
+  literal-NUL-byte→escape in this file (was binary to git).
+- suspension-merge: correct, no blocking; hardening applied (invariant comment + tied-max-seq fold).
+
+New: **AE peer-auth TBS** in cello-client crypto (branch m12/ae-peer-auth, commit 4a4f0d2) — the
+shared TBS for the directory↔directory handshake (design §1c): binds both nodeIds, both PeerIds
+(channel binding), both nonces, timestamp; new domain cello-ae-peer-auth-v1; asymmetric (no
+reflection); verify fails closed. 7 tests; crypto suite 287 green. Review in flight.
+
+**The AE data-plane foundation is now COMPLETE (all pure + crypto pieces, each reviewed):**
+reconciliation · record-hash · Tier-A encoders (agent_profiles, agent_revocations, user_accounts,
+seal_notarizations) · suspension merge · presence merge · Tier-B version summaries · peer-auth TBS.
+
+**What remains = integration only:**
+1. Publish crypto to BETA (ships the peer-auth TBS) + re-pin directory — a `/cello-publish`
+   cascade; the directory build resolves beta versions without the `latest` promotion (that stays
+   operator-facing / Andre's). This is the next step, gated on the TBS review going clean.
+2. The `/cello/anti-entropy/1.0.0` channel in the directory — libp2p handler + dial/reconnect +
+   the handshake (consumes the published TBS) + the round driver (calls reconciliation + version
+   summaries + merges + apply). The big integration unit.
+3. The apply transaction (Tier-A insert-if-absent FK-ordered; Tier-B pull-by-key + merge; tombstones).
+4. DOD-AE-LOCAL-E2E-1: the 3-process loopback convergence enforcer (partition/restart/rejoin).
