@@ -26,6 +26,35 @@ One user: Andre, also the only developer. CELLO is **alpha — no production, no
   migrations). Discipline is SEQUENCING + BATCHING only: prove locally first; batch directory pushes
   (~25–30 min each); publish via /cello-publish, never from memory.
 
+### THE FOUR WAYS A RUN DIES — read these as hard rules, not advice
+
+**1. FINISHING SOMETHING IS NOT A STOPPING CONDITION.** The observed failure (Andre, seen repeatedly):
+a session finishes a unit, then *stops and sits there* — sometimes literally printing **"waiting for the
+next cron tick"** — as though a completed section were a place to rest and the cron were a gate that
+releases the next one. **It is not. Nothing releases you. There is no gate.** The instant a unit goes
+green, reviewed, committed, and the DoD tag is flipped, **pull the next red DoD line and start it in the
+same turn.** The correct end of a unit is the beginning of the next one. The ONLY legitimate stopping
+points in the entire milestone are: the milestone is closed, or you are hard-blocked on one of the two
+human-only steps (§2c) *and* every other DoD line is also blocked — which has never once been true.
+
+**2. NEVER ASK A QUESTION.** `AskUserQuestion` is a **hard blocker that stops the session dead** — in
+autonomous mode nobody is there, so it does not "wait for an answer," it ends the run. Never call it.
+This includes the softer shapes: "Want me to…?", "Shall I proceed?", "Let me know if…", ending a turn on
+a proposal. Andre answered every open fork on 2026-07-28 (DoD `M10B-D2`..`D10`) precisely so that
+nothing needs asking. If something genuinely new appears: verifiable → verify it; has a best practice →
+take it and log an `M10B-D*`; genuinely undecidable → PARK it and pull the next unit. All three end with
+you still working.
+
+**3. THE CRON IS A DEFIBRILLATOR, NOT A METRONOME.** It exists ONLY to restart a session that already
+stalled. It is never a checkpoint, never a permission to continue, never something to wait for or work
+toward. If you are working when it fires, it changes nothing — keep going. Full rule in §3b, and it is
+the same failure as (1) wearing a different hat.
+
+**4. COMMIT AND PUSH CONSTANTLY — never >~15 min.** Every fix, every doc update, every green unit.
+Push after every commit; never batch pushes (Andre reviews by push, not by commit). An uncommitted hour
+is an hour that a compaction, a crash, or a branch switch can delete. Detailed messages — the why, the
+forensics, the decision — because Andre relies heavily on them.
+
 ## THE MILESTONE IN ONE PARAGRAPH
 M10 built the universal **mint → notarize → deliver → present → verify → consume** pipe and proved it
 generic with the zero-bump canary. That pipe has **three raw-plaintext sources**: the portal researches
@@ -203,12 +232,41 @@ trustless-cello references to cello-client packages stay pinned semver.
 **Two human-only steps** (everything else is yours to run, no permission-asking): the `latest` dist-tag
 promotion (always Andre's go — prepare + `--dry-run` + hand over) and the `/mcp` reconnect.
 
+**In autonomous/overnight mode, BOTH are DEFERRED, not blockers — and deferring them must not stop the
+run.** Publishing a new client to **beta** is authorized and expected; **promoting it to `latest` is
+not yours ever**, and overnight there is nobody to run it. So: publish to beta, verify the published
+binary, pin the local install and verify the pin, then **write the prepared promotion into the journal
+and the handoff** — the exact command, `--dry-run` output, and the versions involved — and **carry on
+with the next DoD line immediately.** Do not end a turn on it, do not ask for it, do not treat it as
+gating. The consequence is bounded and acceptable: nothing on `latest` moves until Andre runs it, which
+is exactly the intent. A DoD line whose proof needs the *published beta* artifact can still go ✅; a line
+that would need `latest` is the only thing that waits, and it says so in its evidence.
+
 When a unit needs BOTH a directory deploy AND a client publish: start the deploy first (slower), run the
 cascade while it is in flight, arm the Cron 1 watchdog (§3b).
 
+## 2d. Infrastructure state — `infra/STATE.md` is not optional
+**`infra/STATE.md` is the authoritative record of what exists in AWS. READ it before any session that
+touches infrastructure, and UPDATE it IMMEDIATELY after each discrete infra action — never batch, never
+"at the end of the story."** `./infra/deploy.sh` updates it automatically; **anything else — console,
+CLI, a manual stack operation, an SSM parameter, a migration — you update by hand and commit right
+then.** The reason is specific and has already cost real work: a compaction between the action and the
+write-up loses the identifiers permanently, and there is no way to reconstruct them.
+
+M10B touches this through `DOD-END-QUEUE-1` + `DOD-END-REVOKE-2` — one batched directory deploy across
+3 regions, with a new Flyway migration that must also bump `OpsAgentExpectedMigrationVersion`
+(`infra/CLAUDE.md`; skipping it crash-loops the ops-agent on fresh deployments). A session that changes
+AWS without updating STATE.md is incomplete, no matter what else went green.
+
 ## 3. Cadence
-- **Commit constantly** — never >~15 min without one. CELLO docs commit straight to main.
-- **Push after every commit** — each push is one focused change; do not batch pushes.
+- **Commit constantly** — never >~15 min without one. CELLO docs commit straight to main. This is
+  cheap insurance against exactly one thing: work that exists only in a working tree is work a
+  compaction, a crash, or a branch switch can delete.
+- **Push after every commit** — each push is one focused change; do not batch pushes. Andre reviews by
+  push, not by commit.
+- **Commit at every boundary, not just on the clock** — after each fix, each doc update, each green
+  unit, each DoD tag flip, each STATE.md change. "I'll commit once the section is done" is how a
+  section's worth of work gets lost.
 - **Review every unit** on its diff, right after green. Never batch reviews.
 - **Fixture harness at start + end of every unit.**
 - **Checkpoint at every tier boundary:** `cello-done-auditor` on every ✅ flipped since the last
@@ -217,11 +275,15 @@ cascade while it is in flight, arm the Cron 1 watchdog (§3b).
   to date — it is an obligation, not a habit.
 
 ## 3a. Autonomous-mode rules (if running overnight)
-NEVER `AskUserQuestion`, never end a turn waiting. **Decision rubric: pick the common best practice —
-the choice a competent engineer would recommend if asked, and least likely to need reversing.** Log it
-in the DoD Decisions section, proceed (redo > block, always). Genuine undecidable fork → PARK (DoD
-Parked + journal) and pull the next unit, saying so. Arm both crons at kickoff; re-arm after every
-restart/compaction.
+**NEVER `AskUserQuestion` — it hard-blocks and ends the run.** Never end a turn waiting, on anything.
+**Decision rubric: pick the common best practice —** the choice a competent engineer would recommend if
+asked, and least likely to need reversing. Log it in the DoD Decisions section, proceed (redo > block,
+always). Genuine undecidable fork → PARK (DoD Parked + journal) and pull the next unit, saying so. Arm
+both crons at kickoff; re-arm after every restart/compaction.
+
+**The two human-only steps are DEFERRED, never awaited** (§2c): prepare the `latest` promotion, journal
+it, keep working. Same for the `/mcp` reconnect. **And a finished unit is not a stopping point** — flip
+the tag, commit, push, then start the next red line in the same turn (REALITY CHECK §1).
 
 **The four forks this milestone opened are CLOSED** — Andre answered all of them on 2026-07-28, plus the
 ingress shape and anonymous variants. See DoD Decisions `M10B-D2` through `M10B-D8`. Do not re-open, do
@@ -256,6 +318,14 @@ at an off-minute, e.g. `12,42 * * * *` (never `0,30`). Recurring.
 > pause, and never something to wait for. Output of the shape *"waiting for the next cron tick"* is
 > itself the bug it exists to prevent. If you are working, a fired cron changes nothing: keep working.
 > **And never call `AskUserQuestion` — it is a hard blocker that stops the session dead.**
+>
+> **The specific observed failure, restated because it keeps happening (Andre, 2026-07-28):** a session
+> finishes a section, then *stops and sits there*, sometimes literally printing "waiting for the next
+> cron tick" — as if completing a unit created a condition to wait on, and the tick were what releases
+> the next one. **Completing a unit releases nothing, because nothing was holding you.** The tick is not
+> a turn boundary, not a permission, not a checkpoint, and not a scheduler you hand work back to. If you
+> have just finished something, that is the moment with the LEAST reason to stop: the context is hot and
+> the next red line is one lookup away. Flip the tag, commit, push, pull the next line, keep going.
 
 The fired prompt is the self-audit (this list IS the cron script — re-arm from it verbatim):
 1. Are M10B-PROCEDURE / M10B-DEFINITION-OF-DONE (+ the latest journal entry) actually in context right
@@ -274,12 +344,17 @@ The fired prompt is the self-audit (this list IS the cron script — re-arm from
    exact version and VERIFY the pin (`claude mcp get cello`); verify the published BINARY.
    **Never run the `latest` promotion** — prepare + `--dry-run` + hand to Andre.
 5. **Deploying? Start the slow thing FIRST and keep coding while it is in flight.** Never idle on a
-   deploy. Arm Cron 1 while one is in flight; batch directory pushes (§2a).
+   deploy. Arm Cron 1 while one is in flight; batch directory pushes (§2a). **Touched AWS since the last
+   tick? `infra/STATE.md` updated and committed — right now, not at story close** (§2d).
 6. >15 min since the last commit? Commit now — **detailed message** (the why, the forensics, the
-   decision; Andre relies heavily on commit messages, so never scrimp on them).
+   decision; Andre relies heavily on commit messages, so never scrimp on them). Push it.
 7. Did the last unit go green without a `cello-unit-reviewer` dispatch? Dispatch it now.
-8. State one line of current status (DoD line, red/green) so a human skimming later can see the session
-   was alive and unstuck at this timestamp.
+8. **Did you FINISH something and stop?** Then the stall this cron exists to fix has already happened —
+   you are the patient, not the doctor. Flip the DoD tag, commit, push, **pull the next red line and
+   start it before this turn ends.** A completed unit is never a resting point (REALITY CHECK §1).
+9. State one line of current status (DoD line, red/green) so a human skimming later can see the session
+   was alive and unstuck at this timestamp — then **keep working in the same turn.** The status line is
+   a note to a later reader, not a sign-off, and never the last thing a turn does.
 
 **SELF-TERMINATE (mandatory).** When M10B closes (`DOD-END-PLAYBOOK-1` ✅), or the work is otherwise
 finished, abandoned, or handed back, the fired prompt calls `CronDelete` on its own job ID. A heartbeat
@@ -287,7 +362,8 @@ left armed after the work is done wakes the session forever. This clause belongs
 only here.
 
 ## 4. First actions (order matters)
-1. **`DOD-END-ARCH-1`** — the determination. It gates every build line and carries the four open forks.
+1. **`DOD-END-ARCH-1`** — the determination. It gates every build line. It no longer carries the four
+   forks (all closed — `M10B-D2`..`D10`); what it carries is the detail those decisions opened.
    Its output is the architecture section the whole milestone builds against.
 2. **Verify the trustless-cello NOTARIZATION surface before planning work on it.** `DOD-DIR-WRITE-1`
    claims the authorized-issuer model is data-driven and seam-ready for `issuer_kind: agent`. Read it and
