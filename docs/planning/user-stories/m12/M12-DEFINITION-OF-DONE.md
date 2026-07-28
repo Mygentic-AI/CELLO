@@ -131,15 +131,46 @@ description: >
   6 non-blocking → Entries 8, 9 (see M12-P5, checkpoint scope)
 - **DOD-AE-APPEND-1** [trustless-cello] — append-only tables sync between directories over the
   authenticated libp2p channel via root-comparison + delta pull; divergence detection is
-  O(compare), transfer is delta-only; peers that fail identity verification are refused. — ❌
+  O(compare), transfer is delta-only; peers that fail identity verification are refused. — 🟠
+  THREE of four clauses earned: authenticated channel (live, J-ANTIENTROPY), delta-only transfer
+  (round 2 pulls nothing, unit + live), and peers failing identity verification ARE refused
+  (19 fail-closed unit assertions across ae-channel/ae-handshake). **NOT earned: "root-comparison /
+  divergence detection is O(compare)."** `buildWireState` sends the FULL Tier-A hash list and
+  Tier-B version map every round per peer per table, converged or not — no digest crosses the wire;
+  the digest is recomputed receiver-side from a list already paid for, so it saves nothing. The
+  bucketed machinery design §3 specifies is present but DEAD in the ship path (`differingBuckets`
+  has no production caller). Owed: digest-first exchange, then bucket walk only for differing
+  tables. Done-audit 2026-07-28 ruled the earlier ✅ overstated. → Entries 9-15
+
 - **DOD-AE-MUTABLE-1** [trustless-cello] — mutable-table sync with per-table conflict rules per
   the design doc; `agent_suspensions` convergence proven adversarially: pause during partition,
   node restart mid-sync, stale-node rejoin, un-pause requiring newer authenticated state, tie →
-  suspended. — ❌
+  suspended. — ✅ per-table rules implemented (suspension = seq-based monotonic-burn merge;
+  presence = wall-clock LWW); V49 adds `suspension_seq`/`origin_node` and the write seam mints them
+  atomically. All five adversarial scenarios have a named test: **pause during partition** →
+  J-ANTIENTROPY "a PAUSE written while a node is partitioned converges on heal" (Tier-B, live);
+  **restart mid-sync / stale-node rejoin** → J-ANTIENTROPY burst-catch-up (live) + the
+  `FOR UPDATE`-preserves-a-concurrent-burn pg test; **un-pause needs newer state** → live
+  (`true:false:9` on all three) + `suspension-merge` stale-lower-seq-clear; **tie → suspended** →
+  `suspension-merge` (both arg orders). Wall-clock cannot be a merge input BY CONSTRUCTION
+  (`updated_at` absent from `SuspensionRecord`). Reviewed; 2 HIGH kill-switch findings found +
+  fixed. Parked (design §4 hardening, not one of the five): "restart, then serve a ceremony before
+  the first completed round". → Entries 9-15
+
 - **DOD-AE-LOCAL-E2E-1** [trustless-cello] — **local convergence enforcer:** three directory
   processes on loopback with divergent seeded state converge; kill one mid-sync → restart →
   catch-up; a node absent for a burst of writes converges on rejoin. Runs in e2e-tests via the
-  standard fixture (extend `session-fixture.ts`, never a from-scratch fixture). — ❌
+  standard live-binary fixture (extend `spine/live-harness.ts`, never a from-scratch fixture —
+  the DoD originally said `session-fixture.ts`, which does not exist in either repo; `live-harness`
+  is the spine enforcer harness ~30 `j-*.spine.test.ts` files use). — ✅ ENFORCER RAN, 5/5 green:
+  `packages/e2e-tests/src/spine/j-antientropy.spine.test.ts` — three REAL directory binaries,
+  separate processes + separate DBs, real TCP/Noise. Divergent seeded state converges on all three;
+  a node absent for a **60-record burst** converges on rejoin (asserted present on the writer first,
+  so the all-present assertion is not vacuous); a Tier-B pause written during the partition
+  converges on heal. Extends `live-harness` (`directoryFixedTransport` → deterministic PeerIds +
+  fixed ws ports so a peerId-pinned manifest can be written pre-boot); no from-scratch fixture.
+  → Entries 14-15
+
 - **DOD-MULTIADDR-1** [trustless-cello] — the advertised bootstrap multiaddr is configuration,
   not the hardcoded `/dns4/{host}/tcp/80/ws` template (`directory.ts:1095`); an
   `https`/`wss`-shaped endpoint round-trips through client bootstrap (closes the unverified

@@ -142,19 +142,48 @@ describe("J-ANTIENTROPY — 3 directory processes converge over /cello/anti-entr
     }
   }, 180_000);
 
-  it("a node killed mid-sync catches up on restart (no operator action)", async () => {
-    // Node 0 goes down, the federation keeps writing, node 0 rejoins and must pick up what it
-    // missed. This is the outage-tolerance property the sovereign-node model promises.
+  it("a node absent for a BURST of writes converges on rejoin (no operator action)", async () => {
+    // Node 0 goes down, the federation keeps writing a BURST, node 0 rejoins and must pick up all
+    // of it. The burst matters: a single record proves reconnection, not catch-up — only a batch
+    // exercises the advertisement/transfer path at a size where a bound or a truncation would show.
     await cluster.directories[0]!.stop();
-    seedRevocation(1, "ae-agent-while-down");
+    const burst = Array.from({ length: 60 }, (_, n) => `ae-burst-${String(n).padStart(3, "0")}`);
+    for (const id of burst) seedRevocation(1, id);
+    // Sanity: the burst really landed on the writer, so a later all-present assertion is not vacuous.
+    const onWriter = revocationsOn(1);
+    expect(burst.every((id) => onWriter.has(id)), "burst must be present on the writing node").toBe(true);
 
     const restarted = await cluster.restartDirectory();
     expect(restarted, "restartDirectory must return the fresh node-0 proc").toBeTruthy();
 
-    await waitFor("node 0 to catch up on the write it missed", async () => {
-      return revocationsOn(0).has("ae-agent-while-down");
-    });
-  }, 240_000);
+    await waitFor("node 0 to catch up on the FULL burst it missed", async () => {
+      const have = revocationsOn(0);
+      return burst.every((id) => have.has(id));
+    }, 120_000);
+  }, 300_000);
+
+  it("a PAUSE written while a node is partitioned converges to it on heal (kill switch, Tier-B)", async () => {
+    // The scenario the kill switch actually has to survive: an agent is paused while one sovereign
+    // node cannot see the write. Until that node learns, it would still serve the compromised
+    // agent. Tier-A catch-up (above) does not prove this — suspensions are Tier-B, a different
+    // merge and a different sync path.
+    const agentId = "ae-agent-paused-in-partition";
+    const account = "00000000-0000-0000-0000-0000000000c2";
+    await cluster.directories[0]!.stop(); // node 0 is now partitioned from the federation
+
+    psqlSpineN(1,
+      `INSERT INTO agent_suspensions (agent_id, paused, burned, authorized_by_account, suspension_seq, origin_node, updated_at)
+       VALUES ('${agentId}', true, false, '${account}', 3, '${spineNodeId(1)}', now())
+       ON CONFLICT (agent_id) DO UPDATE SET paused = true, suspension_seq = 3`,
+    );
+
+    await cluster.restartDirectory(); // heal
+
+    await waitFor("the partitioned node to learn the pause on heal", async () => {
+      const row = psqlSpineN(0, `SELECT paused || ':' || suspension_seq FROM agent_suspensions WHERE agent_id = '${agentId}'`).trim();
+      return row === "true:3";
+    }, 120_000, () => aeDiagnostics(agentId));
+  }, 300_000);
 
   it("a burn written on ONE node converges to the others and stays burned (kill switch)", async () => {
     const agentId = "ae-agent-burned";

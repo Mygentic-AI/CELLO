@@ -553,3 +553,40 @@ BEHAVIORAL, not just a call-spy (it also asserts the served getter was never con
 **Still owed (smaller):** `stopAeSync()`-in-shutdown and the `CELLO_AE_INTERVAL_MS` bounds have no
 tests of their own — both are boot/shutdown wiring whose failure mode is loud, so they rank below
 the remaining P1/P2 DoD lines.
+
+---
+
+## Entry 15 — 2026-07-28 — Done-audit: 3 flips OVERSTATED. Two fixed with real tests, one demoted.
+
+Ran `cello-done-auditor` on the three AE status flips before committing them. Verdict: **0 EARNED,
+3 OVERSTATED** — it independently reproduced both suites green (4/4 spine, 69/69 unit) and then
+found that each line had a named AC clause with no test behind it. The tags ran one notch ahead of
+the work. Nothing dishonest reached the repo: the flips were still uncommitted.
+
+**Fixed with real tests (both now earned):**
+- **"a node absent for a BURST of writes converges on rejoin"** — the test seeded ONE record.
+  "Burst" is the load word in that clause and one record proves reconnection, not catch-up. Now
+  seeds **60** records while node 0 is down, asserts they landed on the WRITER first (so the
+  all-present assertion cannot pass vacuously), then asserts the full set after rejoin. Live: green.
+- **"pause during partition"** — was UNPROVEN. The only down-node test seeded `agent_revocations`
+  (Tier-A); suspensions are Tier-B, a different merge and a different sync path, so Tier-A
+  catch-up proved nothing about the kill switch. Added: a PAUSE written while node 0 is
+  partitioned, converging to it on heal. That also removes the auditor's double-count (restart and
+  stale-rejoin were the same Tier-A test cited twice). Live: green. **Enforcer now 5/5.**
+
+**Demoted to 🟠 — DOD-AE-APPEND-1.** The AC says "root-comparison + delta pull; divergence
+detection is **O(compare)**". Delta pull is real (bodies are pulled by hash), but `buildWireState`
+sends the FULL Tier-A hash list and Tier-B version map every round, per peer, per table, converged
+or not — **no digest crosses the wire**. The receiver recomputes a digest from a list it already
+paid to download, so the "root comparison" saves zero bytes. The bucketed machinery §3 specifies
+exists but is DEAD in the ship path: `differingBuckets` has no production caller, its only
+references are its own tests — dead code backed solely by its own test, in a repo whose
+readability is itself a trust signal. My earlier framing ("wire-efficiency optimization owed, not
+a correctness gap") was wrong: divergence detection is BY DEFINITION what you pay before you know
+you diverge, and that cost is paid on the wire. Owed: digest-first `ae_state`, bucket walk only
+for tables whose digests differ — which also makes `differingBuckets` live.
+
+Also corrected in the DoD: the LOCAL-E2E line named `session-fixture.ts` as the standard fixture.
+That file does not exist in either repo. `spine/live-harness.ts` is the live-binary harness ~30
+`j-*.spine.test.ts` files use, and the AE enforcer EXTENDS it (+67 lines) rather than forking —
+which is what fixture discipline actually asks for.
