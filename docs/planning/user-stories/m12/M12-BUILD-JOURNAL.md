@@ -292,3 +292,32 @@ rules, bucketed-digest reconciliation + write-hints, kill-switch convergence rul
 adversarial scenario list for DOD-AE-MUTABLE-1, checkpoint scope ruling, observability ACs,
 mesh retirement list). Unit review dispatched — the DoD line requires review before
 implementation starts.
+
+---
+
+## Journal integrity note (2026-07-28)
+
+Entries below this line are APPENDED at end-of-file (reliable), not prepended. Several earlier
+prepend edits (`python s.replace` with shifting anchors) silently no-op'd, so the detailed prose
+for **Entries 9, 11, 12, 13, 15, 16, 17, 18, 19, 21** is not inline here — but each is preserved
+verbatim in its git commit message (`git log -- docs/planning/user-stories/m12/M12-BUILD-JOURNAL.md`
+and the feature commits). The DoD (status authority) and the RESUME STATE block at the top are
+current; no status or code was lost. Commit log is the durable audit trail for those numbers.
+
+## Entry 21 — 2026-07-28 — AE-APPEND-1 part 4: user_accounts + seal_notarizations specs (in review)
+
+Two more Tier-A specs on the reviewed framework (branch m12/ae-append, commits f080faa8 +
+2098007b), each audited against schema + every production UPDATE:
+- **user_accounts** (key account_id): hashes account_id + phone_stub_hash; EXCLUDES
+  email_stub_hash (nullable, absent from initial INSERT, backfilled — hash-chain.ts already
+  excludes it from the chain → mutable → Tier B).
+- **seal_notarizations** (key session_id+seal_type): hashes the immutable notarization content;
+  EXCLUDES supersedes_notarization_id (BIGINT FK to another row's local BIGSERIAL id → forks) and
+  correlation_id (per-flow). Append-only in production (supersession INSERTs a new row).
+Spec-hygiene FORBIDDEN set extended. Fixed a real defect: a literal NUL byte had leaked into the
+composite-key separator (git saw both files as binary) → replaced with the unicode escape (0 NUL
+bytes remain). Directory suite 754 green; typecheck + lint clean. Review in flight.
+
+Still owed (deferred with reasons): relay_registrations (deregistered_at flip), signal_records
+(status amend), conversation_seals (+children), checkpoint tables (parked M12-P5). These need
+Tier-B logic or the checkpoint decision first.
