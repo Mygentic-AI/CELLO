@@ -31,13 +31,19 @@ resource "google_project_service" "apis" {
 }
 
 # Terraform's own state bucket — bootstrap-created, imported so drift is visible.
+# Holds every historical state version; never destroyable via TF, never publicly exposable.
 resource "google_storage_bucket" "tfstate" {
   name                        = "cello-infra-tfstate"
   project                     = var.project_id
   location                    = "US-EAST1"
   uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
 
   versioning {
     enabled = true
+  }
+
+  lifecycle {
+    prevent_destroy = true
   }
 }

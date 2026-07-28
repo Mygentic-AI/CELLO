@@ -37,7 +37,9 @@ relink any time by demoting something else.
 
 **IaC:** `infra/terraform/` — Terraform, state in `gs://cello-infra-tfstate` (versioned).
 Everything below except the project object itself is Terraform-managed; `terraform plan` clean
-as of 2026-07-28.
+as of 2026-07-28. **Caveat:** IAM uses additive `google_project_iam_member`, so plan-clean does
+NOT detect out-of-band grants — audit with `gcloud projects get-iam-policy cello-infra` at each
+tier boundary.
 
 | Resource | Value | Created | How |
 |---|---|---|---|
@@ -45,7 +47,11 @@ as of 2026-07-28.
 | Enabled APIs | 11 (list in `terraform/project.tf`) | 2026-07-28 | Terraform (`google_project_service`) |
 | VPC `cello-vpc` | custom-mode, **no subnets yet** (per-region with node IaC). Default network + its 4 firewall rules DELETED. | 2026-07-28 | Terraform (imported) |
 | Bucket `cello-infra-tfstate` | us-east1, versioned, UBLA | 2026-07-28 | gcloud bootstrap, imported into TF |
-| Service accounts | `cello-directory-node`, `cello-relay-node`, `cello-ops-agent`, `cello-portal`, `cello-cloud-build` — minimal project-level grants per `terraform/iam.tf`; tighten to resource-scoped as resources appear | 2026-07-28 | Terraform |
+| Service accounts | `cello-directory-node`, `cello-relay-node`, `cello-ops-agent`, `cello-portal`, `cello-cloud-build` — minimal grants per `terraform/iam.tf`. **Secret access is per-secret only, never project-level** (unit-review finding); CI reads only the staging bucket, never tfstate | 2026-07-28 | Terraform |
+| Cloud Build P4SA grants | `cloudbuild.serviceAgent` + `secretmanager.admin` (org policy strips ALL automatic service-agent grants — both had to be granted explicitly for the GitHub connection) | 2026-07-28 | Terraform |
+| Artifact Registry `cello` | `us-east1-docker.pkg.dev/cello-infra/cello` — docker; images pushed by Cloud Build ONLY. Contains `directory:manual-dedc55ac` (+latest); relay image building | 2026-07-28 | Terraform |
+| Bucket `cello-infra_cloudbuild` | Cloud Build staging (auto-created by first submit) | 2026-07-28 | service-created |
+| Cloud Build connection `cello-github` | us-east1, **PENDING_USER_OAUTH — Andre must complete the GitHub authorization link** before path-filtered triggers can be created | 2026-07-28 | gcloud (import to TF with the trigger unit) |
 
 **Nothing else exists in this project.** No VMs, no Cloud SQL, no firewall rules; compute
 default SA present but attached to nothing and granted nothing.

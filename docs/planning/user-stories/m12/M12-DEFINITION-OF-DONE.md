@@ -83,12 +83,16 @@ description: >
   ops-agent, portal, cloud-build) with explicit minimal grants; the compute default SA is used by
   nothing; every grant is recorded in IaC. Org constraints (no SA keys — WIF only; zero default
   grants) are documented in GCP-STATE.md so the silent-403 trap is expected, not discovered. —
-  🟡 5 SAs + 17 minimal bindings live via `infra/terraform/iam.tf`, apply 33/0/0, plan clean;
-  org constraints in GCP-STATE.md. Owed: unit review → Entry 2
+  ✅ 5 SAs live via `infra/terraform/iam.tf`, plan clean; unit review run and ALL findings
+  fixed (secret access now per-secret only; CI bucket-scoped; tfstate hardened; drift caveat
+  documented) → Entries 2, 3
 - **DOD-CI-REGISTRY-1** [trustless-cello] — Artifact Registry repo exists; Cloud Build builds the
   directory and relay images from the GitHub repo (path-filtered triggers per package) and pushes
   to Artifact Registry. No local docker push is possible or needed. AWS CodePipeline remains
-  untouched and functional for the AWS node until P4. — ❌
+  untouched and functional for the AWS node until P4. — 🟠 registry live (TF); directory image
+  BUILT+PUSHED by Cloud Build (`directory:manual-dedc55ac`, build SUCCESS); relay build running;
+  `cello-github` connection created but **PENDING_USER_OAUTH (Andre)** — triggers owed after
+  that → Entry 3
 - **DOD-IAC-BASE-1** [trustless-cello] — the IaC skeleton (tool per M12-D2) stands up and tears
   down one disposable COS VM in a MIG(size 1) with a static IP, firewall rule, and attached
   service account, entirely from code. IaC enforcer green on this skeleton. — ❌

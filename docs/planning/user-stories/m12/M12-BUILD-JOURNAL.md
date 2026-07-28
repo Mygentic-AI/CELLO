@@ -15,9 +15,11 @@ description: >
 
 ## RESUME STATE (keep current — overwrite this block only)
 
-- **Tier:** P0 — PROJECT-1 ✅, IAM-1 🟡 (owes unit review), IAC-BASE-1 partially seeded
-  (skeleton + imports live; owes the disposable MIG up/down proof).
-- **Next red:** finish IAM-1 review, then DOD-CI-REGISTRY-1 (Artifact Registry + Cloud Build).
+- **Tier:** P0 — PROJECT-1 ✅, IAM-1 ✅ (reviewed, all findings fixed), CI-REGISTRY-1 🟠
+  (registry + proven directory build; relay building; triggers blocked on GitHub OAuth),
+  IAC-BASE-1 seeded (owes the disposable MIG up/down proof).
+- **Next red:** DOD-IAC-BASE-1 while CI-REGISTRY-1 waits on the OAuth click.
+- **Blocked on Andre:** complete the `cello-github` connection OAuth (link in Entry 3 / terminal).
 - **HEAD:** trustless-cello `main` (see git log); cello-client untouched by M12 so far.
 - **Cloud state:** AWS = 3 regions awake (woken 2026-07-28, see infra/STATE.md). GCP =
   `cello-infra` live (project + billing + 11 APIs + empty custom `cello-vpc`); authoritative
@@ -102,3 +104,41 @@ Terraform chosen per M12-D2; doing IAM through it lands both lines' groundwork a
 - DOD-GCP-PROJECT-1's owed import → done → flipped ✅.
 
 **Next:** unit review on the terraform diff, then DOD-CI-REGISTRY-1.
+
+---
+
+## Entry 3 — 2026-07-28 — IAM review findings fixed; first Cloud Build images; GitHub connection pending OAuth
+
+**Unit review (cello-unit-reviewer, no model override) on DOD-GCP-IAM-1: SPEC FAITHFUL, 6
+findings, ALL addressed:**
+- **F1 (medium):** project-level `secretmanager.secretAccessor` on 4 workload SAs would let any
+  workload read any other's key material once secrets exist, and no 403 would ever prompt
+  tightening. **Fixed by removal** — secret access is now granted per-secret in the unit that
+  creates each secret; a missing grant fails loud, which makes minimality self-enforcing.
+- **F2 (medium):** CI's project-wide `storage.objectViewer` included the tfstate bucket (all
+  historical state versions). **Fixed:** replaced with a bucket-scoped grant on the Cloud Build
+  staging bucket only.
+- **F3 (low):** additive `iam_member` means plan-clean ≠ no out-of-band grants. **Fixed:** caveat
+  + audit command in GCP-STATE.md; audit at tier boundaries.
+- **F4 (low):** tfstate bucket now `prevent_destroy` + `public_access_prevention=enforced`.
+- **F5 (minor):** .gitignore covers tfvars/override/crash files.
+- **F6 (note):** ops-agent has no `cloudsql.client` yet — intentional; its DB-access pattern is
+  redesigned in DOD-MOVE-OPSAGENT-1 (no cross-cloud DB), so the grant is decided there.
+Post-fix: apply clean, `terraform plan` No changes. IAM-1 → ✅.
+
+**DOD-CI-REGISTRY-1 progress:**
+- Artifact Registry `cello` (us-east1) via TF.
+- **First CELLO image ever built on GCP:** `gcloud builds submit` (source → Cloud Build →
+  Artifact Registry; no local docker) → `directory:manual-dedc55ac` **SUCCESS**, run as the
+  `cello-cloud-build` SA. Relay build `dd2ba947` running.
+- Silent-403 class hit twice in one hour, exactly as predicted (Entry 0): Cloud Build's P4SA had
+  NO roles (org strips service-agent auto-grants). Fixed in TF: `cloudbuild.serviceAgent` +
+  `secretmanager.admin` (the latter is the documented requirement for 2nd-gen GitHub
+  connections — the P4SA creates/manages the OAuth-token secret).
+- `cello-github` connection created, state **PENDING_USER_OAUTH** — Andre must open the
+  authorization link (printed in terminal; also retrievable via
+  `gcloud builds connections describe cello-github --region=us-east1`). Path-filtered triggers
+  for `packages/directory/**` and `packages/relay/**` are the remaining clause.
+- `.gcloudignore` added (keeps `gcloud builds submit` uploads to Dockerfile-relevant sources).
+
+**Next:** DOD-IAC-BASE-1 (disposable MIG proof) while OAuth waits.

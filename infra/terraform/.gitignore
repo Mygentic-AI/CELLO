@@ -2,4 +2,11 @@
 *.tfstate
 *.tfstate.backup
 tfplan
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 crash.log
+crash.*.log

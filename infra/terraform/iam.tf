@@ -8,11 +8,15 @@
 # needs a journal entry.
 
 locals {
+  # Secret access is NEVER project-level: each secret grants its reader via
+  # google_secret_manager_secret_iam_member in the unit that creates the secret. A missing
+  # per-secret grant fails loud (403), which is the enforcement mechanism — a project-level
+  # secretAccessor would let every workload read every other workload's key material and the
+  # 403 that prompts tightening would never fire.
   workload_sas = {
     directory-node = {
       display_name = "CELLO directory node"
       roles = [
-        "roles/secretmanager.secretAccessor",
         "roles/cloudsql.client",
         "roles/logging.logWriter",
         "roles/monitoring.metricWriter",
@@ -21,7 +25,6 @@ locals {
     relay-node = {
       display_name = "CELLO relay node"
       roles = [
-        "roles/secretmanager.secretAccessor",
         "roles/logging.logWriter",
         "roles/monitoring.metricWriter",
       ]
@@ -29,7 +32,6 @@ locals {
     ops-agent = {
       display_name = "CELLO ops agent"
       roles = [
-        "roles/secretmanager.secretAccessor",
         "roles/logging.logWriter",
         "roles/monitoring.metricWriter",
       ]
@@ -37,7 +39,6 @@ locals {
     portal = {
       display_name = "CELLO portal"
       roles = [
-        "roles/secretmanager.secretAccessor",
         "roles/cloudsql.client",
         "roles/logging.logWriter",
         "roles/monitoring.metricWriter",
@@ -48,7 +49,6 @@ locals {
       roles = [
         "roles/artifactregistry.writer",
         "roles/logging.logWriter",
-        "roles/storage.objectViewer",
       ]
     }
   }
@@ -76,4 +76,29 @@ resource "google_project_iam_member" "workload" {
   project  = var.project_id
   role     = each.value.role
   member   = "serviceAccount:${google_service_account.workload[each.value.sa_key].email}"
+}
+
+# The org disables automatic role grants for service agents too — Cloud Build's P4SA arrives
+# with nothing and cannot manage the GitHub-connection OAuth secret without its standard role.
+resource "google_project_iam_member" "cloudbuild_service_agent" {
+  project = var.project_id
+  role    = "roles/cloudbuild.serviceAgent"
+  member  = "serviceAccount:service-${data.google_project.cello_infra.number}@gcp-sa-cloudbuild.iam.gserviceaccount.com"
+}
+
+# CI reads its build source from the staging bucket ONLY — bucket-scoped, never project-level,
+# so the CI SA can never read the Terraform state bucket (which retains every historical state
+# version and may transit sensitive values).
+resource "google_storage_bucket_iam_member" "cloudbuild_staging_source" {
+  bucket = "${var.project_id}_cloudbuild"
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.workload["cloud-build"].email}"
+}
+
+# 2nd-gen GitHub connections: the P4SA stores the OAuth token as a Secret Manager secret it
+# creates itself — documented requirement is secretmanager.admin on the project for the P4SA.
+resource "google_project_iam_member" "cloudbuild_p4sa_secret_admin" {
+  project = var.project_id
+  role    = "roles/secretmanager.admin"
+  member  = "serviceAccount:service-${data.google_project.cello_infra.number}@gcp-sa-cloudbuild.iam.gserviceaccount.com"
 }

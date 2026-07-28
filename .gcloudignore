@@ -1,0 +1,12 @@
+# Controls what `gcloud builds submit` uploads as build source.
+# Keep this aligned with what the Dockerfiles actually COPY (repo-root context,
+# package.json/lockfile/tsconfig + packages/ sources).
+.git
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+docs/
+infra/terraform/.terraform
+coverage
+.DS_Store
