@@ -639,3 +639,83 @@ behaviour (accept under bound, answer with an away message) is a working, if blu
 - [[M10-DEFINITION-OF-DONE]] — DOD-FLOOR-1, DOD-PRESENT-1, DOD-VERIFY-1, DOD-T2-JOURNEY-1
 - [[2026-07-04_edos_rate_limiting]] — identity-bound rate limiting; published service contracts
 - [[2026-07-04_1630_launch-triage-backlog]] — item 9, the kill switch, still unverified
+
+---
+
+## 10. Decisions taken — 2026-07-28 (Andre)
+
+Walked through one at a time, in dependency order rather than document order.
+
+### D-2 — DECIDED: enforce, everything except the DeBERTa model
+
+Reconnect the security and governance layer in **enforcing** mode. Every guard that is built runs and
+acts: inbound sanitization, outbound secret redaction, PII whitelist + bulk-dump warn, rate limiting,
+language allowlist. The DeBERTa injection model stays deferred (it is not built — the real classifier
+was deferred by decision on 2026-06-23 pending the 568 MB model + runtime infra).
+
+Ship the minimal operator escape hatch in the **same unit** — enforcing without a way to relax a
+misfiring rule is the one combination that can strand you (see D-4).
+
+**Andre's stated concern:** *"I have ongoing development everywhere and I'm concerned — because I thought
+this was already flipped on — that I'm going to start experiencing errors and I won't know if they're the
+result of the new code or this flip."* Mitigation, recorded so it isn't rediscovered: the daemon prints
+`security.gateway.connected {mode}` on every boot, so which build had it on is determinable from the log,
+and every screening decision writes a record with reason + correlationId. Attribution is a grep, not a
+guess. Flip on a quiet branch and read a day of records before it reaches working daemons.
+
+### D-3 — DECIDED: local policies in the client database; the enterprise scanner owns its own
+
+- **Local:** policies live in the client's encrypted database. One key. Covered by backup.
+- **Enterprise:** the scanning machine holds its own policies, on its own machine. It never reaches back
+  to the client's database.
+
+Same code, two homes. What is dropped: today's design puts a "the daemon isn't allowed to read this"
+store *on the same laptop*, which never worked — whoever owns the laptop can simply not run the scanner.
+`SI-001`'s guarantee is real but only enforceable when the scanner is on a machine the operator does not
+control, i.e. `M9-REMOTE-001`. Amend `SI-001`'s scope in writing so this reads as correcting an
+over-claim, not dropping a requirement.
+
+**Andre's recollection, confirmed correct:** the motivation for the split was always the enterprise case —
+an enterprise may run inbound/outbound screening on a machine they control while users work locally. That
+architecture is right and is why the local simulation of it is unnecessary.
+
+**Open, deliberately not decided (Phase 2):** when the remote scanner is unreachable, does the local daemon
+fail closed (no screening, no messages) or continue? Fail-closed is enterprise-correct and collides with
+CELLO's availability invariant. Name it before the enterprise build, not during.
+
+### D-4 — DECIDED: CLI prompt now, passkey later
+
+A change that makes you *less* protected (stop redacting my email, raise the send limit, enable autonomous
+override) requires a human confirmation the store already enforces and nothing in the product can currently
+produce. At launch the operator confirms **in the CLI**; the portal passkey flow replaces it when the
+portal connects to this layer. Rationale: one user, and the alternative is that a misfiring rule can never
+be fixed.
+
+**Control surfaces:** keep the two that exist (agent settings, contacts) and add **one** for the security
+layer. Not three.
+
+### D-5 — DECIDED: remove environment-variable overrides from shipped builds
+
+Security settings come from the database only. The four `CELLO_GATEWAY_*` overrides bypass the D-4
+confirmation gate entirely — no confirmation, no versioned row, no fingerprint to attest. Tests inject
+config directly and do not need the env path. A gate with a published bypass is not a gate.
+
+### D-1 — DECIDED: a refusal is always definite, and never comes from the LLM
+
+Resolves the contradiction between the 4-level policy (L1 Ignore = silence) and the inbound state matrix
+(never leave a sender hanging). **The matrix wins: no silent drops.**
+
+Andre's clarifications, which are the substance of the decision:
+
+1. **This is not "every unknown sender gets a no."** Unknown senders may well be accepted — that is a
+   policy choice. The rule is only that *when* the answer is no, it is a **definite** no.
+2. **Blocked always means no. Unknown may or may not**, depending on the configured policy.
+3. **A refusal never involves the LLM.** It is deterministic and decided before anything reaches the model.
+4. **A security-scan result can produce a no** — but the line between *"redact this and carry on"* (accept
+   the session, drop or redact the content) and *"this is bad enough we are not taking the call"* (a
+   deterministic refusal) is **not yet defined**. Defining which findings fall on which side is its own
+   piece of work, and it is new scope not previously tracked anywhere.
+
+Supporting fact that settles the privacy objection to always-answering: the directory already tells any
+querier whether an agent is online (the same finding that deferred `DOD-CONTACT-1`'s presence clause,
+M8C D16). Silence therefore hides nothing that is not already public.
