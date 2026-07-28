@@ -17,9 +17,10 @@ resource "google_artifact_registry_repository" "cello" {
 # registry could replace the image every other node runs, which is a consortium-wide compromise
 # reached from one host. Writing stays exclusively with Cloud Build (iam.tf).
 resource "google_artifact_registry_repository_iam_member" "directory_node_reader" {
+  for_each   = var.directory_nodes
   project    = var.project_id
   location   = google_artifact_registry_repository.cello.location
   repository = google_artifact_registry_repository.cello.name
   role       = "roles/artifactregistry.reader"
-  member     = "serviceAccount:${google_service_account.workload["directory-node"].email}"
+  member     = "serviceAccount:${google_service_account.directory_node[each.key].email}"
 }

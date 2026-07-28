@@ -50,8 +50,18 @@ const SECRET_BINDINGS: readonly Binding[] = [
   { target: "CELLO_PREAUTH_ISSUER_KEY_HEX", refVar: "CELLO_GSM_PREAUTH_ISSUER_KEY", purpose: "preauth-issuer-key", required: false },
 ];
 
-/** Env var naming the secret that holds the database credential JSON. */
+/**
+ * Two database credentials, because there are two roles and the difference is load-bearing.
+ *
+ * `CELLO_GSM_DB_CREDENTIALS` is the SCHEMA OWNER (`postgres`) — Flyway's, for DDL.
+ * `CELLO_GSM_DB_APP_CREDENTIALS` is what the NODE connects as (`cello_service`), which
+ * V2__directory_schema.sql builds the append-only guarantee around: RLS policies are
+ * `TO cello_service` and UPDATE/DELETE are REVOKEd from it. Connecting the node as the owner
+ * bypasses every one of those — no table declares FORCE ROW LEVEL SECURITY — so the two must
+ * never collapse into one, and an absent app credential must REFUSE rather than fall back.
+ */
 const DB_CREDENTIALS_REF = "CELLO_GSM_DB_CREDENTIALS";
+const DB_APP_CREDENTIALS_REF = "CELLO_GSM_DB_APP_CREDENTIALS";
 
 interface DbCredentials {
   username: string;
@@ -78,7 +88,7 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function parseDbCredentials(raw: string): DbCredentials {
+function parseDbCredentials(raw: string, refVar: string): DbCredentials {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -86,19 +96,19 @@ function parseDbCredentials(raw: string): DbCredentials {
     // The SyntaxError is deliberately discarded, not wrapped: Node embeds an excerpt of the input
     // in its message, and the input here is a credential blob.
     throw new Error(
-      `${DB_CREDENTIALS_REF} secret is not JSON — expected {username, password, host, port, dbname}`,
+      `${refVar} secret is not JSON — expected {username, password, host, port, dbname}`,
     );
   }
   if (typeof parsed !== "object" || parsed === null) {
     throw new Error(
-      `${DB_CREDENTIALS_REF} secret is not a JSON object — expected {username, password, host, port, dbname}`,
+      `${refVar} secret is not a JSON object — expected {username, password, host, port, dbname}`,
     );
   }
   const c = parsed as Record<string, unknown>;
   for (const field of ["username", "password", "host", "port", "dbname"] as const) {
     const v = c[field];
     if (v === undefined || v === null || v === "") {
-      throw new Error(`${DB_CREDENTIALS_REF} secret is missing required field '${field}'`);
+      throw new Error(`${refVar} secret is missing required field '${field}'`);
     }
   }
   return c as unknown as DbCredentials;
@@ -158,11 +168,17 @@ export async function buildGcpBootEnv(
   const dbRef = env[DB_CREDENTIALS_REF];
   if (!dbRef) {
     throw new Error(
-      `${DB_CREDENTIALS_REF} is not set — a GCP directory node cannot reach its database without it`,
+      `${DB_CREDENTIALS_REF} is not set — Flyway cannot run its migrations without the schema owner`,
+    );
+  }
+  const dbAppRef = env[DB_APP_CREDENTIALS_REF];
+  if (!dbAppRef) {
+    throw new Error(
+      `${DB_APP_CREDENTIALS_REF} is not set — the node must connect as its restricted role, never as the schema owner`,
     );
   }
   const resolved = new Map<string, string>();
-  for (const resourceName of new Set<string>([dbRef, ...purposeToResource.values()])) {
+  for (const resourceName of new Set<string>([dbRef, dbAppRef, ...purposeToResource.values()])) {
     const value = await secrets.access(resourceName);
     if (!value) {
       throw new Error(
@@ -180,26 +196,33 @@ export async function buildGcpBootEnv(
     lines.push(`export ${b.target}=${shellQuote(resolved.get(resource)!)}`);
   }
 
-  const db = parseDbCredentials(resolved.get(dbRef)!);
+  const admin = parseDbCredentials(resolved.get(dbRef)!, DB_CREDENTIALS_REF);
+  const app = parseDbCredentials(resolved.get(dbAppRef)!, DB_APP_CREDENTIALS_REF);
+
+  // The NODE's connection — the restricted role.
   // Every component is encoded, not just the password: a username containing '@' or ':' would
   // otherwise produce a URL that parses to a different host.
   const enc = encodeURIComponent;
-  const hostPortName = `${enc(db.host)}:${enc(String(db.port))}/${enc(db.dbname)}`;
+  const appHostPortName = `${enc(app.host)}:${enc(String(app.port))}/${enc(app.dbname)}`;
   // Cloud SQL presents a Google-managed certificate chain. Node's pg treats `sslmode=require` as
   // verify-full, so `no-verify` keeps the connection encrypted without pinning a chain the node has
   // no copy of — same reasoning as the RDS path.
   lines.push(
     `export DATABASE_URL=${shellQuote(
-      `postgresql://${enc(db.username)}:${enc(db.password)}@${hostPortName}?sslmode=no-verify`,
+      `postgresql://${enc(app.username)}:${enc(app.password)}@${appHostPortName}?sslmode=no-verify`,
     )}`,
   );
-  // Flyway is pgjdbc, which does NOT accept libpq's `no-verify` (`Invalid sslmode value`), so its
-  // URL carries no sslmode at all — Cloud SQL requires TLS server-side regardless (ENCRYPTED_ONLY).
-  // Its env vars are also not URL-decoded, so they carry the RAW username and password;
-  // percent-encoding them would authenticate with a different string than the node uses.
-  lines.push(`export FLYWAY_URL=${shellQuote(`jdbc:postgresql://${db.host}:${db.port}/${db.dbname}`)}`);
-  lines.push(`export FLYWAY_USER=${shellQuote(db.username)}`);
-  lines.push(`export FLYWAY_PASSWORD=${shellQuote(db.password)}`);
+
+  // FLYWAY's connection — the schema owner, because migrations are DDL and the runtime role has
+  // none. pgjdbc does NOT accept libpq's `no-verify` (`Invalid sslmode value`), so this URL carries
+  // no sslmode at all; Cloud SQL requires TLS server-side regardless (ENCRYPTED_ONLY). Flyway's env
+  // vars are also not URL-decoded, so they carry the RAW username and password — percent-encoding
+  // them would authenticate with a different string.
+  lines.push(
+    `export FLYWAY_URL=${shellQuote(`jdbc:postgresql://${admin.host}:${admin.port}/${admin.dbname}`)}`,
+  );
+  lines.push(`export FLYWAY_USER=${shellQuote(admin.username)}`);
+  lines.push(`export FLYWAY_PASSWORD=${shellQuote(admin.password)}`);
 
   return { script: lines.join("\n") + "\n", skipped };
 }

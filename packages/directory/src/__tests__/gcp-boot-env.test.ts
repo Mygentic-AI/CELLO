@@ -32,6 +32,7 @@ function fakeSecrets(values: Record<string, string>): SecretAccessor & { request
 
 const REF = {
   db: "projects/cello-infra/secrets/db-creds/versions/latest",
+  dbApp: "projects/cello-infra/secrets/db-app-creds/versions/latest",
   node: "projects/cello-infra/secrets/node-key/versions/latest",
   transport: "projects/cello-infra/secrets/transport-key/versions/latest",
   internal: "projects/cello-infra/secrets/internal-api-key/versions/latest",
@@ -46,7 +47,17 @@ const VAL = {
   preauth: "dd".repeat(32),
 };
 
-const DB_JSON = JSON.stringify({
+/** The schema owner — Flyway's credential. */
+const DB_ADMIN_JSON = JSON.stringify({
+  username: "postgres",
+  password: "adm1n-pw",
+  host: "10.10.0.7",
+  port: 5432,
+  dbname: "cello_dev",
+});
+
+/** The node's runtime credential — restricted, under RLS. */
+const DB_APP_JSON = JSON.stringify({
   username: "cello_service",
   password: "p@ss w/ord:special",
   host: "10.10.0.7",
@@ -57,6 +68,7 @@ const DB_JSON = JSON.stringify({
 function baseEnv(): NodeJS.ProcessEnv {
   return {
     CELLO_GSM_DB_CREDENTIALS: REF.db,
+    CELLO_GSM_DB_APP_CREDENTIALS: REF.dbApp,
     CELLO_GSM_NODE_KEY: REF.node,
     CELLO_GSM_TRANSPORT_KEY: REF.transport,
     CELLO_GSM_INTERNAL_API_KEY: REF.internal,
@@ -66,7 +78,8 @@ function baseEnv(): NodeJS.ProcessEnv {
 
 function baseValues(): Record<string, string> {
   return {
-    [REF.db]: DB_JSON,
+    [REF.db]: DB_ADMIN_JSON,
+    [REF.dbApp]: DB_APP_JSON,
     [REF.node]: VAL.node,
     [REF.transport]: VAL.transport,
     [REF.internal]: VAL.internal,
@@ -97,8 +110,11 @@ describe("DOD-NODE-DIR-GCP-1: buildGcpBootEnv", () => {
     expect(script).toContain(
       `export DATABASE_URL='postgresql://cello_service:${encodeURIComponent("p@ss w/ord:special")}@10.10.0.7:5432/cello_dev?sslmode=no-verify'`,
     );
-    expect(script).toContain(`export FLYWAY_PASSWORD='p@ss w/ord:special'`);
-    expect(script).toContain(`export FLYWAY_USER='cello_service'`);
+    // Flyway gets the SCHEMA OWNER, the node gets the restricted role — they are different
+    // credentials on purpose. Running the node as the owner bypasses every RLS policy and the
+    // UPDATE/DELETE revokes that make the seal tables append-only.
+    expect(script).toContain(`export FLYWAY_USER='postgres'`);
+    expect(script).toContain(`export FLYWAY_PASSWORD='adm1n-pw'`);
   });
 
   it("gives Flyway a JDBC URL with NO sslmode — pgjdbc rejects libpq's 'no-verify'", async () => {
@@ -115,7 +131,7 @@ describe("DOD-NODE-DIR-GCP-1: buildGcpBootEnv", () => {
   it("ENCODES every URL component, not just the password", async () => {
     // A username containing '@' would otherwise produce a URL that parses to a different host.
     const values = baseValues();
-    values[REF.db] = JSON.stringify({
+    values[REF.dbApp] = JSON.stringify({
       username: "svc@node", password: "pw", host: "10.10.0.7", port: 5432, dbname: "cello_dev",
     });
     const { script } = await buildGcpBootEnv(baseEnv(), fakeSecrets(values));
@@ -129,7 +145,7 @@ describe("DOD-NODE-DIR-GCP-1: buildGcpBootEnv", () => {
     // metacharacter must stay a value, not become an instruction.
     const values = baseValues();
     values[REF.db] = JSON.stringify({
-      username: "cello_service",
+      username: "postgres",
       password: "a'b; touch /tmp/pwned #",
       host: "10.10.0.7",
       port: 5432,
@@ -169,6 +185,25 @@ describe("DOD-NODE-DIR-GCP-1: buildGcpBootEnv", () => {
     await expect(buildGcpBootEnv(env, fakeSecrets(baseValues()))).rejects.toThrow(
       /CELLO_GSM_TRANSPORT_KEY/,
     );
+  });
+
+  it("REFUSES when the APPLICATION database reference is missing — it must not fall back to the owner", async () => {
+    // The whole point of two credentials is that the node never connects as the schema owner.
+    // Falling back would silently restore the exact configuration this split exists to remove:
+    // the owner bypasses every RLS policy and the UPDATE/DELETE revokes on the seal tables.
+    const env = baseEnv();
+    delete env["CELLO_GSM_DB_APP_CREDENTIALS"];
+    await expect(buildGcpBootEnv(env, fakeSecrets(baseValues()))).rejects.toThrow(
+      /CELLO_GSM_DB_APP_CREDENTIALS/,
+    );
+  });
+
+  it("never gives the node the SCHEMA OWNER's credential", async () => {
+    const { script } = await buildGcpBootEnv(baseEnv(), fakeSecrets(baseValues()));
+    const dbUrl = script.split("\n").find((l) => l.startsWith("export DATABASE_URL="))!;
+    expect(dbUrl).toContain("cello_service");
+    expect(dbUrl).not.toContain("postgres:");   // the ROLE, not the postgresql:// scheme
+    expect(dbUrl).not.toContain("adm1n-pw");
   });
 
   it("REFUSES when the database credential reference is missing", async () => {

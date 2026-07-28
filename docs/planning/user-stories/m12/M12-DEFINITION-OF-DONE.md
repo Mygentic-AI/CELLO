@@ -185,7 +185,7 @@ description: >
   (`packages/interfaces/`), selected by `CELLO_ENV`/config at the composition root, lazy-imported
   (M12-D5), with local stubs. Set per M12-D6: **GCS cloud-storage + GCS audit-log + Cloud KMS
   envelope key** (Parameter Manager dropped — the directory boots from the manifest + relay
-  self-registration; empty-registry is non-fatal). — ✅ PROVEN ON REAL CLOUD. All three
+  self-registration; empty-registry is non-fatal). — 🟡 PARTIALLY PROVEN LIVE. All three
   adapters implemented behind the existing interfaces with injected clients, 10 unit tests green:
   `GcsCloudStorageProvider` (404→`undefined` parity with S3's NoSuchKey; a 403 PROPAGATES rather
   than masquerading as an empty bucket), `GcsAuditLogShipper` (write-through per entry like the S3
@@ -205,7 +205,18 @@ description: >
   `gs://cello-audit-gcp-use1/audit/2026-07-28/…jsonl` (123 bytes), verified from OUTSIDE the node.
   IaC for the buckets + key ring landed with DOD-NODE-DIR-GCP-1 (`storage.tf`, `kms.tf`). The
   `as never` cast on the real KMS client is gone — `KmsLike` now declares the client's real
-  3-tuple return, so the adapter has a structural check again. → Entries 16, 18, 22
+  3-tuple return, so the adapter has a structural check again.
+  **Done-audit correction — ✅ was OVERSTATED.** Live proof covers KMS (round-trip + fail-closed)
+  and the GCS missing-object/missing-bucket distinction. It does NOT cover: the audit shipper's
+  degraded/buffer/flush-retention/ordering contract (unit-green only, against an injected failing
+  fake); write-through *per entry* (one object proves one write, not the no-batching rule); the
+  **403-propagation** guarantee — the one permissions-shaped claim in the line, and the only kind an
+  injected client cannot reproduce; and `rotate()`. The audit object that does exist carries
+  `correlationId: "proof"` — written by an ad-hoc script, not by the node doing its job, because
+  **`ship()` still has no production caller** (Entry 19's gap, re-verified: `grep -rn "\.ship("`
+  hits only `__tests__/`; the sole production reference is `flush()` in the SIGTERM handler, which
+  short-circuits on an always-empty buffer). An adapter no production path invokes is not "proven".
+  → Entries 16, 18, 22
 
 ## Tier P2 — Wave 1: complete CELLO on GCP, standalone
 
@@ -214,7 +225,7 @@ description: >
   fresh transport key (`openssl rand -hex 32`, never copied), static IP, `pg_dump`-to-GCS backup
   timer (shares exist nowhere else). Entirely from IaC. **Evidence must include one
   `gcloud compute ssh --tunnel-through-iap` login** — the IAP firewall path has never been
-  exercised (Entry 5 carry-forward). — ✅ LIVE. `{"status":"ok","nodeId":"gcp-use1","schemaVersion":49}`,
+  exercised (Entry 5 carry-forward). — 🟡 LIVE, NOT IaC-COMPLETE, NOT REVIEW-CLOSED. `{"status":"ok","nodeId":"gcp-use1","schemaVersion":49}`,
   MIG instance HEALTHY, `directory.service.started nodeId=gcp-use1 region=us-east1`. **Node-only DB
   access verified independently of the IaC that produced it:** 0 VPC peerings, 0 VPN tunnels, Cloud
   SQL `ipv4Enabled=false`, `pscEnabled=true`, **no IP address at all** — DOD-INV-NO-VPN holds by
@@ -228,7 +239,24 @@ description: >
   in the pool, node healthy and serving. Six defects stood between "applied" and "working" — two
   missing implicit grants, the COS HOST firewall (policy DROP; a VPC rule alone reaches nothing), an
   undialable advertised address, and two in the backup (pg_dump 15 vs server 17, and a pipeline
-  reporting gzip's exit status). → Entries 21, 22
+  reporting gzip's exit status).
+  **Done-audit correction — ✅ was NOT EARNED, flipped while the IaC review was still in flight.**
+  Three clauses fail. (a) **"Entirely from IaC" is false:** `terraform.tfvars` — which holds the
+  whole `directory_nodes` map and the image tag — was UNTRACKED at the flip commit, excluded by
+  `*.tfvars` in `.gitignore`. A fresh clone could not produce this node; the region-expansion test
+  fails at step zero. (b) **"running the CI-built image" is false:** build
+  `32c90af6` has no `buildTriggerId`, no `repoSource` and no commit SHA — a hand-run
+  `gcloud builds submit` of the local tree, under a tag the registry does not enforce as immutable.
+  The triggers fire on `^main$` and this branch is not main. (c) **"node-only access" is
+  overstated:** the network facts hold (0 peerings, 0 tunnels, no IP — DOD-INV-NO-VPN is solid), but
+  subnets within one VPC are mutually routable, and at flip time ONE shared `cello-directory-node`
+  SA held every per-node grant. Also: the timer never fired (the backup was run by hand) and the
+  dump contained zero share rows, so the clause's actual subject was never exercised.
+  **The reviewer's own finding is the sharpest:** the live node connects as `postgres`, the schema
+  owner, so RLS and the UPDATE/DELETE revokes that make the seal tables append-only are NOT in force
+  on it. Fixes for all of this are in `m12/node-dir-gcp`; the line returns to ✅ when they are
+  applied, the image is trigger-built from main, and the timer has fired on its own schedule with a
+  registered agent's share in the dump. → Entries 21, 22, 23
 - **DOD-NODE-DIR-GCP-2** [trustless-cello] — second GCP directory in a different region; same
   artifact, zero manual steps (IaC enforcer green on the repeat). — ❌
 - **DOD-NODE-DIR-GCP-3** [trustless-cello] — third GCP directory (temporary Wave-1 member so the

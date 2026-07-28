@@ -40,7 +40,11 @@ write_files:
       CELLO_KMS_LOCATION=${kms_location}
       CELLO_KMS_KEYRING=${kms_keyring}
       CELLO_KMS_KEY=${kms_key}
+      # Two database credentials: the schema owner for Flyway's DDL, the restricted role for the
+      # node itself. See sql.tf — connecting the node as the owner silently disables RLS and the
+      # UPDATE/DELETE revokes that make the seal tables append-only.
       CELLO_GSM_DB_CREDENTIALS=${gsm_db}
+      CELLO_GSM_DB_APP_CREDENTIALS=${gsm_db_app}
       CELLO_GSM_NODE_KEY=${gsm_node_key}
       CELLO_GSM_TRANSPORT_KEY=${gsm_transport}
       CELLO_GSM_INTERNAL_API_KEY=${gsm_internal}
@@ -51,10 +55,10 @@ write_files:
     permissions: "0644"
     owner: root
     content: |
-      CELLO_CLOUD=gcp
       NODE_ID=${node_id}
       CELLO_BACKUP_BUCKET=${backup_bucket}
-      CELLO_BACKUP_DBNAME=${backup_dbname}
+      # The SCHEMA OWNER's credential, deliberately — pg_dump reads catalogs and ownership metadata
+      # that the node's restricted role has no business holding. The app credential is not here.
       CELLO_GSM_DB_CREDENTIALS=${gsm_db}
       HOME=/tmp
 

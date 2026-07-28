@@ -37,6 +37,11 @@ variable "directory_nodes" {
     machine_type = string
     db_tier      = string
     hostname     = string
+    # Third octet of this region's 10.10.<n>.0/24 subnet. Assigned once per region and never
+    # reused — an existing node's addresses (including its Cloud SQL PSC endpoint) live in it.
+    # Carried here rather than in a separate map so that adding a region is genuinely ONE entry,
+    # which is what DOD-INV-IAC's region-expansion test claims.
+    subnet_index = number
     # What a client can actually DIAL. A GCP node has no load balancer in front of it, so it
     # advertises the port it listens on; the AWS shape (80/ws fronted by an ALB) is the default
     # the code falls back to, not something to repeat here.
@@ -46,10 +51,10 @@ variable "directory_nodes" {
   default = {}
 }
 
-variable "region_subnets" {
-  description = "Regional subnets in cello-vpc. Scheme: 10.10.<n>.0/24, n assigned in region-add order (us-east1 = 0). One node = one region; adding a region = adding one entry here."
+# Subnets are derived from directory_nodes[*].subnet_index — see network.tf. This variable remains
+# only for subnets that belong to no directory node (a relay-only region, say); it is empty today.
+variable "extra_region_subnets" {
+  description = "Subnets in cello-vpc for regions that host no directory node. Same 10.10.<n>.0/24 scheme; the index must not collide with any node's subnet_index."
   type        = map(string)
-  default = {
-    us-east1 = "10.10.0.0/24"
-  }
+  default     = {}
 }

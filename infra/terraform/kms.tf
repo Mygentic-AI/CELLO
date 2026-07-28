@@ -44,5 +44,5 @@ resource "google_kms_crypto_key_iam_member" "node_envelope" {
   for_each      = var.directory_nodes
   crypto_key_id = google_kms_crypto_key.envelope[each.key].id
   role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
-  member        = "serviceAccount:${google_service_account.workload["directory-node"].email}"
+  member        = "serviceAccount:${google_service_account.directory_node[each.key].email}"
 }

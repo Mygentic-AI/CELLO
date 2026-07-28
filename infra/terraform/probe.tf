@@ -52,7 +52,10 @@ resource "google_compute_instance_template" "probe" {
   service_account {
     # Deliberate reuse of the real directory-node SA (M12-D3): the probe exists to prove the
     # exact node shape, incl. the attached workload identity. Probe lifecycle is minutes.
-    email  = google_service_account.workload["directory-node"].email
+    # The probe is hardcoded to us-east1 throughout this file, so it borrows that node's identity
+    # specifically — service accounts became per-node once a shared one was shown to hand every
+    # node the others' keys.
+    email  = google_service_account.directory_node["us-east1"].email
     scopes = ["cloud-platform"]
   }
 

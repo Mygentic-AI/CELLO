@@ -14,6 +14,8 @@
 # Required environment (from /etc/cello/backup.env):
 #   CELLO_GSM_DB_CREDENTIALS  Secret Manager version resource holding {username,password,host,port,dbname}
 #   CELLO_BACKUP_BUCKET       destination GCS bucket
+# The database name is NOT a separate variable — it comes from the credential secret, so the
+# dump and the node can never disagree about which database they mean.
 #   NODE_ID                   node identifier, used in the object name
 
 set -eu

@@ -31,6 +31,12 @@ resource "google_storage_bucket" "node_audit" {
     node    = each.value.node_id
     purpose = "audit"
   }
+
+  # The bucket exists so that a compromised node cannot erase its own trail. Terraform destroying
+  # it wholesale is the same outcome by another route.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "google_storage_bucket" "relay_manifest" {
@@ -53,7 +59,9 @@ resource "google_storage_bucket" "relay_manifest" {
 }
 
 resource "google_storage_bucket" "node_backups" {
-  for_each                    = var.directory_nodes
+  for_each = var.directory_nodes
+  # Object versioning is what makes num_newer_versions meaningful; each dump has a unique name, so
+  # versions accrue per name rather than replacing.
   name                        = "cello-backups-${each.value.node_id}"
   project                     = var.project_id
   location                    = upper(each.key)
@@ -65,10 +73,15 @@ resource "google_storage_bucket" "node_backups" {
   }
 
   # The node's key shares exist only in its database, so a backup is the only recovery path.
-  # 30 days of dumps, then age out — long enough to notice corruption, short enough to bound cost.
+  #
+  # `num_newer_versions` and NOT a bare `age = 30`: an age-only rule empties the bucket 30 days
+  # after the timer breaks, which is indistinguishable from a node that never backed up — the
+  # failure deletes its own evidence. This keeps the most recent dumps regardless of age, so a
+  # stale-but-present backup stays recoverable and a missing one stays visible.
   lifecycle_rule {
     condition {
-      age = 30
+      age                = 30
+      num_newer_versions = 14
     }
     action {
       type = "Delete"
@@ -90,14 +103,14 @@ resource "google_storage_bucket_iam_member" "node_audit_writer" {
   for_each = var.directory_nodes
   bucket   = google_storage_bucket.node_audit[each.key].name
   role     = "roles/storage.objectCreator"
-  member   = "serviceAccount:${google_service_account.workload["directory-node"].email}"
+  member   = "serviceAccount:${google_service_account.directory_node[each.key].email}"
 }
 
 resource "google_storage_bucket_iam_member" "node_backups_writer" {
   for_each = var.directory_nodes
   bucket   = google_storage_bucket.node_backups[each.key].name
   role     = "roles/storage.objectCreator"
-  member   = "serviceAccount:${google_service_account.workload["directory-node"].email}"
+  member   = "serviceAccount:${google_service_account.directory_node[each.key].email}"
 }
 
 # The manifest is polled every 120s, so the node needs read — and only read.
@@ -105,7 +118,7 @@ resource "google_storage_bucket_iam_member" "relay_manifest_reader" {
   for_each = var.directory_nodes
   bucket   = google_storage_bucket.relay_manifest[each.key].name
   role     = "roles/storage.objectViewer"
-  member   = "serviceAccount:${google_service_account.workload["directory-node"].email}"
+  member   = "serviceAccount:${google_service_account.directory_node[each.key].email}"
 }
 
 # objectViewer grants storage.objects.* but NOT storage.buckets.get, and the provider needs the
@@ -119,5 +132,5 @@ resource "google_storage_bucket_iam_member" "relay_manifest_bucket_reader" {
   for_each = var.directory_nodes
   bucket   = google_storage_bucket.relay_manifest[each.key].name
   role     = "roles/storage.bucketViewer"
-  member   = "serviceAccount:${google_service_account.workload["directory-node"].email}"
+  member   = "serviceAccount:${google_service_account.directory_node[each.key].email}"
 }

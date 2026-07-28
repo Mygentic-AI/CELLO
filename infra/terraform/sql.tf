@@ -4,8 +4,12 @@
 #
 #   ipv4_enabled = false        no public IP exists to reach at all.
 #   psc_config                  Private Service Connect. The consumer end is a forwarding rule in
-#                               THIS node's subnet, so the only network that can reach the instance
-#                               is the node's own.
+#                               this node's subnet. NOTE the precise scope: subnets inside one VPC
+#                               are mutually routable, so the endpoint is reachable from anywhere
+#                               in cello-vpc, not solely from this node. Placement constrains the
+#                               ADDRESS; the credential constrains ACCESS, and credentials are
+#                               per-node (see the two roles below). A VPC per node would make the
+#                               network the boundary too — recorded as owed rather than claimed.
 #
 # PSC and not private IP: Cloud SQL private IP requires Private Service Access, which is a VPC
 # peering into Google's producer network — and DOD-INV-NO-VPN forbids VPC peering outright
@@ -86,20 +90,49 @@ resource "google_sql_database" "cello" {
   instance = google_sql_database_instance.node[each.key].name
 }
 
-# The application role. Password generated per node and never shared between nodes — a credential
-# that unlocked more than one node's database would undo the per-node isolation above.
-resource "random_password" "db" {
+# TWO roles, because they have different privileges and the difference is load-bearing.
+#
+# `postgres` owns the schema and runs the MIGRATIONS. `cello_service` is what the node process
+# connects as, and V2__directory_schema.sql builds the append-only guarantee around exactly that
+# role: RLS policies are `TO cello_service`, and UPDATE/DELETE are REVOKEd from it, so a directory
+# can insert a conversation seal and cannot alter or erase one.
+#
+# Running the node as `postgres` would silently switch that off. The owner bypasses every RLS
+# policy (no table declares FORCE ROW LEVEL SECURITY), and the REVOKE never applied to it in the
+# first place — leaving conversation_seals, attestations and agent_key_shares freely mutable by the
+# application process, with the tamper-evidence claim resting on the hash chain alone and nothing
+# anywhere saying so. AWS already connects as cello_service; this brings GCP in line.
+#
+# V2 creates the role inside an `IF NOT EXISTS` guard, so Terraform creating it first with a
+# password is compatible: the migration finds it present and proceeds to the GRANTs.
+resource "random_password" "db_admin" {
   for_each = var.directory_nodes
   length   = 32
   special  = false # keeps the JDBC URL and the libpq URL free of escaping divergence
 }
 
-resource "google_sql_user" "cello_service" {
+resource "random_password" "db_app" {
+  for_each = var.directory_nodes
+  length   = 32
+  special  = false
+}
+
+# Schema owner. Used by Flyway for DDL, and by pg_dump for the backup, and by nothing else.
+resource "google_sql_user" "admin" {
   for_each = var.directory_nodes
   name     = "postgres"
   project  = var.project_id
   instance = google_sql_database_instance.node[each.key].name
-  password = random_password.db[each.key].result
+  password = random_password.db_admin[each.key].result
+}
+
+# The node's runtime role — INSERT + SELECT under RLS, no DDL, no UPDATE, no DELETE.
+resource "google_sql_user" "cello_service" {
+  for_each = var.directory_nodes
+  name     = "cello_service"
+  project  = var.project_id
+  instance = google_sql_database_instance.node[each.key].name
+  password = random_password.db_app[each.key].result
 }
 
 # ── The consumer end of the PSC link ─────────────────────────────────────────────────────────

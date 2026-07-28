@@ -2,7 +2,10 @@
 *.tfstate
 *.tfstate.backup
 tfplan
-*.tfvars
+# terraform.tfvars is the LIVE TOPOLOGY and is committed on purpose — it holds no secrets, and
+# a node list that exists only on one laptop is not IaC. Secret-bearing var files stay ignored.
+secrets.auto.tfvars
+*.auto.tfvars.json
 *.tfvars.json
 override.tf
 override.tf.json

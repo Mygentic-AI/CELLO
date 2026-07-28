@@ -23,6 +23,12 @@ resource "google_compute_address" "node" {
   name     = "cello-${each.value.node_id}"
   project  = var.project_id
   region   = each.key
+
+  # Clients pin this address through the consortium manifest. Releasing it strands every client
+  # holding the old one, and GCP will not give the same address back.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # ── Firewall ─────────────────────────────────────────────────────────────────────────────────
@@ -108,7 +114,7 @@ resource "google_compute_instance_template" "directory" {
   }
 
   service_account {
-    email  = google_service_account.workload["directory-node"].email
+    email  = google_service_account.directory_node[each.key].email
     scopes = ["cloud-platform"]
   }
 
@@ -131,6 +137,7 @@ resource "google_compute_instance_template" "directory" {
       kms_keyring      = google_kms_key_ring.node[each.key].name
       kms_key          = google_kms_crypto_key.envelope[each.key].name
       gsm_db           = "${google_secret_manager_secret.db_credentials[each.key].id}/versions/latest"
+      gsm_db_app       = "${google_secret_manager_secret.db_app_credentials[each.key].id}/versions/latest"
       gsm_node_key     = "${google_secret_manager_secret.node["${each.value.node_id}--node-key"].id}/versions/latest"
       gsm_transport    = "${google_secret_manager_secret.node["${each.value.node_id}--transport-key"].id}/versions/latest"
       gsm_internal     = "${google_secret_manager_secret.node["${each.value.node_id}--internal-api-key"].id}/versions/latest"
@@ -176,10 +183,16 @@ resource "google_compute_instance_group_manager" "directory" {
     instance_template = google_compute_instance_template.directory[each.key].id
   }
 
+  # PROACTIVE, not OPPORTUNISTIC. Under OPPORTUNISTIC a new instance template does not replace the
+  # running instance, so bumping directory_image_tag produced a clean `terraform apply` while the
+  # node went on running the previous image — and its cloud-init had the OLD tag baked into
+  # ExecStartPre, so it would pull that tag forever. State and reality disagreed with no signal,
+  # which is the same "which code is live" question the immutable-tag rule exists to answer.
+  #
   # Never surge: a surged instance would fight the pinned static IP (IP_IN_USE), and two instances
   # of one node is a split identity regardless. Replace in place, one at a time.
   update_policy {
-    type                  = "OPPORTUNISTIC"
+    type                  = "PROACTIVE"
     minimal_action        = "REPLACE"
     max_surge_fixed       = 0
     max_unavailable_fixed = 1
