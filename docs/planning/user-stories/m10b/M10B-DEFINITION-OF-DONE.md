@@ -793,6 +793,20 @@ the discussion-of-record. Restated here because this is the milestone that imple
   is uncomputable for them. Decide one: registration requires an account (close both NULL paths), or
   account-less agents are permanently refused with a named, surfaced cause. It is currently neither,
   and D-18 alone does not unblock the four lines it was written for.
+  > **DECIDED as `M10B-D26r` — account-less agents are REFUSED at endorsement intake; registration is
+  > NOT changed.** Rejected: making registration require an account. It closes both NULL paths, but
+  > `directory-node.ts:2952–2955` swallows the link failure **deliberately** — *"Account resolution
+  > failure must NOT block registration"* — which is an availability decision in the registration path.
+  > Overriding it from an endorsement milestone trades a real invariant (you can always register) for a
+  > feature gate. Refusing at intake is local, needs no migration, and is *honest*: the quota is
+  > per-account (`M10B-D6`), so an agent with no account has **no quota bucket to charge** — minting for
+  > it would mean minting outside the cap entirely, which is the farming hole by another door.
+  > **Blast radius is near-zero at launch:** account-less rows are the pre-M6 legacy shape (`V23`) plus
+  > the token-less registration path; every agent registered through the portal's pre-auth flow carries
+  > an `account_id`. **The refusal must be ACTIONABLE, not merely named** —
+  > `operator_linkage_unresolved` must tell the operator to link an account in the portal, or a bare
+  > cause reads as a bug in a path they cannot see. Reverse: cheap — requiring an account later is a
+  > registration policy change, not a data migration.
 - **M10B-D27 (2026-07-28, from second-review H4) — the retention ordering in Entry 8 was BACKWARDS; the
   queue-driven rule in `M10B-D11` stands.** Entry 8 wrote "sweep TTL **longer** than the intake-key
   retention window" — the direction that *guarantees* stranding, because a row then outlives the key it
