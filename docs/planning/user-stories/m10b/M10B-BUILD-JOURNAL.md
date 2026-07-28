@@ -1307,3 +1307,121 @@ retracting a bad endorsement. Stated because it is exactly the kind of thing tha
 "every op counts" by default.
 
 **Decision → `M10B-D28`.** Nothing parked.
+
+---
+
+## Entry 14 — THIRD REVIEW: my own measured table was attached to the wrong clause — 2026-07-28
+
+Third pass. **Still 🟡.** Eight of the twelve second-pass findings are closed, including the two I most
+expected to fail (H1's unknown-frame safety and H6's withdrawal carrier — both checked hard and found
+sound). Four remain, and the worst one is mine.
+
+### F3 — the DoD mandated an expression that fixes NOTHING, citing a table measured on a different one
+
+`M10B-D12r3`'s DoD text says the new branches **"supplement `BOOL_OR(r.status = 'revoked')`, never
+replace it."** Entry 11's six-shape table was measured on the **replacement** form. Those are different
+expressions, and the difference is the entire fix.
+
+The mechanism is in `signal-write.ts:634–641`: a tombstone is inserted with `status='revoked'` while
+**the real notarization row is deliberately left `active`**. So `BOOL_OR(r.status='revoked')` fires on
+*every* tombstone regardless of authority. Retain it as a leading branch and the authority branches can
+never be reached.
+
+**Re-run, on Postgres, both readings side by side:**
+
+| shape | today | **supplement** (what the DoD mandates) | **replace + fifth branch** |
+| :-- | :-- | :-- | :-- |
+| h4 revoker ≠ issuer (**the F6 defect**) | revoked | **revoked** ❌ no-op | **active** ✅ |
+| h7 real row carrying `status='revoked'` | revoked | revoked | **revoked** ✅ |
+
+**A coder following the DoD ships a no-op and cites my green table as proof it works.** That is the
+exact failure mode this milestone keeps producing, in its most dangerous form yet: not an unverified
+claim, but *measured evidence attached to a clause it does not test*. The table was never wrong; the
+sentence next to it was, and the sentence is what gets built.
+
+Two more from the same finding, both correct:
+- **The branch-order claim was misstated.** All branches yield `'revoked'`, so among themselves order is
+  immaterial. What *is* load-bearing and went unstated: the revoke branches must precede the
+  **supersession** branches, or a revoked-and-superseded record reads `superseded` — contradicting
+  V46's own rule that revoked is the strongest statement.
+- **A seventh shape regresses** and I never tested it: a real (non-tombstone) row carrying
+  `status='revoked'` reads `revoked` today and `active` under the bare replacement. No writer produces
+  it now — but `UPDATE` is granted, `'revoked'` is in the `CHECK`, and `signal-write.ts:293` already
+  does `UPDATE … SET status='superseded'`. **This is the identical argument I used to justify branch 2
+  for h5, and I failed to apply it to my own expression.** Fifth branch:
+  `BOOL_OR(status='revoked' AND NOT is_tombstone)`. → **`M10B-D12r4`**, measured above.
+
+So "differs from today on exactly one of six shapes" was true only of the six shapes I chose to test.
+
+### F1 — `submission_results`' primary key can wedge ALL federation
+
+`M10B-D25r` gave it PK `(agent_id, submission_id)` and made it replicated. V46's header documents
+exactly this trap, measured: a subscriber's apply worker **enforces** PK/UNIQUE, so a duplicate stops
+**the entire subscription** — all published tables, not just the offending one.
+
+And the path is the designed one: the portal reaches the directory through an ordered failover list, so
+write-to-A → response lost → fail over to B → two rows, identical natural key, both replicate, apply
+worker errors. `ON CONFLICT DO NOTHING` does not help — replication applies the **row**, not the
+statement.
+
+**My "inherits the same accepted convergence cost as `pickup_queue`" was wrong**, and instructively so:
+`pickup_queue` is safe for a reason unrelated to replication — it is `id BIGSERIAL PRIMARY KEY`, and
+`setup-replication.sh` staggers every BIGSERIAL into a per-node residue class precisely so cross-node
+collision cannot occur. A natural key inherits none of that. I asserted an inherited property the
+precedent does not have. → **`M10B-D25r2`**: PK `(agent_id, submission_id, writing_node)`, mirroring
+V46's own `(signal_hash, accepting_node)`; dedupe on the drain; ack deletes all copies.
+
+### F4 — `M10B-D26r`'s refusal points at a flow that does not exist
+
+Two errors. **The blast-radius claim is false**, and falsified by the very code D-26r cites: a pre-auth
+registration whose `resolveAccountId` throws is caught, logged `preauth.account.link.failed`, falls
+through with `accountId` still `null`, and returns `register_success`. So a single transient DB error at
+registration produces an account-less agent on the *modern* path, not just the legacy one.
+
+**And there is no repair path.** `linkAgentToAccount()` exists and `V28` grants the UPDATE it needs —
+with **zero production callers**, and no portal route touching `agent_profiles.account_id` at all. So
+`operator_linkage_unresolved` telling the operator to "link an account in the portal" points at nothing.
+That is precisely the error-fidelity failure the decision claimed to avoid. → **`M10B-D26r2`**: the
+refuse-at-intake choice stands, the false claim is withdrawn, and wiring `linkAgentToAccount()` to a
+portal route becomes a prerequisite of the refusal being honest.
+
+### F5 — `DOD-END-SCOPE-FIX-1` cannot start, and it is sequenced first
+
+`listPresentable`'s SQL needs `opts.accountId`. **`accountId` does not exist anywhere in the daemon's
+production code** — which is *why* the function has no callers. `M10B-D18` resolves agent→account on a
+directory route **for the portal**, not for the daemon.
+
+**Fourth time this milestone: a mechanism named without checking its inputs exist.** The pattern is now
+unmistakable and it is the single most useful thing this determination has produced about how I work.
+→ SCOPE-FIX-1 rescoped to the **`subject_kind='agent'` half**, which needs no account and closes the
+agent-subject scoping hole immediately; the account-subject half is explicitly deferred behind a named
+prerequisite (where the daemon obtains its `accountId`) rather than assumed.
+
+### F6 — `M10B-D28`'s persisted signature has no consumer
+
+D-28 argued a compromised node could forge `revoker_pubkey`, and fixed it by persisting the inner
+signature. **Nothing verifies it** — `M10B-D12r4`'s read path is a SQL view, and a view cannot check
+Ed25519. So the forged tombstone still reads `revoked` everywhere; the column makes forgery detectable
+in principle and prevents nothing. NO CONSUMER, NO SHIP. Corrected: the persisted signature is
+**audit evidence, not a defense**, and it is labelled as such — with verify-on-read named as the
+follow-up that would make it a defense. Claiming a mitigation that mitigates nothing is worse than
+naming the residual.
+
+### F2 / F7 — smaller, taken
+
+`decodeInboundSignalingFrame` returning `null` sends `not_authenticated`, so an upgraded daemon acking
+to a **not-yet-deployed directory node** — routine, since nodes deploy independently per region — gets
+an auth-flavoured name for a version-skew bug, and the operator debugs keys for a day. Directory nodes
+being sovereign makes this the normal case during a rollout, not an edge. Recorded on D-25r as a known
+skew symptom with `unsupported_frame` as the fix. And the ARCH-1 line itself still describes Entry 7's
+world — updated.
+
+### The pattern, stated plainly because it is the finding above all the others
+
+Four of this milestone's blocking findings are the same mistake: **I name a mechanism and reason about
+its behavior without reading whether its inputs exist or who consumes its output.** `listPresentable`
+(no callers), `accountId` (does not exist in the daemon), the pickup path (envelope-shaped decode),
+`linkAgentToAccount` (no callers), the persisted signature (no verifier). The determination has caught
+every one *before a line of code was written*, which is what it is for — but the cheaper fix is the
+habit: **for every mechanism named in a decision, grep its callers and its inputs before writing the
+sentence, not after a reviewer asks.**
