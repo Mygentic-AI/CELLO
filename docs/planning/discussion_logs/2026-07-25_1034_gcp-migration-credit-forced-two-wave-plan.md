@@ -20,10 +20,17 @@ description: >
   so only a directory backs the "if GCP goes down, CELLO works" launch claim. Corrects
   an arithmetic error in the fault-tolerance table, explains why growing N is safe but
   non-beneficial for existing agents, and answers the nodeId and GCP project questions.
-status: draft
+status: superseded
 ---
 
 # GCP migration — credit-forced two-wave plan
+
+> **Superseded by [[2026-07-28_0700_gcp-rebuild-decision-record|the 2026-07-28 decision record]].**
+> Decisions made after this log was written reverse several of its recommendations: the Postgres
+> mesh is retired in favour of libp2p anti-entropy built in the rebuild (no VPN/PSA at all), the
+> single-VM/self-hosted-Postgres shape is dropped for MIG + Cloud SQL, the full-node/validator
+> role split is in scope, and the quota warning was disproven by live gcloud checks. This log
+> remains the record of the derivations and alternatives considered.
 
 **Supersedes `2026-07-25_0617_gcp-relay-and-directory-deployment-plan.md`.** That log asked
 "should we add a GCP node for provider diversity?" and concluded *relay now, directory
