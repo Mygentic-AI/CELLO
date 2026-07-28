@@ -239,6 +239,12 @@ description: >
 - **M12-P3** — **Enrollment** (client-side resharing orchestration + may-enroll credential) —
   explicitly OUT of M12 (Decision 10). Required before N ever grows past 3. Directory half
   already exists (`frost-handler.ts:892,915`).
+- **M12-P5** — **Cross-signed checkpoints have NEVER worked** (MMR tables never replicated →
+  every node's peaks differ → verifyAndSign refuses; CHECKPOINT_PEER_ADDRS empty everywhere;
+  identity_merkle_root never computed — surface-map findings). M12 syncs checkpoint records as
+  data, retires the unauthenticated `/cello/checkpoint/1.0.0` channel, and leaves cross-signing
+  visibly parked. Rebuild post-M12 on the authenticated AE channel with a deterministic shared
+  leaf order.
 - **M12-P4** — **Replica nodes at launch.** The role split ships in P1, but whether any
   replica-role nodes actually deploy at launch (vs the capability lying dormant) is undecided —
   zero replicas is a valid launch shape.

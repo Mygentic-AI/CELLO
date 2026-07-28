@@ -17,7 +17,8 @@ description: >
 
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
-- **Next red:** P1 — DOD-AE-DESIGN-1 + DOD-ROLE-MANIFEST-1 (story branch per M12-D4).
+- **Next red:** DOD-AE-DESIGN-1 in review (doc drafted, Entry 8); DOD-ROLE-MANIFEST-1 next
+  (story branch per M12-D4; manifest schema bump carries `role` + `peerId` together).
 - **Blocked on Andre:** nothing.
 - **HEAD:** trustless-cello `main` (see git log); cello-client untouched by M12 so far.
 - **Cloud state:** AWS = 3 regions awake (woken 2026-07-28, see infra/STATE.md). GCP =
@@ -236,3 +237,33 @@ failures of clauses the lines themselves wrote:
 Post-fix: `terraform plan` No changes. **P0 closes at 4/4 ✅, audit-corrected.**
 
 **Next:** P1 story branch — DOD-AE-DESIGN-1 + DOD-ROLE-MANIFEST-1.
+
+---
+
+## Entry 8 — 2026-07-28 — DOD-AE-DESIGN-1: surface maps + design doc drafted
+
+Two explorers mapped the ground (persisted in `research/`): the 21-table publication set with
+per-table lifecycles, and the libp2p/identity surface. Design-changing discoveries:
+
+- Table-wide hash chains fork by construction under multi-master (ORDER BY local id) — already
+  knowingly unverified cross-node. → chains become node-local audit; cross-node integrity =
+  content addressing + MMR.
+- **Cross-node checkpoint signing has never worked** (MMR tables never replicated; peer list
+  empty in every env; responder-supplied pubkeys trusted). → M12-P5 parked; the
+  unauthenticated checkpoint channel is retired by the design.
+- A spurious `burned=true` destroys FROST shares irreversibly; naive LWW on `updated_at` can
+  un-pause on clock skew; the honor-check fails OPEN on missing profile (documented gap). →
+  §4 of the design: seq-based monotonic merge, burn=OR, tie→suspended, wall-clock never a
+  merge input, pubkey denormalized into the suspension row.
+- primary_holder must never sync (V44 security argument); pickup_queue needs ack-tombstones so
+  deleted ciphertext can't resurrect; signal_records is the content-addressed pattern to copy.
+- The manifest pins node keys but NOT PeerIds (those are unsigned SSM) → manifest gains
+  `peerId` alongside `role` (one schema bump with ROLE-MANIFEST-1); directory starts VERIFYING
+  manifest signatures (today it explicitly doesn't); mutual step-6-style handshake with a new
+  domain (`cello-ae-peer-auth-v1`), both PeerIds in the TBS (channel binding), fail CLOSED.
+
+Deliverable: `M12-ANTI-ENTROPY-DESIGN.md` (channel, 3-tier sync sets with per-table merge
+rules, bucketed-digest reconciliation + write-hints, kill-switch convergence rules + the
+adversarial scenario list for DOD-AE-MUTABLE-1, checkpoint scope ruling, observability ACs,
+mesh retirement list). Unit review dispatched — the DoD line requires review before
+implementation starts.
