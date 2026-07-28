@@ -1107,6 +1107,37 @@ the per-sender limits already decided (D-18, tier bounds) cover abuse volume, an
 inference on a counterparty's behalf. Revisit when a real service agent exists — it also needs a way to
 express what a query costs, which does not exist.
 
+### D-29 — DECIDED: the same-operator rule splits on `subject_kind` — you may not endorse yourself
+
+Andre, 2026-07-28, refining D-27: *"Are you endorsing this particular agent or are you endorsing the human
+operator? If you are endorsing the human operator, then you shouldn't be able to endorse yourself."*
+
+D-27 asked "same operator, yes or no." That was the wrong granularity. The answer depends on what the
+endorsement is ABOUT — which the envelope already carries as `subject_kind` (M10-D5, hashed):
+
+| `subject_kind` | issuer's account == subject's account | Decision |
+| :-- | :-- | :-- |
+| `agent` | Agent A endorses Agent B, both Alice's | **Mint and flag `same_operator`** (D-27). Not really a vouch — a **co-ownership assertion**: *"B is mine, and you already trust me."* Its worth is capped at whatever Alice is worth to the recipient, which is correct. |
+| `account` | Alice's agent endorses Alice's account | **Refuse to mint.** This is self-endorsement with no recipient-relationship reading that rescues it. |
+
+Same deterministic lookup off the verified-phone stub; two different comparisons.
+
+**Nothing is lost by refusing the account case.** *"This account is mine"* is exactly what the verified
+email and phone baseline (D-8) already assert through the portal — an operator self-endorsement adds no
+information the floor doesn't already have.
+
+**Two sub-questions flagged, deliberately not decided here:**
+
+1. **Counting.** The floor predicates on envelope fields only, and `same_operator` is an envelope-visible
+   fact — so a count predicate MUST bucket or exclude flagged endorsements. Otherwise the flag caps their
+   *quality* while leaving *quantity* farmable: ten agents under one operator, ten endorsements, and a
+   naive `count >= N` passes.
+2. **Where the flag lives.** Inside the hash (composed at intake, before hashing — consistent with
+   scan-before-hash, §7) makes it unforgeable but frozen. Served alongside like `status` makes it
+   correctable. This matters because operator linkage is not permanent —
+   [[2026-04-14_0700_agent-succession-and-ownership-transfer]] is a designed flow, so an endorsement minted
+   `same_operator` can stop being true.
+
 ---
 
 ## 13. What endorsement intake now OWES — the actionable list
@@ -1119,8 +1150,11 @@ none of it exists yet:
 2. **Revoke authorisation fix** (M10 REVOKE-1 F6, *"revisit with intake"*). Exact-pubkey auth; the
    tombstone must respect the target's real `issuer_kind`. Without it one `submitter` key can tombstone
    another party's endorsement — which would make D-19 nominal.
-3. **`same_operator` flag at intake (D-27)** — a deterministic check off the existing phone-stub operator
-   linkage, plus the presentation-side rendering that takes its sign from the endorser's tier.
+3. **`same_operator` handling at intake (D-27, D-29)** — one deterministic check off the existing
+   phone-stub operator linkage, branching on `subject_kind`: a `subject_kind: agent` endorsement is minted
+   and flagged, a `subject_kind: account` self-endorsement is REFUSED. Plus the presentation-side rendering
+   that takes the flag's sign from the endorser's tier, and a floor-side count predicate that does not let
+   flagged endorsements accumulate (D-29 sub-question 1).
 4. **Issuer-suspension cascade (D-25)** — suspending an account marks everything it issued as no longer
    vouched, reversibly.
 5. **Verify non-discoverability (D-24)** — confirm no path lets a third party enumerate endorsements about
