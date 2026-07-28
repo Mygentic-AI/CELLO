@@ -37,12 +37,18 @@ export interface VerifyPeerAuthInput {
   params: AePeerAuthParams;
   /** The peer's Ed25519 signature over buildAePeerAuthTbs(params). */
   signature: Uint8Array;
-  /** The peer's libp2p PeerId as observed on the Noise-authenticated connection. */
+  /** The peer's libp2p PeerId as observed on the Noise-authenticated connection (never a wire claim). */
   actualPeerId: string;
-  /** The nonce THIS node exchanged for the peer's slot (single-use, minted by us). */
-  expectedNonce: string;
-  /** Which slot the PEER occupies (A=dialer, B=responder). */
-  expectedNonceSlot: "A" | "B";
+  /** Which slot THIS verifier occupies — "A" if we dialed, "B" if we're the responder. */
+  localSlot: "A" | "B";
+  /**
+   * The nonce THIS node minted for ITS OWN slot and put in ae_hello/ae_auth. This is the replay
+   * gate (§1c line 85 "each side checks the one it minted"): the peer's signed TBS must contain
+   * our fresh challenge, so a replayed transcript from another stream fails.
+   */
+  localMintedNonce: string;
+  /** The nonce we RECEIVED from the peer (their slot). Checked too — both directions bind. */
+  peerNonce: string;
   /** Current time (epoch ms). */
   nowMs: number;
   /** Max |now − timestamp| allowed. Default 60s. */
@@ -52,22 +58,34 @@ export interface VerifyPeerAuthInput {
 export function verifyPeerAuthFrame(
   input: VerifyPeerAuthInput,
 ): { ok: true } | { ok: false; reason: HandshakeFailReason } {
-  const { manifest, peerNodeId, params, signature, actualPeerId, expectedNonce, expectedNonceSlot, nowMs } = input;
+  const { manifest, peerNodeId, params, signature, actualPeerId, localSlot, localMintedNonce, peerNonce, nowMs } = input;
   const maxSkewMs = input.maxSkewMs ?? 60_000;
+  const peerSlot = localSlot === "A" ? "B" : "A";
 
   const node = manifest.nodes.find((n) => n.nodeId === peerNodeId);
   // No manifest entry, or a pre-M12 entry lacking a pinned pubkey/peerId → cannot channel-bind.
   if (!node || !node.pubkey || !node.peerId) return { ok: false, reason: "manifest_pubkey_mismatch" };
 
-  const claimedPeerId = expectedNonceSlot === "B" ? params.peerIdB : params.peerIdA;
-  // Channel binding: the live PeerId AND the TBS-bound peerId must both equal the manifest peerId.
-  if (actualPeerId !== node.peerId || claimedPeerId !== node.peerId) {
+  // Channel binding: the live PeerId AND the peer's TBS-bound peerId must both equal the manifest
+  // peerId. (The peer occupies peerSlot in the TBS.)
+  const peerClaimedPeerId = peerSlot === "B" ? params.peerIdB : params.peerIdA;
+  if (actualPeerId !== node.peerId || peerClaimedPeerId !== node.peerId) {
     return { ok: false, reason: "peerid_mismatch" };
   }
 
-  const claimedNonce = expectedNonceSlot === "B" ? params.nonceBHex : params.nonceAHex;
-  if (claimedNonce !== expectedNonce) return { ok: false, reason: "nonce_mismatch" };
+  // Replay defense, BOTH directions: the peer's signed TBS must contain the nonce WE minted for our
+  // slot (freshness — the load-bearing check, since we chose it) AND the nonce we received from the
+  // peer for its slot. Checking only the peer's nonce would gate on a value the peer/attacker picks.
+  const ourNonceInTbs = localSlot === "A" ? params.nonceAHex : params.nonceBHex;
+  const peerNonceInTbs = peerSlot === "A" ? params.nonceAHex : params.nonceBHex;
+  if (ourNonceInTbs !== localMintedNonce || peerNonceInTbs !== peerNonce) {
+    return { ok: false, reason: "nonce_mismatch" };
+  }
 
+  // Freshness (defense-in-depth). Require an explicit UTC/offset timestamp — a tz-less ISO string
+  // is parsed as LOCAL time, so two nodes in different regions would compute the window off by
+  // their offset. Malformed/tz-less → fail closed.
+  if (!/(?:Z|[+-]\d{2}:?\d{2})$/.test(params.timestamp)) return { ok: false, reason: "timestamp_skew" };
   const ts = Date.parse(params.timestamp);
   if (!Number.isFinite(ts) || Math.abs(nowMs - ts) > maxSkewMs) {
     return { ok: false, reason: "timestamp_skew" };

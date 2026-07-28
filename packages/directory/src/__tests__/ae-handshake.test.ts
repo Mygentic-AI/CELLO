@@ -35,10 +35,10 @@ const params: AePeerAuthParams = {
 const nowMs = Date.parse(params.timestamp) + 5_000; // 5s later, within window
 const sigB = ed25519.sign(buildAePeerAuthTbs(params), seedB);
 
-// Verify B's frame from A's perspective (B is the peer being authenticated).
+// Verify B's frame from A's perspective: WE are the dialer (slot A), the peer is B.
 const base = {
-  manifest, peerNodeId: "aws-use1", params, signature: sigB,
-  actualPeerId: "12D3KooWB", expectedNonce: params.nonceBHex, expectedNonceSlot: "B" as const, nowMs,
+  manifest, peerNodeId: "aws-use1", params, signature: sigB, actualPeerId: "12D3KooWB",
+  localSlot: "A" as const, localMintedNonce: params.nonceAHex, peerNonce: params.nonceBHex, nowMs,
 };
 
 describe("DOD-AE-APPEND-1: verifyPeerAuthFrame", () => {
@@ -50,17 +50,35 @@ describe("DOD-AE-APPEND-1: verifyPeerAuthFrame", () => {
     expect(verifyPeerAuthFrame({ ...base, peerNodeId: "azure-xyz" })).toEqual({ ok: false, reason: "manifest_pubkey_mismatch" });
   });
 
-  it("rejects when the live PeerId != the manifest PeerId → peerid_mismatch (channel binding)", () => {
+  it("REPLAY over a different connection: valid frame+sig but wrong live PeerId → peerid_mismatch", () => {
+    // The attacker replays B's legitimately-signed frame over its own Noise connection. actualPeerId
+    // is the attacker's, ≠ B's manifest peerId → rejected before the (valid) signature is trusted.
     expect(verifyPeerAuthFrame({ ...base, actualPeerId: "12D3KooWEvil" })).toEqual({ ok: false, reason: "peerid_mismatch" });
   });
 
-  it("rejects a stale timestamp → timestamp_skew", () => {
+  it("rejects when the peer's TBS-bound peerId != manifest peerId → peerid_mismatch (binding disjunct)", () => {
+    expect(verifyPeerAuthFrame({ ...base, params: { ...params, peerIdB: "12D3KooWOther" } })).toEqual({ ok: false, reason: "peerid_mismatch" });
+  });
+
+  it("rejects a stale timestamp → timestamp_skew (both directions)", () => {
     expect(verifyPeerAuthFrame({ ...base, nowMs: nowMs + 120_000 })).toEqual({ ok: false, reason: "timestamp_skew" });
     expect(verifyPeerAuthFrame({ ...base, nowMs: nowMs - 200_000 })).toEqual({ ok: false, reason: "timestamp_skew" });
   });
 
-  it("rejects when the peer's nonce != the one we exchanged → nonce_mismatch (replay defense)", () => {
-    expect(verifyPeerAuthFrame({ ...base, expectedNonce: "cc".repeat(32) })).toEqual({ ok: false, reason: "nonce_mismatch" });
+  it("rejects a timezone-less or malformed timestamp → timestamp_skew (avoids local-time skew)", () => {
+    expect(verifyPeerAuthFrame({ ...base, params: { ...params, timestamp: "2026-07-28T10:00:00" } })).toEqual({ ok: false, reason: "timestamp_skew" });
+    expect(verifyPeerAuthFrame({ ...base, params: { ...params, timestamp: "not-a-date" } })).toEqual({ ok: false, reason: "timestamp_skew" });
+  });
+
+  it("REPLAY defense: gates on the nonce WE minted (our slot), not the peer-controlled one", () => {
+    // The load-bearing fix: if the peer's TBS doesn't contain OUR fresh challenge, reject — even
+    // though the peer's own nonce is fine. A verifier that (buggily) checked only the peer's slot
+    // would pass this.
+    expect(verifyPeerAuthFrame({ ...base, localMintedNonce: "cc".repeat(32) })).toEqual({ ok: false, reason: "nonce_mismatch" });
+  });
+
+  it("REPLAY defense: also gates on the peer's nonce we received (both directions)", () => {
+    expect(verifyPeerAuthFrame({ ...base, peerNonce: "cc".repeat(32) })).toEqual({ ok: false, reason: "nonce_mismatch" });
   });
 
   it("rejects a signature by the WRONG key → signature_invalid", () => {
@@ -76,9 +94,7 @@ describe("DOD-AE-APPEND-1: verifyPeerAuthFrame", () => {
     expect(verifyPeerAuthFrame({ ...base, manifest: noPeerId })).toEqual({ ok: false, reason: "manifest_pubkey_mismatch" });
   });
 
-  it("the peer's slot nonce is checked before the signature — a swapped B-nonce → nonce_mismatch", () => {
-    // The peer occupies slot B; a params.nonceBHex ≠ the nonce we exchanged is caught by the nonce
-    // check (which precedes signature verification), naming the replay cause, not signature_invalid.
-    expect(verifyPeerAuthFrame({ ...base, params: { ...params, nonceBHex: "dd".repeat(32) } })).toEqual({ ok: false, reason: "nonce_mismatch" });
+  it("nonce is checked before signature — a swapped nonce names the replay cause, not signature_invalid", () => {
+    expect(verifyPeerAuthFrame({ ...base, params: { ...params, nonceAHex: "dd".repeat(32) } })).toEqual({ ok: false, reason: "nonce_mismatch" });
   });
 });
