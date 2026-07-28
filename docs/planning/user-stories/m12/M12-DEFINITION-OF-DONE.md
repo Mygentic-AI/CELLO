@@ -138,7 +138,11 @@ description: >
 - **DOD-MULTIADDR-1** [trustless-cello] — the advertised bootstrap multiaddr is configuration,
   not the hardcoded `/dns4/{host}/tcp/80/ws` template (`directory.ts:1095`); an
   `https`/`wss`-shaped endpoint round-trips through client bootstrap (closes the unverified
-  `https://` manifest question). — ❌
+  `https://` manifest question). — ✅ `buildBootstrapMultiaddr` extracted + configurable
+  (explicit override > hostname+port+transport > ws fallback; defaults reproduce the AWS string
+  byte-for-byte, reviewer-confirmed); https round-trip covered both sides (client
+  `mapEndpointToBootstrapBase` accepts https, existing test; directory returns wss). Reviewed,
+  F1 empty-env trap fixed. Branch `m12/multiaddr` afe12032 → Entry 12
 - **DOD-ADAPTER-GCP-1** [trustless-cello] — Secret Manager and GCS adapters implemented behind
   the existing interfaces (`packages/interfaces/`), selected by `CELLO_ENV`/config at the
   composition root, with local stubs; the empty-node-registry boot test answers whether a

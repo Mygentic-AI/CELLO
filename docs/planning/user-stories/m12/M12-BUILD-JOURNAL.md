@@ -17,8 +17,10 @@ description: >
 
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
-- **Next red:** DOD-MULTIADDR-1 (independent, trustless-cello only). ROLE-MANIFEST-1 dir half is
-  PARKED on the publish (see below).
+- **Next red:** DOD-ADAPTER-GCP-1 (Secret Manager + GCS adapters, trustless-cello only, no
+  publish). ROLE-MANIFEST-1 dir half PARKED on the publish (see below).
+- **Done since P0:** AE-DESIGN-1 ✅, ROLE-MANIFEST-1 client half ✅ (branch), MULTIADDR-1 ✅
+  (branch).
 - **PARKED — publish cascade (awaiting Andre's go):** ROLE-MANIFEST-1 dir half needs the changed
   cello-client packages on beta + a trustless-cello re-pin. Plan ready (Entry 11): merge
   `m12/role-manifest`→main, bump 7-pkg cascade (crypto 0.0.23, protocol-types 0.0.25, transport
