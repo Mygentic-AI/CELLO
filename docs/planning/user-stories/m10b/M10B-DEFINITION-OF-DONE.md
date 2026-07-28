@@ -215,7 +215,16 @@ the additions M10B is accountable for.
     Scope of any doc cleanup: the M10B documents and [[M10-TYPE-PLAYBOOK]] ONLY — do not sweep the vault.
   - **Expiry.** D-26 gives endorsements no expiry, which is a deliberate exception to Playbook §0's
     "validity window: `expires_at` policy." Confirm `expires_at: null` flows correctly through
-    `DOD-VERIFY-1`'s freshness path (spec §14.7) rather than being read as already-expired. — ❌
+    `DOD-VERIFY-1`'s freshness path (spec §14.7) rather than being read as already-expired.
+  - **WRITTEN 2026-07-28 → Entry 4.** Every item above is settled: intake key → `M10B-D11`; revoke
+    authority → `M10B-D12`; the projection split → `M10B-D13`; consent state → `M10B-D14`; payload
+    split, `same_operator` wording, account-subject naming and expiry settled in the note. Nothing
+    parked. Three verified findings changed the plan: the **notarization path needs no work at all**
+    (the portal stays the only submitter — the §4 first-action question dissolves rather than being
+    answered); the revoke fix **cannot be done at write time** (the blind tombstone INSERT is the
+    F3/F4 convergence fix, so the authority join moves into `signal_records_effective`); and
+    `DOD-END-INV-UNTRUSTED` **needs a projection change no DoD line owned**. Directory is at V48 → the
+    queue is **V49**, `OpsAgentExpectedMigrationVersion` → **49**. — 🟡 written, reviewer pending
 
 ---
 
@@ -529,6 +538,61 @@ the discussion-of-record. Restated here because this is the milestone that imple
   (`DOD-END-FLOOR-2`, D-27) — an endorsement from someone Charlie has never heard of does not move
   Charlie. Farming is capped by `DOD-END-QUOTA-1` and by `INV-NO-SELF-STANDING`. Reverse: adding a
   relationship requirement later is a policy change at intake, not a migration.
+- **M10B-D11 (2026-07-28, `DOD-END-ARCH-1`) — the portal intake key is published in the CONSORTIUM
+  MANIFEST**, as an optional top-level field carrying `{key_id, pubkey}`. This is the question
+  `M10B-D2` opened. The manifest wins because it is already the client's authenticated, polled,
+  officer-threshold-signed source of consortium-level facts, and — verified, not assumed —
+  `canonicalManifestBody` builds the signed body from `Object.keys(manifest)` minus `signatures`
+  (`cello-client/core/crypto/src/manifest.ts:74–84`), an **open** field set: a new top-level field is
+  automatically covered by the officer signatures, and manifests written before it still verify
+  byte-for-byte. Precedent for additive optional fields: `role?`, `peerId?`. **Rotation** is a manifest
+  version bump the daemon's existing poll rolls forward (with its `manifest_version_rollback` guard);
+  **queued submissions are not stranded** because every queue row records the `key_id` it was sealed
+  to and the portal retains a rotated-out private key until no undrained row references it — retention
+  driven by the queue, not a timer. Absent key ⇒ the daemon REFUSES and names the reason, never
+  unsealed (`ABSENT IS NOT FINE`). **Rejected:** serving the key from `/bootstrap` or a new HTTP route
+  — less code, but an unauthenticated distribution channel for a *sealing* key is not a shortcut, it is
+  the vulnerability: a substituted intake key means every endorsement Bob writes is sealed to the
+  attacker. Also rejected: pinning it in client config, which makes rotation a client release.
+- **M10B-D12 (2026-07-28, `DOD-END-ARCH-1`) — revoke authority is evaluated WHERE THE RECORD IS, not
+  where the revoke lands.** Verified defect (`packages/directory/src/signal-write.ts:561–649`):
+  `revokeSignal` authorises on any active `submitter` key and writes a tombstone that hardcodes
+  `'portal'` / `'(tombstone)'`, never reading the target — so one submitter key can kill anyone's
+  endorsement. **The complication the DoD does not name:** the blind INSERT is load-bearing. It is the
+  F3/F4 fix that lets a revoke arriving *before* its record still converge under mesh replication, so
+  "look the record up and compare `issuer_pubkey`" cannot be added at write time — at that moment the
+  record may not be at this node. Resolution: the tombstone keeps its unconditional blind INSERT but
+  records **the requester's real identity**; the authority join moves into `signal_records_effective`,
+  where a tombstone kills a record only if the record is `issuer_kind = 'portal'` (any submitter key —
+  key rotation must keep working, determination §3.5) **or** the tombstone's requester equals the
+  record's `issuer_pubkey`. An unauthorised tombstone is **inert, not rejected**, which is what keeps
+  ordering free. Test consequence: a tombstone that lands before its record must become effective the
+  moment the record replicates in.
+- **M10B-D13 (2026-07-28, `DOD-END-ARCH-1`) — `projectTrustSignals` splits on `issuer_kind`; the
+  payload split alone does NOT satisfy `DOD-END-INV-UNTRUSTED`.** Verified at
+  `cello-client/core/daemon/src/inbound-sessions.ts:78–98`: the framing axis is already right
+  (`issuer: issuerKind === "portal" ? "platform-verified" : "peer-claimed"`, keyed on `issuer_kind`,
+  zero-bump-legal), **but** the payload is handed to the LLM as `claim: decodeCbor(payload)` — one
+  undifferentiated field for every issuer — under a blanket `directory_attestation` opening *"The
+  following trust signals were each verified by the CELLO directory…"*. A correctly split payload still
+  arrives as an undifferentiated `claim`, so the split must reach the projection: `portal` keeps
+  today's shape; `agent` emits the portal's attested wrapper in the attested position and the
+  endorser's words in a distinctly named untrusted field with per-signal framing, and the blanket
+  sentence is reworded to state what the directory actually verified (this hash was notarized and is
+  active) rather than implying the content is true. This is the concrete form of "how `INV-FRAMING`
+  dies quietly", and it generalises to the whole client-sourced family because it keys on
+  `issuer_kind`.
+- **M10B-D14 (2026-07-28, `DOD-END-ARCH-1`) — consent is required by `issuer_kind: agent`, never by
+  type; `consent_state` defaults to `accepted`.** A new column on `wallet_trust_signals` (which already
+  carries additive `ALTER TABLE … ADD COLUMN` migrations — `trust-signal-store.ts:184–188`), with
+  `listPresentable` filtering on it. **The default direction is a correctness decision, not a style
+  one:** `DEFAULT 'accepted'` leaves every existing portal-issued row presentable, and only the
+  delivery path writes `'pending'`, only for agent-issued signals. Defaulting to `'pending'` would
+  silently make every phone/email signal already in every wallet unpresentable — a data-loss-shaped
+  bug that raises no error. Keying on `issuer_kind` (not `type == "endorsement"`) is the
+  generalisation `M10B-D1` demands: every future client-sourced type inherits consent for free. Note
+  `consent_state` and the existing `default_present` answer different questions — *may* it be
+  presented, versus *include it by default* — and conflating them is the trap.
 - **M10B-D1 (2026-07-28) — the milestone is a SOURCE plus two MECHANISMS, not a feature.** Fork: ship
   "endorsements" as a feature, versus generalise the client-supplied source and the consent/withdrawal
   mechanisms so the attestation family opens behind them. Chose the latter; `DOD-END-PLAYBOOK-1` is the
