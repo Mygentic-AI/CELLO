@@ -103,8 +103,8 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
     }
 
     // Termination: a further round in either direction applies nothing.
-    expect(await runAntiEntropyRound(A, B)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
-    expect(await runAntiEntropyRound(B, A)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(A, B)).toEqual({ tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(B, A)).toEqual({ tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0 });
   });
 
   it("burn propagates and is monotonic across a round (kill switch converges irreversibly)", async () => {
@@ -122,8 +122,8 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
       expect(s.suspension_seq).toBe(9);
     }
     // Terminal: the equal-seq idempotent merge converged — a further round applies nothing.
-    expect(await runAntiEntropyRound(A, B)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
-    expect(await runAntiEntropyRound(B, A)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(A, B)).toEqual({ tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(B, A)).toEqual({ tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0 });
   });
 
   it("an already-converged pair does nothing (idempotent)", async () => {
@@ -131,6 +131,23 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
     const B = new MemStore();
     A.revocations.set("agX", rev("agX"));
     B.revocations.set("agX", rev("agX"));
-    expect(await runAntiEntropyRound(A, B)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(A, B)).toEqual({ tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0 });
+  });
+
+  it("a same-key Tier-A fork has the DISTINCT signature pulled>0 && applied===0, every round", async () => {
+    // Two nodes independently recorded a revocation for the SAME agent with different content —
+    // different record hashes, same natural key. Insert-if-absent can never converge them. The
+    // engine must surface this as pulled>0/applied=0 (the fork alarm signature), NOT as {0,0}
+    // (which would be indistinguishable from healthy convergence).
+    const A = new MemStore();
+    const B = new MemStore();
+    A.revocations.set("agF", rev("agF"));
+    B.revocations.set("agF", { ...rev("agF"), reason: "different-content" });
+
+    for (let round = 0; round < 2; round++) {
+      const res = await runAntiEntropyRound(A, B);
+      expect(res.tierAPulled).toBeGreaterThan(0); // the fork re-pulls every round…
+      expect(res.tierAApplied).toBe(0); // …and never applies — the alarm signature persists
+    }
   });
 });

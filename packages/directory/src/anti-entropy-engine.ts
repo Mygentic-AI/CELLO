@@ -11,15 +11,20 @@
  *
  * Convergence rests on the merges being an idempotent join-semilattice (proven in suspension-merge
  * / presence-merge): after both directions run once, a further round pulls nothing and CHANGES
- * nothing — no ping-pong. The apply methods return the number of rows that actually changed local
- * state (Tier-A: inserted; Tier-B: merged-to-a-new-version), so `RoundResult` is the termination
- * signal: a same-key/different-content fork that never converges surfaces as a round that pulls
- * records but reports 0 changes round after round — loudly wrong, never silently absorbed.
+ * nothing — no ping-pong. `RoundResult` reports BOTH counts: what was pulled (planned + fetched)
+ * and what actually changed local state (Tier-A: inserted; Tier-B: version-moved). True
+ * termination is `pulled === 0`. A same-key/different-content fork that never converges has the
+ * distinct signature `pulled > 0 && applied === 0` round after round — the transport handler must
+ * treat that repeating signature as a fork alarm (`ae.round.fork_suspected`), never as health.
  *
  * Store obligations (owned + proven by `PgAeStore` / pg-ae-store.live.test.ts):
  *  - `applyTierA` inserts by the NATURAL key (ON CONFLICT DO NOTHING), returns rows inserted.
  *  - `applyTierB` is atomic per key (FOR UPDATE read → merge → write, insert-race retried),
  *    returns rows whose version hash actually moved.
+ *  - No advertise/serve snapshot txn is required: Tier-A is append-only (an advertised row still
+ *    exists at serve time) and Tier-B apply re-reads FOR UPDATE and merges, so a mid-round local
+ *    write costs at most one extra round — never divergence. Revisit if a Tier-B table's merge
+ *    ever stops being a semilattice.
  */
 
 import { computeTableDigest } from "./set-reconciliation.js";
@@ -60,8 +65,13 @@ export interface AeStoreView {
   applyTierB(table: string, records: readonly TierBRecord[]): MaybePromise<number>;
 }
 
-/** The outcome of a round — what actually changed locally, for observability + termination checks. */
+/** The outcome of a round. Termination = pulled 0; a repeating `pulled > 0 && applied === 0` is
+ *  the fork signature (see header) — the two counts must never be collapsed into one. */
 export interface RoundResult {
+  /** Records the plan pulled from the peer (fetched, whether or not they changed anything). */
+  tierAPulled: number;
+  tierBPulled: number;
+  /** Records that actually changed local state (Tier-A inserted; Tier-B version-moved). */
   tierAApplied: number;
   tierBApplied: number;
 }
@@ -94,17 +104,21 @@ async function peerAdvertisement(peer: AeStoreView): Promise<PeerRoundState> {
 export async function runAntiEntropyRound(local: AeStoreView, peer: AeStoreView): Promise<RoundResult> {
   const plan = planRound(await localState(local), await peerAdvertisement(peer));
 
+  let tierAPulled = 0;
   let tierAApplied = 0;
   for (const [table, hashes] of plan.tierA) {
     const records = await peer.serveTierA(table, hashes);
+    tierAPulled += records.length;
     tierAApplied += await local.applyTierA(table, records);
   }
 
+  let tierBPulled = 0;
   let tierBApplied = 0;
   for (const [table, keys] of plan.tierB) {
     const records = await peer.serveTierB(table, keys);
+    tierBPulled += records.length;
     tierBApplied += await local.applyTierB(table, records);
   }
 
-  return { tierAApplied, tierBApplied };
+  return { tierAPulled, tierBPulled, tierAApplied, tierBApplied };
 }

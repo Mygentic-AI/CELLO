@@ -295,7 +295,11 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     expect(Number(r.suspension_seq)).toBe(3);
 
     const second = await runAntiEntropyRound(store, peer);
-    expect(second.tierBApplied).toBe(0); // converged — pg's advertised version now matches the peer's
+    // TRUE termination: nothing was even pulled — pg's post-apply ADVERTISED version equals the
+    // peer's, so the plan is empty. (tierBApplied 0 alone would also pass under a perpetual
+    // re-pull-merge-to-same-row loop — the cross-encoding bug class; pulled:0 pins it out.)
+    expect(second.tierBPulled).toBe(0);
+    expect(second.tierBApplied).toBe(0);
   });
 
   // ── Tier-A coverage: agent_profiles insert-if-absent ─────────────────────────────────────────

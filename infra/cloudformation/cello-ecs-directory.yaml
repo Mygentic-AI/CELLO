@@ -129,6 +129,14 @@ Resources:
               Value: /tmp/consortium-manifest.json
             - Name: CELLO_DIRECTORY_CONSORTIUM_MANIFEST_B64
               Value: !Sub "{{resolve:ssm:/cello/${Environment}/directory/consortium-manifest}}"
+            # M12 §1b: the directory VERIFIES the manifest at load (it is the anti-entropy trust
+            # anchor). Officer root pubkeys + threshold, pinned in SSM (cello-ssm-parameters.yaml,
+            # public data). The binary exits 1 if the manifest path is set without these — there is
+            # no unverified fallback. Stage-1 resolve: re-run deploy.sh to propagate SSM changes.
+            - Name: CELLO_CONSORTIUM_ROOT_KEYS
+              Value: !Sub "{{resolve:ssm:/cello/${Environment}/consortium/root-keys}}"
+            - Name: CELLO_CONSORTIUM_THRESHOLD
+              Value: !Sub "{{resolve:ssm:/cello/${Environment}/consortium/root-threshold}}"
             # M8B-PREAUTH-CAP: pinned pre-auth issuer PUBLIC key — DKG Round 1 verifies a presented
             # capability's signature against it (stateless, replaces the token validate/consume gate).
             - Name: CELLO_PREAUTH_ISSUER_PUBKEY

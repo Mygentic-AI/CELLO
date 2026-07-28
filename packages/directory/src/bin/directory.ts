@@ -869,16 +869,30 @@ if (nodeKeyHex) {
   logger.info("directory.node_key.configured", { nodeId });
 }
 
-// M7-MANIFEST-002 / DOD-AUTH-2: when a consortium manifest is deployed beside the
-// directory, serve it to clients that poll (manifest_poll_request → manifest_poll_response).
-// The store re-reads the file on each request, so deploying a newer signed version is
-// adopted by clients on their next poll. When unset, the directory ignores poll requests
-// (M6 backward-compat). The directory is only a transport — clients re-verify the manifest.
+// M7-MANIFEST-002 / DOD-AUTH-2 / M12 §1b: when a consortium manifest is deployed beside the
+// directory, serve it to clients that poll (manifest_poll_request → manifest_poll_response)
+// AND — M12 — verify it at load: the manifest is the anti-entropy channel's trust anchor
+// (pinned node pubkeys + peerIds), so the directory itself must refuse an unsigned/tampered/
+// duplicated/rolled-back manifest. The officer trust anchor is pinned via env (same names as
+// the client daemon): CELLO_CONSORTIUM_ROOT_KEYS (comma-separated hex) +
+// CELLO_CONSORTIUM_THRESHOLD. A manifest path WITHOUT the anchor is a fail-loud
+// misconfiguration — there is no unverified fallback (§1c: fail closed, always).
 const consortiumManifestPath = process.env["CELLO_DIRECTORY_CONSORTIUM_MANIFEST"];
 let directoryManifestStore: FileDirectoryManifestStore | undefined;
 if (consortiumManifestPath) {
+  const rootKeysRaw = process.env["CELLO_CONSORTIUM_ROOT_KEYS"] ?? "";
+  const rootKeys = rootKeysRaw.split(",").map((k) => k.trim()).filter((k) => k.length > 0);
+  const threshold = Number.parseInt(process.env["CELLO_CONSORTIUM_THRESHOLD"] ?? "", 10);
+  if (rootKeys.length === 0 || Number.isNaN(threshold) || threshold < 1) {
+    logger.error("adapter.config.missing", {
+      missingKey: "CELLO_CONSORTIUM_ROOT_KEYS / CELLO_CONSORTIUM_THRESHOLD",
+      env,
+      reason: "CELLO_DIRECTORY_CONSORTIUM_MANIFEST is set, so the officer trust anchor is required (M12 §1b — the directory verifies its manifest; no unverified fallback)",
+    });
+    process.exit(1);
+  }
   try {
-    directoryManifestStore = new FileDirectoryManifestStore(consortiumManifestPath, logger);
+    directoryManifestStore = new FileDirectoryManifestStore(consortiumManifestPath, logger, { rootKeys, threshold });
   } catch (err: unknown) {
     logger.error("directory.manifest.store.load.failed", {
       path: consortiumManifestPath,

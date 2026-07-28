@@ -43,6 +43,43 @@ Resources:
         Environment: !Ref Environment
         ManagedBy: cloudformation
 
+  # ── M12 §1b: consortium officer trust anchor ──────────────────────────────────
+  # The directory verifies its consortium manifest at load (verifyManifest, RFC 8032) against
+  # these officer ROOT public keys + signature threshold. PUBLIC data (only the officer's
+  # PUBLIC key — the signing key lives in Secrets Manager cello/{env}/consortium/officer-key-0).
+  # Values must match the client's bundled constants (cello-client
+  # core/daemon/src/bundled-consortium-manifest.ts) — the two sides verify the SAME manifest
+  # against the SAME anchor. Resolved into the directory task at deploy time
+  # ({{resolve:ssm:...}} in cello-ecs-directory.yaml — stage 1: re-run deploy.sh to propagate).
+  ConsortiumRootKeys:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/cello/${Environment}/consortium/root-keys"
+      Type: String
+      Value: "8e9b99e5aa5505f2f50ec9f933f497a64956614575edce3427ec8a096c864199"
+      Description: !Sub >
+        Comma-separated Ed25519 officer ROOT public keys (hex) the ${Environment} directory
+        verifies its consortium manifest against (M12 §1b). Must match the client's bundled
+        BUNDLED_CONSORTIUM_ROOT_KEYS. Rotate together with the officer key + a re-signed manifest.
+      Tags:
+        Project: cello
+        Environment: !Ref Environment
+        ManagedBy: cloudformation
+
+  ConsortiumRootThreshold:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/cello/${Environment}/consortium/root-threshold"
+      Type: String
+      Value: "1"
+      Description: !Sub >
+        Minimum distinct valid officer signatures the ${Environment} directory requires on the
+        consortium manifest (M12 §1b). Must match the client's BUNDLED_CONSORTIUM_THRESHOLD.
+      Tags:
+        Project: cello
+        Environment: !Ref Environment
+        ManagedBy: cloudformation
+
 Outputs:
   OpsAgentExpectedMigrationVersionParameterName:
     Value: !Sub "/cello/${Environment}/ops-agent/expected-migration-version"
