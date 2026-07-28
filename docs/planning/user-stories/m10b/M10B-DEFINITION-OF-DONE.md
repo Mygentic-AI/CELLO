@@ -833,8 +833,17 @@ the discussion-of-record. Restated here because this is the milestone that imple
   >   converges regardless of arrival order."* Under `D-12r4` an unauthorized tombstone that lands
   >   first reads `revoked`, then reads **`active`** once the real record replicates in — a
   >   `revoked → active` transition reachable through ordinary convergence with no write. Branch 1
-  >   preserves today's behavior only until the real row arrives. **Amend V46's header comment in the
-  >   same migration**, or the code contradicts its own documentation.
+  >   preserves today's behavior only until the real row arrives. The invariant change must be written
+  >   down, or the code contradicts its own documentation.
+  >   > **⚠️ CORRECTION TO THE REVIEW — do NOT "amend V46's header comment".** V46 is an **APPLIED**
+  >   > migration (the directory is at V48), and **Flyway checksums the entire file, comments
+  >   > included**. Editing it triggers a checksum error on every node and crash-loops the ops-agent,
+  >   > which validates the migration version — and the repo's own hard rules are explicit: *"Never
+  >   > modify an applied migration"*, plus a standing AC that *"Flyway reports zero checksum errors on
+  >   > all prior migrations (V1 through V[N-1])"*. **The corrected superseding statement goes in the
+  >   > NEW migration's header** (the one that replaces the view), stating what it changes about V46's
+  >   > claim and why. That is the only place it can go, and it is also the right place — the migration
+  >   > that changes the behavior is the one that should document the change.
   > - **The exact-column-set gate will go red.** `m10-store-dir-1-v46-signal-records.test.ts` asserts
   >   `signal_records`' columns exactly, with a comment that any new column *"goes red here and has to
   >   be justified"*. `D-12r4` adds `revoker_pubkey` and `M10B-D28` adds the persisted signature. Write

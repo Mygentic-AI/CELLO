@@ -1545,3 +1545,32 @@ declared, an incomplete supersession list — plus one genuine security defect a
 That is the profile of a determination approaching done. The reviewer's own read: *"none of that needs
 a fifth measurement pass. It is a single editing session, and the only one with real design content is
 F4."* Agreed.
+
+---
+
+## Entry 17 — correction TO the fourth review: V46's header cannot be amended — 2026-07-28
+
+The fourth review's MEDIUM-2 fix said to *"amend V46's header comment in the same migration"* so the
+documented monotonicity invariant matches `M10B-D12r4`'s behavior. **That instruction is unsafe and I
+am not taking it**, for a reason the review did not check.
+
+**V46 is an APPLIED migration** — the directory is at V48 — and **Flyway checksums the entire file,
+comments included**. Editing V46 would:
+1. produce a checksum error on every node's Flyway run,
+2. crash-loop the ops-agent, which validates the migration version against
+   `OpsAgentExpectedMigrationVersion`, and
+3. violate two of the repo's own hard rules from the M5 retrospective — *"Never modify an applied
+   migration"*, and the standing AC that *"Flyway reports zero checksum errors on all prior migrations
+   (V1 through V[N-1])"*.
+
+This is exactly the FEDERATION-002 shape the M5 retrospective was written about.
+
+**The corrected superseding statement goes in the NEW migration's header** — the one that replaces the
+view — stating what it changes about V46's claim and why. That is the only place it *can* go, and on
+reflection the better place regardless: the migration that changes the behavior is the one a later
+reader will be looking at when they wonder why the behavior differs from V46's prose.
+
+**Worth noting for the record:** this is the first finding in four passes where the reviewer's proposed
+*fix* was wrong rather than its diagnosis. The diagnosis (D-12r4 does break V46's stated monotonicity,
+and that must be documented) is correct and stands. Reviewers are held to the same standard as the
+work: verify the proposed remedy, not just the finding.
