@@ -399,3 +399,47 @@ the real canonicalManifestBody — no mocked crypto. Review dispatched.
 
 Next: §1a — populate `peerId` in the manifest entries (schema already carries the field from
 ROLE-MANIFEST-1) + then the `/cello/anti-entropy/1.0.0` channel handler.
+
+---
+
+## Entry 12 — 2026-07-28 — Channel + libp2p face complete; transport 0.0.27 cascade; review hardening
+
+**The AE channel is now built end to end** (branch m12/ae-append, a9f39a0a): wire protocol
+(cebdd6df, handshake + rounds over frames, reviewed), the pg store, the engine, and the new
+`AeSyncService` (streamWire lp+CBOR adapter, responder registration, per-peer dial loop, §6 events,
+fork alarm, §1c rotation-skew retry-once). 54 AE tests green. Remaining for DOD-AE-*: registration
+in `CelloDirectoryNode.start()` + composition-root construction (a ~20-line wiring diff), then the
+DOD-AE-LOCAL-E2E-1 three-process loopback enforcer.
+
+**Cross-repo: transport 0.0.27 published** (cello-client 0d32506; cascade c450f54 → tag v0.0.131;
+smoke-tag green; binary verified — dist carries `connection?.remotePeer?.toString()`; cross-pins
+real). `handle()` now passes the connection's Noise-authenticated remote PeerId as an optional
+second handler arg — the seam the responder's channel binding requires (frost's `peerIdString` wire
+claim is exactly what this replaces). trustless-cello re-pinned ^0.0.27 (directory + relay).
+**`latest` promotion NOT run — Andre's step** (daemon 0.0.78 / cli 0.0.79 / connect 0.0.89 are on
+beta; nothing here blocks on promotion since trustless-cello pins by version).
+
+**Channel review (Opus) — 2 HIGH fixed:** (1) key/body-mismatch lock bypass on applyTierB (a
+malicious authenticated peer could un-burn an agent by writing through a differently-keyed body) —
+refused outright; (2) served records applied unvalidated — applyTierA recomputes every hash from
+the body; RemoteStoreView keeps only requested records. Defense-in-depth: responder never signs a
+wire-claimed peerIdA; regex error classifier removed; per-frame deadlines + 250k wire bounds;
+`node_id_mismatch` split from `peerid_mismatch` (so the §1c retry can't fire on a wrong-endpoint
+dial); engine applies in LOCAL table order; responder-side verification got its own revert-proof
+test.
+
+**Decisions logged:**
+- **M12-D7 — expired-in-place manifest:** if the manifest expires while the process runs with no
+  replacement, the store serves the last VERIFIED manifest and warns loudly on every reload
+  (`directory.manifest.verify.failed`). AE continues on it — halting sync would stop kill-switch
+  propagation, which is worse than pinning against once-valid keys; the warn is the operator's
+  alarm. (A fresh boot with an expired manifest still fails hard.)
+- **O(compare) advertisement deferred:** `ae_state` carries full hash lists/version maps per round
+  (correctness proven); the bucketed-digest short-circuit (§3 step 1-2 wire form) is a wire-
+  efficiency optimization owed before table counts grow — not a launch blocker at dev data sizes.
+- **§1c previous-manifest acceptance owed:** the retry-once-on-re-read half is implemented; the
+  "accept the immediately-previous manifest during rollout" half needs previous-manifest retention
+  on both sides. Owed with the manifest-rotation work (DOD-MANIFEST-GCP-1).
+- **Anti-rollback floor is process-lifetime** (review finding, accepted trade): a restart accepts
+  any validly-signed manifest; the same SSM privilege domain controls the anchor itself, and the
+  client's compiled-in anchor is the real backstop.
