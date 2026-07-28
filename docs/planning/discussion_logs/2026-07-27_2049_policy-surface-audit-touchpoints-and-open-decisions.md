@@ -774,3 +774,106 @@ revealing the address — that is what the no-PII rule requires and what makes a
 goes out by default" — it sends a stranger nothing at all. The gate's instinct is backwards for first
 contact: withholding from someone you already distrust is reasonable, withholding from someone who has
 never met you just means they cannot verify you. Fix with D-8's baseline split.
+
+### D-9 — CLOSED, not a decision: the away-message ladder is already specified and built
+
+The question was badly framed ("custom text for strangers, yes or no"). Andre: *"I thought we agreed
+there's a canned message by the system and you can change that canned message. But you can also set it for
+different tiers."* Correct — `DOD-AWAY-TIER-1` shipped exactly that, four levels resolved most-specific
+first and guaranteed total:
+
+```
+per-contact message  >  per-tier message  >  agent default  >  system default (code)
+```
+
+So the unknown tier already has its own slot. Nothing to decide. The only residual is what wording ships
+as the system default text.
+
+### D-10 — DECIDED: a sender can never raise their own tier
+
+Tier is always the operator's call. Trust signals and introductions may INFORM and may PROMPT — *"Alice was
+introduced by Bob, whom you've whitelisted. Promote her?"* — but only the operator changes a tier. Rejected:
+automatic promotion on a strong signal or a trusted introduction, which would reopen (by another route)
+exactly the hole DEC-AB-3 closed when it removed accept-promotes, and would make an operator you trust into
+a lever for promoting strangers into your inner tier.
+
+### D-11 — DECIDED: build one small "what did my policy do" command
+
+A single list, newest first, with reasons: refusals, redactions, blocks, tier gates, away responses. The
+events already exist; this reads them. Deliberately not a dashboard.
+
+**Ships with the D-2 enforcement flip** — it is the concrete answer to Andre's attribution worry ("will I
+know whether a new error came from the flip?"). Policy nobody can audit is policy nobody can trust,
+including the operator who set it.
+
+---
+
+## 11. D-12 — TABLED (2026-07-28). The one architectural decision, deliberately not made under pressure
+
+Andre: *"This is such a critical architectural decision. I need to piece through it carefully, and the
+environment is just not conducive."* Recorded in full so resuming costs nothing.
+
+### The picture I did not have, in Andre's words
+
+The inbound pipeline, end to end:
+
+1. **Deterministic security scan** — hidden control characters, encodings. (M9 Layer 1.)
+2. **Classifier model** — is this prompt injection? (DeBERTa; deferred, D-2.)
+3. **Relationship** — are they in the address book, at what tier? Decides whether the call proceeds.
+4. **Deterministic trust-signal check** — *"I want to see these types of trust signals."* Cheap, mechanical;
+   exists to avoid paying for evaluation you don't need.
+5. **LLM evaluation of the operator's own policy** — **written in markdown and stored in the database**
+   (not a file), applied to what the sender presented.
+
+**Step 5 is the goal, not a Day-2 extra.** My original D-12 ("should we build an LLM policy seam at
+launch?") was the wrong question — it treated the destination as optional. Correcting that framing is the
+main output of this exchange.
+
+Andre also notes the LLM's job here is small and well-bounded — it is **not** reading the sender's message.
+It sees: the contact overlap, the endorsements offered, the trust signals offered, and the operator's own
+written policy. *"You decide."* And: *"as inference gets cheaper and models get better, I think this is
+going to be the better approach. But cheap deterministic scanning should also be possible."*
+
+### The actual problem
+
+Configuring a deterministic rules engine is too hard for most users — *"even myself, who designed it."*
+The failure mode is a product nobody can set up: too much focus, too much thinking, so nothing works and
+they leave. But the alternatives are unattractive too: a **scoring system** is rejected (CELLO does not
+hand people arbitrary numbers — see [[2026-04-14_1500_deprecate-trust-seeders-and-trustrank]]), and
+LLM-for-everything gives up the cheap path.
+
+Worked example, Andre's: endorsements are coming. If you and I have overlapping contacts, does that
+**negate** the need for a registered, aged GitHub and X account — or at least one of the two?
+
+### What was established before tabling
+
+- **Substitution is scoring in disguise.** The moment a policy says "A *or* B", you must say what each is
+  worth. That is weights, and weights are the scoring system being avoided. As prose the same rule is one
+  sentence and needs no numbers. This is the reason the split below is natural rather than arbitrary.
+- **The proposed line:** *facts* stay deterministic (signed, unexpired, unrevoked, baseline present, tier —
+  no substitution, no judgment, nearly free); anything *substitutable* goes to prose + LLM, because that is
+  precisely where the score would have been.
+- **Who writes what:** the user writes prose; the system writes rules; never the reverse. Most operators
+  write nothing and run on the default (verified email + phone, blocked stays blocked, known fast-tracked).
+- **Determinism by observation, not specification** (proposed, undecided): after the LLM decides the same
+  way enough times, offer to harden it — *"you've admitted seven people who shared two or more contacts;
+  make that automatic?"* The operator gets a deterministic rule they never authored and can trust, because
+  they watched it happen.
+- **Cost shape:** the LLM call fires only for a stranger who cleared the cheap gates — per first contact,
+  not per message. Known contacts never reach it.
+- **Failure shape:** if the LLM is unavailable, fall back to the deterministic floor and **queue**, never
+  admit.
+
+### THE QUESTION, stated for the resumed session
+
+> **When the deterministic floor and the LLM policy disagree, may the LLM ADMIT someone the floor's
+> preferences turned away — or is the floor final, with the LLM only ever able to narrow?**
+
+- **Floor final** (what `DOD-FLOOR-1` specifies today: *"LLM discretion layers on top and may only
+  RESTRICT"*) — predictable and cheap, but one badly-worded rule silently blocks good people forever, and
+  the smarter layer never sees them. This is the brittleness Andre named.
+- **LLM may admit** — the floor becomes a fast path rather than a wall; a bad rule is recoverable. Costs an
+  inference on the cases the floor would have rejected.
+
+Note that deciding "LLM may admit" is a **change to `DOD-FLOOR-1` as shipped**, not a new build on top of
+it — the restriction is already written into the spec and the code.
