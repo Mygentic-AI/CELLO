@@ -877,3 +877,49 @@ Worked example, Andre's: endorsements are coming. If you and I have overlapping 
 
 Note that deciding "LLM may admit" is a **change to `DOD-FLOOR-1` as shipped**, not a new build on top of
 it — the restriction is already written into the spec and the code.
+
+---
+
+## 12. Further decisions — 2026-07-28, second run
+
+### D-16 — DECIDED: concealment with no innocent use refuses the call; everything else is decoded and judged
+
+New scope, surfaced by Andre during D-1 and previously tracked nowhere: the line between *"redact and
+carry on"* and *"this is bad enough we are not taking the call."*
+
+**First framing was rejected as incoherent, correctly.** I proposed "only an injection attempt refuses;
+hidden characters and odd encodings get cleaned and passed on." Andre: *"You can use all sorts of hidden
+characters and odd encodings to CREATE a prompt injection. That's a contradictory statement."* He is right,
+and the reason matters: **cleaning happens BEFORE judging**, so "clean it and pass it on" discards the
+evidence of the attack it was carrying.
+
+**The line that works: some techniques have no innocent use.**
+
+- **Zero-width characters, bidi/direction overrides, and similar** — nobody sends these by accident.
+  **Refuse the call on sight.** Concealment is treated as intent; you never have to prove what was hidden.
+- **Legitimate encodings** (base64, unusual scripts, code snippets) — decode, then judge what is revealed.
+  Refuse if *that* is an attack.
+
+Rejected: refuse-on-any-concealment (blocks legitimate encoded data), and never-refuse-on-concealment
+(unlimited attempts, and it leans entirely on a classifier that is not switched on).
+
+**Owed:** the "no innocent use" list has to be authored and kept current. It is a denylist of wire-level
+techniques, not of content — consistent with the project rule that code uses denylists for wire names.
+
+### D-17 — DECIDED: policy decides, never a hold-for-approval — AND every refusal is surfaced to the operator
+
+The agent never holds a stranger's request waiting for a human. Policy accepts or refuses, including while
+the operator is away — that is the whole value of away mode, and holding would kill it.
+
+**But refusals must not be silent.** Andre: *"You should not leave this hanging… the user should have the
+ability to review any refusals."* The requirement:
+
+1. **The operator is NOTIFIED** that a session was received and refused. Push, not pull.
+2. **A tool call returns the detail** — which policy was triggered and why.
+3. **The point is recoverability, in both directions:** the operator can *update the policy* because
+   something happened they did not want, or *reach out to the person* because the refusal was a false
+   positive.
+
+This is the push half of D-11's pull surface: D-11 is "what did my policy do", D-17 is "your policy just
+refused someone, here's how to look." A false positive that nobody ever learns about is indistinguishable
+from a stranger who never called.
