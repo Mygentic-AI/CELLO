@@ -627,3 +627,35 @@ DOD-NODE-DIR-GCP-1 along with the IaC for the bucket and key ring.
 Note: `persist-001-composition-root.test.ts` has ONE failing case ("exits 1 with
 migration.out.of.date…") — verified pre-existing by stashing the diff and re-running; it fails
 identically on a clean tree.
+
+---
+
+## Entry 17 — 2026-07-28 — DOD-AE-APPEND-1 ✅: digest-first wire + bucket walk (the audited gap, closed)
+
+The done-audit's one remaining OVERSTATED clause is now genuinely implemented rather than argued
+away. Before: `ae_state` carried the full Tier-A hash list and Tier-B version map every round, per
+peer, per table, converged or not — the receiver recomputed a digest from a list it had already paid
+to download, so "root comparison" saved nothing and `differingBuckets` sat in the tree with no
+production caller.
+
+Now, per design §3 steps 1-2:
+1. **Digest exchange** — `ae_state` is `table → digest`, one hash per table. That is the whole
+   advertisement.
+2. **Bucket walk**, only for a Tier-A table whose digest differs — `ae_buckets_req` returns the
+   256-entry bucket-digest vector, `differingBuckets` localises the difference, and
+   `ae_bucket_hashes_req` fetches hashes for ONLY those buckets. A bucket whose digest matches has
+   byte-identical contents on both sides, so skipping it is exact, not approximate. Tier-B fetches
+   its version map for a differing table (`ae_versions_req`).
+
+The mechanism that makes this work is small and worth naming: `PeerRoundState`'s detail is now a
+LAZY THUNK, so `planRound`'s pre-existing digest-match skip actually prevents the fetch instead of
+happening after it. Digests moved onto the store (`tierATableDigest`/`tierBTableDigest`) — a remote
+store view returns the peer's ADVERTISED digest without fetching anything, which is precisely what
+makes detection O(compare) on the wire.
+
+Pinned by two new tests: a converged round sends `ae_state_req` and **nothing else** (frame types
+counted on the wire — the previous implementation would fail this), and a divergent table with 40
+shared + 1 differing record pulls exactly 1. Enforcer re-run against the new protocol: **5/5 green**,
+so the change is proven across three live processes, not just in-process.
+
+DOD-AE-APPEND-1 → ✅. All three AE DoD lines are now audited-earned.

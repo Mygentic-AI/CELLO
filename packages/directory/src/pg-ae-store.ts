@@ -48,6 +48,8 @@ import {
 import { mergeSuspension, type SuspensionRecord } from "./suspension-merge.js";
 import { mergePresence, type PresenceRecord } from "./presence-merge.js";
 import type { AeStoreView, TierARecord, TierBRecord } from "./anti-entropy-engine.js";
+import { computeTableDigest } from "./set-reconciliation.js";
+import { tierBTableDigest } from "./ae-round.js";
 
 export type { TierARecord, TierBRecord } from "./anti-entropy-engine.js";
 
@@ -201,7 +203,20 @@ export class PgAeStore implements AeStoreView {
   tierBTables(): readonly string[] { return TIER_B.map((t) => t.spec.table); }
 
   // ── Advertise ──────────────────────────────────────────────────────────────────────────────
-  /** Record hashes for a Tier-A table (for the bucketed set digest + reconciliation). */
+  /**
+   * The Tier-A table digest — what a peer compares to detect divergence in O(1) per table. Computed
+   * from this node's own rows; only when it differs does the peer pay for any hash list.
+   */
+  async tierATableDigest(table: string): Promise<string> {
+    return computeTableDigest(await this.tierARecordHashes(table));
+  }
+
+  /** The Tier-B table digest — same O(1) divergence-detection role. */
+  async tierBTableDigest(table: string): Promise<string> {
+    return tierBTableDigest(await this.tierBVersions(table));
+  }
+
+  /** Record hashes for a Tier-A table (for the bucket walk + set reconciliation). */
   async tierARecordHashes(table: string): Promise<string[]> {
     const t = tierA(table);
     const res = await this.#pool.query<Record<string, unknown>>(`SELECT ${tierASelectExpr(t)} FROM ${t.spec.table}`);

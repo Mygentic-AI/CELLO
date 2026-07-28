@@ -22,6 +22,8 @@ import { PgAeStore } from "../pg-ae-store.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC, AGENT_PROFILES_SPEC } from "../ae-table-encoders.js";
 import { encodeTierBVersion, SUSPENSION_VERSION_SPEC } from "../ae-mutable-version.js";
 import { runAntiEntropyRound, type AeStoreView } from "../anti-entropy-engine.js";
+import { computeTableDigest } from "../set-reconciliation.js";
+import { tierBTableDigest } from "../ae-round.js";
 import type { SuspensionRecord } from "../suspension-merge.js";
 import type { PresenceRecord } from "../presence-merge.js";
 import { configurePgTypes } from "../pg-type-config.js";
@@ -277,6 +279,12 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
       tierATables: () => [],
       tierBTables: () => ["agent_suspensions"],
       tierARecordHashes: () => [],
+      tierATableDigest: () => computeTableDigest([]),
+      tierBTableDigest: () => tierBTableDigest(new Map([[id, encodeTierBVersion(SUSPENSION_VERSION_SPEC, {
+        agent_id: newer.agent_id, paused: newer.paused, burned: newer.burned, reason: newer.reason,
+        authorized_by_account: newer.authorized_by_account, suspension_seq: String(newer.suspension_seq),
+        origin_node: newer.origin_node,
+      }).versionHash]])),
       tierBVersions: () => new Map([[id, encodeTierBVersion(SUSPENSION_VERSION_SPEC, {
         agent_id: newer.agent_id, paused: newer.paused, burned: newer.burned, reason: newer.reason,
         authorized_by_account: newer.authorized_by_account, suspension_seq: String(newer.suspension_seq),

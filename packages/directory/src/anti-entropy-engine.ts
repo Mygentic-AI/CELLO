@@ -27,8 +27,10 @@
  *    ever stops being a semilattice.
  */
 
-import { computeTableDigest } from "./set-reconciliation.js";
-import { planRound, tierBTableDigest, type LocalRoundState, type PeerRoundState } from "./ae-round.js";
+// Digests are computed BY THE STORE now (tierATableDigest/tierBTableDigest) — a remote store
+// view returns the peer's advertised digest without fetching anything, which is what makes
+// divergence detection O(compare) on the wire.
+import { planRound, type LocalRoundState, type PeerRoundState } from "./ae-round.js";
 
 /** An append-only record body addressed by its record hash. */
 export interface TierARecord {
@@ -51,9 +53,16 @@ export type MaybePromise<T> = T | Promise<T>;
 export interface AeStoreView {
   tierATables(): MaybePromise<readonly string[]>;
   tierBTables(): MaybePromise<readonly string[]>;
-  /** Record hashes for a Tier-A table (for digest + set reconciliation). */
+  /**
+   * The table DIGEST — the O(1)-per-table divergence check. A local store computes it from its own
+   * rows; a REMOTE store view returns what the peer advertised, WITHOUT fetching the hash list.
+   */
+  tierATableDigest(table: string): MaybePromise<string>;
+  /** Record hashes for a Tier-A table. Only called when digests differ (see PeerRoundState). */
   tierARecordHashes(table: string): MaybePromise<readonly string[]>;
-  /** key → versionHash for a Tier-B table. */
+  /** The Tier-B table digest — same O(1) role as tierATableDigest. */
+  tierBTableDigest(table: string): MaybePromise<string>;
+  /** key → versionHash for a Tier-B table. Only called when digests differ. */
   tierBVersions(table: string): MaybePromise<ReadonlyMap<string, string>>;
   /** Fetch Tier-A record bodies for the given hashes (serving a peer's pull). */
   serveTierA(table: string, hashes: readonly string[]): MaybePromise<readonly TierARecord[]>;
@@ -87,22 +96,29 @@ async function localState(store: AeStoreView): Promise<LocalRoundState> {
 /** The peer's advertised state (digests + full detail). In production this crosses the wire; here
  *  it is read directly from the peer's store view. */
 async function peerAdvertisement(peer: AeStoreView): Promise<PeerRoundState> {
-  const tierA = new Map<string, { digest: string; recordHashes: readonly string[] }>();
+  // Detail is LAZY (see PeerRoundState): planRound invokes the fetcher only for tables whose
+  // digests differ, so a converged table costs a digest and nothing else. Over the wire that is
+  // the difference between O(compare) and O(table) per round.
+  const tierA = new Map<string, { digest: string; recordHashes: () => Promise<readonly string[]> }>();
   for (const t of await peer.tierATables()) {
-    const hashes = await peer.tierARecordHashes(t);
-    tierA.set(t, { digest: computeTableDigest(hashes), recordHashes: hashes });
+    tierA.set(t, {
+      digest: await peer.tierATableDigest(t),
+      recordHashes: async () => peer.tierARecordHashes(t),
+    });
   }
-  const tierB = new Map<string, { digest: string; versions: ReadonlyMap<string, string> }>();
+  const tierB = new Map<string, { digest: string; versions: () => Promise<ReadonlyMap<string, string>> }>();
   for (const t of await peer.tierBTables()) {
-    const versions = await peer.tierBVersions(t);
-    tierB.set(t, { digest: tierBTableDigest(versions), versions });
+    tierB.set(t, {
+      digest: await peer.tierBTableDigest(t),
+      versions: async () => peer.tierBVersions(t),
+    });
   }
   return { tierA, tierB };
 }
 
 /** Run one anti-entropy round: LOCAL pulls from PEER and applies. Returns what actually changed. */
 export async function runAntiEntropyRound(local: AeStoreView, peer: AeStoreView): Promise<RoundResult> {
-  const plan = planRound(await localState(local), await peerAdvertisement(peer));
+  const plan = await planRound(await localState(local), await peerAdvertisement(peer));
 
   // Iterate in the LOCAL registry's table order — never the peer's advertisement order. Two
   // reasons: (1) a table the local store doesn't know is simply never pulled (a hostile peer

@@ -131,16 +131,18 @@ description: >
   6 non-blocking → Entries 8, 9 (see M12-P5, checkpoint scope)
 - **DOD-AE-APPEND-1** [trustless-cello] — append-only tables sync between directories over the
   authenticated libp2p channel via root-comparison + delta pull; divergence detection is
-  O(compare), transfer is delta-only; peers that fail identity verification are refused. — 🟠
-  THREE of four clauses earned: authenticated channel (live, J-ANTIENTROPY), delta-only transfer
-  (round 2 pulls nothing, unit + live), and peers failing identity verification ARE refused
-  (19 fail-closed unit assertions across ae-channel/ae-handshake). **NOT earned: "root-comparison /
-  divergence detection is O(compare)."** `buildWireState` sends the FULL Tier-A hash list and
-  Tier-B version map every round per peer per table, converged or not — no digest crosses the wire;
-  the digest is recomputed receiver-side from a list already paid for, so it saves nothing. The
-  bucketed machinery design §3 specifies is present but DEAD in the ship path (`differingBuckets`
-  has no production caller). Owed: digest-first exchange, then bucket walk only for differing
-  tables. Done-audit 2026-07-28 ruled the earlier ✅ overstated. → Entries 9-15
+  O(compare), transfer is delta-only; peers that fail identity verification are refused. — ✅ all
+  four clauses now earned. **Root-comparison / O(compare):** `ae_state` carries ONE DIGEST per
+  table and nothing else; detail is fetched only for tables whose digests differ, and a Tier-A
+  difference then walks buckets (256-entry vector → hashes for ONLY the differing buckets, which
+  makes `differingBuckets` a live production path rather than dead code). Pinned by a test that
+  counts wire frames: a converged round sends `ae_state_req` and NOTHING else — no bucket walk, no
+  hash list, no version map, no body pull. **Delta-only transfer:** bodies pulled by hash; a
+  divergent table with 40 shared + 1 differing record pulls exactly 1. **Identity verification
+  refuses:** 19 fail-closed assertions (wrong key, relayed frames, unknown node, wrong-node answer,
+  self-dial, stale timestamp, pre-auth round frames). **Authenticated channel:** live in
+  J-ANTIENTROPY. Enforcer re-run green against the digest-first protocol (5/5). Done-audit
+  2026-07-28 correctly ruled the earlier ✅ overstated on O(compare); this closes it. → Entries 9-17
 
 - **DOD-AE-MUTABLE-1** [trustless-cello] — mutable-table sync with per-table conflict rules per
   the design doc; `agent_suspensions` convergence proven adversarially: pause during partition,

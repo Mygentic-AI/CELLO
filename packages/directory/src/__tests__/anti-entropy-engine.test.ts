@@ -10,6 +10,8 @@
 
 import { describe, it, expect } from "vitest";
 import { runAntiEntropyRound, type AeStoreView, type TierARecord, type TierBRecord } from "../anti-entropy-engine.js";
+import { computeTableDigest } from "../set-reconciliation.js";
+import { tierBTableDigest } from "../ae-round.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC } from "../ae-table-encoders.js";
 import { encodeTierBVersion, SUSPENSION_VERSION_SPEC } from "../ae-mutable-version.js";
 import { mergeSuspension, type SuspensionRecord } from "../suspension-merge.js";
@@ -27,6 +29,9 @@ class MemStore implements AeStoreView {
   tierARecordHashes(): string[] {
     return [...this.revocations.values()].map((r) => encodeTierARecord(AGENT_REVOCATIONS_SPEC, r).hash);
   }
+  // Digest-first advertisement: the O(1)-per-table divergence check (design §3 step 1).
+  tierATableDigest(): string { return computeTableDigest(this.tierARecordHashes()); }
+  tierBTableDigest(): string { return tierBTableDigest(this.tierBVersions()); }
   tierBVersions(): Map<string, string> {
     const m = new Map<string, string>();
     for (const [k, s] of this.suspensions) {

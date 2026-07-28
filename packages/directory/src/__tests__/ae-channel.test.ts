@@ -14,11 +14,14 @@
 
 import { describe, it, expect } from "vitest";
 import { ed25519 } from "@noble/curves/ed25519.js";
+import { decode as cborDecode } from "cbor-x";
 import type { ConsortiumManifest } from "@cello-protocol/protocol-types";
 import {
   runAeDialer, serveAeResponder, type AeWire, type AeNodeIdentity,
 } from "../ae-channel.js";
 import type { AeStoreView, TierARecord, TierBRecord } from "../anti-entropy-engine.js";
+import { computeTableDigest } from "../set-reconciliation.js";
+import { tierBTableDigest } from "../ae-round.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC } from "../ae-table-encoders.js";
 import { encodeTierBVersion, SUSPENSION_VERSION_SPEC } from "../ae-mutable-version.js";
 import { mergeSuspension, type SuspensionRecord } from "../suspension-merge.js";
@@ -90,6 +93,9 @@ class MemStore implements AeStoreView {
   tierARecordHashes(): string[] {
     return [...this.revocations.values()].map((r) => encodeTierARecord(AGENT_REVOCATIONS_SPEC, r).hash);
   }
+  // Digest-first advertisement: the O(1)-per-table divergence check (design §3 step 1).
+  tierATableDigest(): string { return computeTableDigest(this.tierARecordHashes()); }
+  tierBTableDigest(): string { return tierBTableDigest(this.tierBVersions()); }
   tierBVersions(): Map<string, string> {
     const m = new Map<string, string>();
     for (const [k, s] of this.suspensions) {
@@ -311,5 +317,66 @@ describe("ae-channel: mutual handshake + rounds over the wire", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("timestamp_skew");
+  });
+  // ── DOD-AE-APPEND-1: "divergence detection is O(compare)" ────────────────────────────────────
+  it("a CONVERGED round sends only digests — no hash list, no version map crosses the wire", async () => {
+    // The AC, made observable. Both sides hold identical state, so the round must cost one digest
+    // per table and nothing more. Before the digest-first change the advertisement carried the full
+    // hash list every round, so this counted 1+ detail fetches and would fail.
+    const shared = new MemStore();
+    shared.revocations.set("agX", rev("agX"));
+    shared.suspensions.set("agZ", susp("agZ", 1, true));
+    const clone = new MemStore();
+    clone.revocations.set("agX", rev("agX"));
+    clone.suspensions.set("agZ", susp("agZ", 1, true));
+
+    const [wireA, wireB] = wirePair();
+    // Count what the DIALER asks for: detail requests are the O(table) cost the AC forbids here.
+    const asked: string[] = [];
+    const countingWire: AeWire = {
+      send(bytes) {
+        const t = (cborDecode(bytes) as { type?: string }).type;
+        if (t) asked.push(t);
+        wireA.send(bytes);
+      },
+      next: () => wireA.next(),
+      close: () => wireA.close(),
+    };
+    const responder = serveAeResponder({
+      wire: wireB, manifest, identity: B, actualRemotePeerId: A.peerId, store: shared,
+      nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
+    });
+    const result = await runAeDialer({
+      wire: countingWire, manifest, identity: A, remoteNodeId: B.nodeId, actualRemotePeerId: B.peerId,
+      store: clone, nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
+    });
+    await responder.catch(() => undefined);
+
+    expect(result.ok).toBe(true);
+    expect(asked).toContain("ae_state_req"); // the digest exchange DID happen
+    // …and nothing beyond it: no bucket walk, no hash list, no version map, no body pull.
+    for (const detail of ["ae_buckets_req", "ae_bucket_hashes_req", "ae_versions_req", "ae_pull_a", "ae_pull_b"]) {
+      expect(asked, `converged round must not send ${detail}`).not.toContain(detail);
+    }
+  });
+
+  it("a DIVERGENT table walks buckets — only the differing buckets' hashes are fetched", async () => {
+    // Divergence detection stays cheap even when it fires: the bucket vector localises the
+    // difference to a handful of the 256 buckets, and only those buckets' hashes cross the wire.
+    const peer = new MemStore();
+    const local = new MemStore();
+    for (let i = 0; i < 40; i++) {
+      const r = rev(`shared-${i}`);
+      peer.revocations.set(r.agent_id, r);
+      local.revocations.set(r.agent_id, r);
+    }
+    peer.revocations.set("only-on-peer", rev("only-on-peer")); // one divergence in one bucket
+
+    const { dialerResult, dialerStore } = await runBoth({ responderStore: peer, dialerStore: local });
+    expect(dialerResult.ok).toBe(true);
+    if (!dialerResult.ok) return;
+    // It pulled the one record it lacked — not the other 40.
+    expect(dialerResult.rounds[0].tierAPulled).toBe(1);
+    expect((dialerStore as MemStore).revocations.has("only-on-peer")).toBe(true);
   });
 });

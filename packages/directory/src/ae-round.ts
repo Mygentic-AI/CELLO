@@ -26,10 +26,17 @@ export interface LocalRoundState {
   tierB: ReadonlyMap<string, ReadonlyMap<string, string>>;
 }
 
-/** What a peer advertises per table: a table digest, plus the detail (sent when digests differ). */
+/**
+ * What a peer advertises per table: a table DIGEST, plus a LAZY fetcher for the detail.
+ *
+ * The laziness is the AC, not an optimization: "divergence detection is O(compare)" means a
+ * CONVERGED table must cost one digest — so the detail fetcher is only invoked for tables whose
+ * digests differ. An eager `recordHashes: string[]` here would force the full list across the wire
+ * before `planRound` ever got the chance to skip, making detection O(table) no matter what.
+ */
 export interface PeerRoundState {
-  tierA: ReadonlyMap<string, { digest: string; recordHashes: readonly string[] }>;
-  tierB: ReadonlyMap<string, { digest: string; versions: ReadonlyMap<string, string> }>;
+  tierA: ReadonlyMap<string, { digest: string; recordHashes: () => Promise<readonly string[]> }>;
+  tierB: ReadonlyMap<string, { digest: string; versions: () => Promise<ReadonlyMap<string, string>> }>;
 }
 
 export interface RoundPlan {
@@ -50,22 +57,23 @@ export function tierBTableDigest(versions: ReadonlyMap<string, string>): string 
 }
 
 /** Plan one anti-entropy round: what THIS node must pull from the peer, per table. */
-export function planRound(local: LocalRoundState, peer: PeerRoundState): RoundPlan {
+export async function planRound(local: LocalRoundState, peer: PeerRoundState): Promise<RoundPlan> {
   const plan: RoundPlan = { tierA: new Map(), tierB: new Map() };
 
   for (const [table, adv] of peer.tierA) {
     const localHashes = local.tierA.get(table) ?? [];
-    // Digest match → converged, skip (no drill-down). A table the local node doesn't track has a
-    // local digest over the empty set, which won't match a non-empty peer → falls through to pull.
+    // Digest match → converged, skip WITHOUT fetching the detail. A table the local node doesn't
+    // track has a local digest over the empty set, which won't match a non-empty peer → falls
+    // through to pull.
     if (adv.digest === computeTableDigest(localHashes)) continue;
-    const pull = missingLocally(localHashes, adv.recordHashes);
+    const pull = missingLocally(localHashes, await adv.recordHashes());
     if (pull.length > 0) plan.tierA.set(table, pull);
   }
 
   for (const [table, adv] of peer.tierB) {
     const localVersions = local.tierB.get(table) ?? new Map<string, string>();
     if (adv.digest === tierBTableDigest(localVersions)) continue;
-    const pull = versionKeysToPull(localVersions, adv.versions);
+    const pull = versionKeysToPull(localVersions, await adv.versions());
     if (pull.length > 0) plan.tierB.set(table, pull);
   }
 

@@ -30,6 +30,7 @@ import { Encoder, decode as cborDecode } from "cbor-x";
 import { buildAePeerAuthTbs, type AePeerAuthParams } from "@cello-protocol/crypto";
 import type { ConsortiumManifest } from "@cello-protocol/protocol-types";
 import { verifyPeerAuthFrame, type HandshakeFailReason } from "./ae-handshake.js";
+import { bucketDigests, bucketIndex, differingBuckets } from "./set-reconciliation.js";
 import {
   runAntiEntropyRound,
   type AeStoreView, type MaybePromise, type RoundResult, type TierARecord, type TierBRecord,
@@ -125,18 +126,22 @@ function bytesField(frame: Record<string, unknown>, field: string): Uint8Array {
 
 // ── Round frames: state advertisement over the wire ──────────────────────────────────────────
 
+/**
+ * The advertisement: ONE DIGEST per table, nothing else. This is the AC — "divergence detection is
+ * O(compare)" — so a converged round costs a handful of hashes on the wire regardless of how many
+ * records the tables hold. Detail is fetched only for tables whose digests differ, via the bucket
+ * walk (Tier-A) or a version-map request (Tier-B).
+ */
 interface WireState {
-  tierA: Record<string, string[]>;
-  tierB: Record<string, Record<string, string>>;
+  tierA: Record<string, string>; // table → table digest
+  tierB: Record<string, string>; // table → table digest
 }
 
 async function buildWireState(store: AeStoreView): Promise<WireState> {
-  const tierA: Record<string, string[]> = {};
-  for (const t of await store.tierATables()) tierA[t] = [...await store.tierARecordHashes(t)];
-  const tierB: Record<string, Record<string, string>> = {};
-  for (const t of await store.tierBTables()) {
-    tierB[t] = Object.fromEntries(await store.tierBVersions(t));
-  }
+  const tierA: Record<string, string> = {};
+  for (const t of await store.tierATables()) tierA[t] = await store.tierATableDigest(t);
+  const tierB: Record<string, string> = {};
+  for (const t of await store.tierBTables()) tierB[t] = await store.tierBTableDigest(t);
   return { tierA, tierB };
 }
 
@@ -147,48 +152,82 @@ async function buildWireState(store: AeStoreView): Promise<WireState> {
 class RemoteStoreView implements AeStoreView {
   #wire: AeWire;
   #timeoutMs: number;
+  #local: AeStoreView;
   #state: WireState = { tierA: {}, tierB: {} };
-  constructor(wire: AeWire, timeoutMs: number) { this.#wire = wire; this.#timeoutMs = timeoutMs; }
+  constructor(wire: AeWire, timeoutMs: number, local: AeStoreView) {
+    this.#wire = wire;
+    this.#timeoutMs = timeoutMs;
+    this.#local = local; // needed to compute OUR bucket vector for the walk
+  }
 
-  /** Fetch a fresh advertisement — call once per round, BEFORE handing this view to the engine.
-   *  The state SHAPE is validated here (wire input): table→string[] and table→{key:hash}, all
-   *  strings, all bounded — a malformed advertisement fails the round, never reaches the engine. */
+  /** Fetch a fresh advertisement — one digest per table. Shape-validated (wire input). */
   async refresh(): Promise<void> {
     this.#wire.send(encodeAeFrame({ type: "ae_state_req" }));
     const frame = await nextFrame(this.#wire, "ae_state", this.#timeoutMs);
     const raw = frame["state"];
     if (raw === null || typeof raw !== "object") throw new AeProtocolError("ae_state missing state");
-    const tierARaw = (raw as { tierA?: unknown }).tierA;
-    const tierBRaw = (raw as { tierB?: unknown }).tierB;
-    if (tierARaw === null || typeof tierARaw !== "object" || tierBRaw === null || typeof tierBRaw !== "object") {
-      throw new AeProtocolError("ae_state tiers missing or not maps");
-    }
-    const tierA: Record<string, string[]> = {};
-    for (const [table, hashes] of Object.entries(tierARaw as Record<string, unknown>)) {
-      if (!Array.isArray(hashes) || hashes.some((h) => typeof h !== "string")) {
-        throw new AeProtocolError(`ae_state tierA['${table}'] is not a string array`);
+    const digestMap = (tier: unknown, label: string): Record<string, string> => {
+      if (tier === null || typeof tier !== "object" || Array.isArray(tier)) {
+        throw new AeProtocolError(`ae_state ${label} is not a map`);
       }
-      tierA[table] = [...bounded(hashes as string[], `tierA['${table}'] hashes`)];
-    }
-    const tierB: Record<string, Record<string, string>> = {};
-    for (const [table, versions] of Object.entries(tierBRaw as Record<string, unknown>)) {
-      if (versions === null || typeof versions !== "object" || Array.isArray(versions)) {
-        throw new AeProtocolError(`ae_state tierB['${table}'] is not a map`);
-      }
-      const entries = Object.entries(versions as Record<string, unknown>);
-      bounded(entries, `tierB['${table}'] versions`);
+      const entries = Object.entries(tier as Record<string, unknown>);
+      bounded(entries, `ae_state ${label}`);
       if (entries.some(([, v]) => typeof v !== "string")) {
-        throw new AeProtocolError(`ae_state tierB['${table}'] has a non-string version`);
+        throw new AeProtocolError(`ae_state ${label} has a non-string digest`);
       }
-      tierB[table] = Object.fromEntries(entries) as Record<string, string>;
-    }
-    this.#state = { tierA, tierB };
+      return Object.fromEntries(entries) as Record<string, string>;
+    };
+    this.#state = {
+      tierA: digestMap((raw as { tierA?: unknown }).tierA, "tierA"),
+      tierB: digestMap((raw as { tierB?: unknown }).tierB, "tierB"),
+    };
   }
 
   tierATables(): string[] { return Object.keys(this.#state.tierA); }
   tierBTables(): string[] { return Object.keys(this.#state.tierB); }
-  tierARecordHashes(table: string): string[] { return this.#state.tierA[table] ?? []; }
-  tierBVersions(table: string): Map<string, string> { return new Map(Object.entries(this.#state.tierB[table] ?? {})); }
+  tierATableDigest(table: string): string { return this.#state.tierA[table] ?? ""; }
+  tierBTableDigest(table: string): string { return this.#state.tierB[table] ?? ""; }
+
+  /**
+   * Tier-A detail via the BUCKET WALK (design §3 steps 1-2), invoked only when digests differ:
+   * exchange 256 bucket digests, then request record hashes for ONLY the differing buckets. A
+   * bucket whose digest matches has byte-identical contents on both sides, so nothing in it could
+   * ever need pulling — skipping it is exact, not approximate.
+   */
+  async tierARecordHashes(table: string): Promise<readonly string[]> {
+    this.#wire.send(encodeAeFrame({ type: "ae_buckets_req", table }));
+    const bucketsFrame = await nextFrame(this.#wire, "ae_buckets", this.#timeoutMs);
+    const peerBuckets = bucketsFrame["digests"];
+    if (!Array.isArray(peerBuckets) || peerBuckets.some((d) => typeof d !== "string")) {
+      throw new AeProtocolError("ae_buckets digests is not a string array");
+    }
+    const mine = bucketDigests(await this.#local.tierARecordHashes(table));
+    const want = differingBuckets(mine, peerBuckets as string[]);
+    if (want.length === 0) return [];
+    this.#wire.send(encodeAeFrame({ type: "ae_bucket_hashes_req", table, buckets: want }));
+    const hashesFrame = await nextFrame(this.#wire, "ae_bucket_hashes", this.#timeoutMs);
+    const hashes = hashesFrame["hashes"];
+    if (!Array.isArray(hashes) || hashes.some((h) => typeof h !== "string")) {
+      throw new AeProtocolError("ae_bucket_hashes hashes is not a string array");
+    }
+    return bounded(hashes as string[], `ae_bucket_hashes[${table}]`);
+  }
+
+  /** Tier-B detail: the key→versionHash map for ONE table, requested only when digests differ. */
+  async tierBVersions(table: string): Promise<ReadonlyMap<string, string>> {
+    this.#wire.send(encodeAeFrame({ type: "ae_versions_req", table }));
+    const frame = await nextFrame(this.#wire, "ae_versions", this.#timeoutMs);
+    const versions = frame["versions"];
+    if (versions === null || typeof versions !== "object" || Array.isArray(versions)) {
+      throw new AeProtocolError(`ae_versions['${table}'] is not a map`);
+    }
+    const entries = Object.entries(versions as Record<string, unknown>);
+    bounded(entries, `ae_versions[${table}]`);
+    if (entries.some(([, v]) => typeof v !== "string")) {
+      throw new AeProtocolError(`ae_versions['${table}'] has a non-string version`);
+    }
+    return new Map(entries as Array<[string, string]>);
+  }
 
   // Served records are WIRE INPUT from an authenticated-but-not-therefore-honest peer: keep only
   // records we actually REQUESTED (pull discipline enforced locally, not assumed of the peer).
@@ -307,7 +346,7 @@ export async function runAeDialer(input: AeDialerInput): Promise<AeDialerResult>
     wire.send(encodeAeFrame({ type: "ae_auth_a", sig: sigA }));
 
     // 4. rounds: fresh advertisement each time, then the proven engine.
-    const remote = new RemoteStoreView(wire, timeoutMs);
+    const remote = new RemoteStoreView(wire, timeoutMs, store);
     const rounds: RoundResult[] = [];
     for (let i = 0; i < roundCount; i++) {
       await remote.refresh();
@@ -425,6 +464,36 @@ export async function serveAeResponder(input: AeResponderInput): Promise<void> {
       switch (frame["type"]) {
         case "ae_state_req": {
           wire.send(encodeAeFrame({ type: "ae_state", state: await buildWireState(store) }));
+          break;
+        }
+        case "ae_buckets_req": {
+          const table = str(frame, "table");
+          wire.send(encodeAeFrame({
+            type: "ae_buckets",
+            digests: bucketDigests(await store.tierARecordHashes(table)),
+          }));
+          break;
+        }
+        case "ae_bucket_hashes_req": {
+          const table = str(frame, "table");
+          const wanted = frame["buckets"];
+          if (!Array.isArray(wanted) || wanted.some((b) => typeof b !== "number")) {
+            throw new AeProtocolError("ae_bucket_hashes_req buckets is not a number array");
+          }
+          const want = new Set(bounded(wanted as number[], "ae_bucket_hashes_req buckets"));
+          const all = await store.tierARecordHashes(table);
+          wire.send(encodeAeFrame({
+            type: "ae_bucket_hashes",
+            hashes: all.filter((h) => want.has(bucketIndex(h))),
+          }));
+          break;
+        }
+        case "ae_versions_req": {
+          const table = str(frame, "table");
+          wire.send(encodeAeFrame({
+            type: "ae_versions",
+            versions: Object.fromEntries(await store.tierBVersions(table)),
+          }));
           break;
         }
         case "ae_pull_a": {

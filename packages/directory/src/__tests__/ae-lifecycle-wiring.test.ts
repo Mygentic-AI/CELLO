@@ -18,6 +18,8 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import { CelloDirectoryNode } from "../directory-node.js";
 import { AE_PROTOCOL_ID } from "../ae-channel.js";
 import type { AeStoreView, TierARecord, TierBRecord } from "../anti-entropy-engine.js";
+import { computeTableDigest } from "../set-reconciliation.js";
+import { tierBTableDigest } from "../ae-round.js";
 
 const LIVE_PEER_ID = "12D3KooWLiveTransportIdentity";
 
@@ -26,6 +28,8 @@ const emptyStore: AeStoreView = {
   tierATables: () => [],
   tierBTables: () => [],
   tierARecordHashes: () => [],
+  tierATableDigest: () => computeTableDigest([]),
+  tierBTableDigest: () => tierBTableDigest(new Map()),
   tierBVersions: () => new Map(),
   serveTierA: (): TierARecord[] => [],
   serveTierB: (): TierBRecord[] => [],

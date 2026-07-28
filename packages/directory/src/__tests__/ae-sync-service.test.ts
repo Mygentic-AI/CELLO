@@ -21,6 +21,8 @@ import type { Logger } from "@cello-protocol/interfaces";
 import { AeSyncService, manifestEntryMultiaddr, type AeTransport } from "../ae-sync-service.js";
 import { AE_PROTOCOL_ID, type AeNodeIdentity } from "../ae-channel.js";
 import type { AeStoreView, TierARecord, TierBRecord } from "../anti-entropy-engine.js";
+import { computeTableDigest } from "../set-reconciliation.js";
+import { tierBTableDigest } from "../ae-round.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC } from "../ae-table-encoders.js";
 
 // ── In-memory lp-capable Stream pair (send() feeds the peer's async iterator) ────────────────
@@ -79,6 +81,9 @@ class MemStore implements AeStoreView {
   tierARecordHashes(): string[] {
     return [...this.revocations.values()].map((r) => encodeTierARecord(AGENT_REVOCATIONS_SPEC, r).hash);
   }
+  // Digest-first advertisement: the O(1)-per-table divergence check (design §3 step 1).
+  tierATableDigest(): string { return computeTableDigest(this.tierARecordHashes()); }
+  tierBTableDigest(): string { return tierBTableDigest(this.tierBVersions()); }
   tierBVersions(): Map<string, string> { return new Map(); }
   serveTierA(_t: string, hashes: readonly string[]): TierARecord[] {
     const want = new Set(hashes);
