@@ -238,9 +238,10 @@ the additions M10B is accountable for.
     `D-12r`, `D-12r2`, `D-12r3` → **`D-12r4`**; `D-14`, `D-14r` → **`D-14r2`**; `D-19` → **`D-25r2`**;
     `D-26r` → **`D-26r2`**.
     **The four items still open before this line can go ✅** (third review, Entry 14):
-    1. **F3** — re-run the corrected `D-12r4` expression **inside V46's real `CASE`**, with the
-       supersession ordering, and re-measure. The previous table was measured on a different expression
-       than the DoD prescribed, and the prescribed one was a **no-op**.
+    1. ~~**F3**~~ — **CLOSED (Entry 15).** `D-12r4` re-measured **inside V46's real `CASE`**: nine
+       shapes, eleven rows, **exactly one changes and it is the F6 defect**. The revoke-before-
+       supersession ordering is proven by the revoked-and-superseded case, which the fragment fixture
+       could not reach — V46's supersession branch is a correlated `EXISTS`, not an aggregate.
     2. **F1** — `submission_results` PK gains its node component (`D-25r2`), or a natural-key duplicate
        through the designed failover path wedges **all** federation.
     3. **F4** — wire `linkAgentToAccount()` to a portal route, or `operator_linkage_unresolved` is a
