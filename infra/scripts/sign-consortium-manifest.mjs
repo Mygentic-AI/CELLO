@@ -13,12 +13,19 @@
  *   - Officer signing seed:  Secrets Manager  cello/{env}/consortium/officer-key-0  (32-byte hex)
  *   - Per-region node pubkey: SSM  /cello/{env}/directory/manifest-signer-pubkey   (per region)
  *   - Per-region hostname:    SSM  /cello/{env}/directory/hostname                 (per region)
+ *   - Per-region PeerId:      SSM  /cello/{env}/directory/peer-id                  (per region)
+ *
+ * M12 §1a: every node entry carries `role` ("validator" — replicas are added by hand when one
+ * exists) and `peerId` (promoted from unsigned SSM into the SIGNED manifest, so the officer
+ * signature covers the dial identity end-to-end; the AE handshake channel-binds against it).
  *
  * Emits (stdout): the signed manifest JSON, the officer PUBLIC key, and a ready-to-paste TS block
  * for bundled-consortium-manifest.ts. Verifies its own signature before printing.
  *
- * Usage:  node infra/scripts/sign-consortium-manifest.mjs <env> [region,region,...]
- *         (default regions: us-east-1,eu-central-1,ap-northeast-1)
+ * Usage:  node infra/scripts/sign-consortium-manifest.mjs <env> [region,region,...] [version]
+ *         (default regions: us-east-1,eu-central-1,ap-northeast-1; default version 2 — the
+ *          role+peerId schema. Always bump past the currently-deployed version: both the client
+ *          and the directory refuse rollbacks.)
  *
  * Crypto reference: RFC 8032 (Ed25519). Canonical body: all fields except `signatures`, object keys
  * sorted lexicographically at every level, no whitespace, UTF-8 — matches verifyManifest.
@@ -37,6 +44,11 @@ const { ed25519 } = await import(require.resolve("@noble/curves/ed25519.js"));
 
 const env = process.argv[2] || "dev";
 const regions = (process.argv[3] || "us-east-1,eu-central-1,ap-northeast-1").split(",").map((r) => r.trim());
+const version = Number.parseInt(process.argv[4] || "2", 10);
+if (!Number.isInteger(version) || version < 1) {
+  console.error(`invalid manifest version '${process.argv[4]}'`);
+  process.exit(1);
+}
 
 function aws(args) {
   return execFileSync("aws", args, { encoding: "utf8" }).trim();
@@ -80,11 +92,26 @@ const officerPub = Buffer.from(ed25519.getPublicKey(officerSeed)).toString("hex"
 const nodes = regions.map((region) => {
   const pubkey = ssm("/cello/" + env + "/directory/manifest-signer-pubkey", region);
   const hostname = ssm("/cello/" + env + "/directory/hostname", region);
-  return { nodeId: region, pubkey, region, provider: "aws", endpoint: `http://${hostname || subdomain(region) + ".cello.mygentic.ai"}` };
+  // M12 §1a: the signed manifest pins the dial identity. A missing/garbage peer-id param must fail
+  // the signing run, not emit a manifest the AE handshake can never channel-bind against.
+  const peerId = ssm("/cello/" + env + "/directory/peer-id", region);
+  if (!/^12D3Koo[1-9A-HJ-NP-Za-km-z]{20,}$/.test(peerId)) {
+    console.error(`peer-id for ${region} ('${peerId}') is not a libp2p Ed25519 PeerId — refusing to sign`);
+    process.exit(1);
+  }
+  return {
+    nodeId: region,
+    pubkey,
+    region,
+    provider: "aws",
+    endpoint: `http://${hostname || subdomain(region) + ".cello.mygentic.ai"}`,
+    role: "validator",
+    peerId,
+  };
 });
 
 const manifest = {
-  version: 1,
+  version,
   not_before: "2026-01-01T00:00:00Z",
   expires: "2030-01-01T00:00:00Z",
   nodes,
