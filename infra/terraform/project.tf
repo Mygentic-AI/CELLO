@@ -12,6 +12,11 @@ locals {
     "cloudbuild.googleapis.com",
     "sqladmin.googleapis.com",
     "secretmanager.googleapis.com",
+    # Envelope keys for share material at rest (DOD-ADAPTER-GCP-1 → KmsEnvelopeKeyProvider).
+    "cloudkms.googleapis.com",
+    # `gcloud compute ssh --tunnel-through-iap` — the only SSH path to a node; port 22 is never
+    # open to the internet.
+    "iap.googleapis.com",
     "storage.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",

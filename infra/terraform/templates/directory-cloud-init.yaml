@@ -1,0 +1,118 @@
+#cloud-config
+# CELLO directory node on Container-Optimized OS (DOD-NODE-DIR-GCP-1).
+#
+# NO SECRETS APPEAR IN THIS FILE. It lands in instance metadata, which is readable by anything
+# holding compute.instances.get. What appears here is the secret RESOURCE NAMES; the node resolves
+# them itself at boot with its attached workload identity (gcp-boot-env.ts).
+#
+# Two units:
+#   cello-directory.service  the node. Restarts on failure; the MIG heals it if it stops answering.
+#   cello-backup.timer       daily pg_dump to GCS. The node's key shares exist in its database and
+#                            nowhere else, so this is the only copy off the VM.
+
+write_files:
+  - path: /etc/cello/directory.env
+    permissions: "0644"
+    owner: root
+    content: |
+      CELLO_ENV=${environment}
+      CELLO_CLOUD=gcp
+      NODE_ID=${node_id}
+      CELLO_REGION=${region}
+      HEALTH_PORT=9090
+      CELLO_DIRECTORY_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4000
+      CELLO_DIRECTORY_WS_LISTEN_ADDR=/ip4/0.0.0.0/tcp/8080/ws
+      CELLO_DIRECTORY_HOSTNAME=${hostname}
+      CELLO_AUDIT_BUCKET=${audit_bucket}
+      RELAY_MANIFEST_BUCKET=${relay_bucket}
+      RELAY_MANIFEST_POLL_INTERVAL_MS=120000
+      DIRECTORY_PG_POOL_MAX=50
+      CELLO_KMS_PROJECT=${project_id}
+      CELLO_KMS_LOCATION=${kms_location}
+      CELLO_KMS_KEYRING=${kms_keyring}
+      CELLO_KMS_KEY=${kms_key}
+      CELLO_GSM_DB_CREDENTIALS=${gsm_db}
+      CELLO_GSM_NODE_KEY=${gsm_node_key}
+      CELLO_GSM_TRANSPORT_KEY=${gsm_transport}
+      CELLO_GSM_INTERNAL_API_KEY=${gsm_internal}
+      CELLO_GSM_PREAUTH_ISSUER_KEY=${gsm_preauth}
+      HOME=/tmp
+
+  - path: /etc/cello/backup.env
+    permissions: "0644"
+    owner: root
+    content: |
+      CELLO_CLOUD=gcp
+      NODE_ID=${node_id}
+      CELLO_BACKUP_BUCKET=${backup_bucket}
+      CELLO_BACKUP_DBNAME=${backup_dbname}
+      CELLO_GSM_DB_CREDENTIALS=${gsm_db}
+      HOME=/tmp
+
+  - path: /etc/systemd/system/cello-directory.service
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=CELLO directory node
+      Wants=gcr-online.target
+      After=gcr-online.target
+
+      [Service]
+      Environment=HOME=/home/cello
+      # Artifact Registry auth comes from the VM's attached service account.
+      ExecStartPre=/usr/bin/docker-credential-gcr configure-docker --registries=${registry_host}
+      ExecStartPre=-/usr/bin/docker rm -f cello-directory
+      ExecStartPre=/usr/bin/docker pull ${image}
+      ExecStart=/usr/bin/docker run --rm --name cello-directory \
+        --network host \
+        --env-file /etc/cello/directory.env \
+        ${image}
+      ExecStop=/usr/bin/docker stop cello-directory
+      Restart=always
+      # A crash loop that restarts instantly buries its own cause in log noise; 10s keeps the
+      # serial console readable while still recovering unattended.
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/cello-backup.service
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=CELLO directory pg_dump to GCS
+      Wants=gcr-online.target
+      After=gcr-online.target
+
+      [Service]
+      Type=oneshot
+      Environment=HOME=/home/cello
+      ExecStartPre=/usr/bin/docker-credential-gcr configure-docker --registries=${registry_host}
+      ExecStart=/usr/bin/docker run --rm --name cello-backup \
+        --network host \
+        --env-file /etc/cello/backup.env \
+        --entrypoint /app/packages/directory/scripts/pg-backup-to-gcs.sh \
+        ${image}
+
+  - path: /etc/systemd/system/cello-backup.timer
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=Daily CELLO directory backup
+
+      [Timer]
+      OnCalendar=*-*-* 04:17:00 UTC
+      # A missed window (instance replaced overnight) must still produce a backup, or the gap is
+      # invisible until it is needed.
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+
+runcmd:
+  - systemctl daemon-reload
+  - systemctl enable --now cello-directory.service
+  - systemctl enable --now cello-backup.timer
