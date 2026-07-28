@@ -93,4 +93,21 @@ describe("DOD-AE-APPEND-1: set reconciliation", () => {
     const y = h(0x40, "22");
     expect(computeTableDigest([x, y])).toBe(computeTableDigest([y, x]));
   });
+
+  it("a duplicate hash does NOT change the digest — set semantics enforced (HIGH-1)", () => {
+    // Without dedup, [h,h] would inflate one bucket and cause permanent non-convergence vs [h].
+    const one = computeTableDigest([h(1, "aa")]);
+    const dup = computeTableDigest([h(1, "aa"), h(1, "aa"), h(1, "aa")]);
+    expect(dup).toBe(one);
+    // And within bucketDigests directly:
+    expect(bucketDigests([h(5), h(5)])).toEqual(bucketDigests([h(5)]));
+  });
+
+  it("rejects a malformed record hash with a cause-naming error (HIGH-2/MEDIUM-3)", () => {
+    expect(() => computeTableDigest([""])).toThrow(/malformed record hash/);
+    expect(() => computeTableDigest(["abcd"])).toThrow(/malformed record hash/); // too short
+    expect(() => bucketDigests([h(1) + "extra"])).toThrow(/malformed record hash/); // too long
+    expect(() => bucketDigests(["z".repeat(64)])).toThrow(/malformed record hash/); // non-hex
+    expect(() => bucketDigests([h(0xab, "cd").toUpperCase()])).toThrow(/malformed record hash/); // upper-case hex rejected
+  });
 });
