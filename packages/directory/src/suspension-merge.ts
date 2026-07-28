@@ -68,6 +68,13 @@ export function mergeSuspension(a: SuspensionRecord, b: SuspensionRecord): Suspe
 
   // Rule 3: equal seq. paused = suspended-wins; other non-flag fields from the greater tiebreak
   // hash (wholesale, so the row is internally consistent); keep the tie seq.
+  //
+  // COMMUTATIVITY INVARIANT — do not break: the set of fields copied below MUST be exactly the set
+  // hashed by tiebreakHash (agent_id, reason, authorized_by_account, origin_node, suspension_seq).
+  // That equality is what makes `>=` safe: when the two hashes are equal, every copied field is
+  // provably equal on both records, so merge(a,b) and merge(b,a) pick different objects but emit
+  // identical bytes. Adding a copied field that isn't hashed (or vice versa) silently breaks
+  // convergence on the kill-switch table. paused/burned are excluded here — resolved separately by OR.
   const paused = a.paused || b.paused;
   const winner = tiebreakHash(a) >= tiebreakHash(b) ? a : b;
   return {

@@ -67,12 +67,34 @@ describe("DOD-AE-MUTABLE-1: mergeSuspension", () => {
     expect(mergeSuspension(a, a)).toEqual(a);
   });
 
-  it("wall-clock is NOT a merge input — a stale clear with LOWER seq cannot un-pause", () => {
+  it("a stale LOWER-seq clear cannot un-pause (wall-clock is excluded at the type level)", () => {
+    // updated_at is absent from SuspensionRecord, so wall-clock can't be a merge input by
+    // construction — the real guarantee. This pins the seq-ordering half: a seq-older clear loses.
     const paused = rec({ paused: true, suspension_seq: 5 });
-    // A clear that is wall-clock 'newer' but seq-older must NOT win (skew cannot un-pause):
     const staleClear = rec({ paused: false, suspension_seq: 4 });
     expect(mergeSuspension(paused, staleClear).paused).toBe(true);
     expect(mergeSuspension(staleClear, paused).paused).toBe(true);
+  });
+
+  it("paused ORs over ONLY the records at the max seq, in any fold order (LOW-3)", () => {
+    // Two records tied at the global max seq (5) with conflicting paused, plus a lower-seq clear.
+    // Correct result: paused=true (suspended-wins among the max-seq pair); a naive
+    // 'paused=winner.paused' would fail depending on fold order.
+    const pMax = rec({ paused: true, suspension_seq: 5, reason: "pause", origin_node: "n-a" });
+    const cMax = rec({ paused: false, suspension_seq: 5, reason: "clear", origin_node: "n-b" });
+    const cLow = rec({ paused: false, suspension_seq: 3 });
+    const folds = [
+      mergeSuspension(mergeSuspension(pMax, cMax), cLow),
+      mergeSuspension(mergeSuspension(cMax, cLow), pMax),
+      mergeSuspension(mergeSuspension(cLow, pMax), cMax),
+      mergeSuspension(pMax, mergeSuspension(cMax, cLow)),
+      mergeSuspension(cLow, mergeSuspension(pMax, cMax)),
+    ];
+    for (const f of folds) {
+      expect(f).toEqual(folds[0]); // one fixpoint regardless of order
+      expect(f.paused).toBe(true); // suspended-wins among the max-seq records
+      expect(f.suspension_seq).toBe(5);
+    }
   });
 
   it("converges under any arrival order of three writes (order-independent)", () => {
