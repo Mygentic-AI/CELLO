@@ -19,8 +19,8 @@ description: >
 # M10B — Definition of Done
 
 ## How to use this
-- **[[M10-PROCEDURE]] applies verbatim** — read order, severity triage, the design-note template (§6),
-  batching rules, the reality check. M10B adds no new operating rules; only the deltas in this document.
+- **Read [[M10B-PROCEDURE]] FIRST** — it is self-contained (read order, severity triage, reviewer
+  dispatch lenses, publish/deploy sequencing, the design-note template, the watchdog crons).
 - This is the **target**. Find the lowest-numbered line not ✅; that's the next unit.
 - **Evidence discipline:** a flipped tag carries ONE line of evidence plus `→ Journal Entry N`. Full
   proofs and forensics live in [[M10B-BUILD-JOURNAL]]. This document stays a scoreboard.
@@ -379,7 +379,7 @@ the discussion-of-record. Restated here because this is the milestone that imple
 
 - [[M10-DEFINITION-OF-DONE]] — v1: the generic pipe this milestone extends; its post-v1 section is where
   endorsement intake, the REVOKE-1 F6 fix, and recipient re-scan were parked.
-- [[M10-PROCEDURE]] — the operating runbook, which applies to M10B verbatim.
+- [[M10B-PROCEDURE]] — the operating runbook; self-contained, read first.
 - [[M10-TYPE-PLAYBOOK]] — the one-shot contract; `DOD-END-PLAYBOOK-1` is a run of it.
 - [[M10-TRUST-SIGNAL-STORAGE-AND-CREATION]] — spec-of-record (HOW): §6 the three issuer flows + the
   2026-07-11 all-through-the-portal amendment, §7 Endorsement Mother, §11 endorsements + PSI, §14.1/§14.2
