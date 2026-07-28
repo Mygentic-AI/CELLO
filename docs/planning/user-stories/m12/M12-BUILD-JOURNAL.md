@@ -142,3 +142,21 @@ Post-fix: apply clean, `terraform plan` No changes. IAM-1 → ✅.
 - `.gcloudignore` added (keeps `gcloud builds submit` uploads to Dockerfile-relevant sources).
 
 **Next:** DOD-IAC-BASE-1 (disposable MIG proof) while OAuth waits.
+
+---
+
+## Entry 4 — 2026-07-28 — DOD-IAC-BASE-1 enforcer green; relay image done
+
+- **Relay image built by Cloud Build:** `relay:manual-50e06e3d` SUCCESS → Artifact Registry.
+  Both node images now exist on GCP, built without a single local docker command.
+- **Disposable probe (probe.tf, gated by `disposable_probe` var, default false):**
+  - `apply -var disposable_probe=true` → 5 added: `cello-probe-r4c7` **RUNNING** in us-east1-b,
+    static IP 34.26.220.192, COS-stable, e2-small, directory-node SA attached, IAP-only SSH
+    firewall + the permanent `cello-us-east1` subnet (10.10.0.0/24).
+  - `apply` (default false) → 4 destroyed; zero instances, zero addresses; plan **No changes**.
+  - Known-and-recorded: the probe pins the static IP in the instance template — fine at size 1,
+    deadlocks on rolling replace; the real node units use a stateful-IP MIG policy instead
+    (stated in probe.tf's header so nobody copies the probe pattern).
+- Unit review dispatched; findings land in Entry 5.
+
+**Next:** fix review findings; triggers unit blocked on Andre's GitHub OAuth.

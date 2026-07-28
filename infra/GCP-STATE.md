@@ -45,11 +45,11 @@ tier boundary.
 |---|---|---|---|
 | Project `cello-infra` | number 955736313934 | 2026-07-28 | gcloud (bootstrap layer — managed as data source in TF) |
 | Enabled APIs | 11 (list in `terraform/project.tf`) | 2026-07-28 | Terraform (`google_project_service`) |
-| VPC `cello-vpc` | custom-mode, **no subnets yet** (per-region with node IaC). Default network + its 4 firewall rules DELETED. | 2026-07-28 | Terraform (imported) |
+| VPC `cello-vpc` | custom-mode. Default network + its 4 firewall rules DELETED. Subnets: `cello-us-east1` 10.10.0.0/24 | 2026-07-28 | Terraform (imported) |
 | Bucket `cello-infra-tfstate` | us-east1, versioned, UBLA | 2026-07-28 | gcloud bootstrap, imported into TF |
 | Service accounts | `cello-directory-node`, `cello-relay-node`, `cello-ops-agent`, `cello-portal`, `cello-cloud-build` — minimal grants per `terraform/iam.tf`. **Secret access is per-secret only, never project-level** (unit-review finding); CI reads only the staging bucket, never tfstate | 2026-07-28 | Terraform |
 | Cloud Build P4SA grants | `cloudbuild.serviceAgent` + `secretmanager.admin` (org policy strips ALL automatic service-agent grants — both had to be granted explicitly for the GitHub connection) | 2026-07-28 | Terraform |
-| Artifact Registry `cello` | `us-east1-docker.pkg.dev/cello-infra/cello` — docker; images pushed by Cloud Build ONLY. Contains `directory:manual-dedc55ac` (+latest); relay image building | 2026-07-28 | Terraform |
+| Artifact Registry `cello` | `us-east1-docker.pkg.dev/cello-infra/cello` — docker; images pushed by Cloud Build ONLY. Contains `directory:manual-dedc55ac` and `relay:manual-50e06e3d` (+latest tags) — both built by Cloud Build | 2026-07-28 | Terraform |
 | Bucket `cello-infra_cloudbuild` | Cloud Build staging (auto-created by first submit) | 2026-07-28 | service-created |
 | Cloud Build connection `cello-github` | us-east1, **PENDING_USER_OAUTH — Andre must complete the GitHub authorization link** before path-filtered triggers can be created | 2026-07-28 | gcloud (import to TF with the trigger unit) |
 

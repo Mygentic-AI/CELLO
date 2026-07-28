@@ -95,7 +95,9 @@ description: >
   that → Entry 3
 - **DOD-IAC-BASE-1** [trustless-cello] — the IaC skeleton (tool per M12-D2) stands up and tears
   down one disposable COS VM in a MIG(size 1) with a static IP, firewall rule, and attached
-  service account, entirely from code. IaC enforcer green on this skeleton. — ❌
+  service account, entirely from code. IaC enforcer green on this skeleton. — 🟡 enforcer green
+  both directions (`disposable_probe=true` → RUNNING w/ static IP 34.26.220.192; default →
+  4 destroyed, zero instances, plan clean). Owed: unit review → Entry 4
 
 ## Tier P1 — Protocol code (local-provable, no cloud dependency)
 
