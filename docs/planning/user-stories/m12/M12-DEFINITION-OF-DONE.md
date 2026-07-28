@@ -143,10 +143,12 @@ description: >
   byte-for-byte, reviewer-confirmed); https round-trip covered both sides (client
   `mapEndpointToBootstrapBase` accepts https, existing test; directory returns wss). Reviewed,
   F1 empty-env trap fixed. Branch `m12/multiaddr` afe12032 → Entry 12
-- **DOD-ADAPTER-GCP-1** [trustless-cello] — Secret Manager and GCS adapters implemented behind
-  the existing interfaces (`packages/interfaces/`), selected by `CELLO_ENV`/config at the
-  composition root, with local stubs; the empty-node-registry boot test answers whether a
-  Parameter Manager adapter is needed at all (record the answer as a Decision). — ❌
+- **DOD-ADAPTER-GCP-1** [trustless-cello] — GCP adapters behind the existing interfaces
+  (`packages/interfaces/`), selected by `CELLO_ENV`/config at the composition root, lazy-imported
+  (M12-D5), with local stubs. Set per M12-D6: **GCS cloud-storage + GCS audit-log + Cloud KMS
+  envelope key** (Parameter Manager dropped — the directory boots from the manifest + relay
+  self-registration; empty-registry is non-fatal). — 🟠 M12-D6 decision recorded from code
+  evidence; adapters pending → Entry 13
 
 ## Tier P2 — Wave 1: complete CELLO on GCP, standalone
 
@@ -232,6 +234,20 @@ description: >
   story branches rebased from main regularly — parallel AI coders keep working on main; Cloud
   Build builds test images FROM the story branch; merge to main only when units close. The AWS
   system never runs M12 code until Wave 2.
+- **M12-D5** (2026-07-28): GCP SDK deps (`@google-cloud/storage`, Cloud KMS) go in the
+  **directory package (server-side, runs on the node VM)**, lazy-`import`ed exactly like the
+  AWS SDK (`bin/directory.ts` uses `await import("../adapters/s3-...")` so local mode never
+  loads it). They are NOT shipped to operators (that's the cello-client/cello-mcp concern), so
+  the CLAUDE.md install-size rule does not apply.
+- **M12-D6** (2026-07-28): **The Parameter Manager adapter is NOT needed for M12** — resolving
+  DOD-ADAPTER-GCP-1's open question. Evidence in `bin/directory.ts`: the SSM node registry
+  (`parseNodeRegistryEntries`) emits `node.registry.empty` as a NON-FATAL error and returns an
+  empty set; the relay pool is seeded from the CloudStorageProvider manifest (→ GCS adapter),
+  not the registry, and relays self-register at runtime via libp2p `relay_register`. So a GCP
+  directory boots and functions from the GCS-backed manifest + live self-registration with no
+  Parameter-Store equivalent. Confirm with a live empty-registry boot in P2 (DOD-NODE-DIR-GCP-1);
+  until then the adapter set is **GCS cloud-storage + GCS audit-log + Cloud KMS envelope key**
+  (three, not four).
 - Decisions 1–11 of the spec-of-record are restated there, not here — this section holds only
   decisions made DURING the milestone.
 
