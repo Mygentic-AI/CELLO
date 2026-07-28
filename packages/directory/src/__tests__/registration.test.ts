@@ -698,4 +698,58 @@ describe("REG-001: Directory registration", () => {
     const frame = await reader.readFrameWithTimeout(5000);
     expect(frame["type"]).toBe("not_authenticated");
   });
+  // ─── M12-D8: the DKG quorum derives from the VERIFIED manifest, never the served one ───────
+  it("M12-D8: DKG quorum derives from getVerifiedManifest(), not the served manifest", async () => {
+    // The two roles must not be interchangeable HERE of all places: the quorum decides which nodes
+    // hold shares and what T is, so deriving it from the unverified transport copy would let a
+    // tampered file on disk steer a ceremony. A two-faced store makes the routing observable —
+    // SERVE advertises 3 nodes, USE only this one. Routed correctly, registration takes the
+    // single-node path and reaches dkg_ready. Routed to the served copy, the directory would look
+    // for a 3-node quorum, find one reachable directory, and refuse with dkg_failed.
+    const dirKey = generateKeypair();
+    const node = (nodeId: string) => ({
+      nodeId, pubkey: "aa".repeat(32), region: "r", provider: "aws" as const,
+      endpoint: `https://${nodeId}.example`, role: "validator" as const, peerId: `12D3KooW${nodeId}`,
+    });
+    const window = { version: 1, not_before: "2026-01-01T00:00:00Z", expires: "2030-01-01T00:00:00Z", signatures: [] };
+    const servedThreeNode = { ...window, nodes: [node("a"), node("b"), node("c")] };
+    const verifiedSingleNode = { ...window, nodes: [node("a")] };
+    const calls: string[] = [];
+    const twoFaced = {
+      getCurrentManifest: () => { calls.push("serve"); return servedThreeNode; },
+      getVerifiedManifest: () => { calls.push("use"); return verifiedSingleNode; },
+    } as unknown as import("@cello-protocol/interfaces").DirectoryManifestStore;
+
+    const { node: dirNode, stop: stopDir } = await createDirectoryNode({
+      keyProvider: dirKey,
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "12D3KooWFakeRelay", multiaddrs: ["/ip4/127.0.0.1/tcp/19999"] },
+      directoryManifestStore: twoFaced,
+    });
+    scope.addCleanup(stopDir);
+
+    const clientKey = generateKeypair();
+    const clientNode = await createNode({ keyProvider: clientKey, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await clientNode.start();
+    scope.addCleanup(() => clientNode.stop());
+    await clientNode.dial(dirNode.listenAddresses()[0]!);
+    const { stream, reader } = await doAuth(clientNode, dirNode.getPeerId(), clientKey);
+
+    const mlDsaProvider = await mlDsaKeygen();
+    const clientPubkeyHex = Buffer.from(await clientKey.getPublicKey()).toString("hex");
+    sendFrame(stream, CBOR_ENC.encode({
+      type: "register_request",
+      phone_stub: "m12d8-routing",
+      k_local_pubkey: clientPubkeyHex,
+      ml_dsa_pubkey: Buffer.from(await mlDsaProvider.getPublicKey()).toString("hex"),
+    }));
+    const frame = await reader.readFrameWithTimeout(10_000);
+
+    // The behavioral proof: single-node quorum ⇒ the ceremony starts. A mis-route to the 3-node
+    // served copy would have refused here with register_error/dkg_failed.
+    expect(frame["type"], `expected dkg_ready, got ${JSON.stringify(frame)}`).toBe("dkg_ready");
+    // And the routing itself: the register path consulted the VERIFIED getter, never the served one.
+    expect(calls).toContain("use");
+    expect(calls).not.toContain("serve");
+  });
 });

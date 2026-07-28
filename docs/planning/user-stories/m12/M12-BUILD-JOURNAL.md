@@ -542,7 +542,14 @@ THRESHOLD DOWNGRADE, which is strictly worse than a loud crash loop. An officer 
 boot is a half-finished rotation and should be loud. Recorded in the store's class doc so the file no
 longer contradicts itself.
 
-**Still owed on this line:** a test that pins the DKG-quorum→verified-manifest routing (the
-reviewer's strongest remaining point: revert that one line and the suite stays green, because
-`TestDirectoryManifestStore` returns the same manifest from both getters by design — it needs a
-two-faced double). Also owed: `stopAeSync()`-in-shutdown and the interval validation have no tests.
+**DKG-quorum routing now pinned (the reviewer's strongest remaining point, closed).**
+`registration.test.ts` → "M12-D8: DKG quorum derives from getVerifiedManifest()" drives a real
+register_request against a TWO-FACED store: SERVE advertises 3 nodes, USE advertises only this one.
+Routed correctly the ceremony reaches `dkg_ready` on the single-node path; mis-routed it would hunt
+a 3-node quorum, find one reachable directory and refuse with `dkg_failed`. So the assertion is
+BEHAVIORAL, not just a call-spy (it also asserts the served getter was never consulted).
+**Revert-verified:** flipping that one line to `getCurrentManifest()` makes it fail, then restored.
+
+**Still owed (smaller):** `stopAeSync()`-in-shutdown and the `CELLO_AE_INTERVAL_MS` bounds have no
+tests of their own — both are boot/shutdown wiring whose failure mode is loud, so they rank below
+the remaining P1/P2 DoD lines.
