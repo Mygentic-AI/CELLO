@@ -6,6 +6,11 @@
  * manifest that is unsigned, under-signed, tampered, duplicated, or rolled back. Real Ed25519
  * signatures over the REAL canonicalManifestBody (RFC 8032) — no mocked crypto.
  *
+ * M12-D8 — the store has TWO roles and the tests cover both:
+ *   getVerifiedManifest() (USE) enforces everything below; getCurrentManifest() (SERVE) is a dumb
+ *   transport so clients keep proving they verify independently and officer rotation is not
+ *   blocked by this node's anchor.
+ *
  * Contract under test (verify mode):
  *  - construction: a valid threshold-signed manifest loads; tampered / under-threshold / duplicate
  *    nodeId/pubkey/peerId all throw LOUDLY (startup misconfiguration).
@@ -73,7 +78,7 @@ describe("M12 §1b: FileDirectoryManifestStore verify-at-load", () => {
   it("loads a valid threshold-signed manifest", () => {
     writeFileSync(path, JSON.stringify(makeManifest()));
     const store = new FileDirectoryManifestStore(path, logger, verify);
-    expect(store.getCurrentManifest().version).toBe(1);
+    expect(store.getVerifiedManifest().version).toBe(1);
   });
 
   it("REJECTS a tampered manifest at construction (signature over different bytes)", () => {
@@ -117,7 +122,7 @@ describe("M12 §1b: FileDirectoryManifestStore verify-at-load", () => {
     (bad.nodes as NodeEntry[])[0].pubkey = "dd".repeat(32); // tamper
     writeFileSync(path, JSON.stringify(bad));
 
-    expect(store.getCurrentManifest().version).toBe(1); // last-good stays active
+    expect(store.getVerifiedManifest().version).toBe(1); // last-good stays active
     expect(logger.warn).toHaveBeenCalledWith(
       "directory.manifest.verify.failed",
       expect.objectContaining({ reason: expect.stringContaining("failed verification") }),
@@ -128,14 +133,14 @@ describe("M12 §1b: FileDirectoryManifestStore verify-at-load", () => {
     writeFileSync(path, JSON.stringify(makeManifest({ version: 1 })));
     const store = new FileDirectoryManifestStore(path, logger, verify);
     writeFileSync(path, JSON.stringify(makeManifest({ version: 2 })));
-    expect(store.getCurrentManifest().version).toBe(2);
+    expect(store.getVerifiedManifest().version).toBe(2);
   });
 
   it("reload: a valid but ROLLED-BACK version is rejected (anti-rollback), last-good stays", () => {
     writeFileSync(path, JSON.stringify(makeManifest({ version: 3 })));
     const store = new FileDirectoryManifestStore(path, logger, verify);
     writeFileSync(path, JSON.stringify(makeManifest({ version: 2 }))); // validly signed, older
-    expect(store.getCurrentManifest().version).toBe(3);
+    expect(store.getVerifiedManifest().version).toBe(3);
     expect(logger.warn).toHaveBeenCalledWith(
       "directory.manifest.verify.failed",
       expect.objectContaining({ reason: expect.stringContaining("rollback") }),
@@ -165,6 +170,38 @@ describe("M12 §1b: FileDirectoryManifestStore verify-at-load", () => {
     (m as { signatures: unknown[] }).signatures = []; // unsigned
     writeFileSync(path, JSON.stringify(m));
     const store = new FileDirectoryManifestStore(path, logger);
-    expect(store.getCurrentManifest().version).toBe(1);
+    expect(store.getVerifiedManifest().version).toBe(1);
+  });
+
+  // ── M12-D8: the two roles must DIVERGE — this is the property J-AUTH depends on ────────────
+  it("SERVE relays a FORGED manifest verbatim while USE refuses it (clients verify independently)", () => {
+    writeFileSync(path, JSON.stringify(makeManifest({ version: 1 })));
+    const store = new FileDirectoryManifestStore(path, logger, verify);
+
+    // A rogue/compromised deploy replaces the file with a validly-shaped but FORGED manifest.
+    const forged = makeManifest({ version: 9 });
+    (forged as { signatures: Array<{ officerIndex: number; signature: string }> }).signatures =
+      [{ officerIndex: 0, signature: "ff".repeat(64) }]; // garbage officer signature
+    writeFileSync(path, JSON.stringify(forged));
+
+    // SERVE relays it UNFILTERED — the directory is a dumb pipe, and DOD-AUTH-2 proves the
+    // daemon catches the forgery itself. Pre-filtering here would hide the client-side check
+    // (and would block a manifest signed by a rotated officer set this node can't verify).
+    expect(store.getCurrentManifest().version).toBe(9);
+    // USE refuses it — the node itself never ACTS on an unverified manifest.
+    expect(store.getVerifiedManifest().version).toBe(1);
+  });
+
+  it("SERVE falls back to the last readable manifest on a read error (never throws)", () => {
+    writeFileSync(path, JSON.stringify(makeManifest({ version: 4 })));
+    const store = new FileDirectoryManifestStore(path, logger, verify);
+    expect(store.getCurrentManifest().version).toBe(4);
+
+    writeFileSync(path, "{ this is not json");
+    expect(store.getCurrentManifest().version).toBe(4); // last readable, no throw
+    expect(logger.warn).toHaveBeenCalledWith(
+      "directory.manifest.store.reload.failed", // a parse blip is NOT a verification failure
+      expect.objectContaining({ path }),
+    );
   });
 });

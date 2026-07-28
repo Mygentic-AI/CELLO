@@ -1,35 +1,37 @@
 /**
- * M7-MANIFEST-002 / DOD-AUTH-2 / M12 §1b — FileDirectoryManifestStore.
+ * M7-MANIFEST-002 / DOD-AUTH-2 / M12 §1b + M12-D8 — FileDirectoryManifestStore.
  *
- * The directory's source for the consortium manifest it serves to clients that poll
- * (`manifest_poll_request` → `manifest_poll_response`). It re-reads the manifest JSON
- * from disk on every `getCurrentManifest()` call, so an officer can deploy a newer
- * signed manifest version beside the directory and clients adopt it on their next poll
- * — the production-faithful TUF refresh seam (and the live test's rotation point).
+ * The directory's source for the consortium manifest, in BOTH of its roles (see the
+ * `DirectoryManifestStore` interface docs for why they must stay separate). The file is re-read
+ * on every call, so an officer can deploy a newer signed manifest beside the directory and it is
+ * picked up without a restart — the production-faithful TUF refresh seam (and the live test's
+ * rotation point).
  *
- * **Verification (M12 §1b).** The M7 premise — "the store is only a transport; every
- * polling client re-verifies" — ends when the manifest becomes the anti-entropy channel's
- * trust anchor (pinned node pubkeys + peerIds, DOD-AE-APPEND-1). With `verify` options
- * (officer root keys + threshold, pinned via env/IaC — the same anchor shape as the
- * client's bundled constants), the store enforces at construction AND on every reload:
+ * **`getCurrentManifest()` — SERVE (transport, NOT verified).** Returns the manifest as deployed,
+ * for relay to polling clients. Deliberately unfiltered: clients re-verify independently
+ * (DOD-AUTH-2 proves a rogue directory's forged manifest is caught CLIENT-side), and a manifest
+ * signed by a ROTATED officer set must still reach clients even when this node's pinned anchor
+ * can no longer verify it. Falls back to the last readable manifest on a read/parse error.
+ *
+ * **`getVerifiedManifest()` — USE (verified).** Returns only a manifest this node may ACT on. With
+ * `verify` options (officer root keys + threshold, pinned via env/IaC — the same anchor shape as
+ * the client's bundled constants) it enforces, at construction AND on every call:
  *  - `verifyManifest` (RFC 8032 Ed25519 threshold officer signatures + role domain);
- *  - §1c distinctness — no duplicate `nodeId`, `pubkey`, or `peerId` across entries
- *    (the handshake's anti-reflection guarantee that manifest keys are distinct);
- *  - anti-rollback on reload — a validly-signed but LOWER `version` than the active
- *    manifest is refused (TUF rule; a rollback would resurrect retired node keys).
- * A bad manifest at construction throws (startup misconfiguration, fail loudly). A bad
- * replacement on reload is refused with a cause-naming `directory.manifest.verify.failed`
- * warn and the previous VERIFIED manifest stays active.
+ *  - the signed validity window (`not_before`/`expires`) — an expired-but-validly-signed manifest
+ *    is the freshness door to resurrecting retired node keys;
+ *  - §1c distinctness — no duplicate `nodeId`, `pubkey`, or `peerId` across entries (the
+ *    handshake's anti-reflection guarantee that manifest keys are provably distinct);
+ *  - anti-rollback — a validly-signed but LOWER `version` than the active one is refused (TUF).
+ * A bad manifest at construction throws (startup misconfiguration — fail loudly, exit 1). A bad
+ * replacement later is refused with a cause-naming `directory.manifest.verify.failed` warn while
+ * the last VERIFIED manifest stays active.
  *
- * Without `verify` options the store keeps the M7 transport-only behavior (clients still
- * re-verify) — that mode exists for compat until every deployment carries root keys, and
- * the composition root decides which mode runs (fail-loud wiring in bin/directory.ts).
+ * Without `verify` options both getters behave identically (transport semantics). That mode exists
+ * only for tests/back-compat: the composition root REQUIRES the anchor whenever a manifest path is
+ * set, so production always runs verified (fail-loud wiring in bin/directory.ts).
  *
- * Never throws from getCurrentManifest() (the interface contract): on a read/parse/verify
- * error it serves the last good manifest it cached. It DOES throw at construction if the
- * initial read (or verification, in verify mode) fails.
+ * Neither getter throws after construction (the interface contract).
  */
-
 import { readFileSync } from "node:fs";
 import { verifyManifest, type ConsortiumManifestInput } from "@cello-protocol/crypto";
 import type { DirectoryManifestStore } from "@cello-protocol/interfaces";
@@ -57,7 +59,10 @@ export class FileDirectoryManifestStore implements DirectoryManifestStore {
   readonly #path: string;
   readonly #logger: FileDirectoryManifestStoreLogger | undefined;
   readonly #verify: ManifestVerifyOptions | undefined;
-  #lastGood: ConsortiumManifest;
+  /** Last manifest that PARSED — the SERVE fallback (never verification-gated). */
+  #lastReadable: ConsortiumManifest;
+  /** Last manifest that VERIFIED — the USE fallback + the anti-rollback floor. */
+  #lastVerified: ConsortiumManifest;
 
   constructor(path: string, logger?: FileDirectoryManifestStoreLogger, verify?: ManifestVerifyOptions) {
     this.#path = path;
@@ -65,49 +70,68 @@ export class FileDirectoryManifestStore implements DirectoryManifestStore {
     this.#verify = verify;
     // Initial read is mandatory — a bad path (or, in verify mode, a bad manifest) is a
     // startup misconfiguration, fail loudly.
-    this.#lastGood = this.#readVerified();
+    this.#lastVerified = this.#readVerified();
+    this.#lastReadable = this.#lastVerified;
     this.#logger?.info("directory.manifest.store.loaded", {
       path,
-      manifestVersion: this.#lastGood.version,
+      manifestVersion: this.#lastVerified.version,
       verified: this.#verify !== undefined,
     });
   }
 
+  /** SERVE role — transport semantics, NOT verified. See the class docs. */
   getCurrentManifest(): ConsortiumManifest {
     try {
-      const fresh = this.#readVerified();
-      // Anti-rollback (verify mode): a validly-signed but older version never replaces the
-      // active manifest — refuse and keep serving last-good.
-      if (this.#verify && fresh.version < this.#lastGood.version) {
-        this.#logger?.warn("directory.manifest.verify.failed", {
-          path: this.#path,
-          servedVersion: this.#lastGood.version,
-          reason: `rollback refused: reloaded version ${fresh.version} < active version ${this.#lastGood.version}`,
-        });
-        return this.#lastGood;
-      }
-      if (fresh.version !== this.#lastGood.version) {
-        this.#logger?.info("directory.manifest.store.reloaded", {
-          path: this.#path,
-          oldVersion: this.#lastGood.version,
-          newVersion: fresh.version,
-        });
-      }
-      this.#lastGood = fresh;
+      const fresh = this.#readParsed();
+      this.#lastReadable = fresh;
       return fresh;
     } catch (err: unknown) {
-      // Serve the last good manifest — never throw from this path (interface contract).
-      // In verify mode the failure names its cause under the §6 event taxonomy.
-      const reason = err instanceof Error ? err.message : String(err);
-      this.#logger?.warn(
-        err instanceof ManifestVerificationError ? "directory.manifest.verify.failed" : "directory.manifest.store.reload.failed",
-        { path: this.#path, servedVersion: this.#lastGood.version, reason },
-      );
-      return this.#lastGood;
+      // Never throw from this path (interface contract): relay the last readable manifest.
+      this.#logger?.warn("directory.manifest.store.reload.failed", {
+        path: this.#path,
+        servedVersion: this.#lastReadable.version,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      return this.#lastReadable;
     }
   }
 
-  #readVerified(): ConsortiumManifest {
+  /** USE role — verified, windowed, distinct, never rolled back. See the class docs. */
+  getVerifiedManifest(): ConsortiumManifest {
+    try {
+      const fresh = this.#readVerified();
+      // Anti-rollback: a validly-signed but older version never replaces the active manifest.
+      if (this.#verify && fresh.version < this.#lastVerified.version) {
+        this.#logger?.warn("directory.manifest.verify.failed", {
+          path: this.#path,
+          servedVersion: this.#lastVerified.version,
+          reason: `rollback refused: reloaded version ${fresh.version} < active version ${this.#lastVerified.version}`,
+        });
+        return this.#lastVerified;
+      }
+      if (fresh.version !== this.#lastVerified.version) {
+        this.#logger?.info("directory.manifest.store.reloaded", {
+          path: this.#path,
+          oldVersion: this.#lastVerified.version,
+          newVersion: fresh.version,
+        });
+      }
+      this.#lastVerified = fresh;
+      return fresh;
+    } catch (err: unknown) {
+      // Never throw (interface contract): keep the last VERIFIED manifest active and name the
+      // cause — a read/parse blip must not page as a verification failure.
+      const reason = err instanceof Error ? err.message : String(err);
+      this.#logger?.warn(
+        err instanceof ManifestVerificationError ? "directory.manifest.verify.failed" : "directory.manifest.store.reload.failed",
+        { path: this.#path, servedVersion: this.#lastVerified.version, reason },
+      );
+      return this.#lastVerified;
+    }
+  }
+
+  /** Read + structural check only — no officer/window/distinctness verification. */
+  #readParsed(): ConsortiumManifest {
     const raw = readFileSync(this.#path, "utf8");
     const parsed = JSON.parse(raw) as ConsortiumManifest;
     // Minimal structural check: valid JSON of the wrong shape (e.g. {}, [], 42) must fail
@@ -120,6 +144,12 @@ export class FileDirectoryManifestStore implements DirectoryManifestStore {
     ) {
       throw new Error(`consortium manifest at ${this.#path} is malformed (missing version/nodes/signatures)`);
     }
+    return parsed;
+  }
+
+  /** Read + full verification (officer threshold, validity window, §1c distinctness). */
+  #readVerified(): ConsortiumManifest {
+    const parsed = this.#readParsed();
     if (this.#verify) {
       // Signed validity window: verifyManifest checks signatures, not freshness — but the body
       // SIGNS not_before/expires, and an expired-yet-validly-signed manifest is exactly how

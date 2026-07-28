@@ -879,6 +879,26 @@ if (nodeKeyHex) {
 // CELLO_CONSORTIUM_THRESHOLD. A manifest path WITHOUT the anchor is a fail-loud
 // misconfiguration — there is no unverified fallback (§1c: fail closed, always).
 const consortiumManifestPath = process.env["CELLO_DIRECTORY_CONSORTIUM_MANIFEST"];
+// M12: AE dial-loop period. Validated HERE, once, and fatally — an unparseable or tiny value
+// would reach setInterval as NaN/0, which clamps to ~1ms: a silent busy loop that re-reads and
+// re-verifies the manifest from disk on every tick (and, once peerIds exist, a dial storm against
+// peer nodes) with no log output at all. Fail loud at boot instead, matching the env-config
+// pattern above. Unset → the service default (60s).
+const aeIntervalRaw = process.env["CELLO_AE_INTERVAL_MS"];
+let aeIntervalMs: number | undefined;
+if (aeIntervalRaw !== undefined && aeIntervalRaw !== "") {
+  const parsed = Number(aeIntervalRaw);
+  if (!Number.isFinite(parsed) || parsed < 1000) {
+    logger.error("adapter.config.missing", {
+      missingKey: "CELLO_AE_INTERVAL_MS",
+      env,
+      reason: `must be a number >= 1000 (ms); got '${aeIntervalRaw}'. An invalid value would clamp setInterval to ~1ms — a silent busy loop.`,
+    });
+    process.exit(1);
+  }
+  aeIntervalMs = parsed;
+}
+
 let directoryManifestStore: FileDirectoryManifestStore | undefined;
 if (consortiumManifestPath) {
   const rootKeysRaw = process.env["CELLO_CONSORTIUM_ROOT_KEYS"] ?? "";
@@ -952,8 +972,8 @@ try {
       ? {
           identity: { nodeId, sign: (tbs: Uint8Array) => directoryKeyProvider.sign(tbs) },
           store: new PgAeStore(pgPool),
-          manifest: () => directoryManifestStore.getCurrentManifest(),
-          intervalMs: process.env.CELLO_AE_INTERVAL_MS ? Number(process.env.CELLO_AE_INTERVAL_MS) : undefined,
+          manifest: () => directoryManifestStore.getVerifiedManifest(),
+          intervalMs: aeIntervalMs,
         }
       : undefined,
     pgPool: pgPool ?? undefined,
@@ -1160,6 +1180,8 @@ const healthServer = createHealthServer({
   // CELLO-M7-CONN-001 (DOD-CONN-3): serve the consortium manifest over unauthenticated
   // HTTP so the daemon polls it without an agent identity (the keystone is gone). The
   // store never throws from getCurrentManifest(); an unset store → null → 503.
+  // M12-D8: this is the SERVE role — clients re-verify independently, and pre-filtering here would
+  // block officer rotation and hide a rogue directory from the client-side check that catches it.
   getCurrentManifest: () => directoryManifestStore?.getCurrentManifest() ?? null,
   // DOD-REGISTRY-1: serve the type registry (same model as /manifest — public, signed).
   getRegistryDocument: () => {

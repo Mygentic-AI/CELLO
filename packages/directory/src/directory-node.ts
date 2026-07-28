@@ -748,6 +748,12 @@ export class CelloDirectoryNode {
     this.#pgPool = opts.pgPool;
     this.#directoryKeyProvider = opts.directoryKeyProvider;
     this.#directoryManifestStore = opts.directoryManifestStore;
+    // F3: AE carries kill-switch propagation and its §6 events ARE the operational signal. A node
+    // asked for AE but given no logger would run silently un-synced while looking healthy — refuse
+    // the construction instead (the composition root always passes one).
+    if (opts.aeSync && !opts.logger) {
+      throw new Error("aeSync requires a logger — anti-entropy without its §6 events is silently un-observable");
+    }
     this.#aeSyncConfig = opts.aeSync;
   }
 
@@ -905,14 +911,14 @@ export class CelloDirectoryNode {
     // handler + per-peer dial loop. All protocol/security logic lives in AeSyncService/ae-channel;
     // this is pure lifecycle. Requires transport ≥0.0.27 (the handler's remotePeerId arg); an
     // older transport fails CLOSED per stream inside the service, never open.
-    if (this.#aeSyncConfig && this.#logger) {
+    if (this.#aeSyncConfig) {
       this.#aeSyncService = new AeSyncService({
         transport: this.#node,
         manifest: this.#aeSyncConfig.manifest,
         // Own peerId comes from the LIVE transport, never config — a configured value could lie.
         identity: { ...this.#aeSyncConfig.identity, peerId: this.#node.getPeerId() },
         store: this.#aeSyncConfig.store,
-        logger: this.#logger,
+        logger: this.#logger!, // guaranteed by the constructor guard above
         intervalMs: this.#aeSyncConfig.intervalMs,
       });
       await this.#aeSyncService.start();
@@ -2845,7 +2851,10 @@ export class CelloDirectoryNode {
     // Q = R ∩ manifest, and we register among Q (+ client) with T = majority(N). So registration
     // survives (N − |Q|) directory outages, and the agent seals with any T of Q+1. Absent R (older
     // client / no manifest) → Q = all manifest nodes (all-N back-compat). Single-node manifest → 2-of-2.
-    const manifestNodes = this.#directoryManifestStore?.getCurrentManifest()?.nodes ?? [];
+    // M12-D8: the DKG quorum/threshold is derived from the manifest, so it MUST come from the
+    // VERIFIED role — a tampered manifest here would steer which nodes hold shares and what T is.
+    // (Pre-M12 this read the unverified transport copy; that gap is closed with the role split.)
+    const manifestNodes = this.#directoryManifestStore?.getVerifiedManifest()?.nodes ?? [];
     // No consortium manifest → single-node back-compat (M6/M7): 1 directory, 2-of-2. The quorum logic
     // only applies when a manifest with nodes exists (else quorumNodeIds is [] and participants would be 0).
     const hasManifest = manifestNodes.length > 0;
@@ -5901,6 +5910,9 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
   return {
     directory,
     node,
-    stop: async () => { directory.stopPresenceHeartbeat(); await node.stop(); },
+    // Stop the AE dial loop BEFORE the transport: a tick firing against a stopping node (or an
+    // ended pg pool) emits spurious antientropy.round.failed warns exactly when an operator is
+    // reading shutdown logs.
+    stop: async () => { directory.stopAeSync(); directory.stopPresenceHeartbeat(); await node.stop(); },
   };
 }
