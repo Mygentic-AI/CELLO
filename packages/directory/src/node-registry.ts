@@ -102,6 +102,63 @@ export function constructRelayMultiaddr(entry: NodeRegistryEntry): string {
   return `/dns4/${entry.hostname}/tcp/${entry.port}/${entry.transport}/p2p/${entry.peerId}`;
 }
 
+/** libp2p WebSocket transports a bootstrap multiaddr may advertise. */
+const BOOTSTRAP_TRANSPORTS = new Set(["ws", "wss"]);
+
+export interface BuildBootstrapMultiaddrOpts {
+  /** The directory's libp2p PeerId (always required — every form appends /p2p/<peerId>). */
+  peerId: string;
+  /**
+   * Verbatim override (CELLO_DIRECTORY_BOOTSTRAP_MULTIADDR). Used as-is except that /p2p/<peerId>
+   * is appended when absent. This is how a wss-shaped endpoint reaches /bootstrap unchanged.
+   */
+  explicit?: string;
+  /** Publicly-routable hostname (CELLO_DIRECTORY_HOSTNAME). */
+  hostname?: string;
+  /** Public port (CELLO_DIRECTORY_PUBLIC_PORT). Default 80 — reproduces the pre-M12 AWS string. */
+  port?: string | number;
+  /** Public transport (CELLO_DIRECTORY_PUBLIC_TRANSPORT). Default "ws". Must be ws|wss. */
+  transport?: string;
+  /** Local-dev fallback: the node's actual WS listen address (0.0.0.0 is made routeable). */
+  fallbackWsAddr?: string;
+}
+
+/**
+ * DOD-MULTIADDR-1 — build the directory's advertised bootstrap multiaddr from CONFIGURATION.
+ *
+ * Replaces the hardcoded `/dns4/{host}/tcp/80/ws/p2p/{peerId}` template so a GCP node behind TLS
+ * can advertise `/tcp/443/wss`. Precedence: explicit override → hostname+port+transport →
+ * local-dev fallback → undefined. Defaults (port 80, transport ws) reproduce the AWS string
+ * byte-for-byte, so unset env vars change nothing.
+ */
+export function buildBootstrapMultiaddr(opts: BuildBootstrapMultiaddrOpts): string | undefined {
+  const withP2p = (addr: string): string =>
+    addr.includes("/p2p/") ? addr : `${addr}/p2p/${opts.peerId}`;
+
+  if (opts.explicit) {
+    return withP2p(opts.explicit);
+  }
+
+  if (opts.hostname) {
+    const port = opts.port ?? 80;
+    const transport = opts.transport ?? "ws";
+    if (!BOOTSTRAP_TRANSPORTS.has(transport)) {
+      // Fail loud rather than advertise an undialable /tcp/{port}/{typo} address — a silent bad
+      // transport would surface only as clients failing to connect, far from the cause.
+      throw new Error(
+        `buildBootstrapMultiaddr: unknown transport "${transport}" (expected one of ${[...BOOTSTRAP_TRANSPORTS].join(", ")})`,
+      );
+    }
+    return `/dns4/${opts.hostname}/tcp/${port}/${transport}/p2p/${opts.peerId}`;
+  }
+
+  if (opts.fallbackWsAddr) {
+    return withP2p(opts.fallbackWsAddr.replace("0.0.0.0", "127.0.0.1"));
+  }
+
+  return undefined;
+}
+
 /**
  * Parse SSM node registry parameters into structured relay and directory entries.
  *

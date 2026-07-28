@@ -489,7 +489,7 @@ if (pgPool) {
 //     pre-populate RelayPoolManager manifest entries
 //     log node.registry.loaded { source: 'ssm' }
 
-import { parseNodeRegistryEntries, type SsmParameter } from "../node-registry.js";
+import { parseNodeRegistryEntries, buildBootstrapMultiaddr, type SsmParameter } from "../node-registry.js";
 
 let relayPeerId: string = "";
 let relayMultiaddrs: string[] = [];
@@ -1090,21 +1090,18 @@ const schemaVersion = readdirSync(migrationsDir).filter((f) => /^V\d+__.*\.sql$/
 const directoryHostname = process.env["CELLO_DIRECTORY_HOSTNAME"];
 const directoryPeerId = result.node.getPeerId();
 
-let bootstrapMultiaddr: string | undefined;
-if (directoryHostname) {
-  // Production: construct /dns4/<hostname>/tcp/80/ws/p2p/<peerId>
-  bootstrapMultiaddr = `/dns4/${directoryHostname}/tcp/80/ws/p2p/${directoryPeerId}`;
-} else {
-  // Fallback: use the actual WS listen address from the node (fires when
-  // CELLO_DIRECTORY_HOSTNAME is unset and no WS listen address is available
-  // from the node — e.g. local dev or integration tests).
-  // Replace 0.0.0.0 with 127.0.0.1 so the address is routable for local clients.
-  const wsAddr = result.node.listenAddresses().find((a) => a.includes("/ws"));
-  if (wsAddr) {
-    const routeableAddr = wsAddr.replace("0.0.0.0", "127.0.0.1");
-    bootstrapMultiaddr = routeableAddr.includes("/p2p/") ? routeableAddr : `${routeableAddr}/p2p/${directoryPeerId}`;
-  }
-}
+// DOD-MULTIADDR-1: the advertised bootstrap multiaddr is configuration, not a hardcoded
+// /tcp/80/ws template. Defaults (port 80, transport ws) reproduce the pre-M12 AWS string
+// exactly; a GCP node behind TLS sets CELLO_DIRECTORY_PUBLIC_PORT=443 /_TRANSPORT=wss, or
+// CELLO_DIRECTORY_BOOTSTRAP_MULTIADDR for a verbatim override.
+const bootstrapMultiaddr = buildBootstrapMultiaddr({
+  peerId: directoryPeerId,
+  explicit: process.env["CELLO_DIRECTORY_BOOTSTRAP_MULTIADDR"],
+  hostname: directoryHostname,
+  port: process.env["CELLO_DIRECTORY_PUBLIC_PORT"],
+  transport: process.env["CELLO_DIRECTORY_PUBLIC_TRANSPORT"],
+  fallbackWsAddr: result.node.listenAddresses().find((a) => a.includes("/ws")),
+});
 
 // DOD-REGISTRY-1: cache the registry document for the sync health server resolver.
 // Loaded at startup and refreshed by the internal API on each publish (the internal
