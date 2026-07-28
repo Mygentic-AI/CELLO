@@ -17,8 +17,10 @@ description: >
 
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
-- **Next red:** DOD-AE-DESIGN-1 in review (doc drafted, Entry 8); DOD-ROLE-MANIFEST-1 next
-  (story branch per M12-D4; manifest schema bump carries `role` + `peerId` together).
+- **Next red:** DOD-ROLE-MANIFEST-1 (story branch per M12-D4; manifest schema bump carries
+  `role` + `peerId` together — needs `/cello-publish` for the cello-client packages).
+- **Tier:** P1 — AE-DESIGN-1 ✅ (reviewed, Entry 9). ROLE-MANIFEST-1 next; then AE-APPEND/MUTABLE/
+  LOCAL-E2E, MULTIADDR, ADAPTER-GCP.
 - **Blocked on Andre:** nothing.
 - **HEAD:** trustless-cello `main` (see git log); cello-client untouched by M12 so far.
 - **Cloud state:** AWS = 3 regions awake (woken 2026-07-28, see infra/STATE.md). GCP =

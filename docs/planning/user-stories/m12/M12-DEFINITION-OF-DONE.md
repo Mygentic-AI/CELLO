@@ -120,7 +120,10 @@ description: >
   `primary_holder` rules stated), the directory↔directory channel's identity verification
   (manifest-pinned keys, step-6-style), and the retirement list for the mesh
   (`setup-replication.sh`, slots, SEQ_INCREMENT machinery). Reviewed before implementation
-  starts. — ❌
+  starts. — ✅ `M12-ANTI-ENTROPY-DESIGN.md` + two research maps; adversarial review (all code
+  claims verified), 3 blocking amendments applied (total-order suspension merge; honest
+  burn/trust-model + M12-P6; retirement list gains replication creds/params/5432 path) plus
+  6 non-blocking → Entries 8, 9 (see M12-P5, checkpoint scope)
 - **DOD-AE-APPEND-1** [trustless-cello] — append-only tables sync between directories over the
   authenticated libp2p channel via root-comparison + delta pull; divergence detection is
   O(compare), transfer is delta-only; peers that fail identity verification are refused. — ❌
@@ -245,6 +248,11 @@ description: >
   data, retires the unauthenticated `/cello/checkpoint/1.0.0` channel, and leaves cross-signing
   visibly parked. Rebuild post-M12 on the authenticated AE channel with a deterministic shared
   leaf order.
+- **M12-P6** — **Suspension records are node-attested, not owner-authorized** (design review F2):
+  one compromised in-roster node can mint `burned=true`/spurious un-pause for any agent, and
+  burn-OR propagates it irreversibly. No worse than today's mesh, but the real trust boundary.
+  Hardening = end-to-end owner-signed suspension authorization, mirroring the M8B FROST-stream
+  auth deferral. Out of M12.
 - **M12-P4** — **Replica nodes at launch.** The role split ships in P1, but whether any
   replica-role nodes actually deploy at launch (vs the capability lying dormant) is undecided —
   zero replicas is a valid launch shape.
