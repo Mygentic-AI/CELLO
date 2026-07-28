@@ -112,7 +112,12 @@ description: >
   `consortiumNodeCount` derives from validator count, decoupled from `manifest.nodes.length`;
   DKG participant selection, seal arithmetic, and kill-switch honoring exclude replicas; a
   replica-only manifest is rejected loudly (no validators = no consortium). Version-bump ACs:
-  cello-client packages published to beta via `/cello-publish`, trustless-cello re-pinned. — ❌
+  cello-client packages published to beta via `/cello-publish`, trustless-cello re-pinned. — ✅
+  BOTH halves done+reviewed: client (role/peerId + validatorNodes + replica-only guard, published
+  beta v0.0.129) and directory (re-pin ^0.0.25; `computeDkgTopology` counts validators only;
+  replica-only rejected loudly; behavior byte-for-byte preserved for role-less manifests — review
+  confirmed; seal/kill-switch validator-scoped structurally). F1 handler-rejection test added.
+  → Entries 10, 14, 15. Owed operator-side only: Andre's `latest` promotion (Entry 14).
 - **DOD-AE-DESIGN-1** [trustless-cello] — anti-entropy design doc in the vault: which tables sync
   (append-only set vs mutable set), Merkle/root comparison mechanism (reusing
   `V5__mmr_tables.sql` / `directory_checkpoints` where it fits), conflict rules per mutable table

@@ -17,8 +17,9 @@ description: >
 
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
-- **Next red:** DOD-ADAPTER-GCP-1 (Secret Manager + GCS adapters, trustless-cello only, no
-  publish). ROLE-MANIFEST-1 dir half PARKED on the publish (see below).
+- **Next red:** ADAPTER-GCP-1 remainder (audit-log sink-extraction + Cloud KMS — deliberate
+  starts) OR the AE implementation units (AE-APPEND/MUTABLE/LOCAL-E2E). ROLE-MANIFEST-1 DONE.
+- **ROLE-MANIFEST-1 ✅ FULLY CLOSED** — client (beta v0.0.129) + directory (branch, reviewed).
 - **Done since P0:** AE-DESIGN-1 ✅, ROLE-MANIFEST-1 client half ✅ (branch), MULTIADDR-1 ✅
   (branch), ADAPTER-GCP-1 GCS cloud-storage ✅+reviewed (branch m12/adapter-gcp e1028109).
 - **ADAPTER-GCP-1 remaining — BOTH need deliberate starts, not tail-of-session mirrors:**
