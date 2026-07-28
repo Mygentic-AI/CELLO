@@ -30,12 +30,11 @@ description: >
   crypto-at-rest-severe (reviewer's caution): wrong not-found/permission mapping corrupts share
   encryption, not a benign empty pool. Re-verify the KMS SDK error taxonomy against installed
   source; typed/coded errors, not message-substring.
-- **PARKED — publish cascade (awaiting Andre's go):** ROLE-MANIFEST-1 dir half needs the changed
-  cello-client packages on beta + a trustless-cello re-pin. Plan ready (Entry 11): merge
-  `m12/role-manifest`→main, bump 7-pkg cascade (crypto 0.0.23, protocol-types 0.0.25, transport
-  0.0.25, client 0.0.51, daemon 0.0.76, cli 0.0.77, connect 0.0.87), tag v0.0.129, CI→beta,
-  verify, THEN Andre promotes `latest`. `/cello-publish` loaded. Not started: merge-to-main of an
-  unclosed unit + an npm cascade is Andre's call, and it ends in his latest-promotion regardless.
+- **PUBLISH DONE (beta) — Entry 14.** v0.0.129 CI green incl. smoke-tag. All 7 on beta:
+  crypto 0.0.23, protocol-types 0.0.25, transport 0.0.25, gateway 0.0.5, daemon 0.0.76, cli 0.0.77,
+  connect 0.0.87. Verified against tarballs (validatorNodes in protocol-types dist; guard in crypto
+  dist; cross-pins all real). **AWAITING ANDRE: the `latest` promotion** (operator-facing; command
+  in Entry 14). NOT blocking the dir half — semver ranges resolve against published versions.
 - **Tier:** P1 — AE-DESIGN-1 ✅, ROLE-MANIFEST-1 client half ✅ (reviewed+fixed, Entry 10);
   remaining P1: ROLE-MANIFEST-1 dir half, AE-APPEND/MUTABLE/LOCAL-E2E, MULTIADDR, ADAPTER-GCP.
 - **Branches:** cello-client `m12/role-manifest` (3ca8560, reviewed green, unmerged);
