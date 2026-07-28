@@ -1191,3 +1191,63 @@ it is. None of those are visible by inspection; all three took ten seconds to ex
 not after a reviewer catches it.** That now applies to `signal_records_effective`'s real definition
 too — this validated the *expression*, not yet its substitution into V46's actual `CASE`, which is the
 first task when Tier 3 starts.
+
+---
+
+## Entry 12 — `M10B-D25r`: the return path gets a DECIDED carrier — 2026-07-28
+
+`M10B-D25` named two candidates and picked neither, which is a decision-shaped hole, not a decision.
+Closing it, against the code.
+
+**What the signaling layer actually is.** `directory-frames.ts` holds ~25 outbound encoders, each a
+plain `{type: "…"}` canonical-CBOR map, plus an `InboundSignalingFrame` union. It is an **open,
+additive set** — adding a frame kind is one encoder, one union member, one handler. And there is an
+**exact structural precedent for what D-25 needs**: `trust_signal_pickup` (outbound, pushed on the
+reauth hook at `directory-node.ts:2020–2038`) paired with `TrustSignalAck` (inbound, whose ack deletes
+the row). That is the same push-then-ack-deletes shape a submission result requires.
+
+**So: a new frame kind, plus its own table.** The frame alone is not enough — the stream is only live
+on reauth, so a result produced while Bob is offline needs somewhere to sit.
+
+**The asymmetry with the submission queue, which is the interesting part.** `M10B-D21` says
+`submission_queue` is **not** replicated. `submission_results` **must be**. The reason is not
+inconsistency, it is direction:
+- The submission queue is **collected** — one consumer (the portal) that can poll every node, so a row
+  can sit on exactly one node and still be found.
+- The result queue is **delivered** — the consumer is a daemon that reconnects to *whichever node it
+  likes*. A result stranded on the node the portal happened to write to would simply never arrive.
+
+That is precisely why `pickup_queue` is replicated, and the result queue inherits the same posture,
+including the same accepted convergence cost.
+
+**Shape:** `submission_results (agent_id, submission_id, sealed_result BYTEA, created_at)`, PK
+`(agent_id, submission_id)`. **One row per event — explicitly NO supersede-by-kind**, which is the
+defect that killed `M10B-D19` (V37's upsert would have destroyed the second refusal, re-creating the
+silent failure F2 was raised to close). The ack deletes scoped to `(submission_id, agent_id)`, mirroring
+`ackPickupDelete`'s account-scoped delete — that scoping exists because an id-only delete lets any
+authenticated agent wipe other agents' undelivered rows, and the same hole would exist here.
+
+**Client-side sink, which `M10B-D19` never acknowledged.** `wallet_trust_signals` is envelope-shaped
+(11 fixed columns + bookkeeping) and cannot hold `{outcome, cause, detail}`. So this needs a **new
+daemon table** — a SQLCipher migration on operators' machines, under `M10B-D14r2`'s rules
+(`contacts-tier-migration.ts` pattern: birth gate, one transaction, rethrow). Worth stating plainly
+because it is the second client migration this milestone now owes, and client migrations are the
+riskiest thing here — they run unattended on machines we cannot inspect.
+
+**Residual I am not going to pretend is solved (related to the parked H8).** For a *minted*
+submission the portal delivers the envelope to Alice and the result to Bob at nearly the same instant.
+A node operator sees a `pickup_queue` row `(Alice, H)` and a `submission_results` row
+`(Bob, submission_id)` seconds apart. `submission_id` is a hash of Bob's signed body and does **not**
+equal `H`, so there is no direct join — but the timing correlation is real and it partially re-creates
+the pairing on metadata alone. Decoupling (batching, jitter, deferring the success result to Bob's next
+reconnect regardless of timing) is available and not free. **Logged as a residual against the parked
+`DOD-END-DISCOVER-1` question rather than silently claimed as handled** — it is the same underlying
+issue, and it should be resolved once, with Andre's answer, not twice by guessing.
+
+**Falsification.** Does the reauth hook have what a second drain needs? Yes — it already resolves
+`getAgentIdByPubkey(authedPubkeyHex)` at `:2018` for the pickup drain, so the result drain reuses that
+lookup rather than adding one. Does a new outbound frame break old daemons? An unknown `type` must be
+ignored rather than fatal on the daemon's inbound path — **that is the one thing to verify before
+building**, because if unknown frames throw, shipping this frame to an un-upgraded daemon breaks its
+signaling stream, and every operator upgrades on their own schedule (CLAUDE.md: "upgrades are not
+transparent"). Named as the first task of the unit, not assumed here.

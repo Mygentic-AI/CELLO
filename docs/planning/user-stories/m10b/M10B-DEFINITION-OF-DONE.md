@@ -739,8 +739,25 @@ the discussion-of-record. Restated here because this is the milestone that imple
   exact silent failure F2 was raised to close. (4) Pickup delivery is push-on-signaling-reauth only, so
   a timeout would fire on a live connection. **Required instead:** a dedicated `submission_result`
   table drained on the same reauth hook with its own ack semantics and **no supersede-by-kind** (one
-  message per event, not one current value per fact), or a new signaling frame kind. The decision must
-  also name the **client-side sink** — `wallet_trust_signals` is envelope-shaped and cannot hold
+  message per event, not one current value per fact), or a new signaling frame kind.
+  > **DECIDED as `M10B-D25r` (Entry 12) — it is BOTH: a new signaling frame kind plus its own
+  > replicated table.** `directory-frames.ts` is an open additive set (~25 outbound encoders), and
+  > `trust_signal_pickup` + `TrustSignalAck` is the exact push-then-ack-deletes precedent. Table:
+  > `submission_results (agent_id, submission_id, sealed_result, created_at)`, PK
+  > `(agent_id, submission_id)`, **one row per event, NO supersede-by-kind** (that upsert is what killed
+  > `M10B-D19`), ack scoped to `(submission_id, agent_id)` like `ackPickupDelete` — an id-only delete
+  > would let any authenticated agent wipe another's undelivered results.
+  > **It IS replicated, unlike `submission_queue` (`M10B-D21`), and the asymmetry is direction not
+  > inconsistency:** the submission queue is *collected* by one consumer that can poll every node; the
+  > result queue is *delivered* to a daemon that reconnects to whichever node it likes, so an
+  > unreplicated result would simply never arrive. Same reason `pickup_queue` is replicated.
+  > **Verify first, do not assume:** that an unknown frame `type` is IGNORED rather than fatal on the
+  > daemon's inbound path — if unknown frames throw, this frame breaks the signaling stream of every
+  > daemon that has not upgraded yet.
+  > **Residual, logged against the parked `DOD-END-DISCOVER-1`:** for a minted submission, the envelope
+  > to Alice and the result to Bob land seconds apart, so timing correlation partially re-creates the
+  > pairing on metadata even though `submission_id ≠ signal_hash`. Not claimed as solved.
+  The decision must also name the **client-side sink** — `wallet_trust_signals` is envelope-shaped and cannot hold
   `{outcome, cause, detail}`, so this is a SQLCipher migration on operators' machines, which `D-19`
   did not acknowledge.
 - **M10B-D14r2 (2026-07-28, REPLACES `M10B-D14r` — Entry 10) — the consent filter goes in the SQL of
