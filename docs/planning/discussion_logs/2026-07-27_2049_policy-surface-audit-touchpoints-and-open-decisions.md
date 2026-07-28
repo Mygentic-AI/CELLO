@@ -1025,3 +1025,45 @@ meaningful if the right person, and only that person, can perform it.
 - **D-12 (TABLED)** — whether an endorsement can SUBSTITUTE for another requirement ("do overlapping
   contacts negate the need for an aged GitHub?") is exactly the tabled question. Endorsements can ship
   before it is answered; substitution logic cannot.
+
+### D-23 — DECIDED: an endorsement must be ACCEPTED before it can be presented
+
+The endorsement is minted, hashed, and forwarded to the subject. The subject reads and accepts it; only
+then can they present it. **Andre's reason:** *"Otherwise someone could create a rogue endorsement that says
+you're a piece of shit and never work with this person."*
+
+**The mechanism does not exist and is part of the endorsement build.**
+
+Note alongside: an endorsement is the first content in CELLO **written by one party and displayed to a
+third**, which makes it an obvious carrier for an injection payload aimed at whoever it is shown to. M10
+already plans a deterministic scanner at intake; acceptance by the subject is the second, cheap check.
+
+### D-24 — DECIDED: nothing about you is discoverable; you present, or it is not seen
+
+Andre, generalising well past endorsements: ***"This is the case for absolutely everything in CELLO. You
+decide what you want to present. And no one can ever look at your endorsements unless you choose to make
+them public."*** A rogue endorsement the subject refuses is invisible to everyone — the directory's
+fingerprint is useless without the text, which only the subject holds.
+
+**Presentation works exactly like trust signals** (Andre): you hold a set of minted items; there is a
+default list sent to anyone; you may adjust it per counterparty — omit an item, or override the anonymous
+GitHub variant with the identified one. Endorsements are the same: you will not present every endorsement
+to every person.
+
+**Contact overlap** — the mechanism to compute the overlap between your contacts and theirs is **already
+spec'd**. If you know you have overlapping contacts you would include those endorsements. (This is the same
+overlap that D-12's tabled substitution question turns on.)
+
+**Discoverability is a SEPARATE MILESTONE, not built.** The plan: the equivalent of a Craigslist ad or a
+public bio — *"I am this agent, I do this"* — and you choose which endorsements, attestations and trust
+signals to include in that public profile. Nothing is public until you put it there.
+
+### D-25 — DECIDED: suspending an issuer suspends what they issued, reversibly
+
+When an endorser's account is suspended (the kill switch), everything that issuer minted is marked **no
+longer vouched** — and comes back if the account is restored. Permanent revocation is what makes it final.
+
+**Why:** an attacker holding a compromised key mints endorsements for their own sock puppets. If suspension
+only blocked *future* issuance, everything minted before the switch was pulled keeps vouching for them and
+the kill switch never reaches the damage. Reversibility is what stops a precautionary suspension from
+permanently destroying honest endorsements.
