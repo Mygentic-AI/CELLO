@@ -776,6 +776,22 @@ def handle_session(event, origin, correlation_id):
             )
             prefs = cur.fetchone()
 
+            # THE SURVEY'S OWN ANSWERS, so the status page can render the form
+            # pre-filled instead of blank. `points_breakdown` already says
+            # WHETHER the survey was answered; it cannot say WHAT was answered,
+            # and a form that reopens empty invites someone to retype what they
+            # already told us — which now overwrites the real answers.
+            #
+            # Read from the ledger row's meta because that is where the answers
+            # live; there is no separate survey table, and inventing one to
+            # duplicate this would give the same fact two homes.
+            cur.execute(
+                "SELECT meta FROM points_ledger "
+                "WHERE waitlist_user_id = %s AND reason = 'survey'",
+                (session["waitlist_user_id"],),
+            )
+            survey = cur.fetchone()
+
             # THE READER for status_notes. Without one the Day-6 sweep grants two
             # premium invite codes and writes a note nobody ever sees, which is
             # the exact failure 0021_status_notes.sql opens by describing — a
@@ -812,6 +828,17 @@ def handle_session(event, origin, correlation_id):
                 for r in breakdown
             ],
             "content_alerts": prefs["content_alerts"],
+            # Null when never answered — which is what tells the page to render
+            # the form open rather than collapsed. An empty object would be
+            # indistinguishable from "answered nothing" and would collapse a
+            # survey nobody has filled in, hiding the single action we most want
+            # taken.
+            "survey_answers": (survey["meta"] or {}).get("answers") if survey else None,
+            "survey_freeform": (survey["meta"] or {}).get("freeform") if survey else None,
+            # A separate ledger reason with its own idempotency, so it is asked
+            # separately here too. Someone who declined the call at survey time
+            # can still commit later and be paid for it.
+            "interview_committed": any(r["reason"] == "interview_commit" for r in breakdown),
             "notes": [
                 {"kind": n["kind"], "body": n["body"], "created_at": n["created_at"].isoformat()}
                 for n in notes

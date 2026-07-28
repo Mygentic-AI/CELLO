@@ -163,6 +163,31 @@ def handle_survey(cur, user_id, body, correlation_id):
         cur, user_id, SURVEY_STRUCTURED_POINTS, "survey", {"answers": answers}, correlation_id
     )
 
+    # A REPEAT SUBMISSION IS AN EDIT, NOT A NO-OP. `award` rolls back to its
+    # savepoint on the once-per-user index, which used to mean the second set of
+    # answers was silently thrown away: the caller got 200, the page said
+    # "thank you", and the row still held the FIRST answers. Someone correcting
+    # what they told us had no way to know it did not take, and neither did we.
+    #
+    # `meta || {...}` replaces the answers key and leaves `freeform` alone, so an
+    # edit cannot wipe a free-form answer that was paid for separately below.
+    # Points are deliberately untouched — the ledger row already exists, and its
+    # value is not what changed.
+    updated = False
+    if awarded == 0:
+        cur.execute(
+            "UPDATE points_ledger SET meta = meta || %s "
+            "WHERE waitlist_user_id = %s AND reason = 'survey'",
+            (psycopg2.extras.Json({"answers": answers}), user_id),
+        )
+        updated = cur.rowcount > 0
+        if updated:
+            log(
+                "waitlist.survey.updated",
+                correlation_id,
+                waitlistId=str(user_id),
+            )
+
     # The free-form bonus rides on the same ledger row rather than a second
     # reason, because 'survey' is the only reason the enum has for it. Awarding
     # it separately would need a reason the schema does not define, and adding
@@ -194,8 +219,24 @@ def handle_survey(cur, user_id, body, correlation_id):
                 reason="survey_freeform",
                 points=SURVEY_FREEFORM_POINTS,
             )
+        else:
+            # The bonus is already paid, so this is an edit of the text itself.
+            # Matched on `meta ? 'freeform'` — the exact complement of the clause
+            # above — so the two are mutually exclusive and no path can pay twice.
+            cur.execute(
+                "UPDATE points_ledger SET meta = meta || %s "
+                "WHERE waitlist_user_id = %s AND reason = 'survey' AND meta ? 'freeform'",
+                (psycopg2.extras.Json({"freeform": freeform}), user_id),
+            )
+            updated = updated or cur.rowcount > 0
 
-    return {"awarded": awarded, "points_total": points_total(cur, user_id)}
+    # An EMPTY freeform on an edit deliberately does nothing rather than clearing
+    # what is stored. The +10 has already been paid for that answer and cannot be
+    # unpaid, so blanking the text would leave points backed by nothing — and the
+    # far likelier cause is a form that submitted without the field than someone
+    # deciding to retract what they wrote.
+
+    return {"awarded": awarded, "updated": updated, "points_total": points_total(cur, user_id)}
 
 
 def handle_readiness(cur, user_id, body, correlation_id):

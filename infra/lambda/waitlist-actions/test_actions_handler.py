@@ -219,6 +219,62 @@ def test_the_survey_answers_are_stored(actions):
     assert meta["answers"] == {"agents": "3-9"}
 
 
+def survey_meta(user_id):
+    return query(
+        "SELECT meta FROM points_ledger WHERE waitlist_user_id = %s AND reason = 'survey'",
+        (user_id,),
+    )[0][0]
+
+
+def test_resubmitting_the_survey_edits_the_answers_instead_of_discarding_them(actions):
+    """A SECOND SUBMIT IS AN EDIT. It used to be a silent data loss.
+
+    `award` rolls back to its savepoint on the once-per-user index, so the new
+    answers went nowhere: the caller got 200, the page said thank you, and the
+    row still held the first set. Someone correcting what they told us had no
+    signal that it had not taken, and neither did we. Caught by hand — Andre
+    filled the survey in twice and asked whether the second one had stored.
+    """
+    uid = make_user()
+    cookie = sign_in(uid)
+
+    call(actions, "/waitlist/survey", {"answers": {"agents": "0"}}, cookie)
+    _, second = call(actions, "/waitlist/survey", {"answers": {"agents": "10+"}}, cookie)
+
+    assert survey_meta(uid)["answers"] == {"agents": "10+"}, "the edit was discarded"
+    assert second["awarded"] == 0, "an edit must not pay a second time"
+    assert second["updated"] is True, "the caller has to be able to tell it saved"
+    assert total(uid) == 20
+
+
+def test_an_edit_cannot_wipe_a_freeform_answer_that_was_already_paid_for(actions):
+    """`meta || {...}` merges, so editing the structured answers must leave the
+    free-form text alone. Replacing meta wholesale would delete the answer the
+    +10 was paid for, leaving points backed by nothing."""
+    uid = make_user()
+    cookie = sign_in(uid)
+
+    call(actions, "/waitlist/survey", {"answers": {"agents": "0"}, "freeform": "kept"}, cookie)
+    call(actions, "/waitlist/survey", {"answers": {"agents": "10+"}}, cookie)
+
+    meta = survey_meta(uid)
+    assert meta["freeform"] == "kept"
+    assert meta["answers"] == {"agents": "10+"}
+    assert total(uid) == 30
+
+
+def test_the_freeform_text_is_editable_but_still_paid_only_once(actions):
+    uid = make_user()
+    cookie = sign_in(uid)
+
+    call(actions, "/waitlist/survey", {"answers": {"a": 1}, "freeform": "first"}, cookie)
+    _, second = call(actions, "/waitlist/survey", {"answers": {"a": 1}, "freeform": "second"}, cookie)
+
+    assert survey_meta(uid)["freeform"] == "second"
+    assert second["awarded"] == 0
+    assert total(uid) == 30
+
+
 # ── Post URL (DOD-POST-CREDIT-1, M11-D4) ──────────────────────────────────────
 
 
