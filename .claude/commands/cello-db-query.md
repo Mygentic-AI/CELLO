@@ -5,6 +5,12 @@ description: Run SQL queries against the CELLO directory PostgreSQL database via
 
 # Query the Directory Database
 
+> **This is the DIRECTORY database — `agent_profiles`, registrations, sessions.** The M11
+> waitlist tables (`waitlist_users`, `auth_tokens`, `email_jobs`, …) live in the PORTAL database,
+> and this technique **does not reach it**: TCP 5432 from the directory task to `cello-portal-dev`
+> times out, because that container's security group is not admitted by the portal RDS. The
+> failure is silent — the session opens and the query hangs. Use `/cello-portal-db-query`.
+
 The directory runs on ECS Fargate. There is no DATABASE_URL env var, no psql binary, and `require('pg')` fails because the container is ESM. Follow this exact sequence.
 
 ## Step 1: Get credentials locally
