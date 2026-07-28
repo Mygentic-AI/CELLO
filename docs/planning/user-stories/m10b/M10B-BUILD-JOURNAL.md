@@ -1475,3 +1475,73 @@ they need building.
 view it will live in, never as a fragment.* Four versions of this expression were wrong and each looked
 correct in isolation; the fragment test caught two, and only the real-view test could have caught the
 ordering.
+
+---
+
+## Entry 16 — FOURTH REVIEW: closest yet, and my own fix was a security hole — 2026-07-28
+
+Fourth pass. **Still 🟡, but the reviewer said explicitly it is withholding the flip on substance, not
+caution** — and it independently re-derived F3 from V46's source rather than trusting Entry 15, plus
+attacked F1's ack-delete mechanism as asked and found it **sound**.
+
+**What is genuinely closed:** F3 (confirmed by independent re-derivation — `supplement` is a no-op on
+h4, `no_fifth` regresses h7, `wrong_order` downgrades h8; all three of Entry 15's claims verify). F1's
+mechanism (the publication carries DELETE with no `WITH` clause and REPLICA IDENTITY defaults to the
+PK, so the ack's delete **does** replicate — no node keeps a copy forever). F2, F6, F7.
+
+### HIGH-1 — my `D-26r2` prerequisite was an authorization bypass on the kill switch
+
+I mandated wiring `linkAgentToAccount()` to a portal route. **I did not read its body.** Verified now
+(`pre-auth-token-repository.ts:500–547`):
+- It is `UPDATE agent_profiles SET account_id = $1 WHERE k_local_pubkey = $2` — **no ownership check**,
+  and `k_local_pubkey` is a *public* value anyone can read from the directory.
+- `resolveAccountId` **creates** an account for whatever phone stub is supplied; it never binds to the
+  caller's session.
+- `agent_profiles.account_id` is the authorization root for the **kill switch** — the write seam
+  derives scoping from it *"NOT from a request field"*, and it fronts pause/**burn**, which is
+  monotonic and terminal.
+
+Composed: attacker's phone stub + victim's public `k_local_pubkey` → the victim's agent is reassigned
+to the attacker's account → the attacker can **permanently burn it**. The unused `agentProfileId` in
+the params interface is the tell that nobody had read the body.
+
+**This is the fifth instance of the pattern Entry 14 named — and the first where the un-read mechanism
+is a privilege-granting write.** I named the pattern, wrote a rule about it, and then committed it
+again in the very edit that responded to the review. That is worth recording plainly: naming a habit
+does not fix it; the fix is the grep, every time, before the sentence. → `DOD-END-ACCOUNTLINK-1`, a
+real line with ACs including a negative test.
+
+### The rest
+
+- **HIGH-2 — `submission_results` had no clause adding it to `PUBLICATION_TABLES`.** `D-25r2`'s entire
+  correctness rests on the results being replicated, and the mechanism that replicates them is a
+  hand-maintained list in a shell script that nothing in the DoD mentioned. Build it without that step
+  and the feature passes single-node tests and **silently delivers nothing**. Added as a required
+  clause. (This is also why the `identity_tree_entries` fix earlier tonight mattered — same list.)
+- **HIGH-3 — `D-25r2`'s PK named a column its own column list omitted**, and my edit spliced a
+  sentence in half. The table is now stated once, authoritatively, with `writing_node` present.
+- **HIGH-4 — `SCOPE-FIX-1` named the wrong join key.** `subject` for an agent-subject row is the
+  **`k_local_pubkey` hex**, not the daemon's device-local UUID `agent_id`. And the existing fixture
+  seeds `subject` with the UUID — so a coder following my wording would copy the fixture, go green, and
+  match **zero** production rows, silently un-presenting every agent-subject signal. On the unit
+  sequenced first. The fixture convention has to be fixed before the test is written, or the test does
+  not survive the revert test.
+- **MEDIUM-1 — a TENTH shape changes**: `issuer_kind='directory'` records become unrevocable, because
+  branch 4 tests only `'portal'`. V46 deliberately admits `'directory'` and nothing issues it today —
+  **the identical §5a argument I used twice to add branches 2 and 5, and failed to apply a third
+  time.** So "exactly one row changes" was again scoped to the shapes I chose.
+- **MEDIUM-2 — `D-12r4` breaks V46's documented monotonicity invariant.** An unauthorized tombstone
+  that lands first reads `revoked`, then reads `active` when the real record replicates in —
+  `revoked → active` through ordinary convergence, with no write. V46's header claims this cannot
+  happen. The header must be amended in the same migration.
+- **MEDIUM-4** — the dedupe tiebreak: V46 can use a bare `MIN()` because content-addressing makes the
+  copies identical; `sealed_result` is **not** content-addressed. Tiebreak named (lowest
+  `writing_node`).
+- **LOW-1** — the supersession list omitted `D-25`, `D-25r`, `D-26`. Now a complete table.
+
+**Assessment.** Four passes, and the shape of the findings has changed: passes 1–3 found broken
+*designs*; this one found mostly broken *editing* — a spliced sentence, a column named but not
+declared, an incomplete supersession list — plus one genuine security defect and two scoping misses.
+That is the profile of a determination approaching done. The reviewer's own read: *"none of that needs
+a fifth measurement pass. It is a single editing session, and the only one with real design content is
+F4."* Agreed.

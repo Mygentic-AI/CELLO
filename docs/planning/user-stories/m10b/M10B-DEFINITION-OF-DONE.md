@@ -234,9 +234,18 @@ the additions M10B is accountable for.
     - **The submitter return path** was missing entirely → `M10B-D19`. "Nothing parked" in Entry 4 was
       wrong.
     **THREE REVIEW PASSES, ALL "DO NOT FLIP" (Entries 7, 10, 14). Read the decisions, not this
-    summary — many are on their second or third revision.** Superseded, do not build: `M10B-D12`,
-    `D-12r`, `D-12r2`, `D-12r3` → **`D-12r4`**; `D-14`, `D-14r` → **`D-14r2`**; `D-19` → **`D-25r2`**;
-    `D-26r` → **`D-26r2`**.
+    summary — many are on their second or third revision.**
+    **THE COMPLETE SUPERSESSION LIST — build ONLY the right-hand side:**
+    | superseded, do not build | build this |
+    | :-- | :-- |
+    | `M10B-D12`, `D-12r`, `D-12r2`, `D-12r3` | **`M10B-D12r4`** |
+    | `M10B-D14`, `D-14r` | **`M10B-D14r2`** |
+    | `M10B-D19`, `D-25`, `D-25r` | **`M10B-D25r2`** |
+    | `M10B-D26`, `D-26r` | **`M10B-D26r2`** + the new **`DOD-END-ACCOUNTLINK-1`** |
+    Where an earlier revision is cited by name elsewhere in this file (e.g. "`M10B-D12r3`'s read-time
+    defense", "`M10B-D25r`"), read it as the **current** revision from this table — the reasoning
+    carries forward, the shape does not. Structurally, each replacement is a blockquote nested under
+    the bullet it replaces, so the heading you see first is the superseded one.
     **The four items still open before this line can go ✅** (third review, Entry 14):
     1. ~~**F3**~~ — **CLOSED (Entry 15).** `D-12r4` re-measured **inside V46's real `CASE`**: nine
        shapes, eleven rows, **exactly one changes and it is the F6 defect**. The revoke-before-
@@ -244,8 +253,13 @@ the additions M10B is accountable for.
        could not reach — V46's supersession branch is a correlated `EXISTS`, not an aggregate.
     2. **F1** — `submission_results` PK gains its node component (`D-25r2`), or a natural-key duplicate
        through the designed failover path wedges **all** federation.
-    3. **F4** — wire `linkAgentToAccount()` to a portal route, or `operator_linkage_unresolved` is a
-       dead end (`D-26r2`).
+    3. **F4** — **`DOD-END-ACCOUNTLINK-1`**, a real line with ACs. Wiring `linkAgentToAccount()` as-is
+       is an **authorization bypass on the kill switch** (fourth review HIGH-1, verified in the
+       function body): no ownership check, and `resolveAccountId` creates accounts.
+    5. **HIGH-2** — `submission_results` must join `PUBLICATION_TABLES`, or the return path builds
+       complete and silently delivers nothing.
+    6. **MEDIUM-1/2** — `D-12r4`: decide the `issuer_kind='directory'` shape, and state the
+       monotonicity change while amending V46's header in the same migration.
     4. **F5** — `DOD-END-SCOPE-FIX-1` rescoped to the agent-subject half; the account-subject half needs
        a decision on where the daemon gets its own `accountId`.
     **Closed and verified across the three passes:** the notarization path needs no work; the intake key
@@ -401,7 +415,20 @@ the additions M10B is accountable for.
   > **Scope now: the `subject_kind='agent'` half only** — it needs no account and closes the
   > agent-subject scoping hole immediately. The account-subject half is **deferred behind a named
   > prerequisite** (decide where the daemon obtains its own `accountId` — persisted at registration, or
-  > returned on the signaling auth response) rather than assumed into existence. — ❌
+  > returned on the signaling auth response) rather than assumed into existence.
+  > ### 🚨 THE JOIN KEY IS `k_local_pubkey` HEX, **NOT** THE DAEMON'S `agent_id` (fourth review HIGH-4)
+  > For an agent-subject row, `subject` holds the **K_local pubkey hex** — that is how the directory
+  > joins it (`internal-api-server.ts:791`: `JOIN agent_profiles ap ON ap.k_local_pubkey = sr.subject`).
+  > The daemon's `agent_id` is a **device-local `randomUUID()`** that never enters a hashed envelope.
+  > **The trap, and it is live:** `trust-signal-store.test.ts` seeds `subject` with the daemon's
+  > agent_id UUID. A coder who follows the old wording writes
+  > `WHERE subject_kind != 'agent' OR subject = agentId`, copies the fixture convention, and **goes
+  > green — while matching ZERO rows in production**, silently un-presenting every agent-subject signal.
+  > This unit is sequenced first, so that lands before anything else.
+  > **Required:** scope on the presenting agent's `k_local_pubkey` hex (available at the
+  > `outbound-sessions.ts:186` call site via `loadedAgents`), and **fix the fixture's UUID-as-subject
+  > convention first** — otherwise the new test does not survive the revert test: it passes with or
+  > without the scoping fix, because the fixture makes both paths return the seeded row. — ❌
 
 ---
 
@@ -767,8 +794,26 @@ the discussion-of-record. Restated here because this is the milestone that imple
   >   precede the SUPERSESSION branches**, or a revoked-and-superseded record reads `superseded`,
   >   contradicting V46's rule that revoked is the strongest statement.
   > **Scope of the evidence, honestly:** "differs from today on exactly one of six shapes" was true only
-  > of the six shapes chosen. Re-run the full table on the corrected expression **inside V46's real
-  > `CASE`** as the first task of Tier 3. `revoker_pubkey` must be **`TEXT`**: `bytea[] && text[]` and
+  > of the six shapes chosen. **Re-measured inside V46's real `CASE` (Entry 15) and independently
+  > re-derived by the fourth review: nine shapes, exactly one changes, and the ordering and fifth-branch
+  > claims both hold.** Three further items that measurement surfaced:
+  > - **A TENTH shape changes — `issuer_kind='directory'` records become UNREVOCABLE.** Branch 4 tests
+  >   `issuer_kind = 'portal'`, so a `directory`-issued record gets exact-pubkey matching with no
+  >   rotation escape. V46 deliberately admits `'directory'`; nothing issues it today — which is the
+  >   **identical §5a argument used twice already** to add branches 2 and 5, and I failed to apply it a
+  >   third time. Decide: extend branch 4 to `IN ('portal','directory')`, or state why `directory` is
+  >   deliberately excluded.
+  > - **It BREAKS V46's documented monotonicity invariant, and that must be stated in the migration.**
+  >   V46's header says *"revoked — if ANY node's copy says revoked. Revocation is monotonic … this
+  >   converges regardless of arrival order."* Under `D-12r4` an unauthorized tombstone that lands
+  >   first reads `revoked`, then reads **`active`** once the real record replicates in — a
+  >   `revoked → active` transition reachable through ordinary convergence with no write. Branch 1
+  >   preserves today's behavior only until the real row arrives. **Amend V46's header comment in the
+  >   same migration**, or the code contradicts its own documentation.
+  > - **The exact-column-set gate will go red.** `m10-store-dir-1-v46-signal-records.test.ts` asserts
+  >   `signal_records`' columns exactly, with a comment that any new column *"goes red here and has to
+  >   be justified"*. `D-12r4` adds `revoker_pubkey` and `M10B-D28` adds the persisted signature. Write
+  >   the justification here, so the coder does not decide alone whether to loosen a deliberate gate. `revoker_pubkey` must be **`TEXT`**: `bytea[] && text[]` and
   `text[] && varchar[]` both error at `CREATE VIEW` time. Two things D-12r got right and are confirmed:
   the tombstone INSERT is genuinely blind (no `SELECT` between auth and insert), and a multi-issuer
   hash group cannot exist because `issuer_pubkey` is inside the preimage — so there is no
@@ -808,7 +853,43 @@ the discussion-of-record. Restated here because this is the milestone that imple
   > this migration gets an **auth-flavoured name for a version-skew bug**. Directory nodes are sovereign
   > and deploy independently per region, so this is the *normal* rollout case, not an edge. Add an
   > `unsupported_frame` reply carrying the received `type`; until then it is a documented symptom so the
-  > first operator to hit it is not sent to debug keys. (that upsert is what killed
+  > first operator to hit it is not sent to debug keys. **Note the limit honestly (fourth review):**
+  > `unsupported_frame` **cannot cover the window it is for** — a node that has not deployed cannot send
+  > the new reply — so it buys nothing for *this* rollout and only helps future ones. The documented
+  > symptom is the actual mitigation here.
+  >
+  > ### ✅ `submission_results` — THE AUTHORITATIVE SHAPE (fourth review HIGH-3; restated once, here)
+  > ```sql
+  > CREATE TABLE submission_results (
+  >   agent_id       TEXT        NOT NULL,
+  >   submission_id  TEXT        NOT NULL,
+  >   writing_node   TEXT        NOT NULL,   -- the node component; without it a failover duplicate wedges federation
+  >   sealed_result  BYTEA       NOT NULL,
+  >   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  >   PRIMARY KEY (agent_id, submission_id, writing_node)
+  > );
+  > ```
+  > Earlier prose gave a PK naming a column the column list omitted. This block supersedes it.
+  > - **DEDUPE TIEBREAK (fourth review MEDIUM-4).** The drain dedupes on `(agent_id, submission_id)`,
+  >   but **V46's justification for a bare `MIN()` does NOT transfer**: V46 can pick any copy because
+  >   *"the copies agree on every hashed field — content-addressing guarantees it"*, and
+  >   `sealed_result` is **not** content-addressed — two nodes produce different ciphertext and could
+  >   in principle seal different outcomes. Tiebreak: **lowest `writing_node`**, deterministic across
+  >   nodes. (Same shape as the `pickup_queue` error just corrected: a property asserted from a
+  >   precedent that does not have it.)
+  > - **🚨 PUBLICATION MEMBERSHIP IS A REQUIRED CLAUSE (fourth review HIGH-2).** `submission_results`
+  >   **must be added to `PUBLICATION_TABLES` in `infra/setup-replication.sh`**, and the script re-run
+  >   in all three regions. Miss it and the feature builds complete, passes single-node tests, and
+  >   **silently delivers nothing**: result written to node A → daemon reconnects to node B → drain
+  >   returns zero rows → no frame, no log, no error. `signal_records` and `authorized_issuers` are
+  >   already in that list, so the step is established practice — it was simply never written down here.
+  > - **The ack's cross-node delete is sound but DIVERGES from the one precedent, so say why.**
+  >   `sweepUndeliverablePickups` scopes its multi-row delete *"to this node's own rows for replication
+  >   safety"*; this ack deliberately deletes **all** copies for the pair. That is safe — the publication
+  >   is created with no `WITH` clause so DELETE is published, and REPLICA IDENTITY defaults to the PK —
+  >   but the divergence must be stated rather than left to look like an oversight. **Residual:** a copy
+  >   in flight during the ack survives and is redelivered once, so **the client sink must be
+  >   idempotent** — which "one row per event, no supersede-by-kind" does not provide on its own. (that upsert is what killed
   > `M10B-D19`), ack scoped to `(submission_id, agent_id)` like `ackPickupDelete` — an id-only delete
   > would let any authenticated agent wipe another's undelivered results.
   > **It IS replicated, unlike `submission_queue` (`M10B-D21`), and the asymmetry is direction not
@@ -917,6 +998,28 @@ the discussion-of-record. Restated here because this is the milestone that imple
   >   error-fidelity failure D-26r claimed to avoid. **Prerequisite:** wire `linkAgentToAccount()` to a
   >   portal route before `operator_linkage_unresolved` ships, or the refusal is unactionable and a
   >   transient error becomes a permanent, unannounced disqualification.
+  > ### 🚨 CORRECTED AGAIN (fourth review HIGH-1) — that prerequisite as written is an AUTHORIZATION
+  > ### BYPASS ON THE KILL SWITCH. Do NOT wire `linkAgentToAccount()` as-is.
+  > Verified in the function body (`pre-auth-token-repository.ts:500–547`):
+  > - **`linkAgentToAccount` performs NO ownership check.** It is
+  >   `UPDATE agent_profiles SET account_id = $1 WHERE k_local_pubkey = $2` — nothing proves the caller
+  >   controls that agent key, and `k_local_pubkey` is a **public** value discoverable from the
+  >   directory.
+  > - **`resolveAccountId` CREATES an account** when none matches the supplied phone stub
+  >   (`:504–528`) — it does not bind to the caller's portal session.
+  > - **`agent_profiles.account_id` is the authorization root for the kill switch.** The write seam
+  >   derives scoping from it *"NOT from a request field"*, and it fronts pause/**burn** — and burn is
+  >   monotonic and terminal.
+  > Composed: attacker's own phone stub + victim's public `k_local_pubkey` → the victim's agent is
+  > reassigned to the attacker's account → the attacker can **permanently burn it**. The unused
+  > `agentProfileId` in the params interface is the tell that the body was never read.
+  > **So F4 is NOT a one-line prerequisite. It is its own DoD line, `DOD-END-ACCOUNTLINK-1`, with ACs:**
+  > proof-of-control over the agent key (a signature from `k_local`, not possession of its public half);
+  > link to the **session's** account, never `resolveAccountId`'s create path; remove the dead
+  > `agentProfileId`; and a **negative test** that a caller cannot link an agent they do not control.
+  > **This is the fifth instance of the milestone's recurring pattern** (Entry 14) and the first where
+  > the un-read mechanism is a privilege-granting write — which is exactly why the pattern is worth
+  > naming rather than just fixing case by case.
 - **M10B-D27 (2026-07-28, from second-review H4) — the retention ordering in Entry 8 was BACKWARDS; the
   queue-driven rule in `M10B-D11` stands.** Entry 8 wrote "sweep TTL **longer** than the intake-key
   retention window" — the direction that *guarantees* stranding, because a row then outlives the key it
