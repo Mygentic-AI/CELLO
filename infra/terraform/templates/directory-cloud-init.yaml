@@ -5,7 +5,9 @@
 # holding compute.instances.get. What appears here is the secret RESOURCE NAMES; the node resolves
 # them itself at boot with its attached workload identity (gcp-boot-env.ts).
 #
-# Two units:
+# Three units:
+#   cello-firewall.service   opens the CELLO ports in the COS HOST firewall. Not redundant with the
+#                            VPC rules — see the unit; without it nothing reaches this node.
 #   cello-directory.service  the node. Restarts on failure; the MIG heals it if it stops answering.
 #   cello-backup.timer       daily pg_dump to GCS. The node's key shares exist in its database and
 #                            nowhere else, so this is the only copy off the VM.
@@ -48,6 +50,34 @@ write_files:
       CELLO_BACKUP_DBNAME=${backup_dbname}
       CELLO_GSM_DB_CREDENTIALS=${gsm_db}
       HOME=/tmp
+
+  - path: /etc/systemd/system/cello-firewall.service
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=Open the CELLO ports in the COS host firewall
+      # Must be in place before anything can be reached, including the MIG health probe.
+      Before=cello-directory.service
+      DefaultDependencies=no
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      # Container-Optimized OS ships INPUT with policy DROP, permitting only established
+      # connections, loopback, ICMP and tcp/22. A GCP firewall rule is NOT sufficient on its own:
+      # the packet is allowed onto the wire and then dropped by the host. Without this the MIG
+      # health probe times out, the autohealer resets the instance on a loop, and no peer or client
+      # can reach the node at all — while every VPC-level rule reads as correct.
+      #
+      # -I (insert), and idempotent: COS rebuilds these rules on every boot, and this unit re-runs
+      # on every boot, so a -D before each -I keeps a restart from stacking duplicates.
+      ExecStart=/bin/sh -c 'for p in 4000 8080 9090; do iptables -w -D INPUT -p tcp --dport $p -j ACCEPT 2>/dev/null; iptables -w -I INPUT -p tcp --dport $p -j ACCEPT; done'
+
+      [Install]
+      WantedBy=multi-user.target
 
   - path: /etc/systemd/system/cello-directory.service
     permissions: "0644"
@@ -114,5 +144,6 @@ write_files:
 
 runcmd:
   - systemctl daemon-reload
+  - systemctl enable --now cello-firewall.service
   - systemctl enable --now cello-directory.service
   - systemctl enable --now cello-backup.timer
