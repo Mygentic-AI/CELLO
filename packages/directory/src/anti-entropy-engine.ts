@@ -11,6 +11,17 @@
  * Convergence rests on the merges being an idempotent join-semilattice (proven in suspension-merge
  * / presence-merge): after both directions run once, a further round pulls nothing and applies
  * nothing — no ping-pong.
+ *
+ * Obligations for the pg-backed AeStoreView (the next unit — reviewer F1/F3):
+ *  - `applyTierA` = INSERT … ON CONFLICT (<natural key>) DO NOTHING — the conflict target is the
+ *    NATURAL key (agent_id / k_local_pubkey / composite), never the BIGSERIAL id or a record_hash.
+ *  - `applyTierB` = merge-upsert (SELECT existing → merge fn → UPSERT) and MUST be atomic
+ *    (`SELECT … FOR UPDATE` or the merge in `ON CONFLICT DO UPDATE`), or two concurrent rounds race
+ *    and silently drop a paused/burned update.
+ *  - advertise and serve should read a CONSISTENT snapshot (same txn) so a mid-round change can't
+ *    make a served pull miss a just-advertised hash.
+ *  - `RoundResult` counts records PULLED, not necessarily inserted; a pg store should prefer the
+ *    inserted/merged count so a same-key/different-hash fork surfaces as non-termination loudly.
  */
 
 import { computeTableDigest } from "./set-reconciliation.js";

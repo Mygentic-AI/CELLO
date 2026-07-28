@@ -114,6 +114,9 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
       expect(s.paused).toBe(false); // higher seq's paused won
       expect(s.suspension_seq).toBe(9);
     }
+    // Terminal: the equal-seq idempotent merge converged — a further round applies nothing.
+    expect(runAntiEntropyRound(A, B)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
+    expect(runAntiEntropyRound(B, A)).toEqual({ tierAApplied: 0, tierBApplied: 0 });
   });
 
   it("an already-converged pair does nothing (idempotent)", () => {
