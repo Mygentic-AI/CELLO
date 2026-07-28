@@ -908,3 +908,132 @@ design calls append-only.
 
 **NEXT:** the unit proper — Cloud SQL credential path for `CELLO_CLOUD=gcp` (a `gcp`+`dev` node
 still cannot boot), then the Terraform node module.
+
+---
+
+## Entry 21 — 2026-07-28 — DOD-NODE-DIR-GCP-1: the first GCP directory, and what it took to boot one
+
+### The blocker Entry 19 named, closed
+
+`CELLO_CLOUD=gcp` + `CELLO_ENV=dev` could not boot: the only database-credential path was AWS
+Secrets Manager. `gcp-boot-env` now resolves the node's secrets from GCP Secret Manager with the
+VM's attached workload identity and emits shell `export` lines the entrypoint evaluates — once,
+before Flyway, so Flyway and the node share one fetch instead of two paths that drift.
+
+Why the node fetches rather than being injected: Container-Optimized OS takes container
+environment from instance metadata, and metadata is readable by anything holding
+`compute.instances.get`. Key material must not travel that way. Metadata carries secret RESOURCE
+NAMES; the values never appear in it.
+
+Two Entry 19 owed items closed alongside: `nodeId`/`region` no longer derive from `AWS_REGION`
+(which configures where AWS SDK clients talk, not where a node is — a GCP node was stamping
+`us-east-1` on every log line and every `directory_nodes` row), and the SSM registry is skipped on
+GCP naming the cause rather than reaching for an API that deliberately does not exist there.
+
+### Three defects found before writing any GCP code, one aimed squarely at tonight
+
+Establishing a green floor first turned up nine failures on the merged tree. Checking out
+`m12/ae-append` and re-running gave **the same nine** — the merge introduced none. That baseline is
+the only reason the rest is honest.
+
+The one that mattered: **an unreachable database killed the node with a raw `pg-pool` stack and no
+CELLO event at all.** `loadProfiles()` threw out of an unhandled rejection. On a cloud VM that is
+an unattributable crash in a serial console — and it is the most likely first-boot failure against
+a freshly provisioned managed database. I would have debugged it blind tonight. Related: the
+AC-010 schema guard was **unreachable**, sitting after the profile cache load, so an un-migrated
+database always failed earlier on `relation "agent_profiles" does not exist` and the guard whose
+job is to name the cause never ran. Both fixed; `directory.db.unavailable` and
+`migration.out.of.date` are now distinct causes behind an explicit `SELECT 1` probe.
+
+### The unit review earned its keep — two blocking findings in the untested seam
+
+Both were in the seam between the TypeScript and the shell, the half that had no tests:
+
+**`set -e` does not abort on a failed `eval "$(cmd)"`.** The script's status is `eval`'s, and
+`eval ""` succeeds, so the command substitution's failure is discarded. Every secret-resolution
+failure was swallowed; the script then printed a `boot_env.resolved` success event that was false,
+and the node died forty lines later claiming `RDS_CREDENTIALS_SECRET_ARN not available` — an AWS
+Secrets Manager ARN, on a node holding no AWS credentials, blaming a migration that never ran.
+Textbook error substitution.
+
+**The exported `FLYWAY_URL` was dead.** The AWS derivation rebuilt it from `DATABASE_URL`,
+appending `?sslmode=no-verify` — a libpq value that pgjdbc rejects outright (`Invalid sslmode
+value`). The first migration on the first GCP node would have failed.
+
+Eight further findings fixed (silent `NODE_ID` default violating DOD-INV-NODEID; two key purposes
+silently allowed to share one secret; the unenforced stdout contract; a mandatory pre-auth issuer
+key that would have forced a cross-region signing identity into every node; case-sensitivity
+mismatch; a connection-class error reported as a schema cause; no flush before `process.exit`;
+unencoded URL components). Three tests were called out and replaced: one passed whether or not the
+code under test existed, one stayed green if two rows of the binding table were swapped (booting a
+node with its identity seed as its transport key), and the `eval` line had no tests at all.
+`gcp-entrypoint` now EXECUTES the script with a stubbed `node`; reverting the two blocking fixes
+fails 3 and 1 of its assertions respectively.
+
+The new tests also caught something unprompted: the `DATABASE_URL` `sed` expressions used GNU BRE
+(`\(ql\)\?`), which **BSD sed silently does not match** — the AWS derivation was a no-op on macOS.
+
+### Two more things that would only have failed later
+
+**`RELAY_MANIFEST_SIGNER_PUBKEY` is `requireEnv` on every non-local node**, and a first node in a
+new region has nothing to inherit it from. On AWS the value is set per region by `deploy.sh` from
+that region's own node key, so it has always meant "this node's own public key". The node now
+derives it and logs `relay.manifest.signer.derived`. This is a derivation, not a fallback, and the
+safety argument is the failure direction: if a node were meant to trust a manifest signed by a
+DIFFERENT node, deriving self makes it REJECT that manifest. No input widens what it accepts.
+
+**The backup script was not in the image.** cloud-init's timer overrides the entrypoint to reach
+`/app/packages/directory/scripts/pg-backup-to-gcs.sh`; the Dockerfile copied `dist/`, the
+migrations and the entrypoint, and nothing else. It would have surfaced at 04:17 UTC as a backup
+that silently never ran — and that backup is the only copy of a node's FROST shares off the VM
+(anti-entropy never syncs `agent_key_shares`; Cloud SQL's own backups die with the instance).
+`gcp-image-contents` now extracts every `/app` path the systemd units execute and asserts each
+ships.
+
+### The infrastructure
+
+`terraform apply`: **43 added, 0 changed, 0 destroyed**, then 5 more. Everything `for_each`'d over a
+map keyed by REGION, so two nodes in one region is unrepresentable and adding a region is adding
+one entry — that is the DOD-INV-IAC region-expansion test, not a claim about it.
+
+**Cloud SQL over Private Service Connect, not private IP.** Private IP requires Private Service
+Access, which is a VPC peering into Google's producer network, and DOD-INV-NO-VPN forbids peering
+outright. PSC creates no peering, no reserved range, no transitive route: the consumer end is a
+forwarding rule in the node's own subnet. With `ipv4_enabled=false` there is no public IP to reach
+at all. Live: the instance answers only at **10.10.0.3**, inside `cello-us-east1`.
+
+Per node: its own Cloud SQL, its own KMS key ring and envelope key (a shared key would mean one
+compromised node unwraps every other node's shares), its own three buckets with asymmetric grants
+(**objectCreator** on audit and backups — write, never delete — so a compromised node cannot erase
+its own trail), its own secrets replicated only to its own region, its own static IP.
+
+Node address: **34.75.172.108**. Protocol ports 4000/8080 are open to the internet on purpose —
+libp2p is Noise-encrypted and manifest-pinned, so the transport authenticates its own peers. That
+is precisely what lets directories reconcile across clouds with no tunnel. The health port is not
+in that rule.
+
+One apply failure worth recording: the KMS key ring failed with a 403 because Terraform enabled
+`cloudkms.googleapis.com` in the **same** apply and the enablement had not propagated. Re-apply
+succeeded. Enabling an API and using it in one run is a race, not a config error.
+
+### IAP SSH — the Entry 5 carry-forward, exercised
+
+```
+=== IAP LOGIN OK: cello-gcp-use1-8cpn Tue Jul 28 21:07:28 UTC 2026 ===
+```
+
+`gcloud compute ssh --tunnel-through-iap` works; port 22 is reachable only from 35.235.240.0/20.
+The same session confirmed `docker-credential-gcr configure-docker` succeeds, so Artifact Registry
+auth via workload identity is live, and showed the service in `activating (auto-restart)` with
+`docker pull …:m12-ae76c386` exiting 1 — the image was still building. The retry loop behaves as
+designed.
+
+### Where it stands
+
+The node is provisioned and its restart loop is healthy; it is waiting on its image. Still owed
+before this line can flip: the live boot itself, the EMPTY-REGISTRY BOOT confirmation M12-D6 asked
+for, and real-cloud proof for the three GCP adapters (which is what makes `DOD-ADAPTER-GCP-1` 🟡
+today). DNS (`directory-gcp-use1.cello.mygentic.ai`) is deliberately not created — Route53 is in
+AWS, which is hibernated, and the node does not need it to boot.
+
+Directory suite: 2 failures of 1380, both the parked **M12-P7** chain assertion. lint + tsc clean.
