@@ -129,8 +129,17 @@ def test_e_alert_unsubscribe_is_scoped_to_the_alert_list():
 @pytest.mark.parametrize(
     "render",
     [
-        lambda: templates.e1_confirm(job(display_name='<a/href="https://evil.test">Verify')),
-        lambda: templates.e_magic_link(job(display_name='<a/href="https://evil.test">Verify')),
+        # auth_token is supplied for the same reason waitlist_token and
+        # invite_codes are below: these templates now REQUIRE the thing their
+        # link is made of. They used to fall back to the sign-in page when it was
+        # missing, which is how a "Confirm email →" button could quietly point at
+        # a form asking the reader to start over.
+        lambda: templates.e1_confirm(
+            job(display_name='<a/href="https://evil.test">Verify', auth_token="T")
+        ),
+        lambda: templates.e_magic_link(
+            job(display_name='<a/href="https://evil.test">Verify', auth_token="T")
+        ),
         lambda: templates.e_inv_admission(
             job(display_name='<a/href="https://evil.test">X', wave_number=2, waitlist_token="T")
         ),
@@ -147,6 +156,26 @@ def test_no_template_lets_a_display_name_open_a_tag(render):
     _, html, _ = render()
     assert '<a/href="https://evil.test"' not in html
     assert "evil.test" not in html or "&lt;a/href" in html
+
+
+@pytest.mark.parametrize("render", [templates.e1_confirm, templates.e_magic_link])
+def test_a_link_mail_refuses_to_send_without_its_token(render, database=None):
+    """A mail whose entire job is one link must not ship without the link.
+
+    Both templates used to fall back to {SITE}/auth when auth_token was absent,
+    so a "Confirm email →" button would land the reader on a form asking them to
+    start over — indistinguishable, from their side, from the capture-loop outage
+    that cost three days. It failed silently in the worst way: SES accepted it,
+    the job was marked sent, and no log line anywhere said the link was dead.
+
+    Raising puts it in the batch's failed count and leaves the job to retry.
+    """
+    with pytest.raises(RuntimeError) as excinfo:
+        render(job(display_name="Someone"))
+
+    # The message has to name the template and the user, because the only place
+    # this surfaces is a log line somebody reads later.
+    assert "auth_token" in str(excinfo.value)
 
 
 def test_e_inv_carries_the_install_command(database=None):

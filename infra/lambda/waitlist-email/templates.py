@@ -73,6 +73,32 @@ def _shell(content):
 </html>"""
 
 
+def _require_token(job, template):
+    """The auth token for a link-bearing mail, or a loud failure.
+
+    THIS USED TO FALL BACK TO {SITE}/auth, AND THAT FALLBACK IS THE BUG SHAPE
+    THIS PRODUCT HAS ALREADY PAID FOR ONCE. A missing token meant we mailed
+    somebody a "Confirm email →" button that landed them on the sign-in form —
+    which is precisely the symptom of the three-day capture-loop outage, except
+    self-inflicted and invisible: the send succeeds, the delivery state says
+    sent, and nothing anywhere records that the link could not work.
+
+    Raising instead leaves the job to retry and surfaces in the batch's failed
+    count. A mail that cannot do its one job is worse than a mail that did not
+    go out, because the reader concludes the product is broken and we learn
+    nothing. The dispatcher already takes this line for magic links —
+    latest_unused_magic_link raises rather than returning None — so this makes
+    the confirm path consistent with it rather than inventing a new rule.
+    """
+    token = job.get("auth_token")
+    if not token:
+        raise RuntimeError(
+            f"{template} has no auth_token for user {job.get('user_id')}; refusing to "
+            f"send a link that would land on the sign-in form."
+        )
+    return token
+
+
 def _greeting(job):
     name = (job.get("display_name") or "").strip()
     first = name.split()[0] if name else "there"
@@ -113,8 +139,7 @@ def e1_confirm(job):
     Both belong on the page the click lands on, where they are true.
     """
     name = _greeting(job)
-    token = job.get("auth_token")
-    confirm_url = f"{API}/auth/verify?token={token}" if token else f"{SITE}/auth"
+    confirm_url = f"{API}/auth/verify?token={_require_token(job, 'e1_confirm')}"
 
     parts = [
         f'<h1 style="margin:0 0 8px;font-size:28px;font-weight:700;color:#111;letter-spacing:-0.5px;">Confirm your email, {name}.</h1>',
@@ -155,8 +180,7 @@ def e_magic_link(job):
     that is not theirs must learn nothing from what arrives.
     """
     name = _greeting(job)
-    token = job.get("auth_token")
-    url = f"{API}/auth/verify?token={token}" if token else f"{SITE}/auth"
+    url = f"{API}/auth/verify?token={_require_token(job, 'e_magic_link')}"
 
     content = (
         f'<h1 style="margin:0 0 8px;font-size:28px;font-weight:700;color:#111;letter-spacing:-0.5px;">Sign in, {name}.</h1>'
