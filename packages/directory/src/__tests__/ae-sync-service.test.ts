@@ -151,6 +151,9 @@ describe("AeSyncService — libp2p-face wiring", () => {
       .toBe("/dns4/directory-us1.cello.mygentic.ai/tcp/80/ws/p2p/12D3KooWX");
     expect(manifestEntryMultiaddr("http://host:8080", "12D3KooWX"))
       .toBe("/dns4/host/tcp/8080/ws/p2p/12D3KooWX");
+    // Loopback e2e: an IPv4-literal host must be /ip4/ (a /dns4/ IP literal does not resolve).
+    expect(manifestEntryMultiaddr("http://127.0.0.1:9123", "12D3KooWX"))
+      .toBe("/ip4/127.0.0.1/tcp/9123/ws/p2p/12D3KooWX");
   });
 
   it("dial service converges onto the responder's store through real lp+CBOR framing, emitting §6 events", async () => {

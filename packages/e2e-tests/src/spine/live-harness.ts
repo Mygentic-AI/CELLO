@@ -667,8 +667,15 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
           ? { CELLO_DELIVERY_GRACE_SECONDS: String(opts.deliveryGraceSeconds) }
           : {}),
         // DOD-AUTH-2: serve a consortium manifest to polling clients (rotatable on disk).
+        // M12 §1b: the directory now VERIFIES its manifest at load — a manifest path without the
+        // officer anchor is a fail-loud exit(1). The harness signs its manifests with the spine
+        // officers, so the anchor rides along whenever the path is set.
         ...(opts.directoryConsortiumManifestPath
-          ? { CELLO_DIRECTORY_CONSORTIUM_MANIFEST: opts.directoryConsortiumManifestPath }
+          ? {
+              CELLO_DIRECTORY_CONSORTIUM_MANIFEST: opts.directoryConsortiumManifestPath,
+              CELLO_CONSORTIUM_ROOT_KEYS: CONSORTIUM_ROOT_KEYS.join(","),
+              CELLO_CONSORTIUM_THRESHOLD: String(CONSORTIUM_THRESHOLD),
+            }
           : {}),
         // DOD-LEG-2 negative test: make the directory publish an inflated (still-signed) frontier.
         ...(opts.directoryInflateFrontierForTest

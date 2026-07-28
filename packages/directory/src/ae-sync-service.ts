@@ -67,14 +67,16 @@ export function streamWire(stream: Stream): AeWire {
 
 /**
  * Derive the AE dial multiaddr from a manifest entry's endpoint + peerId. Mirrors the client's
- * endpoint→bootstrap mapping: https → tcp/443/wss, http → tcp/80/ws. (The MULTIADDR-1 helper on
- * the m12/multiaddr branch generalizes this for /bootstrap; converge at the batch merge.)
+ * endpoint→bootstrap mapping: https → tcp/443/wss, http → tcp/80/ws; an IPv4-literal host (the
+ * local loopback e2e) is /ip4/, a hostname is /dns4/. (The MULTIADDR-1 helper on the
+ * m12/multiaddr branch generalizes this for /bootstrap; converge at the batch merge.)
  */
 export function manifestEntryMultiaddr(endpoint: string, peerId: string): string {
   const url = new URL(endpoint);
   const https = url.protocol === "https:";
   const port = url.port !== "" ? Number(url.port) : https ? 443 : 80;
-  return `/dns4/${url.hostname}/tcp/${port}/${https ? "wss" : "ws"}/p2p/${peerId}`;
+  const hostProto = /^\d{1,3}(\.\d{1,3}){3}$/.test(url.hostname) ? "ip4" : "dns4";
+  return `/${hostProto}/${url.hostname}/tcp/${port}/${https ? "wss" : "ws"}/p2p/${peerId}`;
 }
 
 export interface AeSyncConfig {

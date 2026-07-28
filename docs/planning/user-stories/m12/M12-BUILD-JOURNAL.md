@@ -443,3 +443,50 @@ test.
 - **Anti-rollback floor is process-lifetime** (review finding, accepted trade): a restart accepts
   any validly-signed manifest; the same SSM privilege domain controls the anchor itself, and the
   client's compiled-in anchor is the real backstop.
+
+---
+
+## Entry 13 — 2026-07-28 — AE wired into the node; §1b broke a J-AUTH invariant — FIX DESIGNED, NOT YET APPLIED
+
+**Done + green:** AeSyncService wired into `CelloDirectoryNode.start()`/`stopAeSync()` and the
+composition root (2d8c5ab6). Own peerId comes from the live transport, never config. AE turns on
+when the three trust legs exist (verified manifest store + node key + pg pool) — no env flag,
+because a pre-M12 manifest has no peerIds, so the dial loop no-ops and inbound handshakes fail
+closed until the signed rotation lands. Also green + uncommitted→committed here: `manifestEntryMultiaddr`
+now emits `/ip4/` for an IPv4-literal host (the loopback e2e needs it; `/dns4/127.0.0.1` does not
+resolve), and the spine harness passes the officer anchor whenever it sets a manifest path (§1b
+made a path-without-anchor a fail-loud exit(1)).
+
+**⚠️ OPEN — one FAILING test, root cause understood, fix designed but NOT applied.**
+`packages/e2e-tests/src/spine/j-auth.spine.test.ts` → "DOD-AUTH-2 (poll rejects forged)" now fails
+(5 of 6 pass). NOT flaky, NOT pre-existing: my §1b change caused it.
+
+- **Cause:** the test writes a FORGED manifest to the directory's served file and expects the
+  directory to SERVE it, so the daemon can prove it independently rejects it (logs
+  `directory.auth.manifest.signature.invalid` at version 9). §1b made `getCurrentManifest()` verify,
+  so the forged file is refused and the directory serves last-good instead → the daemon never sees
+  v9 → 20s timeout.
+- **Why the test is right:** M7 DOD-AUTH-2 deliberately makes the directory a DUMB TRANSPORT for the
+  manifest. That is a real invariant, for two reasons: clients must never trust the directory (the
+  test is the proof), and a manifest signed by a ROTATED officer set must still reach clients whose
+  anchor is newer than the directory's — otherwise officer rotation is blocked by a stale node.
+- **Why §1b is also right:** the manifest is the AE channel's trust anchor; the directory must not
+  ACT on an unverified one.
+- **Fix (M12-D8, decided — apply next):** these are two ROLES, not one. Split the store:
+  `getCurrentManifest()` reverts to pure transport semantics (serve on-disk; last-good only on
+  read/parse error — no verification), and a new `getVerifiedManifest()` carries the §1b checks
+  (threshold signatures, validity window, §1c distinctness, anti-rollback; construction still
+  throws in verify mode). Then point each call site at the role it actually needs:
+  - SERVE (transport, unverified): `manifest_poll_request` response (`directory-node.ts:2363`) and
+    the HTTP `/manifest` endpoint (`bin/directory.ts:1163`).
+  - USE (must be verified): the AE anchor (`bin/directory.ts:955`) and — a pre-existing latent
+    weakness worth closing in the same change — the **DKG quorum derivation** at
+    `directory-node.ts:2848`, which today derives participants/threshold from an UNVERIFIED
+    manifest.
+  `getVerifiedManifest()` becomes a required method on the `DirectoryManifestStore` interface
+  (`packages/interfaces/src/manifest.ts`) so `TestDirectoryManifestStore` must implement it too — no
+  optional method with a silent fallback to the unverified getter.
+
+Next after that: re-run j-auth (expect 6/6) and the wider spine suite, then DOD-AE-LOCAL-E2E-1
+(three-process loopback convergence via the extended harness — the harness already provisions one DB
+per sovereign node, which is the substrate that enforcer needs).
