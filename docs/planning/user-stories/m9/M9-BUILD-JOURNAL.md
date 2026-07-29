@@ -29,11 +29,13 @@ description: >
 - **Gates at HEAD:** 1588 tests green across daemon + gateway + cli + adapter; lint clean; typecheck
   clean. Enforcer `DOD-M9C-GATE-1` green — it spawns the BUILT `cello-daemon` bin with zero
   injection and reads `mode:"enforcing"` off the boot line.
-- **Status:** STORE-1, WIRE-1, SURFACE-1, ENV-1, AUDIT-1, GATE-1 all built and reviewed (two
-  `cello-unit-reviewer` passes; every blocking finding fixed). Tags await the `cello-done-auditor`
-  verdict — **do not flip to ✅ before it rules.**
-- **Next red line:** `DOD-M9C-PUBLISH-1` — one batched beta cascade (gateway → daemon → cli →
-  connect). Load `/cello-publish` for THAT publish; the `latest` promotion and the `/mcp` reconnect
+- **Status (audited 2026-07-29, Entry C9):** ✅ `STORE-1`, `ENV-1`. 🟡 `WIRE-1`, `SURFACE-1`,
+  `AUDIT-1`, `GATE-1`. ❌ `PUBLISH-1`.
+- **Next work, in value order:** (1) the THREE missing GATE-1 assertions — outbound credential
+  redacted at the peer, crafted inbound sanitized, both readable through AUDIT-1 — which would
+  likely convert WIRE-1 and AUDIT-1 to ✅; (2) `PassthroughGatewayClient` off the two public barrels
+  onto a `/testing` subpath (WIRE-1's unmet clause); (3) `DOD-M9C-PUBLISH-1`, one batched beta
+  cascade — load `/cello-publish` for THAT publish; the `latest` promotion and the `/mcp` reconnect
   are Andre's, prepared and handed over, never run.
 - **Carried forward (Entry C8), not lost:** correlationId threading (F12); `list` should show
   `changed_at` + `chainValid` (F9); `PassthroughGatewayClient` on two public barrels rather than a
@@ -1411,3 +1413,78 @@ carried to the next unit rather than silently dropped.
   off the production surface (F-D).
 - `pii:whitelist_add_requested` has no consumer — nothing turns it into the `cello config set` line
   the operator should run. Inherited from Phase 1, not introduced here.
+
+---
+
+## 2026-07-29 — Entry C9: the done-auditor verdict — 2 EARNED, 4 OVERSTATED, 1 UNPROVEN
+
+**Commit:** `1bae5ba` (branch `m9/connect-unit`). 1588 tests green; lint and typecheck clean.
+
+### The verdict, applied
+
+| Line | Verdict | Tag |
+|---|---|---|
+| `DOD-M9C-STORE-1` | **EARNED** — ciphertext on disk, both refusal paths, no `node:sqlite` in the built artifact, and the SHIPPED daemon creates the encrypted store itself | ✅ |
+| `DOD-M9C-ENV-1` | **EARNED** — the best-evidenced line: the built bin spawned with all four variables at their most permissive still refuses a PII value "whitelisted" only by the environment | ✅ |
+| `DOD-M9C-WIRE-1` | OVERSTATED | 🟡 |
+| `DOD-M9C-SURFACE-1` | OVERSTATED | 🟡 |
+| `DOD-M9C-AUDIT-1` | OVERSTATED | 🟡 |
+| `DOD-M9C-GATE-1` | OVERSTATED | 🟡 |
+| `DOD-M9C-PUBLISH-1` | UNPROVEN | ❌ |
+
+### The finding I missed, and it is the milestone's own defect
+
+`session-node-manager.ts` read `opts.securityGateway ?? new PassthroughGatewayClient()` — **the
+identical shape as the bug that reopened M9, one layer down, and shipping in the built artifact.**
+`daemon.ts` was hardened to throw; this constructor was not. Nothing reaches it today because
+`daemon.ts` always passes the client — but *"currently unreachable" is a property of today's call
+sites, not of the code*, and INV-9 says no shipped path constructs the stub. Now required, with the
+same loud refusal.
+
+### INV-10 claimed a property the code does not have
+
+My F1 fix closed the no-handshake route and I believed that closed the hole. It did not.
+**`clientType` is SELF-DECLARED** — the daemon records whatever string arrives in `ipc.connect`. Any
+process running as the operator can open `~/.cello/daemon.sock` (mode 0600), announce
+`clientType: "cli"`, and pass `confirmed: true`. The TTY check lives in the CLI process; the daemon
+cannot verify it. A same-uid process is not distinguishable from the operator by any local
+mechanism, so **no amount of daemon-side checking closes this.**
+
+I did not paper over it. INV-10, the module doc and the DoD now state what the gate delivers: every
+path an agent reaches by ORDINARY means is closed — its MCP tools, and the CLI, which refuses on a
+non-TTY stdin — so weakening a guard requires deliberately speaking raw IPC and misrepresenting
+itself, a louder act that the hash-chained trail records. **Friction plus audit, not a lock.** The
+real boundary is the portal passkey D-4 already names as the destination.
+
+That correction matters beyond this line: an invariant that overstates its guarantee is the same
+species of defect as a gate that certifies a layer nobody wired.
+
+### The gate is honest and still incomplete
+
+The auditor confirmed the gate test does what it claims — spawns the built binary, never calls
+`startDaemon` in-process, never sets `config.securityGateway`. But it makes **4 of the 6** specified
+assertions and **drives zero traffic**: not one message is screened by the shipped product anywhere
+in it. The daemon's own comment says the boot line is not a handshake — the socket connects lazily
+on first screen — so `mode:"enforcing"` is a LABEL on a socket the gate never exercises. Better than
+`passthrough`, verified from the real binary, and not yet the screening proof the DoD wrote down.
+
+**Owed, and it is the highest-value work left:** gate assertions (2) outbound credential redacted at
+the peer, (3) crafted inbound sanitized, (4) both readable through AUDIT-1, (6) sidecar killed
+mid-session → fail-closed with the real cause. The auditor's read is that those three would likely
+convert WIRE-1 and AUDIT-1 to ✅ as well, since the plumbing already exists and is proven under
+injection.
+
+### The lint rule earned its keep within the hour
+
+`no-dupe-keys`, added for review finding F8, immediately caught three more duplicates my dedupe
+regex had missed — including two in the M9 gate tests where the inserted stub **shadowed a real
+gateway**. Last-wins meant behavior was accidentally correct. That is luck, not coverage, and it is
+exactly the corruption class the rule exists for.
+
+### Still owed
+- The three missing gate assertions (above) — then re-audit WIRE-1 and AUDIT-1.
+- `PassthroughGatewayClient` on two public barrels; WIRE-1's "test-only visibility" clause is unmet.
+  A `/testing` subpath export is the fix.
+- `correlationId` threading; `list` showing `changed_at` + `chainValid`.
+- The plaintext REQUEST LOG — why M8C's `DOD-CRYPTO-AT-REST-1` is 🟡, not ✅.
+- `DOD-M9C-PUBLISH-1` — one batched beta cascade, not started.
