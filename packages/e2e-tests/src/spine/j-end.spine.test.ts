@@ -207,7 +207,12 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     const notarized = psqlSpine(
       `SELECT issuer_kind, type, scanner_version FROM signal_records WHERE is_tombstone = false ORDER BY created_at DESC LIMIT 1`,
     );
-    expect(notarized).toContain("portal");
+    // ATTRIBUTED TO BOB, not to the portal. INV-ATTRIBUTION binds `issuer_pubkey` to the
+    // authenticated identity that supplied the plaintext; the portal SIGNS the submission at the
+    // chokepoint but does not author the claim. This assertion originally said "portal" and passing
+    // it was the bug — the consent gate keys on `issuer_kind: agent`, so a portal-attributed
+    // endorsement was auto-accepted on arrival and the whole consent mechanism was inert.
+    expect(notarized, "the envelope attributes the claim to the AGENT who made it").toContain("agent");
     expect(notarized).toContain("endorsement");
     // The DERIVED scanner version, never the internal constant — the directory cannot re-run the
     // scan, so this field is the only evidence of which rules judged Bob's text.
@@ -215,5 +220,68 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
 
     // THE QUEUE ROW IS GONE: the portal acked a terminal outcome.
     expect(psqlSpine(`SELECT count(*) FROM submission_queue`).replace(/\s/g, "")).toContain("0");
+  }, 120_000);
+
+  it("HOP 3: Alice receives it PENDING — inert until she decides", async () => {
+    // THE DIRECTORY PUSHES PICKUPS ON RECONNECT, not on enqueue (`directory-node.ts` drains the
+    // queue onto a freshly-established signaling stream). Alice connected in HOP 0, BEFORE the mint
+    // in HOP 2, so her connect-time drain found nothing and the delivery is waiting for her next
+    // connect. That is the documented shape — "the envelope sits there and lands when the daemon
+    // next comes online" — and a subject who was already online is simply the same case with a
+    // longer wait, so the journey models the reconnect explicitly rather than sleeping and hoping.
+    const aliceDaemon = daemons[1];
+    await aliceDaemon.stop();
+    const restarted = await startDaemon(dirFor["alice"], cluster.directoryUrl, "jend-alice-2", { manifestEnv });
+    daemons[1] = restarted;
+
+    const conn = await connectMcp(dirFor["alice"], "jend-alice");
+    mcpConns.push(conn);
+    await conn.call("cello_use_agent", { name: "alice" });
+
+    // The envelope arrives on the existing sealed pickup path — no new trigger, no new transport
+    // (M10B / DOD-END-DELIVER-1). Poll rather than assume: a subject who is not instantly ready is
+    // the NORMAL case, and the delivery is asynchronous by design.
+    let pending: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 40; i++) {
+      const res = (await conn.call("cello_consent_list", {})) as { ok?: boolean; pending?: Array<Record<string, unknown>> };
+      pending = res.pending ?? [];
+      if (pending.length > 0) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(pending.length, "the endorsement reached Alice's consent queue").toBe(1);
+
+    const item = pending[0];
+    expect(item.type).toBe("endorsement");
+    // SHE CAN READ WHAT SHE IS BEING ASKED TO STAND BEHIND. Returning a byte count here was review
+    // finding F2 — the surface told her to read the plaintext and handed her a number, so accepting
+    // was necessarily blind.
+    expect(item.payload, "the issuer's actual words, not a byte count").toBeTruthy();
+    expect(JSON.stringify(item.payload)).toContain("payments migration");
+    expect(item.payload_is_untrusted_text, "flagged as the issuer's words, not CELLO's").toBe(true);
+
+    // INERT UNTIL ACCEPTED: nothing pending is presentable, by any path.
+    const held = (await conn.call("cello_trust_signals_list", {})) as { signals?: Array<{ consent_state?: string }> };
+    const endorsements = (held.signals ?? []).filter((x) => x.consent_state === "pending");
+    expect(endorsements.length, "held, and awaiting her decision").toBe(1);
+  }, 120_000);
+
+  it("HOP 4: Alice ACCEPTS, and only then is it presentable", async () => {
+    const conn = mcpConns[mcpConns.length - 1];
+    const listed = (await conn.call("cello_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
+    const hash = listed.pending?.[0]?.signal_hash;
+    expect(hash, "still pending before the decision").toBeTruthy();
+
+    const accepted = (await conn.call("cello_consent_accept", { hash_prefix: hash!.slice(0, 16) })) as {
+      ok?: boolean; consent_state?: string; reason?: string; guidance?: string;
+    };
+    expect(accepted.ok, `accept refused: ${accepted.reason} — ${accepted.guidance}`).toBe(true);
+    expect(accepted.consent_state).toBe("accepted");
+
+    // The queue is empty and the signal is presentable — the two halves of the same decision.
+    const after = (await conn.call("cello_consent_list", {})) as { pending?: unknown[] };
+    expect(after.pending, "nothing left awaiting a decision").toHaveLength(0);
+
+    const held = (await conn.call("cello_trust_signals_list", {})) as { signals?: Array<{ consent_state?: string }> };
+    expect((held.signals ?? []).some((x) => x.consent_state === "accepted"), "now presentable").toBe(true);
   }, 120_000);
 });
