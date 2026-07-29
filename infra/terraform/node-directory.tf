@@ -163,6 +163,7 @@ resource "google_compute_instance_template" "directory" {
       # manifest. Trailing newline trimmed for the same reason.
       consortium_manifest_indented = indent(6, trimspace(file("${path.module}/../manifests/gcp-consortium-manifest.json")))
       hostname                     = each.value.hostname
+      public_addr                  = google_compute_address.node[each.key].address
       public_port                  = each.value.public_port
       public_transport             = each.value.public_transport
       backup_dbname                = google_sql_database.cello[each.key].name

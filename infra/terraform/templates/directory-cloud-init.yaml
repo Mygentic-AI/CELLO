@@ -32,6 +32,12 @@ write_files:
       # connect — far from this file. Becomes 443/wss once TLS terminates in front of the node.
       CELLO_DIRECTORY_PUBLIC_PORT=${public_port}
       CELLO_DIRECTORY_PUBLIC_TRANSPORT=${public_transport}
+      # Advertise the ADDRESS, not the name. The hostname above is real configuration and becomes
+      # the advertised multiaddr the moment DNS exists — but the Route53 records live on AWS, which
+      # is hibernated, so /dns4/<hostname> currently resolves to nothing and a client that fetched
+      # it from /bootstrap could not dial. This explicit override (DOD-MULTIADDR-1) is exactly the
+      # seam for that: remove it when the DNS record exists.
+      CELLO_DIRECTORY_BOOTSTRAP_MULTIADDR=/ip4/${public_addr}/tcp/${public_port}/${public_transport}
       CELLO_AUDIT_BUCKET=${audit_bucket}
       RELAY_MANIFEST_BUCKET=${relay_bucket}
       RELAY_MANIFEST_POLL_INTERVAL_MS=120000
