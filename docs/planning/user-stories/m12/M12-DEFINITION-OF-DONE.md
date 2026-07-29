@@ -327,12 +327,18 @@ description: >
   pinned URL (`not_in_consortium` → `failover to gcp-use1` → `auth.challenge.verified`);
   (d) **kill-switch pause biting across all three nodes** — never exercised;
   (d) **kill-switch pause biting across all three nodes** — still never exercised;
-  (e) **seal** — ❌ EXERCISED AND BROKEN (Entry 41). Bidirectional content delivered
-  (`sequence_number 2, delivered true`) and BOTH sides submitted seal leaves, but the session never
-  reaches `sealed`. A `relay_submit_send_failed` puts the session into the seal-INTERRUPTED path,
-  which then wedges: `close-session` returns `seal_interrupted_in_progress` forever, on both sides,
-  and the documented escape ("wait for `session.interrupted.sealed` … or times out") never
-  arrives. The session cannot be sealed OR closed. Blocks `DOD-E2E-GCP-1`.
+  (e) **seal** — ❓ UNPROVEN, not broken (Entry 41 corrected by Entry 42). Bidirectional content
+  delivered (`sequence_number 2, delivered true`) and BOTH sides submitted seal leaves, but no
+  session has been OBSERVED reaching `sealed` — `sealed-receipt` returns `not_sealed_yet` in every
+  attempt so far. The earlier "wedged forever, no escape" reading was WRONG: the bilateral wait is
+  `CELLO_SEAL_BILATERAL_TIMEOUT_MS`, default **660 s (11 min)**, deliberately longer than the
+  directory's 600 s grace window, and `close-session --force` is an explicit escape. Every test
+  used a client timeout of 300–400 s, so the CLI was killed while the daemon was still legitimately
+  waiting; the subsequent `seal_interrupted_in_progress` was then CORRECT behaviour, not a wedge.
+  **Real (smaller) findings that stand:** the `seal_interrupted_in_progress` guidance names a
+  timeout without saying it is ~11 minutes and never mentions `--force`; and `inbox` listed a
+  session under `sealed_unread` that `sealed-receipt` reports as `not_sealed_yet` — those two
+  disagree and one of them is wrong.
 
 ## Tier P3 — Wave 2: AWS rejoins + the launch claim
 

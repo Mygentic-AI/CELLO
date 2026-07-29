@@ -2350,3 +2350,51 @@ sub-investigation and the surrounding facts are what the next session needs.
 
 The happy path of the multi-cloud rebuild is proven end to end. What remains is the failure and
 finalisation machinery — and one of those, the seal, is now known broken rather than unknown.
+
+---
+
+## Entry 42 — 2026-07-29 — CORRECTION to Entry 41: the seal is unproven, not broken
+
+Entry 41 claimed the seal-interrupted path "wedges", that `session.interrupted.sealed` "never
+arrives and the attempt never times out", and that a session "cannot be sealed and cannot be
+closed". **That was wrong, and it was wrong in the specific way this milestone keeps repeating: I
+named something stronger than the evidence supported.**
+
+What the code actually does:
+
+```js
+const bilateralTimeoutMs = Number(process.env["CELLO_SEAL_BILATERAL_TIMEOUT_MS"]) || 660_000;
+const sealedCompletion = await Promise.race([sealedP, timeoutP]);
+```
+
+**660 seconds — 11 minutes**, deliberately longer than the directory's 600 s delivery-grace window
+so a bilateral timeout always expires AFTER the grace expires. And `close-session --force` exists
+as an explicit operator escape for a half-open session.
+
+Every one of my close attempts used a client-side timeout of 300–400 s. So I killed the CLI while
+the daemon was still legitimately waiting, and the `seal_interrupted_in_progress` I then read as a
+wedge was the concurrency guard doing its job — the `add`/`delete` pair is correctly bracketed in a
+`try/finally`.
+
+**The tell I ignored:** the guidance itself said "or times out". I quoted that line while asserting
+no timeout existed, instead of going to look for the constant. Reading the message and reading the
+code are not the same act, and I did the first while claiming the second.
+
+### What is actually true about the seal
+
+- No session has been OBSERVED reaching `sealed`; `sealed-receipt` returns `not_sealed_yet` in
+  every attempt. That is where it stands — **unproven, not broken.**
+- Both sides DO submit seal leaves, and the `relay_submit_send_failed` →
+  `session.seal.broker.reconnected` → `session.seal.leaf.submitted` recovery works.
+- Two smaller findings survive the correction and are real:
+  1. The `seal_interrupted_in_progress` guidance names a timeout without saying it is ~11 minutes,
+     and never mentions `--force`. An operator reading it has no way to know how long to wait or
+     that an escape exists.
+  2. `inbox` listed session `1ac6abcf…` under `sealed_unread` while `sealed-receipt` reported
+     `not_sealed_yet` for the same id. Those two disagree; one is wrong.
+
+### The rule this earns
+
+**A timeout you did not wait out is not a timeout that does not exist.** Before calling a wait
+"infinite", find the constant. The distinction is not academic — "wedged with no escape" would have
+sent the next session rewriting a state machine that is behaving as designed.
