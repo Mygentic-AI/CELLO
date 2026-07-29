@@ -289,7 +289,7 @@ the additions M10B is accountable for.
   > integration tests** (`m10b-queue-1-v51-submission-queue.test.ts`, run against real Postgres).
   > **Renumbered V49 → V51:** V49 and V50 were already claimed by the M12 anti-entropy branch, which
   > had applied V49 to the shared local `cello_dev` — an M5-rule-4 collision that only Flyway's
-  > checksum check caught. `M10B-D23`'s delivery fix moves to **V52**.
+  > checksum check caught. `M10B-D23`'s delivery fix moves to **V52**. → **Entry 20**.
   > Green: exact four-column set; no submitter/subject/kind/type/payload/reason column under any name;
   > absent from `PUBLICATION_TABLES` (with a positive control); **no UPDATE grant** — found by the test
   > itself and now load-bearing, since it makes "first writer of an id wins" a database property rather
@@ -365,7 +365,13 @@ the additions M10B is accountable for.
   > it. Correct per `M10B-D23`: re-key to `(agent_id, signal_kind, signal_hash)` as **V50**, riding the
   > same batched deploy. The DoD's "no new trigger and no new transport" claim **survives** — this is a
   > cardinality fix, not a transport one — but this line carries **directory work and a migration**, so
-  > it is not the free ride the paragraph above implies. Fan-out resolution is `M10B-D24`. — ❌
+  > it is not the free ride the paragraph above implies. Fan-out resolution is `M10B-D24`.
+  > **BUILT 2026-07-29 — `V52__pickup_queue_pending_per_hash.sql` + the `enqueuePickup` conflict-target
+  > re-key + 5 green tests, including a REVERT PROOF that rebuilds V37's old index and demonstrates the
+  > second endorsement being destroyed.** Also revived `trust-001-pickup-repository.live`, RED since V48
+  > (four days, unnoticed — the file is `CELLO_ENV=local` gated, so CI was green with none of it
+  > running). → **Entry 20**. **🟡 — the deploy is owed; the cross-account fan-out (`M10B-D24`) is
+  > separate and still ❌.** — 🟡
 - **DOD-END-PENDING-1** — **the pending-consent queue: its own surface, NOT the transcript inbox**
   (`M10B-D5`). The inbox is cleared by reading or dismissing a transcript; an endorsement awaiting
   consent has no transcript, so putting it there gives the operator an item they cannot clear the normal
