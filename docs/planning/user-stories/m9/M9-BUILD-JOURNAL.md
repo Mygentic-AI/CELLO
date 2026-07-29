@@ -21,19 +21,24 @@ description: >
 
 ## RESUME STATE (the one mutable block — keep current)
 
-- **Tier open:** Tier 1, THE CONNECT UNIT (opened 2026-07-29).
-- **Next red line:** `DOD-M9C-ENV-1` — remove the four `CELLO_GATEWAY_*` policy overrides. It is
-  unblocked NOW: SURFACE-1 landed, so the store is no longer the only way to configure the gateway.
-  Carry over the request-log AC from the STORE-1 review (Entry C5).
-- **Lines 🟡 this tier:** `DOD-M9C-STORE-1`, `DOD-M9C-WIRE-1`, `DOD-M9C-SURFACE-1` (built + green;
-  🟡 because the enforcer `DOD-M9C-GATE-1` does not exist yet).
+- **Tier open:** Tier 1, THE CONNECT UNIT. **All six build lines are BUILT.**
 - **WHERE THE CODE IS:** branch `m9/connect-unit`, worktree
-  `/Users/andrep/Documents/code/cello-client-m9c` — NOT the primary checkout (Entry C4).
-- **Enforcer:** `DOD-M9C-GATE-1` (composition-root live gate) — not yet built; until it
-  exists, focused suites carry the units.
-- **Decisions-of-record:** policy audit §10 (D-2..D-5, D-11) → DoD Decisions M9C-D1..D5.
-- **Publish owed at tier close:** one batched beta cascade + pinned/verified install;
-  `latest` promotion and `/mcp` reconnect are Andre's.
+  `/Users/andrep/Documents/code/cello-client-m9c` — NOT the primary checkout (Entry C4). It has its
+  own `node_modules` and `dist/`; a concurrent session builds M10B on `main`.
+- **HEAD:** `88dfd73` (7 commits from `449bbba`). Pushed to `origin/m9/connect-unit`.
+- **Gates at HEAD:** 1588 tests green across daemon + gateway + cli + adapter; lint clean; typecheck
+  clean. Enforcer `DOD-M9C-GATE-1` green — it spawns the BUILT `cello-daemon` bin with zero
+  injection and reads `mode:"enforcing"` off the boot line.
+- **Status:** STORE-1, WIRE-1, SURFACE-1, ENV-1, AUDIT-1, GATE-1 all built and reviewed (two
+  `cello-unit-reviewer` passes; every blocking finding fixed). Tags await the `cello-done-auditor`
+  verdict — **do not flip to ✅ before it rules.**
+- **Next red line:** `DOD-M9C-PUBLISH-1` — one batched beta cascade (gateway → daemon → cli →
+  connect). Load `/cello-publish` for THAT publish; the `latest` promotion and the `/mcp` reconnect
+  are Andre's, prepared and handed over, never run.
+- **Carried forward (Entry C8), not lost:** correlationId threading (F12); `list` should show
+  `changed_at` + `chainValid` (F9); `PassthroughGatewayClient` on two public barrels rather than a
+  `/testing` subpath (F-D); `pii:whitelist_add_requested` has no consumer; and the plaintext
+  REQUEST LOG, which is why M8C's `DOD-CRYPTO-AT-REST-1` is 🟡 rather than ✅.
 
 ---
 
