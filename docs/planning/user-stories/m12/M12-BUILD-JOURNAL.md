@@ -2070,3 +2070,48 @@ Not yet established, and the next thing to settle: whether the share is absent f
 DATABASE (dealt but never persisted) or present in the DB but missing from an in-memory structure
 that only populates during a live ceremony. Those have completely different fixes, and the log
 above cannot distinguish them.
+
+---
+
+## Entry 37 — 2026-07-29 — A SESSION COMPLETES ON GCP: two agents, two directories, one relay
+
+```
+initiate-session -> {"ok":true,"sessionId":"df2bf90a…","transportMode":"relay"}
+receive          -> {"ok":true,"sequence_number":1,"senderPubkey":"09a391ed…"}
+```
+
+`alice` registered through **gcp-use1**, `carol` through **gcp-usc1**, in separate daemons and
+separate OS processes. Alice discovered Carol across sovereign nodes, brokered the session, and
+content crossed over the GCP relay. That is the core of `DOD-E2E-GCP-1` on the multi-cloud stack,
+with AWS contributing nothing.
+
+The received body is the auto-AWAY reply, which is correct: neither agent has an attending client,
+so the daemon answers on the away path. The proof here is the TRANSPORT and the sequence number —
+a frame was signed, relayed, and read by sequence on the far side.
+
+### What had to be true, in order
+
+Every one of these was broken earlier today and is now proven on the live system:
+
+| capability | evidence |
+|---|---|
+| registration across the consortium | 3-node FROST DKG, all validators |
+| cross-node discovery | `unknown_agent` cleared by anti-entropy |
+| presence replication | `counterparty_offline` cleared |
+| relay pool | manifest published, `relay.health.check.passed` |
+| session brokering | `session.crossnode.initiated brokerNode gcp-usc1` |
+| threshold signing | `session.ceremony.participated ok:true` |
+| relay transport | `transportMode: "relay"` |
+
+### The discriminator that made the previous failure legible
+
+`ceremony_exhausted` / `AGENT_NOT_BOOTSTRAPPED` (Entry 36) did NOT reproduce with agents registered
+AFTER the directory restarts. Fresh agents complete the identical flow that `aetestA` and `bob`
+could not. So the defect is not in the session path at all — it is that agents registered BEFORE a
+directory restart lose their usability, which is a far more serious claim and a different fix.
+
+Stated as a hypothesis, not a finding: shares are dealt at DKG and are deliberately never
+replicated (`DOD-INV-SHARES-LOCAL`), so if they do not survive a node restart, **every deploy
+strands every existing agent.** That is launch-blocking if true. Not yet proven — the restart test
+is next, and the crash-loop the fleet went through is a competing explanation that has to be ruled
+out before blaming ordinary restarts.
