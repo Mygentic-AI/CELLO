@@ -1625,3 +1625,53 @@ had nothing to attach to.
 The corresponding rule, earned three times on this milestone: **when a failure names its exit point
 instead of its cause, fix the naming before forming another hypothesis.** I formed four hypotheses
 against the un-named version and falsified all four.
+
+---
+
+## Entry 30 — 2026-07-29 — Mechanism found: closing the AE stream tears down the whole CONNECTION
+
+libp2p's own trace, captured by running the container by hand with `DEBUG=libp2p*` (no deploy, no
+IaC change — the node was stopped for 105s and restarted):
+
+```
+06:57:13.472  yamux:outbound:3  negotiating [ '/cello/anti-entropy/1.0.0' ]
+06:57:13.543  yamux:outbound:3  negotiated protocol /cello/anti-entropy/1.0.0
+06:57:13.603  yamux:outbound:3  closed writable end gracefully
+06:57:13.603  yamux            sending GoAway reason=NormalTermination
+06:57:13.605  yamux            underlying stream closed with status closed and 3 streams
+06:57:13.605  yamux:outbound:3  transport closed
+```
+
+The protocol negotiates cleanly — both peers advertise `/cello/anti-entropy/1.0.0` (confirmed in
+identify). Sixty milliseconds later the stream's writable end closes and **yamux immediately sends
+GoAway, terminating the entire connection and all three streams on it** — including identify and
+autonat, which had nothing to do with anti-entropy.
+
+`streamWire.close()` calls `stream.close()`. On this transport that is not a stream-scoped close:
+it takes the connection with it. And because `transport.dial()` REUSES connections (the same trace
+shows `had an existing connection to 12D3KooW…`), every later round inherits a connection that was
+already torn down — which is why the failure is 100% and stage-independent rather than a race.
+
+It also explains the symmetry neatly: whichever side closes first destroys the shared connection,
+so the other side's next read or write fails, and each honestly reports that the peer closed.
+
+### Why the local enforcer never caught it
+
+Same code, same protocol, same frames. The enforcer converges within its run and its assertions
+read the DATABASES, so a torn-down connection after convergence changes no assertion. Production
+runs indefinitely on a 60s tick, so the second round onwards always inherits the dead connection.
+Time-to-second-round, not a code path, is the discriminator — the same shape as the earlier
+falsified stream-leak theory, which is worth noting because I reached for a code-path explanation
+twice before looking at lifetime.
+
+### Next action (not yet made)
+
+Close the STREAM without closing the connection — the libp2p idiom is to close the writable end and
+let the reader drain, rather than `stream.close()` where that is connection-scoped. That change
+belongs with a test that asserts a SECOND round succeeds on a reused connection, which is precisely
+what no existing test covers: the enforcer must keep dialing past convergence for the assertion to
+mean anything.
+
+Everything up to this point is verified working in production: manifest signing and verification,
+peer identity binding, protocol negotiation, the handshake, digest computation, the database role,
+and the dial address.
