@@ -212,7 +212,14 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   both surfaces (the M10B SURFACE-1 lesson). `allow_always` — a persisted loosening — rides the
   same gate. Every change lands as a versioned, hash-chained row; `list` shows current values with
   version and provenance. Headline events: `gateway.config.changed` (key, direction, version,
-  correlationId), `gateway.config.loosen_refused` (+ surface, cause). — ❌
+  correlationId), `gateway.config.loosen_refused` (+ surface, cause).
+  > **BUILT 2026-07-29 — 🟡.** Three IPC verbs + `cello config list|get|set` + three MCP tools;
+  > loosening honored only from a `cli` connection that answered a TTY prompt (M9C-D15/D16), no
+  > `--yes` flag; a successful set restarts the sidecar or says `stored_but_not_applied` (M9C-D17).
+  > Surfaced and fixed a kill-switch defect WIRE-1 had introduced: `cello logout` stops the daemon
+  > over IPC, never through the signal handler, so the sidecar teardown moved into the daemon's own
+  > `stop()`. 1569 tests green. Open: `allow_always` not wired to the new gate; `correlationId` not
+  > threaded. → Entry C7 — 🟡
 
 - **DOD-M9C-ENV-1** — **the side door closes (D-5).** The four policy fallbacks in
   `core/gateway/src/bin/cello-gateway.ts` — `CELLO_GATEWAY_AUTONOMOUS_OVERRIDE`,

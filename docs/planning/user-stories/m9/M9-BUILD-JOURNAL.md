@@ -22,11 +22,11 @@ description: >
 ## RESUME STATE (the one mutable block — keep current)
 
 - **Tier open:** Tier 1, THE CONNECT UNIT (opened 2026-07-29).
-- **Next red line:** `DOD-M9C-SURFACE-1` — the control surface + CLI loosen-confirm (design note
-  first). NOTE the ordering dependency: `DOD-M9C-ENV-1` removes the env overrides, which are today
-  the ONLY way to configure the gateway — so SURFACE-1 must land before ENV-1, not after.
-- **Lines 🟡 this tier:** `DOD-M9C-STORE-1`, `DOD-M9C-WIRE-1` (both built + green; 🟡 because the
-  enforcer `DOD-M9C-GATE-1` does not exist yet).
+- **Next red line:** `DOD-M9C-ENV-1` — remove the four `CELLO_GATEWAY_*` policy overrides. It is
+  unblocked NOW: SURFACE-1 landed, so the store is no longer the only way to configure the gateway.
+  Carry over the request-log AC from the STORE-1 review (Entry C5).
+- **Lines 🟡 this tier:** `DOD-M9C-STORE-1`, `DOD-M9C-WIRE-1`, `DOD-M9C-SURFACE-1` (built + green;
+  🟡 because the enforcer `DOD-M9C-GATE-1` does not exist yet).
 - **WHERE THE CODE IS:** branch `m9/connect-unit`, worktree
   `/Users/andrep/Documents/code/cello-client-m9c` — NOT the primary checkout (Entry C4).
 - **Enforcer:** `DOD-M9C-GATE-1` (composition-root live gate) — not yet built; until it
@@ -1269,3 +1269,60 @@ row (the row count is the assertion — a refusal that still persisted would be 
 `confirmed`. (3) A tightening applies from either, with no prompt. (4) An unknown key and an invalid
 value each get their own reason. (5) `list` reports version + direction + confirmed. (6) The CLI
 refuses to prompt on a non-TTY stdin. (7) A failed restart reports stored-but-not-applied.
+
+---
+
+## 2026-07-29 — Entry C7: SURFACE-1 BUILT (daemon + CLI + MCP) — and a kill switch that had started lying
+
+**Commits (branch `m9/connect-unit`):** `e68cc92` daemon half, `b9857b8` CLI half, `09ee4c3` MCP
+half. **1569 tests green** across daemon + gateway + cli + adapter; lint and typecheck clean.
+
+**What exists now.** `cello config list | get <key> | set <key> <value>`, three IPC verbs behind it,
+and three MCP tools. A TIGHTENING applies immediately from either surface. A LOOSENING is refused
+by the store (no row), and only a CLI caller who answers a TTY prompt can produce the `confirmed`
+flag the store has demanded since June and nothing has ever been able to supply.
+
+**THE BUG THIS UNIT SURFACED, and it was mine.** A logout test went red:
+`AC4: a live daemon whose daemon.lock was DELETED is still found and actually stopped`.
+
+The chain, traced rather than guessed:
+1. `cello logout` stops the daemon through the IPC `shutdown` verb → the daemon's internal
+   `stop()`. It does **not** call `process.exit`, and it never reaches the bin's SIGTERM handler.
+2. That path relies on the **event loop draining** for the process to exit.
+3. WIRE-1 gave the daemon a spawned child with piped stdio. Those pipes are active handles. The
+   loop never drains.
+4. So logout truthfully reported *"Daemon stopped"* — the socket was closed and the singleton lock
+   released, which is exactly what its liveness check tests — while the process ran on forever.
+
+**A kill switch that lies is the precise failure `DOD-SINGLE-DAEMON-1` exists to prevent**, and
+WIRE-1 had reintroduced it through a door that story never had to consider. The second tooth is as
+bad: a surviving gateway holds the encrypted store's write lock against the next daemon — the
+orphan-process problem this project already knows by name.
+
+**Fix:** the teardown moved OUT of the bin's signal handler and INTO the daemon's own `stop()`, via
+a new `onShutdown` hook the composition root supplies. Every exit path passes through `stop()`;
+only one of them passes through a signal.
+
+**The lesson, stated so it generalises:** *when you give a long-lived process a child, find every
+way that process can exit — not the one you were looking at.* The signal handler was the obvious
+path and the wrong one to fix alone.
+
+**Two more things caught by the repo's own tests rather than by review**, which is the system
+working:
+- `SKILL.md` omitted the three new tools. It SHIPS in the connect tarball and instructs agents on
+  the operator's machine, so that is a real gap, and `adapter-002` enforces it.
+- The tool names broke the vocabulary rule (MCP name == `cello_` + the CLI command). Renamed
+  `cello_gateway_config_*` → `cello_config_*`.
+
+**Known gaps, handed to the reviewer rather than hidden:**
+1. `allow_always` is not wired to the new gate — it is still gated by `autonomous_override` inside
+   the outbound screener. Arguably satisfied transitively (that key is now itself gated); the
+   reviewer rules.
+2. `correlationId` is named in the `gateway.config.changed` clause and is not threaded — the config
+   path has no inbound correlation id to thread.
+3. "Provenance" in `list` is version + direction + confirmed. There is no operator identity because
+   there are no local operator accounts.
+
+**Status: 🟡.** `DOD-M9C-GATE-1` — the enforcer that spawns the SHIPPED bin — is still unbuilt, and
+no Tier-1 line goes ✅ on a suite that injects its own wiring. That is the rule this milestone
+exists because of.
