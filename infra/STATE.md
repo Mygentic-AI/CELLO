@@ -41,6 +41,59 @@ returns `000` on a perfectly healthy node. The real client path is `http://direc
 
 ---
 
+## 🟢 GALLERY IS LIVE — gallery.cello.mygentic.ai + portal schema/seed (2026-07-29, ~09:00–10:30 UTC)
+
+**Four AWS-affecting changes. All in `dev`. Nothing in the directory or relay was touched.**
+
+### 1. Route53 — NEW A RECORD, created by hand (not IaC)
+- Zone `Z02692523DOH7NW521CL8` (`cello.mygentic.ai`)
+- `gallery.cello.mygentic.ai` → `63.34.176.185` (the corp-site Lightsail box), TTL 300, plain A record.
+- **Deliberately not in CloudFormation, and neither is `cello.mygentic.ai` itself.** `cello-route53.yaml`
+  only creates ALB-alias records for directory/relay subdomains; the corp site's records have always
+  lived outside it. This record matches the existing pattern rather than introducing a second one.
+  **Open:** the site's DNS as a whole has no IaC. Worth a small template so `gallery.` does not become
+  the second undocumented record — not done.
+- **Gotcha:** the SOA negative TTL on that zone is **86400**. The name was queried before it existed,
+  so any resolver that cached the NXDOMAIN can take up to 24h. Fresh resolvers answer immediately.
+
+### 2. TLS — certificate expanded (Let's Encrypt, on the Lightsail host)
+- SAN is now `cello.mygentic.ai`, `gallery.cello.mygentic.ai`, `www.mygentic.ai`.
+- **Why it had to move with the DNS record:** the `gallery.` nginx server block presents the
+  `cello.mygentic.ai` certificate. A host added to nginx and left out of the SAN list answers HTTPS
+  with a certificate for a different domain.
+- Driven by `.github/workflows/deploy.yml`, which now derives the `-d` list from one `CERT_NAMES`
+  variable and expands only when a name is actually missing (LE rate limits). The deploy smoke test
+  fails loudly if the gallery host or its API namespace stops answering.
+
+### 3. nginx — deploy.yml now applies it SAFELY (behaviour change worth knowing)
+- `deploy/cello-site.conf` has always been applied on **every push to main** — two comments in the
+  repo claimed otherwise and were wrong. It now backs up the live file, gates on `nginx -t`, and
+  restores the backup on failure. Previously it `cp`'d first and tested after, leaving a broken config
+  on disk while the running server looked healthy until the next reload from any source.
+
+### 4. Portal (waitlist) database — migrations 0024 + 0025 applied, and seeded
+- Applied via `cello-waitlist-migrate-dev` (dry-run first each time; exactly one pending each time).
+  Ledger rows: 34 → 35 → 36.
+- `0024` — `published_receipts` gains `transcript`, `seal_status`, `seal_detail`,
+  `sealed_at_precision`; `verified_by`/`node_count` become NULLABLE and constrained to move together.
+- `0025` — `CHECK (transcript IS NULL OR message_count = jsonb_array_length(transcript))`.
+- **Seeded 5 archive receipts** into `published_receipts` via `infra/scripts/portal-db-query.sh`
+  (the VPC-Lambda hop; the RDS is not publicly accessible). All five carry `verified_by IS NULL` —
+  no source document records an attestation count, and that badge sits beside the hash.
+- **This is the `cello_portal` database on `cello-portal-dev`** — the same database as the portal's
+  own tables. Only `published_receipts` was touched.
+
+### 5. Lambdas redeployed — `./infra/deploy-lambdas.sh dev waitlist` (twice)
+- All 13 waitlist functions. Substantive changes: `gallery` (transcripts, shared validator) and
+  `migrate` (carries the .sql files it applies). The first run died partway on a network error at
+  `feedback`; the second completed.
+
+**Verified live:** cert SAN carries the name · `https://gallery.cello.mygentic.ai/` → 200 ·
+`/api/gallery/receipts?page=1` → 5 receipts · `https://gallery.cello.mygentic.ai/receipt/{hash}` → 200
+with its transcript · `cello.mygentic.ai/api/waitlist/auth/session` → 401 (waitlist namespace intact).
+
+---
+
 ## 🔧 MANUAL CHANGE — 2026-07-29 ~09:35 UTC: ap-northeast-1 Flyway checksum realigned (V53)
 
 **What was done, by hand, and why it is not in IaC:** a single row update on the ap-northeast-1
