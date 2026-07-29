@@ -42,14 +42,31 @@ export interface QueuedSubmission {
  * DO NOTHING, never DO UPDATE. An update would let a later writer replace the ciphertext under an id
  * someone else chose — and since the directory cannot open either blob, it could not tell. The first
  * writer of an id wins; a mismatch is the portal's to detect when it re-derives the id.
+ *
+ * RETURNS WHETHER THE ROW WAS ACTUALLY STORED, and the caller MUST NOT discard it.
+ *
+ * `false` means an id was already present — which is USUALLY the submitter's own retry, and is exactly
+ * what makes retry-across-nodes safe. But it is also the shape of a censorship attack, and swallowing
+ * the distinction is what would make that attack silent: `submission_id` is visible in the clear to the
+ * receiving node, so a malicious operator can copy it and pre-insert garbage under the same id at the
+ * other nodes. The submitter's failover retries then all resolve to "already present", and if this
+ * returned `void` the daemon would log `signal.submission.queued` three times for a submission that
+ * reached nobody. Byte-comparing the ciphertext cannot detect it either — a legitimate re-seal produces
+ * different bytes under the same id.
+ *
+ * So the handler distinguishes `signal.submission.queued` from `signal.submission.duplicate`. That does
+ * not by itself defeat the attack; the closure is that a submission is not complete until its notarized
+ * record appears, and the daemon owns that timeout. But without this boolean the handler CANNOT tell,
+ * however well it is written — the information is destroyed here.
  */
-export async function enqueueSubmission(db: Queryable, s: QueuedSubmission): Promise<void> {
-  await db.query(
+export async function enqueueSubmission(db: Queryable, s: QueuedSubmission): Promise<boolean> {
+  const res = await db.query(
     `INSERT INTO submission_queue (submission_id, intake_key_id, ciphertext)
      VALUES ($1, $2, $3)
      ON CONFLICT (submission_id) DO NOTHING`,
     [s.submissionId, s.intakeKeyId, s.ciphertext],
   );
+  return (res.rowCount ?? 0) > 0;
 }
 
 /**
@@ -100,6 +117,23 @@ export async function deleteSubmission(db: Queryable, submissionId: string): Pro
  * submitter is unknown), so the DAEMON owns the corresponding timeout and reports it locally.
  */
 export async function sweepStaleSubmissions(db: Queryable, ttlHours: number): Promise<number> {
+  // REFUSE A DESTRUCTIVE TTL. This is the only unbounded multi-row DELETE in the unit, and it operates
+  // on sealed blobs the directory cannot reconstruct. `ttlHours = 0` makes the predicate
+  // `created_at < now()`, which destroys the ENTIRE queue including a row enqueued a millisecond ago;
+  // a negative value is worse (`now() - (-24h)` = `now() + 24h`). Neither raises an error on its own —
+  // it is a silent total loss. And the TTL's correct value is itself safety-critical (M10B-D27: it must
+  // be <= the portal's intake-key retention window), so it will one day come from a config that does
+  // not exist yet. Fail loud, and name the constraint rather than the exit point.
+  //
+  // Sub-hour TTLs are deliberately NOT expressible: `make_interval(hours => …)` takes an integer, so
+  // 0.5 would be a raw type error and the tempting "fix" is Math.round → 0 → total destruction. If a
+  // shorter window is ever wanted, change the parameter to `ttlMinutes` and `make_interval(mins => …)`.
+  if (!Number.isInteger(ttlHours) || ttlHours < 1) {
+    throw new Error(
+      `submission_queue.sweep refused: ttlHours must be a positive integer ` +
+        `(M10B-D27 — the sweep window must be <= the portal's intake-key retention); got ${String(ttlHours)}`,
+    );
+  }
   const res = await db.query(
     `DELETE FROM submission_queue WHERE created_at < now() - make_interval(hours => $1)`,
     [ttlHours],

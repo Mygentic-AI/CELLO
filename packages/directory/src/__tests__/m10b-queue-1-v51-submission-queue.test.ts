@@ -81,6 +81,10 @@ describeIntegration("V51 submission_queue (DOD-END-QUEUE-1)", () => {
         "SELECT column_name FROM information_schema.columns WHERE table_name = 'submission_queue'",
       );
       const cols = (rows as Array<{ column_name: string }>).map((r) => r.column_name);
+      // POSITIVE CONTROL — without it this test passes against a table that does not exist: an empty
+      // column list satisfies every not.toContain vacuously, so reverting the whole migration would
+      // leave this green while reporting coverage of the unit's central privacy claim.
+      expect(cols).toContain("ciphertext");
       for (const forbidden of ["agent_id", "submitter", "subject", "signal_kind", "type", "payload", "plaintext", "reason"]) {
         expect(cols).not.toContain(forbidden);
       }
@@ -96,7 +100,12 @@ describeIntegration("V51 submission_queue (DOD-END-QUEUE-1)", () => {
       const line = script.split("\n").find((l) => l.startsWith("PUBLICATION_TABLES="));
       expect(line).toBeDefined();
       const tables = line!.replace(/^PUBLICATION_TABLES="/, "").replace(/"$/, "").split(",");
-      expect(tables).toContain("signal_records"); // control: the list parsed correctly
+      // Prove the PARSE, not merely that the line was found. `signal_records` sits mid-list, so it is
+      // unaffected by the quote-stripping — if either replace() failed, the FIRST and LAST elements
+      // would carry stray quotes, and an appended `submission_queue"` would slip past not.toContain.
+      expect(tables.length).toBeGreaterThan(15);
+      for (const t of tables) expect(t).toMatch(/^[a-z_]+$/);
+      expect(tables).toContain("signal_records");
       expect(tables).not.toContain("submission_queue");
     });
 
@@ -119,11 +128,15 @@ describeIntegration("V51 submission_queue (DOD-END-QUEUE-1)", () => {
   describe("enqueue is idempotent on the content-derived id", () => {
     it("a retry of the same body is a STRICT no-op and never replaces the ciphertext", async () => {
       await asCelloService(async (c) => {
-        await enqueueSubmission(c, { submissionId: ID("a"), intakeKeyId: "key-1", ciphertext: Buffer.from([0x01]) });
+        // The RETURN VALUE is the point: `false` means the row was not stored. Without it the caller
+        // cannot distinguish its own retry from a censorship squat (an operator can copy a visible
+        // submission_id and pre-insert garbage at the other nodes), and would log "queued" for a
+        // submission that reached nobody.
+        expect(await enqueueSubmission(c, { submissionId: ID("a"), intakeKeyId: "key-1", ciphertext: Buffer.from([0x01]) })).toBe(true);
         // Same id, DIFFERENT bytes — the case that matters. DO UPDATE here would let a later writer
         // swap the payload under an id someone else chose, and the directory cannot open either blob
         // to notice.
-        await enqueueSubmission(c, { submissionId: ID("a"), intakeKeyId: "key-9", ciphertext: Buffer.from([0xde, 0xad]) });
+        expect(await enqueueSubmission(c, { submissionId: ID("a"), intakeKeyId: "key-9", ciphertext: Buffer.from([0xde, 0xad]) })).toBe(false);
         const { rows } = await c.query(
           "SELECT encode(ciphertext,'hex') AS hex, intake_key_id FROM submission_queue WHERE submission_id = $1",
           [ID("a")],
@@ -137,17 +150,35 @@ describeIntegration("V51 submission_queue (DOD-END-QUEUE-1)", () => {
 
   describe("drain, delete, sweep", () => {
     it("drains oldest-first and reports the intake keys still in use", async () => {
+      // The two orderings must DISAGREE, or the test proves nothing: with ids that sort the same way
+      // they were inserted, `ORDER BY submission_id` alone satisfies it — so the oldest-first property
+      // the test is named for could be deleted and it would stay green. `z-older` is inserted first
+      // and backdated; `a-newer` sorts BEFORE it lexically.
       await asCelloService(async (c) => {
-        await enqueueSubmission(c, { submissionId: ID("b"), intakeKeyId: "key-1", ciphertext: Buffer.from([0x02]) });
-        await enqueueSubmission(c, { submissionId: ID("c"), intakeKeyId: "key-2", ciphertext: Buffer.from([0x03]) });
+        await enqueueSubmission(c, { submissionId: ID("z-older"), intakeKeyId: "key-1", ciphertext: Buffer.from([0x02]) });
+        await enqueueSubmission(c, { submissionId: ID("a-newer"), intakeKeyId: "key-2", ciphertext: Buffer.from([0x03]) });
+      });
+      // Backdate as OWNER — cello_service has no UPDATE grant (see the posture test above).
+      await pool.query("UPDATE submission_queue SET created_at = now() - interval '1 hour' WHERE submission_id = $1", [ID("z-older")]);
+      await asCelloService(async (c) => {
         const drained = (await drainSubmissions(c, 500)).filter((s) => s.submissionId.startsWith(tag));
         const ids = drained.map((s) => s.submissionId);
-        expect(ids.indexOf(ID("b"))).toBeLessThan(ids.indexOf(ID("c")));
-        expect(drained.find((s) => s.submissionId === ID("c"))!.intakeKeyId).toBe("key-2");
+        expect(ids.indexOf(ID("z-older"))).toBeLessThan(ids.indexOf(ID("a-newer")));
+        expect(drained.find((s) => s.submissionId === ID("a-newer"))!.intakeKeyId).toBe("key-2");
 
         // Rotation retention (M10B-D11) is driven by THIS, not a timer.
         const keys = await intakeKeyIdsInUse(c);
         expect(keys).toEqual(expect.arrayContaining(["key-1", "key-2"]));
+      });
+    });
+
+    it("sweep REFUSES a destructive TTL rather than emptying the queue", async () => {
+      // ttlHours <= 0 makes the predicate `created_at < now()` — total, silent destruction of sealed
+      // blobs the directory cannot reconstruct. It must fail loud and name the constraint.
+      await asCelloService(async (c) => {
+        await expect(sweepStaleSubmissions(c, 0)).rejects.toThrow(/positive integer|M10B-D27/i);
+        await expect(sweepStaleSubmissions(c, -24)).rejects.toThrow(/positive integer|M10B-D27/i);
+        await expect(sweepStaleSubmissions(c, 0.5)).rejects.toThrow(/positive integer|M10B-D27/i);
       });
     });
 

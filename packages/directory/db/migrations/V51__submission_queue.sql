@@ -5,7 +5,7 @@
 -- opens the seal, verifies the signature, derives issuer_pubkey FROM that signature, scans, and mints
 -- through the UNCHANGED chokepoint. This table is a mailbox the directory cannot read.
 --
--- THE ABSENCES ARE THE DESIGN. Five columns. No agent_id, no submitter, no subject, no signal_kind,
+-- THE ABSENCES ARE THE DESIGN. Four columns. No agent_id, no submitter, no subject, no signal_kind,
 -- no type, no plaintext, no reason column. Compare pickup_queue, which carries agent_id because
 -- delivery must be ADDRESSED — a submission is not addressed, it is COLLECTED by a single consumer
 -- (the portal) that can poll every node, so it needs no addressee. That difference is what makes
