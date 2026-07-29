@@ -269,7 +269,19 @@ description: >
   third node is what decides whether a US-wide event drops the consortium below threshold. → Entry 24
 - **DOD-NODE-RELAY-GCP-1** [trustless-cello] — at least one GCP relay live: MIG(1) + COS,
   persistent disk for the WAL dir, two secrets, static IP. No code changes expected — flag any
-  that turn out to be needed. — ❌
+  that turn out to be needed. — ✅ `gcp-relay-use1` LIVE at 34.139.119.165.
+  `{"relayId":"8492fffe…51b0","status":"ok"}`, `relay.service.started`, listening
+  `/ip4/…/tcp/4001/ws/p2p/12D3KooWJXHpnWQhGk3jXBJYdXMmeLxEhRqzwZCYd1bxSUh4pg83`. **Registered with
+  the consortium:** the directory logged `relay.registered` and `relay.adapter.multiaddr.updated`,
+  which is what makes sessions brokerable at all. WAL on its own persistent disk (`/dev/sdb` on
+  `/mnt/disks/cello-wal`), format guarded by a `blkid` check so an instance replacement cannot
+  silently mkfs away journalled frames. Two secrets, per-relay, never copied.
+  **NO relay code changed** — the clause asked for that to be flagged, and it held: the GCP secret
+  plumbing lives in cloud-init, so the relay stayed a standalone artifact with env-only config
+  (DOD-INV-RELAY-EXTRACTABLE). Two config-shape defects found by running it: it requires a single
+  registration TARGET (`CELLO_DIRECTORY_PUBKEY`) as well as the accept-set, and its two libp2p
+  listeners cannot share a port (`CELLO_RELAY_LISTEN_ADDR` defaults to 4001, colliding with WS).
+  → Entry 24
 - **DOD-MANIFEST-GCP-1** [cello-client, trustless-cello] — fresh consortium manifest signed:
   three `gcp-*` validators with roles, adopted by clients via poll; step-6 directory identity
   verification passes against the new manifest. — 🟡 DIRECTORY HALF DONE. Manifest signed over the
