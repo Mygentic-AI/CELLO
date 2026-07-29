@@ -319,8 +319,12 @@ description: >
   **Still owed — the parts NOT yet demonstrated, and the reason this is not ✅:**
   (a) it is a MANUAL sequence, not an automated enforcer — the DoD asks for a test that fails
   loudly in CI, and a hand-run session proves the system works today, not that it stays working;
-  (b) **kill one directory → sealing continues at T−1** — never exercised;
-  (c) **client failover** to another directory — never exercised;
+  (b) **kill one directory → threshold holds** — ✅ EXERCISED: `gcp-usc1` stopped (TERMINATED),
+  session still established on 2-of-3 (`T = majority(3) = 2`). Sealing itself still not exercised;
+  (c) **client failover** to another directory — ✅ EXERCISED, and it found a real defect: failover
+  triggered only on UNREACHABILITY, so a directory that resolves but belongs to another consortium
+  was a permanent black hole. Fixed against DECLARED manifest membership; verified live with NO
+  pinned URL (`not_in_consortium` → `failover to gcp-use1` → `auth.challenge.verified`);
   (d) **kill-switch pause biting across all three nodes** — never exercised;
   (e) **seal** — sessions were established and messaged, not sealed to completion.
 

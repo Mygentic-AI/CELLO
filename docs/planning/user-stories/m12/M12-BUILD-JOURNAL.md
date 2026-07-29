@@ -2227,3 +2227,66 @@ Six defects, one shape: **a green surface over a broken write or a silent teardo
 Every one was invisible from the side that reported success. The lesson that actually generalises:
 **when two components disagree about whether something worked, believe the one that says it
 failed** — and go read the other one's write path.
+
+---
+
+## Entry 40 — 2026-07-29 — Threshold tolerance proven; failover was a black hole, now fixed
+
+Two of `DOD-E2E-GCP-1`'s unexercised clauses, taken in order.
+
+### (b) Kill a directory — the threshold holds
+
+`cello-gcp-usc1` stopped (TERMINATED), then a fresh session between agents homed on the other two:
+
+```
+initiate-session -> {"ok":true,"sessionId":"1ac6abcf…","transportMode":"relay"}
+```
+
+2-of-3 with `T = majority(3) = 2`. The redundancy the sovereign-node invariant is FOR, on the live
+system rather than in a unit test. Node restored afterwards.
+
+### (c) Client failover — exercised, and it was broken
+
+Running a daemon with the GCP manifest and NO `CELLO_DIRECTORY_URL`, registration failed with
+`directory_signaling_timeout` while the log showed the same thing over and over:
+
+```
+directory.bootstrap.resolved     http://directory-us1.cello.mygentic.ai
+directory.auth.challenge.failed  us-east-1  key_not_in_manifest
+directory.auth.challenge.failed  us-east-1  key_not_in_manifest
+```
+
+The roster-aware resolver's step 3 (fail over) runs only when the primary resolver returns NULL —
+i.e. when the primary's `/bootstrap` is UNREACHABLE. The AWS directory is perfectly reachable; it
+is simply not a member of this consortium. So the primary resolved forever and failover never ran,
+while `key_not_in_manifest` — an unambiguous "I am not in your consortium" — was ignored as a
+failover signal. **A reachable non-member is strictly worse than an unreachable node**, and it was
+the only case the design could not route around. Exactly the compiled-in default URL after a
+consortium move, which is the case the bundled manifest exists to survive.
+
+### The first fix was wrong, and the tests said so
+
+I first checked the primary against the reachable ROSTER. Three existing tests failed — correctly.
+The roster is *who answered /bootstrap just now*; a genuine member that is momentarily restarting
+is absent from it, so that check turns a blip into a failover and routes around a node that is
+merely coming back. I had conflated reachability with membership, which is the same mistake the
+original code made in the other direction.
+
+The shipped fix checks DECLARED manifest membership: local, no probe, and it cannot confuse "down"
+with "not one of us". It is also cheaper than what was there before — the healthy path now costs
+zero roster probes.
+
+Verified live, no pinned URL:
+
+```
+directory.bootstrap.primary.not_in_consortium  memberCount 3
+directory.bootstrap.failover                   to gcp-use1
+directory.auth.challenge.verified              gcp-use1
+registration ok
+```
+
+Merged to `main` alongside the other agent's `DOD-END-SURFACE-1`; gate green at 2127 tests.
+
+**Worth keeping:** the three broken tests were the most valuable output of that attempt. A fix that
+builds and passes the new test it came with is not verified — it is verified when the tests it did
+NOT anticipate still pass.
