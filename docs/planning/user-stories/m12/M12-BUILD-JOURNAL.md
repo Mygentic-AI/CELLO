@@ -1527,3 +1527,48 @@ all.
 
 All three directories and the relay are healthy and serving on `m12-64ed4da5`. Nothing is merged;
 everything is on `m12/node-dir-gcp` (and `m12/ae-client` for the CLI capability fix).
+
+---
+
+## Entry 28 — 2026-07-29 — AE has NEVER authenticated in production; four hypotheses falsified
+
+A harder fact than Entry 26 had:
+
+```
+antientropy.peer.authenticated  0
+antientropy.round.started      54
+antientropy.peer.auth_failed  101
+```
+
+Zero successes since boot. This is not degradation over time — anti-entropy has **never completed a
+round in production**. (`authenticated` is logged only after handshake AND rounds succeed, so zero
+is consistent with dying at `ae_state` rather than proving the handshake fails.)
+
+### Falsified, each by measurement rather than reasoning
+
+1. **Inbound stream leak.** I believed `#serveInbound` never closed on the success path, exhausting
+   `maxInboundStreams` after minutes — it fitted every symptom, including why a sub-minute local
+   enforcer could not reproduce it. I wrote the fix and a test. **The revert test failed to fail:**
+   removing the close left all three green, because `serveAeResponder` closes the wire in its own
+   `finally`. The comment I doubted was right. Fix and test both DELETED rather than shipped — a
+   redundant fix with a hollow test is worse than neither, because the next reader trusts both.
+2. **Connection accumulation.** libp2p reuses per-peer connections; `dial` is idempotent.
+3. **The restricted `cello_service` role cannot READ the AE tables.** Measured every one directly as
+   that role: `agent_profiles`, `agent_revocations` (63 rows), `seal_notarizations`, `user_accounts`,
+   `agent_suspensions`, `agent_presence` — all readable.
+4. **The role cannot WRITE what Tier-B merge needs.** Also measured, and the grants turn out to be
+   exactly right: the mutable tables carry `UPDATE`, while `user_accounts` and `seal_notarizations`
+   do not — so the append-only guarantee holds AND anti-entropy can do its job. No conflict between
+   the two, which was worth establishing on its own.
+
+### Still standing
+
+The responder throws `Cannot write to a stream that is closed`; the dialer sees the wire close while
+waiting for `ae_state`. Deployed a `stage` marker through the responder's serve loop
+(`awaiting_first_request` / `handling_<frame>` / `sending_ae_state`) so the next read says which
+moment, not just which mechanism — the same technique that turned `protocol_error` into
+`wire closed while waiting for ae_state`.
+
+The local convergence enforcer is green again (5/5) after the harness port fix, so there IS a
+working control to diff against. What differs between it and production is now a short list:
+real WAN latency, three separate hosts, and simultaneous bidirectional dials on the same 60s tick.
