@@ -403,7 +403,15 @@ the additions M10B is accountable for.
   different lifetimes, and conflating them is the bug to avoid: the **item** persists until it is
   accepted or refused, while the **notification** is raised once and stops once seen — an operator must
   not be re-nagged on every `cello_use_agent`. On selecting an agent with pending items, the operator is
-  told they are waiting. Named events: `signal.consent.pending`, `signal.consent.notified`. — ❌
+  told they are waiting. Named events: `signal.consent.pending`, `signal.consent.notified`.
+  > **BUILT 2026-07-29 — the queue and its two lifetimes.** `listPendingConsent` /
+  > `countUnnotifiedConsent` / `markConsentNotified`, backed by a SECOND column
+  > (`consent_notified_at`) because the item and the notification are different facts: one flag would
+  > either dismiss the pending decision or nag forever, and tests pin both directions including that
+  > a NEW arrival raises it again. Keyed by consent state, never by type — a test drives an unknown
+  > client-sourced type through it. Scoped per agent on the same axis as presentation. 10 tests.
+  > **STAGED:** the `cello_use_agent` wiring and the MCP/CLI verbs ride `DOD-END-SURFACE-1`, so the
+  > "operator is told" clause is not yet met end-to-end. — 🟡 store built, surface owed
 - **DOD-END-ACCEPT-1** — accept-before-present (D-23). The subject reads the endorsement and accepts or
   refuses it; **only an accepted endorsement is presentable.** Andre's reason, recorded verbatim in the
   policy audit: *"Otherwise someone could create a rogue endorsement that says you're a piece of shit and
