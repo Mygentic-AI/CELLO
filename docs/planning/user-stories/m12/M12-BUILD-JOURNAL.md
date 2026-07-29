@@ -3118,3 +3118,63 @@ sent. Three outcomes, three different fixes:
 
 Not guessing between them. The client logs carry it, and the rig now lives in the scratchpad rather
 than `/tmp`, so the next run's logs will survive to be read.
+
+---
+
+## Entry 51 — 2026-07-29 — Seal reproduced with logs that survive: `seal_verified` never reaches the client
+
+Rebuilt the rig (see the socket note below), reproduced a failing cross-node seal, and captured
+both sides. Entry 50's prediction was right and the three-way probe resolves to branch 1.
+
+### Proven: the client's seal_verified handler NEVER RUNS
+
+Every path through that handler logs something — `session.seal.ceremony.abort`,
+`.ceremony.participated`, `.ceremony.failed`, `.frost.signature.sent`, or `.frost.signature.send.failed`.
+**None appear in the initiator's log.** This is the case where an absent log IS evidence, precisely
+because Entry 50's trap does not apply: there is no silent early return.
+
+So the directory is waiting for a co-signature the client was never asked for.
+
+### The timeline, cross-referenced
+
+```
+18:19:35.619  session.seal.leaf.submitted        client (ann)
+18:19:35.619  session.seal.autoacknowledged      client
+18:19:35.628  seal.certificate.legibility.built  DIRECTORY (gcp-euw1)   <- 9ms later
+              (directory pushes seal_verified to the initiator around here)
+18:19:42.962  session.seal.broker.reconnected    client, brokerNode gcp-euw1  <- 7.3s LATER
+              (nothing after; no notarization ever recorded)
+```
+
+The directory acts on the seal leaf within 9ms. The initiator's transient visiting connection to
+the broker — the one `Fix #1` exists to provide, because the initiator RELEASED its visiting
+connection after session setup — is not up until 7.3 seconds later.
+
+### What is proven vs inferred
+
+**Proven:** the handler never ran; the directory built legibility and never notarized; the broker
+reconnect happened 7.3s after the directory had already processed the leaf; both closes hung and
+returned nothing.
+
+**Inferred, and NOT yet established:** that the push lands in the gap. The ordering is consistent
+with the directory pushing `seal_verified` before the client's listener exists, but I have not
+confirmed the directory actually attempted the push, nor on which stream. `session.seal.autoacknowledged`
+at the same millisecond as the leaf submission suggests this trace mixes the auto-ack path
+(responding to the OTHER side's close, which I launched 3s earlier) with this side's explicit close
+— so the two events at 35.619 may not both belong to ann's own close. That has to be untangled
+before naming a race, and it is exactly the kind of "obvious" reading that has cost me four
+retractions today.
+
+**Next probe, narrow:** a directory-side log at the push site. `legibility.built` fires and
+`notarization.recorded` does not; there is no event in between saying whether `seal_verified` was
+sent, to which peer, and on which stream. One log line there converts the whole inference into a
+fact — and its absence is why this took a full reproduction to get this far.
+
+### Rig note, because this cost a cycle
+
+`CELLO_DIR` under the session scratchpad FAILS: the daemon dies with
+`listen EINVAL: invalid argument …/daemon.sock` because the unix socket path is 134 chars and the
+platform limit is ~104. I recorded this in Entry 25 this morning and walked into it again this
+evening. `/tmp` is short enough but macOS cleaned it mid-session and destroyed the agents' databases.
+The rig now lives at `~/.cellorig` — short AND durable. Both properties are required and neither
+`/tmp` nor the scratchpad has both.
