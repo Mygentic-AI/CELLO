@@ -807,3 +807,42 @@ All three were my error to have carried:
   comments from 2026-07-29 still say M9C** — commits are immutable, and the code rename is batched
   with the WAL fix rather than spending a version cascade on comment churn. The docs are
   authoritative; if you find `M9C` in a comment, it means this milestone.
+
+---
+
+## 2026-07-29 — Entry C13: I falsified my own cause, and it was wrong
+
+Entry C12 named a mechanism for the empty audit trail: the daemon's open-the-store-per-call design
+checkpointing and unlinking the WAL out from under the long-lived sidecar — *"the audit surface
+destroys the audit trail by reading it."* I wrote it into the DoD and the journal in the same breath
+as the evidence, which made a hypothesis read as a finding.
+
+**It is false.** Two reproductions against the shipped gateway build:
+
+1. **In-process** — long-lived writer, short-lived reader that opens and closes. Files after the
+   close: `gw.db, gw.db-shm, gw.db-wal`. Fresh reader sees **2 of 2** records.
+2. **Cross-process** — writer forked into a child, exactly production's shape. Same result: WAL
+   survives the reader's close, fresh reader sees **2 of 2**.
+
+So the store machinery is sound in both shapes, and the daemon's reads do not destroy anything. I
+took a real clue — unlinked `-wal`/`-shm` — and attached the first mechanism that fit it.
+
+I also checked the inode: `gateway.db` on disk is the same inode the sidecar holds (233282873), so
+"the sidecar writes to a deleted main file" is out too.
+
+**What survives as established:** screening works end to end on the shipped daemon (the redaction
+fired on the SEND call, so it is the outbound path); `security_records` is empty; `-wal`/`-shm` are
+unlinked while held open; one gateway process, both store env vars present.
+
+**What is unknown:** what unlinked those files, and why a `record()` that cannot have thrown leaves
+nothing a later reader sees. Possibly one fact, possibly two.
+
+**The lesson is one I had already written down twice today and then did not apply.** I told the
+counterparty this morning that narrating a hypothesis as fact is the default failure mode, and I
+praised them for retracting a journal entry recorded as established on a too-narrow query. Then I
+did the same thing within the hour — with the added cost that mine went into a definition-of-done,
+where the next reader would have inherited it as settled.
+
+**Next step is evidence, not a fix:** a fresh daemon, one message, and an inspection that never
+opens the store through the operator surface, so the reader is ruled in or out by construction
+rather than by argument.
