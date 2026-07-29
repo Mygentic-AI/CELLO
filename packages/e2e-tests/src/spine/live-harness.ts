@@ -390,6 +390,8 @@ export interface SpineCluster {
   restartDirectory: () => Promise<Proc>;
   relayMultiaddr: string;
   directoryUrl: string; // http://127.0.0.1:<healthPort> — node 0's CELLO_DIRECTORY_URL
+  /** `/internal/*` base URLs, one per node — present only when `internalApiKey` was passed. */
+  internalApiUrls: string[];
   /** The bootstrap/health URL of every directory node (directoryUrls[0] === directoryUrl). */
   directoryUrls: string[];
   /** The Postgres URL of every sovereign node's OWN database (per-node K_server share). */
@@ -529,6 +531,16 @@ export interface StartSpineClusterOpts {
    * (certificate_frontier_unverifiable). Off by default; production never sets it.
    */
   directoryInflateFrontierForTest?: number;
+  /**
+   * M10B / `J-END`: start each directory's `/internal/*` API with this key, and expose the port.
+   *
+   * OPT-IN rather than always-on. `/internal/*` carries the portal-facing reads and writes — the
+   * submission drain, the agent-by-pubkey resolution — and a journey that does not need them should
+   * not be running an extra authenticated surface it never exercises. Under `CELLO_ENV=local` the
+   * directory starts the internal server only when this is set, so the flag mirrors production's
+   * own condition rather than inventing a test-only one.
+   */
+  internalApiKey?: string;
 }
 
 /**
@@ -637,6 +649,17 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
     // that manifest must carry these URLs, so onDirectoryUrlsReady writes it before any spawn.
     const healthPorts: number[] = [];
     for (let i = 0; i < count; i++) healthPorts.push(await freePort());
+    // Allocated up front for the same reason as the health ports: the env is built per node below,
+    // and a port picked mid-loop would not be knowable to a caller before the spawn.
+    const internalApiPorts: number[] = [];
+    const internalApiUrls: string[] = [];
+    if (opts.internalApiKey) {
+      for (let i = 0; i < count; i++) {
+        const p = await freePort();
+        internalApiPorts.push(p);
+        internalApiUrls.push(`http://127.0.0.1:${p}`);
+      }
+    }
     for (let i = 0; i < count; i++) directoryUrls.push(`http://127.0.0.1:${healthPorts[i]}`);
     if (opts.onDirectoryUrlsReady) await opts.onDirectoryUrlsReady([...directoryUrls]);
     for (let i = 0; i < count; i++) {
@@ -685,6 +708,9 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
           ? { CELLO_DIRECTORY_CONSORTIUM_MANIFEST: opts.directoryConsortiumManifestPath }
           : {}),
         // DOD-LEG-2 negative test: make the directory publish an inflated (still-signed) frontier.
+        ...(opts.internalApiKey
+          ? { INTERNAL_API_KEY: opts.internalApiKey, INTERNAL_API_PORT: String(internalApiPorts[i]) }
+          : {}),
         ...(opts.directoryInflateFrontierForTest
           ? { CELLO_DIRECTORY_INFLATE_FRONTIER_FOR_TEST: String(opts.directoryInflateFrontierForTest) }
           : {}),
@@ -751,6 +777,7 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
 
     return {
       tmpDir,
+      internalApiUrls,
       relay: relayRef,
       get directory(): Proc {
         return liveDirs[0];

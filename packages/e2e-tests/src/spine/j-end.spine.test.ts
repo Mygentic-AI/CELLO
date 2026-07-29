@@ -20,6 +20,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { InMemoryKeyProvider } from "@cello-protocol/crypto";
 import {
   startSpineCluster,
@@ -31,6 +32,7 @@ import {
   AUTH_DIRECTORY_NODE_ID,
   AUTH_DIRECTORY_NODE_PUBKEY,
   writeConsortiumManifest,
+  PORTAL_ROOT,
   type SpineCluster,
   type Proc,
   type McpConn,
@@ -50,13 +52,19 @@ const dirs: string[] = [];
  * attacker (`M10B-D11`).
  */
 const INTAKE_KEY_ID = "intake-j-end";
+const INTERNAL_API_KEY = `jend-internal-${randomBytes(8).toString("hex")}`;
 const intakeSeed = new Uint8Array(randomBytes(32));
 
 /** Bob issues; Alice is the subject; Charlie is the recipient who verifies. */
 const dirFor: Record<string, string> = {};
 
 beforeAll(async () => {
-  cluster = await startSpineCluster({ directoryNodeKeyHex: AUTH_DIRECTORY_NODE_KEY_HEX });
+  cluster = await startSpineCluster({
+    directoryNodeKeyHex: AUTH_DIRECTORY_NODE_KEY_HEX,
+    // The portal reaches the queue over `/internal/*`; without a key the directory does not start
+    // that server at all under CELLO_ENV=local.
+    internalApiKey: INTERNAL_API_KEY,
+  });
   const intakePub = Buffer.from(await new InMemoryKeyProvider(intakeSeed).getPublicKey()).toString("hex");
   manifestEnv = writeConsortiumManifest(
     cluster.tmpDir,
@@ -145,5 +153,67 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     expect(rows, "sealed to the manifest's intake key generation").toContain(INTAKE_KEY_ID);
     expect(rows, "the directory must not be able to read the endorsement").not.toContain("payments migration");
     expect(rows, "nor the subject").not.toContain(pubkeys["alice"]);
+  }, 120_000);
+
+  it("HOP 2: the PORTAL drains, authenticates, scans, mints and delivers", async () => {
+    // THE REAL PORTAL MODULES — not a re-implementation. If this ever reverts to seeding
+    // `signal_records` directly, the journey stops testing the thing it exists to test.
+    const { loadPortalIngress } = await import("./portal-ingress.js");
+    const { HttpDirectoryClient } = await import(
+      pathToFileURL(join(PORTAL_ROOT, "src/server/directory/http-client.ts")).href
+    ) as { HttpDirectoryClient: new (baseUrl: string, apiKey: string) => unknown };
+    const { getSubmissionSigner } = await import(
+      pathToFileURL(join(PORTAL_ROOT, "src/server/trust/submission-signer.ts")).href
+    ) as { getSubmissionSigner: (env: string) => unknown };
+
+    const portal = await loadPortalIngress();
+    await portal.prepareIntakeScanner();
+
+    // ENROL THE PORTAL AS AN AUTHORIZED ISSUER — the step a real deployment performs out of band.
+    //
+    // The directory refuses a mint from any key not in `authorized_issuers`, and it is RIGHT to:
+    // that set is the chokepoint the whole notary model rests on (spec §6's amendment collapses it
+    // to portal keys). Seeding it here is enrolment, not a bypass — the submission still travels the
+    // real signed path and is refused if the signature does not verify.
+    const signer = getSubmissionSigner("local") as { getPublicKeyHex(): Promise<string> };
+    const portalPubkey = await signer.getPublicKeyHex();
+    psqlSpine(
+      `INSERT INTO authorized_issuers (pubkey, role, status, label) ` +
+      // ROLE is 'submitter', not 'portal' — the table's own CHECK allows only submitter|registry.
+      // `issuer_kind: portal` on the ENVELOPE is a different axis entirely: it says whose voice the
+      // claim is in, while this says what the key is permitted to do at the chokepoint.
+      `VALUES ('${portalPubkey}', 'submitter', 'active', 'j-end portal signer') ` +
+      `ON CONFLICT (pubkey) DO UPDATE SET status = 'active'`,
+    );
+
+    const result = await portal.drainAndMint({
+      client: new HttpDirectoryClient(cluster.internalApiUrls[0], INTERNAL_API_KEY),
+      // Keyed BY GENERATION, matching what the manifest published.
+      intakeSeeds: new Map([[INTAKE_KEY_ID, intakeSeed]]),
+      signer,
+      // The MINT posts to /internal/signal/submit, which lives on the INTERNAL api port — not the
+      // health/bootstrap port the daemons use. Pointing this at directoryUrl produced a 404 that
+      // read as "directory rejected submit", i.e. a refusal, when it was a wrong address.
+      directoryBaseUrl: cluster.internalApiUrls[0],
+    });
+
+    expect(result.nodeErrors, `a node failed to drain: ${JSON.stringify(result.nodeErrors)}`).toEqual([]);
+    expect(result.drained, "the queued submission was drained").toBeGreaterThanOrEqual(1);
+    expect(result.minted, `nothing minted — rejected:${result.rejected} poison:${result.poison} unhandledOps:${result.unhandledOps}`).toBe(1);
+
+    // NOTARIZED: the signal exists in the directory's ledger, issued by the PORTAL (not by Bob —
+    // the portal is the only issuer; Bob's identity rides inside the payload as the statement's
+    // author, which is what keeps INV-UNTRUSTED and the issuer model intact).
+    const notarized = psqlSpine(
+      `SELECT issuer_kind, type, scanner_version FROM signal_records WHERE is_tombstone = false ORDER BY created_at DESC LIMIT 1`,
+    );
+    expect(notarized).toContain("portal");
+    expect(notarized).toContain("endorsement");
+    // The DERIVED scanner version, never the internal constant — the directory cannot re-run the
+    // scan, so this field is the only evidence of which rules judged Bob's text.
+    expect(notarized, "the signed scanner_version must name the INTAKE scanner").toMatch(/intake-v1\+[0-9a-f]{12}/);
+
+    // THE QUEUE ROW IS GONE: the portal acked a terminal outcome.
+    expect(psqlSpine(`SELECT count(*) FROM submission_queue`).replace(/\s/g, "")).toContain("0");
   }, 120_000);
 });
