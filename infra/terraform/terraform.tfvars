@@ -4,7 +4,7 @@
 environment = "dev"
 
 # Immutable commit-SHA tag built by Cloud Build. Never a moving tag — see infra/cloudbuild/*.yaml.
-directory_image_tag = "seal-obs-8ce8fcff"
+directory_image_tag = "seal-failfast-af1ea85e"
 
 # One node = one region = one independent deployment. The map key is the region, which makes two
 # nodes in one region unrepresentable rather than merely discouraged.
