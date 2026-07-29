@@ -388,6 +388,9 @@ export async function serveAeResponder(input: AeResponderInput): Promise<void> {
   const { wire, manifest, identity, actualRemotePeerId, store } = input;
   const nowMs = input.nowMs ?? (() => Date.now());
   const timeoutMs = input.frameTimeoutMs ?? DEFAULT_FRAME_TIMEOUT_MS;
+  // Declared OUTSIDE the try so the catch can report where we were. "Cannot write to a stream that
+  // is closed" names the mechanism; this names the moment.
+  let stage = "handshake";
   try {
     // 1. the dialer's hello. Any other first frame (including round frames from an
     //    unauthenticated peer) is a violation — refuse before serving ANYTHING.
@@ -449,6 +452,11 @@ export async function serveAeResponder(input: AeResponderInput): Promise<void> {
     // 4. serve loop — one request/response at a time until ae_done or close. No deadline here:
     // BETWEEN requests an idle authenticated peer is legitimate (the dialer may be applying);
     // the transport layer owns idle-connection lifecycle.
+    //
+    // `stage` exists so a throw names the frame it died on. "Cannot write to a stream that is
+    // closed" is the transport's message and identifies the mechanism, not the moment — and the
+    // moment is what separates "the dialer went away" from "we died mid-response".
+    stage = "awaiting_first_request";
     for (;;) {
       const bytes = await wire.next();
       if (bytes === null) return;
@@ -461,9 +469,12 @@ export async function serveAeResponder(input: AeResponderInput): Promise<void> {
       if (frame === null || typeof frame !== "object") {
         throw new AeProtocolError("non-map CBOR frame in serve loop");
       }
+      stage = `handling_${String(frame["type"])}`;
       switch (frame["type"]) {
         case "ae_state_req": {
-          wire.send(encodeAeFrame({ type: "ae_state", state: await buildWireState(store) }));
+          const state = await buildWireState(store);
+          stage = "sending_ae_state";
+          wire.send(encodeAeFrame({ type: "ae_state", state }));
           break;
         }
         case "ae_buckets_req": {
@@ -514,6 +525,12 @@ export async function serveAeResponder(input: AeResponderInput): Promise<void> {
           throw new AeProtocolError(`unexpected frame ${String(frame["type"])} in serve loop`);
       }
     }
+  } catch (err) {
+    // Re-thrown with the stage attached. The caller logs the message; without the stage it reads
+    // as a generic transport error and every distinct failure looks identical.
+    throw err instanceof AeProtocolError
+      ? new AeProtocolError(`${err.message} (stage: ${stage})`)
+      : new Error(`${err instanceof Error ? err.message : String(err)} (stage: ${stage})`);
   } finally {
     wire.close();
   }

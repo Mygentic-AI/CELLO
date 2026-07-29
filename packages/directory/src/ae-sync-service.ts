@@ -189,8 +189,9 @@ export class AeSyncService {
         store: this.#cfg.store,
       });
     } catch (err) {
-      // A failed handshake / protocol violation. The stream is already closed by the responder;
-      // name the cause (§6) — unauthenticated-attempt count should be zero in a healthy consortium.
+      // A failed handshake / protocol violation. The stream is already closed by the responder's
+      // own `finally` (serveAeResponder); name the cause (§6) — unauthenticated-attempt count
+      // should be zero in a healthy consortium.
       logger.warn("antientropy.peer.auth_failed", {
         peerNodeId: "unproven", // identity claims before auth completes are unproven — never log them as fact
         remotePeerId,
