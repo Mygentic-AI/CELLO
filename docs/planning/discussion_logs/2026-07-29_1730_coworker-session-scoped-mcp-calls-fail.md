@@ -166,21 +166,50 @@ To use it against Cowork, the device's `cello` MCP server must run a build that 
 `dist/` path or a published version) with `CELLO_MCP_TRACE=1` in its environment. One Cowork call
 then answers the question outright.
 
-## The open decision: do we rename the parameter?
+## DECIDED and SHIPPED: the parameter is `cello_session_id`
 
-`#77248` is open with no fix and no setting. So the choice is ours, and it is a launch-triage call —
-does a Cowork operator need to drive a CELLO session at launch?
+Andre, same day: *"the only fix is changing the reserved name."* A straight rename, **no deprecated
+alias** — the model reads whatever schema the running shim serves, so an alias would only offer it
+two names and a chance to pick the broken one.
 
-- **Do nothing.** Cowork can open a session and never use it. Claude Code, the CLI and Hermes are
-  unaffected. Costs nothing; leaves Cowork broken for as long as `#77248` is open.
-- **Rename to `cello_session_id`, keep `session_id` accepted but unadvertised.** The schema is
-  served fresh by whatever cello-mcp version is running, so the model always sees — and sends — the
-  working name; the old token keeps working for anything that still sends it. Non-breaking in both
-  directions. Touches 8 tool definitions, their daemon-side param reads, SKILL.md, and needs a
-  publish.
-- **Rename outright.** Cleaner, and breaks anything still sending `session_id`.
+What moved, and what deliberately did not:
 
-Not decided. Do not treat the middle option as chosen because it is the recommended one.
+- **MCP surface only.** All eight session-scoped tools declare `cello_session_id`. Each handler
+  renames on destructure, so the IPC payload still says `session_id` and the daemon, CLI, database
+  and wire protocol are untouched.
+- **No migration, no version skew.** The parameter never crossed the wire. Agents on either connect
+  version still talk to each other; the only cost is that a client must re-read the schema, which it
+  does on reconnect.
+- **Responses and notifications keep `session_id`.** The bridge strips tool-call ARGUMENTS and
+  nothing else; renaming what we send back would be churn that breaks the channel contract.
+- **The shipped prompt text moved in the same commit** — `SKILL.md` (which rides inside the connect
+  tarball), the two plugin skills, and the Hermes wake prompt. A doc teaching the old name would be
+  an agent calling with an argument that gets eaten.
+- **The rename broke no test, which was itself the finding**: nothing named the parameter. A guard
+  now asserts both halves per tool (declared name renamed, IPC field NOT renamed), plus a
+  surface-wide check that no tool re-declares the stripped token.
+
+`cello-client` commit `deb36ef`.
+
+## Proven live, through the failing path
+
+Ms_Chelly — **driven by Claude Cowork in Anthropic's cloud sandbox** — held a full session with
+`CELLO_Feedback` on the renamed parameter: four messages, zero failures, mutual `[[WRAP]]`, sealed
+`b0246f44d7d801569ff80db36d860b3fdcb72918a41fc00ced0638825d71723a` with `attestation_mode: "live"`
+for both participants. The same counterparty pair, hours earlier, on the old name, could not
+exchange a single message.
+
+Full transcript and what it demonstrates:
+[[agent-conversation-2026-07-29-cowork-bridge-connectivity-proof]].
+
+**A dead end worth recording so nobody re-walks it.** Before the rename was chosen, the proposed
+workaround was to drive CELLO from Cowork's `device_bash` using the CLI, which takes positional
+arguments and so has nothing for the bridge to strip. That was wrong, and Cowork was right to
+refuse it: `device_bash` does NOT run on the operator's Mac. It runs in a separate sandbox with only
+the connected folders mounted — no `~/.cello`, no daemon socket, no `cello` binary. The fallback of
+giving that sandbox its own CELLO node fails for a deeper reason: the sandbox is ephemeral, so a
+fresh install each session means a fresh keypair, and a fresh keypair is a **different agent** with
+no contacts, no history and no seals. There was never a bash route.
 
 ## Worth fixing regardless of the outcome
 
