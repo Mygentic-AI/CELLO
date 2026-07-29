@@ -410,8 +410,10 @@ the additions M10B is accountable for.
   > either dismiss the pending decision or nag forever, and tests pin both directions including that
   > a NEW arrival raises it again. Keyed by consent state, never by type — a test drives an unknown
   > client-sourced type through it. Scoped per agent on the same axis as presentation. 10 tests.
-  > **STAGED:** the `cello_use_agent` wiring and the MCP/CLI verbs ride `DOD-END-SURFACE-1`, so the
-  > "operator is told" clause is not yet met end-to-end. — 🟡 store built, surface owed
+  > **SURFACE LANDED 2026-07-29 → Entry 33, 34.** `cello_use_agent` returns `pending_consent` + guidance
+  > (a COUNT; it deliberately does not mark notified — listing does, so the operator is never marked
+  > told about something they were not shown). Verbs at MCP+CLI parity. Covered by a live-daemon test
+  > after the review found the nudge had ZERO coverage. — ✅
 - **DOD-END-ACCEPT-1** — accept-before-present (D-23). The subject reads the endorsement and accepts or
   refuses it; **only an accepted endorsement is presentable.** Andre's reason, recorded verbatim in the
   policy audit: *"Otherwise someone could create a rogue endorsement that says you're a piece of shit and
@@ -431,9 +433,13 @@ the additions M10B is accountable for.
   > bare `catch {}`, which runs on every `startDaemon` and would otherwise flip a REFUSED endorsement
   > back to `accepted` on restart. Presentability is `consent_state = 'accepted'` in the SQL of
   > `listAllActive`, so `include` cannot route around it and anything not exactly `accepted` fails
-  > closed. Keys on `issuer_kind`, never on type. 13 tests. **STAGED, and stated rather than
-  > narrowed:** the refusal MESSAGE (`M10B-D4`) and the operator verbs ride
-  > `DOD-END-SURFACE-1`. — 🟡 state built, surface owed
+  > closed. Keys on `issuer_kind`, never on type. 13 tests.
+  > **REFUSAL MESSAGE + VERBS LANDED 2026-07-29 → Entry 33, 34.** `M10B-D4` rides the submission queue
+  > as a third `op` (`refuse`) — no field added, no order changed, so every existing signature still
+  > verifies. The refusal is recorded and its write CHECKED before anything that can fail; silence is
+  > the default; the issuer learns only what the subject chose to tell him. Account-subject items
+  > refuse but WITHHOLD the message — which agent may speak for an account is unsettled, and a signed
+  > message is not the place to guess (Open questions). — ✅
 - **DOD-END-DISCOVER-1** — non-discoverability, proven by a negative test (D-24): no path lets any third
   party enumerate, count, or infer endorsements about a subject who has not presented them. The
   directory's fingerprint is useless without the text, and only the subject holds the text. Andre,
