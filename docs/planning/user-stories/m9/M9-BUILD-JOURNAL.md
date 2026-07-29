@@ -1017,3 +1017,82 @@ test: a node:sqlite implementation fails this). (2) A raw-bytes assertion: the D
 NOT "SQLite format 3\0" (plaintext magic) after writes. (3) Wrong-key open → store_key_mismatch.
 (4) Both-stores-one-file: config + records coexist in one DB. (5) eslint allowlist entries removed
 → lint stays green (proves no import remains).
+
+---
+
+## 2026-07-29 — Entry C3: DESIGN NOTE — DOD-M9C-WIRE-1 (written before any code)
+
+**Target behavior (one sentence).** A stock-installed `cello-daemon`, with nothing injected, spawns
+the screening sidecar at boot, announces `mode:"enforcing"`, and screens every send and every
+ingest — and if the sidecar cannot be had, says so and fails closed rather than passing content.
+
+**Spec anchors.** DoD `DOD-M9C-WIRE-1`; policy D-2 (M9C-D1); INV-5 (unified seam), INV-6 (never
+lies, never hangs), INV-9 (connected by default, passthrough test-only).
+
+**Producer/consumer chain.** The BIN produces: the store key file (ensuring it exists), the spawned
+sidecar process, and the `LocalSidecarGatewayClient`. `startDaemon` consumes the client and hands
+it to both seams — `cello_send` (outbound) and `SessionNodeManager.ingestReceivedContent`
+(inbound). The client produces verdicts; the seams consume them. The bin's shutdown handler
+consumes the spawn handle. Break any hop and content either stops (fail-closed) or — the defect
+this unit exists to kill — flows unscreened.
+
+**The seam.** `core/daemon/src/bin/cello-daemon.ts` (composition root) and one line of
+`core/daemon/src/daemon.ts` (the `??` fallback). No screening logic moves; the gateway package is
+untouched.
+
+**Decisions this note makes:**
+
+- **M9C-D10 — `securityGateway` becomes REQUIRED in `DaemonConfig`.** Optional-with-a-passthrough-
+  default is precisely how this defect happened: the invariant held by CONVENTION while the comment
+  claimed structure. A required field means the shipped daemon *cannot* forget. The ~45 test files
+  that call `startDaemon` pass `new PassthroughGatewayClient()` explicitly, which is an honest
+  declaration ("this test does not screen") rather than a silent inheritance. This mirrors the fix
+  the concurrent M10B session made to `submitForAgent` this same day, for the same reason.
+- **M9C-D11 — each client declares its OWN `mode`.** `SecurityGatewayClient` gains a readonly
+  `mode` (`"enforcing" | "passthrough"`); `security.gateway.connected` logs
+  `securityGateway.mode`, never a caller-side ternary. The old line computed the announcement from
+  the same expression that chose the client, so a wiring bug could only ever announce itself
+  correctly by luck. The informed skeptic greps this field — it must come from the object.
+- **M9C-D12 — sidecar spawn failure does NOT stop the daemon; it fails closed, announced.** The
+  client already fails closed on a dead socket (`gateway_unavailable`, INV-6), so a failed spawn
+  needs no new blocking path: log `security.gateway.spawn_failed` with the real cause and keep the
+  client. The operator keeps a daemon they can run `cello config` / `cello policy log` against to
+  diagnose, and content still cannot move. Rejected: refusing to start (a cryptic dead agent with
+  no way to inspect it) and falling back to passthrough (the defect itself).
+- **M9C-D13 — the bin ensures the store key exists BEFORE spawning.** The sidecar opens the
+  encrypted store at startup, but `sessions.db.key` is only created when the daemon first opens
+  its own database — later. So the bin calls `resolveDbKey(sessions.db, dbKeyPathFor(...))` first
+  (the same call the daemon makes; idempotent, and on a fresh install it is the one that
+  generates), then passes the key FILE PATH to the child. It uses the return value for nothing —
+  only the side effect. On an existing DB with a missing key file this throws
+  `db_encryption_key_mismatch`, which is the correct fail-closed outcome and the same error the
+  daemon would raise seconds later.
+- **M9C-D14 — no auto-restart of a sidecar that dies mid-run.** Log `security.gateway.exited` with
+  the code; every subsequent screen fails closed with a real cause. A supervision loop is a Day-2
+  add, named here rather than half-built.
+
+**Invariants at stake.** INV-9 is satisfied structurally by D10 + D11 (no shipped path can
+construct passthrough; the announced mode comes from the object). INV-5 is untouched — the seams
+already exist and are already called. INV-6 is inherited from the client's existing deadline +
+fail-closed behavior; D12 leans on it rather than duplicating it.
+
+**Falsification pass.** (1) Does the bin have what it needs? Yes — `celloDir` is computed there,
+and `resolveDbKey`/`dbKeyPathFor` are in `core/daemon`, which the bin is part of. (2) Does
+responsibility live here? The bin is the composition root; process lifecycle and adapter choice
+are exactly its job, and the daemon library stays injectable for tests. (3) Redundancy? The
+daemon must NOT also spawn — one spawner, in the bin, stopped by the bin's shutdown handler.
+(4) What breaks? Every `startDaemon` test call site (required field) — mechanical, and the
+compiler names each one. The e2e spine harness spawns the real bin, so it inherits real screening;
+if a spine test asserts unscreened content it will fail LOUDLY, which is the correct outcome and
+must be fixed by the test, never by loosening the wiring.
+
+**Observability.** `security.gateway.connected` {mode, socketPath} · `security.gateway.spawned`
+{pid, socketPath} · `security.gateway.spawn_failed` {error, guidance} · `security.gateway.exited`
+{code, signal} · `security.gateway.stopped` on clean shutdown.
+
+**Test plan sketch (red first).** (1) A focused test proving `DaemonConfig` requires the field —
+the compiler is the assertion (a `@ts-expect-error` on an omitted field). (2) The mode announced
+equals the client's own `mode` for both implementations. (3) Spawn-failure path: point the bin at
+a non-existent entry → daemon still starts, `spawn_failed` logged, a send fails closed with the
+real cause and NOT `ok:true`. (4) The full proof is `DOD-M9C-GATE-1`, which spawns the shipped bin
+and greps the boot line for `mode:"enforcing"` — until it lands, WIRE-1 stays 🟡.
