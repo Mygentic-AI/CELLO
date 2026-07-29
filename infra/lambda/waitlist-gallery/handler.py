@@ -42,6 +42,7 @@ from _receipt_validation import (
     ReceiptContentError,
     check_message_count,
     clean_transcript,
+    validate_prose,
     validate_seal_status,
 )
 from _sqlstate import classify
@@ -126,6 +127,10 @@ def serialise(row):
         # The archive records a date, not a time. Rendering midnight would put
         # fabricated precision beside a hash on a page built to be checked.
         "sealed_at_precision": row["sealed_at_precision"],
+        # Editorial, not attested. The page renders these as framing and
+        # never as part of the verification claim.
+        "title": row["title"],
+        "summary": row["summary"],
         "transcript": row["transcript"],
         "published_at": row["published_at"],
     }
@@ -144,13 +149,13 @@ def list_receipts(params, correlation_id):
             cur.execute("SELECT count(*) AS n FROM published_receipts")
             total = cur.fetchone()["n"]
             cur.execute(
-                # sealed_at breaks the tie, because a batch published in one
-                # transaction shares a published_at to the microsecond and would
-                # otherwise fall back to HASH order — five cards printing five
-                # dates in no order at all, on a surface whose subject is a
-                # chronological record.
+                # ORDERED BY THE DATE THE CARD SHOWS. published_at is invisible to
+                # a reader, so leading with it produced an order nobody could
+                # account for — and for an archive published in one transaction
+                # it collapsed to hash order outright. The session date is the
+                # one a visitor can see and check against the card next to it.
                 "SELECT * FROM published_receipts "
-                "ORDER BY published_at DESC, sealed_at DESC, receipt_hash "
+                "ORDER BY sealed_at DESC, published_at DESC, receipt_hash "
                 "LIMIT %s OFFSET %s",
                 (size, (page - 1) * size),
             )
@@ -303,6 +308,8 @@ def publish(body, event, correlation_id):
             f"sealed_at_precision must be one of {', '.join(DATE_PRECISIONS)}.",
         )
 
+    title = as_gallery_error(validate_prose, body.get("title"), "title", 120)
+    summary = as_gallery_error(validate_prose, body.get("summary"), "summary", 400)
     transcript = as_gallery_error(clean_transcript, body.get("transcript"))
     # The count and the transcript must agree — a page cannot print
     # "12 messages" above two turns.
@@ -352,8 +359,9 @@ def publish(body, event, correlation_id):
                 INSERT INTO published_receipts
                     (receipt_hash, initiator_moniker, counterparty_moniker, sealed_at,
                      message_count, verified_by, node_count, seal_status, seal_detail,
-                     sealed_at_precision, transcript, published_by_waitlist_user_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     sealed_at_precision, transcript, title, summary,
+                     published_by_waitlist_user_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (receipt_hash) DO NOTHING
                 RETURNING receipt_hash
                 """,
@@ -369,6 +377,8 @@ def publish(body, event, correlation_id):
                     seal_detail,
                     sealed_at_precision,
                     json.dumps(transcript) if transcript is not None else None,
+                    title,
+                    summary,
                     # From the SESSION, never the body.
                     session["waitlist_user_id"],
                 ),

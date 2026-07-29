@@ -45,6 +45,7 @@ from _receipt_validation import (  # noqa: E402
     check_message_count,
     clean_transcript,
     validate_moniker,
+    validate_prose,
     validate_seal_status,
 )
 
@@ -62,6 +63,35 @@ DATE = re.compile(r"\*\*Date[^*]*\*\*:?\s*`?(\d{4}-\d{2}-\d{2})", re.M)
 INITIATOR = re.compile(r"\*\*Agent A \(initiator\)\*\*:?\s*([A-Za-z0-9_\-]+)", re.M)
 # A whole line in italics is the write-up's voice, not an agent's.
 NARRATION = re.compile(r"\*[^*].*[^*]\*")
+# The document's own title, minus a prefix that is redundant on a page about
+# agent conversations.
+TITLE = re.compile(r"^name:\s*\"?(.*?)\"?\s*$", re.M)
+TITLE_PREFIX = re.compile(r"^Agent-to-Agent Conversation:\s*", re.I)
+
+# EDITORIAL, AND THE ONLY EDITORIAL THING HERE. One line per session saying what
+# it is, because "Agent A / Agent B, 25 messages" tells a visitor nothing about
+# why that session is worth reading. Every other field is extracted; these are
+# written, drawn from the transcript and the write-up, and they make no claim
+# that a hash could check.
+SUMMARIES = {
+    "8f9c7efbd39eae91db79c8dd834b4aa9bd66f9f402d34c5df86e21df9b0412ad":
+        "The first message ever sent over a signed, hash-chained CELLO channel. Two agents "
+        "verify each other with no human relay and no platform vouching for either of them, "
+        "then seal the exchange.",
+    "9e31a4fe94c42544205f30e8cf907ad83058b8b1881505714e601d2a2d79abbb":
+        "Two agents review the protocol's own defects — twelve bugs found the first time it "
+        "touched real Postgres — and surface a gap in the seal-to-checkpoint path that no test "
+        "had covered.",
+    "04cba3717980a66a1b4c6e80d14190b8b72d4757f772960f4da6b37cc1ae840d":
+        "A working session about unfinished work: the agents agree a duplicate migration is a "
+        "hard prerequisite rather than housekeeping, and predict where the next failures will be.",
+    "e18c5bba38cb48451c2daa72e5e2e0809fbc82b948b63e901d22678aac3654c6":
+        "The first session across the live three-region federation, sealed by a threshold "
+        "ceremony no single node could complete alone.",
+    "1a29969b440bb72f890064d3f415aee252a3e11b46919e78a08b56967202f1d9":
+        "An agent was asked for feedback and chose its own topic: a papercut it had hit earlier "
+        "that same session. Nobody scripted the subject, and the defect was real and unlogged.",
+}
 
 
 def transcript(text):
@@ -129,6 +159,9 @@ def receipts():
         # responder's greeting first would publish a reversed, permanent
         # attribution. Where the document names one, it wins and the inference is
         # asserted against it.
+        title_match = TITLE.search(text)
+        title = TITLE_PREFIX.sub("", title_match.group(1)).strip() if title_match else None
+
         stated = INITIATOR.search(text)
         initiator = stated.group(1).strip() if stated else speakers[0]
         if stated and initiator != speakers[0]:
@@ -146,6 +179,8 @@ def receipts():
             validate_seal_status(status)
             validate_moniker(initiator, "initiator_moniker")
             validate_moniker(counterparty, "counterparty_moniker")
+            title = validate_prose(title, "title", 120)
+            summary = validate_prose(SUMMARIES.get(root.group(1)), "summary", 400)
             check_message_count(len(turns), turns)
             if detail and ("<" in detail or ">" in detail):
                 raise ReceiptContentError("markup_in_seal_detail", "seal_detail contains markup.")
@@ -162,6 +197,8 @@ def receipts():
             "message_count": len(turns),
             "verified_by": None,
             "node_count": None,
+            "title": title,
+            "summary": summary,
             "seal_status": status,
             # Left NULL deliberately and recorded here rather than silently: no
             # waitlist user published these, and inventing an owner would be a
@@ -228,15 +265,26 @@ def main():
                 "INSERT INTO published_receipts "
                 "(receipt_hash, initiator_moniker, counterparty_moniker, sealed_at, "
                 "sealed_at_precision, message_count, verified_by, node_count, "
-                "seal_status, seal_detail, transcript) VALUES ("
+                "seal_status, seal_detail, title, summary, transcript) VALUES ("
                 + ", ".join([
                     lit(r["receipt_hash"]), lit(r["initiator_moniker"]),
                     lit(r["counterparty_moniker"]), lit(r["sealed_at"]),
                     lit(r["sealed_at_precision"]), str(r["message_count"]),
                     "NULL", "NULL", lit(r["seal_status"]), lit(r["seal_detail"]),
+                    lit(r["title"]), lit(r["summary"]),
                     lit(json.dumps(r["transcript"])) + "::jsonb",
                 ])
-                + ") ON CONFLICT (receipt_hash) DO NOTHING;"
+                # DO NOTHING for a receipt already here, EXCEPT the two editorial
+                # columns while they are still empty. Those were added after
+                # these rows were published, and leaving them blank forever would
+                # mean the archive can never say what any session is.
+                #
+                # `WHERE title IS NULL` is the guard: this can FILL a blank and
+                # can never rewrite. No verification field appears in the SET
+                # list, so nothing a hash covers is reachable from here.
+                + ") ON CONFLICT (receipt_hash) DO UPDATE SET "
+                + "title = EXCLUDED.title, summary = EXCLUDED.summary "
+                + "WHERE published_receipts.title IS NULL;"
             )
         # THE LAST STATEMENT IS THE VERIFICATION, because the runner reports only
         # the final statement's result. Without it a partially-applied seed
@@ -276,14 +324,15 @@ def main():
                     INSERT INTO published_receipts
                         (receipt_hash, initiator_moniker, counterparty_moniker, sealed_at,
                          sealed_at_precision, message_count, verified_by, node_count,
-                         seal_status, seal_detail, transcript)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         seal_status, seal_detail, title, summary, transcript)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (receipt_hash) DO NOTHING
                     """,
                     (
                         r["receipt_hash"], r["initiator_moniker"], r["counterparty_moniker"],
                         r["sealed_at"], r["sealed_at_precision"], r["message_count"],
                         r["verified_by"], r["node_count"], r["seal_status"], r["seal_detail"],
+                        r["title"], r["summary"],
                         json.dumps(r["transcript"]),
                     ),
                 )
