@@ -283,7 +283,20 @@ the additions M10B is accountable for.
   exists — with the standard failover across nodes, since submission must not die on one node being
   down. The daemon never talks to the portal directly, and never sends unsealed (`ABSENT IS NOT FINE`:
   no intake key → refuse, name the reason). Named events: `signal.submission.sealed`,
-  `signal.submission.queued`, `signal.submission.refused` (+ cause). — ❌
+  `signal.submission.queued`, `signal.submission.refused` (+ cause).
+  > **BUILT + REVIEWED 2026-07-29 — 🟡.** Three layers: the wire contract in `@cello-protocol/
+  > protocol-types` (array TBS, `CELLO-SUBMIT-v1`, closed field set, content-derived
+  > `submission_id`), `signal-submission.ts` in the daemon (compose → sign → seal → send, four named
+  > refusals, no code path that emits unsealed), and the `submission_write` frame + handler in the
+  > directory. INV-ATTRIBUTION is enforced by the ABSENCE of a parameter and pinned by a
+  > **compile-time** guard in the source (a `@ts-expect-error` in a test would assert nothing —
+  > `src/__tests__` is excluded from typecheck). Review found 8; all fixed, including a broken ack
+  > correlation, an over-certain error message, and two hollow tests. → **Entries 22, 26, 27**.
+  > **`M10B-D32`: "standard failover across nodes" is the SignalingManager's reconnect** — there is
+  > no client-side multi-node write path, verified. **Two ACs handed forward, both blocking on
+  > `DOD-END-SURFACE-1`:** nothing retries yet (the safety property is real but has no caller), and
+  > **nothing generates the manifest's `intake_key`**, so against every real manifest today this
+  > refuses with `intake_key_absent`. 🟡 on the directory deploy + the protocol-types publish. — 🟡
 - **DOD-END-QUEUE-1** — **the directory side: a mailbox it cannot read.** A queue table holding the
   sealed blob, its recipient (the portal intake key id), and delivery bookkeeping — **no plaintext, no
   payload, no subject, no PII**, exactly the `DOD-DIR-WRITE-1` / M10-D22 posture, and a test asserts the

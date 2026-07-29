@@ -2169,3 +2169,66 @@ replicated `signal_records`.
 **Stated honestly: nothing retries yet.** The retry is a property of the design, not a line of code,
 until `DOD-END-SURFACE-1` gives this an operator-facing caller. Recorded so it is an AC there rather
 than an assumption here.
+
+---
+
+## Entry 27 — `DOD-END-SUBMIT-1` reviewed: 8 findings, all fixed — 2026-07-29
+
+One pass, per the cap. The crypto half came through clean — *"the TBS-as-array discipline, the closed
+field set, the refusal ladder, and the real-crypto tests are right"* — and the weakness was uniformly
+in **the send path's ack correlation and the directory half shipping untested**.
+
+| # | finding | fix |
+| :-- | :-- | :-- |
+| F1 | guidance claimed a retry NO CODE performs | say what is true — not delivered, re-submitting is safe; retry is an AC on `DOD-END-SURFACE-1` |
+| F2 | the skew mapping was over-certain | `not_authenticated` has THREE producers; NAME the ambiguity |
+| F3 | ack correlation broken on 2 of 3 paths | every resolve path id-gated; `not_authenticated` is advisory only |
+| F4 | directory half had ZERO tests | 7 tests, incl. the cross-repo contract |
+| F5 | comment claimed flood protection that does not exist | say it is OWED; bound the row size |
+| F6 | one log line joined submitter → submission_id | split the events; correct "never persisted" |
+| F7 | `directory_unreachable` exit label | carry the transport's own cause |
+| — | two HOLLOW tests | both rewritten (below) |
+
+**F2 is the one worth remembering, because it is the same defect I had just fixed, one level up.** I
+caught the error-substitution trap (a node replies `not_authenticated` for an unknown frame, which
+reads as an auth failure) and then *substituted my own certainty for it*: the guidance asserted
+version skew and stated "NOT an authentication problem". But `not_authenticated` has **three**
+producers — an un-deployed node, a deployed node rejecting a malformed frame (i.e. our own bug), and
+a frame that genuinely arrived before auth completed. In the third case my message sends the operator
+away from the actual cause and toward a deploy that will never fix it. **Naming a cause is only an
+improvement when the mapping is one-to-one; otherwise the honest move is to name the ambiguity and
+order it by likelihood.**
+
+### The second hollow test, which I wrote while fixing the first
+
+The reviewer caught that the "unregisters its handler" test asserted only that
+`registerInboundHandler` *returned* a function — true of any stub — and passed with
+`finally { unregister() }` deleted. Fair, and fixed by counting handlers across all five terminal
+paths.
+
+It also observed that the INV-ATTRIBUTION tests **cannot see their own invariant**: the guarantee is
+the ABSENCE of a parameter, so `submitter_pubkey: opts.submitterPubkey ?? signerPubkey` passes every
+one of them. So I added a `@ts-expect-error` compile-time assertion in the test file — **and it would
+have asserted nothing at all**, because `core/daemon/tsconfig.json` excludes `src/__tests__`. A
+hollow test in compile-time clothing, written in the act of fixing a hollow test.
+
+The guard now lives in `signal-submission.ts`, which `tsc` does read, and **I proved it bites** rather
+than assuming: adding a `submitterPubkey` field to the options makes the build fail with the
+invariant's name in the error text. The runtime tests now say plainly that they cannot observe the
+invariant, instead of implying they do.
+
+**Standing consequence, worth more than this unit:** a `@ts-expect-error` in ANY `src/__tests__` file
+in `core/daemon` is decorative. Type-level guards belong in the source tree.
+
+### Two ACs handed forward, both blocking on `DOD-END-SURFACE-1`
+
+1. **Nothing retries.** `M10B-D32` establishes that failover is the SignalingManager's reconnect, and
+   that a retry is *safe* because `submission_id` is content-derived — but no code performs one, and
+   nothing calls this module yet. The safety property is real; the retry is not, until the surface
+   lands.
+2. **Nothing generates the manifest's `intake_key`.** Verified: no generator, fixture, or deployed
+   manifest sets it, so against every real manifest today `composeSealedSubmission` returns
+   `intake_key_absent`. Correct behavior, and it means this ships as a permanently-refusing feature
+   until manifest generation gains an owner. Named here so it is not discovered live.
+
+**Gates:** cello-client 2086 tests; trustless-cello 929 tests; lint + typecheck green in both.
