@@ -1,0 +1,122 @@
+#cloud-config
+# CELLO relay node on Container-Optimized OS (DOD-NODE-RELAY-GCP-1).
+#
+# NO SECRETS APPEAR IN THIS FILE — it lands in instance metadata, readable by anything holding
+# compute.instances.get. Only secret RESOURCE NAMES appear; the values are fetched at boot with the
+# VM's attached workload identity.
+#
+# The fetch is done HERE in shell rather than by the relay, on purpose. DOD-INV-RELAY-EXTRACTABLE
+# requires the relay stay a standalone artifact with env-only configuration and no shared internal
+# package — so the GCP-specific secret plumbing lives in the GCP deployment, not in the relay image.
+# An enterprise running a private relay supplies the same env vars however it likes.
+#
+# Units:
+#   cello-relay-firewall.service  opens 4001/4000 in the COS HOST firewall. COS ships INPUT with
+#                                 policy DROP, so a VPC rule alone reaches nothing.
+#   cello-relay-wal.mount         the persistent WAL disk. The relay journals in-flight session
+#                                 frames; losing them drops messages agents believe were delivered.
+#   cello-relay.service           the relay.
+
+write_files:
+  - path: /etc/cello/relay-boot.sh
+    permissions: "0700"
+    owner: root
+    content: |
+      #!/bin/bash
+      # Resolve the relay's two secrets into an env file root alone can read.
+      # Fails loud: an empty transport key would give the relay an unstable peer id, and agents
+      # dial it by peer id through the signed relay manifest.
+      set -euo pipefail
+      MD="http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+      TOKEN=$(curl -sf -H 'Metadata-Flavor: Google' "$MD" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+      [ -n "$TOKEN" ] || { echo '{"event":"relay.boot_env.failed","reason":"no metadata token"}'; exit 1; }
+
+      fetch() {
+        v=$(curl -sf -H "Authorization: Bearer $TOKEN" "https://secretmanager.googleapis.com/v1/$1:access" \
+            | python3 -c 'import base64,json,sys; print(base64.b64decode(json.load(sys.stdin)["payload"]["data"]).decode())')
+        [ -n "$v" ] || { echo "{\"event\":\"relay.boot_env.failed\",\"reason\":\"empty secret $1\"}"; exit 1; }
+        printf '%s' "$v"
+      }
+
+      NODE_KEY=$(fetch "${gsm_node_key}")
+      TRANSPORT_KEY=$(fetch "${gsm_transport}")
+
+      umask 077
+      cat > /etc/cello/relay.env <<ENVEOF
+      CELLO_ENV=${environment}
+      NODE_ID=${node_id}
+      NODE_PRIVATE_KEY=$NODE_KEY
+      CELLO_RELAY_TRANSPORT_KEY_HEX=$TRANSPORT_KEY
+      CELLO_DIRECTORY_PUBKEYS=${directory_pubkeys}
+      CELLO_RELAY_WS_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4001/ws
+      CELLO_RELAY_PUBLIC_MULTIADDR=/ip4/${public_addr}/tcp/4001/ws
+      CELLO_RELAY_HEALTH_PORT=4000
+      CELLO_RELAY_HEALTH_CHECK_URL=http://${public_addr}:4000/health
+      WAL_DIR=/mnt/disks/cello-wal
+      RELAY_SESSION_MAX_IDLE_MS=1800000
+      PORT=4000
+      HOME=/tmp
+      ENVEOF
+      echo '{"event":"relay.boot_env.resolved","level":"info"}'
+
+  - path: /etc/systemd/system/cello-relay-firewall.service
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=Open the CELLO relay ports in the COS host firewall
+      Before=cello-relay.service
+      DefaultDependencies=no
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      # COS ships INPUT with policy DROP (established, loopback, ICMP, tcp/22 only). A VPC firewall
+      # rule is necessary and NOT sufficient — the packet is allowed onto the wire and dropped by
+      # the host. Re-runs every boot because COS rebuilds these rules; deletes before inserting so
+      # restarts cannot stack duplicates.
+      ExecStart=/bin/sh -c 'for p in 4000 4001; do iptables -w -D INPUT -p tcp --dport $p -j ACCEPT 2>/dev/null; iptables -w -I INPUT -p tcp --dport $p -j ACCEPT; done'
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/cello-relay.service
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=CELLO relay node
+      Wants=gcr-online.target
+      After=gcr-online.target cello-relay-firewall.service
+
+      [Service]
+      Environment=HOME=/home/cello
+      ExecStartPre=/bin/bash /etc/cello/relay-boot.sh
+      ExecStartPre=/usr/bin/docker-credential-gcr configure-docker --registries=${registry_host}
+      ExecStartPre=-/usr/bin/docker rm -f cello-relay
+      ExecStartPre=/usr/bin/docker pull ${image}
+      ExecStart=/usr/bin/docker run --rm --name cello-relay \
+        --network host \
+        --env-file /etc/cello/relay.env \
+        -v /mnt/disks/cello-wal:/mnt/disks/cello-wal \
+        ${image}
+      ExecStop=/usr/bin/docker stop cello-relay
+      Restart=always
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Format the WAL disk only if it has never been formatted — mkfs on an existing filesystem would
+  # silently discard every journalled frame on an instance replacement, which is the one thing the
+  # persistent disk exists to prevent.
+  - mkdir -p /mnt/disks/cello-wal
+  - if ! blkid /dev/disk/by-id/google-cello-wal; then mkfs.ext4 -m 0 -F -E lazy_itable_init=0,lazy_journal_init=0,discard /dev/disk/by-id/google-cello-wal; fi
+  - mount -o discard,defaults /dev/disk/by-id/google-cello-wal /mnt/disks/cello-wal
+  - chmod 777 /mnt/disks/cello-wal
+  - systemctl daemon-reload
+  - systemctl enable --now cello-relay-firewall.service
+  - systemctl enable --now cello-relay.service

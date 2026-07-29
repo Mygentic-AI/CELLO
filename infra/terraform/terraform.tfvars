@@ -54,3 +54,27 @@ directory_nodes = {
     public_transport = "ws"
   }
 }
+
+# Directory node signing pubkeys — PUBLIC data, and the set a relay will accept instructions from.
+# Terraform generates the key SEEDS but cannot derive Ed25519 public keys, so these come from
+# infra/scripts/gcp-node-identities.sh. Verified byte-identical to what each node logs for itself
+# at boot, which is the basis for trusting a manifest built from them. Re-run the script and
+# re-apply if a node key is ever rotated.
+directory_node_pubkeys = {
+  gcp-use1 = "7969e22a7d95293ae343cb2667c2a4d7127aa8748478582fa637674c30e0113c"
+  gcp-usc1 = "ef961384100bb087f36b68e3a270acb8f22fdf62c4cd5e517e423afb7f399002"
+  gcp-euw1 = "9cb77b68a98f49056fef232f4d56eeb9b66b1a6646fe06b966ff570a82ca6c14"
+}
+
+# Relays do NOT enter the threshold, so they may scale freely — one is enough for Wave 1.
+# us-east1 alongside gcp-use1 keeps the first live session's path short while the topology is
+# being proven; additional relays are additional map entries.
+relay_nodes = {
+  us-east1 = {
+    node_id      = "gcp-relay-use1"
+    zone         = "us-east1-b"
+    subnet_index = 0
+    machine_type = "e2-small"
+    hostname     = "relay-gcp-use1.cello.mygentic.ai"
+  }
+}
