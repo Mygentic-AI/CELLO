@@ -1802,3 +1802,54 @@ The AE blocker has a fix in hand that has not yet run anywhere. Next is deploy +
 `antientropy.peer.authenticated` goes non-zero, then the registration `signaling_lost` frontier
 (Entry 25) — worth re-testing after this lands, since a stream ending "expected" on a connection
 somebody else closed is the same signature.
+
+---
+
+## Entry 33 — 2026-07-29 — Anti-entropy converges in production; the fix was one flag
+
+`ae-autonat-f148aa27` rolled to all three directories. Steady state, 6-minute window:
+
+```
+antientropy.round.started      24
+antientropy.round.completed    24
+antientropy.peer.authenticated 24
+antientropy.peer.auth_failed    0
+```
+
+Against a prior state of **0 authenticated and 100% failure**. Full mesh — 10 completed rounds
+against each of `gcp-use1`, `gcp-usc1`, `gcp-euw1`, so every node reconciles with every peer
+across two continents.
+
+Stated precisely, because this milestone has three times had a claim outrun its evidence: what is
+proven is that rounds COMPLETE and peers AUTHENTICATE. Production convergence of DIVERGENT state
+is NOT proven by this — the local enforcer proves the algorithm, this proves the transport and
+handshake, and neither proves that a write on one node lands on the others in production. That
+remains `DOD-E2E-GCP-1`.
+
+The 185 `auth_failed` in the wider 25-minute window are the pre-rollout instances. Reading only
+that window would have shown "improved but still broken" and sent the next session chasing a fixed
+bug — the narrow post-rollout window is the one that answers the question.
+
+### What the two-day hunt actually cost, and the cheaper path
+
+The bug was three lines of a dependency, and the fix was one flag already documented in
+`@libp2p/interface`. What made it expensive was that every observable pointed away from it: the
+failure was symmetric, stage-independent, total, and absent on loopback — which reads like a
+protocol bug in the code I had just written, not a library tearing down a connection underneath it.
+
+The step that finally worked was reading `@libp2p/autonat`'s source. I had reasoned about what
+autonat *does* (probe reachability, both roles, no split) and parked a design fork on that
+reasoning. The source said something different: it reuses an open connection and then closes it.
+**Reasoning about a dependency's behaviour produced a fork; reading it produced a one-line fix.**
+
+Same lesson as the `pnpm patch` guard: assert on the artifact, not on the intent. The Dockerfile
+now greps the production tree for `force: true`, because a patch that fails to apply builds clean.
+
+### Also fixed: the shared-Postgres "flyway conflict"
+
+Andre asked whether I was running database upgrades, because it was causing conflicts on both
+sides. It was — but not via the migrations. Numbers were disjoint (`main` V45–48 + V51–54, this
+branch V49–50). `docker-compose.yml` pinned the host port, so two worktrees shared one server that
+the spine harness DROPs and re-migrates from scratch. `DATABASE_URL` is now the single knob;
+verified by running the AE enforcer on 5434 (all 5 green, V1→V50 on its own server) while the other
+checkout's 5433 was untouched.

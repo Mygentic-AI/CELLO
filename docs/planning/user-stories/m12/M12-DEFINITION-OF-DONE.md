@@ -417,7 +417,7 @@ description: >
   burn-OR propagates it irreversibly. No worse than today's mesh, but the real trust boundary.
   Hardening = end-to-end owner-signed suspension authorization, mirroring the M8B FROST-stream
   auth deferral. Out of M12.
-- **M12-P8 — AutoNAT tears down the connection anti-entropy runs on. FIXED, live verification owed.**
+- **M12-P8 — AutoNAT tears down the connection anti-entropy runs on. ✅ FIXED AND VERIFIED LIVE.**
   autonat's responder calls `openConnection(multiaddr, options)` — which RETURNS AN EXISTING
   connection when one is open to that peer — and then closes it in a `finally`, killing every
   stream multiplexed on it. Explains 100% AE failure, symmetric, stage-independent, and why the
@@ -427,8 +427,14 @@ description: >
   Kept directories serving dial-back, so client NAT detection (DOD-NAT-REACHABILITY-1) is
   untouched, and needed no transport change or publish cascade. The Dockerfile copies `patches/`
   into both install stages and ASSERTS the patch is in the production tree.
-  **Owed:** deploy and confirm `antientropy.peer.authenticated` goes non-zero. Not provable
-  locally — the loopback enforcer cannot reach this path by construction.
+  **Live evidence** (image `ae-autonat-f148aa27`, 6-minute steady-state window after rollout):
+  24 `round.started`, 24 `round.completed`, 24 `peer.authenticated`, **0 `auth_failed`** — against
+  a prior state of 0 authenticated and 100% failure. Full mesh: 10 completed rounds against each
+  of `gcp-use1`, `gcp-usc1`, `gcp-euw1`, so every node reconciles with every peer.
+  Not provable locally — the loopback enforcer cannot reach this path by construction.
+  **Still owed for `DOD-E2E-GCP-1`:** production convergence of DIVERGENT state. Rounds completing
+  proves the transport and the handshake; the local enforcer proves the algorithm. Neither proves
+  a write on one node lands on the others in production.
   **Watch:** cello-client also runs autonat; if a client-side stream shows the same teardown, it
   needs the same patch there. → Entry 31, Entry 32
 - **M12-P9 — two worktrees shared ONE local Postgres.** `docker-compose.yml` pinned the host port,
