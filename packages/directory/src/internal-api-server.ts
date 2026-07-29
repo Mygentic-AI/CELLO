@@ -658,6 +658,69 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
       return;
     }
 
+    // ── M10B: which of THESE hashes are still active? ───────────────────────────────────────────
+    // POST /internal/signals/active-among  { "hashes": ["<64 hex>", …] } → { "active": [...] }
+    //
+    // THE NOTARY-SHAPED QUESTION, and the replacement for /internal/active-signals. That route asks
+    // "what signals does this ACCOUNT have?", which forces the directory to keep `subject` and
+    // `issuer_pubkey` as queryable columns — i.e. to store the EDGE (who a signal is about, who
+    // issued it) so it can answer on someone else's behalf. This route asks only "of these hashes,
+    // which are live?", which needs nothing but the hash.
+    //
+    // The caller supplies the hashes because the caller MINTED them and therefore already knows
+    // them. The knowledge stays with the party that produced it; the directory stops being a
+    // queryable graph of relationships and goes back to being a notary.
+    if (req.method === "POST" && req.url === "/internal/signals/active-among") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!internalApiKey || providedKey !== internalApiKey) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      let body: Buffer;
+      try {
+        body = await readBody(req);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "could not read request body" }));
+        return;
+      }
+      let hashes: string[];
+      try {
+        const parsed = JSON.parse(body.toString("utf8")) as { hashes?: unknown };
+        // Shape-check every element rather than trusting the array: these go straight into a query,
+        // and a caller getting the wire format wrong should be told so, not silently return nothing.
+        if (!Array.isArray(parsed.hashes) || !parsed.hashes.every((h) => typeof h === "string" && /^[0-9a-f]{64}$/.test(h))) {
+          throw new Error("hashes must be an array of 64-char lowercase hex strings");
+        }
+        hashes = parsed.hashes as string[];
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "malformed_request", detail: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
+      if (hashes.length === 0) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ active: [] }));
+        return;
+      }
+      try {
+        const { rows } = await pool.query<{ signal_hash: string }>(
+          `SELECT signal_hash FROM signal_records_effective
+            WHERE signal_hash = ANY($1) AND effective_status = 'active'`,
+          [hashes],
+        );
+        logger.info("signal.active_among.ok", { asked: hashes.length, active: rows.length, correlationId });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ active: rows.map((r) => r.signal_hash) }));
+      } catch (err) {
+        logger.error("signal.active_among.failed", { reason: err instanceof Error ? err.message : String(err), correlationId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "query failed" }));
+      }
+      return;
+    }
+
     // ── M10 / DOD-DIRDATA-READ-1: track-record aggregate for a given agent pubkey ────────────────
     // GET /internal/track-record/<agentPubkeyHex>
     // Computes session_count and clean_close_rate from seal_notarizations + conversation_seals

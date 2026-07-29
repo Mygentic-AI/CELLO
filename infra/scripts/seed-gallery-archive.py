@@ -87,7 +87,7 @@ def receipts():
             # No root: never sealed, so nothing to verify. No transcript: the
             # smoke-test log covers two sessions and its root cannot be
             # attributed to one bilateral exchange.
-            print(f"  skip {path.name} (root={bool(root)}, turns={len(turns)})")
+            print(f"  skip {path.name} (root={bool(root)}, turns={len(turns)})", file=sys.stderr)
             continue
 
         seal = SEAL.search(text)
@@ -99,7 +99,7 @@ def receipts():
         speakers = list(dict.fromkeys(t["speaker"] for t in turns))
         date = DATE.search(text)
         if not date or len(speakers) < 2:
-            print(f"  skip {path.name} (date={bool(date)}, speakers={len(speakers)})")
+            print(f"  skip {path.name} (date={bool(date)}, speakers={len(speakers)})", file=sys.stderr)
             continue
 
         yield {
@@ -121,18 +121,71 @@ def receipts():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--emit-sql",
+        action="store_true",
+        help="Print the INSERTs instead of connecting. The portal RDS is not "
+             "publicly accessible, so the only route in is the VPC-Lambda hop in "
+             "infra/scripts/portal-db-query.sh, which takes SQL rather than a "
+             "connection.",
+    )
     args = ap.parse_args()
 
     rows = list(receipts())
     if not rows:
         sys.exit("No publishable sessions found — refusing to report success.")
 
-    print(f"\n{len(rows)} publishable receipt(s):")
+    print(f"\n{len(rows)} publishable receipt(s):", file=sys.stderr)
     for r in rows:
         print(
             f"  {r['receipt_hash'][:12]}  {r['initiator_moniker']} / {r['counterparty_moniker']}"
-            f"  {r['sealed_at'][:10]}  {r['message_count']} msgs  {r['seal_status']}"
+            f"  {r['sealed_at'][:10]}  {r['message_count']} msgs  {r['seal_status']}",
+            file=sys.stderr,
         )
+
+    if args.emit_sql:
+        # Literals quoted by psycopg2, never by string formatting: the turn
+        # bodies are real prose full of apostrophes, and hand-rolled escaping is
+        # how a seed script becomes an injection vector against its own database.
+        def lit(value):
+            """Dollar-quoted, because backslashes must survive verbatim.
+
+            The transcript is JSON, and JSON escapes a double quote as a
+            backslash-quote. Ordinary SQL quoting then doubles that backslash —
+            psycopg2 cannot know `standard_conforming_strings` without a
+            connection, so it quotes defensively — and the JSON parser receives a
+            literal backslash and rejects the whole value. Four of five rows
+            failed that way; the fifth had no quotes in it and looked fine, which
+            is how a partial seed reports success.
+
+            Dollar-quoting performs NO escape processing, so bytes in are bytes
+            out. The tag is verified absent from the value rather than assumed.
+            """
+            if value is None:
+                return "NULL"
+            tag = "cello"
+            while f"${tag}$" in value:
+                tag += "x"
+            return f"${tag}${value}${tag}$"
+
+        statements = []
+        for r in rows:
+            statements.append(
+                "INSERT INTO published_receipts "
+                "(receipt_hash, initiator_moniker, counterparty_moniker, sealed_at, "
+                "sealed_at_precision, message_count, verified_by, node_count, "
+                "seal_status, seal_detail, transcript) VALUES ("
+                + ", ".join([
+                    lit(r["receipt_hash"]), lit(r["initiator_moniker"]),
+                    lit(r["counterparty_moniker"]), lit(r["sealed_at"]),
+                    lit(r["sealed_at_precision"]), str(r["message_count"]),
+                    "NULL", "NULL", lit(r["seal_status"]), lit(r["seal_detail"]),
+                    lit(json.dumps(r["transcript"])) + "::jsonb",
+                ])
+                + ") ON CONFLICT (receipt_hash) DO NOTHING;"
+            )
+        sys.stdout.write("\n".join(statements) + "\n")
+        return
 
     if args.dry_run:
         print("\n--dry-run: nothing written.")
