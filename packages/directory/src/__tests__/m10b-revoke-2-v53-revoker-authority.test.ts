@@ -191,4 +191,38 @@ describeIntegration("DOD-END-REVOKE-2 / V53 — revoker authority in signal_reco
     // the status is decided WITHOUT the signature having been checked by anything.
     expect(await statusOf("h14")).toBe("revoked");
   });
+
+  // ── Review F4 (pre-existing since V46) — supersession must consult EFFECTIVE status ────────────
+  describe("a withdrawn successor does not strand its predecessor", () => {
+    it("Bob re-endorses then WITHDRAWS the new one — the original comes BACK", async () => {
+      // The defect: V46's guard was `s.status <> 'revoked'`, and it has been INERT since revocation
+      // became a tombstone (the real row's status stays 'active'). So this sequence left v1
+      // `superseded` and v2 `revoked` — BOTH unpresentable, nothing saying so, and the subject
+      // simply has nothing. Withdrawal is one of the two mechanisms this milestone IS, so a
+      // withdrawal that silently destroys the endorsement it replaced is not a corner.
+      await record("v1");
+      await row({ hash: "v2", node: "n1", issuerKind: "agent", issuerPubkey: "bobkey", supersedes: "v1" });
+      await tombstone("v2", "bobkey");                     // authorized: the issuer's own withdrawal
+      expect(await statusOf("v2")).toBe("revoked");
+      expect(await statusOf("v1")).toBe("active");         // ← was `superseded` before the fix
+    });
+
+    it("but an UNAUTHORIZED tombstone on the successor does NOT resurrect the predecessor", async () => {
+      // The naive repair — "ignore a successor that has any tombstone" — is a RESURRECTION ATTACK:
+      // Mallory tombstones v2 and v1 springs back to presentable. The successor has to be judged by
+      // the SAME authority rules, which is what computing revoked-ness once in a CTE buys.
+      await record("w1");
+      await row({ hash: "w2", node: "n1", issuerKind: "agent", issuerPubkey: "bobkey", supersedes: "w1" });
+      await tombstone("w2", "mallorykey");                 // unauthorized
+      expect(await statusOf("w2")).toBe("active");         // the tombstone is inert...
+      expect(await statusOf("w1")).toBe("superseded");     // ...so it cannot revive w1 either
+    });
+
+    it("ordinary supersession is untouched", async () => {
+      await record("x1");
+      await row({ hash: "x2", node: "n1", issuerKind: "agent", issuerPubkey: "bobkey", supersedes: "x1" });
+      expect(await statusOf("x1")).toBe("superseded");
+      expect(await statusOf("x2")).toBe("active");
+    });
+  });
 });

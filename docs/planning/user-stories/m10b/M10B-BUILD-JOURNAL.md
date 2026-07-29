@@ -2427,3 +2427,42 @@ and the audit-evidence test asserted `is_nullable = 'YES'` — true of any colum
 - **An inert revoke returns `{ok: true, revoked_rows: 1}`.** Deliberate for arrival-order freedom,
   but the caller is told "revoked" when the truth is "recorded, currently inert" — the portal would
   show a user their endorsement is withdrawn when it is not.
+
+---
+
+## Entry 31 — review F4 fixed: a withdrawal no longer destroys the endorsement it replaced — 2026-07-29
+
+Taken immediately rather than carried, because it is a real defect in the milestone's own headline
+mechanism and V53 is the migration that rewrites this CASE — the cheap moment is now.
+
+**Reproduced first, on live Postgres, before touching anything:** Bob endorses (v1), re-endorses (v2
+supersedes v1), then withdraws v2 → **v2 `revoked`, v1 `superseded`. Both unpresentable.** Alice has
+nothing and no path says so. V46's guard `s.status <> 'revoked'` — commented *"a REVOKED replacement
+supersedes nothing"* — has been **inert since revocation became a tombstone**, because the real row's
+status stays `'active'`. It is a comment describing a constraint the code stopped enforcing.
+
+**The naive repair is an attack.** "Ignore a successor that has any tombstone" lets Mallory tombstone
+v2 and *resurrect* v1 — an unauthorised write changing what a third party can present. So the
+successor has to be judged by the **same** authority rules as the record itself, which is a
+self-reference the CASE cannot express.
+
+**Resolution (`M10B-D33`):** compute revoked-ness ONCE in a CTE, then let the supersession branch
+consult it. No recursion, one definition of authority, and the successor is judged exactly as the
+record is.
+
+**Measured, all four shapes:**
+
+| shape | before | after |
+| :-- | :-- | :-- |
+| successor withdrawn by its own issuer | predecessor `superseded` | **predecessor `active`** ← the fix |
+| successor tombstoned by MALLORY | `superseded` | **`superseded`** (no resurrection) |
+| ordinary supersession | `superseded` | `superseded` |
+| revoked AND superseded | `revoked` | `revoked` (ordering preserved) |
+
+All three shapes are now permanent regression tests. 45 integration tests green against a rebuilt
+V53; 932 in the default gate; lint and typecheck clean.
+
+**Still open from the same review, unchanged:** F2's `issued_at`-through-a-queue problem, F3's silent
+`MIN(issuer_kind)` disagreement, F5's asymmetric pubkey validation, F8's replication column-skew
+window (needs one measured check before the batched deploy), and the inert-revoke-reports-success
+response.

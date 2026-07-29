@@ -1233,6 +1233,22 @@ the discussion-of-record. Restated here because this is the milestone that imple
   gateway HTTP server, and the sidecar spawner into a Next.js Fargate app. Consequence for process:
   this makes `gateway` a **sixth** cello-client package the other repos pin, so the cross-repo
   version-bump AC discipline (CLAUDE.md) now covers it.
+- **M10B-D33 (2026-07-29, `DOD-END-REVOKE-2`, from review F4) — supersession consults EFFECTIVE
+  status, and the successor is judged by the SAME authority rules.** V46's guard
+  (*"a REVOKED replacement supersedes nothing"*) has been **inert since revocation became a
+  tombstone**: the real row's `status` stays `'active'`, so the guard only ever fires for a direct
+  `UPDATE … SET status='revoked'` that no writer performs. Measured consequence: Bob endorses,
+  re-endorses (v2 supersedes v1), then **withdraws v2** → v2 `revoked`, v1 `superseded`. **Both
+  unpresentable, with nothing saying so** — a withdrawal silently destroying the endorsement it
+  replaced, in one of the two mechanisms this milestone *is*. **Rejected: "ignore a successor that
+  has any tombstone"** — it is a RESURRECTION ATTACK, letting an unauthorised tombstone on the
+  successor bring its predecessor back. So revoked-ness is computed ONCE in a CTE and the
+  supersession branch consults it, which judges the successor exactly as the record itself is judged,
+  with no recursion. Measured on live Postgres: the withdrawn-successor case returns the predecessor
+  to `active`; Mallory's unauthorised tombstone leaves it `superseded`; ordinary supersession and the
+  revoked-beats-superseded ordering are unchanged. **Pre-existing (V46), fixed here** under the
+  standing rule that a real defect found outside the diff gets fixed — and V53 is the migration that
+  rewrites this CASE, so it is the right and only cheap moment.
 - **M10B-D29 (2026-07-29) — `DOD-END-ARCH-1` CLOSES on four passes, not five; the remaining findings
   are ACs on the units that build them.** The determination consumed an entire overnight session and
   shipped zero lines of code — four completed review passes plus a fifth that died on the session
