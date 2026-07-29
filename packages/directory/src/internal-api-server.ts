@@ -684,6 +684,10 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
     if (req.method === "POST" && req.url === "/internal/submissions/drain") {
       const providedKey = req.headers["x-cello-internal-api-key"];
       if (!internalApiKey || providedKey !== internalApiKey) {
+        // LOGGED, like every other /internal/ auth failure. Without it a credential-guessing sweep
+        // is invisible — and, more mundanely, a rotated key produces a portal-side "all nodes
+        // unreachable" with NOTHING on the directory side to correlate it against.
+        logger.warn("signal.ingress.auth.failed", { route: "drain", remoteAddr: req.socket.remoteAddress, owningNodeId });
         res.writeHead(401, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;
@@ -725,7 +729,8 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
             submission_id: r.submissionId,
             intake_key_id: r.intakeKeyId,
             // Hex because JSON has no bytes. Lossless and unambiguous, and it matches every other
-            // blob this API hands out.
+            // blob this API hands out. NEVER empty: the portal refuses a zero-length ciphertext,
+            // because an empty `bytea` is exactly what transport truncation looks like.
             ciphertext: Buffer.from(r.ciphertext).toString("hex"),
           })),
         }));
@@ -740,6 +745,7 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
     if (req.method === "POST" && req.url === "/internal/submissions/ack") {
       const providedKey = req.headers["x-cello-internal-api-key"];
       if (!internalApiKey || providedKey !== internalApiKey) {
+        logger.warn("signal.ingress.auth.failed", { route: "ack", remoteAddr: req.socket.remoteAddress, owningNodeId });
         res.writeHead(401, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;

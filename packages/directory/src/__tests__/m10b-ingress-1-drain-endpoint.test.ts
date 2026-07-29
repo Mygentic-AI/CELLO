@@ -103,12 +103,21 @@ describeIntegration("DOD-END-INGRESS-1 — /internal/submissions", () => {
     expect(((await res.json()) as { error: string }).error).toBe("malformed_request");
   });
 
-  it("clamps an absurd drain limit instead of letting a caller ask for everything", async () => {
+  it("clamps an absurd drain limit — and the clamp reaches the QUERY, not just the echo", async () => {
+    // Seed past the ceiling so the row count proves it. Asserting only `body.limit <= 500` would
+    // pass against an implementation that echoed 500 while handing 10,000,000 to the query — which
+    // is the unbounded read the clamp exists to prevent.
+    const rows = Array.from({ length: 520 }, (_, i) => ({
+      submissionId: ID(`clamp-${String(i).padStart(4, "0")}`),
+      intakeKeyId: "intake-clamp",
+      ciphertext: Buffer.from([i & 0xff]),
+    }));
+    for (const r of rows) await enqueueSubmission(pool, r);
+
     const res = await post("/internal/submissions/drain", { limit: 10_000_000 });
     expect(res.status).toBe(200);
-    // Not an error — a large limit is a reasonable thing to ask for, it just must not become an
-    // unbounded read that pins the database or the portal's memory.
     const body = (await res.json()) as { submissions: unknown[]; limit: number };
     expect(body.limit).toBeLessThanOrEqual(500);
+    expect(body.submissions.length).toBeLessThanOrEqual(500);
   });
 });
