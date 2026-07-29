@@ -70,3 +70,9 @@ variable "consortium_threshold" {
   type        = number
   default     = 1
 }
+
+variable "preauth_issuer_pubkey" {
+  description = "Ed25519 PUBLIC key of the pre-authorization issuer (hex). Setting it is what ENABLES capability checking on a directory — unset does not weaken the check, it removes it. PUBLIC data; derive with derive-pubkey.js from the consortium preauth issuer secret."
+  type        = string
+  default     = ""
+}

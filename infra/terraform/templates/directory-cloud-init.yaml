@@ -49,6 +49,11 @@ write_files:
       CELLO_GSM_TRANSPORT_KEY=${gsm_transport}
       CELLO_GSM_INTERNAL_API_KEY=${gsm_internal}
       CELLO_GSM_PREAUTH_ISSUER_KEY=${gsm_preauth}
+      # Setting this is what ENABLES pre-authorization capability checking. Unset, the node does not
+      # perform a weaker check — it performs NONE, and accepts registration from anyone who can
+      # reach it. One issuer for the whole consortium, because a client presents its capability to
+      # whichever directory it reaches.
+      CELLO_PREAUTH_ISSUER_PUBKEY=${preauth_issuer_pubkey}
       # The signed roster of directory nodes, and the officer key it is verified against. The node
       # derives its DKG quorum and threshold from this, so it is verified at load and boot is FATAL
       # if it does not verify (M12-D9) — booting on an unverifiable roster would leave the quorum

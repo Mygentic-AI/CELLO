@@ -97,3 +97,10 @@ relay_nodes = {
 # derives it from the manifest.
 consortium_root_keys = "e8300a2b9de7be6f6d629f778dc319715ad0010c0639f3a1564181d56d3eb104"
 consortium_threshold = 1
+
+# Pre-authorization issuer PUBLIC key. Setting this is what ENABLES capability checking on every
+# directory — unset, a node does not perform a weaker check, it performs none and accepts
+# registration from anyone who can reach it. ONE issuer for the consortium, because a client
+# presents its capability to whichever directory it reaches.
+# Derived from cello-consortium-preauth-issuer-key with infra/scripts/derive-pubkey.js.
+preauth_issuer_pubkey = "4468292bbe38ab929e504a1d962abeebe4f02db0a380b4d7880eb4f4dbd56c07"

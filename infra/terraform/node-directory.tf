@@ -124,26 +124,27 @@ resource "google_compute_instance_template" "directory" {
     # its secrets must NOT sit in metadata, which is readable by anything holding
     # compute.instances.get. See the SECRETS note in secrets.tf.
     user-data = templatefile("${path.module}/templates/directory-cloud-init.yaml", {
-      image                = "${google_artifact_registry_repository.cello.location}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.cello.repository_id}/directory:${var.directory_image_tag}"
-      registry_host        = "${google_artifact_registry_repository.cello.location}-docker.pkg.dev"
-      node_id              = each.value.node_id
-      region               = each.key
-      environment          = var.environment
-      project_id           = var.project_id
-      audit_bucket         = google_storage_bucket.node_audit[each.key].name
-      relay_bucket         = google_storage_bucket.relay_manifest[each.key].name
-      backup_bucket        = google_storage_bucket.node_backups[each.key].name
-      kms_location         = each.key
-      kms_keyring          = google_kms_key_ring.node[each.key].name
-      kms_key              = google_kms_crypto_key.envelope[each.key].name
-      gsm_db               = "${google_secret_manager_secret.db_credentials[each.key].id}/versions/latest"
-      gsm_db_app           = "${google_secret_manager_secret.db_app_credentials[each.key].id}/versions/latest"
-      gsm_node_key         = "${google_secret_manager_secret.node["${each.value.node_id}--node-key"].id}/versions/latest"
-      gsm_transport        = "${google_secret_manager_secret.node["${each.value.node_id}--transport-key"].id}/versions/latest"
-      gsm_internal         = "${google_secret_manager_secret.node["${each.value.node_id}--internal-api-key"].id}/versions/latest"
-      gsm_preauth          = "${google_secret_manager_secret.node["${each.value.node_id}--preauth-issuer-key"].id}/versions/latest"
-      consortium_root_keys = var.consortium_root_keys
-      consortium_threshold = var.consortium_threshold
+      image                 = "${google_artifact_registry_repository.cello.location}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.cello.repository_id}/directory:${var.directory_image_tag}"
+      registry_host         = "${google_artifact_registry_repository.cello.location}-docker.pkg.dev"
+      node_id               = each.value.node_id
+      region                = each.key
+      environment           = var.environment
+      project_id            = var.project_id
+      audit_bucket          = google_storage_bucket.node_audit[each.key].name
+      relay_bucket          = google_storage_bucket.relay_manifest[each.key].name
+      backup_bucket         = google_storage_bucket.node_backups[each.key].name
+      kms_location          = each.key
+      kms_keyring           = google_kms_key_ring.node[each.key].name
+      kms_key               = google_kms_crypto_key.envelope[each.key].name
+      gsm_db                = "${google_secret_manager_secret.db_credentials[each.key].id}/versions/latest"
+      gsm_db_app            = "${google_secret_manager_secret.db_app_credentials[each.key].id}/versions/latest"
+      gsm_node_key          = "${google_secret_manager_secret.node["${each.value.node_id}--node-key"].id}/versions/latest"
+      gsm_transport         = "${google_secret_manager_secret.node["${each.value.node_id}--transport-key"].id}/versions/latest"
+      gsm_internal          = "${google_secret_manager_secret.node["${each.value.node_id}--internal-api-key"].id}/versions/latest"
+      gsm_preauth           = "${google_secret_manager_secret.consortium_preauth_issuer.id}/versions/latest"
+      preauth_issuer_pubkey = var.preauth_issuer_pubkey
+      consortium_root_keys  = var.consortium_root_keys
+      consortium_threshold  = var.consortium_threshold
       # Terraform's indent() does NOT indent the FIRST line, so the template supplies that one's
       # leading spaces and indent() supplies the rest. Getting this wrong put the manifest's opening
       # brace at column 0, which broke the YAML block scalar — and a cloud-config that fails to

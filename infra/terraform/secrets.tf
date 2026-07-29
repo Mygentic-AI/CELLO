@@ -25,7 +25,11 @@
 locals {
   # target env var suffix => how the value is produced. gcp-boot-env.ts maps CELLO_GSM_* reference
   # variables to the node's real env vars; this map is the other end of that contract.
-  node_secret_names = ["node-key", "transport-key", "internal-api-key", "preauth-issuer-key"]
+  # NOT preauth-issuer-key: that is ONE identity for the whole consortium (see the
+  # consortium_preauth_issuer resource below). Minting it per node gave each node a DIFFERENT
+  # issuer, so a capability signed for one would fail verification at the other two — registration
+  # would work or not depending on which node the client happened to reach.
+  node_secret_names = ["node-key", "transport-key", "internal-api-key"]
 
   node_secret_pairs = flatten([
     for region, node in var.directory_nodes : [
@@ -220,3 +224,43 @@ resource "google_secret_manager_secret_version" "consortium_officer" {
 # Deliberately granted to NO workload. Directories and relays verify with the PUBLIC key, which is
 # configuration; only an operator signing a new manifest needs the seed. A node that could read it
 # could mint a roster naming itself the whole consortium.
+
+# ── The pre-authorization issuer ─────────────────────────────────────────────────────────────
+# Signs the "may register" capabilities the portal hands out. ONE identity for the consortium: a
+# capability is presented to whichever directory the client reaches, so every node must verify
+# against the same issuer.
+#
+# The directory enables capability checking only when CELLO_PREAUTH_ISSUER_PUBKEY is set. Leaving it
+# unset does not weaken a check — it removes it, and the node then accepts registration from anyone
+# who can reach it. That is a different product.
+resource "random_id" "consortium_preauth_issuer" {
+  byte_length = 32
+}
+
+resource "google_secret_manager_secret" "consortium_preauth_issuer" {
+  project   = var.project_id
+  secret_id = "cello-consortium-preauth-issuer-key"
+
+  replication {
+    auto {}
+  }
+
+  # Losing it invalidates every capability in flight and every one already issued.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_secret_manager_secret_version" "consortium_preauth_issuer" {
+  secret      = google_secret_manager_secret.consortium_preauth_issuer.id
+  secret_data = random_id.consortium_preauth_issuer.hex
+}
+
+# Every directory reads it — a node signs pre-auth challenges with it as well as verifying.
+resource "google_secret_manager_secret_iam_member" "consortium_preauth_issuer" {
+  for_each  = var.directory_nodes
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.consortium_preauth_issuer.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.directory_node[each.key].email}"
+}
