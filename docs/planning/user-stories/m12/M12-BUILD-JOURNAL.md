@@ -2175,3 +2175,55 @@ a connection and both peers logged a clean EOF.
 registration — the fix removes today's cause, not the mechanism that hid it. Registration should
 not report success until the share is durable, or should at minimum raise an alarm that is not a
 debug line nobody reads.
+
+---
+
+## Entry 39 — 2026-07-29 — Durable shares, and a US↔Europe session on GCP alone
+
+`dkgRound3` now awaits `storeShareDurable()` (which already existed for DOD-REFRESH-1) and FAILS
+the ceremony if the share cannot be persisted. A share this node cannot persist is a share it will
+not have after any restart, so failing is the honest answer — the agent retries registration
+instead of receiving an identity that quietly expires with the process. Deployed as
+`durable-share-d963b31a`; `sharesLoaded: 2` after rollout, 1127 directory tests green.
+
+Then the widest test yet, on GCP with AWS contributing nothing:
+
+```
+zoe  registered via gcp-use1  (US East)
+yuri registered via gcp-euw1  (Europe West)
+initiate-session -> {"ok":true,"sessionId":"e1b2233c…","transportMode":"relay"}
+```
+
+Two agents, two continents, two sovereign directories, one relay.
+
+### `DOD-E2E-GCP-1` is 🟡 PARTIAL, deliberately not ✅
+
+The happy path is proven end to end. Four clauses of that DoD line are NOT:
+
+- kill one directory → sealing continues at T−1
+- client failover to another directory
+- kill-switch pause biting across all three nodes
+- seal (sessions were established and messaged, never sealed to completion)
+
+And the line asks for an **enforcer**, not a manual run. What exists today is a sequence I drove by
+hand; it proves the system works now, not that it stays working. Marking this ✅ on the strength of
+a green manual session would be the same overstatement this milestone has already made three times
+— and the failure clauses are precisely the ones that protect the sovereign-node invariant, so
+they are the LAST ones to take on trust.
+
+### The through-line of today
+
+Six defects, one shape: **a green surface over a broken write or a silent teardown.**
+
+| defect | what lied |
+|---|---|
+| AutoNAT closes a shared connection | both peers logged a clean EOF |
+| relay manifest never published | directory logged `not_found` and carried on |
+| relay health port firewalled | pool would have emptied silently |
+| SI-003 rejected every share write | registration returned `ok` |
+| fire-and-forget persistence | DKG named every validator a signer |
+| directory reports `fullyEstablished: true` | client had rejected the assignment |
+
+Every one was invisible from the side that reported success. The lesson that actually generalises:
+**when two components disagree about whether something worked, believe the one that says it
+failed** — and go read the other one's write path.

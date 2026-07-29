@@ -309,7 +309,20 @@ description: >
 - **DOD-E2E-GCP-1** [trustless-cello, cello-client] — **GCP standalone enforcer:** with AWS
   unreachable, on the rebuilt system: fresh registration → DKG → seal → live two-agent session →
   kill one directory → sealing continues (T−1=1) → client failover → anti-entropy convergence
-  verified → kill-switch pause bites across all three nodes. — ❌
+  verified → kill-switch pause bites across all three nodes. — 🟡 PARTIAL (manual, not enforced)
+  **Proven manually on the live GCP system (Entries 37–38), AWS contributing nothing:**
+  fresh registration → 3-node FROST DKG → cross-node discovery → presence replication →
+  cross-node brokering → threshold signing → **session established over the GCP relay**, both
+  US↔US (`gcp-use1`↔`gcp-usc1`) and **US↔Europe** (`gcp-use1`↔`gcp-euw1`); content read by
+  sequence number on the far side; anti-entropy `applied > 0` with a lookup that changed answer;
+  shares survive a full fleet restart (`sharesLoaded 2`, was 0).
+  **Still owed — the parts NOT yet demonstrated, and the reason this is not ✅:**
+  (a) it is a MANUAL sequence, not an automated enforcer — the DoD asks for a test that fails
+  loudly in CI, and a hand-run session proves the system works today, not that it stays working;
+  (b) **kill one directory → sealing continues at T−1** — never exercised;
+  (c) **client failover** to another directory — never exercised;
+  (d) **kill-switch pause biting across all three nodes** — never exercised;
+  (e) **seal** — sessions were established and messaged, not sealed to completion.
 
 ## Tier P3 — Wave 2: AWS rejoins + the launch claim
 
