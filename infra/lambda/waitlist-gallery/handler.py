@@ -35,6 +35,15 @@ from _dburl import portal_database_url
 import psycopg2.extras
 
 from _logging import emit as log
+from _receipt_validation import (
+    DATE_PRECISIONS,
+    MAX_TURN_CHARS,
+    SEAL_STATES,
+    ReceiptContentError,
+    check_message_count,
+    clean_transcript,
+    validate_seal_status,
+)
 from _sqlstate import classify
 
 # Kept only so an explicit override still works. The live value is resolved
@@ -47,20 +56,6 @@ MAX_PAGE_SIZE = 100
 
 HASH_RE = re.compile(r"^[a-zA-Z0-9._-]{8,128}$")
 MONIKER_RE = re.compile(r"^[\w .'-]{1,64}$", re.UNICODE)
-
-# What the seal ACTUALLY was. Closed set: an unrecognised state must fail the
-# write rather than reach a public page that asserts something about a ceremony
-# nobody can name.
-SEAL_STATES = ("sealed", "seal_deferred")
-DATE_PRECISIONS = ("date", "timestamp")
-
-# Transcript bounds. Generous against the real archive (max 25 turns, 854 chars
-# in a turn, 10KB total) and finite, because an unbounded caller-supplied array
-# on an irrevocable public page is a row nobody can delete.
-MAX_TURNS = 500
-MAX_TURN_CHARS = 8000
-MAX_TRANSCRIPT_BYTES = 256 * 1024
-
 
 class GalleryError(Exception):
     def __init__(self, status, code, message):
@@ -196,67 +191,13 @@ def get_receipt(receipt_hash, correlation_id):
     return resp(200, serialise(row), cache="public, max-age=86400, immutable")
 
 
-def clean_transcript(raw):
-    """The turns as published, or None.
-
-    Every string here is caller-supplied and lands on a public, bot-indexed,
-    irrevocable page. Markup is refused at the WRITE, on the same terms as
-    monikers and for the same reason — escaping correctly at every future read
-    is a promise about code not yet written.
-    """
-    if raw is None:
-        return None
-    if not isinstance(raw, list):
-        raise GalleryError(
-            400, "invalid_transcript", "A transcript must be an array of turns."
-        )
-    if len(raw) > MAX_TURNS:
-        raise GalleryError(
-            400,
-            "transcript_too_long",
-            f"A transcript may carry at most {MAX_TURNS} turns; this one has {len(raw)}.",
-        )
-
-    turns = []
-    for index, turn in enumerate(raw):
-        if not isinstance(turn, dict):
-            raise GalleryError(
-                400, "invalid_turn", f"Turn {index} is not an object."
-            )
-        speaker = (turn.get("speaker") or "").strip()
-        text = (turn.get("body") or "").strip()
-        if not MONIKER_RE.match(speaker or ""):
-            raise GalleryError(
-                400,
-                "invalid_turn_speaker",
-                f"Turn {index} has no usable speaker, or one containing markup.",
-            )
-        if not text:
-            raise GalleryError(
-                400, "empty_turn", f"Turn {index} has no body."
-            )
-        if len(text) > MAX_TURN_CHARS:
-            raise GalleryError(
-                400,
-                "turn_too_long",
-                f"Turn {index} is {len(text)} characters; the limit is {MAX_TURN_CHARS}.",
-            )
-        if "<" in text or ">" in text:
-            raise GalleryError(
-                400,
-                "markup_in_turn",
-                f"Turn {index} contains markup, which is refused rather than escaped at read time.",
-            )
-        turns.append({"speaker": speaker, "body": text})
-
-    encoded = json.dumps(turns)
-    if len(encoded.encode("utf-8")) > MAX_TRANSCRIPT_BYTES:
-        raise GalleryError(
-            400,
-            "transcript_too_large",
-            f"A transcript may be at most {MAX_TRANSCRIPT_BYTES} bytes.",
-        )
-    return turns
+def as_gallery_error(fn, *args, **kwargs):
+    """Content rules raise ReceiptContentError; the API answers 400 with the same
+    code, so a rule tripped by the seeder and by a caller reads identically."""
+    try:
+        return fn(*args, **kwargs)
+    except ReceiptContentError as err:
+        raise GalleryError(400, err.code, err.message)
 
 
 def publish(body, event, correlation_id):
@@ -334,13 +275,9 @@ def publish(body, event, correlation_id):
                 f"verified_by ({verified_by}) cannot exceed node_count ({node_count}).",
             )
 
-    seal_status = (body.get("seal_status") or "sealed").strip()
-    if seal_status not in SEAL_STATES:
-        raise GalleryError(
-            400,
-            "unknown_seal_status",
-            f"seal_status must be one of {', '.join(SEAL_STATES)}; got {seal_status!r}.",
-        )
+    seal_status = as_gallery_error(
+        validate_seal_status, (body.get("seal_status") or "sealed").strip()
+    )
 
     seal_detail = (body.get("seal_detail") or "").strip() or None
     if seal_detail and ("<" in seal_detail or ">" in seal_detail):
@@ -360,7 +297,10 @@ def publish(body, event, correlation_id):
             f"sealed_at_precision must be one of {', '.join(DATE_PRECISIONS)}.",
         )
 
-    transcript = clean_transcript(body.get("transcript"))
+    transcript = as_gallery_error(clean_transcript, body.get("transcript"))
+    # The count and the transcript must agree — a page cannot print
+    # "12 messages" above two turns.
+    as_gallery_error(check_message_count, message_count, transcript)
 
     agent_pubkey = (body.get("agent_pubkey") or "").strip()
     if not agent_pubkey:

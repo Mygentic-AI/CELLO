@@ -35,6 +35,19 @@ from pathlib import Path
 
 import psycopg2
 
+# ONE VALIDATOR, SHARED WITH THE API. Every guard the gallery Lambda enforces
+# used to be unreachable from here, and this is the path that wrote every row in
+# the table — so the rules protecting an irrevocable public page ran only on the
+# route nobody used.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lambda" / "waitlist-gallery"))
+from _receipt_validation import (  # noqa: E402
+    ReceiptContentError,
+    check_message_count,
+    clean_transcript,
+    validate_moniker,
+    validate_seal_status,
+)
+
 VAULT = (
     Path(__file__).resolve().parents[2]
     / "docs/planning/milestone-writeups/live-session-e2e-proofs"
@@ -44,12 +57,17 @@ TURN = re.compile(r"^\*\*([A-Za-z0-9_\- ]+?)(?:\s*\(seq\s*(\d+)\))?:\*\*\s*(.*)$
 ROOT = re.compile(r"sealed_?[ _]?root[\"*: ]+`?\"?([0-9a-f]{64})", re.I)
 SEAL = re.compile(r"Seal status\*\*:\s*`([a-z_]+)`\s*(?:—\s*(.*))?$", re.M | re.I)
 DATE = re.compile(r"\*\*Date[^*]*\*\*:?\s*`?(\d{4}-\d{2}-\d{2})", re.M)
+# "Agent A (initiator)" / "Agent A pubkey (reviewer)" — the document naming
+# which side opened the session.
+INITIATOR = re.compile(r"\*\*Agent A \(initiator\)\*\*:?\s*([A-Za-z0-9_\-]+)", re.M)
 # A whole line in italics is the write-up's voice, not an agent's.
 NARRATION = re.compile(r"\*[^*].*[^*]\*")
 
 
 def transcript(text):
-    m = re.search(r"^## Transcript\s*$", text, re.M)
+    # "## Conversation Transcript" exists in the vault too. An exact match
+    # reported those files as having no turns, which is a different fact.
+    m = re.search(r"^##\s+(?:[A-Za-z ]+\s)?Transcript\s*$", text, re.M)
     if not m:
         return []
     body = text[m.end():]
@@ -91,8 +109,12 @@ def receipts():
             continue
 
         seal = SEAL.search(text)
-        status = seal.group(1) if seal else "sealed"
-        detail = (seal.group(2) or "").strip() if seal else None
+        if not seal:
+            # Never default. An absent seal line means the document does not say
+            # what happened, and "sealed" is a positive cryptographic claim.
+            sys.exit(f"{path.name}: no 'Seal status' line — refusing to assume one.")
+        status = seal.group(1)
+        detail = (seal.group(2) or "").strip()
         # Backticks are markdown, and the API refuses markup rather than
         # escaping it later.
         detail = re.sub(r"[`<>]", "", detail) if detail else None
@@ -102,17 +124,49 @@ def receipts():
             print(f"  skip {path.name} (date={bool(date)}, speakers={len(speakers)})", file=sys.stderr)
             continue
 
+        # THE INITIATOR IS STATED, NOT INFERRED FROM WHO SPEAKS FIRST. Turn order
+        # happens to agree in all five documents, but a write-up that logged the
+        # responder's greeting first would publish a reversed, permanent
+        # attribution. Where the document names one, it wins and the inference is
+        # asserted against it.
+        stated = INITIATOR.search(text)
+        initiator = stated.group(1).strip() if stated else speakers[0]
+        if stated and initiator != speakers[0]:
+            sys.exit(
+                f"{path.name}: document names {initiator!r} as initiator but "
+                f"{speakers[0]!r} speaks first — refusing to guess."
+            )
+        counterparty = next(sp for sp in speakers if sp != initiator)
+
+        # EVERY ROW GOES THROUGH THE API'S OWN RULES before it can be emitted.
+        # Refusing here is the whole point: these rows are written by direct SQL,
+        # so this is the only place the guards can run at all.
+        try:
+            turns = clean_transcript(turns)
+            validate_seal_status(status)
+            validate_moniker(initiator, "initiator_moniker")
+            validate_moniker(counterparty, "counterparty_moniker")
+            check_message_count(len(turns), turns)
+            if detail and ("<" in detail or ">" in detail):
+                raise ReceiptContentError("markup_in_seal_detail", "seal_detail contains markup.")
+        except ReceiptContentError as err:
+            sys.exit(f"{path.name}: {err.code} — {err.message}")
+
         yield {
             "source": path.name,
             "receipt_hash": root.group(1),
-            "initiator_moniker": speakers[0],
-            "counterparty_moniker": speakers[1],
+            "initiator_moniker": initiator,
+            "counterparty_moniker": counterparty,
             "sealed_at": f"{date.group(1)}T00:00:00Z",
             "sealed_at_precision": "date",
             "message_count": len(turns),
             "verified_by": None,
             "node_count": None,
-            "seal_status": status if status in ("sealed", "seal_deferred") else "sealed",
+            "seal_status": status,
+            # Left NULL deliberately and recorded here rather than silently: no
+            # waitlist user published these, and inventing an owner would be a
+            # false attribution on a permanent page. DOD-GALLERY-PRIVACY-1's
+            # portal action is what gives real rows a real publisher.
             "seal_detail": detail,
             "transcript": turns,
         }
@@ -144,9 +198,9 @@ def main():
         )
 
     if args.emit_sql:
-        # Literals quoted by psycopg2, never by string formatting: the turn
-        # bodies are real prose full of apostrophes, and hand-rolled escaping is
-        # how a seed script becomes an injection vector against its own database.
+        # Dollar-quoted, with the tag proven absent from each value. No other
+        # quoting is permitted here: the transcript is JSON, and any escape-
+        # processing form mangles its backslashes.
         def lit(value):
             """Dollar-quoted, because backslashes must survive verbatim.
 
@@ -184,7 +238,23 @@ def main():
                 ])
                 + ") ON CONFLICT (receipt_hash) DO NOTHING;"
             )
+        # THE LAST STATEMENT IS THE VERIFICATION, because the runner reports only
+        # the final statement's result. Without it a partially-applied seed
+        # returns rowcount 1 and looks exactly like a complete one — which is
+        # what a quoting bug did here: four rows failed, the fifth inserted, and
+        # nothing said so.
+        statements.append(
+            "SELECT count(*) AS rows, count(transcript) AS with_transcript, "
+            "count(verified_by) AS with_attestation_claim, "
+            "count(*) FILTER (WHERE message_count <> jsonb_array_length(transcript)) "
+            "AS count_mismatch FROM published_receipts;"
+        )
         sys.stdout.write("\n".join(statements) + "\n")
+        print(
+            f"\nEmitted {len(rows)} INSERT(s) + a verification SELECT. "
+            f"Expect rows >= {len(rows)}, with_attestation_claim = 0, count_mismatch = 0.",
+            file=sys.stderr,
+        )
         return
 
     if args.dry_run:

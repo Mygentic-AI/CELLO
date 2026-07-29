@@ -348,7 +348,7 @@ TURNS = [
 def test_a_published_transcript_comes_back_in_order(gallery):
     """The reason the gallery exists is that a stranger can READ a real session.
     Seal metadata alone proves one happened and shows none of it."""
-    _, published = publish(gallery, transcript=TURNS)
+    _, published = publish(gallery, transcript=TURNS, message_count=len(TURNS))
 
     _, body = call(gallery, "GET", f"/gallery/receipts/{published['receipt_hash']}")
 
@@ -356,6 +356,17 @@ def test_a_published_transcript_comes_back_in_order(gallery):
     assert body["transcript"][0]["body"].startswith("First message")
     # Order IS the conversation. A set-like comparison would pass on a reversal.
     assert body["transcript"] == TURNS
+
+
+def test_message_count_must_match_the_transcript(gallery):
+    """A page printing "12 messages" above two turns contradicts itself in front
+    of the reader — the worst shape a fabricated number can take. Caught by this
+    rule while writing the test above, which claimed 12 for a 2-turn exchange."""
+    result, body = publish(gallery, transcript=TURNS, message_count=12)
+
+    assert result["statusCode"] == 400
+    assert body["error"] == "message_count_mismatch"
+    assert query("SELECT count(*) FROM published_receipts")[0][0] == 0
 
 
 def test_a_receipt_without_a_transcript_still_publishes(gallery):
@@ -439,3 +450,23 @@ def test_an_unbounded_transcript_is_refused(gallery):
 
     assert result["statusCode"] == 400
     assert body["error"] == "turn_too_long"
+
+
+def test_an_unknown_date_precision_is_refused(gallery):
+    """sealed_at_precision decides whether a clock time is printed beside a
+    Merkle root. Its guard had no test: deleting the whole block left 29 tests
+    green, because the `or "timestamp"` default kept the field populated."""
+    result, body = publish(gallery, sealed_at_precision="approximately")
+
+    assert result["statusCode"] == 400
+    assert body["error"] == "unknown_date_precision"
+    assert query("SELECT count(*) FROM published_receipts")[0][0] == 0
+
+
+def test_an_empty_transcript_is_stored_as_absent(gallery):
+    """`[]` renders as "no transcript" but escapes WHERE transcript IS NULL,
+    so it is a third state pretending to be the second."""
+    _, published = publish(gallery, transcript=[], message_count=0)
+
+    _, body = call(gallery, "GET", f"/gallery/receipts/{published['receipt_hash']}")
+    assert body["transcript"] is None
