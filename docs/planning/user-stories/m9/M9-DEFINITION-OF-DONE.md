@@ -114,11 +114,23 @@ layer — later).
 - **INV-9 — NEW: Connected by default; passthrough is test-only.** No shipped code path constructs
   `PassthroughGatewayClient`. A daemon that cannot screen does not pretend it can: content fails
   closed with a named cause, and the degradation is ANNOUNCED. The mode announced at boot is the
-  mode the process is in. — ❌ until `DOD-M9C-WIRE-1`
-- **INV-10 — NEW: The loosen gate has no side door.** Every loosening flows through the versioned
-  store's confirm gate, and the confirmation is produced only by an interactive human act (CLI
-  prompt now, passkey later). No environment variable, MCP tool, IPC verb, or file import can
-  loosen silently. — ❌ until `DOD-M9C-ENV-1` + `DOD-M9C-SURFACE-1`
+  mode the process is in. — 🟡 the shipped daemon announces `enforcing` and no shipped path can omit
+  the client; a silent `?? new PassthroughGatewayClient()` survived in `session-node-manager.ts`
+  until the 2026-07-29 audit found it (fixed, Entry C9). The stub is still exported from two public
+  package barrels — the "test-only visibility" clause is not met.
+- **INV-10 — AMENDED 2026-07-29 by audit: the loosen gate is FRICTION PLUS AUDIT, not a lock.**
+  Every loosening flows through the versioned store's confirm gate and lands as a hash-chained row.
+  No environment variable and no MCP tool can loosen — those are closed (`DOD-M9C-ENV-1`,
+  `DOD-M9C-SURFACE-1`). **An IPC verb still can**, and the original wording claiming otherwise was
+  false: `clientType` is SELF-DECLARED, so any process running as the operator can open
+  `~/.cello/daemon.sock`, announce `clientType: "cli"` and pass `confirmed: true`. The TTY check
+  lives in the CLI process; the daemon cannot verify it, and a same-uid process is not
+  distinguishable from the operator by any local mechanism — so this is not fixable daemon-side.
+  What the gate does deliver: every path an agent reaches by ORDINARY means is closed (its MCP
+  tools, and the CLI, which refuses on a non-TTY stdin), so weakening a guard requires deliberately
+  speaking raw IPC and misrepresenting itself — a louder act, and one the audit trail records.
+  **The real boundary is the portal passkey D-4 already names as the destination.** — 🟡 partial;
+  the absolute form is owed to the passkey confirm
 
 ---
 
@@ -176,7 +188,9 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   > eslint quarantine down to one file; absence asserted on the BUILT artifact. Reviewer found 4
   > blocking (error substitution + busy_timeout ordering, undrained child stderr, empty-string
   > silent-no-store, hollow guard) — ALL FIXED in `a68ed2e`. 🟡 not ✅: the enforcer
-  > (`DOD-M9C-GATE-1`) does not exist yet. → Entry C5 — 🟡
+  > (`DOD-M9C-GATE-1`) does not exist yet. **Audit 2026-07-29: EARNED** — ciphertext on disk, both
+  > refusal paths, no `node:sqlite` in the built artifact, and the shipped daemon creates the
+  > encrypted store itself. → Entry C5, C9 — ✅
 
 - **DOD-M9C-WIRE-1** — **the connect: the shipped daemon runs the layer, enforcing (D-2).** The
   composition root (`core/daemon/src/bin/cello-daemon.ts`) constructs the real gateway client and
@@ -196,8 +210,10 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   > `securityGateway` REQUIRED in `DaemonConfig` (M9C-D10) so no shipped path can omit it; `mode`
   > declared by the client (M9C-D11); spawn failure fails closed + announced (M9C-D12); the bin
   > resolves the store key first (M9C-D13). 1277 daemon+gateway tests green, lint + typecheck
-  > clean. 🟡 on `DOD-M9C-GATE-1` — the proof must come from the SHIPPED bin, not this suite.
-  > → Entry C5 — 🟡
+  > clean. **Audit 2026-07-29: OVERSTATED, stays 🟡** — the wiring and the real sidecar process are
+  > proven from the shipped bin, but "every guard runs and acts" is proven only under injection, and
+  > the stub is still exported from two public barrels. A silent `?? new PassthroughGatewayClient()`
+  > found in `session-node-manager.ts` was FIXED (Entry C9). → Entry C5, C9 — 🟡
 
 - **DOD-M9C-SURFACE-1** — **the control surface + the human confirm (D-4, absorbs M8C
   `DOD-CONFIG-1`).** `cello config list` / `get <key>` / `set <key> <value>` against the versioned
@@ -218,8 +234,10 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   > `--yes` flag; a successful set restarts the sidecar or says `stored_but_not_applied` (M9C-D17).
   > Surfaced and fixed a kill-switch defect WIRE-1 had introduced: `cello logout` stops the daemon
   > over IPC, never through the signal handler, so the sidecar teardown moved into the daemon's own
-  > `stop()`. 1569 tests green. Open: `allow_always` not wired to the new gate; `correlationId` not
-  > threaded. → Entry C7 — 🟡
+  > `stop()`. **Audit 2026-07-29: OVERSTATED, stays 🟡** — the F1 fix closed the no-handshake route
+  > but NOT the lying-handshake route, because `clientType` is self-declared. INV-10 is amended above
+  > to claim only what the code delivers. `allow_always` needs no work (it never persists).
+  > → Entry C7, C9 — 🟡
 
 - **DOD-M9C-ENV-1** — **the side door closes (D-5).** The four policy fallbacks in
   `core/gateway/src/bin/cello-gateway.ts` — `CELLO_GATEWAY_AUTONOMOUS_OVERRIDE`,
@@ -230,7 +248,13 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   env path inject config through the store or the constructor instead. Proven by a negative test
   IN THE LIVE GATE: booting the shipped daemon with `CELLO_GATEWAY_AUTONOMOUS_OVERRIDE=1` in the
   environment has NO effect on screening behavior and leaves no config row. Grep-level absence of
-  the four names in built gateway output, asserted on the artifact. — ❌
+  the four names in built gateway output, asserted on the artifact.
+  > **BUILT + AUDITED 2026-07-29 — ✅ EARNED**, and the auditor's best-evidenced line: the BUILT bin
+  > is spawned with all four variables at their most permissive and a PII value "whitelisted" only
+  > by the environment is still not allowed through; the shipped daemon booted the same way still
+  > reads `mode:"enforcing"` with zero config rows written. The artifact assertion matches
+  > `process.env` READS rather than the bare names (the bin keeps a comment explaining the removal),
+  > with a non-vacuity control proving the scan finds a real read. → Entry C8 — ✅
 
 - **DOD-M9C-AUDIT-1** — **"what did my policy do" (D-11, security half — ships WITH the flip, by
   decision).** One command (CLI + MCP read parity): a single reverse-chronological list from the
@@ -239,7 +263,12 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   Deliberately not a dashboard. This is the attribution answer D-2 promised Andre ("is this new
   error the flip or my other work?") — so it lands in the same publish as WIRE-1, never later. The
   output shape leaves room for the reachability source (refusals, tier gates, away responses) to
-  join in the later refusal unit without a breaking change. — ❌
+  join in the later refusal unit without a breaking change.
+  > **BUILT 2026-07-29 — 🟡.** `cello policy log` + `cello_policy_log` read the real encrypted record
+  > store and return `chainValid`; the tamper test edits a stored disposition through the SQLCipher
+  > file and asserts the flag flips. **Audit: OVERSTATED** — the records it reads are written BY THE
+  > TEST, so nothing yet proves the log reflects screened traffic. That link is GATE-1 assertion (4),
+  > which the gate does not make. → Entry C8, C9 — 🟡
 
 - **DOD-M9C-GATE-1** — **the composition-root live gate — the enforcer, and the lesson encoded.**
   A live test that spawns the REAL `cello-daemon` binary from `dist/` (the shipped bin; zero
@@ -251,7 +280,16 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   (5) the ENV-1 negative case (override env var inert); (6) kill the sidecar mid-session → the
   next send returns the fail-closed verdict with the real cause, nothing flows unscreened, and the
   daemon has announced the degradation. Green means the PRODUCT screens, not that the layer can.
-  — ❌
+  > **BUILT 2026-07-29 — 🟡. Audit: OVERSTATED, and the reason matters more than the tag.** The test
+  > IS honest — it spawns the built binary, never calls `startDaemon` in-process, never sets
+  > `config.securityGateway` — and it proves the boot mode, a real sidecar pid, the encrypted store,
+  > the inert env vars, and no orphan on SIGTERM. But it makes 4 of the 6 specified assertions and
+  > **drives ZERO traffic**: not one message is screened by the shipped product anywhere in it. The
+  > daemon's own comment says the boot line is not a handshake (the socket connects lazily on first
+  > screen), so `mode:"enforcing"` remains a LABEL on a socket this gate never exercises. OWED:
+  > (2) outbound credential redacted at the peer, (3) crafted inbound sanitized, (4) both readable
+  > through AUDIT-1, (6) sidecar killed mid-session → fail-closed with the real cause. Those three
+  > would likely convert WIRE-1 and AUDIT-1 to ✅ as well. → Entry C8, C9 — 🟡
 
 - **DOD-M9C-PUBLISH-1** — **it reaches the operator.** The whole unit ships as ONE batched cascade
   (gateway → daemon → cli → adapter/connect as the graph requires) to npm **beta** via
