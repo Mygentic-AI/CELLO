@@ -2970,3 +2970,80 @@ Also owed from this entry: the client's `seal_unilateral_timeout` guidance names
 ("the directory could not verify the reported root") that the code cannot have reached in this
 failure mode. A message that asserts a specific upstream cause it did not observe sends the reader
 to the wrong component — the same class as `fullyEstablished: true` for a refused session.
+
+---
+
+## Entry 49 — 2026-07-29 — The seal bug LOCALIZED: legibility fires, then nothing
+
+A cross-review session with Ms_Chelly (M9) produced a cheap test that killed two hypotheses in an
+hour — one hers, one mine-because-I-accepted-hers — and localized the real defect without
+reproducing anything.
+
+### Correction to Entry 48
+
+Entry 48 recorded, as established, that failing seals produce ZERO directory-side seal events, and
+reasoned from there that the unilateral request never arrives. **False.** I had queried a
+25-minute window. At 240 minutes, `notarization.recorded` exists for sessions I had filed as
+failures. The mechanism was never wrong — the FRAME was. Those are the expensive ones, because the
+conclusion looks derived rather than assumed.
+
+### The timestamps
+
+```
+13:03:28.636  seal.certificate.legibility.built   03c3d9a1
+13:03:31.239  notarization.recorded               (+2.6s)
+13:03:31.297  conversation.seal.recorded
+
+13:56:16.722  seal.certificate.legibility.built   9f36817c
+13:56:19.211  notarization.recorded               (+2.5s)
+13:56:19.258  conversation.seal.recorded
+```
+
+Both successes are strictly sequential, ~2.5s apart. **Not two writers racing** — the hypothesis
+that symmetric single-event loss implied unordered writers is refuted.
+
+### The failures are TWO unrelated modes, not one symmetric one
+
+```
+notarization + conversation.seal.recorded, NO legibility   -> 7bd1cb39, e397a715
+legibility ONLY, nothing after                             -> ad9315b6, 9faa39c3
+```
+
+The first pair are **not failures**. Those are the abuse-bound sessions the counterparty never
+joined, so the directory recorded a UNILATERAL seal with no bilateral legibility — correct
+behaviour that I had bucketed as failure because the client returned an error. My "symmetric loss"
+was an artifact of my own bucketing.
+
+**Only `legibility ONLY` is the bug.**
+
+### Localization
+
+In both successes, notarization follows legibility within 2.6s. For `ad9315b6` the log stops dead
+at `legibility.built` 14:33:53. The step between those two events is `#resolvePrimaryPubkey` — and
+for that same failing seal, `directory.profile.read_through` **never fired at all**, on a build that
+contains the read-through and reaches it on every cache miss.
+
+A call that leaves no trace and produces no subsequent event is a call that did not return. Working
+hypothesis, now narrow enough to be worth stating: `legibility.built` → `#resolvePrimaryPubkey`
+hangs → notarization never happens → the client waits out its bilateral window and reports a
+verification that never ran.
+
+### Owed, and its own defect
+
+The client's `seal_unilateral_timeout` guidance says "the directory could not verify the reported
+root". In this failure mode the directory never reached verification. **A message asserting an
+upstream cause it did not observe** sends the reader to the wrong component — same class as
+`fullyEstablished: true` for a refused session, and as a `mode:"enforcing"` label on a socket
+nothing had exercised.
+
+Also owed, and worth doing FIRST because it changes what every later log line means: a member node
+that holds no share for a given agent has no error code of its own. It surfaces as
+`AGENT_NOT_BOOTSTRAPPED`, which reads as a client fault, so the operator debugs the client while the
+truth is on the other side. That is error substitution. One code names it.
+
+### The gate this earns
+
+The fix for the SI-003 share bug (Entry 38) currently asserts that the encrypted WRITE succeeds.
+That is still green about the wrong noun, just a nearer one: **the write succeeding is not the share
+surviving.** Only a process that no longer holds the value in memory can distinguish them. The gate
+to write is: register → restart the node → require a ceremony to complete.
