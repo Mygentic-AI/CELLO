@@ -3937,3 +3937,82 @@ guard each fail exactly one assertion when removed, naming the real cause.
 **Status:** both lines stay 🟡. The routing defect is fixed and proven live on `cello.mygentic.ai`;
 the canonical `gallery.cello.mygentic.ai` still owes a DNS record, and until it resolves the live
 run on the host the DoD actually names cannot be performed.
+
+---
+
+### Entry 63: the gallery carries conversations, and the archive is live
+**Date:** 2026-07-29
+**Target:** DOD-GALLERY-CONTENT-1, DOD-GALLERY-SEED-1 [corp-cello-site, trustless-cello]
+
+New scope, decided by Andre and recorded as M11-D33/D34 before any code: a receipt page proved a
+session happened while showing none of it, which is not the question the GEO argument in §9 depends
+on. Five real sessions are now published.
+
+**Clause checklist — DOD-GALLERY-CONTENT-1:**
+- [x] `published_receipts` gains an ordered transcript (speaker + body, sequence preserved)
+- [x] the receipt page renders the exchange below the seal metadata
+- [x] no edit path and no delete path for content (`ON CONFLICT DO NOTHING`, never `DO UPDATE`)
+- [x] turn bodies refused at the WRITE on the same terms as monikers, not escaped at the read
+- [x] a receipt with no transcript renders as before rather than showing an empty panel
+- [ ] counterparty consent — deliberately unsolved, stated in the line itself
+
+**Clause checklist — DOD-GALLERY-SEED-1:**
+- [x] the write-ups carrying a sealed root are published
+- [x] each renders the seal state it actually had
+- [x] `verified_by`/`node_count` populated only where a record states them — no record does, so all NULL
+- [x] the live index lists the archive; a receipt page renders its transcript
+
+**The count moved twice, and both corrections were mine.** I wrote "fifteen" from a directory
+listing, corrected to "six" from a grep for sealed roots, and corrected to **five** only after
+running the extractor. `smoke-test-m4` has a root but no `## Transcript` section and covers TWO
+sessions, so its root cannot be attributed to one bilateral exchange. Seven others were never
+sealed. A number in this document is measured or it is labelled an estimate (§5c) — I published two
+unmeasured ones before honouring that.
+
+**What is NOT invented, and why it matters more here than anywhere else.** No write-up records what
+the directory attested, so `verified_by`/`node_count` are NULL on all five. The badge renders beside
+the Merkle root on a page whose entire purpose is that a stranger can check it — a count inferred
+from "we run three nodes" would make the page evidence against the product. The schema now makes the
+pair nullable and constrained to move together, because "verified by 2 of ?" is not a weaker claim
+but an unreadable one.
+
+The seal states genuinely differ and that is better material than a uniform tick: `sealed` with a
+live bilateral FROST ceremony (m8b, m8c), `sealed` with attestations pending because the MMR
+checkpoint had not been written (m4-05-18), and one `seal_deferred` with the chain committed anyway.
+`SealState` is shared by the index and the receipt page, so a card cannot advertise a claim the page
+it links to declines to make, and `seal_status` is checked FIRST so a row carrying stale counts still
+cannot present itself as verified.
+
+**`message_count` is derived but not asserted.** It is the count of extracted turns, and it
+reconciles against a number each document states independently: genesis + turns + seal equals the
+stated leaf count in all three m4 sessions (25/27, 10/12, 5/7), and m8b says "7 content messages" for
+7 extracted turns. Two independent derivations agreeing is the difference between a measured number
+and a counted-then-claimed one.
+
+**Extraction fidelity — one defect found and fixed before publishing.** The accumulator absorbed the
+write-up's own italic narration into the final turn, so
+*"B sealed first. A received `seal_rejected`. 12 leaves committed."* would have been published as
+words an agent said. A whole line in italics now terminates the turn and is discarded.
+
+**The date is stored at the precision the record has.** All five write-ups give a day, not a time.
+`sealed_at_precision` suppresses the clock rather than printing a midnight nobody measured.
+
+**The seed writes directly, and that is a gap being recorded rather than hidden.** `POST
+/gallery/publish` requires the agent to be linked via `waitlist_agent_links` — three readers, no
+writer (§ Parked) — so no publish call can currently succeed. These are operator-published archive
+rows. It does **not** discharge `DOD-GALLERY-PRIVACY-1`'s portal action, which real users still need.
+
+**The quoting bug, which is the one worth remembering.** The portal RDS is not publicly accessible,
+so the seed travels as SQL text through the VPC-Lambda hop rather than as a connection. Quoting the
+transcript with psycopg2 corrupted it: JSON escapes `"` as `\"`, psycopg2 doubles the backslash
+because without a connection it cannot know `standard_conforming_strings`, and Postgres then rejects
+the JSON. **Four of five rows failed. The fifth contained no double quotes, inserted cleanly, and
+looked like success.** That is a partial seed reporting completion, and it is exactly why this ran
+against a local database first. Dollar-quoting does no escape processing at all.
+
+**Runs:** schema enforcer PASS (idempotent · safe over data · fresh == historic over data · tamper
+detected) · 29 pytest · 54 vitest · typecheck · lint · build.
+**Live:** migration applied to the portal DB through `waitlist-migrate` (dry-run first — exactly one
+pending). `published_receipts` holds 5 rows, **0** with `verified_by IS NOT NULL`, **0** where
+`message_count <> jsonb_array_length(transcript)`. The live API serves all five with transcripts, and
+the deployed bundles carry the new rendering.
