@@ -855,10 +855,31 @@ export class FrostDirectoryHandler {
       return { ok: false, reason: "share_verification_failed" };
     }
 
-    // Store the finalized FrostSecret in the share store (same path as bootstrapKeyShares).
-    // This makes the node ready for signing ceremonies.
+    // Store the finalized FrostSecret DURABLY before this node reports the DKG complete.
+    //
+    // storeShare() is fire-and-forget: it caches in memory and lets the encrypted write run
+    // unawaited. That made a failed write invisible — registration returned ok, the DKG named every
+    // validator a signer, and the agent worked until the directory process restarted, at which
+    // point the share was simply gone (`sharesLoaded: 0` -> AGENT_NOT_BOOTSTRAPPED). A whole class
+    // of agents was permanently unusable while every surface said success.
+    //
+    // A share this node cannot persist is a share it will not have after any restart, so failing
+    // the ceremony is the honest answer: the agent retries registration instead of receiving an
+    // identity that quietly expires with the process.
     const share: LocalShare = { secret: key.secret, pub: key.public };
-    this.#shareStore.storeShare(agentPubkey, epochId, share);
+    try {
+      await this.#shareStore.storeShareDurable(agentPubkey, epochId, share);
+    } catch (err: unknown) {
+      this.#logger?.error("frost.dkg.round3.share_persist_failed", {
+        agentShort: agentPubkey.slice(0, 16),
+        epochId,
+        nodeId: this.#nodeId,
+        error: err instanceof Error ? err.message : "unknown",
+      });
+      this.#dkgStates.delete(stateKey);
+      try { ed25519_FROST.DKG.clean(state.secret); } catch { /* ignore */ }
+      return { ok: false, reason: "share_verification_failed" };
+    }
     this.#currentEpoch.set(agentPubkey, parseEpochN(epochId) ?? 1);
 
     // Clean up DKG state — the DKG_Secret (polynomial) is no longer needed.
