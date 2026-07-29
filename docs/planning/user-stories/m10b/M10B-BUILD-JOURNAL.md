@@ -2462,7 +2462,28 @@ record is.
 All three shapes are now permanent regression tests. 45 integration tests green against a rebuilt
 V53; 932 in the default gate; lint and typecheck clean.
 
-**Still open from the same review, unchanged:** F2's `issued_at`-through-a-queue problem, F3's silent
-`MIN(issuer_kind)` disagreement, F5's asymmetric pubkey validation, F8's replication column-skew
-window (needs one measured check before the batched deploy), and the inert-revoke-reports-success
-response.
+**F5 also fixed (same session).** `toPreimage` pins `issuer_pubkey` to lowercase-hex-even-length —
+enough for hash agreement, but it does not pin LENGTH, while `revoker_pubkey` is validated as 64 hex.
+Branch 4 compares them exactly, so a short-but-well-formed agent key notarized cleanly and was then
+**permanently unrevocable**, with the issuer's own withdrawal silently inert *and returning success*.
+Now refused at submit as `envelope_invalid`, naming the consequence rather than the rule. Not
+normalized on read — the value is inside the hash.
+
+**Still open from the same review, and each needs a decision rather than a keystroke:**
+
+- **F2 — withdrawal's `issued_at` cannot survive the queue hop.** It is inside the inner TBS *and* is
+  what the directory skew-checks at 600s, but the withdrawal travels daemon → queue → portal drain →
+  portal revoke. Bob must sign over an `issued_at` the *portal* will submit with, which he cannot
+  know; and a drain lagging >10 min kills the withdrawal as `stale_request`. Needs a validity
+  *window*, not an instant. → `DOD-END-INGRESS-1` / `DOD-END-SURFACE-1`.
+- **F3 — `MIN(issuer_kind)` is now an authority predicate, not a descriptive aggregate.** One node
+  disagreeing silently makes a portal record permanently unrevocable everywhere. `MIN()` picking the
+  stricter side is right for the forgery direction; the defect is that disagreement is *resolved
+  silently* instead of surfaced.
+- **F8 — replication column-skew, UNMEASURED.** Two new columns on a published table, three regions
+  deploying in parallel. A V53 node writing while a peer is on V52 should stall that peer's entire
+  subscription until it migrates. Neither local Postgres runs `wal_level=logical`. **One measured
+  check is owed BEFORE the batched deploy** — this is the item most likely to bite at wake.
+- **An inert revoke returns `{ok: true, revoked_rows: 1}`.** Deliberate (arrival-order freedom), but
+  the caller is told "revoked" when the truth is "recorded, currently inert" — the portal would show
+  an operator their endorsement is withdrawn when it is not.
