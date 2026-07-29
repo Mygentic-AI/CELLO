@@ -379,6 +379,10 @@ import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilate
 /** M10B / DOD-END-SUBMIT-1 — a sealed submission handed to this node. Three fields; the ABSENCES
  *  (no submitter, no subject, no signal kind) are what make the queue's privacy property structural
  *  rather than aspirational. */
+/** Upper bounds on a submission_write. See the decoder for why an unbounded write path is a hole. */
+export const MAX_SUBMISSION_CIPHERTEXT_BYTES = 64 * 1024;
+export const MAX_INTAKE_KEY_ID_CHARS = 128;
+
 export type SubmissionWrite = {
   type: "submission_write";
   submission_id: string;
@@ -418,8 +422,12 @@ export function encodeSubmissionWriteResult(frame: { submission_id: string; stor
 
 /** M10B / DOD-END-SUBMIT-1: refuse a submission, NAMING the cause (OUTBOUND). Never a bare failure —
  *  the submitter's only other signal is silence, and silence is indistinguishable from loss. */
-export function encodeSubmissionWriteError(frame: { reason: string }): Uint8Array {
-  return ENC.encode({ type: "submission_write_error", reason: frame.reason });
+export function encodeSubmissionWriteError(frame: { submission_id: string; reason: string }): Uint8Array {
+  // CARRIES THE ID. Without it the daemon cannot tell whose failure this is: the inbound handler
+  // sees every frame on a shared stream, so an unaddressed error resolves whichever submission
+  // happens to be in flight — and two concurrent submissions is not exotic, it is the second
+  // endorsement.
+  return ENC.encode({ type: "submission_write_error", submission_id: frame.submission_id, reason: frame.reason });
 }
 
 /**
@@ -641,7 +649,12 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     // Shape-check the id rather than trusting it into a primary key: it is sha256 hex, and a
     // caller-chosen value of any other shape is a caller getting the wire format wrong (or probing).
     if (!/^[0-9a-f]{64}$/.test(submission_id)) return null;
-    if (ciphertext.length === 0) return null;
+    // BOUNDED. Signaling auth is bare proof-of-possession of any Ed25519 key — no registration
+    // required — so anyone who can dial this node can write here. Unbounded BYTEA plus a TTL sweep
+    // bounds growth at `rate x TTL`, which is not a bound. A sealed endorsement is a sentence plus
+    // seal overhead; 64 KiB is orders of magnitude of headroom and still refuses a firehose.
+    if (ciphertext.length === 0 || ciphertext.length > MAX_SUBMISSION_CIPHERTEXT_BYTES) return null;
+    if (intake_key_id.length === 0 || intake_key_id.length > MAX_INTAKE_KEY_ID_CHARS) return null;
     return { type: "submission_write", submission_id, intake_key_id, ciphertext };
   }
 

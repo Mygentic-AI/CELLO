@@ -2175,10 +2175,18 @@ export class CelloDirectoryNode {
           //
           // AUTHENTICATED, off the live connection identity. The stream's challenge-response has
           // already yielded `authedPubkeyHex`, and that is deliberately the ONLY place submitter
-          // identity exists here: it is used for flood protection and logging and is NEVER persisted,
-          // because a `submitting_agent_id` column would hand a node operator "Bob submitted five
+          // identity exists here: it is never persisted IN THE DATABASE, because a
+          // `submitting_agent_id` column would hand a node operator "Bob submitted five
           // endorsements" — not to whom, but still the metadata shape DOD-END-DISCOVER-1 is written
           // against (Entry 8).
+          //
+          // ⚠️ FLOOD PROTECTION IS OWED, NOT IMPLEMENTED, and this comment previously claimed
+          // otherwise. Signaling auth is bare proof-of-possession of ANY Ed25519 key — no
+          // registration required, and unlike `session_request`/`connection_request` this path has
+          // no `#requireRegistration` gate — so anyone who can dial this node can insert rows. The
+          // decoder now bounds each row's SIZE, which is a cap on damage per write and not a rate
+          // limit. A per-`authedPubkeyHex` token bucket belongs here and is an AC on
+          // `DOD-END-INGRESS-1`, which owns the drain that would otherwise chew through the garbage.
           //
           // Nothing is opened, parsed, or interpreted. The row is {id, intake_key_id, ciphertext}.
           void this.#processSubmissionWrite(stream, authedPubkeyHex!, parsed);
@@ -2603,7 +2611,8 @@ export class CelloDirectoryNode {
    * have learned. It writes exactly {submission_id, intake_key_id, ciphertext}.
    *
    * `authedPubkeyHex` — the identity the stream's challenge-response already proved — is used for
-   * LOGGING ONLY and is never persisted. A `submitting_agent_id` column would give a node operator
+   * LOGGING ONLY and is never persisted IN THE DATABASE (a log group is persisted storage too, so
+   * the unqualified claim would be false), and never in the same log line as the submission id. A `submitting_agent_id` column would give a node operator
    * "Bob submitted five endorsements": not to whom, but still the metadata shape
    * DOD-END-DISCOVER-1 is written against (Entry 8). It is truncated even in the log.
    *
@@ -2629,12 +2638,20 @@ export class CelloDirectoryNode {
         stream,
         encodeSubmissionWriteResult({ submission_id: frame.submission_id, stored }),
       );
+      // TWO LINES, DELIBERATELY, AND THEY DO NOT SHARE A KEY. `submission_id` is the sha256 of the
+      // PLAINTEXT submission, and the portal holds that same id against the opened body — subject
+      // included. So a single line carrying both `submitter` and `submissionId` reconstructs
+      // "Bob -> this specific endorsement of Alice" for anyone with the node's logs and any view of
+      // portal-side ids. Truncating the pubkey to 16 hex chars is 8 bytes: fully identifying, not a
+      // mitigation. A log group is persisted storage; "never persisted" was only ever true of the DB.
       this.#logger?.info(stored ? "signal.submission.queued" : "signal.submission.duplicate", {
         submissionId: frame.submission_id.slice(0, 16),
         intakeKeyId: frame.intake_key_id,
-        submitter: authedPubkeyHex.slice(0, 16),
         ciphertextBytes: frame.ciphertext.length,
       });
+      // Connection-scoped, and carries NO submission id — enough to see that a peer is submitting
+      // (and to hang a rate limiter off later), not enough to join a peer to a submission.
+      this.#logger?.debug("signal.submission.accepted", { submitter: authedPubkeyHex.slice(0, 16) });
     } catch (err: unknown) {
       // NAME THE CAUSE, and never leave the submitter with silence: its only other signal is a
       // timeout, which is indistinguishable from the submission being lost. The upstream message
@@ -2646,7 +2663,7 @@ export class CelloDirectoryNode {
         submitter: authedPubkeyHex.slice(0, 16),
         reason: message,
       });
-      this.#sendFrame(stream, encodeSubmissionWriteError({ reason: "queue_write_failed" }));
+      this.#sendFrame(stream, encodeSubmissionWriteError({ submission_id: frame.submission_id, reason: "queue_write_failed" }));
     }
   }
 
