@@ -272,7 +272,18 @@ description: >
   that turn out to be needed. — ❌
 - **DOD-MANIFEST-GCP-1** [cello-client, trustless-cello] — fresh consortium manifest signed:
   three `gcp-*` validators with roles, adopted by clients via poll; step-6 directory identity
-  verification passes against the new manifest. — ❌
+  verification passes against the new manifest. — 🟡 DIRECTORY HALF DONE. Manifest signed over the
+  three validators (`role: validator`, T = majority(3) = 2) with a FRESH officer key generated in
+  GCP Secret Manager — not the AWS one, per M12-D4's zero-shared-state rule, which also keeps this
+  off a hibernated AWS account. Live on all three nodes:
+  `directory.manifest.store.loaded { manifestVersion: 1, verified: true }`. Nothing hand-entered —
+  identities come from `gcp-node-identities.sh` and were verified byte-identical to what each node
+  logs for itself at boot. **This is what brought anti-entropy to life:** a node learns its peers
+  from this file, and all three now run a full mesh
+  (`antientropy.round.started` to both peers from every node, across three regions and two
+  continents, over authenticated libp2p with no VPN and no peering). **Owed:** the cello-client
+  half — bundled manifest constant + publish — and step-6 verification proven from a client.
+  → Entry 24
 - **DOD-MOVE-OPSAGENT-1** [trustless-cello] — ops-agent runs on GCP; email via the SES HTTPS API
   (WIF or SigV4 credentials handled without SA keys — no key files exist, org-enforced); its
   DB-access pattern redesigned so it needs NO cross-cloud database connection (per-node health

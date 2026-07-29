@@ -1239,3 +1239,79 @@ straight after doing genuinely hard work, which is exactly when the check is mos
 The other rule that earned itself: **run the thing, do not merely install it.** Every defect in
 Entries 22 and 23 came from running something — the timer, the boot, the adapters against real
 cloud — and none from reading.
+
+---
+
+## Entry 24 — 2026-07-29 — N=3 across two continents, and anti-entropy running between them
+
+The consortium exists. Three directory nodes, three regions, a signed manifest they all verify,
+and a full anti-entropy mesh between them.
+
+```
+gcp-use1   us-east1      34.75.172.108    HEALTHY  schemaVersion 50
+gcp-usc1   us-central1   34.136.176.190   HEALTHY  schemaVersion 50
+gcp-euw1   europe-west1  34.34.166.245    HEALTHY  schemaVersion 50
+
+{"event":"directory.manifest.store.loaded","manifestVersion":1,"verified":true}
+{"event":"antientropy.round.started","peerNodeId":"gcp-usc1"}   from gcp-use1
+{"event":"antientropy.round.started","peerNodeId":"gcp-euw1"}   from gcp-use1
+{"event":"antientropy.round.started","peerNodeId":"gcp-use1"}   from gcp-usc1
+{"event":"antientropy.round.started","peerNodeId":"gcp-euw1"}   from gcp-usc1
+{"event":"antientropy.round.started","peerNodeId":"gcp-use1"}   from gcp-euw1
+{"event":"antientropy.round.started","peerNodeId":"gcp-usc1"}   from gcp-euw1
+```
+
+Every node reconciling with both peers, over the authenticated libp2p channel, across two
+continents, with **no VPN, no VPC peering and no Private Service Access** — verified against live
+state, not against the Terraform meant to produce it: `networks peerings list` → 0 items,
+`vpn-tunnels list` → 0 items, and each Cloud SQL instance has `ipv4Enabled=false`,
+`pscEnabled=true` and no IP address at all. That is the whole thesis of the milestone working.
+
+### The region-expansion test, measured
+
+Nodes 2 and 3 were added as **one `directory_nodes` map entry each**. The apply created **99
+resources** and **not one new resource block was written**. Each node got its own Cloud SQL over
+PSC, KMS key ring and envelope key, three buckets, five secrets, a service account, a static IP, a
+MIG and its cloud-init. Deriving the subnet CIDR from the node's own `subnet_index` is what turned
+"two coordinated entries" into one.
+
+### The manifest pipeline, and why nothing in it is typed by hand
+
+`gcp-node-identities.sh` reads each node's key seeds from Secret Manager and pipes them into the
+existing derivers on stdin (never argv — SI-001). Its output was checked against the running nodes:
+the offline derivation of `gcp-use1` produced `7969e22a…113c` and `12D3KooWMH58hm8x…`, **byte-identical
+to what that node logged for itself at boot**. That equality is the entire basis for trusting a
+manifest built offline, and it is why the signer takes no hand-entered values.
+
+`sign-gcp-consortium-manifest.mjs` then fails closed on the three ways a roster goes quietly wrong:
+it verifies its own signature before emitting, refuses a duplicate `nodeId` (two entries under one
+FROST identifier), and refuses two nodes sharing a signing key (one host answering as two members
+of a quorum).
+
+A **fresh officer key** in GCP Secret Manager, not the AWS one — M12-D4 requires zero shared runtime
+state, and a shared officer would mean a manifest signed for one consortium verifies against the
+other. It is granted to **no workload**: everything verifies with the public key, and a node that
+could read the seed could mint a roster naming itself the whole consortium.
+
+### The two failures on the way, both worth keeping
+
+**Switching the node to `cello_service` immediately proved the split was real** — and broke the
+startup guard, which queries `flyway_schema_history`. That table is owned by whoever ran the
+migration; on AWS the node and Flyway are the same role so it is readable by construction, on GCP
+they are deliberately different. Worse, the guard reported the denial as
+`migration.out.of.date currentVersion 0` — a permissions fault wearing a schema fault's name,
+sending an operator to re-run migrations that had already run. V50 grants SELECT (and nothing
+more — a node that could write that table could rewrite the evidence of which schema it runs), and
+the guard now separates the three causes it can actually see.
+
+**Terraform's `indent()` does not indent the first line.** The manifest's opening brace landed at
+column 0 inside a YAML block scalar, and cloud-init reported `Invalid format at line 66 column 1`.
+The part worth remembering: **a cloud-config that fails to parse writes NOTHING.** The node came up
+with no systemd units at all — `Unit cello-directory.service could not be found`, empty journal.
+A total absence, rather than an error pointing at the file that caused it.
+
+### Where the critical path stands
+
+`DOD-NODE-DIR-GCP-2` and `-3` are ✅. `MANIFEST-GCP-1` is 🟡 — the directory half is live and
+verified; the cello-client half (bundled manifest constant + publish) is owed. The relay is applied
+and coming up. After that the path to a testable system is `E2E-GCP-1` itself.
