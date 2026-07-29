@@ -23,6 +23,13 @@ RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 
 # Copy workspace root files for pnpm workspace resolution
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json tsconfig.json ./
+# Patched dependencies — the relay needs these as much as the directory does. @libp2p/autonat's
+# dial-back RESPONDER closes a connection it did not open, and the relay is a SERVICE node so it
+# keeps that responder. A client asking the relay to verify reachability therefore had its own
+# relay connection torn down: `relay_connection_gone`, lost reservations, and seal leaves failing
+# with `relay_stream_closed`. Without this COPY the image builds clean and installs the UNPATCHED
+# package, so the assertion below fails the build rather than shipping it silently.
+COPY patches/ patches/
 COPY packages/interfaces/package.json packages/interfaces/
 COPY packages/relay/package.json packages/relay/
 
@@ -52,11 +59,24 @@ RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 
 # Copy workspace structure for production install
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+# Patched dependencies — the relay needs these as much as the directory does. @libp2p/autonat's
+# dial-back RESPONDER closes a connection it did not open, and the relay is a SERVICE node so it
+# keeps that responder. A client asking the relay to verify reachability therefore had its own
+# relay connection torn down: `relay_connection_gone`, lost reservations, and seal leaves failing
+# with `relay_stream_closed`. Without this COPY the image builds clean and installs the UNPATCHED
+# package, so the assertion below fails the build rather than shipping it silently.
+COPY patches/ patches/
 COPY packages/interfaces/package.json packages/interfaces/
 COPY packages/relay/package.json packages/relay/
 
 # Install production dependencies only
 RUN pnpm install --frozen-lockfile --prod
+
+RUN set -eu; \
+    f=$(find node_modules/.pnpm -path '*@libp2p/autonat/dist/src/autonat.js' | head -1); \
+    [ -n "$f" ] || { echo 'FATAL: @libp2p/autonat not found in the production tree'; exit 1; }; \
+    grep -q 'force: true' "$f" || { echo "FATAL: @libp2p/autonat is UNPATCHED at $f"; exit 1; }; \
+    echo "ok: @libp2p/autonat patched at $f"
 
 # Copy compiled dist from build stage
 COPY --from=build /app/packages/interfaces/dist/ packages/interfaces/dist/
