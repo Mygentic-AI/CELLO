@@ -9,6 +9,7 @@ The table-driven case is the real vault: the exact five receipts, asserted whole
 """
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -195,3 +196,67 @@ def test_a_stated_initiator_that_contradicts_turn_order_is_refused(tmp_path, mon
     with pytest.raises(SystemExit) as exit_info:
         list(seed.receipts())
     assert "refusing to guess" in str(exit_info.value)
+
+
+# ── corroboration: read the DOCUMENT, not a dict someone typed ────────────────
+
+LEAF_COUNT = re.compile(r"(\d+)\s+leaves", re.I)
+CONTENT_COUNT = re.compile(r"(\d+)\s+content messages", re.I)
+
+# The one document that states no count of any kind. Named here rather than
+# skipped silently, because "four of five reconcile" is the true claim and the
+# DoD said five.
+UNCORROBORATED = "1a29969b440bb72f890064d3f415aee252a3e11b46919e78a08b56967202f1d9"
+
+
+def source_text(row):
+    return (seed.VAULT / row["source"]).read_text()
+
+
+def test_message_count_reconciles_with_the_documents_own_leaf_count(rows):
+    """The count is DERIVED by the parser, so on its own it is an assertion.
+
+    It becomes evidence only when a second, independently-written number in the
+    same document agrees: leaves = genesis + turns + seal. This reads that number
+    out of the file rather than comparing against a hand-typed table, which is
+    what the previous test did and why it could not catch a transcription error.
+    """
+    checked = 0
+    for row in rows:
+        if row["receipt_hash"] == UNCORROBORATED:
+            continue
+        text = source_text(row)
+        leaves = LEAF_COUNT.search(text)
+        content = CONTENT_COUNT.search(text)
+        assert leaves or content, f"{row['source']} states no corroborating count"
+
+        if content:
+            assert int(content.group(1)) == row["message_count"]
+        else:
+            # genesis leaf + one per message + seal leaf
+            assert int(leaves.group(1)) == row["message_count"] + 2
+        checked += 1
+
+    assert checked == 4, f"expected 4 corroborated receipts, reconciled {checked}"
+
+
+def test_the_uncorroborated_receipt_is_still_the_only_one(rows):
+    """Pins the exception so it cannot quietly grow.
+
+    m8c states no leaf count and no message count, so its 4 traces to the parser
+    alone. That is acceptable and recorded; a SECOND such document appearing
+    without anyone noticing is not.
+    """
+    uncorroborated = [
+        r["receipt_hash"]
+        for r in rows
+        if not LEAF_COUNT.search(source_text(r)) and not CONTENT_COUNT.search(source_text(r))
+    ]
+    assert uncorroborated == [UNCORROBORATED]
+
+
+def test_the_published_hash_is_the_documents_own_sealed_root(rows):
+    """The primary key, and the single thing a stranger can check. Read back out
+    of the file rather than compared to the table above."""
+    for row in rows:
+        assert row["receipt_hash"] in source_text(row)

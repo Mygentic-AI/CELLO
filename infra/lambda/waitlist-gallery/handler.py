@@ -144,7 +144,13 @@ def list_receipts(params, correlation_id):
             cur.execute("SELECT count(*) AS n FROM published_receipts")
             total = cur.fetchone()["n"]
             cur.execute(
-                "SELECT * FROM published_receipts ORDER BY published_at DESC, receipt_hash "
+                # sealed_at breaks the tie, because a batch published in one
+                # transaction shares a published_at to the microsecond and would
+                # otherwise fall back to HASH order — five cards printing five
+                # dates in no order at all, on a surface whose subject is a
+                # chronological record.
+                "SELECT * FROM published_receipts "
+                "ORDER BY published_at DESC, sealed_at DESC, receipt_hash "
                 "LIMIT %s OFFSET %s",
                 (size, (page - 1) * size),
             )

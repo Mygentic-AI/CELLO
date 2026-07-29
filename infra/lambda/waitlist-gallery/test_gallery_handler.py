@@ -191,6 +191,30 @@ def test_the_index_is_chronological_and_paginated(gallery):
     assert len(page2["receipts"]) == 5
     assert page1["total"] == 25
 
+    # The test was named "chronological" while asserting only row counts — a
+    # name writing a cheque the assertions did not cover. Pages must not overlap
+    # and must not drop a receipt, or pagination silently loses rows.
+    hashes = [r["receipt_hash"] for r in page1["receipts"] + page2["receipts"]]
+    assert len(set(hashes)) == 25
+
+
+def test_receipts_published_together_still_read_newest_session_first(gallery):
+    """A batch published in one transaction shares published_at to the
+    microsecond, so ordering collapsed to receipt_hash — five cards printing
+    five dates in no order at all. sealed_at is the tiebreak."""
+    for day in ("2026-05-18", "2026-07-07", "2026-05-20"):
+        publish(gallery, sealed_at=f"{day}T00:00:00Z")
+
+    # Separate publishes get distinct published_at, so that column alone would
+    # order them and the tiebreak would never engage. The archive seed inserts
+    # in ONE transaction — this reproduces that, which is the case that broke.
+    query("UPDATE published_receipts SET published_at = timestamptz '2026-07-29 09:54:22.419623+00'")
+
+    _, body = call(gallery, "GET", "/gallery/receipts")
+
+    dates = [r["sealed_at"][:10] for r in body["receipts"]]
+    assert dates == sorted(dates, reverse=True), f"not newest-first: {dates}"
+
 
 def test_the_total_is_the_real_count(gallery):
     """A gallery that padded this would be inventing social proof, and it is the
