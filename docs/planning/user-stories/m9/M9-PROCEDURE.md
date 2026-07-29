@@ -138,7 +138,7 @@ Then start the loop (§2).
 8. **Review — ONE read-only reviewer on the unit's diff: `cello-unit-reviewer`, NO model override.**
    The dispatch supplies: the DoD line VERBATIM, the clause checklist, the diff, the repo. Include
    the standing M9 lenses (§2b). Fix EVERY finding; commit fixes. **One pass; two is the hard cap**
-   (§3). At the tier boundary, `cello-done-auditor` audits every ✅ flip.
+   (§3). **`cello-unit-reviewer` is the ONLY review agent this project uses** — see §3.
 9. **Update docs** — flip the DoD tag (+ one-line evidence + journal pointer), append the journal
    entry, commit, push.
 10. Back to 1 — in the same turn.
@@ -201,9 +201,25 @@ hand to Andre) and the `/mcp` reconnect. Journal them and keep working.
 
 - **Live gate at start + end of every unit** once `DOD-M9C-GATE-1` exists; before that, the unit's
   focused suite.
-- **Checkpoint at the tier boundary:** `cello-done-auditor` on every ✅ flipped since the last
-  checkpoint; only EARNED stays ✅. Journal summary, commit, push. Keep the RESUME STATE block at
-  the top of the journal current — it is an obligation, not a habit.
+- **Checkpoint at the tier boundary:** journal summary, commit, push. Keep the RESUME STATE block
+  at the top of the journal current — it is an obligation, not a habit.
+
+> ### 🚫 `cello-done-auditor` IS RETIRED. DO NOT DISPATCH IT.
+> **`cello-unit-reviewer` is the only review agent this project uses.** The done-auditor predates
+> the current process: it expects a milestone backed by full user stories and ACs, and it re-runs
+> long suites to re-derive verdicts the per-unit review already produced. Pointing it at this
+> milestone burns a large number of tokens to re-litigate work that was already reviewed.
+>
+> Andre, 2026-07-29, after I dispatched it twice in one session: *"We don't use this agent anymore
+> at all… We only use one agent, which is the unit reviewer."* I had copied the tier-boundary step
+> out of [[M10B-PROCEDURE]] without checking whether the agent was still in use, so a stale
+> convention propagated into a fresh document and then into two dispatches. **If a procedure tells
+> you to dispatch a review agent other than `cello-unit-reviewer`, that procedure is out of date —
+> fix it rather than following it.**
+>
+> **On flipping status tags without it:** the per-unit reviewer is the check. Beyond that, a tag is
+> earned by the ENFORCER'S OUTPUT, quoted in the journal — not by a second opinion. If the evidence
+> does not read as sufficient, the honest move is to leave the line 🟡 and say why.
 
 ## 3a. Autonomous-mode rules
 **NEVER `AskUserQuestion`.** Decision rubric: verifiable → verify; best practice → take it, log an
@@ -255,7 +271,7 @@ never end a turn idle; `CronDelete` itself when the tier closes.
 
 ### 5c. Process
 - **One thread. One coder (the main loop). NO parallel implementation agents.** Read-only subagents
-  only (unit-reviewer / done-auditor / explorer).
+  only — `cello-unit-reviewer` or an explorer. Never a second review agent (see §3).
 - **🚨 CHECK FOR A SECOND AGENT IN THE CHECKOUT BEFORE THE FIRST BUILD.** Run `git status -sb` and
   `git worktree list` at kickoff. If another session has uncommitted work in the primary checkout,
   **create your own branch AND worktree before you build anything** — not after the first

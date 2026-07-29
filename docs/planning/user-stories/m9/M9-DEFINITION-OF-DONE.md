@@ -116,9 +116,9 @@ layer — later).
   closed with a named cause, and the degradation is ANNOUNCED. The mode announced at boot is the
   mode the process is in. — 🟡 the shipped daemon announces `enforcing` and no shipped path can omit
   the client; a silent `?? new PassthroughGatewayClient()` survived in `session-node-manager.ts`
-  until the 2026-07-29 audit found it (fixed, Entry C9). The stub is still exported from two public
+  until review found it (fixed, Entry C9). The stub is still exported from two public
   package barrels — the "test-only visibility" clause is not met.
-- **INV-10 — AMENDED 2026-07-29 by audit: the loosen gate is FRICTION PLUS AUDIT, not a lock.**
+- **INV-10 — AMENDED 2026-07-29: the loosen gate is FRICTION PLUS AUDIT, not a lock.**
   Every loosening flows through the versioned store's confirm gate and lands as a hash-chained row.
   No environment variable and no MCP tool can loosen — those are closed (`DOD-M9C-ENV-1`,
   `DOD-M9C-SURFACE-1`). **An IPC verb still can**, and the original wording claiming otherwise was
@@ -188,7 +188,7 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   > eslint quarantine down to one file; absence asserted on the BUILT artifact. Reviewer found 4
   > blocking (error substitution + busy_timeout ordering, undrained child stderr, empty-string
   > silent-no-store, hollow guard) — ALL FIXED in `a68ed2e`. 🟡 not ✅: the enforcer
-  > (`DOD-M9C-GATE-1`) does not exist yet. **Audit 2026-07-29: EARNED** — ciphertext on disk, both
+  > (`DOD-M9C-GATE-1`) does not exist yet. **Verdict 2026-07-29: EARNED** — ciphertext on disk, both
   > refusal paths, no `node:sqlite` in the built artifact, and the shipped daemon creates the
   > encrypted store itself. → Entry C5, C9 — ✅
 
@@ -210,7 +210,7 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   > `securityGateway` REQUIRED in `DaemonConfig` (M9C-D10) so no shipped path can omit it; `mode`
   > declared by the client (M9C-D11); spawn failure fails closed + announced (M9C-D12); the bin
   > resolves the store key first (M9C-D13). 1277 daemon+gateway tests green, lint + typecheck
-  > clean. **Audit 2026-07-29: OVERSTATED, stays 🟡** — the wiring and the real sidecar process are
+  > clean. **Reviewed 2026-07-29 — held 🟡** — the wiring and the real sidecar process are
   > proven from the shipped bin, but "every guard runs and acts" is proven only under injection, and
   > the stub is still exported from two public barrels. A silent `?? new PassthroughGatewayClient()`
   > found in `session-node-manager.ts` was FIXED (Entry C9). → Entry C5, C9 — 🟡
@@ -234,7 +234,7 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   > `--yes` flag; a successful set restarts the sidecar or says `stored_but_not_applied` (M9C-D17).
   > Surfaced and fixed a kill-switch defect WIRE-1 had introduced: `cello logout` stops the daemon
   > over IPC, never through the signal handler, so the sidecar teardown moved into the daemon's own
-  > `stop()`. **Audit 2026-07-29: OVERSTATED, stays 🟡** — the F1 fix closed the no-handshake route
+  > `stop()`. **Reviewed 2026-07-29 — held 🟡** — the F1 fix closed the no-handshake route
   > but NOT the lying-handshake route, because `clientType` is self-declared. INV-10 is amended above
   > to claim only what the code delivers. `allow_always` needs no work (it never persists).
   > → Entry C7, C9 — 🟡
@@ -249,7 +249,7 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   IN THE LIVE GATE: booting the shipped daemon with `CELLO_GATEWAY_AUTONOMOUS_OVERRIDE=1` in the
   environment has NO effect on screening behavior and leaves no config row. Grep-level absence of
   the four names in built gateway output, asserted on the artifact.
-  > **BUILT + AUDITED 2026-07-29 — ✅ EARNED**, and the auditor's best-evidenced line: the BUILT bin
+  > **BUILT + PROVEN 2026-07-29 — ✅**, and the auditor's best-evidenced line: the BUILT bin
   > is spawned with all four variables at their most permissive and a PII value "whitelisted" only
   > by the environment is still not allowed through; the shipped daemon booted the same way still
   > reads `mode:"enforcing"` with zero config rows written. The artifact assertion matches
@@ -266,7 +266,7 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   join in the later refusal unit without a breaking change.
   > **BUILT 2026-07-29 — 🟡.** `cello policy log` + `cello_policy_log` read the real encrypted record
   > store and return `chainValid`; the tamper test edits a stored disposition through the SQLCipher
-  > file and asserts the flag flips. **Audit: OVERSTATED** — the records it reads are written BY THE
+  > file and asserts the flag flips. **Held 🟡** — the records it reads are written BY THE
   > TEST, so nothing yet proves the log reflects screened traffic. That link is GATE-1 assertion (4),
   > which the gate does not make. → Entry C8, C9 — 🟡
 
