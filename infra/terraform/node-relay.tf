@@ -52,6 +52,18 @@ variable "directory_node_pubkeys" {
   default     = {}
 }
 
+variable "directory_node_peer_ids" {
+  description = "node_id => libp2p peer id. PUBLIC. Same source as the pubkeys; Terraform cannot derive a peer id from a transport seed."
+  type        = map(string)
+  default     = {}
+}
+
+variable "relay_primary_directory" {
+  description = "node_id of the directory a relay registers with. The relay requires ONE directory pubkey (CELLO_DIRECTORY_PUBKEY) as its registration target, in addition to the full accept-set."
+  type        = string
+  default     = ""
+}
+
 resource "google_service_account" "relay_node" {
   for_each     = var.relay_nodes
   project      = var.project_id
@@ -255,6 +267,11 @@ resource "google_compute_instance_template" "relay" {
       gsm_node_key      = "${google_secret_manager_secret.relay["${each.value.node_id}--node-key"].id}/versions/latest"
       gsm_transport     = "${google_secret_manager_secret.relay["${each.value.node_id}--transport-key"].id}/versions/latest"
       directory_pubkeys = local.directory_pubkeys
+      # The relay REQUIRES a single directory as its registration target, separate from the set it
+      # accepts instructions from. Registering is how the relay pool gets populated at all — until
+      # it happens every directory reports relay.manifest.not_found and brokers no sessions.
+      primary_directory_pubkey    = var.directory_node_pubkeys[var.relay_primary_directory]
+      primary_directory_multiaddr = "/ip4/${google_compute_address.node[[for r, n in var.directory_nodes : r if n.node_id == var.relay_primary_directory][0]].address}/tcp/8080/ws/p2p/${var.directory_node_peer_ids[var.relay_primary_directory]}"
     })
     google-logging-enabled = "true"
   }

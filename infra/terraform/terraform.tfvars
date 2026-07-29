@@ -69,6 +69,17 @@ directory_node_pubkeys = {
 # Relays do NOT enter the threshold, so they may scale freely — one is enough for Wave 1.
 # us-east1 alongside gcp-use1 keeps the first live session's path short while the topology is
 # being proven; additional relays are additional map entries.
+# Same source as directory_node_pubkeys — infra/scripts/gcp-node-identities.sh.
+directory_node_peer_ids = {
+  gcp-use1 = "12D3KooWMH58hm8xpuwgwaNSvnvXBuc126jfuUMVbrGNcU2MeEAX"
+  gcp-usc1 = "12D3KooWExQLMbvaioVqQCPkc1ZZgJ5kdoePymtMrg46ugMBs5zi"
+  gcp-euw1 = "12D3KooWP52VSVrakyRdPyt23kAuhgp3FV6tiVRByfdyVvHAaEeJ"
+}
+
+# The relay registers with the directory in its own region — shortest path, and no cross-region
+# dependency for the thing that makes sessions brokerable at all.
+relay_primary_directory = "gcp-use1"
+
 relay_image_tag = "m12-b91b0f84"
 
 relay_nodes = {

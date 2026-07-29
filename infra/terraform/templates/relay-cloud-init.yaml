@@ -47,7 +47,11 @@ write_files:
       NODE_ID=${node_id}
       NODE_PRIVATE_KEY=$NODE_KEY
       CELLO_RELAY_TRANSPORT_KEY_HEX=$TRANSPORT_KEY
+      # SINGULAR is the registration target; PLURAL is the set the relay accepts instructions from.
+      # The relay requires the singular and falls back to it when the plural is unset.
+      CELLO_DIRECTORY_PUBKEY=${primary_directory_pubkey}
       CELLO_DIRECTORY_PUBKEYS=${directory_pubkeys}
+      CELLO_DIRECTORY_MULTIADDR=${primary_directory_multiaddr}
       CELLO_RELAY_WS_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4001/ws
       CELLO_RELAY_PUBLIC_MULTIADDR=/ip4/${public_addr}/tcp/4001/ws
       CELLO_RELAY_HEALTH_PORT=4000
