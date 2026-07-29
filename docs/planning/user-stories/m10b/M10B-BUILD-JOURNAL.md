@@ -2487,3 +2487,63 @@ normalized on read — the value is inside the hash.
 - **An inert revoke returns `{ok: true, revoked_rows: 1}`.** Deliberate (arrival-order freedom), but
   the caller is told "revoked" when the truth is "recorded, currently inert" — the portal would show
   an operator their endorsement is withdrawn when it is not.
+
+---
+
+## Entry 32 — `DOD-END-ACCEPT-1` reviewed: consent stopped DISPLAY but not ERASURE — 2026-07-29
+
+One pass, nine findings, all fixed. The migration design held under attack — the reviewer could not
+construct a sequence that resurrects a refusal — but the unit failed the DoD's own words,
+*"cannot be presented by any path"*, in two directions I had not thought to look.
+
+### The two that mattered were found by RUNNING the store, not reading it
+
+**F1 — a rogue PENDING endorsement superseded the subject's ACCEPTED one.** The consent gate works:
+the rogue lands `pending` and is unpresentable. But its *insert* ran the type-dedup supersession, so
+Alice's own accepted endorsement was marked `superseded` and she presented **nothing**. The stranger
+still decided what her counterparties saw — he just erased instead of speaking. **Consent that blocks
+display but permits deletion closes half the threat**, and the half it leaves open is the one that
+looks like nothing happened.
+
+**F2 — any issuer could supersede any row by naming its hash** (pre-existing since M10).
+`supersedes_hash` was honoured with no authority check, so a third party who could get one signal
+delivered could kill phone, email, anything. This is the daemon-side twin of what V54 fixes in the
+directory: *an unauthorised write must not change what a third party can present.*
+
+Both now require the SAME ISSUER — for an agent the key IS the identity — and supersession is
+deferred while unconsented, then re-applied through the identical path on acceptance so the effect is
+not silently dropped.
+
+**F3 — the consent predicate landed on one of three read paths.** `listPresentableTypes` is the LIVE
+validator for `--include`, so `--include endorsement` on a wallet holding only a pending endorsement
+validated fine and then presented nothing. That is precisely the lie `DOD-END-SCOPE-FIX-1` removed
+along the scoping dimension, reintroduced along the consent one — two units in a row, same shape.
+
+### And a hollow test I wrote WHILE fixing the hollow tests
+
+My first F1/F2 regressions drove `putWalletSignal` — which does not supersede at all — so
+"the rogue did not supersede" held trivially. They passed. **The CONTROL test caught it by failing:**
+"the same issuer's re-issue still supersedes" went red, because nothing was superseding anything.
+
+That is twice today a control caught a hollow negative (the other was `DOD-END-REVOKE-2`'s legacy-
+tombstone case). The pattern is worth stating as a rule: **a negative assertion is only as good as the
+positive one beside it.** "X does not happen" is satisfied by an implementation where nothing happens,
+and the paired positive is what distinguishes the two. Write them together or the negative is
+decoration.
+
+### The rest
+
+F4 the operator surface reported success it could not deliver (`wallet_enable_signal` returned
+`ok:true` on a pending row); F5 the backfill had no `WHERE` and was true only by RELEASE TIMING, not
+by code; F6 a bare `ROLLBACK` that destroys the real error on `SQLITE_FULL` **and** suppresses the
+event added for exactly that failure — the pattern this file claims to follow guards it, and I copied
+the shape minus its two most important lines; F7 `BEGIN IMMEDIATE` + re-read under the lock; F8 the
+declared type said non-null over a nullable column; F9 a stray semicolon.
+
+**Published state, stated because it matters operationally:** `daemon@0.0.79` reached `latest` and is
+installed, and it is the build WITHOUT these fixes. Neither F1 nor F2 is reachable there — both need
+an agent-issued endorsement delivered into a wallet, and nothing can issue one until
+`DOD-END-SUBMIT-1` has an operator surface — so this is a prompt follow-up, not an incident.
+`daemon@0.0.80` + `cli@0.0.81` carry the fixes.
+
+**Gate:** 2105 tests, lint, typecheck, build green.
