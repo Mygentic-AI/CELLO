@@ -3791,3 +3791,67 @@ each file remembering to.
 question about the capture loop is a question about the deployed system, and
 the answer to all of them is the same three commands at the top of
 [[M11-NEXT-STEPS-AWS-AWAKE]].
+
+---
+
+### Entry 61: the gallery's "Not Found" is a base-path mismatch, not an empty gallery
+**Date:** 2026-07-29
+**Target:** DOD-GALLERY-INDEX-1, DOD-GALLERY-RECEIPT-1 [corp-cello-site] — the live run these lines owe
+
+Reported from the live site: `/gallery` renders "Loading…" and then **"Not Found"**. The empty-state
+branch these lines were built with — *"No receipts have been published yet."* — has never executed in
+production.
+
+**Clause checklist (DOD-GALLERY-INDEX-1, verbatim clauses):**
+- [ ] index at `gallery.cello.mygentic.ai/` shows a card grid of published receipts
+- [ ] cards carry agent monikers, timestamp, verification badge
+- [ ] cards link to the receipt page
+- [ ] pagination, 20 per page
+- [ ] **live run** ← the clause this unit is about
+
+**Clause checklist (DOD-GALLERY-RECEIPT-1, the corp-cello-site half):**
+- [ ] receipt page shows monikers, timestamp, Merkle hash, verification status, message count
+- [ ] share buttons: copy link, X, LinkedIn
+- [ ] **live run** ← this unit
+- [ ] (cello-client sealed-receipt footer — sequenced behind DNS, Entry 47, NOT this unit)
+
+**The failure path, produce and consume.**
+
+1. `GalleryIndex` calls `fetchReceipts(page)` → `waitlistApi.ts` builds `` `${BASE}/gallery/receipts?page=1` ``
+2. `BASE` is `/api/waitlist` — a relative path, deliberately, so the session cookie stays host-only (Entry 45)
+3. nginx: `location ^~ /api/waitlist/` → `proxy_pass https://api.cello.mygentic.ai/waitlist/`
+4. The request therefore arrives at the API as `/waitlist/gallery/receipts`
+5. `cello-waitlist.yaml` declares **two** top-level namespaces: `POST|GET /waitlist/*` and
+   `GET|POST /gallery/*`. There is no `/waitlist/gallery/*` route.
+6. API Gateway answers its own `{"message":"Not Found"}` with status 404
+7. `fetchReceipts` throws `body.message` — the string `"Not Found"` — and the page renders it verbatim
+
+Verified live rather than reasoned:
+
+| URL | Result |
+|---|---|
+| `cello.mygentic.ai/api/waitlist/gallery/receipts?page=1` | `404 {"message":"Not Found"}` |
+| `api.cello.mygentic.ai/gallery/receipts?page=1` | `200 {"receipts": [], "page": 1, "per_page": 20, "total": 0}` |
+
+The API is healthy and correct. The site cannot reach it. `fetchReceipt` (the receipt page) has the
+identical defect through the same base, so both P3 pages are affected.
+
+**Why the boundary test did not catch it.** `apiBoundary.spec.ts` enforces that exactly one module
+names the API and reads its env var — the Entry 45 lesson, at the right altitude for the defect it was
+written for. What it does not assert is that the URL a call *constructs* corresponds to a route that
+*exists*. Every gallery call passed the boundary test while being unroutable. The boundary was
+guarded; the mapping across it was not.
+
+**The producer of the wrong precondition** is the single-base assumption: one `BASE`, one nginx
+location, written when `/waitlist/*` was the only namespace. `/gallery/*` was added to the API in
+Entry 32 as a sibling namespace, and the client half was written against the existing base by default
+— the same shape of mistake as Entry 35, where a decision correct for one surface propagated silently
+to a surface with different requirements.
+
+**Fix (both halves ship together or the site 404s either way):**
+- a `GALLERY_BASE` of `/api/gallery` in `waitlistApi.ts` for the three gallery calls
+- an nginx `location ^~ /api/gallery/` → `proxy_pass https://api.cello.mygentic.ai/gallery/`
+
+**Red-first:** a test asserting that every base the client builds URLs from has a matching nginx
+location whose `proxy_pass` maps it onto a declared API namespace. Revert test: restore `BASE` on the
+gallery calls and it must fail.
