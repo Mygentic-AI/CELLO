@@ -2912,3 +2912,61 @@ Enrollment as the ceremony cause (Entry 46), the boot-only profile cache as the 
 because it resembled the symptom. The pattern is now unmistakable enough to state as a rule:
 **when a symptom resembles a known problem, that resemblance is the reason to check harder, not
 the reason to stop checking.**
+
+---
+
+## Entry 48 — 2026-07-29 — Seal path traced; and I killed the production daemon with an unscoped pkill
+
+### Operational mistake, recorded because it has a rule attached
+
+I used `pkill -f "cello-daemon.js"` to cycle my throwaway GCP test daemons. That pattern is NOT
+scoped — it killed **Andre's production daemon**, repeatedly. All five live agents went offline each
+time and the Claude Code MCP connection died with `ipc_connection_lost`. I only noticed because an
+inbound CELLO event failed.
+
+**`CELLO_DIR` isolates a test daemon's socket and database. It does NOT isolate it from a process
+name.** I had a memory telling me to prefer `cello logout`/`login`, and I read it as being about
+teaching operators a clean workflow rather than about not breaking the live machine. Restored with
+`cello login` and verified: daemon running, signaling connected, all five agents online with
+standing receivers armed, prior session state intact. Memory rewritten as a hard rule with the
+consequence attached.
+
+Separately, macOS cleaned `/tmp` mid-session, taking the test daemons' `CELLO_DIR`s — and therefore
+their registered agents and databases — along with the signed manifest. The rig now lives in the
+session scratchpad. **Test state that must survive should never sit in `/tmp`.**
+
+### Sealing WORKS on AWS — so the failure is environment-specific, not a broken feature
+
+`cello_inbox` surfaced a sealed session on `CELLO_Feedback` (`5b07cd90…`, the DOD-RECEIVE-GUIDANCE-1
+live proof from 2026-07-23) with a complete four-message transcript. That session sealed. Whatever
+is failing on GCP, the seal machinery itself is sound.
+
+### The seal path, traced (correcting my own earlier reading)
+
+1. `submitSealLeaf` sends the leaf to the **relay**, which acts as seal witness
+   (`session-node-manager.ts:3136` — `if (!entry.relayClient) return relay_unavailable`).
+2. On escalation the client sends a UNILATERAL seal request to the directory, and it **CARRIES the
+   leaves in the request** — `directory-node.ts:4129`: `const leafData: RelaySealData = { leaves:
+   carried.leaves, … }`. The directory does NOT fetch them from the relay.
+3. The directory rebuilds the CONTENT-HASH merkle root from each leaf's `s2.content_hash` and
+   compares it to the reported root (`:4326`); mismatch → `unilateral_root_unverifiable`.
+
+**This matters for diagnosis.** I had assumed the directory pulls seal data from the relay, which
+would have made a directory→relay reachability problem the natural suspect. It doesn't. Since the
+leaves are carried, and failing seals produce **zero** directory-side seal events, the unilateral
+request is not arriving at the directory at all — the failure is upstream of any root verification,
+and the client's error text ("the directory could not verify the reported root") describes a
+verification that never ran.
+
+### Next probe, stated so it is not re-derived
+
+Rebuild the rig, reproduce a failing seal, and determine whether the client ever emits the unilateral
+request and whether the directory logs receiving it. The two outcomes have different fixes:
+- request sent, no directory event → transport/routing between client and directory on the seal path
+- request never sent → the client abandons before escalating, and the timeout is a symptom of the
+  bilateral wait, not of directory verification
+
+Also owed from this entry: the client's `seal_unilateral_timeout` guidance names a cause
+("the directory could not verify the reported root") that the code cannot have reached in this
+failure mode. A message that asserts a specific upstream cause it did not observe sends the reader
+to the wrong component — the same class as `fullyEstablished: true` for a refused session.
