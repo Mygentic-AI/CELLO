@@ -392,8 +392,9 @@ the additions M10B is accountable for.
   > re-key + 5 green tests, including a REVERT PROOF that rebuilds V37's old index and demonstrates the
   > second endorsement being destroyed.** Also revived `trust-001-pickup-repository.live`, RED since V48
   > (four days, unnoticed — the file is `CELLO_ENV=local` gated, so CI was green with none of it
-  > running). → **Entry 20**. **🟡 — the deploy is owed; the cross-account fan-out (`M10B-D24`) is
-  > separate and still ❌.** — 🟡
+  > running). → **Entry 20**. **✅ DEPLOYED 2026-07-29 ~10:05 UTC** — V52 live in all three regions, verified
+  > against each regional database. **The cross-account fan-out (`M10B-D24`) is separate and still
+  > ❌.** — ✅
 - **DOD-END-PENDING-1** — **the pending-consent queue: its own surface, NOT the transcript inbox**
   (`M10B-D5`). The inbox is cleared by reading or dismissing a transcript; an endorsement awaiting
   consent has no transcript, so putting it there gives the operator an item they cannot clear the normal
