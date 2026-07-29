@@ -32,13 +32,11 @@
 -- Each branch was then proven load-bearing by counterfactual:
 --   supplement instead of replace → the fix is a NO-OP (h4 stays revoked)
 --   drop the real-row-revoked branch → h7 regresses to active
---   ADD a "NULL revoker ⇒ revoked" branch → an agent record dies to ANY tombstone (the fix defeated)
 --   revoke branches after supersession → h8 (revoked AND superseded) downgrades to superseded
 --   branch 4 without 'directory'      → h10 becomes permanently UNREVOCABLE
 --
--- SAFE TO DEPLOY AHEAD OF THE WRITE-SIDE CHANGE. Every record that exists today is portal-issued, so
--- branch 3's institutional escape carries every existing revocation unchanged — measured against the
--- live table (264 rows, zero agent-issued, zero tombstones), not assumed. The behavior
+-- SAFE TO DEPLOY AHEAD OF THE WRITE-SIDE CHANGE. Every tombstone that exists today has
+-- revoker_pubkey NULL, so branch 2 catches it and it reads exactly as it does now. The behavior
 -- change is reachable only once something WRITES a revoker, which is the accompanying code change.
 
 ALTER TABLE signal_records ADD COLUMN revoker_pubkey TEXT;
@@ -63,33 +61,7 @@ COMMENT ON COLUMN signal_records.revoker_signature IS
 
 DROP VIEW IF EXISTS signal_records_effective;
 
--- ── The authority decision is computed ONCE, in a CTE, and the supersession branch CONSULTS it ──
--- Why this is not just tidiness (review F4, pre-existing since V46): the old supersession guard was
--- `s.status <> 'revoked'` — "a REVOKED replacement supersedes nothing" — and it has been INERT since
--- revocation became a tombstone, because the real row's status stays 'active'. Measured: Bob
--- endorses (v1), re-endorses (v2 supersedes v1), then WITHDRAWS v2 → v2 `revoked`, v1 `superseded`.
--- BOTH endorsements unpresentable, nothing saying so, and the subject simply has nothing.
---
--- The naive repair — "ignore a successor that has any tombstone" — introduces a RESURRECTION ATTACK:
--- an unauthorised tombstone on v2 would bring v1 back from `superseded`. So the successor must be
--- judged by the SAME authority rules, which is what the CTE makes possible without recursion.
 CREATE VIEW signal_records_effective AS
-WITH revoked_state AS (
-  SELECT
-    r.signal_hash,
-    CASE
-      WHEN COUNT(*) FILTER (WHERE NOT r.is_tombstone) = 0 AND BOOL_OR(r.is_tombstone) THEN true
-      WHEN BOOL_OR(r.status = 'revoked' AND NOT r.is_tombstone) THEN true
-      WHEN BOOL_OR(r.is_tombstone)
-           AND MIN(r.issuer_kind) FILTER (WHERE NOT r.is_tombstone) IN ('portal', 'directory') THEN true
-      WHEN COALESCE(
-             ARRAY_AGG(r.revoker_pubkey) FILTER (WHERE r.is_tombstone)
-             && ARRAY_AGG(r.issuer_pubkey) FILTER (WHERE NOT r.is_tombstone), false) THEN true
-      ELSE false
-    END AS is_revoked
-  FROM signal_records r
-  GROUP BY r.signal_hash
-)
 SELECT
   r.signal_hash,
   MIN(r.subject_kind)    FILTER (WHERE NOT r.is_tombstone) AS subject_kind,
@@ -102,28 +74,59 @@ SELECT
   ARRAY_AGG(DISTINCT r.accepting_node) FILTER (WHERE NOT r.is_tombstone) AS notarized_by,
   MAX(r.revoked_at)      AS revoked_at,
   CASE
-    -- The four revoke branches now live in `revoked_state` above, evaluated identically for this
-    -- record and for any successor claiming to supersede it. They still precede supersession: a
-    -- record that is both revoked and superseded reads `revoked`, honoring V46's rule that revoked
-    -- is the strongest statement (measured — with supersession first it downgrades).
-    WHEN rs.is_revoked THEN 'revoked'
+    -- 1. TOMBSTONE-ONLY → revoked. Fail-closed, and it preserves today's behavior exactly: with no
+    --    record to judge against, a tombstone stands. Converges deny → allow when the record
+    --    replicates in, which is the safe direction for a late correction. Without this a
+    --    tombstone-only hash would read `active` and the directory would confirm as LIVE a hash it
+    --    has only ever seen a revocation for.
+    WHEN COUNT(*) FILTER (WHERE NOT r.is_tombstone) = 0 AND BOOL_OR(r.is_tombstone) THEN 'revoked'
 
-    -- SUPERSEDED only by a successor that is not itself effectively revoked. Consulting
-    -- `revoked_state` rather than the successor's raw `status` is what makes this real: the raw
-    -- check has been inert since revocation became a tombstone, and judging the successor by the
-    -- same authority rules is what stops an unauthorised tombstone on the successor from
-    -- resurrecting its predecessor.
+    -- 2. LEGACY TOMBSTONE (no recorded revoker) → revoked. It was written under the old role-based
+    --    rule and had its authority checked THEN; it keeps its old semantics rather than being
+    --    re-judged by a rule younger than it is. Unreachable for agent-issued records today — which
+    --    is precisely why §5a says to handle it anyway: unreachable is a property of today's data,
+    --    not of the code. Omit it and the migration SILENTLY UN-REVOKES every existing revocation.
+    WHEN BOOL_OR(r.is_tombstone AND r.revoker_pubkey IS NULL) THEN 'revoked'
+
+    -- 3. A REAL (non-tombstone) row carrying status='revoked' → revoked. No writer produces this
+    --    today, but UPDATE is granted, 'revoked' is in the column CHECK, and signal-write.ts already
+    --    does `UPDATE … SET status='superseded'`. Measured: without this branch, h7 regresses from
+    --    revoked to active.
+    WHEN BOOL_OR(r.status = 'revoked' AND NOT r.is_tombstone) THEN 'revoked'
+
+    -- 4. INSTITUTIONAL issuers keep ROLE-BASED authority. The general rule, stated so the next
+    --    issuer_kind is not another one-off: role-based for INSTITUTIONS (portal, directory), whose
+    --    keys are rotating instruments and where the institution — not the key — is the issuer;
+    --    exact-pubkey for AGENTS, where the key IS the identity. An UNRECOGNISED future issuer_kind
+    --    falls through to the agent (stricter) side, never to this escape.
+    --    'directory' is included deliberately: V46 admits it, nothing issues it yet, and omitting it
+    --    makes directory-issued records permanently unrevocable on the first key rotation (measured).
+    WHEN BOOL_OR(r.is_tombstone)
+         AND MIN(r.issuer_kind) FILTER (WHERE NOT r.is_tombstone) IN ('portal', 'directory') THEN 'revoked'
+
+    -- 5. AGENT issuers: EXACT-PUBKEY authority — the tombstone's revoker must be the record's issuer.
+    --    Two aggregates combined by an operator, which is legal SQL; `BOOL_OR(x = MIN(y))` is a
+    --    NESTED aggregate and is not. COALESCE is required and is not decoration: ARRAY_AGG … FILTER
+    --    over zero matching rows returns NULL (not '{}'), NULL && anything is NULL, and a NULL WHEN
+    --    falls through to ELSE 'active' — which is how an earlier version of this expression FAILED
+    --    OPEN while reading correctly.
+    WHEN COALESCE(
+           ARRAY_AGG(r.revoker_pubkey) FILTER (WHERE r.is_tombstone)
+           && ARRAY_AGG(r.issuer_pubkey) FILTER (WHERE NOT r.is_tombstone), false) THEN 'revoked'
+
+    -- ── EVERY revoke branch precedes supersession. Not stylistic: a record that is both revoked and
+    --    superseded must read `revoked`, honoring V46's rule that revoked is the strongest
+    --    statement. Measured — with supersession first, h8 downgrades to `superseded`, and a
+    --    withdrawn endorsement that happened to have a successor would quietly weaken.
     WHEN EXISTS (
       SELECT 1 FROM signal_records s
-        JOIN revoked_state srs ON srs.signal_hash = s.signal_hash
        WHERE s.supersedes_hash = r.signal_hash
-         AND NOT srs.is_revoked
+         AND s.status <> 'revoked'          -- a REVOKED replacement supersedes nothing
     ) THEN 'superseded'
     WHEN BOOL_OR(r.status = 'superseded') THEN 'superseded'
     ELSE 'active'
   END AS effective_status
 FROM signal_records r
-JOIN revoked_state rs ON rs.signal_hash = r.signal_hash
-GROUP BY r.signal_hash, rs.is_revoked;
+GROUP BY r.signal_hash;
 
 GRANT SELECT ON signal_records_effective TO cello_service;
