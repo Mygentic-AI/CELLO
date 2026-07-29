@@ -1326,3 +1326,83 @@ working:
 **Status: 🟡.** `DOD-M9C-GATE-1` — the enforcer that spawns the SHIPPED bin — is still unbuilt, and
 no Tier-1 line goes ✅ on a suite that injects its own wiring. That is the rule this milestone
 exists because of.
+
+---
+
+## 2026-07-29 — Entry C8: ENV-1, AUDIT-1, GATE-1 built; the WIRE-1/SURFACE-1 review, and its six blocking findings
+
+**Commits (branch `m9/connect-unit`):** `6f933ab` ENV-1, `9396a92` AUDIT-1, `88dfd73` GATE-1 + every
+review fix. **1588 tests green** across daemon + gateway + cli + adapter; lint and typecheck clean.
+
+### The gate exists, and it is the one that could not have passed before
+
+`DOD-M9C-GATE-1` spawns the BUILT `cello-daemon` binary with zero injection and reads what the
+product does. Its first assertion — `security.gateway.connected` → `mode:"enforcing"` — is exactly
+the line that said `passthrough` on every real daemon for weeks while the June gate was green. It
+also proves the sidecar is a real OS process, the store is created encrypted beside the daemon's
+database under the same key, the removed env variables are inert end to end, and SIGTERM leaves no
+orphan on the store lock.
+
+### The reviewer found six blocking issues. All six were real.
+
+**F1 was a genuine security hole, and my own justification for it was wrong.** `getClientType`
+returns `undefined` for a connection that never sent `ipc.connect`, and the daemon separately
+defaults a handshake without `clientType` to `"cli"`. Testing `!== "mcp"` therefore made the
+PERMISSIVE side the default: a raw socket write to `~/.cello/daemon.sock` carrying
+`confirmed: true` would land a human-confirmed loosening with no human anywhere, and `verifyChain`
+would attest it as confirmed forever. Ten lines of node.
+
+M9C-D15 had justified the shape with *"anyone who can spawn a process claiming `cli` can also just
+run the CLI."* That is false in the one direction that matters: an agent running `cello config set`
+from a Bash tool gets a **non-TTY stdin and is refused**. The raw socket was not equivalent to
+running the CLI — it was the ONLY route that worked for a non-human. **D15 is amended: only an
+explicit `cli` handshake may confirm.**
+
+**F4 — the teardown ran after `singletonLock.release()`.** The `shutdown` verb acknowledges without
+awaiting the drain, so `cello logout && cello login` can race a successor daemon in — whose gateway
+meets a store lock held by the old one. The 3s `busy_timeout` usually rides it out, which makes the
+failure *intermittent*, which is worse. The comment three lines below states the property the
+placement was giving away: *"Released LAST: while we hold it, no successor daemon can start."*
+
+**F5 — no orphan reaping on a death that skips `stop()`** (SIGKILL, crash, OOM). The child now
+holds a piped stdin it never reads; parent death closes it and the gateway exits. Without it the
+NEXT daemon spends its whole life fail-closed against a lock nobody can explain — because M9C-D14
+says no auto-restart.
+
+**F2 — error substitution.** A failed spawn surfaced as `gateway_unavailable` on every message
+("check the gateway is running, then retry") when the cause was a missing key file, a lock, a stale
+plaintext store, or a missing binary — and retrying could never work. The composition root already
+had the code and guidance; now it hands them to the client.
+
+**F3 — a non-TTY caller was told the operator DECLINED** a prompt never shown, with no way forward.
+Now `not_a_tty`, naming the command. And `confirmAtTty` listened only for `data`, so Ctrl-D never
+settled the promise — a hang, which INV-6 forbids outright.
+
+**F6/F7/F8/F10/F11** — out-of-range as `internal_error`; the prompt hiding what a list replacement
+drops; 13 duplicate keys from the mechanical patch that BOTH typecheck and lint called clean (now
+deduped, and `no-dupe-keys` is enabled — a gate that cannot see the corruption a bulk edit causes is
+not covering bulk edits); a dead branch; a missing `error` listener that would have killed the
+daemon at boot rather than degrading.
+
+### What the reviewer got right that I would not have caught
+
+**The CLI half had NO tests at all.** `gatewayConfigSet` took an injectable `prompt` and nothing in
+the repo ever called it — so the two-phase flow, the declined path, and the non-TTY refusal were
+entirely unproven while the DoD line read as satisfied. Five tests now drive a real daemon over its
+real socket with only the prompt injected. They read **stdout OR stderr**, because refusals render
+to stderr and a test watching only stdout would miss every failure path — the same shape of blind
+spot as the original defect.
+
+**On the known gaps I handed over:** `allow_always` is satisfied *structurally*, not transitively —
+it never writes the whitelist at all, so there is no auto-persist path to gate. `correlationId`
+remains unthreaded and the reviewer's call is that it should be done rather than accepted; it is
+carried to the next unit rather than silently dropped.
+
+### Carried forward, not lost
+- `correlationId` threading through the config flow (F12).
+- `list` should show `changed_at` and `chainValid` (F9) — the store has the timestamp; `history()`
+  drops it.
+- `PassthroughGatewayClient` is exported from two public barrels; a `/testing` subpath would keep it
+  off the production surface (F-D).
+- `pii:whitelist_add_requested` has no consumer — nothing turns it into the `cello config set` line
+  the operator should run. Inherited from Phase 1, not introduced here.
