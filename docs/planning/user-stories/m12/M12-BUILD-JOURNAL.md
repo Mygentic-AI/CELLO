@@ -1983,3 +1983,90 @@ rejected is exactly the shape that makes a dashboard say healthy while nothing w
 
 Everything up to the final assignment parse is green: register → discover across nodes → broker
 cross-node → threshold-sign. The session does not establish. That parse is the next thing.
+
+---
+
+## Entry 36 — 2026-07-29 — The relay pool was never published; `assignment_parse_failed` is fixed
+
+`assignment_parse_failed` (Entry 35) was never a client bug. The chain, end to end:
+
+1. No `relay-manifest.json` existed in ANY of the three GCP buckets — the relay pool manifest had
+   never been published for GCP.
+2. Every directory logged `relay.manifest.not_found` and wired NO RelayPoolManager.
+3. Session assignments were therefore issued with no `relay_endpoint`.
+4. The client requires it (`session-assignment-parser`: `if (!relayEndpoint) return null`) and
+   rejected the assignment — three hops from the cause, and on the wrong side of the wire.
+
+Fixed with `infra/scripts/publish-gcp-relay-manifest.mjs` (new): derives the relay's identity from
+Secret Manager, builds the manifest, signs it **once per node with that node's own key**, uploads
+to that node's bucket.
+
+### One manifest per node is not redundancy — it is the sovereignty invariant
+
+`RELAY_MANIFEST_SIGNER_PUBKEY` is unset on these nodes, so `resolveRelayManifestSigner` falls back
+to each node's OWN directory pubkey: every node verifies the relay roster against itself and will
+not accept one because a peer signed it. A single shared manifest cannot work, and making one work
+would mean giving all three a common signer — deleting the property deliberately.
+
+### Two infrastructure defects found on the way
+
+**The relay's health port admitted only Google's prober ranges.** The DIRECTORY health-checks each
+relay before assigning a session to it, from a directory subnet — so every check would have timed
+out, the relay marked unavailable, and the pool emptied even with a valid manifest. Added
+`cello-relay-allow-health-internal`, sourced from the subnets themselves so a new region cannot be
+forgotten. Confirmed by `relay.health.check.passed` afterwards.
+
+**A directory that boots before its manifest exists can NEVER acquire one.** On `manifest not
+found` the composition root does `mgr.stop(); return undefined` — the poll loop never starts. The
+120s poll only helps nodes that had a manifest at boot. Publishing to a running fleet therefore
+required a rolling restart. That is a real gap: the recovery path for "relay published later" is
+an operator restart, and nothing says so.
+
+### The mistake worth recording: I deleted a manifest that was correct
+
+The first upload used a DEEP canonical sort; `buildCanonicalPayload` sorts **top-level keys only**.
+Every node rejected it — and a bad signature is `process.exit(1)`, not a soft skip, so the fleet
+crash-looped. I fixed the sort and republished, then read `relay.manifest.invalid` events inside a
+`--freshness` window and concluded the fix had failed, so I deleted all three manifests.
+
+Those events were the OLD manifest still cycling through the crash loop. The corrected manifest had
+in fact loaded — proven afterwards by `relay.health.check.passed`, which only runs for a relay
+already in the pool. **A time-windowed query is not a causal one:** `--freshness=4m` answers "were
+there failures recently", never "did MY change fail". Every check after a fix now filters on
+`timestamp > <recorded upload time>`, which is what finally showed `relay.manifest.refreshed
+version 3, relayCount 1`.
+
+The publisher now derives its canonical form to match `buildCanonicalPayload` exactly, verified
+byte-for-byte against the real exported function before uploading.
+
+### Where the session flow now stands
+
+Each failure gave way to the next real one:
+
+```
+unknown_agent            -> anti-entropy replicated the profile
+assignment_parse_failed  -> relay pool published (this entry)
+counterparty_offline     -> presence replicated across nodes
+ceremony_exhausted       <- CURRENT
+```
+
+`counterparty_offline` clearing is itself notable: **presence replicates across sovereign nodes**,
+so a node learns that an agent homed elsewhere is online.
+
+### NEW BLOCKER: `AGENT_NOT_BOOTSTRAPPED` after a node restart
+
+```
+frost.directory.commitment.response  ok:false  reason: AGENT_NOT_BOOTSTRAPPED   (gcp-euw1)
+frost.debug.generateCommitment.no_share x9
+adapter.profiles.loaded  6              <- profiles DO load
+```
+
+The node has the agent's PROFILE but no SHARE. aetestA's DKG registered signers on all three nodes
+before the restarts; afterwards at least two report no share. Shares are deliberately never
+replicated (`DOD-INV-SHARES-LOCAL`), so anti-entropy cannot heal this by design — which is exactly
+the deferred **M8B enrollment / absent-node reconcile** problem arriving in production.
+
+Not yet established, and the next thing to settle: whether the share is absent from the node's
+DATABASE (dealt but never persisted) or present in the DB but missing from an in-memory structure
+that only populates during a live ceremony. Those have completely different fixes, and the log
+above cannot distinguish them.

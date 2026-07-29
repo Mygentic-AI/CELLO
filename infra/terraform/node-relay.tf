@@ -189,6 +189,28 @@ resource "google_compute_firewall" "relay_health" {
   }
 }
 
+# The DIRECTORY health-checks each relay in its pool before assigning a session to it
+# (RelayPoolManager#runHealthChecks → healthCheckUrl). That traffic is VPC-internal and comes from
+# the directory subnets, NOT from Google's prober ranges — with only the prober rule above, every
+# check times out, the relay is marked unavailable, and the directory brokers sessions with an
+# EMPTY relay pool. Clients then reject the assignment (`assignment_parse_failed`), which reads as
+# a client bug rather than a missing firewall rule.
+#
+# Ranges come from the subnets themselves so a new region cannot be forgotten here.
+resource "google_compute_firewall" "relay_health_internal" {
+  name          = "cello-relay-allow-health-internal"
+  project       = var.project_id
+  network       = google_compute_network.cello_vpc.id
+  direction     = "INGRESS"
+  source_ranges = [for s in google_compute_subnetwork.regional : s.ip_cidr_range]
+  target_tags   = ["cello-relay"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["4000"]
+  }
+}
+
 resource "google_compute_firewall" "relay_ssh_iap" {
   name          = "cello-relay-allow-iap-ssh"
   project       = var.project_id
