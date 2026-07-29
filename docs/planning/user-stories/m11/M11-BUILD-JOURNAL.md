@@ -4094,3 +4094,70 @@ build — returns the receipt with its transcript.
 **Note for whoever hits it:** the SOA negative TTL on that zone is 86400, and the name was queried
 before it existed, so resolvers that cached the NXDOMAIN may take up to 24h. Fresh resolvers answer
 immediately.
+
+---
+
+### Entry 65: two of my four ✅ flips were not earned
+**Date:** 2026-07-29
+**Target:** DOD-GALLERY-1, -INDEX-1, -CONTENT-1, -SEED-1 — `cello-done-auditor` checkpoint
+
+Verdict: **2 earned, 2 overstated.** Both overstatements were mine, and one I had already flagged as
+suspect when dispatching the audit — which is not the same as not making it.
+
+**DOD-GALLERY-1 → back to 🟡.** The line says **"SSR-rendered (bot-indexable)"**. That clause is met
+at zero percent, shown three independent ways: the served HTML for the index and for a receipt
+contains no moniker, no hash and no transcript; `npm run build` marks every route `○ (Static)`; and
+`sitemap.xml` carries one `/gallery` entry and no per-receipt URL, so even a JS-executing crawler
+finds one page rather than five. `robots.txt` explicitly invites GPTBot to a page that serves GPTBot
+an empty div.
+
+The sharp part is not the gap — it is **parked and known** (Entry 35, a three-way fork that is
+Andre's). It is that tagging the line ✅ on the strength of its sibling clauses **retires that fork by
+accident**. A parked decision that disappears because a status tag moved is worse than an open one.
+
+**DOD-GALLERY-SEED-1 → 🟡.** Two of its three verification claims did not hold:
+- *"each field asserted against its source document by test"* described a test that **never opens the
+  source document** — it compared parser output to an `EXPECTED` dict I typed by hand in the same
+  file. That is a golden-file pin, useful against regressions, and structurally unable to catch a
+  value I transcribed wrongly. Which is exactly the failure this line already had **twice** (Entry
+  63: fifteen → six → five).
+- **m8c's `message_count` of 4 has no corroborating line anywhere in its document.** The other four
+  reconcile against an independently-written leaf count; this one traces to the parser alone. The
+  cross-check I wrote into the DoD listed four reconciliations while claiming the property for five.
+
+**Fixed rather than just re-tagged:** the seed tests now read the leaf count **out of the file**
+(`leaves = genesis + turns + seal`) and reconcile against it, and a second test pins m8c as the *only*
+uncorroborated document so a second one cannot appear unnoticed. Proven by simulating the failure the
+old test could not see — dropping a turn in the parser now fails the corroboration assertion.
+
+**DOD-GALLERY-CONTENT-1 and -INDEX-1 stand**, and the auditor passed them on live evidence rather
+than on this journal: it introspected the live constraint
+(`CHECK ((transcript IS NULL) OR (message_count = jsonb_array_length(transcript)))`) and forced real
+pagination against production (`?page=1&per_page=2` and `page=2` returning disjoint, correct sets).
+
+**Two defects outside the four lines, both real, both fixed:**
+- **The index was not chronological and a test name said it was.** Ordering was
+  `published_at DESC, receipt_hash`; the archive was inserted in one transaction, so all five share a
+  `published_at` to the microsecond and the order collapsed to **hash** — five cards printing five
+  dates in no order at all. `sealed_at` is now the tiebreak. The existing test asserted only row
+  counts under the name "chronological"; it tests chronology now, and had to force a shared
+  `published_at` to reproduce the case at all, because separate publishes never engage the tiebreak.
+- **Soft-404 on the gallery host.** `try_files … /gallery.html` answered *any* unknown path with 200
+  and the gallery shell. With robots.txt inviting GPTBot, ClaudeBot and PerplexityBot, that offers
+  crawlers unlimited distinct URLs returning identical content at a success status — on the surface
+  whose entire value is being indexed well. Unknown paths 404 now; `/receipt/` keeps its rewrite,
+  because an unpublished receipt must render its own page rather than a 404 that would confirm a
+  private session exists.
+
+**`GalleryIndex` had no spec**, so every content clause of INDEX-1 was true only by construction, and
+the pagination control has never executed in production (5 receipts < 20 per page). Six tests now,
+including that a card shows no verification badge when the receipt carries no counts — a card
+advertising a claim the page it links to declines to make is worse than either alone.
+
+**Gate:** 33 gallery pytest · 19 seed pytest · 65 vitest **green under `TZ=America/Los_Angeles`** ·
+typecheck · lint · build.
+**Live:** index reads newest-session-first (07-07, 07-01, 05-20, 05-19, 05-18) ·
+`/this-does-not-exist-xyz` → 404 · `/` → 200 · `/receipt/{hash}` → 200.
+
+**Standing:** GALLERY-CONTENT-1 ✅ · GALLERY-INDEX-1 ✅ · GALLERY-1 🟡 (SSR clause, parked fork) ·
+GALLERY-SEED-1 🟡 (m8c uncorroborated, named and pinned).
