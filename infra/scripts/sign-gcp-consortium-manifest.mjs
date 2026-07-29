@@ -115,6 +115,12 @@ const manifest = {
     // worse than one that is plain.
     endpoint: `http://${n.address}:9090`,
     peerId: n.peerId,
+    // The libp2p dial address, stated rather than inferred. `endpoint` is the HTTP base for
+    // /bootstrap; on a node with no load balancer that is a DIFFERENT listener from the WebSocket
+    // upgrade, so anything deriving a dial address from `endpoint` reaches the HTTP server and
+    // fails — which is exactly how anti-entropy broke when the endpoint moved to 9090 for
+    // /bootstrap. Two consumers, two ports, so the manifest carries both.
+    multiaddr: `/ip4/${n.address}/tcp/8080/ws`,
     role: "validator",
   })),
   signatures: [],

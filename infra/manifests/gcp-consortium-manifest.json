@@ -10,6 +10,7 @@
       "provider": "gcp",
       "endpoint": "http://34.75.172.108:9090",
       "peerId": "12D3KooWMH58hm8xpuwgwaNSvnvXBuc126jfuUMVbrGNcU2MeEAX",
+      "multiaddr": "/ip4/34.75.172.108/tcp/8080/ws",
       "role": "validator"
     },
     {
@@ -19,6 +20,7 @@
       "provider": "gcp",
       "endpoint": "http://34.136.176.190:9090",
       "peerId": "12D3KooWExQLMbvaioVqQCPkc1ZZgJ5kdoePymtMrg46ugMBs5zi",
+      "multiaddr": "/ip4/34.136.176.190/tcp/8080/ws",
       "role": "validator"
     },
     {
@@ -28,13 +30,14 @@
       "provider": "gcp",
       "endpoint": "http://34.34.166.245:9090",
       "peerId": "12D3KooWP52VSVrakyRdPyt23kAuhgp3FV6tiVRByfdyVvHAaEeJ",
+      "multiaddr": "/ip4/34.34.166.245/tcp/8080/ws",
       "role": "validator"
     }
   ],
   "signatures": [
     {
       "officerIndex": 0,
-      "signature": "d3044f584a957e63af7ee179c7311c9f0edd124f0b8a64d01bb9fe0d2c4944c407b7d1c7cdbc1de4b3f7b012cd9e13c89b9496c82fb21962f13117c42f378106"
+      "signature": "43610d4b4a2488543dee8866aa21d6fc8cca708b35139d823807d4df4a9c7b6d1ec3863c1a15d2e2d16bcb1859cbddb1cdc9e3fcc85f38aad693d0625d9f1c0a"
     }
   ]
 }

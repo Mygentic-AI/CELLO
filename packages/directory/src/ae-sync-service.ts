@@ -66,12 +66,56 @@ export function streamWire(stream: Stream): AeWire {
 }
 
 /**
- * Derive the AE dial multiaddr from a manifest entry's endpoint + peerId. Mirrors the client's
- * endpoint→bootstrap mapping: https → tcp/443/wss, http → tcp/80/ws; an IPv4-literal host (the
- * local loopback e2e) is /ip4/, a hostname is /dns4/. (The MULTIADDR-1 helper on the
- * m12/multiaddr branch generalizes this for /bootstrap; converge at the batch merge.)
+ * Render a thrown value for a log field.
+ *
+ * `String(err)` on a plain object yields the literally useless "[object Object]", and libp2p dial
+ * failures throw aggregates rather than Errors — so an anti-entropy round that could not reach a
+ * peer reported its cause as "[object Object]" and an operator learned nothing at all. Errors must
+ * name their cause; that includes the ones that are not Error instances.
  */
-export function manifestEntryMultiaddr(endpoint: string, peerId: string): string {
+export function describeThrown(err: unknown): string {
+  if (err instanceof Error) {
+    // AggregateError carries the real reasons in .errors; the outer message is usually generic.
+    const inner = (err as { errors?: unknown[] }).errors;
+    if (Array.isArray(inner) && inner.length > 0) {
+      return `${err.message} [${inner.map((e) => (e instanceof Error ? e.message : String(e))).join("; ")}]`;
+    }
+    return err.message;
+  }
+  if (err !== null && typeof err === "object") {
+    const o = err as Record<string, unknown>;
+    const parts = ["name", "code", "message", "reason"]
+      .filter((k) => typeof o[k] === "string" || typeof o[k] === "number")
+      .map((k) => `${k}=${String(o[k])}`);
+    if (parts.length > 0) return parts.join(" ");
+    try {
+      return JSON.stringify(err).slice(0, 300);
+    } catch {
+      return "unserialisable thrown object";
+    }
+  }
+  return String(err);
+}
+
+/**
+ * Derive the AE dial multiaddr for a manifest entry.
+ *
+ * **`endpoint` is the HTTP base, not the libp2p address, and the two are not always the same
+ * port.** On AWS one ALB port fronts both `/bootstrap` and the WebSocket upgrade, so deriving the
+ * dial address from `endpoint` happened to work. On a node with no load balancer they are
+ * different listeners: `/bootstrap` is on the HTTP server and the WS upgrade is on the protocol
+ * port. Deriving from `endpoint` there makes anti-entropy dial the HTTP server, which is not a
+ * libp2p listener, and every round fails — while the manifest, the endpoint and the peerId are all
+ * individually correct.
+ *
+ * So an entry MAY carry an explicit `multiaddr`, and when it does that is authoritative. Absent it,
+ * the derivation is unchanged (https → tcp/443/wss, http → tcp/80/ws; IPv4-literal host → /ip4/,
+ * hostname → /dns4/) so pre-M12 and AWS manifests behave exactly as before.
+ */
+export function manifestEntryMultiaddr(endpoint: string, peerId: string, multiaddr?: string): string {
+  if (multiaddr) {
+    return multiaddr.includes("/p2p/") ? multiaddr : `${multiaddr}/p2p/${peerId}`;
+  }
   const url = new URL(endpoint);
   const https = url.protocol === "https:";
   const port = url.port !== "" ? Number(url.port) : https ? 443 : 80;
@@ -111,7 +155,7 @@ export class AeSyncService {
     this.#timer = setInterval(() => {
       this.syncAllPeers().catch((err) => {
         logger.error("antientropy.round.failed", {
-          reason: err instanceof Error ? err.message : String(err),
+          reason: describeThrown(err),
           scope: "dial_loop",
         });
       });
@@ -150,7 +194,7 @@ export class AeSyncService {
       logger.warn("antientropy.peer.auth_failed", {
         peerNodeId: "unproven", // identity claims before auth completes are unproven — never log them as fact
         remotePeerId,
-        reason: err instanceof Error ? err.message : String(err),
+        reason: describeThrown(err),
       });
     }
   }
@@ -161,16 +205,16 @@ export class AeSyncService {
     for (const node of manifest.nodes) {
       if (node.nodeId === this.#cfg.identity.nodeId) continue;
       if (!node.peerId || !node.endpoint) continue; // pre-M12 entry — unsyncable until rotation
-      await this.syncPeer(node.nodeId, node.endpoint, node.peerId);
+      await this.syncPeer(node.nodeId, node.endpoint, node.peerId, (node as { multiaddr?: string }).multiaddr);
     }
   }
 
   /** One dial + handshake + rounds attempt against a peer. */
-  async #attempt(peerNodeId: string, endpoint: string, peerId: string) {
+  async #attempt(peerNodeId: string, endpoint: string, peerId: string, multiaddr?: string) {
     const { transport } = this.#cfg;
     // The dial pins /p2p/<manifest peerId>; libp2p aborts if the remote's Noise key mismatches.
     // Still, channel-bind against the OBSERVED identity the dial returned — evidence, not intent.
-    const dialed = await transport.dial(manifestEntryMultiaddr(endpoint, peerId));
+    const dialed = await transport.dial(manifestEntryMultiaddr(endpoint, peerId, multiaddr));
     const stream = await transport.newStream(dialed.peerId, AE_PROTOCOL_ID);
     return runAeDialer({
       wire: streamWire(stream),
@@ -183,13 +227,13 @@ export class AeSyncService {
   }
 
   /** Dial one peer and run the pull side; emits the §6 round events. Never throws. */
-  async syncPeer(peerNodeId: string, endpoint: string, peerId: string): Promise<void> {
+  async syncPeer(peerNodeId: string, endpoint: string, peerId: string, multiaddr?: string): Promise<void> {
     const { logger } = this.#cfg;
     const correlationId = randomUUID();
     const startMs = Date.now();
     logger.info("antientropy.round.started", { peerNodeId, correlationId });
     try {
-      let result = await this.#attempt(peerNodeId, endpoint, peerId);
+      let result = await this.#attempt(peerNodeId, endpoint, peerId, multiaddr);
       // §1c manifest-rotation skew: during a rollout the peer may hold vN+1 while we still run vN
       // (or vice versa) — a sync outage here is a KILL-SWITCH PROPAGATION outage. On an identity-
       // binding failure, re-read the manifest (the verifying store re-reads + re-verifies from
@@ -199,7 +243,7 @@ export class AeSyncService {
       if (!result.ok && (result.reason === "manifest_pubkey_mismatch" || result.reason === "peerid_mismatch")) {
         const refreshed = this.#cfg.manifest().nodes.find((n) => n.nodeId === peerNodeId);
         if (refreshed?.peerId && refreshed.endpoint) {
-          result = await this.#attempt(peerNodeId, refreshed.endpoint, refreshed.peerId);
+          result = await this.#attempt(peerNodeId, refreshed.endpoint, refreshed.peerId, (refreshed as { multiaddr?: string }).multiaddr);
         }
       }
       if (!result.ok) {
@@ -228,7 +272,7 @@ export class AeSyncService {
     } catch (err) {
       logger.warn("antientropy.round.failed", {
         peerNodeId,
-        reason: err instanceof Error ? err.message : String(err),
+        reason: describeThrown(err),
         durationMs: Date.now() - startMs,
         correlationId,
       });
