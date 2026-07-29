@@ -1386,3 +1386,66 @@ Every one of these looked correct in isolation, which is the point:
   `listen EINVAL`. Use a short path like `/tmp/cg2`.
 - Andre's own daemon runs on `~/.cello/daemon.sock`; `CELLO_DIR` gives a separate socket, so this
   never touches it. Verified before starting anything.
+
+---
+
+## Entry 26 — 2026-07-29 — Correction: anti-entropy has never completed a round in production
+
+**Entry 24 overstated it, and I repeated the overstatement to Andre.** I reported "a full
+anti-entropy mesh across two continents" on the strength of `antientropy.round.started` from every
+node to both peers. Rounds STARTING is not rounds COMPLETING. The same output carried
+`antientropy.peer.auth_failed` and I attributed those to peers being mid-roll without checking.
+
+Current, measured over a 10-minute window on `gcp-usc1`:
+
+```
+antientropy.round.started    6
+antientropy.round.failed     0
+antientropy.peer.auth_failed 12
+    peerNodeId gcp-use1  reason protocol_error
+    peerNodeId gcp-euw1  reason protocol_error
+    peerNodeId unproven  reason "wire closed while waiting for ae_auth_a"
+```
+
+Symmetric: every node dials both peers, and every handshake fails. `protocol_error` is the
+dialer's view, `wire closed while waiting for ae_auth_a` the responder's, of the same exchange.
+
+This is the third time on this milestone that a status claim outran its evidence, and the shape is
+identical each time: **a real thing happened, and I named something slightly stronger than the
+thing.** Adapters initialised → "proven on real cloud". Topology applied → "entirely from IaC".
+Rounds started → "a working mesh". The tell is always the same — the log line I quoted is upstream
+of the property I claimed.
+
+### What IS established, and what it cost to establish
+
+The dial itself now works, and that was a genuinely separate defect worth its own entry:
+`manifestEntryMultiaddr` derived the peer address from the manifest's `endpoint`, taking its port
+verbatim. On AWS one ALB port fronts both `/bootstrap` and the WebSocket upgrade, so that was
+correct by coincidence. On a node with no load balancer they are different listeners — so when I
+moved `endpoint` to 9090 to make `/bootstrap` reachable for clients, anti-entropy began dialling
+the HTTP server. Manifest, endpoint, peerId and signature were each individually correct.
+
+Fixed by having a manifest entry carry an explicit `multiaddr`, authoritative when present, with
+the derivation unchanged when absent so AWS and pre-M12 manifests are byte-for-byte unaffected.
+
+And the failure had been reporting its cause as `"[object Object]"` — libp2p throws aggregates
+rather than Errors, and `String({})` produces exactly that. `describeThrown` now unwraps
+AggregateError's inner reasons and surfaces code/message from plain objects. Without that fix the
+line above would still read `[object Object]` and this entry could not have been written.
+
+### The frontier, precisely
+
+Everything up to the AE handshake works: three directories healthy, manifest verified and
+officer-signed, `/bootstrap` reachable, peers dialable, a live client completing step-6 identity
+auth in both directions, and a relay registered.
+
+Two things remain, and they are independent:
+
+1. **The AE §1c handshake** — `protocol_error`. Both ends fail symmetrically. Start from
+   `ae-channel.ts`'s `ae_auth_a` exchange and the responder's `buildAePeerAuthTbs` binding; the
+   local convergence enforcer passes, so this is something the loopback harness does not reproduce.
+2. **Client registration** — `signaling_lost` after a verified connect (Entry 25). The directory
+   sees the stream open, presence go online, then close 0.4s later.
+
+Neither is a config problem at this point; both are protocol-level and want a fresh session rather
+than hour eighteen of this one.

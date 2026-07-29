@@ -290,12 +290,14 @@ description: >
   off a hibernated AWS account. Live on all three nodes:
   `directory.manifest.store.loaded { manifestVersion: 1, verified: true }`. Nothing hand-entered —
   identities come from `gcp-node-identities.sh` and were verified byte-identical to what each node
-  logs for itself at boot. **This is what brought anti-entropy to life:** a node learns its peers
-  from this file, and all three now run a full mesh
-  (`antientropy.round.started` to both peers from every node, across three regions and two
-  continents, over authenticated libp2p with no VPN and no peering). **Owed:** the cello-client
-  half — bundled manifest constant + publish — and step-6 verification proven from a client.
-  → Entry 24
+  logs for itself at boot. **Step-6 client verification PROVEN** (Entry 25): a live client verified the
+  manifest, resolved all 3 nodes, and completed directory identity auth — `directory.auth.challenge.verified`
+  on the client, `directory.auth.challenge.signed` on the directory, same agent, same instant.
+  **CORRECTION (Entry 26): anti-entropy is NOT yet proven.** Entry 24 claimed a working mesh on the
+  strength of `antientropy.round.started`; rounds STARTING is not rounds COMPLETING, and the §1c
+  handshake is failing (`protocol_error` dialside, `wire closed while waiting for ae_auth_a`
+  responder-side). Dialling now works — that was a separate defect — but no round has completed in
+  production. **Owed:** the AE handshake, and the cello-client bundled-manifest half. → Entries 24-26
 - **DOD-MOVE-OPSAGENT-1** [trustless-cello] — ops-agent runs on GCP; email via the SES HTTPS API
   (WIF or SigV4 credentials handled without SA keys — no key files exist, org-enforced); its
   DB-access pattern redesigned so it needs NO cross-cloud database connection (per-node health
