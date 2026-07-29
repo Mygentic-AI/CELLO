@@ -48,6 +48,19 @@ MAX_PAGE_SIZE = 100
 HASH_RE = re.compile(r"^[a-zA-Z0-9._-]{8,128}$")
 MONIKER_RE = re.compile(r"^[\w .'-]{1,64}$", re.UNICODE)
 
+# What the seal ACTUALLY was. Closed set: an unrecognised state must fail the
+# write rather than reach a public page that asserts something about a ceremony
+# nobody can name.
+SEAL_STATES = ("sealed", "seal_deferred")
+DATE_PRECISIONS = ("date", "timestamp")
+
+# Transcript bounds. Generous against the real archive (max 25 turns, 854 chars
+# in a turn, 10KB total) and finite, because an unbounded caller-supplied array
+# on an irrevocable public page is a row nobody can delete.
+MAX_TURNS = 500
+MAX_TURN_CHARS = 8000
+MAX_TRANSCRIPT_BYTES = 256 * 1024
+
 
 class GalleryError(Exception):
     def __init__(self, status, code, message):
@@ -110,6 +123,15 @@ def serialise(row):
         # it was 2-of-3 or 3-of-3, and those are different claims.
         "verified_by": row["verified_by"],
         "node_count": row["node_count"],
+        # NULL where the record does not state it. The page then reports the
+        # seal and makes no attestation claim, rather than inferring a count
+        # from how many nodes happen to be running.
+        "seal_status": row["seal_status"],
+        "seal_detail": row["seal_detail"],
+        # The archive records a date, not a time. Rendering midnight would put
+        # fabricated precision beside a hash on a page built to be checked.
+        "sealed_at_precision": row["sealed_at_precision"],
+        "transcript": row["transcript"],
         "published_at": row["published_at"],
     }
 
@@ -174,6 +196,69 @@ def get_receipt(receipt_hash, correlation_id):
     return resp(200, serialise(row), cache="public, max-age=86400, immutable")
 
 
+def clean_transcript(raw):
+    """The turns as published, or None.
+
+    Every string here is caller-supplied and lands on a public, bot-indexed,
+    irrevocable page. Markup is refused at the WRITE, on the same terms as
+    monikers and for the same reason — escaping correctly at every future read
+    is a promise about code not yet written.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise GalleryError(
+            400, "invalid_transcript", "A transcript must be an array of turns."
+        )
+    if len(raw) > MAX_TURNS:
+        raise GalleryError(
+            400,
+            "transcript_too_long",
+            f"A transcript may carry at most {MAX_TURNS} turns; this one has {len(raw)}.",
+        )
+
+    turns = []
+    for index, turn in enumerate(raw):
+        if not isinstance(turn, dict):
+            raise GalleryError(
+                400, "invalid_turn", f"Turn {index} is not an object."
+            )
+        speaker = (turn.get("speaker") or "").strip()
+        text = (turn.get("body") or "").strip()
+        if not MONIKER_RE.match(speaker or ""):
+            raise GalleryError(
+                400,
+                "invalid_turn_speaker",
+                f"Turn {index} has no usable speaker, or one containing markup.",
+            )
+        if not text:
+            raise GalleryError(
+                400, "empty_turn", f"Turn {index} has no body."
+            )
+        if len(text) > MAX_TURN_CHARS:
+            raise GalleryError(
+                400,
+                "turn_too_long",
+                f"Turn {index} is {len(text)} characters; the limit is {MAX_TURN_CHARS}.",
+            )
+        if "<" in text or ">" in text:
+            raise GalleryError(
+                400,
+                "markup_in_turn",
+                f"Turn {index} contains markup, which is refused rather than escaped at read time.",
+            )
+        turns.append({"speaker": speaker, "body": text})
+
+    encoded = json.dumps(turns)
+    if len(encoded.encode("utf-8")) > MAX_TRANSCRIPT_BYTES:
+        raise GalleryError(
+            400,
+            "transcript_too_large",
+            f"A transcript may be at most {MAX_TRANSCRIPT_BYTES} bytes.",
+        )
+    return turns
+
+
 def publish(body, event, correlation_id):
     """Publishing writes a permanent, irrevocable, indexed page asserting that a
     session happened and that N of M directory nodes attested to it.
@@ -209,21 +294,73 @@ def publish(body, event, correlation_id):
 
     try:
         message_count = int(body.get("message_count", 0))
-        verified_by = int(body.get("verified_by", 0))
-        node_count = int(body.get("node_count", 0))
         sealed_at = body.get("sealed_at")
         datetime.fromisoformat(str(sealed_at).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         raise GalleryError(400, "invalid_receipt_fields", "Receipt metadata is missing or malformed.")
 
-    if node_count <= 0 or verified_by > node_count:
-        # Publishing "verified by 5 of 3" would put a claim on a public page
-        # that the directory could not have made.
+    # VERIFICATION IS OPTIONAL AND ALL-OR-NOTHING.
+    #
+    # Absent means the caller does not know what the directory attested, and the
+    # page will say what the seal was and claim nothing further. What is refused
+    # is a HALF claim: "verified by 2 of ?" cannot be rendered, and a default of
+    # zero or three would be a number nobody measured on the one page whose
+    # purpose is that its numbers can be checked.
+    raw_verified = body.get("verified_by")
+    raw_nodes = body.get("node_count")
+    if (raw_verified is None) != (raw_nodes is None):
         raise GalleryError(
             400,
-            "impossible_verification",
-            f"verified_by ({verified_by}) cannot exceed node_count ({node_count}).",
+            "partial_verification",
+            "verified_by and node_count must be given together or not at all.",
         )
+
+    if raw_verified is None:
+        verified_by = node_count = None
+    else:
+        try:
+            verified_by = int(raw_verified)
+            node_count = int(raw_nodes)
+        except (TypeError, ValueError):
+            raise GalleryError(
+                400, "invalid_verification", "Verification counts must be whole numbers."
+            )
+        if node_count <= 0 or verified_by < 0 or verified_by > node_count:
+            # Publishing "verified by 5 of 3" would put a claim on a public page
+            # that the directory could not have made.
+            raise GalleryError(
+                400,
+                "impossible_verification",
+                f"verified_by ({verified_by}) cannot exceed node_count ({node_count}).",
+            )
+
+    seal_status = (body.get("seal_status") or "sealed").strip()
+    if seal_status not in SEAL_STATES:
+        raise GalleryError(
+            400,
+            "unknown_seal_status",
+            f"seal_status must be one of {', '.join(SEAL_STATES)}; got {seal_status!r}.",
+        )
+
+    seal_detail = (body.get("seal_detail") or "").strip() or None
+    if seal_detail and ("<" in seal_detail or ">" in seal_detail):
+        raise GalleryError(
+            400, "markup_in_seal_detail", "seal_detail contains markup."
+        )
+    if seal_detail and len(seal_detail) > MAX_TURN_CHARS:
+        raise GalleryError(
+            400, "seal_detail_too_long", "seal_detail is too long."
+        )
+
+    sealed_at_precision = (body.get("sealed_at_precision") or "timestamp").strip()
+    if sealed_at_precision not in DATE_PRECISIONS:
+        raise GalleryError(
+            400,
+            "unknown_date_precision",
+            f"sealed_at_precision must be one of {', '.join(DATE_PRECISIONS)}.",
+        )
+
+    transcript = clean_transcript(body.get("transcript"))
 
     agent_pubkey = (body.get("agent_pubkey") or "").strip()
     if not agent_pubkey:
@@ -268,8 +405,9 @@ def publish(body, event, correlation_id):
                 """
                 INSERT INTO published_receipts
                     (receipt_hash, initiator_moniker, counterparty_moniker, sealed_at,
-                     message_count, verified_by, node_count, published_by_waitlist_user_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                     message_count, verified_by, node_count, seal_status, seal_detail,
+                     sealed_at_precision, transcript, published_by_waitlist_user_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (receipt_hash) DO NOTHING
                 RETURNING receipt_hash
                 """,
@@ -281,6 +419,10 @@ def publish(body, event, correlation_id):
                     message_count,
                     verified_by,
                     node_count,
+                    seal_status,
+                    seal_detail,
+                    sealed_at_precision,
+                    json.dumps(transcript) if transcript is not None else None,
                     # From the SESSION, never the body.
                     session["waitlist_user_id"],
                 ),

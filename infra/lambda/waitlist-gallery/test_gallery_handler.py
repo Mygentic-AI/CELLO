@@ -335,3 +335,107 @@ def test_the_owner_can_publish_their_own_receipt(gallery):
 
     assert result["statusCode"] == 200
     assert body["newly_published"] is True
+
+
+# ── DOD-GALLERY-CONTENT-1 / DOD-GALLERY-SEED-1 (M11-D33, M11-D34) ─────────────
+
+TURNS = [
+    {"speaker": "Ada", "body": "First message over a signed, hash-chained channel."},
+    {"speaker": "Grace", "body": "Verified without trusting whoever introduced us."},
+]
+
+
+def test_a_published_transcript_comes_back_in_order(gallery):
+    """The reason the gallery exists is that a stranger can READ a real session.
+    Seal metadata alone proves one happened and shows none of it."""
+    _, published = publish(gallery, transcript=TURNS)
+
+    _, body = call(gallery, "GET", f"/gallery/receipts/{published['receipt_hash']}")
+
+    assert [t["speaker"] for t in body["transcript"]] == ["Ada", "Grace"]
+    assert body["transcript"][0]["body"].startswith("First message")
+    # Order IS the conversation. A set-like comparison would pass on a reversal.
+    assert body["transcript"] == TURNS
+
+
+def test_a_receipt_without_a_transcript_still_publishes(gallery):
+    """Receipts published before transcripts existed are still valid receipts,
+    and the page renders them as it always did rather than showing an empty
+    panel."""
+    _, published = publish(gallery)
+
+    _, body = call(gallery, "GET", f"/gallery/receipts/{published['receipt_hash']}")
+
+    assert body["transcript"] is None
+    assert body["seal_status"] == "sealed"
+
+
+def test_markup_in_a_turn_is_refused_at_the_write(gallery):
+    """Same rule as monikers: refused when stored, not escaped at every read.
+    Escaping correctly forever is a promise about code not yet written."""
+    result, body = publish(
+        gallery,
+        transcript=[{"speaker": "Ada", "body": "<script>alert(1)</script>"}],
+    )
+
+    assert result["statusCode"] == 400
+    assert body["error"] == "markup_in_turn"
+    assert query("SELECT count(*) FROM published_receipts")[0][0] == 0
+
+
+def test_a_transcript_must_be_an_array(gallery):
+    result, body = publish(gallery, transcript={"speaker": "Ada", "body": "hi"})
+
+    assert result["statusCode"] == 400
+    assert body["error"] == "invalid_transcript"
+
+
+def test_half_a_verification_is_refused(gallery):
+    """"Verified by 2 of ?" cannot be rendered. Absent is a position; half is a
+    broken claim, and defaulting the other half would invent the number."""
+    result, body = publish(gallery, verified_by=2, node_count=None)
+
+    assert result["statusCode"] == 400
+    assert body["error"] == "partial_verification"
+    assert query("SELECT count(*) FROM published_receipts")[0][0] == 0
+
+
+def test_a_receipt_may_carry_no_verification_at_all(gallery):
+    """The archive sessions predate the 3-region attestation shape and no
+    document records a count. Null means the page reports the seal and claims
+    nothing about attestation — the alternative was inferring a number."""
+    _, published = publish(
+        gallery,
+        verified_by=None,
+        node_count=None,
+        seal_status="seal_deferred",
+        seal_detail="directory unreachable at close; 16 leaves committed",
+    )
+
+    _, body = call(gallery, "GET", f"/gallery/receipts/{published['receipt_hash']}")
+
+    assert body["verified_by"] is None
+    assert body["node_count"] is None
+    assert body["seal_status"] == "seal_deferred"
+    assert "16 leaves" in body["seal_detail"]
+
+
+def test_an_unknown_seal_status_is_refused(gallery):
+    """A public page asserting a ceremony state nobody can name is worse than
+    no page. Closed set, refused at the write."""
+    result, body = publish(gallery, seal_status="probably_fine")
+
+    assert result["statusCode"] == 400
+    assert body["error"] == "unknown_seal_status"
+
+
+def test_an_unbounded_transcript_is_refused(gallery):
+    """Irrevocable public rows must be finite — there is no delete route to
+    undo an accepted one."""
+    result, body = publish(
+        gallery,
+        transcript=[{"speaker": "Ada", "body": "x" * 9000}],
+    )
+
+    assert result["statusCode"] == 400
+    assert body["error"] == "turn_too_long"
