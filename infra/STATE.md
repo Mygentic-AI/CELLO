@@ -89,6 +89,12 @@ it leaves one execution to run uncontended.
    ordering ProductionDeploy to start with a region StagingDeploy does not touch, would remove the
    failure mode entirely. Not fixed; recorded.
 
+**✅ RESOLVED 2026-07-29 ~10:05 UTC — V54 live in all three regions, checksums converged.**
+Verified against each regional database, not inferred from the pipeline: `max(version) = 54`,
+V53 checksum `-1956862388` in all three, `bool_and(success) = true`, and
+`http://directory-{us1,eu1,ap1}/manifest` → **200**. Task definitions: us-east-1 `:360`,
+eu-central-1 `:136`, ap-northeast-1 `:127`. The ap realignment held through its deploy.
+
 **THE RULE THIS COST — never edit an applied migration.** The window between "written" and "applied"
 is not safe either: here it was under an hour, and a wake closed it without anyone deciding to
 deploy. Before pushing a migration change, rebuild the migration set against a scratch database and
