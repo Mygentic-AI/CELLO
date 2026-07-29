@@ -116,6 +116,51 @@ describe("PERSIST-005 AC-004: wrong keyId → decrypt throws, no partial bytes r
   });
 });
 
+describe("M12 SI-003: the STORE's structural check is provider-agnostic", () => {
+  // Regression guard. The check used to demand `ciphertext.length === plaintext + 28`, which
+  // assumed raw AES-GCM. GCP Cloud KMS returns its own wrapped blob whose length is NOT a fixed
+  // function of plaintext length, so EVERY share write on GCP threw here. The write is
+  // fire-and-forget, so registration still reported success while agent_key_shares stayed empty —
+  // shares lived only in memory and every directory restart stranded every agent.
+  const silent: Logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as unknown as Logger;
+  const shareBytes = randomBytes(1126);
+
+  function storeWith(encrypt: (pt: Uint8Array) => Uint8Array) {
+    const inserts: unknown[][] = [];
+    const pool = { query: async (_q: string, params: unknown[]) => { inserts.push(params); return { rows: [] }; } };
+    const provider = { encrypt: async (pt: Uint8Array) => encrypt(pt), decrypt: async (ct: Uint8Array) => ct, rotate: async () => {} };
+    const store = new EncryptedPgShareStore(pool as unknown as pg.Pool, provider as never, silent);
+    return { store, inserts };
+  }
+
+  it("ACCEPTS a Cloud-KMS-shaped ciphertext that is longer than plaintext + 28", async () => {
+    // The exact shape that was being rejected in production: ~1209 bytes for a 1126-byte share.
+    const { store, inserts } = storeWith((pt) => Buffer.concat([Buffer.from("kms-wrapped-header"), Buffer.from(pt), randomBytes(65)]));
+    await store.storeShare("agent-kms", "epoch:1", shareBytes);
+    expect(inserts).toHaveLength(1); // reached the INSERT — the whole point
+  });
+
+  it("REJECTS a provider that returns the PLAINTEXT unchanged", async () => {
+    // An exact-length rule could never catch this: a no-op "encryption" has exactly the length the
+    // old check would have demanded of a same-length provider. This is what SI-003 is FOR.
+    const { store, inserts } = storeWith((pt) => pt);
+    await expect(store.storeShare("agent-plain", "epoch:1", shareBytes)).rejects.toThrow(/PLAINTEXT unchanged/);
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("REJECTS output too short to carry an authentication tag", async () => {
+    const { store, inserts } = storeWith((pt) => Buffer.from(pt).subarray(0, 100));
+    await expect(store.storeShare("agent-short", "epoch:1", shareBytes)).rejects.toThrow(/too short to be authenticated/);
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("REJECTS empty ciphertext", async () => {
+    const { store, inserts } = storeWith(() => new Uint8Array(0));
+    await expect(store.storeShare("agent-empty", "epoch:1", shareBytes)).rejects.toThrow(/empty ciphertext/);
+    expect(inserts).toHaveLength(0);
+  });
+});
+
 describe("PERSIST-005 SI-003: AES-256-GCM ciphertext structural validity", () => {
   const KEY_HEX = randomBytes(32).toString("hex");
   const provider = new LocalEnvelopeKeyProvider(KEY_HEX);

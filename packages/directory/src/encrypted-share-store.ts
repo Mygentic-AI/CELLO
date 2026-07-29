@@ -50,11 +50,23 @@ import pg from "pg";
 import type { EnvelopeKeyProvider, Logger } from "@cello-protocol/interfaces";
 
 /**
- * AES-256-GCM overhead: 12-byte nonce + 16-byte authentication tag.
- * Ciphertext length = plaintext length + OVERHEAD_BYTES.
- * This is the structural invariant checked by SI-003.
+ * Minimum bytes a real AEAD ciphertext adds over its plaintext (12-byte nonce + 16-byte tag for
+ * AES-256-GCM). A LOWER BOUND, not an equality.
+ *
+ * It used to be an equality check (`length === plaintext + 28`), which silently assumed every
+ * provider returns raw AES-GCM. GCP Cloud KMS does not: `encrypt()` returns KMS's own wrapped blob
+ * carrying key metadata, so its length is not a fixed function of plaintext length (observed
+ * ~1209 bytes where the equality demanded 1154). EVERY share write on GCP therefore failed
+ * `SI-003` — and because the write is fire-and-forget, registration still reported success while
+ * `agent_key_shares` stayed empty. Shares lived only in memory, so every directory restart
+ * stranded every agent with `AGENT_NOT_BOOTSTRAPPED`.
+ *
+ * The equality bought nothing the bounds below do not: what SI-003 exists to catch is a provider
+ * that returns plaintext, empty, or truncated bytes. That is now checked directly — including
+ * ciphertext === plaintext, which an exact-length rule could never have caught for a provider
+ * whose "encryption" is a no-op of the same length.
  */
-const OVERHEAD_BYTES = 28; // 12 (nonce) + 16 (auth tag)
+const MIN_AEAD_OVERHEAD_BYTES = 28; // 12 (nonce) + 16 (auth tag)
 
 /**
  * EncryptedPgShareStore — writes and reads encrypted K_server_X shares
@@ -113,11 +125,23 @@ export class EncryptedPgShareStore {
       throw err;
     }
 
-    // Step 2: Structural validity check (SI-003)
-    // AES-256-GCM output MUST be exactly plaintext_length + 28 bytes and non-empty.
-    const expectedLen = plaintextLen + OVERHEAD_BYTES;
-    if (ciphertext.length === 0 || ciphertext.length !== expectedLen) {
-      const reason = `expected ${expectedLen} bytes (${plaintextLen} + ${OVERHEAD_BYTES} overhead), got ${ciphertext.length}`;
+    // Step 2: Structural validity check (SI-003) — provider-agnostic.
+    // Catches the failures that actually matter: empty output, output that cannot carry an
+    // authentication tag, and output that IS the plaintext. Deliberately does NOT assume a
+    // provider-specific ciphertext length — see MIN_AEAD_OVERHEAD_BYTES.
+    const minLen = plaintextLen + MIN_AEAD_OVERHEAD_BYTES;
+    // Plaintext-passthrough is checked BEFORE the length bound. A passthrough always trips the
+    // length bound too, but "too short" would send an operator hunting a truncation bug when the
+    // real fault is that nothing was encrypted at all.
+    const reason =
+      ciphertext.length === 0
+        ? "provider returned empty ciphertext"
+        : Buffer.from(ciphertext).equals(Buffer.from(shareBytes))
+          ? "provider returned the PLAINTEXT unchanged — refusing to persist unencrypted share material"
+          : ciphertext.length < minLen
+            ? `too short to be authenticated: got ${ciphertext.length}, need at least ${minLen} (${plaintextLen} + ${MIN_AEAD_OVERHEAD_BYTES})`
+            : null;
+    if (reason !== null) {
       const structuralError = new Error(`ciphertext structural check failed: ${reason}`);
       this.#logger.error("key.encrypted.failed", structuralError, { keyId, agentId });
       throw structuralError;
