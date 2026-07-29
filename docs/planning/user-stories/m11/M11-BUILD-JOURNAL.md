@@ -3855,3 +3855,85 @@ to a surface with different requirements.
 **Red-first:** a test asserting that every base the client builds URLs from has a matching nginx
 location whose `proxy_pass` maps it onto a declared API namespace. Revert test: restore `BASE` on the
 gallery calls and it must fail.
+
+---
+
+### Entry 62: the fix worked on the wrong host, and the test agreed with it
+**Date:** 2026-07-29
+**Target:** DOD-GALLERY-INDEX-1, DOD-GALLERY-RECEIPT-1 [corp-cello-site] — review of Entry 61
+
+Reviewer on `14ad42b`. Findings fixed in `326c755`. The headline is the one worth keeping:
+**the unit's own regression test was green while the defect it was written to catch was still
+present on the domain the DoD names.**
+
+**1. The fix stopped at `cello.mygentic.ai`.** `gallery.cello.mygentic.ai` — the host both DoD
+lines specify — has its own server block, and it had no `/api/` location at all. The client builds
+a RELATIVE path, so there `/api/gallery/receipts` matched `location /` and fell through
+`try_files $uri $uri.html $uri/ /gallery.html` to **200 `text/html`**.
+
+That is worse than the 404 it replaced. `response.ok` is true, so every error branch is skipped —
+including the `404 → ReceiptNotPublished` path that keeps an unpublished receipt indistinguishable
+from a private one — and the unguarded `response.json()` throws
+`Unexpected token '<', "<!DOCTYPE "... is not valid JSON` at the visitor. It is not live only
+because the host does not resolve yet (Entry 47's DNS sequencing). It would have become live at the
+moment DNS landed, on both pages, which is the worst possible timing for it to appear.
+
+**2. The test could not see hosts.** `nginxProxies` scanned the conf flat and keyed on the location
+prefix alone, so a location in ANY server block satisfied a request to ANY host. That is the same
+species of mistake as one base for two namespaces, one layer down. Now parsed per `server { }` with
+an explicit host→namespace map, and it fails naming the host. Both server blocks serve the same
+static export, so a page is not bound to a host by its build — which is why the map has to be
+declared rather than inferred.
+
+**Four more ways it could not bite**, each a real defect it would have passed:
+- **The `proxy_pass` trailing slash was normalised away.** In nginx that slash is the whole
+  semantic: with `location ^~ /api/gallery/`, `proxy_pass …/gallery/` gives `/gallery/receipts` and
+  `proxy_pass …/gallery` gives `/galleryreceipts`. Stripping it made both compute the same string.
+- **Methods were dropped.** `RouteKey` is `GET /gallery/receipts`; the fixture stored bare paths, so
+  a wrong verb passed here and 405s in production.
+- **Whole-path interpolations were skipped silently**, with a hardcoded `>= 7` as the only backstop.
+  Renaming one helper parameter would have removed three calls from the check with nothing red.
+- **The boundary was read without `stripComments`**, in a file whose own docblock exists because
+  comments are prose and not calls.
+
+**3. `stripComments` had a third bug, and it fired during this fix.** It stripped block comments
+BEFORE line comments, so the `/*` inside a line comment naming a wildcard path — which is exactly
+what a comment about the `/waitlist/*` namespace contains — read as a block opener and deleted
+everything to the next closer. The symptom was not a wrong answer but an **empty** one: the base map
+came back with zero entries and every assertion built on it would have passed vacuously. The
+anti-vacuity guard caught it, which is the only reason it did not ship as a green suite checking
+nothing. Line comments now go first.
+
+**4. Error substitution, which is why this survived to production.** `"Not Found"` was API Gateway's
+ROUTER reporting no match, forwarded verbatim and rendered as the gallery's entire page. It named no
+URL, no host, no status and no layer, and it reads like a statement about receipts — so it sent
+anyone debugging it to the wrong subsystem. The upstream sentence still survives as evidence, but it
+now travels with the status and the URL, and a non-JSON body reports that the request *reached a
+page, not the API*. Revert-tested: removing the content-type guard reproduces
+`Unexpected token '<'` exactly.
+
+**5. `deploy.yml` ships nginx on every push — and the checklist said otherwise.** I recorded
+"deploy is batched with the next unit". False: the workflow scp's the conf, cp's it over the live
+file and reloads, on every push to main, and the run for `14ad42b` had already succeeded. Verified
+rather than assumed: `cello.mygentic.ai/api/gallery/receipts?page=1` → `200 {"receipts": [], …}`.
+Two comments in the repo state that deploy.yml never touches nginx; both are false and one of them
+is what I read. Corrected in place.
+
+Worse, it did `cp` then `nginx -t`. Under `set -e` a config that fails the test is already on disk
+when the job aborts, and the running nginx keeps its in-memory copy — so everything looks healthy
+until the next reload from any source (certbot, a reboot) starts from the broken file. Now backs up,
+tests, and restores on failure.
+
+**6. The env var meaning change was silent-poisonous.** `NEXT_PUBLIC_WAITLIST_API_BASE` went from
+"the waitlist base" to "the API root". Set nowhere today, but had anyone set it to the old meaning
+every call on every surface would 404 — `/api/waitlist/waitlist` — inlined at build where nothing at
+runtime could detect it, and the test reads the source literal so it would have stayed green.
+Renamed to `NEXT_PUBLIC_CELLO_API_ROOT`: a stale value under a retired name is inert.
+
+**Gate:** 48 vitest (up from 44) · typecheck clean · lint clean · build clean.
+**Revert tests:** the gallery-host proxy, the client base, the nginx location, and the content-type
+guard each fail exactly one assertion when removed, naming the real cause.
+
+**Status:** both lines stay 🟡. The routing defect is fixed and proven live on `cello.mygentic.ai`;
+the canonical `gallery.cello.mygentic.ai` still owes a DNS record, and until it resolves the live
+run on the host the DoD actually names cannot be performed.
