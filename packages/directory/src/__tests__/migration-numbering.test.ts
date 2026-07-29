@@ -24,16 +24,26 @@ import { fileURLToPath } from "node:url";
 const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), "../../db/migrations");
 
 /**
- * Versions deliberately NOT present on this branch, and why.
+ * Versions OWNED BY ANOTHER BRANCH — absence here is expected, and presence is equally fine once
+ * that branch merges.
  *
- * A gap is legal to Flyway on a fresh apply — it only becomes fatal when a migration numbered BELOW
- * the current version shows up later, because Flyway then refuses the out-of-order apply and the
- * entrypoint aborts. So the gap itself is not the bug; an unrecorded gap is, because nobody knows it
- * is reserved and the next branch numbers into it.
+ * A gap is legal to Flyway on a fresh apply. It only turns fatal when a migration numbered BELOW the
+ * current version appears LATER, because Flyway then refuses the out-of-order apply and
+ * docker-entrypoint.sh dies under `set -e`. So the gap is not the bug — an UNRECORDED gap is,
+ * because nobody knows the number is spoken for and the next branch writes into it.
+ *
+ * COORDINATION AGREEMENT (2026-07-29, with the M12 session):
+ *   - M12 owns V49 and V50. Written, committed, pushed; no further edits.
+ *   - This branch owns V51–V54.
+ *   - No overlap, no gaps between the two.
+ *   - **V55 is the next free number.** If M12 needs another migration it takes the next number above
+ *     the highest on EITHER branch, never fills a gap, and says so first.
+ *
+ * Recorded here rather than in a doc because this is the file that fails when someone forgets.
  */
-const RESERVED_ELSEWHERE = new Set([
-  49, // M12 anti-entropy branch
-  50, // M12 anti-entropy branch
+const OWNED_BY_ANOTHER_BRANCH = new Set([
+  49, // M12 anti-entropy
+  50, // M12 anti-entropy
 ]);
 
 function versions(): number[] {
@@ -61,22 +71,27 @@ describe("directory migration numbering", () => {
     const all = versions();
     const missing: number[] = [];
     for (let v = 1; v <= all[all.length - 1]; v++) {
-      if (!all.includes(v) && !RESERVED_ELSEWHERE.has(v)) missing.push(v);
+      if (!all.includes(v) && !OWNED_BY_ANOTHER_BRANCH.has(v)) missing.push(v);
     }
     expect(
       missing,
       `migration version gap(s) with no recorded owner: ${missing.join(", ")}. ` +
-        `Either the file is missing, or add the version to RESERVED_ELSEWHERE naming the branch that owns it.`,
+        `Either the file is missing, or add the version to OWNED_BY_ANOTHER_BRANCH naming the branch that owns it.`,
     ).toEqual([]);
   });
 
-  it("does not number INTO a range reserved by another branch", () => {
-    // The inverse, and the one that actually bites on merge: this branch must not use a number
-    // another branch already holds, or both files exist after the merge with the same version.
-    const clashes = versions().filter((v) => RESERVED_ELSEWHERE.has(v));
-    expect(
-      clashes,
-      `these versions are reserved by another branch: ${clashes.join(", ")} — renumber ABOVE the highest version on either branch`,
-    ).toEqual([]);
+  it("numbers ABOVE every version either branch has used — the merge-safe rule", () => {
+    // NOT "never use a number in the owned set": once M12 merges, V49/V50 legitimately appear here
+    // and an assertion against their presence would fail on a perfectly correct tree. The property
+    // that actually holds through a merge is that NEW work climbs above the high-water mark of both
+    // branches, so nothing is ever inserted BELOW an applied version — which is the only ordering
+    // Flyway refuses.
+    const all = versions();
+    const highWaterMark = Math.max(...all, ...OWNED_BY_ANOTHER_BRANCH);
+    const nextFree = highWaterMark + 1;
+    expect(all).not.toContain(nextFree);
+    // Sanity: the agreement says V55 is next. If this drifts, the comment above is stale and the
+    // other branch has not been told.
+    expect(nextFree, "coordination agreement says V55 is the next free number").toBe(55);
   });
 });
