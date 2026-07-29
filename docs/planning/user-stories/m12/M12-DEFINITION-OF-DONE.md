@@ -258,9 +258,15 @@ description: >
   applied, the image is trigger-built from main, and the timer has fired on its own schedule with a
   registered agent's share in the dump. → Entries 21, 22, 23
 - **DOD-NODE-DIR-GCP-2** [trustless-cello] — second GCP directory in a different region; same
-  artifact, zero manual steps (IaC enforcer green on the repeat). — ❌
+  artifact, zero manual steps (IaC enforcer green on the repeat). — ✅ `gcp-usc1` (us-central1)
+  HEALTHY. **IaC enforcer green on the repeat, measured not asserted:** added as ONE
+  `directory_nodes` map entry; the apply created 99 resources across nodes 2 and 3 with **zero new
+  resource blocks written**. Subnet CIDR derives from the node's own `subnet_index`, which is what
+  made it one entry rather than two. → Entry 24
 - **DOD-NODE-DIR-GCP-3** [trustless-cello] — third GCP directory (temporary Wave-1 member so the
-  standalone consortium is N=3; displaced or re-rolled as replica when AWS joins in P3). — ❌
+  standalone consortium is N=3; displaced or re-rolled as replica when AWS joins in P3). — ✅
+  `gcp-euw1` (europe-west1) HEALTHY. Another continent on purpose: at N=3 with T=majority=2 the
+  third node is what decides whether a US-wide event drops the consortium below threshold. → Entry 24
 - **DOD-NODE-RELAY-GCP-1** [trustless-cello] — at least one GCP relay live: MIG(1) + COS,
   persistent disk for the WAL dir, two secrets, static IP. No code changes expected — flag any
   that turn out to be needed. — ❌
