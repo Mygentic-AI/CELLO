@@ -266,7 +266,12 @@ the additions M10B is accountable for.
     rides the manifest; `expires_at: null` is safe (cite `listAllActive`, **not** the dead
     `listPresentable`); an unknown inbound frame is **ignored, not fatal**, so a new frame kind is
     genuinely additive; the withdrawal carrier (`D-28`). **Parked for Andre:** `DOD-END-DISCOVER-1`.
-    — 🟡 three passes, four findings open
+    **CLOSED 2026-07-29 — `M10B-D29`. Every one of the four remaining items is now an AC on the unit
+    that builds it, which is what the review cap prescribes; none was left unowned.** F1 → `M10B-D25r2`'s
+    authoritative table (`DOD-END-INGRESS-1`); F4 → its own line `DOD-END-ACCOUNTLINK-1`; HIGH-2 → the
+    `PUBLICATION_TABLES` clause on `M10B-D25r2`; MEDIUM-1/2 → `M10B-D12r4` (`DOD-END-REVOKE-2`); F5 →
+    the rescope, now BUILT (`DOD-END-SCOPE-FIX-1`). Four completed passes, and the fourth reviewer's
+    own read was *"none of that needs a fifth measurement pass."* → Entry 21. — ✅
 
 ---
 
@@ -1199,6 +1204,20 @@ the discussion-of-record. Restated here because this is the milestone that imple
   gateway HTTP server, and the sidecar spawner into a Next.js Fargate app. Consequence for process:
   this makes `gateway` a **sixth** cello-client package the other repos pin, so the cross-repo
   version-bump AC discipline (CLAUDE.md) now covers it.
+- **M10B-D29 (2026-07-29) — `DOD-END-ARCH-1` CLOSES on four passes, not five; the remaining findings
+  are ACs on the units that build them.** The determination consumed an entire overnight session and
+  shipped zero lines of code — four completed review passes plus a fifth that died on the session
+  quota. That is the failure the review cap was written to stop (*"reviewers always find something, so
+  an unbounded review loop has no termination condition"*), and re-dispatching a sixth pass to confirm
+  an editing session would be the same trap wearing a different hat. The cap's own instruction is the
+  resolution: **remaining findings become ACs on the units they affect, and the per-unit review catches
+  them there.** Every one of the four now is — the table in the ARCH-1 line names which unit owns
+  which. The standard applied is the fourth reviewer's: *would a competent coder following this build
+  the right thing, with the remaining unknowns named as unknowns* — and the answer is yes, since the
+  unknowns are named, sized, and assigned. **Reverse:** cheap and local — a unit-level review that
+  finds the determination wrong about its own line fixes it in that unit, which is exactly where the
+  cost belongs. **Not closed by this:** the parked `DOD-END-DISCOVER-1` policy question, which is
+  Andre's and stays 🅿️.
 - **M10B-D1 (2026-07-28) — the milestone is a SOURCE plus two MECHANISMS, not a feature.** Fork: ship
   "endorsements" as a feature, versus generalise the client-supplied source and the consent/withdrawal
   mechanisms so the attestation family opens behind them. Chose the latter; `DOD-END-PLAYBOOK-1` is the

@@ -1652,6 +1652,69 @@ code, and inventing one is a separate decision.
 
 ---
 
+## Entry 21 — `DOD-END-ARCH-1` CLOSED on four passes; `DOD-END-SCOPE-FIX-1` BUILT — 2026-07-29
+
+Two things, and the first exists so the second could happen.
+
+### `DOD-END-ARCH-1` → ✅ (`M10B-D29`)
+
+Entry 18 named the standard and this applies it: four completed passes, a fifth that died on the
+quota, and a fourth reviewer whose own closing read was *"none of that needs a fifth measurement
+pass."* Re-dispatching to confirm an editing session is the review trap in a different hat — the cap
+(`M10B-PROCEDURE` §3) says remaining findings become **ACs on the units they affect**, so each of the
+four was placed on its owning unit rather than held against the determination:
+
+| open item | now owned by |
+| :-- | :-- |
+| F1 — `submission_results` PK needs its node component | `M10B-D25r2`'s authoritative table → `DOD-END-INGRESS-1` |
+| HIGH-2 — `submission_results` must join `PUBLICATION_TABLES` | the required clause on `M10B-D25r2` |
+| F4 — `linkAgentToAccount` is an authorization bypass | its own line, `DOD-END-ACCOUNTLINK-1`, with a negative test |
+| MEDIUM-1/2 — `directory` issuer_kind + the monotonicity statement | `M10B-D12r4` → `DOD-END-REVOKE-2` |
+| F5 — SCOPE-FIX-1 rescope | built, below |
+
+Unchanged: `DOD-END-DISCOVER-1` stays 🅿️ — it is a policy call and it is Andre's.
+
+### `DOD-END-SCOPE-FIX-1` — BUILT (commit `4f3e835`, cello-client)
+
+**Clause checklist, the yardstick the reviewer received:**
+
+| # | clause | evidence |
+| :-- | :-- | :-- |
+| C1 | scoping lands on the LIVE path, not the dead one | predicate is in `listAllActive`; `listPresentable` untouched but for its param name |
+| C2 | in the SQL, not a JS branch | `AND (subject_kind <> 'agent' OR subject = ?)` |
+| C3 | scopes on the K_local pubkey, not the `agent_id` UUID | call site resolves `loadedAgents.find(a => a.name === agentName).pubkey` |
+| C4 | fixture convention fixed FIRST; test survives the revert | `seedAgentKeys` added; a test asserts the UUID matches **nothing** |
+| C5 | agent-subject half only; account half deferred, not faked | stated in `listAllActive`'s doc comment with the prerequisite named |
+| C6 | absent presenter ⇒ REFUSE | `throw` on empty/absent, asserted both ways |
+| C7 | nothing type-shaped | the predicate keys on `subject_kind`, which is envelope data |
+
+**The defect, restated from the code rather than the DoD:** the wallet is daemon-wide (M10-D14: no
+agent column at all — the envelope's own `subject` decides who may present it). `listAllActive` never
+looked at `subject`, so on a daemon holding Alice and Bob, **Bob's session offered Alice's
+agent-subject signals to Bob's counterparties**. Live, in M10, today.
+
+**Red first, and the red was informative.** Re-pointing the fixtures from `agent_id` to `pubkeyHex`
+turned 10 tests red before a line of implementation existed — exactly what Entry 19 predicted, and
+the first honest signal that the scoping had only ever been exercised against the wrong key.
+
+**The revert test, on the load-bearing assertion:** revert the SQL predicate and
+`listAllActive({presentingAgentPubkeyHex: bobPubkey})` returns Alice's signal too, so the assertion
+fails. The trap test is the stronger one — pass the UUID and the result must be **empty**, which is
+red both if the predicate is missing (returns everything) and if it were written against `agent_id`
+(returns the row).
+
+**One deliberate non-deletion.** `listPresentable` remains dead code, and deleting it was tempting.
+It is the only implementation of the ACCOUNT-subject half, which is deferred behind a named
+prerequisite — deleting it would delete the design along with the code and leave the deferred half
+with nothing to come back to. Its doc comment now says it has no callers and why it is kept, so it
+cannot be mistaken for the live path again (which is how this defect survived M10 in the first place).
+
+**Gate: 2044 tests, lint, typecheck, build — all green** in cello-client. And the gate debt Entry 20
+recorded against `DOD-END-QUEUE-1`/`DOD-END-DELIVER-1` is discharged too: trustless-cello runs green
+on all four.
+
+---
+
 ## Entry 20 — `DOD-END-QUEUE-1` and `DOD-END-DELIVER-1` BUILT — 2026-07-29
 
 **Two units, 20 tests green against real Postgres.** Evidence, since the DoD only carries one line each.
