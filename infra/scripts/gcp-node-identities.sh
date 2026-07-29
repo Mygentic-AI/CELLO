@@ -34,7 +34,7 @@ NODE_IDS=$(grep -oE 'node_id[[:space:]]*=[[:space:]]*"[^"]+"' "$TFVARS" | sed 's
 [ -n "$NODE_IDS" ] || { echo "no node_id entries found in $TFVARS" >&2; exit 1; }
 
 first=true
-$JSON && printf '['
+if $JSON; then printf '['; fi
 
 for node_id in $NODE_IDS; do
   # The seeds never touch a variable that could be echoed; each is piped directly to its deriver.
@@ -61,4 +61,5 @@ for node_id in $NODE_IDS; do
   first=false
 done
 
-$JSON && printf ']\n'
+if $JSON; then printf ']\n'; fi
+exit 0

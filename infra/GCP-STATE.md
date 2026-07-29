@@ -105,6 +105,35 @@ missing object — GCS 404s both).
 AWS, which is hibernated. The node does not need it to boot; it is needed by
 `DOD-MANIFEST-GCP-1`, when clients start dialling this node.
 
+## Directory nodes 2 and 3 — DOD-NODE-DIR-GCP-2 / -3, applied 2026-07-29
+
+Added as **one `directory_nodes` map entry each**. `terraform apply` created **99 resources** and
+**not one new resource block was written** — that is the DOD-INV-IAC region-expansion test passing
+in practice rather than in principle. Everything in the gcp-use1 table above is reproduced per
+node: Cloud SQL over PSC, its own KMS key ring and envelope key, three buckets, five secrets, a
+per-node service account, a static IP, a MIG and its cloud-init.
+
+| Node | Region / zone | Address | Ed25519 pubkey | libp2p peerId |
+|---|---|---|---|---|
+| `gcp-use1` | us-east1 / -b | 34.75.172.108 | `7969e22a7d95293ae343cb2667c2a4d7127aa8748478582fa637674c30e0113c` | `12D3KooWMH58hm8xpuwgwaNSvnvXBuc126jfuUMVbrGNcU2MeEAX` |
+| `gcp-usc1` | us-central1 / -a | 34.136.176.190 | `ef961384100bb087f36b68e3a270acb8f22fdf62c4cd5e517e423afb7f399002` | `12D3KooWExQLMbvaioVqQCPkc1ZZgJ5kdoePymtMrg46ugMBs5zi` |
+| `gcp-euw1` | europe-west1 / -b | 34.34.166.245 | `9cb77b68a98f49056fef232f4d56eeb9b66b1a6646fe06b966ff570a82ca6c14` | `12D3KooWP52VSVrakyRdPyt23kAuhgp3FV6tiVRByfdyVvHAaEeJ` |
+
+Subnets `10.10.<subnet_index>.0/24` are derived from each node's own `subnet_index`, so a region is
+genuinely one entry. Regions were chosen for failure independence: us-central1 shares no power grid
+or network fabric with us-east1, and node 3 is on another continent because at N=3 with
+T=majority=2 the third node decides whether a US-wide event drops the consortium below threshold.
+
+**Reproduce the identity table:** `infra/scripts/gcp-node-identities.sh` — it reads each node's key
+seeds from Secret Manager and pipes them into the existing derivers on stdin (never argv). Verified
+against the running node: the offline derivation is byte-identical to what `gcp-use1` logged for
+itself at boot, which is the basis for trusting a manifest built from it.
+
+**Two roles per database, deliberately.** `postgres` owns the schema and runs Flyway; the node
+connects as `cello_service`, which V2 restricts to INSERT + SELECT under RLS with UPDATE and DELETE
+revoked. Running the node as the owner silently disables all of it. V50 grants `cello_service`
+SELECT on `flyway_schema_history` so the startup version guard can read the table it checks.
+
 ## Quotas (verified 2026-07-28 — ample, no requests needed)
 
 us-east1 / us-central1 / europe-west1 / europe-west3: 200 CPUs (24 E2), 8 static IPs, 4 TB disk.
