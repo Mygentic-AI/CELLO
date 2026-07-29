@@ -70,6 +70,25 @@ reached it.
 
 **All three regions now record V51 `752698578`, V52 `-1852033893`, V53 `-1956862388`.**
 
+**Follow-on, same session (~09:55 UTC): pipeline execution `bae64bca` ABANDONED.** Three executions
+were in flight at once (the other session's push, plus two of mine — the V53/V54 fix and a STATE.md
+commit pushed separately while the first was still deploying). **`ProductionDeploy` and
+`StagingDeploy` both target us-east-1**, so concurrent executions contend for the same ECS service:
+the older `ProductionDeployUsEast1` waits for a deployment a newer execution already replaced, times
+out after ~45 min, and **eu-central-1 / ap-northeast-1 never start** — their actions stay `None` and
+the regions silently stay on old code. It happened twice before being recognised as structural.
+`bae64bca` was redundant (`e0b1231b`'s source `1572c391` already contains `65c2411f`), so abandoning
+it leaves one execution to run uncontended.
+
+**Two consequences worth keeping:**
+1. **Batch directory pushes — the CLAUDE.md rule, with a concrete price.** Pushing STATE.md
+   separately while a deploy was in flight cost ~45 min of stalled pipeline and two wasted builds.
+   When a deploy is running, commit locally and push AFTER it lands.
+2. **`ProductionDeploy` starting with us-east-1 — the region `StagingDeploy` also owns — is what makes
+   concurrent executions deadlock rather than merely queue.** A pipeline-level concurrency guard, or
+   ordering ProductionDeploy to start with a region StagingDeploy does not touch, would remove the
+   failure mode entirely. Not fixed; recorded.
+
 **THE RULE THIS COST — never edit an applied migration.** The window between "written" and "applied"
 is not safe either: here it was under an hour, and a wake closed it without anyone deciding to
 deploy. Before pushing a migration change, rebuild the migration set against a scratch database and
