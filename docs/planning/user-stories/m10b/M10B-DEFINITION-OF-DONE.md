@@ -510,7 +510,15 @@ the additions M10B is accountable for.
   moment a person can issue an endorsement, **one submitter key can tombstone someone else's
   endorsement.** Required: exact-`issuer_pubkey` auth for `issuer_kind: agent`, and the tombstone must
   respect the target's real `issuer_kind`. Role-based auth stays correct for portal-issued records (it is
-  what survives a portal key rotation — determination §3.5). **Without this, D-19 is nominal.** — ❌
+  what survives a portal key rotation — determination §3.5). **Without this, D-19 is nominal.**
+  > **BUILT 2026-07-29 — 🟡.** `V53__signal_records_revoker_authority.sql` (the `M10B-D12r4` CASE,
+  > `revoker_pubkey` + `revoker_signature`) plus the inner, self-certifying authorization in
+  > `revokeSignal`. **Measured before written** (Entries 11/15's rule): ten shapes inside V46's REAL
+  > view — **exactly one changes and it is the F6 defect** — then every branch proven load-bearing by
+  > counterfactual, including the one that would have made the fix a NO-OP. 12 view tests + 5
+  > end-to-end through the real mint→revoke→status path. V46 is NOT amended (Entry 17); the
+  > monotonicity statement is in V53's header. **Open, and named:** `revoker_signature` is AUDIT
+  > EVIDENCE — nothing verifies it, so the compromised-node case stays open. → **Entry 28**. — 🟡
 - **DOD-END-WITHDRAW-1** — withdrawal takes effect everywhere, including for recipients already holding a
   copy (D-19). The endorsement stops being presentable, and any recipient holding it sees it marked
   withdrawn on next check. Rides `DOD-VERIFY-1`'s existing TTL-re-check-on-use machinery (spec §14.7) —
