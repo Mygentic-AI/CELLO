@@ -40,12 +40,31 @@
 import { createRequire } from "module";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { existsSync } from "fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..");
 // packages/crypto no longer has local node_modules (post-REPOSPLIT — it's published to npm).
-// Resolve via demo/ which has a real node_modules with @noble/curves installed.
-const require = createRequire(join(repoRoot, "demo", "node_modules", "@noble", "curves", "package.json"));
+// @noble/curves lives in whichever workspace package happens to have installed it. Hardcoding
+// demo/node_modules made these scripts work only in a checkout where demo/ deps were installed —
+// they threw MODULE_NOT_FOUND in any git worktree, which is where infra work actually happens.
+// Try the known homes in order and fail naming all of them.
+function resolveNoble(repoRoot) {
+  const candidates = [
+    join(repoRoot, "demo", "node_modules", "@noble", "curves", "package.json"),
+    join(repoRoot, "packages", "directory", "node_modules", "@noble", "curves", "package.json"),
+    join(repoRoot, "packages", "relay", "node_modules", "@noble", "curves", "package.json"),
+    join(repoRoot, "node_modules", "@noble", "curves", "package.json"),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return createRequire(c);
+  }
+  throw new Error(
+    "@noble/curves not found. Looked in:\n  " + candidates.join("\n  ") +
+    "\nRun `pnpm install` in this checkout.",
+  );
+}
+const require = resolveNoble(repoRoot);
 
 // Dynamic import using the resolved path so ESM honours it correctly
 const curvesPath = require.resolve("@noble/curves/ed25519.js");
