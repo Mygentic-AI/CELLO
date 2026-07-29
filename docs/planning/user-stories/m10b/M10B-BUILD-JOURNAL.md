@@ -2340,3 +2340,90 @@ which is the reason SCOPE-FIX-1 was sequenced first: consent bolted on top of an
 have passed its own negative tests against a path that was never scoped.
 
 **Next:** the design note proper, then red-first.
+
+---
+
+## Entry 30 — REVOKE-2 review: the fix contained its own bypass, and my measurement missed it — 2026-07-29
+
+One pass. It found the unit's **headline defect still live**, inside the branch I had added to be
+careful. This is the most important entry in the milestone so far, because of *how* it survived.
+
+### F1 — the "legacy tombstone" branch defeated the entire unit
+
+`BOOL_OR(is_tombstone AND revoker_pubkey IS NULL) → 'revoked'`, sitting above the exact-pubkey
+branch. The reasoning read as conservative: a tombstone written before V53 had its authority checked
+under the old rule, so keep its old semantics.
+
+**A missing revoker is not a property of age.** Nothing distinguishes a pre-V53 tombstone from one
+written a minute ago with the two optional fields left out. So any submitter could still kill any
+agent-issued endorsement by *omitting* something — the exact attack the line exists to stop.
+
+And it was live, not theoretical: the **only** revoke producer in the system,
+`cello-portal/src/server/trust/directory-submit.ts`, sends no revoker at all. Every revoke reaching a
+deployed directory took the NULL path, so the exact-pubkey branch was **unreachable in production**.
+
+**The justification was also false**, and measuring is what showed it. Branch 4's institutional
+escape already carries every legacy revocation. Removing the NULL branch changes **exactly one
+shape**:
+
+| shape | with the "legacy" branch | without it |
+| :-- | :-- | :-- |
+| portal record + NULL tombstone | revoked | **revoked** |
+| directory record + NULL tombstone | revoked | **revoked** |
+| **agent record + NULL tombstone** | **revoked** | **active** ← the fix |
+
+Checked against the data too, not only the logic: `signal_records` holds 264 rows, **zero
+agent-issued and zero tombstones** — there is no legacy agent tombstone to grandfather.
+
+### Why my own measurement did not catch it, which is the lesson
+
+Entry 28 says *"measured, not argued"* and it was — ten shapes, live Postgres, counterfactuals per
+branch. It still shipped the bypass, because **I chose the shapes**. My h5 fixture was an *agent*
+record with a NULL-revoker tombstone, and I asserted `revoked` and called it correct. The
+measurement faithfully confirmed what I already believed.
+
+**A measurement only tests the hypotheses you thought to write down.** Counterfactuals ask "does this
+branch do something?" — the question that catches this is "what does this branch do that the OTHERS
+DO NOT?", which is what the reviewer ran. A branch whose behavior is fully covered by another branch
+is not conservative; it is either dead or a hole, and here it was a hole. That belongs beside the
+Entry 15 rule rather than replacing it: measure inside the real view, **and** measure each branch's
+*marginal* contribution.
+
+The test was the worst part: it **pinned the bypass as correct behavior**, so a future reviewer
+reading the suite would have found the hole documented as intended. Two further hollow tests from the
+same review: the "no inner authorization" case used a *portal* envelope and never checked
+`effective_status` (an implementation letting any submitter kill any endorsement passed it verbatim),
+and the audit-evidence test asserted `is_nullable = 'YES'` — true of any column nothing ever writes.
+
+### Also fixed
+
+- **A false comment (F2).** The inner-auth TBS was described as a "byte-identical local copy per the
+  M7-WIRE-001 convention, with a drift guard". That convention covers a copy of a builder that
+  already exists upstream; this has **no counterpart**, so no drift guard is possible and the
+  sentence asserted a safety net that does not exist. Corrected, and shipping the builder in
+  `@cello-protocol/protocol-types` is now an AC on `DOD-END-WITHDRAW-1`.
+
+### Carried forward as ACs — named, not silently deferred
+
+- **F2 (design gap):** `issued_at` is inside the inner TBS *and* is what the directory skew-checks at
+  600s. A withdrawal travels daemon → queue → portal drain → portal revoke, so Bob must sign over an
+  `issued_at` the *portal* will submit with, which he cannot know — and a drain lagging >10min kills
+  the withdrawal as `stale_request`. Needs a validity window rather than an instant. → `DOD-END-INGRESS-1` / `DOD-END-SURFACE-1`.
+- **F3:** `MIN(issuer_kind)` is now an *authority* predicate, not a descriptive aggregate. One node
+  disagreeing about `issuer_kind` silently makes a portal record permanently unrevocable everywhere.
+  `MIN()` picking the stricter side is right for forgery; the defect is that disagreement is resolved
+  silently rather than surfaced.
+- **F4 (pre-existing, V46):** `s.status <> 'revoked'` in the supersession EXISTS is **inert** — since
+  revocation became a tombstone, the real row stays `active`. So withdrawing a *successor* leaves its
+  predecessor `superseded` forever: re-endorse then withdraw, and **both** endorsements are
+  unpresentable with nothing saying so.
+- **F5:** `revoker_pubkey` is validated lowercase-64-hex; the envelope's `issuer_pubkey` is not
+  validated to the same shape at every entry point. Branch 5 is an exact string comparison across the
+  two.
+- **F8 (unmeasured):** two new columns on a table in `PUBLICATION_TABLES`, with three regions
+  deploying in parallel. A V53 node writing while a peer is on V52 should stall that peer's whole
+  subscription until it migrates. Neither local Postgres runs `wal_level=logical`, so this needs one
+  measured check **before the batched deploy**.
+- **An inert revoke returns `{ok: true, revoked_rows: 1}`.** Deliberate for arrival-order freedom,
+  but the caller is told "revoked" when the truth is "recorded, currently inert" — the portal would
+  show a user their endorsement is withdrawn when it is not.
