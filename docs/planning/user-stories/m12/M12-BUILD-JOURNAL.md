@@ -2115,3 +2115,63 @@ replicated (`DOD-INV-SHARES-LOCAL`), so if they do not survive a node restart, *
 strands every existing agent.** That is launch-blocking if true. Not yet proven — the restart test
 is next, and the crash-loop the fleet went through is a competing explanation that has to be ruled
 out before blaming ordinary restarts.
+
+---
+
+## Entry 38 — 2026-07-29 — LAUNCH-BLOCKER: no FROST share had ever been persisted on GCP
+
+Entry 37's hypothesis was right, and the cause was worse than "restarts lose shares".
+
+```
+adapter.write.failed  EncryptedPgShareStore
+  ciphertext structural check failed: expected 1154 bytes (1126 + 28 overhead), got 1209
+```
+
+`SI-003` demanded `ciphertext.length === plaintext + 28` — raw AES-256-GCM. GCP Cloud KMS
+`encrypt()` returns its OWN wrapped blob carrying key metadata, so its length is not a fixed
+function of plaintext length. **Every share write on GCP threw.** `agent_key_shares` was empty,
+and `sharesLoaded: 0` on all three nodes.
+
+### Why nothing ever said so
+
+`PersistentShareStore.storeShare` is **fire-and-forget** — `void this.#encrypted.storeShare(...)`.
+So the surface everyone reads stayed green: registration returned `ok:true`, the DKG reported all
+three validators as signers, and the agent worked *for as long as the directory process lived*.
+The share existed only in the in-memory cache. Any restart, and:
+
+```
+sharesLoaded 0 -> generateCommitment.no_share -> AGENT_NOT_BOOTSTRAPPED -> ceremony_exhausted
+```
+
+Every agent registered before a restart was permanently unusable. **A single deploy would have
+done that to every real user**, with a green registration path and no alarm.
+
+### The fix
+
+The equality bought nothing the bounds do not. SI-003 exists to catch a provider returning empty,
+truncated, or unencrypted bytes — now checked directly, and one of those checks is strictly
+STRONGER than what it replaced: `ciphertext === plaintext` catches a no-op "encryption" that an
+exact-length rule could never catch for a same-length provider. Passthrough is tested before the
+length bound, so it reports "returned the PLAINTEXT unchanged" rather than sending an operator
+after a truncation bug.
+
+### Verified, in order, on the live fleet
+
+| step | before | after |
+|---|---|---|
+| share write | `adapter.write.failed` every time | no failures |
+| `sharesLoaded` after restart | **0** | **2** |
+| session for a PRE-restart agent | `ceremony_exhausted` | `{"ok":true,"transportMode":"relay"}` |
+
+### What this says about the class of bug
+
+Three failures today shared one shape: **a green surface over a broken write.** The relay manifest
+was absent and the directory logged `not_found` and carried on. The share write failed and
+registration returned `ok`. Both were fire-and-forget or soft-fallback paths where the only honest
+answer was to fail loudly. The AutoNAT bug was the same shape from the other side — libp2p closed
+a connection and both peers logged a clean EOF.
+
+**Still owed:** the fire-and-forget write itself. A share write failure STILL cannot fail a
+registration — the fix removes today's cause, not the mechanism that hid it. Registration should
+not report success until the share is durable, or should at minimum raise an alarm that is not a
+debug line nobody reads.
