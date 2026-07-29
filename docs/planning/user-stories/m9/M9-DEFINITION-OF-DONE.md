@@ -298,7 +298,17 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   install is pinned and the pin VERIFIED (`claude mcp get cello`). After Andre's next daemon
   restart, his own `~/.cello/daemon.log` — the artifact that exposed the defect — shows
   `mode:"enforcing"`. The `latest` promotion and the `/mcp` reconnect are prepared and handed
-  over, never run. — ❌
+  over, never run.
+  > **PUBLISHED TO BETA 2026-07-29 — 🟡.** Tag `v0.0.140`; Build ✓, Publish ✓. Shipped:
+  > **gateway 0.0.13, daemon 0.0.87, cli 0.0.88, connect 0.0.97** (crypto/protocol-types/transport
+  > unchanged and deliberately not bumped). **The trap this avoided:** local versions EQUALLED
+  > published beta, because the M10B cascade shipped those same numbers before the M9 merge landed
+  > — same version, different content, which npm keeps forever. Verified against the TARBALL, not
+  > CI: `dist/bin/cello-daemon.js` contains `startSecurityLayer`; `dist/index.d.ts` no longer
+  > exports the stub; `dist/testing.js` ships; cli→daemon pins `0.0.87` and connect's pins are real
+  > versions, no `workspace:*`. **🟡 until the `latest` promotion — Andre's, never mine** — the
+  > default install path (`npx @cello-protocol/connect`, `npm i -g …@latest`) still resolves to the
+  > OLD build, so no operator has this yet. → Entry C11 — 🟡
 
 ---
 

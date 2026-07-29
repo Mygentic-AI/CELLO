@@ -32,6 +32,7 @@ description: >
   injection and reads `mode:"enforcing"` off the boot line.
 - **Status (audited 2026-07-29, Entry C9):** ✅ `STORE-1`, `ENV-1`. 🟡 `WIRE-1`, `SURFACE-1`,
   `AUDIT-1`, `GATE-1`. ❌ `PUBLISH-1`.
+- **MERGED + PUBLISHED TO BETA** (Entry C11). `latest` promotion is OWED and is Andre's.
 - **Next work, in value order:** (1) the THREE missing GATE-1 assertions — outbound credential
   redacted at the peer, crafted inbound sanitized, both readable through AUDIT-1 — which would
   likely convert WIRE-1 and AUDIT-1 to ✅; (2) `PassthroughGatewayClient` off the two public barrels
@@ -1544,3 +1545,71 @@ here would repeat the exact mistake this milestone exists to correct.
 - **INV-10 remains partial by nature, not by omission.** A same-uid process can announce
   `clientType: "cli"` over the IPC socket. The portal passkey D-4 names is the only thing that makes
   the absolute claim true; nothing local can.
+
+---
+
+## 2026-07-29 — Entry C11: merged, published to beta, and the version trap that nearly ate it
+
+**Merge:** `b991bb3` on `cello-client` `main`. Zero code conflicts. Both manifests kept BOTH sides —
+the M10B cascade (gateway 0.0.12, daemon 0.0.86) and this branch's `./testing` exports plus
+sqlcipher as optional. Two M10B test files needed the now-required `securityGateway`; the guard's
+own error text named the fix. Merged tree: **1607 tests green**, lint + typecheck clean, gate run
+AFTER the merge.
+
+**The journal-renumbering hazard did not apply.** M9 entries are C1–C10 in `M9-BUILD-JOURNAL.md`;
+M10B entries are 33–38 in `M10B-BUILD-JOURNAL.md`. Separate files. I passed that warning on before
+checking it — worth remembering that a warning inherited from another context still needs verifying
+against your own.
+
+### THE TRAP: local version == published version, different content
+
+Before publishing, local and beta both read gateway 0.0.12 / daemon 0.0.86 / cli 0.0.87. Nothing to
+do, apparently. **But the M10B cascade published those numbers BEFORE the M9 merge landed**, so
+npm's copies carried the old content under the same version strings. That is `/cello-publish`
+invariant #1, and the failure is silent: npm keeps the old build forever and every consumer pinning
+it gets a daemon with no security layer — this milestone's own defect, reintroduced by the publish
+step.
+
+Bumped the four packages the merge actually touched (gateway → daemon → cli/connect); crypto,
+protocol-types and transport are untouched at the bottom of the graph, so their pins stay valid.
+Tag `v0.0.140` — chosen as the next FREE counter and verified free, because the tag counter has
+drifted from the connect version before.
+
+**Shipped to beta:** gateway 0.0.13, daemon 0.0.87, cli 0.0.88, connect 0.0.97.
+
+**Verified against the TARBALL, not the CI badge:** `npm pack`'d daemon@0.0.87 —
+`dist/bin/cello-daemon.js` contains `startSecurityLayer`; the only `PassthroughGatewayClient` string
+in `dist/index.js` is the comment saying it moved; `dist/index.d.ts` does not export it;
+`dist/testing.js` ships. Cross-pins are real versions (cli → daemon 0.0.87), no `workspace:*`.
+
+### CI caught a defect in my own gate
+
+The main-branch run of the cascade failed: `afterEach` hook timed out at 10000ms. vitest gives a
+hook 10s by default and `stopDaemon` waited up to 10s — **the hook could never fit inside its own
+budget** on a loaded runner. It passed locally every time and passed on the tag run, which is
+precisely why it was worth fixing rather than re-running: it would have failed a publish eventually,
+and the symptom reads as a broken test rather than a slow one. Graceful budget → 5s, hook → explicit
+30s, and SIGKILL now waits for the process to actually die (the next test takes a fresh CELLO_DIR
+but a surviving daemon still holds the old one's sidecar and store locks). **No version bump owed:**
+`src/__tests__` is excluded from tsconfig and `files` ships `dist/` only, so no published byte moved.
+
+### Where it stops
+
+**`latest` is NOT promoted, and that is not mine to do.** Until Andre runs it, the default install
+path resolves to the old build and no operator — including Andre's own running daemon — has any of
+this. The prepared command set is in the handoff below.
+
+```
+npm dist-tag add @cello-protocol/connect@0.0.97 latest
+npm dist-tag add @cello-protocol/cli@0.0.88 latest
+npm dist-tag add @cello-protocol/daemon@0.0.87 latest
+npm dist-tag add @cello-protocol/gateway@0.0.13 latest
+npm dist-tag add @cello-protocol/crypto@0.0.30 latest
+npm dist-tag add @cello-protocol/transport@0.0.34 latest
+npm dist-tag add @cello-protocol/protocol-types@0.0.32 latest
+```
+
+Then: `npm i -g @cello-protocol/cli@latest @cello-protocol/connect@latest`, `cello logout && cello
+login`, reconnect the MCP. `~/.cello/daemon.log` should then read
+`security.gateway.connected {"mode":"enforcing"}` — the line that has said `passthrough` on every
+boot since June, and the single clearest proof this milestone landed.
