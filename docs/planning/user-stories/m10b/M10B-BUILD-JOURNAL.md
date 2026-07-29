@@ -2232,3 +2232,72 @@ in `core/daemon` is decorative. Type-level guards belong in the source tree.
    until manifest generation gains an owner. Named here so it is not discovered live.
 
 **Gates:** cello-client 2086 tests; trustless-cello 929 tests; lint + typecheck green in both.
+
+---
+
+## Entry 28 — `DOD-END-REVOKE-2` BUILT: V53 + the inner authorization — 2026-07-29
+
+The M10 defect this milestone inherited (`DOD-REVOKE-1` review F6, deferred with *"revisit with
+intake"*): revoke authorises on the generic `submitter` role and writes a tombstone that never reads
+its target, so the moment a person can issue an endorsement, **one submitter key can tombstone
+anyone's**. Without it, D-19 is nominal.
+
+### The measurement came first, and it earned itself again
+
+Four consecutive versions of this expression were wrong and **every one read correctly in prose**.
+So, per the standing rule from Entries 11/15: ten shapes, eighteen rows, run on live Postgres inside
+V46's **real** view shape — including its correlated-`EXISTS` supersession branch, which a fragment
+fixture cannot exercise at all.
+
+**Exactly one shape changes, and it is the defect:** `revoker ≠ issuer` goes `revoked → active`.
+h1, h2, h3, h5, h6, h7, h8, h8s, h9, h9s, h10 are all identical to today.
+
+Then each branch was proven **load-bearing by counterfactual**, and each failed exactly where
+predicted:
+
+| counterfactual | what breaks |
+| :-- | :-- |
+| supplement instead of replace | h4 stays `revoked` — **the fix is a NO-OP** (the third review's F3, confirmed) |
+| drop the real-row-revoked branch | h7 regresses `revoked → active` |
+| revoke branches after supersession | h8 downgrades `revoked → superseded` |
+| branch 4 without `'directory'` | h10 becomes **permanently unrevocable** (fourth review MEDIUM-1) |
+
+Finally the migration itself was applied to a **clean database built from main's migrations** and the
+ten shapes re-run through the real view — same result. The shared `cello_dev` could not be used: it
+carries the M12 branch's V49/V50 and a V51 checksum mismatch, which is precisely the collision
+Entry 20 documented. A throwaway DB is the workaround; the collision is not fixed.
+
+### The write half, and why the inner signature exists at all
+
+`M10B-D12r4`'s predicate needs a revoker to compare, and the reason one cannot simply be taken from
+the transport signer is the fourth review's best finding: **the portal is the only `submitter` key,
+so Bob's withdrawal arrives signed by the PORTAL.** A predicate comparing transport signer to record
+issuer would never match an agent-issued record, and every agent withdrawal would be silently inert.
+
+So the revoke body carries an authorization signed by the **claimed issuer**, verified **standalone —
+no record lookup**, which is what preserves the blind INSERT and its arrival-order freedom. The TBS
+is `(domain ‖ signal_hash ‖ issued_at)`; `issued_at` is inside it because without a timestamp the
+authorization is a **permanent bearer capability** to revoke that hash at every node forever.
+
+**An authorization that does not verify is REFUSED, never recorded unverified.** Recording it would
+be laundering by storage: the view compares pubkeys and cannot check Ed25519, so every peer node
+receiving the row through replication would trust whatever the originating node wrote. Its reason,
+`revoker_authorization_invalid`, is deliberately **distinct from `signature_invalid`** — they name
+two different keys, and collapsing them sends an operator to rotate the portal's submitter key over a
+bad agent signature.
+
+### What is NOT closed, stated rather than implied
+
+- **`revoker_signature` is AUDIT EVIDENCE, not a defense** (`M10B-D28`, third review F6). Nothing
+  verifies it; the read path is a SQL view and a view cannot check Ed25519. A forged tombstone from a
+  compromised node still reads `revoked` on all three. The column makes forgery detectable *in
+  principle* and prevents nothing. **The compromised-node case remains OPEN** — closing it needs a
+  verifier (a subscriber-side validation pass, or verify-on-read before serving a `revoked` verdict).
+- **V46 is not amended, and must not be.** It is applied; Flyway checksums the whole file, comments
+  included; editing it crash-loops the ops-agent in three regions (Entry 17). The superseding
+  statement about V46's documented monotonicity — an unauthorised tombstone that lands first now
+  reads `revoked`, then `active` once the real record replicates in — lives in V53's header.
+- **`DOD-END-WITHDRAW-1` still needs its carrier wired** (`M10B-D28`'s `op: "withdraw"` through the
+  submission queue). The authority model is now real; the operator-facing path to invoke it is not.
+
+**Gate:** 929 tests, lint, typecheck green. 🟡 — rides the batched directory deploy with V51/V52.
