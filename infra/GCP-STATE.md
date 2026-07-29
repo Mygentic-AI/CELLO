@@ -134,6 +134,32 @@ connects as `cello_service`, which V2 restricts to INSERT + SELECT under RLS wit
 revoked. Running the node as the owner silently disables all of it. V50 grants `cello_service`
 SELECT on `flyway_schema_history` so the startup version guard can read the table it checks.
 
+## Consortium-wide secrets and the relay — 2026-07-29
+
+| Secret | Purpose | Granted to |
+|---|---|---|
+| `cello-consortium-officer-key-0` | Signs the consortium manifest. Root of trust for the roster and the threshold. | **NO workload.** Everything verifies with the PUBLIC key; a node that could read the seed could mint a roster naming itself the whole consortium. |
+| `cello-consortium-preauth-issuer-key` | Signs "may register" capabilities. ONE identity — a client presents its capability to whichever directory it reaches. | All three directories |
+
+Officer pubkey `e8300a2b9de7be6f6d629f778dc319715ad0010c0639f3a1564181d56d3eb104` (threshold 1).
+Pre-auth issuer pubkey `4468292bbe38ab929e504a1d962abeebe4f02db0a380b4d7880eb4f4dbd56c07`.
+
+**`CELLO_PREAUTH_ISSUER_PUBKEY` is what ENABLES capability checking.** Unset, a directory does not
+perform a weaker check — it performs none and accepts registration from anyone who can reach it.
+All three nodes ran that way until 2026-07-29 04:55 UTC; they now log
+`directory.auth.capability.enabled`.
+
+**Relay `gcp-relay-use1`** — 34.139.119.165, MIG(1) + COS, WAL on its own persistent disk
+(`prevent_destroy`, format guarded by `blkid` so a replacement cannot mkfs away journalled frames),
+two per-relay secrets, listening `/tcp/4001/ws` (public) and `/tcp/4002` (bound, not exposed —
+`CELLO_RELAY_LISTEN_ADDR` defaults to 4001 and collides with WS otherwise). Registered with
+`gcp-use1`: `relay.registered` + `relay.adapter.multiaddr.updated`.
+
+**Orphaned, unused, safe to delete by hand:** `cello-gcp-use1-preauth-issuer-key`,
+`cello-gcp-usc1-preauth-issuer-key`, `cello-gcp-euw1-preauth-issuer-key`. Superseded by the
+consortium-wide issuer above and dropped from Terraform management rather than destroyed —
+`prevent_destroy` blocked the delete, correctly.
+
 ## Quotas (verified 2026-07-28 — ample, no requests needed)
 
 us-east1 / us-central1 / europe-west1 / europe-west3: 200 CPUs (24 E2), 8 static IPs, 4 TB disk.
