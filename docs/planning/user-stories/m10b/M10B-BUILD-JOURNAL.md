@@ -2084,3 +2084,88 @@ tree it did not own. Nothing was lost this time — that is luck, not process.
 `M10B-PROCEDURE` §5d is explicit: *"One thread. One coder (the main loop). NO parallel implementation
 agents."* Two sessions on one repo violates it in the most expensive way available, because the
 collisions are in the shared audit trail. **Surfaced to Andre rather than worked around.**
+
+---
+
+## Entry 26 — `DOD-END-SUBMIT-1` BUILT across all three layers — 2026-07-29
+
+The queue table has existed since Entry 20 with **nothing writing to it**. This closes that: the
+wire contract, the daemon that composes/signs/seals/sends, and the directory frame that accepts.
+
+**Clause checklist (the yardstick the reviewer received):**
+
+| # | clause | where |
+| :-- | :-- | :-- |
+| C1 | composes `(subject_kind, subject, body)` and SIGNS with the agent key | `composeSealedSubmission` |
+| C2 | seals the WHOLE submission; no path emits unsealed | structural — there is no code path in `signal-submission.ts` that returns plaintext |
+| C3 | writes over the existing channel; the daemon never talks to the portal | `submission_write` on the signaling stream |
+| C4 | "standard failover across nodes" | `M10B-D32` below — a finding, not a simplification |
+| C5 | no intake key ⇒ refuse, naming the reason | four refusal reasons, extended to malformed |
+| C6 | `signal.submission.sealed` / `.queued` / `.refused` | all present; `.duplicate` added (see below) |
+| C7 | INV-ATTRIBUTION | `submitter_pubkey` read from the KeyProvider; no parameter exists to override it |
+| C8 | INV-ZEROBUMP | the discriminator is `op`, a protocol verb; nothing knows a signal type |
+
+**Three things worth keeping.**
+
+**1. INV-ATTRIBUTION is structural rather than enforced.** There is no `submitterPubkey` parameter —
+the field is read from the signing `KeyProvider`, so a caller cannot name someone else because there
+is nowhere to put the lie. Two tests prove it with real Ed25519 (the pubkey equals the signer's own
+public half; the signature verifies over the canonical TBS), and a third gives the check teeth by
+verifying the same bytes against a different key and requiring `false`.
+
+Stated in the code where someone will be when they are tempted: **Ed25519 has no key recovery**
+(RFC 8032), so "derive `issuer_pubkey` from the signature" cannot mean literal recovery. The pubkey
+is present in the body and is *worthless until the signature verifies against it*. Reading it before
+that is the forgery hole.
+
+**2. `submission_id` is derived from the PLAINTEXT, never the ciphertext.** Sealing is randomised, so
+a ciphertext-derived id would change on every re-seal and a failover retry would look like a second
+submission — two mints, double quota consumption. The test pins exactly this: two composes of one
+body produce **different ciphertext and the same id**.
+
+**3. The error-substitution trap, caught before it shipped.** A directory node that has not deployed
+this frame kind has its decoder return `null` and replies `not_authenticated` (`M10B-D25r` F2).
+Passing that through would send an operator to debug KEYS for a day over a rollout artefact — and
+because directory nodes are sovereign and deploy per region, an upgraded daemon meeting an older node
+is the **normal** rollout case, not an edge. Mapped to `submission_unsupported_by_node`, and the test
+asserts the guidance does *not* tell them to check their key.
+
+**What the directory learns: nothing.** The frame carries exactly three fields, asserted by an
+exact-key-set test — because if the FRAME carried a submitter or a subject, the table would want a
+column for it and the privacy property would erode from the wire inward. `authedPubkeyHex` is used
+for logging only, truncated, never persisted. The operator's body text is never logged anywhere; the
+`signal.submission.sealed` event carries a byte count instead, because that log line would otherwise
+be the one place an operator's words about a third party existed in the clear on disk.
+
+**Gates:** cello-client 2081 tests, lint, typecheck, build. trustless-cello 922 tests, lint,
+typecheck. **🟡 — the directory half rides the batched deploy** (hibernated), and protocol-types
+joins the publish debt.
+
+**Not yet wired to an operator surface** — `composeSealedSubmission`/`sendSealedSubmission` have no
+caller until `DOD-END-SURFACE-1`. Staged deliberately, and stated rather than left for a reviewer to
+notice.
+
+### `M10B-D32` — "standard failover across nodes" is the SignalingManager's reconnect, not a client-side fan-out
+
+`DOD-END-SUBMIT-1` says the daemon writes to a directory node *"with the standard failover across
+nodes, since submission must not die on one node being down."* That reads like a client-side
+multi-node write. **Verified before building, and it is not one.**
+
+The daemon holds a **single** signaling stream. Registration — the closest precedent — sends
+`register_request` to the connected node carrying `reachable_node_ids`, and the **directory** picks
+the quorum and fans out (`registration-manager.ts:190–200`). There is no client-side multi-node write
+path in the daemon at all.
+
+So "standard failover" is the existing reconnect (`getFailoverEndpoint` / `failoverEndpointResolver`),
+and building a bespoke fan-out here would duplicate the SignalingManager. **A retry after that
+reconnect is safe for exactly the reason `M10B-D20` exists:** `submission_id` is content-derived, so
+the same body handed to a second node is stored once and minted once.
+
+**The accepted loss is `M10B-D21`'s, unchanged and already written down:** the queue is deliberately
+unreplicated, so a submission written to a node that then dies permanently is lost — recoverable by
+re-submitting, and the thing that must never be lost is the *notarized record*, which lives in
+replicated `signal_records`.
+
+**Stated honestly: nothing retries yet.** The retry is a property of the design, not a line of code,
+until `DOD-END-SURFACE-1` gives this an operator-facing caller. Recorded so it is an AC there rather
+than an assumption here.
