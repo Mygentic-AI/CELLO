@@ -158,11 +158,13 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   SQLCipher storage opened with the daemon's key — the design note decides the topology (tables in
   an existing daemon DB vs a sibling SQLCipher file under the same key; the deciding test is
   Andre's: *the database is what we back up*) and how the key reaches the sidecar (never argv,
-  never world-readable). `cello_backup` captures and `cello_restore` restores them, proven by a
-  round-trip test that finds the config versions and records intact. An existing plaintext store
-  is imported ONCE at first encrypted boot and the plaintext file is then DELETED (leaving it
-  defeats the point); the hash chains restart at a genesis row recording the import; no plaintext
-  store present is normal first boot, not an error. Zero `node:sqlite` imports remain in
+  never world-readable). **AMENDED by Entry C2 evidence (M9C-D6):** `cello_backup`/`cello_restore`
+  are `not_implemented` stubs, so the provable guarantee is custody-and-position — the stores sit
+  under the same key, in the same `~/.cello` set the backup will capture, fail-closed on a missing
+  or wrong key — and the round-trip proof is OWED to the backup build, recorded there when it
+  lands. **AMENDED (M9C-D7):** no plaintext importer is built — no production plaintext store has
+  ever existed (the layer never ran; only tests set the old env paths); a stray dev-machine
+  plaintext store is not consulted. Zero `node:sqlite` imports remain in
   `core/gateway` production code; the two gateway entries in the `eslint.config.mjs` quarantine
   allowlist are REMOVED (the allowlist only shrinks); absence is asserted on the BUILT artifact.
   The false "the daemon does the same" comments die with the files. `M9-CFG-001`'s SI-001 clause
@@ -291,7 +293,16 @@ records are attested to the directory.
 - **M9C-D5 (from policy D-11, Andre 2026-07-28)** — the policy-log command ships WITH the
   enforcement flip, as its attribution mitigation. Security half here; reachability half joins in
   the refusal unit (§15 items 5–8).
-- *(build decisions `M9C-D6+` are appended here as the design notes make them)*
+- **M9C-D6 (Entry C2)** — the STORE-1 backup clause is amended: `cello_backup`/`cello_restore`
+  are stubs, so this unit proves custody-and-position (same key, same set, fail-closed open); the
+  round-trip proof lands with the backup build.
+- **M9C-D7 (Entry C2)** — no plaintext importer: no production plaintext gateway store has ever
+  existed, so an importer would be dead code born dead.
+- **M9C-D8 (Entry C2)** — key handoff to the sidecar is by KEY FILE PATH
+  (`CELLO_GATEWAY_STORE_KEY_FILE`), never key bytes in env or argv.
+- **M9C-D9 (Entry C2)** — both stores live in ONE encrypted file, `~/.cello/gateway.db`, keyed by
+  the `sessions.db.key` bytes; the old `CELLO_GATEWAY_CONFIG_DB`/`_RECORD_DB` env names die.
+- *(further build decisions `M9C-D10+` are appended here as the design notes make them)*
 
 ## Open questions
 - None blocking Tier 1. The design notes own: store topology, key handoff mechanism, chain-genesis
