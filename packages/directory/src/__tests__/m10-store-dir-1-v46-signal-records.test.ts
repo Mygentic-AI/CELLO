@@ -55,10 +55,10 @@ describeIntegration("V46 signal_records migration (DOD-STORE-DIR-1)", () => {
   const insert = (c: PoolClient, r: Record<string, unknown>): Promise<unknown> =>
     c.query(
       `INSERT INTO signal_records
-         (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type,
+         (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type,
           supersedes_hash, status, scanner_version)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [r.signal_hash, r.accepting_node, r.subject_kind, r.subject, r.issuer_kind, r.issuer_pubkey,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [r.signal_hash, r.accepting_node, r.subject_kind, r.issuer_kind, r.issuer_pubkey,
        r.type, r.supersedes_hash ?? null, r.status, r.scanner_version],
     );
 
@@ -78,7 +78,7 @@ describeIntegration("V46 signal_records migration (DOD-STORE-DIR-1)", () => {
   afterAll(async () => {
     if (pool) {
       await pool.query("RESET ROLE").catch(() => {});
-      await pool.query("DELETE FROM signal_records WHERE subject LIKE $1", [`${tag}%`]).catch(() => {});
+      await pool.query("DELETE FROM signal_records WHERE scanner_version = $1", [tag]).catch(() => {});
       await pool.end();
     }
   });
@@ -176,7 +176,10 @@ describeIntegration("V46 signal_records migration (DOD-STORE-DIR-1)", () => {
       expect(cols).toEqual([
         "accepting_node", "created_at", "is_tombstone", "issuer_kind", "issuer_pubkey", "revoked_at",
         "revoker_pubkey", "revoker_signature",
-        "scanner_version", "signal_hash", "status", "subject", "subject_kind",
+        // `subject` REMOVED in V55 — the directory stopped storing WHO a signal is about, which is
+        // what made the endorsement graph readable off a replicated table. Without it the issuer
+        // identity pairs with nobody. See V55's header.
+        "scanner_version", "signal_hash", "status", "subject_kind",
         "supersedes_hash", "type",
       ].sort());
     });

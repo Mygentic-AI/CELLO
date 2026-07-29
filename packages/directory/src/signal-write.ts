@@ -278,7 +278,8 @@ export async function submitSignal(args: {
       throw new SubmitRejected(
         "envelope_invalid",
         `an agent issuer_pubkey must be a 32-byte Ed25519 key as 64 lowercase hex chars, got ` +
-        `${JSON.stringify(envelope.issuer_pubkey)} — a shorter value notarizes but can never be revoked`,
+        `${JSON.stringify(envelope.issuer_pubkey)}. It is INSIDE the hash, so a malformed value is ` +
+        `notarized permanently and every party that re-derives the preimage must reproduce it exactly.`,
       );
     }
 
@@ -295,13 +296,17 @@ export async function submitSignal(args: {
     //    replayed submit resurrect a revoked signal).
     const res = await pool.query(
       `INSERT INTO signal_records
-         (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type,
+         (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type,
           supersedes_hash, status, scanner_version)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',$9)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8)
        ON CONFLICT (signal_hash, accepting_node) DO NOTHING`,
       [
-        derived, acceptingNode, envelope.subject_kind, envelope.subject, envelope.issuer_kind,
-        envelope.issuer_pubkey, envelope.type,
+        // V55: the directory no longer stores the SUBJECT — who a signal is about lives in the
+        // envelope, which is hashed here and delivered to the daemon. Without it the issuer identity
+        // pairs with nobody, so there is no readable edge. `issuer_pubkey` stays because
+        // DOD-END-REVOKE-2's authority check compares a tombstone's revoker against it.
+        derived, acceptingNode, envelope.subject_kind, envelope.issuer_kind, envelope.issuer_pubkey,
+        envelope.type,
         envelope.supersedes_hash === null ? null : Buffer.from(envelope.supersedes_hash).toString("hex"),
         req.scanner_version,
       ],
@@ -737,10 +742,10 @@ export async function revokeSignal(args: {
     const revokeNode = `revoke:${acceptingNode}`;
     const ins = await pool.query(
       `INSERT INTO signal_records
-         (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type,
+         (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type,
           supersedes_hash, status, revoked_at, scanner_version, is_tombstone,
           revoker_pubkey, revoker_signature)
-       VALUES ($1,$2,'agent','(tombstone)','portal','(tombstone)','(tombstone)',NULL,'revoked',now(),'(tombstone)',true,
+       VALUES ($1,$2,'agent','portal','(tombstone)','(tombstone)',NULL,'revoked',now(),'(tombstone)',true,
                $3,$4)
        ON CONFLICT (signal_hash, accepting_node) DO NOTHING`,
       [signalHash, revokeNode, revokerPubkey, revokerSignature],

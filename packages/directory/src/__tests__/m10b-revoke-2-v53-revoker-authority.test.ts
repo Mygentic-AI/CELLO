@@ -37,9 +37,9 @@ describeIntegration("DOD-END-REVOKE-2 / V53 — revoker authority in signal_reco
   }) => {
     await pool.query(
       `INSERT INTO signal_records
-         (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type,
+         (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type,
           status, supersedes_hash, is_tombstone, revoker_pubkey, scanner_version)
-       VALUES ($1,$2,'agent','subj',$3,$4,'endorsement',$5,$6,$7,$8,'test-v0')`,
+       VALUES ($1,$2,'agent',$3,$4,'endorsement',$5,$6,$7,$8,'test-v0')`,
       [o.hash, o.node, o.issuerKind, o.issuerPubkey, o.status ?? "active",
        o.supersedes ?? null, o.tombstone ?? false, o.revoker ?? null],
     );
@@ -178,9 +178,9 @@ describeIntegration("DOD-END-REVOKE-2 / V53 — revoker authority in signal_reco
     await record("h14");
     await pool.query(
       `INSERT INTO signal_records
-         (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type,
+         (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type,
           status, is_tombstone, revoker_pubkey, revoker_signature, scanner_version)
-       VALUES ('h14','n2','agent','subj','portal','(tombstone)','endorsement','revoked',true,'bobkey',$1,'test-v0')`,
+       VALUES ('h14','n2','agent','portal','(tombstone)','endorsement','revoked',true,'bobkey',$1,'test-v0')`,
       [Buffer.alloc(64, 7)],
     );
     const { rows } = await pool.query(

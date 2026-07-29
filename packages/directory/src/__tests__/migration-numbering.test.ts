@@ -34,10 +34,14 @@ const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), "../../db/migra
  *
  * COORDINATION AGREEMENT (2026-07-29, with the M12 session):
  *   - M12 owns V49 and V50. Written, committed, pushed; no further edits.
- *   - This branch owns V51–V54.
+ *   - This branch owns V51–V55 (V55 taken 2026-07-29 — the edge-column removal).
  *   - No overlap, no gaps between the two.
- *   - **V55 is the next free number.** If M12 needs another migration it takes the next number above
+ *   - **V56 is the next free number.** If M12 needs another migration it takes the next number above
  *     the highest on EITHER branch, never fills a gap, and says so first.
+ *
+ * The assertion below is what caught this drifting: it pinned 55, I took 55, and the test failed
+ * rather than the comment quietly going stale. That is the whole reason the number is asserted and
+ * not merely written down.
  *
  * Recorded here rather than in a doc because this is the file that fails when someone forgets.
  */
@@ -92,6 +96,6 @@ describe("directory migration numbering", () => {
     expect(all).not.toContain(nextFree);
     // Sanity: the agreement says V55 is next. If this drifts, the comment above is stale and the
     // other branch has not been told.
-    expect(nextFree, "coordination agreement says V55 is the next free number").toBe(55);
+    expect(nextFree, "coordination agreement says V56 is the next free number").toBe(56);
   });
 });

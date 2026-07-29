@@ -101,14 +101,14 @@ describeIntegration("DOD-REVOKE-1 — revocation through the chokepoint", () => 
 
   afterAll(async () => {
     if (pool) {
-      await pool.query("DELETE FROM signal_records WHERE subject LIKE $1 OR subject='(tombstone)'", [`${tag}%`]).catch(() => {});
+      await pool.query("DELETE FROM signal_records WHERE scanner_version IN ($1, '(tombstone)')", ["test-v0"]).catch(() => {});
       await pool.query("DELETE FROM authorized_issuers WHERE label=$1", [tag]).catch(() => {});
       await pool.end();
     }
   });
 
   beforeEach(async () => {
-    await pool.query("DELETE FROM signal_records WHERE subject LIKE $1 OR (is_tombstone AND signal_hash LIKE $2)", [`${tag}%`, "%"]);
+    await pool.query("DELETE FROM signal_records");
   });
 
   it("revokes a signal it minted, and the effective status becomes revoked", async () => {
@@ -161,7 +161,7 @@ describeIntegration("DOD-REVOKE-1 — revocation through the chokepoint", () => 
     await pool.query("DELETE FROM signal_records WHERE signal_hash=$1", [orphanHash]);
   });
 
-  it("TOMBSTONE + real row: status is revoked, but the view surfaces the REAL subject, not the placeholder", async () => {
+  it("TOMBSTONE + real row: status is revoked, but the view surfaces the REAL issuer, not the placeholder", async () => {
     // After convergence a node holds BOTH the real row (from the minting node) and a tombstone (from
     // the node that got the revoke first). effective_status must be revoked, AND the descriptive
     // fields must be the real ones — the is_tombstone FILTER in the view is what guarantees the
@@ -172,8 +172,11 @@ describeIntegration("DOD-REVOKE-1 — revocation through the chokepoint", () => 
 
     expect(await effective(h)).toBe("revoked");
     const { rows } = await pool.query(
-      "SELECT subject, subject_kind, notarized_by FROM signal_records_effective WHERE signal_hash=$1", [h]);
-    expect(rows[0].subject, "the placeholder must not win the MIN()").toBe(`${tag}-real-subject`);
+      "SELECT issuer_pubkey, subject_kind, notarized_by FROM signal_records_effective WHERE signal_hash=$1", [h]);
+    // Re-pointed after V55 dropped `subject`: the PROPERTY under test is that the tombstone's
+    // placeholder row never wins the descriptive aggregates, and `issuer_pubkey` carries it now —
+    // the tombstone writes '(tombstone)' there too, so it is the same trap on a live column.
+    expect(rows[0].issuer_pubkey, "the placeholder must not win the MIN()").toBe(pubA);
     expect(rows[0].subject_kind).toBe("agent");
     // provenance lists the REAL notarizing node only, never the tombstone's node.
     expect(rows[0].notarized_by).toEqual(["us-east-1"]);
@@ -194,15 +197,17 @@ describeIntegration("DOD-REVOKE-1 — revocation through the chokepoint", () => 
     expect(minted).toBe(h);
 
     // The real notarization SURVIVED — its descriptive fields are present, not the placeholder.
+    // Re-pointed off `subject` after V55 dropped it; `issuer_pubkey` carries the same property,
+    // because the tombstone writes '(tombstone)' there too.
     const { rows } = await pool.query(
-      "SELECT subject, is_tombstone FROM signal_records WHERE signal_hash=$1 AND accepting_node=$2", [h, NODE]);
+      "SELECT issuer_pubkey, is_tombstone FROM signal_records WHERE signal_hash=$1 AND accepting_node=$2", [h, NODE]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].subject).toBe(`${tag}-f1-real`);
+    expect(rows[0].issuer_pubkey).toBe(pubA);
     expect(rows[0].is_tombstone).toBe(false);
     // ...and the signal still reads revoked (the tombstone lives at a distinct PK and wins the status).
     expect(await effective(h)).toBe("revoked");
-    const { rows: eff } = await pool.query("SELECT subject FROM signal_records_effective WHERE signal_hash=$1", [h]);
-    expect(eff[0].subject, "the real subject, not the placeholder").toBe(`${tag}-f1-real`);
+    const { rows: eff } = await pool.query("SELECT issuer_pubkey FROM signal_records_effective WHERE signal_hash=$1", [h]);
+    expect(eff[0].issuer_pubkey, "the real issuer, not the placeholder").toBe(pubA);
     await pool.query("DELETE FROM signal_records WHERE signal_hash=$1", [h]);
   });
 
