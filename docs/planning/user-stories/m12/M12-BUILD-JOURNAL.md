@@ -1315,3 +1315,74 @@ A total absence, rather than an error pointing at the file that caused it.
 `DOD-NODE-DIR-GCP-2` and `-3` are ✅. `MANIFEST-GCP-1` is 🟡 — the directory half is live and
 verified; the cello-client half (bundled manifest constant + publish) is owed. The relay is applied
 and coming up. After that the path to a testable system is `E2E-GCP-1` itself.
+
+---
+
+## Entry 25 — 2026-07-29 — A real client reaches the GCP consortium; registration stops one step short
+
+Drove the actual client against the live GCP system. Everything up to the DKG works; registration
+does not yet complete. Recording the exact frontier rather than a summary, because the next session
+should start from the evidence and not re-derive it.
+
+### What is PROVEN working, client-side
+
+```
+directory.auth.manifest.verified   manifestVersion 1, signerCount 1
+directory.consortium.resolved      declaredNodes 3, resolvedNodes 3
+directory.bootstrap.resolved       http://34.75.172.108:9090 → 12D3KooWMH58hm8x…
+directory.auth.challenge.verified  directoryNodeId gcp-use1
+directory.signaling.connected      verified: true, manifestVersion 1
+```
+
+The client verified the officer-signed manifest, resolved **all three** GCP directories from it,
+bootstrapped, and completed **step-6 directory identity auth** — the directory signed the client's
+challenge with its node key and the client verified it against the manifest. Confirmed from both
+sides; the directory logged `directory.auth.challenge.signed` for the same agent at the same
+instant. That is `DOD-MANIFEST-GCP-1`'s step-6 clause, live.
+
+### The frontier
+
+```
+directory.signaling.stream.ended   {"expected": true}
+registration.failed                {"reason": "signaling_lost"}
+```
+
+The stream ends — and the client marks it **expected** — then registration fails one second later.
+The directory shows no `register_request` or DKG event for that agent, so the ceremony never
+started. What is NOT the cause, established rather than assumed: the dial works, Noise works, the
+manifest verifies, identity auth passes, and all three nodes resolve.
+
+### Four defects fixed getting this far, each invisible until the previous one was
+
+Every one of these looked correct in isolation, which is the point:
+
+1. **The manifest pointed at the libp2p port.** `endpoint: http://IP:8080` — 8080 speaks the
+   WebSocket upgrade and answers plain HTTP with **400**. A correctly signed manifest resolved to
+   ZERO reachable nodes. `/bootstrap` lives on 9090, which I had restricted to Google's probers. On
+   AWS the ALB hides this with path-selective rules onto the same port.
+2. **The advertised multiaddr named a host that does not exist.** `/dns4/directory-gcp-use1.cello.mygentic.ai/…`
+   — those Route53 records live on hibernated AWS and were never created. Well-formed, reachable
+   endpoint, undialable address. Fixed with `CELLO_DIRECTORY_BOOTSTRAP_MULTIADDR` — the seam
+   `DOD-MULTIADDR-1` exists for.
+3. **Capability checking was OFF** (Entry 24's commit) — and had I not found it, this test would
+   have registered without a capability and the pass would have looked like evidence.
+4. **The CLI could never pass a capability.** `register-agent` gated on `CELLO-`/`DEV-` prefixes; a
+   capability is base64url JSON. `preauth-capability.ts` says it is "pasted into `cello register`",
+   so a capability could be minted, signed and accepted by every directory and never get past the
+   client. Fixed in cello-client (`cc994c1`) with a shape check that does NOT import
+   `@cello-protocol/crypto` — the CLI does not depend on it, and adding a package to an operator's
+   install for a paste-error guard is the wrong trade.
+
+### Notes for whoever picks this up
+
+- The whole test needs **no npm publish**: `CELLO_DIR` isolates the daemon profile and
+  `CELLO_CONSORTIUM_MANIFEST` overrides the roster (M12-D4). The bundled manifest stays AWS.
+- Run the CLI from `core/cli/dist/bin/cello.js` in the cello-client worktree to pick up the
+  capability fix without publishing.
+- Mint capabilities with `infra/scripts/mint-preauth-capability.mjs`. Verified against the
+  **published** `@cello-protocol/crypto`: accepts the real one, rejects a flipped signature byte,
+  rejects a different issuer.
+- A unix socket path has a ~104-char limit — a `CELLO_DIR` under the scratchpad fails with
+  `listen EINVAL`. Use a short path like `/tmp/cg2`.
+- Andre's own daemon runs on `~/.cello/daemon.sock`; `CELLO_DIR` gives a separate socket, so this
+  never touches it. Verified before starting anything.
