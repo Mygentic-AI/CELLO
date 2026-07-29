@@ -108,9 +108,12 @@ const manifest = {
     pubkey: n.pubkey,
     region: n.nodeId.replace(/^gcp-/, ""),
     provider: "gcp",
-    // ws, not wss: no TLS terminator sits in front of these nodes yet. The address is what a
-    // client can actually dial today, and an endpoint that lies is worse than one that is plain.
-    endpoint: `http://${n.address}:8080`,
+    // The HTTP port (9090), NOT the libp2p WS port (8080). `endpoint` is the base a client GETs
+    // /bootstrap from to learn the multiaddr and peer id; 8080 speaks the WS upgrade and answers
+    // plain HTTP with 400, which resolves as zero reachable nodes from a valid manifest.
+    // http, not https: no TLS terminator in front of these nodes yet, and an endpoint that lies is
+    // worse than one that is plain.
+    endpoint: `http://${n.address}:9090`,
     peerId: n.peerId,
     role: "validator",
   })),

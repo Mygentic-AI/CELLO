@@ -72,14 +72,25 @@ resource "google_compute_firewall" "node_protocol" {
   }
 }
 
-# Google's health-check and MIG prober ranges. Separate rule because the source is Google
-# infrastructure, not the public internet, and collapsing them would hide that.
-resource "google_compute_firewall" "node_health" {
-  name          = "cello-directory-allow-health-probes"
+# The node's HTTP port. Public, and it has to be: a client bootstraps by fetching
+# GET {endpoint}/bootstrap to learn the directory's multiaddr and peer id, and 8080 is the libp2p
+# WS listener, which answers plain HTTP with 400. Without this the client resolves ZERO nodes from
+# a perfectly valid manifest.
+#
+# On AWS the ALB does path-selective routing — /bootstrap, /manifest and /registry are public rules
+# onto this same port, /health is only a target-group probe. GCP has no load balancer here, so the
+# port is exposed whole. What that adds over AWS is /health, which returns nodeId and schemaVersion:
+# both already public, since nodeId is in the signed manifest. Google's prober ranges are covered by
+# 0.0.0.0/0 and no longer need their own rule.
+#
+# Restoring path-selective exposure is part of putting a TLS terminator in front of these nodes
+# (owed — see the ws-not-wss note in GCP-STATE).
+resource "google_compute_firewall" "node_http" {
+  name          = "cello-directory-allow-http"
   project       = var.project_id
   network       = google_compute_network.cello_vpc.id
   direction     = "INGRESS"
-  source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
+  source_ranges = ["0.0.0.0/0"]
   target_tags   = ["cello-directory"]
 
   allow {
