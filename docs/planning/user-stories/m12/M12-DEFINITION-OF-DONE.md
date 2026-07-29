@@ -417,22 +417,25 @@ description: >
   burn-OR propagates it irreversibly. No worse than today's mesh, but the real trust boundary.
   Hardening = end-to-end owner-signed suspension authorization, mirroring the M8B FROST-stream
   auth deferral. Out of M12.
-- **M12-P8 — AutoNAT tears down the connection anti-entropy runs on (ROOT CAUSE, Entry 31).**
-  A peer's AutoNAT dial-back request makes a directory "dial" that peer; the connection manager
-  returns the EXISTING connection — the one carrying the AE stream — AutoNAT verifies reachability
-  and then CLOSES it as probe cleanup, killing every stream on it. Verified in libp2p's own trace.
-  **The fork, and why it is not a one-liner:** `@libp2p/autonat` bundles the client (probe) and
-  responder (dial-back) roles in one service with no option to split them or to stop it closing.
-  Directories need no NAT detection for themselves (static public IPs), but they currently SERVE
-  the dial-back that CLIENT NAT detection depends on (DOD-NAT-REACHABILITY-1). Options:
-  (a) drop `autoNAT()` from directory nodes and let clients probe RELAYS instead — relays are also
-  service nodes and exist for reachability; (b) fork/patch autonat so the responder does not close a
-  connection it did not create; (c) pin AE to a dedicated connection — rejected in Entry 31 as it
-  leaves the same footgun for FROST and signaling, which also share connections.
-  Leaning (a), but it moves a load-bearing piece of NAT traversal and wants Andre's read.
-  **Scope note:** this is not AE-specific. Any long-lived stream between two publicly addressed
-  CELLO peers is exposed; AE merely runs continuously between directories and so hits it every time.
-  → Entry 31
+- **M12-P8 — AutoNAT tears down the connection anti-entropy runs on. FIXED, live verification owed.**
+  autonat's responder calls `openConnection(multiaddr, options)` — which RETURNS AN EXISTING
+  connection when one is open to that peer — and then closes it in a `finally`, killing every
+  stream multiplexed on it. Explains 100% AE failure, symmetric, stage-independent, and why the
+  loopback enforcer never reproduced it (autonat skips same-host peers, so PUBLIC ADDRESSING is
+  the discriminator). Fixed by a pnpm patch passing `force: true`, which is also semantically
+  correct: reusing a connection made the reachability check vacuous as well as destructive.
+  Kept directories serving dial-back, so client NAT detection (DOD-NAT-REACHABILITY-1) is
+  untouched, and needed no transport change or publish cascade. The Dockerfile copies `patches/`
+  into both install stages and ASSERTS the patch is in the production tree.
+  **Owed:** deploy and confirm `antientropy.peer.authenticated` goes non-zero. Not provable
+  locally — the loopback enforcer cannot reach this path by construction.
+  **Watch:** cello-client also runs autonat; if a client-side stream shows the same teardown, it
+  needs the same patch there. → Entry 31, Entry 32
+- **M12-P9 — two worktrees shared ONE local Postgres.** `docker-compose.yml` pinned the host port,
+  so a second checkout either failed to bind or silently used the first's server — and the spine
+  harness DROPs and re-migrates from scratch. Two branches re-migrating one server to two heads
+  (main V54, this branch V50) produced a bogus `migration.out.of.date` that read like a broken
+  startup guard. `DATABASE_URL` is now the single knob for both bring-up and connect. → Entry 32
 - **M12-P7** — **`verifyChain('user_accounts')` cannot pass on a shared test database.**
   `account-001` AC-005/AC-007 verify the chain over the WHOLE table, but ~10 test files
   `DELETE FROM user_accounts` as cleanup, and `verifyChain` recomputes each row's hash from its

@@ -1730,3 +1730,75 @@ connection, and FROST and signaling share connections too.
 **This is the one that matters beyond M12:** any long-lived CELLO stream between two publicly
 addressed peers is exposed to the same teardown. Anti-entropy surfaced it because it is the first
 protocol to run continuously between two directory nodes.
+
+---
+
+## Entry 32 — 2026-07-29 — The AutoNAT fix is one flag; and the "flyway conflict" was a shared Postgres
+
+Two fixes, unrelated causes, both of which had been wearing someone else's name.
+
+### 1. `force: true` — the whole AutoNAT fix
+
+Entry 31 established the root cause. I recorded the fix as a `@cello-protocol/transport` change
+needing a server/client role switch and a publish cascade, and parked it as a genuine design fork
+because directories SERVE the dial-back that client NAT detection depends on — so "just turn
+autonat off on directories" would move a load-bearing piece of `DOD-NAT-REACHABILITY-1`.
+
+Reading the library instead of reasoning about it collapsed the fork. `@libp2p/autonat`'s responder:
+
+```js
+connection = await this.components.connectionManager.openConnection(multiaddr, options);
+...
+finally { if (connection != null) { await connection.close(); } }
+```
+
+`openConnection` returns an EXISTING connection when one is open to that peer. `@libp2p/interface`
+documents `force?: boolean` as "open a new connection to the remote even if one already exists".
+A pnpm patch adding `{ ...options, force: true }` fixes it.
+
+The part worth keeping: **`force: true` is what the code should always have done.** AutoNAT exists
+to verify that a NEW inbound dial succeeds. Reusing an already-open connection proves nothing about
+dialability — so the bug was not only destroying connections, it was answering the question it
+exists to ask without testing anything. One flag, both defects. That is also why this beats all
+three options I had parked: nothing moves architecturally, directories keep serving dial-back, and
+FROST and signaling stop carrying a footgun that AE merely hit first because it runs continuously.
+
+Guard added, because a patch that fails to apply is invisible: the Dockerfile copies `patches/`
+into BOTH install stages and then greps the production tree for `force: true`, failing the build if
+it is absent. Without the COPY the image builds clean and silently runs unpatched.
+
+**Not provable locally.** The loopback enforcer cannot reach this path by construction —
+autonat skips peers on the same host (`autonat.js:235`). Live deploy is the only proof.
+
+### 2. The "flyway conflict" was never about migrations
+
+Andre asked whether I was doing database upgrades, because it was causing conflicts on both sides.
+It was, and the cause was not the migration files.
+
+**Migration numbers were never in conflict.** `main` holds V45–48 + V51–54; this branch holds
+V49–50. Disjoint, and they merge into a complete sequence. Nothing to renumber.
+
+The real conflict: `docker-compose.yml` pinned the host port to `5433:5432`, so both worktrees
+tried to bind one port. The second either died with "port is already allocated" or connected to
+the FIRST checkout's server — and `ensurePostgres` does `DROP DATABASE ... WITH (FORCE)` +
+`CREATE DATABASE` + Flyway V1→V{N} from scratch. Two agents therefore kept re-migrating a single
+server to two different heads, and each saw the other's head as a broken startup guard.
+
+The tell I missed: the comment at `live-harness.ts:242` describes this exact failure, because I
+had already fixed **half** of it — the harness CONNECTS to whatever `DATABASE_URL` names. But the
+compose file was still pinned, so a second worktree could not bring up a server of its own to
+connect to. A half-fix to a symmetric problem looks like a fix and behaves like the bug.
+
+`DATABASE_URL` is now the single knob: the harness derives `CELLO_PG_HOST_PORT` from it and passes
+it to all seven `docker compose` invocations. Default stays 5433, so nothing on `main` changes.
+
+**Running spine tests in this worktree** requires naming the port explicitly, e.g.
+`DATABASE_URL=postgresql://postgres:dev@localhost:5434/cello_dev`. There is no ambient default that
+would pick a free port — deliberately, since guessing is how the two checkouts collided.
+
+### Where this leaves the critical path
+
+The AE blocker has a fix in hand that has not yet run anywhere. Next is deploy + confirm
+`antientropy.peer.authenticated` goes non-zero, then the registration `signaling_lost` frontier
+(Entry 25) — worth re-testing after this lands, since a stream ending "expected" on a connection
+somebody else closed is the same signature.
