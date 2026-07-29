@@ -2547,3 +2547,91 @@ an agent-issued endorsement delivered into a wallet, and nothing can issue one u
 `daemon@0.0.80` + `cli@0.0.81` carry the fixes.
 
 **Gate:** 2105 tests, lint, typecheck, build green.
+
+---
+
+## Entry 33 — `DOD-END-SURFACE-1` begins: the consent verbs, and three guards that caught dead code — 2026-07-29
+
+**What went in.** The operator half of consent: the `cello_use_agent` nudge, `cello_consent_list` /
+`_accept` / `_refuse` at MCP+CLI parity, and the M10B-D4 refusal message. Commits `3744b19`,
+`bd58925`, `7fe7faf` in cello-client (pushed; they sit on top of the M12 agent's `fb9c23f` cascade,
+so they are NOT in the promoted `latest` — they ride the next one).
+
+**The nudge, and why it does not mark anything notified.** `cello_use_agent` reads
+`countUnnotifiedConsent` and returns `pending_consent` + guidance. It is a COUNT and nothing else.
+Marking notified on selection would record the operator as told about something they were never
+shown; the nudge is a number, the LIST is what shows the items, and `cello_consent_list` is what
+records that they saw them. That keeps `M10B-D5`'s two lifetimes apart — the notification goes
+quiet once seen, the DECISION persists until made. A failed read returns
+`pending_consent: "unknown"` rather than silence (§5a): silence is exactly how an endorsement dies
+unnoticed, so an unknown is surfaced as an unknown.
+
+**The refusal message is a third OP, not a new structure.** `SubmissionOp` gains `refuse` next to
+`submit`/`withdraw`. `op` is a protocol verb — what the caller is ASKING FOR — which is the axis
+INV-ZEROBUMP permits, unlike branching on what a signal MEANS. The widening adds no field and
+reorders nothing, so **every signature already made over a `submit` or `withdraw` body still
+verifies**; a test pins the arity equality so a later change that breaks it cannot pass quietly
+(§5b: is any signature or hash over these bytes? Yes — hence the check). Subject is the target
+signal hash, exactly as for a withdrawal: both verbs act on an existing signal instead of asserting
+a fact about a party.
+
+**Order is the invariant.** The refusal is recorded BEFORE anything that can fail, and every failure
+path returns the refusal with `issuer_notified: false`. A refusal contingent on the network would
+leave a signal Alice believes she rejected sitting in an unrefused state, and she would retry
+against a signal already refused. The test asserts the source POSITIONS of `setConsentState` versus
+compose/send rather than prose about ordering.
+
+**This is `composeSealedSubmission`'s first real caller**, which closes one of the two ACs
+`DOD-END-SUBMIT-1` handed forward ("nothing retries yet — the safety property is real but has no
+caller"). It needs the manifest's intake key at request time, so `verifyStartupManifest` now returns
+the verified manifest object — set ONLY on the path where signatures, validity window, and
+anti-rollback all passed. A sealing key read off an unverified manifest is a key an attacker chose:
+it would seal the operator's words to the attacker instead of the portal.
+
+### Three guards caught real defects, in the order they fired
+
+This is the part worth keeping, because each guard caught something a human reading the diff would
+have called fine.
+
+1. **The daemon vocabulary SOURCE AUDIT** failed the first commit: my nudge guidance named
+   `cello_consent_list_pending`, a tool that did not exist — the guidance was written before the
+   tool was built. Exactly the audit-what-ships case: a string the daemon shows an operator is a
+   promise about the surface.
+2. **The name-parity rule** (MCP name ≡ `cello_` + CLI verb) then rejected
+   `cello_consent_list_pending` against `cello consent list`. Renamed the TOOL rather than bending
+   the CLI verb to match a suffix carrying no meaning — there is nothing else to list.
+3. **`KNOWN_COMMANDS`** rejected an unlisted `consent` command. That guard exists so that adding a
+   CLI verb is deliberate; adding it to the list is the deliberation.
+
+### The defect none of them could catch, and the gap it exposes
+
+The verbs shipped **dead on both surfaces**. The daemon reads `params?.hash_prefix`; the MCP tool
+and the CLI both sent `signal_hash`. Every accept and every refuse would have returned
+`invalid_prefix`.
+
+All three guards above were green across it, and that is the point: **parity of NAMES is not parity
+of CALLS.** They check that a tool exists, that its name matches its CLI verb, and that a name shown
+to an operator resolves to something real. None of them looks at arguments. A verb can be perfectly
+named, correctly listed, fully documented, and completely non-functional.
+
+The fix went to `hash_prefix` rather than moving the handler to `signal_hash`: the handler
+deliberately takes a prefix of ≥8 hex chars, matching `cello trust-signals view <hash>`, and an
+operator reading a hash off `cello consent list` should not have to paste 64 characters to act on it.
+
+The new test (`m10b-surface-1-consent-params.test.ts`) is a source audit: it extracts every
+`params?.<name>` a handler reads and asserts each surface sends only names in that set. Revert-tested
+both times it changed. It also needed fixing twice while being written, which is itself a finding
+worth recording — the first extractor assumed an inline object literal and broke the moment both
+call sites built params conditionally, and the second mistook a function's own opening brace for an
+object literal, making a type annotation (`params:`) look like a parameter being sent. **A source
+audit is code, and it fails in the ways code fails.** Both times it was generalised rather than
+loosened, and the revert test was re-run after each change to prove it still bites.
+
+### State
+
+- Gate: 2143 tests, lint, typecheck, build — all green in cello-client.
+- `cello-unit-reviewer` dispatched on `fb9c23f..HEAD` with the four claimed clauses; findings and
+  fixes land in the next entry.
+- **Clauses still owed on this line:** issue an endorsement for a counterparty; read a refusal
+  message as the ISSUER (the daemon-side drain of the `refuse` op); list held signals + status;
+  withdraw; per-counterparty include/omit at presentation; quota visibility (`DOD-END-QUOTA-1`).
