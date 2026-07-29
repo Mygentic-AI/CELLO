@@ -1485,7 +1485,24 @@ The local convergence enforcer exercises this exact path and passes, so whatever
 the frame logic itself — candidates are the WS transport's framing under real latency, an
 `maxInboundStreams` interaction, or a timeout the loopback never reaches.
 
-### Also found: the migration guard misfires, twice now
+### CORRECTED (same session): the migration guard is FINE — the harness was misconfigured
+
+What follows was wrong, and is kept because the wrong conclusion is the instructive part.
+
+`live-harness` hardcoded `localhost:5433` for both `DATABASE_URL` and `spineDbUrl`. `docker
+compose` honours `COMPOSE_FILE`, so this worktree PROVISIONED and migrated its spine databases on
+its own Postgres (5434) and then started the directory processes against the OTHER checkout's
+(5433), where another agent's branch is applied. A directory counted THIS branch's migration files
+(50) and read THAT branch's applied history (49). Measured both: `5434 max_rank=50`,
+`5433 max_rank=49`.
+
+So the guard was correct throughout and I nearly rewrote it. "The startup check that gates every
+node in every environment is wrong" is a far more expensive conclusion than "the test harness is
+misconfigured", and I reached for the expensive one because the cheap one required noticing another
+agent shares this machine. Fixed the same way as persist-001: derive from `DATABASE_URL`.
+`j-antientropy` is green again, 5/5.
+
+### ORIGINAL, INCORRECT diagnosis follows
 
 The enforcer currently fails to start its directories:
 
