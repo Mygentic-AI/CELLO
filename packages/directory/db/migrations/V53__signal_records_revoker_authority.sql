@@ -32,11 +32,13 @@
 -- Each branch was then proven load-bearing by counterfactual:
 --   supplement instead of replace → the fix is a NO-OP (h4 stays revoked)
 --   drop the real-row-revoked branch → h7 regresses to active
+--   ADD a "NULL revoker ⇒ revoked" branch → an agent record dies to ANY tombstone (the fix defeated)
 --   revoke branches after supersession → h8 (revoked AND superseded) downgrades to superseded
 --   branch 4 without 'directory'      → h10 becomes permanently UNREVOCABLE
 --
--- SAFE TO DEPLOY AHEAD OF THE WRITE-SIDE CHANGE. Every tombstone that exists today has
--- revoker_pubkey NULL, so branch 2 catches it and it reads exactly as it does now. The behavior
+-- SAFE TO DEPLOY AHEAD OF THE WRITE-SIDE CHANGE. Every record that exists today is portal-issued, so
+-- branch 3's institutional escape carries every existing revocation unchanged — measured against the
+-- live table (264 rows, zero agent-issued, zero tombstones), not assumed. The behavior
 -- change is reachable only once something WRITES a revoker, which is the accompanying code change.
 
 ALTER TABLE signal_records ADD COLUMN revoker_pubkey TEXT;
@@ -81,20 +83,31 @@ SELECT
     --    has only ever seen a revocation for.
     WHEN COUNT(*) FILTER (WHERE NOT r.is_tombstone) = 0 AND BOOL_OR(r.is_tombstone) THEN 'revoked'
 
-    -- 2. LEGACY TOMBSTONE (no recorded revoker) → revoked. It was written under the old role-based
-    --    rule and had its authority checked THEN; it keeps its old semantics rather than being
-    --    re-judged by a rule younger than it is. Unreachable for agent-issued records today — which
-    --    is precisely why §5a says to handle it anyway: unreachable is a property of today's data,
-    --    not of the code. Omit it and the migration SILENTLY UN-REVOKES every existing revocation.
-    WHEN BOOL_OR(r.is_tombstone AND r.revoker_pubkey IS NULL) THEN 'revoked'
+    -- ⚠️ THERE IS DELIBERATELY NO "NULL REVOKER ⇒ REVOKED" BRANCH HERE, and an earlier draft of this
+    --    migration had one. It read as conservative — "a tombstone written before V53 had its
+    --    authority checked under the old rule, so keep its old semantics" — and it DEFEATED THE
+    --    ENTIRE FIX. A missing revoker is not a property of AGE: nothing distinguishes a pre-V53
+    --    tombstone from one written a minute ago with the fields simply left out, so the branch
+    --    handed every attacker a role-based escape on exactly the records this migration exists to
+    --    protect. Measured: agent record + NULL-revoker tombstone read `revoked` WITH that branch and
+    --    reads `active` without it.
+    --    Its justification was also false, and measuring it is what showed that: branch 4 below
+    --    ALREADY catches every institutional legacy revocation (portal and directory records with a
+    --    NULL-revoker tombstone still read `revoked`), and branch 1 catches tombstone-only. So the
+    --    branch protected NOTHING — verified against the data as well as the logic: `signal_records`
+    --    holds zero agent-issued rows and zero tombstones, so no legacy agent tombstone exists to
+    --    grandfather in the first place.
+    --    ABSENT IS NOT FINE (§5a): a tombstone that cannot prove its authority does not get one.
 
-    -- 3. A REAL (non-tombstone) row carrying status='revoked' → revoked. No writer produces this
+    -- 2. A REAL (non-tombstone) row carrying status='revoked' → revoked. No writer produces this
     --    today, but UPDATE is granted, 'revoked' is in the column CHECK, and signal-write.ts already
     --    does `UPDATE … SET status='superseded'`. Measured: without this branch, h7 regresses from
     --    revoked to active.
     WHEN BOOL_OR(r.status = 'revoked' AND NOT r.is_tombstone) THEN 'revoked'
 
-    -- 4. INSTITUTIONAL issuers keep ROLE-BASED authority. The general rule, stated so the next
+    -- 3. INSTITUTIONAL issuers keep ROLE-BASED authority. This is ALSO what carries every pre-V53
+    --    tombstone, since every record that exists today is portal-issued — which is why no
+    --    NULL-revoker branch is needed above. The general rule, stated so the next
     --    issuer_kind is not another one-off: role-based for INSTITUTIONS (portal, directory), whose
     --    keys are rotating instruments and where the institution — not the key — is the issuer;
     --    exact-pubkey for AGENTS, where the key IS the identity. An UNRECOGNISED future issuer_kind
@@ -104,7 +117,8 @@ SELECT
     WHEN BOOL_OR(r.is_tombstone)
          AND MIN(r.issuer_kind) FILTER (WHERE NOT r.is_tombstone) IN ('portal', 'directory') THEN 'revoked'
 
-    -- 5. AGENT issuers: EXACT-PUBKEY authority — the tombstone's revoker must be the record's issuer.
+    -- 4. AGENT issuers: EXACT-PUBKEY authority, and with no NULL-revoker escape above it this is now
+    --    the ONLY way an agent-issued record can be revoked — the tombstone's revoker must be the record's issuer.
     --    Two aggregates combined by an operator, which is legal SQL; `BOOL_OR(x = MIN(y))` is a
     --    NESTED aggregate and is not. COALESCE is required and is not decoration: ARRAY_AGG … FILTER
     --    over zero matching rows returns NULL (not '{}'), NULL && anything is NULL, and a NULL WHEN

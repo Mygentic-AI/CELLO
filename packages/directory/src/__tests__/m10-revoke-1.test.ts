@@ -296,12 +296,29 @@ describeIntegration("DOD-REVOKE-1 — revocation through the chokepoint", () => 
       expect(await effective(h)).toBe("revoked");
     });
 
-    it("a revoke with NO inner authorization records no revoker — the legacy path, unchanged", async () => {
-      const h = await mint(envelope());
-      await revokeSignal(await revokeArgs(h, keyA, pubA));
+    it("a revoke with NO inner authorization is INERT against an AGENT record", async () => {
+      // Previously this used a PORTAL envelope and asserted only that revoker_pubkey was NULL — it
+      // never checked effective_status, so an implementation letting any submitter kill any
+      // endorsement passed it exactly as written. That is what let the NULL-revoker bypass ship.
+      const [, bobPub] = await (async (): Promise<[Signer, string]> => {
+        const kp = generateKeypair(); return [kp, hex(await kp.getPublicKey())];
+      })();
+      const h = await mint(envelope({ issuer_kind: "agent", issuer_pubkey: bobPub }));
+      await revokeSignal(await revokeArgs(h, keyA, pubA));   // portal-signed, no inner authorization
       const { rows } = await pool.query(
         "SELECT revoker_pubkey FROM signal_records WHERE signal_hash=$1 AND is_tombstone", [h]);
       expect((rows[0] as { revoker_pubkey: string | null }).revoker_pubkey).toBeNull();
+      expect(await effective(h)).toBe("active");             // ← the assertion that was missing
     });
+
+    it("...while a PORTAL record with no inner authorization still revokes", async () => {
+      // The portal's existing revoke path (directory-submit sends no revoker) must keep working —
+      // it goes through the institutional escape, which is exactly why requiring the inner
+      // authorization outright would have broken production revocation for no security gain.
+      const h = await mint(envelope());                       // issuer_kind: portal
+      await revokeSignal(await revokeArgs(h, keyA, pubA));
+      expect(await effective(h)).toBe("revoked");
+    });
+
   });
 });

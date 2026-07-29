@@ -83,14 +83,31 @@ describeIntegration("DOD-END-REVOKE-2 / V53 — revoker authority in signal_reco
     expect(await statusOf("h1")).toBe("revoked");
   });
 
-  it("a LEGACY tombstone (NULL revoker) keeps its OLD role-based semantics", async () => {
-    // Branch 2, and the migration-safety property: every tombstone written before V53 has
-    // revoker_pubkey NULL. Omit this branch and the migration SILENTLY UN-REVOKES every existing
-    // revocation — `{NULL} && {'bobkey'}` is false. Unreachable for agent-issued records today,
-    // which is exactly why §5a says to handle it.
-    await record("h5");
-    await tombstone("h5", null);
-    expect(await statusOf("h5")).toBe("revoked");
+  it("A TOMBSTONE WITH NO REVOKER IS INERT AGAINST AN AGENT RECORD — the bypass, closed", async () => {
+    // THIS TEST PREVIOUSLY ASSERTED THE OPPOSITE, and that is the finding worth keeping. The first
+    // version of V53 had a "NULL revoker ⇒ revoked" branch justified as preserving legacy semantics,
+    // and this test — using an AGENT record — asserted `revoked` and called it correct.
+    //
+    // It defeated the entire unit. A missing revoker is not a property of AGE: nothing distinguishes
+    // a pre-V53 tombstone from one written a minute ago with the fields simply omitted. And the only
+    // revoke producer in the system (the portal's directory-submit) sends no revoker at all, so
+    // EVERY revoke took that path and exact-pubkey authority was unreachable in production.
+    await record("h11");                       // issuer_kind: agent, issuer bobkey
+    await tombstone("h11", null);              // no inner authorization at all
+    expect(await statusOf("h11")).toBe("active");
+  });
+
+  it("...but an institutional record with a NULL-revoker tombstone STILL revokes", async () => {
+    // The other half, and the reason the NULL branch was not needed: branch 3's institutional escape
+    // already carries every pre-V53 revocation. Verified against the data too — signal_records holds
+    // zero agent-issued rows and zero tombstones, so no legacy agent tombstone exists to grandfather.
+    await row({ hash: "p1", node: "n1", issuerKind: "portal", issuerPubkey: "portalkey" });
+    await tombstone("p1", null);
+    expect(await statusOf("p1")).toBe("revoked");
+
+    await row({ hash: "d1", node: "n1", issuerKind: "directory", issuerPubkey: "dirkey" });
+    await tombstone("d1", null);
+    expect(await statusOf("d1")).toBe("revoked");
   });
 
   it("a PORTAL record is revocable by a ROTATED portal key — role-based authority survives", async () => {
@@ -155,14 +172,23 @@ describeIntegration("DOD-END-REVOKE-2 / V53 — revoker authority in signal_reco
     expect((rows[0] as { issuer_kind: string }).issuer_kind).toBe("agent");
   });
 
-  it("carries revoker_signature as AUDIT EVIDENCE — nullable, and nothing verifies it", async () => {
-    // Named honestly (M10B-D28, third review F6): logical replication applies rows and never re-runs
-    // revokeSignal, so a peer node accepts whatever revoker the originating node wrote. The column
-    // makes forgery detectable IN PRINCIPLE and prevents nothing, because the read path is a view
-    // and a view cannot check Ed25519. The compromised-node case stays OPEN.
-    const { rows } = await pool.query(
-      "SELECT is_nullable FROM information_schema.columns WHERE table_name='signal_records' AND column_name='revoker_signature'",
+  it("PERSISTS the revoker signature — asserted on the stored bytes, not on nullability", async () => {
+    // The previous version asserted `is_nullable = 'YES'`, which ANY nullable BYTEA column satisfies
+    // — including one nothing ever writes. It tested the schema, not the claim in its own name.
+    await record("h14");
+    await pool.query(
+      `INSERT INTO signal_records
+         (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type,
+          status, is_tombstone, revoker_pubkey, revoker_signature, scanner_version)
+       VALUES ('h14','n2','agent','subj','portal','(tombstone)','endorsement','revoked',true,'bobkey',$1,'test-v0')`,
+      [Buffer.alloc(64, 7)],
     );
-    expect((rows[0] as { is_nullable: string }).is_nullable).toBe("YES");
+    const { rows } = await pool.query(
+      "SELECT revoker_signature FROM signal_records WHERE signal_hash='h14' AND is_tombstone");
+    expect((rows[0] as { revoker_signature: Buffer }).revoker_signature.length).toBe(64);
+    // ...and it is AUDIT EVIDENCE, not a defense: the view reaches `revoked` from revoker_pubkey
+    // alone and never looks at these bytes, because a view cannot verify Ed25519. Stated by asserting
+    // the status is decided WITHOUT the signature having been checked by anything.
+    expect(await statusOf("h14")).toBe("revoked");
   });
 });

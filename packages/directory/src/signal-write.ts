@@ -544,10 +544,21 @@ interface SignalRevokeRequest {
 }
 
 /**
- * Domain tag for the inner revoke authorization. BYTE-IDENTICAL LOCAL COPY of the protocol-types
- * builder, per the M7-WIRE-001 convention already used for `buildAgentRevocationTbs`: the directory
- * keeps its own copy until a publish ships the helper here, and a drift-guard test plus the live
- * spine catch any divergence.
+ * Domain tag for the inner revoke authorization.
+ *
+ * ⚠️ THIS IS A NET-NEW WIRE CONTRACT WITH NO COUNTERPART YET, and an earlier comment here claimed
+ * otherwise — that it was a "byte-identical local copy per the M7-WIRE-001 convention, with a
+ * drift-guard test and the live spine catching divergence". That convention is real
+ * (`buildAgentRevocationTbs`, and both its drift guards exist) but it describes a local copy of a
+ * builder that ALREADY EXISTS upstream. There is no upstream builder here, so no drift guard is even
+ * possible — a drift guard against a single implementation is a tautology — and the sentence
+ * asserted a safety net that does not exist.
+ *
+ * **NOTHING PRODUCES THIS SIGNATURE YET.** The only revoke producer in the system
+ * (`cello-portal/src/server/trust/directory-submit.ts`) sends no revoker, so the exact-pubkey branch
+ * is unreachable in production until a producer lands. Owed: ship this builder in
+ * `@cello-protocol/protocol-types` (the daemon and the portal must generate identical bytes), then
+ * add the drift guard against it — an AC on `DOD-END-WITHDRAW-1`.
  *
  * Distinct from `CELLO-REVOKE-v1` (AGENT revocation — a different structure entirely),
  * `CELLO-TSIG-v1`, `CELLO-TSIG-REQ-v1` and `CELLO-SUBMIT-v1`, so no signature can be replayed across
