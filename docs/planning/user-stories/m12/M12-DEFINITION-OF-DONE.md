@@ -327,7 +327,11 @@ description: >
   pinned URL (`not_in_consortium` → `failover to gcp-use1` → `auth.challenge.verified`);
   (d) **kill-switch pause biting across all three nodes** — never exercised;
   (d) **kill-switch pause biting across all three nodes** — still never exercised;
-  (e) **seal** — ❓ UNPROVEN, not broken (Entry 41 corrected by Entry 42). Bidirectional content
+  (e) **seal** — ✅ PROVEN (Entry 44). Bilateral seal completed across GCP with an identical
+  `sealed_root efabec57bc12e8122ef61635a075086efb4b8761ece461a866ca8978cd0d9a28` returned to BOTH
+  sides, a notarized legibility certificate, and `sealed-receipt` retrievable. Earlier text kept
+  below for the history of how it got there:
+  ~~❓ UNPROVEN, not broken (Entry 41 corrected by Entry 42). Bidirectional content
   delivered (`sequence_number 2, delivered true`) and BOTH sides submitted seal leaves, but no
   session has been OBSERVED reaching `sealed` — `sealed-receipt` returns `not_sealed_yet` in every
   attempt so far. The earlier "wedged forever, no escape" reading was WRONG: the bilateral wait is
@@ -338,7 +342,11 @@ description: >
   **Real (smaller) findings that stand:** the `seal_interrupted_in_progress` guidance names a
   timeout without saying it is ~11 minutes and never mentions `--force`; and `inbox` listed a
   session under `sealed_unread` that `sealed-receipt` reports as `not_sealed_yet` — those two
-  disagree and one of them is wrong.
+  disagree and one of them is wrong.~~
+  **OPEN, and the reason (e) took so long:** the same two agents could NOT seal before a directory
+  restart and COULD after it, with no code change in between. Root cause NOT established — see
+  Entry 44. Until it is, a directory restart is an undocumented precondition for sealing a
+  recently-registered agent, which is launch-relevant.
 
 ## Tier P3 — Wave 2: AWS rejoins + the launch claim
 

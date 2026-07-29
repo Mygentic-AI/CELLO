@@ -2641,3 +2641,61 @@ The relay ships only `[RELAY] Peer connected/disconnected` to Cloud Logging — 
 for seal-leaf submission. That hop is opaque, and it is exactly the hop between "client submitted"
 and "directory never saw it". Diagnosing anything that crosses the relay currently requires
 guessing.
+
+---
+
+## Entry 44 — 2026-07-29 — THE SEAL COMPLETES on GCP; but I could not prove WHY it started working
+
+### The result
+
+```
+close-session (tess) -> {"ok":true,"sealed_root":"efabec57bc12e8122ef61635a075086efb4b8761ece461a866ca8978cd0d9a28", ...}
+close-session (sam)  -> {"ok":true,"sealed_root":"efabec57bc12e8122ef61635a075086efb4b8761ece461a866ca8978cd0d9a28", ...}
+sealed-receipt       -> ok:true, legibility certificate attached
+```
+
+**Identical sealed root on both sides**, a notarized legibility certificate, and a retrievable
+receipt. `DOD-E2E-GCP-1`'s seal clause is met. The complete chain now runs on GCP with AWS
+contributing nothing:
+
+register → 3-node FROST DKG → cross-node discovery → presence replication → cross-node brokering →
+threshold signing → relay session → bidirectional messages → **bilateral seal + notarized receipt**.
+
+### What I got wrong on the way, and did not ship
+
+Entry 43 named the cause as the boot-only in-memory profile cache, quoting the deferred M8B
+"absent-node reconcile" item — which fits the symptom perfectly and is written down in CLAUDE.md as
+a known gap. It was the obvious answer.
+
+**It is also wrong, and reading the code rather than the symptom is what showed it.** The seal path
+calls `#resolvePrimaryPubkey`, and that already uses `getProfileWithReadThrough` — a DB query whose
+own docblock describes exactly this bug and says "fixing it at the store layer fixes every
+getProfile consumer at once". A read-through would have found the row if the row existed. So the
+boot-only cache cannot be the explanation.
+
+Which leaves the row genuinely absent from the sealing node's DATABASE at the time — anti-entropy
+replication lag, not a cache. The restart is then a red herring: ~30 minutes also passed, which is
+plenty of anti-entropy cycles.
+
+**I cannot distinguish those two from the evidence I have**, and the restart confounded the
+experiment by changing both variables at once. Saying "the cache was the cause" would have been the
+third time this milestone I named something the evidence did not support — and it would have sent
+someone to fix a cache that is already fixed.
+
+### The experiment that settles it
+
+Register a fresh agent, then IMMEDIATELY attempt a seal brokered by a node that was not in its DKG
+quorum, with no restart:
+- fails, then succeeds minutes later on its own → **replication lag**
+- fails until that node restarts → **the cache path is not being taken**, and the read-through is
+  not reaching this call site the way the code suggests
+
+One run, one variable. Until then the honest statement is: **a recently-registered agent may fail
+to seal on a node that was not in its DKG quorum, and the window closes on its own or on restart.**
+
+### Launch relevance
+
+Not cosmetic. Registrations are continuous in production, and the sealing node is whichever one
+brokered — frequently not one of the DKG quorum. If the window is replication lag it is bounded and
+probably tolerable; if it needs a restart it is not. That is the whole reason the distinction is
+worth one clean experiment rather than a guess.
