@@ -312,57 +312,40 @@ in the journal before any code ([[M9B-PROCEDURE]] §6).
   the `sessions.db.key` bytes; the old `CELLO_GATEWAY_CONFIG_DB`/`_RECORD_DB` env names die.
 - *(further build decisions `M9B-D10+` are appended here as the design notes make them)*
 
-## Found live after publish (2026-07-29) — NOT fixed, and the cause is NOT yet known
+## Found live after publish, and FIXED (2026-07-29)
 
-**`DOD-M9B-AUDIT-1` and `DOD-M9B-WIRE-1`'s "records on every screened message" clause are BROKEN in
-production.**
+**The audit surface was destroying the audit trail.** Screening worked on the live daemon while
+`security_records` stayed empty. Mechanism, reproduced against the shipped binary:
 
-### What is established
+```
+1. sidecar screens          -> record written, visible, -wal present
+2. a reader opens + CLOSES  -> SQLite unlinks -wal/-shm from under the LIVE sidecar
+3. sidecar screens again    -> the write lands in the orphaned WAL
+4. a fresh reader sees      -> only the FIRST record
+```
 
-- **Screening works end to end through the shipped daemon.** An outbound message carrying an
-  AWS-key-shaped string returned `modified: true`, `stage:"secrets"`,
-  `disposition:"redact"`, `category:"secret:aws-access-token"`, and arrived redacted. The
-  transformation came back on the SEND call, so this is the outbound path, not the peer's inbound.
-- **`security_records` is empty.** Zero rows for that message and for the clean one before it.
-  Confirmed twice: `cello policy log` (empty, `chainValid: true`) and opening the encrypted store
-  directly with the daemon's key.
-- **The sidecar's `gateway.db-wal` and `gateway.db-shm` are UNLINKED while it still holds them
-  open.** `lsof` lists all three; the directory lists only `gateway.db`.
-- **`gateway.db` is the SAME inode** the sidecar holds (233282873) — so readers and the sidecar do
-  share the main file. Not a deleted-main-file case.
-- The sidecar is alive, is the only gateway process, and carries both store environment variables,
-  so its record store was constructed.
+`cello policy log` and `cello config list` — the surfaces whose whole job is showing what the layer
+did — silently destroyed the record of what it did next.
 
-### My stated cause was WRONG, and it is worth recording that it was
+**Cause: this milestone's own decision** to open the store per call rather than hold a handle, on
+the reasoning that config commands are rare and a second long-lived handle buys only lock
+contention. The reasoning was wrong in the one way that mattered — it is not contention, it is that
+a close performs last-connection cleanup while another process is still writing.
 
-I wrote — in this document and in the journal — that the daemon's open-the-store-per-call design
-checkpoints and unlinks the WAL out from under the long-lived sidecar, i.e. *"the audit surface
-destroys the audit trail by reading it."* **That is falsified.** Two reproductions against the
-shipped build:
+**Fix (daemon 0.0.88):** the config and record handles are opened lazily and held for the process
+lifetime. Process exit releases them, and the sidecar is torn down first. Verified in the published
+tarball.
 
-1. **In-process**, long-lived writer + short-lived reader that opens and closes: WAL survives the
-   close, and a fresh reader sees every record.
-2. **Cross-process** (writer in a forked child, exactly production's shape): same result — WAL
-   survives, fresh reader sees both records.
+**Regression test** (`DOD-M9B-GATE-1`): screen → read THROUGH THE OPERATOR SURFACE → screen → read.
+The second read must see both. Reverting to open-per-call makes it see one.
 
-So the store machinery is sound in both shapes and something else unlinked those files. I asserted
-a mechanism from a plausible-looking clue and would have "fixed" the wrong thing.
+**Why the gate missed it originally:** it drove the sidecar socket directly and never read through
+the surface that does the damage. Green about the wrong noun, in the test written to stop being
+green about the wrong noun.
 
-### What is NOT yet known
-
-What unlinked `-wal`/`-shm`, and — the question that actually matters — why a `records.record()`
-call that cannot have thrown (a throw becomes `screen_error` and blocks; the message was delivered)
-leaves no row a later reader can see. Those may be the same fact or two.
-
-**Next step is evidence, not a fix:** a fresh daemon, one message, and an inspection that never
-opens the store through the operator surface — so the reader is ruled in or out by construction
-rather than by argument.
-
-### Why the gate missed it
-
-`DOD-M9B-GATE-1` drives the sidecar socket directly and sees records appear — proving the sidecar
-CAN record. Production reaches it through a different door. Whatever the cause turns out to be, the
-gate needs an assertion that reads records back through the OPERATOR surface after real traffic.
+**Two wrong diagnoses on the way, both recorded rather than tidied away** (journal C12/C13/C14): I
+asserted this mechanism from a clue without testing it, then "falsified" it with a reproduction
+whose forked child sat idle and declared it dead. Only the real-daemon shape reproduces it.
 
 ## Open questions
 - None blocking Tier 1. The design notes own: store topology, key handoff mechanism, chain-genesis

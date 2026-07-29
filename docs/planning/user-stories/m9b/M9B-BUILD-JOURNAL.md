@@ -27,7 +27,9 @@ description: >
   daemon reads `security.gateway.connected {"mode":"enforcing"}`.
 - **✅** `DOD-M9B-STORE-1`, `DOD-M9B-ENV-1`. **🟡** `-WIRE-1`, `-SURFACE-1`, `-AUDIT-1`, `-GATE-1`.
   `-PUBLISH-1` shipped to beta + promoted.
-- **🔴 NEXT, and it is a real defect found live AFTER publish:** screening works end to end
+- **✅ The audit-trail defect is FIXED and published** (daemon 0.0.88, cascade `v0.0.141`, Entry
+  C15). `latest` promotion owed — Andre's.
+- **Superseded, kept for the trail:** screening works end to end
   (an outbound AWS-key-shaped string came back redacted from the real daemon) but **nothing is
   recorded** — the sidecar's WAL is unlinked while it still holds it open, and the cause is this
   milestone's own open-the-store-per-call decision on the daemon side. The audit surface destroys
@@ -886,3 +888,55 @@ after a proven redaction. If no, something else eats the rows and the unlink is 
 answer: hold a long-lived daemon handle (if the open/close cycle is the trigger) versus something
 about how the sidecar's connection recovers (if writes survive the unlink). Choosing between them by
 argument is how the last two hours went.
+
+---
+
+## 2026-07-29 — Entry C15: fixed, published, verified in the tarball
+
+**The decisive test, run at last instead of described:**
+
+```
+1. screen #1 -> redact
+2. reader opens + closes        -> -wal UNLINKED
+3. screen #2 -> redact
+4. fresh reader sees: 1          => write #2 LOST. Chain confirmed.
+```
+
+Then the fix, tested through the DAEMON'S OWN IPC rather than a probe script — the first attempt
+was itself the reader doing open/close, so it never exercised the fix at all:
+
+```
+1. screen #1 -> redact
+2. operator surface (cello policy log) sees: 1
+3. screen #2 -> redact
+4. operator surface now sees: 2   ✅ writes survive the read
+```
+
+**Fix:** the config and record handles are opened lazily and held for the process lifetime. No
+connection performs the last-connection close while the sidecar is alive.
+
+**Shipped:** cascade `v0.0.141` — daemon 0.0.88, cli 0.0.89, connect 0.0.98. Both CI runs green.
+`gateway`, `crypto`, `protocol-types`, `transport` untouched since the last cascade and deliberately
+not bumped. Verified in the tarball: `dist/gateway-config-handlers.js` assigns both cached handles,
+and the only surviving `store.close()` string is inside the comment explaining its removal.
+
+**Carried, not mine:** this cascade also ships two commits from the concurrent session — the
+`CELLO_MCP_TRACE` recorder and a BREAKING rename of the session-id parameter to `cello_session_id`.
+Both were already on main and green under the full gate here (1630 tests). Flagged to Andre before
+promotion rather than slipped through under a cascade headlined by the audit-trail fix.
+
+**`latest` promotion is owed and is Andre's:**
+
+```
+npm dist-tag add @cello-protocol/connect@0.0.98 latest
+npm dist-tag add @cello-protocol/cli@0.0.89 latest
+npm dist-tag add @cello-protocol/daemon@0.0.88 latest
+npm dist-tag add @cello-protocol/gateway@0.0.13 latest
+npm dist-tag add @cello-protocol/crypto@0.0.30 latest
+npm dist-tag add @cello-protocol/transport@0.0.34 latest
+npm dist-tag add @cello-protocol/protocol-types@0.0.32 latest
+```
+
+Then `npm i -g @cello-protocol/cli@latest @cello-protocol/connect@latest`, `cello logout && cello
+login`, reconnect the MCP. **The proof that it took:** send one message, then `cello policy log` —
+it should show a row. Before this fix it showed nothing, forever, after the first read.
