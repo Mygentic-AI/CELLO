@@ -22,7 +22,7 @@ Both participants should have independent, matching transcripts stored in their 
 Switch to the initiating agent (`cello_use_agent` if needed), then:
 
 ```
-cello_transcript({ session_id: SESSION_ID })
+cello_transcript({ cello_session_id: SESSION_ID })
 ```
 
 Record:
@@ -36,7 +36,7 @@ Record:
 Switch to the target agent (`cello_use_agent`), then:
 
 ```
-cello_transcript({ session_id: SESSION_ID })
+cello_transcript({ cello_session_id: SESSION_ID })
 ```
 
 ### Step 1c — Verify consistency
@@ -69,7 +69,7 @@ Both agents should have the same sealed receipt with a matching `sealed_root`.
 
 For each agent:
 ```
-cello_sealed_receipt({ session_id: SESSION_ID })
+cello_sealed_receipt({ cello_session_id: SESSION_ID })
 ```
 
 ### Step 2b — Verify consistency

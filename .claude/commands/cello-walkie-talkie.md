@@ -102,8 +102,8 @@ Note the `sessionId`. If it returns `standing_receiver_unavailable`, the respond
 Then send your opening message (1–3 sentences, plain prose — no signal tokens in content) with `signal: "over"`, then immediately call `cello_receive`:
 
 ```
-cello_send({ session_id: "SESSION_ID", content: "your opening message", signal: "over" })
-cello_receive({ session_id: "SESSION_ID", timeout_ms: 30000 })
+cello_send({ cello_session_id: "SESSION_ID", content: "your opening message", signal: "over" })
+cello_receive({ cello_session_id: "SESSION_ID", timeout_ms: 30000 })
 ```
 
 ### If you are the **responder** — listen first (you start WAITING)
@@ -123,7 +123,7 @@ If `totalMatched` is 0, the initiator hasn't connected yet — call `cello_sessi
 Once `cello_sessions()` shows an active session for your agent, block on its real `sessionId`:
 
 ```
-cello_receive({ session_id: "SESSION_ID", timeout_ms: 30000 })
+cello_receive({ cello_session_id: "SESSION_ID", timeout_ms: 30000 })
 ```
 
 If it times out, call `cello_sessions()` again, then `cello_receive` again. When their message arrives you are now HOLDING — compose a reply (with its token) and send it.
@@ -135,7 +135,7 @@ If it times out, call `cello_sessions()` again, then `cello_receive` again. When
 Run the walkie-talkie loop. In WAITING:
 
 ```
-cello_receive({ session_id: "SESSION_ID", timeout_ms: 30000 })
+cello_receive({ cello_session_id: "SESSION_ID", timeout_ms: 30000 })
 ```
 
 - **Message ends in `[[OVER]]`** → compose a reply with a signal token, `cello_send` it, go back to WAITING.
