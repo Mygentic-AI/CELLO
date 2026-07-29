@@ -2716,3 +2716,72 @@ Republishing was not optional: npm version ≡ published content, and leaving 0.
 different source would hand anyone who installed it the blind-consent build permanently.
 
 **`latest` promotion is Andre's and is NOT run here** — prepared in the handoff below.
+
+---
+
+## Entry 35 — the issue verb, and why it is not called `cello_endorse` — 2026-07-29
+
+`cello_trust_signals_issue` / `cello trust-signals issue <pubkey> <text…>` (cello-client `3e71255`).
+Severity-1 in this milestone's own triage — *"Bob's agent supplies an endorsement for Alice"* — and
+until now the submission machinery built by `DOD-END-SUBMIT-1` had no way for an operator to invoke
+it. A mechanism reachable only by daemon IPC is the `DOD-SETTINGS-SURFACE-1` mistake repeated.
+
+**The naming was the design decision.** `cello_endorse` is the obvious name and it would have baked
+the type into the operator surface permanently — a per-type construct in cello-client, which is
+exactly what the zero-bump lens is instructed to flag. The verb is type-free instead, and it is
+type-free *by construction* rather than by discipline: **the submission wire carries no type field
+at all.** `SubmissionBody` is `{v, op, subject_kind, subject, submitter_pubkey, body, issued_at}` —
+the PORTAL decides what it mints. So a second client-sourced type needs no new verb, no new
+parameter, and no client change, which is precisely what `DOD-END-PLAYBOOK-1` has to demonstrate
+with an empty client diff. The proof got easier because the surface refused to learn the type.
+
+**The refactor came first, deliberately.** `refuse` and `issue` are the same journey with a different
+`op`. Rather than write the second copy, the compose→seal→send path was extracted to
+`submitForAgent`, which owns every guard: the online check (so sending never brings a stopped agent
+online as a side effect), the body cap (so an oversized paste never dies in the transport wearing a
+transport's error label), the key-provider lookup, and the forwarding of compose/send causes. **A
+second hand-written copy is how two paths that must agree stop agreeing** — the next verb would have
+inherited whichever subset its author remembered. INV-ATTRIBUTION holds inside the helper by
+construction: the provider is looked up from the selected agent and there is no parameter through
+which a caller could name another identity.
+
+Behaviour preservation is the spec for a refactor, so the refusal source-audits were **re-pointed at
+the shared path rather than deleted** (§5b — triage by subject-under-test, never by file), plus four
+assertions covering the guards once in the place they now live.
+
+**Refused at the source, with actionable reasons:** a subject that is not 64 hex chars, an empty
+body, and SELF-issuance. The portal is the real enforcer of `INV-NO-SELF-STANDING` (only it sees
+account linkage), but an agent endorsing *itself* is detectable here with certainty, and refusing
+early beats a silent rejection at intake minutes later.
+
+The success response says **`queued`, never "issued"** — the portal must still drain, authenticate,
+scan and mint, and the subject must then ACCEPT before anyone else sees it. Three steps that have
+not happened.
+
+**The exhaustive SKILL.md audit paid for itself immediately**, failing the build on this verb being
+undocumented. It had been a fixed sample of six tool names until Entry 34 rewrote it to run off
+`DUAL_SURFACE_VERBS`; the first thing it caught was a gap predating this milestone
+(`cello_dismiss`), and the second was this one.
+
+### PREPARED FOR ANDRE — the `latest` promotion (NOT run here)
+
+Two cascades published to **beta** and verified against the tarballs (real cross-pins, no
+`workspace:*`, the changed symbols present in `dist/`): `v0.0.135` then `v0.0.136`.
+
+`latest` still points at the M12 agent's earlier set, so none of M10B's consent or issue surface is
+on the default install path yet. The promotion is operator-run, always:
+
+```bash
+npm dist-tag add @cello-protocol/connect@0.0.93 latest
+npm dist-tag add @cello-protocol/cli@0.0.84 latest
+npm dist-tag add @cello-protocol/daemon@0.0.83 latest
+npm dist-tag add @cello-protocol/gateway@0.0.9 latest
+npm dist-tag add @cello-protocol/crypto@0.0.27 latest
+npm dist-tag add @cello-protocol/transport@0.0.31 latest
+npm dist-tag add @cello-protocol/protocol-types@0.0.29 latest
+```
+
+**Do not run this yet if the issue-verb review is still open** — `3e71255` landed AFTER `v0.0.136`,
+so the issue verb is not in any published artifact. A third cascade is owed once that review's
+findings are fixed, and promoting before it would put the reviewed-consent surface on `latest` while
+the issue verb exists only in git.
