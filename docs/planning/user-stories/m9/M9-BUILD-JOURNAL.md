@@ -25,8 +25,9 @@ description: >
 - **WHERE THE CODE IS:** branch `m9/connect-unit`, worktree
   `/Users/andrep/Documents/code/cello-client-m9c` — NOT the primary checkout (Entry C4). It has its
   own `node_modules` and `dist/`; a concurrent session builds M10B on `main`.
-- **HEAD:** `88dfd73` (7 commits from `449bbba`). Pushed to `origin/m9/connect-unit`.
-- **Gates at HEAD:** 1588 tests green across daemon + gateway + cli + adapter; lint clean; typecheck
+- **HEAD:** `bad9db2` (10 commits from `449bbba`). Pushed to `origin/m9/connect-unit`. **Ready for
+  Andre to merge into `main`, then publish.**
+- **Gates at HEAD:** 1589 tests green across daemon + gateway + cli + adapter; lint clean; typecheck
   clean. Enforcer `DOD-M9C-GATE-1` green — it spawns the BUILT `cello-daemon` bin with zero
   injection and reads `mode:"enforcing"` off the boot line.
 - **Status (audited 2026-07-29, Entry C9):** ✅ `STORE-1`, `ENV-1`. 🟡 `WIRE-1`, `SURFACE-1`,
@@ -1488,3 +1489,58 @@ exactly the corruption class the rule exists for.
 - `correlationId` threading; `list` showing `changed_at` + `chainValid`.
 - The plaintext REQUEST LOG — why M8C's `DOD-CRYPTO-AT-REST-1` is 🟡, not ✅.
 - `DOD-M9C-PUBLISH-1` — one batched beta cascade, not started.
+
+---
+
+## 2026-07-29 — Entry C10: the audit's two remaining clauses closed; ready for merge
+
+**Commits:** `93988ca` (the stub off the public barrels), `bad9db2` (the gate screens). Branch
+`m9/connect-unit` is 10 commits from `449bbba`. **1589 tests green**, lint and typecheck clean.
+
+### The stub is off the production surface (WIRE-1's last written clause)
+
+The audit ruled "the stub moves to test-only visibility" UNMET, and it was right in the worst way:
+visibility had moved the WRONG direction — from an internal default to a value export on the public
+barrel of two published packages. It still has to exist (`securityGateway` is required, and tests
+are out-of-tree consumers), so it now lives at `@cello-protocol/gateway/testing` and
+`@cello-protocol/daemon/testing`. **Verified on the BUILT artifacts:** neither `dist/index.d.ts`
+mentions it; both `dist/testing.js` exist. 75 test files re-pointed.
+
+Two comments that were true when written and false by the time this unit landed, both REWRITTEN
+rather than deleted: `session-node-manager.ts` described the always-allow default it no longer has,
+and — the one that matters — `cello-mcp.ts` said *"the daemon runs PassthroughGatewayClient, so no
+tool [is screened]"*. **That file SHIPS in the connect tarball and instructs agents on the
+operator's machine.** A shipped file asserting the security layer is off, in the release that turns
+it on, is the audit-what-ships rule in miniature.
+
+### The gate now screens
+
+The audit's central finding: the gate spawned the shipped binary honestly and drove **zero
+traffic**, so `mode:"enforcing"` was a label on a socket nothing had exercised.
+
+It now sends real content through the gateway the SHIPPED daemon spawned — the test is a client of
+that socket, never an injection into the daemon. An outbound AWS-key-shaped credential returns
+REDACTED with the secret absent from the payload; a crafted inbound carrying zero-width concealment
+does not return intact; and both records are then read back **through the daemon's own IPC policy
+log**, which proves the sidecar writes and the daemon reads one shared encrypted store, with the
+chain verifying.
+
+**What it deliberately does not claim**, and the test says so in its own comment: that the daemon's
+`cello_send` path calls the gateway. That is INV-5, the seam, proven separately. Overstating it
+here would repeat the exact mistake this milestone exists to correct.
+
+### Standing at merge
+- ✅ `STORE-1`, `ENV-1` (auditor: EARNED).
+- 🟡 `WIRE-1`, `SURFACE-1`, `AUDIT-1`, `GATE-1` — all built, reviewed twice, audited, and now
+  carrying the evidence the audit said was missing. **They are candidates for re-audit, not for a
+  self-serving flip:** the maker does not grade his own homework, and the next session should put
+  the auditor back on them before any ✅.
+- ❌ `PUBLISH-1` — Andre's call, after merge.
+
+### Still owed after merge
+- `correlationId` threading through the config flow; `list` showing `changed_at` + `chainValid`.
+- The plaintext REQUEST LOG — the reason M8C's `DOD-CRYPTO-AT-REST-1` is 🟡 rather than ✅.
+- `pii:whitelist_add_requested` has no consumer (inherited from Phase 1).
+- **INV-10 remains partial by nature, not by omission.** A same-uid process can announce
+  `clientType: "cli"` over the IPC socket. The portal passkey D-4 names is the only thing that makes
+  the absolute claim true; nothing local can.
