@@ -1907,3 +1907,114 @@ maximum version, so a gap was invisible by construction. Now blocks on gaps and 
    units can go past 🟡.
 3. **Ending turns on reports.** The procedure says a status line is *"never the last thing a turn does"*,
    and I did it repeatedly. Reporting in is not a stopping condition.
+
+---
+
+## Entry 22 — `DOD-END-SUBMIT-1`: clause checklist, falsification pass, and the wire contract (written before any code) — 2026-07-29
+
+**Two repos, stated up front (`M10B-PROCEDURE` §2a):** `cello-client` (the wire contract in
+`protocol-types`, the daemon composer/signer/sealer/sender) and `trustless-cello` (the directory's
+authenticated receive handler, which lands the row via `DOD-END-QUEUE-1`'s repository). No migration —
+`V51` already created `submission_queue`.
+
+**Target behavior (one sentence).** Bob's daemon composes a submission, signs it with his agent key,
+seals it to the portal intake key carried in the verified consortium manifest, and writes it to the
+directory node it is already authenticated to — and if the manifest carries no intake key it refuses
+and names that as the reason, rather than sending anything unsealed.
+
+### Clause checklist — the yardstick the reviewer receives
+
+| # | clause (from the DoD line) | how it is met |
+| :-- | :-- | :-- |
+| C1 | composes `(subject_kind, subject, plaintext body)` | slots 4/5/6 of the fixed-order body array |
+| C2 | **signs it with his agent key** | Ed25519 over the canonical body bytes, using the agent's `keyProvider` (K_local) — the same key `subject` holds for an agent-subject row |
+| C3 | seals the WHOLE submission to the portal's intake key | `sealToRecipient(intakePubkey, encodeCbor(signedSubmission))` |
+| C4 | writes it to a directory node over the channel that already exists | a new inbound signaling frame on the agent's own authenticated stream — `mgr.sendRaw`, the `trust_signal_ack` precedent |
+| C5 | standard failover across nodes | inherited: the per-agent `SignalingManager` reconnects across the consortium roster, and a retry re-sends the SAME content-derived `submission_id`, so a retry to another node dedups at the portal rather than double-minting (`M10B-D20`) |
+| C6 | the daemon never talks to the portal directly | no portal URL, no HTTP client, no portal package enters the daemon; the only new dependency is a manifest field |
+| C7 | never unsealed; absent intake key ⇒ REFUSE, named | `signal.submission.refused` + cause `intake_key_absent`; there is no code path that sends without sealing (§5a) |
+| C8 | events `signal.submission.sealed` / `.queued` / `.refused` (+ cause) | all three, injected logger, correlationId = `submission_id` |
+
+### Falsification pass — what was checked in the code, before writing any
+
+1. **Does the manifest have somewhere to put the intake key?** `canonicalManifestBody` builds the
+   signed body from `Object.keys(manifest)` minus `signatures` (`core/crypto/src/manifest.ts:74–84`),
+   so a new top-level field is automatically covered by the officer signatures and older manifests
+   still verify byte-for-byte — `M10B-D11` verified, not assumed. **But the type is NOT open:**
+   `ConsortiumManifest` (`core/protocol-types/src/manifest.ts:78`) has no index signature, so the
+   optional field is a real additive change there. (`ConsortiumManifestInput` in crypto *does* have
+   one, which is why verification needs no change at all.)
+2. **Does the daemon have a sealing primitive, in the right direction?** Yes — `sealToRecipient(
+   recipientEd25519Pub, plaintext)`, exported from `@cello-protocol/crypto`
+   (`content-seal.ts`, X25519 ECDH + HKDF + AES-256-GCM). It seals to a **public** key, which is
+   exactly what the daemon holds. **Consequence for the portal, recorded here so INGRESS-1 does not
+   discover it late:** `openSealed` needs the Ed25519 **seed**, so the portal's intake private key
+   cannot live in KMS the way `submission-signer.ts` does — it is a secret-held seed. That is
+   INGRESS-1's problem, but it is a constraint this unit's choice imposes.
+3. **Does the call site have a send method on the INTERFACE?** `SignalingManager.sendRaw(frame)`
+   (`core/transport/src/signaling-manager.ts:325`) returns `OperationResult`, and
+   `registerInboundHandler` delivers the reply — the exact shape `inbound-sessions.ts:771` already uses
+   for `trust_signal_ack`. `sendRaw` reports only *send* success, so an ack frame is required for C8's
+   `queued` event to mean anything.
+4. **What else breaks?** `decodeInboundSignalingFrame` returning `null` replies `not_authenticated`
+   (`M10B-D25r2`'s third-review F2) — so a daemon submitting to a directory node that has not taken
+   this deploy gets an auth-flavoured name for a version-skew bug. Known and documented; the same
+   symptom already recorded for the result frame.
+
+### The wire contract — a fixed-order ARRAY, because a map would break cross-party bytes
+
+`encodeCbor`'s own header is explicit: maps encode in **insertion order** with a non-minimal header,
+so *"never hash or sign a CBOR map produced by this encoder."* Every to-be-signed structure in CELLO is
+an array with a domain tag in slot 0 (`encodeTrustSignalEnvelope`, `buildSealTbs`, …). This follows it.
+
+```
+SUBMISSION_DOMAIN = "cello.submission.v1"
+
+body = [ SUBMISSION_DOMAIN, op, issuer_pubkey, signal_type, subject_kind,
+         subject, content, issued_at, intake_key_id ]        // arity 9, fixed
+
+signed = [ SUBMISSION_SIGNED_DOMAIN, bodyBytes, signature ]  // arity 3, fixed
+submission_id = sha256(encodeCbor(signed))                   // hex — M10B-D20
+ciphertext    = sealToRecipient(intakePubkey, encodeCbor(signed))
+```
+
+- **`signal_type` is carried as OPAQUE DATA and never branched on** — and this is the clause that makes
+  `DOD-END-PLAYBOOK-1` reachable at all. If the daemon knew the string `"endorsement"`, the second
+  client-sourced type would need a client change and the zero-bump proof would fail by construction.
+  The caller supplies it; the client and directory only move it.
+- **`op`** (`endorse` | `withdraw`) is `M10B-D28`'s discriminator, carried now so withdrawal rides this
+  queue later without a wire change. It is not branched on in this unit either.
+- **`issuer_pubkey` is INSIDE the signed body**, and the portal accepts the identity only because the
+  signature over those bytes verifies under it. That is what `INV-ATTRIBUTION` requires — not a claimed
+  field, but a key that demonstrably signed. A caller-supplied pubkey with no signature over the same
+  bytes is the forgery this shape forecloses.
+- **`intake_key_id` is inside the signature**, so a substituted intake key cannot be swapped in
+  undetected after signing.
+- **`issued_at` inside the body** is what gives a legitimate re-issue after refusal a *different*
+  `submission_id` (`M10B-D20`), while a retry of the same submission keeps the same one.
+
+### Decision this note makes
+
+- **`M10B-D30` — `DOD-END-SUBMIT-1` owns the full daemon→directory write path**, including the
+  directory's receive handler, not just the daemon half. A daemon-only unit would have **no consumer**
+  (§5a NO CONSUMER, NO SHIP): the row could never land, and the `signal.submission.queued` event could
+  not be proven by any test. `DOD-END-QUEUE-1` built the table and the repository; this unit builds the
+  authenticated frame that calls it. Flood protection runs off the live connection identity, never a
+  persisted column (Entry 8).
+
+### Test plan — RED FIRST, and in this order
+
+1. **Wire contract (protocol-types):** body encodes to a fixed-arity array with the domain tag in slot
+   0; two parties building the same submission produce identical bytes; changing any field changes
+   `submission_id`; a re-issue with a later `issued_at` produces a different id while a byte-identical
+   retry produces the same one.
+2. **Refusal (daemon):** manifest with no `intake_key` ⇒ the composer returns a refusal naming
+   `intake_key_absent`, emits `signal.submission.refused`, and **nothing is sent** — asserted on the
+   send spy, so "refused" cannot be satisfied by a send that happened to fail.
+3. **Seal (daemon):** the frame's ciphertext does not contain the plaintext content bytes, and
+   `openSealed` under the intake seed recovers the exact signed structure. No mock crypto.
+4. **Attribution (portal-side verification, asserted here on the wire):** a body whose `issuer_pubkey`
+   is swapped after signing fails verification — the revert test for `INV-ATTRIBUTION`.
+5. **Directory handler:** an authenticated frame lands exactly one row and acks with `stored: true`; a
+   byte-identical retry acks `stored: false` (QUEUE-1's boolean, now with its consumer); an
+   unauthenticated frame lands nothing.
