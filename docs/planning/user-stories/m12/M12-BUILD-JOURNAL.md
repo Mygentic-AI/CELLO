@@ -2849,3 +2849,66 @@ silent debug namespace, the seal "wedged forever" against an 11-minute timeout, 
 the ceremony failure. Each time the tell was the same: **I reached for a mechanism I already knew
 about instead of the one the logs pointed at.** The check that would have caught all three costs
 one query.
+
+---
+
+## Entry 47 — 2026-07-29 — Entry 46's "divergence" was an ABUSE BOUND working correctly; the seal is intermittent
+
+### Retraction 3: the initiator/target session divergence is not a defect
+
+Entry 46 reported that sam held 12 "active" sessions while tess had 4, and framed it as the
+initiator marking sessions active that the target never received. The target's own log says
+otherwise:
+
+```
+session.inbound.accept.failed   reason: "abuse_bound_sessions_per_sender"   x8
+```
+
+`perSenderCap = resolveTierBound(agentName, tier, "max_sessions")` — a TIER-BASED cap, and sam is
+an unknown/untrusted contact to tess. tess was refusing sessions because an untrusted sender had
+too many open with her. **That is the trust-tier abuse protection doing exactly its job**, and my
+loop tripped it by opening a dozen sessions without closing any.
+
+Proven by clearing it: `close-session --force` on tess's four stale sessions, and the very next
+`initiate-session` was received normally (`ok:true`, no `session_not_found`). Then a full exchange
+worked — `delivered:true`, and tess read `"Clean end-to-end validation. [[WRAP]]"` by sequence.
+
+**One real finding survives:** the directory logged `targetGotAssignment: true, fullyEstablished:
+true` for sessions the target REFUSED. `targetGotAssignment` evidently means "we wrote the frame to
+the target's stream", not "the target accepted". A refusal is invisible to both the initiator and
+the directory's telemetry, which is the same shape as Entry 35's `fullyEstablished` problem.
+
+### The seal is INTERMITTENT — this is the honest headline
+
+Confirmed successes, both sides, matching roots:
+- `656e71c4324461a5286abce9d3a830256f2a92c2d6289e3bb3a0ad4cc266e31d`
+- and one earlier bilateral seal with a retrievable receipt
+
+Confirmed failures, including the clean run above with no abuse bound in play and content
+verifiably delivered both ways:
+```
+sam  -> seal_unilateral_timeout
+tess -> seal_unilateral_timeout
+```
+
+So sealing is not a missing feature and not a broken path — it succeeds sometimes and times out
+other times, under conditions I have not isolated. Everything upstream of it is reliable:
+registration, discovery, presence, brokering, threshold signing, relay transport, and bidirectional
+messaging all passed repeatedly today, including 3/3 through a directory instance replacement with
+the client untouched.
+
+### Corrected reliability picture
+
+| stage | state |
+|---|---|
+| register → DKG → discover → session → message | reliable (3/3, 3/3 post-replacement) |
+| tolerate one directory down / replaced | reliable |
+| **seal** | **intermittent — the one thing standing between "runs" and "runs every time"** |
+
+### Three retractions in one day
+
+Enrollment as the ceremony cause (Entry 46), the boot-only profile cache as the seal cause
+(Entry 44), and now the session divergence. Each was a mechanism I already knew about, reached for
+because it resembled the symptom. The pattern is now unmistakable enough to state as a rule:
+**when a symptom resembles a known problem, that resemblance is the reason to check harder, not
+the reason to stop checking.**
