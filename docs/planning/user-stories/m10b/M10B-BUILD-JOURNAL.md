@@ -2785,3 +2785,97 @@ npm dist-tag add @cello-protocol/protocol-types@0.0.29 latest
 so the issue verb is not in any published artifact. A third cascade is owed once that review's
 findings are fixed, and promoting before it would put the reviewed-consent surface on `latest` while
 the issue verb exists only in git.
+
+---
+
+## Entry 36 — issue-verb review: two claims the code made about itself were false — 2026-07-29
+
+`cello-unit-reviewer` on `3e71255`. 8 findings, all fixed (cello-client `3d6a223`). The pattern in the
+two blocking ones is worth naming, because it is not "the code is wrong" — it is **the code asserting
+a property it does not have.**
+
+### F2 — INV-ATTRIBUTION held by CONVENTION while the comment claimed CONSTRUCTION
+
+`submitForAgent` carried: *"the key provider is looked up from the SELECTED agent's name and there is
+no parameter to pass a different identity."* There was one — `sel: { name, pubkey }`, caller-supplied,
+declared on the line immediately below. Both call sites passed the correctly-resolved selection, so
+there was no live bug. The invariant was true; the reason given for it was not.
+
+And the test that "pinned" it asserted `expect(helper).not.toMatch(/opts\.(keyProvider|submitterPubkey)/)`
+— **the absence of two identifiers that had never existed in that function.** It could not fail. It
+would have passed against an implementation that took a caller-supplied identity, which is the exact
+thing it was written to forbid.
+
+The fix makes the claim true rather than softening it: the helper takes `connectionId` and calls
+`resolveSelectedAgent` itself, so there is no identity input left to get wrong.
+
+**Why this is worse than an ordinary bug.** The next verb — withdraw — is written by someone who
+reads that comment. "There is no parameter to pass a different identity" tells them the shape is safe
+to copy, so they pass an agent name out of `params` without re-resolving, and nothing in the file, the
+tests, or the type system stops them. **A false security comment is load-bearing in the wrong
+direction.**
+
+### F1 — the shared path was extracted, and one behaviour did not come with it
+
+`stored: false` means a directory node reports it already held this submission id: either a benign
+retry or single-node censorship, indistinguishable from the client. The refuse path branched on it
+and warned. The issue path — *eleven lines later in the same function* — emitted `stored` as a bare
+field, and the CLI prints only `guidance`, so an operator would never see it at all.
+
+The commit that introduced this contains a comment saying that collapsing the two "destroys the only
+information that could ever tell them apart", immediately above a path that collapses them.
+
+The fix puts the warning **inside** `submitForAgent` rather than at the second call site. The
+generalisable form: **when you extract a shared path, the guards that move are obvious and the
+REPORTING that did not move is not.** A guard omitted at one call site is a bug; a guard omitted in
+the shared path is a bug available to every future caller.
+
+### F5 — a certainty claim that was one agent deep
+
+The self-issuance guard compared the subject against `sel.pubkey` — the *selected* agent — under a
+comment describing it as "detectable right here with certainty". The daemon holds `loadedAgents`:
+every agent on the machine. An operator running two of their own agents could issue from one about
+the other and pass straight through. **Solo multi-agent is CELLO's first wedge**, so that is the most
+likely way to reach this check, not the least. Now checks every loaded agent and names which one.
+
+### F7 — three behaviour moves the refactor did not surface, recorded here because that is the rule
+
+Behaviour preservation is a refactor's spec, so a move that is *arguably better* still has to be
+stated rather than normalised away:
+
+1. The 4000-char cap now runs **after** the account-subject gate, previously before — so an oversized
+   message on an account-subject item returns `account_subject_message_unsupported` rather than
+   `message_too_long`. More correct; still a change.
+2. Send-failure guidance lost its trailing *"Retrying is safe — the submission id is derived from the
+   content."* Three of four send branches already carry retry advice inside their own guidance, so
+   the loss lands only on `submission_refused_by_node`, where retrying is the wrong advice anyway.
+   Net improvement, unstated until now.
+3. Offline guidance went from *"refuse again with the same message"* to *"try again"* — necessarily
+   generic once shared.
+
+### What the guards caught, and what they could not
+
+The reviewer verified the full guard inventory survived the extraction intact, line by line against
+the pre-image, and confirmed the parameter names matched character-for-character (the `bd58925`
+dead-verb class). What **nothing** caught: the deliverable had no behavioural test at all — renaming
+`subject_pubkey` in the handler would have left the whole suite green.
+
+So the milestone now has a structural guard it lacked: **every tool in `DUAL_SURFACE_VERBS` must
+resolve to a real daemon handler.** Name-parity checked the CLI and the MCP shim against the
+vocabulary; nothing checked the vocabulary against the DAEMON. Revert-tested by mistyping the proxied
+method name.
+
+### Also landed — per-counterparty include/omit (a `DOD-END-SURFACE-1` clause)
+
+`contact_signal_prefs`, keyed on `agent_id` — never `agent_name`, which is a mutable display label
+reusable after retirement and would silently hand a NEW agent the retired one's disclosure choices.
+Applied LAST at presentation and only ever to **narrow**: consent is enforced upstream in SQL, so an
+explicit `present: true` cannot resurrect something consent excluded. `null` CLEARS a choice, which
+is a distinct state from `false` — without the distinction an operator could never undo an omission
+without knowing what the default had been.
+
+### Note on the shared checkout
+
+A second session is working in the same `cello-client` tree (it landed `DOD-M9C-STORE-1`, the gateway
+SQLCipher work, as `449bbba`). Staging is now file-by-file rather than `git add -A`; the six earlier
+M10B commits were checked and contain none of its files.
