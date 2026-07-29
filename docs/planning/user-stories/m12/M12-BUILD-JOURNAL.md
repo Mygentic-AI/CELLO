@@ -1920,3 +1920,66 @@ carrying the result and the shipped fix would have been unproven.
   `frost.directory.stream.open.retry` logs `error: "[object Object]"`. Both make the next
   intermittent failure harder to diagnose than it needs to be.
 - The client fix ships through `/cello-publish`; not yet published.
+
+---
+
+## Entry 35 — 2026-07-29 — Anti-entropy replicates for real; sessions reach the last mile and stop
+
+Ran a two-daemon, two-directory session to check whether the AutoNAT client fix (Entry 34) breaks
+anything before proposing a publish. It does not — and the run proved two bigger things and found
+one new blocker.
+
+### Anti-entropy replication is CONFIRMED end-to-end (closes Entry 33's open claim)
+
+`bob` registered against **gcp-usc1**. `aetestA`, connected to **gcp-use1**, first got
+`unknown_agent` — then, after an anti-entropy cycle, found him. A write on one sovereign node
+became readable on another with no operator action. Backed by counts on the wire:
+
+```
+antientropy.round.completed  applied: 2  peerNodeId gcp-usc1
+antientropy.round.completed  applied: 1  peerNodeId gcp-use1
+```
+
+Entry 33 deliberately refused to claim this on the strength of rounds completing. This is the
+evidence that was missing: `applied > 0`, and a lookup that changed answer because of it.
+
+### Also proven in the same run
+
+- **Cross-node registration** — `bob` registered through a directory that is not `aetestA`'s.
+- **Cross-node brokering** — `session.crossnode.initiated brokerNode gcp-usc1`: the initiator
+  VISITS the counterparty's home node to broker.
+- **FROST threshold SIGNING** — `frost.directory.sign.start` →
+  `session.ceremony.participated ok:true`. Distinct from the DKG; this is a live threshold
+  signature over a real session.
+
+### NEW BLOCKER: `assignment_parse_failed` — the two sides disagree about success
+
+The directory believes it delivered:
+
+```
+session.assignment.delivery.complete  fullyEstablished: true
+                                      initiatorGotAssignment: true, targetGotAssignment: true
+```
+
+The client cannot parse what arrived:
+
+```
+session.crossnode.failed  reason: assignment_parse_failed  brokerNode: gcp-usc1
+```
+
+Reproduced 3/3. It is NOT a timeout and NOT `session_request_error` — a frame arrived within
+~0.3s and `parseSessionAssignment()` returned null (or the frame carried no `assignment` key), so
+this is a SCHEMA disagreement on the cross-node/visiting assignment path, not transport.
+
+**Not caused by the AutoNAT change.** The failure is at CBOR frame parsing, after the transport
+carried the frame and after the signing ceremony succeeded. The AutoNAT fix governs whether the
+connection survives; here it plainly did.
+
+**Worth its own note:** `fullyEstablished: true` on the directory while the client fails is an
+observability defect in its own right. A node reporting success for an exchange the counterparty
+rejected is exactly the shape that makes a dashboard say healthy while nothing works.
+
+### Where this leaves `DOD-E2E-GCP-1`
+
+Everything up to the final assignment parse is green: register → discover across nodes → broker
+cross-node → threshold-sign. The session does not establish. That parse is the next thing.
