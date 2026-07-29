@@ -1967,3 +1967,63 @@ publish cascade. Verification itself needs no change: `ConsortiumManifestInput` 
 `[key: string]: unknown`, and `canonicalManifestBody` builds the signed body from `Object.keys` minus
 `signatures`, so officer signatures cover the new field automatically and older manifests still verify
 byte-for-byte (`M10B-D11`, confirmed independently here).
+
+---
+
+## Entry 24 — handoff: four `DOD-END-SCOPE-FIX-1` findings the other session's pass did not cover — 2026-07-29
+
+Context in [[#Entry 23]]: two sessions ran M10B concurrently. Both reviewed `4f3e835`, independently
+and with the same verdict on the big three — **F1** (a malformed presenter returns `[]` instead of
+refusing), **F2** (`--include` validated against the unscoped wallet, so it silently no-ops), and
+**F3** (no log when the predicate drops every row) were already fixed in the working tree by the
+session that owns the unit, with reasoning that matches finding-for-finding. This session's pass is
+therefore redundant on those, and they are NOT re-raised.
+
+**These four are not addressed in that working tree, and they are recorded here so they are not lost
+when it commits.** They are ACs on whoever next touches this unit, per the review cap's own rule.
+
+**F4 (HIGH, pre-existing, `core/protocol-types/src/trust-signal.ts:228`) — `subject` has no
+lowercase-hex validator, and this unit just made byte-equality on it load-bearing.** `toPreimage`
+validates `issuer_pubkey` as lowercase hex, with the reason spelled out in its own comment: *"Hex has
+a case, and 'AABB' and 'aabb' are the same key but different preimage bytes."* For
+`subject_kind: "agent"`, `subject` **is** a pubkey hex and gets only an NFC check. An uppercase-hex
+subject therefore encodes, hashes, notarizes and stores cleanly — and is then invisible on both
+sides: `wallet_trust_signals.subject` is `TEXT` with no `COLLATE NOCASE`, so SQLite's BINARY
+collation makes the new `subject = ?` predicate miss it, and the directory's
+`JOIN agent_profiles ap ON ap.k_local_pubkey = sr.subject` (`internal-api-server.ts:791`) misses it
+too. Not hypothetical here: `trust-signal-store.ts:321–323` already names *"a directory version-skew
+emitting uppercase hex"* as a real condition. **Fix:** the same lowercase-hex check on `subject` when
+`subject_kind === "agent"`, at the one place both sides of the wire share.
+
+**F5 (MEDIUM) — the naming inversion that let the M10 defect survive is preserved, and slightly
+worsened.** `listAllActive` **no longer returns all active rows** — it returns a scoped subset, and it
+is the live path, so its name now actively misdescribes it. `listPresentable` still holds the
+authoritative name and is still dead; its new doc comment is honest but only reaches someone who
+opens the file, while anyone who greps `listPresentable` to ask *"where is presentation scoping
+enforced?"* gets the same wrong answer M10 gave. Keeping the dead function is defensible (it is the
+only implementation of the deferred account half); keeping the names is not. **Fix:** rename to
+`listPresentableForAgent` and `listPresentableWithAccountScope_DEFERRED`. Verified free: neither is
+re-exported from `core/daemon/src/index.ts`, `package.json`'s `exports` map exposes only `.`, and
+there is no consumer in trustless-cello or cello-portal.
+
+**F6 (MEDIUM) — the unit's headline claim has zero test coverage, and the bypass is easy.** Nothing
+in the repo exercises `runSessionRequestOverSignaling`'s presentation block — no test imports
+`createOutboundSessions`. Change `outbound-sessions.ts` to pass `agentRec.agent_id`, `agentName`, or
+`targetHex` instead of `agentRec.pubkey`: it typechecks (all `string`), lint/typecheck/build pass,
+**all 2044 tests stay green**, and every agent-subject signal is silently un-presented forever. The
+required parameter stops a caller OMITTING the identity; it cannot distinguish the right value from a
+wrong one, which is the entire subject of the fourth review's HIGH-4. F1's format check converts that
+bypass from silent to a loud throw at runtime — the cheap 80% — but the real assertion is a
+`session_request` frame captured from a stub `SignalingManager` on a daemon holding two agents, with
+`trust_signals` containing only the presenter's hash.
+
+**F7 (LOW) — the call-site `throw` is unreachable in production and untested.** `negotiate` already
+resolves the same lookup over the same live `loadedAgents` and returns `agent_not_found` first; the
+only path to the new throw is a `cello_delete_agent` splice landing inside an in-flight negotiation.
+Fine as defence in depth — but the falsification rule asks "would this create redundancy?", so it
+should say that it is deliberate rather than look like a missed duplicate.
+
+**Not a finding, recorded for the standing zero-bump lens:** `putWalletSignal`'s
+`!s.type.endsWith("_id")` default-present heuristic (`trust-signal-store.ts:285`) is type-shaped. It
+is pre-existing, untouched, and a generic suffix convention rather than a per-type enum — so not an
+INV-ZEROBUMP violation, but it is the kind of thing that becomes one quietly.
