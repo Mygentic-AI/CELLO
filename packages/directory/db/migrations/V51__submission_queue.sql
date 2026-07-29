@@ -1,4 +1,4 @@
--- V49 — M10B / DOD-END-QUEUE-1: the sealed submission queue (M10B-D2).
+-- V51 — M10B / DOD-END-QUEUE-1: the sealed submission queue (M10B-D2).
 --
 -- WHAT THIS IS. The client-supplied arm of the trust-signal pipe. Bob's daemon signs an endorsement
 -- with his agent key, SEALS it to the portal's intake key, and drops it here. The portal drains,
