@@ -417,6 +417,22 @@ description: >
   burn-OR propagates it irreversibly. No worse than today's mesh, but the real trust boundary.
   Hardening = end-to-end owner-signed suspension authorization, mirroring the M8B FROST-stream
   auth deferral. Out of M12.
+- **M12-P8 — AutoNAT tears down the connection anti-entropy runs on (ROOT CAUSE, Entry 31).**
+  A peer's AutoNAT dial-back request makes a directory "dial" that peer; the connection manager
+  returns the EXISTING connection — the one carrying the AE stream — AutoNAT verifies reachability
+  and then CLOSES it as probe cleanup, killing every stream on it. Verified in libp2p's own trace.
+  **The fork, and why it is not a one-liner:** `@libp2p/autonat` bundles the client (probe) and
+  responder (dial-back) roles in one service with no option to split them or to stop it closing.
+  Directories need no NAT detection for themselves (static public IPs), but they currently SERVE
+  the dial-back that CLIENT NAT detection depends on (DOD-NAT-REACHABILITY-1). Options:
+  (a) drop `autoNAT()` from directory nodes and let clients probe RELAYS instead — relays are also
+  service nodes and exist for reachability; (b) fork/patch autonat so the responder does not close a
+  connection it did not create; (c) pin AE to a dedicated connection — rejected in Entry 31 as it
+  leaves the same footgun for FROST and signaling, which also share connections.
+  Leaning (a), but it moves a load-bearing piece of NAT traversal and wants Andre's read.
+  **Scope note:** this is not AE-specific. Any long-lived stream between two publicly addressed
+  CELLO peers is exposed; AE merely runs continuously between directories and so hits it every time.
+  → Entry 31
 - **M12-P7** — **`verifyChain('user_accounts')` cannot pass on a shared test database.**
   `account-001` AC-005/AC-007 verify the chain over the WHOLE table, but ~10 test files
   `DELETE FROM user_accounts` as cleanup, and `verifyChain` recomputes each row's hash from its
