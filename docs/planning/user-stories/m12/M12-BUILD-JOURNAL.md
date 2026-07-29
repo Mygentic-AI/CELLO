@@ -1675,3 +1675,58 @@ mean anything.
 Everything up to this point is verified working in production: manifest signing and verification,
 peer identity binding, protocol negotiation, the handshake, digest computation, the database role,
 and the dial address.
+
+---
+
+## Entry 31 — 2026-07-29 — ROOT CAUSE: AutoNAT closes the shared connection out from under anti-entropy
+
+libp2p's own trace, and it is unambiguous:
+
+```
+13.543  yamux:outbound:3  negotiated protocol /cello/anti-entropy/1.0.0
+13.599  auto-nat          incoming request from 12D3KooWExQ… (gcp-usc1)
+13.600  auto-nat          dial multiaddrs /ip4/34.136.176.190/tcp/8080/ws/p2p/12D3KooWExQ…
+13.601  connection-mgr    had an EXISTING connection to 12D3KooWExQ…
+13.601  auto-nat          successfully dialed 12D3KooWExQ…
+13.602  connection        closing connection to /ip4/34.136.176.190/…      ← AutoNAT's cleanup
+13.603  yamux:outbound:3  closed writable end gracefully                    ← our AE stream
+13.603  yamux             sending GoAway reason=NormalTermination
+13.605  yamux             underlying stream closed with status closed and 3 streams
+```
+
+A peer asks this node to verify ITS reachability (the AutoNAT dial-back). AutoNAT asks the
+connection manager to dial that peer; the manager returns the **existing** connection — the one
+already carrying our anti-entropy stream — AutoNAT records the address as reachable, and then
+**closes the connection** as probe cleanup. Every stream on it dies, including AE, identify and
+autonat's own. `@libp2p/autonat` logs the identical `Cannot write to a stream that is closed` from
+`askPeerToVerify`, which is the same message the AE responder was reporting.
+
+AutoNAT assumes the connection it "dialed" is its own to dispose of. When the manager hands it a
+shared one, that assumption destroys other protocols' work.
+
+### Why every earlier hypothesis failed, and why the local enforcer cannot see it
+
+- **Not a race.** AutoNAT probes on essentially every new connection, so failure is 100%, which is
+  exactly what `authenticated=0` across 54 rounds showed and what killed the simultaneous-dial idea.
+- **Not stream lifecycle.** Both endpoints close correctly; the CONNECTION is destroyed beneath them.
+- **Stage-independent** because the teardown is unrelated to protocol state — it lands wherever the
+  exchange had got to, which is why the stage marker showed both `sending_ae_state` and `handshake`.
+- **Locally invisible** because AutoNAT does not probe loopback/private addresses. The enforcer's
+  three nodes are on 127.0.0.1, so the interaction cannot occur. **Public addressing is the
+  discriminator** — not latency, not host count, not timing.
+
+### The fix, and where it belongs
+
+Directory nodes have public static IPs and known addresses. They do not need NAT detection at all —
+AutoNAT exists for peers that must discover whether they are reachable. Disabling it for
+server-role nodes removes the interaction rather than working around it.
+
+That is a `@cello-protocol/transport` change (`autoNAT()` is unconditional in `createLibp2p`), so it
+needs a server/client switch in `CelloNode` plus a directory-side opt-in — and it ships through
+`/cello-publish` with the usual version cast. The alternative (give anti-entropy its own dedicated
+connection) is strictly worse: it leaves a live footgun for every other CELLO protocol sharing a
+connection, and FROST and signaling share connections too.
+
+**This is the one that matters beyond M12:** any long-lived CELLO stream between two publicly
+addressed peers is exposed to the same teardown. Anti-entropy surfaced it because it is the first
+protocol to run continuously between two directory nodes.
