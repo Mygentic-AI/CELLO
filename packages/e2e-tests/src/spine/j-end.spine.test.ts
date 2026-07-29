@@ -349,4 +349,79 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
       `SELECT effective_status FROM signal_records_effective WHERE type = 'endorsement' LIMIT 1`,
     )).toContain("active");
   }, 120_000);
+
+  it("HOP 6 (case a): Alice REFUSES a second endorsement with a message — and it never reaches Charlie", async () => {
+    const bob = mcpConns[0];
+    const alice = mcpConns[1];
+
+    // ── Bob issues a SECOND endorsement, one Alice will not stand behind ──
+    const wrong = "Alice single-handedly rewrote the billing system over a weekend.";
+    const issued = (await bob.call("cello_trust_signals_issue", {
+      subject_pubkey: pubkeys["alice"], body: wrong,
+    })) as { ok?: boolean; reason?: string; guidance?: string };
+    expect(issued.ok, `issue refused: ${issued.reason} — ${issued.guidance}`).toBe(true);
+
+    const { loadPortalIngress } = await import("./portal-ingress.js");
+    const portal = await loadPortalIngress();
+    const { HttpDirectoryClient } = await import(
+      pathToFileURL(join(PORTAL_ROOT, "src/server/directory/http-client.ts")).href
+    ) as { HttpDirectoryClient: new (baseUrl: string, apiKey: string) => unknown };
+    const { getSubmissionSigner } = await import(
+      pathToFileURL(join(PORTAL_ROOT, "src/server/trust/submission-signer.ts")).href
+    ) as { getSubmissionSigner: (env: string) => unknown };
+
+    const pass = await portal.drainAndMint({
+      client: new HttpDirectoryClient(cluster.internalApiUrls[0], INTERNAL_API_KEY),
+      intakeSeeds: new Map([[INTAKE_KEY_ID, intakeSeed]]),
+      signer: getSubmissionSigner("local"),
+      directoryBaseUrl: cluster.internalApiUrls[0],
+    });
+    expect(pass.minted, `second endorsement not minted: ${JSON.stringify(pass)}`).toBe(1);
+
+    // ── It lands PENDING; Alice refuses it, WITH a message (M10B-D4) ──
+    // Reconnect: the directory pushes pickups on reconnect, not on enqueue (see HOP 3).
+    await daemons[1].stop();
+    daemons[1] = await startDaemon(dirFor["alice"], cluster.directoryUrl, "jend-alice-3", { manifestEnv });
+    const alice2 = await connectMcp(dirFor["alice"], "jend-alice-refuse");
+    mcpConns.push(alice2);
+    await alice2.call("cello_use_agent", { name: "alice" });
+
+    let pending: Array<{ signal_hash: string }> = [];
+    for (let i = 0; i < 40; i++) {
+      const res = (await alice2.call("cello_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
+      pending = res.pending ?? [];
+      if (pending.length > 0) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(pending.length, "the second endorsement is awaiting her decision").toBe(1);
+
+    const refused = (await alice2.call("cello_consent_refuse", {
+      hash_prefix: pending[0].signal_hash.slice(0, 16),
+      message: "I reviewed that migration, I did not write it. Happy to be endorsed for the review.",
+    })) as { ok?: boolean; consent_state?: string; message_queued?: boolean; message_error?: string };
+    expect(refused.ok, `refuse failed: ${JSON.stringify(refused)}`).toBe(true);
+    expect(refused.consent_state).toBe("refused");
+    // THE REFUSAL IS RECORDED WHETHER OR NOT THE MESSAGE GOES ANYWHERE — the decision must never be
+    // contingent on the network, or Alice believes she rejected something that is still pending.
+    expect(refused.message_queued, `message not queued: ${refused.message_error}`).toBe(true);
+
+    // Her message rides the SAME submission queue, as an `op: refuse` — the same injection surface
+    // pointed the other way, and scanned identically at intake.
+    expect(psqlSpine(`SELECT count(*) FROM submission_queue`).replace(/\s/g, ""), "the refusal message is queued").not.toBe("0");
+
+    // ── AND CHARLIE NEVER SEES IT. The refused endorsement is unpresentable by every path. ──
+    const charlie = mcpConns[mcpConns.length - 2];
+    const awaiting = charlie.call("cello_await_session", { timeout_ms: 30_000 });
+    const init = (await alice2.call("cello_initiate_session", { target_pubkey: pubkeys["charlie"] })) as { ok?: boolean };
+    expect(init.ok, `second session failed: ${JSON.stringify(init)}`).toBe(true);
+
+    const inbound = (await awaiting) as { trust_signals?: Array<{ type: string; claim: Record<string, unknown> }> };
+    const endorsements = (inbound.trust_signals ?? []).filter((x) => x.type === "endorsement");
+    // EXACTLY ONE — the accepted one. Two would mean a refused endorsement was presentable; zero
+    // would mean the accepted one had stopped being. Both are failures, and only an exact count
+    // catches both.
+    expect(endorsements.length, `Charlie saw ${endorsements.length} endorsements; only the ACCEPTED one may present`).toBe(1);
+    expect(String(endorsements[0].claim.statement)).toContain("payments migration");
+    expect(String(endorsements[0].claim.statement), "the refused claim must not appear").not.toContain("billing system");
+  }, 180_000);
 });
