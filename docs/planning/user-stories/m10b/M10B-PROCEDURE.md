@@ -351,6 +351,32 @@ any more than a cron tick is (§0 rule 1).
   unit, each DoD tag flip, each STATE.md change. "I'll commit once the section is done" is how a
   section's worth of work gets lost.
 - **Review every unit** on its diff, right after green. Never batch reviews.
+
+> ### 🚨 ONE REVIEW PASS PER ARTIFACT. TWO IS THE ABSOLUTE MAXIMUM. THIS IS A HARD CAP.
+> **"Review every unit" is NOT "review until the report comes back empty."** It never will. **Reviewers
+> always find something — every single time.** That is what they are for, and it means an unbounded
+> review loop has **no termination condition**. A human asked to review a document reviews it *once*,
+> hands over the findings, and moves on; nobody re-reviews the same artifact until it comes back clean.
+>
+> **The rule:**
+> 1. **One pass.** Read the findings. Fix what is real.
+> 2. **A second pass ONLY if the first found a defect that changed the artifact's shape** — not to
+>    confirm the fixes landed. You can read your own diff.
+> 3. **There is no third pass. Ever.** If a third feels necessary, the artifact is not the problem —
+>    the work has become the reviewing.
+> 4. **Remaining findings become ACs on the units they affect**, and the per-unit review catches them
+>    there. That is what per-unit review is *for*. A determination does not have to be perfect; it has
+>    to be good enough that a competent coder builds the right thing with the unknowns named.
+>
+> **What this cost, so it is never repeated (2026-07-28/29, Andre: *"0%? WTF?"*):** `DOD-END-ARCH-1`
+> took **four completed review passes plus a fifth**, consumed an ENTIRE overnight session, and shipped
+> **zero lines of code**. Each pass found real defects — that is precisely the trap, because it always
+> feels justified in the moment. The findings were genuine and the process was still a failure. **A
+> milestone is delivered in code, not in determinations.**
+>
+> Applies to design notes, determinations, and diffs alike. It is a rabbit hole with a review-shaped
+> disguise (CLAUDE.md: *"am I burning tokens and time… so that two hours later we ask why are we even
+> fixing this?"*).
 - **Fixture harness at start + end of every unit.**
 - **Checkpoint at every tier boundary:** `cello-done-auditor` on every ✅ flipped since the last
   checkpoint; only EARNED stays ✅. Journal summary, commit, START A NEW JOURNAL FILE for the next tier
