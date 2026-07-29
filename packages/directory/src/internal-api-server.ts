@@ -43,6 +43,7 @@ import {
   isAgentOwnedByAccount,
   applyRevocationFlag,
 } from "./agent-write-repository.js";
+import { drainSubmissions, deleteSubmission } from "./submission-queue-repository.js";
 
 // READ-001 freshness window is now shared from agent-presence-repository (one source of truth for
 // the account-presence read and the cross-node discovery lookup).
@@ -63,6 +64,11 @@ export interface InternalApiServerOptions {
  * Create the internal API HTTP server.
  * Returns the server — caller must call .listen().
  */
+/** Default rows per drain when the caller does not say. */
+const DEFAULT_DRAIN_LIMIT = 100;
+/** Hard ceiling on a single drain — see the clamp comment on the route. */
+const MAX_DRAIN_LIMIT = 500;
+
 export function createInternalApiServer(opts: InternalApiServerOptions): Server {
   const { pool, internalApiKey, logger, owningNodeId } = opts;
 
@@ -659,6 +665,116 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
     }
 
     // ── M10B: which of THESE hashes are still active? ───────────────────────────────────────────
+    // ── M10B / DOD-END-INGRESS-1: the portal drains the sealed submission queue ──────────────────
+    //
+    // TWO ROUTES, and the split IS the exactly-once property. `drain` READS; it does not delete. A
+    // portal that dies between reading a row and minting from it sees that row again on its next
+    // pass. Delete-on-read would turn every crash into a silent loss of a submission whose operator
+    // was told it had been queued — and since the ciphertext is opaque here, nothing downstream
+    // could ever notice it had gone.
+    //
+    // The row leaves only on `ack`, which the portal sends after a TERMINAL outcome: minted,
+    // rejected, or poison. All three delete; they differ only in what the portal sends back to the
+    // submitter (M10B-D22b: poison sends nothing, because an unverifiable submission is
+    // unattributable by construction).
+    //
+    // The directory still reads nothing. It hands back the same opaque bytes it was given, and it
+    // cannot tell an endorsement from a withdrawal from a refusal — that discriminator (`op`) rides
+    // INSIDE the seal (INV-DIR-DUMB).
+    if (req.method === "POST" && req.url === "/internal/submissions/drain") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!internalApiKey || providedKey !== internalApiKey) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      // AUTH MATTERS EVEN THOUGH THE PAYLOAD IS OPAQUE. The set of queued ids, their arrival order
+      // and their intake key ids is traffic analysis: how much is being submitted, how often, and
+      // against which key generation. "It is encrypted" is not a reason to serve it to anyone.
+      let limit = DEFAULT_DRAIN_LIMIT;
+      try {
+        const body = await readBody(req);
+        if (body.length > 0) {
+          const parsed = JSON.parse(body.toString("utf8")) as { limit?: unknown };
+          if (parsed.limit !== undefined) {
+            const n = Number(parsed.limit);
+            if (!Number.isFinite(n) || n < 1) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "malformed_request", detail: "limit must be a positive number" }));
+              return;
+            }
+            // CLAMPED, not refused. A caller asking for a million rows is being reasonable about its
+            // own appetite and unreasonable about ours; an unbounded read pins the database and the
+            // portal's memory at once. The applied limit is ECHOED so the caller can tell it was
+            // clamped and page, rather than believing it drained everything.
+            limit = Math.min(Math.floor(n), MAX_DRAIN_LIMIT);
+          }
+        }
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "malformed_request", detail: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
+      try {
+        const rows = await drainSubmissions(pool, limit);
+        logger.info("signal.ingress.drained", { count: rows.length, limit, owningNodeId });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          limit,
+          submissions: rows.map((r) => ({
+            submission_id: r.submissionId,
+            intake_key_id: r.intakeKeyId,
+            // Hex because JSON has no bytes. Lossless and unambiguous, and it matches every other
+            // blob this API hands out.
+            ciphertext: Buffer.from(r.ciphertext).toString("hex"),
+          })),
+        }));
+      } catch (err) {
+        logger.error("signal.ingress.drain.failed", { error: err instanceof Error ? err.message : String(err), owningNodeId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "drain failed" }));
+      }
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/internal/submissions/ack") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!internalApiKey || providedKey !== internalApiKey) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      let submissionId: string;
+      try {
+        const parsed = JSON.parse((await readBody(req)).toString("utf8")) as { submission_id?: unknown };
+        if (typeof parsed.submission_id !== "string" || parsed.submission_id.length === 0) {
+          throw new Error("submission_id must be a non-empty string");
+        }
+        submissionId = parsed.submission_id;
+      } catch (err) {
+        // REFUSED, not quietly accepted. A malformed ack answered with 200 would let a broken portal
+        // believe it was clearing rows forever while the queue grew without bound — and the symptom
+        // would surface days later as a full disk, nowhere near the cause.
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "malformed_request", detail: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
+      try {
+        const removed = await deleteSubmission(pool, submissionId);
+        // IDEMPOTENT: `removed: false` is not an error. A portal retrying an ack after a timeout
+        // wants the row gone, and it is gone — reporting a failure would push it into a retry loop
+        // over an outcome it has already achieved.
+        logger.info("signal.ingress.acked", { submissionId, removed, owningNodeId });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ removed }));
+      } catch (err) {
+        logger.error("signal.ingress.ack.failed", { submissionId, error: err instanceof Error ? err.message : String(err), owningNodeId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "ack failed" }));
+      }
+      return;
+    }
+
     // POST /internal/signals/active-among  { "hashes": ["<64 hex>", …] } → { "active": [...] }
     //
     // THE NOTARY-SHAPED QUESTION, and the replacement for /internal/active-signals. That route asks
