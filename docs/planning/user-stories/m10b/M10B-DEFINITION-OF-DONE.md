@@ -1362,6 +1362,34 @@ distribution and rotation question opened by `M10B-D2`, the queue's ack/poison a
 and how an account subject is named at intake. None of these blocks the milestone; all are the
 determination's job.
 
+### THE SPINE HARNESS HAS NEVER RUN PORTAL CODE — and M10B's journey is ABOUT portal code
+
+Raised 2026-07-29, and it is a **false-green hazard**, which is why it is here rather than left to
+discover during the run.
+
+Every existing spine journey SIMULATES the portal by seeding `signal_records` directly. `j-canary`
+says so in its own comment: *"In production the portal does this via the signed submission API. In
+this test we seed directly."* That was sound for M10, where the portal's role was to insert a row and
+the thing under test was the directory's genericity.
+
+**It is not sound for M10B.** The thing under test IS the portal's ingress — drain, open the seal,
+verify the signature and derive `issuer_pubkey` from it, scan, compose with split voices, mint,
+deliver. A `J-END` written on the established pattern would seed `signal_records` and skip
+`drainAndMint`, `authenticateSubmission` and `scanSubmissionBody` entirely, then go green. It would
+certify the client-supplied source while testing none of it — and it would look exactly like a
+passing journey.
+
+`cello-portal` is not in the trustless-cello pnpm workspace, so the harness cannot import it today.
+
+**The shape that works, and it is not exotic:** `live-harness.ts` already reaches ACROSS repos —
+`CELLO_CLIENT_ROOT` and `TRUSTLESS_ROOT` are both exported from it, and the daemons it spawns are
+cello-client binaries. Adding `PORTAL_ROOT` and importing the ingress modules under `tsx` is the same
+move again, and it keeps the journey exercising the REAL code rather than a second implementation of
+it. A reimplementation in the test would be precisely the "byte-identical local copy on each side"
+that `M10B-D28` forbids for the submission wire, applied to the pipeline instead.
+
+Recording it now because the wrong choice here is invisible: the journey passes either way.
+
 ### NO MANIFEST CARRIES AN `intake_key`, SO THE CLIENT-SUPPLIED SOURCE IS INERT — measured 2026-07-29
 
 Not a design question; a provisioning gap, stated here because the surface now exists and hides it
