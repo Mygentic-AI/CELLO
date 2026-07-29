@@ -1362,6 +1362,32 @@ distribution and rotation question opened by `M10B-D2`, the queue's ack/poison a
 and how an account subject is named at intake. None of these blocks the milestone; all are the
 determination's job.
 
+### NO MANIFEST CARRIES AN `intake_key`, SO THE CLIENT-SUPPLIED SOURCE IS INERT — measured 2026-07-29
+
+Not a design question; a provisioning gap, stated here because the surface now exists and hides it
+well. `cello_trust_signals_issue` and the `M10B-D4` refusal message both refuse with
+`intake_key_absent` against **every real manifest**, because the portal's intake keypair has never
+been generated.
+
+Measured, not inferred: `/cello/dev/portal/intake-key-id` and `/cello/dev/portal/intake-key-pubkey`
+both return `ParameterNotFound` in us-east-1, and the portal source contains no `intake` reference at
+all. `infra/scripts/sign-consortium-manifest.mjs:121-141` already reads both SSM parameters and
+spreads `intake_key` into the signed body **only when both are present** — so the signing plumbing is
+complete and simply has nothing to read.
+
+What is owed, in order: generate an Ed25519 intake keypair; the SEED into Secrets Manager (the portal
+reads it to open seals), the `key_id` + public half into those two SSM parameters via
+`cello-ssm-parameters.yaml` — **not by hand**, since a manually-created resource fails the next
+`deploy.sh` with `ResourceAlreadyExists`; re-sign and publish the manifest. Rotation semantics are
+already decided (`M10B-D11`): the queue row records its `intake_key_id` precisely so a rotated-out
+private key is retained until no undrained row references it.
+
+**This does NOT block `DOD-END-JOURNEY-1`.** [[M10B-PROCEDURE]] §2e is explicit that "live, across
+real processes" means real OS processes, not deployed AWS, and the spine harness
+(`packages/e2e-tests/src/spine/auth-manifest.ts`) already mints a manifest carrying an intake key —
+`m10b-manifest-intake-key.test.ts` covers it. So the milestone's proof is unaffected; what is
+affected is anyone trying the deployed dev environment by hand and concluding the feature is broken.
+
 ### WHICH AGENT MAY SPEAK FOR AN ACCOUNT — now load-bearing, raised 2026-07-29 (SURFACE-1 review F7)
 
 An **account-subject** pending item is visible to EVERY agent on a daemon: `listPendingConsent` scopes
