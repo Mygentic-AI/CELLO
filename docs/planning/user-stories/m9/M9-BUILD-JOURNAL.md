@@ -940,3 +940,80 @@ Reject / refusal-notification work (§15 items 5–8) is a LATER unit — only t
 security half ships here, shaped so the reachability source can join without a breaking change.
 
 **Next:** design note for `DOD-M9C-STORE-1` (Entry C2), then the loop.
+
+---
+
+## 2026-07-29 — Entry C2: DESIGN NOTE — DOD-M9C-STORE-1 (written before any code)
+
+**Target behavior (one sentence).** The gateway's config versions and security records live in
+SQLCipher-encrypted storage opened with the daemon's key, in the `~/.cello` backup set, with zero
+`node:sqlite` left in gateway production code.
+
+**Spec anchors.** DoD `DOD-M9C-STORE-1`; policy D-3 (M9C-D2); `DOD-CRYPTO-AT-REST-1` (M8C);
+INV-4 as amended. Two DoD clauses are AMENDED by evidence found this entry (see decisions D6/D7).
+
+**Facts established by reading the code (not assumed):**
+1. The daemon's one engine site is `core/daemon/src/sqlcipher-db.ts` — `@signalapp/sqlcipher`
+   prebuilt, raw 32-byte key in a 0600 key file beside the DB (`dbKeyPathFor` → `<db>.key`),
+   PRAGMA-key + verify-read, WAL only after verification, fail-closed (no plaintext fallback).
+2. `cello_backup` / `cello_restore` are STUBS — `not_implemented` in `daemon.ts`. The DoD clause
+   "proven by a backup round-trip" cannot be proven against a stub.
+3. The gateway stores were only ever created when `CELLO_GATEWAY_CONFIG_DB` / `_RECORD_DB` env vars
+   were set — and only tests set them. The layer never ran in the product (that is this milestone's
+   whole finding), so NO production plaintext store has ever existed.
+4. Both stores are already engineered for two-process access (BEGIN IMMEDIATE + busy_timeout —
+   their own comments say "two processes on the same file").
+
+**Producer/consumer chain.** The gateway bin produces record rows (every screened message) and
+consumes config rows (read at boot). The daemon (SURFACE-1) will produce config rows (CLI-confirmed
+sets over IPC) and consume record rows (AUDIT-1 reads). Both processes open the same encrypted
+file; WAL + busy_timeout + IMMEDIATE transactions carry the concurrency, unchanged from the
+stores' existing design.
+
+**The seam.** `core/gateway` gains its own minimal SQLCipher opener (`store/encrypted-db.ts`):
+load `@signalapp/sqlcipher`, PRAGMA raw key from a KEY FILE PATH, verify-read, WAL, busy_timeout.
+It does NOT import from `core/daemon` (dependency direction: daemon → gateway). The daemon's
+richer opener (FK enforcement, migration helpers) stays where it is; the ~50 duplicated lines are
+the price of the package boundary and are recorded as such.
+
+**Invariants at stake.** INV-4 (amended): satisfied — same key, backup set. INV-9/INV-10:
+untouched here. The custody lens: the stores REFUSE to open without a valid key file (fail-closed,
+`store_key_unavailable`); there is no plaintext fallback path at all after this unit.
+
+**Approach + rejected alternative.** A sibling file `~/.cello/gateway.db`, keyed by THE SAME key
+file as `sessions.db` (the daemon passes the KEY FILE PATH — never key bytes — via spawn env).
+Rejected: tables inside `sessions.db` — couples the gateway's per-message write load to
+SessionNodeManager's transaction patterns and migration lifecycle across two processes for zero
+custody gain (same file ≠ more encrypted than same key). Rejected: a second key (`gateway.db.key`)
+— D-3 says one key, and a second key file is one more thing a backup can miss.
+
+**Falsification pass.** `@signalapp/sqlcipher` is already a daemon dependency, so the prebuilt
+ships in the install regardless — adding it to `core/gateway` adds a package.json edge, not
+install weight (pnpm dedupes). Raw-key reuse across two SQLCipher files is sound (per-file salts;
+Signal's own pattern). The stores' varargs call sites match the daemon's adapter shape, so the
+port is the constructor + open path, not the query surface.
+
+**Decisions this note makes:**
+- **M9C-D6 (DoD amendment).** The backup round-trip clause is REPLACED: `cello_backup` is a stub,
+  so the provable guarantee is custody-and-position — same key, same directory, fail-closed open —
+  and the round-trip proof lands when backup lands. The DoD line is edited to say so.
+- **M9C-D7 (DoD amendment).** NO plaintext importer is built. No production plaintext store has
+  ever existed (fact 3); an importer would be dead code born dead, and dead code in an open-source
+  trust product reads as rot. A stray dev-machine plaintext store is simply not consulted.
+- **M9C-D8.** Key handoff is by KEY FILE PATH (`CELLO_GATEWAY_STORE_KEY_FILE`), never bytes in env
+  or argv. The file is 0600 in a 0700 dir, same user, already the sanctioned one-plaintext-key.
+- **M9C-D9.** Store paths become fixed conventions under `CELLO_DIR` (`gateway.db`, keyed by
+  `sessions.db.key`), passed to the bin as plumbing env (`CELLO_GATEWAY_STORE_DB` +
+  `_STORE_KEY_FILE`). The old `CELLO_GATEWAY_CONFIG_DB`/`_RECORD_DB` env names die; both stores
+  live in ONE encrypted file (they always could — separate files were an accident of env plumbing).
+
+**Observability.** `gateway.store.opened` {path, encrypted:true, walMode} (stderr-structured from
+the bin; never a key); open failure → exit 2 with `store_key_unavailable` / `store_open_failed` on
+stderr — the spawner surfaces it as spawn failure (WIRE-1's announced fail-closed).
+
+**Test plan sketch (red first).** (1) cfg/rec store tests re-pointed at the encrypted opener:
+round-trip through a real SQLCipher file, then RE-OPEN WITHOUT the key → refuses (the revert
+test: a node:sqlite implementation fails this). (2) A raw-bytes assertion: the DB file header is
+NOT "SQLite format 3\0" (plaintext magic) after writes. (3) Wrong-key open → store_key_mismatch.
+(4) Both-stores-one-file: config + records coexist in one DB. (5) eslint allowlist entries removed
+→ lint stays green (proves no import remains).
