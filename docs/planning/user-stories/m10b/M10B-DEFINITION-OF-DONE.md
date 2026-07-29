@@ -609,7 +609,21 @@ the additions M10B is accountable for.
   include/omit at presentation; **see my remaining issuance quota and when the window frees up**
   (`DOD-END-QUOTA-1` — a quota the operator cannot see is a wall they hit blind). Andre's standing rule
   applies — **don't ship dead features**: an endorsement mechanism reachable only by daemon IPC is the
-  `DOD-SETTINGS-SURFACE-1` mistake repeated. — ❌
+  `DOD-SETTINGS-SURFACE-1` mistake repeated.
+  > **FIVE OF NINE CLAUSES LANDED 2026-07-29, reviewed twice → Entries 33–36.** Issue
+  > (`cello_trust_signals_issue`, type-free by construction — the wire carries no type field, so a
+  > second client-sourced type needs no new verb); list pending WITH the issuer's plaintext; accept;
+  > refuse with the optional `M10B-D4` message; list held + consent status; per-counterparty
+  > include/omit (`contact_signal_prefs`, narrows only). All at MCP+CLI parity, in the ONE
+  > vocabulary, documented in the shipped SKILL.md, and behind a new structural guard that every
+  > declared tool resolves to a real daemon handler.
+  > **THREE CLAUSES ARE BLOCKED ON UNBUILT MECHANISMS, and building their surfaces first would ship
+  > exactly the dead features this line forbids:** *read a refusal message I received as issuer*
+  > needs the portal drain (`DOD-END-INGRESS-1` ❌ — nothing consumes the `refuse` op yet);
+  > *withdraw one I issued* needs `DOD-END-WITHDRAW-1` (❌), and the issuer additionally holds no
+  > local record of what they submitted, so there is nothing to name; *see my remaining quota* needs
+  > `DOD-END-QUOTA-1` (❌, portal-enforced). Each is one line of work once its mechanism exists.
+  > — 🟡 five landed, three blocked on their mechanisms
 - **DOD-END-JOURNEY-1** — **live journey, across real processes.** Bob's agent supplies an endorsement for
   Alice → portal authenticates Bob, scans, mints, notarizes → Alice receives it PENDING → Alice accepts →
   Alice presents it to Charlie → Charlie verifies (hash ∈ directory, active) and consumes it with
