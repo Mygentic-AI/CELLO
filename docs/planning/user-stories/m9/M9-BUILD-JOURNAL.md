@@ -1096,3 +1096,39 @@ equals the client's own `mode` for both implementations. (3) Spawn-failure path:
 a non-existent entry → daemon still starts, `spawn_failed` logged, a send fails closed with the
 real cause and NOT `ok:true`. (4) The full proof is `DOD-M9C-GATE-1`, which spawns the shipped bin
 and greps the boot line for `mode:"enforcing"` — until it lands, WIRE-1 stays 🟡.
+
+---
+
+## 2026-07-29 — Entry C4: PROCESS CORRECTION — the connect unit moves to its own branch and worktree
+
+**What went wrong.** This session built STORE-1 directly on `main` in the primary `cello-client`
+checkout — the same branch and the same working tree a CONCURRENT session is using to build M10B
+(endorsements). Andre: *"your work in M9 is interfering with their work in M10B… you're causing
+his gates like linting and building to fail."*
+
+The interference was not the committed content (STORE-1 is self-consistent, and the repo-wide run
+was 2169 passed / 5 failed, where the 5 are the M10B session's own in-flight red tests). It was
+the CHURN of sharing one tree: a `pnpm install` rewriting shared `node_modules` and the lockfile, a
+`tsc --build` rewriting shared `dist/`, and repo-wide `vitest` sweeps — all landing underneath
+another agent's gate runs. A gate that fails because someone else is mid-install reads as a real
+failure, and costs the other session a debugging detour.
+
+**The correction.**
+- Branch `m9/connect-unit`, worktree `/Users/andrep/Documents/code/cello-client-m9c`, based on
+  `449bbba` (STORE-1). Its own `node_modules` and `dist/`, so builds and test runs cannot collide.
+- **`449bbba` STAYS on `main`** and is the shared ancestor of the branch — it is green and
+  self-contained, so reverting it would mean a SECOND intrusive change to the other session's tree
+  for no gain, and would risk conflicts with whatever they have since written.
+- Everything after STORE-1 — WIRE-1 in particular, which makes `securityGateway` REQUIRED in
+  `DaemonConfig` and therefore touches ~45 test files — happens on the branch. That change landing
+  on shared `main` mid-M10B would have been genuinely disruptive.
+- **The trustless-cello docs stay on `main`.** They are `docs/planning/user-stories/m9/**` only;
+  they cannot affect the directory build, and putting the plan on a branch would hide it from
+  Andre, who reads by push.
+- Test runs are FILTERED from here on (`vitest run <file>`), never repo-wide sweeps.
+
+**The rule this earns.** *One repo, one tree, one coder.* A second agent in a repo gets its own
+worktree BEFORE its first build — not after its first collision. M9-PROCEDURE §5c ("One thread.
+One coder") assumed the thread was alone in the checkout; that assumption is now written down as
+a check to run at kickoff: `git status -sb` plus `git worktree list`, and if another session has
+uncommitted work in the primary checkout, branch out first.

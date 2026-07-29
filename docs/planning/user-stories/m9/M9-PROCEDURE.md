@@ -256,7 +256,17 @@ never end a turn idle; `CronDelete` itself when the tier closes.
 ### 5c. Process
 - **One thread. One coder (the main loop). NO parallel implementation agents.** Read-only subagents
   only (unit-reviewer / done-auditor / explorer).
-- **Work directly on `main`.** Commit often, push every commit.
+- **🚨 CHECK FOR A SECOND AGENT IN THE CHECKOUT BEFORE THE FIRST BUILD.** Run `git status -sb` and
+  `git worktree list` at kickoff. If another session has uncommitted work in the primary checkout,
+  **create your own branch AND worktree before you build anything** — not after the first
+  collision. Sharing a tree means sharing `node_modules`, `dist/`, and the lockfile: a `pnpm
+  install` or a repo-wide `vitest` sweep lands underneath the other agent's gate run and fails it
+  for reasons that have nothing to do with their code, which costs them a debugging detour.
+  Learned the hard way on 2026-07-29 against the M10B session (Entry C4). **This unit's home is
+  branch `m9/connect-unit`, worktree `/Users/andrep/Documents/code/cello-client-m9c`.**
+- **Filtered test runs only** (`vitest run <file>`), never a repo-wide sweep, even in your own
+  worktree — it is minutes of CPU for a signal a filtered run gives in seconds.
+- Commit often, push every commit.
 - **MCP/CLI parity for reads and tightenings; loosening is CLI-only BY DESIGN (D-4)** — record the
   asymmetry where the parity checker will see it, so it reads as a decision, not a gap. Parity of
   names is not parity of calls: verify the wired parameter names end-to-end (the M10B SURFACE-1
