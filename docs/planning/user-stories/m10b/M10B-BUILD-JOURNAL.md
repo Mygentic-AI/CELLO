@@ -2301,3 +2301,42 @@ bad agent signature.
   submission queue). The authority model is now real; the operator-facing path to invoke it is not.
 
 **Gate:** 929 tests, lint, typecheck green. 🟡 — rides the batched directory deploy with V51/V52.
+
+---
+
+## Entry 29 — `DOD-END-ACCEPT-1`: inputs VERIFIED before the design note — 2026-07-29
+
+Not a design note. This is the step Entry 14 named as the milestone's recurring defect — *"I name a
+mechanism and reason about its behavior without reading whether its inputs exist"* — done first, so
+the note that follows is built on checked ground rather than on `M10B-D14r2`'s summary of it.
+
+**All four inputs exist and are as described:**
+
+1. **The migration pattern is real and is the right one.** `migrateContactsAddTierMetadata`
+   (`contacts-tier-migration.ts:131`) is exactly what `M10B-D14r2` mandates: a `PRAGMA table_info`
+   **birth gate**, columns added with **NO DEFAULT** (so the backfill has a real discriminator —
+   with a DEFAULT the backfill matches nothing), and the ALTER + backfill in **one
+   `BEGIN…COMMIT`**. Its header states the failure that shape prevents, and it is the same one
+   consent faces: a crash between the ALTER committing and the backfill would let the next boot see
+   the column, skip the one-time step forever, and silently mis-set every existing row.
+2. **The one-time gate is tied to COLUMN BIRTH, not to NULL-ness** — a distinction consent needs
+   exactly as much: a NULL appearing later must read as the *tighter* default, never be promoted.
+3. **`CREATE_WALLET_SQL` is the fresh-database DDL** (`trust-signal-store.ts:151`) and must gain the
+   column too, or fresh and migrated databases diverge. The repo already has the
+   **"fresh == migrated"** convention to assert that (`dod-tier-1-migration.test.ts:21`).
+4. **The hazard `M10B-D14r2` warns about is REAL and I read it.** `ensureTrustSignalSchema` ends in a
+   bare `catch {}` — *"Column already exists — safe to ignore"* (`trust-signal-store.ts:186`) — and
+   it runs on **every** `startDaemon`. So a consent migration written as a sibling `ALTER`/`UPDATE`
+   inside that function would have its failures swallowed, and an unconditional backfill would
+   **flip a refused endorsement back to `accepted` on the next restart**, silently, making it
+   presentable. That is why the consent migration gets its own function on the contacts-tier
+   pattern, with a **rethrow**, and does not join `ensureTrustSignalSchema`'s try/catch.
+
+**One consequence worth stating now, before it gets designed around:** `listAllActive` — the live
+presentation path, just scoped by `DOD-END-SCOPE-FIX-1` — is where the consent predicate belongs
+(`AND consent_state = 'accepted'` in the SQL). `listPresentable` is still dead, and `M10B-D14r2`
+already corrected D-14r's error of naming it. The two predicates now stack in the same WHERE clause,
+which is the reason SCOPE-FIX-1 was sequenced first: consent bolted on top of an unscoped path would
+have passed its own negative tests against a path that was never scoped.
+
+**Next:** the design note proper, then red-first.
