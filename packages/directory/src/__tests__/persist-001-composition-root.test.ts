@@ -52,11 +52,12 @@ function runBin(env: NodeJS.ProcessEnv): { stdout: string; stderr: string; code:
       env: merged,
       stdio: "pipe",
       encoding: "utf8",
-      // Generous on purpose. This spawns a real node that opens a pool, probes the server and
-      // reads the migration history — and sibling test files in the same run create and drop
-      // databases on that server. At 5s one case measured 5014ms and was killed, turning a
-      // correct refusal into a timeout that looked like a logic failure.
-      timeout: 30_000,
+      // 15s, and the bounds matter in BOTH directions. At 5s a correct refusal measured 5014ms and
+      // was killed, which looked like a logic failure. At 30s it collided with vitest's own 30s
+      // test timeout: the happy-path case starts a node that runs forever, so the subprocess kill
+      // and the test giving up landed at the same instant. 15s clears the slowest observed refusal
+      // by 3x and still leaves vitest room to end the test itself.
+      timeout: 15_000,
     });
     return { stdout, stderr: "", code: 0 };
   } catch (err: unknown) {
