@@ -2635,3 +2635,84 @@ loosened, and the revert test was re-run after each change to prove it still bit
 - **Clauses still owed on this line:** issue an endorsement for a counterparty; read a refusal
   message as the ISSUER (the daemon-side drain of the `refuse` op); list held signals + status;
   withdraw; per-counterparty include/omit at presentation; quota visibility (`DOD-END-QUOTA-1`).
+
+---
+
+## Entry 34 — SURFACE-1 reviewed: the surface said "read this" and returned a byte count — 2026-07-29
+
+`cello-unit-reviewer` on `fb9c23f..HEAD`, no model override. 14 findings, all addressed
+(cello-client `a5a2183`). Two are worth the milestone's memory; one I corrected rather than applied.
+
+### F2 — the clause's whole purpose was unmet while three tests were green
+
+`cello_consent_list` returned `payload_bytes: 412`. Both surfaces — the MCP `accept` description and
+the CLI `consent` help, **both added by the same diff** — instructed the operator to *read the
+plaintext before accepting*. So an operator who followed the instruction received a number and
+accepted blind, on a claim someone else had written about them. That is the entire point of
+`DOD-END-ACCEPT-1` ("someone could create a rogue endorsement that says you're a piece of shit"),
+and it was missing while the tests, the name-parity audits and the vocabulary audit were all green.
+
+The plaintext was reachable the whole time — `wallet_view_signal` decodes it four hundred lines
+away. Nothing pointed at it. **A surface that instructs and a handler that does not comply is a
+worse failure than a surface that says nothing**, because the operator acts on the instruction.
+
+### F5 — a check that was true at startup and quietly stopped being true
+
+`verifyStartupManifest` verifies signatures, validity window and anti-rollback ONCE, at daemon start.
+The daemon then holds that object for its whole lifetime; nothing refreshes it. `composeSealedSubmission`
+checked that `intake_key` was **present and well-formed** — never that the manifest was still inside
+its window.
+
+Three weeks on, the portal rotates the intake key and publishes v+1; this daemon seals to the retired
+key, a directory node accepts it, and the operator is told the message was sent. The portal cannot
+open it and — since identity is derived from the signature inside the seal — cannot even attribute
+it. The message vanishes with no error anywhere.
+
+The generalisable form: **§5a's "absent is not fine" has a time dimension.** A verification result is
+not a fact, it is a fact *with an expiry*, and the check belongs where the key is USED, not only
+where it was fetched. Now refuses `manifest_expired`, naming the manifest and the instant.
+
+### The one I corrected — F13
+
+The review called `consent_notified_at` (milliseconds) an outlier "among epoch-seconds siblings" and
+proposed converting it. Backwards: the store's own convention block says hashed ENVELOPE fields are
+seconds and LOCAL BOOKKEEPING is milliseconds (`received_at`, `verified_at`). Converting would have
+*introduced* the inconsistency. Documented in that block instead. Worth recording that a reviewer's
+premise is checkable and sometimes wrong — the fix here was to read the convention the file already
+stated, not to act on the finding as written.
+
+### The hollow tests, which is the finding I would keep if I could keep only one
+
+**The nudge had ZERO coverage.** Deleting the entire block from `cello_use_agent` left the whole repo
+green, because the tests I wrote exercised the three STORE methods it calls. They were real tests of
+real code — just not of the code the clause added. An implementation that computed the count and
+never attached it to the response passed everything.
+
+And the refusal-message test pinned SOURCE TEXT only. Four wrong implementations passed it, including
+one that seals with a **different agent's key provider** — which is INV-ATTRIBUTION itself, the thing
+the compile-time guard was written to protect. The guard proves no *override parameter* exists; it
+cannot prove the right provider was passed.
+
+Both are the same mistake in different clothes: **testing what the code is made of instead of what it
+does.** Fixed with a live-daemon test over a real socket, a direct pin on the guidance-key class, and
+behavioural tests that compose → seal → open → decode so attribution is asserted on BYTES. Residual
+gap stated rather than papered over: no end-to-end test drives the refuse HANDLER with a live
+signaling stream; the handler-to-transport hop is still source-audit only.
+
+### Also: F1, and why the fix was a rule rather than a patch
+
+The nudge told CLI operators to run `cello_consent_list` — untypeable. `renderForSurface` rewrites
+only keys in a literal set of three, and `pending_consent_guidance` was not one. The class of bug is
+"a handler invents a new `*_guidance` key without knowing a registry exists", so the fix closes the
+class: any key ending in `guidance` is an instruction. Patching the single key would have left the
+next handler to rediscover it.
+
+### Published
+
+Two cascades, because the first shipped before the review ran: `v0.0.135`
+(daemon 0.0.82 / cli 0.0.83 / connect 0.0.92, verified against the tarballs — real cross-pins, no
+`workspace:*`) and `v0.0.136` (daemon 0.0.83 / cli 0.0.84 / connect 0.0.93) carrying the fixes.
+Republishing was not optional: npm version ≡ published content, and leaving 0.0.82 in place with
+different source would hand anyone who installed it the blind-consent build permanently.
+
+**`latest` promotion is Andre's and is NOT run here** — prepared in the handoff below.
