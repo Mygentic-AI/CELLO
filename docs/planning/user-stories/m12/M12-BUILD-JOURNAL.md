@@ -2568,3 +2568,76 @@ MANIFEST, v0.0.130 AE TBS).
    round-2 pulls nothing per the idempotency-termination note).
 This phase is proven by a multi-process integration test, not unit tests — a distinct mode from
 the logic layer above.
+
+---
+
+## Entry 43 — 2026-07-29 — Published to beta and promoted; the seal's root cause is the ABSENT-NODE PROFILE gap
+
+### The publish shipped and is verified against the binaries
+
+`v0.0.134` → transport **0.0.29**, daemon **0.0.81**, cli **0.0.82**, connect **0.0.91**
+(crypto/protocol-types/gateway unchanged — no source changes). CI green including
+`Published-artifact smoke test (tag)`, which is the clean-install signal rather than a green
+pipeline. Verified on the TARBALLS, not the local tree:
+
+- `transport@0.0.29` → `autonatResponder`, `unhandle` present
+- `daemon@0.0.81` → `not_in_consortium`, `getManifestPeerIds`, **and `consent_notified_at`**
+- every cross-pin a real version, no `workspace:*` anywhere
+
+`consent_notified_at` matters beyond my own work: npm `daemon@0.0.80` had been stale against two
+committed daemon changes. 0.0.81 is what actually ships them, and a re-publish at 0.0.80 would
+have looked green and shipped nothing.
+
+Andre promoted all seven to `latest` and restarted his daemon. **Live validation on AWS
+production**: `directory_signaling: connected`, all five agents online, every standing receiver
+armed, zero errors in the following window. The AutoNAT responder removal does not regress the
+client against a consortium that is not GCP.
+
+The publish guard also did its job: my first `git tag` was BLOCKED because I had loaded
+`/cello-publish` for the PREPARATION, not for this publish. Loaded-once really is not covered.
+
+### The seal: root cause identified, and it is a known deferred defect
+
+Both sides return `seal_unilateral_timeout` — *"the directory could not verify the reported root,
+**or the certificate failed verification**"*. The second clause is the true one.
+
+Directory-side, for the whole flow, exactly one event:
+
+```
+seal.certificate.legibility.built   participantCount 2, finalMessageAnswered false
+```
+
+No notarization event, and — decisively — **no `seal.single_key.anomaly`**. That warn fires only
+when a profile EXISTS but yields no primary pubkey. Its absence means `getProfile(initiator)`
+returned `undefined` outright. The directory then takes the documented fallback:
+
+> "No primary_pubkey registered for this initiator — fall back to M1 single-key notarization …
+> The single-key path **will be rejected by M2 clients**."
+
+So the directory notarizes with a single key, the client correctly refuses it, and the client's
+only symptom is a timeout. **The seal machinery is working; it is being fed a missing profile.**
+
+`agent_profiles` (which carries `primary_pubkey`) IS in the anti-entropy table set, so the DATA
+replicates. What does not is the node's IN-MEMORY view — and that is the deferred M8B item recorded
+in `.claude/CLAUDE.md` verbatim:
+
+> "**Absent-node reconcile:** a node that stayed up but wasn't in the quorum should pick up an
+> agent's identity from replication into memory without a restart (today the in-memory profile
+> cache only loads at boot)."
+
+`adapter.profiles.loaded 6` fires once at boot; `sam` and `tess` registered after it. A node that
+was not in their DKG quorum therefore has no in-memory profile for them until it restarts — and if
+that node is the one asked to seal, the seal degrades to single-key and fails.
+
+**Not yet proven, and the next step:** confirm that the sealing node is specifically one that was
+absent from the agent's DKG quorum, and that restarting it makes the same seal succeed. That
+experiment distinguishes "cache never populated" from "profile genuinely absent from this node's
+DB", which have different fixes — and the second would mean anti-entropy is not carrying profiles
+as intended, which is a much larger claim.
+
+### Also owed, found on the way
+
+The relay ships only `[RELAY] Peer connected/disconnected` to Cloud Logging — no structured events
+for seal-leaf submission. That hop is opaque, and it is exactly the hop between "client submitted"
+and "directory never saw it". Diagnosing anything that crosses the relay currently requires
+guessing.
