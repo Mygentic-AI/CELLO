@@ -82,7 +82,11 @@ export type SubmitRejection =
   | "unknown_issuer"             // the pubkey is not in authorized_issuers at all
   | "issuer_revoked"             // it is there, and it has been revoked
   | "issuer_wrong_role"          // it is active, but not a `submitter`
-  | "signature_invalid"          // the signature does not verify against the claimed pubkey
+  | "signature_invalid"          // the TRANSPORT signature does not verify against the claimed signer
+  | "revoker_authorization_invalid" // the INNER revoke authorization does not verify against the claimed
+                                    // REVOKER. Distinct from signature_invalid on purpose: they name
+                                    // two different keys, and collapsing them sends an operator to
+                                    // rotate the portal's submitter key over a bad agent signature.
   | "stale_request"              // issued_at is outside the skew window
   | "envelope_undecodable"       // the envelope bytes are not a canonical trust-signal envelope (bad FORM)
   | "envelope_invalid"           // canonical form, but a field violates the envelope's own rules (bad MEANING)
@@ -523,6 +527,44 @@ interface SignalRevokeRequest {
   op: "revoke";
   signal_hash: string;
   issued_at: number;
+  /**
+   * M10B-D12r4 / D-28 — the INNER, SELF-CERTIFYING authorization, signed by the CLAIMED ISSUER.
+   *
+   * Why an inner signature rather than trusting the transport signer: the portal is the only
+   * `submitter`-role key, so Bob's withdrawal reaches the directory signed by the PORTAL. Without
+   * this, the authority predicate could never match an agent-issued record and EVERY agent
+   * withdrawal would be silently inert — D-19 nominal, exactly as the fourth review found.
+   *
+   * Verified STANDALONE, with NO record lookup, which is what preserves the blind INSERT and its
+   * arrival-order freedom. Absent ⇒ the tombstone records no revoker and keeps the legacy
+   * role-based semantics (which is what every pre-V53 tombstone has).
+   */
+  revoker_pubkey?: string;
+  revoker_signature?: Uint8Array;
+}
+
+/**
+ * Domain tag for the inner revoke authorization. BYTE-IDENTICAL LOCAL COPY of the protocol-types
+ * builder, per the M7-WIRE-001 convention already used for `buildAgentRevocationTbs`: the directory
+ * keeps its own copy until a publish ships the helper here, and a drift-guard test plus the live
+ * spine catch any divergence.
+ *
+ * Distinct from `CELLO-REVOKE-v1` (AGENT revocation — a different structure entirely),
+ * `CELLO-TSIG-v1`, `CELLO-TSIG-REQ-v1` and `CELLO-SUBMIT-v1`, so no signature can be replayed across
+ * them.
+ */
+export const SIGNAL_REVOKE_AUTH_DOMAIN = "CELLO-SIGREVOKE-v1";
+
+/**
+ * The inner authorization's to-be-signed bytes: (domain ‖ signal_hash ‖ issued_at), as a fixed-order
+ * ARRAY — the encoder is not deterministic for maps.
+ *
+ * `issued_at` is INSIDE the TBS and that is load-bearing (M10B-D28). Without it the authorization is
+ * a PERMANENT BEARER CAPABILITY to revoke that hash, at every node, forever — anyone who ever saw
+ * one could replay it. With it, the existing CLOCK_SKEW_SECONDS window bounds the replay.
+ */
+export function buildSignalRevokeAuthorizationTbs(signalHash: string, issuedAt: number): Uint8Array {
+  return encodeCbor([SIGNAL_REVOKE_AUTH_DOMAIN, signalHash, issuedAt]);
 }
 
 export interface RevokeResult {
@@ -604,6 +646,38 @@ export async function revokeSignal(args: {
 
     const signalHash = r.signal_hash;
 
+    // ── M10B-D12r4: the INNER authorization, verified STANDALONE ──────────────────────────────────
+    // NO RECORD LOOKUP. That is the whole point: the target row may not be at this node yet (a
+    // revoke can legitimately arrive before its record under mesh replication), so the blind INSERT
+    // below and its arrival-order freedom must survive. A signature over (domain ‖ hash ‖ issued_at)
+    // needs nothing but itself.
+    //
+    // ABSENT ⇒ NO REVOKER RECORDED, which is the LEGACY path and is deliberate: every tombstone
+    // written before V53 has revoker_pubkey NULL, and the view's legacy branch keeps those reading
+    // exactly as they do today. Absent is NOT fine as a way to CLAIM authority, though — an
+    // unverifiable claim is refused outright rather than recorded unverified, which would put a
+    // forged revoker in a replicated column that peers accept at face value.
+    let revokerPubkey: string | null = null;
+    let revokerSignature: Buffer | null = null;
+    if (r.revoker_pubkey !== undefined || r.revoker_signature !== undefined) {
+      if (typeof r.revoker_pubkey !== "string" || !/^[0-9a-f]{64}$/.test(r.revoker_pubkey)) {
+        throw new SubmitRejected("malformed_request", "revoker_pubkey must be 64 lowercase hex chars");
+      }
+      if (!(r.revoker_signature instanceof Uint8Array) || r.revoker_signature.length !== 64) {
+        throw new SubmitRejected("malformed_request", "revoker_signature must be a 64-byte Ed25519 signature");
+      }
+      const tbs = buildSignalRevokeAuthorizationTbs(signalHash, issuedAt);
+      const authorized = verify(Buffer.from(r.revoker_pubkey, "hex"), tbs, r.revoker_signature);
+      if (!authorized) {
+        // REFUSE, never "record it and let the view decide". The view compares pubkeys and cannot
+        // check Ed25519, so an unverified revoker written here would be trusted by every peer node
+        // that receives the row through replication — the forgery would be laundered by storage.
+        throw new SubmitRejected("revoker_authorization_invalid", "revoker_signature does not verify over (domain ‖ signal_hash ‖ issued_at) for the claimed revoker_pubkey");
+      }
+      revokerPubkey = r.revoker_pubkey;
+      revokerSignature = Buffer.from(r.revoker_signature);
+    }
+
     // REVOCATION IS ALWAYS A TOMBSTONE INSERT — never an UPDATE of the notarization row. This single
     // decision closes three failure modes the review found (F1/F3/F4), and it is worth stating why:
     //
@@ -631,15 +705,22 @@ export async function revokeSignal(args: {
     const ins = await pool.query(
       `INSERT INTO signal_records
          (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type,
-          supersedes_hash, status, revoked_at, scanner_version, is_tombstone)
-       VALUES ($1,$2,'agent','(tombstone)','portal','(tombstone)','(tombstone)',NULL,'revoked',now(),'(tombstone)',true)
+          supersedes_hash, status, revoked_at, scanner_version, is_tombstone,
+          revoker_pubkey, revoker_signature)
+       VALUES ($1,$2,'agent','(tombstone)','portal','(tombstone)','(tombstone)',NULL,'revoked',now(),'(tombstone)',true,
+               $3,$4)
        ON CONFLICT (signal_hash, accepting_node) DO NOTHING`,
-      [signalHash, revokeNode],
+      [signalHash, revokeNode, revokerPubkey, revokerSignature],
     );
     const revokedRows = ins.rowCount ?? 0; // 1 = newly revoked at this node; 0 = this node already had
 
     logger.info("signal.revocation.accepted", {
       signalHash, issuer: signerPubkeyHex.slice(0, 16), acceptingNode, revokedRows, correlationId,
+      // Which authority model this tombstone will be judged under. Without it, an operator debugging
+      // an inert withdrawal cannot tell "no inner authorization was sent" from "it was sent and the
+      // revoker is not the issuer" — and those have completely different fixes.
+      authority: revokerPubkey === null ? "role" : "exact-pubkey",
+      revoker: revokerPubkey === null ? null : revokerPubkey.slice(0, 16),
     });
     return { signalHash, revokedRows };
   } catch (err) {

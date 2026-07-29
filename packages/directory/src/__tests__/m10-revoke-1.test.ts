@@ -15,7 +15,7 @@ import { Pool } from "pg";
 import { randomBytes } from "node:crypto";
 import { generateKeypair } from "@cello-protocol/crypto";
 import { encodeCbor, encodeTrustSignalEnvelope, hashTrustSignalEnvelope, type TrustSignalEnvelope } from "@cello-protocol/protocol-types";
-import { submitSignal, revokeSignal, buildSignalRequestTbs } from "../signal-write.js";
+import { submitSignal, revokeSignal, buildSignalRequestTbs, buildSignalRevokeAuthorizationTbs } from "../signal-write.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
 const describeIntegration = process.env.CELLO_ENV === "local" ? describe : describe.skip;
@@ -54,6 +54,30 @@ describeIntegration("DOD-REVOKE-1 — revocation through the chokepoint", () => 
 
   async function revokeArgs(signalHash: string, signer: Signer, pub: string, node = NODE) {
     const body = encodeCbor({ v: 1, op: "revoke", signal_hash: signalHash, issued_at: nowSec() });
+    return {
+      pool, logger: silent, acceptingNode: node, correlationId: "c", bodyCbor: body,
+      signerPubkeyHex: pub, signatureHex: hex(await signer.sign(buildSignalRequestTbs(body))),
+    };
+  }
+
+  /**
+   * M10B / DOD-END-REVOKE-2 — a revoke carrying the INNER authorization (M10B-D12r4).
+   *
+   * The transport signer stays the portal (it is the only `submitter` key, which is exactly why the
+   * inner signature has to exist); the AUTHORITY is the revoker's.
+   */
+  async function revokeArgsWithAuthorization(
+    signalHash: string, signer: Signer, pub: string,
+    revoker: Signer, revokerPub: string, node = NODE,
+    tamper?: (tbs: Uint8Array) => Uint8Array,
+  ) {
+    const issuedAt = nowSec();
+    const tbs = buildSignalRevokeAuthorizationTbs(signalHash, issuedAt);
+    const sig = await revoker.sign(tamper ? tamper(tbs) : tbs);
+    const body = encodeCbor({
+      v: 1, op: "revoke", signal_hash: signalHash, issued_at: issuedAt,
+      revoker_pubkey: revokerPub, revoker_signature: sig,
+    });
     return {
       pool, logger: silent, acceptingNode: node, correlationId: "c", bodyCbor: body,
       signerPubkeyHex: pub, signatureHex: hex(await signer.sign(buildSignalRequestTbs(body))),
@@ -213,5 +237,71 @@ describeIntegration("DOD-REVOKE-1 — revocation through the chokepoint", () => 
       pool, logger: silent, acceptingNode: NODE, correlationId: "c", bodyCbor: body,
       signerPubkeyHex: pubA, signatureHex: hex(await keyA.sign(buildSignalRequestTbs(body))),
     })).rejects.toMatchObject({ reason: "stale_request" });
+  });
+
+  // ── M10B / DOD-END-REVOKE-2 — the F6 authority fix, end-to-end through the real code path ───────
+  describe("M10B-D12r4 — an agent-issued record obeys EXACT-PUBKEY authority", () => {
+    it("THE DEFECT, DEAD: a submitter key cannot tombstone an agent's record it does not own", async () => {
+      // Before V53 this returned `revoked`: revoke authorised on the generic submitter role and the
+      // view honoured any tombstone. Mallory is a legitimate submitter here — that is the point. The
+      // tombstone is written (arrival order must stay free) and is simply INERT.
+      const [mallory, malloryPub] = await (async (): Promise<[Signer, string]> => {
+        const kp = generateKeypair(); return [kp, hex(await kp.getPublicKey())];
+      })();
+      const [bob, bobPub] = await (async (): Promise<[Signer, string]> => {
+        const kp = generateKeypair(); return [kp, hex(await kp.getPublicKey())];
+      })();
+      const h = await mint(envelope({ issuer_kind: "agent", issuer_pubkey: bobPub }));
+      expect(await effective(h)).toBe("active");
+
+      const res = await revokeSignal(await revokeArgsWithAuthorization(h, keyA, pubA, mallory, malloryPub));
+      expect(res.revokedRows).toBe(1);            // the row IS written — blind insert, order-free
+      expect(await effective(h)).toBe("active");  // ...and it does NOTHING
+      void bob;
+    });
+
+    it("the ISSUER's own withdrawal still revokes", async () => {
+      // The other side. Without this the "fix" would be indistinguishable from breaking withdrawal.
+      const [bob, bobPub] = await (async (): Promise<[Signer, string]> => {
+        const kp = generateKeypair(); return [kp, hex(await kp.getPublicKey())];
+      })();
+      const h = await mint(envelope({ issuer_kind: "agent", issuer_pubkey: bobPub }));
+      const res = await revokeSignal(await revokeArgsWithAuthorization(h, keyA, pubA, bob, bobPub));
+      expect(res.revokedRows).toBe(1);
+      expect(await effective(h)).toBe("revoked");
+    });
+
+    it("REFUSES an inner authorization that does not verify — never records it unverified", async () => {
+      // Recording an unverified revoker would be laundering by storage: the view compares pubkeys and
+      // cannot check Ed25519, so every peer node receiving the row through replication would trust
+      // it. The reason is DISTINCT from signature_invalid, which names the transport key — sending an
+      // operator to rotate the portal's submitter key over a bad agent signature is the wrong subsystem.
+      const [bob, bobPub] = await (async (): Promise<[Signer, string]> => {
+        const kp = generateKeypair(); return [kp, hex(await kp.getPublicKey())];
+      })();
+      const h = await mint(envelope({ issuer_kind: "agent", issuer_pubkey: bobPub }));
+      await expect(
+        revokeSignal(await revokeArgsWithAuthorization(h, keyA, pubA, bob, bobPub, NODE,
+          (tbs) => new Uint8Array([...tbs, 0x00]))),   // signed over the WRONG bytes
+      ).rejects.toMatchObject({ reason: "revoker_authorization_invalid" });
+      expect(await effective(h)).toBe("active");
+    });
+
+    it("a PORTAL-issued record keeps ROLE-based authority — key rotation must not strand it", async () => {
+      // The escape that exists because the portal is ONE logical issuer whose keys rotate. Exact
+      // matching here would make every portal record unrevocable the moment the KMS key rotates.
+      const h = await mint(envelope());
+      const res = await revokeSignal(await revokeArgs(h, keyB, pubB)); // a DIFFERENT submitter key
+      expect(res.revokedRows).toBe(1);
+      expect(await effective(h)).toBe("revoked");
+    });
+
+    it("a revoke with NO inner authorization records no revoker — the legacy path, unchanged", async () => {
+      const h = await mint(envelope());
+      await revokeSignal(await revokeArgs(h, keyA, pubA));
+      const { rows } = await pool.query(
+        "SELECT revoker_pubkey FROM signal_records WHERE signal_hash=$1 AND is_tombstone", [h]);
+      expect((rows[0] as { revoker_pubkey: string | null }).revoker_pubkey).toBeNull();
+    });
   });
 });
