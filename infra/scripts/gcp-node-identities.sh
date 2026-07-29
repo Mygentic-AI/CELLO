@@ -29,8 +29,20 @@ JSON=false
 
 [ -f "$TFVARS" ] || { echo "missing $TFVARS — the topology is the source of the node list" >&2; exit 1; }
 
-# node_id values, in the order they appear in the topology.
-NODE_IDS=$(grep -oE 'node_id[[:space:]]*=[[:space:]]*"[^"]+"' "$TFVARS" | sed 's/.*"\(.*\)"/\1/')
+# node_id values from the DIRECTORY block only. tfvars also declares relay_nodes, whose node_ids
+# have their own secrets — scanning the whole file pulled those in and the derivation failed on a
+# secret that was never meant to be there.
+NODE_IDS=$(awk '
+  /^directory_nodes[[:space:]]*=[[:space:]]*\{/ { inblock=1; depth=1; next }
+  inblock {
+    n=gsub(/\{/,"{"); depth+=n
+    m=gsub(/\}/,"}"); depth-=m
+    if (depth<=0) { inblock=0; next }
+    if (match($0, /node_id[[:space:]]*=[[:space:]]*"[^"]+"/)) {
+      s=substr($0, RSTART, RLENGTH); gsub(/.*"/,"",s)
+      split(substr($0,RSTART,RLENGTH), a, "\"" ); print a[2]
+    }
+  }' "$TFVARS")
 [ -n "$NODE_IDS" ] || { echo "no node_id entries found in $TFVARS" >&2; exit 1; }
 
 first=true

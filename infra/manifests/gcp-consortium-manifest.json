@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "not_before": "2026-01-01T00:00:00Z",
+  "expires": "2030-01-01T00:00:00Z",
+  "nodes": [
+    {
+      "nodeId": "gcp-use1",
+      "pubkey": "7969e22a7d95293ae343cb2667c2a4d7127aa8748478582fa637674c30e0113c",
+      "region": "use1",
+      "provider": "gcp",
+      "endpoint": "http://34.75.172.108:8080",
+      "peerId": "12D3KooWMH58hm8xpuwgwaNSvnvXBuc126jfuUMVbrGNcU2MeEAX",
+      "role": "validator"
+    },
+    {
+      "nodeId": "gcp-usc1",
+      "pubkey": "ef961384100bb087f36b68e3a270acb8f22fdf62c4cd5e517e423afb7f399002",
+      "region": "usc1",
+      "provider": "gcp",
+      "endpoint": "http://34.136.176.190:8080",
+      "peerId": "12D3KooWExQLMbvaioVqQCPkc1ZZgJ5kdoePymtMrg46ugMBs5zi",
+      "role": "validator"
+    },
+    {
+      "nodeId": "gcp-euw1",
+      "pubkey": "9cb77b68a98f49056fef232f4d56eeb9b66b1a6646fe06b966ff570a82ca6c14",
+      "region": "euw1",
+      "provider": "gcp",
+      "endpoint": "http://34.34.166.245:8080",
+      "peerId": "12D3KooWP52VSVrakyRdPyt23kAuhgp3FV6tiVRByfdyVvHAaEeJ",
+      "role": "validator"
+    }
+  ],
+  "signatures": [
+    {
+      "officerIndex": 0,
+      "signature": "79a7b604454d33e2ae480fa3d9ebd0a609a0e6b2538eb6c7746fe3a6824a2b44e9683dbb7b872b6a5bcfe76c555fedd3a49783c026c2b88bb61ab2ff2b7bd00b"
+    }
+  ]
+}

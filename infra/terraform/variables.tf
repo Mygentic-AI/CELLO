@@ -58,3 +58,15 @@ variable "extra_region_subnets" {
   type        = map(string)
   default     = {}
 }
+
+variable "consortium_root_keys" {
+  description = "Comma-separated Ed25519 officer ROOT public keys the manifest is verified against. PUBLIC. Printed by infra/scripts/sign-gcp-consortium-manifest.mjs; the private seed lives only in Secret Manager and is granted to no workload."
+  type        = string
+  default     = ""
+}
+
+variable "consortium_threshold" {
+  description = "How many officer signatures a manifest needs. 1 in dev — one officer. This is NOT the FROST threshold; that is majority(validators) and is derived from the manifest itself."
+  type        = number
+  default     = 1
+}

@@ -49,7 +49,21 @@ write_files:
       CELLO_GSM_TRANSPORT_KEY=${gsm_transport}
       CELLO_GSM_INTERNAL_API_KEY=${gsm_internal}
       CELLO_GSM_PREAUTH_ISSUER_KEY=${gsm_preauth}
+      # The signed roster of directory nodes, and the officer key it is verified against. The node
+      # derives its DKG quorum and threshold from this, so it is verified at load and boot is FATAL
+      # if it does not verify (M12-D9) — booting on an unverifiable roster would leave the quorum
+      # deriving from an empty node set, which the code treats as single-node back-compat. A silent
+      # threshold downgrade is worse than a crash loop.
+      CELLO_DIRECTORY_CONSORTIUM_MANIFEST=/etc/cello/consortium-manifest.json
+      CELLO_CONSORTIUM_ROOT_KEYS=${consortium_root_keys}
+      CELLO_CONSORTIUM_THRESHOLD=${consortium_threshold}
       HOME=/tmp
+
+  - path: /etc/cello/consortium-manifest.json
+    permissions: "0644"
+    owner: root
+    content: |
+${consortium_manifest_indented}
 
   - path: /etc/cello/backup.env
     permissions: "0644"
@@ -108,6 +122,7 @@ write_files:
       ExecStart=/usr/bin/docker run --rm --name cello-directory \
         --network host \
         --env-file /etc/cello/directory.env \
+        -v /etc/cello/consortium-manifest.json:/etc/cello/consortium-manifest.json:ro \
         ${image}
       ExecStop=/usr/bin/docker stop cello-directory
       Restart=always

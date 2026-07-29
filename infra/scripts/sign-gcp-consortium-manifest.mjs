@@ -1,0 +1,139 @@
+#!/usr/bin/env node
+/**
+ * sign-gcp-consortium-manifest.mjs — build and sign the GCP consortium manifest
+ * (M12 DOD-MANIFEST-GCP-1).
+ *
+ * The consortium manifest is the signed roster of directory nodes. Both sides of the protocol
+ * depend on it: a directory derives its DKG quorum and threshold from it (so a tampered manifest
+ * would steer which nodes hold shares and what T is), and a client bundles it so a cold-boot daemon
+ * knows every directory and can fail over to a reachable one. The officer signature is what makes
+ * either safe.
+ *
+ * The GCP counterpart of sign-consortium-manifest.mjs, which reads AWS SSM and Secrets Manager.
+ * This one reads GCP Secret Manager and a FRESH officer key: M12-D4 requires the GCP and AWS
+ * systems run in parallel with zero shared runtime state, and a shared officer key would mean a
+ * manifest signed for one consortium verifies against the other.
+ *
+ * Node identities come from gcp-node-identities.sh, which derives them from the same Secret Manager
+ * seeds the nodes themselves use — verified byte-identical to what each node logs for itself at
+ * boot. Nothing here is hand-entered.
+ *
+ * Every node is role `validator`: replicas hold no shares and take no part in a ceremony, and this
+ * consortium has none (M12-P4 leaves that capability dormant at launch).
+ *
+ * The officer SEED is read from Secret Manager and never passed as an argument or printed.
+ *
+ * Usage:  node infra/scripts/sign-gcp-consortium-manifest.mjs [--out <path>]
+ *
+ * Crypto reference: RFC 8032 (Ed25519). Canonical body: every field except `signatures`, object
+ * keys sorted lexicographically at every level, no whitespace, UTF-8 — matching verifyManifest.
+ */
+
+import { createRequire } from "node:module";
+import { existsSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(__dirname, "..", "..");
+
+function resolveNoble(root) {
+  const candidates = [
+    join(root, "packages", "directory", "node_modules", "@noble", "curves", "package.json"),
+    join(root, "demo", "node_modules", "@noble", "curves", "package.json"),
+    join(root, "packages", "relay", "node_modules", "@noble", "curves", "package.json"),
+    join(root, "node_modules", "@noble", "curves", "package.json"),
+  ];
+  for (const c of candidates) if (existsSync(c)) return createRequire(c);
+  throw new Error("@noble/curves not found in:\n  " + candidates.join("\n  "));
+}
+const require = resolveNoble(repoRoot);
+const { ed25519 } = await import(require.resolve("@noble/curves/ed25519.js"));
+
+const PROJECT = process.env["CELLO_GCP_PROJECT"] ?? "cello-infra";
+const outIdx = process.argv.indexOf("--out");
+const outPath = outIdx !== -1 ? process.argv[outIdx + 1] : null;
+
+/** Canonical body: exclude `signatures`, sort keys recursively, no whitespace. */
+function sortedReplacer(_k, v) {
+  if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+    const s = {};
+    for (const k of Object.keys(v).sort()) s[k] = v[k];
+    return s;
+  }
+  return v;
+}
+function canonicalBody(m) {
+  const body = {};
+  for (const k of Object.keys(m)) if (k !== "signatures") body[k] = m[k];
+  return new TextEncoder().encode(JSON.stringify(body, sortedReplacer));
+}
+
+// ── Inputs ───────────────────────────────────────────────────────────────────────────────────
+
+const nodes = JSON.parse(
+  execFileSync("bash", [join(__dirname, "gcp-node-identities.sh"), "--json"], { encoding: "utf8" }),
+);
+if (nodes.length === 0) throw new Error("no directory nodes found — check terraform.tfvars");
+
+for (const n of nodes) {
+  if (!/^[0-9a-f]{64}$/i.test(n.pubkey)) throw new Error(`${n.nodeId}: pubkey is not 32-byte hex`);
+  if (!n.address) throw new Error(`${n.nodeId}: no static address — has terraform applied?`);
+}
+// A duplicate nodeId would put two manifest entries under one FROST identifier (DOD-INV-NODEID).
+const ids = new Set(nodes.map((n) => n.nodeId));
+if (ids.size !== nodes.length) throw new Error("duplicate nodeId in the roster");
+// Two nodes sharing a signing key would let one host answer as two members of the quorum.
+const keys = new Set(nodes.map((n) => n.pubkey.toLowerCase()));
+if (keys.size !== nodes.length) throw new Error("two nodes share a signing pubkey — refusing to sign");
+
+const officerSeedHex = execFileSync(
+  "gcloud",
+  ["secrets", "versions", "access", "latest", "--secret", "cello-consortium-officer-key-0", "--project", PROJECT],
+  { encoding: "utf8" },
+).trim();
+if (!/^[0-9a-f]{64}$/i.test(officerSeedHex)) throw new Error("officer seed is not 64-hex");
+const officerSeed = Buffer.from(officerSeedHex, "hex");
+const officerPub = Buffer.from(ed25519.getPublicKey(officerSeed)).toString("hex");
+
+// ── Build ────────────────────────────────────────────────────────────────────────────────────
+
+const manifest = {
+  version: 1,
+  not_before: "2026-01-01T00:00:00Z",
+  expires: "2030-01-01T00:00:00Z",
+  nodes: nodes.map((n) => ({
+    nodeId: n.nodeId,
+    pubkey: n.pubkey,
+    region: n.nodeId.replace(/^gcp-/, ""),
+    provider: "gcp",
+    // ws, not wss: no TLS terminator sits in front of these nodes yet. The address is what a
+    // client can actually dial today, and an endpoint that lies is worse than one that is plain.
+    endpoint: `http://${n.address}:8080`,
+    peerId: n.peerId,
+    role: "validator",
+  })),
+  signatures: [],
+};
+
+manifest.signatures = [
+  { officerIndex: 0, signature: Buffer.from(ed25519.sign(canonicalBody(manifest), officerSeed)).toString("hex") },
+];
+
+// Fail closed: never emit a manifest this process cannot itself verify.
+if (!ed25519.verify(Buffer.from(manifest.signatures[0].signature, "hex"), canonicalBody(manifest), Buffer.from(officerPub, "hex"))) {
+  throw new Error("self-verification FAILED — refusing to emit");
+}
+
+const json = JSON.stringify(manifest, null, 2);
+if (outPath) {
+  writeFileSync(outPath, json + "\n");
+  console.error(`wrote ${outPath}`);
+} else {
+  console.log(json);
+}
+
+console.error(`# ${nodes.length} validators, officer pubkey ${officerPub}, threshold 1`);
+console.error(`# CELLO_CONSORTIUM_ROOT_KEYS=${officerPub}`);
+console.error(`# T = majority(validators) = ${Math.floor(nodes.length / 2) + 1}`);

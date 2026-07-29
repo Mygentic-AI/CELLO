@@ -181,3 +181,42 @@ resource "google_secret_manager_secret_iam_member" "db_app_credentials" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.directory_node[each.key].email}"
 }
+
+# ── The consortium officer key ───────────────────────────────────────────────────────────────
+# The root of trust for the manifest. It signs the roster of directory nodes, and every client and
+# every directory verifies that signature against the officer PUBLIC key before believing which
+# nodes exist or what the threshold is.
+#
+# A FRESH key for the GCP consortium, deliberately not the AWS one. M12-D4 requires the two systems
+# run in parallel with zero shared runtime state — sharing the officer key would mean a manifest
+# signed for one consortium verifies against the other, which is the opposite of two independent
+# systems. It also keeps this milestone from depending on a hibernated AWS account.
+#
+# Not per-node: there is one consortium, so there is one officer. Threshold is 1 in dev.
+resource "random_id" "consortium_officer" {
+  byte_length = 32
+}
+
+resource "google_secret_manager_secret" "consortium_officer" {
+  project   = var.project_id
+  secret_id = "cello-consortium-officer-key-0"
+
+  replication {
+    auto {}
+  }
+
+  # Losing this means no future manifest can ever be signed for this consortium: every node and
+  # every client would be pinned to a roster nobody can amend or rotate.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_secret_manager_secret_version" "consortium_officer" {
+  secret      = google_secret_manager_secret.consortium_officer.id
+  secret_data = random_id.consortium_officer.hex
+}
+
+# Deliberately granted to NO workload. Directories and relays verify with the PUBLIC key, which is
+# configuration; only an operator signing a new manifest needs the seed. A node that could read it
+# could mint a roster naming itself the whole consortium.

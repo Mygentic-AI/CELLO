@@ -78,3 +78,9 @@ relay_nodes = {
     hostname     = "relay-gcp-use1.cello.mygentic.ai"
   }
 }
+
+# The officer public key the consortium manifest is verified against, and how many officer
+# signatures it needs. NOT the FROST threshold — that is majority(validators) = 2 and the node
+# derives it from the manifest.
+consortium_root_keys = "e8300a2b9de7be6f6d629f778dc319715ad0010c0639f3a1564181d56d3eb104"
+consortium_threshold = 1
