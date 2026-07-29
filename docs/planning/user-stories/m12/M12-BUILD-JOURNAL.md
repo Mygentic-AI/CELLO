@@ -3312,3 +3312,73 @@ suggests it is simply not draining.
 `seal.certificate.deferred` is what made all of this legible. Before it, this failure was a bare
 `enqueueNotification` with no log, and the client's timeout blamed directory verification that never
 ran. One WARN at the point where two components disagree turned a day of guessing into two runs.
+
+---
+
+## Entry 54 — 2026-07-29 — SEAL ROOT CAUSE, final: every seal is processed by ONE directory, and it can only reach agents homed there
+
+Entry 53 framed this as the responder lacking a broker entry. That was true but downstream. The
+actual cause is one line of infrastructure config meeting one line of relay code.
+
+### The mechanism
+
+The relay drives the bilateral seal: two ctrl leaves in the log → it calls the directory's
+`processSeal`. `network-directory-adapter.ts` sends that to **`this.#directoryPeerId`** — a SINGLE
+configured directory. Infrastructure pins it:
+
+```
+infra/terraform/terraform.tfvars:81   relay_primary_directory = "gcp-use1"
+```
+
+So **every seal in the consortium is processed by `gcp-use1`**, wherever the participants live.
+`processSeal` then pushes `seal_verified` to the seal initiator out of its LOCAL `#streams` map.
+
+| seal initiator | homed on | seal processed by | outcome |
+|---|---|---|---|
+| ann  | gcp-use1 | gcp-use1 | ✅ stream present — today's two successes |
+| bob2 | gcp-euw1 | gcp-use1 | ❌ `initiator_stream_absent` → deferred forever |
+
+The seal initiator is **whoever closes first**, not the session initiator. That is the entire source
+of the apparent randomness.
+
+### It is structural, not probabilistic
+
+`notification_queue` is **not** in the anti-entropy table set (`agent_profiles`,
+`agent_revocations`, `agent_suspensions`, `agent_presence`, `seal_notarizations`). The queued frame
+is local to `gcp-use1`, and `drainNotifications` only fires when a peer authenticates ON THAT NODE.
+bob2 is homed on `gcp-euw1` and has no reason to ever connect to `gcp-use1`. **The frame is
+unreachable by construction, not merely late** — which kills Entry 53's option (3).
+
+So with one relay pinned to one directory, ANY agent not homed on that directory can never complete
+a seal it initiates. It looked intermittent only because my two test agents were deliberately split
+across nodes — the very cross-node property M12 exists to prove.
+
+### Why the earlier fixes were right but insufficient
+
+- Entry 52 (auto-ack broker connection) closed a genuine 5-second ordering race and is worth keeping;
+  the reconnect now lands 341ms BEFORE the directory looks instead of 5s after.
+- Neither it nor Fix #1 can help here: both open a connection to the SESSION broker, and the frame
+  is addressed by the SEAL processor, which is a different node chosen by relay config.
+
+### The fix, and what it costs
+
+There is **no node-to-node frame forwarding** in the directory today — I checked. So the candidates:
+
+1. **Relay routes `processSeal` to the seal initiator's home node.** The relay already holds the
+   sender pubkeys of both ctrl leaves; the directory knows homing via `agent_presence.owning_node_id`,
+   which IS replicated. Smallest change that respects the sovereign-node model — no new cross-node
+   channel, just a better choice of which directory to call.
+2. **Directory forwards `seal_verified` to the owning node.** Correct in general and the largest
+   change: it introduces directory→directory frame delivery, which does not exist yet.
+3. **Every agent maintains a stream on the relay's primary directory.** Rejected on sight — it
+   re-centralises exactly what the consortium exists to avoid.
+
+(1) is the one to build. It also removes a hidden single point of failure that has nothing to do
+with sealing: today `relay_primary_directory` makes one node load-bearing for every seal in the
+consortium, which contradicts DOD-INV-SOVEREIGN's redundancy clause.
+
+### Owed
+
+The `relay_primary_directory` variable deserves a comment saying what it actually governs. It reads
+as "which directory the relay registers with" and is in fact "which directory adjudicates every seal
+in the consortium."
