@@ -51,6 +51,20 @@ const HERE = fileURLToPath(new URL(".", import.meta.url));
 export const TRUSTLESS_ROOT = resolve(HERE, "../../../..");
 // cello-client is a sibling repo (REPOSPLIT): the daemon / mcp / cli binaries.
 export const CELLO_CLIENT_ROOT = resolve(TRUSTLESS_ROOT, "../cello-client");
+/**
+ * cello-portal, the third sibling — and reaching it is what stops `J-END` being a FALSE GREEN.
+ *
+ * Every earlier spine journey simulates the portal by seeding `signal_records` directly (`j-canary`
+ * says so in its own comment), which was sound when the portal's role was to insert a row and the
+ * directory's genericity was under test. M10B inverts that: the portal's INGRESS — drain, open the
+ * seal, verify and derive the issuer from the signature, scan, compose, mint, deliver — IS the thing
+ * under test. A journey that seeds the directory would skip all of it and still pass.
+ *
+ * So the journey drives the REAL portal modules. Re-implementing that pipeline inside the test would
+ * be the "byte-identical local copy on each side" that `M10B-D28` forbids for the submission wire,
+ * applied to the pipeline instead — and the copy that drifts is the one nobody runs in production.
+ */
+export const PORTAL_ROOT = resolve(TRUSTLESS_ROOT, "../cello-portal");
 
 export const BINS = {
   // trustless-cello (this repo)
