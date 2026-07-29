@@ -159,9 +159,23 @@ describeIntegration("V46 signal_records migration (DOD-STORE-DIR-1)", () => {
       const { rows } = await pool.query(
         "SELECT column_name FROM information_schema.columns WHERE table_name = 'signal_records'",
       );
+      //
+      // ── V53 (M10B-D12r4 / D-28) adds TWO, and here is the argument this test demands ──────────
+      // `revoker_pubkey` — WHO authorised a tombstone. Without it the revoke authority check is
+      //   impossible: today `revokeSignal` authorises on the generic `submitter` role and writes a
+      //   tombstone hardcoding 'portal'/'(tombstone)', so one submitter key can tombstone ANYONE's
+      //   endorsement (M10 DOD-REVOKE-1 review F6). It is a PUBLIC KEY — the same class of value as
+      //   `issuer_pubkey`, which this table already holds — so it tells a node operator nothing the
+      //   table does not already say, and it holds no content whatsoever. DOD-INV-DIR-DUMB intact.
+      // `revoker_signature` — the tombstone's inner authorization, persisted as AUDIT EVIDENCE and
+      //   labelled as such in the migration, because nothing verifies it (the read path is a SQL
+      //   view and a view cannot check Ed25519). It is a signature over a hash, not content.
+      // Both are NULL for every row written before V53, which is what lets the legacy-tombstone
+      // branch keep pre-M10B revocations reading exactly as they do today.
       const cols = (rows as Array<{ column_name: string }>).map((r) => r.column_name).sort();
       expect(cols).toEqual([
         "accepting_node", "created_at", "is_tombstone", "issuer_kind", "issuer_pubkey", "revoked_at",
+        "revoker_pubkey", "revoker_signature",
         "scanner_version", "signal_hash", "status", "subject", "subject_kind",
         "supersedes_hash", "type",
       ].sort());
