@@ -1715,6 +1715,148 @@ on all four.
 
 ---
 
+## Entry 22 — DESIGN NOTE — `DOD-END-SUBMIT-1` (written before any code) — 2026-07-29
+
+**Two repos, stated up front (§2a):** cello-client (protocol-types + daemon) and trustless-cello
+(directory frame handler). The queue TABLE exists (Entry 20) and **nothing writes to it** — the wire
+path is this unit.
+
+**Target behavior (one sentence).** Bob's daemon composes an endorsement, signs it with his agent
+key, seals it to the portal's intake key, and hands it to a directory node that cannot read it — and
+if any part of that is unavailable it refuses and says which part, rather than sending anything
+unsealed.
+
+**Spec anchors.** `M10B-D2` (the ingress IS this queue; the daemon never calls the portal), `M10B-D11`
+(the intake key rides the manifest; absent ⇒ refuse), `M10B-D20` (`submission_id` = sha256 of the
+signed body, a routing HINT the directory cannot verify), `M10B-D21` (unreplicated ⇒ the submitter's
+failover across nodes is what covers a dead node), `M10B-D28` (the sealed body is `op`-discriminated;
+the TBS builder lives in `@cello-protocol/protocol-types` so daemon and portal produce identical
+bytes; `issued_at` inside the TBS bounds replay). Crypto: Ed25519 → RFC 8032, CBOR → RFC 8949,
+SHA-256 → FIPS 180-4.
+
+### The verifications — done before the sentences, which is the habit Entry 14 said was missing
+
+- **V1 — the sealing primitive exists and is the right one.** `sealToRecipient(recipientEd25519Pub,
+  plaintext)` / `openSealed`, exported from `@cello-protocol/crypto`
+  (`content-seal.ts:89`, `index.ts:64`). This is the same primitive the M10-D22 pickup path uses, so
+  the queue really is its mirror image rather than a new crypto surface.
+- **V2 — the daemon already holds the verified manifest object, so reading one more field needs no
+  new interface.** `manifestProvider.getCurrentManifest()` returns a cached, signature-verified
+  `ConsortiumManifest`, with a live precedent at `register-handler.ts:137`. Checked the provider, not
+  just the type.
+- **V3 — but `ConsortiumManifest` is CLOSED, and `M10B-D11` reads as though it were not.** The
+  protocol-types interface (`manifest.ts:78–86`) has **no index signature**: `version`, `not_before`,
+  `expires`, `nodes`, `signatures`. So the intake key is an additive change to that interface, not a
+  free-form field. D-11's *signature-coverage* claim is unaffected and still holds — coverage comes
+  from crypto's `canonicalManifestBody` building the signed body from `Object.keys(manifest)`, and
+  crypto's own `ConsortiumManifestInput` **does** carry `[key: string]: unknown` (`manifest.ts:38`).
+  Two different types, one open and one closed; only the closed one needs editing.
+- **V4 — the inbound frame set is genuinely additive, and it lives in the DIRECTORY repo.**
+  `packages/directory/src/directory-frames.ts:389` is a plain union with a `decodeInboundSignalingFrame`
+  switch. The daemon does **not** need an encoder: it sends raw CBOR maps through
+  `signaling.sendRaw({type: …})`, exactly as `session_request` does. So "adding a frame kind" is one
+  union member and one decoder case on the directory side, and a literal map on the daemon side.
+- **V5 — the queue repository is ready and unwired.** `enqueueSubmission(db, {submissionId,
+  intakeKeyId, ciphertext}) → boolean` (`submission-queue-repository.ts:62`), **zero callers**. Its
+  boolean is the censorship signal Entry 20's review added, and this unit is the consumer that makes
+  it non-dead: the handler must distinguish `queued` from `duplicate`.
+
+**Producer/consumer chain.**
+
+| Thing | Producer | Consumer | If wrong |
+| :-- | :-- | :-- | :-- |
+| intake key `{key_id, pubkey}` | consortium manifest (officer-signed) | Bob's daemon | absent ⇒ MUST refuse; a fallback to unsealed hands the directory every endorsement |
+| submitter signature over the TBS | Bob's daemon (K_local) | the PORTAL, at drain | unverified ⇒ anyone mints an endorsement attributed to anyone, permanently, inside the hash |
+| sealed ciphertext | Bob's daemon | portal intake key | sealed to the wrong key ⇒ undecryptable poison with no reply (unattributable, `M10B-D22b`) |
+| `submission_id` | daemon (sha256 of signed body) | directory PK / portal dedupe | a HINT only — the directory cannot open the seal to check it (`M10B-D20` correction) |
+| queued/duplicate boolean | `enqueueSubmission` | the frame handler's event | collapsed ⇒ a censorship attack is silent (Entry 20) |
+
+**The seam.**
+- `@cello-protocol/protocol-types` — the submission body type, the canonical CBOR encoder, the TBS
+  builder, and `intake_key?` on `ConsortiumManifest`. It lives here because **the portal must rebuild
+  these bytes identically** and the portal depends on protocol-types and crypto only.
+- `cello-client/core/daemon` — compose → sign → seal → send, with failover across nodes; the manifest
+  intake-key read; the refusal paths.
+- `trustless-cello/packages/directory` — one inbound frame kind, one handler calling
+  `enqueueSubmission`. **`submitSignal`/notarization is NOT touched** (Entry 4 V1).
+
+**Invariants at stake, and the property that prevents each violation.**
+- **INV-ATTRIBUTION.** Stated precisely, because a reviewer will otherwise read the body as
+  caller-supplied: **Ed25519 has no key recovery** (RFC 8032), so "derive `issuer_pubkey` from the
+  signature" cannot mean literal recovery. The body carries the submitter pubkey, and it is
+  **worthless until the signature over the TBS verifies against it** — a body claiming P with a valid
+  signature by P proves possession of P's private key. The AC is therefore: the pubkey is never read
+  except as the verification key, and never trusted before that verification succeeds.
+- **INV-CONSENT / DOD-END-DISCOVER-1.** The directory sees `{submission_id, intake_key_id,
+  ciphertext}` and nothing else — no submitter, no subject. Enforced by the schema (Entry 20), and
+  this unit must not add a field to the frame that the table would then want.
+- **INV-ZEROBUMP.** Nothing here learns the string `endorsement`. The discriminator is `op`
+  (`M10B-D28`) — a protocol verb, not a signal type — and `subject_kind`, which is envelope data. A
+  second client-sourced type sends the identical frame.
+- **§5a ABSENT IS NOT FINE.** Three refusal paths, each naming its own cause: no intake key in the
+  manifest, no manifest at all, every node unreachable. None of them may degrade to sending.
+
+**Approach + rejected alternative.** Sign, then seal, then send with failover; the id is content-
+derived so a retry to a second node is a strict no-op rather than a double-mint. **Rejected: seal
+then sign.** Signing the ciphertext would bind Bob's identity to bytes he cannot prove the meaning
+of, and the portal would have to open before it could attribute — inverting the order that makes an
+unopenable blob *unattributable poison* rather than a wrongly-attributed submission. **Also
+rejected: an HTTP route on the directory** — the daemon has no directory HTTP client for authenticated
+writes, and the signaling stream already carries a challenge-response-authenticated identity that
+flood protection needs (Entry 10's correction: `verifySignedRequest` over HTTP proves only "some
+submitter-role key", the signaling frame yields a verified `authedPubkeyHex`).
+
+**Falsification pass.**
+1. *Does the call site have the method on the INTERFACE?* Yes — V2, checked the provider and a live
+   caller, not the type alone.
+2. *Does responsibility sit right?* The TBS builder is in protocol-types, not the daemon, because a
+   local copy on each side is exactly how two implementations drift into producing different bytes
+   for the same submission (`M10B-D28`).
+3. *What redundancy?* `submission_id` is both the PK and the retry dedupe key — one mechanism, two
+   jobs, rather than a separate nonce.
+4. *What else breaks?* A new frame kind reaching a directory node that has not deployed it:
+   `decodeInboundSignalingFrame` returns `null` and the node replies `not_authenticated`, which is an
+   auth-flavoured name for a version-skew bug (`M10B-D25r`'s F2). Directory nodes are sovereign and
+   deploy per region, so this is the NORMAL rollout case. The daemon must not read that reply as an
+   auth failure — it fails over to the next node and reports the skew.
+
+**Decisions this note makes.**
+- **M10B-D30 — the frame is `submission_write` and its ack is `submission_write_result`, carrying
+  `{stored: boolean}`.** The boolean is `enqueueSubmission`'s return value and this is its named
+  consumer (NO CONSUMER, NO SHIP): `stored: false` means the id was already present, which is usually
+  the submitter's own retry and is also the shape of the single-node censorship attack Entry 20
+  identified. The daemon logs `signal.submission.queued` vs `signal.submission.duplicate` and does
+  **not** treat duplicate as success on a node it has not written to before.
+- **M10B-D31 — the submission TBS domain tag is `CELLO-SUBMIT-v1`.** Distinct from `CELLO-TSIG-v1`
+  (the envelope preimage, protocol-types) and `CELLO-TSIG-REQ-v1` (the directory request, verified to
+  live in `signal-write.ts`), so a signature over one can never be replayed as the other.
+  TBS = `CELLO-SUBMIT-v1 ‖ canonical-CBOR(body-without-signature)`, and `issued_at` is inside the
+  body, so the existing clock-skew bound applies to it (`M10B-D28`).
+
+**Nothing parked.**
+
+**Test plan sketch (red first).**
+- Refusal, each naming its own cause and each asserting **nothing was sent**: manifest absent;
+  manifest present with no `intake_key`; all nodes unreachable. A bare `submission_failed` is a
+  failing assertion.
+- **Never unsealed:** a test that the bytes handed to the transport are not the plaintext body — the
+  revert test being that removing the seal call makes it red.
+- Attribution: the signature verifies against the pubkey in the body, and a body whose pubkey is
+  swapped for another agent's fails verification. (Portal-side enforcement is `DOD-END-INGRESS-1`;
+  this unit proves the bytes it emits are verifiable.)
+- Determinism: the same body signed twice yields the same `submission_id`; a re-issue with a
+  different `issued_at` yields a different one.
+- Failover: node A refuses/times out ⇒ the daemon writes to node B, and the id is identical.
+- Directory side: an authenticated `submission_write` lands a row; an UNauthenticated one does not;
+  a duplicate id returns `stored: false` and does not overwrite the ciphertext.
+- Zero-bump: nothing in the diff branches on a type string.
+- Enforcer: `DOD-END-JOURNEY-1` end-to-end; the unit itself is harness-provable offline.
+
+**Owed:** a protocol-types change ⇒ the publish cascade (deferred, §2c); a directory change ⇒ the one
+batched deploy (hibernated, §2e). Both land 🟡 until then.
+
+---
+
 ## Entry 20 — `DOD-END-QUEUE-1` and `DOD-END-DELIVER-1` BUILT — 2026-07-29
 
 **Two units, 20 tests green against real Postgres.** Evidence, since the DoD only carries one line each.
