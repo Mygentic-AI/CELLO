@@ -102,7 +102,6 @@ const waitConnected = async (dir: string, label: string): Promise<void> => {
 
 describe("J-TRACK-RECORD — DOD-T3-JOURNEY-1: track-record supersession live journey", () => {
   it("A presents track_record v1; after supersession, A presents again → B sees only v2 (stale v1 stripped by directory)", async () => {
-    const agentSubject = `agent-${randomBytes(8).toString("hex")}`;
 
     // ── Set up two agents: A (holder), B (recipient) ──
     const dirA = mkdtempSync(join(tmpdir(), "cello-track-A-"));
@@ -117,6 +116,13 @@ describe("J-TRACK-RECORD — DOD-T3-JOURNEY-1: track-record supersession live jo
     const createB = JSON.parse(cello(["create-agent", "beta"], { CELLO_DIR: dirB }).stdout) as { pubkey: string };
     const pubA = createA.pubkey;
     const pubB = createB.pubkey;
+    // An agent-subject signal's `subject` IS the subject agent's K_local pubkey — that is how the
+    // directory joins it (`JOIN agent_profiles ap ON ap.k_local_pubkey = sr.subject`) and what the
+    // portal writes at mint. This used to be a random `agent-…` string, which no production path
+    // ever produces; once the daemon began scoping presentation on the presenting agent's own pubkey
+    // (DOD-END-SCOPE-FIX-1) that fixture matched nothing and this journey presented no track_record
+    // at all. The fixture was the wrong one, not the scoping.
+    const agentSubject = pubA;
 
     await waitConnected(dirA, "A");
     await waitConnected(dirB, "B");

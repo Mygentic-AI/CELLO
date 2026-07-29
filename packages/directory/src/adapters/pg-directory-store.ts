@@ -32,6 +32,7 @@ import type {
   AgentPresenceLookup,
 } from "@cello-protocol/interfaces";
 import { drainPickupForAgent, ackPickupDelete, sweepUndeliverablePickups } from "../pickup-repository.js";
+import { enqueueSubmission } from "../submission-queue-repository.js";
 import { readPresenceForDiscovery } from "../agent-presence-repository.js";
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
 import {
@@ -411,6 +412,11 @@ export class PgDirectoryStore implements DirectoryStore {
 
   async sweepUndeliverablePickups(ttlHours = 24): Promise<number> {
     return sweepUndeliverablePickups(this.#pool, this.#nodeId, ttlHours);
+  }
+
+  /** M10B / DOD-END-SUBMIT-1 — see the interface for why the boolean must not be discarded. */
+  async enqueueSubmission(s: { submissionId: string; intakeKeyId: string; ciphertext: Buffer }): Promise<boolean> {
+    return enqueueSubmission(this.#pool, s);
   }
 
   /**

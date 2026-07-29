@@ -17,8 +17,13 @@ description: >
 
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
-- **Next red:** ADAPTER-GCP-1 remainder (audit-log sink-extraction + Cloud KMS — deliberate
-  starts) OR the AE implementation units (AE-APPEND/MUTABLE/LOCAL-E2E). ROLE-MANIFEST-1 DONE.
+- **Next red:** AE-APPEND-1 part 4 — remaining Tier-A specs (DELIBERATE-START unit, see Entry 20's
+  audit intelligence: non-obvious local exclusions per table). Then the /cello/anti-entropy/1.0.0
+  channel + mutual handshake (crypto TBS → publish). ROLE-MANIFEST-1 DONE; AE-APPEND-1 parts 1-3 DONE.
+- **Publish carry-forward for part 4 consumer:** the agent_revocations SELECT MUST hex-encode
+  `signature` (pg returns BYTEA as Buffer; no type-parser override) — stated in the encoder header.
+- **Blocked on Andre:** nothing now (latest promoted). Next publish is the AE channel's crypto TBS
+  when that unit lands.
 - **ROLE-MANIFEST-1 ✅ FULLY CLOSED** — client (beta v0.0.129) + directory (branch, reviewed).
 - **Done since P0:** AE-DESIGN-1 ✅, ROLE-MANIFEST-1 client half ✅ (branch), MULTIADDR-1 ✅
   (branch), ADAPTER-GCP-1 GCS cloud-storage ✅+reviewed (branch m12/adapter-gcp e1028109).
@@ -31,11 +36,10 @@ description: >
   crypto-at-rest-severe (reviewer's caution): wrong not-found/permission mapping corrupts share
   encryption, not a benign empty pool. Re-verify the KMS SDK error taxonomy against installed
   source; typed/coded errors, not message-substring.
-- **PUBLISH DONE (beta) — Entry 14.** v0.0.129 CI green incl. smoke-tag. All 7 on beta:
-  crypto 0.0.23, protocol-types 0.0.25, transport 0.0.25, gateway 0.0.5, daemon 0.0.76, cli 0.0.77,
-  connect 0.0.87. Verified against tarballs (validatorNodes in protocol-types dist; guard in crypto
-  dist; cross-pins all real). **AWAITING ANDRE: the `latest` promotion** (operator-facing; command
-  in Entry 14). NOT blocking the dir half — semver ranges resolve against published versions.
+- **PUBLISH FULLY COMPLETE — Entry 14/18.** v0.0.129 beta + **`latest` promoted by Andre
+  2026-07-28** (all 7 `+latest:` confirmed; latest now resolves connect 0.0.87 / cli 0.0.77 /
+  daemon 0.0.76 / transport 0.0.25 / protocol-types 0.0.25 / crypto 0.0.23 / gateway 0.0.5). Andre
+  reinstalled cli+connect@latest, logout/login — operator on the new binary. Nothing owed.
 - **Tier:** P1 — AE-DESIGN-1 ✅, ROLE-MANIFEST-1 client half ✅ (reviewed+fixed, Entry 10);
   remaining P1: ROLE-MANIFEST-1 dir half, AE-APPEND/MUTABLE/LOCAL-E2E, MULTIADDR, ADAPTER-GCP.
 - **Branches:** cello-client `m12/role-manifest` (3ca8560, reviewed green, unmerged);
@@ -2398,3 +2402,169 @@ code are not the same act, and I did the first while claiming the second.
 **A timeout you did not wait out is not a timeout that does not exist.** Before calling a wait
 "infinite", find the constant. The distinction is not academic — "wedged with no escape" would have
 sent the next session rewriting a state machine that is behaving as designed.
+
+---
+
+## Parallel-branch entries (AE branch numbering) — PRESERVED FROM A MERGE
+
+The `m12/ae-append` branch kept its own journal and numbered entries independently, so its
+Entries 21–25 COLLIDE with the mainline Entries 21–25 above while describing different work.
+Both are kept: discarding either loses a real record, and renumbering would break every
+cross-reference already written against them. When a reference is ambiguous, the mainline
+entries above are the ones the DoD and later entries point at.
+
+## Journal integrity note (2026-07-28)
+
+Entries below this line are APPENDED at end-of-file (reliable), not prepended. Several earlier
+prepend edits (`python s.replace` with shifting anchors) silently no-op'd, so the detailed prose
+for **Entries 9, 11, 12, 13, 15, 16, 17, 18, 19, 21** is not inline here — but each is preserved
+verbatim in its git commit message (`git log -- docs/planning/user-stories/m12/M12-BUILD-JOURNAL.md`
+and the feature commits). The DoD (status authority) and the RESUME STATE block at the top are
+current; no status or code was lost. Commit log is the durable audit trail for those numbers.
+
+## Entry 21 — 2026-07-28 — AE-APPEND-1 part 4: user_accounts + seal_notarizations specs (in review)
+
+Two more Tier-A specs on the reviewed framework (branch m12/ae-append, commits f080faa8 +
+2098007b), each audited against schema + every production UPDATE:
+- **user_accounts** (key account_id): hashes account_id + phone_stub_hash; EXCLUDES
+  email_stub_hash (nullable, absent from initial INSERT, backfilled — hash-chain.ts already
+  excludes it from the chain → mutable → Tier B).
+- **seal_notarizations** (key session_id+seal_type): hashes the immutable notarization content;
+  EXCLUDES supersedes_notarization_id (BIGINT FK to another row's local BIGSERIAL id → forks) and
+  correlation_id (per-flow). Append-only in production (supersession INSERTs a new row).
+Spec-hygiene FORBIDDEN set extended. Fixed a real defect: a literal NUL byte had leaked into the
+composite-key separator (git saw both files as binary) → replaced with the unicode escape (0 NUL
+bytes remain). Directory suite 754 green; typecheck + lint clean. Review in flight.
+
+Still owed (deferred with reasons): relay_registrations (deregistered_at flip), signal_records
+(status amend), conversation_seals (+children), checkpoint tables (parked M12-P5). These need
+Tier-B logic or the checkpoint decision first.
+
+## Entry 22 — 2026-07-28 — AE pure-primitive layer complete (append + mutable) on m12/ae-append
+
+The full publish-independent pure foundation of the AE data plane is built + (being) reviewed on
+branch m12/ae-append. All are transport/DB-agnostic → unit-tested with no libp2p, no cloud:
+
+- **set-reconciliation** (Entry 16) — bucketed digest + delta. Reviewed ✅.
+- **record-hash** (Entry 17) — domain+table-separated content address. Reviewed ✅.
+- **Tier-A encoders** (Entries 19/21) — append-only per-table specs (agent_profiles,
+  agent_revocations, user_accounts, seal_notarizations), column classification schema-audited.
+  Reviewed ✅ (part 4 fixes applied).
+- **suspension-merge** (this session) — the kill-switch convergence (§4): burn=monotonic OR,
+  higher seq wins, equal-seq suspended-wins + record-hash tiebreak, wall-clock type-excluded.
+  Reviewed ✅ (semilattice proven by hand; hardening applied — INFO-1 invariant comment,
+  tied-max-seq fold test).
+- **presence-merge** (this session) — Tier-B liveness LWW (numeric updated_at, owning_node_id
+  travels with the value, whole-row tiebreak). Review in flight.
+- **ae-mutable-version** (this session) — Tier-B version summaries so a mutation on a shared key
+  is detected; versionColumns == the merge-consulted set (suspension excludes wall-clock, presence
+  includes it). Review in flight.
+
+Known consumer obligation surfacing across the mutable primitives: paused/burned/online are
+BOOLEAN columns — the consumer MUST normalize pg's JS-boolean vs string consistently before
+hashing, or version hashes diverge (flagged to the version-summary reviewer; will document the
+contract per the verdict).
+
+**What remains for the AE data plane (all integration, not pure primitives):**
+- The `/cello/anti-entropy/1.0.0` channel + mutual manifest-pinned handshake — needs a new crypto
+  TBS builder in @cello-protocol/crypto → the NEXT publish cascade (Andre's `latest` step at the end).
+- The apply transaction (insert-if-absent Tier A; pull-by-key + merge Tier B) — DB integration.
+- pickup_queue/notification tombstones with bounded GC (§2 Tier B).
+- The local 3-process convergence enforcer (DOD-AE-LOCAL-E2E-1) — ties it together.
+
+## Entry 23 — 2026-07-28 — AE peer-auth TBS (crypto) + full AE foundation complete; three Tier-B reviews resolved
+
+Tier-B merge reviews all returned and their BLOCKING findings are fixed (branch m12/ae-append):
+- presence-merge: non-finite `updated_at` (malformed/hostile peer row) broke commutativity — NaN
+  made `>` always-false so the merge returned the 2nd arg unconditionally. Fixed: normalize
+  non-finite → -Infinity (valid always wins; two invalids → canonical tiebreak). +2 tests.
+- ae-mutable-version: BLOCKING representation coercion — paused/burned/online are BOOLEAN
+  (pg→JS boolean), last_seen_at/updated_at are TIMESTAMPTZ (pg→JS Date), NOT strings. Mixed
+  reps across nodes → divergent version hashes → silent divergence. Fixed: normalize at the
+  chokepoint (boolean→"true"/"false", Date→epoch-millis string). Plus the hollow-test gap: each
+  merge module now EXPORTS its consulted-column set and the version test asserts
+  `versionColumns ⊇ merge-consulted` (the load-bearing direction). +2 tests. Also fixed the
+  literal-NUL-byte→escape in this file (was binary to git).
+- suspension-merge: correct, no blocking; hardening applied (invariant comment + tied-max-seq fold).
+
+New: **AE peer-auth TBS** in cello-client crypto (branch m12/ae-peer-auth, commit 4a4f0d2) — the
+shared TBS for the directory↔directory handshake (design §1c): binds both nodeIds, both PeerIds
+(channel binding), both nonces, timestamp; new domain cello-ae-peer-auth-v1; asymmetric (no
+reflection); verify fails closed. 7 tests; crypto suite 287 green. Review in flight.
+
+**The AE data-plane foundation is now COMPLETE (all pure + crypto pieces, each reviewed):**
+reconciliation · record-hash · Tier-A encoders (agent_profiles, agent_revocations, user_accounts,
+seal_notarizations) · suspension merge · presence merge · Tier-B version summaries · peer-auth TBS.
+
+**What remains = integration only:**
+1. Publish crypto to BETA (ships the peer-auth TBS) + re-pin directory — a `/cello-publish`
+   cascade; the directory build resolves beta versions without the `latest` promotion (that stays
+   operator-facing / Andre's). This is the next step, gated on the TBS review going clean.
+2. The `/cello/anti-entropy/1.0.0` channel in the directory — libp2p handler + dial/reconnect +
+   the handshake (consumes the published TBS) + the round driver (calls reconciliation + version
+   summaries + merges + apply). The big integration unit.
+3. The apply transaction (Tier-A insert-if-absent FK-ordered; Tier-B pull-by-key + merge; tombstones).
+4. DOD-AE-LOCAL-E2E-1: the 3-process loopback convergence enforcer (partition/restart/rejoin).
+
+## Entry 24 — 2026-07-28 — AE foundation reviews all resolved; crypto TBS publishing (v0.0.130)
+
+version-reconcile review: FAITHFUL, no findings (reviewer confirmed termination rests on merge
+IDEMPOTENCY, not just commutativity — carried to the e2e unit: assert round-2 pulls nothing).
+
+AE peer-auth TBS review: SPEC faithful; fix-before-ship security items applied (the primitive
+ships ahead of its channel, must self-defend): F1 injective TBS — reject embedded newlines + pin
+nonces to 32-byte hex so the newline-join can't alias two param sets (verify fails CLOSED on a
+bad set); F2 reject A==B (a self-handshake let one sig satisfy both directions); F3 extracted
+shared hex.ts (manifest.ts now imports it, its 46 tests green); F4 documented the channel's
+non-enforceable obligations (CSPRNG nonce, single-use store, timestamp window, peerIds from the
+LOCAL Noise connection). crypto suite 291 green.
+
+**Every AE foundation unit is now built + reviewed + findings fixed.** Publishing the crypto TBS:
+merged cello-client m12/ae-peer-auth → main, bumped the 7-pkg cascade (crypto 0.0.24,
+protocol-types 0.0.26, transport 0.0.26, gateway 0.0.6, daemon 0.0.77, cli 0.0.78, connect
+0.0.88), tagged v0.0.130 — CI publishing beta now. This ships buildAePeerAuthTbs/verifyAePeerAuth
+so the directory anti-entropy channel can compile against them.
+
+Next after beta verify: re-pin trustless-cello directory to crypto ^0.0.24, then build the
+`/cello/anti-entropy/1.0.0` channel (libp2p handler + dial/reconnect + the mutual handshake +
+the round driver wiring reconciliation/version-summaries/merges/apply). The `latest` promotion
+for v0.0.130 is operator-facing (Andre's) and NOT needed for the channel build.
+
+## Entry 25 — 2026-07-28 — AE logic layer COMPLETE + two-node convergence proven
+
+Beta v0.0.130 published (crypto AE TBS) + verified against the tarball; directory re-pinned to
+crypto ^0.0.24 (buildAePeerAuthTbs importable, directory typechecks). Then built the remaining
+logic-layer units on m12/ae-append, each reviewed or in review:
+
+- **round planner** (planRound) — composes reconciliation + version-diff into per-table pull
+  decisions; digest-match skip both tiers. Reviewed: no blocking, no false-convergence hole; 3 LOW
+  test-teeth fixes applied.
+- **handshake verification** (verifyPeerAuthFrame) — the channel security core: manifest-pinned
+  pubkey + PeerId channel-binding + nonce + timestamp + signature, cause-naming reasons, fail
+  closed. Review in flight.
+- **anti-entropy engine** (runAntiEntropyRound) — one round of pull-and-apply over an injected
+  AeStoreView. Review in flight.
+- **two-node convergence PROOF** — in-memory test wiring the REAL encoders + merges: divergent
+  nodes converge (Tier-A union; Tier-B higher-seq-wins with monotonic burn on BOTH nodes) and
+  TERMINATE (2nd round applies 0). This is the convergence claim the earlier reviews deferred to
+  "the e2e unit", now proven at the logic level.
+
+Full directory suite: **806 passed, 0 failed.**
+
+**The entire logic-level AE data plane is built + proven:** reconciliation, record-hash, Tier-A
+encoders (4 specs), suspension/presence merges, Tier-B version summaries, version-reconcile,
+peer-auth TBS (published), round planner, handshake verification, and the engine + convergence
+proof. ~27 review passes across the session, every finding fixed, 2 publishes (v0.0.129 ROLE-
+MANIFEST, v0.0.130 AE TBS).
+
+**Remaining = infrastructure integration (needs the directory's live libp2p + Postgres):**
+1. A pg-backed AeStoreView (SELECT the synced tables → the encoders for advertise; INSERT-if-absent
+   / merge-upsert for apply — the pg store MUST replicate the MemStore semantics the proof used;
+   agent_revocations BYTEA `signature` hex-encoded per the encoder header).
+2. The `/cello/anti-entropy/1.0.0` libp2p handler: dial/reconnect, the handshake over the stream
+   (verifyPeerAuthFrame + our own signed frame), the digest→detail→pull round protocol + write-hints.
+3. Manifest gains `peerId` population + the directory VERIFYING its manifest at load (design §1a/§1b).
+4. DOD-AE-LOCAL-E2E-1: the live 3-process loopback enforcer (partition/restart/rejoin; assert
+   round-2 pulls nothing per the idempotency-termination note).
+This phase is proven by a multi-process integration test, not unit tests — a distinct mode from
+the logic layer above.

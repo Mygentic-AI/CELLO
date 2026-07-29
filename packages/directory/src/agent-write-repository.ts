@@ -116,10 +116,21 @@ export async function enqueuePickup(
   // M10-D22: an M10 wallet-signal delivery carries its OWN signal_hash on the row (its anchor is
   // signal_records). One pending per (agent, kind); a re-mint replaces the prior pending row,
   // INCLUDING its signal_hash, so a superseding delivery cannot leave the old hash behind).
+  // M10B / M10B-D23 (V52): the conflict target is (agent_id, signal_kind, SIGNAL_HASH). It MUST match
+  // the partial unique index or the upsert raises "no unique or exclusion constraint matching the ON
+  // CONFLICT specification" — the index and this clause are one change, never two.
+  //
+  // WHY THE HASH IS IN THE KEY. Under the old (agent_id, signal_kind) key this DO UPDATE silently
+  // DESTROYED the second endorsement of a subject: two people endorse Alice while she is offline, both
+  // deliveries are (alice, 'endorsement'), and the second overwrote the first with no error and a
+  // success return. Endorsements are inherently many-per-kind; M10's signals were not, which is why the
+  // old key was correct then and data loss now. Keying on content means many distinct signals coexist
+  // while a genuine re-enqueue of the IDENTICAL envelope still collapses to one row — so V37's
+  // READ COMMITTED duplicate-row race stays closed.
   await pool.query(
     `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id, signal_hash) VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (agent_id, signal_kind) WHERE acked_at IS NULL
-     DO UPDATE SET ciphertext = EXCLUDED.ciphertext, signal_hash = EXCLUDED.signal_hash, created_at = now()`,
+     ON CONFLICT (agent_id, signal_kind, signal_hash) WHERE acked_at IS NULL
+     DO UPDATE SET ciphertext = EXCLUDED.ciphertext, created_at = now()`,
     [args.agentId, args.signalKind, args.ciphertext, args.owningNodeId, args.signalHash ?? null],
   );
 }

@@ -38,11 +38,22 @@ export interface ConsortiumNodeEntry {
   peerId?: string;
 }
 
+/** M10B-D11 — the portal's intake key, published in the manifest. Optional, and its ABSENCE is a
+ *  real state the daemon must refuse on rather than degrade past (it never sends unsealed). */
+export interface ManifestIntakeKey {
+  key_id: string;
+  pubkey: string;
+}
+
 export interface SignedManifest {
   version: number;
   not_before: string;
   expires: string;
   nodes: ConsortiumNodeEntry[];
+  /** M10B-D11. Omitted unless a test supplies one — so the default manifest keeps exercising the
+   *  refusal path, which is the state every manifest in the world is in until the portal publishes
+   *  a key. */
+  intake_key?: ManifestIntakeKey;
   signatures: { officerIndex: number; signature: string }[];
 }
 
@@ -50,6 +61,17 @@ export interface MakeManifestOpts {
   version?: number;
   notBefore?: string;
   expires?: string;
+  /**
+   * M10B-D11 — publish a portal intake key. `DOD-END-SUBMIT-1` REFUSES to submit without one and
+   * never falls back to sending unsealed, so the endorsement journey cannot run at all until a
+   * manifest carries this.
+   *
+   * Signature coverage is automatic and that is the verified reason the manifest was chosen as the
+   * channel for a SEALING key: `canonicalBody` builds from `Object.keys` minus `signatures`, an OPEN
+   * field set, so a new top-level field is inside the officer signatures with no format change —
+   * and manifests written before it still verify byte-for-byte.
+   */
+  intakeKey?: ManifestIntakeKey;
 }
 
 // Deterministic officer seeds — identical to core/crypto manifest-test-fixture.ts.
@@ -153,6 +175,10 @@ export function makeSignedManifest(nodes: ConsortiumNodeEntry[], opts?: MakeMani
     not_before: opts?.notBefore ?? "2026-01-01T00:00:00Z",
     expires: opts?.expires ?? "2027-01-01T00:00:00Z",
     nodes,
+    // Spread-if-present, never `intake_key: undefined`: an explicit undefined would appear in
+    // Object.keys and change the signed body, so a manifest built without a key would stop matching
+    // one built by an older version of this helper.
+    ...(opts?.intakeKey ? { intake_key: opts.intakeKey } : {}),
   };
   const body = canonicalBody(base);
   const signatures = [0, 1, 2].map((idx) => ({

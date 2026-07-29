@@ -237,6 +237,44 @@ if [[ -z "${HIGHEST_MIGRATION}" ]]; then
   preflight_errors=$((preflight_errors + 1))
 else
   echo "  Migration files: highest is V${HIGHEST_MIGRATION} — will be written to SSM after deploy"
+
+  # 1b. MIGRATION VERSION CONTIGUITY — the check M5 retrospective rule 4 asked for and never got.
+  #
+  # A GAP means another branch has claimed those numbers. It is invisible to the computation above,
+  # which only takes the maximum — that is precisely how V49/V50 were claimed by the M12 branch while
+  # M10B wrote V51/V52 with nothing noticing (2026-07-29; Flyway's checksum check caught it by luck,
+  # in a local database).
+  #
+  # WHY IT IS A DEPLOY-BLOCKER RATHER THAN A WARNING. Deploying with a gap succeeds — gaps are legal
+  # on a first apply. The damage lands on the NEXT merge: once the other branch's lower-numbered
+  # migrations exist in a database already at the higher version, `flyway migrate` (run bare by
+  # docker-entrypoint.sh, with validateOnMigrate on and outOfOrder off, under `set -e`) ABORTS. The
+  # entrypoint dies before `exec node`, the task never starts, the health check fails, and ECS rolls
+  # back — in ALL THREE REGIONS AT ONCE, because they deploy in parallel.
+  #
+  # The fix when this fires is a written handshake, not a flag: whichever branch merges second
+  # renumbers its migrations to sit above the other's.
+  MIGRATION_NUMS=$(ls "${SCRIPT_DIR}/../packages/directory/db/migrations"/V*.sql 2>/dev/null \
+    | sed 's/.*\/V\([0-9]*\)__.*/\1/' | sort -n | uniq)
+  MISSING_VERSIONS=$(comm -23 <(seq 1 "${HIGHEST_MIGRATION}" | sort) <(echo "${MIGRATION_NUMS}" | sort) | sort -n | tr '\n' ' ')
+  if [[ -n "${MISSING_VERSIONS// /}" ]]; then
+    echo "  ERROR: migration version gap(s): ${MISSING_VERSIONS}" >&2
+    echo "         Another branch has almost certainly claimed these numbers. Flyway will REFUSE them" >&2
+    echo "         once V${HIGHEST_MIGRATION} is applied, crash-looping the directory in every region." >&2
+    echo "         Fix: whichever branch merges second renumbers above the other. Do NOT flyway repair." >&2
+    preflight_errors=$((preflight_errors + 1))
+  else
+    echo "  Migration versions are contiguous V1..V${HIGHEST_MIGRATION} — no branch collision"
+  fi
+
+  # 1c. Duplicate version numbers — two files claiming one version. Flyway fails at resolve time, but
+  # catching it here names the cause instead of surfacing it inside a container log.
+  DUPLICATE_VERSIONS=$(ls "${SCRIPT_DIR}/../packages/directory/db/migrations"/V*.sql 2>/dev/null \
+    | sed 's/.*\/V\([0-9]*\)__.*/\1/' | sort -n | uniq -d | tr '\n' ' ')
+  if [[ -n "${DUPLICATE_VERSIONS// /}" ]]; then
+    echo "  ERROR: duplicate migration version(s): ${DUPLICATE_VERSIONS} — two files claim one version" >&2
+    preflight_errors=$((preflight_errors + 1))
+  fi
 fi
 
 # 2. Stale Route53 DNS records: warn if directory or relay records exist outside CFN.

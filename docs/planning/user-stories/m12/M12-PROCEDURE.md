@@ -17,6 +17,24 @@ description: >
 ## REALITY CHECK — read before anything
 One user: Andre, also the only developer. CELLO is **alpha — no production, no real users.**
 Total data loss is not merely acceptable, it is **the plan** — this milestone is a rebuild from zero.
+
+## 🛑 THERE ARE EXACTLY TWO REASONS TO STOP AND HAND BACK TO ANDRE
+
+**Everything else is a NOPE — do not stop for it. Keep working.**
+
+1. **A manual operation only Andre can do, that blocks you.** You cannot proceed in some area until he does it. (Examples: the npm `latest` promotion, a browser OAuth flow, `/mcp` reconnect, an AWS-teardown per-stack go.)
+2. **A critical design decision that could cause harm, where you need his guidance.** A genuine fork where guessing wrong does damage.
+
+**That is the whole list.** If what you're about to write is not one of these two, it is a NOPE — do not send it, keep working:
+- Check-ins ("here's where I am") → **NOPE.**
+- Recaps / session tallies ("this session delivered…") → **NOPE.**
+- Telling him about the future / what you *may* need later → **NOPE.**
+- "Should I keep going?" / "want me to start X?" → **NOPE** (the answer is always yes — start it).
+- "This is a natural stopping point" / "I've done a lot" → **NOPE.** Length is never a reason to stop.
+- "This deserves a deliberate/fresh start" → **NOPE.** Be careful, don't stop. Careful ≠ handing back.
+
+The durable record is the journal + commits, not messages to Andre. Report progress by committing, not by writing him. When you finish a unit, pull the next one and keep going. Only surface when you hit reason 1 or reason 2 — and then say ONLY that, in one or two lines.
+
 - **Never gate/hedge/ask permission on a CODE change.** Correctness + security fixes ship immediately.
 - **Do not invent decisions for Andre.** "Should I do this code work?" is always yes.
 - **DO pause for a GENUINE design fork** (materially different architectures) — in autonomous mode

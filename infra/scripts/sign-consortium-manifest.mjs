@@ -75,6 +75,27 @@ function aws(args) {
 function ssm(name, region) {
   return aws(["ssm", "get-parameter", "--name", name, "--region", region, "--query", "Parameter.Value", "--output", "text"]);
 }
+/**
+ * An SSM lookup for a parameter that may legitimately not exist yet.
+ *
+ * `ssm()` cannot be used for this: `aws()` is execFileSync, which THROWS on a non-zero exit, and
+ * `get-parameter` exits non-zero with ParameterNotFound. So an optional lookup written with `ssm()`
+ * does not return empty — it crashes the whole signer, breaking manifest signing for every
+ * environment that has not set the parameter.
+ *
+ * Only absence is swallowed. Any other failure (no credentials, wrong region, denied) must still
+ * blow up: silently emitting a manifest because the operator's session expired would be the
+ * fail-open direction on a signed document.
+ */
+function ssmOptional(name, region) {
+  try {
+    return ssm(name, region);
+  } catch (err) {
+    const text = `${err?.stderr ?? ""}${err?.message ?? ""}`;
+    if (text.includes("ParameterNotFound")) return null;
+    throw err;
+  }
+}
 function subdomain(region) {
   return { "us-east-1": "directory-us1", "eu-central-1": "directory-eu1", "ap-northeast-1": "directory-ap1" }[region]
     ?? `directory-${region}`;
@@ -129,11 +150,41 @@ const nodes = regions.map((region) => {
   };
 });
 
+// M10B-D11 — the PORTAL INTAKE KEY, read from SSM like every other cross-region fact here.
+//
+// Clients seal endorsement submissions to this key, and the daemon REFUSES to submit without it —
+// it never falls back to sending unsealed, because an unsealed submission hands the directory every
+// endorsement in the clear. So a manifest emitted without this makes the endorsement flow
+// permanently-refusing rather than broken-looking, which is the safe direction but is invisible
+// unless you know to look. It is OPTIONAL here on purpose: omitting the parameter is a legitimate
+// state (the portal has not published a key yet), and emitting a placeholder would be worse — a
+// substituted or bogus sealing key means submissions are sealed to something nobody can open, and
+// they arrive at the portal as unattributable poison with no reply possible.
+//
+// Signature coverage is automatic: canonicalBody builds from Object.keys minus signatures, so a new
+// top-level field is inside the officer signature with no format change, and manifests emitted
+// before this still verify byte-for-byte.
+const intakeKeyId = ssmOptional("/cello/" + env + "/portal/intake-key-id", regions[0]);
+const intakeKeyPub = ssmOptional("/cello/" + env + "/portal/intake-key-pubkey", regions[0]);
+if ((intakeKeyId && !intakeKeyPub) || (!intakeKeyId && intakeKeyPub)) {
+  // Half-configured is never emitted: a key_id with no pubkey cannot seal, and a pubkey with no
+  // key_id breaks the rotation retention that keeps queued submissions from being stranded.
+  console.error("portal intake key is HALF-configured (need both intake-key-id and intake-key-pubkey) — refusing to emit");
+  process.exit(1);
+}
+if (intakeKeyPub && !/^[0-9a-f]{64}$/.test(intakeKeyPub)) {
+  console.error(`portal intake-key-pubkey must be 64 lowercase hex chars, got ${JSON.stringify(intakeKeyPub)} — refusing to emit`);
+  process.exit(1);
+}
+
 const manifest = {
   version,
   not_before: "2026-01-01T00:00:00Z",
   expires: "2030-01-01T00:00:00Z",
   nodes,
+  // Spread-if-present, never an explicit undefined — that would appear in Object.keys and change the
+  // signed body, so a manifest without a key would stop matching one emitted before this change.
+  ...(intakeKeyId && intakeKeyPub ? { intake_key: { key_id: intakeKeyId, pubkey: intakeKeyPub } } : {}),
   signatures: [],
 };
 manifest.signatures = [{ officerIndex: 0, signature: Buffer.from(ed25519.sign(canonicalBody(manifest), officerSeed)).toString("hex") }];

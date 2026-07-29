@@ -35,6 +35,15 @@ from _dburl import portal_database_url
 import psycopg2.extras
 
 from _logging import emit as log
+from _receipt_validation import (
+    DATE_PRECISIONS,
+    MAX_TURN_CHARS,
+    SEAL_STATES,
+    ReceiptContentError,
+    check_message_count,
+    clean_transcript,
+    validate_seal_status,
+)
 from _sqlstate import classify
 
 # Kept only so an explicit override still works. The live value is resolved
@@ -47,7 +56,6 @@ MAX_PAGE_SIZE = 100
 
 HASH_RE = re.compile(r"^[a-zA-Z0-9._-]{8,128}$")
 MONIKER_RE = re.compile(r"^[\w .'-]{1,64}$", re.UNICODE)
-
 
 class GalleryError(Exception):
     def __init__(self, status, code, message):
@@ -110,6 +118,15 @@ def serialise(row):
         # it was 2-of-3 or 3-of-3, and those are different claims.
         "verified_by": row["verified_by"],
         "node_count": row["node_count"],
+        # NULL where the record does not state it. The page then reports the
+        # seal and makes no attestation claim, rather than inferring a count
+        # from how many nodes happen to be running.
+        "seal_status": row["seal_status"],
+        "seal_detail": row["seal_detail"],
+        # The archive records a date, not a time. Rendering midnight would put
+        # fabricated precision beside a hash on a page built to be checked.
+        "sealed_at_precision": row["sealed_at_precision"],
+        "transcript": row["transcript"],
         "published_at": row["published_at"],
     }
 
@@ -127,7 +144,13 @@ def list_receipts(params, correlation_id):
             cur.execute("SELECT count(*) AS n FROM published_receipts")
             total = cur.fetchone()["n"]
             cur.execute(
-                "SELECT * FROM published_receipts ORDER BY published_at DESC, receipt_hash "
+                # sealed_at breaks the tie, because a batch published in one
+                # transaction shares a published_at to the microsecond and would
+                # otherwise fall back to HASH order — five cards printing five
+                # dates in no order at all, on a surface whose subject is a
+                # chronological record.
+                "SELECT * FROM published_receipts "
+                "ORDER BY published_at DESC, sealed_at DESC, receipt_hash "
                 "LIMIT %s OFFSET %s",
                 (size, (page - 1) * size),
             )
@@ -174,6 +197,15 @@ def get_receipt(receipt_hash, correlation_id):
     return resp(200, serialise(row), cache="public, max-age=86400, immutable")
 
 
+def as_gallery_error(fn, *args, **kwargs):
+    """Content rules raise ReceiptContentError; the API answers 400 with the same
+    code, so a rule tripped by the seeder and by a caller reads identically."""
+    try:
+        return fn(*args, **kwargs)
+    except ReceiptContentError as err:
+        raise GalleryError(400, err.code, err.message)
+
+
 def publish(body, event, correlation_id):
     """Publishing writes a permanent, irrevocable, indexed page asserting that a
     session happened and that N of M directory nodes attested to it.
@@ -209,21 +241,72 @@ def publish(body, event, correlation_id):
 
     try:
         message_count = int(body.get("message_count", 0))
-        verified_by = int(body.get("verified_by", 0))
-        node_count = int(body.get("node_count", 0))
         sealed_at = body.get("sealed_at")
         datetime.fromisoformat(str(sealed_at).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         raise GalleryError(400, "invalid_receipt_fields", "Receipt metadata is missing or malformed.")
 
-    if node_count <= 0 or verified_by > node_count:
-        # Publishing "verified by 5 of 3" would put a claim on a public page
-        # that the directory could not have made.
+    # VERIFICATION IS OPTIONAL AND ALL-OR-NOTHING.
+    #
+    # Absent means the caller does not know what the directory attested, and the
+    # page will say what the seal was and claim nothing further. What is refused
+    # is a HALF claim: "verified by 2 of ?" cannot be rendered, and a default of
+    # zero or three would be a number nobody measured on the one page whose
+    # purpose is that its numbers can be checked.
+    raw_verified = body.get("verified_by")
+    raw_nodes = body.get("node_count")
+    if (raw_verified is None) != (raw_nodes is None):
         raise GalleryError(
             400,
-            "impossible_verification",
-            f"verified_by ({verified_by}) cannot exceed node_count ({node_count}).",
+            "partial_verification",
+            "verified_by and node_count must be given together or not at all.",
         )
+
+    if raw_verified is None:
+        verified_by = node_count = None
+    else:
+        try:
+            verified_by = int(raw_verified)
+            node_count = int(raw_nodes)
+        except (TypeError, ValueError):
+            raise GalleryError(
+                400, "invalid_verification", "Verification counts must be whole numbers."
+            )
+        if node_count <= 0 or verified_by < 0 or verified_by > node_count:
+            # Publishing "verified by 5 of 3" would put a claim on a public page
+            # that the directory could not have made.
+            raise GalleryError(
+                400,
+                "impossible_verification",
+                f"verified_by ({verified_by}) cannot exceed node_count ({node_count}).",
+            )
+
+    seal_status = as_gallery_error(
+        validate_seal_status, (body.get("seal_status") or "sealed").strip()
+    )
+
+    seal_detail = (body.get("seal_detail") or "").strip() or None
+    if seal_detail and ("<" in seal_detail or ">" in seal_detail):
+        raise GalleryError(
+            400, "markup_in_seal_detail", "seal_detail contains markup."
+        )
+    if seal_detail and len(seal_detail) > MAX_TURN_CHARS:
+        raise GalleryError(
+            400, "seal_detail_too_long", "seal_detail is too long."
+        )
+
+    sealed_at_precision = (body.get("sealed_at_precision") or "timestamp").strip()
+    if sealed_at_precision not in DATE_PRECISIONS:
+        raise GalleryError(
+            400,
+            "unknown_date_precision",
+            f"sealed_at_precision must be one of {', '.join(DATE_PRECISIONS)}.",
+        )
+
+    transcript = as_gallery_error(clean_transcript, body.get("transcript"))
+    # The count and the transcript must agree — a page cannot print
+    # "12 messages" above two turns.
+    as_gallery_error(check_message_count, message_count, transcript)
 
     agent_pubkey = (body.get("agent_pubkey") or "").strip()
     if not agent_pubkey:
@@ -268,8 +351,9 @@ def publish(body, event, correlation_id):
                 """
                 INSERT INTO published_receipts
                     (receipt_hash, initiator_moniker, counterparty_moniker, sealed_at,
-                     message_count, verified_by, node_count, published_by_waitlist_user_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                     message_count, verified_by, node_count, seal_status, seal_detail,
+                     sealed_at_precision, transcript, published_by_waitlist_user_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (receipt_hash) DO NOTHING
                 RETURNING receipt_hash
                 """,
@@ -281,6 +365,10 @@ def publish(body, event, correlation_id):
                     message_count,
                     verified_by,
                     node_count,
+                    seal_status,
+                    seal_detail,
+                    sealed_at_precision,
+                    json.dumps(transcript) if transcript is not None else None,
                     # From the SESSION, never the body.
                     session["waitlist_user_id"],
                 ),

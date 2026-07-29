@@ -3791,3 +3791,373 @@ each file remembering to.
 question about the capture loop is a question about the deployed system, and
 the answer to all of them is the same three commands at the top of
 [[M11-NEXT-STEPS-AWS-AWAKE]].
+
+---
+
+### Entry 61: the gallery's "Not Found" is a base-path mismatch, not an empty gallery
+**Date:** 2026-07-29
+**Target:** DOD-GALLERY-INDEX-1, DOD-GALLERY-RECEIPT-1 [corp-cello-site] — the live run these lines owe
+
+Reported from the live site: `/gallery` renders "Loading…" and then **"Not Found"**. The empty-state
+branch these lines were built with — *"No receipts have been published yet."* — has never executed in
+production.
+
+**Clause checklist (DOD-GALLERY-INDEX-1, verbatim clauses):**
+- [ ] index at `gallery.cello.mygentic.ai/` shows a card grid of published receipts
+- [ ] cards carry agent monikers, timestamp, verification badge
+- [ ] cards link to the receipt page
+- [ ] pagination, 20 per page
+- [ ] **live run** ← the clause this unit is about
+
+**Clause checklist (DOD-GALLERY-RECEIPT-1, the corp-cello-site half):**
+- [ ] receipt page shows monikers, timestamp, Merkle hash, verification status, message count
+- [ ] share buttons: copy link, X, LinkedIn
+- [ ] **live run** ← this unit
+- [ ] (cello-client sealed-receipt footer — sequenced behind DNS, Entry 47, NOT this unit)
+
+**The failure path, produce and consume.**
+
+1. `GalleryIndex` calls `fetchReceipts(page)` → `waitlistApi.ts` builds `` `${BASE}/gallery/receipts?page=1` ``
+2. `BASE` is `/api/waitlist` — a relative path, deliberately, so the session cookie stays host-only (Entry 45)
+3. nginx: `location ^~ /api/waitlist/` → `proxy_pass https://api.cello.mygentic.ai/waitlist/`
+4. The request therefore arrives at the API as `/waitlist/gallery/receipts`
+5. `cello-waitlist.yaml` declares **two** top-level namespaces: `POST|GET /waitlist/*` and
+   `GET|POST /gallery/*`. There is no `/waitlist/gallery/*` route.
+6. API Gateway answers its own `{"message":"Not Found"}` with status 404
+7. `fetchReceipts` throws `body.message` — the string `"Not Found"` — and the page renders it verbatim
+
+Verified live rather than reasoned:
+
+| URL | Result |
+|---|---|
+| `cello.mygentic.ai/api/waitlist/gallery/receipts?page=1` | `404 {"message":"Not Found"}` |
+| `api.cello.mygentic.ai/gallery/receipts?page=1` | `200 {"receipts": [], "page": 1, "per_page": 20, "total": 0}` |
+
+The API is healthy and correct. The site cannot reach it. `fetchReceipt` (the receipt page) has the
+identical defect through the same base, so both P3 pages are affected.
+
+**Why the boundary test did not catch it.** `apiBoundary.spec.ts` enforces that exactly one module
+names the API and reads its env var — the Entry 45 lesson, at the right altitude for the defect it was
+written for. What it does not assert is that the URL a call *constructs* corresponds to a route that
+*exists*. Every gallery call passed the boundary test while being unroutable. The boundary was
+guarded; the mapping across it was not.
+
+**The producer of the wrong precondition** is the single-base assumption: one `BASE`, one nginx
+location, written when `/waitlist/*` was the only namespace. `/gallery/*` was added to the API in
+Entry 32 as a sibling namespace, and the client half was written against the existing base by default
+— the same shape of mistake as Entry 35, where a decision correct for one surface propagated silently
+to a surface with different requirements.
+
+**Fix (both halves ship together or the site 404s either way):**
+- a `GALLERY_BASE` of `/api/gallery` in `waitlistApi.ts` for the three gallery calls
+- an nginx `location ^~ /api/gallery/` → `proxy_pass https://api.cello.mygentic.ai/gallery/`
+
+**Red-first:** a test asserting that every base the client builds URLs from has a matching nginx
+location whose `proxy_pass` maps it onto a declared API namespace. Revert test: restore `BASE` on the
+gallery calls and it must fail.
+
+---
+
+### Entry 62: the fix worked on the wrong host, and the test agreed with it
+**Date:** 2026-07-29
+**Target:** DOD-GALLERY-INDEX-1, DOD-GALLERY-RECEIPT-1 [corp-cello-site] — review of Entry 61
+
+Reviewer on `14ad42b`. Findings fixed in `326c755`. The headline is the one worth keeping:
+**the unit's own regression test was green while the defect it was written to catch was still
+present on the domain the DoD names.**
+
+**1. The fix stopped at `cello.mygentic.ai`.** `gallery.cello.mygentic.ai` — the host both DoD
+lines specify — has its own server block, and it had no `/api/` location at all. The client builds
+a RELATIVE path, so there `/api/gallery/receipts` matched `location /` and fell through
+`try_files $uri $uri.html $uri/ /gallery.html` to **200 `text/html`**.
+
+That is worse than the 404 it replaced. `response.ok` is true, so every error branch is skipped —
+including the `404 → ReceiptNotPublished` path that keeps an unpublished receipt indistinguishable
+from a private one — and the unguarded `response.json()` throws
+`Unexpected token '<', "<!DOCTYPE "... is not valid JSON` at the visitor. It is not live only
+because the host does not resolve yet (Entry 47's DNS sequencing). It would have become live at the
+moment DNS landed, on both pages, which is the worst possible timing for it to appear.
+
+**2. The test could not see hosts.** `nginxProxies` scanned the conf flat and keyed on the location
+prefix alone, so a location in ANY server block satisfied a request to ANY host. That is the same
+species of mistake as one base for two namespaces, one layer down. Now parsed per `server { }` with
+an explicit host→namespace map, and it fails naming the host. Both server blocks serve the same
+static export, so a page is not bound to a host by its build — which is why the map has to be
+declared rather than inferred.
+
+**Four more ways it could not bite**, each a real defect it would have passed:
+- **The `proxy_pass` trailing slash was normalised away.** In nginx that slash is the whole
+  semantic: with `location ^~ /api/gallery/`, `proxy_pass …/gallery/` gives `/gallery/receipts` and
+  `proxy_pass …/gallery` gives `/galleryreceipts`. Stripping it made both compute the same string.
+- **Methods were dropped.** `RouteKey` is `GET /gallery/receipts`; the fixture stored bare paths, so
+  a wrong verb passed here and 405s in production.
+- **Whole-path interpolations were skipped silently**, with a hardcoded `>= 7` as the only backstop.
+  Renaming one helper parameter would have removed three calls from the check with nothing red.
+- **The boundary was read without `stripComments`**, in a file whose own docblock exists because
+  comments are prose and not calls.
+
+**3. `stripComments` had a third bug, and it fired during this fix.** It stripped block comments
+BEFORE line comments, so the `/*` inside a line comment naming a wildcard path — which is exactly
+what a comment about the `/waitlist/*` namespace contains — read as a block opener and deleted
+everything to the next closer. The symptom was not a wrong answer but an **empty** one: the base map
+came back with zero entries and every assertion built on it would have passed vacuously. The
+anti-vacuity guard caught it, which is the only reason it did not ship as a green suite checking
+nothing. Line comments now go first.
+
+**4. Error substitution, which is why this survived to production.** `"Not Found"` was API Gateway's
+ROUTER reporting no match, forwarded verbatim and rendered as the gallery's entire page. It named no
+URL, no host, no status and no layer, and it reads like a statement about receipts — so it sent
+anyone debugging it to the wrong subsystem. The upstream sentence still survives as evidence, but it
+now travels with the status and the URL, and a non-JSON body reports that the request *reached a
+page, not the API*. Revert-tested: removing the content-type guard reproduces
+`Unexpected token '<'` exactly.
+
+**5. `deploy.yml` ships nginx on every push — and the checklist said otherwise.** I recorded
+"deploy is batched with the next unit". False: the workflow scp's the conf, cp's it over the live
+file and reloads, on every push to main, and the run for `14ad42b` had already succeeded. Verified
+rather than assumed: `cello.mygentic.ai/api/gallery/receipts?page=1` → `200 {"receipts": [], …}`.
+Two comments in the repo state that deploy.yml never touches nginx; both are false and one of them
+is what I read. Corrected in place.
+
+Worse, it did `cp` then `nginx -t`. Under `set -e` a config that fails the test is already on disk
+when the job aborts, and the running nginx keeps its in-memory copy — so everything looks healthy
+until the next reload from any source (certbot, a reboot) starts from the broken file. Now backs up,
+tests, and restores on failure.
+
+**6. The env var meaning change was silent-poisonous.** `NEXT_PUBLIC_WAITLIST_API_BASE` went from
+"the waitlist base" to "the API root". Set nowhere today, but had anyone set it to the old meaning
+every call on every surface would 404 — `/api/waitlist/waitlist` — inlined at build where nothing at
+runtime could detect it, and the test reads the source literal so it would have stayed green.
+Renamed to `NEXT_PUBLIC_CELLO_API_ROOT`: a stale value under a retired name is inert.
+
+**Gate:** 48 vitest (up from 44) · typecheck clean · lint clean · build clean.
+**Revert tests:** the gallery-host proxy, the client base, the nginx location, and the content-type
+guard each fail exactly one assertion when removed, naming the real cause.
+
+**Status:** both lines stay 🟡. The routing defect is fixed and proven live on `cello.mygentic.ai`;
+the canonical `gallery.cello.mygentic.ai` still owes a DNS record, and until it resolves the live
+run on the host the DoD actually names cannot be performed.
+
+---
+
+### Entry 63: the gallery carries conversations, and the archive is live
+**Date:** 2026-07-29
+**Target:** DOD-GALLERY-CONTENT-1, DOD-GALLERY-SEED-1 [corp-cello-site, trustless-cello]
+
+New scope, decided by Andre and recorded as M11-D33/D34 before any code: a receipt page proved a
+session happened while showing none of it, which is not the question the GEO argument in §9 depends
+on. Five real sessions are now published.
+
+**Clause checklist — DOD-GALLERY-CONTENT-1:**
+- [x] `published_receipts` gains an ordered transcript (speaker + body, sequence preserved)
+- [x] the receipt page renders the exchange below the seal metadata
+- [x] no edit path and no delete path for content (`ON CONFLICT DO NOTHING`, never `DO UPDATE`)
+- [x] turn bodies refused at the WRITE on the same terms as monikers, not escaped at the read
+- [x] a receipt with no transcript renders as before rather than showing an empty panel
+- [ ] counterparty consent — deliberately unsolved, stated in the line itself
+
+**Clause checklist — DOD-GALLERY-SEED-1:**
+- [x] the write-ups carrying a sealed root are published
+- [x] each renders the seal state it actually had
+- [x] `verified_by`/`node_count` populated only where a record states them — no record does, so all NULL
+- [x] the live index lists the archive; a receipt page renders its transcript
+
+**The count moved twice, and both corrections were mine.** I wrote "fifteen" from a directory
+listing, corrected to "six" from a grep for sealed roots, and corrected to **five** only after
+running the extractor. `smoke-test-m4` has a root but no `## Transcript` section and covers TWO
+sessions, so its root cannot be attributed to one bilateral exchange. Seven others were never
+sealed. A number in this document is measured or it is labelled an estimate (§5c) — I published two
+unmeasured ones before honouring that.
+
+**What is NOT invented, and why it matters more here than anywhere else.** No write-up records what
+the directory attested, so `verified_by`/`node_count` are NULL on all five. The badge renders beside
+the Merkle root on a page whose entire purpose is that a stranger can check it — a count inferred
+from "we run three nodes" would make the page evidence against the product. The schema now makes the
+pair nullable and constrained to move together, because "verified by 2 of ?" is not a weaker claim
+but an unreadable one.
+
+The seal states genuinely differ and that is better material than a uniform tick: `sealed` with a
+live bilateral FROST ceremony (m8b, m8c), `sealed` with attestations pending because the MMR
+checkpoint had not been written (m4-05-18), and one `seal_deferred` with the chain committed anyway.
+`SealState` is shared by the index and the receipt page, so a card cannot advertise a claim the page
+it links to declines to make, and `seal_status` is checked FIRST so a row carrying stale counts still
+cannot present itself as verified.
+
+**`message_count` is derived but not asserted.** It is the count of extracted turns, and it
+reconciles against a number each document states independently: genesis + turns + seal equals the
+stated leaf count in all three m4 sessions (25/27, 10/12, 5/7), and m8b says "7 content messages" for
+7 extracted turns. Two independent derivations agreeing is the difference between a measured number
+and a counted-then-claimed one.
+
+**Extraction fidelity — one defect found and fixed before publishing.** The accumulator absorbed the
+write-up's own italic narration into the final turn, so
+*"B sealed first. A received `seal_rejected`. 12 leaves committed."* would have been published as
+words an agent said. A whole line in italics now terminates the turn and is discarded.
+
+**The date is stored at the precision the record has.** All five write-ups give a day, not a time.
+`sealed_at_precision` suppresses the clock rather than printing a midnight nobody measured.
+
+**The seed writes directly, and that is a gap being recorded rather than hidden.** `POST
+/gallery/publish` requires the agent to be linked via `waitlist_agent_links` — three readers, no
+writer (§ Parked) — so no publish call can currently succeed. These are operator-published archive
+rows. It does **not** discharge `DOD-GALLERY-PRIVACY-1`'s portal action, which real users still need.
+
+**The quoting bug, which is the one worth remembering.** The portal RDS is not publicly accessible,
+so the seed travels as SQL text through the VPC-Lambda hop rather than as a connection. Quoting the
+transcript with psycopg2 corrupted it: JSON escapes `"` as `\"`, psycopg2 doubles the backslash
+because without a connection it cannot know `standard_conforming_strings`, and Postgres then rejects
+the JSON. **Four of five rows failed. The fifth contained no double quotes, inserted cleanly, and
+looked like success.** That is a partial seed reporting completion, and it is exactly why this ran
+against a local database first. Dollar-quoting does no escape processing at all.
+
+**Runs:** schema enforcer PASS (idempotent · safe over data · fresh == historic over data · tamper
+detected) · 29 pytest · 54 vitest · typecheck · lint · build.
+**Live:** migration applied to the portal DB through `waitlist-migrate` (dry-run first — exactly one
+pending). `published_receipts` holds 5 rows, **0** with `verified_by IS NOT NULL`, **0** where
+`message_count <> jsonb_array_length(transcript)`. The live API serves all five with transcripts, and
+the deployed bundles carry the new rendering.
+
+---
+
+### Entry 64: the guards protected the path nobody used
+**Date:** 2026-07-29
+**Target:** DOD-GALLERY-CONTENT-1, DOD-GALLERY-SEED-1 — review of Entry 63
+
+Reviewer on the transcript unit. Two blocking findings, and both sat on the **seed path — the path
+that wrote every row currently in the table.**
+
+**1. None of the API's validation ran on the rows that shipped.** `clean_transcript` refuses markup,
+enforces turn shape, and bounds size; the seeder writes direct SQL and never called it. So the
+receipt page's own comment — *"markup is refused at the write too, so this is the second of two
+locks"* — was false for every live row: there was one lock. The data happens to be clean (checked:
+zero turns containing `<` or `>`), which is luck, not a guarantee. Fixed by extracting
+`_receipt_validation.py` and importing it from both, so a rule tripped by the seeder and by an API
+caller produces the same code.
+
+**2. An unrecognised seal state was coerced to `sealed`.** `status = seal.group(1) if seal else
+"sealed"`, then `status if status in (...) else "sealed"`. A write-up whose seal line is absent,
+reworded, or names a state this codebase does not know would be published as a positive
+cryptographic claim the document never made — permanently, on the page whose only purpose is that a
+stranger can check it. The Lambda refuses exactly this with `unknown_seal_status`; the seeder
+inverted it. Both now refuse, and neither defaults.
+
+**3. `message_count` agreed with the transcript by construction, not by rule.** The seeder derives
+the count from the turns, so it was true and unenforced — any other writer could publish "12
+messages" above a two-turn exchange, a page contradicting itself in front of the reader. Now a DB
+constraint (`0025`) and an API check. It found a defect immediately: my own test fixture claimed 12
+messages for a 2-turn transcript.
+
+**4. The initiator was inferred from who speaks first.** The documents state it. Turn order agrees
+in all five, but a write-up that logged the responder's greeting first would publish a reversed,
+permanent attribution. The stated value now wins and the inference is asserted against it.
+
+**5. `--emit-sql` had no success signal at all** — it returns before touching a database, and the
+runner reports only the last statement's rowcount. That is precisely how the Entry 63 quoting bug
+inserted one row of five and looked complete. The emitted SQL now ends with a verification SELECT,
+so the runner's own output *is* the check.
+
+**6. The seed script had no tests.** For a script that turns markdown into irrevocable public
+content, that was the largest gap in the unit — the narration fix from Entry 63 reverted with zero
+failures. 16 tests now, including the exact five-row vault output and four refusal cases, each
+revert-tested individually.
+
+**Two more the reviewer caught that were real defects, not gaps:**
+- **The date test passed with its own fix deleted.** `toLocaleDateString()` never emits a colon and
+  `/2026/` still matches a date shifted backwards, so the assertion could not see that a reader in
+  Los Angeles saw **2026-05-17** for a session dated 2026-05-18 — a wrong date beside a Merkle root,
+  which is the exact failure `sealed_at_precision` exists to prevent. Now asserted on the day and
+  verified failing under `TZ=America/Los_Angeles`.
+- **The index card rendered two of the three seal states the DoD names.** `seal_detail` carries what
+  separates a live 3-region ceremony from one whose MMR checkpoint was never written, and the card
+  never showed it, so two materially different seals looked identical on the surface people scan.
+
+**A process error of mine, recorded because it is otherwise invisible.** Commit `8708d07e` carries
+**63 lines of `packages/directory/src/internal-api-server.ts`** that I did not write. `git add -A`
+in a repo holding another session's in-flight work swept it into a commit whose message describes
+only the seed quoting fix. It is not dead — `cello-portal` calls the route — so reverting it would
+break the portal; it needs a test before the next directory deploy, and it will ship under a message
+nobody would search for. Checking `git status` before the next commit found more of the same work
+staged and waiting (`V55__drop_signal_edge_columns.sql`, `signal-write.ts`). **Explicit paths from
+here, never `git add -A` in this repo.**
+
+**Gate:** 48 python (30 gallery + 16 seed + 2 new guard tests) · 59 vitest · typecheck · lint ·
+build · schema enforcer on `0025`.
+
+**LIVE — `gallery.cello.mygentic.ai` now resolves and serves.** DNS A record added to the
+`cello.mygentic.ai` zone; the certificate was expanded to cover it in the same deploy, because the
+gallery server block presents the `cello.mygentic.ai` cert and a host added to nginx without a SAN
+entry answers HTTPS with a certificate for a different domain. The deploy smoke test now fails
+loudly on both. Verified: cert SAN carries the name, the page serves 200, the API namespace resolves
+from that host, and `https://gallery.cello.mygentic.ai/receipt/{hash}` — the URL the share buttons
+build — returns the receipt with its transcript.
+
+**Note for whoever hits it:** the SOA negative TTL on that zone is 86400, and the name was queried
+before it existed, so resolvers that cached the NXDOMAIN may take up to 24h. Fresh resolvers answer
+immediately.
+
+---
+
+### Entry 65: two of my four ✅ flips were not earned
+**Date:** 2026-07-29
+**Target:** DOD-GALLERY-1, -INDEX-1, -CONTENT-1, -SEED-1 — `cello-done-auditor` checkpoint
+
+Verdict: **2 earned, 2 overstated.** Both overstatements were mine, and one I had already flagged as
+suspect when dispatching the audit — which is not the same as not making it.
+
+**DOD-GALLERY-1 → back to 🟡.** The line says **"SSR-rendered (bot-indexable)"**. That clause is met
+at zero percent, shown three independent ways: the served HTML for the index and for a receipt
+contains no moniker, no hash and no transcript; `npm run build` marks every route `○ (Static)`; and
+`sitemap.xml` carries one `/gallery` entry and no per-receipt URL, so even a JS-executing crawler
+finds one page rather than five. `robots.txt` explicitly invites GPTBot to a page that serves GPTBot
+an empty div.
+
+The sharp part is not the gap — it is **parked and known** (Entry 35, a three-way fork that is
+Andre's). It is that tagging the line ✅ on the strength of its sibling clauses **retires that fork by
+accident**. A parked decision that disappears because a status tag moved is worse than an open one.
+
+**DOD-GALLERY-SEED-1 → 🟡.** Two of its three verification claims did not hold:
+- *"each field asserted against its source document by test"* described a test that **never opens the
+  source document** — it compared parser output to an `EXPECTED` dict I typed by hand in the same
+  file. That is a golden-file pin, useful against regressions, and structurally unable to catch a
+  value I transcribed wrongly. Which is exactly the failure this line already had **twice** (Entry
+  63: fifteen → six → five).
+- **m8c's `message_count` of 4 has no corroborating line anywhere in its document.** The other four
+  reconcile against an independently-written leaf count; this one traces to the parser alone. The
+  cross-check I wrote into the DoD listed four reconciliations while claiming the property for five.
+
+**Fixed rather than just re-tagged:** the seed tests now read the leaf count **out of the file**
+(`leaves = genesis + turns + seal`) and reconcile against it, and a second test pins m8c as the *only*
+uncorroborated document so a second one cannot appear unnoticed. Proven by simulating the failure the
+old test could not see — dropping a turn in the parser now fails the corroboration assertion.
+
+**DOD-GALLERY-CONTENT-1 and -INDEX-1 stand**, and the auditor passed them on live evidence rather
+than on this journal: it introspected the live constraint
+(`CHECK ((transcript IS NULL) OR (message_count = jsonb_array_length(transcript)))`) and forced real
+pagination against production (`?page=1&per_page=2` and `page=2` returning disjoint, correct sets).
+
+**Two defects outside the four lines, both real, both fixed:**
+- **The index was not chronological and a test name said it was.** Ordering was
+  `published_at DESC, receipt_hash`; the archive was inserted in one transaction, so all five share a
+  `published_at` to the microsecond and the order collapsed to **hash** — five cards printing five
+  dates in no order at all. `sealed_at` is now the tiebreak. The existing test asserted only row
+  counts under the name "chronological"; it tests chronology now, and had to force a shared
+  `published_at` to reproduce the case at all, because separate publishes never engage the tiebreak.
+- **Soft-404 on the gallery host.** `try_files … /gallery.html` answered *any* unknown path with 200
+  and the gallery shell. With robots.txt inviting GPTBot, ClaudeBot and PerplexityBot, that offers
+  crawlers unlimited distinct URLs returning identical content at a success status — on the surface
+  whose entire value is being indexed well. Unknown paths 404 now; `/receipt/` keeps its rewrite,
+  because an unpublished receipt must render its own page rather than a 404 that would confirm a
+  private session exists.
+
+**`GalleryIndex` had no spec**, so every content clause of INDEX-1 was true only by construction, and
+the pagination control has never executed in production (5 receipts < 20 per page). Six tests now,
+including that a card shows no verification badge when the receipt carries no counts — a card
+advertising a claim the page it links to declines to make is worse than either alone.
+
+**Gate:** 33 gallery pytest · 19 seed pytest · 65 vitest **green under `TZ=America/Los_Angeles`** ·
+typecheck · lint · build.
+**Live:** index reads newest-session-first (07-07, 07-01, 05-20, 05-19, 05-18) ·
+`/this-does-not-exist-xyz` → 404 · `/` → 200 · `/receipt/{hash}` → 200.
+
+**Standing:** GALLERY-CONTENT-1 ✅ · GALLERY-INDEX-1 ✅ · GALLERY-1 🟡 (SSR clause, parked fork) ·
+GALLERY-SEED-1 🟡 (m8c uncorroborated, named and pinned).

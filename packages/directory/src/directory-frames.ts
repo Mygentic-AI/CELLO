@@ -376,6 +376,20 @@ import type { RegisterRequest, DkgComplete, ConnectionRequest, ConnectionRespons
 import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilateral, SealUnilateralTooEarly, SealUnilateralConfirmed, SealUnilateralNotification, ManifestPollRequest, SealUpgradeRequest, SealUpgradeConfirmed, SealUpgradeRejected } from "./directory-types.js";
 
 /** M7-DIR-PING-001: client heartbeat frame. */
+/** M10B / DOD-END-SUBMIT-1 — a sealed submission handed to this node. Three fields; the ABSENCES
+ *  (no submitter, no subject, no signal kind) are what make the queue's privacy property structural
+ *  rather than aspirational. */
+/** Upper bounds on a submission_write. See the decoder for why an unbounded write path is a hole. */
+export const MAX_SUBMISSION_CIPHERTEXT_BYTES = 64 * 1024;
+export const MAX_INTAKE_KEY_ID_CHARS = 128;
+
+export type SubmissionWrite = {
+  type: "submission_write";
+  submission_id: string;
+  intake_key_id: string;
+  ciphertext: Uint8Array;
+};
+
 export type PingFrame = { type: "ping"; ts: number };
 export type PongFrame = { type: "pong"; ts: number };
 
@@ -386,7 +400,35 @@ export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId:
 /** initiatorPubkey is included so the directory can route the rejection back to the initiator by direct lookup in #streams. */
 export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"; sessionId: string; initiatorPubkey: string; reason: string };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SessionOfferReject | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SessionOfferReject | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest | SubmissionWrite;
+
+/**
+ * M10B / DOD-END-SUBMIT-1: acknowledge a sealed submission (OUTBOUND).
+ *
+ * `stored` is `enqueueSubmission`'s return value, carried through rather than collapsed into a bare
+ * success. `false` means an id was already present — usually the submitter's own retry, which is what
+ * makes retry-across-nodes safe, but ALSO the shape of a single-node censorship attack: this node can
+ * read `submission_id` in the clear, so a malicious operator could pre-insert garbage under the same
+ * id at the other nodes and every retry would resolve to "already present". The submitter cannot act
+ * on a distinction it was never told about.
+ */
+export function encodeSubmissionWriteResult(frame: { submission_id: string; stored: boolean }): Uint8Array {
+  return ENC.encode({
+    type: "submission_write_result",
+    submission_id: frame.submission_id,
+    stored: frame.stored,
+  });
+}
+
+/** M10B / DOD-END-SUBMIT-1: refuse a submission, NAMING the cause (OUTBOUND). Never a bare failure —
+ *  the submitter's only other signal is silence, and silence is indistinguishable from loss. */
+export function encodeSubmissionWriteError(frame: { submission_id: string; reason: string }): Uint8Array {
+  // CARRIES THE ID. Without it the daemon cannot tell whose failure this is: the inbound handler
+  // sees every frame on a shared stream, so an unaddressed error resolves whichever submission
+  // happens to be in flight — and two concurrent submissions is not exotic, it is the second
+  // endorsement.
+  return ENC.encode({ type: "submission_write_error", submission_id: frame.submission_id, reason: frame.reason });
+}
 
 /**
  * CELLO-M8-TRUST-001: encode a trust-signal pickup for delivery to the agent's daemon (OUTBOUND).
@@ -589,6 +631,31 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const id = typeof o["id"] === "string" ? o["id"] : null;
     if (id === null) return null;
     return { type: "trust_signal_ack", id };
+  }
+
+  if (o["type"] === "submission_write") {
+    // M10B / DOD-END-SUBMIT-1: a daemon hands this node a SEALED submission. Exactly three fields,
+    // and the absences are the design — no submitter, no subject, no kind, no type. The directory
+    // cannot open the blob and has nowhere to put anything it learned (INV-DIR-DUMB).
+    //
+    // `submission_id` is caller-supplied and UNVERIFIABLE here: opening the seal is the only way to
+    // check it, and this node cannot. It is a routing hint and a dedupe key, never an authority —
+    // the PORTAL re-derives it from the opened body and discards a row whose id disagrees
+    // (M10B-D20, corrected by the second review).
+    const submission_id = typeof o["submission_id"] === "string" ? o["submission_id"] : null;
+    const intake_key_id = typeof o["intake_key_id"] === "string" ? o["intake_key_id"] : null;
+    const ciphertext = toUint8Array(o["ciphertext"]);
+    if (submission_id === null || intake_key_id === null || !ciphertext) return null;
+    // Shape-check the id rather than trusting it into a primary key: it is sha256 hex, and a
+    // caller-chosen value of any other shape is a caller getting the wire format wrong (or probing).
+    if (!/^[0-9a-f]{64}$/.test(submission_id)) return null;
+    // BOUNDED. Signaling auth is bare proof-of-possession of any Ed25519 key — no registration
+    // required — so anyone who can dial this node can write here. Unbounded BYTEA plus a TTL sweep
+    // bounds growth at `rate x TTL`, which is not a bound. A sealed endorsement is a sentence plus
+    // seal overhead; 64 KiB is orders of magnitude of headroom and still refuses a firehose.
+    if (ciphertext.length === 0 || ciphertext.length > MAX_SUBMISSION_CIPHERTEXT_BYTES) return null;
+    if (intake_key_id.length === 0 || intake_key_id.length > MAX_INTAKE_KEY_ID_CHARS) return null;
+    return { type: "submission_write", submission_id, intake_key_id, ciphertext };
   }
 
   if (o["type"] === "seal_attempt") {

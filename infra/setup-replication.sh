@@ -166,7 +166,13 @@ done
 # cross-node seal. Step 6 below now staggers EVERY BIGSERIAL sequence (per-node residue class,
 # INCREMENT BY SEQ_INCREMENT), so all of these replicate cleanly regardless of which node writes.
 # seal_notarizations is included so cross-node seals federate (its chain is never verified -> no fork).
-PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,seal_notarizations,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts,registrations,pre_authorization_tokens,agent_revocations,agent_suspensions,identity_tree_entries,agent_presence,directory_nodes,pickup_queue,capability_claim_codes,signal_records,authorized_issuers"
+# REMOVED 2026-07-28: `identity_tree_entries` — DROPPED by V48__drop_identity_tree_entries.sql and never
+# recreated (it was the M8 write-seam anchor; M10's self-contained delivery via pickup_queue.signal_hash
+# + signal_records replaced it). Leaving it here is not cosmetic: Step 5 runs
+# `ALTER PUBLICATION cello_pub SET TABLE ${PUBLICATION_TABLES}`, which ERRORS on a table that does not
+# exist — so this line would fail replication setup on any fresh region (the region-expansion test) or
+# any re-run after V48. Found 2026-07-28 while scoping M10B's own publication changes.
+PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,seal_notarizations,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts,registrations,pre_authorization_tokens,agent_revocations,agent_suspensions,agent_presence,directory_nodes,pickup_queue,capability_claim_codes,signal_records,authorized_issuers"
 TABLE_COUNT=$(echo "${PUBLICATION_TABLES}" | tr ',' '\n' | wc -l | tr -d ' ')
 
 # Per-node sequence-stagger config (applied in Step 6). Each node mints ids ≡ its offset

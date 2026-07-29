@@ -234,6 +234,10 @@ export class InMemoryDirectoryStore implements DirectoryStore {
   // ─── CELLO-M8-TRUST-001: trust-signal pickup (in-memory) ───────────────────
   readonly #pubkeyToAgentId = new Map<string, string>(); // k_local_pubkey hex → agent_id
   readonly #pickup = new Map<string, PickupItem[]>(); // agent_id → queued items
+  // M10B: submission_id → the sealed row. NO submitter and NO subject, exactly as the real table has
+  // none — a stub that modelled more identity than the table holds would let a test "prove" a privacy
+  // property the schema does not have.
+  readonly #submissions = new Map<string, { intakeKeyId: string; ciphertext: Buffer }>();
 
   /** Test/stub helper: register a pubkey→agent_id mapping and seed a pickup item. */
   seedPickup(kLocalPubkeyHex: string, agentId: string, item: PickupItem): void {
@@ -255,6 +259,18 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     // Account-scoped: only remove the row if it belongs to the ACK'ing agent.
     const items = this.#pickup.get(agentId);
     if (items) this.#pickup.set(agentId, items.filter((it) => it.id !== id));
+  }
+
+  /**
+   * M10B / DOD-END-SUBMIT-1. FIRST WRITER OF AN ID WINS — never an overwrite, mirroring the real
+   * table's `ON CONFLICT DO NOTHING` and its lack of an UPDATE grant. An update would let a later
+   * writer replace the ciphertext under an id someone else chose, and since neither this stub nor
+   * the directory can open either blob, neither could tell.
+   */
+  async enqueueSubmission(s: { submissionId: string; intakeKeyId: string; ciphertext: Buffer }): Promise<boolean> {
+    if (this.#submissions.has(s.submissionId)) return false;
+    this.#submissions.set(s.submissionId, { intakeKeyId: s.intakeKeyId, ciphertext: Buffer.from(s.ciphertext) });
+    return true;
   }
 
   // The in-memory stub does not model identity-tree anchors or row age, so the orphan-sweep is a no-op

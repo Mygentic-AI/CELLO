@@ -5,8 +5,19 @@
 // ACK DELETES the row so the queue holds NO ciphertext for that signal afterward (AC-002); and a new
 // ciphertext for an (agent, signal_kind) SUPERSEDES a prior undelivered one for that same kind (so a
 // re-enrolled signal cannot leave a STALE row that hashes to the superseded anchor and re-fires
-// hash_mismatch forever — the poison-pill the one-anchor-per-kind model must not allow). Gated to
-// CELLO_ENV=local. Run against a DB with the full migration history (e.g. cello_spine).
+// hash_mismatch forever). Gated to CELLO_ENV=local. Run against a DB with the full migration history.
+//
+// RE-POINTED 2026-07-29 (M10B). This file had been RED since V48 (2026-07-25) and nobody noticed —
+// two independent staleness problems, fixed by SUBJECT (the pickup repository is alive; only its
+// drivers and one assertion were dead):
+//   1. It seeded `identity_tree_entries` for the drain's hash anchor. V48 DROPPED that table; M10
+//      delivery carries the hash on the pickup row itself (V47 `pickup_queue.signal_hash`). The seeding
+//      is gone and `enqueuePickup` is passed `signalHash` directly — which is what production does.
+//   2. Its supersede assertions were "one pending per (agent, KIND)". V52 (M10B-D23) deliberately
+//      re-keys that to (agent, kind, HASH), because the old rule SILENTLY DESTROYED the second
+//      endorsement of a subject. Those assertions now test supersede-by-CONTENT. Everything else —
+//      agent-scoping, the co-tenant guard, ACK idempotence, oldest-first, the cross-tenant ACK guard —
+//      is preserved exactly, because none of it changed.
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
@@ -26,18 +37,10 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DB_URL });
     await pool.query(`DELETE FROM pickup_queue WHERE agent_id = ANY($1)`, [[AGENT, OTHER_AGENT]]);
-    await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = ANY($1)`, [[AGENT, OTHER_AGENT]]);
-    await pool.query(
-      `INSERT INTO identity_tree_entries (agent_id, signal_kind, signal_hash, updated_at)
-       VALUES ($1, $2, $3, now()), ($1, $4, $5, now())
-       ON CONFLICT (agent_id, signal_kind) DO UPDATE SET signal_hash = EXCLUDED.signal_hash, updated_at = now()`,
-      [AGENT, "webauthn", HASH_WEBAUTHN, "phone", HASH_PHONE],
-    );
   });
 
   afterAll(async () => {
     await pool.query(`DELETE FROM pickup_queue WHERE agent_id = ANY($1)`, [[AGENT, OTHER_AGENT]]).catch(() => {});
-    await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = ANY($1)`, [[AGENT, OTHER_AGENT]]).catch(() => {});
     await pool.end();
   });
 
@@ -47,8 +50,8 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     // pair for a kind SUPERSEDES the first (covered by the next test).
     const ctWeb = Buffer.from(Uint8Array.from({ length: 64 }, (_, i) => (i * 7 + 1) % 256));
     const ctPhone = Buffer.from(Uint8Array.from({ length: 64 }, (_, i) => (i * 11 + 3) % 256));
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctWeb, owningNodeId: "test-node" });
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "phone", ciphertext: ctPhone, owningNodeId: "test-node" });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctWeb, owningNodeId: "test-node", signalHash: HASH_WEBAUTHN });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "phone", ciphertext: ctPhone, owningNodeId: "test-node", signalHash: HASH_PHONE });
 
     const drained = await drainPickupForAgent(pool, AGENT);
     expect(drained).toHaveLength(2);
@@ -82,34 +85,40 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     await ackPickupDelete(pool, byKind.webauthn.id, AGENT);
   });
 
-  it("a new ciphertext for an (agent, kind) SUPERSEDES a prior UNDELIVERED one for that kind (no stale-row poison loop)", async () => {
-    // Re-enrollment scenario: a first sealed signal for 'webauthn' is enqueued but the daemon has not yet
-    // pulled it (still undelivered). A second enrollment supersedes the anchor and enqueues a new sealed
-    // value. The stale first ciphertext (sealed to the OLD value) MUST NOT linger — left behind, it would
-    // hash to the superseded anchor on every drain → permanent hash_mismatch that never ACKs.
+  it("a re-enqueue of the SAME signal_hash supersedes in place; a DIFFERENT hash coexists (M10B-D23)", async () => {
+    // CHANGED BY V52, deliberately. The old rule was "one pending per (agent, KIND)", which meant a
+    // second endorsement of the same subject overwrote the first — silent data loss, since endorsements
+    // are inherently many-per-kind. Supersession now keys on CONTENT: re-delivering the identical
+    // envelope collapses in place (so V37's READ COMMITTED duplicate race stays closed), while two
+    // genuinely different signals of the same kind both survive.
     const ctOld = Buffer.from(Uint8Array.from({ length: 48 }, (_, i) => (i * 13 + 5) % 256));
     const ctNew = Buffer.from(Uint8Array.from({ length: 48 }, (_, i) => (i * 17 + 9) % 256));
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctOld, owningNodeId: "test-node" });
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew, owningNodeId: "test-node" });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctOld, owningNodeId: "test-node", signalHash: HASH_WEBAUTHN });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew, owningNodeId: "test-node", signalHash: HASH_WEBAUTHN });
 
     const drained = await drainPickupForAgent(pool, AGENT);
     const web = drained.filter((d) => d.signalKind === "webauthn");
-    expect(web, "only the latest ciphertext for the kind survives — the stale one is superseded").toHaveLength(1);
+    expect(web, "same hash → superseded in place, one row").toHaveLength(1);
     expect(Buffer.compare(web[0].ciphertext, ctNew)).toBe(0);
 
+    // The defect V52 fixes: a DIFFERENT hash for the same (agent, kind) must NOT overwrite.
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctOld, owningNodeId: "test-node", signalHash: "e".repeat(64) });
+    const bothHashes = (await drainPickupForAgent(pool, AGENT)).filter((d) => d.signalKind === "webauthn");
+    expect(bothHashes, "two distinct signals of one kind BOTH survive — this is the M10B fix").toHaveLength(2);
+
     // Supersede is scoped to (agent, kind): a DIFFERENT kind enqueued alongside is untouched.
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "phone", ciphertext: ctOld, owningNodeId: "test-node" });
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew, owningNodeId: "test-node" });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "phone", ciphertext: ctOld, owningNodeId: "test-node", signalHash: HASH_PHONE });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew, owningNodeId: "test-node", signalHash: HASH_WEBAUTHN });
     const afterPhone = await drainPickupForAgent(pool, AGENT);
     expect(afterPhone.filter((d) => d.signalKind === "phone"), "a different kind is not superseded").toHaveLength(1);
-    expect(afterPhone.filter((d) => d.signalKind === "webauthn")).toHaveLength(1);
+    expect(afterPhone.filter((d) => d.signalKind === "webauthn"), "the two webauthn hashes are still distinct rows").toHaveLength(2);
 
     // Supersede is also scoped to agent_id — a DIFFERENT agent's pending pickup of the SAME kind must
     // SURVIVE our enqueue (an unscoped DELETE would silently destroy other tenants' undelivered signals,
     // the cross-tenant twin of the H1 ACK guard). Seed OTHER_AGENT's webauthn pickup, then re-enqueue
     // AGENT's webauthn; OTHER_AGENT's row must remain.
-    await enqueuePickup(pool, { agentId: OTHER_AGENT, signalKind: "webauthn", ciphertext: ctOld, owningNodeId: "test-node" });
-    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew, owningNodeId: "test-node" });
+    await enqueuePickup(pool, { agentId: OTHER_AGENT, signalKind: "webauthn", ciphertext: ctOld, owningNodeId: "test-node", signalHash: HASH_WEBAUTHN });
+    await enqueuePickup(pool, { agentId: AGENT, signalKind: "webauthn", ciphertext: ctNew, owningNodeId: "test-node", signalHash: HASH_WEBAUTHN });
     const otherDrain = await drainPickupForAgent(pool, OTHER_AGENT);
     expect(
       otherDrain.filter((d) => d.signalKind === "webauthn"),
@@ -124,19 +133,21 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     if (leftover) await ackPickupDelete(pool, leftover.id, AGENT);
   });
 
-  it("the invariant is DB-ENFORCED: a raw duplicate pending INSERT (bypassing enqueuePickup) is rejected", async () => {
+  it("the invariant is DB-ENFORCED: a raw duplicate pending INSERT for the same (agent,kind,HASH) is rejected", async () => {
     // The supersede is best-effort in app code under a concurrent same-(agent,kind) race; the V37 partial
     // UNIQUE index makes "one pending per kind" a real constraint. Prove it directly: a second raw INSERT
     // for the same (agent, kind) with acked_at NULL — exactly what two racing enqueues would attempt —
     // must be REJECTED by the database, not silently produce a second poison-pill row.
     const ct = Buffer.from(Uint8Array.from({ length: 32 }, (_, i) => (i * 3 + 1) % 256));
-    await pool.query(`INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, 'webauthn', $2)`, [AGENT, ct]);
+    await pool.query(`INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, signal_hash) VALUES ($1, 'webauthn', $2, $3)`, [AGENT, ct, HASH_WEBAUTHN]);
     await expect(
-      pool.query(`INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, 'webauthn', $2)`, [AGENT, ct]),
-      "a second pending row for the same (agent,kind) must violate the unique index",
+      pool.query(`INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, signal_hash) VALUES ($1, 'webauthn', $2, $3)`, [AGENT, ct, HASH_WEBAUTHN]),
+      "a second pending row for the same (agent,kind,hash) must violate the unique index",
     ).rejects.toThrow(/duplicate key|unique/i);
-    // A DIFFERENT kind is still allowed (the index is per-kind), and the row clears on ACK.
-    await pool.query(`INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext) VALUES ($1, 'phone', $2)`, [AGENT, ct]);
+    // A DIFFERENT HASH of the same kind is now ALLOWED — that is the M10B-D23 change, asserted directly.
+    await pool.query(`INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, signal_hash) VALUES ($1, 'webauthn', $2, $3)`, [AGENT, ct, "f".repeat(64)]);
+    // A DIFFERENT kind is still allowed, and the rows clear on ACK.
+    await pool.query(`INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, signal_hash) VALUES ($1, 'phone', $2, $3)`, [AGENT, ct, HASH_PHONE]);
     for (const d of await drainPickupForAgent(pool, AGENT)) await ackPickupDelete(pool, d.id, AGENT);
     expect(await drainPickupForAgent(pool, AGENT)).toHaveLength(0);
   });
@@ -160,11 +171,12 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
        VALUES ($1, 'orphan_fresh', $2, 'test-node', now())`,
       [AGENT, ct],
     );
-    // (c) OLD but ANCHORED (webauthn has an anchor) → must survive (it IS deliverable).
+    // (c) OLD but SELF-ANCHORED — post-V48 "anchored" means the row carries its OWN signal_hash (V47),
+    //     not that a row exists in the dropped identity_tree_entries → must survive (it IS deliverable).
     await pool.query(
-      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id, created_at)
-       VALUES ($1, 'webauthn', $2, 'test-node', now() - interval '48 hours')`,
-      [AGENT, ct],
+      `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id, created_at, signal_hash)
+       VALUES ($1, 'webauthn', $2, 'test-node', now() - interval '48 hours', $3)`,
+      [AGENT, ct, HASH_WEBAUTHN],
     );
 
     const swept = await sweepUndeliverablePickups(pool, "test-node", 24);
@@ -191,7 +203,6 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
     const ct = Buffer.from(Uint8Array.from({ length: 40 }, (_, i) => (i * 13 + 2) % 256));
     // No upsertIdentityHash for 'phone' here (beforeAll seeded one — clear it so this row is genuinely
     // anchor-less, proving the hash comes from the ROW, not a stray JOIN).
-    await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = $1`, [AGENT]);
     await pool.query(
       `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, owning_node_id, signal_hash)
        VALUES ($1, 'phone', $2, 'test-node', $3)`,
@@ -206,7 +217,6 @@ describeLive("TRUST-001 live — pickup drain + ACK + supersede (real Postgres)"
 
   it("M10 sweep: an OLD anchor-less row that carries its OWN signal_hash is NOT swept (it is deliverable)", async () => {
     await pool.query(`DELETE FROM pickup_queue WHERE agent_id = $1`, [AGENT]);
-    await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = $1`, [AGENT]);
     const ct = Buffer.from(Uint8Array.from({ length: 24 }, (_, i) => (i * 3 + 5) % 256));
     // OLD (past TTL), anchor-less, but SELF-ANCHORED via pq.signal_hash → must survive the sweep.
     await pool.query(
