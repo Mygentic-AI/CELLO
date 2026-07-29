@@ -3047,3 +3047,74 @@ The fix for the SI-003 share bug (Entry 38) currently asserts that the encrypted
 That is still green about the wrong noun, just a nearer one: **the write succeeding is not the share
 surviving.** Only a process that no longer holds the value in memory can distinguish them. The gate
 to write is: register → restart the node → require a ceremony to complete.
+
+---
+
+## Entry 50 — 2026-07-29 — Entry 49's localization was wrong; the seal stalls on a CO-SIGNATURE, not a hang
+
+### The correction
+
+Entry 49 localized the seal defect to `#resolvePrimaryPubkey` hanging, on the reasoning that
+`directory.profile.read_through` never fired for the failing seal even though the deployed build
+contains the read-through. **That inference was wrong, and reading the function instead of grepping
+around it is what showed it:**
+
+```ts
+async #resolvePrimaryPubkey(kLocalPubkeyHex, correlationId) {
+  const cached = this.#primaryPubkeys.get(kLocalPubkeyHex);
+  if (cached) return cached;                                    // <-- returns, logs NOTHING
+  const profile = await this.#store.getProfileWithReadThrough(...);  // <-- only this logs
+```
+
+A missing `read_through` means the in-memory cache **HIT**, not that anything hung. Confirmed
+against a 6-hour window: 22 `read_through` events exist, every one `cache_hit`, every one for a
+single unrelated pubkey. So `resolvePrimaryPubkey` returned a key promptly for my agents, and the
+stall is downstream of it.
+
+Same failure shape as the earlier one, one level up: I read the ABSENCE of a log as evidence of a
+stall, when the code has an earlier return that logs nothing. **An absent log is only evidence if
+every path through the code would have logged.**
+
+### Where the seal actually stalls
+
+Directly after the primary-pubkey resolution, in the threshold branch:
+
+```
+// SESSION-005: Push seal_verified to initiator; wait for seal_frost_signature.
+```
+
+The directory **cannot notarize alone**. It pushes `seal_verified` to the initiator and waits for
+the client to return `seal_frost_signature`. No co-signature → no `notarization.recorded`. That is
+not a hang inside the directory; it is a bilateral handshake with one side never answering.
+
+This fits every observation without strain:
+- `legibility.built` fires (the broker did its half)
+- `notarization.recorded` never does (still waiting on the client)
+- the client reports `seal_unilateral_timeout` (it was waiting too)
+- intermittent, because it depends on whether the frame reaches the client at all
+
+### The prime suspect, already documented in the codebase
+
+`close-session-handler.ts` carries this, verbatim:
+
+> "Fix #1 (cross-node seal-liveness): if this session was brokered by another node, the
+> `seal_verified` + `session_sealed` frames are pushed by that BROKER — but the initiator released
+> its visiting connection after setup, so on the home stream they never arrive and close times out.
+> Re-open a transient visiting connection to the broker … for the duration of the seal."
+
+A known failure with a known fix — and `session.seal.broker.reconnected` DID appear in a client log
+earlier today, so that path runs. The question is now narrow and concrete: **does the transient
+visiting connection reliably come up, and does `seal_verified` arrive on it?** Every seal I ran was
+cross-node (agents deliberately homed on different directories), which is exactly the population
+this fix exists for.
+
+### Next probe
+
+Client-side, on a failing seal, look for `seal_verified` arriving and `seal_frost_signature` being
+sent. Three outcomes, three different fixes:
+- `seal_verified` never arrives → the visiting connection is the defect (Fix #1 not holding)
+- it arrives and no co-signature is sent → the client-side seal responder
+- both happen and notarization still doesn't → the directory's receive path
+
+Not guessing between them. The client logs carry it, and the rig now lives in the scratchpad rather
+than `/tmp`, so the next run's logs will survive to be read.
