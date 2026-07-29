@@ -855,6 +855,33 @@ streams for one pubkey, two processes holding the same FROST share, double-accep
 > prescribe plus any crash, and the recovery action propagates it. `DOD-INV-ONE-PRIMARY` forbids exactly
 > this across machines; we have been violating it on one.
 
+## ✅ DOD-CRYPTO-AT-REST-1 — the gateway writes security records + config to disk UNENCRYPTED
+
+> **CLOSED 2026-07-29 by `DOD-M9C-STORE-1`** (M9's reopened connect unit, branch `m9/connect-unit`,
+> commit `449bbba`). `core/gateway` got its own SQLCipher opener — it cannot import the daemon's,
+> since the daemon depends on the gateway and not the reverse — and both stores now live in ONE
+> encrypted file, `~/.cello/gateway.db`, opened with the DAEMON'S key file. One key, one backup
+> unit, which is policy decision D-3.
+>
+> Two clauses were amended by evidence rather than met (`M9C-D6`, `M9C-D7`, journal Entry C2):
+> `cello_backup`/`cello_restore` are still `not_implemented` stubs, so a round-trip proof is OWED
+> to the backup build and recorded there; and NO plaintext importer was built, because the layer
+> never ran in the product, so no production plaintext store has ever existed and an importer would
+> be dead code born dead.
+>
+> The two gateway entries also left the `node:sqlite` quarantine allowlist in
+> `cello-client/eslint.config.mjs` — only `daemon/identity-migration.ts` remains.
+>
+> **Still open here, deliberately:** the gateway's REQUEST LOG (`CELLO_GATEWAY_REQUEST_LOG`) writes
+> plaintext metadata plus a content SHA-256 outside the encrypted store. Only tests set it and no
+> shipped path passes it, but this line's claim is not fully closed while it exists — see
+> [[M9-DEFINITION-OF-DONE]].
+
+<details>
+<summary>The original finding, kept verbatim</summary>
+
+</details>
+
 ## 🔴 DOD-CRYPTO-AT-REST-1 — the gateway writes security records + config to disk UNENCRYPTED
 
 **Found 2026-07-09, while chasing an unrelated npm warning.** Not an M9 concern despite living in
@@ -1076,7 +1103,15 @@ bare `{type:"timeout"}` — verified in `daemon.ts`, not assumed). §3's "exit 0
 - **DOD-CONFIG-1** — `cello config list/get/set [--agent <name>]` on M9-CFG-001's versioned
   store (extend, never a parallel subsystem); tighten-free/loosen-needs-confirmation enforced;
   every M8C-introduced setting (away message, privacy mode, auto-start, TTL, queue caps,
-  per-session size limit, Telegram settings, primary-transfer policy) readable + writable. — ❌
+  per-session size limit, Telegram settings, primary-transfer policy) readable + writable.
+  — 🟡 **ABSORBED 2026-07-29 by `DOD-M9C-SURFACE-1`** (policy D-4). `cello config list|get|set`
+  exists on M9-CFG-001's versioned store, tighten-free / loosen-confirmed is enforced end to end,
+  and the confirmation is an interactive TTY prompt — deliberately with no `--yes` flag, since a
+  flag a script can pass is the environment-variable bypass renamed. **The SECURITY-LAYER half is
+  built; the M8C-settings half is NOT** — away message, TTL, auto-start and the rest still live on
+  `cello settings` / `agent_settings`, which is a different store with a different governance
+  model (no confirmation gate). Whether the two surfaces merge is an open product decision, not a
+  gap this unit left. See [[M9-DEFINITION-OF-DONE]] `DOD-M9C-SURFACE-1`.
   - **Friction riders (F6, F12 — verified open 2026-07-06):**
     - **F6** — directory-node selection becomes a first-class, documented setting/flag, not the
       env-var-only `CELLO_DIRECTORY_URL` (defaults silently to US — `directory-bootstrap.ts:32`).
