@@ -2290,3 +2290,63 @@ Merged to `main` alongside the other agent's `DOD-END-SURFACE-1`; gate green at 
 **Worth keeping:** the three broken tests were the most valuable output of that attempt. A fix that
 builds and passes the new test it came with is not verified — it is verified when the tests it did
 NOT anticipate still pass.
+
+---
+
+## Entry 41 — 2026-07-29 — Messaging works both ways; the SEAL wedges and cannot be escaped
+
+Continued through `DOD-E2E-GCP-1`'s remaining clauses. Clause (e) is broken, and the failure mode
+is worse than "does not seal".
+
+### What works
+
+zoe (`gcp-use1`) ↔ yuri (`gcp-euw1`), both on failover-selected directories, no pinned URL:
+
+```
+send    -> {"ok":true,"sequence_number":2,"delivered":true}
+receive -> {"ok":true,"sequence_number":0,"content":"Dispatched."}
+```
+
+Real bidirectional content, US↔Europe, over the GCP relay. The protocol's own guards behaved
+correctly along the way — `session_not_current` refused a send while a message was unread, and
+`sessions` showed the session ACTIVE on both sides with matching ids.
+
+### What is broken: the seal-interrupted path has no exit
+
+```
+session.seal.leaf.submit.failed   reason: relay_submit_send_failed
+session.seal.autoack.skipped      reason: relay_submit_send_failed
+session.seal.broker.reconnected   brokerNode: gcp-euw1
+session.seal.leaf.submitted       sequenceNumber: 5          <- both sides reached this
+```
+
+The reconnect path RECOVERED — both sides submitted their seal leaf after it. But the session never
+reaches `sealed`, `sealed-receipt` returns `not_sealed_yet` indefinitely, and every subsequent
+`close-session` on EITHER side returns:
+
+```
+seal_interrupted_in_progress — "Wait for session.interrupted.sealed … or times out"
+```
+
+`session.interrupted.sealed` never appears and the attempt never times out. **The session cannot be
+sealed and cannot be closed.** The guidance names an escape that does not exist, which is the
+worst kind of error message: it tells an operator to wait for something that will never happen.
+
+Not chased to root cause — recorded with the exact evidence instead, because it is a self-contained
+sub-investigation and the surrounding facts are what the next session needs.
+
+### Where DOD-E2E-GCP-1 stands
+
+| clause | state |
+|---|---|
+| fresh registration → DKG | ✅ |
+| live two-agent session | ✅ (US↔US and US↔Europe) |
+| kill one directory → threshold holds | ✅ 2-of-3 |
+| client failover | ✅ (after fixing the non-member black hole) |
+| anti-entropy convergence | ✅ `applied > 0`, lookup changed answer |
+| **seal** | ❌ **wedges, no escape** |
+| kill-switch pause across all three | ❌ not exercised |
+| automated enforcer | ❌ still a manual sequence |
+
+The happy path of the multi-cloud rebuild is proven end to end. What remains is the failure and
+finalisation machinery — and one of those, the seal, is now known broken rather than unknown.

@@ -326,7 +326,13 @@ description: >
   was a permanent black hole. Fixed against DECLARED manifest membership; verified live with NO
   pinned URL (`not_in_consortium` → `failover to gcp-use1` → `auth.challenge.verified`);
   (d) **kill-switch pause biting across all three nodes** — never exercised;
-  (e) **seal** — sessions were established and messaged, not sealed to completion.
+  (d) **kill-switch pause biting across all three nodes** — still never exercised;
+  (e) **seal** — ❌ EXERCISED AND BROKEN (Entry 41). Bidirectional content delivered
+  (`sequence_number 2, delivered true`) and BOTH sides submitted seal leaves, but the session never
+  reaches `sealed`. A `relay_submit_send_failed` puts the session into the seal-INTERRUPTED path,
+  which then wedges: `close-session` returns `seal_interrupted_in_progress` forever, on both sides,
+  and the documented escape ("wait for `session.interrupted.sealed` … or times out") never
+  arrives. The session cannot be sealed OR closed. Blocks `DOD-E2E-GCP-1`.
 
 ## Tier P3 — Wave 2: AWS rejoins + the launch claim
 
