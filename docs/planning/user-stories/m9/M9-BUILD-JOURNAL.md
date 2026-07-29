@@ -22,9 +22,13 @@ description: >
 ## RESUME STATE (the one mutable block — keep current)
 
 - **Tier open:** Tier 1, THE CONNECT UNIT (opened 2026-07-29).
-- **Next red line:** `DOD-M9C-STORE-1` — design note first (store topology, key handoff,
-  plaintext import).
-- **Lines ✅ this tier:** none yet.
+- **Next red line:** `DOD-M9C-SURFACE-1` — the control surface + CLI loosen-confirm (design note
+  first). NOTE the ordering dependency: `DOD-M9C-ENV-1` removes the env overrides, which are today
+  the ONLY way to configure the gateway — so SURFACE-1 must land before ENV-1, not after.
+- **Lines 🟡 this tier:** `DOD-M9C-STORE-1`, `DOD-M9C-WIRE-1` (both built + green; 🟡 because the
+  enforcer `DOD-M9C-GATE-1` does not exist yet).
+- **WHERE THE CODE IS:** branch `m9/connect-unit`, worktree
+  `/Users/andrep/Documents/code/cello-client-m9c` — NOT the primary checkout (Entry C4).
 - **Enforcer:** `DOD-M9C-GATE-1` (composition-root live gate) — not yet built; until it
   exists, focused suites carry the units.
 - **Decisions-of-record:** policy audit §10 (D-2..D-5, D-11) → DoD Decisions M9C-D1..D5.
@@ -1132,3 +1136,65 @@ worktree BEFORE its first build — not after its first collision. M9-PROCEDURE 
 One coder") assumed the thread was alone in the checkout; that assumption is now written down as
 a check to run at kickoff: `git status -sb` plus `git worktree list`, and if another session has
 uncommitted work in the primary checkout, branch out first.
+
+---
+
+## 2026-07-29 — Entry C5: STORE-1 + WIRE-1 BUILT and reviewed (branch `m9/connect-unit`)
+
+**Commits.** `449bbba` STORE-1 (on `main`, the branch's ancestor — Entry C4), `a68ed2e` WIRE-1 +
+every STORE-1 review fix (branch only). Pushed to `origin/m9/connect-unit`.
+
+**Gates.** `core/daemon` + `core/gateway`: **1277 tests green, 140 files**, lint clean, typecheck
+clean, in the isolated worktree. Both lines are **🟡, not ✅** — the enforcer (`DOD-M9C-GATE-1`)
+does not exist yet, and no Tier-1 line may cite an injection-seam test as its proof.
+
+**The reviewer earned its keep: four blocking findings, all real, all fixed.**
+
+1. **Error substitution, and a latent misdiagnosis machine.** `store_key_mismatch` was thrown from
+   a BARE `catch` — the SQLite reason discarded — and `busy_timeout` was set AFTER the verify read.
+   Since M9C-D9 made the store file SHARED with the daemon, the first contended open would return
+   `SQLITE_BUSY` instantly and be reported as *"the daemon's key does not match this store —
+   restore the matching key file"*. Destructive advice for a lock. Fixed: timeout set before the
+   verify read; the upstream reason survives into the message; `store_locked` and
+   `store_plaintext_file` are their own codes. The daemon's own opener already did this — the copy
+   had dropped it, which is a behavior-moved regression, not a style difference.
+2. **Every refusal died in an undrained pipe.** `spawnGatewaySidecar` piped the child's stderr and
+   attached no listener, so all four coded, guided refusals reached the caller as
+   `gateway sidecar exited before ready (code 1)` — a message naming where the failure surfaced and
+   nothing about what went wrong. Fixed: tail buffered and appended to both rejection paths; the
+   bin prints code + guidance, not just message. (Also closes an unbounded-pipe backpressure risk.)
+3. **A silent fallback with the shape of a guard.** The half-configured check tested
+   `=== undefined` while the two call sites tested truthiness, so `CELLO_GATEWAY_STORE_DB=""` passed
+   the guard and produced NO stores — screening every message with no audit trail and no config
+   governance, while printing READY. Fixed by normalising once (`|| undefined`) so guard and call
+   sites read the same value.
+4. **The guard was hollow.** Deleting it left every test in both repos green. Three new tests spawn
+   the REAL BUILT bin and assert the exit codes; a fourth asserts absence of `node:sqlite` on the
+   BUILT ARTIFACT (building first rather than skipping when `dist/` is stale — a guard that skips
+   is off exactly when it matters).
+
+Also fixed from the same review: swallowed WAL degradation now reported; the now-false
+`detect/index.ts` comment rewritten (the danger changed shape — a native prebuilt reached through
+`createRequire`, which a static import scan cannot see, so the structural filename assertions are
+what still guard that boundary); `@signalapp/sqlcipher` moved to `optionalDependencies` so the
+portal's `./detect` pin does not drag a native binary into Next.js.
+
+**Two findings deliberately NOT fixed here, with homes:**
+- The **request log** (`CELLO_GATEWAY_REQUEST_LOG`) writes plaintext metadata + a content SHA-256
+  outside the encrypted store. Only tests set it, and WIRE-1 does not pass it — but STORE-1's claim
+  to close the storage half of `DOD-CRYPTO-AT-REST-1` is overstated while it exists. → an AC on
+  `DOD-M9C-ENV-1`, which is the unit that owns "no policy-bearing env var survives".
+- The **four `CELLO_GATEWAY_*` policy overrides** still exist. That is `DOD-M9C-ENV-1` by design.
+
+**One test expectation changed, and it is not a weakening.** The seam test asserted
+`mode === "sidecar"`; M9C-D11 changes the vocabulary to `"enforcing"`. "Sidecar" named the
+TRANSPORT SHAPE — a daemon whose sidecar screened nothing would still have announced it truthfully.
+The mode now names what the client DOES with content, and the DoD names `"enforcing"` as the value
+the informed skeptic greps for.
+
+**Ordering correction found while writing this.** `DOD-M9C-ENV-1` must come AFTER
+`DOD-M9C-SURFACE-1`, not before: the env overrides are currently the ONLY way to configure the
+gateway, so removing them first would leave the layer unconfigurable. The DoD's line order already
+happens to be right; this entry records WHY, so nobody "optimises" by doing the small one first.
+
+**Next:** `DOD-M9C-SURFACE-1` — design note (Entry C6), then the loop.

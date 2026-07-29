@@ -169,9 +169,14 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   allowlist are REMOVED (the allowlist only shrinks); absence is asserted on the BUILT artifact.
   The false "the daemon does the same" comments die with the files. `M9-CFG-001`'s SI-001 clause
   carries the INV-4 amendment note in the YAML itself, so nobody re-reads the stale guarantee.
-  Headline events: `gateway.store.opened` (with `encrypted:true`, never a key), `gateway.store.
-  imported` (row counts, one-time), `gateway.store.import_failed` (+ cause, refuses to proceed).
-  — ❌
+  Headline events: `gateway.store.opened` (with `encrypted:true`, never a key). ~~`gateway.store.
+  imported` / `import_failed`~~ — VOID under M9C-D7, there is no importer.
+  > **BUILT + REVIEWED 2026-07-29 — 🟡.** `core/gateway/src/store/encrypted-db.ts` opens SQLCipher
+  > under the daemon's key file; both stores share `gateway.db`; four distinct fail-closed codes;
+  > eslint quarantine down to one file; absence asserted on the BUILT artifact. Reviewer found 4
+  > blocking (error substitution + busy_timeout ordering, undrained child stderr, empty-string
+  > silent-no-store, hollow guard) — ALL FIXED in `a68ed2e`. 🟡 not ✅: the enforcer
+  > (`DOD-M9C-GATE-1`) does not exist yet. → Entry C5 — 🟡
 
 - **DOD-M9C-WIRE-1** — **the connect: the shipped daemon runs the layer, enforcing (D-2).** The
   composition root (`core/daemon/src/bin/cello-daemon.ts`) constructs the real gateway client and
@@ -186,7 +191,13 @@ in the journal before any code ([[M9-PROCEDURE]] §6).
   `governance_timeout` — never a generic label, never a hang, never unscreened flow-through). The
   boot event tells the truth: `security.gateway.connected` with `mode:"enforcing"` (the value the
   informed skeptic greps for), and the mode value is derived from the actual construction, not a
-  constant. — ❌
+  constant.
+  > **BUILT 2026-07-29 — 🟡.** `cello-daemon.ts` spawns the sidecar + constructs the real client;
+  > `securityGateway` REQUIRED in `DaemonConfig` (M9C-D10) so no shipped path can omit it; `mode`
+  > declared by the client (M9C-D11); spawn failure fails closed + announced (M9C-D12); the bin
+  > resolves the store key first (M9C-D13). 1277 daemon+gateway tests green, lint + typecheck
+  > clean. 🟡 on `DOD-M9C-GATE-1` — the proof must come from the SHIPPED bin, not this suite.
+  > → Entry C5 — 🟡
 
 - **DOD-M9C-SURFACE-1** — **the control surface + the human confirm (D-4, absorbs M8C
   `DOD-CONFIG-1`).** `cello config list` / `get <key>` / `set <key> <value>` against the versioned
