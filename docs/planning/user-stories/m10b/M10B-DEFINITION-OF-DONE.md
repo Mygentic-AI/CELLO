@@ -326,7 +326,18 @@ the additions M10B is accountable for.
   (portal verification code; the directory read path `queryAccountFacts` /
   `GET /internal/track-record/...`). Drain semantics are exactly-once with the failure reason preserved
   to the submitter; a poisoned row leaves the queue rather than blocking it. Named events:
-  `signal.ingress.drained`, `signal.ingress.authenticated`, `signal.ingress.rejected` (+ cause). — ❌
+  `signal.ingress.drained`, `signal.ingress.authenticated`, `signal.ingress.rejected` (+ cause).
+  > **BUILT + REVIEWED + PROVEN LIVE 2026-07-29 → Entry 38, J-END.** Directory drain/ack routes (read
+  > and ack are SEPARATE: drain does not delete, so a crash mid-mint re-delivers rather than losing a
+  > submission the operator was told was queued), the portal's drain loop, and an authenticated
+  > trigger route. `J-END` hop 2 drives the REAL modules end to end — authenticate → dedupe on the
+  > DERIVED id → scan → compose → mint → deliver → ack — against a live directory and Postgres.
+  > 12 review findings fixed, the worst being that `op` was read for a log line and never branched
+  > on, so a private refusal message would have been minted as a public endorsement.
+  > **THREE CLAUSES GENUINELY UNMET, stated rather than rounded up:** nothing is preserved to the
+  > SUBMITTER (`submission_results` / `M10B-D25r2` does not exist in either repo); `refuse` and
+  > `withdraw` ops are recognised but left QUEUED pending their handlers; and account-subject
+  > submissions are refused by name pending `DOD-END-SUBJECTKIND-1`. — 🟡
 - **DOD-END-SCAN-1** — the deterministic intake scanner (spec §7): injection patterns (primary), secrets,
   constrained charset (a sentence — no control chars, no markup), length cap, URL handling. **Versioned
   and byte-identical**, and the version travels INSIDE the signed submission body — `DOD-DIR-WRITE-1`
@@ -642,6 +653,26 @@ the additions M10B is accountable for.
     with a named reason (`DOD-END-SUBJECTKIND-1`).
   - **(d) withdrawal reaches a prior recipient** — Bob withdraws after Charlie has already verified and
     stored it; Charlie sees it withdrawn on next check (`DOD-END-WITHDRAW-1`). — ❌
+  > **THE CORE JOB AND THREE CASES RUN LIVE 2026-07-29 — `j-end.spine.test.ts`, 9 hops green.**
+  > Real daemons, a real directory, a real Postgres, and the PORTAL'S OWN ingress modules loaded
+  > across the repo boundary (`portal-ingress.ts`) rather than re-implemented — because a journey
+  > written on the established spine pattern would seed `signal_records` directly, skip drain,
+  > authenticate, scan and mint entirely, and still go green.
+  > **Proven:** the core job end to end, with hop 5 asserting INV-UNTRUSTED survives to a consuming
+  > context (CELLO's `claim` does NOT contain Bob's sentence; his `statement` is verbatim, flagged,
+  > attributed to his key); **(a)** partial — refusal recorded, message queued as an `op: refuse`,
+  > and Charlie sees EXACTLY ONE endorsement (two would mean a refused one presented, zero would mean
+  > the accepted one stopped); **(a2)** the mint succeeds with the subject's daemon DOWN, nothing is
+  > lost, and selecting her agent on return tells her — the FIRST test of that nudge anywhere, a
+  > review having found the clause had zero coverage; **(c)** self-endorsement refused at the source,
+  > including two agents on ONE daemon, which is the farming shape and the ordinary one given solo
+  > multi-agent is the first wedge.
+  > **WHAT IT FOUND:** the consent gate was INERT — every endorsement auto-accepted, because the
+  > envelope was attributed to the portal instead of its author, so `issuerKind === "agent"` never
+  > matched. Both repos' unit suites were green through that; none of them looked at the envelope.
+  > **Not provable yet, each blocked on a named thing:** (a)'s correction loop needs the refuse-op
+  > handler + `submission_results`; **(b)** needs `DOD-END-SUBJECTKIND-1`; **(d)** needs
+  > `DOD-END-WITHDRAW-1`. — 🟡 core job + 3 cases live, 2 cases blocked
 - **DOD-END-PLAYBOOK-1** — **the architectural proof, M10B's equivalent of the canary.** With M10B's
   machinery in place, a SECOND client-sourced type is taken from nothing to live end-to-end as a pure
   [[M10-TYPE-PLAYBOOK]] run — **`git status --porcelain` clean and `git diff --stat` empty in cello-client
