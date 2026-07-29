@@ -2879,3 +2879,78 @@ without knowing what the default had been.
 A second session is working in the same `cello-client` tree (it landed `DOD-M9C-STORE-1`, the gateway
 SQLCipher work, as `449bbba`). Staging is now file-by-file rather than `git add -A`; the six earlier
 M10B commits were checked and contain none of its files.
+
+---
+
+### 2026-07-29 — Entry 37: DESIGN NOTE — `DOD-END-SCAN-1` (written before any code)
+
+**Target behavior (one sentence).** A submission's plaintext body is judged by a deterministic,
+versioned rule corpus BEFORE it is hashed, and on any hit the submission is REJECTED with the reason
+named — never cleaned, never partially accepted — while the exact rule set that judged it is recorded
+in a `scanner_version` derived from the corpus itself.
+
+**Spec anchors.** Spec §7 constraints 2 (versioned shared component, byte-identical across nodes) and
+3 (reject always, fail-closed). Policy D-16 (concealment with no innocent use refuses on sight;
+legitimate encodings are decoded and judged). `M10B-D15` (derived `scanner_version`), `M10B-D16`
+(shared corpus, portal-owned verdict), `M10B-D17` (the `./detect` subpath). SHA-256 → FIPS 180-4.
+
+**Producer/consumer chain.**
+- *Rule corpus* — produced by `@cello-protocol/gateway/detect` (`compileInjectionPatterns`,
+  `compileSecretRules`, RE2-backed, no I/O, no model). Consumed by the portal's intake. If the corpus
+  changes, `scanner_version` changes with it — that is the whole point of deriving it.
+- *`scanner_version`* — produced HERE by hashing the canonical serialization of the active rule set.
+  Consumed by `mint.ts` and stored by the directory as a SIGNED field. If it were hand-maintained and
+  went stale, the directory would notarize evidence of a scan that did not happen — the directory
+  cannot re-run the scan, which is precisely why `DOD-DIR-WRITE-1` made the field signed.
+- *Verdict* — produced here, consumed by the ingress drain loop, which acks the row and (for an
+  attributable submission) reports the cause back to the submitter.
+
+**The seam.** `src/server/trust/submission-scan.ts` in cello-portal, between
+`authenticateSubmission` (Entry 36's step 2) and `mint.ts`. It imports from
+`@cello-protocol/gateway/detect` and NEVER the package barrel — the barrel pulls
+`GatewayConfigStore`/`GatewayRecordStore`, the HTTP server and the sidecar spawner into a Next.js
+Fargate app. It must not know what a signal TYPE is: it judges bytes, and the same call judges the
+body of an endorsement, a withdrawal and a refusal message identically.
+
+**Invariants at stake.**
+- `INV-UNTRUSTED` — the scanner never rewrites the body. A "cleaned" body would be the portal
+  restating the submitter's words in its own voice, which is exactly how framing dies quietly. Reject
+  or pass, nothing in between.
+- `INV-ZEROBUMP` — no branch on signal type. The corpus judges text.
+- `INV-ATTRIBUTION` — untouched; the scanner runs AFTER authentication and never re-derives identity.
+- Fail-closed (§5a) — an unrecognised verdict, an uncompiled corpus, or a thrown detector must
+  REJECT. A scanner that can be silently off cannot back a signed `scanner_version`; that is the same
+  reasoning that excluded the Layer-2 ONNX classifier (`M10B-D16`), and it applies to our own failure
+  modes too.
+
+**Approach + rejected alternative.** Compile the corpus once at module load, derive `scanner_version`
+from its canonical serialization, and expose one `scanSubmissionBody(body)` returning
+`{ ok: true, scannerVersion }` or `{ ok: false, reason, scannerVersion }`. **Rejected: reusing the
+gateway's `InboundScreener` disposition.** Its stated posture is the OPPOSITE of intake's — "not, by
+itself, an auto-block; CELLO is not a moderation tool; this surfaces evidence, it does not police
+content" — so reusing it produces a scanner that passes its own tests and never refuses anything.
+The corpus is shared; the policy is the portal's. **Also rejected: scanning after hashing**, which
+would notarize the hash of content that is then rejected, leaving a permanent record of a signal
+that was never minted.
+
+**Falsification pass.** Checked before writing code: `@cello-protocol/gateway` is NOT currently a
+portal dependency — it must be added, and `./detect` is a real exports entry (verified in the
+package's `exports` map, not assumed). `compileInjectionPatterns` is async-ready
+(`injectionPatternsReady`), so the module cannot judge before the corpus is compiled and must refuse
+rather than pass while it is warming. Redaction (`redactSecrets`) exists and must NOT be used for its
+rewriting behaviour — only its FINDINGS matter here, because rewriting is the thing INV-UNTRUSTED
+forbids.
+
+**Decisions this note makes.**
+1. Charset class, length cap and URL policy are part of the hashed corpus serialization, so changing
+   any of them changes `scanner_version` — they are rules, not configuration.
+2. The length cap at intake is independent of the client's 4000-char submit cap: the client cap is a
+   courtesy to the operator, this one is a protocol constraint, and the portal must not trust a
+   client-side bound it did not enforce.
+
+**Test plan sketch.** Red-first: an injection payload is rejected with `scanner_injection_pattern`;
+a live-looking credential is rejected with `scanner_secret`; control characters and markup are
+rejected; an over-long body is rejected; a normal sentence PASSES (the positive control without which
+"reject everything" would pass every negative test); the same body scanned twice yields the same
+`scanner_version`; a body is never mutated. Enforcer: the ingress path, and ultimately
+`DOD-END-JOURNEY-1` case (a) where a refusal message is scanned on the same path.
