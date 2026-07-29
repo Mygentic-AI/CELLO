@@ -284,7 +284,19 @@ the additions M10B is accountable for.
   payload, no subject, no PII**, exactly the `DOD-DIR-WRITE-1` / M10-D22 posture, and a test asserts the
   absence on the schema. Notarization is untouched: nothing here writes `signal_records`, and the
   directory composes nothing (`INV-DIR-DUMB`). Rides the one batched directory deploy with
-  `DOD-END-REVOKE-2`; a new Flyway migration updates `OpsAgentExpectedMigrationVersion`. — ❌
+  `DOD-END-REVOKE-2`; a new Flyway migration updates `OpsAgentExpectedMigrationVersion`.
+  > **BUILT 2026-07-29 — `V51__submission_queue.sql` + `submission-queue-repository.ts` + 8 green
+  > integration tests** (`m10b-queue-1-v51-submission-queue.test.ts`, run against real Postgres).
+  > **Renumbered V49 → V51:** V49 and V50 were already claimed by the M12 anti-entropy branch, which
+  > had applied V49 to the shared local `cello_dev` — an M5-rule-4 collision that only Flyway's
+  > checksum check caught. `M10B-D23`'s delivery fix moves to **V52**.
+  > Green: exact four-column set; no submitter/subject/kind/type/payload/reason column under any name;
+  > absent from `PUBLICATION_TABLES` (with a positive control); **no UPDATE grant** — found by the test
+  > itself and now load-bearing, since it makes "first writer of an id wins" a database property rather
+  > than an `ON CONFLICT` intention; retry-is-a-strict-no-op under mismatched bytes; oldest-first drain;
+  > intake-keys-in-use (rotation retention's input); idempotent delete; sweep taking only aged rows.
+  > **🟡 not ✅ — the deploy is owed**, and `OpsAgentExpectedMigrationVersion` goes to the final number
+  > once the M12 branch's numbering settles. — 🟡
 - **DOD-END-INGRESS-1** — **the portal drains and mints.** The third arm of the portal's mint function:
   drain the queue, open the seal, **verify the submission signature and derive `issuer_pubkey` FROM it**
   — never from a request field (`DOD-END-INV-ATTRIBUTION`) — then scan, compose, and hand off to

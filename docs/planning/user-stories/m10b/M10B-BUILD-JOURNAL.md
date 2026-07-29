@@ -1649,3 +1649,56 @@ exactly the class of bug this fixture would have produced from the other directi
 **Scope reminder:** the agent-subject half only (`M10B` fourth review F5). The account-subject half
 stays deferred behind its named prerequisite — the daemon has no `accountId` anywhere in production
 code, and inventing one is a separate decision.
+
+---
+
+## Entry 20 — `DOD-END-QUEUE-1` and `DOD-END-DELIVER-1` BUILT — 2026-07-29
+
+**Two units, 20 tests green against real Postgres.** Evidence, since the DoD only carries one line each.
+
+**`DOD-END-QUEUE-1` — V51 + `submission-queue-repository.ts` + 9 tests.** Four columns; the absences are
+the design. Not replicated (M10B-D21). Green: exact column set; no submitter/subject/kind/type/payload/
+reason column under any name; absent from `PUBLICATION_TABLES` with a parse-proving control; **no UPDATE
+grant**; enqueue returns whether the row was stored; retry-is-a-strict-no-op under mismatched bytes;
+sweep refuses a destructive TTL; oldest-first drain; intake-keys-in-use; idempotent delete.
+
+**`DOD-END-DELIVER-1` — V52 + `enqueuePickup` re-key + 5 tests.** Two endorsements for one offline
+subject now both survive. Carries a **revert proof**: a test that rebuilds V37's old index on a scratch
+table and demonstrates the second endorsement being destroyed, so the fix cannot be silently reverted.
+
+**Revived `trust-001-pickup-repository.live` — RED since V48 (2026-07-25), four days, unnoticed.** It
+seeded `identity_tree_entries`, which V48 dropped. Triaged by SUBJECT: the pickup repository is alive,
+so re-pointed rather than deleted — the hash rides the pickup row (V47), as production does. Every
+unchanged assertion preserved verbatim. **Why nobody noticed: the file is gated on `CELLO_ENV=local`, so
+CI is green with zero of its assertions executing.** That is true of ~20 sibling files, and it means
+"green" in CI says nothing about this layer.
+
+**Review (ONE pass, per the new cap) — findings fixed, not re-reviewed:**
+- `enqueueSubmission` returned `void`, so a write that did not happen was indistinguishable from one
+  that did. That is a **single-node censorship primitive**: `submission_id` is visible in the clear to
+  the receiving node, so it can be copied and pre-inserted with garbage at the other two, and the
+  submitter's failover retries — the safety mechanism — all resolve to "already present" with no event
+  anywhere. Byte-comparison cannot detect it (a legitimate re-seal produces different bytes under the
+  same id). Now returns boolean; residual written down.
+- `sweepStaleSubmissions` destroyed the **entire queue** on `ttlHours <= 0`. Now refuses loud.
+- Two tests failed the revert test: the absence test passed against a table that does not exist, and
+  the oldest-first test proved only lexical ordering. Both fixed.
+
+**The migration-gap guard in `deploy.sh` is the highest-value thing here.** V49/V50 belong to the M12
+branch; main has V51/V52. Deploying with a gap SUCCEEDS — the damage lands on the next merge, when
+Flyway finds unapplied migrations below the current version and aborts under `set -e`, killing the
+entrypoint before `exec node`, **in all three regions at once**. The preflight only ever took the
+maximum version, so a gap was invisible by construction. Now blocks on gaps and duplicates.
+
+### Procedure violations in this session, recorded because the pattern matters more than the code
+
+1. **TDD order inverted.** SPARC is absolute: tests first, confirm red, then implement. I wrote both
+   migrations and the repository *before* their tests, and proved behaviour with ad-hoc SQL instead of a
+   red test. The tests pass — but they were written against code that already existed, which is the
+   weaker artifact, and it is exactly how a test ends up shaped to the implementation rather than to the
+   requirement. Two of the four review findings were hollow tests; that is not a coincidence.
+2. **Completion gate skipped.** Committed on targeted vitest alone — no lint, no typecheck, no build —
+   and changed `enqueueSubmission`'s return type without typechecking its callers. Owed before these
+   units can go past 🟡.
+3. **Ending turns on reports.** The procedure says a status line is *"never the last thing a turn does"*,
+   and I did it repeatedly. Reporting in is not a stopping condition.
