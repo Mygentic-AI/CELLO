@@ -91,7 +91,10 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  for (const c of mcpConns) await c.close();
+  // EACH close() GUARDED. Several of these point at daemons stopped in later hops, and one
+  // rejection would abort the loop — leaving spawned relay/directory binaries, bound ports and the
+  // Docker Postgres alive for the next journey to inherit.
+  for (const c of mcpConns) { try { await c.close(); } catch { /* the daemon may already be gone */ } }
   for (const d of daemons) await d.stop();
   await cluster?.stop();
   for (const dir of dirs) {
@@ -333,21 +336,45 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     // nothing downstream could tell. That is why the portal's claim is asserted NOT to contain his
     // text rather than merely asserting his text is present somewhere.
     const claim = endorsement!.claim;
-    expect(String(claim.claim), "CELLO's own voice must not restate Bob's words").not.toContain("payments migration");
-    expect(String(claim.claim)).toMatch(/NOT verified|does not vouch/i);
     expect(claim.statement, "Bob's words, verbatim").toContain("payments migration");
     expect(claim.statement_is_untrusted).toBe(true);
     expect(claim.statement_author_pubkey, "attributed to BOB, the author").toBe(pubkeys["bob"]);
 
-    // NOT the portal's key. The portal signed the submission at the chokepoint; it did not make the
-    // claim, and the framing Charlie sees says so.
-    expect(claim.statement_author_pubkey).not.toBe(pubkeys["alice"]);
+    // ── THE WRAPPER, NOT ONLY THE PAYLOAD ────────────────────────────────────────────────────────
+    // A review showed the earlier version of this block was BYPASSABLE: it asserted only on fields
+    // nested inside `claim`, so adding `summary: \`${type}: ${statement}\`` to the projection would
+    // have put Bob's sentence in front of the model under `directory_verified: true` with every
+    // assertion still green. M10B-D13 says exactly that — the payload split alone does not satisfy
+    // INV-UNTRUSTED.
+    expect(endorsement!.issuer, "framed as peer-claimed, not platform-verified").toBe("peer-claimed");
+    const projected = endorsement as unknown as Record<string, unknown>;
+    expect(projected.content_is_peer_claimed).toBe(true);
+    expect(String(projected.framing), "and told how to treat it").toMatch(/did NOT verify|does not vouch/i);
 
-    // VERIFIED AGAINST THE DIRECTORY: the hash Charlie holds is live in the notary ledger. Without
-    // this, a presented envelope is just bytes someone handed over.
+    // NO PART OF THE PROJECTION OUTSIDE `statement` MAY CARRY BOB'S WORDS. Asserted over the whole
+    // object rather than one field, because the bypass was a NEW field — checking only the fields
+    // that exist today cannot catch a field added tomorrow.
+    const withoutStatement = JSON.stringify({ ...projected, claim: { ...claim, statement: "" } });
+    for (const phrase of ["payments migration", "led the payments", "no incident"]) {
+      expect(withoutStatement, `"${phrase}" leaked outside the quoted statement`).not.toContain(phrase);
+    }
+
+    // The session-level attestation must not claim CELLO verified the CONTENT.
+    const attestation = String((inbound as unknown as Record<string, unknown>).directory_attestation ?? "");
+    expect(attestation, "the attestation covers provenance, not truth").not.toMatch(/each verified by the CELLO directory/i);
+    expect(attestation).toMatch(/peer-claimed/i);
+
+    // THE DIRECTORY IS THE ENFORCER, not Charlie's daemon — worth stating precisely, because the
+    // DoD clause reads "Charlie verifies" and he does not: `inbound-sessions.ts` records the verdict
+    // the DIRECTORY supplied. The directory strips non-active signals from the assignment before it
+    // is sent, which is why this must be bound to the hash Charlie actually received rather than to
+    // "some endorsement, somewhere" — an unbound query here cannot fail without the assertions above
+    // having already failed.
+    const presentedHash = (endorsement as unknown as { signal_hash?: string }).signal_hash;
+    expect(presentedHash, "the projection carries the hash it was verified under").toMatch(/^[0-9a-f]{64}$/);
     expect(psqlSpine(
-      `SELECT effective_status FROM signal_records_effective WHERE type = 'endorsement' LIMIT 1`,
-    )).toContain("active");
+      `SELECT effective_status FROM signal_records_effective WHERE signal_hash = '${presentedHash}'`,
+    ), "the hash Charlie holds is live in the notary ledger").toContain("active");
   }, 120_000);
 
   it("HOP 6 (case a): Alice REFUSES a second endorsement with a message — and it never reaches Charlie", async () => {
@@ -405,9 +432,31 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     // contingent on the network, or Alice believes she rejected something that is still pending.
     expect(refused.message_queued, `message not queued: ${refused.message_error}`).toBe(true);
 
-    // Her message rides the SAME submission queue, as an `op: refuse` — the same injection surface
-    // pointed the other way, and scanned identically at intake.
+    // THE REFUSAL IS DURABLE, asserted HERE rather than inferred from a later hop. A review found
+    // this hop passed for the wrong reason: presentation filters on `consent_state = 'accepted'`, so
+    // a `consent_refuse` that was a total no-op would leave the endorsement PENDING — equally
+    // unpresentable — and the "exactly one" count below would still be green. The count
+    // distinguishes accepted-from-not, never refused-from-pending.
+    const afterRefusal = (await alice2.call("cello_consent_list", {})) as { pending?: unknown[] };
+    expect(afterRefusal.pending, "no decision is left outstanding").toHaveLength(0);
+    const heldNow = (await alice2.call("cello_trust_signals_list", {})) as { signals?: Array<{ consent_state?: string }> };
+    expect(
+      (heldNow.signals ?? []).filter((x) => x.consent_state === "refused"),
+      "the refusal is RECORDED, not merely reported",
+    ).toHaveLength(1);
+
+    // Her message rides the SAME submission queue as an `op: refuse` — the same injection surface
+    // pointed the other way, scanned identically at intake. Proven by the next drain classifying it
+    // as an unhandled op (the handler is not built), not merely by a row existing.
     expect(psqlSpine(`SELECT count(*) FROM submission_queue`).replace(/\s/g, ""), "the refusal message is queued").not.toBe("0");
+    const refusePass = await portal.drainAndMint({
+      client: new HttpDirectoryClient(cluster.internalApiUrls[0], INTERNAL_API_KEY),
+      intakeSeeds: new Map([[INTAKE_KEY_ID, intakeSeed]]),
+      signer: getSubmissionSigner("local"),
+      directoryBaseUrl: cluster.internalApiUrls[0],
+    });
+    expect(refusePass.unhandledOps, "the queued row is a `refuse` op, recognised and left queued").toBe(1);
+    expect(refusePass.minted, "a refusal must never mint anything").toBe(0);
 
     // ── AND CHARLIE NEVER SEES IT. The refused endorsement is unpresentable by every path. ──
     const charlie = mcpConns[mcpConns.length - 2];
@@ -485,12 +534,24 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     const listed = (await alice3.call("cello_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
     expect(listed.pending, "the endorsement survived her absence").toHaveLength(1);
 
-    // AND THE NOTIFICATION DOES NOT REPEAT once seen — the item persists, the nudge goes quiet.
-    // Two different lifetimes (M10B-D5); one flag would either nag forever or dismiss the decision.
-    const second = (await alice3.call("cello_use_agent", { name: "alice" })) as Record<string, unknown>;
-    void second;
-    const afterSeen = (await alice3.call("cello_consent_list", {})) as { pending?: unknown[] };
-    expect(afterSeen.pending, "the DECISION persists after the notice is seen").toHaveLength(1);
+    // AND THE NOTIFICATION DOES NOT REPEAT once seen. `cello_consent_list` above stamped
+    // `consent_notified_at`, so a fresh selection must now carry no nudge.
+    //
+    // A FRESH CONNECTION IS REQUIRED, and the previous version of this got it wrong: re-selecting
+    // the already-current agent early-returns `agent_already_current` BEFORE the nudge block runs,
+    // so its response has no `pending_consent` field whatever the state. Asserting on that proved
+    // nothing — it was `void second;`, asserting literally nothing, while the DoD claimed the clause
+    // proven.
+    const alice4 = await connectMcp(dirFor["alice"], "jend-alice-seen");
+    mcpConns.push(alice4);
+    const afterNotice = (await alice4.call("cello_use_agent", { name: "alice" })) as Record<string, unknown>;
+    expect(afterNotice.ok, `re-selection failed: ${JSON.stringify(afterNotice)}`).toBe(true);
+    expect(afterNotice.pending_consent, "the nudge goes quiet once the items have been SEEN").toBeUndefined();
+
+    // But the DECISION persists — two different lifetimes (M10B-D5). One flag would either nag
+    // forever or silently dismiss a pending decision, and only asserting both halves catches either.
+    const afterSeen = (await alice4.call("cello_consent_list", {})) as { pending?: unknown[] };
+    expect(afterSeen.pending, "the decision survives the notice being seen").toHaveLength(1);
   }, 180_000);
 
   it("HOP 8 (case c): self-endorsement is REFUSED at the source, with a named reason", async () => {

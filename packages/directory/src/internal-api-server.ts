@@ -699,8 +699,13 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
         return;
       }
       try {
-        const { rows } = await pool.query<{ agent_id: string | null; account_id: string | null }>(
-          `SELECT agent_id, account_id FROM agent_profiles WHERE lower(k_local_pubkey) = $1 LIMIT 1`,
+        // `phone_stub_hash` rides along because it is the OPERATOR LINKAGE (policy D-29): two
+        // accounts that verified the same phone are the same human, and same-operator endorsements
+        // must not manufacture standing. It is a SHA-256 stub, never a number — the directory holds
+        // no PII by design — so this discloses nothing beyond "these two share a verifier".
+        const { rows } = await pool.query<{ agent_id: string | null; account_id: string | null; phone_stub_hash: string | null }>(
+          `SELECT agent_id, account_id, NULLIF(phone_stub_hash, '') AS phone_stub_hash
+             FROM agent_profiles WHERE lower(k_local_pubkey) = $1 LIMIT 1`,
           [pubkey],
         );
         // NOT a 404 for an unknown pubkey. "This agent is not registered here" is a legitimate
@@ -708,11 +713,14 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
         // would make the portal's drain loop treat an ordinary unknown subject as an outage.
         if (rows.length === 0 || !rows[0].agent_id) {
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ found: false, agent_id: null, account_id: null }));
+          res.end(JSON.stringify({ found: false, agent_id: null, account_id: null, phone_stub_hash: null }));
           return;
         }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ found: true, agent_id: rows[0].agent_id, account_id: rows[0].account_id }));
+        res.end(JSON.stringify({
+          found: true, agent_id: rows[0].agent_id, account_id: rows[0].account_id,
+          phone_stub_hash: rows[0].phone_stub_hash,
+        }));
       } catch (err) {
         logger.error("signal.deliver.resolve.failed", { error: err instanceof Error ? err.message : String(err), owningNodeId });
         res.writeHead(500, { "Content-Type": "application/json" });
