@@ -56,12 +56,25 @@ acceptance_criteria:
 # ─── Security Invariants ───────────────────────────────────
 security_invariants:
   - id: SI-001
-    statement: "the gateway config store shall not be readable or writable with the daemon's key"
+    status: "RE-SCOPED 2026-07-29 to M9-REMOTE-001 (Phase 2). DO NOT implement locally."
+    statement: "on a REMOTE gateway, the config store shall not be readable or writable with the
+      daemon's key"
     adversarial_condition: "even when a compromised client holding the daemon's SQLCipher key
-      tries to open the gateway config DB — it is a separate file with a separate key and the
-      open fails"
+      tries to open the remote gateway's config DB, the open fails — because the store is on a
+      machine the operator does not control"
     test_type: integration
     component_under_test: gateway
+    amendment: >
+      AMENDED by M9C-D2 (policy decision D-3, Andre 2026-07-28) and INV-4 as amended in
+      M9-DEFINITION-OF-DONE. The LOCAL form of this invariant — a separate file with a separate
+      key, on the operator's own machine — was dropped as unenforceable theatre: whoever owns the
+      laptop can simply not run the scanner, so a store the local daemon "cannot read" buys
+      nothing while costing the backup unit. As of DOD-M9C-STORE-1 the local gateway store IS
+      opened with the daemon's key, deliberately, so that one key and one backup cover it.
+      The guarantee is real only where it is physically enforceable — a scanner on a machine the
+      operator does not control — which is M9-REMOTE-001. Any agent reading this file: do NOT
+      "restore" a separate local key, and do NOT write a local adversarial test for the old
+      statement. It would fail, correctly.
 
 # ─── References ─────────────────────────────────────────────
 references:
