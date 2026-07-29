@@ -247,7 +247,16 @@ export class AeSyncService {
         }
       }
       if (!result.ok) {
-        logger.warn("antientropy.peer.auth_failed", { peerNodeId, reason: result.reason, correlationId });
+        // `detail` carries WHY — which field the peer sent wrong, which value was rejected.
+        // `reason` alone is the exit-point label: every distinct handshake violation arrives as
+        // the single class "protocol_error", so dropping detail here discards the one piece of
+        // information the handshake went to the trouble of producing.
+        logger.warn("antientropy.peer.auth_failed", {
+          peerNodeId,
+          reason: result.reason,
+          ...(result.detail !== undefined && { detail: result.detail }),
+          correlationId,
+        });
         return;
       }
       logger.info("antientropy.peer.authenticated", { peerNodeId, correlationId });
