@@ -423,7 +423,27 @@ export class FrostDirectoryHandler {
     });
 
     if (!share) {
-      this.#logger?.error("frost.debug.generateCommitment.no_share", { agentShort, epochId, nodeId: this.#nodeId });
+      // Name WHICH shareless state this is. `AGENT_NOT_BOOTSTRAPPED` reads as "the agent did not
+      // register", i.e. a client fault — so an operator debugs the client while the truth is on
+      // this side. That is error substitution: the label names where the failure surfaced, not what
+      // went wrong. Two genuinely different states hide behind it, with different fixes:
+      //
+      //   heldEpochs = none  -> this node was NEVER in this agent's DKG quorum. Shares are dealt
+      //                         per-quorum and deliberately never replicated (DOD-INV-SHARES-LOCAL),
+      //                         so this node CANNOT serve this agent until a resharing ceremony
+      //                         enrolls it (M8B Problem 3). Reachable, legitimate, unable to serve.
+      //   heldEpochs = some  -> the node holds shares but not for THIS epoch: a stale or skewed
+      //                         epoch, which is a coordination bug, not an enrollment gap.
+      //
+      // The wire reason is unchanged (protocol compatibility); the LOG now distinguishes them.
+      const maxEpochHeld = this.#shareStore.getMaxEpoch(agentPubkey);
+      this.#logger?.error("frost.debug.generateCommitment.no_share", {
+        agentShort,
+        epochId,
+        nodeId: this.#nodeId,
+        maxEpochHeld: maxEpochHeld ?? null,
+        shareState: maxEpochHeld === undefined ? "node_never_held_a_share_for_this_agent" : "node_holds_shares_but_not_this_epoch",
+      });
       return { ok: false, reason: "AGENT_NOT_BOOTSTRAPPED" };
     }
 
@@ -512,6 +532,16 @@ export class FrostDirectoryHandler {
       if (this.#isExpiredEpoch(agentPubkey, epochId)) {
         return { ok: false, reason: "EPOCH_EXPIRED" };
       }
+      // Same distinction as generateCommitment — this path was previously SILENT, returning the
+      // conflated reason with no log at all, so a signing failure here left nothing to read.
+      const maxEpochHeld = this.#shareStore.getMaxEpoch(agentPubkey);
+      this.#logger?.error("frost.sign.no_share", {
+        agentShort: agentPubkey.slice(0, 16),
+        epochId,
+        nodeId: this.#nodeId,
+        maxEpochHeld: maxEpochHeld ?? null,
+        shareState: maxEpochHeld === undefined ? "node_never_held_a_share_for_this_agent" : "node_holds_shares_but_not_this_epoch",
+      });
       return { ok: false, reason: "AGENT_NOT_BOOTSTRAPPED" };
     }
 
