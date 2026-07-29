@@ -5033,20 +5033,52 @@ export class CelloDirectoryNode {
         this.#store.enqueueNotification(initiatorHex, sealVerifiedEvent, sessionIdHex);
       }
     } else {
-      // DB-003: initiator not connected — enqueue for delivery when they reconnect.
+      // DB-003: initiator not connected HERE. Two very different situations hide behind that, and
+      // conflating them is what made this failure invisible for a day.
       //
-      // WARN, not info: this is the point at which a seal silently becomes indefinite. The
-      // directory holds #pendingFrostSeals open waiting for a co-signature it has just declined to
-      // ask for, and the initiator is told nothing — it waits out its own bilateral window and
-      // reports a timeout that names directory verification, which never ran. This branch is
-      // expected for a genuinely offline initiator; it is NOT expected during an active close,
-      // where the initiator is right there but reached the directory over a VISITING connection it
-      // released after setup (see close-session-handler "Fix #1").
+      //   OFFLINE      -> enqueue is correct. The initiator will reconnect to THIS node and
+      //                   drainNotifications (on signaling auth) hands it the frame.
+      //   ONLINE ELSEWHERE -> enqueue is a BLACK HOLE. `notification_queue` is per-node and is NOT
+      //                   in the anti-entropy set, and the drain only fires for a peer that
+      //                   authenticates on THIS node. An agent homed on another directory has no
+      //                   reason ever to connect here, so the frame can never be delivered.
+      //
+      // The second case is not hypothetical: the relay drives every seal to a SINGLE configured
+      // directory (`relay_primary_directory`), so any agent not homed on that node lands here.
+      // Returning ok:true there told the relay the seal had succeeded while the directory sat in
+      // #pendingFrostSeals forever, and both clients waited out an 11-minute window before
+      // reporting a verification that never ran.
+      //
+      // Presence is replicated (Tier-B `agent_presence`), so THIS node can tell the two apart.
+      const presence = this.#store.getAgentPresenceForDiscovery
+        ? await this.#store.getAgentPresenceForDiscovery(initiatorHex, PRESENCE_NODE_FRESHNESS_MS)
+        : { hasRow: false, rawOnline: false, owningNodeId: null, nodeFresh: false };
+      const homedElsewhere =
+        presence.rawOnline === true &&
+        typeof presence.owningNodeId === "string" &&
+        presence.owningNodeId !== this.#frostHandler.nodeId;
+
+      if (homedElsewhere) {
+        // Fail FAST and LOUD rather than enqueue into a queue that cannot reach them. The relay
+        // turns this into rejectSeal, so both clients get a named answer immediately instead of a
+        // silent timeout. Still enqueued as a best-effort backstop in case they do visit later.
+        this.#logger?.error("seal.certificate.undeliverable", {
+          sessionId: sessionIdHex,
+          initiatorShort: initiatorHex.slice(0, 16),
+          initiatorHomedOn: presence.owningNodeId,
+          processedBy: this.#frostHandler.nodeId,
+          reason: "initiator_homed_on_another_node",
+          consequence: "notification_queue is per-node and not replicated — this frame cannot reach them from here",
+        });
+        this.#store.enqueueNotification(initiatorHex, sealVerifiedEvent, sessionIdHex);
+        return { ok: false, reason: "seal_initiator_not_local" };
+      }
+
       this.#logger?.warn("seal.certificate.deferred", {
         sessionId: sessionIdHex,
         initiatorShort: initiatorHex.slice(0, 16),
         reason: "initiator_stream_absent",
-        consequence: "seal blocks until the initiator reconnects and drains the queue",
+        consequence: "seal blocks until the initiator reconnects to THIS node and drains the queue",
       });
       this.#store.enqueueNotification(initiatorHex, sealVerifiedEvent, sessionIdHex);
     }
