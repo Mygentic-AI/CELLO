@@ -5011,6 +5011,16 @@ export class CelloDirectoryNode {
     if (initiatorStream) {
       try {
         this.#sendFrame(initiatorStream, encodeSealVerified(sealVerifiedEvent));
+        // The FROST seal cannot complete without this frame: the directory has built the
+        // certificate and is now BLOCKED waiting for the initiator's co-signature. Until now the
+        // send left no trace at all, so a seal that stalled here was indistinguishable from one
+        // that stalled anywhere else — `legibility.built` fired, `notarization.recorded` did not,
+        // and nothing in between said whether the request had even been sent.
+        this.#logger?.info("seal.certificate.delivered", {
+          sessionId: sessionIdHex,
+          initiatorShort: initiatorHex.slice(0, 16),
+          awaiting: "seal_frost_signature",
+        });
       } catch (error) {
         // M7-SESSION-004 AC-009 lateral catch audit: log the send failure rather than
         // swallowing it before falling back to the deferred-delivery queue.
@@ -5024,6 +5034,20 @@ export class CelloDirectoryNode {
       }
     } else {
       // DB-003: initiator not connected — enqueue for delivery when they reconnect.
+      //
+      // WARN, not info: this is the point at which a seal silently becomes indefinite. The
+      // directory holds #pendingFrostSeals open waiting for a co-signature it has just declined to
+      // ask for, and the initiator is told nothing — it waits out its own bilateral window and
+      // reports a timeout that names directory verification, which never ran. This branch is
+      // expected for a genuinely offline initiator; it is NOT expected during an active close,
+      // where the initiator is right there but reached the directory over a VISITING connection it
+      // released after setup (see close-session-handler "Fix #1").
+      this.#logger?.warn("seal.certificate.deferred", {
+        sessionId: sessionIdHex,
+        initiatorShort: initiatorHex.slice(0, 16),
+        reason: "initiator_stream_absent",
+        consequence: "seal blocks until the initiator reconnects and drains the queue",
+      });
       this.#store.enqueueNotification(initiatorHex, sealVerifiedEvent, sessionIdHex);
     }
 
