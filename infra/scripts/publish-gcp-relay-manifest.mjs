@@ -90,15 +90,21 @@ const relayPublicIp = gcloud(["compute", "addresses", "describe", `cello-${RELAY
 // The health check is VPC-INTERNAL: the directory pings the relay's PRIVATE ip (see
 // cello-relay-allow-health-internal). The public address is firewalled to Google's probers only, so
 // a public healthCheckUrl marks every relay unavailable and empties the pool.
+//
+// Read from the RESERVED address, never from the live instance. Reading the instance captured an
+// EPHEMERAL ip that a MIG replacement moves (observed 10.10.0.14 -> 10.10.0.27): the manifest then
+// pointed at an address nothing answered on, every directory's health check failed, the pool
+// emptied, and sessions returned `relay_unavailable` until someone re-ran this script. The reserved
+// address is pinned to the instance in node-relay.tf, so a replacement cannot invalidate it.
 const relayPrivateIp = gcloud([
-  "compute", "instances", "list", "--filter", `name~^cello-${RELAY_ID}`,
-  "--format=value(networkInterfaces[0].networkIP)",
-]).split("\n")[0].trim();
+  "compute", "addresses", "describe", `cello-${RELAY_ID}-internal`,
+  "--region", "us-east1", "--format=value(address)",
+]);
 
 if (!/^[0-9a-f]{64}$/i.test(relayPubkey)) throw new Error("relay pubkey is not 32-byte hex");
 if (!relayPeerId.startsWith("12D3Koo")) throw new Error(`unexpected relay peer id: ${relayPeerId}`);
 if (!relayPublicIp) throw new Error("relay has no static address — has terraform applied?");
-if (!relayPrivateIp) throw new Error("relay instance not found / has no internal IP");
+if (!/^\d+\.\d+\.\d+\.\d+$/.test(relayPrivateIp)) throw new Error(`reserved internal address for ${RELAY_ID} not found — has terraform applied? got: ${relayPrivateIp}`);
 
 const relays = [
   {

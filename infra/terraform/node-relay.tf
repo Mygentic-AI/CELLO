@@ -147,6 +147,28 @@ resource "google_secret_manager_secret_iam_member" "relay" {
 
 # ── Network ──────────────────────────────────────────────────────────────────────────────────
 
+# The relay's VPC-INTERNAL address, pinned.
+#
+# Directories health-check each relay over the VPC (the PUBLIC health port is firewalled to Google's
+# probers only), so the manifest's healthCheckUrl must name an internal address. An EPHEMERAL one is
+# a trap: a MIG instance replacement moves it (observed 10.10.0.14 -> 10.10.0.27), every directory's
+# health check then fails, the relay pool empties, and every session returns `relay_unavailable`
+# until someone re-runs the manifest publisher. Pinning it makes the published value un-stale-able.
+resource "google_compute_address" "relay_internal" {
+  for_each     = var.relay_nodes
+  name         = "cello-${each.value.node_id}-internal"
+  project      = var.project_id
+  region       = each.key
+  subnetwork   = google_compute_subnetwork.regional[each.key].id
+  address_type = "INTERNAL"
+  purpose      = "GCE_ENDPOINT"
+
+  # Releasing it reintroduces exactly the drift this resource exists to prevent.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 resource "google_compute_address" "relay" {
   for_each = var.relay_nodes
   name     = "cello-${each.value.node_id}"
@@ -268,6 +290,7 @@ resource "google_compute_instance_template" "relay" {
 
   network_interface {
     subnetwork = google_compute_subnetwork.regional[each.key].id
+    network_ip = google_compute_address.relay_internal[each.key].address
     access_config {
       nat_ip = google_compute_address.relay[each.key].address
     }
@@ -347,4 +370,9 @@ resource "google_compute_instance_group_manager" "relay" {
 output "relay_node_addresses" {
   description = "Public address of each relay — goes into the signed relay pool manifest."
   value       = { for k, v in var.relay_nodes : v.node_id => google_compute_address.relay[k].address }
+}
+
+output "relay_node_internal_addresses" {
+  description = "Pinned VPC-internal address of each relay — the healthCheckUrl the directories probe."
+  value       = { for k, v in var.relay_nodes : v.node_id => google_compute_address.relay_internal[k].address }
 }
