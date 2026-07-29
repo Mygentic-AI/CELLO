@@ -3178,3 +3178,67 @@ platform limit is ~104. I recorded this in Entry 25 this morning and walked into
 evening. `/tmp` is short enough but macOS cleaned it mid-session and destroyed the agents' databases.
 The rig now lives at `~/.cellorig` — short AND durable. Both properties are required and neither
 `/tmp` nor the scratchpad has both.
+
+---
+
+## Entry 52 — 2026-07-29 — SEAL ROOT CAUSE: Fix #1 was applied to one of the two paths that submit seal leaves
+
+The instrumentation added in Entry 51's "next probe" paid off on the first run. Root cause is
+proven end to end, to the millisecond, and reproduced twice.
+
+### The trace
+
+```
+18:41:56.555  CLIENT     session.seal.leaf.submitted   + session.seal.autoacknowledged
+18:41:56.612  DIRECTORY  seal.certificate.legibility.built              (+57ms)
+18:41:56.615  DIRECTORY  seal.certificate.deferred  initiator_stream_absent   (+60ms)
+18:42:01.529  CLIENT     session.seal.broker.reconnected  gcp-euw1     (+4.97s — TOO LATE)
+```
+
+Earlier run, same shape, 7.3s late. The new `seal.certificate.deferred` event is what made this
+legible: before it, the directory's failure branch was a bare `enqueueNotification` with no log.
+
+### The chain
+
+1. B closes. The directory asks A (the initiator) to AUTO-ACKNOWLEDGE.
+2. A's auto-ack path calls `submitSealLeaf` **directly** —
+   `session-node-manager.ts:3286`: `void this.submitSealLeaf(agentName, sessionId, correlationId)`
+   — with no visiting connection to the broker, and fire-and-forget.
+3. The directory acts on that leaf within 60ms, builds the certificate, and goes to push
+   `seal_verified` to the initiator. `#streams.get(initiatorHex)` is **undefined**: A reached the
+   broker over a VISITING connection it released after session setup.
+4. The frame is ENQUEUED instead of sent. The directory then blocks in `#pendingFrostSeals` waiting
+   for a co-signature it has just declined to ask for.
+5. ~5 seconds later A's own explicit close runs, and THAT path does re-open the broker connection
+   (`session.seal.broker.reconnected`) — too late; the frame is already in the queue.
+6. Both sides wait out their windows. The client reports `seal_unilateral_timeout`, naming a
+   directory verification that never ran.
+
+### The defect in one sentence
+
+`close-session-handler.ts` carries "Fix #1 (cross-node seal-liveness)", which re-opens a transient
+visiting connection to the broker for the duration of the seal — **and it was applied only to the
+explicit-close path.** The auto-acknowledge path submits a seal leaf over a connection that does not
+exist, and it is the path that fires FIRST whenever the counterparty closes first.
+
+That is why sealing is intermittent rather than broken: whoever closes second takes the auto-ack
+path and loses. The two successes earlier today were the orderings where the initiator's connection
+happened to still be up.
+
+### Why it took a full day
+
+Every layer reported success about something adjacent to the thing that failed:
+- the client's `seal_unilateral_timeout` names directory verification, which never ran
+- the directory logged `legibility.built` and then nothing at all
+- the auto-ack path `void`s its submission, so nothing awaits or reports it
+- and the deferral branch — the actual failure — had no log whatsoever
+
+Four retractions came out of that fog (enrollment, profile cache, session divergence, and Entry 49's
+`resolvePrimaryPubkey`). Every one was a mechanism I already knew, reached for because it resembled
+the symptom. The thing that finally worked was adding one log at the exact point where two
+components disagree, and it took ten minutes.
+
+### Fix
+
+Apply Fix #1 to the auto-acknowledge path: ensure the broker visiting connection exists BEFORE
+submitting the seal leaf, not after. Next entry.
