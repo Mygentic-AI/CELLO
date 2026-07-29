@@ -846,3 +846,43 @@ where the next reader would have inherited it as settled.
 **Next step is evidence, not a fix:** a fresh daemon, one message, and an inspection that never
 opens the store through the operator surface, so the reader is ruled in or out by construction
 rather than by argument.
+
+---
+
+## 2026-07-29 — Entry C14: the unlink REPRODUCES in the real-daemon shape. My falsification was too weak.
+
+Ran the real thing: the shipped `cello-daemon` binary against a throwaway `CELLO_DIR`, its own
+spawned sidecar, no injection.
+
+```
+A. after boot, files:                          gateway.db, gateway.db-shm, gateway.db-wal
+B. screened via the sidecar socket -> redact   gateway.db, gateway.db-shm, gateway.db-wal
+C. records visible without the operator surface: 1
+D. files after that read:                      gateway.db          <-- -wal and -shm GONE
+```
+
+**Line D reproduces the unlink**, in the shape that matters, and my forked-child test in Entry C13
+did not. So C13's falsification was too weak, not decisive: the child there sat idle, and SQLite's
+behaviour on close depends on the other connection's lock state. **Entry C13 was right that I had
+narrated a hypothesis as a finding; it was wrong to conclude the hypothesis was dead.** Both
+corrections stand — the process error was real, and so is the mechanism it was attached to, at
+least in part.
+
+**What C14 adds as established:**
+- A reader that opens and closes the store CAN unlink `-wal`/`-shm` out from under the live
+  sidecar, in the real-daemon configuration.
+- Records written through the sidecar socket ARE visible before that happens (count 1 at line C).
+- **The daemon carries no in-process redaction** — `grep` over the built `core/daemon/dist` and the
+  connect tarball finds no `OutboundScreener`/`redactSecrets`. So production's redaction can only
+  have come from the sidecar, which means the sidecar screened that message and should have
+  recorded it.
+
+**The one test left, and it is decisive:** after the unlink, does a subsequent sidecar write become
+invisible to a fresh reader? If yes, the chain is complete — reader unlinks the WAL, sidecar keeps
+writing into the orphaned file, every later record is lost, which is exactly production's zero rows
+after a proven redaction. If no, something else eats the rows and the unlink is a side-show.
+
+**Do not fix before running it.** The candidate fixes point in opposite directions depending on the
+answer: hold a long-lived daemon handle (if the open/close cycle is the trigger) versus something
+about how the sidecar's connection recovers (if writes survive the unlink). Choosing between them by
+argument is how the last two hours went.
