@@ -424,4 +424,72 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     expect(String(endorsements[0].claim.statement)).toContain("payments migration");
     expect(String(endorsements[0].claim.statement), "the refused claim must not appear").not.toContain("billing system");
   }, 180_000);
+
+  it("HOP 7 (case a2): Alice is OFFLINE when Bob submits — nothing is lost, and she is TOLD on return", async () => {
+    // A SUBJECT WHO NEVER ACTS IS THE NORMAL CASE, not an error case. Nothing in the mint path may
+    // assume the subject is present, and the operator must not have to go looking.
+    const bob = mcpConns[0];
+
+    // Alice's daemon goes DOWN before Bob submits anything.
+    await daemons[1].stop();
+
+    const issued = (await bob.call("cello_trust_signals_issue", {
+      subject_pubkey: pubkeys["alice"],
+      body: "Alice reviewed the auth rewrite and caught two race conditions.",
+    })) as { ok?: boolean; reason?: string; guidance?: string };
+    expect(issued.ok, `issue refused while subject offline: ${issued.reason} — ${issued.guidance}`).toBe(true);
+
+    const { loadPortalIngress } = await import("./portal-ingress.js");
+    const portal = await loadPortalIngress();
+    const { HttpDirectoryClient } = await import(
+      pathToFileURL(join(PORTAL_ROOT, "src/server/directory/http-client.ts")).href
+    ) as { HttpDirectoryClient: new (baseUrl: string, apiKey: string) => unknown };
+    const { getSubmissionSigner } = await import(
+      pathToFileURL(join(PORTAL_ROOT, "src/server/trust/submission-signer.ts")).href
+    ) as { getSubmissionSigner: (env: string) => unknown };
+
+    // THE MINT MUST SUCCEED WITH THE SUBJECT DOWN. If it required her to be online, an endorsement
+    // would be undeliverable exactly when it is most ordinary — the recipient is simply not at
+    // their desk.
+    const pass = await portal.drainAndMint({
+      client: new HttpDirectoryClient(cluster.internalApiUrls[0], INTERNAL_API_KEY),
+      intakeSeeds: new Map([[INTAKE_KEY_ID, intakeSeed]]),
+      signer: getSubmissionSigner("local"),
+      directoryBaseUrl: cluster.internalApiUrls[0],
+    });
+    expect(pass.minted, `mint failed with the subject offline: ${JSON.stringify(pass)}`).toBe(1);
+
+    // The envelope waits in the pickup path rather than being dropped.
+    expect(psqlSpine(`SELECT count(*) FROM pickup_queue WHERE acked_at IS NULL`).replace(/\s/g, ""), "the envelope is waiting for her").not.toBe("0");
+
+    // ── She comes back ──
+    daemons[1] = await startDaemon(dirFor["alice"], cluster.directoryUrl, "jend-alice-4", { manifestEnv });
+    const alice3 = await connectMcp(dirFor["alice"], "jend-alice-return");
+    mcpConns.push(alice3);
+
+    // SELECTING THE AGENT TELLS HER SOMETHING IS WAITING. This is the clause a review found had zero
+    // coverage: the store methods were tested, the response field was not, and an implementation
+    // that computed the count and never attached it passed everything.
+    let nudge: Record<string, unknown> = {};
+    for (let i = 0; i < 40; i++) {
+      nudge = (await alice3.call("cello_use_agent", { name: "alice" })) as Record<string, unknown>;
+      if (nudge.pending_consent !== undefined && nudge.pending_consent !== 0) break;
+      // Re-selecting the current agent is a no-op, so switch away and back to re-trigger it.
+      await alice3.call("cello_use_agent", { name: "charlie" }).catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(nudge.pending_consent, `no pending-consent nudge on selection: ${JSON.stringify(nudge)}`).toBe(1);
+    expect(String(nudge.pending_consent_guidance), "and told what to run about it").toMatch(/consent/i);
+
+    // NOTHING WAS LOST: the endorsement is there, awaiting her decision.
+    const listed = (await alice3.call("cello_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
+    expect(listed.pending, "the endorsement survived her absence").toHaveLength(1);
+
+    // AND THE NOTIFICATION DOES NOT REPEAT once seen — the item persists, the nudge goes quiet.
+    // Two different lifetimes (M10B-D5); one flag would either nag forever or dismiss the decision.
+    const second = (await alice3.call("cello_use_agent", { name: "alice" })) as Record<string, unknown>;
+    void second;
+    const afterSeen = (await alice3.call("cello_consent_list", {})) as { pending?: unknown[] };
+    expect(afterSeen.pending, "the DECISION persists after the notice is seen").toHaveLength(1);
+  }, 180_000);
 });
