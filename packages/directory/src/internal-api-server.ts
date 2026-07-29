@@ -665,6 +665,62 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
     }
 
     // ── M10B: which of THESE hashes are still active? ───────────────────────────────────────────
+    // ── M10B / DOD-END-DELIVER-1: resolve an agent SUBJECT to its delivery identity ──────────────
+    //
+    // A client-supplied endorsement names its subject by K_LOCAL PUBKEY — the only identifier a
+    // contact actually holds, and the only one the submission wire carries (no account identifier
+    // ever crosses it, deliberately). But `/internal/signal/deliver` queues a sealed copy per
+    // `agent_id`. Without this resolution the portal can NOTARIZE an endorsement about Alice and
+    // then have no way to reach her: minted, permanent, and invisible to its own subject.
+    //
+    // AUTHENTICATED, and not merely for consistency. This links a pubkey seen on the wire to an
+    // ACCOUNT, which is exactly the correlation the directory's no-PII posture withholds from
+    // everyone except the portal.
+    if (req.method === "POST" && req.url === "/internal/agent-by-pubkey") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!internalApiKey || providedKey !== internalApiKey) {
+        logger.warn("signal.deliver.auth.failed", { remoteAddr: req.socket.remoteAddress, owningNodeId });
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      let pubkey: string;
+      try {
+        const parsed = JSON.parse((await readBody(req)).toString("utf8")) as { k_local_pubkey?: unknown };
+        // LOWERCASED before the shape check, because hex case must never decide deliverability: a
+        // subject arriving upper-cased would resolve to found:false and the endorsement would be
+        // minted and never delivered, with nothing anywhere reporting a problem.
+        const raw = typeof parsed.k_local_pubkey === "string" ? parsed.k_local_pubkey.toLowerCase() : "";
+        if (!/^[0-9a-f]{64}$/.test(raw)) throw new Error("k_local_pubkey must be 64 hex characters");
+        pubkey = raw;
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "malformed_request", detail: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
+      try {
+        const { rows } = await pool.query<{ agent_id: string | null; account_id: string | null }>(
+          `SELECT agent_id, account_id FROM agent_profiles WHERE lower(k_local_pubkey) = $1 LIMIT 1`,
+          [pubkey],
+        );
+        // NOT a 404 for an unknown pubkey. "This agent is not registered here" is a legitimate
+        // answer, not a failure: a 404 is indistinguishable from a routing mistake, and an error
+        // would make the portal's drain loop treat an ordinary unknown subject as an outage.
+        if (rows.length === 0 || !rows[0].agent_id) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ found: false, agent_id: null, account_id: null }));
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ found: true, agent_id: rows[0].agent_id, account_id: rows[0].account_id }));
+      } catch (err) {
+        logger.error("signal.deliver.resolve.failed", { error: err instanceof Error ? err.message : String(err), owningNodeId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "resolve failed" }));
+      }
+      return;
+    }
+
     // ── M10B / DOD-END-INGRESS-1: the portal drains the sealed submission queue ──────────────────
     //
     // TWO ROUTES, and the split IS the exactly-once property. `drain` READS; it does not delete. A
