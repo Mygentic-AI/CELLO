@@ -1449,3 +1449,64 @@ Two things remain, and they are independent:
 
 Neither is a config problem at this point; both are protocol-level and want a fresh session rather
 than hour eighteen of this one.
+
+---
+
+## Entry 27 — 2026-07-29 — The AE failure is NOT the handshake; it dies at `ae_state`
+
+Adding the dropped `detail` field changed the diagnosis completely, in one deploy.
+
+**Before** (all the log carried): `reason: "protocol_error"` — the exit-point class. Three nodes,
+twelve failures, one generic word, nothing actionable.
+
+**After**:
+
+```
+{"event":"antientropy.peer.auth_failed","peerNodeId":"gcp-use1",
+ "reason":"protocol_error","detail":"wire closed while waiting for ae_state"}
+```
+
+So the §1c mutual handshake **completes** — `ae_hello` → `ae_auth_b` → `ae_auth_a` all exchanged,
+signatures verified, channel bound. The round then dies waiting for `ae_state`, the digest
+advertisement that opens reconciliation. Entry 26 called this a handshake failure; it is not.
+
+That reframes it entirely: manifest-pinned peer authentication works across regions in production.
+What fails is the first round frame after it.
+
+### Where to start next session
+
+`ae-channel.ts`, the transition from handshake into `rounds` — the dialer builds a
+`RemoteStoreView` and requests state; the responder should answer `ae_state` (one digest per
+table). The responder's own log for these connections shows `wire closed while waiting for
+ae_auth_a`, which is a DIFFERENT directed channel (every node dials both peers, so there are six),
+not the other half of the same one. Pair them by `correlationId` before drawing conclusions.
+
+The local convergence enforcer exercises this exact path and passes, so whatever differs is not in
+the frame logic itself — candidates are the WS transport's framing under real latency, an
+`maxInboundStreams` interaction, or a timeout the loopback never reaches.
+
+### Also found: the migration guard misfires, twice now
+
+The enforcer currently fails to start its directories:
+
+```
+Successfully applied 50 migrations to schema "public", now at version v50   (×3, all DBs)
+{"event":"migration.out.of.date","currentVersion":49,"requiredVersion":50}
+```
+
+Verified independently — `cello_spine_0` holds `count=50, max(installed_rank)=50`. The guard
+compares `MAX(installed_rank)` against the migration FILE COUNT, and those are not the same
+quantity: `installed_rank` is a per-database insertion sequence, not a version. This is the second
+misfire from the same comparison (the first surfaced as a permissions denial reported as a stale
+schema, fixed in V50/Entry 24's commit).
+
+**The guard should compare the highest applied VERSION to the highest migration file version**, not
+a row counter to a file count. Deliberately NOT changed at hour eighteen of this session: it gates
+every node's startup on every environment, and getting it wrong strands the whole consortium. It is
+the first thing to fix next session, and it currently blocks the local AE enforcer from running at
+all.
+
+### State
+
+All three directories and the relay are healthy and serving on `m12-64ed4da5`. Nothing is merged;
+everything is on `m12/node-dir-gcp` (and `m12/ae-client` for the CLI capability fix).
