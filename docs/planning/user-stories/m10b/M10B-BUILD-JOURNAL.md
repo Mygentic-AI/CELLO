@@ -1574,3 +1574,44 @@ reader will be looking at when they wonder why the behavior differs from V46's p
 *fix* was wrong rather than its diagnosis. The diagnosis (D-12r4 does break V46's stated monotonicity,
 and that must be documented) is correct and stands. Reviewers are held to the same standard as the
 work: verify the proposed remedy, not just the finding.
+
+---
+
+## Entry 18 — fifth review pass DIED on the session quota — NO VERDICT — 2026-07-29 (~00:5x)
+
+The fifth `cello-unit-reviewer` dispatch terminated early: *"Agent terminated early due to an API
+error: You've hit your session limit · resets 1:30am."* It got as far as *"I'll read the three commits
+and the current DoD/journal state"* and produced nothing else.
+
+**A killed reviewer is NOT a pass.** Recording this explicitly because the failure mode is obvious and
+tempting: five dispatches, four verdicts, and a fifth that "didn't find anything" — except it didn't
+look. `DOD-END-ARCH-1` therefore stays **🟡 on four verdicts, not five**, and the flip question is
+**unanswered**, not answered favourably.
+
+**State for whoever picks this up (a later cron firing, or Andre):**
+- Every finding from all four completed passes has a recorded fix in the DoD. The fourth reviewer's own
+  closing read was *"none of that needs a fifth measurement pass. It is a single editing session, and
+  the only one with real design content is F4."* **That editing session is done** — commits `1921f5da`,
+  `83ecf62b`, `a555ad47`, `ba971512`.
+- So the fifth pass was **confirmation, not discovery**. Re-dispatch it after the quota resets; the
+  brief is in the session history and asks it to rule CLOSED/NOT-CLOSED on each fourth-pass finding
+  plus the one question that matters: *is this good enough to build against* — with each remaining item
+  labelled DESIGN gap (settle before code) or IMPLEMENTATION detail (settle in the unit).
+- **Two things still need Andre**, unchanged: the parked `DOD-END-DISCOVER-1` policy question (the
+  endorsement graph is readable in plaintext by any node operator once minted), and the fact that
+  nothing has been pushed — 35 commits sit on local `main`.
+
+**Honest assessment of the night, since this is a natural place to make one.** The determination
+consumed the entire session and never flipped. That is not obviously wrong — it caught, before any code
+existed: a revoke predicate that would have silently made every withdrawal inert; a consent default
+that would have flipped refused endorsements back to accepted on daemon restart; a return path that was
+unbuildable at both ends; a primary key that could have wedged all federation; and a portal route that
+would have let anyone permanently burn someone else's agent. Any one of those found *after*
+implementation costs more than this night did.
+
+But the counter-case deserves stating rather than being argued away: **five review passes on a
+document is a lot of passes**, and the last one was confirmation. If the sixth also finds only editing
+errors, the right call is to flip on the fourth reviewer's standard — *"would a competent coder
+following this build the right thing, with the remaining unknowns named as unknowns"* — and let the
+per-unit reviews catch the rest, which is what they are for. Determinations are supposed to converge,
+not to be polished indefinitely; the launch-triage lens applies to process too.
