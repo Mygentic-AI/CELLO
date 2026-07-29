@@ -313,8 +313,12 @@ the additions M10B is accountable for.
   > itself and now load-bearing, since it makes "first writer of an id wins" a database property rather
   > than an `ON CONFLICT` intention; retry-is-a-strict-no-op under mismatched bytes; oldest-first drain;
   > intake-keys-in-use (rotation retention's input); idempotent delete; sweep taking only aged rows.
-  > **🟡 not ✅ — the deploy is owed**, and `OpsAgentExpectedMigrationVersion` goes to the final number
-  > once the M12 branch's numbering settles. — 🟡
+  > **✅ DEPLOYED 2026-07-29 ~10:05 UTC** — V51 live in all three regions, verified against each
+  > regional database (`max(version)=54`, `bool_and(success)=true`), not inferred from pipeline
+  > status. `OpsAgentExpectedMigrationVersion` needs no edit: `deploy.sh` computes it dynamically
+  > from the highest migration file and overwrites SSM, so the CFN default is ignored (verified in
+  > the script). Migration numbering with the M12 branch is settled — they own V49/V50, this branch
+  > owns V51–V54, V55 next free. — ✅
 - **DOD-END-INGRESS-1** — **the portal drains and mints.** The third arm of the portal's mint function:
   drain the queue, open the seal, **verify the submission signature and derive `issuer_pubkey` FROM it**
   — never from a request field (`DOD-END-INV-ATTRIBUTION`) — then scan, compose, and hand off to
@@ -411,7 +415,16 @@ the additions M10B is accountable for.
   nothing. Bob may then issue a corrected endorsement — re-issuance after refusal is explicitly allowed
   (and counts against `DOD-END-QUOTA-1`). The message is operator-authored free text from the
   *subject*, so it is scanned on the same path as the endorsement body — it is the same injection
-  surface pointed the other way. — ❌
+  surface pointed the other way.
+  > **BUILT 2026-07-29 — the consent STATE and its enforcement.** `consent_state` on
+  > `wallet_trust_signals` via a birth-gated migration on the `contacts-tier` pattern (no DEFAULT,
+  > ALTER+backfill in one transaction, RETHROW) — deliberately OUTSIDE `ensureTrustSignalSchema`'s
+  > bare `catch {}`, which runs on every `startDaemon` and would otherwise flip a REFUSED endorsement
+  > back to `accepted` on restart. Presentability is `consent_state = 'accepted'` in the SQL of
+  > `listAllActive`, so `include` cannot route around it and anything not exactly `accepted` fails
+  > closed. Keys on `issuer_kind`, never on type. 13 tests. **STAGED, and stated rather than
+  > narrowed:** the refusal MESSAGE (`M10B-D4`) and the operator verbs ride
+  > `DOD-END-SURFACE-1`. — 🟡 state built, surface owed
 - **DOD-END-DISCOVER-1** — non-discoverability, proven by a negative test (D-24): no path lets any third
   party enumerate, count, or infer endorsements about a subject who has not presented them. The
   directory's fingerprint is useless without the text, and only the subject holds the text. Andre,
@@ -518,7 +531,13 @@ the additions M10B is accountable for.
   > counterfactual, including the one that would have made the fix a NO-OP. 12 view tests + 5
   > end-to-end through the real mint→revoke→status path. V46 is NOT amended (Entry 17); the
   > monotonicity statement is in V53's header. **Open, and named:** `revoker_signature` is AUDIT
-  > EVIDENCE — nothing verifies it, so the compromised-node case stays open. → **Entry 28**. — 🟡
+  > EVIDENCE — nothing verifies it, so the compromised-node case stays open. → **Entries 28, 30, 31**.
+  > **✅ DEPLOYED 2026-07-29 ~10:05 UTC** — V53+V54 live in all three regions, `success: true`,
+  > V53 checksum converged at `-1956862388`, `/manifest` 200 everywhere. **Reviewed; three defects
+  > fixed**, the worst being F1: a "legacy tombstone" branch that defeated the whole fix and which my
+  > own test had pinned as correct. Still open and named on the line, not silently closed: F2's
+  > `issued_at`-through-a-queue problem, F3's silent `MIN(issuer_kind)` disagreement, F8's
+  > replication column-skew window. — ✅
 - **DOD-END-WITHDRAW-1** — withdrawal takes effect everywhere, including for recipients already holding a
   copy (D-19). The endorsement stops being presentable, and any recipient holding it sees it marked
   withdrawn on next check. Rides `DOD-VERIFY-1`'s existing TTL-re-check-on-use machinery (spec §14.7) —
