@@ -260,6 +260,28 @@ export async function submitSignal(args: {
     } catch (err) {
       throw new SubmitRejected("envelope_invalid", err instanceof Error ? err.message : String(err));
     }
+    // M10B / DOD-END-REVOKE-2 (review F5) — an AGENT issuer's pubkey must be a FULL 32-byte key.
+    //
+    // `toPreimage` already enforces lowercase-hex-with-even-length, which is what makes the HASH
+    // agree across parties. It does NOT pin the LENGTH, and for an agent issuer that gap is not
+    // cosmetic: the revoke authority check is an exact string comparison between this value and a
+    // `revoker_pubkey` that IS validated as 64 lowercase hex. A short-but-well-formed
+    // `issuer_pubkey` therefore notarizes cleanly and can then never match any revoker — the record
+    // is PERMANENTLY UNREVOCABLE and the issuer's own withdrawal is silently inert, returning
+    // success. Both ends of that comparison have to be drawn from the same alphabet.
+    //
+    // Only for `agent`: a portal or directory record is judged by the institutional escape, which
+    // does not compare pubkeys at all, and constraining their key format is not this line's call.
+    // NOT normalized on read — the value is inside the hash, so repairing it there would break the
+    // one property the preimage exists to provide.
+    if (envelope.issuer_kind === "agent" && !/^[0-9a-f]{64}$/.test(envelope.issuer_pubkey)) {
+      throw new SubmitRejected(
+        "envelope_invalid",
+        `an agent issuer_pubkey must be a 32-byte Ed25519 key as 64 lowercase hex chars, got ` +
+        `${JSON.stringify(envelope.issuer_pubkey)} — a shorter value notarizes but can never be revoked`,
+      );
+    }
+
     if (derived !== req.signal_hash) {
       // The submitter's claim and the bytes disagree. This is the check that makes "notarized"
       // mean anything.

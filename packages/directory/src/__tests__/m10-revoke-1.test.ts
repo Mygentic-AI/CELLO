@@ -321,4 +321,24 @@ describeIntegration("DOD-REVOKE-1 — revocation through the chokepoint", () => 
     });
 
   });
+
+  // ── Review F5 — an agent issuer_pubkey that cannot be revoked must not notarize at all ─────────
+  it("REFUSES an agent-issued envelope whose issuer_pubkey is not a full 32-byte key", async () => {
+    // toPreimage enforces lowercase-hex-even-length (what makes the hash agree) but not LENGTH. The
+    // revoke authority check compares this exactly against a revoker_pubkey validated as 64 hex, so
+    // a short-but-well-formed key notarizes cleanly and is then PERMANENTLY UNREVOCABLE — the
+    // issuer's own withdrawal silently inert, returning success. Refused at submit instead.
+    await expect(mint(envelope({ issuer_kind: "agent", issuer_pubkey: "abcd" })))
+      .rejects.toMatchObject({ reason: "envelope_invalid" });
+  });
+
+  it("...and a well-formed 64-hex agent key still notarizes", async () => {
+    // The control: without it, "refuses agent keys" would pass an implementation that refuses ALL of
+    // them, which would break the milestone rather than protect it.
+    const [, bobPub] = await (async (): Promise<[Signer, string]> => {
+      const kp = generateKeypair(); return [kp, hex(await kp.getPublicKey())];
+    })();
+    const h = await mint(envelope({ issuer_kind: "agent", issuer_pubkey: bobPub }));
+    expect(await effective(h)).toBe("active");
+  });
 });
