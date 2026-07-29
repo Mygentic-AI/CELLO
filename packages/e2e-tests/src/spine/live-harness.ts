@@ -238,11 +238,29 @@ export function listenMultiaddr(proc: Proc, opts: { ws?: boolean } = {}): string
 // (DO/pg_roles), so a fresh DB in the existing cluster migrates cleanly. This never
 // pushes anything anywhere; images are cached locally.
 const SPINE_DB = "cello_spine";
-export const DATABASE_URL = `postgresql://postgres:dev@localhost:5433/${SPINE_DB}`;
+/**
+ * Postgres coordinates come from DATABASE_URL when set, so the harness connects to whichever
+ * instance this checkout brought up.
+ *
+ * Hardcoding 5433 meant a second worktree PROVISIONED its spine databases on its own Postgres
+ * (docker compose honours COMPOSE_FILE) and then pointed the directory processes at the OTHER
+ * checkout's — so a directory counted THIS branch's migration files and read THAT branch's applied
+ * history. It surfaced as `migration.out.of.date currentVersion 49 requiredVersion 50` against
+ * databases that were verifiably at 50, which reads exactly like a broken startup guard. The guard
+ * was right; the harness was pointing it at the wrong server.
+ */
+const PG_BASE = process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
+export const PG_HOST_PORT = (() => {
+  const u = new URL(PG_BASE);
+  return `${u.hostname}:${u.port || "5432"}`;
+})();
+export const DATABASE_URL = `postgresql://postgres:dev@${PG_HOST_PORT}/${SPINE_DB}`;
 
 /** The libpq URL for a harness-owned spine database (one per sovereign directory node). */
 export function spineDbUrl(dbName: string): string {
-  return `postgresql://postgres:dev@localhost:5433/${dbName}`;
+  // Same server the harness provisions on — see PG_HOST_PORT. A hardcoded port here pointed the
+  // per-node directories at a different checkout's Postgres.
+  return `postgresql://postgres:dev@${PG_HOST_PORT}/${dbName}`;
 }
 
 /**
