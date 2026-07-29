@@ -1348,6 +1348,26 @@ distribution and rotation question opened by `M10B-D2`, the queue's ack/poison a
 and how an account subject is named at intake. None of these blocks the milestone; all are the
 determination's job.
 
+### WHICH AGENT MAY SPEAK FOR AN ACCOUNT — now load-bearing, raised 2026-07-29 (SURFACE-1 review F7)
+
+An **account-subject** pending item is visible to EVERY agent on a daemon: `listPendingConsent` scopes
+with `(subject_kind <> 'agent' OR lower(subject) = ?)`, deliberately, because the item is about the
+account rather than about one agent. Two consequences surfaced once the consent surface existed:
+
+1. **Any agent can refuse it.** Defensible — it is the account's own decision — but unruled.
+2. **The refusal MESSAGE would be signed with that agent's K_local**, so the issuer would receive a
+   signed statement from an agent that was not the subject of anything. Signing is not the place to
+   guess, so `cello_consent_refuse` currently **refuses the message** for account-subject items
+   (`account_subject_message_unsupported`) while the refusal itself stands. Named, not silent.
+3. **The nudge can be silenced for the wrong agent.** One agent listing pending items marks the
+   account-subject rows notified for all of them, so another agent may never be told. That is the
+   silent-death-of-an-endorsement failure the nudge exists to prevent, and it fires on an ordinary
+   two-agent daemon. Fixing it properly means per-agent notification state (a
+   `consent_notifications(agent_pubkey, signal_hash)` table), which is a schema change.
+
+This is not a fork needing Andre — it needs a rule, and the rule belongs with `DOD-END-ARCH-1`'s
+"how an account subject is named at intake", which is the same question from the other end.
+
 ## Parked
 
 - **PSI and endorser-overlap** (spec §11) — construction unchosen; both applications post-v1. The
