@@ -1615,3 +1615,37 @@ errors, the right call is to flip on the fourth reviewer's standard — *"would 
 following this build the right thing, with the remaining unknowns named as unknowns"* — and let the
 per-unit reviews catch the rest, which is what they are for. Determinations are supposed to converge,
 not to be polished indefinitely; the launch-triage lens applies to process too.
+
+---
+
+## Entry 19 — `DOD-END-SCOPE-FIX-1`: the fixture trap, root-caused; the fix is three lines — 2026-07-29
+
+Traced the fourth review's HIGH-4 fixture trap to its source before writing any test, so the
+implementing session starts from evidence rather than a warning.
+
+**The trap, confirmed.** `seedAgents` (`__tests__/helpers/seed-agents.ts:35–59`) returns
+**`name → agent_id`** — a UUID from `store.createAgent`. `trust-signal-store.test.ts` then uses those
+UUIDs as `subject` for `subjectKind: "agent"` rows (`:150–151`). In production `subject` holds the
+**K_local pubkey hex** (the directory joins `ap.k_local_pubkey = sr.subject`). So the fixture asserts a
+convention the wire does not use, and a scoping predicate written to match it passes green while
+matching **zero** production rows.
+
+**The fix is small, which is the good news.** `seedAgents` **already derives the real pubkey** —
+`const pubkeyHex = Buffer.from(await new InMemoryKeyProvider(seed).getPublicKey()).toString("hex")`
+(`:53`) — and stores it. It simply does not return it. So: return `name → { agentId, pubkeyHex }` (or a
+second map), and point the agent-subject fixtures at `pubkeyHex`. No new key material, no invented
+values — and the helper's own header already warns that a pubkey disagreeing with its seed *"is not a
+shortcut — it is a corrupt identity that would surface as a baffling failure much later,"* which is
+exactly the class of bug this fixture would have produced from the other direction.
+
+**Order of work for the implementing session, red-first:**
+1. Extend `seedAgents` to return the pubkey it already computes. Mechanical, no behavior change.
+2. Re-point the agent-subject fixtures in `trust-signal-store.test.ts` at `pubkeyHex`. **Expect
+   existing tests to go red here** — that redness is the defect surfacing, not a regression, and it is
+   the first honest signal that `listPresentable`'s scoping was only ever exercised against the wrong
+   key.
+3. Only then write the new scoping test against `listAllActive`, and implement.
+
+**Scope reminder:** the agent-subject half only (`M10B` fourth review F5). The account-subject half
+stays deferred behind its named prerequisite — the daemon has no `accountId` anywhere in production
+code, and inventing one is a separate decision.
