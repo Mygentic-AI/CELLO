@@ -41,6 +41,43 @@ returns `000` on a perfectly healthy node. The real client path is `http://direc
 
 ---
 
+## 🔧 MANUAL CHANGE — 2026-07-29 ~09:35 UTC: ap-northeast-1 Flyway checksum realigned (V53)
+
+**What was done, by hand, and why it is not in IaC:** a single row update on the ap-northeast-1
+directory database —
+`UPDATE flyway_schema_history SET checksum = -1956862388 WHERE version = '53' AND checksum = 824786915;`
+This is the equivalent of `flyway repair` for one row, applied via the ECS-exec `pg` technique
+(`/cello-db-query`). Nothing else was touched.
+
+**Why it was necessary — THE THREE REGIONS HAD DIVERGED.** V53 was applied during the 06:37 UTC wake
+from the image current at that moment. Between that wake and the next deploy, the file was edited (a
+review fix removing a security bypass) and pushed, so:
+
+| region | V53 checksum before | source |
+| :-- | :-- | :-- |
+| us-east-1 | `-1956862388` | original V53, applied at the wake |
+| eu-central-1 | `-1956862388` | original V53, applied at the wake |
+| **ap-northeast-1** | **`824786915`** | the EDITED V53 — it deployed after the edit was pushed |
+
+There is no single file that matches all three. `V53__signal_records_revoker_authority.sql` has been
+restored byte-identical to the originally-deployed version (verified: Flyway computes
+`-1956862388` for it locally), and the corrections moved to
+`V54__supersession_consults_effective_status.sql`. That fixes us-east-1 and eu-central-1 and would
+have **crash-looped ap-northeast-1** — a checksum mismatch aborts `docker-entrypoint.sh` under
+`set -e` before `exec node`, so the container dies at startup and the task restarts forever. The
+realignment was done while ap was still on the OLD task definition, i.e. before the new image
+reached it.
+
+**All three regions now record V51 `752698578`, V52 `-1852033893`, V53 `-1956862388`.**
+
+**THE RULE THIS COST — never edit an applied migration.** The window between "written" and "applied"
+is not safe either: here it was under an hour, and a wake closed it without anyone deciding to
+deploy. Before pushing a migration change, rebuild the migration set against a scratch database and
+compare Flyway's own checksum to what each region has recorded — the comparison is cheap and it is
+the only thing that catches a divergence like this.
+
+---
+
 ## Hibernate / wake — standing behaviour
 
 Cycle timing: **~15–18 min** for a wake, all 3 regions in parallel. RDS reaching `available` is the
