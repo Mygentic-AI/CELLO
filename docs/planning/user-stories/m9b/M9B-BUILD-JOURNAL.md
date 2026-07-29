@@ -940,3 +940,70 @@ npm dist-tag add @cello-protocol/protocol-types@0.0.32 latest
 Then `npm i -g @cello-protocol/cli@latest @cello-protocol/connect@latest`, `cello logout && cello
 login`, reconnect the MCP. **The proof that it took:** send one message, then `cello policy log` —
 it should show a row. Before this fix it showed nothing, forever, after the first read.
+
+---
+
+## 2026-07-29 — Entry C16: the first live false positive, and the affordance gap behind it
+
+Reported by a coworker's agent hours after enforcing went live: *"the gateway flagged an issue number
+as pii:phone and refused my message twice, then refused to let me override it myself. Correct
+behavior, but any agent citing an issue number or date will hit it."*
+
+Two separate defects in one report, and the second is the more important one.
+
+### 1. A date is not a phone number (`225bb14`)
+
+`PHONE_RE` is `/\+?\d[\d\s().-]{7,}\d/g` — `-` sits inside the character class, so an ISO date
+matches. Reproduced before touching anything:
+
+```
+FLAGGED  "tracked in 2026-07-29 planning"   -> 2026-07-29
+FLAGGED  "PR #12345 closed 2026-07-29"      -> 2026-07-29
+ok       "see issue #1234 for details"
+```
+
+PII is a WARN disposition, meaning **NOT SENT** until resolved — so any agent citing a date was
+blocked. Agents cite dates constantly, including in our own log lines.
+
+Excluded only shapes that CANNOT be a phone: ISO 8601 dates/datetimes, and digit runs longer than
+15 (past the E.164 maximum). **Deliberately NOT excluded**, and pinned by tests: bare 11-digit runs
+(a commit number overlaps the country-code phone range) and 15-digit runs sitting exactly at the
+maximum. Weakening a real guard to fix an annoyance is the wrong trade.
+
+*My first version of that test asserted a 15-digit run should pass. The test data was wrong, not the
+rule — 15 digits is dialable. Both cases are now pinned so the boundary cannot drift.*
+
+### 2. THE CATEGORY: the agent does not know what it can do (`ea27825`)
+
+Andre: *"this is another case of this problem we often have. The agent doesn't know what it can do.
+When things are redacted, it needs to be given some information on that."*
+
+The refusal said WHAT happened and nothing about what was AVAILABLE. An agent in that position
+retries the same thing, gives up, or invents a workaround — and the operator never learns a guard
+misfired. The escape hatch existed the whole time (`SURFACE-1` shipped it); it was simply not
+discoverable from where the agent was standing.
+
+The re-warn guidance now carries three things: what the agent can do **right now** (`redact`, which
+unblocks it unaided), the exact commands the **operator** runs if the flag is wrong
+(`cello config set pii_whitelist <value>` / `cello config set autonomous_override true`), and where
+to look (`cello policy log`). The agent cannot run the loosening commands — that is the gate working
+— but it can RELAY them, and an exact command is the difference between a stuck operator and a
+two-second fix.
+
+Also: `policy` and `config` were under **Other** in `cello --help`. They now have their own
+**Security** group. Burying the one command that unblocks a misfiring guard is how an operator fails
+to find it. And internal story IDs (`DOD-M9C-SURFACE-1`) were leaking into operator-facing help —
+noise to a user, and the wrong milestone name besides.
+
+### Still owed from this report
+
+**The same gap exists on every other refusal path** — a blocked injection, a rate limit, a language
+hold. Each names what happened; none names a command. This entry fixed the one that bit someone.
+The sweep is the next unit, and it should land in the same cascade as this, not after it.
+
+### Correction to my own framing
+
+I first told Andre the agent was "stranded" and framed it as a locked door. That was wrong: he
+pointed out the CLI path exists, and it does — I built it today. The default is deliberately strict
+and unblocking is a deliberate human act. The gap was never a missing capability; it was a missing
+signpost.
