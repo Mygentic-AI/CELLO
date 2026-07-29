@@ -52,6 +52,12 @@ write_files:
       CELLO_DIRECTORY_PUBKEY=${primary_directory_pubkey}
       CELLO_DIRECTORY_PUBKEYS=${directory_pubkeys}
       CELLO_DIRECTORY_MULTIADDR=${primary_directory_multiaddr}
+      # TWO libp2p listeners, and they must not share a port. CELLO_RELAY_LISTEN_ADDR defaults to
+      # /ip4/0.0.0.0/tcp/4001 — the same port as the WS listener below — and libp2p treats a
+      # collision as fatal (EADDRINUSE, "Some configured addresses failed to be listened on").
+      # WS keeps 4001 because that is the port agents dial and the one in the advertised multiaddr
+      # and the firewall; the plain TCP listener moves to 4002 and is deliberately NOT exposed.
+      CELLO_RELAY_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4002
       CELLO_RELAY_WS_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4001/ws
       CELLO_RELAY_PUBLIC_MULTIADDR=/ip4/${public_addr}/tcp/4001/ws
       CELLO_RELAY_HEALTH_PORT=4000
