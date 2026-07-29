@@ -7,6 +7,44 @@ It is updated automatically by `infra/deploy.sh` after every successful deployme
 
 Any agent or human that deploys, modifies, or tears down infrastructure **must update this file** before closing the session. If you ran `deploy.sh`, it updated this automatically. If you made manual AWS changes, update the relevant section by hand and commit.
 
+**Hibernate/wake status is a REPLACED block, never an appended log.** There is exactly one
+"POWER STATE" section below and each cycle overwrites it. Do not add a new dated section per
+hibernate or wake — that is noise, not state. Durable lessons from a cycle go in the standing
+section that follows it, or in `infra/CLAUDE.md`.
+
+---
+
+## ⚡ POWER STATE — HIBERNATED (as of 2026-07-28 20:21 UTC)
+
+Wake in progress; this block is rewritten on completion.
+
+---
+
+## Hibernate / wake — standing behaviour
+
+Cycle timing: **~15–18 min** for a wake, all 3 regions in parallel. RDS reaching `available` is the
+long pole (~9–11 min); us-east-1 finishes last because it restores four ECS services, not two.
+A 40-min wake (2026-07-22) was an RDS outlier, not the norm.
+
+**Two `hibernate.sh` defects found and fixed 2026-07-27 — the script had been unrunnable for ~32 h:**
+- `04fe0d83` — `a7cef102` added the portal listener-rule/SNI-cert capture *above* the block that
+  assigns `portal_alb_arn`; under `set -u` that aborted every run on the first region discovered.
+  Nobody saw it because no hibernate was attempted in between. Same commit added the missing
+  `jq -c` compaction for `portal_extra_certs` — multi-line JSON breaks `--argjson`.
+- `fa227c69` — `operations.*` was never in the blackhole list. It has its own alias to the portal
+  ALB, so deleting that ALB left it answering NXDOMAIN for the whole down-window. **8** hostnames
+  are blackholed now, not 7.
+
+**The ops dashboard survives a wake with no manual redeploy** (first proven 2026-07-28): the
+`operations.*` host rule and its SNI cert are captured at hibernate and restored at wake. Consequence:
+the `wake.sh` post-wake checklist item **"0. REDEPLOY THE OPS DASHBOARD"** (~line 676) is stale and
+should be deleted.
+
+**Blackhole, not NXDOMAIN.** Every name is UPSERTed to `198.51.100.1` (TEST-NET-2) on hibernate.
+A dangling alias answers NXDOMAIN, which seeds negative caches at every resolver between client and
+Route53 and re-poisons them on wake — a documented ~50 min post-wake client outage (2026-07-24).
+A name that resolves to a dead IP is never negatively cached; connections just fail fast at TCP.
+
 ---
 
 ## 🟢 SIGN-IN LOOP CLOSED — same-origin API + host-only cookie (2026-07-28, 06:18–06:45 UTC)
@@ -108,68 +146,6 @@ because the directory container's security group is not admitted by the portal R
 waitlist Lambdas have a path. The script borrows one: it copies the deployed waitlist-auth package
 and VPC config into a throwaway Lambda, runs the statement, and deletes the function in a shell trap.
 Nothing persists — confirmed, no `cello-tmp-portal-admin-*` functions remain.
-
----
-
-## 🔴 Hibernate complete — all 3 regions down (2026-07-28, 20:13–20:21 UTC)
-
-Uptime this cycle: ~16.5 h (woken 03:51 UTC). ECS→0 (directory + relay ×3, portal, ops-agent),
-4 RDS stopped, demo EC2 stopped, 7 ALBs + 3 NAT Gateways (EIPs retained) + 3 ssmmessages endpoints
-deleted. Portal capture: 2 listener rules + 1 SNI cert.
-
-**First clean cycle with both hibernate.sh fixes in place.** All **8** hostnames blackholed to
-`198.51.100.1` — `operations.cello.mygentic.ai` included for the first time (`fa227c69`), closing
-the last NXDOMAIN hole. Previous cycle left it negatively cacheable all night.
-
-**ECS Exec unavailable while hibernated.** No AWS changes until `wake.sh --execute` has run.
-
----
-
-## 🟢 Wake complete — all 3 regions live (2026-07-28, 03:36:06–03:51:29 UTC)
-
-**Elapsed: 15 min 23 sec.** All 3 inventory diffs IDENTICAL. RDS cleared in ~9 min.
-
-**✅ THE OPS DASHBOARD SURVIVED A WAKE WITH NO MANUAL REDEPLOY — first time.** This was the first
-wake to consume the portal listener rules captured by the repaired `hibernate.sh` (`04fe0d83`).
-Verified directly against AWS, not just the script's own log:
-- portal ALB HTTPS listener rule `priority 100 · host-header · operations.cello.mygentic.ai` — restored
-- extra SNI cert `4b6a3413-5195-4fa4-9b9f-c0fe8998983d` — re-attached
-- `operations.cello.mygentic.ai` resolves to the new portal ALB and answers **HTTP 307** (TLS
-  handshake succeeded, host rule matched, app redirecting to auth — i.e. serving, not `000`/`502`)
-
-The `wake.sh` post-wake checklist item "0. REDEPLOY THE OPS DASHBOARD" (line ~676) is now stale and
-should be removed — it predates the rule capture.
-
-**ALB DNS names after this wake (always query AWS — these rotate each wake):**
-- **us-east-1:** dir `cello-dir-dev-169398503.us-east-1.elb.amazonaws.com` / relay `cello-relay-dev-2053577298.us-east-1.elb.amazonaws.com` / portal `cello-portal-dev-1749119977.us-east-1.elb.amazonaws.com`
-- **eu-central-1:** dir `cello-dir-dev-794544796.eu-central-1.elb.amazonaws.com` / relay `cello-relay-dev-855471523.eu-central-1.elb.amazonaws.com`
-- **ap-northeast-1:** dir `cello-dir-dev-1996262482.ap-northeast-1.elb.amazonaws.com` / relay `cello-relay-dev-1927652707.ap-northeast-1.elb.amazonaws.com`
-
-**Verified independently:** all 8 DNS names (7 + `operations`) resolve to real ALB addresses, no
-`198.51.100.1` remaining; 7 ALBs `active`; all 8 ECS services 1/1 `COMPLETED`; 4 RDS `available`;
-demo agent EC2 `running`. ECS Exec available again.
-
----
-
-## 🔴 Hibernate complete — all 3 regions down (2026-07-27, 19:14–19:26 UTC)
-
-Uptime this cycle: ~35 h (woken 2026-07-26 08:04 UTC). ECS→0 (directory + relay ×3, portal,
-ops-agent), 4 RDS stopped, demo EC2 stopped, 7 ALBs + 3 NAT Gateways (EIPs retained) + 3
-ssmmessages endpoints deleted, `directory-*`/`relay-*`/`portal` blackholed to `198.51.100.1`.
-
-**Two hibernate.sh defects found and fixed in this session — hibernate had been unrunnable for ~32 h:**
-- `04fe0d83` — `a7cef102` (2026-07-26 11:11) added the portal listener-rule/SNI-cert capture *above*
-  the block that assigns `portal_alb_arn`; under `set -u` that aborted every run on the first region.
-  No hibernate had been attempted between that commit and now, so nobody saw it. Also added the
-  missing `jq -c` compaction for `portal_extra_certs` (multi-line JSON breaks `--argjson`).
-  This run captured **2 portal listener rules + 1 extra SNI cert** — including the
-  `operations.cello.mygentic.ai` host-header rule → `cello-Targe-SMBCCDNKD2RR`, which is what lets
-  wake restore the ops dashboard without a manual redeploy.
-- `fa227c69` — `operations.*` was never in the blackhole list, so it answers NXDOMAIN for the whole
-  down-window. **Known live gap for THIS cycle**: the fix landed after the blackhole pass had already
-  run, so `operations.cello.mygentic.ai` is NXDOMAIN until wake. Every future hibernate blackholes it.
-
-**ECS Exec unavailable while hibernated.** No AWS changes until `wake.sh --execute` has run.
 
 ---
 
@@ -432,98 +408,6 @@ what matters and stays true is that every one of them is a descendant of `22e1cf
 
 **Still NOT proven live:** burning a REAL token on a REAL Telegram account. That needs an admitted
 user, which needs DB visibility, which needs the ops dashboard — blocked on Andre (repo + deploy).
-
----
-
-## 🟢 Wake complete — all 3 regions live (2026-07-26, 07:48:25–08:03:56 UTC)
-
-**Elapsed: 15 min 31 sec** — fastest cycle so far (RDS cleared in ~9 min). All 3 inventory diffs
-IDENTICAL. eu-central-1 and ap-northeast-1 finished first; us-east-1 trailed because it restores
-four ECS services rather than two.
-
-**ALB DNS names after this wake (always query AWS — these rotate each wake):**
-- **us-east-1:** dir `cello-dir-dev-1331770655.us-east-1.elb.amazonaws.com` / relay `cello-relay-dev-638138632.us-east-1.elb.amazonaws.com` / portal `cello-portal-dev-55479137.us-east-1.elb.amazonaws.com`
-- **eu-central-1:** dir `cello-dir-dev-258981800.eu-central-1.elb.amazonaws.com` / relay `cello-relay-dev-1680165026.eu-central-1.elb.amazonaws.com`
-- **ap-northeast-1:** dir `cello-dir-dev-611263329.ap-northeast-1.elb.amazonaws.com` / relay `cello-relay-dev-1852153856.ap-northeast-1.elb.amazonaws.com`
-
-**Verified independently of the script:** all 7 Route53 names resolve to real ALB addresses (no
-`198.51.100.1` blackhole remaining), 7 ALBs `active`, all 8 ECS services 1/1 `COMPLETED`, 4 RDS
-`available`, demo agent EC2 `i-0ad3e7c22470f266e` `running`. Portal HTTPS listener re-wired with the
-existing ACM cert. ECS Exec available again.
-
----
-
-## 🔴 Hibernate complete — all 3 regions down (2026-07-25, 20:04–20:11 UTC)
-
-Uptime this cycle: ~15 h (woken 04:58 UTC). ECS→0 (directory + relay ×3, portal, ops-agent), 4 RDS
-stopped, demo EC2 `i-0ad3e7c22470f266e` stopped, 7 ALBs + 3 NAT Gateways (EIPs retained) + 3
-ssmmessages endpoints deleted, all 7 Route53 names blackholed to `198.51.100.1` TTL 60.
-State written to `hibernation-state.json`.
-
-**ECS Exec unavailable while hibernated.** No AWS changes until `wake.sh --execute` has run.
-
----
-
-## 🟢 Wake complete — all 3 regions live (2026-07-25, 04:40:24–04:58:08 UTC)
-
-**Elapsed: 17 min 44 sec** (all 3 regions in parallel; RDS cleared in ~11 min — no us-east-1 stall this
-cycle). All 3 inventory diffs IDENTICAL vs the before-snapshots.
-
-**ALB DNS names after this wake (always query AWS — these rotate each wake):**
-- **us-east-1:** dir `cello-dir-dev-1389700310.us-east-1.elb.amazonaws.com` / relay `cello-relay-dev-92196857.us-east-1.elb.amazonaws.com` / portal `cello-portal-dev-1930699881.us-east-1.elb.amazonaws.com`
-- **eu-central-1:** dir `cello-dir-dev-881776890.eu-central-1.elb.amazonaws.com` / relay `cello-relay-dev-568589413.eu-central-1.elb.amazonaws.com`
-- **ap-northeast-1:** dir `cello-dir-dev-2037645818.ap-northeast-1.elb.amazonaws.com` / relay `cello-relay-dev-1209579083.ap-northeast-1.elb.amazonaws.com`
-
-**Verified independently of the script:** all 7 Route53 names resolve to real ALB addresses (no
-`198.51.100.1` blackhole left over), 7 ALBs `active`, all 8 ECS services 1/1 `COMPLETED` (directory +
-relay ×3, portal, ops-agent), 4 RDS `available`, demo agent EC2 `i-0ad3e7c22470f266e` `running`.
-ECS Exec is available again (ssmmessages endpoints restored).
-
----
-
-## 🔴 Hibernate complete — all 3 regions down (2026-07-24, 19:27–19:32 UTC)
-
-ECS services scaled to 0 (directory + relay ×3, plus portal and ops-agent in us-east-1), all 4 RDS
-instances stopped (`cello-dev` ×3 + `cello-portal-dev`), demo agent EC2 `i-0ad3e7c22470f266e`
-stopped, 7 ALBs deleted, 3 NAT Gateways deleted (EIPs retained), 3 ssmmessages VPC endpoints
-deleted. All 7 Route53 names (`directory-*`, `relay-*`, `portal`) UPSERTed to blackhole A
-`198.51.100.1` TTL 60 — prevents the NXDOMAIN negative-cache poisoning from the 2026-07-24 incident.
-State written to `hibernation-state.json`; before-snapshots at `hibernation-snapshots/*-20260724T192732Z.json`.
-
-**ECS Exec is unavailable while hibernated** (ssmmessages endpoint gone). Do not make any AWS change
-until `wake.sh --execute` has run — see "Hibernation — No Infrastructure Changes While Down" in `infra/CLAUDE.md`.
-
----
-
-## 🟢 Wake complete — all 3 regions live (2026-07-24, 16:01–16:17 UTC)
-
-**Elapsed: ~16 min 18 sec** (all 3 regions in parallel — no RDS bottleneck this cycle). All inventory diffs IDENTICAL.
-
-**ALB DNS names after this wake (always query AWS — these rotate each wake):**
-- **us-east-1:** dir `cello-dir-dev-122037600.us-east-1.elb.amazonaws.com` / relay `cello-relay-dev-1952460772.us-east-1.elb.amazonaws.com` / portal `cello-portal-dev-1669316295.us-east-1.elb.amazonaws.com`
-- **eu-central-1:** dir `cello-dir-dev-1689370715.eu-central-1.elb.amazonaws.com` / relay `cello-relay-dev-1937702647.eu-central-1.elb.amazonaws.com`
-- **ap-northeast-1:** dir `cello-dir-dev-1360605312.ap-northeast-1.elb.amazonaws.com` / relay `cello-relay-dev-1105113187.ap-northeast-1.elb.amazonaws.com`
-
----
-
-## 🔴 Hibernate complete — all 3 regions down (2026-07-23, 19:42–19:46 UTC)
-
-ECS services scaled to 0, RDS stopped, ALBs deleted, NAT Gateways deleted, ssmmessages endpoints deleted. EIPs retained. State written to `hibernation-state.json`.
-
----
-
-## 🟢 Wake complete — all 3 regions live (2026-07-22, 11:01–11:42 UTC)
-
-**Elapsed: 40 min 22 sec** (us-east-1 RDS bottleneck ~30 min; eu/ap ~16 min each). All inventory diffs IDENTICAL.
-
-**ALB DNS names after this wake (always query AWS — these rotate each wake):**
-- **us-east-1:** dir `cello-dir-dev-1707859629.us-east-1.elb.amazonaws.com` / relay `cello-relay-dev-1213001224.us-east-1.elb.amazonaws.com` / portal `cello-portal-dev-1855029973.us-east-1.elb.amazonaws.com`
-- **eu-central-1:** dir `cello-dir-dev-982990851.eu-central-1.elb.amazonaws.com` / relay `cello-relay-dev-1532772294.eu-central-1.elb.amazonaws.com`
-- **ap-northeast-1:** dir `cello-dir-dev-1456419132.ap-northeast-1.elb.amazonaws.com` / relay `cello-relay-dev-1760393426.ap-northeast-1.elb.amazonaws.com`
-
-**ECS task defs (post-wake):** us-east-1 directory `:270` relay `:97` / eu-central-1 directory `:107` relay `:43` / ap-northeast-1 directory `:98` relay `:38`
-
-**⚠️ Pipeline STAGING_DIRECTORY_URL still broken** — the us-east-1 directory ALB was `cello-dir-dev-1341968405` (old, from rogue-agent cleanup on 2026-07-17) and CI smoke tests have been failing since. The pipeline SSM parameter needs updating to the new DNS above. Do NOT touch this without the pipeline context.
 
 ---
 
