@@ -1853,3 +1853,70 @@ branch V49–50). `docker-compose.yml` pinned the host port, so two worktrees sh
 the spine harness DROPs and re-migrates from scratch. `DATABASE_URL` is now the single knob;
 verified by running the AE enforcer on 5434 (all 5 green, V1→V50 on its own server) while the other
 checkout's 5433 was untouched.
+
+---
+
+## Entry 34 — 2026-07-29 — Registration works against the GCP consortium; the same bug, on the other side
+
+`signaling_lost` (Entry 25's frontier) is fixed. Four consecutive registrations against the live
+GCP consortium, each a real 3-node FROST DKG — `directory.dkg.participant.signer.registered` from
+`gcp-use1`, `gcp-usc1` AND `gcp-euw1`. Every node holds a share; no single-node fallback.
+
+### It was AutoNAT again — on the client this time
+
+The same defect as M12-P8, mirrored. `@libp2p/autonat`'s responder answers a dial-back by calling
+`openConnection(peer)` — which returns an ALREADY-OPEN connection — and closes it in a `finally`.
+On a client that is the connection carrying directory signaling. The yamux wire, which is what
+finally settled it:
+
+```
+yamux:inbound:4  negotiated /libp2p/autonat/1.0.0   <- the DIRECTORY asks us to dial it back
+yamux:outbound:3 closed writable end gracefully     <- the signaling stream
+yamux sending GoAway reason=NormalTermination       <- whole connection, 3 live streams
+directory.signaling.stream.ended
+```
+
+**I called AutoNAT falsified an hour before this, and I was wrong.** `DEBUG=libp2p:autonat*`
+produced no output, and I read that as "autonat is not involved" — but the module logs under a
+different namespace, so absence of logs was never absence of autonat. The correct reading of that
+evidence was "this probe tells me nothing", not "hypothesis refuted". Only `libp2p:yamux*`, which
+shows the actual protocol negotiated on each stream, could answer it.
+
+### The fix, and the first attempt that failed
+
+Directories and clients need OPPOSITE things, so the fix differs by side:
+- **Directory** (trustless-cello): keeps the responder — clients' prober half depends on it — with
+  the `force: true` pnpm patch so it stops closing connections it did not open.
+- **Client** (cello-client): drops the responder entirely via `unhandle()`. The prober half opens
+  OUTBOUND streams and needs no inbound handler, so `getDialability()` is unaffected. A client is
+  not infrastructure; it has no reason to answer dial-back at all.
+
+**A pnpm patch cannot be the client's fix.** Patches are workspace-local and applied at install
+time; they do NOT ship to operators through npm. The directory can use one because its image is
+built in this repo. cello-client needs a fix in its own source, which is why `unhandle()`.
+
+The first attempt gated on `nodeType !== undefined`. It built, linted, and still failed — the
+directory-signaling node is a long-lived CLIENT that deliberately leaves `nodeType` unset (its own
+comment says so, and it already opts out of `relayServer` explicitly for the same reason). So the
+gate was false on exactly the node being destroyed. The shipped version mirrors `relayServer` with
+an explicit `autonatResponder: { enabled: false }`.
+
+That is the falsification step from the debugging discipline — *does the fix location match where
+responsibility actually lives?* — and skipping it cost a full test cycle. Green build, green lint,
+same failure.
+
+### Verified with the patch REMOVED
+
+The decisive run deleted the pnpm patch from cello-client and reinstalled, confirming
+`@libp2p/autonat` was unpatched on disk, before re-testing. Otherwise the patch would have been
+carrying the result and the shipped fix would have been unproven.
+
+### Owed
+- **`dkg_failed` appeared once** and did not reproduce across four subsequent runs. Not chased;
+  recorded because an intermittent DKG failure is not acceptable at launch. The client failed at
+  `43.279` while the third node was still verifying the capability at `43.692`, which points at a
+  client-side deadline rather than a node fault.
+- **The DKG failure reason is not logged client-side** — `dkg_failed` with no detail, and
+  `frost.directory.stream.open.retry` logs `error: "[object Object]"`. Both make the next
+  intermittent failure harder to diagnose than it needs to be.
+- The client fix ships through `/cello-publish`; not yet published.
