@@ -1261,6 +1261,31 @@ the discussion-of-record. Restated here because this is the milestone that imple
   gateway HTTP server, and the sidecar spawner into a Next.js Fargate app. Consequence for process:
   this makes `gateway` a **sixth** cello-client package the other repos pin, so the cross-repo
   version-bump AC discipline (CLAUDE.md) now covers it.
+- **M10B-D34 (2026-07-29, Andre) — THE DIRECTORY DOES NOT STORE THE EDGE. It holds hashes.**
+  Andre, on being shown that `signal_records` carried `subject` and `issuer_pubkey` in the clear:
+  *"The directory doesn't need in its database this person endorsed that person. None of that stuff
+  should be in there. Everything that is involved in what you are doing is in the plain text which is
+  then hashed. The hash is stored in the directory, the plain text is forwarded to the daemon."*
+  **The framing that produced this was mine and it was wrong** — I described the exposure as
+  "plaintext in the directory", which implies CONTENT. It never was: `signal_records` has no payload
+  column and the client's copy travels sealed. What was exposed is the EDGE — the pair of identities
+  — and Andre's point is that the directory has no business holding it, because both pubkeys are in
+  the envelope that gets hashed, so anyone who wants to verify who endorsed whom checks the envelope
+  they were shown.
+  **Verified before acting, and this is what made it cheap:** exactly ONE consumer used those
+  columns — `/internal/active-signals/<accountId>`, a convenience read for the portal. The notary
+  path never did (`signal-present.ts` is hash-in, hash-out), so verification is untouched.
+  **Executed in four ordered steps, each leaving the portal working:** the portal records its own
+  mints (`minted_signals`, portal migration 0008) → a hash-only `activeAmong` replaces the
+  account-scoped read → the three consumers move over and `queryActiveSignals` is deleted → V55 drops
+  `subject` and removes the route.
+  **`issuer_pubkey` is HELD BACK, deliberately.** `DOD-END-REVOKE-2` requires exact-`issuer_pubkey`
+  auth for agent issuers, and that check compares a tombstone's revoker against this column;
+  dropping it would silently revert the M10 F6 fix. Dropping `subject` alone already destroys the
+  edge — a graph needs both ends. **OPEN QUESTION, deferred rather than settled:** whether the issuer
+  identity should also leave, with revoke authority moving entirely to the portal (`M10B-D12r3`
+  already names the portal as primary enforcement and the directory check as defense-in-depth
+  against a compromised or second submitter key). Not decided as a side effect of a column drop.
 - **M10B-D33 (2026-07-29, `DOD-END-REVOKE-2`, from review F4) — supersession consults EFFECTIVE
   status, and the successor is judged by the SAME authority rules.** V46's guard
   (*"a REVOKED replacement supersedes nothing"*) has been **inert since revocation became a
