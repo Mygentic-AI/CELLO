@@ -492,4 +492,50 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     const afterSeen = (await alice3.call("cello_consent_list", {})) as { pending?: unknown[] };
     expect(afterSeen.pending, "the DECISION persists after the notice is seen").toHaveLength(1);
   }, 180_000);
+
+  it("HOP 8 (case c): self-endorsement is REFUSED at the source, with a named reason", async () => {
+    // INV-NO-SELF-STANDING: an operator cannot manufacture standing for themselves. The portal is
+    // the real enforcer (only it sees account linkage), but an agent endorsing ITSELF is detectable
+    // on the client with certainty — and refusing there gives a real answer now instead of a silent
+    // rejection at intake minutes later.
+    const bob = mcpConns[0];
+    const self = (await bob.call("cello_trust_signals_issue", {
+      subject_pubkey: pubkeys["bob"],
+      body: "Bob is exceptionally reliable and should be trusted with anything.",
+    })) as { ok?: boolean; reason?: string; guidance?: string };
+
+    expect(self.ok, "an agent must not be able to endorse itself").toBe(false);
+    expect(self.reason).toBe("self_subject");
+    // NAMES ITS CAUSE. "intake_rejected" would send an operator looking at the network; this tells
+    // them what they actually did.
+    expect(String(self.guidance)).toMatch(/itself|somebody else/i);
+
+    // AND NOTHING WAS QUEUED. A refusal that still wrote to the queue would leave the portal to
+    // reject it later, which is the silent-rejection path this guard exists to avoid.
+    const queued = psqlSpine(`SELECT count(*) FROM submission_queue`).replace(/\s/g, "");
+    expect(queued, "a refused self-endorsement must not reach the queue").toBe("1"); // only the earlier refusal message
+
+    // THE CROSS-AGENT CASE IS THE ONE THAT MATTERS FOR FARMING, and it needs a second agent on
+    // BOB'S OWN daemon — Charlie runs on a separate daemon here, so he is a genuinely different
+    // operator as far as Bob's daemon can tell. That distinction is the whole point: the guard can
+    // only see the agents it actually holds.
+    //
+    // Solo multi-agent is CELLO's first wedge, so an operator running two of their own agents is the
+    // ordinary case, not an exotic one — which makes this the likeliest way to reach the check.
+    const secondAgent = cello(["create-agent", "bob-second"], { CELLO_DIR: dirFor["bob"] });
+    expect(secondAgent.status, `create-agent bob-second: ${secondAgent.stdout}`).toBe(0);
+    const bobAgents = JSON.parse(cello(["agents"], { CELLO_DIR: dirFor["bob"] }).stdout) as {
+      agents: Array<{ name: string; pubkey: string }>;
+    };
+    const second = bobAgents.agents.find((a) => a.name === "bob-second");
+    expect(second?.pubkey, "the second agent has a key").toBeTruthy();
+
+    const crossLocal = (await bob.call("cello_trust_signals_issue", {
+      subject_pubkey: second!.pubkey,
+      body: "My other agent is extremely trustworthy.",
+    })) as { ok?: boolean; reason?: string; guidance?: string };
+    expect(crossLocal.ok, "two agents on ONE daemon are the same operator").toBe(false);
+    expect(crossLocal.reason).toBe("self_subject");
+    expect(String(crossLocal.guidance), "names BOTH agents so the operator understands why").toMatch(/bob-second/i);
+  }, 120_000);
 });
