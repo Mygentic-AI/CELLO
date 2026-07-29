@@ -278,13 +278,28 @@ async function openStore(databaseUrl: string): Promise<PgDirectoryStore> {
     );
     appliedVersion = result.rows[0]?.max_rank ?? 0;
   } catch (err) {
-    // Two very different causes reach here. A connection-class failure (Postgres class 08, or a
-    // socket error) means the server went away between the probe above and now — reporting that as
-    // "migrations have not run" sends the operator to Flyway for a network problem.
+    // Three very different causes reach here, and only ONE of them means "migrations have not run".
+    // Treating them alike is how a permissions fault ends up wearing a schema fault's name.
     if (isConnectionError(err)) {
+      // The server went away between the probe above and now — a network problem, not a Flyway one.
       await dieUnavailable(err, target);
     }
-    // Otherwise: flyway_schema_history absent (never migrated) or cello_service lacks SELECT on it.
+    const code = (err as { code?: unknown } | null)?.code;
+    if (code === "42501") {
+      // insufficient_privilege: the table is there, this role cannot read it. Reporting
+      // "migration.out.of.date" here sends the operator to Flyway to re-run migrations that have
+      // already run — and the actual fix is a GRANT (see V50).
+      logger.error("migration.version.query.denied", {
+        ...target,
+        env,
+        reason: err instanceof Error ? err.message : String(err),
+        remediation: "the node's role needs SELECT on flyway_schema_history (V50); it is not the role that ran the migrations",
+      });
+      await pgPool.end().catch(() => { /* already reported */ });
+      process.exit(1);
+    }
+    // 42P01 undefined_table, or anything else: the history table genuinely is not there, which is
+    // what an un-migrated database looks like.
     logger.error("migration.version.query.failed", { reason: String(err), env });
     appliedVersion = 0;
   }

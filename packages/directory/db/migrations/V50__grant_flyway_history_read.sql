@@ -1,0 +1,19 @@
+-- V50 — let the application role READ the migration history it is checked against.
+--
+-- The directory refuses to start when the applied schema version is behind the migrations it
+-- ships with (the AC-010 guard in bin/directory.ts). That guard queries flyway_schema_history,
+-- which Flyway creates and which is owned by whoever ran the migration.
+--
+-- On AWS the node and Flyway connect as the same role, so the table is readable by construction.
+-- On GCP they are deliberately different roles — Flyway runs as the schema owner because
+-- migrations are DDL, and the node runs as cello_service, which V2 restricts to INSERT + SELECT
+-- under RLS with UPDATE and DELETE revoked. The node therefore could not read the very table its
+-- startup guard depends on, and the guard reported "permission denied" as "migrations have not
+-- run" — a permissions fault wearing a schema fault's name.
+--
+-- SELECT only. The history table is Flyway's record of what has been applied; the application has
+-- no business writing to it, and granting more would let a compromised node rewrite the evidence
+-- of which schema it is actually running.
+--
+-- Idempotent and harmless on AWS, where the grant is a no-op against the owner.
+GRANT SELECT ON TABLE flyway_schema_history TO cello_service;

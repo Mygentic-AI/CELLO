@@ -52,7 +52,11 @@ function runBin(env: NodeJS.ProcessEnv): { stdout: string; stderr: string; code:
       env: merged,
       stdio: "pipe",
       encoding: "utf8",
-      timeout: 5000,
+      // Generous on purpose. This spawns a real node that opens a pool, probes the server and
+      // reads the migration history — and sibling test files in the same run create and drop
+      // databases on that server. At 5s one case measured 5014ms and was killed, turning a
+      // correct refusal into a timeout that looked like a logic failure.
+      timeout: 30_000,
     });
     return { stdout, stderr: "", code: 0 };
   } catch (err: unknown) {
