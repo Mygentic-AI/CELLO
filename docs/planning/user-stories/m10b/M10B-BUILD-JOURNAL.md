@@ -2027,3 +2027,60 @@ should say that it is deliberate rather than look like a missed duplicate.
 `!s.type.endsWith("_id")` default-present heuristic (`trust-signal-store.ts:285`) is type-shaped. It
 is pre-existing, untouched, and a generic suffix convention rather than a per-type enum — so not an
 INV-ZEROBUMP violation, but it is the kind of thing that becomes one quietly.
+
+---
+
+## Entry 25 — `DOD-END-SCOPE-FIX-1` reviewed and CLOSED; the handed-off F4 fixed, but not as proposed — 2026-07-29
+
+**One review pass, per the cap.** Verdict: SPEC FAITHFUL on all seven clauses, tests have teeth (all
+three new ones survive the revert test), removals proven. Four findings, all fixed, none re-reviewed.
+
+| finding | fix |
+| :-- | :-- |
+| HIGH-1 — the fixture trap was still live in the OTHER repo, taking down the only e2e coverage of the call site | both spine journeys now seed the agent subject with the presenting agent's real pubkey |
+| MEDIUM-2 — a zero-row presentation emitted no log at all | `signal.presentation.none_eligible` with `heldTotal` |
+| MEDIUM-3 — the guard rejected empty but accepted wrong-SHAPED | lowercase-hex shape check; the trap test now asserts a THROW, not a quiet `[]` |
+| MEDIUM-4 — `--include` validated against the daemon-wide wallet | new scoped `listPresentableTypes()` |
+| LOW-5 — the call-site lookup is unreachable via the built-in negotiator | KEPT as defense-in-depth (the negotiator is injectable), and said so rather than silently declining |
+
+**HIGH-1 is the one worth remembering.** The unit fixed the UUID-as-subject fixture convention in
+cello-client and stopped at the repo boundary — while the only tests anywhere that exercise the
+presentation CALL SITE live in trustless-cello's spine journeys, and both seeded an agent subject with
+a random `agent-…` string. So the change would have gone green in its own repo and red in the only
+place that proves it works. `cello-client` has no test importing `createOutboundSessions` at all.
+
+### The handed-off F4, and why I did not take the proposed fix
+
+The other live session (Entry 24) handed off four findings its pass caught and mine did not. F4 is
+real and I fixed it: `subject` for an agent-subject row IS a pubkey hex, hex has a case, and this unit
+made byte-equality on it load-bearing in two places at once — the daemon's `subject = ?` under
+SQLite's BINARY collation, and the directory's case-sensitive `k_local_pubkey` join.
+
+**Its proposed fix was a lowercase-hex validator on `subject` in `toPreimage`, mirroring the one
+`issuer_pubkey` already has. I took it, and backed it out.** 32 tests went red, and the informative
+one was the NFC test: the encoder deliberately treats `subject` as an arbitrary NFC string, because
+for an ACCOUNT subject it is one — an opaque account id with no canonical case. A conditional "hex if
+agent, any string if account" rule makes a byte-agreement component enforce a semantic convention, and
+it would reject envelopes that component is contracted to encode. **The red was the shape of the fix
+being wrong, not fixture debt to sweep** — which is the same lesson four review passes kept producing,
+arriving this time as a test failure instead of a reviewer.
+
+Fixed instead where the comparison lives and where the failure is mine: `lower(subject)` in the
+predicate. Case-insensitive comparison is the correct equality for hex, not a fallback. **The residual
+is written into the code rather than claimed closed:** the directory's join is still case-sensitive,
+so an uppercase subject that ever got minted stays invisible there. Constraining the value at its
+PRODUCER (the portal's mint) spans three components and is its own decision.
+
+**Still owed from Entry 24, as ACs on whoever next touches this:** F5 (rename, so grepping for where
+scoping is enforced stops giving M10's wrong answer) and F6 (no test imports `createOutboundSessions`,
+so a wrong VALUE — `agentName` instead of the pubkey — still passes every unit test; only the spine
+journeys catch it).
+
+### Process note: TWO SESSIONS RAN M10B CONCURRENTLY, and it cost real work
+
+Both sessions reviewed the same commit, both wrote an Entry 22, and one had to withdraw its own. My
+spine-test fix was swept into the other session's commit because it ran `git add -A` over a working
+tree it did not own. Nothing was lost this time — that is luck, not process.
+`M10B-PROCEDURE` §5d is explicit: *"One thread. One coder (the main loop). NO parallel implementation
+agents."* Two sessions on one repo violates it in the most expensive way available, because the
+collisions are in the shared audit trail. **Surfaced to Andre rather than worked around.**
