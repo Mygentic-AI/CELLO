@@ -256,6 +256,15 @@ export const PG_HOST_PORT = (() => {
 })();
 export const DATABASE_URL = `postgresql://postgres:dev@${PG_HOST_PORT}/${SPINE_DB}`;
 
+/**
+ * Environment for every `docker compose` call. Binds the Postgres HOST port to whatever
+ * DATABASE_URL names, so ONE knob controls both halves: which server the harness brings up and
+ * which one it connects to. Fixing only the connect half (above) left the compose file pinned to
+ * 5433, so a second worktree could not bring up its own Postgres at all -- it either failed to
+ * bind or quietly shared the other checkout's server and re-migrated it to this branch's head.
+ */
+const COMPOSE_ENV = { ...process.env, CELLO_PG_HOST_PORT: PG_HOST_PORT.split(":")[1] ?? "5433" };
+
 /** The libpq URL for a harness-owned spine database (one per sovereign directory node). */
 export function spineDbUrl(dbName: string): string {
   // Same server the harness provisions on — see PG_HOST_PORT. A hardcoded port here pointed the
@@ -281,7 +290,7 @@ export function ensurePostgres(dbNames: string[] = [SPINE_DB]): void {
         "(docker-compose `postgres` + `flyway`). Start Docker Desktop and retry.",
     );
   }
-  execFileSync("docker", ["compose", "up", "-d", "--wait", "postgres"], { cwd: TRUSTLESS_ROOT, stdio: "inherit" });
+  execFileSync("docker", ["compose", "up", "-d", "--wait", "postgres"], { env: COMPOSE_ENV, cwd: TRUSTLESS_ROOT, stdio: "inherit" });
   for (const dbName of dbNames) {
     // Fresh, isolated test DB: drop + recreate so the migration history is always clean.
     execFileSync(
@@ -292,13 +301,13 @@ export function ensurePostgres(dbNames: string[] = [SPINE_DB]): void {
         "-c", `DROP DATABASE IF EXISTS ${dbName} WITH (FORCE);`,
         "-c", `CREATE DATABASE ${dbName};`,
       ],
-      { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
+      { env: COMPOSE_ENV, cwd: TRUSTLESS_ROOT, stdio: "inherit" },
     );
     // Migrate the fresh DB from V1 — no repair needed (clean history).
     execFileSync(
       "docker",
       ["compose", "run", "--rm", "-e", `FLYWAY_URL=jdbc:postgresql://postgres:5432/${dbName}`, "flyway"],
-      { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
+      { env: COMPOSE_ENV, cwd: TRUSTLESS_ROOT, stdio: "inherit" },
     );
   }
 }
@@ -316,7 +325,7 @@ export function psqlDb(dbName: string, sql: string): string {
       "compose", "exec", "-T", "postgres",
       "psql", "-U", "postgres", "-d", dbName, "-tAc", sql,
     ],
-    { cwd: TRUSTLESS_ROOT, encoding: "utf8" },
+    { env: COMPOSE_ENV, cwd: TRUSTLESS_ROOT, encoding: "utf8" },
   );
   return out.trim();
 }
@@ -347,7 +356,7 @@ export function copyAgentProfileBetweenNodes(fromNode: number, toNode: number, k
       `psql -U postgres -d ${SPINE_DB}_${fromNode} -c "COPY (SELECT ${cols} FROM agent_profiles WHERE k_local_pubkey='${kLocalPubkeyHex}') TO STDOUT" | ` +
         `psql -U postgres -d ${SPINE_DB}_${toNode} -v ON_ERROR_STOP=1 -c "COPY agent_profiles (${cols}) FROM STDIN"`,
     ],
-    { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
+    { env: COMPOSE_ENV, cwd: TRUSTLESS_ROOT, stdio: "inherit" },
   );
 }
 
@@ -361,7 +370,7 @@ export function copyAgentPresenceBetweenNodes(fromNode: number, toNode: number, 
       `psql -U postgres -d ${SPINE_DB}_${fromNode} -c "COPY (SELECT ${cols} FROM agent_presence WHERE k_local_pubkey='${kLocalPubkeyHex}') TO STDOUT" | ` +
         `psql -U postgres -d ${SPINE_DB}_${toNode} -v ON_ERROR_STOP=1 -c "COPY agent_presence (${cols}) FROM STDIN"`,
     ],
-    { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
+    { env: COMPOSE_ENV, cwd: TRUSTLESS_ROOT, stdio: "inherit" },
   );
 }
 
@@ -375,7 +384,7 @@ export function copyDirectoryNodeBetweenNodes(fromNode: number, toNode: number, 
       `psql -U postgres -d ${SPINE_DB}_${fromNode} -c "COPY (SELECT ${cols} FROM directory_nodes WHERE node_id='${nodeId}') TO STDOUT" | ` +
         `psql -U postgres -d ${SPINE_DB}_${toNode} -v ON_ERROR_STOP=1 -c "COPY directory_nodes (${cols}) FROM STDIN"`,
     ],
-    { cwd: TRUSTLESS_ROOT, stdio: "inherit" },
+    { env: COMPOSE_ENV, cwd: TRUSTLESS_ROOT, stdio: "inherit" },
   );
 }
 

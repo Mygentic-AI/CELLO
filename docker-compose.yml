@@ -8,7 +8,12 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: dev
     ports:
-      - "5433:5432"
+      # Host port is a VARIABLE so two worktrees can each run their own Postgres. Hardcoded, the
+      # second checkout either fails to bind ("port is already allocated") or silently shares the
+      # first one's server -- and the spine harness DROPs and re-migrates its databases, so two
+      # branches re-migrate one server to two different heads. That surfaces as a bogus
+      # `migration.out.of.date`. The harness sets this from DATABASE_URL; 5433 keeps the default.
+      - "${CELLO_PG_HOST_PORT:-5433}:5432"
     command: >
       postgres
       -c shared_preload_libraries=pgaudit
