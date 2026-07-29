@@ -156,6 +156,39 @@ the only thing that catches a divergence like this.
 
 ---
 
+## 🗄️ SCHEMA — V55 LIVE IN ALL THREE REGIONS (2026-07-29 ~12:5x UTC)
+
+**The directory stopped storing the EDGE.** `signal_records.subject` — WHO a signal is about — is
+dropped. Verified per region against the database, not inferred from pipeline status:
+`max(version)=55`, `subject` column count `0`, `bool_and(success)=true`, and us-east-1 still reads
+**33 active signals** through the rebuilt view, so the notary path works after the drop.
+`http://directory-{us1,eu1,ap1}/manifest` → 200. Task definitions us-east-1 `:370`, eu-central-1
+`:141`, ap-northeast-1 `:132`.
+
+**Why (M10B-D34, Andre):** everything a signal asserts — both parties included — is in the plaintext
+envelope, which is hashed; the hash goes to the directory and the plaintext to the daemon. Holding a
+queryable `subject` meant any node operator could read the endorsement graph off a replicated table
+with one SELECT. Dropping it destroys the pairing: a graph needs both ends.
+
+**`issuer_pubkey` DELIBERATELY REMAINS.** `DOD-END-REVOKE-2`'s authority check compares a tombstone's
+`revoker_pubkey` against it; dropping it would have silently reverted the M10 F6 fix ("any submitter
+key can tombstone anyone's endorsement"). Whether the issuer identity should also leave, with revoke
+authority moving entirely to the portal, is an OPEN QUESTION recorded in `M10B-D34` — not settled as
+a side effect of a column drop.
+
+**Sequenced so nothing broke:** the portal first recorded its own mints (portal migration 0008) and
+switched to a hash-only `/internal/signals/active-among`; only then did the directory drop the column
+and remove `/internal/active-signals`. Each step left the portal working.
+
+**PIPELINE LESSON, PAID TWICE TODAY.** `ProductionDeploy` and `StagingDeploy` both target us-east-1,
+so two concurrent executions do not queue — they DEADLOCK: the older `ProductionDeployUsEast1` waits
+on an ECS deployment a newer execution already replaced, times out after ~45 min, and eu/ap never
+start (their actions read `None` while the pipeline looks busy). The fix is to abandon the superseded
+execution. The prevention is to batch pushes: **do not push anything, including docs, while a
+directory deploy is in flight.**
+
+---
+
 ## Hibernate / wake — standing behaviour
 
 Cycle timing: **~15–18 min** for a wake, all 3 regions in parallel. RDS reaching `available` is the
