@@ -332,6 +332,21 @@ export interface DirectoryStore {
    *  never landed) cannot linger forever. Returns the rows deleted. Anchored or fresh rows are untouched. */
   sweepUndeliverablePickups(ttlHours?: number): Promise<number>;
 
+  // ─── M10B / DOD-END-SUBMIT-1: the sealed submission queue (M10B-D2) ────────
+  /**
+   * Accept a SEALED submission this node cannot read. Returns whether the row was actually STORED.
+   *
+   * The boolean is not optional bookkeeping and MUST NOT be discarded by a caller. `false` means the
+   * id was already present — usually the submitter's own retry across nodes, which is exactly what
+   * `submission_id` being content-derived makes safe, but ALSO the shape of a single-node censorship
+   * attack: `submission_id` is visible in the clear to the receiving node, so a malicious operator
+   * can copy it and pre-insert garbage under the same id at the other nodes, and the submitter's
+   * failover retries all resolve to "already present". Byte-comparing the ciphertext cannot detect
+   * that either — a legitimate re-seal produces different bytes under the same id. Collapsing the
+   * two outcomes here destroys the only information that could ever distinguish them.
+   */
+  enqueueSubmission(s: { submissionId: string; intakeKeyId: string; ciphertext: Buffer }): Promise<boolean>;
+
   /**
    * Return true if the given phone_stub_hash (hex SHA-256) is already claimed.
    * Used for the phone_already_claimed duplicate guard.

@@ -176,6 +176,8 @@ import {
   encodeSealUpgradeConfirmed,
   encodeSealUpgradeRejected,
   encodeTrustSignalPickup,
+  encodeSubmissionWriteResult,
+  encodeSubmissionWriteError,
   encodeManifestPollResponse,
   encodePong,
   decodeInboundSignalingFrame,
@@ -2168,6 +2170,18 @@ export class CelloDirectoryNode {
               );
             })
             .catch(() => {});
+        } else if (parsed.type === "submission_write") {
+          // M10B / DOD-END-SUBMIT-1: accept a sealed submission into the queue this node cannot read.
+          //
+          // AUTHENTICATED, off the live connection identity. The stream's challenge-response has
+          // already yielded `authedPubkeyHex`, and that is deliberately the ONLY place submitter
+          // identity exists here: it is used for flood protection and logging and is NEVER persisted,
+          // because a `submitting_agent_id` column would hand a node operator "Bob submitted five
+          // endorsements" — not to whom, but still the metadata shape DOD-END-DISCOVER-1 is written
+          // against (Entry 8).
+          //
+          // Nothing is opened, parsed, or interpreted. The row is {id, intake_key_id, ciphertext}.
+          void this.#processSubmissionWrite(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "session_request") {
           // REG-001 AC-009: refuse session_request if registration is required and the agent
           // has not completed it. requireRegistration defaults to false for backward compat.
@@ -2581,6 +2595,61 @@ export class CelloDirectoryNode {
    * revocation is APPENDED (never an agent_profiles mutation — SI-002, guardrail #5); on any failure
    * NOTHING is written and a distinct reason is returned.
    */
+  /**
+   * M10B / DOD-END-SUBMIT-1 — accept a sealed submission into a queue this node cannot read.
+   *
+   * The handler is deliberately dull, and that dullness IS the security property (INV-DIR-DUMB): it
+   * never opens, parses, or interprets the blob, and the table has nowhere to put anything it might
+   * have learned. It writes exactly {submission_id, intake_key_id, ciphertext}.
+   *
+   * `authedPubkeyHex` — the identity the stream's challenge-response already proved — is used for
+   * LOGGING ONLY and is never persisted. A `submitting_agent_id` column would give a node operator
+   * "Bob submitted five endorsements": not to whom, but still the metadata shape
+   * DOD-END-DISCOVER-1 is written against (Entry 8). It is truncated even in the log.
+   *
+   * The submission_id is caller-supplied and unverifiable here — opening the seal is the only way to
+   * check it and this node cannot. It is a dedupe key and a routing hint; the PORTAL re-derives it
+   * from the opened body and discards a row whose id disagrees (M10B-D20).
+   */
+  async #processSubmissionWrite(
+    stream: Stream,
+    authedPubkeyHex: string,
+    frame: import("./directory-frames.js").SubmissionWrite,
+  ): Promise<void> {
+    try {
+      const stored = await this.#store.enqueueSubmission({
+        submissionId: frame.submission_id,
+        intakeKeyId: frame.intake_key_id,
+        ciphertext: Buffer.from(frame.ciphertext),
+      });
+      // The boolean is carried to the submitter rather than collapsed into success — it is the only
+      // thing that can ever distinguish "my own retry" from "someone pre-inserted garbage under my
+      // id at this node", and the submitter cannot act on a distinction it was never told about.
+      this.#sendFrame(
+        stream,
+        encodeSubmissionWriteResult({ submission_id: frame.submission_id, stored }),
+      );
+      this.#logger?.info(stored ? "signal.submission.queued" : "signal.submission.duplicate", {
+        submissionId: frame.submission_id.slice(0, 16),
+        intakeKeyId: frame.intake_key_id,
+        submitter: authedPubkeyHex.slice(0, 16),
+        ciphertextBytes: frame.ciphertext.length,
+      });
+    } catch (err: unknown) {
+      // NAME THE CAUSE, and never leave the submitter with silence: its only other signal is a
+      // timeout, which is indistinguishable from the submission being lost. The upstream message
+      // survives into the log; the wire reason stays coarse because a database error string is not
+      // something to hand an arbitrary authenticated caller.
+      const message = err instanceof Error ? err.message : String(err);
+      this.#logger?.error("signal.submission.write_failed", {
+        submissionId: frame.submission_id.slice(0, 16),
+        submitter: authedPubkeyHex.slice(0, 16),
+        reason: message,
+      });
+      this.#sendFrame(stream, encodeSubmissionWriteError({ reason: "queue_write_failed" }));
+    }
+  }
+
   async #processRevokeAgent(
     stream: Stream,
     authedPubkeyHex: string,
