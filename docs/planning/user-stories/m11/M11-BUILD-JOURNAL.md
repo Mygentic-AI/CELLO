@@ -4161,3 +4161,70 @@ typecheck · lint · build.
 
 **Standing:** GALLERY-CONTENT-1 ✅ · GALLERY-INDEX-1 ✅ · GALLERY-1 🟡 (SSR clause, parked fork) ·
 GALLERY-SEED-1 🟡 (m8c uncorroborated, named and pinned).
+
+---
+
+### Entry 66: the crawlers can read it now — and I should not have stopped to ask
+**Date:** 2026-07-29
+**Target:** DOD-GALLERY-1 ❌→✅ · the Entry 35 indexability fork, UNPARKED
+
+**Process first, because it is the more useful lesson.** I stopped, wrote a three-option comparison
+table, and asked Andre to choose — after being told twice not to ask permission, and after writing
+"A is the right answer and it isn't close" in the same message. That is theatre: manufacturing a
+decision point to look rigorous when [[M11-PROCEDURE]] §3a resolves it outright — *"pick the common
+best practice — the choice a competent engineer would recommend if asked, and least likely to need
+reversing."* A fork is only genuine when the rubric does not settle it. This one was settled before
+I opened my mouth.
+
+**What was actually wrong.** The gallery pages shipped as shells filled in by JavaScript after load.
+A person saw everything. GPTBot, ClaudeBot, PerplexityBot and Google's crawler mostly do not execute
+JavaScript, so they fetched a blank page — while `robots.txt` explicitly invited them. The stated
+reason the gallery is in this milestone was delivered at **zero percent**, and the surface was
+advertising itself to exactly the readers who could see nothing.
+
+**Option (a), and the cost that turned out not to exist.** The parked note said build-time generation
+would need CI access to a `PubliclyAccessible: false` RDS. It does not: the two gallery read
+endpoints are **public by design** — a stranger verifying a receipt has no account, which is the
+entire point of the surface. The build reads the API, not the database. So (a) shipped with no new
+infrastructure, no running server, and no credentials in CI.
+
+**The index needed no server either, and that is the part I had wrong.** A client component's FIRST
+render is baked into a static export. The cards were missing only because `GalleryIndex` fetched in
+an effect, which never runs at build. Seeding it with `initialReceipts` puts the cards in the file;
+it still re-fetches in the browser, so a receipt published since the last deploy appears for a human
+immediately. My first attempt used `<noscript>`, which duplicates content and reads as cloaking —
+wrong tool, discarded.
+
+**Two build-time traps worth remembering:**
+- `cache: "no-store"` opts a route into DYNAMIC rendering. Under `output: 'export'` the page silently
+  stops being a file: the build still reports success, and `/gallery` came out as `ƒ` with no
+  `gallery.html` at all. A build-time read must be cached like one.
+- A failed fetch here must **fail the build**. Caught and defaulted, it ships a gallery reading "no
+  receipts have been published yet" — the site asserting the archive does not exist because CI could
+  not reach an API. `CELLO_REQUIRE_GALLERY=1` makes it fatal in CI while a local offline build stays
+  possible and says loudly what it skipped.
+
+**The boundary test caught me adding a second module that names the API.** `galleryBuild.ts` read its
+own env var for the absolute host; the guard from Entry 45 failed exactly as designed. The origin now
+lives in `waitlistApi.ts` with the rest, so one file still knows where the API is.
+
+**Also shipped:** `Conversation`/`Message` JSON-LD per receipt so an answer engine reads the parties
+and turns as data rather than inferring them from prose; the sitemap lists every receipt from the
+same read that generates the pages, so the two cannot disagree; cards link to the pre-rendered path
+rather than `?h=`; nginx prefers the real file and falls back to the client page.
+
+**Gate:** 70 vitest green under `TZ=America/Los_Angeles` · typecheck · lint · build with
+`CELLO_REQUIRE_GALLERY=1`.
+
+**Verified as the crawlers, not by reasoning about the build:**
+- `curl -A GPTBot https://gallery.cello.mygentic.ai/receipt/1a29969b…` → monikers, the full turns
+  (`no_current_agent` and all), and `application/ld+json`.
+- `curl -A PerplexityBot https://gallery.cello.mygentic.ai/` → *"Ms_Chelly ↔ CELLO_Feedback 7/7/2026 ·
+  4 messages Sealed · attestation count not recorded"*.
+- `sitemap.xml` → 5 receipt URLs.
+- The deploy smoke test now fails if a receipt page serves no content to a non-JS client, so this
+  cannot silently regress.
+
+**Standing:** GALLERY-1 ✅ · GALLERY-INDEX-1 ✅ · GALLERY-CONTENT-1 ✅ · GALLERY-SEED-1 🟡 (m8c's
+message count is uncorroborated by any line in its own document — named, pinned by a test, and the
+only one).
