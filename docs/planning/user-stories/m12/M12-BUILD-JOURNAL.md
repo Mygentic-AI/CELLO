@@ -3242,3 +3242,73 @@ components disagree, and it took ten minutes.
 
 Apply Fix #1 to the auto-acknowledge path: ensure the broker visiting connection exists BEFORE
 submitting the seal leaf, not after. Next entry.
+
+---
+
+## Entry 53 — 2026-07-29 — The seal fix landed the ordering and exposed the real gap: the RESPONDER has no broker entry
+
+My Entry 52 fix works and is not sufficient. Both halves are worth recording because the second is
+architectural, not a race.
+
+### The ordering race IS closed
+
+```
+19:07:54.577  B: seal.leaf.submitted                 (B closes first)
+19:07:57.155  A: seal.autoack.broker.reconnected     <- the fix: connection open BEFORE submitting
+19:07:57.496  DIRECTORY: seal.certificate.deferred   <- 341ms AFTER it opened
+19:07:57.498  A: seal.leaf.submitted
+```
+
+Previously the reconnect landed ~5s AFTER the directory had already deferred. It now lands 341ms
+BEFORE. The race is gone, and the deferral persists — so the timing was never the whole story.
+
+### The real gap
+
+The deferral names the initiator whose stream is missing: `d48a9b802e3ba6bf` = **bob2**, not ann.
+
+- **bob2** is homed on `gcp-euw1`
+- the seal was processed by `gcp-use1` (instance `..853249`) — **ann's** home
+- `crossNodeBrokerBySession` is populated for the session INITIATOR only: ann visited bob2's home
+  node to broker the session, so ann has a broker entry and **bob2 has none**
+
+So Fix #1 — and my extension of it — no-op entirely for bob2, because there is no broker to
+reconnect to. Yet the moment bob2 closes FIRST it becomes the **seal** initiator, and the directory
+processing the seal pushes `seal_verified` to bob2 on a node bob2 has never had a stream on.
+
+Two different "initiator" roles were being conflated:
+- **session initiator** (ann) — has a visiting connection to the counterparty's home, tracked in
+  `crossNodeBrokerBySession`
+- **seal initiator** (whoever closes first — here bob2) — is who `processSeal` pushes
+  `seal_verified` to, and has no such tracking at all
+
+Fix #1 guards the first role. The frame is addressed to the second.
+
+### Why it presents as intermittent
+
+Whoever closes first becomes the seal initiator. If that is the session initiator (ann), Fix #1
+applies and the seal completes — the two successes earlier today. If it is the responder (bob2),
+there is no broker entry, no connection, and the frame is deferred. **A coin flip on close ordering.**
+
+### The fix is NOT another reconnect
+
+Opening yet another visiting connection would mean guessing which node will process the seal, and
+the responder has no reason to know. The candidates, in order of how much they change:
+
+1. **Directory-side**: `processSeal` runs on a node that, by construction, has the OTHER party's
+   stream (it just received their leaf). Route `seal_verified` through the node that does hold the
+   seal initiator's stream, rather than requiring it locally — the consortium already replicates
+   enough to know where an agent is homed (`agent_presence` carries `owning_node_id`).
+2. **Client-side**: have the responder register a broker entry too, so Fix #1 applies symmetrically.
+   Cheaper, but it only works if the responder can predict the processing node.
+3. **Deferred-delivery**: the frame IS enqueued and the initiator DOES reconnect seconds later.
+   If the queue drained on reconnect the seal would complete late rather than never. Worth checking
+   why it does not — this may be the smallest real fix.
+
+(3) is the next thing to test, because the machinery already exists and the observed behaviour
+suggests it is simply not draining.
+
+### Kept from Entry 52
+
+`seal.certificate.deferred` is what made all of this legible. Before it, this failure was a bare
+`enqueueNotification` with no log, and the client's timeout blamed directory verification that never
+ran. One WARN at the point where two components disagree turned a day of guessing into two runs.
