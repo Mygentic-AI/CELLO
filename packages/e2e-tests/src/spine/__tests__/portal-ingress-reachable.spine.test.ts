@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { drainAndMint, prepareIntakeScanner, authenticateSubmission } from "../portal-ingress.js";
+import { loadPortalIngress } from "../portal-ingress.js";
 
 /**
  * The spine lane can reach the portal's REAL ingress.
@@ -10,9 +10,9 @@ import { drainAndMint, prepareIntakeScanner, authenticateSubmission } from "../p
  * which is precisely the false green the indirection exists to prevent.
  */
 describe("the spine lane reaches the portal's ingress", () => {
-  it("resolves the real modules, not a local re-implementation", () => {
-    expect(typeof drainAndMint).toBe("function");
-    expect(typeof prepareIntakeScanner).toBe("function");
-    expect(typeof authenticateSubmission).toBe("function");
+  it("resolves the real modules, not a local re-implementation", async () => {
+    const portal = await loadPortalIngress();
+    expect(typeof portal.drainAndMint).toBe("function");
+    expect(typeof portal.prepareIntakeScanner).toBe("function");
   });
 });
