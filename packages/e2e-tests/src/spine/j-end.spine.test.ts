@@ -167,6 +167,11 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     ) as { getSubmissionSigner: (env: string) => unknown };
 
     const portal = await loadPortalIngress();
+    // SELF-SUFFICIENT: apply the portal's migrations rather than assuming the container still has
+    // them. A Docker restart recreates it, and without this the mint throws, the per-row catch
+    // swallows it, and the journey reports "nothing minted" with every counter zero — an
+    // environment fault wearing a code fault's clothes.
+    await portal.migrate();
     await portal.prepareIntakeScanner();
 
     // ENROL THE PORTAL AS AN AUTHORIZED ISSUER — the step a real deployment performs out of band.
@@ -283,5 +288,65 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
 
     const held = (await conn.call("cello_trust_signals_list", {})) as { signals?: Array<{ consent_state?: string }> };
     expect((held.signals ?? []).some((x) => x.consent_state === "accepted"), "now presentable").toBe(true);
+  }, 120_000);
+
+  it("HOP 5: Alice presents to Charlie, who verifies it and sees BOB'S voice, not CELLO's", async () => {
+    const alice = mcpConns[mcpConns.length - 1];
+    // Bare `.ok).toBe(true)` assertions give "expected false to be true" and nothing else, which is
+    // useless at 3am. Every call here reports what it actually got.
+    const added = (await alice.call("cello_contact_add", { pubkey: pubkeys["charlie"] })) as Record<string, unknown>;
+    expect(added.ok, `contact_add: ${JSON.stringify(added)}`).toBe(true);
+    // Alice is ALREADY current from HOP 4, and re-selecting returns
+    // `{ok:false, reason:"agent_already_current"}` — a benign no-op whose own guidance says "No
+    // action needed". Worth noting as an API wrinkle (a script branching on `ok` reads a no-op as a
+    // failure), but the journey simply does not need the redundant call.
+
+    const charlie = await connectMcp(dirFor["charlie"], "jend-charlie");
+    mcpConns.push(charlie);
+    const started = (await charlie.call("cello_start_agent", { name: "charlie" })) as Record<string, unknown>;
+    expect(started.ok, `start_agent(charlie): ${JSON.stringify(started)}`).toBe(true);
+    const usedC = (await charlie.call("cello_use_agent", { name: "charlie" })) as Record<string, unknown>;
+    expect(usedC.ok, `use_agent(charlie): ${JSON.stringify(usedC)}`).toBe(true);
+
+    const awaiting = charlie.call("cello_await_session", { timeout_ms: 30_000 });
+    const init = (await alice.call("cello_initiate_session", { target_pubkey: pubkeys["charlie"] })) as { ok?: boolean };
+    expect(init.ok, `initiate failed: ${JSON.stringify(init)}`).toBe(true);
+
+    const inbound = (await awaiting) as {
+      type?: string;
+      trust_signals?: Array<{ type: string; issuer: string; claim: Record<string, unknown> }>;
+    };
+    expect(inbound.type).toBe("new_session");
+    expect(inbound.trust_signals, "Charlie must receive the endorsement Alice accepted").toBeDefined();
+
+    const endorsement = inbound.trust_signals!.find((x) => x.type === "endorsement");
+    expect(endorsement, `no endorsement presented: ${JSON.stringify(inbound.trust_signals)}`).toBeTruthy();
+
+    // ── INV-UNTRUSTED, ALL THE WAY TO A CONSUMING CONTEXT ────────────────────────────────────────
+    // This is the assertion the whole milestone builds toward. Charlie's agent is about to put this
+    // in an LLM's context, and the two voices must still be distinguishable at that point:
+    //
+    //   - CELLO's `claim` says only what CELLO knows — that a key signed it and it passed the scan.
+    //   - Bob's `statement` is his own words, flagged untrusted, with his key beside them.
+    //
+    // If these had merged upstream, a stranger's sentence would arrive wearing CELLO's authority and
+    // nothing downstream could tell. That is why the portal's claim is asserted NOT to contain his
+    // text rather than merely asserting his text is present somewhere.
+    const claim = endorsement!.claim;
+    expect(String(claim.claim), "CELLO's own voice must not restate Bob's words").not.toContain("payments migration");
+    expect(String(claim.claim)).toMatch(/NOT verified|does not vouch/i);
+    expect(claim.statement, "Bob's words, verbatim").toContain("payments migration");
+    expect(claim.statement_is_untrusted).toBe(true);
+    expect(claim.statement_author_pubkey, "attributed to BOB, the author").toBe(pubkeys["bob"]);
+
+    // NOT the portal's key. The portal signed the submission at the chokepoint; it did not make the
+    // claim, and the framing Charlie sees says so.
+    expect(claim.statement_author_pubkey).not.toBe(pubkeys["alice"]);
+
+    // VERIFIED AGAINST THE DIRECTORY: the hash Charlie holds is live in the notary ledger. Without
+    // this, a presented envelope is just bytes someone handed over.
+    expect(psqlSpine(
+      `SELECT effective_status FROM signal_records_effective WHERE type = 'endorsement' LIMIT 1`,
+    )).toContain("active");
   }, 120_000);
 });

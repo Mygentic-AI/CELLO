@@ -45,6 +45,16 @@ export interface IngressResult {
 }
 
 export interface PortalIngress {
+  /**
+   * Apply the portal's own migrations.
+   *
+   * The journey runs this itself rather than assuming someone did. The portal's Postgres is a Docker
+   * container, and a Docker restart recreates it — after which `processed_submissions` is gone, the
+   * mint throws, the per-row catch swallows it, and the journey reports "nothing minted" with every
+   * counter at zero. That reads as a code defect and is an environment one, which is the worst kind
+   * of red to hand somebody.
+   */
+  migrate(): Promise<unknown>;
   /** Compile the intake rule corpus. The pass refuses to run until this has succeeded. */
   prepareIntakeScanner(): Promise<void>;
   /** One drain pass: authenticate -> dedupe -> scan -> compose -> mint -> deliver -> ack. */
@@ -68,11 +78,15 @@ const portalModule = (rel: string): string =>
 export async function loadPortalIngress(): Promise<PortalIngress> {
   const ingress = (await import(portalModule("submission-ingress.ts"))) as Pick<PortalIngress, "drainAndMint">;
   const scan = (await import(portalModule("submission-scan.ts"))) as Pick<PortalIngress, "prepareIntakeScanner">;
+  const db = (await import(pathToFileURL(join(PORTAL_ROOT, "src/server/migrate.ts")).href)) as Pick<PortalIngress, "migrate">;
   if (typeof ingress.drainAndMint !== "function" || typeof scan.prepareIntakeScanner !== "function") {
     throw new Error(
       "[portal-ingress] the portal's ingress modules did not export what J-END drives — refusing to " +
         "run a journey that would otherwise appear to pass while testing nothing",
     );
   }
-  return { drainAndMint: ingress.drainAndMint, prepareIntakeScanner: scan.prepareIntakeScanner };
+  if (typeof db.migrate !== "function") {
+    throw new Error("[portal-ingress] the portal's migrate() is not reachable — J-END cannot guarantee its own schema");
+  }
+  return { drainAndMint: ingress.drainAndMint, prepareIntakeScanner: scan.prepareIntakeScanner, migrate: db.migrate };
 }
