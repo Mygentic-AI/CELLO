@@ -1,22 +1,35 @@
 ---
 name: M9 Build Journal
 type: journal
-date: 2026-06-21
+date: 2026-07-29
 milestone: M9
 status: open
 description: >
-  Append-only build journal for M9 (the security gateway). One entry per unit of work.
-  NEVER edit a prior entry. This is the live-state + audit-trail follow-through doc: a
-  fresh context reads the last few entries to resume. Pairs with M9-DEFINITION-OF-DONE.md
-  (the target) and M9-PROCEDURE.md (the runbook). See M9-PROCEDURE.md §0 for read order
-  and §1 for what each entry must contain.
+  Append-only build journal for M9 (the security and governance layer). One entry per unit
+  of work. NEVER edit a prior entry; the RESUME STATE block below is the ONE mutable region
+  and is kept current (M10B standard). June 2026 entries are date-titled (the Phase-1 build);
+  entries from the 2026-07-29 reopening onward are numbered C1, C2, … (the CONNECT UNIT) so
+  DoD evidence pointers (`→ Entry C·N`) resolve. Pairs with M9-DEFINITION-OF-DONE.md (the
+  target) and M9-PROCEDURE.md (the runbook — read order §0, entry contents §7).
 ---
 
 # M9 Build Journal (append-only)
 
 > Newest entries at the BOTTOM. Never edit or delete a prior entry. Each entry: DoD-ID,
 > what was red, what was found, commit hashes, reviewer outcome, blockers, decisions.
-> (M9-PROCEDURE.md §1, §9.)
+> Design-significant units get a DESIGN NOTE entry before any code (M9-PROCEDURE §6).
+
+## RESUME STATE (the one mutable block — keep current)
+
+- **Tier open:** Tier 1, THE CONNECT UNIT (opened 2026-07-29).
+- **Next red line:** `DOD-M9C-STORE-1` — design note first (store topology, key handoff,
+  plaintext import).
+- **Lines ✅ this tier:** none yet.
+- **Enforcer:** `DOD-M9C-GATE-1` (composition-root live gate) — not yet built; until it
+  exists, focused suites carry the units.
+- **Decisions-of-record:** policy audit §10 (D-2..D-5, D-11) → DoD Decisions M9C-D1..D5.
+- **Publish owed at tier close:** one batched beta cascade + pinned/verified install;
+  `latest` promotion and `/mcp` reconnect are Andre's.
 
 ---
 
@@ -890,3 +903,40 @@ At part-2 build time, the open sub-decision is the transformers.js runtime insta
 lazy to keep the client small, matching the model-not-bundled call). Do NOT build part 2 blind — it needs
 the model + runtime + a memory-capable env to write AND verify; unrunnable inference code would violate the
 "only a live run is done" discipline. State: gateway 130 + daemon 395 green; nothing pushed; nothing on `main`.
+
+---
+
+## 2026-07-29 — Entry C1: M9 REOPENED for the CONNECT UNIT — docs modernized to the M10B standard
+
+**Why reopened.** The 2026-07-27 policy surface audit (§0) proved the layer never runs in the
+shipped product: the composition root never sets `config.securityGateway`, every daemon boots
+`PassthroughGatewayClient`, and Andre's own daemon log has announced `mode:"passthrough"` on every
+boot. The June gate (`m9-gate-1.test.ts`) injected the real client itself — it proved the layer
+works when connected and hid that only the test connects it. Andre, 2026-07-29: modernize the
+three M9 documents to the M10B standard, extend the DoD to fully cover the connect work, then do
+it.
+
+**Docs produced this entry (trustless-cello, straight to main):**
+- `M9-PROCEDURE.md` — full rewrite to the M10B standard: reality check, the four ways a run dies,
+  severity triage with the M9-specific silently-broken-core list (injection-seam theatre, silent
+  passthrough downgrade, agent self-loosening, plaintext resurrection, env bypass resurrection),
+  reviewer lenses, review-pass hard cap, design-note template. The old §3a 30-minute drift-check
+  cron and the M7-era worktree rules are superseded (M7 closed; work is on `main` now).
+- `M9-DEFINITION-OF-DONE.md` — full rewrite: M10B status legend, Orientation (the five-point
+  evidence chain), scope fence, invariants with the INV-4 AMENDMENT (per policy D-3: one key,
+  backup unit; SI-001 re-scoped to Phase 2) plus new INV-9 (connected by default, passthrough
+  test-only) and INV-10 (no loosen side door). Tier 0 compresses the June Phase-1 record with
+  statuses preserved, including the 2026-07-09 storage correction now assigned to STORE-1.
+  **Tier 1 is the connect unit:** `DOD-M9C-STORE-1` (custody, closes DOD-CRYPTO-AT-REST-1),
+  `-WIRE-1` (enforcing flip, INV-9), `-SURFACE-1` (cello config + CLI loosen-confirm, absorbs
+  DOD-CONFIG-1), `-ENV-1` (removes the four CELLO_GATEWAY_* policy overrides), `-AUDIT-1` (the
+  D-11 command, security half, ships with the flip), `-GATE-1` (composition-root live gate — the
+  new enforcer; spawns the shipped bin, zero injection), `-PUBLISH-1` (one batched beta cascade).
+  Decisions M9C-D1..D5 import policy D-2/D-3/D-4/D-5/D-11 with their reasoning.
+- This journal — header updated to the numbered-entry convention, RESUME STATE block added.
+
+**Scope guard.** This unit is cello-client only; no AWS, no directory, no portal. The Generic
+Reject / refusal-notification work (§15 items 5–8) is a LATER unit — only the D-11 command's
+security half ships here, shaped so the reachability source can join without a breaking change.
+
+**Next:** design note for `DOD-M9C-STORE-1` (Entry C2), then the loop.
