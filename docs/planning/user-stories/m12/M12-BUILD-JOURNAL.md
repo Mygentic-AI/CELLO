@@ -2781,3 +2781,71 @@ production, not a new bug:
 
 Stated as the leading explanation, NOT as established — confirming it means showing the failing
 node was outside that specific agent's DKG quorum.
+
+---
+
+## Entry 46 — 2026-07-29 — Reliability measured properly; two claims of mine retracted, one new divergence found
+
+### Retraction 1: the enrollment gap is NOT the cause of `ceremony_exhausted`
+
+I named M8B "enrollment / Problem 3" as the cause twice — in Entry 45 and to Andre — on
+pattern-match, not evidence: "no share" resembled the no-share problem I already knew about.
+Andre asked me to be precise about what I meant, which forced the check I should have run first:
+
+```
+directory.dkg.participant.signer.registered  ->  gcp-use1, gcp-usc1, gcp-euw1   (ALL THREE)
+```
+
+Every node holds a share for every agent registered here. No node is absent, so enrollment cannot
+apply. **Enrollment is a real, documented, deliberately-unbuilt feature (the resharing ceremony) —
+it is simply not what was failing.**
+
+### Retraction 2: `ceremony_exhausted` is no longer occurring at all
+
+Across the last two hours: every `frost.debug.generateCommitment.share_lookup` reports
+`shareFound: true` with a consistent `:epoch:1`, and there are **zero** `no_share` events. The
+epoch-mismatch theory I floated next is also unsupported. The instances I saw are fully explained
+by the SI-003 share-persistence bug (Entry 38) — a CLOSED cause. My "~60% reliably green, one
+defect explains it" was stale and overconfident on the diagnosis.
+
+### What the system actually does now, measured
+
+| test | result |
+|---|---|
+| sessions, client freshly connected | **3/3** |
+| sessions after a directory instance REPLACEMENT, client NOT restarted | **3/3** |
+| sessions while one directory is TERMINATED (2-of-3) | ✅ |
+| `directory_below_threshold` | only when Terraform replaced ALL THREE directories + the relay at once — the client recovered on its own afterwards |
+
+**The client recovers from a rolling directory replacement without a restart.** That is the
+redundancy half of the sovereign-node invariant, demonstrated rather than assumed.
+
+### NEW: the initiator accumulates sessions the counterparty never received
+
+```
+sam  (initiator): 12 sessions, ALL "active"
+tess (target)   :  4 sessions, ONE active — and that one still in pending_session_requests
+```
+
+`initiate-session` returns a sessionId and the initiator marks the session ACTIVE, while the target
+has no record of it. The initiator then cannot seal — `close-session` on the target returns
+`session_not_found` for a session the initiator considers live. This is the same shape as the
+directory logging `session.assignment.delivery.complete fullyEstablished: true` for an assignment
+the client rejected (Entry 35): **one side declares success for a two-sided fact.**
+
+Partly harness-induced — my loop created sessions faster than the target accepted them, which a
+real operator would not do. But two things are NOT harness artifacts and are worth fixing:
+1. the initiator marks a session `active` on an assignment the target may never have acted on, and
+2. those phantom sessions ACCUMULATE with no expiry, so the initiator's session list drifts
+   permanently away from reality.
+
+There is an `expired_session_requests` bucket on the inbox, so an expiry concept exists on the
+TARGET side; the initiator appears to have no equivalent.
+
+### The rule this session keeps re-teaching
+
+Three times today I named a cause that the evidence did not support — AutoNAT "falsified" by a
+silent debug namespace, the seal "wedged forever" against an 11-minute timeout, and enrollment as
+the ceremony failure. Each time the tell was the same: **I reached for a mechanism I already knew
+about instead of the one the logs pointed at.** The check that would have caught all three costs
+one query.
