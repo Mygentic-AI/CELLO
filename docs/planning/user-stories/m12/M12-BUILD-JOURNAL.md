@@ -1572,3 +1572,56 @@ moment, not just which mechanism — the same technique that turned `protocol_er
 The local convergence enforcer is green again (5/5) after the harness port fix, so there IS a
 working control to diff against. What differs between it and production is now a short list:
 real WAN latency, three separate hosts, and simultaneous bidirectional dials on the same 60s tick.
+
+---
+
+## Entry 29 — 2026-07-29 — The AE failure, located exactly: streams reset mid-exchange, stage-independent
+
+The stage marker settled it in one deploy:
+
+```
+"Cannot write to a stream that is closed (stage: sending_ae_state)"
+"wire closed while waiting for ae_auth_a (stage: handshake)"
+```
+
+Read together with the dialer's `wire closed while waiting for ae_state`, the picture is complete
+and it is NOT what any of the earlier hypotheses said:
+
+- The responder **authenticates successfully**, receives `ae_state_req`, and **computes the digests
+  without error** — `buildWireState` returns, since the stage advanced to `sending_ae_state`.
+- The write of `ae_state` then fails: the stream is already closed.
+- On a different directed channel the responder dies at `stage: handshake`, waiting for an
+  `ae_auth_a` the dialer never sent.
+- Both endpoints report that the OTHER closed.
+
+So streams are being reset **at whatever point they happen to have reached** — stage-independent,
+symmetric, and never once succeeding (`authenticated=0` across 54 rounds before this deploy). That
+is a transport-level reset, not an endpoint decision. No amount of protocol-logic reading would
+have found it, which is why the diagnostic mattered more than the reasoning.
+
+### The leading hypothesis, and why it fits
+
+**Simultaneous bidirectional dials.** Every node dials every peer on its own 60s tick, so A dials B
+while B dials A. Two connections come into existence between the same peer pair; libp2p collapses
+duplicates, and every stream on the losing connection is reset — at whatever stage it had reached.
+
+It fits each observation: symmetric (both directions lose), stage-independent (the reset is
+unrelated to protocol state), immediate (dedup happens at connection setup), permanent (every tick
+recreates the race), and absent locally (the enforcer's three nodes converge in one pass rather
+than sustaining a mutual 60s dial loop).
+
+It is a hypothesis, and it is labelled as one. What is now established beyond it: the handshake
+logic, the digest computation, the manifest, the peer identities, the database role and the dial
+address are all correct — each verified by measurement rather than inspection.
+
+### What the diagnostics cost and returned
+
+Three small changes turned an undiagnosable failure into a located one:
+`describeThrown` (a thrown non-Error rendered as `[object Object]`), logging the handshake's
+`detail` (dropped at the log site), and the responder `stage` marker. Each took one deploy, and
+each was necessary — without the first, the second could not be read; without the second, the third
+had nothing to attach to.
+
+The corresponding rule, earned three times on this milestone: **when a failure names its exit point
+instead of its cause, fix the naming before forming another hypothesis.** I formed four hypotheses
+against the un-named version and falsified all four.
