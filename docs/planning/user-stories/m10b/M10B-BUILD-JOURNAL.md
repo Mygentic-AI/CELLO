@@ -2954,3 +2954,82 @@ rejected; an over-long body is rejected; a normal sentence PASSES (the positive 
 "reject everything" would pass every negative test); the same body scanned twice yields the same
 `scanner_version`; a body is never mutated. Enforcer: the ingress path, and ultimately
 `DOD-END-JOURNEY-1` case (a) where a refusal message is scanned on the same path.
+
+---
+
+## Entry 38 — `DOD-END-INGRESS-1` and `DOD-END-SCAN-1`, and a subpath that was inert — 2026-07-29
+
+Three repos moved. Directory: the drain surface. Portal: the drain client, the authentication step,
+the scanner. cello-client: the corpus made enumerable, then made *usable*.
+
+### The directory: two routes, because the split IS the exactly-once property
+
+`DOD-END-QUEUE-1` built the mailbox and its repository; **nothing exposed it**, so every submission
+the client surface reported as "queued" sat in a table nobody read.
+
+`POST /internal/submissions/drain` READS; it does not delete. `POST /internal/submissions/ack`
+removes, after the portal reaches a TERMINAL outcome (minted, rejected, poison — all three delete,
+differing only in what goes back to the submitter). Delete-on-read is the obvious single-route design
+and it turns **every crash into a silent loss** of a submission whose operator was told it was
+queued — and since the ciphertext is opaque to the directory, nothing downstream could ever notice.
+Revert-tested: putting the delete back into drain fails the crash-recovery assertion.
+
+Auth is required even though the payload is opaque. The SET of queued ids, their arrival order and
+their intake key ids is traffic analysis — how much, how often, against which key generation.
+*"It is encrypted"* is not a reason to serve it to anyone.
+
+### The portal: what "derive `issuer_pubkey` from the signature" actually means
+
+Written down because the phrase invites a wrong implementation. **Ed25519 has no key recovery**
+(RFC 8032), so it cannot mean recovering a key from signature bytes. It means the body CLAIMS a key
+and that claim is worth **nothing** until the signature verifies against it. The operational rule the
+code enforces: `submitter_pubkey` is never read for any purpose before `verify` returns true — only
+shape-checked. Tested directly with the forgery: Mallory writes a body claiming Bob's pubkey and
+signs it with her own.
+
+Every failure RETURNS rather than throwing, because the caller drains a batch and one poisoned row
+must not stop the rest — a single malformed submission that aborted the drain would be a trivial
+denial of service against every other submitter.
+
+### `scanner_version` is derived, and that required making the corpus enumerable
+
+`M10B-D15` says derive it; nothing could. Added `injectionPatternIds`, `secretRuleIds` and
+`detectorCorpusDigest` to the `./detect` subpath — over the **ACTIVE** set, not the source list,
+because `compileSecretRules` deliberately skips a rule that will not compile under RE2. That
+distinction is what makes §7's "byte-identical across nodes" mechanically checkable instead of
+aspirational: **two intakes agree iff their derived versions agree.** Sorted before hashing, so a
+mere reorder does not fake a rule change.
+
+### THE FINDING WORTH KEEPING — the subpath was complete-looking and inert
+
+`./detect` never exported `initLinearRegex`. **The corpus cannot compile without it.** Omit it and
+`compileInjectionPatterns` runs happily, leaves `compiled` null, and `scanInjectionPatterns` returns
+`[]` for every input — every rule silently matching nothing. A consumer installing that gets a
+scanner **that cheerfully passes a prompt-injection payload**, which is strictly worse than one that
+fails to load, because it reports success.
+
+Two things made it invisible:
+1. **From inside the monorepo it works**, because the gateway's own startup calls `initLinearRegex`
+   before anything else. Nothing in cello-client exercised the subpath as an outside consumer would.
+2. **The exports map deliberately offers no deep-import escape** (that narrowness is the point of
+   `M10B-D17`), so there was no workaround — the omission was fatal rather than annoying.
+
+It surfaced only when the portal's scanner was built against the PUBLISHED package. Generalised:
+**a narrow entry point has to be tested from outside, as a consumer, or "narrow" and "broken" are
+indistinguishable.** The pinned export-list guard I wrote earlier caught every ADDITION deliberately;
+it could not catch an omission, because it only checks that the listed names are present.
+
+### Published
+
+`v0.0.138` (gateway 0.0.11 — corpus digest) and `v0.0.139` (gateway 0.0.12 — the initializer).
+0.0.11 is on npm and is the unusable one; anyone reading this should use **0.0.12 or later**.
+
+### State
+
+- Directory drain routes: 6 integration tests green, **NOT deployed** — rides the next directory
+  deploy (~25–30 min, 3 regions). No migration, so nothing to renumber against the other session.
+- Portal: drain client (7 tests) + `authenticateSubmission` (6 tests) green and pushed.
+- Portal scanner: written, **not yet verified** — it needs gateway 0.0.12, which was publishing as
+  this entry was written.
+- Neither `DOD-END-INGRESS-1` nor `DOD-END-SCAN-1` has had its `cello-unit-reviewer` pass yet. Both
+  are owed one before either tag flips.
