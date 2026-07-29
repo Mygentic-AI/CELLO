@@ -2699,3 +2699,85 @@ Not cosmetic. Registrations are continuous in production, and the sealing node i
 brokered — frequently not one of the DKG quorum. If the window is replication lag it is bounded and
 probably tolerable; if it needs a restart it is not. That is the whole reason the distinction is
 worth one clean experiment rather than a guess.
+
+---
+
+## Entry 45 — 2026-07-29 — The relay never got the AutoNAT patch; and three more traps behind it
+
+### 1. The relay was running UNPATCHED autonat the whole time
+
+The relay is a SERVICE node, so it KEEPS the AutoNAT dial-back responder. Unpatched, that responder
+answers a probe by calling `openConnection(peer)` — returning the ALREADY-OPEN connection — and
+closing it. For a client, that connection is its relay link.
+
+Live evidence before the fix:
+
+```
+session.standing_receiver.reservation.lost  x31   reason: relay_connection_gone
+[RELAY] Peer connected / Peer disconnected         (constant churn, seconds apart)
+close-session -> relay_stream_closed
+initiate-session -> counterparty_did_not_accept
+```
+
+The same `reservation.lost / relay_connection_gone` pair appears in Andre's PRODUCTION daemon.
+
+**Why it was missed:** when the patch landed I fixed `packages/directory/Dockerfile` and never looked
+at `packages/relay/Dockerfile`. Without `COPY patches/`, pnpm installs the UNPATCHED package and the
+image builds perfectly clean. The relay had been shipping unpatched since the patch existed. Both
+stages now copy `patches/` and assert `force: true` in the production tree, so an unpatched relay
+fails the BUILD.
+
+Post-deploy the peer churn stopped.
+
+### 2. My relay manifest publisher baked in an EPHEMERAL private IP
+
+`healthCheckUrl` used the relay's private IP, correct at publish time — and the VPC-internal address
+is exactly right, since the public one is firewalled to Google's probers. But a MIG instance
+replacement changes it: `10.10.0.14` → `10.10.0.27`. Every directory's health check then failed, the
+pool emptied, and sessions returned `relay_unavailable`.
+
+Republishing at v4 fixed it, but that is an operational trap, not a fix: **any relay replacement
+silently breaks every session until someone re-runs the publisher.** The durable fix is a STATIC
+INTERNAL address (`google_compute_address` with `address_type = "INTERNAL"`) pinned into the
+instance, so the value in the manifest cannot go stale. **Owed.**
+
+### 3. Cross-region relay health checks abort
+
+```
+relay.health.check.failed   "This operation was aborted"
+relay.pool.unavailable      x2
+```
+
+The check has a 5 s timeout (`relay-pool-manager.ts:153`). Cross-region latency inside the VPC is
+~30–90 ms, so 5 s is not tight — an abort means the request HUNG, not that it was slow. Some nodes
+pass while others fail, so it is not a blanket firewall block. Undiagnosed; recorded with the exact
+signature. **Owed.**
+
+### 4. The seal question: BOTH branches of the decisive test were falsified
+
+A Fable subagent traced the profile path from source and established, with file:line evidence:
+- `primary_pubkey` is `TEXT NOT NULL`, written in ONE atomic INSERT, and `agent_profiles` has no
+  UPDATE grant — so a row-exists-but-key-missing window CANNOT occur. That kills the cache theory.
+- Anti-entropy DOES carry `primary_pubkey` (`AGENT_PROFILES_SPEC.immutableColumns`).
+- Its decisive probe: look for `directory.profile.read_through` around the failed seal.
+  `read_through_miss` → the row was genuinely absent; line ABSENT → the build predates the fix.
+
+I ran it. For the failing initiator the line **never fired at all** — and the deployed build is
+current, so it does contain the read-through. **Both branches are falsified**, which means the seal
+path did not reach `#resolvePrimaryPubkey` the way both of us assumed. The honest state is that the
+mechanism is still unknown, and the next probe must start from "which call actually produced the
+single-key fallback", not from the profile store.
+
+### 5. Where the ceremony now fails, and why it is probably EXPECTED
+
+Latest run: `ceremony_exhausted` for an agent registered AFTER the last restart. Shares are
+deliberately never replicated (`DOD-INV-SHARES-LOCAL`), and a DKG runs over a QUORUM, not all N — so
+a node outside that quorum legitimately holds no share and cannot co-sign. If the broker picks that
+node, the ceremony fails. That is the deferred **M8B enrollment / Problem 3** item arriving in
+production, not a new bug:
+
+> "a node that was down/absent during a DKG holds **no share** and can't co-sign for that agent
+> until it gets one via a *resharing ceremony*"
+
+Stated as the leading explanation, NOT as established — confirming it means showing the failing
+node was outside that specific agent's DKG quorum.

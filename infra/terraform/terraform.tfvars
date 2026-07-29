@@ -80,7 +80,7 @@ directory_node_peer_ids = {
 # dependency for the thing that makes sessions brokerable at all.
 relay_primary_directory = "gcp-use1"
 
-relay_image_tag = "m12-b91b0f84"
+relay_image_tag = "relay-autonat-56a013c8"
 
 relay_nodes = {
   us-east1 = {
