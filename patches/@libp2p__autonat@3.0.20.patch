@@ -1,0 +1,32 @@
+diff --git a/dist/src/autonat.js b/dist/src/autonat.js
+index 743fe234e46b52060d78a6fcd85f7b14d617d4b2..595235c9e2007fb6b1c65e7673835a3308edd958 100644
+--- a/dist/src/autonat.js
++++ b/dist/src/autonat.js
+@@ -273,7 +273,12 @@ export class AutoNATService {
+             let connection;
+             lastMultiaddr = multiaddr;
+             try {
+-                connection = await this.components.connectionManager.openConnection(multiaddr, options);
++                // CELLO patch: force a NEW connection.
++                // Without this, openConnection returns an EXISTING connection to this peer, and
++                // the `finally` below closes it -- tearing down every stream multiplexed on it
++                // (anti-entropy, FROST, signaling). It also makes the verification vacuous:
++                // reusing a connection proves nothing about whether the peer can be DIALED.
++                connection = await this.components.connectionManager.openConnection(multiaddr, { ...options, force: true });
+                 if (!connection.remoteAddr.equals(multiaddr)) {
+                     this.log.error('tried to dial %a but dialed %a', multiaddr, connection.remoteAddr);
+                     throw new Error('Unexpected remote address');
+diff --git a/src/autonat.ts b/src/autonat.ts
+index b9c418220f47ca4534151d7a0aacb85b63761f1f..53a7550ef0fe2314d4d462dd44b47f4ab7f2a590 100644
+--- a/src/autonat.ts
++++ b/src/autonat.ts
+@@ -380,7 +380,8 @@ export class AutoNATService implements Startable {
+       lastMultiaddr = multiaddr
+ 
+       try {
+-        connection = await this.components.connectionManager.openConnection(multiaddr, options)
++        // CELLO patch: force a NEW connection -- see dist/src/autonat.js for the rationale.
++        connection = await this.components.connectionManager.openConnection(multiaddr, { ...options, force: true })
+ 
+         if (!connection.remoteAddr.equals(multiaddr)) {
+           this.log.error('tried to dial %a but dialed %a', multiaddr, connection.remoteAddr)

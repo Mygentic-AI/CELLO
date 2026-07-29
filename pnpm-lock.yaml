@@ -7,6 +7,11 @@ settings:
 overrides:
   '@libp2p/interface': 3.2.2
 
+patchedDependencies:
+  '@libp2p/autonat@3.0.20':
+    hash: 4204195cc5d8c953020547b5655983198d96374b3eba3b831ca70496a73cf935
+    path: patches/@libp2p__autonat@3.0.20.patch
+
 importers:
 
   .:
@@ -4807,7 +4812,7 @@ snapshots:
       '@cello-protocol/protocol-types': 0.0.21
       '@chainsafe/libp2p-noise': 17.0.0
       '@chainsafe/libp2p-yamux': 8.0.1
-      '@libp2p/autonat': 3.0.20
+      '@libp2p/autonat': 3.0.20(patch_hash=4204195cc5d8c953020547b5655983198d96374b3eba3b831ca70496a73cf935)
       '@libp2p/circuit-relay-v2': 4.2.3
       '@libp2p/crypto': 5.1.21
       '@libp2p/dcutr': 3.0.18
@@ -4832,7 +4837,7 @@ snapshots:
       '@cello-protocol/protocol-types': 0.0.23
       '@chainsafe/libp2p-noise': 17.0.0
       '@chainsafe/libp2p-yamux': 8.0.1
-      '@libp2p/autonat': 3.0.20
+      '@libp2p/autonat': 3.0.20(patch_hash=4204195cc5d8c953020547b5655983198d96374b3eba3b831ca70496a73cf935)
       '@libp2p/circuit-relay-v2': 4.2.3
       '@libp2p/crypto': 5.1.21
       '@libp2p/dcutr': 3.0.18
@@ -4857,7 +4862,7 @@ snapshots:
       '@cello-protocol/protocol-types': 0.0.26
       '@chainsafe/libp2p-noise': 17.0.0
       '@chainsafe/libp2p-yamux': 8.0.1
-      '@libp2p/autonat': 3.0.20
+      '@libp2p/autonat': 3.0.20(patch_hash=4204195cc5d8c953020547b5655983198d96374b3eba3b831ca70496a73cf935)
       '@libp2p/circuit-relay-v2': 4.2.3
       '@libp2p/crypto': 5.1.21
       '@libp2p/dcutr': 3.0.18
@@ -5260,7 +5265,7 @@ snapshots:
 
   '@leichtgewicht/ip-codec@2.0.5': {}
 
-  '@libp2p/autonat@3.0.20':
+  '@libp2p/autonat@3.0.20(patch_hash=4204195cc5d8c953020547b5655983198d96374b3eba3b831ca70496a73cf935)':
     dependencies:
       '@libp2p/interface': 3.2.2
       '@libp2p/interface-internal': 3.1.8

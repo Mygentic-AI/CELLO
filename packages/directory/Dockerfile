@@ -22,6 +22,11 @@ RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 
 # Copy workspace root files for pnpm workspace resolution
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json tsconfig.json ./
+# Patched dependencies. `pnpm.patchedDependencies` in the root package.json names files under
+# patches/, and WITHOUT them pnpm installs the UNPATCHED package -- an image that boots fine and
+# silently loses the fix. @libp2p/autonat's dial-back closes a connection it did not open, which
+# tears down anti-entropy. Verified post-build by the `force: true` assertion below.
+COPY patches/ patches/
 COPY packages/interfaces/package.json packages/interfaces/
 COPY packages/directory/package.json packages/directory/
 
@@ -71,11 +76,25 @@ RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 
 # Copy workspace structure for production install
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+# Patched dependencies. `pnpm.patchedDependencies` in the root package.json names files under
+# patches/, and WITHOUT them pnpm installs the UNPATCHED package -- an image that boots fine and
+# silently loses the fix. @libp2p/autonat's dial-back closes a connection it did not open, which
+# tears down anti-entropy. Verified post-build by the `force: true` assertion below.
+COPY patches/ patches/
 COPY packages/interfaces/package.json packages/interfaces/
 COPY packages/directory/package.json packages/directory/
 
 # Install production dependencies only
 RUN pnpm install --frozen-lockfile --prod
+
+# Assert the patch is actually in the shipped tree. A patch that silently fails to apply is the
+# whole failure mode this guards -- the node would run, anti-entropy would fail, and nothing would
+# say why. Fails the build, not production.
+RUN set -eu; \
+    f=$(find node_modules/.pnpm -path '*@libp2p/autonat/dist/src/autonat.js' | head -1); \
+    [ -n "$f" ] || { echo 'FATAL: @libp2p/autonat not found in the production tree'; exit 1; }; \
+    grep -q 'force: true' "$f" || { echo "FATAL: @libp2p/autonat is UNPATCHED at $f"; exit 1; }; \
+    echo "ok: @libp2p/autonat patched at $f"
 
 # Copy compiled dist from build stage
 COPY --from=build /app/packages/interfaces/dist/ packages/interfaces/dist/
