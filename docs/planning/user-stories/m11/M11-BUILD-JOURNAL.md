@@ -4016,3 +4016,81 @@ detected) · 29 pytest · 54 vitest · typecheck · lint · build.
 pending). `published_receipts` holds 5 rows, **0** with `verified_by IS NOT NULL`, **0** where
 `message_count <> jsonb_array_length(transcript)`. The live API serves all five with transcripts, and
 the deployed bundles carry the new rendering.
+
+---
+
+### Entry 64: the guards protected the path nobody used
+**Date:** 2026-07-29
+**Target:** DOD-GALLERY-CONTENT-1, DOD-GALLERY-SEED-1 — review of Entry 63
+
+Reviewer on the transcript unit. Two blocking findings, and both sat on the **seed path — the path
+that wrote every row currently in the table.**
+
+**1. None of the API's validation ran on the rows that shipped.** `clean_transcript` refuses markup,
+enforces turn shape, and bounds size; the seeder writes direct SQL and never called it. So the
+receipt page's own comment — *"markup is refused at the write too, so this is the second of two
+locks"* — was false for every live row: there was one lock. The data happens to be clean (checked:
+zero turns containing `<` or `>`), which is luck, not a guarantee. Fixed by extracting
+`_receipt_validation.py` and importing it from both, so a rule tripped by the seeder and by an API
+caller produces the same code.
+
+**2. An unrecognised seal state was coerced to `sealed`.** `status = seal.group(1) if seal else
+"sealed"`, then `status if status in (...) else "sealed"`. A write-up whose seal line is absent,
+reworded, or names a state this codebase does not know would be published as a positive
+cryptographic claim the document never made — permanently, on the page whose only purpose is that a
+stranger can check it. The Lambda refuses exactly this with `unknown_seal_status`; the seeder
+inverted it. Both now refuse, and neither defaults.
+
+**3. `message_count` agreed with the transcript by construction, not by rule.** The seeder derives
+the count from the turns, so it was true and unenforced — any other writer could publish "12
+messages" above a two-turn exchange, a page contradicting itself in front of the reader. Now a DB
+constraint (`0025`) and an API check. It found a defect immediately: my own test fixture claimed 12
+messages for a 2-turn transcript.
+
+**4. The initiator was inferred from who speaks first.** The documents state it. Turn order agrees
+in all five, but a write-up that logged the responder's greeting first would publish a reversed,
+permanent attribution. The stated value now wins and the inference is asserted against it.
+
+**5. `--emit-sql` had no success signal at all** — it returns before touching a database, and the
+runner reports only the last statement's rowcount. That is precisely how the Entry 63 quoting bug
+inserted one row of five and looked complete. The emitted SQL now ends with a verification SELECT,
+so the runner's own output *is* the check.
+
+**6. The seed script had no tests.** For a script that turns markdown into irrevocable public
+content, that was the largest gap in the unit — the narration fix from Entry 63 reverted with zero
+failures. 16 tests now, including the exact five-row vault output and four refusal cases, each
+revert-tested individually.
+
+**Two more the reviewer caught that were real defects, not gaps:**
+- **The date test passed with its own fix deleted.** `toLocaleDateString()` never emits a colon and
+  `/2026/` still matches a date shifted backwards, so the assertion could not see that a reader in
+  Los Angeles saw **2026-05-17** for a session dated 2026-05-18 — a wrong date beside a Merkle root,
+  which is the exact failure `sealed_at_precision` exists to prevent. Now asserted on the day and
+  verified failing under `TZ=America/Los_Angeles`.
+- **The index card rendered two of the three seal states the DoD names.** `seal_detail` carries what
+  separates a live 3-region ceremony from one whose MMR checkpoint was never written, and the card
+  never showed it, so two materially different seals looked identical on the surface people scan.
+
+**A process error of mine, recorded because it is otherwise invisible.** Commit `8708d07e` carries
+**63 lines of `packages/directory/src/internal-api-server.ts`** that I did not write. `git add -A`
+in a repo holding another session's in-flight work swept it into a commit whose message describes
+only the seed quoting fix. It is not dead — `cello-portal` calls the route — so reverting it would
+break the portal; it needs a test before the next directory deploy, and it will ship under a message
+nobody would search for. Checking `git status` before the next commit found more of the same work
+staged and waiting (`V55__drop_signal_edge_columns.sql`, `signal-write.ts`). **Explicit paths from
+here, never `git add -A` in this repo.**
+
+**Gate:** 48 python (30 gallery + 16 seed + 2 new guard tests) · 59 vitest · typecheck · lint ·
+build · schema enforcer on `0025`.
+
+**LIVE — `gallery.cello.mygentic.ai` now resolves and serves.** DNS A record added to the
+`cello.mygentic.ai` zone; the certificate was expanded to cover it in the same deploy, because the
+gallery server block presents the `cello.mygentic.ai` cert and a host added to nginx without a SAN
+entry answers HTTPS with a certificate for a different domain. The deploy smoke test now fails
+loudly on both. Verified: cert SAN carries the name, the page serves 200, the API namespace resolves
+from that host, and `https://gallery.cello.mygentic.ai/receipt/{hash}` — the URL the share buttons
+build — returns the receipt with its transcript.
+
+**Note for whoever hits it:** the SOA negative TTL on that zone is 86400, and the name was queried
+before it existed, so resolvers that cached the NXDOMAIN may take up to 24h. Fresh resolvers answer
+immediately.
