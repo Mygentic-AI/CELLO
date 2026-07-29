@@ -1198,3 +1198,74 @@ gateway, so removing them first would leave the layer unconfigurable. The DoD's 
 happens to be right; this entry records WHY, so nobody "optimises" by doing the small one first.
 
 **Next:** `DOD-M9C-SURFACE-1` — design note (Entry C6), then the loop.
+
+---
+
+## 2026-07-29 — Entry C6: DESIGN NOTE — DOD-M9C-SURFACE-1 (written before any code)
+
+**Target behavior (one sentence).** An operator can read every gateway guard and change it from the
+CLI; a change that TIGHTENS applies immediately, a change that LOOSENS stops and asks a human at a
+terminal — and no MCP tool, no agent, and no environment variable can produce that confirmation.
+
+**Spec anchors.** DoD `DOD-M9C-SURFACE-1`; policy D-4 (M9C-D3); INV-10; M9-CFG-001's §7
+tighten-free/loosen-confirmed clause (the store already ENFORCES it — nothing in the product could
+ever satisfy it, which is why `confirmed` has never once been set outside a test).
+
+**Producer/consumer chain.** CLI (or MCP) → IPC verb → `GatewayConfigStore.set()` → a versioned,
+hash-chained row. The gateway sidecar CONSUMES config at boot only, so a write that nobody applies
+is a lie: the daemon restarts the sidecar after a successful set. Reads go the other way: the store
+is the producer, `cello config list` the consumer.
+
+**The seam.** A new `core/daemon/src/gateway-config-handlers.ts`, registered from `daemon.ts` in
+three lines — deliberately NOT written inside `startDaemon`'s body. It follows
+`contact-handlers.ts`, which named its dependencies instead of closing over the daemon's state, and
+it keeps this unit's `daemon.ts` diff to almost nothing (the M10B session is editing that file on
+`main`, and a small diff is a small merge).
+
+**Decisions this note makes:**
+
+- **M9C-D15 — the loosen gate is enforced by CONNECTION TYPE, in the daemon.** Clients already
+  declare `clientType` on `ipc.connect` (`"mcp"` | `"cli"`). `confirmed: true` is honored ONLY from
+  a `cli` connection; from an `mcp` connection a loosening is REFUSED with guidance naming the exact
+  command to run. Stating the limit plainly: this is not a cryptographic boundary — a local process
+  can claim to be the CLI. It does not need to be. The threat is *an agent talking itself into
+  weakening its own guards*, and the agent reaches the daemon through the MCP server, which declares
+  `mcp`. Anyone who can spawn a process claiming `cli` can also just run the CLI.
+- **M9C-D16 — the human act is a TTY prompt, and `--yes` does not exist for loosenings.** The CLI
+  refuses to confirm when stdin is not a TTY. A flag that lets a script confirm is the env-var
+  bypass with a nicer name (D-5 removes exactly that). Tightenings need no prompt and stay
+  scriptable.
+- **M9C-D17 — a successful set RESTARTS the sidecar, via a callback the bin supplies.** The gateway
+  reads config at boot, so without this the operator gets `ok:true` and unchanged behavior — the
+  worst outcome available. Same shape as the existing Telegram-poller restart callback. The socket
+  path does not change, and `LocalSidecarGatewayClient` reconnects lazily, so nothing else moves. If
+  the restart fails the response says the change is STORED BUT NOT APPLIED, naming the restart as
+  the remaining step — never a bare `ok`.
+- **M9C-D18 — the surface shows the GOVERNANCE, not just the value.** `list` renders each key with
+  its current value, its version, whether the last change was a tighten or a loosen, and whether it
+  was confirmed. A config surface that shows values alone cannot answer the only question that
+  matters after an incident: *who weakened this, and did a human agree?*
+
+**Invariants at stake.** INV-10 is the point of the unit: after this + ENV-1, every loosening has a
+versioned row and a human act behind it. INV-9 untouched. INV-7: each refusal carries its own
+reason (`needs_confirmation`, `loosen_requires_cli`, `not_a_tty`, `unknown_key`, `invalid_value`) —
+never a shared `config_error`.
+
+**Falsification pass.** (1) Does the daemon have the store? Yes — after STORE-1 it is one SQLCipher
+file under the daemon's own key, so the daemon opens it directly; no new custody. (2) Two writers?
+The gateway writes records, the daemon writes config, both under `BEGIN IMMEDIATE` + `busy_timeout`
+— the design the stores already carry. (3) Does the restart callback belong in the bin? Yes: the bin
+owns the sidecar's lifecycle (WIRE-1), and the daemon must not learn to spawn processes. (4) What
+breaks? Nothing reads gateway config today except the sidecar at boot, so there is no other consumer
+to invalidate.
+
+**Observability.** `gateway.config.changed` {key, direction, version, confirmed, correlationId} ·
+`gateway.config.loosen_refused` {key, surface, reason} · `gateway.config.applied` {key, restarted} ·
+`gateway.config.restart_failed` {key, error}.
+
+**Test plan sketch (red first).** (1) A loosening from an `mcp` connection is refused and writes NO
+row (the row count is the assertion — a refusal that still persisted would be the whole gate gone).
+(2) The same loosening from a `cli` connection WITH `confirmed` applies and writes a row marked
+`confirmed`. (3) A tightening applies from either, with no prompt. (4) An unknown key and an invalid
+value each get their own reason. (5) `list` reports version + direction + confirmed. (6) The CLI
+refuses to prompt on a non-TTY stdin. (7) A failed restart reports stored-but-not-applied.
