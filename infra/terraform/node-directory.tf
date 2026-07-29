@@ -144,8 +144,12 @@ resource "google_compute_instance_template" "directory" {
       gsm_preauth          = "${google_secret_manager_secret.node["${each.value.node_id}--preauth-issuer-key"].id}/versions/latest"
       consortium_root_keys = var.consortium_root_keys
       consortium_threshold = var.consortium_threshold
-      # Indented to sit under the YAML block scalar in the template.
-      consortium_manifest_indented = indent(6, file("${path.module}/../manifests/gcp-consortium-manifest.json"))
+      # Terraform's indent() does NOT indent the FIRST line, so the template supplies that one's
+      # leading spaces and indent() supplies the rest. Getting this wrong put the manifest's opening
+      # brace at column 0, which broke the YAML block scalar — and a cloud-config that fails to
+      # parse writes NOTHING, so the node came up with no units at all rather than with a bad
+      # manifest. Trailing newline trimmed for the same reason.
+      consortium_manifest_indented = indent(6, trimspace(file("${path.module}/../manifests/gcp-consortium-manifest.json")))
       hostname                     = each.value.hostname
       public_port                  = each.value.public_port
       public_transport             = each.value.public_transport

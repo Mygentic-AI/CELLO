@@ -69,6 +69,8 @@ directory_node_pubkeys = {
 # Relays do NOT enter the threshold, so they may scale freely — one is enough for Wave 1.
 # us-east1 alongside gcp-use1 keeps the first live session's path short while the topology is
 # being proven; additional relays are additional map entries.
+relay_image_tag = "m12-b91b0f84"
+
 relay_nodes = {
   us-east1 = {
     node_id      = "gcp-relay-use1"
