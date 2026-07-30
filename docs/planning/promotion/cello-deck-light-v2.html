@@ -1,0 +1,1082 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CELLO — Your AI is 2026. Your collaboration is 1995.</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@200;400;700;800&family=Crimson+Pro:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --accent: #D91E8A;
+            --accent-dark: #B01870;
+            --accent-wash: #fce4f2;
+            --text-primary: #1a1a1a;
+            --text-secondary: #4a4a4a;
+            --text-muted: #6a6a6a;
+            --bg-slide: #ffffff;
+            --bg-subtle: #fafafa;
+            --border: #e0e0e0;
+            --dim: #d32f2f;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html {
+            scroll-behavior: smooth;
+            scroll-snap-type: y mandatory;
+        }
+
+        body {
+            font-family: 'Crimson Pro', Georgia, serif;
+            color: var(--text-primary);
+            line-height: 1.6;
+            font-size: 18px;
+            background: linear-gradient(135deg, #fafafa 0%, #f0f0f0 100%);
+            font-weight: 300;
+        }
+
+        .slide {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 60px 80px;
+            scroll-snap-align: start;
+            background: var(--bg-slide);
+            position: relative;
+        }
+
+        .slide:nth-child(even) { background: var(--bg-subtle); }
+
+        .slide.center { justify-content: center; align-items: center; text-align: center; }
+
+        .slide-number {
+            position: absolute;
+            bottom: 30px;
+            right: 40px;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .slide-number .brand-footer { color: var(--accent); }
+
+        .brand {
+            position: absolute;
+            top: 30px;
+            left: 40px;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 14px;
+            font-weight: 800;
+            color: var(--accent);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 72px;
+            font-weight: 800;
+            letter-spacing: -2px;
+            line-height: 1.05;
+            margin-bottom: 24px;
+            color: var(--text-primary);
+        }
+
+        h2 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 47px;
+            font-weight: 700;
+            letter-spacing: -1px;
+            line-height: 1.15;
+            margin-bottom: 28px;
+            color: var(--text-primary);
+        }
+
+        h3 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 16px;
+        }
+
+        .accent { color: var(--accent); }
+        .dim-text { color: var(--text-muted); }
+
+        .subtitle {
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-size: 24px;
+            color: var(--text-secondary);
+            font-weight: 300;
+            line-height: 1.5;
+            max-width: 1000px;
+        }
+
+        .kicker {
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-size: 21px;
+            font-weight: 300;
+            color: var(--text-muted);
+            letter-spacing: 0.5px;
+            margin-bottom: 28px;
+        }
+
+        .scene-quote {
+            font-size: 25px;
+            font-weight: 300;
+            color: var(--text-secondary);
+            line-height: 1.55;
+            max-width: 900px;
+            font-style: italic;
+        }
+        .scene-quote strong {
+            font-style: normal;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* Pull bar — the recurring emphasis device */
+        .pull {
+            padding: 26px 34px;
+            border-left: 5px solid var(--accent);
+            background: var(--bg-subtle);
+            border-radius: 0 8px 8px 0;
+        }
+        .slide:nth-child(even) .pull { background: #fff; }
+        .pull p {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 26px;
+            font-weight: 800;
+            color: var(--text-primary);
+            line-height: 1.3;
+        }
+        .pull p.sub {
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-size: 19px;
+            font-weight: 300;
+            color: var(--text-secondary);
+            margin-top: 10px;
+        }
+
+        /* Dash list */
+        ul.dash {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+        ul.dash li {
+            display: flex;
+            gap: 18px;
+            align-items: flex-start;
+            font-size: 23px;
+            color: var(--text-secondary);
+            line-height: 1.45;
+        }
+        ul.dash li .b { color: var(--accent); font-weight: 800; flex-shrink: 0; }
+        ul.dash li strong { color: var(--text-primary); font-weight: 600; }
+
+        /* Card grids */
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+
+        .card {
+            background: white;
+            padding: 28px;
+            border-radius: 12px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.07);
+            border-top: 4px solid var(--accent);
+        }
+        .card .label {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 11px;
+            font-weight: 800;
+            color: var(--accent);
+            letter-spacing: 2px;
+            margin-bottom: 14px;
+            text-transform: uppercase;
+        }
+        .card h4 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 20px;
+            font-weight: 800;
+            margin-bottom: 10px;
+            line-height: 1.25;
+        }
+        .card p {
+            font-size: 16px;
+            color: var(--text-secondary);
+            line-height: 1.55;
+        }
+        .card p + p { margin-top: 10px; }
+        .card p strong { color: var(--text-primary); font-weight: 600; }
+
+        .card.muted { border-top-color: #ccc; box-shadow: 0 4px 24px rgba(0,0,0,0.04); }
+        .card.muted .label { color: var(--text-muted); }
+
+        /* Node diagram */
+        .node-diagram {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            margin: 28px 0;
+        }
+        .node {
+            width: 88px; height: 88px;
+            border-radius: 50%;
+            background: white;
+            border: 2px solid var(--border);
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px; font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            gap: 5px; flex-shrink: 0;
+            text-align: center; line-height: 1.3;
+        }
+        .node i { font-size: 24px; color: var(--text-muted); }
+        .node.hot { background: var(--accent-wash); border: 2px solid var(--accent); color: var(--accent); }
+        .node.hot i { color: var(--accent); }
+        .node.cool { background: #f0f7ff; border-color: #4a90d9; color: #35719e; }
+        .node.cool i { color: #4a90d9; }
+        .node.platform { width: 100px; height: 100px; background: #f5f5f5; border-color: #ccc; color: #999; }
+        .node.platform i { font-size: 28px; color: #bbb; }
+
+        .connector { flex: 1; height: 2px; position: relative; min-width: 36px; background: var(--border); }
+        .connector.broken {
+            background: repeating-linear-gradient(90deg,
+                var(--accent) 0px, var(--accent) 6px,
+                transparent 6px, transparent 14px);
+        }
+        .connector-label {
+            position: absolute; top: -20px; left: 50%;
+            transform: translateX(-50%);
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px; font-weight: 800;
+            color: var(--accent); letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+        .node-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+        .node-caption {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px; font-weight: 800;
+            letter-spacing: 1px; text-transform: uppercase;
+            color: var(--text-muted); text-align: center; line-height: 1.4;
+        }
+        .node-caption.danger { color: var(--accent); }
+
+        /* Mode rows — the canyon */
+        .mode-row {
+            display: flex; align-items: center; gap: 24px;
+            padding: 20px 26px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: white;
+        }
+        .mode-row.empty {
+            background: linear-gradient(135deg, #fce4ec 0%, #f8bbd9 100%);
+            border: 2px solid var(--accent);
+        }
+        .mode-row .mode-n {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 12px; font-weight: 800;
+            letter-spacing: 1px; color: var(--accent);
+            width: 74px; flex-shrink: 0;
+        }
+        .mode-row .mode-name {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 20px; font-weight: 800;
+            width: 330px; flex-shrink: 0; line-height: 1.25;
+        }
+        .mode-row .mode-name span {
+            display: block;
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-size: 15px; font-weight: 300;
+            color: var(--text-muted); font-style: italic;
+            margin-top: 2px;
+        }
+        .mode-row .mode-tool { font-size: 18px; color: var(--text-secondary); flex: 1; }
+        .mode-row .mode-verdict {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 14px; font-weight: 800;
+            letter-spacing: 1px; text-transform: uppercase;
+            color: var(--text-muted); flex-shrink: 0;
+        }
+        .mode-row.empty .mode-verdict { color: var(--accent); }
+
+        /* Ladder */
+        .rung { display: flex; align-items: stretch; }
+        .rung .n {
+            background: var(--accent); color: white; width: 56px;
+            display: flex; align-items: center; justify-content: center;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 22px; font-weight: 800; flex-shrink: 0;
+            border-radius: 8px 0 0 8px;
+        }
+        .rung .body {
+            background: white; flex: 1; padding: 18px 26px;
+            border: 1px solid var(--border); border-left: none;
+            border-radius: 0 8px 8px 0;
+        }
+        .rung .body .t {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 13px; font-weight: 800; color: var(--accent);
+            letter-spacing: 1px; margin-bottom: 5px;
+            display: flex; align-items: center; gap: 12px;
+        }
+        .rung .body p { font-size: 17px; color: var(--text-secondary); line-height: 1.5; }
+        .rung.next .n { background: #bbb; }
+        .rung.next .body .t { color: var(--text-muted); }
+
+        .pill {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 9px; font-weight: 800; letter-spacing: 1px;
+            padding: 3px 9px; border-radius: 20px;
+            background: var(--accent); color: white;
+            text-transform: uppercase;
+        }
+        .pill.soon { background: #ddd; color: #777; }
+
+        /* Stats */
+        .stats-row { display: flex; gap: 64px; margin-top: 44px; }
+        .stat-number {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 52px; font-weight: 800;
+            color: var(--text-primary); line-height: 1;
+        }
+        .stat-label { font-size: 15px; color: var(--text-secondary); margin-top: 8px; font-weight: 400; line-height: 1.4; }
+
+        /* Manifesto over-list */
+        .over { display: flex; flex-direction: column; gap: 16px; }
+        .over-item {
+            display: flex; align-items: baseline; gap: 16px;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 25px; font-weight: 800;
+            line-height: 1.3;
+        }
+        .over-item .num {
+            font-size: 12px; color: var(--accent);
+            letter-spacing: 1px; width: 30px; flex-shrink: 0;
+        }
+        .over-item .yes { color: var(--text-primary); }
+        .over-item .over-word {
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-weight: 300; font-style: italic;
+            color: var(--accent); font-size: 22px;
+        }
+        .over-item .no { color: var(--text-muted); font-weight: 400; }
+
+        /* Mono / receipt */
+        .mono {
+            font-family: 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.7;
+        }
+        .receipt {
+            background: #fff;
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            padding: 22px 26px;
+        }
+        .receipt .rrow { display: flex; gap: 14px; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+        .receipt .rrow:last-child { border-bottom: none; }
+        .receipt .rk {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px; font-weight: 800; letter-spacing: 1px;
+            color: var(--text-muted); text-transform: uppercase;
+            width: 140px; flex-shrink: 0; padding-top: 3px;
+        }
+        .receipt .rv { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 13px; color: var(--text-primary); word-break: break-all; line-height: 1.5; }
+        .receipt .rv.ok { color: var(--accent); font-weight: 600; }
+
+        /* Signal table */
+        table.signals { width: 100%; border-collapse: collapse; font-size: 17px; }
+        table.signals td { padding: 12px 12px; border-bottom: 1px solid var(--border); }
+        table.signals tr:last-child td { border-bottom: none; }
+        table.signals td.k {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-weight: 800; font-size: 11px; color: var(--accent);
+            letter-spacing: 1px; white-space: nowrap; width: 130px;
+        }
+        table.signals td.v { color: var(--text-secondary); }
+
+        .xlist { list-style: none; display: flex; flex-direction: column; gap: 2px; }
+        .xlist li {
+            font-size: 18px; padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: flex-start; gap: 14px;
+            line-height: 1.45; color: var(--text-secondary);
+        }
+        .xlist li:last-child { border-bottom: none; }
+        .xlist li .x { color: var(--dim); flex-shrink: 0; font-weight: 700; }
+        .xlist li strong { color: var(--text-primary); font-weight: 600; }
+
+        .nav-hint {
+            position: fixed; bottom: 30px; left: 50%;
+            transform: translateX(-50%);
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 12px; color: var(--text-muted);
+            letter-spacing: 1px; opacity: 0.6;
+        }
+
+        .big-statement {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 62px; font-weight: 800;
+            color: var(--text-primary); line-height: 1.15;
+            letter-spacing: -1.5px;
+        }
+
+        /* Title-card wordmark */
+        .wordmark {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 190px;
+            font-weight: 800;
+            letter-spacing: -6px;
+            line-height: 0.9;
+            color: var(--accent);
+            margin-bottom: 18px;
+        }
+        .descriptor {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 40px;
+            font-weight: 700;
+            letter-spacing: -0.8px;
+            line-height: 1.2;
+            color: var(--text-primary);
+            margin-bottom: 16px;
+        }
+        .descriptor .soft { color: var(--text-muted); font-weight: 400; }
+        .title-rule {
+            width: 120px; height: 5px;
+            background: var(--accent);
+            border-radius: 3px;
+            margin-bottom: 28px;
+        }
+        .rule { width: 48px; height: 4px; background: var(--accent); border-radius: 2px; margin: 34px auto; }
+
+        @media screen and (max-width: 1024px) {
+            .wordmark { font-size: 96px; letter-spacing: -3px; }
+            .descriptor { font-size: 26px; }
+            .slide { padding: 40px; }
+            h1 { font-size: 44px; }
+            h2 { font-size: 34px; }
+            .big-statement { font-size: 38px; }
+            .grid-3, .grid-4, .grid-2 { grid-template-columns: 1fr; }
+            .stats-row { flex-wrap: wrap; gap: 32px; }
+            .mode-row { flex-wrap: wrap; gap: 12px; }
+            .mode-row .mode-name { width: auto; }
+        }
+
+        /* ============ PRINT: A4 landscape, one slide per page ============ */
+        @media print {
+            @page { size: A4 landscape; margin: 0; }
+
+            html, body {
+                scroll-snap-type: none;
+                background: white;
+                font-size: 16px;
+            }
+
+            .slide {
+                width: 297mm;
+                height: 209.5mm;
+                min-height: 0;
+                max-height: 209.5mm;
+                overflow: hidden;
+                padding: 26px 46px 34px;
+                page-break-after: always;
+                break-after: page;
+                page-break-inside: avoid;
+                break-inside: avoid;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                box-sizing: border-box;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            .slide:last-of-type { page-break-after: auto; break-after: auto; }
+
+            h1 { font-size: 46px; margin-bottom: 14px; letter-spacing: -1.5px; }
+            h2 { font-size: 31px; margin-bottom: 16px; }
+            h3 { font-size: 10px; margin-bottom: 9px; letter-spacing: 2.5px; }
+            .subtitle { font-size: 17px; }
+            .kicker { font-size: 15px; margin-bottom: 16px; }
+            .scene-quote { font-size: 17px; }
+            .big-statement { font-size: 40px; letter-spacing: -1px; }
+            .rule { margin: 20px auto; }
+
+            .wordmark { font-size: 128px; letter-spacing: -4px; margin-bottom: 12px; }
+            .descriptor { font-size: 26px; margin-bottom: 10px; letter-spacing: -0.5px; }
+            .title-rule { width: 84px; height: 4px; margin-bottom: 18px; }
+
+            .pull { padding: 16px 22px; }
+            .pull p { font-size: 18px; }
+            .pull p.sub { font-size: 14px; margin-top: 6px; }
+
+            ul.dash { gap: 11px; }
+            ul.dash li { font-size: 16px; gap: 13px; }
+
+            .grid-2 { gap: 18px; }
+            .grid-3 { gap: 15px; }
+            .grid-4 { gap: 12px; }
+            .card { padding: 17px; border-radius: 9px; box-shadow: 0 2px 10px rgba(0,0,0,0.07); }
+            .card .label { font-size: 9px; margin-bottom: 8px; letter-spacing: 1.5px; }
+            .card h4 { font-size: 15px; margin-bottom: 6px; }
+            .card p { font-size: 12.5px; line-height: 1.5; }
+            .card p + p { margin-top: 7px; }
+
+            .node-diagram { margin: 16px 0; }
+            .node { width: 64px; height: 64px; font-size: 8px; gap: 3px; }
+            .node i { font-size: 17px; }
+            .node.platform { width: 72px; height: 72px; }
+            .node.platform i { font-size: 20px; }
+            .connector { min-width: 26px; }
+            .connector-label { font-size: 8px; top: -15px; }
+            .node-caption { font-size: 8px; }
+
+            .mode-row { padding: 13px 18px; gap: 16px; }
+            .mode-row .mode-n { font-size: 10px; width: 58px; }
+            .mode-row .mode-name { font-size: 15px; width: 250px; }
+            .mode-row .mode-name span { font-size: 12px; }
+            .mode-row .mode-tool { font-size: 13.5px; }
+            .mode-row .mode-verdict { font-size: 11px; }
+
+            .rung .n { width: 42px; font-size: 17px; }
+            .rung .body { padding: 12px 18px; }
+            .rung .body .t { font-size: 10.5px; margin-bottom: 3px; gap: 9px; }
+            .rung .body p { font-size: 13px; line-height: 1.45; }
+            .pill { font-size: 7.5px; padding: 2px 7px; }
+
+            .stats-row { margin-top: 26px; gap: 48px; }
+            .stat-number { font-size: 36px; }
+            .stat-label { font-size: 11.5px; margin-top: 5px; }
+
+            .over { gap: 10px; }
+            .over-item { font-size: 17px; gap: 12px; }
+            .over-item .num { font-size: 9px; width: 22px; }
+            .over-item .over-word { font-size: 15px; }
+
+            .receipt { padding: 14px 18px; border-radius: 8px; }
+            .receipt .rrow { padding: 4px 0; gap: 10px; }
+            .receipt .rk { font-size: 8px; width: 105px; padding-top: 2px; }
+            .receipt .rv { font-size: 10px; line-height: 1.45; }
+            .mono { font-size: 10.5px; }
+
+            table.signals { font-size: 13px; }
+            table.signals td { padding: 8px 9px; }
+            table.signals td.k { font-size: 9px; width: 100px; }
+
+            .xlist li { font-size: 13.5px; padding: 8px 0; gap: 11px; }
+
+            .brand { top: 18px; left: 30px; font-size: 10px; }
+            .slide-number { bottom: 16px; right: 30px; font-size: 10px; gap: 11px; }
+            .nav-hint { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- 01 — TITLE CARD -->
+<section class="slide">
+    <h3 style="margin-bottom: 22px;">Introducing</h3>
+    <div class="wordmark">CELLO</div>
+    <div class="title-rule"></div>
+    <p class="descriptor">Because your AI is 2026.<br>Your collaboration is <span class="accent">1995</span>.<br><span class="soft">Private, verified, and no one in the middle.</span></p>
+
+    <div class="stats-row" style="margin-top: 38px;">
+        <div>
+            <div class="stat-number">0 lines</div>
+            <div class="stat-label">Of integration code<br>to connect two agents</div>
+        </div>
+        <div>
+            <div class="stat-number">0 bytes</div>
+            <div class="stat-label">Of your message content<br>stored on any server</div>
+        </div>
+        <div>
+            <div class="stat-number">Any</div>
+            <div class="stat-label">Agent that runs bash or MCP<br>Claude Code · Cowork · Codex · Hermes · OpenClaw · more</div>
+        </div>
+    </div>
+    <div class="slide-number"><span class="brand-footer">MYGENTIC AI</span><span>01</span></div>
+</section>
+
+<!-- 02 — ORIGIN, THE SCENE -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Where this started</h3>
+    <h2>It's 3:30 in the afternoon.</h2>
+
+    <p class="scene-quote" style="max-width: 1020px;">"The head of client relationships is in a board meeting. Her phone has been face-down on the table for twenty minutes and it will not stop buzzing. The same name, over and over.<br><br>
+    The client is one of the firm's largest. Days ago he asked them to buy a position. He has heard nothing since, and the stock has run. <strong>He is angry, and he is right.</strong><br><br>
+    Thirty-five minutes and three calls later she has it: the order was never placed. His deposit was never confirmed, so it never went to the broker."</p>
+
+    <div class="pull" style="margin-top: 32px;">
+        <p>What would it have taken for her to stay in her seat, ask her own agent,<br>and know where that order was before the meeting had moved on?</p>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>02</span></div>
+</section>
+
+<!-- 03 — ORIGIN, THE INSIGHT -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>What I found</h3>
+    <h2>Nobody was slow at their part.</h2>
+
+    <div class="grid-2" style="align-items: start;">
+        <div>
+            <p class="scene-quote" style="font-size: 21px;">"I went in to give every person on that team an AI assistant. I'd spent months building personal agents and I thought I knew what I was building.<br><br>
+            I sat through discovery with every desk. Their procedures were good — written down, understood, actually followed. Everything confirmed the plan I walked in with.<br><br>
+            <strong>It would have helped. It would not have fixed anything.</strong>"</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 18px;">
+            <div class="card">
+                <div class="label">The constraint</div>
+                <p style="font-size: 17px;">Goldratt spent a career making this point about factories: speeding up a step that isn't the constraint doesn't speed up the system. Make eight relationship managers twice as fast and you've only doubled the rate at which work arrives at the desk that was already the bottleneck.</p>
+            </div>
+            <div class="card">
+                <div class="label">The realisation</div>
+                <p style="font-size: 17px;">To actually speed the firm up, the assistants would have to collaborate — share a goal and hand off between themselves, without a person carrying it across. Nothing I could install would do that.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="pull" style="margin-top: 26px;">
+        <p>The work wasn't stuck inside the steps.<br><span class="accent">It was stuck in the spaces between them.</span></p>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>03</span></div>
+</section>
+
+<!-- 04 — THE RECOGNITION -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Then I found it in my own work</h3>
+    <h2>Individually devastating.<br>Collectively <span class="accent">meh</span>.</h2>
+    <p class="subtitle" style="margin-bottom: 30px;">It wasn't just that firm. I'm solo and AI-native with the best setup I've ever had — and the same disease was waiting for me. You can spin up a swarm that does the work of a department in an afternoon. To hand any of it to someone else, you still copy and paste.</p>
+
+    <div class="grid-4">
+        <div class="card muted" style="border-top-color: var(--border);">
+            <div class="label">Your clipboard</div>
+            <p>Moonlighting as a message queue.</p>
+        </div>
+        <div class="card muted" style="border-top-color: var(--border);">
+            <div class="label">Your inbox</div>
+            <p>One AI writes it, a human ferries it, another AI reads it.</p>
+        </div>
+        <div class="card muted" style="border-top-color: var(--border);">
+            <div class="label">Your Slack</div>
+            <p>Doing its best as an agent communication layer.</p>
+        </div>
+        <div class="card muted" style="border-top-color: var(--border);">
+            <div class="label">Your issue tracker</div>
+            <p>Fine for the work you planned. Useless for the question you didn't.</p>
+        </div>
+    </div>
+
+    <div class="pull" style="margin-top: 30px;">
+        <p>Twelve channels pressed into service for something<br>none of them were built to do.</p>
+        <p class="sub">"We've been given mech suits — and we still haven't figured out how to link up our fire controls. To talk to each other, we still have to lift our visors and scream across the gap."</p>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>04</span></div>
+</section>
+
+<!-- 05 — PROBLEM 1 -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Problem — 01 of 03</h3>
+    <h2>Your own agents<br>can't work together.</h2>
+
+    <div class="node-diagram">
+        <div class="node-wrap">
+            <div class="node"><i class="fa-solid fa-terminal"></i>Agent<br>A</div>
+            <div class="node-caption">its own window</div>
+        </div>
+        <div class="connector broken"><div class="connector-label">copy</div></div>
+        <div class="node-wrap">
+            <div class="node hot"><i class="fa-solid fa-user"></i>You</div>
+            <div class="node-caption danger">the mail boy</div>
+        </div>
+        <div class="connector broken"><div class="connector-label">paste</div></div>
+        <div class="node-wrap">
+            <div class="node"><i class="fa-solid fa-terminal"></i>Agent<br>B</div>
+            <div class="node-caption">its own window</div>
+        </div>
+        <div class="connector broken"><div class="connector-label">repeat</div></div>
+        <div class="node-wrap">
+            <div class="node"><i class="fa-solid fa-terminal"></i>Agent<br>C</div>
+            <div class="node-caption">its own window</div>
+        </div>
+    </div>
+
+    <ul class="dash">
+        <li><span class="b">—</span><span>Your specialised assistants run side by side and cannot exchange a single word of context directly.</span></li>
+        <li><span class="b">—</span><span>Orchestration isn't collaboration. A subagent can't push back, can't ask what you meant, and can't reach sideways to the peer about to make the same mistake.</span></li>
+        <li><span class="b">—</span><span>So you shuttle transcripts between terminals — a meat-based converter turning structured data into prose, so another agent can turn it straight back.</span></li>
+    </ul>
+
+    <div class="pull" style="margin-top: 28px;">
+        <p>You don't have a team of AI agents.<br><span class="accent">You have parallel workers who never speak to each other.</span></p>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>05</span></div>
+</section>
+
+<!-- 06 — PROBLEM 2 -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Problem — 02 of 03</h3>
+    <h2>Your agents can't work<br>with anyone else's.</h2>
+
+    <div class="grid-2" style="align-items: start;">
+        <div>
+            <p class="subtitle" style="font-size: 26px; color: var(--text-primary); font-weight: 400; margin-bottom: 24px;">Your client runs AI.<br>You run AI.<br><span class="accent" style="font-weight: 600;">Nothing connects them.</span></p>
+            <ul class="dash" style="gap: 14px;">
+                <li><span class="b">—</span><span style="font-size: 20px;">Every partner integration means bespoke APIs and custom webhooks, engineered from scratch per client.</span></li>
+                <li><span class="b">—</span><span style="font-size: 20px;">So the handoff falls back to humans, pasting into Slack and email.</span></li>
+            </ul>
+        </div>
+        <div class="card" style="border-top-color: var(--border); background: var(--bg-subtle); box-shadow:none; border: 1.5px solid var(--border);">
+            <div class="label" style="color: var(--text-muted);">The cost, honestly</div>
+            <p style="font-size: 18px; line-height: 1.6;">It's fine — until it isn't. Copy-pasting works when you have two agents and thirty minutes.</p>
+            <p style="font-size: 18px; line-height: 1.6;">It breaks when you have five agents, a deadline, and the output of agent A is stale by the time you paste it into agent C.</p>
+            <p style="font-size: 18px; line-height: 1.6;"><strong>The cost isn't dramatic. It's the slow bleed</strong> — context loss, version drift, and never being able to check on an agent without interrupting your own flow.</p>
+        </div>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>06</span></div>
+</section>
+
+<!-- 07 — PROBLEM 3 -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The Problem — 03 of 03</h3>
+    <h2>And you can't safely<br>let another agent in.</h2>
+    <p class="subtitle" style="margin-bottom: 26px;">Even if you wired it up yourself, you'd have opened a door you can't see through.</p>
+
+    <div class="grid-2">
+        <div>
+            <ul class="xlist">
+                <li><span class="x">✗</span><span><strong>You can't tell who's knocking.</strong> No way to evaluate the identity or reputation of an incoming connection — so your agent takes instructions from a stranger.</span></li>
+                <li><span class="x">✗</span><span><strong>Inbound payloads.</strong> One hidden prompt injection in an incoming file can turn your agent loose on your local directories and credentials.</span></li>
+                <li><span class="x">✗</span><span><strong>Outbound leaks.</strong> Once connected, nothing stops your agent from quietly handing over API keys or a client's data.</span></li>
+                <li><span class="x">✗</span><span><strong>No record.</strong> If it goes wrong, there's nothing either side will accept as proof of what was said.</span></li>
+            </ul>
+        </div>
+        <div class="card" style="background: linear-gradient(135deg, #fce4ec 0%, #f8bbd9 100%); border: 2px solid var(--accent); border-top-width: 2px; box-shadow: none; display:flex; flex-direction:column; justify-content:center;">
+            <div class="label">Why this is different</div>
+            <h4 style="font-size: 23px; margin-bottom: 12px;">Every network before this one had a circuit breaker.</h4>
+            <p style="font-size: 16.5px;">Email arrives, a human reads it, a human decides whether to act. Phishing works — but it needs someone to click. The human is the circuit breaker. Slow, fallible, but a circuit breaker.</p>
+            <p style="font-size: 16.5px;"><strong>Agent networks don't have one.</strong> An agent receives a well-formed instruction and executes. One compromised instruction doesn't stay in one agent — it rides the network, at machine speed.</p>
+        </div>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>07</span></div>
+</section>
+
+<!-- 08 — THE CANYON -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Why nobody has fixed it</h3>
+    <h2>Two of the three ways we work<br>have been solved.</h2>
+
+    <div style="display: flex; flex-direction: column; gap: 14px; margin-top: 8px;">
+        <div class="mode-row">
+            <div class="mode-n">MODE 01</div>
+            <div class="mode-name">Top-down orchestration<span>the boss and the org chart</span></div>
+            <div class="mode-tool">Subagents, LangGraph, orchestration frameworks</div>
+            <div class="mode-verdict">Solved</div>
+        </div>
+        <div class="mode-row">
+            <div class="mode-n">MODE 02</div>
+            <div class="mode-name">Broadcast and service<span>the storefront</span></div>
+            <div class="mode-tool">MCP, APIs, tool calls</div>
+            <div class="mode-verdict">Solved</div>
+        </div>
+        <div class="mode-row empty">
+            <div class="mode-n">MODE 03</div>
+            <div class="mode-name">Freeform collaboration<span>two peers, no hierarchy, no schema</span></div>
+            <div class="mode-tool"><strong>Checking in. Negotiating. Asking a question. Handing off work.</strong></div>
+            <div class="mode-verdict">Nothing</div>
+        </div>
+    </div>
+
+    <div class="pull" style="margin-top: 30px;">
+        <p>Mode 3 is how humans spend most of their working lives.</p>
+        <p class="sub">MCP + API is the app. What's missing is the phone call — the one that handles the thing the schema didn't predict.</p>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>08</span></div>
+</section>
+
+<!-- 09 — THE BELIEF -->
+<section class="slide center">
+    <div class="brand">CELLO</div>
+    <p class="kicker">So I built the thing that was missing. And I built it on one rule.</p>
+    <p class="big-statement">No one should control <span class="accent">your conversation</span>.<br>No one should own <span class="accent">your data</span>.</p>
+    <div class="rule"></div>
+    <p class="kicker" style="margin-bottom: 0;">Not a platform. Not a government. Not us.</p>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>09</span></div>
+</section>
+
+<!-- 10 — MANIFESTO -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>What that means in practice</h3>
+    <h2>Seven choices,<br>already made.</h2>
+
+    <div class="over">
+        <div class="over-item"><span class="num">01</span><span><span class="yes">Collaboration</span> <span class="over-word">over</span> <span class="no">orchestration.</span></span></div>
+        <div class="over-item"><span class="num">02</span><span><span class="yes">Federated systems</span> <span class="over-word">over</span> <span class="no">centralised ones.</span></span></div>
+        <div class="over-item"><span class="num">03</span><span><span class="yes">Data we never hold</span> <span class="over-word">over</span> <span class="no">data we promise to protect.</span></span></div>
+        <div class="over-item"><span class="num">04</span><span><span class="yes">Keys in your hands</span> <span class="over-word">over</span> <span class="no">keys in ours.</span></span></div>
+        <div class="over-item"><span class="num">05</span><span><span class="yes">Policies you set</span> <span class="over-word">over</span> <span class="no">policies we hand you.</span></span></div>
+        <div class="over-item"><span class="num">06</span><span><span class="yes">Privacy the code enforces</span> <span class="over-word">over</span> <span class="no">privacy that depends on regulators.</span></span></div>
+        <div class="over-item"><span class="num">07</span><span><span class="yes">Code you can verify</span> <span class="over-word">over</span> <span class="no">owners you must trust.</span></span></div>
+    </div>
+
+    <div class="pull" style="margin-top: 30px;">
+        <p class="sub" style="font-size: 21px; font-style: italic;">"Break in and there is nothing worth taking. We don't take custody of your keys — you're an adult, and nobody holds your house keys for you either."</p>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>10</span></div>
+</section>
+
+<!-- 11 — WHAT IT IS -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>What CELLO is</h3>
+    <h2>A phone line for your agents.</h2>
+    <p class="subtitle" style="margin-bottom: 28px;">Every human employee has a phone. Nobody built a phone company to get one. You just got a line — and it worked with everyone else's.</p>
+
+    <div class="grid-3">
+        <div class="card muted">
+            <div class="label">Not a model</div>
+            <p>CELLO doesn't make your agents smarter. It connects them.</p>
+        </div>
+        <div class="card muted">
+            <div class="label">Not a framework</div>
+            <p>It doesn't replace Claude Code, Cowork, Codex, Hermes or OpenClaw. It sits underneath all of them.</p>
+        </div>
+        <div class="card muted">
+            <div class="label">Not a platform</div>
+            <p>There is no CELLO cloud routing your messages. Nothing to depend on, nothing to be charged rent by.</p>
+        </div>
+    </div>
+
+    <div class="pull" style="margin-top: 30px;">
+        <p>Any agent that can run a bash command or an MCP tool can use it.</p>
+        <p class="sub">Zero lines of integration code. No API keys exchanged between parties. Nothing retained anywhere.</p>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>11</span></div>
+</section>
+
+<!-- 12 — HOW IT WORKS -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>How it works</h3>
+    <h2>Four things happen.<br>Then they just talk.</h2>
+
+    <div class="node-diagram" style="margin: 26px 0 30px;">
+        <div class="node-wrap">
+            <div class="node cool"><i class="fa-solid fa-at"></i>Address</div>
+            <div class="node-caption">permanent, yours</div>
+        </div>
+        <div class="connector"><div class="connector-label">dial</div></div>
+        <div class="node-wrap">
+            <div class="node cool"><i class="fa-solid fa-plug"></i>Connect</div>
+            <div class="node-caption">encrypted, direct</div>
+        </div>
+        <div class="connector"><div class="connector-label">screen</div></div>
+        <div class="node-wrap">
+            <div class="node hot"><i class="fa-solid fa-shield-halved"></i>Trust</div>
+            <div class="node-caption">your policy, your client</div>
+        </div>
+        <div class="connector"><div class="connector-label">close</div></div>
+        <div class="node-wrap">
+            <div class="node hot"><i class="fa-solid fa-stamp"></i>Seal</div>
+            <div class="node-caption">a paper trail you hold</div>
+        </div>
+    </div>
+
+    <div class="grid-4">
+        <div class="card">
+            <div class="label">01 · Address</div>
+            <p>One permanent cryptographic address for every agent you run. Generated on your device. It never leaves.</p>
+        </div>
+        <div class="card">
+            <div class="label">02 · Connect</div>
+            <p>A private encrypted channel, direct between the two agents. The relay can see <em>that</em> a call happened. Never what was said.</p>
+        </div>
+        <div class="card">
+            <div class="label">03 · Trust</div>
+            <p>You know who you're letting in before you let them in — and your own client decides, not us.</p>
+        </div>
+        <div class="card">
+            <div class="label">04 · Seal</div>
+            <p>A cryptographic paper trail of everything that was said. One copy each. We hold none.</p>
+        </div>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>12</span></div>
+</section>
+
+<!-- 13 — TRUST -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Who you let in</h3>
+    <h2>You set the bar.<br>Your client enforces it.</h2>
+
+    <div class="grid-2" style="grid-template-columns: 1fr 1.25fr; gap: 32px; align-items: start;">
+        <div>
+            <div class="label" style="font-family: 'Bricolage Grotesque', sans-serif; font-size: 11px; font-weight: 800; color: var(--text-muted); letter-spacing: 2px; margin-bottom: 12px;">SIGNALS YOU CAN STACK</div>
+            <table class="signals">
+                <tr><td class="k">Minimum</td><td class="v">Phone OTP · Email</td></tr>
+                <tr><td class="k">Identity</td><td class="v">LinkedIn · X · GitHub · any SSO</td></tr>
+                <tr><td class="k">Device</td><td class="v">WebAuthn · TOTP · hardware attestation</td></tr>
+                <tr><td class="k">Reputation</td><td class="v">Issue-free history · account age</td></tr>
+                <tr><td class="k">Social</td><td class="v">Endorsements from agents you know</td></tr>
+            </table>
+            <p style="font-size: 17px; color: var(--text-muted); margin-top: 14px; font-style: italic;">Stack as many as you like. More signals, more doors open.</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 18px;">
+            <div class="card">
+                <div class="label">The part that matters</div>
+                <p style="font-size: 17px;">CELLO verifies the signal, then stores <strong>only a hash</strong> of it. Your agent keeps the real thing, locally. The directory holds nothing worth stealing — and we never learn what your credentials say.</p>
+            </div>
+            <div class="card">
+                <div class="label">Your policy, examples</div>
+                <p style="font-size: 17px;">Require a LinkedIn older than five years. Require one endorsement from an agent you already know. Require N issue-free sessions. Or accept anyone.</p>
+                <p style="font-size: 17px;"><strong>Policy is evaluated by your client — not the platform. CELLO never decides who you talk to.</strong></p>
+            </div>
+            <div class="card" style="border-top-color: var(--border); background: var(--bg-subtle); box-shadow:none;">
+                <div class="label" style="color: var(--text-muted);">In practice</div>
+                <p style="font-size: 17px;">A colleague's agent arrives with six mutual endorsements. A fraudster arrives with a one-month-old GitHub account. The fraudster is shut out not by a rule, but by the absence of a reputation they couldn't fake.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>13</span></div>
+</section>
+
+<!-- 14 — THE RECEIPT -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>What you're left holding</h3>
+    <h2>A record neither side<br>can walk back.</h2>
+
+    <div class="grid-2" style="grid-template-columns: 1.15fr 1fr; gap: 32px; align-items: center;">
+        <div class="receipt">
+            <div class="rrow"><div class="rk">Session</div><div class="rv">1f4bd0b070c982f1a42588a685d2822b</div></div>
+            <div class="rrow"><div class="rk">Between</div><div class="rv">Ms_Chelly &nbsp;↔&nbsp; CELLO_Support</div></div>
+            <div class="rrow"><div class="rk">Sealed</div><div class="rv">2026-07-28</div></div>
+            <div class="rrow"><div class="rk">Trust signals</div><div class="rv">11 directory-verified</div></div>
+            <div class="rrow"><div class="rk">Root</div><div class="rv">09155c0fb5c8c1e07e981873a73d1390<br>a25666c7def09bbf7af7ece840ae63c0</div></div>
+            <div class="rrow"><div class="rk">Status</div><div class="rv ok">✓ verifiable by anyone, forever</div></div>
+        </div>
+        <div>
+            <ul class="dash" style="gap: 16px;">
+                <li><span class="b">—</span><span>Every message is a leaf in a Merkle tree. The root is 32 bytes — smaller than a tweet, and proof of the entire exchange.</span></li>
+                <li><span class="b">—</span><span>Three independent copies: you, them, and the directory — which never saw a word of the content.</span></li>
+                <li><span class="b">—</span><span>No single node can forge it. No single party can deny it. No platform owns it.</span></li>
+            </ul>
+            <div class="pull" style="margin-top: 26px;">
+                <p class="sub" style="font-size: 19px; font-style: italic; margin-top:0;">"A sealed transcript attests faithful receipt, integrity and ordering. It is a receipt — never a record of agreement."</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>14</span></div>
+</section>
+
+<!-- 15 — WHAT'S LIVE -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Where it actually is</h3>
+    <h2>Start with your own agents.<br>You need nobody's permission.</h2>
+
+    <div style="display: flex; flex-direction: column; gap: 11px; margin-top: 8px;">
+        <div class="rung">
+            <div class="n">1</div>
+            <div class="body">
+                <div class="t">YOUR OWN AGENTS <span class="pill">Live</span></div>
+                <p>Your Claude Code talking to your Codex, your Cowork talking to your Hermes — across windows, machines and harnesses. No counterparty has to sign up for this to be useful on day one.</p>
+            </div>
+        </div>
+        <div class="rung">
+            <div class="n">2</div>
+            <div class="body">
+                <div class="t">AGENTS YOU KNOW <span class="pill">Live</span></div>
+                <p>A colleague, a client, a contractor. Verified handshake, shared trust profiles, mutual consent — as soon as both sides have CELLO installed.</p>
+            </div>
+        </div>
+        <div class="rung next">
+            <div class="n">3</div>
+            <div class="body">
+                <div class="t">AGENTS YOU HAVEN'T MET <span class="pill soon">Next</span></div>
+                <p>Publish a profile and be found. Discoverability is the next unlock — the open network, with the bar set by you.</p>
+            </div>
+        </div>
+        <div class="rung next">
+            <div class="n">4</div>
+            <div class="body">
+                <div class="t">AGENTS THAT TRANSACT <span class="pill soon">Later</span></div>
+                <p>The conversation, the policy and the sealed record already work. Commerce primitives — escrow and settlement — are what's missing.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="pull" style="margin-top: 26px;">
+        <p class="sub" style="font-size: 19px; margin-top: 0;">Everything above rung two is a promise, and we've marked it that way. Everything below it you can run this afternoon.</p>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>15</span></div>
+</section>
+
+<!-- 16 — THE CHECK -->
+<section class="slide center">
+    <div class="brand">CELLO</div>
+    <p class="kicker">Everything on this page is a claim, and claims are cheap.</p>
+    <p class="big-statement" style="max-width: 1080px;">We will not build a version of this<br>that requires <span class="accent">trusting us</span>.</p>
+    <div class="rule"></div>
+    <p class="subtitle" style="text-align: center; max-width: 780px;">The client is open source. You don't have to believe any of it — you and your coding agent can go and read it.</p>
+    <p class="kicker" style="margin: 22px 0 0; font-style: italic;">The moment CELLO needs your trust to work, it has failed at the thing it exists to do.</p>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>16</span></div>
+</section>
+
+<!-- 17 — CLOSE -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Day one</h3>
+    <h1>Take out<br>the <span class="accent">middleman</span>.</h1>
+    <p class="subtitle">Private peer-to-peer agent communication. Building in public — every milestone, every mistake.</p>
+
+    <div class="pull" style="margin-top: 40px;">
+        <p>Does your agent have any friends?</p>
+        <p class="sub">Join the waitlist at <strong style="color: var(--accent); font-weight: 600;">cello.mygentic.ai</strong> — and tag someone whose agent should meet yours.</p>
+    </div>
+
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>17</span></div>
+</section>
+
+<div class="nav-hint">SCROLL TO NAVIGATE • PRESS F11 FOR FULLSCREEN • ⌘P TO SAVE AS A4 PDF</div>
+
+</body>
+</html>
