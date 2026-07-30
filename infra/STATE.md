@@ -1879,3 +1879,30 @@ CELLO_IMAGE_TAG=v1.2.3 ./infra/deploy.sh dev us-east-1
 # Override GitHub connection ID (default: dev connection UUID)
 CELLO_GITHUB_CONNECTION_ID=<uuid> ./infra/deploy.sh staging eu-central-1
 ```
+
+---
+
+## Portal intake key — M10B `DOD-END-INGRESS-1` (provisioned 2026-07-30, us-east-1)
+
+The key a submitting daemon seals a trust-signal submission TO, so the DIRECTORY cannot read it. Its
+absence is why `cello_trust_signals_issue` refused with `intake_key_absent` on dev: the deployed
+consortium manifest (v1) carries a node roster and signatures but no `intake_key`, and the daemon
+refuses to send unsealed rather than let the directory read a submission.
+
+- **Secrets Manager `cello/dev/portal/intake-key-0`** (us-east-1) — Ed25519 **seed**, 32-byte hex.
+  Created 2026-07-30. The seed was generated INTO Secrets Manager by a script that never prints it
+  and never passes it on argv (SI-001); only the public key was emitted. Read by the PORTAL to open
+  sealed submissions — never by the directory, which is the entire point.
+- **Public key** = `87da56bf2ca5ef75d62d88dfed1f667f9fa565ee0a5306aeeef50f5d7053b3d1`
+- **`key_id`** = `intake-dev-1`. Generation-scoped by design (`M10B-D11`): rotation publishes a NEW
+  id and RETAINS the old seed until no undrained row references it, because in-flight rows are sealed
+  to whichever generation was published when they were sent. Opening every row with one current seed
+  turns a routine rotation into the permanent destruction of every queued endorsement.
+
+**Still owed for this to work end to end** (tracked, not yet done at the time of writing):
+1. `intake_key: { key_id, pubkey }` added to the consortium manifest, **re-signed** (adding a field
+   invalidates the officer signature) with the version bumped — clients reject a rollback.
+2. SSM `/cello/dev/directory/consortium-manifest` updated with the new base64, and the directory
+   redeployed so tasks pick it up.
+3. The portal task wired to read the seed into `PORTAL_INTAKE_SEEDS` as `intake-dev-1:<seed>`.
+4. `cello-iam.yaml` granting the portal task role read on `portal/intake-key*`.
