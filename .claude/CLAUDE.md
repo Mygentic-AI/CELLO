@@ -352,7 +352,14 @@ number, say so out loud, and unpin before the session ends.
 **Never tell users to run `npx clear-npx-cache`.** It wipes every npx-installed tool. Promoting and
 installing `latest` is sufficient.
 
-**`claude mcp add` syntax:** Use `--` to separate claude's flags from npx's flags, otherwise `--yes` is misinterpreted.
+**The plugin is the install route, not `claude mcp add`.** `cello-client` publishes a marketplace
+(`.claude-plugin/marketplace.json`, name `cello-protocol`) and a plugin (`plugins/cello/`) carrying the
+MCP shim, four skills, the receptionist agent, and the channel binding. Users run
+`/plugin marketplace add Mygentic-AI/cello-client` then `/plugin install cello@cello-protocol`.
+**Tool names under the plugin are `mcp__plugin_cello_cello__*`, not `mcp__cello__*`** — anything
+keyed on the old prefix (permission allowlists, hooks, docs) silently stops matching. Never register
+both routes at once; that runs the shim twice. Manual `claude mcp add` survives as a fallback only,
+and there `--` separates claude's flags from npx's or `--yes` is misinterpreted.
 
 ---
 
