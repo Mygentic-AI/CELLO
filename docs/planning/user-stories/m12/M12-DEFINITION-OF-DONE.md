@@ -144,9 +144,13 @@ description: >
   over an injected `AeStoreView`, and the peer-auth TBS in `@cello-protocol/crypto` (published).
   Proven by an in-memory two-node convergence test wiring the REAL encoders and merges: divergent
   nodes converge (Tier-A union; Tier-B higher-seq-wins with monotonic burn on both) and TERMINATE —
-  round 2 applies zero. — 🟡 built on `m12/ae-append`; directory suite 806 green; crypto TBS beta
-  v0.0.130 verified against the tarball. **Owed before ✅: the verdicts for `verifyPeerAuthFrame` and
-  `runAntiEntropyRound`, which Entry 25 left in flight, quoted.** → Entries 16–25
+  round 2 applies zero. — ✅ the owed verdicts are quoted (→ Entry 70). Reviewer, verbatim:
+  *"SPEC: DEVIATIONS FOUND … SILENT FALLBACKS FOUND — F2 is the fail-open … HOLLOW TESTS FOUND"* —
+  9 findings, 3 HIGH, **all closed**: failure containment moved out of the store into the engine, a
+  withholding peer can no longer report `{0,0,0,0}` as convergence (`tierAPlanned`), and peer-advertised
+  tables are filtered against the local registry so a rolling upgrade cannot kill suspension
+  replication. Verified on the 3-process spine gate, 5/5 (→ Entry 70b), not only the unit suite.
+  → Entries 16–25, 70, 70b
 - **DOD-AE-STORE-1** [trustless-cello] — a Postgres-backed `AeStoreView`: SELECT the synced tables into
   the encoders for advertise; INSERT-if-absent / merge-upsert for apply. **It must reproduce the
   MemStore semantics the convergence proof used** — a pg store that diverges from the proven semantics
