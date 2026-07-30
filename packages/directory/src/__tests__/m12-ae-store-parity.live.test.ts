@@ -191,3 +191,43 @@ describeLive("DOD-AE-STORE-1: Tier-B advertise and apply hash the SAME form", ()
     expect(after.rows[0]?.paused, "a refused body must not clear the pause").toBe(true);
   });
 });
+
+describeLive("DOD-AE-STORE-1: the natural-key constraint names are REAL", () => {
+  let pool: pg.Pool;
+  beforeAll(() => { pool = new pg.Pool({ connectionString: DB_URL }); });
+  afterAll(async () => { await pool.end(); });
+
+  it("every naturalKeyConstraint exists in pg_constraint on its own table", async () => {
+    // This is the test whose absence let the bug ship. The classifier previously substring-matched the
+    // natural-key COLUMN against the constraint NAME — and Postgres names a primary key `<table>_pkey`,
+    // so `"user_accounts_pkey".includes("account_id")` is false. Every ordinary duplicate was therefore
+    // logged as an identity fork, and the real fork (user_accounts_phone_stub_hash_key) arrived in the
+    // same words. Asserting the names against the live catalogue means a migration that renames one
+    // goes red here instead of silently re-classifying every duplicate as an alarm.
+    const expected: Array<[string, string]> = [
+      ["agent_profiles", "agent_profiles_k_local_unique"],
+      ["agent_revocations", "agent_revocations_pkey"],
+      ["user_accounts", "user_accounts_pkey"],
+      ["seal_notarizations", "seal_notarizations_session_seal_type_key"],
+    ];
+    for (const [table, constraint] of expected) {
+      const r = await pool.query<{ n: string }>(
+        `SELECT conname AS n FROM pg_constraint
+          WHERE conrelid = $1::regclass AND conname = $2 AND contype IN ('p','u')`,
+        [table, constraint],
+      );
+      expect(r.rows.length, `${table}: no unique/PK constraint named '${constraint}'`).toBe(1);
+    }
+  });
+
+  it("the fork constraint is NOT the natural key on user_accounts", async () => {
+    // The distinction the classifier exists to draw: phone_stub_hash is UNIQUE and is NOT the natural
+    // key, so two nodes minting an account for one phone stub is a genuine identity fork. If this ever
+    // became the natural key, the classifier would start calling forks convergence.
+    const r = await pool.query<{ n: string }>(
+      `SELECT conname AS n FROM pg_constraint
+        WHERE conrelid = 'user_accounts'::regclass AND contype = 'u' AND conname = 'user_accounts_phone_stub_hash_key'`,
+    );
+    expect(r.rows.length, "the fork constraint must exist and be distinct from the PK").toBe(1);
+  });
+});

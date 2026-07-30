@@ -75,6 +75,19 @@ interface TierAPg {
    * agree on insertion order, which anti-entropy does not provide and does not need to.
    */
   readonly chained?: boolean;
+  /**
+   * The EXACT name of the constraint enforcing this table's natural key.
+   *
+   * A duplicate on it is convergence (the row already arrived); a duplicate on any OTHER unique
+   * constraint is a genuine fork and must be alarmed. Substring-matching the natural-key COLUMN name
+   * against the constraint name cannot make that distinction — Postgres names a primary key
+   * `<table>_pkey`, so `"user_accounts_pkey".includes("account_id")` is false and every ordinary
+   * duplicate was reported as an identity fork, burying the one alarm that matters.
+   *
+   * Verified against `pg_constraint`, not derived from the migrations — and asserted there by a live
+   * test, so a migration that renames one goes red instead of silently re-classifying every duplicate.
+   */
+  readonly naturalKeyConstraint: string;
 }
 
 // ORDER IS LOAD-BEARING: the engine applies Tier-A in this order and design §3.3 requires
@@ -82,13 +95,14 @@ interface TierAPg {
 // only because `account_id` is not in AGENT_PROFILES_SPEC — and that spec gained a column one commit
 // ago, so "inert today" is not a reason to leave it wrong.
 const TIER_A: readonly TierAPg[] = [
-  { spec: USER_ACCOUNTS_SPEC, bytea: [], chained: true },
-  { spec: AGENT_PROFILES_SPEC, bytea: [] },
-  { spec: AGENT_REVOCATIONS_SPEC, bytea: ["signature"] },
+  { spec: USER_ACCOUNTS_SPEC, bytea: [], chained: true, naturalKeyConstraint: "user_accounts_pkey" },
+  { spec: AGENT_PROFILES_SPEC, bytea: [], naturalKeyConstraint: "agent_profiles_k_local_unique" },
+  { spec: AGENT_REVOCATIONS_SPEC, bytea: ["signature"], naturalKeyConstraint: "agent_revocations_pkey" },
   {
     spec: SEAL_NOTARIZATIONS_SPEC,
     bytea: ["session_id", "sealed_root", "participant_a_pubkey", "participant_b_pubkey", "frost_signature"],
     chained: true,
+    naturalKeyConstraint: "seal_notarizations_session_seal_type_key",
   },
 ];
 
@@ -457,8 +471,9 @@ export class PgAeStore implements AeStoreView {
           // `user_accounts.phone_stub_hash` is UNIQUE and is NOT the natural key, so two nodes minting
           // an account for one phone stub is an identity FORK, which is exactly the divergence
           // anti-entropy exists to surface. Swallowing it as "convergence" would discard the evidence.
-          const naturalKeyViolation =
-            e?.code === "23505" && (e.constraint === undefined || e.constraint.includes(t.spec.naturalKey[0]!));
+          // Exact match, and an UNNAMED 23505 is NOT assumed benign: defaulting the unknown case to
+          // "convergence" silently skips a row on evidence we do not have.
+          const naturalKeyViolation = e?.code === "23505" && e.constraint === t.naturalKeyConstraint;
           if (!naturalKeyViolation) {
             if (e?.code === "23505") {
               this.#logger?.error("antientropy.apply.constraint_conflict", {
@@ -485,12 +500,30 @@ export class PgAeStore implements AeStoreView {
         .map((c, i) => (t.bytea.includes(c) ? `decode($${i + 1},'hex')` : `$${i + 1}`))
         .join(", ");
       const values = cols.map((c) => body[c] ?? null);
-      const res = await this.#pool.query(
-        `INSERT INTO ${t.spec.table} (${cols.join(", ")}) VALUES (${placeholders})
-         ON CONFLICT (${conflict}) DO NOTHING`,
-        values,
-      );
-      inserted += res.rowCount ?? 0;
+      // PER-RECORD, matching the chained branch above. Without this, anything Postgres raises abandons
+      // every REMAINING record in the batch: `decode(…,'hex')` on a malformed BYTEA (decode RAISES,
+      // unlike Buffer.from), or a 23505 on one of the unique constraints `ON CONFLICT (naturalKey)`
+      // does NOT cover — `agent_profiles` alone has three. The engine contains the throw at table
+      // granularity so the round survives, but the poisoned record is re-planned every round and the
+      // rest of that table's backlog never lands.
+      try {
+        const res = await this.#pool.query(
+          `INSERT INTO ${t.spec.table} (${cols.join(", ")}) VALUES (${placeholders})
+           ON CONFLICT (${conflict}) DO NOTHING`,
+          values,
+        );
+        inserted += res.rowCount ?? 0;
+      } catch (err) {
+        const e = err as { code?: string; constraint?: string } | null;
+        // Name the RECORD, not just the table. The bare pg message ("invalid hexadecimal digit") does
+        // not say which row or column, and the table arrives separately in the round's failure list.
+        this.#logger?.error("antientropy.apply.failed", {
+          table: t.spec.table,
+          naturalKey: t.spec.naturalKey.map((k) => String(body[k])).join("\u0000"),
+          constraint: e?.constraint,
+          reason: e instanceof Error ? e.message : String(err),
+        });
+      }
     }
     return inserted;
   }
