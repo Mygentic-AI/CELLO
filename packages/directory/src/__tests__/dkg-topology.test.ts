@@ -88,3 +88,43 @@ describe("DOD-ROLE-MANIFEST-1 dir: computeDkgTopology", () => {
     expect(t.replicaOnly).toBe(false);
   });
 });
+
+// ─── DOD-INV-NODEID: two manifest entries must never share a FROST identifier ──────────────────
+
+describe("DOD-INV-NODEID: a duplicate nodeId is a non-functional consortium, not a bigger one", () => {
+  /**
+   * A node's FROST identifier is `Identifier.derive(nodeId)` (`frost-handler.ts:366`) — deterministic
+   * in the nodeId and nothing else. So two manifest entries sharing a nodeId are ONE FROST
+   * participant wearing two hats, and the arithmetic inflates around it: N counts 3, T = majority(3)
+   * = 2, and the quorum can be "satisfied" by two entries that resolve to a single identifier — one
+   * node meeting the threshold alone, which is the sovereign-node invariant voided.
+   *
+   * Nothing rejected this before. `verifyManifest` dedupes OFFICER indices (signature counting) and
+   * never looks at nodeIds, so a duplicate is operator error that verifies clean and corrupts the
+   * threshold silently. It is not attacker-reachable (manifests are officer-signed) — it is
+   * reachable by a typo in the file I write by hand, which is worse, because it looks fine.
+   */
+  const v = (nodeId: string): ConsortiumNode =>
+    ({ nodeId, role: "validator", pubkey: "00".repeat(32) }) as unknown as ConsortiumNode;
+
+  it("flags a duplicate validator nodeId instead of counting it twice", () => {
+    const topo = computeDkgTopology([v("gcp-usc1"), v("gcp-euw1"), v("gcp-usc1")], undefined);
+    expect(topo.duplicateNodeIds).toEqual(["gcp-usc1"]);
+  });
+
+  it("does not inflate N with the duplicate", () => {
+    // The count must reflect DISTINCT FROST participants, so T is derived from what can actually
+    // hold distinct shares. Counting 3 here yields T=2 over 2 real participants — a threshold that
+    // one node's identifier can satisfy.
+    const topo = computeDkgTopology([v("gcp-usc1"), v("gcp-euw1"), v("gcp-usc1")], undefined);
+    expect(topo.consortiumNodeCount).toBe(2);
+    expect(topo.dkgThreshold).toBe(2);
+  });
+
+  it("leaves a well-formed manifest untouched", () => {
+    const topo = computeDkgTopology([v("gcp-usc1"), v("gcp-euw1"), v("gcp-use1")], undefined);
+    expect(topo.duplicateNodeIds).toEqual([]);
+    expect(topo.consortiumNodeCount).toBe(3);
+    expect(topo.dkgThreshold).toBe(2);
+  });
+});

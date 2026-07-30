@@ -43,7 +43,12 @@ description: >
 - **DOD-INV-THRESHOLD** [trustless-cello, cello-client] — `T = majority(validators)` everywhere.
   `consortiumNodeCount` and every threshold/DKG/kill-switch derivation counts **validator-role
   nodes only**; replicas never enter the arithmetic. All-N / T=N never appears (settled
-  2026-07-04). — ❌
+  2026-07-04). — ✅ **SINGLE SOURCE, BOTH REPOS** (→ Entry 61). Exactly one derivation exists:
+  `dkg-topology.ts:54`, covered by `dkg-topology.test.ts` (10/10). A repo-wide grep for a second
+  majority/threshold computation in `packages/directory/src` and `packages/relay/src` returns only
+  that line plus prose comments. Both repos filter through the SAME `validatorNodes()` in
+  `@cello-protocol/protocol-types` — directory via `dkg-topology.ts`, client via
+  `register-handler.ts:139` — so a replica cannot enter the arithmetic on either side.
 - **DOD-INV-SHARES-LOCAL** [trustless-cello] — `agent_key_shares` (or successor) appears in NO
   sync set, NO anti-entropy exchange, and NO off-node artifact except the node's own encrypted
   backup. A share never transits between nodes by any mechanism. — ✅ **ENFORCED MECHANICALLY**
@@ -74,19 +79,36 @@ description: >
   last clause: **a paused agent must not be able to seal via a node that lacks the state.**
 - **DOD-INV-NODEID** [all] — every node is born `<cloud>-<region>` (e.g. `aws-use1`, `gcp-usc1`)
   and is never renamed; no two manifest entries ever hold the same FROST identifier in one
-  manifest version. — ❌
+  manifest version. — ✅ **ENFORCED (→ Entry 61).** All live nodes are `<cloud>-<region>`
+  (`gcp-usc1`, `gcp-euw1`, `gcp-use1`). The identifier clause had NO enforcement anywhere:
+  a node's FROST identifier is `Identifier.derive(nodeId)` and nothing else, so two entries sharing
+  a nodeId are ONE participant wearing two hats — and `verifyManifest` dedupes only OFFICER indices,
+  never nodeIds, so a hand-edit typo verified clean and silently produced a threshold a single
+  identifier could satisfy alone. `computeDkgTopology` now counts DISTINCT nodeIds and reports
+  `duplicateNodeIds`; the registration handler refuses the ceremony with
+  `directory.dkg.duplicate_node_ids` at ERROR. Red-first, 3 tests, directory suite 954 green.
 - **DOD-INV-NO-VPN** [trustless-cello] — no VPN, VPC peering, Private Service Access consumer, or
   any cross-cloud network tunnel is created. Directory sync happens only over the authenticated
-  libp2p transport. Nothing external ever connects to a node's Postgres. — ❌
+  libp2p transport. Nothing external ever connects to a node's Postgres. — ✅ **VERIFIED
+  (→ Entry 61).** Zero `google_compute_vpn_*`, `google_compute_router`, `google_compute_network_peering`,
+  `service_networking`, or `google_compute_interconnect` resources anywhere in `infra/terraform/`.
 - **DOD-INV-RELAY-EXTRACTABLE** [trustless-cello] — the relay gains no consortium state, no
   database, no shared internal config package, no directory import; config stays env-only. It
-  remains a standalone shippable artifact (future enterprise private relay). — ❌
+  remains a standalone shippable artifact (future enterprise private relay). — ✅ **VERIFIED, and
+  re-checked against the one diff that threatened it** (→ Entry 60/61). Zero directory imports —
+  `DirectoryAdapter` is structurally typed precisely to avoid one (`relay-node.ts:173`). Deps are
+  only `crypto`, `interfaces`, `protocol-types`, `transport` (contracts, not config). The unit
+  reviewer passed this lens explicitly on DOD-SEAL-BROKER-1: `CELLO_DIRECTORY_ENDPOINTS` is env-only,
+  parsed in `bin/relay.ts`, held as a plain `Record<string,string>`. An enterprise private relay
+  leaves it unset and gets the pre-existing behaviour.
 - **DOD-INV-IAC** [trustless-cello] — every GCP and AWS resource exists in IaC; any manual
   emergency fix lands in IaC + the STATE file (`infra/STATE.md` / `infra/GCP-STATE.md`,
   updated immediately per action, never batched) before its unit closes. Region-expansion test:
   a new region with zero manual steps. — ❌
 - **DOD-INV-NO-SAAS / DOD-INV-DOMAIN** [all] — no paid SaaS; all URLs are
-  `*.cello.mygentic.ai`. — ❌
+  `*.cello.mygentic.ai`. — ✅ **VERIFIED (→ Entry 61).** A URL sweep of `infra/terraform/*.tf` and
+  the directory + relay sources returns nothing outside `*.cello.mygentic.ai` and infrastructure
+  hosts (googleapis, amazonaws, loopback) — no third-party SaaS endpoint anywhere.
 
 ---
 

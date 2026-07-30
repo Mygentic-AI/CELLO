@@ -2960,6 +2960,23 @@ export class CelloDirectoryNode {
     const topo = computeDkgTopology(allManifestNodes, reachableNodeIds);
     const { consortiumNodeCount, dkgThreshold, dkgParticipants } = topo;
 
+    // DOD-INV-NODEID: two validator entries sharing a nodeId are ONE FROST participant — the
+    // identifier is `Identifier.derive(nodeId)` and nothing else. Dealing against that set produces a
+    // threshold a single identifier can satisfy alone, which is the sovereign-node invariant voided.
+    // Refuse the ceremony rather than deal shares under an inflated N. Named at ERROR because the
+    // cause is a malformed manifest an operator hand-edited, not a transient condition — and it
+    // verifies clean, so nothing else will say so.
+    if (topo.duplicateNodeIds.length > 0) {
+      this.#logger?.error("directory.dkg.duplicate_node_ids", {
+        agent: truncHex(frame.k_local_pubkey),
+        duplicateNodeIds: topo.duplicateNodeIds,
+        distinctValidators: topo.consortiumNodeCount,
+        reason: "a repeated validator nodeId collapses two manifest entries onto one FROST identifier",
+      });
+      this.#pendingPreAuthData.delete(frame.k_local_pubkey);
+      this.#sendFrame(stream, encodeRegisterError({ type: "register_error", reason: "dkg_failed" }));
+      return;
+    }
     // A manifest with nodes but zero validators is a non-functional consortium — no share-holder
     // could ever co-sign. Refuse loudly rather than DKG against a share-less set.
     if (topo.replicaOnly) {

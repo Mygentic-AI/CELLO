@@ -27,6 +27,14 @@ export interface DkgTopology {
   dkgParticipants: number;
   /** |Q| < T with more than one validator — refuse rather than DKG a below-quorum group. */
   belowQuorum: boolean;
+  /**
+   * Validator nodeIds appearing MORE THAN ONCE (DOD-INV-NODEID). A node's FROST identifier is
+   * `Identifier.derive(nodeId)` and nothing else, so a repeated nodeId is one participant wearing two
+   * hats — and the arithmetic inflates around it, yielding a threshold a single identifier can meet
+   * alone. Non-empty means the manifest is malformed; the caller refuses. Not attacker-reachable
+   * (manifests are officer-signed) — reachable by a hand-edit that otherwise verifies clean.
+   */
+  duplicateNodeIds: string[];
 }
 
 /**
@@ -44,8 +52,14 @@ export function computeDkgTopology(
   const hasManifest = allManifestNodes.length > 0;
   const replicaOnly = hasManifest && validators.length === 0;
 
-  const consortiumNodeCount = validators.length || 1;
-  const validatorNodeIds = validators.map((n) => n.nodeId);
+  // DISTINCT identifiers, not entries: N must count what can actually hold distinct shares.
+  const validatorNodeIds = [...new Set(validators.map((n) => n.nodeId))];
+  const seen = new Set<string>();
+  const duplicateNodeIds = [
+    ...new Set(validators.map((n) => n.nodeId).filter((id) => (seen.has(id) ? true : (seen.add(id), false)))),
+  ];
+
+  const consortiumNodeCount = validatorNodeIds.length || 1;
   const quorumNodeIds =
     reachableNodeIds !== undefined
       ? validatorNodeIds.filter((id) => reachableNodeIds.includes(id))
@@ -54,7 +68,7 @@ export function computeDkgTopology(
   const dkgThreshold = consortiumNodeCount === 1 ? 2 : Math.floor(consortiumNodeCount / 2) + 1;
   // Validators present → the quorum size |Q|; no manifest (0 validators) → the single primary
   // directory (2-of-2). replicaOnly is handled by the caller before these are used.
-  const dkgParticipants = validators.length > 0 ? quorumNodeIds.length : 1;
+  const dkgParticipants = validatorNodeIds.length > 0 ? quorumNodeIds.length : 1;
   const belowQuorum = consortiumNodeCount > 1 && dkgParticipants < dkgThreshold;
 
   return {
@@ -65,5 +79,6 @@ export function computeDkgTopology(
     dkgThreshold,
     dkgParticipants,
     belowQuorum,
+    duplicateNodeIds,
   };
 }

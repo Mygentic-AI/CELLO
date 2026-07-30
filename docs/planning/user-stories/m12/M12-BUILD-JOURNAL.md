@@ -3832,3 +3832,51 @@ deleted earlier today was not: same symptom, opposite epistemics.
 Re-run: **GREEN, 147s.** The client-side fix lives on `cello-client` `m12/ae-client` and is exercised
 from the local build the enforcer drives (`CELLO_CLIENT_ROOT`) — unpublished, so an npm publish is
 still owed before any operator sees it.
+
+---
+
+## Entry 61 — 2026-07-30 — Tier-I invariants verified; DOD-INV-NODEID had no enforcement at all
+
+Five Tier-I lines flipped to ✅ with mechanical evidence, and one of them turned out to be unenforced
+rather than merely unasserted.
+
+### DOD-INV-NODEID — the gap
+
+A node's FROST identifier is `ed25519_FROST.Identifier.derive(this.#nodeId)` (`frost-handler.ts:366`)
+— deterministic in the nodeId and nothing else. So **two manifest entries sharing a nodeId are ONE
+FROST participant wearing two hats.** Nothing rejected that: `verifyManifest` dedupes OFFICER indices
+for signature counting and never looks at nodeIds.
+
+The consequence is not a cosmetic miscount. `consortiumNodeCount` counted ENTRIES, so a duplicate
+inflated N to 3 and derived T = majority(3) = 2 over **two** real participants — a threshold that a
+single identifier can satisfy alone. That is `DOD-INV-SOVEREIGN` voided: "no single node can complete
+a threshold ceremony alone."
+
+Not attacker-reachable — manifests are officer-signed. Reachable by a typo in a file I hand-edit,
+which is worse, because it verifies clean and nothing anywhere says otherwise.
+
+Fixed red-first: `computeDkgTopology` counts DISTINCT nodeIds and reports `duplicateNodeIds`, and the
+registration handler refuses the ceremony with `directory.dkg.duplicate_node_ids` at ERROR — a
+consumer in the same unit, not a flag left for later. 3 tests; directory suite 954 green.
+
+### The other four
+
+- **THRESHOLD** — exactly one derivation exists (`dkg-topology.ts:54`); a grep for a second
+  majority/threshold computation across the directory and relay sources returns only prose. Both
+  repos filter through the same `validatorNodes()` in `protocol-types`, so a replica cannot enter the
+  arithmetic on either side.
+- **NO-VPN** — zero VPN / router / peering / service-networking / interconnect resources in
+  `infra/terraform/`. The anti-entropy dividend is intact: nothing external reaches a node's Postgres.
+- **RELAY-EXTRACTABLE** — zero directory imports (`DirectoryAdapter` is structurally typed precisely
+  to avoid one); deps are contracts only. Re-checked against the one diff that threatened it: the
+  reviewer passed the lens on DOD-SEAL-BROKER-1 — `CELLO_DIRECTORY_ENDPOINTS` is env-only and an
+  enterprise private relay leaves it unset.
+- **NO-SAAS / DOMAIN** — a URL sweep finds nothing outside `*.cello.mygentic.ai` and infrastructure
+  hosts.
+
+### Still owed in Tier I
+
+`SOVEREIGN` and `IAC` are cross-cutting and judged per-unit rather than by grep; `KILL-SWITCH`
+remains 🟡 — proven locally against three real processes with a real partition, owed on the live
+fleet. The blocker there is still practical, not architectural: `/internal/agent-write` needs
+`accountId` + `agentId`, which capability-minted test agents do not have.
