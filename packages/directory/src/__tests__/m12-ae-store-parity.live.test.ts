@@ -23,6 +23,12 @@ import pg from "pg";
 import { PgAeStore } from "../pg-ae-store.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC } from "../ae-table-encoders.js";
 import { computeTableDigest } from "../set-reconciliation.js";
+import { SEAL_NOTARIZATIONS_SPEC } from "../ae-table-encoders.js";
+import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
+import { computeChainHash, serializeRecord, CHAIN_GENESIS } from "../hash-chain.js";
+import type { Logger } from "@cello-protocol/interfaces";
+
+const silentLogger: Logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as unknown as Logger;
 
 const DB_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
 const describeLive = process.env.CELLO_ENV === "local" ? describe : describe.skip;
@@ -229,5 +235,69 @@ describeLive("DOD-AE-STORE-1: the natural-key constraint names are REAL", () => 
         WHERE conrelid = 'user_accounts'::regclass AND contype = 'u' AND conname = 'user_accounts_phone_stub_hash_key'`,
     );
     expect(r.rows.length, "the fork constraint must exist and be distinct from the PK").toBe(1);
+  });
+});
+
+describeLive("DOD-AE-STORE-1: a chain containing an AE-APPLIED row still verifies", () => {
+  let pool: pg.Pool;
+  const SESSION = Buffer.from("ae".repeat(16), "hex");
+
+  beforeAll(() => { pool = new pg.Pool({ connectionString: DB_URL }); });
+  afterAll(async () => { await pool.end(); });
+  afterEach(async () => { await pool.query("DELETE FROM seal_notarizations WHERE session_id = $1", [SESSION]); });
+
+  it("applies a notarization through the REAL ChainWriter and its chain link recomputes", async () => {
+    // The reviewer's highest-value gap, and he said so plainly: he traced this by hand from
+    // TABLE_EXTRA_EXCLUDED and serializeRecord and concluded it holds, but "that is inference, not a
+    // test, and a mismatch means an AE-replicated seal receipt makes the node's ENTIRE notarization
+    // chain read as tampered." Every other chained-table test runs against a fake ChainWriter and a
+    // pool returning no rows, so none of them proves the real writer accepts these columns, or that
+    // what it writes still chains.
+    //
+    // The specific risk is representation drift between the two write paths: the AE path hands
+    // Buffers decoded from wire hex and a BIGINT close_timestamp, while recordNotarization hands
+    // Buffers and a number. If serializeRecord saw them differently, the chain would break at the
+    // row AFTER this one and read as tamper-evidence firing.
+    const store = new PgDirectoryStore(pool, silentLogger, "gcp-usc1", "us-central1");
+    const aeStore = new PgAeStore(pool, store, silentLogger);
+
+    const body = {
+      session_id: SESSION.toString("hex"),
+      seal_type: "bilateral",
+      sealed_root: "bb".repeat(32),
+      participant_a_pubkey: "cc".repeat(32),
+      participant_b_pubkey: "dd".repeat(32),
+      close_timestamp: "1753900000000",
+      frost_signature: "ee".repeat(64),
+    };
+    const { hash } = encodeTierARecord(SEAL_NOTARIZATIONS_SPEC, body);
+    expect(await aeStore.applyTierA("seal_notarizations", [{ hash, body }])).toBe(1);
+
+    // Assert THIS ROW'S OWN LINK, not the whole table's validity.
+    //
+    // My first version verified the entire chain and asserted the break point had not moved. It was
+    // hollow, and the revert test proved it: `verifyChain` reports only the FIRST break, and this
+    // shared database already breaks at row 1 (other suites insert seal_notarizations directly,
+    // bypassing insertWithChain). A pre-existing break therefore MASKS any break at the row this test
+    // writes — reverting the hex→Buffer conversion left it green.
+    //
+    // The linkage check needs no clean prefix: recompute this row's chain hash from the row before it
+    // and compare with what was stored. That is exactly what verifyChain does per row, scoped to the
+    // one row whose provenance is anti-entropy.
+    const all = (await pool.query<Record<string, unknown>>("SELECT * FROM seal_notarizations ORDER BY id")).rows;
+    const idx = all.findIndex((r) => Buffer.from(r["session_id"] as Buffer).equals(SESSION));
+    expect(idx, "the AE-applied row must be present").toBeGreaterThanOrEqual(0);
+    const mine = all[idx]!;
+    const prevHash = idx === 0 ? CHAIN_GENESIS : (all[idx - 1]!["chain_hash"] as string);
+
+    // Recomputed from the row AS POSTGRES RETURNS IT — which is the whole point. If the writer hashed
+    // a hex string while the column stores bytes, the read-back row re-serializes differently and this
+    // is where it shows.
+    const recomputed = computeChainHash(serializeRecord(mine, "seal_notarizations"), prevHash);
+    expect(
+      recomputed,
+      "the AE-applied row's stored chain_hash does not match a recomputation from the persisted row — " +
+        "an anti-entropy-replicated receipt would make this node's notarization chain read as tampered",
+    ).toBe(mine["chain_hash"]);
   });
 });

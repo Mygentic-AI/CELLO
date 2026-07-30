@@ -4539,3 +4539,65 @@ worktrees, two ports, no shared state:
 ```
 DATABASE_URL="postgresql://postgres:dev@localhost:5434/cello_dev" pnpm run test:spine
 ```
+
+---
+
+## Entry 71 — 2026-07-30 — DOD-AE-STORE-1 reviewed: 5 findings closed, and a hollow test I caught myself
+
+Pass 2 of 2 on `pg-ae-store.ts`. Verdicts, quoted:
+
+> **SPEC: DEVIATIONS FOUND** — the "reproduce the MemStore semantics" clause is not met. `suspension_seq`
+> exists as a `number` on the apply path and a `string` on the advertise path where MemStore stringifies
+> at both (HIGH-1) [blocking]; the generic Tier-A branch lacks the per-record containment its chained
+> sibling has (MEDIUM-3).
+>
+> **SILENT FALLBACKS FOUND** — `e.constraint === undefined` defaults an unnamed 23505 to "convergence"
+> and skips it [blocking, MEDIUM].
+>
+> **ERROR SUBSTITUTION FOUND** — `antientropy.apply.constraint_conflict` names an identity FORK for what
+> is, for both tables it governs, an ordinary converged duplicate (HIGH-2) [blocking].
+>
+> **HOLLOW TESTS FOUND** — `m12-ae-chained-tables.test.ts:206` [blocking]: it names the natural-key-vs-fork
+> distinction and survives that distinction being reverted, which is why HIGH-2 shipped.
+
+It also confirmed the parity test's discriminating-power substitution is sound — *"strictly stronger than
+a one-time manual revert"* — and that every test in `m12-ae-store-parity.live.test.ts` survives the revert
+test.
+
+### The findings
+
+**HIGH-1 — the kill switch could be flipped OFF by a mistyped body.** `applyTierB` ran two wire-input
+checks and zero TYPE checks. A peer body with `suspension_seq: "5"` against a local `5` compares unequal,
+so the merge takes the higher-seq branch; `5 > "5"` is false, so the PEER wins; and its `paused` is copied
+wholesale over ours, bypassing the equal-seq suspended-wins rule. Reachable without a hostile peer — the
+correct cleanup of `rowToBody`'s lossy `Number()` is exactly the edit that detonates it, and a rolling
+deploy puts a fixed and unfixed node on the wire together. `presence-merge` already hardened against this
+shape: the liveness table was defended and the kill switch was not.
+
+**HIGH-2 — the fork alarm could never fire for the right reason.** The classifier substring-matched the
+natural-key COLUMN against the constraint NAME, and Postgres names a primary key `<table>_pkey` — so
+`"user_accounts_pkey".includes("account_id")` is false, and so is the seal equivalent. Every ordinary
+duplicate was logged as an identity fork; the real one arrived in the same words. Names now verified
+against `pg_constraint` and asserted there, so a migration rename goes red.
+
+**MEDIUM-3/4** — per-record containment on the generic path (one bad record no longer abandons a table's
+batch), and a refusal for a profile body with no `agent_id`.
+
+### The hollow test was mine, and the revert test found it
+
+The reviewer's highest-value gap was `verifyChain` after an AE-applied row — he had traced it by hand and
+said plainly it was *"inference, not a test."* I wrote it, it passed, and then the revert test passed too:
+handing the chain writer hex strings instead of Buffers left it green.
+
+The reason is worth keeping. `verifyChain` reports only the FIRST break, and this shared dev database
+already breaks at row 1 — other suites insert `seal_notarizations` directly, bypassing `insertWithChain`.
+A pre-existing break MASKS every later one, so "the whole chain is still valid" could never see a fault in
+the row I had just written.
+
+Rewritten to assert that row's OWN link: recompute its chain hash from the row before it and compare with
+what was stored, reading the row back **as Postgres returns it**. No clean prefix needed, and the revert
+now turns it red. That converts the reviewer's inference into a measurement — the thing he said he would
+not close the tag without.
+
+**Owed, and it is data repair not code:** the live fleet's NULL-`agent_id` profiles still fork and nothing
+in AE can heal them (M12-D-NULL-AGENTID). Directory 986 green.
