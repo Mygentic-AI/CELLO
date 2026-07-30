@@ -173,7 +173,12 @@ function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
  * Uses structural typing so relay package does not import @cello-protocol/directory.
  */
 export interface DirectoryAdapter {
-  processSeal(sessionId: Uint8Array, sealData: import("./relay-types.js").SealData): Promise<{ ok: true } | { ok: false; reason: string }>;
+  processSeal(
+    sessionId: Uint8Array,
+    sealData: import("./relay-types.js").SealData,
+    /** Optional redirect target — which directory adjudicates this seal (see the adapter). */
+    target?: { peerId: string; multiaddr: string },
+  ): Promise<{ ok: true } | { ok: false; reason: string; redirect?: { nodeId: string; peerId: string; multiaddr: string } }>;
   /**
    * FEDERATION-003 AC-005/AC-006: Look up a relay's registered public key by relayId.
    * Returns undefined if the relayId is not registered.
@@ -1314,7 +1319,22 @@ export class CelloRelayNode {
     const sealResult = this.submitForSeal(sessionId);
     if (!sealResult.ok) return;
 
-    const dirResult = await this.#directory!.processSeal(sessionId, sealResult.data);
+    let dirResult = await this.#directory!.processSeal(sessionId, sealResult.data);
+
+    // FOLLOW THE REDIRECT, once. The seal must be adjudicated by the node holding the seal
+    // initiator's signaling stream: `seal_verified` is pushed from a LOCAL stream map, and
+    // notification_queue is per-node and NOT replicated, so a directory that lacks that stream can
+    // never deliver it — the seal would hang until both clients timed out. The configured directory
+    // is the only one the relay knows statically; it tells us which node can finish the job.
+    //
+    // Exactly one hop: a second redirect would mean the consortium disagrees about homing, and
+    // chasing it risks a loop. Better to reject with the reason than to spin.
+    if (!dirResult.ok && dirResult.redirect) {
+      const { nodeId, peerId, multiaddr } = dirResult.redirect;
+      this.#logger.info("relay.seal.redirected", { nodeId, reason: dirResult.reason });
+      dirResult = await this.#directory!.processSeal(sessionId, sealResult.data, { peerId, multiaddr });
+    }
+
     if (dirResult.ok) {
       this.confirmSeal(sessionId);
     } else {

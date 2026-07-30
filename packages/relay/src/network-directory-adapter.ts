@@ -178,7 +178,19 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
     }
   }
 
-  async processSeal(sessionId: Uint8Array, sealData: SealData): Promise<{ ok: true } | { ok: false; reason: string }> {
+  async processSeal(
+    sessionId: Uint8Array,
+    sealData: SealData,
+    /**
+     * Optional override of WHICH directory adjudicates this seal. Defaults to the configured one.
+     *
+     * Needed because the seal must be adjudicated by a node that holds the seal initiator's
+     * signaling stream — `seal_verified` is pushed from a LOCAL stream map, and notification_queue
+     * is per-node and not replicated. The configured directory tells us where to go via a redirect;
+     * the relay stores nothing about the consortium itself (DOD-INV-RELAY-EXTRACTABLE).
+     */
+    target?: { peerId: string; multiaddr: string },
+  ): Promise<{ ok: true } | { ok: false; reason: string; redirect?: { nodeId: string; peerId: string; multiaddr: string } }> {
     if (!this.#node) return { ok: false, reason: "directory_unavailable" };
 
     const frame = CBOR_ENC.encode({
@@ -190,12 +202,14 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
     }) as Uint8Array;
 
     try {
-      // Ensure connected
-      for (const addr of this.#directoryMultiaddrs) {
+      // Ensure connected — to the redirect target when one was supplied, else the configured node.
+      const addrs = target ? [target.multiaddr] : this.#directoryMultiaddrs;
+      const peerId = target ? target.peerId : this.#directoryPeerId;
+      for (const addr of addrs) {
         try { await this.#node.dial(addr); break; } catch { /* try next */ }
       }
 
-      const stream = await this.#node.newStream(this.#directoryPeerId, DIRECTORY_RELAY_PROTOCOL_ID);
+      const stream = await this.#node.newStream(peerId, DIRECTORY_RELAY_PROTOCOL_ID);
       stream.send(lp.encode.single(frame));
       await stream.close();
 
@@ -203,7 +217,12 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
         const raw = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
         const resp = CBOR_ENC.decode(raw) as Record<string, unknown>;
         if (resp["type"] === "seal_received") return { ok: true };
-        return { ok: false, reason: (resp["reason"] as string) ?? "directory_error" };
+        const redirect = resp["redirect"] as { nodeId: string; peerId: string; multiaddr: string } | undefined;
+        return {
+          ok: false,
+          reason: (resp["reason"] as string) ?? "directory_error",
+          ...(redirect?.peerId && redirect.multiaddr ? { redirect } : {}),
+        };
       }
       return { ok: false, reason: "no_response" };
     } catch (err) {

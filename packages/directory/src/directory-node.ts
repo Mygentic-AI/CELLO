@@ -1153,7 +1153,15 @@ export class CelloDirectoryNode {
       if (result.ok) {
         stream.send(lp.encode.single(CBOR_ENC.encode({ type: "seal_received" })));
       } else {
-        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "error", reason: result.reason })));
+        // Pass the REDIRECT through to the relay when we have one. Without it the relay can only
+        // reject the seal; with it the relay retries against the node that can actually deliver
+        // `seal_verified` to the initiator. This is what keeps the relay extractable — it learns
+        // where to go from a directory it already trusts, not from baked-in consortium config.
+        stream.send(lp.encode.single(CBOR_ENC.encode(
+          "redirect" in result && result.redirect
+            ? { type: "error", reason: result.reason, redirect: result.redirect }
+            : { type: "error", reason: result.reason },
+        )));
       }
       await stream.close();
     } catch {
@@ -4756,7 +4764,18 @@ export class CelloDirectoryNode {
    * Called in-process by the relay after both SEAL control leaves are submitted.
    * Returns a structured result; the relay calls confirmSeal or rejectSeal accordingly.
    */
-  async processSeal(sessionId: Uint8Array, sealData: RelaySealData): Promise<{ ok: true } | { ok: false; reason: string }> {
+  async processSeal(
+    sessionId: Uint8Array,
+    sealData: RelaySealData,
+  ): Promise<
+    | { ok: true }
+    // A REDIRECT, not just a failure: when the seal initiator is homed on another node this node
+    // physically cannot deliver `seal_verified` to them (notification_queue is per-node and is not
+    // replicated), but it CAN say who can. The relay follows this rather than needing a static list
+    // of every directory — which keeps DOD-INV-RELAY-EXTRACTABLE intact: the relay learns the
+    // consortium from a directory it already trusts, never from baked-in configuration.
+    | { ok: false; reason: string; redirect?: { nodeId: string; peerId: string; multiaddr: string } }
+  > {
     const sessionIdHex = Buffer.from(sessionId).toString("hex");
     const leaves = sealData.leaves;
     const relayRoot = sealData.merkle_root;
@@ -5071,6 +5090,31 @@ export class CelloDirectoryNode {
           consequence: "notification_queue is per-node and not replicated — this frame cannot reach them from here",
         });
         this.#store.enqueueNotification(initiatorHex, sealVerifiedEvent, sessionIdHex);
+        // Name WHERE the seal can complete. presence gives the owning nodeId; the VERIFIED manifest
+        // gives its dial coordinates. Without both we still fail loudly — a redirect we cannot
+        // address is worse than an honest refusal, because the relay would retry into nothing.
+        // `peerId` and `multiaddr` are present in the manifest at RUNTIME (M12 §1a — the AE
+        // handshake channel-binds against peerId, and the relay/client dial the multiaddr) but the
+        // published @cello-protocol/protocol-types ConsortiumNode does not declare them yet. Read
+        // them through a narrow local type rather than a blanket cast, so a missing field is a
+        // handled absence and not an undefined at runtime.
+        // OWED: bump protocol-types to declare peerId/multiaddr/role and drop this.
+        type DialableNode = { nodeId: string; peerId?: string; multiaddr?: string };
+        const owner = (this.#directoryManifestStore?.getVerifiedManifest()?.nodes as
+          | readonly DialableNode[]
+          | undefined)?.find((n) => n.nodeId === presence.owningNodeId);
+        if (owner?.peerId && owner.multiaddr) {
+          return {
+            ok: false,
+            reason: "seal_initiator_not_local",
+            redirect: { nodeId: owner.nodeId, peerId: owner.peerId, multiaddr: owner.multiaddr },
+          };
+        }
+        this.#logger?.warn("seal.certificate.redirect.unaddressable", {
+          sessionId: sessionIdHex,
+          initiatorHomedOn: presence.owningNodeId,
+          reason: owner ? "manifest_entry_lacks_dial_coordinates" : "owning_node_not_in_manifest",
+        });
         return { ok: false, reason: "seal_initiator_not_local" };
       }
 
