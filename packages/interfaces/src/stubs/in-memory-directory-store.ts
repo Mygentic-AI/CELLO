@@ -43,32 +43,6 @@ export class InMemoryDirectoryStore implements DirectoryStore {
   #notarizationSeq = 0;
   readonly #notarizationIds = new Map<string, number>();
 
-  /**
-   * DOD-SEAL-BROKER-1 (receipt fetch). The stub already tracks notarizations, so it answers for real
-   * rather than always returning null — a stub that always says "no receipt" would make the fetch path
-   * look correct while never exercising it.
-   */
-  async getSealNotarization(sessionIdHex: string): Promise<{
-    sessionIdHex: string;
-    sealedRoot: Uint8Array;
-    participantAPubkey: Uint8Array;
-    participantBPubkey: Uint8Array;
-    closeTimestamp: number;
-    frostSignature: Uint8Array;
-    sealType: string;
-  } | null> {
-    const n = this.#notarizations.get(sessionIdHex);
-    if (!n) return null;
-    return {
-      sessionIdHex,
-      sealedRoot: n.sealed_root,
-      participantAPubkey: n.participant_a_pubkey,
-      participantBPubkey: n.participant_b_pubkey,
-      closeTimestamp: n.close_timestamp,
-      frostSignature: n.frost_signature,
-      sealType: (n as unknown as { seal_type?: string }).seal_type ?? "bilateral",
-    };
-  }
 
   async recordNotarization(notarization: SealNotarization, _opts?: { correlationId?: string; client?: unknown }): Promise<void> {
     const sessionHex = Buffer.from(notarization.session_id).toString("hex");

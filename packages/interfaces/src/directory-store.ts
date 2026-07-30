@@ -213,28 +213,6 @@ export interface DirectoryStore {
    */
   drainNotifications(pubkeyHex: string, correlationId: string): Promise<DirectoryNotification[]>;
 
-  /**
-   * DOD-SEAL-BROKER-1 (receipt fetch): read the notarization for a session, if this node has one.
-   *
-   * A participant homed on another directory cannot be handed `session_sealed` by the node that
-   * adjudicated the seal — `notification_queue` is per-node and is not replicated, and the drain only
-   * fires for a peer authenticating on that same node. But `seal_notarizations` IS replicated, so the
-   * stranded participant's OWN home directory already holds the receipt. This is the read that lets
-   * it be LEARNED locally instead of pushed across nodes.
-   *
-   * Returns null when this node has no notarization for the session — which is a legitimate answer
-   * (the seal may genuinely not have happened, or replication may not have carried it yet) and must
-   * be distinguishable from a failure to look.
-   */
-  getSealNotarization(sessionIdHex: string): Promise<{
-    sessionIdHex: string;
-    sealedRoot: Uint8Array;
-    participantAPubkey: Uint8Array;
-    participantBPubkey: Uint8Array;
-    closeTimestamp: number;
-    frostSignature: Uint8Array;
-    sealType: string;
-  } | null>;
 
   // ─── REG-001: Agent profile methods ──────────────────────────────────────
 
