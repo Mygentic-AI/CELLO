@@ -34,38 +34,39 @@ description: >
 
 ---
 
-## Tier I — Invariants (must hold in every phase, every line)
+## Tier I — Invariants (properties, NOT deliverables — no status tags)
 
-- **DOD-INV-SOVEREIGN** [all] — no single node can complete a threshold ceremony alone; no
-  privileged node exists in any topology, sync, or deploy decision; no provider-specific
-  networking or hardcoded endpoint enters protocol code; a down node is routed around, never
-  fatal. — ❌
-- **DOD-INV-THRESHOLD** [trustless-cello, cello-client] — `T = majority(validators)` everywhere.
-  `consortiumNodeCount` and every threshold/DKG/kill-switch derivation counts **validator-role
-  nodes only**; replicas never enter the arithmetic. All-N / T=N never appears (settled
-  2026-07-04). — ❌
-- **DOD-INV-SHARES-LOCAL** [trustless-cello] — `agent_key_shares` (or successor) appears in NO
-  sync set, NO anti-entropy exchange, and NO off-node artifact except the node's own encrypted
-  backup. A share never transits between nodes by any mechanism. — ❌
-- **DOD-INV-KILL-SWITCH** [trustless-cello] — suspension state fails CLOSED and converges
-  suspended-wins: a pause reaches every up node despite partition and restart; an un-suspension
-  requires verifiably newer authenticated state; a tie resolves suspended. A paused agent sealing
-  because an UP node lacked the state is a critical finding. — ❌
-- **DOD-INV-NODEID** [all] — every node is born `<cloud>-<region>` (e.g. `aws-use1`, `gcp-usc1`)
-  and is never renamed; no two manifest entries ever hold the same FROST identifier in one
-  manifest version. — ❌
-- **DOD-INV-NO-VPN** [trustless-cello] — no VPN, VPC peering, Private Service Access consumer, or
-  any cross-cloud network tunnel is created. Directory sync happens only over the authenticated
-  libp2p transport. Nothing external ever connects to a node's Postgres. — ❌
-- **DOD-INV-RELAY-EXTRACTABLE** [trustless-cello] — the relay gains no consortium state, no
-  database, no shared internal config package, no directory import; config stays env-only. It
-  remains a standalone shippable artifact (future enterprise private relay). — ❌
-- **DOD-INV-IAC** [trustless-cello] — every GCP and AWS resource exists in IaC; any manual
-  emergency fix lands in IaC + the STATE file (`infra/STATE.md` / `infra/GCP-STATE.md`,
-  updated immediately per action, never batched) before its unit closes. Region-expansion test:
-  a new region with zero manual steps. — ❌
-- **DOD-INV-NO-SAAS / DOD-INV-DOMAIN** [all] — no paid SaaS; all URLs are
-  `*.cello.mygentic.ai`. — ❌
+> **CHANGED 2026-07-30. These nine carried ❌ tags and should never have.** An invariant is a property
+> every unit must not violate — you never *build* one, so it cannot be a deliverable, and a permanent
+> ❌ on a property reads as unfinished work no unit can ever finish. They are **enforced per-unit as
+> reviewer lenses**: [[M12-PROCEDURE]] §2b, where every one of the nine now has a lens that fires on
+> every diff. Stated once here, untagged, because they are the yardstick's fine print.
+
+- **SOVEREIGN** [all] — no single node completes a threshold ceremony alone; no privileged node in any
+  topology, sync, or deploy decision; no provider-specific networking or hardcoded endpoint in protocol
+  code; a down node is routed around, never fatal.
+- **THRESHOLD** [trustless-cello, cello-client] — `T = majority(validators)` everywhere.
+  `consortiumNodeCount` and every threshold/DKG/kill-switch derivation counts **validator-role nodes
+  only**; replicas never enter the arithmetic. All-N / T=N never appears (settled 2026-07-04).
+- **SHARES-LOCAL** [trustless-cello] — `agent_key_shares` (or successor) appears in NO sync set, NO
+  anti-entropy exchange, and NO off-node artifact except the node's own encrypted backup. A share never
+  transits between nodes by any mechanism.
+- **KILL-SWITCH** [trustless-cello] — suspension fails CLOSED and converges suspended-wins: a pause
+  reaches every up node despite partition and restart; an un-suspension requires verifiably newer
+  authenticated state; a tie resolves suspended. A paused agent sealing because an UP node lacked the
+  state is a critical finding.
+- **NODEID** [all] — every node is born `<cloud>-<region>` (`aws-use1`, `gcp-usc1`) and is never
+  renamed; no two manifest entries ever hold the same FROST identifier in one manifest version.
+- **NO-VPN** [trustless-cello] — no VPN, VPC peering, Private Service Access consumer, or cross-cloud
+  tunnel. Directory sync happens only over the authenticated libp2p transport. Nothing external ever
+  connects to a node's Postgres.
+- **RELAY-EXTRACTABLE** [trustless-cello] — the relay gains no consortium state, no database, no shared
+  internal config package, no directory import; config stays env-only. It remains a standalone
+  shippable artifact (future enterprise private relay).
+- **IAC** [trustless-cello] — every GCP and AWS resource exists in IaC; any manual emergency fix lands
+  in IaC + the STATE file before its unit closes. Region-expansion test: a new region with zero manual
+  steps. (Inventory discipline — `terraform plan` is the GCP inventory, [[M12-PROCEDURE]] §5.)
+- **NO-SAAS / DOMAIN** [all] — no paid SaaS; all URLs are `*.cello.mygentic.ai`.
 
 ---
 
@@ -129,9 +130,37 @@ description: >
   claims verified), 3 blocking amendments applied (total-order suspension merge; honest
   burn/trust-model + M12-P6; retirement list gains replication creds/params/5432 path) plus
   6 non-blocking → Entries 8, 9 (see M12-P5, checkpoint scope)
-- **DOD-AE-APPEND-1** [trustless-cello] — append-only tables sync between directories over the
-  authenticated libp2p channel via root-comparison + delta pull; divergence detection is
-  O(compare), transfer is delta-only; peers that fail identity verification are refused. — ❌
+> **SPLIT 2026-07-30 — the line below was ONE ❌ concealing ~10 built-and-reviewed sub-units.** The
+> anti-entropy work decomposes into a pure logic layer, a pg-backed store, a libp2p channel, and the
+> behavioral claim that rides them; keeping it as one line meant the status authority could not tell
+> you where the largest unit in the milestone stood, and only the journal could — the journal that had
+> just lost ten entries. Statuses below are inherited from Entries 16–25 and are deliberately
+> conservative: nothing is ✅ whose reviewer verdict is not quoted ([[M12-PROCEDURE]] §2).
+
+- **DOD-AE-PRIMITIVES-1** [trustless-cello] — the pure, transport-and-DB-agnostic logic layer:
+  bucketed set-reconciliation (digest + delta), record-hash and the Tier-A per-table encoders,
+  Tier-B suspension/presence merges + version summaries + version-reconcile, the round planner
+  (`planRound`), handshake verification (`verifyPeerAuthFrame`), the engine (`runAntiEntropyRound`)
+  over an injected `AeStoreView`, and the peer-auth TBS in `@cello-protocol/crypto` (published).
+  Proven by an in-memory two-node convergence test wiring the REAL encoders and merges: divergent
+  nodes converge (Tier-A union; Tier-B higher-seq-wins with monotonic burn on both) and TERMINATE —
+  round 2 applies zero. — 🟡 built on `m12/ae-append`; directory suite 806 green; crypto TBS beta
+  v0.0.130 verified against the tarball. **Owed before ✅: the verdicts for `verifyPeerAuthFrame` and
+  `runAntiEntropyRound`, which Entry 25 left in flight, quoted.** → Entries 16–25
+- **DOD-AE-STORE-1** [trustless-cello] — a Postgres-backed `AeStoreView`: SELECT the synced tables into
+  the encoders for advertise; INSERT-if-absent / merge-upsert for apply. **It must reproduce the
+  MemStore semantics the convergence proof used** — a pg store that diverges from the proven semantics
+  makes the proof describe something nobody runs. `agent_revocations.signature` is BYTEA and MUST be
+  hex-encoded in the SELECT (pg returns a Buffer; no type-parser override is installed). — ❌
+- **DOD-AE-CHANNEL-1** [trustless-cello] — the `/cello/anti-entropy/1.0.0` libp2p handler: dial and
+  reconnect, the mutual handshake over the stream (`verifyPeerAuthFrame` plus our own signed frame),
+  and the digest→detail→pull round protocol with write-hints. Manifest gains `peerId` population and
+  the directory VERIFIES its manifest at load (design §1a/§1b). Peers failing identity verification are
+  refused with the cause named. — ❌
+- **DOD-AE-APPEND-1** [trustless-cello] — **the behavioral claim, riding the three above:** append-only
+  tables sync between directories over the authenticated libp2p channel via root-comparison + delta
+  pull; divergence detection is O(compare), transfer is delta-only; peers that fail identity
+  verification are refused. Proven by a multi-process integration test, not unit tests. — ❌
 - **DOD-AE-MUTABLE-1** [trustless-cello] — mutable-table sync with per-table conflict rules per
   the design doc; `agent_suspensions` convergence proven adversarially: pause during partition,
   node restart mid-sync, stale-node rejoin, un-pause requiring newer authenticated state, tie →

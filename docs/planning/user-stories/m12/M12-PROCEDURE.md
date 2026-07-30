@@ -84,11 +84,48 @@ Then start the loop (§2).
 | Artifact | Role |
 |---|---|
 | **M12-DEFINITION-OF-DONE** | The **yardstick + sole status authority** — ordered, status-tagged, carries Decisions + Parked. Flip tags in place; one line of evidence + `→ Entry N`, never an essay. |
-| **M12-BUILD-JOURNAL** | The **audit trail + evidence home** — append-only. Full proofs, bug forensics, run output live HERE. Never edit a prior entry. New file per tier (`M12-BUILD-JOURNAL-T{n}.md`) seeded with a 10-line resume block. |
+| **M12-BUILD-JOURNAL** | The **audit trail + evidence home** — append-only. Full proofs, bug forensics, run output live HERE. Never edit a prior entry. New file per tier (`M12-BUILD-JOURNAL-T{n}.md`) seeded with a 10-line resume block. **Entries are written at END OF FILE and VERIFIED after writing — see §1a.** |
 | **Local convergence enforcer** | Three directory processes on loopback, divergent state → anti-entropy converges them; kill/restart/catch-up proven; suspended-wins proven under partition. No cloud needed. |
 | **GCP standalone enforcer** | The live journey (§0a.2) run entirely on GCP with AWS unreachable. Wave 1 lines are ✅ only after this passes. |
 | **Outage-claim enforcer** | GCP directories blocked → existing agent still seals via AWS; new registration refuses loudly. Wave 2 lines are ✅ only after this passes. |
 | **IaC enforcer** | The region-expansion test: would this node come up in a brand-new region with zero manual steps? Every manual `gcloud`/console fix must land in IaC and the STATE file before its unit closes. |
+
+## 1a. Journal writing — APPEND AT EOF, THEN VERIFY (added 2026-07-30)
+
+**This milestone already lost 10 of its first 25 entries.** Entries 9, 11–13, 15–19 and 21 have no
+prose in the journal: they were written by *prepending* near the top with scripted string replacement,
+the anchors shifted as the file grew, and the edits **silently no-op'd** — no error, exit 0, and the
+content simply never landed. Nothing was recoverable except from the commit messages.
+
+The rule §1 already carried ("append-only, never edit a prior entry") did not prevent it, because it
+says nothing about **where a new entry goes**, and prepending is itself an edit to the top of the file.
+
+1. **A new entry is appended at END OF FILE.** Never prepended, never inserted between entries. The
+   RESUME STATE block at the top is the ONLY thing overwritten in place.
+2. **Verify the write landed** — `grep -c "^## Entry N"` (or read the tail) immediately after. An edit
+   tool that reports success is not evidence the bytes are in the file when the edit was scripted.
+3. **Chronological order is not worth a lost entry.** An out-of-order entry number at EOF is trivially
+   readable; a silently dropped one is gone.
+4. **The commit message is a backup, not the home.** If prose exists only in a commit, say so in the
+   journal at the point it belongs, with the SHA — the way the 2026-07-28 integrity note does.
+
+## 1b. Document discipline (carried from the M10B scope & cost review)
+
+M12's documents are currently in good shape — keep them that way, deliberately. M10B's DoD reached
+1,629 lines while its own header said it stays a scoreboard, and every later review paid to re-read
+the archaeology.
+
+- **A DoD line is a status tag, one line of evidence, and `→ Entry N`.** Cap any status blockquote at
+  ~5 lines. Longer belongs in the journal with a pointer.
+- **Supersession history lives ONLY in the journal.** A DoD line names the CURRENT shape of a decision,
+  never the corpse of the previous one.
+- **A decision on its THIRD rewrite gets MEASURED, not rewritten.** Two prose revisions is the cap; the
+  third attempt runs it — against real Postgres, the real manifest, live `gcloud`. This milestone is
+  unusually well served by that rule: almost every M12 question has a command that answers it.
+- **A design-doc unit gets ONE review pass; TWO is the hard cap** (`DOD-AE-DESIGN-1` was worked
+  correctly — one adversarial pass, three blocking amendments, closed). At pass two, remaining findings
+  become ACs on the units that build them. An unbounded review loop on a document has no termination
+  condition and ships zero code.
 
 ## 2. The core loop (one unit = one DoD line)
 1. **Find the red** — lowest non-✅ DoD line in the active tier. Don't skip ahead.
@@ -103,10 +140,21 @@ Then start the loop (§2).
 7. **Commit** (constantly — §3), push after every commit.
 8. **Review — ONE read-only `cello-unit-reviewer` on the unit's diff, no model override.**
    Dispatch per §2b. Fix EVERY finding; commit fixes. At tier boundaries, `cello-done-auditor`
-   audits every ✅ flipped since the last checkpoint.
+   audits every ✅ flipped since the last checkpoint — **scoped per §2d**.
 9. **Update docs** — flip the DoD tag (+ one-line evidence + journal pointer), journal entry,
    STATE file if any cloud resource changed.
-10. Back to 1.
+10. **Merge the branch** (§2e) — a reviewed-green unit does not sit on a branch.
+11. Back to 1.
+
+> ### 🚨 "REVIEW IN FLIGHT" IS NOT A CLOSING STATE (added 2026-07-30)
+> **DONE = written AND reviewed. IMPLEMENTED = written, not yet reviewed.** Entries 21, 22 and 25 each
+> close narrating a unit as complete with `Review in flight` — truthful, and still the wrong shape,
+> because step 8 precedes step 9 for a reason and a killed or unread reviewer produces NO verdict in
+> either direction.
+> - **A tag flips only when the reviewer's verdict is QUOTED in the journal entry.** Not "reviewed" —
+>   the finding count and disposition, in the reviewer's own words.
+> - **An entry that ends with a review outstanding says so in its heading**, and the unit stays 🟡.
+> - Ending a session with reviews in flight is fine; recording them as closed is not.
 
 ## 2a. Repos — where work lands
 - **trustless-cello** (this repo) — directory + relay code, ALL IaC (`infra/`), ops-agent,
@@ -125,6 +173,13 @@ created in both.
 
 ## 2b. Reviewer dispatch — what the unit reviewer is TOLD
 Supply: the DoD line VERBATIM (all clauses), the coder's clause checklist, the diff, the repo(s).
+
+> ### 🚨 THE NINE INVARIANTS LIVE HERE AS LENSES — they carry no DoD status tags (added 2026-07-30)
+> An invariant is a property every unit must not violate. **You never *build* one, so it cannot be a
+> deliverable and must never carry a tag** — a permanent ❌ on a property reads as unfinished work no
+> unit can ever finish. The DoD lists them once, untagged, pointing here. Every lens below fires on
+> EVERY unit's diff, whether or not that unit's DoD line mentions it.
+
 Standing M12-specific lenses:
 - **Sovereignty lens (BLOCKING):** flag any path where one node can complete a ceremony alone,
   any provider-specific networking in protocol code, any hardcoded endpoint, anything that
@@ -140,6 +195,17 @@ Standing M12-specific lenses:
 - **Relay-extractability lens:** the relay gains no consortium state, no shared internal config
   package, no directory import. It must remain a standalone shippable artifact (enterprise
   private-relay deliverable).
+- **Node-identity lens (BLOCKING):** every node id is `<cloud>-<region>`, chosen once and NEVER
+  renamed — a rename destroys the FROST identifier. Flag any diff that renames, derives, or defaults
+  a node id, and any manifest version where two entries could hold one FROST identifier.
+- **No-tunnel lens (BLOCKING):** flag any VPN, VPC peering, Private Service Access consumer, or
+  cross-cloud network path — and anything outside a node connecting to that node's Postgres. Sync is
+  the authenticated libp2p channel or it does not happen.
+- **IaC lens:** every cloud resource the diff implies exists in Terraform/CFN, and any manual fix
+  landed in IaC + the STATE file before the unit closes. The test is the region-expansion one: would
+  this come up in a brand-new region with zero manual steps? **A `gcloud`/console action in a journal
+  entry with no matching IaC diff is a finding.**
+- **No-SaaS / domain lens:** no paid SaaS dependency; every URL is `*.cello.mygentic.ai`.
 - **Spec fidelity** against the decision record's numbered decisions (per-clause verdicts;
   silent simplification is BLOCKING). **Error fidelity** — causes, not exit-point labels.
   **Revert test** on every new test. **Removal integrity** on any diff that deletes/moves code —
@@ -157,6 +223,50 @@ Standing M12-specific lenses:
   ZERO grants — every permission is explicit, and the failure mode is a silent 403.
 - **Cloud SQL:** each node's DB accepts connections from its own node only. Nothing cross-cloud
   ever connects to a node's Postgres — that is the anti-entropy dividend; protect it.
+
+## 2d. `cello-done-auditor` — RETIRED EVERYWHERE ELSE, DELIBERATELY KEPT HERE (added 2026-07-30)
+
+The auditor is retired across the project: on code milestones it re-litigates work the unit reviewer
+already passed, at high token cost. **M12 is a standing exception, and it has earned it twice** —
+`DOD-GCP-PROJECT-1`'s "only the needed APIs" was live-false (33 enabled, including project-creation
+defaults), and `DOD-GCP-IAM-1` had an out-of-band `builds.builder` grant Google added automatically.
+Neither is findable in a diff.
+
+**The reason is structural, so hold the scope exactly:** M12's claims are about **live cloud state**,
+and a reviewer reading a diff cannot see what is actually enabled, granted, or running. Terraform says
+what was declared; the auditor asks what is *there*.
+
+- **IN scope:** any ✅ whose truth depends on live cloud state — enabled APIs, IAM grants, MIG/instance
+  health, DNS, deployed image digests, migration versions in each regional DB, what a STATE file
+  claims versus what the cloud returns. It anchors to command output, never to the journal's prose.
+- **OUT of scope:** re-reviewing code diffs, test quality, or spec fidelity. That is the unit
+  reviewer's single pass and it does not get a second opinion.
+- **Cadence:** tier boundaries only, over every ✅ flipped since the last checkpoint. Never per unit.
+- A finding downgrades the tag and the correction is recorded on the line — as Entry 7 did.
+
+## 2e. Parallel work — branches, worktrees, and merge (added 2026-07-30)
+
+**§5's "one thread, one coder" was inherited from a single-thread milestone and contradicts how M12
+actually runs.** `M12-D4` deliberately chose parallel coders on story branches, there are worktrees in
+both repos (`trustless-cello-m12`, `cello-client-m12`), and the milestone is going well that way. The
+rule below replaces it; what survives from §5 is that **subagents stay read-only** — reviewers,
+auditors and explorers only, never a parallel implementation agent inside one session.
+
+- **One branch per unit, named `m12/<unit>`.** It is pushed on creation, so `git branch -vv` shows an
+  upstream for every branch — a bare branch is either unpushed or untracked and you cannot tell which
+  by looking (verified 2026-07-30: `m12/role-manifest` looked unpushed and was merely untracked).
+- **🚨 COMMIT BY EXPLICIT PATH. NEVER `git add -A`.** Non-negotiable with a shared checkout: an `-A`
+  has already swept another session's half-finished work into a commit that then claimed a gate it did
+  not have. Stage the files you wrote, by name.
+- **A reviewed-green unit MERGES — it does not sit.** Merge is step 10 of the loop. The failure mode
+  is quiet: five branches unmerged at once (measured 2026-07-30) while `main` moves under all of them,
+  so every one pays a rebase it did not budget for and the DoD's ✅ describes code nobody is running.
+- **Rebase onto `main` at every session start** for any branch older than a session, and after any
+  merge to `main`. Main carries other milestones' commits — it is not quiet.
+- **Two branches must never touch the same file.** If they must, they are one unit; say so and merge
+  the first before starting the second.
+- **Migration numbers are claimed on `main`, not on a branch.** M10B and M12 collided on V49/V50 and
+  only Flyway's checksum caught it. Before writing `V{N}`, check `main` in both repos.
 
 ## 3. Cadence
 - **Commit constantly** — never >~15 min without one; push after every commit. Docs commit to main.
@@ -199,10 +309,20 @@ Then P1 (protocol code — all local-provable, no cloud dependency, can interlea
 - **NO ARCHAEOLOGY COMMENTS.** Present tense, imperative; constraints the code can't show.
 - **DEADNESS IS PROVEN BY DELETION** + both repos' gates. Mesh retirement units triage deleted
   tests by subject-under-test, never by file. Assert absence on BUILT artifacts (`rm -rf dist` first).
+- **ONE INVENTORY, NOT TWO — `terraform plan` is the GCP inventory (added 2026-07-30).** Now that
+  Terraform holds state and drift, a hand-maintained resource list in `GCP-STATE.md` is a SECOND source
+  of truth that silently disagrees with the first. **`GCP-STATE.md` records only what Terraform cannot:**
+  the billing-slot ledger, org constraints (no SA keys, zero default grants), the undisable-able
+  platform APIs, and manual one-offs still owed an import — plus a pointer to `terraform plan`. Do not
+  copy resource inventories into it. `infra/STATE.md` keeps its existing role for the AWS side until
+  teardown, because CloudFormation there has no equivalent single command.
 - **DO NOT ESCALATE WHAT YOU CAN VERIFY.** Check gcloud/aws/code first.
 - **MEASURE BEFORE QUOTING A NUMBER.**
-- **One thread. One coder (the main loop).** Read-only subagents only (unit-reviewer, done-auditor,
-  explorer). Deployment and code work stay in foreground.
+- **Subagents stay READ-ONLY** (unit-reviewer, done-auditor, explorer) — never a parallel
+  implementation agent inside one session. Deployment and code work stay in foreground. *(Parallel
+  coders on separate story branches are the deliberate M12 model — rules in §2e. This line no longer
+  says "one thread, one coder"; that was inherited from a single-thread milestone and contradicted
+  `M12-D4`.)*
 - **`node:sqlite` VERBOTEN** (SQLCipher only, client side). **No mocks for crypto.** **No
   `console.log`** in implementation — injected logger, `domain.noun.verb` events, correlationId
   threading; observability ACs are first-class on every unit.
