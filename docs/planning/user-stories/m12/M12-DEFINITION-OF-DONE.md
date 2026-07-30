@@ -327,7 +327,10 @@ description: >
   pinned URL (`not_in_consortium` → `failover to gcp-use1` → `auth.challenge.verified`);
   (d) **kill-switch pause biting across all three nodes** — never exercised;
   (d) **kill-switch pause biting across all three nodes** — still never exercised;
-  (e) **seal** — ✅ PROVEN (Entry 44). Bilateral seal completed across GCP with an identical
+  (e) **seal** — ✅ PROVEN AND FIXED (Entries 44, 52–55). Was intermittent because every seal was
+  adjudicated by ONE relay-pinned directory that could only reach agents homed there; the relay now
+  follows a redirect to the node holding the seal initiator's stream. Cross-node seal completes in
+  ~280ms where it previously timed out after 11 minutes. Bilateral seal completed across GCP with an identical
   `sealed_root efabec57bc12e8122ef61635a075086efb4b8761ece461a866ca8978cd0d9a28` returned to BOTH
   sides, a notarized legibility certificate, and `sealed-receipt` retrievable. Earlier text kept
   below for the history of how it got there:

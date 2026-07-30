@@ -3382,3 +3382,66 @@ consortium, which contradicts DOD-INV-SOVEREIGN's redundancy clause.
 The `relay_primary_directory` variable deserves a comment saying what it actually governs. It reads
 as "which directory the relay registers with" and is in fact "which directory adjudicates every seal
 in the consortium."
+
+---
+
+## Entry 55 — 2026-07-30 — THE SEAL WORKS CROSS-NODE: 280ms, on the ordering that never succeeded
+
+```
+A: sealed_root 37e239e80b7fa4407d1606d6ce5d84f68b8a064614333f65e081ca7bfc0dc9f8
+B: sealed_root 37e239e80b7fa4407d1606d6ce5d84f68b8a064614333f65e081ca7bfc0dc9f8
+```
+
+Identical roots, both sides, with the RESPONDER closing first — the exact case that produced
+`initiator_stream_absent` and an 11-minute timeout on every previous attempt.
+
+### The redirect, in the trace
+
+```
+04:51:24.076  legibility.built                                       gcp-use1  (relay's pinned node)
+04:51:24.104  undeliverable   homedOn gcp-usc1, processedBy gcp-use1            <- refuse + redirect
+04:51:24.354  legibility.built                                       gcp-usc1  (redirect target)
+04:51:24.357  delivered                                                        <- stream present
+04:51:28.192  notarization.recorded
+04:51:28.227  conversation.seal.recorded
+```
+
+**280ms** from first attempt to completed seal. The node that could not deliver said so and named
+who could; the relay followed once; the node holding the initiator's stream finished it.
+
+Stronger than intended: the initiator turned out to be homed on `gcp-usc1`, not `euw1` — bob2's home
+moved when its daemon reconnected through failover after I cleared sessions. So the redirect resolved
+a node that was configured NOWHERE, on either side. Exactly what it is for.
+
+### What made this fixable
+
+The whole day's difficulty was that every layer reported success about something adjacent to the
+failure. What broke the deadlock was, in order:
+1. `seal.certificate.deferred` — one WARN at the point where two components disagreed (Entry 51).
+2. Separating "offline, enqueue is correct" from "online elsewhere, enqueue is a black hole" using
+   REPLICATED presence — the directory always had the information to tell those apart (Entry 54).
+3. A self-describing redirect, so the relay needed no new configuration and stayed extractable.
+
+### Also proven in this run
+
+The pinned relay internal address held at `10.10.0.28` across a full instance replacement — the fix
+from earlier today doing its job unattended. Before it, a replacement silently broke every session
+until someone re-ran the manifest publisher.
+
+### Six defects fixed today, all verified live
+
+| defect | shape |
+|---|---|
+| relay shipped UNPATCHED autonat (Dockerfile skipped `patches/`) | connection torn down under it |
+| no FROST share ever persisted (SI-003 vs Cloud KMS ciphertext) | write returned ok, nothing stored |
+| failover only on unreachability, not non-membership | reachable non-member = black hole |
+| relay health address was ephemeral | replacement broke every session |
+| `seal_verified` deferral was silent AND returned ok:true | relay told the seal succeeded |
+| every seal adjudicated by one relay-pinned directory | unreachable initiator by construction |
+
+Every one had the same signature: **a green surface over a broken write or a silent teardown.**
+
+### What remains on DOD-E2E-GCP-1
+
+- kill-switch pause biting across all three nodes — still never exercised
+- the automated enforcer — the sequence is still driven by hand
