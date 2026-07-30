@@ -1989,3 +1989,33 @@ service. Revisions: **us-east-1 :397, eu-central-1 :155, ap-northeast-1 :146**.
 These three revisions are CFN DRIFT and will be overwritten the next time the ECS directory stack
 deploys successfully — which is fine and intended, because the stack resolves the SAME SSM parameter.
 The drift is the manifest arriving EARLY, not a different value.
+
+---
+
+## `submission_results` — written correctly, does not replicate yet (2026-07-30)
+
+**Proven working:** the M10B refusal return path. A live refusal from the demo agent was drained
+(`refused: 1`, `minted: 0`), and eu-central-1 holds the row with the right attribution —
+`issuer_pubkey da0c73f8…` (CELLO_Feedback), `outcome refused`, `accepting_node eu-central-1`. The
+directory serves results scoped to the authenticated stream identity (`signal.results.served`,
+`issuer: da0c73f8`), and the daemon's fetch returns cleanly.
+
+**The gap:** the issuer's daemon asked **us-east-1**; the row is on **eu-central-1**, because the
+portal records a result on the node that ACCEPTED the submission (nodeIndex 1 that day). V56 was
+added to `PUBLICATION_TABLES` in `setup-replication.sh` but the script was never run, so the table
+was not in `cello_pub`.
+
+**Done:** `ALTER PUBLICATION cello_pub ADD TABLE submission_results` on all three regions, as the RDS
+MASTER role via ECS exec (the app role is not the publication owner, and `setup-replication.sh`
+cannot run from a laptop — RDS is VPC-private).
+
+**Still not working:** `ALTER SUBSCRIPTION … REFRESH PUBLICATION` on us-east-1 reports 2
+subscriptions and then produces no output, and the eu row has not copied in. Not diagnosed further.
+
+**Two ways to finish it, and the second may be better:**
+1. Finish the subscription refresh so the table replicates like `signal_records`.
+2. **Fan the fetch out across nodes**, exactly as the portal's drain does. The drain already learned
+   this lesson for the submission QUEUE — "collect from ALL nodes, never fail over" — because a row
+   lives only on the node that accepted it. Results have the same property at the moment they are
+   written, so depending on replication makes the return path fragile in the same way. The composite
+   PK already makes multi-node rows safe.
