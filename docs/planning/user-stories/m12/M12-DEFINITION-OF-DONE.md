@@ -113,9 +113,19 @@ description: >
   real pre-fix defect is inflated advertised redundancy (`signers.max = 4`, `participants: 4` persisted
   on the share when only 3 distinct holders exist — you believe you can lose two nodes and can lose
   one), and the ceremony fails closed regardless.
-  **Clauses 1 and 2 are NOT enforced.** "Born `<cloud>-<region>`": `bin/directory.ts:153` requires
-  `NODE_ID` to be present but never checks its shape, and the legacy AWS default is a BARE region
-  (`us-east-1`). "Never renamed": no guard. (Consequence is milder than this line implied — signing
+  **Clause 1 is now ENFORCED (Entry 67).** `validateNodeId` refuses a NODE_ID that names no cloud,
+  names a cloud the node is not running on, or is a bare region on a non-AWS node — the likeliest
+  copy-paste, because it is the CORRECT value for the AWS node next door. The one documented legacy
+  form (an AWS node whose id is exactly its own region) is kept, pinned to that node's own region so it
+  cannot become a general escape hatch, and logged as `directory.node_id.legacy_form` rather than
+  silently accepted. Revert-tested: restoring presence-only turns 5 red. Falsified against the live
+  fleet before shipping — a startup fatal that rejected `gcp-usc1`/`gcp-euw1`/`gcp-use1` would
+  crash-loop every node, so all three were run through the compiled validator with the exact
+  `CELLO_CLOUD=gcp` the cloud-init sets. Directory suite 974 green.
+  **Clause 2 ("never renamed") is still NOT enforced.** No guard compares the configured NODE_ID
+  against what this node's persisted state was written under. Consequence is milder than this line
+  implied — signing reads the identifier from the STORED share, so a rename does not invalidate
+  existing shares; it breaks the AE handshake loudly with `manifest_pubkey_mismatch`. (Consequence is milder than this line implied — signing
   reads the identifier from the STORED share, not a re-derivation, so a rename does not invalidate
   existing shares; it breaks the AE handshake loudly with `manifest_pubkey_mismatch`.)
   **The gap that actually matters is still open:** every check above compares manifest nodeId

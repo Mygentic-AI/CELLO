@@ -4188,3 +4188,35 @@ the chain. The fix is its suggested assertion — `serializeRecord(aeRecord) ===
 paths. Revert-tested: dropping the conversion turns 3 red, mis-indexing turns 1 red. Previously: zero.
 
 Directory suite 967 green.
+
+---
+
+## Entry 67 — 2026-07-30 — DOD-INV-NODEID clause 1 enforced: NODE_ID shape is checked at birth
+
+The startup path required `NODE_ID` to be PRESENT and described the intended shape in a comment
+directly above the check. Nothing verified it. That gap is not a naming lint: `NODE_ID` feeds
+`Identifier.derive()`, so it IS the node's FROST participant identifier — born wrong, the node holds
+shares nobody can address, and the correction is a decommission rather than a rename.
+
+The motivating case is deliberately boring. `NODE_ID=us-east-1` on a GCP node is the CORRECT value for
+the AWS node next door, so it is the likeliest copy-paste of all, and before this it started cleanly
+and derived an identifier matching nothing in the manifest.
+
+`validateNodeId` refuses: a value naming no cloud, a cloud the node is not running on, and a bare
+region on a non-AWS node. It keeps the ONE documented legacy form — an AWS node whose id is exactly
+its own region, which real pre-convention nodes have and which cannot be renamed without destroying
+their identifier — pinned to that node's own region so the exception cannot smuggle an arbitrary
+string through, and logged as `directory.node_id.legacy_form` rather than silently accepted.
+
+**Falsification before shipping, because this is a startup fatal.** A validator that rejected the
+fleet's real ids would crash-loop all three nodes on the next deploy — a worse outcome than the bug it
+fixes. So `gcp-usc1`, `gcp-euw1` and `gcp-use1` were run through the COMPILED validator with the exact
+`CELLO_CLOUD=gcp` the cloud-init template sets, and the node_id values read from
+`terraform.tfvars` rather than from memory. All three pass.
+
+Revert-tested: restoring presence-only turns 5 red. Directory suite 974 green.
+
+Clause 2 ("never renamed") stays unenforced and is now stated accurately: signing reads the identifier
+from the STORED share, not a re-derivation, so a rename does not invalidate existing shares — it breaks
+the AE handshake loudly with `manifest_pubkey_mismatch`. A guard would compare the configured NODE_ID
+against what this node's persisted state was written under.

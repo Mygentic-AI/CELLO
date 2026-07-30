@@ -52,6 +52,7 @@ import { PgTokenValidator } from "../adapters/pg-token-validator.js";
 import { PgNonceBinder } from "../adapters/pg-nonce-binder.js";
 import { InMemoryShareStore } from "../share-store.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
+import { validateNodeId } from "../node-id.js";
 import { EncryptedPgShareStore } from "../encrypted-share-store.js";
 import { PersistentShareStore } from "../persistent-share-store.js";
 import { MmrStore } from "../mmr-store.js";
@@ -159,6 +160,32 @@ if (!nodeId) {
     reason: "NODE_ID is the permanent FROST participant identifier and must be set explicitly as <cloud>-<region>; only the legacy AWS path may derive it from a region",
   });
   process.exit(1);
+}
+
+// PRESENCE WAS NEVER THE QUESTION — the SHAPE is. NODE_ID feeds Identifier.derive(), so it IS this
+// node's FROST participant identifier: born wrong, the node holds shares nobody can address, and the
+// correction is a decommission rather than a rename. The comment above has stated the rule since the
+// convention was introduced; nothing enforced it, so `NODE_ID=us-east-1` on a GCP node — the correct
+// value for the AWS node next door, and therefore the likeliest copy-paste — started cleanly and
+// derived an identifier matching nothing in the manifest.
+const nodeIdVerdict = validateNodeId(nodeId, { env, cloudProvider, nodeRegion });
+if (!nodeIdVerdict.ok) {
+  logger.error("adapter.config.invalid", {
+    missingKey: "NODE_ID",
+    nodeId,
+    env,
+    cloud: cloudProvider,
+    reason: nodeIdVerdict.reason,
+  });
+  process.exit(1);
+}
+if (nodeIdVerdict.legacy) {
+  // Accepted, but never silently: these are pre-convention nodes whose identifier cannot be changed
+  // without decommissioning them, and an operator should know a node is running on the exception.
+  logger.warn("directory.node_id.legacy_form", {
+    nodeId,
+    reason: "bare-region NODE_ID predates the <cloud>-<region> convention; kept because renaming it would destroy this node's FROST identifier",
+  });
 }
 
 // ─── SECOPS-001: AuditLogShipper instantiation ───────────────────────────
