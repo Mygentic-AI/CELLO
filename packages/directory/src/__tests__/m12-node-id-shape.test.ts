@@ -14,8 +14,8 @@
 import { describe, it, expect } from "vitest";
 import { validateNodeId } from "../node-id.js";
 
-const gcp = { env: "dev", cloudProvider: "gcp", nodeRegion: "us-central1" };
-const aws = { env: "dev", cloudProvider: "aws", nodeRegion: "us-east-1" };
+const gcp = { env: "dev", cloudProvider: "gcp", nodeRegion: "us-central1", regionSource: "CELLO_REGION" as const };
+const aws = { env: "dev", cloudProvider: "aws", nodeRegion: "us-east-1", regionSource: "AWS_REGION" as const };
 
 describe("DOD-INV-NODEID clause 1: a node is born <cloud>-<region>", () => {
   it("accepts the real fleet's ids", () => {
@@ -27,9 +27,9 @@ describe("DOD-INV-NODEID clause 1: a node is born <cloud>-<region>", () => {
   it("REFUSES a bare region on a non-AWS node — the copy-paste from the AWS node next door", () => {
     const v = validateNodeId("us-east-1", gcp);
     expect(v.ok).toBe(false);
-    // The message must name the mistake, not just the rule: "invalid NODE_ID" sends an operator to
-    // re-read a spec, where "a bare region is the legacy AWS form" sends them to the right line.
-    expect((v as { reason: string }).reason).toMatch(/legacy AWS form|names no cloud/);
+    // The SPECIFIC branch, not an alternation: "|names no cloud" would also pass if the message
+    // degraded to the generic one, which is a different code path and worse guidance.
+    expect((v as { reason: string }).reason).toMatch(/bare AWS region .* not valid on gcp/);
   });
 
   it("refuses a value that names no cloud at all", () => {
@@ -41,7 +41,7 @@ describe("DOD-INV-NODEID clause 1: a node is born <cloud>-<region>", () => {
   it("refuses a cloud the node is not actually running on", () => {
     // Permanent AND wrong: the identifier is derived from this string, and the manifest entry it has
     // to match is written by hand somewhere else.
-    const v = validateNodeId("azure-use1", gcp);
+    const v = validateNodeId("aws-use1", gcp);
     expect(v.ok).toBe(false);
     expect((v as { reason: string }).reason).toMatch(/running on 'gcp'/);
   });
@@ -58,8 +58,36 @@ describe("DOD-INV-NODEID clause 1: a node is born <cloud>-<region>", () => {
     expect(validateNodeId("eu-west-1", aws).ok).toBe(false); // not THIS node's region
   });
 
+
+  it("refuses the legacy form when the region was FABRICATED, not resolved", () => {
+    // nodeId defaults to nodeRegion, and nodeRegion falls back to a hardcoded "us-east-1" — so with
+    // neither region variable set, both sides of the legacy comparison are the same guess and the
+    // check passes by comparing a value to itself. The node would be permanently born "us-east-1"
+    // wherever it actually runs, which is the exact copy-paste this unit exists to stop, arriving
+    // through a different door.
+    const v = validateNodeId("us-east-1", { env: "dev", cloudProvider: "aws", nodeRegion: "us-east-1", regionSource: "default" });
+    expect(v.ok).toBe(false);
+    expect((v as { reason: string }).reason).toMatch(/was not resolved/);
+  });
+
+  it("accepts the spine cluster's multi-node ids — the milestone-close gate runs on these", () => {
+    // The first version of this validator refused `spine-node-0` and would have killed all seven
+    // multi-process spine journeys, which `pnpm run test` does not run. A unit test suite going green
+    // is exactly why that was invisible.
+    for (const i of [0, 1, 2]) {
+      expect(
+        validateNodeId(`aws-spine-${i}`, { env: "local", cloudProvider: "aws", nodeRegion: "local", regionSource: "local" }),
+        `aws-spine-${i}`,
+      ).toEqual({ ok: true });
+    }
+  });
+
+  it("refuses a region segment that is only punctuation", () => {
+    expect(validateNodeId("gcp--", gcp).ok).toBe(false);
+  });
+
   it("allows the local shorthand only in local env", () => {
-    expect(validateNodeId("local", { env: "local", cloudProvider: "", nodeRegion: "local" })).toEqual({ ok: true });
+    expect(validateNodeId("local", { env: "local", cloudProvider: "aws", nodeRegion: "local", regionSource: "local" })).toEqual({ ok: true });
     expect(validateNodeId("local", gcp).ok).toBe(false);
   });
 });

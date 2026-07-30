@@ -103,9 +103,16 @@ export const DIRECTORY_NODE_PUBLIC_KEY_HEX =
 // NODE_ID) and the manifest the daemon verifies. Seeds 0x10+i avoid the officer seeds
 // (0x01..0x05) and the single-node key above.
 
-/** Stable consortium nodeId for spine directory node i (matches its NODE_ID env). */
+/**
+ * Stable consortium nodeId for spine directory node i (matches its NODE_ID env).
+ *
+ * `aws-` prefixed because NODE_ID is validated at startup against `<cloud>-<region>` — it feeds
+ * `Identifier.derive()`, so it is the FROST participant identifier and the directory refuses to boot
+ * under a malformed one. The harness leaves `CELLO_CLOUD` unset, which resolves to `aws`. This
+ * function is the single source for BOTH the env var and the manifest entry, so the two cannot drift.
+ */
 export function spineNodeId(i: number): string {
-  return `spine-node-${i}`;
+  return `aws-spine-${i}`;
 }
 
 /** Deterministic Ed25519 node-identity keypair (32-byte seed) for spine directory node i. */

@@ -122,10 +122,10 @@ description: >
   fleet before shipping — a startup fatal that rejected `gcp-usc1`/`gcp-euw1`/`gcp-use1` would
   crash-loop every node, so all three were run through the compiled validator with the exact
   `CELLO_CLOUD=gcp` the cloud-init sets. Directory suite 974 green.
-  **Clause 2 ("never renamed") is still NOT enforced.** No guard compares the configured NODE_ID
-  against what this node's persisted state was written under. Consequence is milder than this line
-  implied — signing reads the identifier from the STORED share, so a rename does not invalidate
-  existing shares; it breaks the AE handshake loudly with `manifest_pubkey_mismatch`. (Consequence is milder than this line implied — signing
+  **Clause 2 ("never renamed") is still NOT enforced** — no guard compares the configured NODE_ID
+  against what this node's persisted state was written under. Signing reads the identifier from the
+  STORED share, so a rename does not invalidate existing shares; it breaks the AE handshake loudly with
+  `manifest_pubkey_mismatch`. Parked with full reasoning below. (Consequence is milder than this line implied — signing
   reads the identifier from the STORED share, not a re-derivation, so a rename does not invalidate
   existing shares; it breaks the AE handshake loudly with `manifest_pubkey_mismatch`.)
   **The gap that actually matters is still open:** every check above compares manifest nodeId

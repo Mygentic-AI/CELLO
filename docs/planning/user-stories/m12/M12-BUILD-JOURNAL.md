@@ -4220,3 +4220,61 @@ Clause 2 ("never renamed") stays unenforced and is now stated accurately: signin
 from the STORED share, not a re-derivation, so a rename does not invalidate existing shares — it breaks
 the AE handshake loudly with `manifest_pubkey_mismatch`. A guard would compare the configured NODE_ID
 against what this node's persisted state was written under.
+
+### Entry 67b — the NODE_ID review: my falsification was correct and still missed the case that mattered
+
+I falsified the validator against the live GCP fleet and the hibernated AWS fleet, and both hold — the
+reviewer re-derived them independently. It then found the configuration I never looked at: **the spine
+cluster**. `live-harness.ts` spawns three directories with `NODE_ID=spine-node-{i}` and no
+`CELLO_CLOUD`, so `cloudProvider` defaults to `aws` and my validator refused all three:
+
+```
+"spine-node-0" cloud="aws" =>
+{"ok":false,"reason":"NODE_ID must start with a known cloud (aws, gcp, azure); got 'spine-node-0'. …"}
+```
+
+That is `process.exit(1)` for seven multi-process journeys — and the spine suite is opt-in
+(`vitest.config.ts` excludes `*.spine.test.ts`), so "directory suite 974 green" could never have seen
+it. **This is precisely the milestone-close gate: Vitest green ≠ done.** I had written the words
+"falsified before shipping" in the previous entry while checking only the environments I already had
+in mind.
+
+Fixed at the harness — `spineNodeId(i)` is now `aws-spine-${i}`, and because that function is the
+single source for both the env var and the manifest entry, the two cannot drift. Then I enumerated
+EVERY `NODE_ID` the harness spawns rather than fixing the one I was shown: `AUTH_DIRECTORY_NODE_ID`
+("local") and the no-NODE_ID default path both pass, verified against the compiled validator.
+
+### The other findings
+
+- **F2 — the legacy exception was self-satisfying.** `nodeId` defaults to `nodeRegion`, and
+  `nodeRegion` falls back to a hardcoded `us-east-1`, so with neither region variable set the check
+  compared a fabricated value **to itself** and passed. A node that cannot say where it is would be
+  permanently born `us-east-1` wherever it actually runs — the same copy-paste this unit exists to
+  stop, arriving through a different door. Now the region's SOURCE is tracked and a fabricated one is
+  refused.
+- **F3 — the error message lied in the cases that actually fire.** It asserted "a bare region is the
+  legacy AWS form and is not valid on aws" — but a bare region IS valid on aws (it is the exception
+  this file implements), and `spine-node-0` is not a bare region at all. The hint is now conditional on
+  the id actually looking like a region and on the cloud actually being non-AWS.
+- **F5 — a WARN that fires on every AWS node, forever, by IaC design.** `cello-ecs-directory.yaml` sets
+  `NODE_ID` to the region for the whole AWS fleet, so the legacy warning fired on every task start. A
+  signal that fires on the normal case is not a signal. Now INFO, with the genuinely suspicious case
+  (legacy form on an unresolved region) refused outright instead.
+- **F4** `missingKey` → `configKey` (the value is present and malformed; different remediation).
+  **F6** `azure` removed from the accept-list — it was reachable only in local and made the error
+  message advertise a cloud production always refuses. **F7** region regex no longer accepts pure
+  punctuation. **F8** archaeology comments rewritten present-tense; a duplicated DoD sentence removed.
+
+### The tests were pinned to the wrong thing
+
+All seven original tests survived **deleting the entire 19-line consumer** in `bin/directory.ts`. They
+pinned the pure function — which was never the risky part, being pure and total. The startup fatal,
+the three defaultable env values, and the accept-set all live in the composition root. My own revert
+test reverted the FUNCTION, not the WIRING, which is why it looked adequate.
+
+Three `runBin` tests now spawn the real binary: a refusal, an acceptance of the live fleet's id (the
+half that catches an over-narrow accept-set — a crash-loop is worse than the bug), and the
+fabricated-region case. **They initially landed inside a describe block gated on real Postgres and were
+silently SKIPPED** — a test that never runs being its own instance of the pattern this milestone keeps
+finding. Moved to the un-gated block; now deleting the consumer turns 2 red, where previously nothing
+noticed. Directory suite 980 green.

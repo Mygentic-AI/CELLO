@@ -115,6 +115,56 @@ describe("AC-004: composition root exits 1 on missing config", () => {
     expect(out).toContain("DEV_ENVELOPE_KEY");
   });
 
+  it("DOD-INV-NODEID: REFUSES a bare AWS region as NODE_ID on a GCP node", () => {
+    // THE WIRING TEST. Every assertion in m12-node-id-shape.test.ts survives deleting the 19-line
+    // consumer in bin/directory.ts — they pin the pure function, which was never the risky part. The
+    // startup fatal, the three env values that can each be defaulted, and the accept-set that must be
+    // exactly right all live in the composition root, and only spawning the binary reaches them.
+    const result = runBin({
+      CELLO_ENV: "dev",
+      CELLO_CLOUD: "gcp",
+      CELLO_REGION: "us-central1",
+      NODE_ID: "us-east-1",
+    });
+    expect(result.code).toBe(1);
+    const out = result.stdout + result.stderr;
+    expect(out).toContain('"configKey":"NODE_ID"');
+    // configKey, not missingKey — the value is present and malformed, and the two need different
+    // remediation. Asserting the absence of the wrong field keeps them from being merged back.
+    expect(out).not.toContain('"missingKey":"NODE_ID"');
+  });
+
+  it("DOD-INV-NODEID: accepts the live fleet's id end-to-end", () => {
+    // The other half of the wiring test, and the one that catches an over-narrow accept-set. A
+    // validator that refused a real node id would crash-loop the whole fleet — worse than the bug it
+    // fixes — and a refusal-only test cannot tell the difference.
+    const result = runBin({
+      CELLO_ENV: "dev",
+      CELLO_CLOUD: "gcp",
+      CELLO_REGION: "us-central1",
+      NODE_ID: "gcp-usc1",
+    });
+    const out = result.stdout + result.stderr;
+    expect(out).not.toContain('"configKey":"NODE_ID"'); // it fails later, for a database reason
+  });
+
+  it("DOD-INV-NODEID: refuses a bare-region NODE_ID when the region itself was never resolved", () => {
+    // nodeId defaults to nodeRegion and nodeRegion defaults to a hardcoded "us-east-1", so with no
+    // region variable set the legacy check compares a fabricated value to itself and passes. The node
+    // would be permanently born "us-east-1" wherever it actually runs.
+    const result = runBin({
+      CELLO_ENV: "dev",
+      CELLO_CLOUD: "aws",
+      CELLO_REGION: undefined,
+      AWS_REGION: undefined,
+      NODE_ID: undefined,
+    });
+    expect(result.code).toBe(1);
+    const out = result.stdout + result.stderr;
+    expect(out).toContain('"configKey":"NODE_ID"');
+    expect(out).toContain("was not resolved");
+  });
+
   it("exits 1 when CELLO_RELAY_MULTIADDR is absent", () => {
     const result = runBin({ CELLO_ENV: "local", CELLO_RELAY_MULTIADDR: undefined });
     expect(result.code).toBe(1);
@@ -182,6 +232,10 @@ describeIntegration("AC-002: CELLO_ENV=local startup — all adapters initialise
     });
     expect(result.code).toBe(1); // no AWS credentials here — but for a LATER reason
     const out = result.stdout + result.stderr;
+    // AWS_REGION resolved, so the legacy bare-region form is legitimately accepted (regionSource is
+    // "AWS_REGION", not "default") — assert BOTH field names, since the guard now reports configKey
+    // and an assertion on the old name alone would pass whether or not the guard fired.
+    expect(out).not.toContain('"configKey":"NODE_ID"');
     expect(out).not.toContain('"missingKey":"NODE_ID"');
   });
 

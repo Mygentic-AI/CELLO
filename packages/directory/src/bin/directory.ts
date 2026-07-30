@@ -52,7 +52,7 @@ import { PgTokenValidator } from "../adapters/pg-token-validator.js";
 import { PgNonceBinder } from "../adapters/pg-nonce-binder.js";
 import { InMemoryShareStore } from "../share-store.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
-import { validateNodeId } from "../node-id.js";
+import { validateNodeId, type RegionSource } from "../node-id.js";
 import { EncryptedPgShareStore } from "../encrypted-share-store.js";
 import { PersistentShareStore } from "../persistent-share-store.js";
 import { MmrStore } from "../mmr-store.js";
@@ -114,6 +114,17 @@ const awsRegion = process.env["AWS_REGION"] ?? "us-east-1";
 // CELLO_REGION is the cloud-neutral answer. It falls back to AWS_REGION so existing AWS
 // deployments are unchanged without touching their task definitions.
 const nodeRegion = process.env["CELLO_REGION"] ?? process.env["AWS_REGION"] ?? (env === "local" ? "local" : "us-east-1");
+// WHERE the region came from, not just what it is. The legacy bare-region NODE_ID form compares
+// nodeId against nodeRegion — and nodeId itself defaults to nodeRegion — so when neither variable
+// resolves, both sides are the same hardcoded "us-east-1" and the check passes by comparing a guess
+// to itself. validateNodeId refuses that case, and it needs this to see it.
+const regionSource: RegionSource = process.env["CELLO_REGION"]
+  ? "CELLO_REGION"
+  : process.env["AWS_REGION"]
+    ? "AWS_REGION"
+    : env === "local"
+      ? "local"
+      : "default";
 // AC-007 (REPOSPLIT-001): health server moved to port 9090 so port 8080 is free for
 // the libp2p WS listener. ALB target group health check updated to port 9090.
 const healthPort = parseInt(process.env["HEALTH_PORT"] ?? "9090", 10);
@@ -162,28 +173,33 @@ if (!nodeId) {
   process.exit(1);
 }
 
-// PRESENCE WAS NEVER THE QUESTION — the SHAPE is. NODE_ID feeds Identifier.derive(), so it IS this
-// node's FROST participant identifier: born wrong, the node holds shares nobody can address, and the
-// correction is a decommission rather than a rename. The comment above has stated the rule since the
-// convention was introduced; nothing enforced it, so `NODE_ID=us-east-1` on a GCP node — the correct
-// value for the AWS node next door, and therefore the likeliest copy-paste — started cleanly and
-// derived an identifier matching nothing in the manifest.
-const nodeIdVerdict = validateNodeId(nodeId, { env, cloudProvider, nodeRegion });
+// Shape, not just presence. NODE_ID feeds Identifier.derive(), so it IS this node's FROST participant
+// identifier: born wrong, the node holds shares nobody can address and the correction is a
+// decommission, not a rename. `NODE_ID=us-east-1` on a GCP node is the correct value for the AWS node
+// next door, which makes it the likeliest copy-paste and the one worth naming in the error.
+const nodeIdVerdict = validateNodeId(nodeId, { env, cloudProvider, nodeRegion, regionSource });
 if (!nodeIdVerdict.ok) {
+  // configKey, not missingKey: the value is PRESENT and malformed. The neighbouring CELLO_CLOUD check
+  // uses configKey for the same reason — absent and invalid need different remediation, and one field
+  // for both makes them indistinguishable to anything keyed on it.
   logger.error("adapter.config.invalid", {
-    missingKey: "NODE_ID",
+    configKey: "NODE_ID",
     nodeId,
     env,
     cloud: cloudProvider,
+    nodeRegion,
+    regionSource,
     reason: nodeIdVerdict.reason,
   });
   process.exit(1);
 }
 if (nodeIdVerdict.legacy) {
-  // Accepted, but never silently: these are pre-convention nodes whose identifier cannot be changed
-  // without decommissioning them, and an operator should know a node is running on the exception.
-  logger.warn("directory.node_id.legacy_form", {
-    nodeId,
+  // INFO, not WARN. Every AWS node is on this form permanently and by IaC design
+  // (`cello-ecs-directory.yaml` sets NODE_ID to the region), so a warning here fires on every task
+  // start of the whole fleet — and a signal that fires on the normal case is not a signal. The case
+  // that WOULD be suspicious, a legacy id pinned to an unresolved region, is now refused outright.
+  logger.info("directory.node_id.legacy", {
+    nodeId, env, cloud: cloudProvider, nodeRegion, regionSource,
     reason: "bare-region NODE_ID predates the <cloud>-<region> convention; kept because renaming it would destroy this node's FROST identifier",
   });
 }
