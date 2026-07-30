@@ -3702,3 +3702,98 @@ Seven defects, one signature: **every layer correct, one silent hand-off between
 copied into an image; a share write returning ok while nothing persisted; a failover that never
 triggered; an ephemeral IP baked into a signed manifest; a deferral returning success; a factory
 dropping an option; and a queue that cannot reach the peer it is queued for.
+
+---
+
+## Entry 60 — 2026-07-30 — DOD-INV-SHARES-LOCAL enforced; the seal-receipt fetch DELETED; 9 review findings closed
+
+### 1. DOD-INV-SHARES-LOCAL — ✅ enforced mechanically
+
+`m12-inv-shares-local.test.ts` (11/11). The invariant held because nobody had added
+`agent_key_shares` to a spec list — a fact about the present, not a property of the design.
+
+The exfiltration path is not the obvious one. `planRound` iterates the **peer's** advertisement and
+pulls any table whose digest differs, treating an untracked table as "local digest over the empty
+set" (`ae-round.ts:63-70`). The pull side is deliberately open. So the dangerous frame is not a
+poisoned record — it is a peer simply asking:
+
+```
+ae_pull_a { table: "agent_key_shares", hashes: [...] }  →  serveTierA("agent_key_shares", …)
+```
+
+That is refused only because every wire-reachable store method resolves the peer-supplied table name
+through a closed registry that throws first. All 8 entry points are asserted to refuse it **before
+touching the database** — the injected pool throws `POOL REACHED`, so a refusal arriving after a
+`SELECT … FROM agent_key_shares` fails red instead of passing. Revert-tested: injecting the share
+table into the registry turns 5 red, `serveTierA` failing with POOL REACHED.
+
+### 2. The enforcer immediately falsified a premise in my own DoD line
+
+`DOD-SEAL-BROKER-1` justified the receipt fetch "because receipts already replicate to every
+directory". **They do not.** `seal_notarizations` is declared in `TIER_A_SPECS` but is absent from the
+AE store's registry — it needs the canonical chain writer (`insertWithChain`) and was left out
+deliberately rather than half-wired (`pg-ae-store.ts` "Scope"). A receipt exists only on the
+directory that recorded it, so the fetch could only ever be answered by the directory that had
+already failed to deliver it.
+
+Now asserted, so it cannot be mis-stated again: the test pins the pending set to exactly
+`{seal_notarizations, user_accounts}`, and when the chain-writer unit lands it goes red and forces
+both the registry and that assumption to be revisited together.
+
+### 3. The receipt fetch is DELETED — a fetched root cannot be proof
+
+The reviewer found two HIGH defects, and chasing them showed the feature cannot be made safe from the
+current schema:
+
+- **F2:** the inbound handler matched on frame TYPE only, never comparing `session_id`, while
+  `registerInboundHandler` broadcasts every frame to ALL handlers. Two sessions whose bilateral
+  windows expired within 5s both had a handler live, so the first `seal_result` settled BOTH — the
+  second returning the *other* session's root as its own proof.
+- **F3:** `frost_signature` was delivered and never verified, so one directory's word was reported to
+  the operator as a completed seal. A single node producing a ceremony output is exactly what the
+  sovereign-node invariant forbids.
+
+F3 has no fix from stored state. `verifyBilateralSealCertificate` needs `leaf_count`, `signer_pubkey`
+and the legibility binding; `seal_notarizations` persists none of them, and legibility is
+deliberately never stored. Comparing against a locally-known root is also out — a *stranded*
+participant has no local root, which is precisely why it is fetching. The root is irreducibly one
+directory's word.
+
+Deleted both halves (client fetch + directory serve path + `getSealNotarization` from the contract
+and both implementations); absence proven on a FORCE-rebuilt dist. Without it the agent escalates to
+a unilateral seal exactly as before and gets a receipt it **can** verify. An unverifiable receipt is
+worse than an honest escalation.
+
+This also retired F4 without a fix: that handler held the only `await` in the signaling read loop,
+unguarded, so a transient Postgres error on one frame propagated to the stream catch — whose
+`finally` deletes the stream and runs the offline path — kicking an authenticated agent offline over
+a failed lookup.
+
+### 4. F1 — the feature had introduced a new single point of failure
+
+Targeting the broker created a failure mode the configured-directory path never had: `processSeal`
+dials ONLY the target it is given and returns the transport error with NO redirect, so a broker whose
+address is stale, rotated, or firewalled **rejected the seal outright**. Before the feature, the
+configured directory would have been asked and would have redirected. One unreachable node making
+CELLO unusable is the redundancy invariant inverted.
+
+Any broker failure carrying no redirect now retries against the configured directory: misclassifying
+a transport error as a protocol rejection costs an available seal, while the reverse costs one wasted
+dial, and re-adjudication cannot double-notarize (idempotent on `session_id + seal_type`).
+
+### 5. The live enforcer could not detect the feature's loss
+
+Its assertions are `ok`, a 64-hex root, and both sides agreeing — all of which pass with the broker
+selection fully reverted, via the redirect path. **I had already measured that path and mistaken it
+for the broker path** (Entry 58). A green live run is not coverage. The new relay unit test asserts
+the TARGET `processSeal` receives, which is the only thing that separates the two, and it catches the
+factory field-drop (`80b5a2d8`) that cost a full deploy cycle — five lines of spy, invisible to
+`tsc` and to any outcome-based assertion.
+
+### 6. Process notes
+
+- I committed a typecheck error because I piped `pnpm run typecheck` through `tail`, so the pipeline
+  reported *tail's* exit status and the `&&` chain continued to commit and push. **Gate on the
+  command's own status, never through a pipe.**
+- Seven of the nine findings share this milestone's recurring shape: a green surface over a broken
+  write, a silent teardown, or a discarded cause.

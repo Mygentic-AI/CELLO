@@ -335,6 +335,21 @@ description: >
   replicated. — ✅ **ALL FOUR MET (Entry 59).** Live enforcer `j-gcp-live.spine.test.ts` GREEN in 151s
   with agents on `gcp-usc1`+`gcp-euw1` and the relay pinned to `gcp-use1` — the home of neither.
   `relay.seal.broker.resolved` → `delivered` → `notarization.recorded`, no redirect, no forwarding.
+  **Reviewed (Entry 60), 9 findings, all closed.** The live run alone did NOT earn clause (c): revert
+  the broker selection and the configured directory still redirects, the seal still completes, and
+  every assertion in the live enforcer still passes — it proves cross-directory sealing works, not
+  that the relay asked the broker. Now enforced offline by
+  `relay/src/__tests__/m12-seal-broker-selection.test.ts` (5/5), which asserts the TARGET
+  `processSeal` is called with. Revert-tested twice: removing the broker record turns 3 red, and
+  dropping `directoryEndpointsByPubkey` in the factory — the bug that actually cost a deploy cycle —
+  turns the same 3 red.
+  **F1 was a new single point of failure** and is fixed: an up-but-unreachable broker rejected the
+  seal outright (processSeal dials only its given target and returns no redirect), where before the
+  configured directory would have been asked and would have redirected. That violated the redundancy
+  invariant — one unreachable node making CELLO unusable. Also fixed: the leaked broker map that the
+  teardown-parity helper could not see (F5), the broker recorded before `recordSession` succeeded
+  (F7), a rejected seal whose cause was discarded (F6), and an endpoint parser that deferred a config
+  typo to a per-seal fallback instead of a startup fatal (F9).
   **Why it was not built:** relay SELECTION (directory picks a relay per session, health-aware) was
   built — `pickRelay()`. The return direction was deferred to a config value and never revisited.
   The asymmetry is the defect: dynamic outbound, hardcoded inbound.
