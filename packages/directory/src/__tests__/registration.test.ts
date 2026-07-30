@@ -541,6 +541,77 @@ describe("REG-001: Directory registration", () => {
     expect(directory.hasProfile(Buffer.from(pub).toString("hex"))).toBe(false);
   });
 
+  it("DOD-INV-NODEID: duplicate validator nodeIds → register rejected, cause named in the log", async () => {
+    // The guard at the arithmetic site is UNREACHABLE through the real manifest store: the §1c
+    // distinctness check in file-directory-manifest-store.ts refuses a duplicate nodeId (and duplicate
+    // pubkey, and duplicate peerId) at the verify boundary, and the verify anchor is mandatory whenever
+    // a manifest path is set. Injecting a store stub is therefore not a shortcut — it IS the scenario:
+    // this guard exists for unverified/test mode and for any future second DirectoryManifestStore.
+    //
+    // Without this test, reverting the 17-line handler guard left the whole dkg-topology suite green:
+    // the flag was covered, the refusal was not.
+    const duplicateNodeIdManifest: ConsortiumManifest = {
+      version: 7,
+      not_before: new Date().toISOString(),
+      expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+      nodes: [
+        { nodeId: "gcp-usc1", pubkey: "a".repeat(64), region: "us-central1", provider: "gcp", endpoint: "https://a.example.com", role: "validator" },
+        { nodeId: "gcp-euw1", pubkey: "b".repeat(64), region: "europe-west1", provider: "gcp", endpoint: "https://b.example.com", role: "validator" },
+        // Same nodeId as the first: one FROST identifier, two manifest entries.
+        { nodeId: "gcp-usc1", pubkey: "c".repeat(64), region: "us-central1", provider: "gcp", endpoint: "https://c.example.com", role: "validator" },
+      ],
+      signatures: [],
+    };
+
+    const events: Array<{ event: string; ctx: Record<string, unknown> }> = [];
+    const capturingLogger = {
+      info: () => {}, debug: () => {},
+      warn: (event: string, ctx: Record<string, unknown>) => { events.push({ event, ctx }); },
+      error: (event: string, ctx: Record<string, unknown>) => { events.push({ event, ctx }); },
+    } as unknown as Parameters<typeof createDirectoryNode>[0]["logger"];
+
+    const dirKey = generateKeypair();
+    const { directory, node: dirNode, stop: stopDir } = await createDirectoryNode({
+      keyProvider: dirKey,
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "12D3KooWFakeRelay", multiaddrs: ["/ip4/127.0.0.1/tcp/19999"] },
+      directoryManifestStore: new TestDirectoryManifestStore(duplicateNodeIdManifest),
+      logger: capturingLogger,
+    });
+    scope.addCleanup(stopDir);
+
+    const clientKey = generateKeypair();
+    const clientNode = await createNode({ keyProvider: clientKey, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await clientNode.start();
+    scope.addCleanup(() => clientNode.stop());
+    await clientNode.dial(dirNode.listenAddresses()[0]!);
+
+    const { stream, reader } = await doAuth(clientNode, dirNode.getPeerId(), clientKey);
+    const mlDsa = await mlDsaKeygen();
+    const pub = await clientKey.getPublicKey();
+
+    sendFrame(stream, CBOR_ENC.encode({
+      type: "register_request",
+      phone_stub: "+7777777778",
+      k_local_pubkey: Buffer.from(pub).toString("hex"),
+      ml_dsa_pubkey: Buffer.from(await mlDsa.getPublicKey()).toString("hex"),
+    }));
+
+    const frame = await reader.readFrameWithTimeout(10000);
+    expect(frame["type"]).toBe("register_error");
+    expect(frame["reason"]).toBe("dkg_failed");
+    expect(directory.hasProfile(Buffer.from(pub).toString("hex"))).toBe(false);
+
+    // `dkg_failed` on the wire is an exit-point label, so the CAUSE has to be in the log or it exists
+    // nowhere. manifestVersion is asserted because "your manifest is malformed" is unactionable
+    // without saying which manifest.
+    const dup = events.find((e) => e.event === "directory.dkg.duplicate_node_ids");
+    expect(dup, `expected directory.dkg.duplicate_node_ids; got: ${events.map((e) => e.event).join(", ")}`).toBeDefined();
+    expect(dup!.ctx["duplicateNodeIds"]).toEqual(["gcp-usc1"]);
+    expect(dup!.ctx["distinctValidators"]).toBe(2);
+    expect(dup!.ctx["manifestVersion"]).toBe(7);
+  });
+
   it("AC-009: unregistered authenticated client → session_request → not_registered", async () => {
     const dirKey = generateKeypair();
     const { node: dirNode, stop: stopDir } = await createDirectoryNode({

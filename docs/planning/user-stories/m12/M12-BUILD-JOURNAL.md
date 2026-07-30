@@ -3974,3 +3974,32 @@ and requires every column a security gate JOINs on to be in the joined table's s
 `includes("agent_id")` alone would fix today's bug and catch nothing else. Directory suite 956 green.
 
 **Not yet deployed** — the fleet still runs `reviewfix-de1ed949`, which predates both fixes.
+
+### Entry 63 — the two items Entry 62 recorded as owed are closed
+
+**Handler-level test.** The `duplicateNodeIds` FLAG was covered; the REFUSAL was not — reverting the
+17-line guard in `directory-node.ts` left all 10 topology tests green, so the DoD's operative claim
+had no coverage at all. Now `registration.test.ts` drives a duplicate-bearing manifest through the
+real registration path and asserts the `register_error` frame, that no profile was created, and that
+`directory.dkg.duplicate_node_ids` carries `duplicateNodeIds`, `distinctValidators` and
+`manifestVersion`. Revert-tested: pulling the guard turns it red.
+
+Injecting a store stub is not a shortcut here — it IS the scenario. The §1c distinctness check refuses
+a duplicate at the verify boundary, and the verify anchor is mandatory whenever a manifest path is
+set, so the arithmetic-site guard is unreachable through the real store. The stub is what makes the
+test honest about which mode the guard defends, and the test name says so.
+
+**Round-1 identifier binding** (cello-client `network-directory-node.ts`). Every check in the
+consortium compares manifest nodeId STRINGS, but a node's FROST identifier derives from its own
+deployed `NODE_ID` — so two entries with distinct nodeIds on boxes sharing one `NODE_ID` collide and
+pass all of them. Round 1 is the first point where the identifiers actually in play are visible.
+`DKG.round2` does reject the collision (`@noble/curves` throws `Duplicate id=…`), but as an exception
+from inside a crypto library that then had to survive every catch on the way out — one of which was
+the bare `catch {}` fixed in Entry 62. Refusing at round 1 names the cause and points at the likely
+misconfiguration while the node list is still in hand.
+
+Both are the reviewer's own prescriptions, implemented rather than deferred.
+
+**Still not deployed.** The fleet runs `reviewfix-de1ed949`, which predates the kill-switch fix
+(Entry 62 §2) and everything above. The directory image build was declined, so the deploy is parked
+awaiting Andre rather than retried.

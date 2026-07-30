@@ -106,8 +106,16 @@ description: >
   `NODE_ID` do collide, and pass all four checks. The enforcing check is in `runNetworkDkg` after
   round 1: assert the round-1 identifiers are distinct AND that each equals
   `Identifier.derive(roster[i].nodeId)` — both inputs are already in hand.
-  **Owed:** a handler-level test (reverting the 17-line guard leaves 10/10 green), and the round-1
-  identifier binding above.
+  **Both owed items now closed (Entry 63).** The handler-level test exists
+  (`registration.test.ts` → "DOD-INV-NODEID: duplicate validator nodeIds → register rejected, cause
+  named in the log"), asserting the `register_error` frame, no profile created, and
+  `directory.dkg.duplicate_node_ids` carrying `duplicateNodeIds`, `distinctValidators` and
+  `manifestVersion`. Revert-tested: removing the 17-line guard turns it red, where previously the
+  whole topology suite stayed green. And the round-1 identifier check shipped in cello-client
+  (`network-directory-node.ts`): after round 1, colliding identifiers are refused with a message
+  naming the likely cause (two nodes deployed under one `NODE_ID`) — the first point where the
+  identifiers ACTUALLY in play are visible, rather than manifest strings that cannot see the
+  collapse. Daemon suite 1121/1121; directory suite 957.
 - **DOD-INV-NO-VPN** [trustless-cello] — no VPN, VPC peering, Private Service Access consumer, or
   any cross-cloud network tunnel is created. Directory sync happens only over the authenticated
   libp2p transport. Nothing external ever connects to a node's Postgres. — ✅ **VERIFIED
