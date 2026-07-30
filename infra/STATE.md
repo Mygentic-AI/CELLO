@@ -1977,3 +1977,15 @@ CloudFormation's model of it is stale.
    the deploy dependency entirely for manifest changes and is arguably the better design (publishing a
    manifest should not require a deploy). Does not fix the drift, but removes this blocker from the
    critical path. Needs an SSM read on the directory task role.
+
+**RESOLVED 2026-07-30 — manifest v2 IS LIVE, via task-definition revisions (CFN drift path).**
+`GET /manifest` on directory-us1 now returns `version: 2` with `intake_key: intake-dev-1`, so
+`intake_key_absent` is cleared on dev. The CFN stack could not be updated (stale ALB listener ARNs
+after the hibernate/wake cycle — see the entry above), so the manifest was applied the way this repo
+has done it before under drift: read the running task definition, patch
+`CELLO_DIRECTORY_CONSORTIUM_MANIFEST_B64` from the SSM value, register a new revision, update the
+service. Revisions: **us-east-1 :397, eu-central-1 :155, ap-northeast-1 :146**.
+
+These three revisions are CFN DRIFT and will be overwritten the next time the ECS directory stack
+deploys successfully — which is fine and intended, because the stack resolves the SAME SSM parameter.
+The drift is the manifest arriving EARLY, not a different value.
