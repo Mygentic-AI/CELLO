@@ -155,12 +155,14 @@ description: >
   the encoders for advertise; INSERT-if-absent / merge-upsert for apply. **It must reproduce the
   MemStore semantics the convergence proof used** — a pg store that diverges from the proven semantics
   makes the proof describe something nobody runs. `agent_revocations.signature` is BYTEA and MUST be
-  hex-encoded in the SELECT (pg returns a Buffer; no type-parser override is installed). — 🟡 BUILT
-  (`pg-ae-store.ts`, live on the GCP fleet; the ❌ reflected main, which never saw the branch).
-  **Parity proven against REAL Postgres** (→ Entry 69): the store's advertised hash equals the
-  encoders' for the same row, a served body re-encodes to the claimed hash, and the digest is stable.
-  The BYTEA trap is pinned by proving the test's own discriminating power — the same row with a Buffer
-  signature vs its hex string hash DIFFERENTLY. Owed for ✅: a reviewer verdict, quoted.
+  hex-encoded in the SELECT (pg returns a Buffer; no type-parser override is installed). — ✅ (→ Entries 69, 71).
+  Parity proven against REAL Postgres; the DoD's named BYTEA trap pinned by proving the test's own
+  discriminating power. Reviewed (pass 2 of 2), verdict verbatim: *"SPEC: DEVIATIONS FOUND … SILENT
+  FALLBACKS FOUND … ERROR SUBSTITUTION FOUND … HOLLOW TESTS FOUND"* — 5 findings, **all closed**: the
+  kill switch could be flipped off by a mistyped `suspension_seq`; the fork alarm could never fire for
+  the right reason; the generic apply path had no per-record containment; a null-`agent_id` profile is
+  now refused. The reviewer's stated condition for closing — a live proof that an AE-applied row still
+  chains — is met, and my first attempt at it was hollow (Entry 71).
 - **DOD-AE-CHANNEL-1** [trustless-cello] — the `/cello/anti-entropy/1.0.0` libp2p handler: dial and
   reconnect, the mutual handshake over the stream (`verifyPeerAuthFrame` plus our own signed frame),
   and the digest→detail→pull round protocol with write-hints. Manifest gains `peerId` population and
