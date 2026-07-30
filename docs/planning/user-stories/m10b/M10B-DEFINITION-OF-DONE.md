@@ -416,7 +416,12 @@ the additions M10B is accountable for.
   Default target is the specific agent unless requested and agreed (M10-D5). Supersedes the 2026-04-10
   log's blanket same-owner rejection, which is marked superseded there. The account-subject case depends
   on the portal resolving agent pubkey → account (`DOD-END-ARCH-1`); if that resolution is missing the
-  mint is REFUSED with a named cause, never minted unflagged. — ❌
+  mint is REFUSED with a named cause, never minted unflagged.
+  > **✅ 2026-07-30** — all four clauses in `submission-ingress.ts`, 21 tests green: agent-subject
+  > same-operator MINTS FLAGGED (live today — `co-own: own` on a real endorsement); account-subject
+  > same-operator REFUSES as `same_operator_account_subject`; a missing agent→account resolution
+  > REFUSES as `subject_not_registered` (also live). Revert-tested. D-27's tier CAP moved with
+  > `DOD-END-TIER-1`. → Entry 42 — ✅
 - **DOD-END-QUOTA-1** — **the issuance quota (`M10B-D6`).** At most **100** endorsements per **rolling
   30 days**, enforced **per account** (not per agent — a per-agent cap is bypassed by spinning up
   agents, which is the same farming hole `INV-NO-SELF-STANDING` exists to close), counted at the portal
