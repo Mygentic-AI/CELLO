@@ -50,7 +50,17 @@ description: >
 - **DOD-INV-KILL-SWITCH** [trustless-cello] — suspension state fails CLOSED and converges
   suspended-wins: a pause reaches every up node despite partition and restart; an un-suspension
   requires verifiably newer authenticated state; a tie resolves suspended. A paused agent sealing
-  because an UP node lacked the state is a critical finding. — ❌
+  because an UP node lacked the state is a critical finding. — 🟡 PROVEN LOCALLY, NOT ON THE FLEET
+  **Proven** by `j-antientropy.spine.test.ts` against three real directory PROCESSES with a real
+  partition (5/5 green, 2026-07-29): "a PAUSE written while a node is partitioned converges to it on
+  heal (Tier-B)" and "a burn written on ONE node converges to the others and stays burned". That is
+  the convergence and monotonicity half, on the real merge code.
+  **Owed:** the same exercise on the live GCP fleet. Blocked on a practical detail, not a design
+  one: `/internal/agent-write` is the portal's account-scoped seam and requires `accountId` +
+  `agentId`, which capability-minted test agents do not have. Either mint an agent through the
+  portal path or write the suspension directly to one node's `agent_suspensions` (needs VPC access —
+  the IAP SSH rule exists, Cloud SQL is behind PSC). The invariant most worth checking live is the
+  last clause: **a paused agent must not be able to seal via a node that lacks the state.**
 - **DOD-INV-NODEID** [all] — every node is born `<cloud>-<region>` (e.g. `aws-use1`, `gcp-usc1`)
   and is never renamed; no two manifest entries ever hold the same FROST identifier in one
   manifest version. — ❌
