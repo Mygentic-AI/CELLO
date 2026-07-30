@@ -855,9 +855,9 @@ streams for one pubkey, two processes holding the same FROST share, double-accep
 > prescribe plus any crash, and the recovery action propagates it. `DOD-INV-ONE-PRIMARY` forbids exactly
 > this across machines; we have been violating it on one.
 
-## 🟡 DOD-CRYPTO-AT-REST-1 — the gateway writes security records + config to disk UNENCRYPTED
+## ✅ DOD-CRYPTO-AT-REST-1 — the gateway writes security records + config to disk UNENCRYPTED
 
-> **THE NAMED DEFECT IS FIXED 2026-07-29 by `DOD-M9C-STORE-1`** (M9's reopened connect unit, branch `m9/connect-unit`,
+> **FULLY CLOSED 2026-07-30 (the named defect fixed 2026-07-29 by `DOD-M9C-STORE-1`** (M9's reopened connect unit, branch `m9/connect-unit`,
 > commit `449bbba`). `core/gateway` got its own SQLCipher opener — it cannot import the daemon's,
 > since the daemon depends on the gateway and not the reverse — and both stores now live in ONE
 > encrypted file, `~/.cello/gateway.db`, opened with the DAEMON'S key file. One key, one backup
@@ -872,12 +872,16 @@ streams for one pubkey, two processes holding the same FROST share, double-accep
 > The two gateway entries also left the `node:sqlite` quarantine allowlist in
 > `cello-client/eslint.config.mjs` — only `daemon/identity-migration.ts` remains.
 >
-> **🟡 and not ✅, and the reason is the whole point of this line.** The gateway's REQUEST LOG
-> (`CELLO_GATEWAY_REQUEST_LOG`) still writes plaintext metadata plus a content SHA-256 outside the
-> encrypted store. Only tests set it and no shipped path passes it — but this line's title is
-> "the gateway writes ... to disk UNENCRYPTED", and one env var away from true is not false. It
-> goes ✅ when that path is either routed into the encrypted store or refused outside tests. Owed
-> to the next M9 unit; see [[M9-DEFINITION-OF-DONE]].
+> **✅ CLOSED 2026-07-30.** The last plaintext path is gone. The gateway's REQUEST LOG
+> (`CELLO_GATEWAY_REQUEST_LOG`) wrote metadata plus a content SHA-256 outside the encrypted store —
+> only tests set it, but this line's title is "the gateway writes ... to disk UNENCRYPTED", and one
+> env var away from true is not false.
+>
+> It was REMOVED rather than guarded, because it was redundant: the record store already carries
+> direction, disposition, contentHash and correlationId. Deadness proven properly — no reference in
+> either repo, not on the `exports` map — and its three test consumers now read the ENCRYPTED store
+> instead, which makes them better tests: they assert on the durable audit trail rather than a debug
+> side-channel. See [[M9B-DEFINITION-OF-DONE]] and [[M9B-BUILD-JOURNAL]] Entry C19.
 
 <details>
 <summary>The original finding, kept verbatim</summary>
