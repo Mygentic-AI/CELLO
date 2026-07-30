@@ -155,7 +155,12 @@ description: >
   the encoders for advertise; INSERT-if-absent / merge-upsert for apply. **It must reproduce the
   MemStore semantics the convergence proof used** — a pg store that diverges from the proven semantics
   makes the proof describe something nobody runs. `agent_revocations.signature` is BYTEA and MUST be
-  hex-encoded in the SELECT (pg returns a Buffer; no type-parser override is installed). — ❌
+  hex-encoded in the SELECT (pg returns a Buffer; no type-parser override is installed). — 🟡 BUILT
+  (`pg-ae-store.ts`, live on the GCP fleet; the ❌ reflected main, which never saw the branch).
+  **Parity proven against REAL Postgres** (→ Entry 69): the store's advertised hash equals the
+  encoders' for the same row, a served body re-encodes to the claimed hash, and the digest is stable.
+  The BYTEA trap is pinned by proving the test's own discriminating power — the same row with a Buffer
+  signature vs its hex string hash DIFFERENTLY. Owed for ✅: a reviewer verdict, quoted.
 - **DOD-AE-CHANNEL-1** [trustless-cello] — the `/cello/anti-entropy/1.0.0` libp2p handler: dial and
   reconnect, the mutual handshake over the stream (`verifyPeerAuthFrame` plus our own signed frame),
   and the digest→detail→pull round protocol with write-hints. Manifest gains `peerId` population and
