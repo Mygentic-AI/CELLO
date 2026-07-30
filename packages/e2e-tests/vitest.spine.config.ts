@@ -31,5 +31,16 @@ export default defineConfig({
     hookTimeout: 180_000,
     // Live binaries bind real ports and share one local Postgres — run serially.
     fileParallelism: false,
+    env: {
+      // The portal's config module REQUIRES this and throws without it. It was previously supplied by
+      // an `export` in whatever shell ran the journey — which means the journey passed only in the
+      // session that happened to export it, and failed for anyone else (including a later call in the
+      // same session, since shell env does not persist). A test whose green depends on ambient shell
+      // state is not reproducible. Declared here, matching the portal's own vitest config so the two
+      // repos point at the SAME local database rather than diverging silently.
+      PORTAL_DATABASE_URL:
+        process.env.PORTAL_DATABASE_URL ?? "postgres://portal:portal@localhost:55432/cello_portal",
+      CELLO_ENV: process.env.CELLO_ENV ?? "local",
+    },
   },
 });

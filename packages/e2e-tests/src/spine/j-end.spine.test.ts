@@ -19,7 +19,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { InMemoryKeyProvider } from "@cello-protocol/crypto";
 import {
@@ -138,6 +138,31 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     const conn = await connectMcp(dirFor["bob"], "jend-bob");
     mcpConns.push(conn);
     await conn.call("cello_use_agent", { name: "bob" });
+
+    // ── BOB MUST BE A DIFFERENT OPERATOR, OR THIS JOURNEY TESTS THE WRONG THING ─────────────────
+    // `cello login` registers every agent under the ONE dev account, so all three shared an
+    // `account_id` AND a `phone_stub_hash`. The portal's same-operator check (D-29) reads exactly
+    // those two fields — so it correctly flagged Bob's endorsement of Alice as CO-OWNED, and the
+    // journey's headline claim ("a stranger endorses Alice, and Charlie can rely on it") was
+    // quietly exercising the co-ownership path instead. Under DOD-END-COUNT-1 such a signal does
+    // not even count toward a floor, so the hop asserted a case the milestone deliberately discounts.
+    //
+    // This was invisible while the flag lived in the payload and nothing consumed it. Giving Bob his
+    // own account and phone stub makes him the stranger the story needs. Case (b) — the same-operator
+    // POSITIVE — deliberately keeps the shared account, which is why the two cases must differ here
+    // rather than in what the portal is told.
+    const bobAccount = randomUUID();
+    psqlSpine(
+      `INSERT INTO user_accounts (account_id, phone_stub_hash, chain_hash) ` +
+      `VALUES ('${bobAccount}', 'jend-bob-phone-stub', 'jend-bob-chain'); ` +
+      `UPDATE agent_profiles SET account_id = '${bobAccount}', phone_stub_hash = 'jend-bob-phone-stub' ` +
+      `WHERE lower(k_local_pubkey) = lower('${pubkeys["bob"]}')`,
+    );
+    const linkage = psqlSpine(
+      `SELECT count(DISTINCT account_id) FROM agent_profiles ` +
+      `WHERE lower(k_local_pubkey) IN (lower('${pubkeys["bob"]}'), lower('${pubkeys["alice"]}'))`,
+    );
+    expect(linkage.replace(/\s/g, ""), "Bob and Alice must be DISTINCT operators for this hop").toContain("2");
 
     const statement = "Alice led the payments migration and shipped it with no incident.";
     const res = (await conn.call("cello_trust_signals_issue", {
@@ -320,7 +345,15 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
       trust_signals?: Array<{ type: string; issuer: string; claim: Record<string, unknown> }>;
     };
     expect(inbound.type).toBe("new_session");
-    expect(inbound.trust_signals, "Charlie must receive the endorsement Alice accepted").toBeDefined();
+    // A zero-signal presentation is silent by design at the daemon (`trustSignals = undefined`), so the
+    // reason lives only in ALICE's log. Surfacing it here is the difference between "Charlie got nothing"
+    // and knowing whether her wallet was empty, her scoping excluded it, or the read threw.
+    if (inbound.trust_signals === undefined) {
+      const why = daemons.flatMap((d, i) => d.output.split("\n")
+        .filter((l) => /signal\.|trust_signal/.test(l))
+        .map((l) => `[daemon ${i}] ${l}`)).slice(-16).join("\n");
+      expect.fail(`Charlie received no trust_signals. Alice's presentation log:\n${why || "(no signal.presentation lines at all)"}`);
+    }
 
     const endorsement = inbound.trust_signals!.find((x) => x.type === "endorsement");
     expect(endorsement, `no endorsement presented: ${JSON.stringify(inbound.trust_signals)}`).toBeTruthy();
@@ -379,7 +412,6 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
 
   it("HOP 6 (case a): Alice REFUSES a second endorsement with a message — and it never reaches Charlie", async () => {
     const bob = mcpConns[0];
-    const alice = mcpConns[1];
 
     // ── Bob issues a SECOND endorsement, one Alice will not stand behind ──
     const wrong = "Alice single-handedly rewrote the billing system over a weekend.";

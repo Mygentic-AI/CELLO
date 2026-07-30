@@ -65,6 +65,7 @@ interface Vector {
     issued_at: number;
     expires_at: number | null;
     supersedes_hash: string | null; // hex in the file; RAW BYTES in the preimage
+    same_operator: boolean;
   };
   preimage_hex: string;
   signal_hash_hex: string;
@@ -135,7 +136,7 @@ describe("DOD-INV-CANONICAL — the DIRECTORY agrees with the frozen envelope ve
     const ISSUED_AT = 8, EXPIRES_AT = 9;
     for (const v of loaded.vectors) {
       const items = walkCborArray(bytes(v.preimage_hex));
-      expect(items).toHaveLength(11); // fixed arity — M10-D17
+      expect(items).toHaveLength(12); // fixed arity — M10-D17 (12 since M10B appended same_operator)
       expect(items[ISSUED_AT].major, `issued_at must be a uint: ${v.name}`).toBe(0);
       const exp = items[EXPIRES_AT];
       const isNull = exp.major === 7 && exp.ai === 22;

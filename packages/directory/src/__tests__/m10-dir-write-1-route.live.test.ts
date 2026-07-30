@@ -39,6 +39,7 @@ describeIntegration("DOD-DIR-WRITE-1 — the wired /internal/signal/submit route
       subject_kind: "agent", subject: `${tag}-agent`, issuer_kind: "portal",
       issuer_pubkey: submitterPub, type: "phone", schema_version: 1,
       payload: new Uint8Array([1, 2, 3]), issued_at: nowSec(), expires_at: null, supersedes_hash: null,
+      same_operator: false,
       ...over,
     };
   }

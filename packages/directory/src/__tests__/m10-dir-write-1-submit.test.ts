@@ -57,6 +57,7 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
       issued_at: nowSec(),
       expires_at: null,
       supersedes_hash: null,
+      same_operator: false,
       ...over,
     };
   }

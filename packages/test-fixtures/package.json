@@ -19,7 +19,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cello-protocol/protocol-types": "^0.0.18"
+    "@cello-protocol/protocol-types": "^0.0.33"
   },
   "devDependencies": {
     "@claude-flow/testing": "3.0.0-alpha.6",
