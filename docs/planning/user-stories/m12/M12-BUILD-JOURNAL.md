@@ -4003,3 +4003,27 @@ Both are the reviewer's own prescriptions, implemented rather than deferred.
 **Still not deployed.** The fleet runs `reviewfix-de1ed949`, which predates the kill-switch fix
 (Entry 62 §2) and everything above. The directory image build was declined, so the deploy is parked
 awaiting Andre rather than retried.
+
+### Entry 63b — the kill-switch defect was a CLASS; I checked whether it recurs. It does not.
+
+The Entry 62 §2 bug is "a consumer depends on a column the sync set does not carry". Fixing the one
+instance is worth little if the shape repeats, so I enumerated the rest.
+
+**Joins.** Three distinct join shapes exist in `pg-directory-store.ts`. Two are onto `agent_profiles`
+and both key on `agent_id` (the suspension/burn gates, and `agent_revocations` at `:281`) — covered by
+the fix, and now by the generalized test. The third (`conversation_proof_leaf_checkpoints`) is not a
+replicated table, so it is out of scope.
+
+**Non-join consumers.** `agent_profiles` has four columns outside the sync set: `id` (BIGSERIAL,
+node-local), `created_at` (per-node clock), `chain_hash` (node-local audit trail, written locally on
+apply by design), and `status` + `account_id`.
+
+`status` is the one that looked dangerous: two queries gate on `status = 'active'` (`:242`, `:1087`),
+and a replicated row is never given one. It is safe, for two reasons that both had to hold — the
+column is `NOT NULL DEFAULT 'active'`, so a replicated row lands active; and it is never UPDATEd
+anywhere, so there is no state change that could fail to propagate. Revocation does not travel through
+this column: it has its own Tier-A table keyed on `agent_id`, which now replicates.
+
+So the fix is complete rather than merely local, and the generalized test guards the join half against
+recurrence. Recorded because "I fixed the instance" and "I closed the class" are different claims, and
+a later session should not have to redo this to tell which one happened.
