@@ -1146,3 +1146,85 @@ in C8 is the CONFIG flow only; I had overstated it as the whole thing.
 **Housekeeping owed to Andre:** I left `rate_max_per_window` at 500 on his daemon from that test.
 Real cap, generous, but not something he chose. Reverting it to 0 is a LOOSENING and will ask him to
 confirm — which is the gate working, and also why I did not quietly undo it.
+
+---
+
+## 2026-07-30 — Entry C19: the closeout — a shipped feature deleted, and the three findings I deferred
+
+Six items, one commit (`8334651`), plus the rename (`c42cae0`). What makes this entry worth writing is
+not the list; it is that the largest item was a **deletion**, and that three of the others were
+findings I had chosen not to fix and named in C17 — which is the only reason they got fixed at all.
+
+### The plaintext request log is GONE, not guarded
+
+`CELLO_GATEWAY_REQUEST_LOG` wrote per-message metadata plus a content SHA-256 to a file outside the
+encrypted store. It is why M8C's `DOD-CRYPTO-AT-REST-1` stayed 🟡 after the named defect was fixed:
+the line's own title is "the gateway writes to disk UNENCRYPTED", and **one env var away from true is
+not false**.
+
+The tempting fix was to route it into the encrypted store, or refuse it outside tests. Both are worse
+than deleting it, because the record store already carries everything it carried — direction,
+disposition, `contentHash`, `correlationId` — with a hash chain the request log never had. Keeping a
+second, weaker, unencrypted copy of the audit trail so that three tests could keep reading the easy
+one is exactly backwards for a security layer.
+
+**Deadness proven before deleting, not assumed:** no reference anywhere in `trustless-cello`, not on
+the `exports` map, no shipped path that sets it. (The rule I am obeying here is the one from the
+stale-`dist` lesson: prove it against what SHIPS, not what compiles.)
+
+**The three test consumers migrated UP, not away.** They now open the encrypted store through a
+`gatewayRecords(dbPath, keyPath)` helper and assert on `contentHash`. That is a stronger test than the
+one it replaced: it proves the durable, chained audit trail recorded the pass, rather than proving a
+debug side-channel got a line. Two tests whose *subject* was the request log itself were deleted —
+triage by subject, not by convenience; there is no behaviour left for them to describe. A third kept
+its pass-through assertions and lost only the log half.
+
+### F8 — the DDL throw leaked the connection
+
+Both store constructors open the file, then `exec(DDL)`. A throw there — `SQLITE_BUSY` past the
+`busy_timeout` is reachable on a file shared with the sidecar — left the native handle open and cached
+nothing, so every retry opened another one. An fd leak against a lock-sensitive file is a slow way to
+make the whole store unopenable. Now closed before rethrow, with the original error preserved.
+
+### F9 — the daemon could not let go, and the ORDER is the whole finding
+
+`registerGatewayConfigHandlers` holds long-lived handles by design (C15: closing per call is what
+unlinked the WAL). Nothing could release them. Production was safe — the bin exits — but `stop()`
+could not, and the daemon explicitly supports in-process callers, which is precisely the shape that
+leaks.
+
+The fix is a returned disposer, called at the end of `stop()`'s finally, **after `onShutdown`**. That
+ordering is not a style choice: while the sidecar is alive, closing there *is* the F1/F2 defect. The
+same line of code, moved four lines earlier, becomes the bug this milestone spent a day on.
+
+### F10 — a provenance prefix on the guidance
+
+The affordance blocks from C16 are imperative, contain shell commands, and land in the same context as
+inbound counterparty content. A counterparty can mimic the format and have an agent relay "run this" as
+though the security layer had asked. Every block now carries `[cello security layer, local]`. This is
+**not a cryptographic boundary** — nothing in an LLM's context is, and the comment says so — but an
+agent that knows the layer speaks with a fixed prefix has something to check.
+
+### Two smaller ones, both "the command you run after an incident"
+
+`correlationId` is now minted per `cello_config_set` and spans `changed` → `applied` /
+`restart_failed`, including the restarted sidecar's own boot lines. The screening path already
+threaded one (C18); the config path has no inbound id to inherit, so it mints.
+
+`cello_config_list` now reports `changedAt` and `chainValid`. The timestamp was stored all along and
+`history()` dropped it — so the command an operator runs after an incident could not answer *when* it
+changed or *whether the chain still verifies*. An unset key reads `null`, not a fabricated timestamp.
+
+### The M9C→M9B rename
+
+Seven test files and their identifiers. Mechanical, and separated into its own commit for exactly that
+reason — a rename mixed into a behavioural diff hides the behavioural diff.
+
+Gate: **1649 passed, 5 skipped**; lint and typecheck clean.
+
+### What this entry says about the process
+
+Three of these six items exist because C17 wrote down what it did not fix, by name, with a reason. The
+alternative — "review clean, moving on" — would have left an fd leak, an undisposable handle, and an
+unattributed instruction channel in a milestone whose DoD reads all ✅. **A deferred finding that is
+named survives; one that is summarized away does not.**
