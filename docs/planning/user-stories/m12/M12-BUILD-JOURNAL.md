@@ -4027,3 +4027,47 @@ this column: it has its own Tier-A table keyed on `agent_id`, which now replicat
 So the fix is complete rather than merely local, and the generalized test guards the join half against
 recurrence. Recorded because "I fixed the instance" and "I closed the class" are different claims, and
 a later session should not have to redo this to tell which one happened.
+
+---
+
+## Entry 64 — 2026-07-30 — DOD-AE-CHAINED-TABLES-1: seal receipts replicate
+
+`TIER_A_SPECS` declared four Tier-A tables; the pg registry served two. `seal_notarizations` and
+`user_accounts` were declared-but-absent, so **a seal receipt existed only on the directory that
+recorded it** — for a notary product, the durability property that matters most. My SHARES-LOCAL
+enforcer pinned that divergence in place precisely so this unit would trip it; it did.
+
+**The design premise had gone stale.** `pg-ae-store.ts`'s "Scope" comment defers these tables because
+they need the canonical chain writer and it did not want the coupling. But `insertWithChain` is
+already a PUBLIC method on `PgDirectoryStore` accepting an external client, so no extraction was
+needed — a narrow injected `ChainWriter` (one method) does it. Worth noting for the next deferral I
+read: the comment was true when written, and quietly stopped being true.
+
+**Chain columns stay node-local.** A node applying a replicated row recomputes `prev_hash`/`chain_hash`
+against its OWN tip rather than copying the origin's — otherwise two nodes' chains would have to agree
+on insertion order, which anti-entropy does not provide and does not need to. `encodeTierARecord`
+already hashes only `immutableColumns` and no chain column is in either spec, so the content address
+is chain-free and converges regardless of arrival order. No spec change was required.
+
+**Absent is not fine.** A store built without the writer REFUSES the chained tables, naming what is
+missing, rather than falling through to the generic INSERT — which would write the row *unchained*:
+present, readable, and outside the tamper-evident chain that is the table's entire reason for
+existing. That is the advertised-but-unappliable state the original deferral was right to avoid, and
+it would have been the easy accident here.
+
+Duplicates are convergence, not failure: the same notarization arriving twice, or from two peers, is
+the steady state, so 23505 is swallowed and everything else propagates.
+
+The registry/spec assertion in `m12-inv-shares-local.test.ts` is now strict equality in BOTH
+directions — a spec with no registry entry (a table that cannot be applied) and a registry entry with
+no spec (a table leaving the node with no audited column list) are both defects.
+
+**`user_accounts` privacy — settled, not inherited.** It replicates `account_id` + `phone_stub_hash`
+only: two opaque columns, no email, no phone, nothing recoverable. It does widen who holds the
+stub-hash set from one node to N, which is real — a stub hash remains a confirmation oracle for a
+guessed number. Accepted because the alternative is worse: an account row on one node only makes
+`agent_profiles.account_id` a dangling FK everywhere else, and account-scoped operations then depend
+on which directory you happened to reach. Revisit if that table ever gains a recoverable field.
+
+Directory suite 962 green. **Owed:** the live cross-node proof, which needs a deploy — parked with the
+kill-switch fix.

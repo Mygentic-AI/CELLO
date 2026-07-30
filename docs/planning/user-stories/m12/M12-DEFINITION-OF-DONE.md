@@ -139,14 +139,26 @@ description: >
   natural key exactly — so a bilateral row CAN land on a node already holding the unilateral one.
   (e) `supersedes_notarization_id` is a node-local BIGSERIAL FK and must stay out of the record; a
   node can re-derive it locally from `(session_id, seal_type)` if it wants the pointer.
-  **Open question to settle IN the unit, not before:** `user_accounts` replicates `phone_stub_hash`
-  to every node. That is hash-only and consistent with "no PII in the directory", but it widens who
-  holds the set of stub hashes — decide explicitly and journal it, rather than inheriting the
-  decision from the spec having been written first.
+  **Settled (Entry 64):** `user_accounts` replicates exactly `account_id` + `phone_stub_hash` — two
+  columns, both opaque. No email, no phone, no recoverable identifier: consistent with "the directory
+  is hash-only; the portal holds the recoverable value". It does widen who holds the stub-hash set from
+  one node to N, which is a real change and not nothing — a stub hash is still a confirmation oracle
+  for a guessed phone number. Accepted because the alternative is worse: an account row that exists on
+  one node only makes `agent_profiles.account_id` a dangling FK everywhere else, and account-scoped
+  operations then depend on which directory you reached — the exact per-node divergence anti-entropy
+  exists to remove. Revisit if the account table ever gains a recoverable field; that would flip it.
   **Done means:** both tables serve and apply through anti-entropy; a receipt written on one node is
   readable from another with a locally-computed chain; the `m12-inv-shares-local.test.ts` assertion
   that pins the pending set to exactly `{seal_notarizations, user_accounts}` is updated in the same
-  commit (it is designed to go red here); `agent_key_shares` is still refused. — ❌
+  commit (it is designed to go red here); `agent_key_shares` is still refused. — 🟡 **BUILT, NOT YET
+  PROVEN LIVE** (→ Entry 64). Both tables are in the registry; apply routes through the injected
+  canonical `insertWithChain` so a replicated row extends THIS node's chain; a store built without the
+  writer REFUSES the chained tables rather than writing them unchained; wire-input hash recomputation
+  is preserved on the new path; duplicates are treated as convergence (23505), not failure. The
+  registry/spec assertion is now strict equality in BOTH directions. Directory suite 962 green.
+  **Owed:** a live cross-node proof (a receipt written on one node readable from another), which needs
+  a deploy — parked with the kill-switch fix. The `user_accounts` / `phone_stub_hash` privacy question
+  is settled below.
 
 - **DOD-INV-NO-VPN** [trustless-cello] — no VPN, VPC peering, Private Service Access consumer, or
   any cross-cloud network tunnel is created. Directory sync happens only over the authenticated

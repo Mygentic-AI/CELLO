@@ -1170,7 +1170,17 @@ try {
     aeSync: directoryManifestStore && directoryKeyProvider && pgPool
       ? {
           identity: { nodeId, sign: (tbs: Uint8Array) => directoryKeyProvider.sign(tbs) },
-          store: new PgAeStore(pgPool),
+          // The chain writer is the SAME PgDirectoryStore the node writes through, so a replicated
+          // notarization extends this node's one canonical chain rather than a second one. Guarded by
+          // capability, not by env: a stub store (local mode) has no insertWithChain, and passing
+          // undefined makes PgAeStore refuse the chained tables loudly instead of writing them
+          // unchained.
+          store: new PgAeStore(
+            pgPool,
+            typeof (store as { insertWithChain?: unknown }).insertWithChain === "function"
+              ? (store as unknown as ConstructorParameters<typeof PgAeStore>[1])
+              : undefined,
+          ),
           manifest: () => directoryManifestStore.getVerifiedManifest(),
           intervalMs: aeIntervalMs,
         }

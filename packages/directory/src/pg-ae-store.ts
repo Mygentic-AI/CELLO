@@ -40,7 +40,10 @@
  */
 
 import type pg from "pg";
-import { encodeTierARecord, type TierATableSpec, type TableRow, AGENT_PROFILES_SPEC, AGENT_REVOCATIONS_SPEC } from "./ae-table-encoders.js";
+import {
+  encodeTierARecord, type TierATableSpec, type TableRow,
+  AGENT_PROFILES_SPEC, AGENT_REVOCATIONS_SPEC, USER_ACCOUNTS_SPEC, SEAL_NOTARIZATIONS_SPEC,
+} from "./ae-table-encoders.js";
 import {
   encodeTierBVersion, type TierBVersionSpec, type MutableRow,
   SUSPENSION_VERSION_SPEC, PRESENCE_VERSION_SPEC,
@@ -59,12 +62,43 @@ interface TierAPg {
   readonly spec: TierATableSpec;
   /** Columns stored as BYTEA — hex-encoded on read, decoded on write. */
   readonly bytea: readonly string[];
+  /**
+   * Hash-chained tables cannot take the generic INSERT: it would write a row with no chain columns —
+   * present and readable, but outside the tamper-evident chain that is the reason the table exists.
+   * These apply through the canonical writer instead, which computes the chain against THIS node's
+   * own tip. Chain values are never copied from the origin: two nodes' chains would then have to
+   * agree on insertion order, which anti-entropy does not provide and does not need to.
+   */
+  readonly chained?: boolean;
 }
 
 const TIER_A: readonly TierAPg[] = [
   { spec: AGENT_PROFILES_SPEC, bytea: [] },
   { spec: AGENT_REVOCATIONS_SPEC, bytea: ["signature"] },
+  { spec: USER_ACCOUNTS_SPEC, bytea: [], chained: true },
+  {
+    spec: SEAL_NOTARIZATIONS_SPEC,
+    bytea: ["session_id", "sealed_root", "participant_a_pubkey", "participant_b_pubkey", "frost_signature"],
+    chained: true,
+  },
 ];
+
+/**
+ * The canonical hash-chain writer, injected rather than inherited. `PgDirectoryStore` already exposes
+ * `insertWithChain` publicly and accepts an external client, so this store needs the ONE method — not
+ * a reference to the whole store, which would drag the directory's entire surface into the sync path.
+ */
+export interface ChainWriter {
+  insertWithChain(
+    tableName: never,
+    record: Record<string, unknown>,
+    columns: string[],
+    values: unknown[],
+    chainHashIndex: number,
+    externalClient?: pg.PoolClient,
+    correlationId?: string,
+  ): Promise<string>;
+}
 
 /** The columns to SELECT for a Tier-A table = natural key ∪ immutable columns (deduped). */
 function tierAColumns(t: TierAPg): string[] {
@@ -197,7 +231,12 @@ function isUniqueViolation(err: unknown): boolean {
 
 export class PgAeStore implements AeStoreView {
   readonly #pool: pg.Pool;
-  constructor(pool: pg.Pool) { this.#pool = pool; }
+  readonly #chainWriter: ChainWriter | undefined;
+
+  constructor(pool: pg.Pool, chainWriter?: ChainWriter) {
+    this.#pool = pool;
+    this.#chainWriter = chainWriter;
+  }
 
   tierATables(): readonly string[] { return TIER_A.map((t) => t.spec.table); }
   tierBTables(): readonly string[] { return TIER_B.map((t) => t.spec.table); }
@@ -284,6 +323,40 @@ export class PgAeStore implements AeStoreView {
           `pg-ae-store: ${t.spec.table} record content does not match its claimed hash (claimed ${rec.hash.slice(0, 16)}…, actual ${recomputed.slice(0, 16)}…) — refusing to apply`,
         );
       }
+      if (t.chained) {
+        // ABSENT IS NOT FINE: without the writer this table cannot be applied correctly, and falling
+        // through to the generic INSERT would write it UNCHAINED — the advertised-but-unappliable
+        // state the registry exists to prevent. Refuse, naming what is missing.
+        if (!this.#chainWriter) {
+          throw new Error(
+            `pg-ae-store: ${t.spec.table} is hash-chained and no chain writer was injected — refusing ` +
+              `to apply it unchained`,
+          );
+        }
+        // BYTEA columns arrive hex-encoded on the wire; the chain writer takes real values, and the
+        // record it serializes must match what is stored or the chain hash will not reproduce.
+        const record: Record<string, unknown> = {};
+        for (const c of cols) {
+          const v = body[c] ?? null;
+          record[c] = t.bytea.includes(c) && typeof v === "string" ? Buffer.from(v, "hex") : v;
+        }
+        // chain_hash is computed by the writer; it is passed as a placeholder it overwrites.
+        const columns = [...cols, "chain_hash"];
+        const values = [...cols.map((c) => record[c]), ""];
+        record["chain_hash"] = "";
+        try {
+          await this.#chainWriter.insertWithChain(
+            t.spec.table as never, record, columns, values, columns.length - 1,
+          );
+          inserted += 1;
+        } catch (err) {
+          // A duplicate is convergence, not failure: the same notarization reaching a node twice (or
+          // from two peers) is the normal steady state. Anything else is a real write failure.
+          if ((err as { code?: string } | null)?.code !== "23505") throw err;
+        }
+        continue;
+      }
+
       const placeholders = cols
         .map((c, i) => (t.bytea.includes(c) ? `decode($${i + 1},'hex')` : `$${i + 1}`))
         .join(", ");

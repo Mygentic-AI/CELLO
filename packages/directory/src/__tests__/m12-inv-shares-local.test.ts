@@ -61,32 +61,23 @@ describe("DOD-INV-SHARES-LOCAL: the share table is unreachable through anti-entr
     // Allowlist, not a denylist: a new table added to either tier fails this assertion and forces
     // a deliberate decision + an audit of whether it may leave the node. A denylist would let the
     // next table in silently and only catch the one name someone thought to forbid.
-    expect(store.tierATables()).toEqual(["agent_profiles", "agent_revocations"]);
+    expect(store.tierATables()).toEqual([
+      "agent_profiles",
+      "agent_revocations",
+      "user_accounts",
+      "seal_notarizations",
+    ]);
     expect(store.tierBTables()).toEqual(["agent_suspensions", "agent_presence"]);
 
-    // The specs are the source the registry is built from, and they currently declare TWO MORE
-    // Tier-A tables than the store implements: user_accounts and seal_notarizations need the
-    // canonical chain writer (`insertWithChain`) and were left out deliberately rather than
-    // advertised-but-unappliable (see pg-ae-store.ts "Scope"). Nothing consumes TIER_A_SPECS at
-    // runtime — the registry is the only wire path — so the gap is a missing feature, not a
-    // half-wired one.
-    //
-    // It is asserted rather than ignored because the divergence has a consequence that is easy to
-    // state wrongly: **seal receipts do not replicate between directories.** Any design that
-    // assumes a receipt can be read from a directory other than the one that recorded it is
-    // building on a table that does not sync yet. When the chain-writer unit lands, this assertion
-    // fails and forces both the registry list above and that assumption to be revisited together.
+    // Registry and specs now agree EXACTLY. They did not until DOD-AE-CHAINED-TABLES-1: the specs
+    // declared four Tier-A tables and the registry served two, so seal receipts existed only on the
+    // directory that recorded them. This assertion is what made that divergence impossible to
+    // misstate, and it is kept in its strict form so the next divergence in EITHER direction fails
+    // here — a spec with no registry entry (a table that cannot be applied) and a registry entry with
+    // no spec (a table leaving the node with no audited column list) are both defects.
     const specTables = [...TIER_A_SPECS.map((s) => s.table), ...TIER_B_SPECS.map((s) => s.table)];
     expect(specTables).not.toContain(SHARE_TABLE);
-
-    const served = [...store.tierATables(), ...store.tierBTables()];
-    // Nothing is served that was never specced — that direction WOULD be a half-wiring.
-    expect(served.filter((t) => !specTables.includes(t))).toEqual([]);
-    // And the pending direction is exactly the two chain-backed tables, nothing else.
-    expect(specTables.filter((t) => !served.includes(t)).sort()).toEqual([
-      "seal_notarizations",
-      "user_accounts",
-    ]);
+    expect([...store.tierATables(), ...store.tierBTables()].sort()).toEqual(specTables.sort());
   });
 
   /**
