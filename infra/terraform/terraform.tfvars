@@ -4,7 +4,7 @@
 environment = "dev"
 
 # Immutable commit-SHA tag built by Cloud Build. Never a moving tag — see infra/cloudbuild/*.yaml.
-directory_image_tag = "fetch-33b26752"
+directory_image_tag = "reviewfix-de1ed949"
 
 # One node = one region = one independent deployment. The map key is the region, which makes two
 # nodes in one region unrepresentable rather than merely discouraged.
@@ -80,7 +80,7 @@ directory_node_peer_ids = {
 # dependency for the thing that makes sessions brokerable at all.
 relay_primary_directory = "gcp-use1"
 
-relay_image_tag = "broker2-80b5a2d8"
+relay_image_tag = "reviewfix-de1ed949"
 
 relay_nodes = {
   us-east1 = {
