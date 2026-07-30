@@ -368,13 +368,17 @@ CELLO is split across two repos. `trustless-cello` (server-side) depends on pack
 
 **`workspace:*` references to cello-client packages in trustless-cello are a bug.** `workspace:*` resolves to the local copy in the pnpm workspace. After REPOSPLIT-002, the local copies in `trustless-cello/packages/crypto/`, `packages/transport/`, etc. are stale and no longer maintained. Using `workspace:*` means directory and relay run against old code silently. There is no type error. Tests pass. The bug is invisible until something breaks in production.
 
-**The correct reference format is a pinned semver range:**
+**The correct reference is `latest`** — the lockfile is what makes the build reproducible, not the
+range:
 ```json
-"@cello-protocol/crypto": "^0.0.7",
-"@cello-protocol/transport": "^0.0.4",
-"@cello-protocol/protocol-types": "^0.0.3",
-"@cello-protocol/client": "^0.0.20"
+"@cello-protocol/crypto": "latest",
+"@cello-protocol/transport": "latest",
+"@cello-protocol/protocol-types": "latest"
 ```
+`pnpm-lock.yaml` is committed and records the exact resolved version, so a pinned range buys nothing
+it does not already give — while `^0.0.x` floats to nothing and goes stale silently. On 2026-07-30
+these refs sat at three different versions (0.0.18, 0.0.23, 0.0.26) against 0.0.33 published, so the
+directory decoded an 11-field envelope while the portal minted 12 and refused every endorsement.
 
 **Interfaces stays local.** `@cello-protocol/interfaces` is maintained in `trustless-cello` and is the only package that remains as `workspace:*` — it is not a cello-client package.
 

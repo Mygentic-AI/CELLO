@@ -36,16 +36,16 @@
     "@types/pg": "8.20.0",
     "tsx": "^4.0.0",
     "yaml": "^2.7.0",
-    "@cello-protocol/daemon": "^0.0.90"
+    "@cello-protocol/daemon": "latest"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1051.0",
     "@aws-sdk/client-secrets-manager": "3.1051.0",
     "@aws-sdk/client-ssm": "3.1051.0",
-    "@cello-protocol/crypto": "^0.0.31",
+    "@cello-protocol/crypto": "latest",
     "@cello-protocol/interfaces": "workspace:*",
-    "@cello-protocol/protocol-types": "^0.0.33",
-    "@cello-protocol/transport": "^0.0.35",
+    "@cello-protocol/protocol-types": "latest",
+    "@cello-protocol/transport": "latest",
     "@libp2p/interface": "^3.0.0",
     "@noble/curves": "2.2.0",
     "cbor-x": "^1.6.4",

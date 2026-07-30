@@ -27,10 +27,10 @@
     "@claude-flow/testing": "3.0.0-alpha.6"
   },
   "dependencies": {
-    "@cello-protocol/crypto": "^0.0.31",
+    "@cello-protocol/crypto": "latest",
     "@cello-protocol/interfaces": "workspace:*",
-    "@cello-protocol/protocol-types": "^0.0.33",
-    "@cello-protocol/transport": "^0.0.35",
+    "@cello-protocol/protocol-types": "latest",
+    "@cello-protocol/transport": "latest",
     "@libp2p/crypto": "^5.0.0",
     "@libp2p/interface": "^3.0.0",
     "@chainsafe/libp2p-noise": "^17.0.0",
