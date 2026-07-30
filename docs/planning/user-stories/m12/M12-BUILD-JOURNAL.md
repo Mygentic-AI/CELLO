@@ -3797,3 +3797,38 @@ factory field-drop (`80b5a2d8`) that cost a full deploy cycle — five lines of 
   command's own status, never through a pipe.**
 - Seven of the nine findings share this milestone's recurring shape: a green surface over a broken
   write, a silent teardown, or a discarded cause.
+
+### Entry 60b — the redeploy, and a race the enforcer caught on the way
+
+Both services deployed to the fleet on `reviewfix-de1ed949` (Cloud Build `a918df99` relay /
+`a904a60d` directory), **node-by-node**, each polled to a real `GET /bootstrap` 200 before the next
+was touched — `update_policy = PROACTIVE` means one un-targeted apply replaces all three at once, and
+T−1=1 tolerates exactly one node down. `infra/GCP-STATE.md` updated immediately after.
+
+The first post-deploy enforcer run FAILED, and it was a real find, not a regression:
+
+```
+seal on the fleet:  relay.seal.broker.resolved → seal.certificate.delivered → notarization.recorded
+the initiator's close call:  { ok: false, reason: "session_node_unavailable" }
+```
+
+The seal completed and notarized — with **no `relay.seal.broker.unreachable`**, so F1's retry did not
+disturb the happy path — while the party that asked to close was told it had failed.
+
+`submitSealLeaf` reports `session_node_unavailable` when the in-memory node entry is gone, and one way
+it goes is the session SEALING: teardown runs before the record's status flips to `"sealed"`, so a
+close landing in that window misses the AC-010 already-sealed check and lands on the submit failure
+instead. **Both parties closing at once is the ordinary case** — each operator ends the conversation —
+so whichever call arrives second hits it.
+
+Two defects in one frame: the reason is an exit-point label, and the guidance bolted to it blamed
+relay reachability when the relay was fine and the seal was durable. The operator got no root, which
+is the whole point of closing.
+
+Fixed by reading the root from **that agent's own database** — state it computed and persisted itself,
+never a directory's word. That distinction is exactly why this is a fix and the fetched-receipt path
+deleted earlier today was not: same symptom, opposite epistemics.
+
+Re-run: **GREEN, 147s.** The client-side fix lives on `cello-client` `m12/ae-client` and is exercised
+from the local build the enforcer drives (`CELLO_CLIENT_ROOT`) — unpublished, so an npm publish is
+still owed before any operator sees it.
