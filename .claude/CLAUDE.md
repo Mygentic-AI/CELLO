@@ -341,41 +341,13 @@ Format the proof as a numbered flow. Include:
 **The version cascade, dist-tags, and the post-publish verification live in `/cello-publish`** — load
 the skill, do not reconstruct them from memory here.
 
-## Pinned Versions Are Forbidden — We Use `latest`
+**No pinned versions — always `latest`.** A pin is invisible: someone pins for a good reason, never
+unpins, and a later session burns hours on a fix that is published but not running. Note `^0.0.x` IS
+a pin (a caret below `0.1.0` floats to nothing), and `npm i pkg@latest` writes one into
+`package.json` — check after. Verify with `claude mcp get`, not memory.
 
-**Do not pin a version. Anywhere.** Not in an MCP registration, not in a `package.json`, not in a
-task definition, not in an install command you hand someone. `latest` is the default and the rule.
-
-**Why it is a rule and not a preference:** a pin is invisible after the day it is made. Someone pins
-for a reason that is good at the time, never unpins, and weeks later a different session is staring
-at behaviour that makes no sense — a fix that is definitely published, definitely on `main`, and
-definitely not running. The hunt that follows is expensive and it ends, every time, at a pin nobody
-remembers writing. The cost is never paid by whoever pinned it.
-
-This has already happened here more than once: an MCP registered at `connect@0.0.60` while `latest`
-was `0.0.102` (42 versions of drift, discovered by accident), and the demo agent pinned at
-`daemon@0.0.93` with stale transitive deps underneath it.
-
-**`^0.0.x` IS A PIN.** Under npm semver a caret below `0.1.0` matches nothing but that exact patch,
-so `"^0.0.94"` floats to precisely nothing. Writing a caret and believing it floats is the most
-common way a pin gets created by someone who thought they were avoiding one. `npm i pkg@latest`
-writes one of these into `package.json` — check afterwards, and change it to `latest`.
-
-**THE LEGITIMATE EXCEPTION: testing something not yet promoted.** A version published to `beta` but
-not yet on `latest` cannot be reached by `latest` — that is the whole point of the two tags. Testing
-it is a real need and pinning is a valid way to get there. Bisecting a regression and reproducing a
-specific break are the same shape.
-
-Even then, **prefer the TAG over the version**: `npm i -g @cello-protocol/cli@beta` gets the
-unpromoted build without writing a number anybody has to remember to remove. A tag keeps floating; a
-number does not. Reach for an exact version only when you need one specific build and `beta` has
-already moved past it.
-
-When you do pin: **say so in the same breath**, and **unpin before the session ends**. A pin that
-outlives its reason is the entire failure mode — nobody ever pins intending to leave it.
-
-**Verify, never assume, that a pin is gone.** `claude mcp get <name>` and read the `Args`; grep the
-`package.json`; check the task definition. The whole problem is that pins are silent.
+**Exception:** testing a build not yet promoted to `latest`. Use the TAG (`@beta`) rather than a
+number, say so out loud, and unpin before the session ends.
 
 **Never tell users to run `npx clear-npx-cache`.** It wipes every npx-installed tool. Promoting and
 installing `latest` is sufficient.
