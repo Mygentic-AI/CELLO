@@ -1899,10 +1899,24 @@ refuses to send unsealed rather than let the directory read a submission.
   to whichever generation was published when they were sent. Opening every row with one current seed
   turns a routine rotation into the permanent destruction of every queued endorsement.
 
-**Still owed for this to work end to end** (tracked, not yet done at the time of writing):
-1. `intake_key: { key_id, pubkey }` added to the consortium manifest, **re-signed** (adding a field
-   invalidates the officer signature) with the version bumped — clients reject a rollback.
-2. SSM `/cello/dev/directory/consortium-manifest` updated with the new base64, and the directory
-   redeployed so tasks pick it up.
-3. The portal task wired to read the seed into `PORTAL_INTAKE_SEEDS` as `intake-dev-1:<seed>`.
-4. `cello-iam.yaml` granting the portal task role read on `portal/intake-key*`.
+**Manifest v2 signed and published to SSM (2026-07-30):**
+- SSM `/cello/dev/portal/intake-key-id` = `intake-dev-1` — **all 3 regions**.
+- SSM `/cello/dev/portal/intake-key-pubkey` = `87da56bf…b3d1` — **all 3 regions**.
+- SSM `/cello/dev/consortium/manifest-version` = `2` — **all 3 regions**. NEW parameter. The signing
+  script hardcoded `version: 1`, so adding `intake_key` would have produced two DIFFERENT manifests
+  both calling themselves v1. The client's anti-rollback is `version < lastSeen`, so same-version is
+  adopted and it would have worked — but "same version, different content" is the hazard that has
+  already cost this project a burned npm release, and correctness should not rest on that check
+  being `<` rather than `<=`. Optional with default 1, so every earlier manifest still reproduces.
+- SSM `/cello/dev/directory/consortium-manifest` → **param version 2, all 3 regions**, carrying the
+  signed manifest v2 with `intake_key`.
+- Signature **independently verified** against the client's pinned
+  `BUNDLED_CONSORTIUM_ROOT_KEYS[0]` (`8e9b99e5…4199`) — not merely the signer's own self-check. The
+  officer pubkey the script emits matches what the shipped client pins, so daemons will accept it.
+
+**Still owed:**
+1. **Directory redeploy** — the task definition resolves `{{resolve:ssm:…/consortium-manifest}}` at
+   DEPLOY time, so the running tasks still carry the v1 manifest baked into their env. Until the
+   stack updates, `intake_key_absent` persists.
+2. The portal task wired to read the seed into `PORTAL_INTAKE_SEEDS` as `intake-dev-1:<seed>`.
+3. `cello-iam.yaml` granting the portal task role read on `portal/intake-key*`.
