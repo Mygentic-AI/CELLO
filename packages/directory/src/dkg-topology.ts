@@ -55,9 +55,12 @@ export function computeDkgTopology(
   // DISTINCT identifiers, not entries: N must count what can actually hold distinct shares.
   const validatorNodeIds = [...new Set(validators.map((n) => n.nodeId))];
   const seen = new Set<string>();
-  const duplicateNodeIds = [
-    ...new Set(validators.map((n) => n.nodeId).filter((id) => (seen.has(id) ? true : (seen.add(id), false)))),
-  ];
+  const dupes = new Set<string>();
+  for (const { nodeId } of validators) {
+    if (seen.has(nodeId)) dupes.add(nodeId);
+    seen.add(nodeId);
+  }
+  const duplicateNodeIds = [...dupes];
 
   const consortiumNodeCount = validatorNodeIds.length || 1;
   const quorumNodeIds =

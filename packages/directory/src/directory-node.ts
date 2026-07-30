@@ -2971,6 +2971,9 @@ export class CelloDirectoryNode {
         agent: truncHex(frame.k_local_pubkey),
         duplicateNodeIds: topo.duplicateNodeIds,
         distinctValidators: topo.consortiumNodeCount,
+        // Name the MANIFEST, as directory.dkg.below_quorum does: this event says "the manifest file
+        // is malformed", so the version is what tells the operator WHICH file to go and fix.
+        manifestVersion: this.#directoryManifestStore?.getVerifiedManifest()?.version,
         reason: "a repeated validator nodeId collapses two manifest entries onto one FROST identifier",
       });
       this.#pendingPreAuthData.delete(frame.k_local_pubkey);

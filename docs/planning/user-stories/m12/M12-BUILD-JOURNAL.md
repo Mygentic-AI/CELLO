@@ -3880,3 +3880,97 @@ consumer in the same unit, not a flag left for later. 3 tests; directory suite 9
 remains 🟡 — proven locally against three real processes with a real partition, owed on the live
 fleet. The blocker there is still practical, not architectural: `/internal/agent-write` needs
 `accountId` + `agentId`, which capability-minted test agents do not have.
+
+---
+
+## Entry 62 — 2026-07-30 — CORRECTION to Entry 61, and a real kill-switch hole found on the live fleet
+
+Two things happened in the same stretch. One is me getting a security story wrong in the durable
+record; the other is a genuine critical defect found by reading the live fleet's database.
+
+### 1. Entry 61's DOD-INV-NODEID claim was wrong on both legs
+
+I wrote that the identifier clause "had NO enforcement anywhere" and that a duplicate nodeId
+"silently produced a threshold a single identifier could satisfy alone." The unit reviewer refuted
+both, and I verified both refutations myself before accepting them.
+
+**Enforcement already existed, in three places.** `sign-gcp-consortium-manifest.mjs:84-86` refuses to
+SIGN a roster with a duplicate nodeId — and its comment cites `DOD-INV-NODEID` by name, one day before
+my commit. `file-directory-manifest-store.ts:214-228` (§1c) refuses at the VERIFY boundary over
+`nodeId`, `pubkey` AND `peerId`, across ALL entries rather than only validators — strictly stronger
+than what I added. And `@noble/curves` `DKG.round2` throws `Duplicate id=…`, so the key can never be
+produced. My grep missed all three because I searched for `frost_identifier|duplicate.*identifier`
+across a narrow file set, and then read the empty result as proof of absence — the exact move CLAUDE.md
+warns about, one file after I wrote a test whose entire premise is that absence must be asserted rather
+than assumed.
+
+**The arithmetic runs the other way.** `majority(D) ≤ majority(E)` for `D ≤ E`, so an inflated entry
+count derived an equal-or-STRICTER threshold, never a weaker one:
+
+```
+entries=3 distinct=2  T_pre=2 T_post=2  delta= 0
+entries=4 distinct=3  T_pre=3 T_post=2  delta=-1
+entries=6 distinct=4  T_pre=4 T_post=3  delta=-1
+```
+
+For the case my own tests used (3 entries, 1 duplicate) the duplicate changed T by **nothing**. And
+T=2 requires two DISTINCT identifiers, so one node could never satisfy it. **DOD-INV-SOVEREIGN was
+never at risk.** My dedup, taken alone, *lowers* T — it is safe only because the caller refuses first.
+The real pre-fix defect is inflated advertised redundancy: `signers.max = 4` and `participants: 4`
+persisted on the share when only 3 distinct holders exist, so you believe you can lose two nodes and
+you can lose one.
+
+One of my three tests was hollow for the same reason: `expect(dkgThreshold).toBe(2)` passes identically
+pre-fix. Replaced with a 4-entry/3-distinct case where dedup actually moves T — **downward** — which
+documents the correction instead of hiding it.
+
+**The gap that actually matters is still open.** All four checks compare manifest nodeId *strings*, but
+a node's FROST identifier comes from its OWN deployed `NODE_ID` (`frost-handler.ts:758`). Two entries
+with DISTINCT nodeIds deployed on boxes sharing one `NODE_ID` do collide and pass everything. The
+enforcing check is in `runNetworkDkg` after round 1 — assert the identifiers are distinct and that each
+equals `Identifier.derive(roster[i].nodeId)`. Recorded on the DoD line as owed.
+
+Also fixed from that review: the bare `catch {}` in `registration-manager.ts` that discarded every DKG
+failure cause — including the `Duplicate id=…` diagnosis this unit is about — and surfaced all of them
+to the operator as `dkg_failed`.
+
+### 2. THE KILL SWITCH FAILED OPEN ON EVERY REPLICA — found live
+
+While building a DB probe for the kill-switch live proof, I read `agent_profiles` on `gcp-usc1` and
+found **four of eight rows with `agent_id = NULL`** — consistently the later row of each pair, i.e. the
+one that arrived by anti-entropy rather than local registration.
+
+**Producer:** `applyTierA` inserts exactly `AGENT_PROFILES_SPEC.immutableColumns`, and `agent_id` was
+not in that list. Every replicated profile landed with a NULL identity.
+
+**Consumer:** the kill switch is
+
+```sql
+SELECT 1 FROM agent_suspensions s JOIN agent_profiles p ON p.agent_id = s.agent_id
+ WHERE p.k_local_pubkey = $1 AND s.paused = true
+```
+
+`NULL = s.agent_id` is never true → zero rows → `isAgentSuspended` returns **false**. So a paused — or
+BURNED — agent kept being co-signed by every node that had learned it by replication. The suspension
+row itself replicated correctly (Tier-B); it simply could not be joined to the agent.
+
+**What made it silent is the guard built for this exact situation.** `hasAgentProfile` exists to fire
+`frost.suspension.uncheckable` when a node holds no profile — but it matched on `k_local_pubkey` only,
+so it returned TRUE. The node believed it had checked, and signed.
+
+This is the finding `DOD-INV-KILL-SWITCH` names in its own text: "A paused agent sealing because an UP
+node lacked the state is a critical finding." Unlike the NODEID story above, this one is real, it was
+live on the fleet, and I have the NULL rows.
+
+Two fixes. `agent_id` joins the sync set — it is immutable in the strict sense the list requires (set
+in both registration INSERTs, never UPDATEd). And `hasAgentProfile` now requires
+`agent_id IS NOT NULL`, because a profile the gates cannot evaluate is exactly as uncheckable as no
+profile at all while looking present — that clause is what makes the already-written NULL rows loud
+instead of silently fail-open, since `applyTierA` is ON CONFLICT DO NOTHING and will not overwrite
+them.
+
+Enforced by `m12-inv-kill-switch-joinkey.test.ts`, written to generalize: it reads the store's own SQL
+and requires every column a security gate JOINs on to be in the joined table's sync set. Asserting
+`includes("agent_id")` alone would fix today's bug and catch nothing else. Directory suite 956 green.
+
+**Not yet deployed** — the fleet still runs `reviewfix-de1ed949`, which predates both fixes.

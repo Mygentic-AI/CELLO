@@ -104,21 +104,35 @@ describe("DOD-INV-NODEID: a duplicate nodeId is a non-functional consortium, not
    * threshold silently. It is not attacker-reachable (manifests are officer-signed) — it is
    * reachable by a typo in the file I write by hand, which is worse, because it looks fine.
    */
-  const v = (nodeId: string): ConsortiumNode =>
-    ({ nodeId, role: "validator", pubkey: "00".repeat(32) }) as unknown as ConsortiumNode;
+  // The file's own helper — `as unknown as ConsortiumNode` would defeat the one check that flags a
+  // future required field, in a test whose whole subject is a security invariant.
+  const v = (nodeId: string): ConsortiumNode => node(nodeId, "validator");
 
   it("flags a duplicate validator nodeId instead of counting it twice", () => {
     const topo = computeDkgTopology([v("gcp-usc1"), v("gcp-euw1"), v("gcp-usc1")], undefined);
     expect(topo.duplicateNodeIds).toEqual(["gcp-usc1"]);
   });
 
-  it("does not inflate N with the duplicate", () => {
-    // The count must reflect DISTINCT FROST participants, so T is derived from what can actually
-    // hold distinct shares. Counting 3 here yields T=2 over 2 real participants — a threshold that
-    // one node's identifier can satisfy.
-    const topo = computeDkgTopology([v("gcp-usc1"), v("gcp-euw1"), v("gcp-usc1")], undefined);
-    expect(topo.consortiumNodeCount).toBe(2);
-    expect(topo.dkgThreshold).toBe(2);
+  it("counts DISTINCT participants, which moves T DOWNWARD — hence the caller must refuse", () => {
+    // 4 entries / 3 distinct, deliberately: with 3 entries / 2 distinct, majority(3) === majority(2)
+    // === 2, so a threshold assertion there passes identically pre-fix and proves nothing. This case
+    // is where dedup actually moves T.
+    //
+    // And it moves it DOWN (3 → 2), never up: majority(D) <= majority(E) for D <= E. So the
+    // pre-dedup code never derived a WEAKER threshold — the inflated count derived an equal-or-
+    // STRICTER one. The real pre-fix defect was advertised redundancy: `signers = {max: 4}` and
+    // `participants: 4` persisted on the share when only 3 distinct holders exist — you believe you
+    // can lose two nodes and you can lose one.
+    //
+    // This also shows why dedup alone would be a REGRESSION: silently proceeding under a corrected
+    // N lowers the threshold. It is safe only because the caller refuses on duplicateNodeIds first.
+    const topo = computeDkgTopology(
+      [v("gcp-usc1"), v("gcp-euw1"), v("gcp-use1"), v("gcp-usc1")],
+      undefined,
+    );
+    expect(topo.duplicateNodeIds).toEqual(["gcp-usc1"]);
+    expect(topo.consortiumNodeCount).toBe(3);
+    expect(topo.dkgThreshold).toBe(2); // majority(3); the 4-entry count would have given 3
   });
 
   it("leaves a well-formed manifest untouched", () => {

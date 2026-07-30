@@ -44,7 +44,7 @@ description: >
   `consortiumNodeCount` and every threshold/DKG/kill-switch derivation counts **validator-role
   nodes only**; replicas never enter the arithmetic. All-N / T=N never appears (settled
   2026-07-04). — ✅ **SINGLE SOURCE, BOTH REPOS** (→ Entry 61). Exactly one derivation exists:
-  `dkg-topology.ts:54`, covered by `dkg-topology.test.ts` (10/10). A repo-wide grep for a second
+  `dkg-topology.ts` (the `dkgThreshold` line), covered by `dkg-topology.test.ts` (10/10). A repo-wide grep for a second
   majority/threshold computation in `packages/directory/src` and `packages/relay/src` returns only
   that line plus prose comments. Both repos filter through the SAME `validatorNodes()` in
   `@cello-protocol/protocol-types` — directory via `dkg-topology.ts`, client via
@@ -79,14 +79,35 @@ description: >
   last clause: **a paused agent must not be able to seal via a node that lacks the state.**
 - **DOD-INV-NODEID** [all] — every node is born `<cloud>-<region>` (e.g. `aws-use1`, `gcp-usc1`)
   and is never renamed; no two manifest entries ever hold the same FROST identifier in one
-  manifest version. — ✅ **ENFORCED (→ Entry 61).** All live nodes are `<cloud>-<region>`
-  (`gcp-usc1`, `gcp-euw1`, `gcp-use1`). The identifier clause had NO enforcement anywhere:
-  a node's FROST identifier is `Identifier.derive(nodeId)` and nothing else, so two entries sharing
-  a nodeId are ONE participant wearing two hats — and `verifyManifest` dedupes only OFFICER indices,
-  never nodeIds, so a hand-edit typo verified clean and silently produced a threshold a single
-  identifier could satisfy alone. `computeDkgTopology` now counts DISTINCT nodeIds and reports
-  `duplicateNodeIds`; the registration handler refuses the ceremony with
-  `directory.dkg.duplicate_node_ids` at ERROR. Red-first, 3 tests, directory suite 954 green.
+  manifest version. — 🟠 **PARTIAL — and the Entry 61 claim was WRONG (corrected in Entry 62).**
+  **Clause 3 (identifier uniqueness): enforced, and it already was.** Three checks predate this unit:
+  `sign-gcp-consortium-manifest.mjs:84-86` refuses to SIGN a roster with a duplicate nodeId;
+  `file-directory-manifest-store.ts:214-228` (§1c) refuses at the VERIFY boundary over `nodeId`,
+  `pubkey` AND `peerId` across ALL entries — strictly stronger than what this unit added; and
+  `@noble/curves` `DKG.round2` throws `Duplicate id=…`, so no key with colliding identifiers can be
+  produced at all. Because the verify anchor is mandatory whenever a manifest path is set, the new
+  `computeDkgTopology` guard is **unreachable in production** — it closes the unverified/test-mode gap
+  and is defense-in-depth at the arithmetic site. Keep it; do not claim it closed a live hole.
+  **I had the threshold arithmetic INVERTED.** `majority(D) ≤ majority(E)` for `D ≤ E`, so an inflated
+  entry count derived an equal-or-STRICTER threshold, never a weaker one — and for the 3-entry/1-dup
+  case `majority(3) = majority(2) = 2`, i.e. no change at all. T=2 still requires two DISTINCT
+  identifiers, so a single node could never satisfy it: **DOD-INV-SOVEREIGN was never at risk.** The
+  real pre-fix defect is inflated advertised redundancy (`signers.max = 4`, `participants: 4` persisted
+  on the share when only 3 distinct holders exist — you believe you can lose two nodes and can lose
+  one), and the ceremony fails closed regardless.
+  **Clauses 1 and 2 are NOT enforced.** "Born `<cloud>-<region>`": `bin/directory.ts:153` requires
+  `NODE_ID` to be present but never checks its shape, and the legacy AWS default is a BARE region
+  (`us-east-1`). "Never renamed": no guard. (Consequence is milder than this line implied — signing
+  reads the identifier from the STORED share, not a re-derivation, so a rename does not invalidate
+  existing shares; it breaks the AE handshake loudly with `manifest_pubkey_mismatch`.)
+  **The gap that actually matters is still open:** every check above compares manifest nodeId
+  *strings*, but a node's FROST identifier comes from its OWN deployed `NODE_ID`
+  (`frost-handler.ts:758`). Two entries with DISTINCT nodeIds whose boxes are deployed with the SAME
+  `NODE_ID` do collide, and pass all four checks. The enforcing check is in `runNetworkDkg` after
+  round 1: assert the round-1 identifiers are distinct AND that each equals
+  `Identifier.derive(roster[i].nodeId)` — both inputs are already in hand.
+  **Owed:** a handler-level test (reverting the 17-line guard leaves 10/10 green), and the round-1
+  identifier binding above.
 - **DOD-INV-NO-VPN** [trustless-cello] — no VPN, VPC peering, Private Service Access consumer, or
   any cross-cloud network tunnel is created. Directory sync happens only over the authenticated
   libp2p transport. Nothing external ever connects to a node's Postgres. — ✅ **VERIFIED

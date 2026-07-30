@@ -364,8 +364,17 @@ export class PgDirectoryStore implements DirectoryStore {
   // isAgentSuspended above JOINs to zero rows and the node signs BLIND to any suspension — the
   // single-node-honor gap. Used only to emit the loud `frost.suspension.uncheckable` warn.
   async hasAgentProfile(kLocalPubkeyHex: string): Promise<boolean> {
+    // `agent_id IS NOT NULL` is part of the question, not a refinement of it. This exists to answer
+    // "can this node evaluate a suspension for that agent?", and the gates evaluate it by joining on
+    // agent_id — so a profile whose agent_id is NULL is exactly as uncheckable as no profile at all,
+    // while looking present. Matching on k_local_pubkey alone reported TRUE for such a row, which
+    // suppressed `frost.suspension.uncheckable` and let the node sign believing it had checked.
+    //
+    // Rows written before agent_id joined the sync set keep their NULL — applyTierA is
+    // ON CONFLICT DO NOTHING, so replication will not overwrite them — so this clause is what makes
+    // those rows loud rather than silently fail-open.
     const result = await this.#pool.query(
-      `SELECT 1 FROM agent_profiles WHERE k_local_pubkey = $1 LIMIT 1`,
+      `SELECT 1 FROM agent_profiles WHERE k_local_pubkey = $1 AND agent_id IS NOT NULL LIMIT 1`,
       [kLocalPubkeyHex],
     );
     return result.rows.length > 0;

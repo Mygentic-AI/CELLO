@@ -49,7 +49,16 @@ export interface TierATableSpec {
 export const AGENT_PROFILES_SPEC: TierATableSpec = {
   table: "agent_profiles",
   naturalKey: ["k_local_pubkey"],
-  immutableColumns: ["k_local_pubkey", "primary_pubkey", "ml_dsa_pubkey", "phone_stub_hash", "registered_at"],
+  // `agent_id` is here because THE KILL SWITCH JOINS ON IT. `isAgentSuspended` / `isAgentBurned` /
+  // `listBurnedAgentPubkeys` all do `JOIN agent_profiles p ON p.agent_id = s.agent_id`, so a
+  // replicated profile without it is a profile the gates cannot evaluate: `NULL = s.agent_id` is
+  // never true, the join returns zero rows, and the gate answers "not suspended". Omitting it meant
+  // a paused or burned agent kept being co-signed by every node that learned it by replication
+  // (observed live on gcp-usc1, 2026-07-30: four of eight profiles had a NULL agent_id).
+  //
+  // It qualifies as immutable in the strict sense this list requires: set in both registration
+  // INSERTs and never UPDATEd anywhere.
+  immutableColumns: ["k_local_pubkey", "agent_id", "primary_pubkey", "ml_dsa_pubkey", "phone_stub_hash", "registered_at"],
 };
 
 /**
