@@ -3445,3 +3445,74 @@ Every one had the same signature: **a green surface over a broken write or a sil
 
 - kill-switch pause biting across all three nodes — still never exercised
 - the automated enforcer — the sequence is still driven by hand
+
+---
+
+## Entry 56 — 2026-07-30 — The enforcer earned its keep on its first real run
+
+Wrote `j-gcp-live.spine.test.ts` — the DOD-E2E-GCP-1 enforcer. It drives two real client daemons
+against the three live GCP directories and the live relay, mints its own capabilities, and closes
+with the RESPONDER first (the ordering that regressed). Opt-in behind `CELLO_GCP_E2E=1`.
+
+**It failed on its first real run, and the failure is a genuine product bug my manual testing
+missed.** That is the whole argument for having it.
+
+### The bug: I fixed the request, not the result
+
+The fleet SEALED successfully:
+
+```
+09:33:02.727  relay.seal.redirected          <- Entry 55's fix working
+09:33:05.636  notarization.recorded
+09:33:05.675  conversation.seal.recorded
+```
+
+The initiator reported `seal_unilateral_timeout`.
+
+`session_sealed` is delivered by `#deliverOrEnqueue` (`directory-node.ts:5304`):
+
+```ts
+const stream = this.#streams.get(pubkeyHex);
+if (stream) { this.#sendFrame(stream, encoded); return; }
+if (pubkeyHex) this.#store.enqueueNotification(pubkeyHex, event, correlationId);
+```
+
+The same per-node, non-replicated queue as before. Entry 55 fixed delivery of the seal REQUEST
+(`seal_verified`) by redirecting to the node holding the seal initiator's stream. But the RESULT
+(`session_sealed`) goes to BOTH participants, and after a redirect the adjudicating node holds at
+most one of their streams. The other participant is enqueued into a queue it will never drain.
+
+**This is worse than the request case.** There the seal had not happened, so a timeout was
+recoverable by retry. Here the seal IS notarized and durable — `conversation.seal.recorded` — and one
+party simply never learns. Retrying cannot help; there is nothing left to do. The agent holds a
+session it believes failed, against a receipt that exists.
+
+### Why my manual runs passed
+
+Both sides returned `sealed_root` in Entry 55 because the redirect happened to land on a node holding
+the stream that mattered for that particular homing. The enforcer varies nothing deliberately — it
+just ran a different homing draw and hit the case I had not. **A hand-driven test samples one
+ordering; the bug lives in the others.**
+
+### Two test-harness bugs fixed getting here, both worth remembering
+
+1. **`execFileSync` blocks the event loop.** Two closes scheduled with `setTimeout` ran strictly
+   sequentially, so the first waited out its full 660s bilateral window for a second close that could
+   not start until it returned — an 812-second "failure" for a seal the fleet completed in 3s. A
+   bilateral ceremony cannot be driven by synchronous calls; the closes now use `spawn`.
+2. **A harness timeout shorter than the protocol's own wait.** My 600s cap sat under
+   `CELLO_SEAL_BILATERAL_TIMEOUT_MS` (660s), so a slow-but-correct seal was reported as a failure.
+   Now 780s.
+
+Also: the CLI prints JSON followed by human prose, so slicing from the first `{` to end-of-output
+never parses — and it fails SILENTLY, as a missing `ok` that reads exactly like the command failing.
+Registration had succeeded while the assertion said it failed. Now brace-matched.
+
+### The fix
+
+`#deliverOrEnqueue` needs the same treatment as the request path: when the participant is online but
+homed elsewhere, enqueuing locally is a black hole. Options — forward to the owning node (needs
+directory→directory delivery, still absent), or replicate `notification_queue` via anti-entropy
+(it is deliberately not in the set today), or have the CLIENT poll for its own seal result rather
+than depend on a push it may never receive. The third is the smallest and the most robust: the seal
+is already durable and queryable, so the receipt does not need to be pushed to be learned.
