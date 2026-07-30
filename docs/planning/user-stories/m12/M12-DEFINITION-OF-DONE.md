@@ -646,6 +646,26 @@ description: >
 - Decisions 1–11 of the spec-of-record are restated there, not here — this section holds only
   decisions made DURING the milestone.
 
+### PARKED — DOD-INV-NODEID clause 2 ("never renamed"), 2026-07-30
+
+**Not implemented, deliberately.** A guard would compare the configured `NODE_ID` against what this
+node's persisted state was written under. There is nowhere to read that from today: `directory_nodes`
+carries rows for PEERS as well as self (the presence-freshness JOIN depends on that), so "a row exists
+under a different node_id" is the normal state, not evidence of a rename. The shares are keyed by
+agent and epoch, not by node. So the guard needs a dedicated single-row identity table — which means a
+Flyway migration, which per the milestone rules must also bump `OpsAgentExpectedMigrationVersion` in
+`cello-ssm-parameters.yaml` or the ops-agent crash-loops on fresh deployments. That file is AWS-side,
+and AWS is hibernated.
+
+**Weighed against the actual consequence, which is mild and already loud.** Signing reads the
+identifier from the STORED share, not a re-derivation, so a rename does NOT invalidate existing shares
+or silently corrupt a ceremony — it breaks the anti-entropy handshake with `manifest_pubkey_mismatch`,
+which names its cause. A guard here is defense-in-depth on a failure that already fails loudly, and it
+costs a migration touching hibernated infrastructure to get it.
+
+**Revisit** when the next migration ships for another reason (fold it in then, near-free), or if the
+consequence ever stops being loud.
+
 ## Parked
 
 - **M12-P1** — **Demo agent move** (EC2 `i-0ad3e7c22470f266e`, not in IaC). Candidate, not
