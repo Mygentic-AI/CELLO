@@ -662,7 +662,33 @@ the additions M10B is accountable for.
   > refuses to send a signal whose bytes it cannot reproduce; the recipient's `hash_mismatch` logs
   > BOTH hashes; a frozen vector carries `same_operator: true` (all seven said `false`, which is also
   > what a hardcoded bug says); and `cello_trust_signals_list` shows the operator which of their
-  > endorsements are capped. Live: J-END HOP 9. Revert-tested. — ✅
+  > endorsements are capped. Live: J-END HOP 9. Revert-tested.
+  >
+  > **🟡 TAG CORRECTED 2026-07-30 AFTER REVIEW — the exclusion is NOT ENFORCED, because nothing calls
+  > the predicate.** `evaluateSignalPolicy` has ZERO production callers: a repo-wide grep across
+  > cello-client returns its definition, one comment, and two test files. No session path, no contact
+  > handler and no gateway invokes it, and no operator-facing surface sets a `SignalRequirementPolicy`
+  > (`cello_contact_set_signal` governs which of MY signals I PRESENT, not what I REQUIRE).
+  >
+  > So this is the SAME defect a third layer up, and the sequence is worth stating plainly: the flag
+  > was inert because it sat unread in the payload → moved to the envelope → inert because the INSERT
+  > dropped it → fixed → **still inert, because the consumer is a library function nobody invokes.**
+  > Ten of Alice's own agents clear a floor of three today for the same reason they did before this
+  > milestone: no floor is ever evaluated. `DOD-FLOOR-1` (M10, ✅) has the same hole — its journey
+  > evidence calls `evaluateSignalPolicy` FROM THE TEST, which is the hand-built-rows shape again:
+  > the test supplies the caller production lacks.
+  >
+  > **WHY IT IS NOT WIRED IN THIS PASS, deliberately.** `DEFAULT_UNKNOWN_POLICY` is
+  > `{min_count: 1, require_issuer_kind: "portal"}`. Enforcing that at session acceptance today would
+  > refuse every UNKNOWN contact holding no portal signal — i.e. most agents — and "two agents
+  > connect" is the product's core value. A floor that is never evaluated is a missing security
+  > property; a floor wired wrong is a broken product. Wiring it safely needs a policy SOURCE (the
+  > operator setting a requirement per tier or per contact), opt-in defaults, and a refusal the
+  > operator can see and act on — a unit of its own, not a line of glue.
+  >
+  > **WHAT IS ACTUALLY TRUE:** the predicate is correct and revert-tested; the envelope slot, both
+  > store round-trips, presentation and the recipient's rendering are correct and live. The exclusion
+  > cannot be reached in production. — 🟡
 - **DOD-END-FLOOR-2** — endorsement-aware floor predicates: count, issuer tier, and issuer identity, all
   computed by joining the presented envelope's `issuer_pubkey` against the recipient's own contacts. This
   is compatible with `INV-FLOOR-ENVELOPE-ONLY` (nothing reaches into the payload) and is what D-27's
@@ -725,7 +751,13 @@ the additions M10B is accountable for.
     > not expose `same_operator` at all, so the fact was silently discounted rather than shown. It now
     > ships with its own framing — the operator vouching for their own agent is useful if you already
     > trust that operator and worth nothing as independent corroboration — because the same sentence
-    > means different things depending on who wrote it. — ✅
+    > means different things depending on who wrote it.
+    >
+    > **🟡 3-of-4 after review.** Minted ✅, flagged on the envelope ✅, delivered/accepted/presented ✅,
+    > rendered as a positive ✅. The fourth clause — "a `min_count` floor does not count it" — is NOT
+    > enforced in production: nothing calls `evaluateSignalPolicy` (see `DOD-END-COUNT-1`). HOP 9
+    > proves every hop up to and including the recipient reading it; it cannot prove a floor that is
+    > never evaluated. — 🟡
   - **(c) self-endorsement refused** — an account-subject same-operator submission is rejected at intake
     with a named reason (`DOD-END-SUBJECTKIND-1`).
   - **(d) withdrawal reaches a prior recipient** — Bob withdraws after Charlie has already verified and
