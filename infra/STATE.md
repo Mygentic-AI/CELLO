@@ -1928,3 +1928,52 @@ question instead of a value.
    updates, `intake_key_absent` persists.
 2. **Portal redeploy** — same reason: the new secret is wired in the template, not in the running
    task definition.
+
+---
+
+## ⛔ `cello-ecs-directory-dev` CANNOT BE CFN-DEPLOYED AFTER A HIBERNATE/WAKE CYCLE (found 2026-07-30)
+
+**Symptom.** `./infra/deploy.sh dev us-east-1` fails on `cello-ecs-directory-dev`:
+
+```
+RegistryPathRule  Resource handler returned message: "One or more listeners not found
+                  (Service: ElasticLoadBalancingV2, Status Code: 400)"  HandlerErrorCode: NotFound
+```
+
+**Verified cause, not inferred.** The stack's `HttpListener` physical id is
+`…:listener/app/cello-dir-dev/9f3cee2f6df31fc9/276eb2ef7ba777` and `describe-listeners` on it returns
+`ListenerNotFound`. The LIVE ALB is a different one — `…/cello-dir-dev/ff340fbf2683cbe2` — with a
+healthy port-80 listener. So every `AWS::ElasticLoadBalancingV2::ListenerRule` in the stack points at
+an ALB that no longer exists.
+
+**Why it happens every cycle, by design.** `hibernate.sh` DELETES the dir and relay ALBs (its own
+header: *"ALBs (dir + relay per region) ~$150/mo"*) and `wake.sh` recreates them OUTSIDE
+CloudFormation, then UPSERTs Route53 to the new aliases. This file already records that mechanism for
+the CodeBuild `STAGING_DIRECTORY_URL` (§ "Why it keeps coming back"). What was NOT recorded is that it
+also strands the ECS stack's listener ARNs — so the stack is drifted after EVERY wake, and any update
+that touches a listener rule fails.
+
+**Why nobody hit it before:** the migration-contiguity pre-flight was blocking every directory deploy
+from main independently (V48→V51 gap, fixed 2026-07-30 with `RESERVED-VERSIONS.txt`), so no deploy got
+far enough to reach the CFN stage.
+
+**What it blocks right now.** The consortium manifest reaches tasks as
+`{{resolve:ssm:…/consortium-manifest}}`, resolved into the task definition at DEPLOY time. Manifest v2
+(carrying the portal `intake_key`) is published in SSM in all three regions, but the RUNNING tasks
+still serve v1 — confirmed by `GET /manifest` on directory-us1 returning `version: 1` with no
+`intake_key`. Until this is resolved, `cello_trust_signals_issue` keeps refusing with
+`intake_key_absent` against dev, and no live end-to-end trust-signal test is possible.
+
+**NOT attempted, deliberately.** Repairing this means CFN resource import of the live ALB/listener, or
+letting CloudFormation replace the ALB — the second mints a new DNS name and takes the directory down
+in that region while Route53 catches up. That is hard to reverse and outward-facing on a live
+environment, so it needs an explicit decision rather than a reflex. The runtime is HEALTHY; only
+CloudFormation's model of it is stale.
+
+**Three ways out, for whoever picks this up:**
+1. **CFN resource import** — adopt the live ALB/listener ARNs into the stack. No downtime, fiddly.
+2. **Let CFN replace the ALB** — clean model, but a new DNS name and a real outage window per region.
+3. **Read the manifest at RUNTIME from SSM instead of baking it into the task definition** — sidesteps
+   the deploy dependency entirely for manifest changes and is arguably the better design (publishing a
+   manifest should not require a deploy). Does not fix the drift, but removes this blocker from the
+   critical path. Needs an SSM read on the directory task role.
