@@ -39,7 +39,25 @@ description: >
 - **DOD-INV-SOVEREIGN** [all] — no single node can complete a threshold ceremony alone; no
   privileged node exists in any topology, sync, or deploy decision; no provider-specific
   networking or hardcoded endpoint enters protocol code; a down node is routed around, never
-  fatal. — ❌
+  fatal. — ✅ **HELD ACROSS THE MILESTONE, per clause** (→ Entry 65b). Judged from evidence, not
+  by grep — this invariant is cross-cutting by nature.
+  (a) *No node completes a ceremony alone:* `T = majority(validators)` from the single derivation in
+  `dkg-topology.ts`, and T distinct FROST identifiers are required — now enforced twice, at the
+  manifest (`duplicateNodeIds`) and at round 1 in the client, where the identifiers actually in play
+  are first visible. The one claimed counter-example this session (a duplicate nodeId collapsing the
+  threshold) was FALSE and is retracted in Entry 62: the arithmetic runs the other way.
+  (b) *No privileged node:* anti-entropy is peer-to-peer with no coordinator; the seal's adjudicator
+  is now chosen per session BY SIGNATURE (`DOD-SEAL-BROKER-1`) rather than by a deploy-time constant —
+  this milestone REMOVED the one privileged-node pattern that existed.
+  (c) *No hardcoded endpoint / provider-specific networking in protocol code:* the relay carries
+  directory addresses as env-only config with no directory import (reviewer-verified); the directory
+  derives peers from the signed manifest. Node addresses live in Terraform, never in source.
+  (d) *A down node is routed around:* quorum registration (M8B) registers among the AVAILABLE
+  directories; the client fails over on a primary absent from declared manifest membership; and this
+  session FIXED the one regression against this clause — an unreachable brokering directory had begun
+  killing seals outright instead of falling back (F1).
+  **Caveat kept deliberately:** (d) is proven for the paths above, NOT yet for a full-region outage —
+  that is `DOD-OUTAGE-CLAIM-1` (P3) and remains unproven.
 - **DOD-INV-THRESHOLD** [trustless-cello, cello-client] — `T = majority(validators)` everywhere.
   `consortiumNodeCount` and every threshold/DKG/kill-switch derivation counts **validator-role
   nodes only**; replicas never enter the arithmetic. All-N / T=N never appears (settled

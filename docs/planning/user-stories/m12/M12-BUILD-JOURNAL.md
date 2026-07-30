@@ -4099,3 +4099,30 @@ attribute. A count that comes out suspiciously round is worth re-deriving before
 
 AWS is deliberately excluded: hibernated, and touching hibernated infra corrupts the wake inventory. It
 is slated for teardown (P4), where the audit belongs — against a live environment.
+
+### Entry 65b — DOD-INV-SOVEREIGN, judged per clause
+
+Cross-cutting invariants cannot be greped; they are judged from what the milestone's units actually
+did. Per clause:
+
+- **No node completes a ceremony alone.** One threshold derivation, `T = majority(validators)`, and a
+  ceremony needs T DISTINCT FROST identifiers — enforced at the manifest and, as of Entry 63, at
+  round 1 where the identifiers actually in play are first visible. The one apparent counter-example
+  this session was my own, and it was wrong (Entry 62).
+- **No privileged node.** Anti-entropy is peer-to-peer with no coordinator, and this milestone
+  *removed* the one privileged-node pattern that did exist: the seal's adjudicator was a deploy-time
+  constant unrelated to the conversation, and is now chosen per session by signature.
+- **No hardcoded endpoint or provider-specific networking in protocol code.** Relay: env-only, no
+  directory import, reviewer-verified. Directory: peers from the signed manifest. Addresses live in
+  Terraform.
+- **A down node is routed around.** Quorum registration, client failover on declared membership — and
+  the one REGRESSION against this clause was introduced and fixed inside this milestone: targeting the
+  brokering directory made an unreachable broker fatal to the seal, where the configured directory
+  would previously have been asked and would have redirected.
+
+That last one is the honest shape of this invariant: it is not a property you verify once, it is one a
+new feature can quietly take away. The broker work improved correctness and cost availability in the
+same diff, and only a review caught it.
+
+**Caveat kept:** the down-node clause is proven for those paths, not for a full-region outage. That is
+`DOD-OUTAGE-CLAIM-1` and it is still unproven.
