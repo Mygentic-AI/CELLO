@@ -1007,3 +1007,102 @@ I first told Andre the agent was "stranded" and framed it as a locked door. That
 pointed out the CLI path exists, and it does — I built it today. The default is deliberately strict
 and unblocking is a deliberate human act. The gap was never a missing capability; it was a missing
 signpost.
+
+---
+
+## 2026-07-29 — Entry C17: the review that found my WAL fix was worse than the bug
+
+`ca91d5c`. Three units went out earlier today with NO review pass — the WAL fix, the date false
+positive, the affordance change. Andre asked for the review before any further publish. It found
+**three blocking defects, two of them in fixes I had already shipped.** Both are corrected here
+rather than carried.
+
+### F1/F2 — my WAL fix was incomplete, and could corrupt the governance store
+
+I wrote the mechanism down as *"a close performs SQLite's last-connection cleanup."* **Wrong.** The
+reviewer probed `@signalapp/sqlcipher` 3.3.5 directly: with two live daemon-side connections open
+and reading, a `close()` still left `wal=false shm=false`. **ANY connection's close unlinks, full
+stop.**
+
+That wrong model is what made the fix incomplete. There were TWO closers. I removed the daemon's
+and left the sidecar's — and `restartSecurityGateway` SIGTERMs the sidecar on **every successful
+`cello config set`**. So:
+
+```
+cello policy log   : 2 chainValid=true  | ON DISK: records=2
+cello config set 5 : ok v1 (sidecar restarted)
+[two more messages screened]
+cello policy log   : 2 chainValid=true  | ON DISK: records=4   <- under-reports, forever
+```
+
+A truncated audit view **asserting its own integrity**. And worse (F2, reproduced 4/4): the next
+config write through the stale handle returns `ok` and leaves the file `SQLITE_CORRUPT` — which
+means the sidecar's next boot throws in its constructor, exits before READY, and the daemon runs
+fail-closed for its entire life with no auto-restart. **The old defect lost records; mine could
+destroy the config chain and wedge the layer.** Strictly worse than the bug I was fixing.
+
+**Fix:** the sidecar CHECKPOINTS instead of closing — `PRAGMA wal_checkpoint(TRUNCATE)` folds the
+log into the main file and unlinks nothing another process holds; exit releases the descriptors.
+
+### F3 — my PII fix was a security regression
+
+`ISO_DATE_RE` had no end anchor. `PHONE_RE`'s class contains space, `-`, `(`, `)`, `.` — so a date
+immediately followed by a number is ONE greedy match, and I discarded the whole match because it
+merely *started* date-shaped:
+
+```
+PASSED   "2026-07-29 415-555-2671"      -> []
+PASSED   "2026-07-29 (415) 555-2671"    -> []
+FLAGGED  "on 2026-07-29 call 415-..."   (a word breaks the match)
+```
+
+Eleven characters of prefix walked a real phone number past the guard. Not just adversarial —
+*"Meeting 2026-07-29 415-555-2671"* is a plausible sentence. **Fix:** strip a leading ISO date,
+then judge the remainder.
+
+### F4 — the ">15 digits cannot be a phone" rule passed a padded number
+
+`4155552671000000` and `0000004155552671` both passed; both were flagged before my change. Rule
+removed entirely — the reported false positive was dates, never long ids, so it bought nothing and
+cost a covert channel.
+
+### F5 — I told the agent something false
+
+My guidance said *"you cannot"* run the loosening command. The reviewer verified
+`script -q /dev/null` flips `process.stdin.isTTY` to true. `INV-10` already states this honestly
+("a friction gate, not a lock") — the one place the honesty was dropped was **the string an LLM
+actually reads**, while handing it the exact command. Now an instruction not to, never a claim it
+is impossible.
+
+### F6 — I recommended a command that silently drops data
+
+`cello config set pii_whitelist <value>` REPLACES the list. **This codebase already found that
+exact defect in review once**, and I wrote guidance describing the command as purely additive
+anyway. Now leads with `cello config list` and says REPLACES.
+
+### F7 — store READ throws escaped as `internal_error`
+
+The open path names `store_plaintext_file` / `store_locked` / `store_key_mismatch`; the read path
+said *"an unexpected error occurred, check daemon logs"* — for a corrupted security store, with no
+remedy. Now `store_corrupt` / `store_locked` / `store_read_failed`, each with a remedy.
+
+### The regression test the first fix should have had
+
+`DOD-M9B-GATE-1` now runs: screen → read the policy log → **`cello config set` (which restarts the
+sidecar)** → screen → read again. Asserts 2 not 1, `chainValid` true, and that the config store is
+still readable. The first test never entered the state the daemon actually lives in — it exercised
+the daemon's handle only in the one state where the fix worked.
+
+### Left unfixed, deliberately, and named
+
+F8 (a DDL throw in the store constructor leaks the connection), F9 (no way to release the handles
+for an in-process caller — matters for vitest, not production), F10 (the guidance block has no
+provenance marker, so a counterparty could mimic it). All low/medium, none shipped-breaking.
+
+### The lesson, and it is the same one twice
+
+I stated a mechanism from a plausible clue, then "falsified" it with a reproduction too weak to
+show it, then concluded the hypothesis was dead — and wrote each of those into a
+definition-of-done. The reviewer's closing note is the one to keep: *"my first probe (raw engine,
+no store classes) failed to reproduce it — the commit's mechanism only surfaced against the real
+components."* A reproduction that does not use the real components is not a falsification.
