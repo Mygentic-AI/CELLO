@@ -94,7 +94,16 @@ not trim them.
 
 **Scope limit, and it is the important caveat.** Managed settings is a file on one machine. This fixes
 it for *this* machine only. Every other user still gets the red screen unless they write the same file
-or their org admin does. **Only getting onto Anthropic's curated list fixes it for everybody.** The
+or their org admin does. **But it is self-serve.** managed-settings.json is just a local file — any user can write it with one
+sudo command on their own machine, no admin and no org involvement. So this is a documented setup
+step, not a blocker: see the `setup` skill. Getting onto Anthropic's curated list would only make it
+zero-touch, and there is no submission route without a partner contact — treat that as an accepted
+constraint, never an open task.
+
+**The trap to document with it:** `allowedChannelPlugins` REPLACES the Anthropic allowlist. A user who
+writes only the cello entry silently kills their Telegram, Discord and iMessage channels. Any snippet
+we publish must carry all four official entries, and must say to MERGE rather than overwrite if the
+file already exists. The
 account was on `apemmelaar@gmail.com's Organization`, which is why the managed-settings route applied
 at all.
 
@@ -217,7 +226,6 @@ decoupled from the shim version so a docs-only change does not require a shim re
 
 - `trustless-cello/.claude/` still holds its own `cello-receptionist` (now diverged from the plugin's)
   and `cello-walkie-talkie`.
-- Anthropic curated-list submission — the only fix that reaches other people's machines.
 - The `shutdown` doorbell defect above.
 - The `SessionStart`-hook question for daemon install, deliberately deferred.
 
