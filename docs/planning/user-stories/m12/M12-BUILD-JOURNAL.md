@@ -4601,3 +4601,64 @@ not close the tag without.
 
 **Owed, and it is data repair not code:** the live fleet's NULL-`agent_id` profiles still fork and nothing
 in AE can heal them (M12-D-NULL-AGENTID). Directory 986 green.
+
+---
+
+## Entry 72 — 2026-07-30 — DOD-AE-CHANNEL-1 reviewed: 10 findings, and three were in tonight's own work
+
+First pass on `ae-channel.ts`. Verdicts, quoted:
+
+> **SPEC: DEVIATIONS FOUND** — clause 4's `write-hints` (design §3, `ae_hint {table, keys[]}`) is absent
+> with no journaled deferral: [blocking].
+>
+> **SILENT FALLBACKS FOUND** — HIGH-1 (duplicate served records disarm both the shortfall alarm and the
+> fork streak) and MEDIUM-6 (`onUnknownTable` unwired — a skipped table is a degraded path that is not
+> announced): the HIGH is [blocking].
+>
+> **ERROR SUBSTITUTION FOUND** — HIGH-3 (`catch { return null }` in `streamWire.next()` renames a 4 MiB
+> decode refusal as "wire closed") and MEDIUM-5: [blocking].
+>
+> **HOLLOW TESTS FOUND** — test #13 fails THE REVERT TEST for the bucket-walk claim in its name … [blocking].
+
+It also said the part worth keeping: *"the handshake, the fail-closed discipline, the cause-naming and
+the manifest-verification wiring are the strongest parts of the M12 code I have read, and I could not
+break the auth path. The defects are all downstream of it — in what the channel does with data from a
+peer that has ALREADY authenticated, which is exactly where 'authentication is not honesty' stops being
+enforced."*
+
+### Three of these were mine, from earlier tonight
+
+**HIGH-1 undid both alarms I had just built.** The served-record filter is `requested.has(hash)` — and
+`Set.has` is membership, not consumption, so duplicates survive. A peer serving one record ten times
+satisfied a ten-record plan: `pulled` reached `planned` so the shortfall alarm (added hours earlier)
+stayed silent, and because one row DID apply, the fork streak was reset. A peer withholding nine of ten
+`agent_suspensions` rows reported as a clean converged round forever. I added two alarms for exactly
+this failure and left the line that defeats both.
+
+**MEDIUM-6 was no-consumer-no-ship, by me.** I added `onUnknownTable` to the engine and never passed it,
+so the rolling-deploy table skip — the case whose reasoning I wrote into the engine header — was silent.
+
+**MEDIUM-4 was over-reach in my containment fix.** The per-table `try` wrapped `peer.serve*` as well as
+`local.apply*`, so a dead wire became a per-table failure and the round kept issuing requests into it
+before reporting `completed`. Now store errors are contained and wire errors propagate, identified by
+`name` because the engine is transport-agnostic. That required giving `AeProtocolError` an explicit
+`name` — subclassing `Error` inherits `"Error"`, so the check would never have matched. I verified that
+by running it rather than reasoning about it.
+
+### The test I wrote for HIGH-1 was itself wrong, and the revert test caught it
+
+My first duplicate-records test rewrote the `ae_pull_a` REQUEST to three copies of one hash. It passed,
+and so did the revert — because `MemStore.serveTierA` maps over its own records and filters by the
+requested set, so it still returned one. No duplicate was ever sent; I had instrumented the wrong hop.
+Rewritten to inject the duplicate into the `ae_records_a` frame travelling BACK, which is the hop the
+filter actually guards. The revert now turns it red.
+
+Also fixed: test #13 asserted `ok`/`pulled`/`landed` for a claim about FRAMES, so an implementation
+requesting all 256 buckets passed it — it now decodes `ae_bucket_hashes_req` and asserts exactly one
+differing bucket, and reverting `differingBuckets` to "ask for all" turns it red. Test #12 gained the
+one assertion that closes its stated bypass (an empty advertisement sends no detail frames either).
+
+`ae_hint` is deferred with its cost stated — up to 60 s of kill-switch propagation latency, not a
+correctness gap — as `M12-D-AE-WRITE-HINTS`.
+
+Directory **987** green.

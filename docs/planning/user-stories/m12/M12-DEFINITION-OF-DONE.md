@@ -479,6 +479,24 @@ description: >
 
 ## Decisions
 
+### M12-D-AE-WRITE-HINTS (2026-07-30) — `ae_hint` deferred, with the latency it costs stated
+
+`DOD-AE-CHANNEL-1` says "the digest→detail→pull round protocol **with write-hints**". digest→detail→pull
+is implemented; `ae_hint {table, keys[]}` (design §3 "Cadence") is **not**, and until now that was an
+un-journaled simplification of a clause the DoD spells out — which is exactly the shape a reviewer is
+right to block on.
+
+**What it costs, precisely:** hints exist so a local write PUSHES rather than waits. Without them a
+suspension written on node A reaches B on B's next scheduled round — up to `intervalMs`, currently
+**60 s, unjittered** (the design says 30 s jittered). So the kill switch converges in up to a minute
+rather than immediately. It still converges, fails closed, and is proven to do so across a real
+partition (`j-antientropy`, Entry 70b) — this is latency, not correctness.
+
+**Deferred rather than built**, because a hint frame is a new wire message with its own auth and
+flood-control questions (an authenticated peer that can make us pull on demand is a cheap amplifier),
+and the correctness it would buy is already there. Revisit when the kill switch has a stated propagation
+SLA — that is the requirement that makes a minute unacceptable, and it does not exist yet.
+
 ### M12-D-NULL-AGENTID (2026-07-30) — refuse at the door; the fleet backfill is owed and is NOT code
 
 Adding `agent_id` to `AGENT_PROFILES_SPEC` (so the kill-switch join works on replicas) also put it in

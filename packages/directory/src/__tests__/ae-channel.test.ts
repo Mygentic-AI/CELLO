@@ -374,6 +374,13 @@ describe("ae-channel: mutual handshake + rounds over the wire", () => {
 
     expect(result.ok).toBe(true);
     expect(asked).toContain("ae_state_req"); // the digest exchange DID happen
+    // …of a REAL converged round. Without this, an implementation whose refresh() returned empty
+    // advertisements would send no detail frames either and pass identically — "nothing crossed the
+    // wire" has to mean "there was something to compare and it matched".
+    expect(result.ok && result.rounds[0]).toEqual({
+      tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0,
+      tierAPlanned: 0, tierBPlanned: 0, failures: [],
+    });
     // …and nothing beyond it: no bucket walk, no hash list, no version map, no body pull.
     for (const detail of ["ae_buckets_req", "ae_bucket_hashes_req", "ae_versions_req", "ae_pull_a", "ae_pull_b"]) {
       expect(asked, `converged round must not send ${detail}`).not.toContain(detail);
@@ -392,11 +399,89 @@ describe("ae-channel: mutual handshake + rounds over the wire", () => {
     }
     peer.revocations.set("only-on-peer", rev("only-on-peer")); // one divergence in one bucket
 
-    const { dialerResult, dialerStore } = await runBoth({ responderStore: peer, dialerStore: local });
+    // Count the FRAMES, not just the outcome. The name makes a wire-level claim — "only the differing
+    // buckets' hashes are fetched" — and asserting ok/pulled/landed cannot see it: an implementation
+    // that requested all 256 buckets, or skipped the walk and asked for the full hash list, produces
+    // exactly the same outcome and passed this test unchanged.
+    const [wireA, wireB] = wirePair();
+    const sent: Array<Record<string, unknown>> = [];
+    const countingWire: AeWire = {
+      send(bytes) { sent.push(cborDecode(bytes) as Record<string, unknown>); wireA.send(bytes); },
+      next: () => wireA.next(),
+      close: () => wireA.close(),
+    };
+    const responder = serveAeResponder({
+      wire: wireB, manifest, identity: B, actualRemotePeerId: A.peerId, store: peer,
+      nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
+    });
+    const dialerResult = await runAeDialer({
+      wire: countingWire, manifest, identity: A, remoteNodeId: B.nodeId, actualRemotePeerId: B.peerId,
+      store: local, nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
+    });
+    await responder.catch(() => undefined);
+
     expect(dialerResult.ok).toBe(true);
     if (!dialerResult.ok) return;
-    // It pulled the one record it lacked — not the other 40.
     expect(dialerResult.rounds[0].tierAPulled).toBe(1);
-    expect((dialerStore as MemStore).revocations.has("only-on-peer")).toBe(true);
+    expect(local.revocations.has("only-on-peer")).toBe(true);
+
+    // The walk happened, and it asked for ONE bucket — 41 records over 256 buckets put the single
+    // divergence in exactly one.
+    const req = sent.find((f) => f["type"] === "ae_bucket_hashes_req");
+    expect(req, "a divergent table must trigger a bucket-hash request").toBeDefined();
+    const buckets = req!["buckets"] as number[];
+    expect(Array.isArray(buckets)).toBe(true);
+    expect(buckets.length, `expected ONE differing bucket, asked for ${buckets.length}`).toBe(1);
+  });
+
+  it("REFUSES a peer that serves the same record repeatedly to fake a full response", async () => {
+    const { encodeAeFrame } = await import("../ae-channel.js");
+    // The `requested` filter is membership, not consumption, so duplicates used to survive it: a peer
+    // could satisfy an N-record plan by sending record #1 N times. `pulled` then reached `planned`, so
+    // the shortfall alarm stayed silent, and because one row DID apply the fork streak reset — a peer
+    // withholding the rest of agent_suspensions looked like a clean converged round forever.
+    const peer2 = new MemStore();
+    const local2 = new MemStore();
+    for (let i = 0; i < 3; i++) peer2.revocations.set(`dup-${i}`, rev(`dup-${i}`));
+
+    const [wA, wB] = wirePair();
+    // Duplicate the RESPONSE, not the request. My first attempt rewrote `ae_pull_a`'s hash list to
+    // three copies — which proved nothing, because MemStore.serveTierA maps over ITS OWN records and
+    // filters by the requested set, so it still returned one. The duplicate has to be injected into
+    // the `ae_records_a` frame travelling back, which is the hop RemoteStoreView's filter guards.
+    const dupWire: AeWire = {
+      send: (bytes) => wA.send(bytes),
+      async next() {
+        const b = await wA.next();
+        if (!b) return b;
+        const f = cborDecode(b) as Record<string, unknown>;
+        if (f["type"] === "ae_records_a" && Array.isArray(f["records"]) && f["records"].length > 0) {
+          const one = (f["records"] as unknown[])[0];
+          f["records"] = [one, one, one];
+          return encodeAeFrame(f);
+        }
+        return b;
+      },
+      close: () => wA.close(),
+    };
+    const responder2 = serveAeResponder({
+      wire: wB, manifest, identity: B, actualRemotePeerId: A.peerId, store: peer2,
+      nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
+    });
+    const res2 = await runAeDialer({
+      wire: dupWire, manifest, identity: A, remoteNodeId: B.nodeId, actualRemotePeerId: B.peerId,
+      store: local2, nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
+    });
+    await responder2.catch(() => undefined);
+
+    expect(res2.ok).toBe(true);
+    if (!res2.ok) return;
+    // Deduped: the three copies count ONCE, so pulled stays below planned and the shortfall is visible
+    // to the sync service instead of being papered over.
+    // Three copies of one record must count ONCE — otherwise pulled reaches planned, the shortfall
+    // alarm stays silent, and the applied row resets the fork streak.
+    expect(res2.rounds[0].tierAPulled).toBe(1);
+    expect(res2.rounds[0].tierAPlanned).toBe(3);
+    expect(res2.rounds[0].tierAPlanned).toBeGreaterThan(res2.rounds[0].tierAPulled);
   });
 });
