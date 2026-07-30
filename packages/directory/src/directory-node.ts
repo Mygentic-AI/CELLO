@@ -5316,7 +5316,29 @@ export class CelloDirectoryNode {
         this.#streams.delete(pubkeyHex);
       }
     }
-    if (pubkeyHex) this.#store.enqueueNotification(pubkeyHex, event, correlationId);
+    if (pubkeyHex) {
+      // The RESULT half of the same defect the seal REQUEST had. `notification_queue` is per-node and
+      // is NOT in the anti-entropy set, and `drainNotifications` only fires for a peer authenticating
+      // on THIS node — so a participant homed elsewhere never receives this. After a seal redirect the
+      // adjudicating node holds at most ONE participant's stream, so the other is routinely stranded.
+      //
+      // Worse than the request case: by this point the seal IS notarized and durable
+      // (`conversation.seal.recorded`), so there is nothing to retry. The agent holds a session it
+      // believes failed, against a receipt that exists. It reports `seal_unilateral_timeout` — an
+      // error naming a verification that in fact succeeded.
+      //
+      // Logged at ERROR so it is alarmable rather than inferred from a client-side timeout. The
+      // durable fix is recorded in the build journal: `seal_notarizations` IS a Tier-A anti-entropy
+      // table, so the stranded participant's OWN home node already receives the notarization — the
+      // receipt can be LEARNED locally and does not need this cross-node push at all.
+      this.#logger?.error("seal.result.undelivered", {
+        sessionId: correlationId,
+        participantShort: pubkeyHex.slice(0, 16),
+        eventType: event.type,
+        consequence: "the seal is durable but this participant was not told; it will report a timeout for a seal that succeeded",
+      });
+      this.#store.enqueueNotification(pubkeyHex, event, correlationId);
+    }
   }
 
   /**

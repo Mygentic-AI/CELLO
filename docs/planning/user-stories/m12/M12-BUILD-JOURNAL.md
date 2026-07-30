@@ -3516,3 +3516,61 @@ directory→directory delivery, still absent), or replicate `notification_queue`
 (it is deliberately not in the set today), or have the CLIENT poll for its own seal result rather
 than depend on a push it may never receive. The third is the smallest and the most robust: the seal
 is already durable and queryable, so the receipt does not need to be pushed to be learned.
+
+---
+
+## Entry 57 — 2026-07-30 — The seal RESULT half: made visible, and the durable fix is a local read, not a push
+
+### Landed now
+
+`#deliverOrEnqueue`'s enqueue branch was silent. It now logs `seal.result.undelivered` at ERROR,
+naming the session, the stranded participant, and the consequence. Directory suite green (940).
+
+That converts an invisible failure into an alarmable one. It does NOT fix it — deliberately, because
+the correct fix is a protocol change and half-building one at the end of a long session is how the
+original defect got shipped.
+
+### Why this half is worse than the request half
+
+| | seal REQUEST (`seal_verified`) | seal RESULT (`session_sealed`) |
+|---|---|---|
+| state when it strands | seal has NOT happened | seal IS notarized and durable |
+| is retry useful? | yes — the ceremony can rerun | **no — there is nothing left to do** |
+| what the client reports | `seal_unilateral_timeout` | `seal_unilateral_timeout` |
+
+Same error string, opposite truths. In the second case the agent holds a session it believes failed
+against a receipt that demonstrably exists (`conversation.seal.recorded`). An error naming a
+verification that in fact SUCCEEDED is the most misleading state in the system so far.
+
+### The enabling fact, which changes the fix
+
+**`seal_notarizations` is a Tier-A anti-entropy table** — natural key `(session_id, seal_type)`,
+append-only, listed in `M12-ANTI-ENTROPY-DESIGN.md:119` and encoded in `ae-table-encoders.ts:95`.
+`notification_queue` is NOT.
+
+So the notarization ALREADY replicates to the stranded participant's own home node. The receipt does
+not need to be pushed across nodes — **it can be learned locally.** That kills the two expensive
+options and leaves a cheap one:
+
+1. ~~directory→directory forwarding~~ — new cross-node channel, does not exist
+2. ~~replicate `notification_queue`~~ — deliberately excluded from the AE set, and it is a queue,
+   not a fact; replicating delivery state invites double-delivery
+3. **the client learns the result locally** — on bilateral timeout, ask its OWN home directory
+   whether a notarization exists for the session before escalating to unilateral
+
+(3) needs: a store read (`seal_notarizations` by `session_id` — schema has `sealed_root`,
+`participant_a/b_pubkey`, `close_timestamp`, `frost_signature`, `chain_hash`, `seal_type`), one
+request/response frame pair, and a client-side check in the timeout path.
+
+**One design snag found while scoping it:** `SessionSealedWithLegibility` requires the `legibility`
+certificate, which is DERIVED and not stored in `seal_notarizations`. So the response cannot simply
+reuse the existing `session_sealed` event and inherit the client's existing handler — either
+legibility is re-derived at query time from the stored leaves, or the response carries a narrower
+"seal exists, here is the notarization" shape and the client treats it as proof-of-completion rather
+than as a full certificate. That choice wants deciding before coding, not during.
+
+### Enforcer status
+
+`j-gcp-live.spine.test.ts` currently FAILS, correctly, on exactly this. It is the regression guard
+for the fix and should stay red until the fix lands — a red enforcer naming a real defect is worth
+more than a green one that skips it.
