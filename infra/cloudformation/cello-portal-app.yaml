@@ -44,6 +44,18 @@ Parameters:
     Type: String
     Default: arn:aws:secretsmanager:us-east-1:257394457473:secret:cello/dev/ops-agent/directory-api-key-YTcKGN
     Description: Reuses the directory internal API key (same value the ops-agent uses).
+  IntakeSeedsSecretArn:
+    Type: String
+    Default: "arn:aws:secretsmanager:us-east-1:257394457473:secret:cello/dev/portal/intake-key-0-GXpcIR"
+    Description: >
+      Secrets Manager ARN for cello/{env}/portal/intake-key-0 — the PORTAL INTAKE seeds, as
+      `key_id:hexseed` pairs comma-separated across live generations. This is the key a submitting
+      daemon seals a trust-signal submission TO, so the DIRECTORY cannot read it; the portal is the
+      only party that can open one. ONE secret holds EVERY live generation on purpose: rotation must
+      retain the previous seed until no undrained row still references it (M10B-D11), because
+      in-flight rows are sealed to whichever generation was published when they were sent. Opening
+      every row with a single current seed turns a routine rotation into the permanent, unattributable
+      destruction of every queued endorsement.
   SubmissionSeedSecretArn:
     Type: String
     Description: >
@@ -141,6 +153,7 @@ Resources:
                   - !Ref KmsMasterKeySecretArn
                   - !Ref DirectoryApiKeySecretArn
                   - !Ref SubmissionSeedSecretArn
+                  - !Ref IntakeSeedsSecretArn
                   - !Ref GitHubOAuthSecretArn
 
   TaskRole:
@@ -219,6 +232,10 @@ Resources:
               ValueFrom: !Ref DirectoryApiKeySecretArn
             - Name: PORTAL_SUBMISSION_SEED
               ValueFrom: !Ref SubmissionSeedSecretArn
+            # M10B / DOD-END-INGRESS-1 — without this the drain answers 503 `no_intake_keys` and
+            # every sealed submission stays queued: the portal cannot open what it has no key for.
+            - Name: PORTAL_INTAKE_SEEDS
+              ValueFrom: !Ref IntakeSeedsSecretArn
             - Name: GITHUB_CLIENT_ID
               ValueFrom: !Sub "${GitHubOAuthSecretArn}:client_id::"
             - Name: GITHUB_CLIENT_SECRET

@@ -1914,9 +1914,17 @@ refuses to send unsealed rather than let the directory read a submission.
   `BUNDLED_CONSORTIUM_ROOT_KEYS[0]` (`8e9b99e5…4199`) — not merely the signer's own self-check. The
   officer pubkey the script emits matches what the shipped client pins, so daemons will accept it.
 
+**Portal wiring done in IaC (2026-07-30):** `cello-portal-app.yaml` gains `IntakeSeedsSecretArn`
+(defaulted to the secret's ARN), injects it as `PORTAL_INTAKE_SEEDS`, and adds it to the task's
+secret-read policy. The secret VALUE was rewritten from a bare seed into the wire format the portal
+parses — `key_id:hexseed`, comma-separated across live generations — so one secret holds every live
+generation. That is deliberate: rotation must retain the previous seed until no undrained row still
+references it, and splitting generations across secrets would make "which are live" a deploy-time
+question instead of a value.
+
 **Still owed:**
 1. **Directory redeploy** — the task definition resolves `{{resolve:ssm:…/consortium-manifest}}` at
-   DEPLOY time, so the running tasks still carry the v1 manifest baked into their env. Until the
-   stack updates, `intake_key_absent` persists.
-2. The portal task wired to read the seed into `PORTAL_INTAKE_SEEDS` as `intake-dev-1:<seed>`.
-3. `cello-iam.yaml` granting the portal task role read on `portal/intake-key*`.
+   DEPLOY time, so running tasks still carry the v1 manifest baked into their env. Until the stack
+   updates, `intake_key_absent` persists.
+2. **Portal redeploy** — same reason: the new secret is wired in the template, not in the running
+   task definition.
