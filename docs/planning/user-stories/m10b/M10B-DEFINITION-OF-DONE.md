@@ -598,7 +598,37 @@ the additions M10B is accountable for.
 - **DOD-END-COUNT-1** — floor/count handling (D-29 sub-question 1). `same_operator` is an envelope-visible
   fact, so a count predicate MUST bucket or exclude flagged endorsements; a naive `count >= N` otherwise
   passes on ten agents under one operator. Keeps `DOD-FLOOR-1`'s "envelope fields only" rule intact —
-  the predicate input is the envelope, the join is recipient-local. — ❌
+  the predicate input is the envelope, the join is recipient-local.
+  > **🅿️ PARKED 2026-07-30 — a WIRE decision, and the DoD line and the implementation disagree about
+  > where `same_operator` lives.** This line says it is "an envelope-visible fact". It is not:
+  > `DOD-END-SUBJECTKIND-1` shipped the flag in the **PAYLOAD** (`same_operator: boolean` inside the
+  > CBOR), because the envelope's field set is fixed — `subject_kind`, `subject`, `issuer_kind`,
+  > `issuer_pubkey`, `type`, `schema_version`, `issued_at`, `expires_at`, `supersedes_hash` — and
+  > carries no slot for it.
+  >
+  > So the count predicate cannot both exclude flagged endorsements AND honour
+  > `INV-FLOOR-ENVELOPE-ONLY` as things stand. The three ways out, and why this is Andre's call:
+  >
+  > 1. **Add `same_operator` to the envelope.** Correct in principle — the envelope is the signed,
+  >    hashed, verifiable surface, and a floor predicate should read only that. But it is a WIRE
+  >    change: the field is inside the hash, so it needs `protocol-types`, the directory, the daemon
+  >    and the portal moving together, and **a signal minted before the field exists can never
+  >    retroactively have it**. That is the migration trap named in the repo's own launch triage.
+  > 2. **Let the predicate read this ONE payload field.** Cheapest, and it breaks the invariant that
+  >    keeps floor predicates from becoming type-aware. Once one field is exempt the rule is advisory.
+  > 3. **Leave the count as-is and cap worth by TIER only** (D-27), accepting that `min_count` can be
+  >    cleared by same-operator endorsements. Weakest — it is precisely the "ten agents under one
+  >    operator" hole this line exists to close.
+  >
+  > **The hole is NOT open in practice today**, which is why parking is safe: `min_count` has exactly
+  > one caller (`DEFAULT_UNKNOWN_POLICY`, `min_count: 1`) paired with
+  > `require_issuer_kind: "portal"`, and a client-supplied endorsement is `issuer_kind: agent` — so it
+  > cannot satisfy that policy at all. The farming hole opens the moment a policy asks for
+  > `min_count` WITHOUT pinning `issuer_kind`, and nothing today does.
+  >
+  > Recommendation if asked: (1), taken deliberately and early, because it is the only option that
+  > survives contact with `INV-FLOOR-ENVELOPE-ONLY` — and doing it later strands every endorsement
+  > minted in the meantime. — 🅿️
 - **DOD-END-FLOOR-2** — endorsement-aware floor predicates: count, issuer tier, and issuer identity, all
   computed by joining the presented envelope's `issuer_pubkey` against the recipient's own contacts. This
   is compatible with `INV-FLOOR-ENVELOPE-ONLY` (nothing reaches into the payload) and is what D-27's
