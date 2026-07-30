@@ -220,3 +220,5 @@ be told, not left to infer it from a parameter error three calls later.
 
 Related: [[project_mcp_stale_socket_after_daemon_restart]],
 [[feedback_prefer_cli_lifecycle_over_pkill]]
+
+- [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist|The CELLO Claude Code plugin and the channels allowlist]] — where the `cello_session_id` rename from this bug was propagated into the README, the commands, and the plugin skills.

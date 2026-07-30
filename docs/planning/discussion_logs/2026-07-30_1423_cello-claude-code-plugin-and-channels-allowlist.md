@@ -220,3 +220,12 @@ decoupled from the shim version so a docs-only change does not require a shim re
 - Anthropic curated-list submission — the only fix that reaches other people's machines.
 - The `shutdown` doorbell defect above.
 - The `SessionStart`-hook question for daemon install, deliberately deferred.
+
+---
+
+## Related Documents
+
+- [[2026-06-27_0753_claude-code-channels-cello-integration|Claude Code Channels × CELLO — Integration Model]] — the design that introduced the channel shim and the `claude/channel` capability. This log is its distribution sequel: the channel is built and now registers without the dangerous flag.
+- [[2026-07-29_1730_coworker-session-scoped-mcp-calls-fail|A client that could open a session but never use it]] — the Cowork/`remote-devices` bug (`anthropics/claude-code#77248`) that forced the `cello_session_id` rename. This log records propagating that rename to the 25 instruction-file sites it had not reached.
+- [[2026-07-21_0748_watcher-receptionist-pattern|Watcher and Receptionist Pattern]] — the poll-a-blocking-subagent pattern now shipped as the `receptionist` skill plus the `cello-receptionist` agent inside the plugin.
+- [[2026-07-22_1530_walkie-talkie-signal-tokens-design|Walkie-Talkie Signal Token Design]] — settled OVER/STANDBY/WRAP. Its `signal` parameter was missing from the shipped `SKILL.md` entirely, one of the defects fixed here; walkie-talkie itself was retired rather than bundled.
