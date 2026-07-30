@@ -190,7 +190,9 @@ credential, a human hand, or reaches a real counterparty is OUT OF SCOPE — do 
       bar names a kill switch as a first-class requirement; the first time screening misfires on a
       real conversation you will want it to already exist.
 - [ ] **A4. Paths under `~/.cello/`.** `CELLO_GATEWAY_SOCKET` (required), `CELLO_GATEWAY_CONFIG_DB`,
-      `CELLO_GATEWAY_REQUEST_LOG`. Give them real defaults; do not make the operator set env vars.
+      Give them real defaults; do not make the operator set env vars. (`CELLO_GATEWAY_REQUEST_LOG`
+      was here too — DELETED 2026-07-30 with the plaintext request log itself, M8C
+      `DOD-CRYPTO-AT-REST-1`. Do not re-add it.)
 - [ ] **A5. The PII whitelist — DECIDED: OPTION 1, the operator sets it explicitly (Andre, 2026-07-13).**
 
       **What it actually is:** a plain `string[]` (`core/gateway/src/detect/pii.ts:34`) — a list of the

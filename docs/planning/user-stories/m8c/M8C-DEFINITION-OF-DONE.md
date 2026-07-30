@@ -857,13 +857,13 @@ streams for one pubkey, two processes holding the same FROST share, double-accep
 
 ## ✅ DOD-CRYPTO-AT-REST-1 — the gateway writes security records + config to disk UNENCRYPTED
 
-> **FULLY CLOSED 2026-07-30 (the named defect fixed 2026-07-29 by `DOD-M9C-STORE-1`** (M9's reopened connect unit, branch `m9/connect-unit`,
+> **FULLY CLOSED 2026-07-30 (the named defect fixed 2026-07-29 by `DOD-M9B-STORE-1`** (M9's reopened connect unit, branch `m9/connect-unit`,
 > commit `449bbba`). `core/gateway` got its own SQLCipher opener — it cannot import the daemon's,
 > since the daemon depends on the gateway and not the reverse — and both stores now live in ONE
 > encrypted file, `~/.cello/gateway.db`, opened with the DAEMON'S key file. One key, one backup
 > unit, which is policy decision D-3.
 >
-> Two clauses were amended by evidence rather than met (`M9C-D6`, `M9C-D7`, journal Entry C2):
+> Two clauses were amended by evidence rather than met (`M9B-D6`, `M9B-D7`, journal Entry C2):
 > `cello_backup`/`cello_restore` are still `not_implemented` stubs, so a round-trip proof is OWED
 > to the backup build and recorded there; and NO plaintext importer was built, because the layer
 > never ran in the product, so no production plaintext store has ever existed and an importer would
@@ -878,8 +878,10 @@ streams for one pubkey, two processes holding the same FROST share, double-accep
 > env var away from true is not false.
 >
 > It was REMOVED rather than guarded, because it was redundant: the record store already carries
-> direction, disposition, contentHash and correlationId. Deadness proven properly — no reference in
-> either repo, not on the `exports` map — and its three test consumers now read the ENCRYPTED store
+> direction, disposition, contentHash and correlationId. No reference in either repo and no shipped
+> path that set it — though the field WAS on the package's `.` export via `GatewayServerOptions`, so
+> its removal is a semver-breaking type change (review L2 corrected my claim to the contrary; the
+> deletion itself landed in `39f8100`, not `8334651`). Its three test consumers now read the ENCRYPTED store
 > instead, which makes them better tests: they assert on the durable audit trail rather than a debug
 > side-channel. See [[M9B-DEFINITION-OF-DONE]] and [[M9B-BUILD-JOURNAL]] Entry C19.
 
@@ -1110,14 +1112,14 @@ bare `{type:"timeout"}` — verified in `daemon.ts`, not assumed). §3's "exit 0
   store (extend, never a parallel subsystem); tighten-free/loosen-needs-confirmation enforced;
   every M8C-introduced setting (away message, privacy mode, auto-start, TTL, queue caps,
   per-session size limit, Telegram settings, primary-transfer policy) readable + writable.
-  — 🟡 **ABSORBED 2026-07-29 by `DOD-M9C-SURFACE-1`** (policy D-4). `cello config list|get|set`
+  — 🟡 **ABSORBED 2026-07-29 by `DOD-M9B-SURFACE-1`** (policy D-4). `cello config list|get|set`
   exists on M9-CFG-001's versioned store, tighten-free / loosen-confirmed is enforced end to end,
   and the confirmation is an interactive TTY prompt — deliberately with no `--yes` flag, since a
   flag a script can pass is the environment-variable bypass renamed. **The SECURITY-LAYER half is
   built; the M8C-settings half is NOT** — away message, TTL, auto-start and the rest still live on
   `cello settings` / `agent_settings`, which is a different store with a different governance
   model (no confirmation gate). Whether the two surfaces merge is an open product decision, not a
-  gap this unit left. See [[M9-DEFINITION-OF-DONE]] `DOD-M9C-SURFACE-1`.
+  gap this unit left. See [[M9-DEFINITION-OF-DONE]] `DOD-M9B-SURFACE-1`.
   - **Friction riders (F6, F12 — verified open 2026-07-06):**
     - **F6** — directory-node selection becomes a first-class, documented setting/flag, not the
       env-var-only `CELLO_DIRECTORY_URL` (defaults silently to US — `directory-bootstrap.ts:32`).

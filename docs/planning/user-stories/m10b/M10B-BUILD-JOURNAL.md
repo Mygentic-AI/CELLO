@@ -2876,7 +2876,7 @@ without knowing what the default had been.
 
 ### Note on the shared checkout
 
-A second session is working in the same `cello-client` tree (it landed `DOD-M9C-STORE-1`, the gateway
+A second session is working in the same `cello-client` tree (it landed `DOD-M9B-STORE-1`, the gateway
 SQLCipher work, as `449bbba`). Staging is now file-by-file rather than `git add -A`; the six earlier
 M10B commits were checked and contain none of its files.
 

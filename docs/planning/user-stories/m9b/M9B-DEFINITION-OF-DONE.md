@@ -213,7 +213,7 @@ in the journal before any code ([[M9B-PROCEDURE]] §6).
   `core/gateway/src/bin/cello-gateway.ts` — `CELLO_GATEWAY_AUTONOMOUS_OVERRIDE`,
   `CELLO_GATEWAY_PII_WHITELIST`, `CELLO_GATEWAY_RATE_MAX_PER_WINDOW`,
   `CELLO_GATEWAY_RATE_WINDOW_MS` — are REMOVED. Security settings come from the store only;
-  plumbing envs that carry no policy (socket path, store location, request log) survive only if
+  plumbing envs that carry no policy (socket path, store location) survive only if
   set by the daemon's own spawn plumbing, and none of them can loosen a guard. Tests that used the
   env path inject config through the store or the constructor instead. Proven by a negative test
   IN THE LIVE GATE: booting the shipped daemon with `CELLO_GATEWAY_AUTONOMOUS_OVERRIDE=1` in the
@@ -365,5 +365,5 @@ gate now runs screen → read → **config set** → screen → read.
   decisions, §14.4 the config-store register entry, §15 the work list
 - [[M9-DEFINITION-OF-DONE]] / [[M9-BUILD-JOURNAL]] — the JUNE record: what the layer is and how it
   was proven when connected. **[[M9-PROCEDURE]] is outdated; do not copy from it.**
-- [[M8C-DEFINITION-OF-DONE]] — `DOD-CRYPTO-AT-REST-1` (custody, 🟡 pending the request log) and
+- [[M8C-DEFINITION-OF-DONE]] — `DOD-CRYPTO-AT-REST-1` (custody, ✅ once the request log went) and
   `DOD-CONFIG-1` (absorbed by `DOD-M9B-SURFACE-1`)

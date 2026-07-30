@@ -65,11 +65,11 @@ security_invariants:
     test_type: integration
     component_under_test: gateway
     amendment: >
-      AMENDED by M9C-D2 (policy decision D-3, Andre 2026-07-28) and INV-4 as amended in
+      AMENDED by M9B-D2 (policy decision D-3, Andre 2026-07-28) and INV-4 as amended in
       M9-DEFINITION-OF-DONE. The LOCAL form of this invariant — a separate file with a separate
       key, on the operator's own machine — was dropped as unenforceable theatre: whoever owns the
       laptop can simply not run the scanner, so a store the local daemon "cannot read" buys
-      nothing while costing the backup unit. As of DOD-M9C-STORE-1 the local gateway store IS
+      nothing while costing the backup unit. As of DOD-M9B-STORE-1 the local gateway store IS
       opened with the daemon's key, deliberately, so that one key and one backup cover it.
       The guarantee is real only where it is physically enforceable — a scanner on a machine the
       operator does not control — which is M9-REMOTE-001. Any agent reading this file: do NOT
