@@ -60,6 +60,7 @@ function wirePair(): [AeWire, AeWire] {
 // ── Nodes + manifest (real keys) ─────────────────────────────────────────────────────────────
 const seedA = new Uint8Array(32).fill(0xa1);
 const seedB = new Uint8Array(32).fill(0xb2);
+const seedC = new Uint8Array(32).fill(0xc3);
 const pub = (s: Uint8Array): string => Buffer.from(ed25519.getPublicKey(s)).toString("hex");
 
 const manifest: ConsortiumManifest = {
@@ -69,6 +70,9 @@ const manifest: ConsortiumManifest = {
   nodes: [
     { nodeId: "aws-use1", pubkey: pub(seedA), region: "us-east-1", provider: "aws", endpoint: "https://a", role: "validator", peerId: "12D3KooWAAA" },
     { nodeId: "gcp-usc1", pubkey: pub(seedB), region: "us-central1", provider: "gcp", endpoint: "https://b", role: "validator", peerId: "12D3KooWBBB" },
+    // A third member so "we dialed X and a DIFFERENT valid member answered" is expressible without
+    // the dialer targeting its own nodeId — which is now refused as a self-dial before any I/O.
+    { nodeId: "gcp-euw1", pubkey: pub(seedC), region: "europe-west1", provider: "gcp", endpoint: "https://c", role: "validator", peerId: "12D3KooWCCC" },
   ],
   signatures: [],
 };
@@ -82,6 +86,7 @@ function identity(nodeId: string, seed: Uint8Array, peerId: string): AeNodeIdent
 }
 const A = identity("aws-use1", seedA, "12D3KooWAAA");
 const B = identity("gcp-usc1", seedB, "12D3KooWBBB");
+const C = identity("gcp-euw1", seedC, "12D3KooWCCC");
 
 // ── Minimal in-memory store (same shape the engine test proves) ──────────────────────────────
 type RevRow = { agent_id: string; epoch_id: string | null; reason: string | null; signature: string; revoked_at: string };
@@ -233,12 +238,15 @@ describe("ae-channel: mutual handshake + rounds over the wire", () => {
     // routing/endpoint mis-binding. Deliberately NOT peerid_mismatch: the §1c rotation-skew retry
     // keys on manifest/peerid mismatches and must never fire on a plain wrong-endpoint dial.
     const [wireA, wireB] = wirePair();
+    // Dialer A, TARGET gcp-usc1, and gcp-euw1 answers — three distinct members. The old fixture had
+    // A dialing its OWN nodeId and only reached node_id_mismatch because B happened to answer, so it
+    // exercised the mis-binding by accident; that shape is now refused earlier as a self-dial.
     const responder = serveAeResponder({
-      wire: wireB, manifest, identity: B, actualRemotePeerId: A.peerId, store: new MemStore(),
+      wire: wireB, manifest, identity: C, actualRemotePeerId: A.peerId, store: new MemStore(),
       nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
     });
     const dialer = runAeDialer({
-      wire: wireA, manifest, identity: A, remoteNodeId: "aws-use1", actualRemotePeerId: B.peerId,
+      wire: wireA, manifest, identity: A, remoteNodeId: "gcp-usc1", actualRemotePeerId: C.peerId,
       store: new MemStore(), nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
     });
     const [result] = await Promise.all([dialer, responder.catch(() => undefined)]);
@@ -286,9 +294,15 @@ describe("ae-channel: mutual handshake + rounds over the wire", () => {
     expect(result.detail).toMatch(/timed out/);
   });
 
-  it("FAILS CLOSED: self-dial (nodeId_a === nodeId_b) is refused (anti-reflection)", async () => {
+  it("FAILS CLOSED: self-dial (nodeId_a === nodeId_b) is refused as self_dial (anti-reflection)", async () => {
     const { dialerResult } = await runBoth({ responderId: A, responderActualRemotePeerId: A.peerId, dialerActualRemotePeerId: A.peerId });
     expect(dialerResult.ok).toBe(false);
+    if (dialerResult.ok) return;
+    // The REASON, not just the refusal. This used to surface as `signature_invalid` — because
+    // buildAePeerAuthTbs throws on nodeIdA === nodeIdB and verifyAePeerAuth swallows that to false —
+    // pointing the operator at key material for what is actually reflection, or a manifest where two
+    // entries share an identity. Asserting only `ok === false` is why nothing noticed.
+    expect(dialerResult.reason).toBe("self_dial");
   });
 
   it("responder refuses round frames from a peer that never authenticated", async () => {

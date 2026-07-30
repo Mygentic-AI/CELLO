@@ -277,7 +277,7 @@ export type AeDialerResult =
       /** `node_id_mismatch`: a valid consortium member answered, but not the one we dialed —
        *  a routing/endpoint mis-binding, NOT a channel-binding failure (distinct so the §1c
        *  rotation-skew retry, keyed on peerid/pubkey mismatches, never fires on it). */
-      reason: HandshakeFailReason | "node_id_mismatch" | "protocol_error";
+      reason: HandshakeFailReason | "node_id_mismatch" | "self_dial" | "protocol_error";
       detail?: string;
     };
 
@@ -291,6 +291,25 @@ export async function runAeDialer(input: AeDialerInput): Promise<AeDialerResult>
   const nowMs = input.nowMs ?? (() => Date.now());
   const roundCount = input.rounds ?? 1;
   const timeoutMs = input.frameTimeoutMs ?? DEFAULT_FRAME_TIMEOUT_MS;
+
+  // SELF-DIAL, refused before any I/O. A node dialing itself is knowable here — no round trip needed
+  // — and every later detector names it badly: the responder's TBS builder throws on the A==B
+  // anti-reflection rule, which the wire converts to `protocol_error`, so an operator whose manifest
+  // lists this node under two entries (or whose endpoint resolves back to itself) was told the PEER
+  // spoke the protocol wrongly. Refusing here names the actual cause, and costs nothing.
+  // Keyed on nodeId ALONE, deliberately. A peerId comparison looks like a free second signal but is
+  // not: peerIds are transport identities that fixtures and single-host deployments legitimately
+  // share, so it produces false self-dials on connections that are fine. nodeId is the FROST
+  // participant identity — two nodes sharing one is already forbidden.
+  if (remoteNodeId === identity.nodeId) {
+    wire.close(); // the responder is waiting on our hello; leaving it to time out is not a refusal
+    return {
+      ok: false,
+      reason: "self_dial",
+      detail: `refusing to dial self (nodeId ${identity.nodeId}) — check the manifest for a duplicate entry or an endpoint that resolves back to this node`,
+    };
+  }
+
   try {
     // 1. hello with our freshly-minted nonce (the replay gate for OUR slot).
     const nonceA = randomBytes(32).toString("hex");
