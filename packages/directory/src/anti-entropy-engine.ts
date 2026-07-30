@@ -147,6 +147,17 @@ async function peerAdvertisement(
   return { tierA, tierB };
 }
 
+/**
+ * Is this a failure of the WIRE rather than of a store?
+ *
+ * Structural, not `instanceof`: the engine is deliberately transport-agnostic (it composes two
+ * `AeStoreView`s and must stay testable against in-memory ones), so importing the channel's error
+ * class here would invert the dependency the injection exists to avoid.
+ */
+function isWireError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AeProtocolError";
+}
+
 /** Run one anti-entropy round: LOCAL pulls from PEER and applies. Returns what actually changed. */
 export async function runAntiEntropyRound(
   local: AeStoreView,
@@ -182,6 +193,11 @@ export async function runAntiEntropyRound(
       tierAPulled += records.length;
       tierAApplied += await local.applyTierA(table, records);
     } catch (err) {
+      // Containment is for STORE failures — a poisoned record must not take Tier-B, and the kill
+      // switch, down with it. A WIRE failure is different in kind: the stream is dead, so continuing
+      // to the next table issues requests into it and waits out a frame deadline per table before
+      // reporting the round `completed`. Propagate those.
+      if (isWireError(err)) throw err;
       failures.push({ tier: "A", table, reason: err instanceof Error ? err.message : String(err) });
     }
   }
@@ -198,6 +214,7 @@ export async function runAntiEntropyRound(
       tierBPulled += records.length;
       tierBApplied += await local.applyTierB(table, records);
     } catch (err) {
+      if (isWireError(err)) throw err;
       failures.push({ tier: "B", table, reason: err instanceof Error ? err.message : String(err) });
     }
   }

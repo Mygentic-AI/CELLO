@@ -64,7 +64,12 @@ function decodeFrame(bytes: Uint8Array): Record<string, unknown> {
 
 /** Protocol violation — the peer broke the frame contract (wrong type, missing field, early close).
  *  Always terminal for the stream; the message names what was violated. */
-export class AeProtocolError extends Error {}
+export class AeProtocolError extends Error {
+  // Set explicitly: subclassing Error does NOT set `name` (it inherits "Error" from the prototype),
+  // and the engine identifies wire failures structurally by name rather than by `instanceof` — it is
+  // transport-agnostic and must not import this module.
+  override readonly name = "AeProtocolError";
+}
 
 /** Per-frame receive deadline. A peer that goes silent mid-conversation (post-hello, mid-round)
  *  must not park this side forever — the wire is closed and the exchange fails. */
@@ -236,16 +241,35 @@ class RemoteStoreView implements AeStoreView {
   async serveTierA(table: string, hashes: readonly string[]): Promise<TierARecord[]> {
     this.#wire.send(encodeAeFrame({ type: "ae_pull_a", table, hashes: [...hashes] }));
     const frame = await nextFrame(this.#wire, "ae_records_a", this.#timeoutMs);
-    const records = bounded((frame["records"] as TierARecord[] | undefined) ?? [], "ae_records_a");
+    const raw = frame["records"] ?? [];
+    // Array-CHECKED, not cast. `bounded` only reads `.length`, so a scalar passes it and the filter
+    // below then throws a TypeError — which the dialer's catch classifies as OUR fault, not the
+    // peer's, filing a protocol violation under a local-defect event.
+    if (!Array.isArray(raw)) throw new AeProtocolError("ae_records_a `records` is not an array");
+    const records = bounded(raw as TierARecord[], "ae_records_a");
     const requested = new Set(hashes);
-    return records.filter((r) => typeof r?.hash === "string" && requested.has(r.hash));
+    // DEDUPED. `Set.has` is membership, not consumption, so a peer serving one record ten times used
+    // to satisfy a ten-record plan: `pulled` reached `planned`, the shortfall alarm stayed silent, and
+    // because one row DID apply the fork streak was reset. A peer withholding nine of ten
+    // `agent_suspensions` rows reported as a clean converged round, forever — the kill switch not
+    // replicating, with every alarm built to catch it disarmed. Dedup also caps the result at
+    // `requested.size`.
+    const seen = new Set<string>();
+    return records.filter(
+      (r) => typeof r?.hash === "string" && requested.has(r.hash) && !seen.has(r.hash) && (seen.add(r.hash), true),
+    );
   }
   async serveTierB(table: string, keys: readonly string[]): Promise<TierBRecord[]> {
     this.#wire.send(encodeAeFrame({ type: "ae_pull_b", table, keys: [...keys] }));
     const frame = await nextFrame(this.#wire, "ae_records_b", this.#timeoutMs);
-    const records = bounded((frame["records"] as TierBRecord[] | undefined) ?? [], "ae_records_b");
+    const rawB = frame["records"] ?? [];
+    if (!Array.isArray(rawB)) throw new AeProtocolError("ae_records_b `records` is not an array");
+    const records = bounded(rawB as TierBRecord[], "ae_records_b");
     const requested = new Set(keys);
-    return records.filter((r) => typeof r?.key === "string" && requested.has(r.key));
+    const seenKeys = new Set<string>();
+    return records.filter(
+      (r) => typeof r?.key === "string" && requested.has(r.key) && !seenKeys.has(r.key) && (seenKeys.add(r.key), true),
+    );
   }
   applyTierA(): never { throw new AeProtocolError("applyTierA is local-only, never remote"); }
   applyTierB(): never { throw new AeProtocolError("applyTierB is local-only, never remote"); }
@@ -271,7 +295,7 @@ export interface AeDialerInput {
 }
 
 export type AeDialerResult =
-  | { ok: true; rounds: RoundResult[] }
+  | { ok: true; rounds: RoundResult[]; unknownTables: Array<{ tier: "A" | "B"; table: string }> }
   | {
       ok: false;
       /** `node_id_mismatch`: a valid consortium member answered, but not the one we dialed —
@@ -367,13 +391,23 @@ export async function runAeDialer(input: AeDialerInput): Promise<AeDialerResult>
     // 4. rounds: fresh advertisement each time, then the proven engine.
     const remote = new RemoteStoreView(wire, timeoutMs, store);
     const rounds: RoundResult[] = [];
+    // A table the peer advertises and we do not track is SKIPPED rather than fatal — the right call,
+    // since the alternative kills every old node's rounds against new ones during a rolling deploy, in
+    // the direction carrying suspensions. But a skip is a degraded round, and a degraded round that
+    // says nothing is indistinguishable from a healthy one: the caller must be able to say which table
+    // stopped replicating and when. Collected here and surfaced by the sync service.
+    const unknownTables: Array<{ tier: "A" | "B"; table: string }> = [];
     for (let i = 0; i < roundCount; i++) {
       await remote.refresh();
-      rounds.push(await runAntiEntropyRound(store, remote));
+      rounds.push(
+        await runAntiEntropyRound(store, remote, (tier, table) => {
+          if (!unknownTables.some((u) => u.tier === tier && u.table === table)) unknownTables.push({ tier, table });
+        }),
+      );
     }
     wire.send(encodeAeFrame({ type: "ae_done" }));
     wire.close();
-    return { ok: true, rounds };
+    return { ok: true, rounds, unknownTables };
   } catch (err) {
     wire.close();
     if (err instanceof AeProtocolError) return { ok: false, reason: "protocol_error", detail: err.message };
@@ -527,13 +561,17 @@ export async function serveAeResponder(input: AeResponderInput): Promise<void> {
           break;
         }
         case "ae_pull_a": {
-          const hashes = bounded((frame["hashes"] as string[]) ?? [], "ae_pull_a hashes");
+          const rawHashes = frame["hashes"] ?? [];
+          if (!Array.isArray(rawHashes)) throw new AeProtocolError("ae_pull_a `hashes` is not an array");
+          const hashes = bounded(rawHashes as string[], "ae_pull_a hashes");
           const records = await store.serveTierA(str(frame, "table"), hashes);
           wire.send(encodeAeFrame({ type: "ae_records_a", records: [...records] }));
           break;
         }
         case "ae_pull_b": {
-          const keys = bounded((frame["keys"] as string[]) ?? [], "ae_pull_b keys");
+          const rawKeys = frame["keys"] ?? [];
+          if (!Array.isArray(rawKeys)) throw new AeProtocolError("ae_pull_b `keys` is not an array");
+          const keys = bounded(rawKeys as string[], "ae_pull_b keys");
           const records = await store.serveTierB(str(frame, "table"), keys);
           wire.send(encodeAeFrame({ type: "ae_records_b", records: [...records] }));
           break;

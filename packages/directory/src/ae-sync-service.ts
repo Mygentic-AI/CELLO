@@ -28,8 +28,7 @@ import type { ConsortiumManifest } from "@cello-protocol/protocol-types";
 import type { Logger } from "@cello-protocol/interfaces";
 import {
   AE_PROTOCOL_ID, runAeDialer, serveAeResponder,
-  type AeWire, type AeNodeIdentity,
-} from "./ae-channel.js";
+  type AeWire, type AeNodeIdentity, AeProtocolError } from "./ae-channel.js";
 import type { AeStoreView } from "./anti-entropy-engine.js";
 
 /** The transport surface the service needs (structurally satisfied by CelloNode). */
@@ -55,8 +54,15 @@ export function streamWire(stream: Stream): AeWire {
         const { value, done } = await frames.next();
         if (done || value === undefined) return null;
         return value instanceof Uint8Array ? value : (value as { subarray(): Uint8Array }).subarray();
-      } catch {
-        return null; // stream reset/abort mid-read — the channel treats it as closed (fail closed)
+      } catch (err) {
+        // NOT swallowed into `null`. `null` means "the peer finished" and the channel renders it as
+        // "wire closed while waiting for X" — which is a lie for the case that actually bites first:
+        // `lp.decode` is called without options, so `maxDataLength` is the library default 4 MiB,
+        // while `lp.encode.single` has NO cap. A responder serving a whole table in one frame (a node
+        // rejoining with an empty DB, pulling all of agent_profiles) sends a frame OUR OWN decoder
+        // then refuses — and the operator was told the network closed the wire, so they go and read
+        // the peer's logs, which show a clean successful serve.
+        throw new AeProtocolError(`AE frame read failed: ${describeThrown(err)}`);
       }
     },
     close() {
@@ -269,6 +275,16 @@ export class AeSyncService {
       const applied = result.rounds.reduce((n, r) => n + r.tierAApplied + r.tierBApplied, 0);
       const planned = result.rounds.reduce((n, r) => n + r.tierAPlanned + r.tierBPlanned, 0);
       const failures = result.rounds.flatMap((r) => r.failures);
+
+      // A table this node does not track, advertised by the peer — normal mid-rolling-deploy, and
+      // silent until now. Named at WARN because the consequence is that the table is NOT replicating
+      // in this direction until both nodes carry it.
+      for (const u of result.unknownTables) {
+        logger.warn("antientropy.round.table_unknown", {
+          peerNodeId, tier: u.tier, table: u.table, correlationId,
+          reason: "peer advertises a table this node does not track — skipped, so it is not replicating in this direction",
+        });
+      }
       logger.info("antientropy.round.completed", {
         peerNodeId, pulled, applied, planned, durationMs: Date.now() - startMs, correlationId,
       });
