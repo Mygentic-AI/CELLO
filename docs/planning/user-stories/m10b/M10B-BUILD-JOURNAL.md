@@ -3143,3 +3143,116 @@ code from each other. All aligned.
   no output, which is NO verdict, not a pass.
 - Case (d) (withdrawal) still ❌ and blocked on `DOD-END-WITHDRAW-1`; refuse/withdraw ops still
   accumulate unhandled in the queue, which is what keeps `DOD-END-INGRESS-1` amber.
+
+---
+
+## Entry 40 — the review, and the third layer of the same hole
+
+The `cello-unit-reviewer` pass on the `same_operator` work. Two dispatches died on API
+errors first (529, then ENOTFOUND) — **a killed reviewer is NO verdict, not a pass**, so the
+third dispatch was the first real one. Eight findings, seven fixed here, one deliberately not.
+
+### F1 — the finding that matters: `evaluateSignalPolicy` has no production caller
+
+I fixed this defect twice today and it was still there a layer up. The sequence:
+
+1. The flag was inert because it sat **in the payload**, which no floor predicate may read.
+2. Moved to the envelope → inert because **`putReceivedSignal` dropped it on the INSERT**.
+3. Fixed → **still inert, because nothing calls the predicate.** A repo-wide grep returns its
+   definition, one comment, and two test files. No session path, no contact handler, no
+   gateway. No operator-facing surface sets a `SignalRequirementPolicy` either —
+   `cello_contact_set_signal` governs what I PRESENT, not what I REQUIRE.
+
+Ten of Alice's own agents clear a floor of three today for the same reason they did before
+this milestone: **no floor is ever evaluated.** `DOD-FLOOR-1` (M10, ✅) has the identical
+hole — its journey evidence calls `evaluateSignalPolicy` *from the test*, which is the
+hand-built-rows shape again: the test supplies the caller production lacks.
+
+**Not wired, deliberately, and this is a triage call rather than a deferral.**
+`DEFAULT_UNKNOWN_POLICY` is `{min_count: 1, require_issuer_kind: "portal"}`. Enforcing that
+at session acceptance today refuses every UNKNOWN contact holding no portal signal — i.e.
+most agents — and "two agents connect" is the product's core value. A floor never evaluated
+is a missing security property; a floor wired wrong is a broken product. `DOD-END-COUNT-1`
+and case (b) went back to 🟡 rather than carrying a ✅ the code cannot support.
+
+### F3 — and the reason nobody saw it: 45 test files that never run
+
+Replacing the directory's vendored decoder with the shared one silently changed a named
+reason: `decodeTrustSignalEnvelope` runs `toPreimage`'s semantic validation internally, so an
+out-of-enum `subject_kind` started reporting as `envelope_undecodable` — a FORM label on a
+MEANING failure, sending an operator to debug their CBOR encoder over a bad enum value. That
+is error substitution introduced by a refactor. Restored explicitly by classifying: a
+12-element array carrying the domain tag is structurally an envelope, so what remains is a
+VALUE problem.
+
+**The bigger thing is why it went unnoticed.** Every directory integration suite is
+`describe.skip` unless `CELLO_ENV=local`, and the gate does not set it. "935 tests green"
+exercised NONE of the submit chokepoint — the security-core module whose decoder I had just
+replaced. Running it found four breaks, three predating this milestone:
+
+- a test asserting `envelope_invalid` was already failing on my swap;
+- `bad[0] = 0x8c` corrupted the arity header to claim 12 when the preimage had 11 — and M10B
+  made **12 correct**, so the corruption became a VALID envelope and the test passed by
+  accepting exactly what it exists to refuse;
+- V55 dropped `signal_records.subject` and four queries across three suites still used it;
+- `m10-present-1-dumb-check.test.ts` — the suite for `checkPresentedSignals`, the function the
+  entire currency attestation rests on — was broken by V55 and unrun.
+
+36 tests now green under `CELLO_ENV=local`. Under that env 121 further failures are local
+credential problems rather than rot, so un-skipping wholesale would be noise; that triage is
+its own unit.
+
+### The attestation: wrong twice, in opposite directions
+
+Worth recording because the error was mine and the mechanism is instructive.
+
+1. I grepped the DAEMON, found `verdict: "active"` hard-coded and no ledger query, and wrote
+   that the attestation lied about a currency check. **It does not** — `#processSessionRequest`
+   calls `checkPresentedSignals` against `signal_records_effective` and forwards only active
+   rows. That was a claim about the PRODUCER reached by reading only the CONSUMER, which the
+   repo's debugging rules name explicitly.
+2. Reverted — and the restored sentence was *also* wrong, in the other direction. The
+   projection lists **every signal ever received from a contact**, while the directory checks
+   only what was presented in THIS session. Charlie holds three endorsements from Alice, she
+   presents one, all three are handed to his LLM under a sentence saying their status was just
+   confirmed — so one revoked last week keeps vouching.
+
+Fixed by threading `presentedSignalHashes` onto the inbound event and marking each signal
+`currency_checked_this_session`. That closes most of `DOD-END-WITHDRAW-1`'s "recipient holding
+a copy" clause at the point that actually matters — what a consuming model is told — with no
+new transport.
+
+### The rest
+
+- **F4** — the `same_operator` ALTER swallowed every failure. `sqlcipher-db.ts` sets no
+  `busy_timeout` and "two daemons on one DB" is a named real condition, so SQLITE_BUSY
+  swallows identically to duplicate-column; the daemon then runs with sessions forming
+  normally while no presented signal is ever stored. Now re-reads `PRAGMA table_info` and
+  rethrows. Revert-tested.
+- **F5** — `cello trust-signals list` never rendered the flag: MCP saw it, the CLI operator did
+  not. Half a parity fix on the surface `DOD-END-SURFACE-1` exists to keep in step.
+- **F6** — the envelope stopped being a pure function of the signed submission. `same_operator`
+  is computed from live account linkage and hashed in, so a re-mint after a crash could flip it
+  and notarize a SECOND endorsement from one submission — the duplicate `0009` prevents,
+  arriving where it cannot see. Now pinned to the derived submission id (`0010`).
+- **F7** — a comment claimed a refusal the code does not perform (the throw is caught by its own
+  function and degraded to a warn). Behaviour right, comment wrong, which is worse than either.
+- **F8** — `errored` rows do have a ceiling (`sweepStaleSubmissions`), but the sweep DELETES, so
+  the terminal state is a submission that vanished with no result and no notice. Named, not fixed.
+
+The reviewer also corrected one of my own claims: dropping `deliverWalletSignal`'s flag fails
+**1** daemon test, not "2 protocol-types tests" — protocol-types cannot depend on the daemon.
+And it found that `trust-signal-envelope.test.ts` stays entirely green under a hardcoded-false
+encoder, because every assertion round-trips through the same encoder and decoder. **The
+eighth frozen vector is the only thing standing between this repo and that bug.**
+
+### State
+
+- J-END **10/10 live** after all seven fixes. cello-client 2286 / trustless-cello 935 / portal
+  164, plus 36 directory integration tests that had never run.
+- Published `v0.0.145` (daemon 0.0.92, protocol-types 0.0.34, connect 0.0.101), binary-verified.
+  The post-review fixes are NOT yet published — they ride the next cascade.
+- `DOD-END-COUNT-1` 🟡 and case (b) 🟡, honestly, until the predicate has a caller.
+- ⚠️ **Local `cello_dev` DB:** V53–V55 were applied by hand (psql) to unblock the integration
+  suites, so its `flyway_schema_history` still reports max(version)=52 while the schema is at 55.
+  Harmless locally, but flyway would disagree — rebuild the local DB rather than trusting it.
