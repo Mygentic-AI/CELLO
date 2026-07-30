@@ -1397,3 +1397,35 @@ Cross-pins are real versions with no `workspace:*` leak; `daemon@0.0.93 → gate
 promotion is Andre's to run and always has been. Until he promotes, an operator installing `@latest`
 gets a daemon whose guidance is unmarked and whose marker is forgeable — the H2/H3 fixes are
 published but not yet on the default install path.
+
+### C20 closing proof — promoted, and the audit trail survived the upgrade
+
+All seven packages promoted to `latest` by Andre and verified resolving: connect `0.0.102`, cli
+`0.0.94`, daemon `0.0.93`, gateway `0.0.18`, crypto `0.0.33`, transport `0.0.37`, protocol-types
+`0.0.35`. He then installed, `logout`/`login`, and reconnected the MCP.
+
+**The new fields are live on his own daemon**, which is where the previous two rounds were caught:
+
+```
+rate_max_per_window   500  v1  tighten  changedAt 1785384409044  chainValid true
+autonomous_override   null v0  —        changedAt null           chainValid null
+```
+
+`changedAt` is populated where a change exists, and an unset key reads `chainValid: null` — **not** the
+vacuous `true` that review L5 named. Both fields were unreadable at this surface before this round.
+
+**And the hash chain survived everything this milestone kept breaking it with:**
+
+```
+policy log   total: 21   chainValid: true
+```
+
+Twenty-one records, chain intact — across a `config set` that SIGTERMed the sidecar (C18), a version
+upgrade, a full `logout`/`login`, and a new daemon binary. In round 1 that same sequence froze the log
+while still reporting `chainValid: true`; here the count is unchanged from C18's proof *because
+nothing new was screened*, and the chain verifies rather than having been truncated. Inbound/outbound
+pairs still share one `correlationId` and one `contentHash` — one message through both agents' screens.
+
+Five agents online, standing receivers ready. **The layer is enforcing, its audit trail is durable
+across restarts and upgrades, its guidance is attributable, and its control surface can answer what
+changed and when.** That is M9B.
