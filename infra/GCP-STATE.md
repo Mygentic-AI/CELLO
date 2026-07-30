@@ -160,6 +160,24 @@ two per-relay secrets, listening `/tcp/4001/ws` (public) and `/tcp/4002` (bound,
 consortium-wide issuer above and dropped from Terraform management rather than destroyed —
 `prevent_destroy` blocked the delete, correctly.
 
+## Live image tags (2026-07-30)
+
+Both services on **`reviewfix-de1ed949`** (Cloud Build `a918df99` relay / `a904a60d` directory),
+pinned in `infra/terraform/terraform.tfvars`. Carries the DOD-SEAL-BROKER-1 review fixes: the relay
+now routes around an unreachable brokering directory instead of rejecting the seal (F1), and the
+seal-receipt fetch is removed from both sides (an unverifiable root cannot be proof — Entry 60).
+
+Deployed node-by-node, each polled to a real `GET /bootstrap` 200 before the next was touched —
+`update_policy = PROACTIVE` means one un-targeted apply would replace all three at once, and T−1=1
+tolerates exactly one node down.
+
+| Node | Address | Verified ready |
+|---|---|---|
+| `gcp-usc1` | 34.136.176.190 | 2026-07-30 |
+| `gcp-euw1` | 34.34.166.245 | 2026-07-30 |
+| `gcp-use1` | 34.75.172.108 | 2026-07-30 |
+| `gcp-relay-use1` | 34.139.119.165 (internal 10.10.0.28) | 2026-07-30 |
+
 ## Quotas (verified 2026-07-28 — ample, no requests needed)
 
 us-east1 / us-central1 / europe-west1 / europe-west3: 200 CPUs (24 E2), 8 static IPs, 4 TB disk.
