@@ -4694,3 +4694,79 @@ actually emits `antientropy.peer.auth_failed` — it fails at the handshake, not
 what it emits rather than what I assumed, which is the same discipline that caught the finding above.
 
 Directory **987** green.
+
+---
+
+## Entry 73 — 2026-07-31 — the cello-client branch reviewed: a HIGH in code I did not know was in my own diff
+
+The five commits on `cello-client` `m12/ae-client` had never been reviewed, which was the larger gap:
+that repo ships to operators via npm and runs on their machines, where a bad change is far less
+recoverable than one on a directory I can redeploy.
+
+### Verdicts, quoted
+
+> **SPEC: DEVIATIONS FOUND** — `0c212ae` shipped an undescribed second change in `daemon.ts` and
+> `session-node-manager.ts`; `a8c1475` reverted only the described half, leaving 86 of 150 lines in
+> place with no commit message covering them and no journal entry. [blocking]
+>
+> **SILENT FALLBACKS FOUND** — F1 (auto-ack broker released before the seal frames arrive; the
+> visiting-stream queue drain can delete durable receipt rows into a dying stream) is HIGH and
+> [blocking].
+>
+> **ERROR SUBSTITUTION FOUND** — `daemon.ts:1741` surfaces `dkg_failed` with a confident wrong
+> diagnosis ("verify the preAuthToken") for causes that are now known one call frame away. [blocking]
+>
+> **HOLLOW TESTS FOUND** — more precisely, **NO TESTS.** … **Every new behavior in this branch fails
+> THE REVERT TEST vacuously: revert any of the four commits and all 1121 tests still pass.** [blocking]
+>
+> **REMOVALS PROVEN** — `a8c1475` is clean in source, in `dist`, and across both repos.
+
+### The finding I could not have reached alone
+
+The reviewer opened with something outside my framing: **commit `0c212ae` contained two changes and
+described one.** Its message covers the seal-receipt fetch; its diff also carried the auto-acknowledge
+broker connection. My revert removed only the half the message named, so 86 of 150 lines survived,
+unmentioned anywhere.
+
+And that surviving half was wrong in a way I would have defended, because I wrote the comment above it.
+It released the broker visiting connection in a `.finally()` on `submitSealLeaf` — which settles at the
+relay ack plus a local root computation, **milliseconds** — while the frame it exists to catch arrives
+**~60ms later**. The GCP timeline proving that is quoted three lines above the bug. It closed the stream
+before the push it was opened for: precisely the stall it was written to prevent.
+
+Worse than a lost race. The directory drains its DURABLE notification queue on ANY stream that
+authenticates, visiting included, and DELETES each row once sent. A visiting stream that authenticates
+and dies milliseconds later invites send-and-delete into a closing stream — the receipt gone from the
+queue and never delivered. That is the permanent-loss mode the Seam B work closed, re-entered from the
+other side.
+
+### Three corrections to my own reasoning on the close fix
+
+- The guard fired on EVERY `!submit.ok` while justifying itself for one reason. Now scoped, and the
+  scope is pinned by a test.
+- My comment named a mechanism that does not exist: `destroySessionNode` flips the status BEFORE
+  deleting the node entry, so "teardown runs before the flip" is false. The real producers are a stale
+  `record` snapshot taken before a broker dial that can take 10s, and `retireSessionNode` stopping a
+  node without a status change.
+- My justification — *"read from THIS agent's own database, never from a directory's word"* — is
+  narrower than written. For a NON-initiator the stored cert is recorded `verified:false`; it is
+  directory-attested over an authenticated channel. What IS different from the deleted fetch, and now
+  says so: field-completeness, independent frontier re-derivation (the client never takes the
+  directory's word for that value), and cryptographic verification where this agent holds the signer
+  key. Also decisive: `cello_get_sealed_receipt` already returns this exact cert, so the close surfaces
+  data the operator can already retrieve rather than minting a new claim.
+
+### Tests
+
+Two of the three named are done — the FROST identifier distinctness check (extracted to a seam, since
+its call site needs a live multi-node DKG) and the close-after-own-seal guard with its negative twin
+and its scope assertion. `registerCloseSessionHandler` had no test anywhere in the repo; that harness
+now exists. Daemon **1130/1130**.
+
+**Still owed:** the broker-release timing test — the one that would have caught F1. It needs a
+`session-node-manager` fixture that can observe `stop()` relative to a simulated inbound
+`seal_verified`, which is a heavier fixture than the close harness.
+
+**Also owed and unchanged:** none of this is published. The branch carries operator-facing behaviour
+(the removed fetch, the close fix, the registration guidance) and reaches operators only through
+`/cello-publish` + Andre's `latest` promotion.
