@@ -1106,3 +1106,48 @@ show it, then concluded the hypothesis was dead — and wrote each of those into
 definition-of-done. The reviewer's closing note is the one to keep: *"my first probe (raw engine,
 no store classes) failed to reproduce it — the commit's mechanism only surfaced against the real
 components."* A reproduction that does not use the real components is not a falsification.
+
+---
+
+## 2026-07-29 — Entry C18: cascade v0.0.142, and the layer proven on the operator's own daemon
+
+**Two cascades today.** `v0.0.141` (gateway 0.0.13, daemon 0.0.88, cli 0.0.89, connect 0.0.98) went
+out BEFORE the review and carried two of the defects C17 records. `v0.0.142` (gateway 0.0.14,
+daemon 0.0.89, cli 0.0.90) carries the corrections. Both CI runs green; `latest` promoted by Andre.
+
+**Verified against the TARBALL, behaviourally, not by reading the diff.** Pulled
+`@cello-protocol/gateway@0.0.14` and ran the bypass strings through the built module:
+
+```
+FLAGGED  "2026-07-29 415-555-2671"        <- the bypass I introduced, closed
+FLAGGED  "ref 4155552671000000 end"       <- the padded-number channel, closed
+FLAGGED  "call me at +1 415 555 2671"     <- a real phone still caught
+ok       "tracked in 2026-07-29 planning" <- the original false positive, still fixed
+```
+
+`checkpointStore` present in the shipped bin; zero `config?.close()` remaining. Cross-pins real:
+`daemon → gateway 0.0.14`, `cli → daemon 0.0.89`.
+
+### THE CLOSING PROOF — on Andre's live daemon, through the sequence that failed twice
+
+After he promoted, installed, and restarted:
+
+```
+policy log            total: 21   chainValid: true
+config set rate_max   -> tighten, v1, applied: true     <- the sidecar RESTARTED
+policy log            total: 21   chainValid: true       <- handle NOT stale
+config list           -> readable, rate_max_per_window: 500 v1
+```
+
+Before the correction, that config set would have frozen the log at 21 forever while still claiming
+`chainValid: true`, and a second write would have corrupted the store. Both held. **This is the
+first time the milestone's central claim has been true end to end on a real machine.**
+
+Also observed live, and worth recording because it closes an earlier open item: the screening path
+DOES thread `correlationId` — an inbound and an outbound record for one message carried the same id
+AND the same `contentHash`, i.e. one message followed through both agents' screens. The gap named
+in C8 is the CONFIG flow only; I had overstated it as the whole thing.
+
+**Housekeeping owed to Andre:** I left `rate_max_per_window` at 500 on his daemon from that test.
+Real cap, generous, but not something he chose. Reverting it to 0 is a LOOSENING and will ask him to
+confirm — which is the gate working, and also why I did not quietly undo it.
