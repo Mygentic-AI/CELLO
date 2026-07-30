@@ -805,6 +805,52 @@ export class PgDirectoryStore implements DirectoryStore {
    * AC-009: logs notification.drained when items are returned.
    * SI-001: atomic SELECT+DELETE prevents double delivery.
    */
+  /**
+   * DOD-SEAL-BROKER-1 (receipt fetch): the notarization for one session, from THIS node's copy.
+   *
+   * Reads the replicated table, so a node that never adjudicated the seal still answers correctly once
+   * anti-entropy has carried the row. Newest first: V31 allows a superseding notarization for the same
+   * session, and the current one is what a participant should be told about.
+   */
+  async getSealNotarization(sessionIdHex: string): Promise<{
+    sessionIdHex: string;
+    sealedRoot: Uint8Array;
+    participantAPubkey: Uint8Array;
+    participantBPubkey: Uint8Array;
+    closeTimestamp: number;
+    frostSignature: Uint8Array;
+    sealType: string;
+  } | null> {
+    const r = await this.#pool.query<{
+      sealed_root: Buffer;
+      participant_a_pubkey: Buffer;
+      participant_b_pubkey: Buffer;
+      close_timestamp: string;
+      frost_signature: Buffer;
+      seal_type: string;
+    }>(
+      `SELECT sealed_root, participant_a_pubkey, participant_b_pubkey, close_timestamp,
+              frost_signature, seal_type
+         FROM seal_notarizations
+        WHERE session_id = $1
+        ORDER BY id DESC
+        LIMIT 1`,
+      [Buffer.from(sessionIdHex, "hex")],
+    );
+    const row = r.rows[0];
+    if (!row) return null;
+    return {
+      sessionIdHex,
+      sealedRoot: new Uint8Array(row.sealed_root),
+      participantAPubkey: new Uint8Array(row.participant_a_pubkey),
+      participantBPubkey: new Uint8Array(row.participant_b_pubkey),
+      // BIGINT arrives as a string from pg; Number() is safe for a millisecond timestamp.
+      closeTimestamp: Number(row.close_timestamp),
+      frostSignature: new Uint8Array(row.frost_signature),
+      sealType: row.seal_type,
+    };
+  }
+
   async drainNotifications(pubkeyHex: string, correlationId: string): Promise<DirectoryNotification[]> {
     const result = await this.#pool.query<{ id: string; payload: unknown }>(
       `WITH drained AS (

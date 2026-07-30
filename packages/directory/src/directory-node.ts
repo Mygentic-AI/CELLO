@@ -2374,6 +2374,50 @@ export class CelloDirectoryNode {
         } else if (parsed.type === "seal_upgrade_request") {
           // CELLO-M7-UPGRADE-001 (DOD-UP-1): returning absent party ratifies the unilateral seal
           void this.#processSealUpgradeRequest(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "seal_result_request") {
+          // DOD-SEAL-BROKER-1 (receipt fetch): "do you hold a receipt for this session?"
+          //
+          // A participant homed here cannot be handed `session_sealed` by a DIFFERENT directory that
+          // adjudicated the seal — notification_queue is per-node and unreplicated. But
+          // seal_notarizations IS replicated, so this node holds the receipt and the participant can
+          // LEARN it rather than wait for a push that will never arrive. Without this the agent times
+          // out and reports a verification failure for a seal that demonstrably succeeded.
+          //
+          // Authorization: answer ONLY to a participant of that session. The requester is already
+          // authenticated on this stream, so this is a membership check, not a trust decision — but it
+          // must be made, or any authenticated agent could enumerate other people's receipts.
+          const reqSessionHex = Buffer.from(parsed.session_id).toString("hex");
+          const notarization = await this.#store.getSealNotarization(reqSessionHex);
+          const requesterIsParticipant =
+            notarization !== null &&
+            [notarization.participantAPubkey, notarization.participantBPubkey].some(
+              (pk) => Buffer.from(pk).toString("hex") === authedPubkeyHex,
+            );
+          if (notarization && requesterIsParticipant) {
+            this.#logger?.info("seal.result.served", {
+              sessionId: reqSessionHex,
+              requesterShort: authedPubkeyHex!.slice(0, 16),
+              sealType: notarization.sealType,
+            });
+            this.#sendFrame(stream, CBOR_ENC.encode({
+              type: "seal_result",
+              session_id: notarization.sessionIdHex,
+              sealed_root: notarization.sealedRoot,
+              close_timestamp: notarization.closeTimestamp,
+              frost_signature: notarization.frostSignature,
+              seal_type: notarization.sealType,
+            }));
+          } else {
+            // "Not here" and "not yours" answer identically ON PURPOSE: distinguishing them tells a
+            // caller whether a session it is not part of exists, which is a disclosure this frame has
+            // no reason to make. The reason is logged locally instead.
+            this.#logger?.debug("seal.result.none", {
+              sessionId: reqSessionHex,
+              requesterShort: authedPubkeyHex!.slice(0, 16),
+              reason: !notarization ? "no_notarization_here" : "requester_not_a_participant",
+            });
+            this.#sendFrame(stream, CBOR_ENC.encode({ type: "seal_result_none", session_id: reqSessionHex }));
+          }
         } else if (parsed.type === "ping") {
           // M7-DIR-PING-001: heartbeat ping/pong — no state, no blocking
           this.#logger?.debug("directory.signaling.ping.received", {

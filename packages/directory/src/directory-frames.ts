@@ -400,7 +400,16 @@ export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId:
 /** initiatorPubkey is included so the directory can route the rejection back to the initiator by direct lookup in #streams. */
 export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"; sessionId: string; initiatorPubkey: string; reason: string };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SessionOfferReject | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest | SubmissionWrite;
+/**
+ * DOD-SEAL-BROKER-1 (receipt fetch): "do you hold a receipt for this session?"
+ *
+ * Asked by a participant whose seal was adjudicated by a DIFFERENT directory, which therefore could not
+ * hand it `session_sealed` (notification_queue is per-node and unreplicated). `seal_notarizations` IS
+ * replicated, so the directory the participant is connected to can answer from its own copy.
+ */
+export type SealResultRequestFrame = { type: "seal_result_request"; session_id: Uint8Array };
+
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SessionOfferReject | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest | SubmissionWrite | SealResultRequestFrame;
 
 /**
  * M10B / DOD-END-SUBMIT-1: acknowledge a sealed submission (OUTBOUND).
@@ -729,6 +738,14 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     const ts = typeof tsRaw === "number" ? tsRaw : typeof tsRaw === "bigint" ? Number(tsRaw) : null;
     if (ts === null || !Number.isFinite(ts)) return null;
     return { type: "ping", ts };
+  }
+
+  // DOD-SEAL-BROKER-1 (receipt fetch): session id only — the answer is authorized by checking the
+  // authenticated requester against the notarization's participants, not by anything in this frame.
+  if (o["type"] === "seal_result_request") {
+    const session_id = toUint8Array(o["session_id"]);
+    if (!session_id || session_id.length !== 16) return null;
+    return { type: "seal_result_request", session_id };
   }
 
   // M7-MANIFEST-002: manifest poll request from client → directory
