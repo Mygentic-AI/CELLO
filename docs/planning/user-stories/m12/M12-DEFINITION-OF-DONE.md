@@ -167,22 +167,24 @@ description: >
   reconnect, the mutual handshake over the stream (`verifyPeerAuthFrame` plus our own signed frame),
   and the digest→detail→pull round protocol with write-hints. Manifest gains `peerId` population and
   the directory VERIFIES its manifest at load (design §1a/§1b). Peers failing identity verification are
-  refused with the cause named. — 🟡 BUILT (`ae-channel.ts`; the ❌ reflected main, which never saw the
-  branch). Handshake + rounds over the wire covered by `ae-channel.test.ts` 13/13, including
-  fail-closed on wrong key, relayed frames, a member answering for a node we did not dial, self-dial,
-  pre-auth round frames and a frame deadline; the O(compare) claim is pinned by a frame-counting test
-  (a converged round sends digests and nothing else). Proven between three real processes over Noise in
-  `j-antientropy` 5/5 (→ Entry 70b). Owed for ✅: a reviewer verdict, quoted.
+  refused with the cause named. — ✅ (→ Entries 70b, 72). Reviewed, verdict verbatim:
+  *"SPEC: DEVIATIONS FOUND … SILENT FALLBACKS FOUND … ERROR SUBSTITUTION FOUND … HOLLOW TESTS FOUND"* —
+  10 findings, **all closed**; `write-hints` deferred with its cost stated (`M12-D-AE-WRITE-HINTS`).
+  The reviewer's own summary of the auth path: *"the handshake, the fail-closed discipline, the
+  cause-naming and the manifest-verification wiring are the strongest parts of the M12 code I have
+  read, and I could not break the auth path."* 14/14 over the wire; re-verified on the 3-process spine
+  gate 5/5 AFTER the fixes, since they changed wire behaviour.
 - **DOD-AE-APPEND-1** [trustless-cello] — **the behavioral claim, riding the three above:** append-only
   tables sync between directories over the authenticated libp2p channel via root-comparison + delta
   pull; divergence detection is O(compare), transfer is delta-only; peers that fail identity
-  verification are refused. Proven by a multi-process integration test, not unit tests. — 🟡 the
+  verification are refused. Proven by a multi-process integration test, not unit tests. — ✅ the
   multi-process proof EXISTS and is green: `j-antientropy.spine.test.ts` 5/5 across **three real
   directory processes** over Noise (→ Entry 70b) — divergent state converges on all three, a node absent
   for a burst catches up on rejoin with no operator action, and both kill-switch clauses hold across a
   real partition. Clause evidence: O(compare) by frame count (a converged round sends digests and
-  nothing else), delta-only by the bucket-walk test, identity refusal by six fail-closed cases. Owed for
-  ✅: it rides AE-CHANNEL-1, whose verdict is not yet in.
+  nothing else), delta-only by the bucket-walk test, identity refusal by six fail-closed cases. AE-CHANNEL-1's verdict is now in
+  and its 10 findings are closed, and the spine gate was re-run green AFTER those fixes — so the layer
+  this claim rides is no longer the open question. ✅
 - **DOD-AE-CHAINED-TABLES-1** [trustless-cello] — the two hash-chained Tier-A tables
   (`seal_notarizations`, `user_accounts`) serve AND apply through anti-entropy, so a seal receipt no
   longer exists only on the directory that recorded it. Chain columns are node-local: an applying node
