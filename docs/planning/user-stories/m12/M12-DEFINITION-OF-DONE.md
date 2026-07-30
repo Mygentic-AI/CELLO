@@ -169,7 +169,9 @@ description: >
   the directory VERIFIES its manifest at load (design §1a/§1b). Peers failing identity verification are
   refused with the cause named. — ✅ (→ Entries 70b, 72). Reviewed, verdict verbatim:
   *"SPEC: DEVIATIONS FOUND … SILENT FALLBACKS FOUND … ERROR SUBSTITUTION FOUND … HOLLOW TESTS FOUND"* —
-  10 findings, **all closed**; `write-hints` deferred with its cost stated (`M12-D-AE-WRITE-HINTS`).
+  10 findings, **all closed** (→ Entry 72b — I flipped this tag when 7 were closed and said "all";
+  the remaining three, plus a hollow sovereign-isolation test, were closed after). `write-hints` is
+  deferred with its cost stated (`M12-D-AE-WRITE-HINTS`).
   The reviewer's own summary of the auth path: *"the handshake, the fail-closed discipline, the
   cause-naming and the manifest-verification wiring are the strongest parts of the M12 code I have
   read, and I could not break the auth path."* 14/14 over the wire; re-verified on the 3-process spine

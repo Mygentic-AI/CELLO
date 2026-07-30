@@ -80,6 +80,30 @@ const DEFAULT_FRAME_TIMEOUT_MS = 30_000;
  *  stream an unbounded advertisement into memory. Exceeding it is a protocol violation. */
 const MAX_WIRE_ITEMS = 250_000;
 
+/**
+ * Whole-stream idle bound for the RESPONDER's serve loop. Two orders of magnitude above the per-frame
+ * deadline because it must never cut off a dialer that is simply busy applying — it exists only to
+ * reap a peer that is gone.
+ */
+const IDLE_DEADLINE_MS = 300_000;
+
+/** Like `nextFrame` but returns raw bytes and tolerates a clean end-of-stream (`null`). */
+async function nextRawFrame(wire: AeWire, timeoutMs: number, stage: string): Promise<Uint8Array | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new AeProtocolError(`responder idle for ${timeoutMs}ms at ${stage} — peer is gone, releasing the stream`)),
+      timeoutMs,
+    );
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([wire.next(), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function nextFrame(wire: AeWire, expectType: string, timeoutMs: number): Promise<Record<string, unknown>> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -202,7 +226,9 @@ class RemoteStoreView implements AeStoreView {
   async tierARecordHashes(table: string): Promise<readonly string[]> {
     this.#wire.send(encodeAeFrame({ type: "ae_buckets_req", table }));
     const bucketsFrame = await nextFrame(this.#wire, "ae_buckets", this.#timeoutMs);
-    const peerBuckets = bucketsFrame["digests"];
+    // bounded() like every other wire collection — the 4 MiB frame cap makes this a bounded
+    // allocation anyway, but an omission among five neighbours that all check reads as deliberate.
+    const peerBuckets = bounded((bucketsFrame["digests"] ?? []) as unknown[], "ae_buckets digests");
     if (!Array.isArray(peerBuckets) || peerBuckets.some((d) => typeof d !== "string")) {
       throw new AeProtocolError("ae_buckets digests is not a string array");
     }
@@ -502,16 +528,24 @@ export async function serveAeResponder(input: AeResponderInput): Promise<void> {
       throw new AeProtocolError(`handshake failed: ${verdict.reason}`);
     }
 
-    // 4. serve loop — one request/response at a time until ae_done or close. No deadline here:
-    // BETWEEN requests an idle authenticated peer is legitimate (the dialer may be applying);
-    // the transport layer owns idle-connection lifecycle.
+    // 4. serve loop — one request/response at a time until ae_done or close.
+    //
+    // Bounded by IDLE_DEADLINE_MS, not unbounded. An earlier version delegated this to "the transport
+    // layer owns idle-connection lifecycle" — I checked, and it does not: `handle` forwards only
+    // maxInboundStreams and runOnLimitedConnection, and yamux has no per-stream idle close. So an
+    // authenticated dialer that died without a FIN (process kill, black-holed partition) parked this
+    // loop forever holding the stream, and `#serveInbound` is void-ed so nothing reaped it. With
+    // maxInboundStreams: 8, eight corpses from one peer stop that peer's inbound AE entirely.
+    //
+    // The deadline is generous on purpose: BETWEEN requests an idle dialer is legitimate (it may be
+    // applying a large batch), so this must only catch a peer that is gone, never one that is working.
     //
     // `stage` exists so a throw names the frame it died on. "Cannot write to a stream that is
     // closed" is the transport's message and identifies the mechanism, not the moment — and the
     // moment is what separates "the dialer went away" from "we died mid-response".
     stage = "awaiting_first_request";
     for (;;) {
-      const bytes = await wire.next();
+      const bytes = await nextRawFrame(wire, IDLE_DEADLINE_MS, stage);
       if (bytes === null) return;
       let frame: Record<string, unknown>;
       try {

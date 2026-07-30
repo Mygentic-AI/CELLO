@@ -4662,3 +4662,35 @@ one assertion that closes its stated bypass (an empty advertisement sends no det
 correctness gap — as `M12-D-AE-WRITE-HINTS`.
 
 Directory **987** green.
+
+### Entry 72b — CORRECTION: I flipped DOD-AE-CHANNEL-1 saying "all 10 findings closed" when 7 were
+
+Caught on the next heartbeat by checking my own claim instead of repeating it. **MEDIUM-7, LOW-8 and
+LOW-9 were still open** when I wrote "all 10 findings, all closed" into the DoD and the journal. Three
+greps settled it in under a minute, which is the whole argument for checking.
+
+Now closed:
+
+- **MEDIUM-7 — a real leak.** The responder's serve loop had no idle bound, justified by a comment
+  saying "the transport layer owns idle-connection lifecycle". The reviewer checked and it does not:
+  `handle` forwards only `maxInboundStreams` and `runOnLimitedConnection`, and yamux has no per-stream
+  idle close. An authenticated dialer that died without a FIN parked the loop forever holding the
+  stream, and `#serveInbound` is `void`-ed so nothing reaped it — eight corpses from one peer stop that
+  peer's inbound AE entirely. Bounded at 300 s, two orders above the per-frame deadline so it can only
+  ever catch a peer that is gone, never one that is busy applying.
+- **LOW-8** — `ae_buckets` digests was the one wire collection not passed through `bounded()`.
+- **LOW-9** — the self-dial comment justified keying on nodeId because "peerIds … fixtures and
+  single-host deployments legitimately share". In any VERIFIED manifest that is impossible; §1c refuses
+  a duplicate `peerId` outright. The false positives were fixtures, and the comment now says so.
+
+**And the sovereign-isolation test was hollow.** `"a failing peer is isolated — the other peer still
+converges"` called `syncPeer` twice by hand and never `syncAllPeers`, which is where per-peer isolation
+lives — so gutting that loop left it green. It was named for the SOVEREIGN invariant and could not
+detect the invariant's loss. Rewritten to drive `syncAllPeers` against a roster with a broken peer
+listed BEFORE the healthy one; reverting the loop to stop on first failure now turns it red.
+
+One detail worth keeping: my first version asserted `antientropy.round.failed`, and the broken peer
+actually emits `antientropy.peer.auth_failed` — it fails at the handshake, not mid-round. I asserted
+what it emits rather than what I assumed, which is the same discipline that caught the finding above.
+
+Directory **987** green.

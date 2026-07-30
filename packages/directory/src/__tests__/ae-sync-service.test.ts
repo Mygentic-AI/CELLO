@@ -111,7 +111,7 @@ function testLogger(): Logger & { events: Array<[string, Record<string, unknown>
 }
 
 /** Wire two services together: S_dial's newStream() feeds S_resp's registered inbound handler. */
-function pairServices(opts?: { respStore?: MemStore; dialStore?: MemStore; deliverRemotePeerId?: string | null }) {
+function pairServices(opts?: { respStore?: MemStore; dialStore?: MemStore; deliverRemotePeerId?: string | null; dialManifest?: typeof manifest }) {
   const respStore = opts?.respStore ?? new MemStore();
   const dialStore = opts?.dialStore ?? new MemStore();
   const respLogger = testLogger();
@@ -143,7 +143,7 @@ function pairServices(opts?: { respStore?: MemStore; dialStore?: MemStore; deliv
     transport: respTransport, manifest: () => manifest, identity: B, store: respStore, logger: respLogger,
   });
   const dialService = new AeSyncService({
-    transport: dialTransport, manifest: () => manifest, identity: A, store: dialStore, logger: dialLogger,
+    transport: dialTransport, manifest: () => opts?.dialManifest ?? manifest, identity: A, store: dialStore, logger: dialLogger,
   });
   return { respService, dialService, respStore, dialStore, respLogger, dialLogger };
 }
@@ -194,25 +194,36 @@ describe("AeSyncService — libp2p-face wiring", () => {
   });
 
   it("a failing peer is isolated — the other peer still converges (sovereign fallback)", async () => {
-    const { respService, dialService, respStore, dialStore, dialLogger } = pairServices();
+    // Drives syncAllPeers, which is where per-peer isolation actually lives. The previous version
+    // called syncPeer twice by hand, so gutting that loop — making it throw on the first failure, or
+    // Promise.all with no catch — left it green: it was named for the SOVEREIGN claim and could not
+    // detect the claim's loss. It also carried dead code and a comment describing a plan it abandoned.
+    // A manifest with a BROKEN peer listed BEFORE the healthy one, so a loop that stops on the first
+    // failure never reaches B. The broken entry's pubkey is not the key it will sign with, so its
+    // handshake fails — a real per-peer failure, whichever layer it lands in.
+    const withBroken = {
+      ...manifest,
+      nodes: [
+        manifest.nodes[0]!,
+        { nodeId: "azure-weu", pubkey: "00".repeat(32), region: "westeurope", provider: "azure",
+          endpoint: "https://down.example", role: "validator", peerId: "12D3KooWDown" } as (typeof manifest)["nodes"][number],
+        manifest.nodes[1]!,
+      ],
+    };
+    const { respService, dialService, respStore, dialStore, dialLogger } =
+      pairServices({ dialManifest: withBroken });
     respStore.revocations.set("agX", rev("agX"));
     await respService.start();
     respService.stop();
 
-    // Peer 1: unreachable (dial throws). Peer 2: the healthy responder.
-    const unreachable = { nodeId: "azure-weu", endpoint: "https://down.example", peerId: "12D3KooWDown" };
-    const dialSvc = dialService as unknown as { syncPeer(n: string, e: string, p: string): Promise<void> };
-    const origDial = (dialService as unknown as { "#cfg"?: unknown });
-    void origDial;
-    // Make the unreachable peer fail by pointing newStream at a closed handler? Simpler: dial to a
-    // peerId with no responder — newStream fires the handler only for the paired transport, so use
-    // a nodeId the manifest lacks a pubkey for → handshake fails → round.failed, then the healthy
-    // peer still syncs.
-    await dialSvc.syncPeer(unreachable.nodeId, unreachable.endpoint, unreachable.peerId);
-    await dialSvc.syncPeer(B.nodeId, "https://b.example", B.peerId);
+    await dialService.syncAllPeers();
 
-    expect(dialStore.revocations.has("agX")).toBe(true); // healthy peer converged despite the failure
+    // The healthy peer converged DESPITE the broken one being attempted first — that is the claim.
+    expect(dialStore.revocations.has("agX"), "the loop must continue past a failing peer").toBe(true);
     const names = dialLogger.events.map(([e]) => e);
+    // The broken peer failed at the HANDSHAKE, not mid-round, so the event is peer.auth_failed —
+    // asserted by what it actually emits rather than by what I first assumed.
+    expect(names, `events: ${names.join(",")}`).toContain("antientropy.peer.auth_failed");
     expect(names.filter((n) => n === "antientropy.round.completed").length).toBe(1);
   });
 
