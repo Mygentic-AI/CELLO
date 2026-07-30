@@ -140,6 +140,26 @@ interface TierBPg {
   update(client: pg.PoolClient, body: unknown): Promise<void>;
   /** The natural-key column (single-column keys for both Tier-B tables). */
   readonly keyColumn: string;
+  /**
+   * The body in its CANONICAL hashing form. The advertise path hashes the raw pg row, where BIGINT
+   * columns are strings; `rowToBody` turns some of them into numbers so the merges can compare them.
+   * Hashing the merge form directly meant the same logical row produced two different version hashes
+   * depending on which path you arrived by — the in-memory store the convergence proof runs on does
+   * not have that split (it stringifies for hashing and keeps natives for merging), and neither may
+   * this one, or the proof describes something nobody runs.
+   */
+  toVersionRow(body: unknown): MutableRow;
+  /**
+   * Reject a wire body whose fields are the wrong TYPE, before any merge sees it.
+   *
+   * `applyTierB` recomputes the key/body agreement but nothing checks value types, and the channel
+   * validates only that the key is a string. A peer body carrying `suspension_seq: "5"` against a
+   * local `5` compares unequal, so the merge takes the higher-seq branch instead of the equal-seq
+   * one — and `5 > "5"` is false, so the PEER wins and its `paused` is copied wholesale over ours,
+   * bypassing the suspended-wins rule that is the kill switch's entire guarantee. It then never
+   * converges. Authentication is not honesty; a type is part of the value.
+   */
+  validateBody(body: unknown): string | null;
 }
 
 const SUSPENSIONS: TierBPg = {
@@ -160,6 +180,33 @@ const SUSPENSIONS: TierBPg = {
     suspension_seq: Number(r.suspension_seq), // BIGINT-string → number (a per-agent write counter, ≪ 2^53)
     origin_node: (r.origin_node as string | null) ?? "",
   }),
+  // Numerics as strings, matching the raw pg row the advertise path hashes (and `record-hash.ts`'s
+  // rule that the encoder passes ALL numerics as strings).
+  toVersionRow: (body): MutableRow => {
+    const s2 = body as SuspensionRecord;
+    return {
+      agent_id: s2.agent_id, paused: s2.paused, burned: s2.burned, reason: s2.reason,
+      authorized_by_account: s2.authorized_by_account,
+      suspension_seq: String(s2.suspension_seq),
+      origin_node: s2.origin_node,
+    } as unknown as MutableRow;
+  },
+  validateBody: (body): string | null => {
+    const b = body as Record<string, unknown>;
+    if (typeof b["agent_id"] !== "string") return "agent_id must be a string";
+    if (typeof b["paused"] !== "boolean") return `paused must be a boolean, got ${typeof b["paused"]}`;
+    if (typeof b["burned"] !== "boolean") return `burned must be a boolean, got ${typeof b["burned"]}`;
+    // The field that decides which merge branch runs, so its type IS the kill switch's correctness.
+    const seq = b["suspension_seq"];
+    if (typeof seq !== "number" || !Number.isInteger(seq) || !Number.isFinite(seq)) {
+      return `suspension_seq must be a finite integer, got ${JSON.stringify(seq)} (${typeof seq})`;
+    }
+    for (const c of ["reason", "authorized_by_account", "origin_node"]) {
+      const v = b[c];
+      if (v !== null && typeof v !== "string") return `${c} must be a string or null, got ${typeof v}`;
+    }
+    return null;
+  },
   // updated_at is display-only (NOT a merge input); stamp now() so the human-facing column stays
   // fresh without ever influencing convergence.
   insert: async (client, body) => {
@@ -198,6 +245,21 @@ const PRESENCE: TierBPg = {
     last_seen_at: String(r.last_seen_at), // BIGINT epoch-millis string
     updated_at: String(r.updated_at),
   }),
+  // Already string-valued end to end; identity keeps the two Tier-B tables symmetric rather than
+  // making the caller remember which one needs converting.
+  toVersionRow: (body): MutableRow => body as MutableRow,
+  validateBody: (body): string | null => {
+    const b = body as Record<string, unknown>;
+    if (typeof b["k_local_pubkey"] !== "string") return "k_local_pubkey must be a string";
+    if (typeof b["online"] !== "boolean") return `online must be a boolean, got ${typeof b["online"]}`;
+    if (typeof b["owning_node_id"] !== "string") return `owning_node_id must be a string, got ${typeof b["owning_node_id"]}`;
+    for (const c of ["last_seen_at", "updated_at"]) {
+      // Strings on the wire; `presence-merge` normalises non-finite to -Infinity, but a non-string
+      // here still means the peer is not speaking the encoding both sides hash.
+      if (typeof b[c] !== "string") return `${c} must be a string (epoch millis), got ${typeof b[c]}`;
+    }
+    return null;
+  },
   // Write the MERGED epoch millis back (NOT now()) — the winning updated_at must be preserved or the
   // LWW ordering is lost and the next round re-triggers. to_timestamp writes the exact instant into
   // the TIMESTAMPTZ column, node-TZ-independent (no AT TIME ZONE).
@@ -461,6 +523,12 @@ export class PgAeStore implements AeStoreView {
         `pg-ae-store: ${t.spec.table} record key '${rec.key}' does not match its body ${t.keyColumn} '${String(bodyKey)}' — refusing to apply`,
       );
     }
+    // Types, not just shape. Everything below merges peer-supplied values, and a wrong type changes
+    // which merge BRANCH runs — silently, and in the kill switch's favour-losing direction.
+    const typeError = t.validateBody(rec.body);
+    if (typeError) {
+      throw new Error(`pg-ae-store: ${t.spec.table} record '${rec.key}' body ${typeError} — refusing to apply`);
+    }
     const MAX_ATTEMPTS = 3;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const client = await this.#pool.connect();
@@ -472,9 +540,9 @@ export class PgAeStore implements AeStoreView {
         const incoming = rec.body;
         if (existing.rows.length > 0) {
           const local = t.rowToBody(existing.rows[0]);
-          const priorVersion = encodeTierBVersion(t.spec, local as MutableRow).versionHash;
+          const priorVersion = encodeTierBVersion(t.spec, t.toVersionRow(local)).versionHash;
           const merged = t.merge(local, incoming);
-          const mergedVersion = encodeTierBVersion(t.spec, merged as MutableRow).versionHash;
+          const mergedVersion = encodeTierBVersion(t.spec, t.toVersionRow(merged)).versionHash;
           if (mergedVersion !== priorVersion) {
             await t.update(client, merged);
             await client.query("COMMIT");

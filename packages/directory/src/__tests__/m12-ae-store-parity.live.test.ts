@@ -123,3 +123,71 @@ describeLive("DOD-AE-STORE-1: the pg store and the encoders agree on the record 
     await expect(store.serveTierA("agent_key_shares", ["x"])).rejects.toThrow(/unknown Tier-A table/);
   });
 });
+
+describeLive("DOD-AE-STORE-1: Tier-B advertise and apply hash the SAME form", () => {
+  let pool: pg.Pool;
+  let store: PgAeStore;
+  const AGENT_B = "aestoreparityb" + "0".repeat(50);
+
+  beforeAll(() => {
+    pool = new pg.Pool({ connectionString: DB_URL });
+    store = new PgAeStore(pool);
+  });
+  afterAll(async () => { await pool.end(); });
+  afterEach(async () => { await pool.query("DELETE FROM agent_suspensions WHERE agent_id = $1", [AGENT_B]); });
+
+  async function seedSuspension(): Promise<void> {
+    await pool.query(
+      `INSERT INTO agent_suspensions (agent_id, paused, burned, reason, authorized_by_account, suspension_seq, origin_node, updated_at)
+       VALUES ($1, true, false, 'parity probe', $2, 5, 'gcp-usc1', now())
+       ON CONFLICT (agent_id) DO NOTHING`,
+      [AGENT_B, "00000000-0000-0000-0000-0000000000e2"],
+    );
+  }
+
+  it("re-applying a row's OWN served body is a no-op", async () => {
+    // Idempotence on the apply path: a body identical to what we hold must not report "changed",
+    // or the node writes an UPDATE and re-reports every round — non-termination on the kill switch's
+    // own table.
+    //
+    // HONEST LIMIT, because I checked: this does NOT detect the number/string split that
+    // `toVersionRow` closes. Both sides of this comparison come from the merge form, so they agree
+    // with each other whichever encoding they use — reverting `toVersionRow` leaves this green. The
+    // split is self-consistent per path and has no symptom today; what it had was a trap, since the
+    // correct cleanup of `rowToBody`'s lossy `Number()` is exactly the edit that detonates the merge.
+    // The OBSERVABLE half of that finding is the type validator, covered by the next test.
+    await seedSuspension();
+    const advertised = await store.tierBVersions("agent_suspensions");
+    const served = await store.serveTierB("agent_suspensions", [...advertised.keys()]);
+    const mine = served.find((r) => r.key === AGENT_B);
+    expect(mine, "the seeded suspension must be served").toBeDefined();
+
+    expect(await store.applyTierB("agent_suspensions", [mine!]), "identical body must change nothing").toBe(0);
+    // And the advertised version is unmoved, so the next round plans nothing for this key.
+    expect((await store.tierBVersions("agent_suspensions")).get(AGENT_B)).toBe(advertised.get(AGENT_B));
+  });
+
+  it("REFUSES a Tier-B body whose suspension_seq is a string, instead of letting the peer win", async () => {
+    // The kill-switch fail-open. With `suspension_seq: "5"` against a local `5`: the equality test
+    // fails so the merge takes the higher-seq branch; `5 > "5"` is false so the PEER wins; and the
+    // peer's `paused` is copied wholesale over ours — bypassing the equal-seq suspended-wins rule.
+    // Authentication is not honesty, and a type is part of the value.
+    await seedSuspension();
+    const poisoned = {
+      key: AGENT_B,
+      body: {
+        agent_id: AGENT_B, paused: false, burned: false, reason: "unpause",
+        authorized_by_account: "00000000-0000-0000-0000-0000000000e2",
+        suspension_seq: "5", origin_node: "gcp-euw1",
+      },
+    };
+    await expect(store.applyTierB("agent_suspensions", [poisoned as never])).rejects.toThrow(
+      /suspension_seq must be a finite integer/,
+    );
+    // The pause is still in force — the refusal must not have half-applied anything.
+    const after = await pool.query<{ paused: boolean }>(
+      "SELECT paused FROM agent_suspensions WHERE agent_id = $1", [AGENT_B],
+    );
+    expect(after.rows[0]?.paused, "a refused body must not clear the pause").toBe(true);
+  });
+});
