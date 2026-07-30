@@ -2005,7 +2005,7 @@ own story) deliberately, never smuggled in as a rider. Source:
      refused; (b) the refusal message names both frontiers; (c) the reconcile path (per AC 1) turns a
      one-leaf divergence into a sealable session, or the leaf is proven never to have been appended.
 
-- **DOD-CLI-SESSIONS-SCOPE-1** ❌ OPEN (raised 2026-07-30) — CLI `cello sessions` ignores the selected
+- **DOD-CLI-SESSIONS-SCOPE-1** ✅ FIXED (2026-07-30, cello-client `6b9964c`) — CLI `cello sessions` ignores the selected
   agent and lists every agent's sessions; the MCP `cello_sessions` scopes correctly. The dual
   surfaces disagree.
 
@@ -2033,7 +2033,15 @@ own story) deliberately, never smuggled in as a rider. Source:
      returns none, and `cello sessions --agent B` returns B's.
   5. Parity test extension: for every dual-surface verb, the CLI and MCP forms return the same set for
      the same agent selection. The existing parity test checks that NAMES match; it does not check
-     that ANSWERS match, which is how this survived.
+     that ANSWERS match, which is how this survived. — ⏳ **still open**: AC 1-4 shipped, this
+     generalisation did not. `cello sessions` is now covered; no other dual-surface verb is.
+
+  **Fixed 2026-07-30** (cello-client `6b9964c`): routed through the parity path, so it also gained
+  `--agent`, the online check, and the same no-selection refusal as its siblings; the daemon-wide view
+  survives as `--all-agents`. Verified live — 44 rows for the selected agent, 115 for
+  `--agent Ms_Chelly`, 261 for `--all-agents`. Test note worth keeping: the two behavioural tests
+  cannot catch a regression here, because in a temp daemon with no sessions the daemon-wide handler
+  answers `ok` too. The wire name is therefore asserted directly, verified by mutation.
 
 - **DOD-AWAY-WRAP-1** ✅ DONE — Away autoresponder must not fire on a `[[WRAP]]`-signalled message; it must close the session silently instead.
 
