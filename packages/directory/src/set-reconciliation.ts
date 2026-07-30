@@ -113,5 +113,8 @@ export function missingLocally(
   peerRecordHashesHex: readonly string[],
 ): string[] {
   const mine = new Set(myRecordHashesHex);
-  return peerRecordHashesHex.filter((h) => !mine.has(h));
+  // DEDUPED. A peer advertising the same hash twice would otherwise be asked for it twice, inflating
+  // `tierAPulled` — which is the numerator of the fork alarm (`pulled > 0 && applied === 0`). Harmless
+  // for correctness, since apply is insert-if-absent, but it lets a peer nudge a diagnostic.
+  return [...new Set(peerRecordHashesHex.filter((h) => !mine.has(h)))];
 }

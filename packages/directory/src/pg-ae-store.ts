@@ -335,20 +335,21 @@ export class PgAeStore implements AeStoreView {
         );
       }
       if (t.chained) {
-        // ABSENT IS NOT FINE — but the blast radius must stay on THIS table. Without the writer this
-        // table cannot be applied correctly and must not fall through to the generic INSERT (that
-        // writes it UNCHAINED). It is skipped with an ERROR rather than thrown, because
-        // `runAntiEntropyRound` applies all of Tier-A and THEN Tier-B with no try between them: a
-        // throw here skips `agent_suspensions` and `agent_presence` entirely, so a permanent failure
-        // on a receipt would stop the KILL SWITCH replicating to this node, every round, forever.
-        // Refusing the table and continuing the round preserves both properties.
+        // ABSENT IS NOT FINE. This table cannot be applied correctly without the writer, and it must
+        // not fall through to the generic INSERT — that writes it UNCHAINED, outside the
+        // tamper-evident chain that is the table's reason for existing. Throw.
+        //
+        // Blast radius is the ENGINE's concern, not this file's: `runAntiEntropyRound` now applies
+        // Tier-A table by table and always reaches Tier-B, so a refusal here costs this table and
+        // nothing else. A previous version of this code caught the throw HERE while reasoning about
+        // the engine's control flow — a layering inversion that also guarded only one of the five
+        // throw sites in this file, and that the in-memory store the convergence proof runs on did
+        // not share.
         if (!this.#chainWriter) {
-          this.#logger?.error("antientropy.apply.skipped", {
-            table: t.spec.table,
-            offered: records.length,
-            reason: "table is hash-chained and no ChainWriter was injected — refusing to apply it unchained",
-          });
-          return inserted;
+          throw new Error(
+            `pg-ae-store: ${t.spec.table} is hash-chained and no ChainWriter was injected — refusing ` +
+              `to apply it unchained`,
+          );
         }
 
         // BYTEA columns arrive hex-encoded on the wire; the chain writer takes real values, and the

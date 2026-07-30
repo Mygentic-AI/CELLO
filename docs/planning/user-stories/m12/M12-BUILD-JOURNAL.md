@@ -4416,3 +4416,89 @@ needs, checked rather than assumed.
 
 **Not claiming the unit ✅.** Under the tag rule a flip needs a reviewer's verdict quoted, and this
 unit has not had its pass. Directory suite 981 green.
+
+---
+
+## Entry 70 — 2026-07-30 — DOD-AE-PRIMITIVES-1: the owed review ran; 9 findings, all closed
+
+The DoD owed *"the verdicts for `verifyPeerAuthFrame` and `runAntiEntropyRound`, which Entry 25 left in
+flight, quoted."* This is that pass — the first COMPLETED one, since a killed reviewer produces no
+verdict in either direction. **9 findings: 3 HIGH, 3 MEDIUM, 3 LOW. All three HIGH were on the
+kill-switch replication path.**
+
+### Verdicts, quoted
+
+> **SPEC: DEVIATIONS FOUND** — 7 clauses ruled: 4 implemented, 2 deviated (clause 5, unconditional
+> termination claim; clause 6, the table-containment claim), 1 missing (clause 7, single-use nonce
+> accounting). Neither deviation cites a DECISIONS entry. **[blocking]**
+>
+> **SILENT FALLBACKS FOUND** — F2 is the fail-open: a peer that withholds records returns `{0,0,0,0}`
+> and logs `antientropy.round.completed`, the exact signature of health, while `agent_suspensions` does
+> not replicate. F1 and F3 are fail-loud but with a blast radius that takes the kill switch down with
+> them. **All three HIGH findings are [blocking].**
+>
+> **ERROR SUBSTITUTION FOUND** — `manifest_pubkey_mismatch` (F4) stands in for three distinct causes,
+> two unrelated to any pubkey and none of them a mismatch, and drives a retry loop keyed on it;
+> `signature_invalid` (F5) stands in for self-dial/reflection; and F3 files a peer-driven failure under
+> a local-store cause. **[blocking]**
+>
+> **HOLLOW TESTS FOUND** — one hollow test: the engine's table-routing defense at
+> `anti-entropy-engine.ts:130` has no coverage and **does not survive THE REVERT TEST** (a one-line
+> revert to iterating `plan.tierA` leaves all four tests green). **[blocking]**
+>
+> **REMOVALS PROVEN** — not applicable; this pass reviews current state and neither artifact deletes or
+> moves code.
+
+It also confirmed the DoD's own claim, which I had taken on trust: *"the DoD claim holds"* — the
+two-node convergence fixture wires the production encoders and merges, not stand-ins.
+
+### The three HIGH findings
+
+**F1 — the bounding was in the wrong layer, and it was mine.** Yesterday I put per-table failure
+containment inside `pg-ae-store.applyTierA`, reasoning there about `runAntiEntropyRound`'s control
+flow. The reviewer called it a layering inversion and was right on three counts: it guarded one of
+five throw sites in that file, the MemStore the convergence proof runs on had no equivalent (so the
+proven semantics and the pg semantics diverged on the failure path, which `DOD-AE-STORE-1` forbids),
+and the reasoning belonged to the caller. Moved into the engine: Tier-A applies table by table,
+failures accumulate onto `RoundResult`, and **Tier-B always runs**. The store's special case is deleted
+and it throws cleanly again.
+
+**F2 — the fail-open.** `tierAPulled` counted what ARRIVED, never what was PLANNED. A peer advertising
+differing digests and then serving nothing returned `{0,0,0,0}` — byte-identical to convergence — and
+`ae-sync-service` logged `round.completed` and **reset the fork streak**. `RoundResult` now carries
+`tierAPlanned`/`tierBPlanned`; a shortfall alarms as `antientropy.round.shortfall`, and neither a
+shortfall nor a table failure resets the streak, because clearing a counter on a round that proved
+nothing is how a fork hides.
+
+**F3 — a rolling upgrade would have broken suspension replication.** `peerAdvertisement` iterated the
+peer's table list verbatim, and `planRound` then asked the LOCAL store for a peer-chosen table name,
+which throws. Not merely a hostile-peer concern: the moment a newer directory adds a synced table,
+every OLD node's rounds against new nodes die — in the old←new direction, the one carrying
+suspensions — during an ordinary deploy, blamed on the local database. Now filtered against the local
+registry upstream of the planner, with `antientropy.peer.unknown_table` so a dropped table is not
+silent.
+
+### Tests
+
+The hollow one is fixed, and the fix moved: because F3's filter now strips unknown tables upstream, the
+loop's routing defense is redundant for that case, so I revert-tested where the defense actually
+lives. Three reverts now bite — removing the filter (routing test red), removing the per-table `try`
+(containment test red), iterating the peer's plan order (apply-ORDER test red). Apply order had no
+coverage at all before; MemStore has one table per tier, so nothing could pin it.
+
+Also: `ae-handshake.test.ts`'s tz-less-timestamp test only had teeth under a UTC runner — deleting the
+format guard left the parse off by the runner's offset, which trips the SKEW branch instead, so it
+passed for the wrong reason on exactly the machines where the bug is real. `process.env.TZ` is now
+pinned.
+
+F4–F7 closed: `node_not_in_manifest` / `manifest_entry_incomplete` / `self_dial` / `node_id_mismatch`
+replace two conflated names, and the rotation-skew retry is re-scoped so an unknown peer no longer
+costs a manifest re-read plus a second dial every interval. The nonce comment now states the real
+mechanism (a per-stream CSPRNG nonce, single-use by construction) instead of delegating to a store no
+caller keeps.
+
+Directory suite **986**, relay 171, typecheck and lint clean.
+
+**The unit does NOT go ✅.** Its remaining owed item is `DOD-AE-APPEND-1`'s multi-process proof, and
+these fixes are themselves unreviewed — one pass has run on the artifacts as they were, not as they now
+are.

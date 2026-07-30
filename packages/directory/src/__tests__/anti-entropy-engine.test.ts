@@ -83,6 +83,19 @@ const susp = (agent_id: string, seq: number, paused: boolean, extra?: Partial<Su
   agent_id, paused, burned: false, reason: null, authorized_by_account: null, suspension_seq: seq, origin_node: "n", ...extra,
 });
 
+/**
+ * A terminated round: nothing planned, nothing pulled, nothing applied, nothing failed.
+ *
+ * `tierAPlanned`/`tierBPlanned` are the load-bearing additions. Asserting only that PULLED is zero
+ * cannot distinguish convergence from a peer that advertised differing digests and then served
+ * nothing — both produce zeros. Planned-zero says the planner found nothing to ask for, which is what
+ * "converged" actually means.
+ */
+const TERMINATED = {
+  tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0,
+  tierAPlanned: 0, tierBPlanned: 0, failures: [],
+};
+
 describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
   it("converges divergent state in both tiers, then terminates (2nd round is a no-op)", async () => {
     const A = new MemStore();
@@ -108,8 +121,8 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
     }
 
     // Termination: a further round in either direction applies nothing.
-    expect(await runAntiEntropyRound(A, B)).toEqual({ tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0 });
-    expect(await runAntiEntropyRound(B, A)).toEqual({ tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(A, B)).toEqual(TERMINATED);
+    expect(await runAntiEntropyRound(B, A)).toEqual(TERMINATED);
   });
 
   it("burn propagates and is monotonic across a round (kill switch converges irreversibly)", async () => {
@@ -127,8 +140,8 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
       expect(s.suspension_seq).toBe(9);
     }
     // Terminal: the equal-seq idempotent merge converged — a further round applies nothing.
-    expect(await runAntiEntropyRound(A, B)).toEqual({ tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0 });
-    expect(await runAntiEntropyRound(B, A)).toEqual({ tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(A, B)).toEqual(TERMINATED);
+    expect(await runAntiEntropyRound(B, A)).toEqual(TERMINATED);
   });
 
   it("an already-converged pair does nothing (idempotent)", async () => {
@@ -136,7 +149,7 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
     const B = new MemStore();
     A.revocations.set("agX", rev("agX"));
     B.revocations.set("agX", rev("agX"));
-    expect(await runAntiEntropyRound(A, B)).toEqual({ tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0 });
+    expect(await runAntiEntropyRound(A, B)).toEqual(TERMINATED);
   });
 
   it("a same-key Tier-A fork has the DISTINCT signature pulled>0 && applied===0, every round", async () => {
@@ -154,5 +167,137 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
       expect(res.tierAPulled).toBeGreaterThan(0); // the fork re-pulls every round…
       expect(res.tierAApplied).toBe(0); // …and never applies — the alarm signature persists
     }
+  });
+});
+
+// ─── Engine-level defenses (added after the DOD-AE-PRIMITIVES-1 review) ──────────────────────────
+//
+// MemStore ignores its table argument (`_t`), and both nodes advertise identical single-table
+// registries — so the routing defense at the top of the apply loop had NO coverage: reverting it to
+// iterate `plan.tierA` left every test green while the property it protects disappeared. These
+// stores record what they are ASKED for, which is the only way to see the difference.
+
+/** A store that remembers every table name it was asked to serve or apply. */
+class SpyStore extends MemStore {
+  readonly served: string[] = [];
+  readonly applied: string[] = [];
+  override serveTierA(t: string, hashes: readonly string[]): TierARecord[] {
+    this.served.push(t);
+    return super.serveTierA(t, hashes);
+  }
+  override applyTierA(t: string, records: readonly TierARecord[]): number {
+    this.applied.push(t);
+    return super.applyTierA(t, records);
+  }
+}
+
+/** A peer that also advertises a table this node does not track. */
+class ExtraTablePeer extends SpyStore {
+  override tierATables(): string[] { return ["agent_revocations", "agent_key_shares"]; }
+  override tierATableDigest(t?: string): string {
+    // A non-empty, differing digest for the extra table — otherwise planRound skips it as converged
+    // and the test proves nothing.
+    return t === "agent_key_shares" ? "f".repeat(64) : super.tierATableDigest();
+  }
+}
+
+describe("engine defenses: peer-chosen table names, containment, and shortfall", () => {
+  it("never serves or applies a table the LOCAL registry does not track", async () => {
+    // The revert test for the routing defense. Iterating the peer's plan instead of the local
+    // registry would put "agent_key_shares" into both lists — and SHARES-LOCAL forbids that name
+    // reaching a store method at all.
+    const local = new SpyStore();
+    const peer = new ExtraTablePeer();
+    peer.revocations.set("a1", { agent_id: "a1", epoch_id: "e1", reason: "r", signature: "ab", revoked_at: "1" } as never);
+
+    const unknown: Array<[string, string]> = [];
+    const res = await runAntiEntropyRound(local, peer, (tier, table) => unknown.push([tier, table]));
+
+    expect(local.applied).not.toContain("agent_key_shares");
+    expect(peer.served).not.toContain("agent_key_shares");
+    // Filtered upstream of the planner, and SAID — a silently dropped table during a rolling upgrade
+    // is indistinguishable from a converged one.
+    expect(unknown).toContainEqual(["A", "agent_key_shares"]);
+    // The legitimate table still replicated: the filter must not cost convergence.
+    expect(res.tierAApplied).toBe(1);
+    expect(local.revocations.has("a1")).toBe(true);
+  });
+
+  it("a Tier-A failure does NOT stop Tier-B — the kill switch keeps replicating", async () => {
+    // The containment property. Before this, any throw in the Tier-A loop aborted the round before
+    // agent_suspensions was touched, so one poisoned record stopped suspensions replicating from
+    // that peer every round, forever.
+    const local = new SpyStore();
+    local.applyTierA = () => { throw new Error("poisoned record"); };
+    const peer = new SpyStore();
+    peer.revocations.set("a2", { agent_id: "a2", epoch_id: "e2", reason: "r", signature: "cd", revoked_at: "2" } as never);
+    peer.suspensions.set("agent-x", { agent_id: "agent-x", paused: true, burned: false, suspension_seq: 4, origin_node: "n1" } as never);
+
+    const res = await runAntiEntropyRound(local, peer);
+
+    expect(res.failures).toHaveLength(1);
+    expect(res.failures[0]!.table).toBe("agent_revocations");
+    expect(res.failures[0]!.reason).toMatch(/poisoned record/); // the cause, not an exit-point label
+    expect(res.tierBApplied, "Tier-B must still have run").toBe(1);
+    expect(local.suspensions.get("agent-x")?.paused).toBe(true);
+  });
+
+  it("a peer that withholds records reports a SHORTFALL, not convergence", async () => {
+    // The fail-open. `pulled` counts what ARRIVED, so a peer advertising differing digests and then
+    // serving nothing returned {0,0,0,0} — byte-identical to a converged round.
+    const local = new SpyStore();
+    const peer = new SpyStore();
+    peer.revocations.set("a3", { agent_id: "a3", epoch_id: "e3", reason: "r", signature: "ef", revoked_at: "3" } as never);
+    peer.serveTierA = () => []; // advertises it, then serves nothing
+
+    const res = await runAntiEntropyRound(local, peer);
+
+    expect(res.tierAPlanned, "the plan asked for the record").toBe(1);
+    expect(res.tierAPulled, "the peer served nothing").toBe(0);
+    expect(res.tierAApplied).toBe(0);
+    // planned > pulled is the shortfall the sync service alarms on; without tierAPlanned this round
+    // is indistinguishable from termination.
+    expect(res.tierAPlanned).toBeGreaterThan(res.tierAPulled);
+  });
+});
+
+/**
+ * Two Tier-A tables, advertised by the peer in the OPPOSITE order to the local registry. MemStore has
+ * one table per tier, so nothing pinned apply order — and order is the loop's real remaining job now
+ * that routing is filtered upstream: design §3.3 requires accounts → profiles → suspensions, because
+ * each references the one before it.
+ */
+class TwoTableStore implements AeStoreView {
+  readonly appliedOrder: string[] = [];
+  constructor(private readonly order: string[], private readonly nonEmpty: Set<string> = new Set()) {}
+  tierATables(): string[] { return this.order; }
+  tierBTables(): string[] { return []; }
+  tierARecordHashes(t: string): string[] { return this.nonEmpty.has(t) ? ["a".repeat(64)] : []; }
+  tierATableDigest(t: string): string { return computeTableDigest(this.tierARecordHashes(t)); }
+  tierBTableDigest(): string { return tierBTableDigest(new Map()); }
+  tierBVersions(): Map<string, string> { return new Map(); }
+  serveTierA(_t: string, hashes: readonly string[]): TierARecord[] {
+    return hashes.map((h) => ({ hash: h, body: {} }));
+  }
+  serveTierB(): TierBRecord[] { return []; }
+  applyTierA(t: string, records: readonly TierARecord[]): number {
+    this.appliedOrder.push(t);
+    return records.length;
+  }
+  applyTierB(): number { return 0; }
+}
+
+describe("apply ORDER follows the LOCAL registry, not the peer's advertisement", () => {
+  it("applies accounts before profiles even when the peer advertises the reverse", async () => {
+    // FK-dependency ordering (design §3.3). If the loop iterated the peer's plan, a peer could
+    // reorder our inserts — and once account_id joins the profiles sync set that is a 23503 mid-round,
+    // which under the containment fix now degrades to a skipped table rather than a crash, i.e. it
+    // would be quiet.
+    const local = new TwoTableStore(["user_accounts", "agent_profiles"]);
+    const peer = new TwoTableStore(["agent_profiles", "user_accounts"], new Set(["agent_profiles", "user_accounts"]));
+
+    await runAntiEntropyRound(local, peer);
+
+    expect(local.appliedOrder).toEqual(["user_accounts", "agent_profiles"]);
   });
 });

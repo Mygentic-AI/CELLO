@@ -83,6 +83,21 @@ export interface RoundResult {
   /** Records that actually changed local state (Tier-A inserted; Tier-B version-moved). */
   tierAApplied: number;
   tierBApplied: number;
+  /**
+   * What the plan ASKED for. Without this, `pulled` counts what arrived and a peer that serves
+   * nothing returns `{0,0,0,0}` — byte-identical to convergence — while its digests demonstrably
+   * differed. A caller reading only `pulled === 0` would log a healthy round forever and reset the
+   * fork streak while `agent_suspensions` never replicates. `planned > served` is a SHORTFALL and
+   * never happens on the normal path.
+   */
+  tierAPlanned: number;
+  tierBPlanned: number;
+  /**
+   * Per-table failures. A round no longer dies whole: Tier-A is applied table by table and Tier-B
+   * runs regardless, because aborting Tier-A takes `agent_suspensions` — the kill switch — down with
+   * it, every round, for as long as one poisoned record is offered.
+   */
+  failures: Array<{ tier: "A" | "B"; table: string; reason: string }>;
 }
 
 async function localState(store: AeStoreView): Promise<LocalRoundState> {
@@ -95,12 +110,27 @@ async function localState(store: AeStoreView): Promise<LocalRoundState> {
 
 /** The peer's advertised state (digests + full detail). In production this crosses the wire; here
  *  it is read directly from the peer's store view. */
-async function peerAdvertisement(peer: AeStoreView): Promise<PeerRoundState> {
+async function peerAdvertisement(
+  peer: AeStoreView,
+  localTierA: readonly string[],
+  localTierB: readonly string[],
+  onUnknown?: (tier: "A" | "B", table: string) => void,
+): Promise<PeerRoundState> {
   // Detail is LAZY (see PeerRoundState): planRound invokes the fetcher only for tables whose
   // digests differ, so a converged table costs a digest and nothing else. Over the wire that is
   // the difference between O(compare) and O(table) per round.
+  // FILTER TO WHAT WE TRACK, before the planner sees it. `planRound` treats an untracked table as
+  // "local digest over the empty set", which differs from any non-empty peer, so it invokes the
+  // fetcher — and the fetcher asks the LOCAL store for that peer-chosen table name, which throws.
+  // The engine then dies on a table it was never going to apply anyway (the apply loop iterates the
+  // LOCAL registry). That is not merely a hostile-peer concern: the moment a newer directory version
+  // adds a synced table, every OLD node's rounds against new nodes die — in the old←new direction,
+  // the one carrying suspensions — during an ordinary rolling deploy.
+  const localA = new Set(localTierA);
+  const localB = new Set(localTierB);
   const tierA = new Map<string, { digest: string; recordHashes: () => Promise<readonly string[]> }>();
   for (const t of await peer.tierATables()) {
+    if (!localA.has(t)) { onUnknown?.("A", t); continue; }
     tierA.set(t, {
       digest: await peer.tierATableDigest(t),
       recordHashes: async () => peer.tierARecordHashes(t),
@@ -108,6 +138,7 @@ async function peerAdvertisement(peer: AeStoreView): Promise<PeerRoundState> {
   }
   const tierB = new Map<string, { digest: string; versions: () => Promise<ReadonlyMap<string, string>> }>();
   for (const t of await peer.tierBTables()) {
+    if (!localB.has(t)) { onUnknown?.("B", t); continue; }
     tierB.set(t, {
       digest: await peer.tierBTableDigest(t),
       versions: async () => peer.tierBVersions(t),
@@ -117,8 +148,18 @@ async function peerAdvertisement(peer: AeStoreView): Promise<PeerRoundState> {
 }
 
 /** Run one anti-entropy round: LOCAL pulls from PEER and applies. Returns what actually changed. */
-export async function runAntiEntropyRound(local: AeStoreView, peer: AeStoreView): Promise<RoundResult> {
-  const plan = await planRound(await localState(local), await peerAdvertisement(peer));
+export async function runAntiEntropyRound(
+  local: AeStoreView,
+  peer: AeStoreView,
+  onUnknownTable?: (tier: "A" | "B", table: string) => void,
+): Promise<RoundResult> {
+  const localTierA = await local.tierATables();
+  const localTierB = await local.tierBTables();
+  const plan = await planRound(
+    await localState(local),
+    await peerAdvertisement(peer, localTierA, localTierB, onUnknownTable),
+  );
+  const failures: RoundResult["failures"] = [];
 
   // Iterate in the LOCAL registry's table order — never the peer's advertisement order. Two
   // reasons: (1) a table the local store doesn't know is simply never pulled (a hostile peer
@@ -127,23 +168,39 @@ export async function runAntiEntropyRound(local: AeStoreView, peer: AeStoreView)
   // sync set (profiles → suspensions; accounts → profiles).
   let tierAPulled = 0;
   let tierAApplied = 0;
-  for (const table of await local.tierATables()) {
+  let tierAPlanned = 0;
+  for (const table of localTierA) {
     const hashes = plan.tierA.get(table);
     if (!hashes || hashes.length === 0) continue;
-    const records = await peer.serveTierA(table, hashes);
-    tierAPulled += records.length;
-    tierAApplied += await local.applyTierA(table, records);
+    tierAPlanned += hashes.length;
+    // PER-TABLE, so one table's failure costs that table and nothing else. Previously any throw here
+    // — a content-hash mismatch, an invalid-hex record, a transient DB error — aborted the round
+    // before Tier-B ran, so a single poisoned record stopped the kill switch replicating from that
+    // peer indefinitely. Loud and contained beats loud and total.
+    try {
+      const records = await peer.serveTierA(table, hashes);
+      tierAPulled += records.length;
+      tierAApplied += await local.applyTierA(table, records);
+    } catch (err) {
+      failures.push({ tier: "A", table, reason: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   let tierBPulled = 0;
   let tierBApplied = 0;
-  for (const table of await local.tierBTables()) {
+  let tierBPlanned = 0;
+  for (const table of localTierB) {
     const keys = plan.tierB.get(table);
     if (!keys || keys.length === 0) continue;
-    const records = await peer.serveTierB(table, keys);
-    tierBPulled += records.length;
-    tierBApplied += await local.applyTierB(table, records);
+    tierBPlanned += keys.length;
+    try {
+      const records = await peer.serveTierB(table, keys);
+      tierBPulled += records.length;
+      tierBApplied += await local.applyTierB(table, records);
+    } catch (err) {
+      failures.push({ tier: "B", table, reason: err instanceof Error ? err.message : String(err) });
+    }
   }
 
-  return { tierAPulled, tierBPulled, tierAApplied, tierBApplied };
+  return { tierAPulled, tierBPulled, tierAApplied, tierBApplied, tierAPlanned, tierBPlanned, failures };
 }

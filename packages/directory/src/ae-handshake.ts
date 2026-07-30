@@ -22,7 +22,14 @@ import { verifyAePeerAuth, type AePeerAuthParams } from "@cello-protocol/crypto"
 import type { ConsortiumManifest } from "@cello-protocol/protocol-types";
 
 export type HandshakeFailReason =
-  | "manifest_pubkey_mismatch"
+  /** The peer is not in our manifest at all — it is not a consortium member, or our manifest is stale. */
+  | "node_not_in_manifest"
+  /** Present, but missing a pinned `pubkey` or `peerId` — a pre-M12 entry needing re-publication. */
+  | "manifest_entry_incomplete"
+  /** The TBS names the same node/peer on both sides — reflection, or two manifest entries sharing an identity. */
+  | "self_dial"
+  /** The TBS's claimed nodeId is not the node we dialed. */
+  | "node_id_mismatch"
   | "peerid_mismatch"
   | "nonce_mismatch"
   | "timestamp_skew"
@@ -62,9 +69,29 @@ export function verifyPeerAuthFrame(
   const maxSkewMs = input.maxSkewMs ?? 60_000;
   const peerSlot = localSlot === "A" ? "B" : "A";
 
+  // F6: bind the TBS's OWN nodeId for the peer slot, not just its peerId. Both callers currently
+  // derive the two from one value, so this is unexploitable today — but the contract at the top of
+  // this file ("the peer's claimed nodeId is in the manifest") was enforced by caller discipline
+  // alone, in an exported security core that is tested independently of its callers.
+  const peerClaimedNodeId = peerSlot === "B" ? params.nodeIdB : params.nodeIdA;
+  if (peerClaimedNodeId !== peerNodeId) return { ok: false, reason: "node_id_mismatch" };
+
+  // F5: self-dial / reflection, checked explicitly. `buildAePeerAuthTbs` throws on
+  // nodeIdA === nodeIdB, and `verifyAePeerAuth` swallows that to false — so this used to surface as
+  // `signature_invalid`, pointing the operator at key material for what is actually an
+  // anti-reflection violation or a manifest where two entries share an identity.
+  if (params.nodeIdA === params.nodeIdB || params.peerIdA === params.peerIdB) {
+    return { ok: false, reason: "self_dial" };
+  }
+
   const node = manifest.nodes.find((n) => n.nodeId === peerNodeId);
-  // No manifest entry, or a pre-M12 entry lacking a pinned pubkey/peerId → cannot channel-bind.
-  if (!node || !node.pubkey || !node.peerId) return { ok: false, reason: "manifest_pubkey_mismatch" };
+  // THREE distinct causes, three distinct operator actions — one reason name conflated them, and
+  // none of them is a "mismatch" (no pubkey is compared here). It also drove a retry: the rotation
+  // -skew handler keys on `manifest_pubkey_mismatch`, so "this peer is not in my manifest at all"
+  // triggered a manifest re-read plus a second full dial, per unknown peer, every interval.
+  if (!node) return { ok: false, reason: "node_not_in_manifest" };
+  if (!node.pubkey) return { ok: false, reason: "manifest_entry_incomplete" };
+  if (!node.peerId) return { ok: false, reason: "manifest_entry_incomplete" };
 
   // Channel binding: the live PeerId AND the peer's TBS-bound peerId must both equal the manifest
   // peerId. (The peer occupies peerSlot in the TBS.)

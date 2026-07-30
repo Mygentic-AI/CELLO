@@ -195,7 +195,13 @@ describe("ae-channel: mutual handshake + rounds over the wire", () => {
     const { dialerResult } = await runBoth({ responderStore, rounds: 2 });
     expect(dialerResult.ok).toBe(true);
     if (!dialerResult.ok) return;
-    expect(dialerResult.rounds[1]).toEqual({ tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0 });
+    // Termination over the wire is now a 7-field claim: nothing PLANNED either, and no table failed.
+    // Planned-zero is what separates real convergence from a peer that advertised differing digests
+    // and then served nothing.
+    expect(dialerResult.rounds[1]).toEqual({
+      tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0,
+      tierAPlanned: 0, tierBPlanned: 0, failures: [],
+    });
   });
 
   it("FAILS CLOSED: responder signing with the WRONG key → signature_invalid, no round runs", async () => {
@@ -214,12 +220,12 @@ describe("ae-channel: mutual handshake + rounds over the wire", () => {
     expect(dialerResult.reason).toBe("peerid_mismatch");
   });
 
-  it("FAILS CLOSED: a nodeId absent from the manifest → manifest_pubkey_mismatch", async () => {
+  it("FAILS CLOSED: a nodeId absent from the manifest → node_not_in_manifest", async () => {
     const ghost: AeNodeIdentity = { nodeId: "azure-xyz", peerId: "12D3KooWGhost", sign: (tbs) => ed25519.sign(tbs, seedB) };
     const { dialerResult } = await runBoth({ responderId: ghost });
     expect(dialerResult.ok).toBe(false);
     if (dialerResult.ok) return;
-    expect(dialerResult.reason).toBe("manifest_pubkey_mismatch");
+    expect(dialerResult.reason).toBe("node_not_in_manifest");
   });
 
   it("FAILS CLOSED: a VALID consortium member answering for a node we did not dial → node_id_mismatch", async () => {

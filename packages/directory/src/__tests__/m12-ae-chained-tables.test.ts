@@ -112,25 +112,22 @@ describe("DOD-AE-CHAINED-TABLES-1: seal_notarizations and user_accounts replicat
     expect(chainCalls, "nothing may be written when the content address is wrong").toHaveLength(0);
   });
 
-  it("without a chain writer, SKIPS the table loudly — it does not write it unchained, and does not abort the round", async () => {
-    // Two properties at once, and they pull against each other. It must not fall through to the
-    // generic INSERT (that writes the row outside the chain). But it must not THROW either:
-    // runAntiEntropyRound applies all of Tier-A and THEN Tier-B with no try between them, so a throw
-    // here skips agent_suspensions and agent_presence — a permanent failure on a seal receipt would
-    // stop the KILL SWITCH replicating to this node every round, forever.
+  it("without a chain writer, REFUSES the table — it never writes it unchained", async () => {
+    // It must not fall through to the generic INSERT: that writes the row outside the tamper-evident
+    // chain that is the table's reason for existing. So it throws.
+    //
+    // Blast radius is the ENGINE's job, not this file's. An earlier version caught this here while
+    // reasoning about `runAntiEntropyRound`'s control flow — a layering inversion that guarded one of
+    // five throw sites in this file and that the in-memory store the convergence proof runs on did not
+    // share. The engine now applies Tier-A table by table and always reaches Tier-B; that containment
+    // is proven in anti-entropy-engine.test.ts ("a Tier-A failure does NOT stop Tier-B").
     const { pool, queries } = harness();
-    const logged: Array<{ event: string; ctx: Record<string, unknown> }> = [];
-    const store = new PgAeStore(pool, undefined, {
-      info: () => {}, warn: () => {}, debug: () => {},
-      error: (event: string, ctx: Record<string, unknown>) => logged.push({ event, ctx }),
-    } as never);
+    const store = new PgAeStore(pool);
     const body = sealBody("ac".repeat(16));
     const { hash } = encodeTierARecord(SEAL_NOTARIZATIONS_SPEC, body);
 
-    const inserted = await store.applyTierA("seal_notarizations", [{ hash, body }]);
-    expect(inserted).toBe(0);
+    await expect(store.applyTierA("seal_notarizations", [{ hash, body }])).rejects.toThrow(/no ChainWriter/);
     expect(queries.filter((q) => /INSERT INTO seal_notarizations/i.test(q))).toEqual([]);
-    expect(logged.map((l) => l.event)).toContain("antientropy.apply.skipped");
   });
 
   it("the chained record serializes IDENTICALLY to the locally-written one", async () => {

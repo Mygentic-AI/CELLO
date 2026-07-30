@@ -241,7 +241,10 @@ export class AeSyncService {
       // disk) and retry ONCE with the possibly-fresh entry. auth_failed is emitted only after
       // both attempts fail. (Accepting the immediately-previous manifest — the other half of the
       // §1c rule — requires previous-manifest retention on both sides; owed, journaled.)
-      if (!result.ok && (result.reason === "manifest_pubkey_mismatch" || result.reason === "peerid_mismatch")) {
+      // Scoped to the two reasons a manifest ROTATION can actually explain. It previously included
+      // the catch-all that also meant "this peer is not in my manifest at all" — which no re-read can
+      // fix, so every unknown peer cost a manifest re-read plus a second full dial, every interval.
+      if (!result.ok && (result.reason === "manifest_entry_incomplete" || result.reason === "peerid_mismatch")) {
         const refreshed = this.#cfg.manifest().nodes.find((n) => n.nodeId === peerNodeId);
         if (refreshed?.peerId && refreshed.endpoint) {
           result = await this.#attempt(peerNodeId, refreshed.endpoint, refreshed.peerId, (refreshed as { multiaddr?: string }).multiaddr);
@@ -264,13 +267,39 @@ export class AeSyncService {
 
       const pulled = result.rounds.reduce((n, r) => n + r.tierAPulled + r.tierBPulled, 0);
       const applied = result.rounds.reduce((n, r) => n + r.tierAApplied + r.tierBApplied, 0);
+      const planned = result.rounds.reduce((n, r) => n + r.tierAPlanned + r.tierBPlanned, 0);
+      const failures = result.rounds.flatMap((r) => r.failures);
       logger.info("antientropy.round.completed", {
-        peerNodeId, pulled, applied, durationMs: Date.now() - startMs, correlationId,
+        peerNodeId, pulled, applied, planned, durationMs: Date.now() - startMs, correlationId,
       });
+
+      // A table that failed no longer takes the round with it, so it has to be SAID — otherwise the
+      // round reports completed while one table silently stopped replicating from this peer.
+      for (const f of failures) {
+        logger.error("antientropy.round.table_failed", {
+          peerNodeId, tier: f.tier, table: f.table, reason: f.reason, correlationId,
+        });
+      }
+
+      // SHORTFALL: the plan asked for records the peer did not serve. Tier-A is append-only and
+      // Tier-B keys come from the peer's own advertisement, so on the normal path served === planned
+      // — this never fires benignly, which is what makes it a signal. A withholding peer otherwise
+      // returns pulled 0 / applied 0, which is byte-identical to convergence.
+      const shortfall = planned - pulled;
+      if (shortfall > 0) {
+        logger.error("antientropy.round.shortfall", {
+          peerNodeId, planned, served: pulled, shortfall, correlationId,
+          reason: "peer advertised records it then did not serve — this round is NOT evidence of convergence",
+        });
+      }
 
       // The engine's fork signature: pulled>0 while applied===0. One occurrence can be a benign
       // mid-round write; a STREAK is a same-key/different-content fork that will never converge.
-      if (pulled > 0 && applied === 0) {
+      // A shortfall or a table failure must NOT reset the streak: both mean this round proved
+      // nothing, and clearing the counter on a round that proved nothing is how a fork hides.
+      if (shortfall > 0 || failures.length > 0) {
+        // leave the streak untouched — neither confirmed nor cleared
+      } else if (pulled > 0 && applied === 0) {
         const streak = (this.#forkStreak.get(peerNodeId) ?? 0) + 1;
         this.#forkStreak.set(peerNodeId, streak);
         if (streak >= 2) {

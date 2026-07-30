@@ -8,6 +8,12 @@
  * Fails CLOSED — any check failing rejects.
  */
 
+// The tz-less-timestamp test below distinguishes the FORMAT guard from the SKEW guard. Without a
+// pinned zone, a non-UTC runner parses the tz-less string off by its own UTC offset, which exceeds the
+// 60s window — so the test would pass via the skew branch even with the format guard deleted, on
+// precisely the machines where a tz-less timestamp is dangerous.
+process.env.TZ = "UTC";
+
 import { describe, it, expect } from "vitest";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { buildAePeerAuthTbs, type AePeerAuthParams } from "@cello-protocol/crypto";
@@ -46,8 +52,20 @@ describe("DOD-AE-APPEND-1: verifyPeerAuthFrame", () => {
     expect(verifyPeerAuthFrame(base)).toEqual({ ok: true });
   });
 
-  it("rejects when the nodeId is not in the manifest → manifest_pubkey_mismatch", () => {
-    expect(verifyPeerAuthFrame({ ...base, peerNodeId: "azure-xyz" })).toEqual({ ok: false, reason: "manifest_pubkey_mismatch" });
+  it("rejects when the TBS claims a different nodeId than the one we dialed → node_id_mismatch", () => {
+    // The nodeId binding. Changing only peerNodeId leaves the TBS naming the original node, so this
+    // is caught before the manifest is even consulted.
+    expect(verifyPeerAuthFrame({ ...base, peerNodeId: "azure-xyz" })).toEqual({ ok: false, reason: "node_id_mismatch" });
+  });
+
+  it("rejects a coherent frame from a node absent from the manifest → node_not_in_manifest", () => {
+    // Reaches the manifest lookup for real: the dialed nodeId and the TBS agree, and the manifest
+    // simply has no such member. Distinct from an incomplete entry because no manifest re-read can
+    // fix it — which is why the rotation-skew retry is scoped to exclude this reason.
+    const emptyManifest = { ...base.manifest, nodes: [] };
+    expect(verifyPeerAuthFrame({ ...base, manifest: emptyManifest })).toEqual({
+      ok: false, reason: "node_not_in_manifest",
+    });
   });
 
   it("REPLAY over a different connection: valid frame+sig but wrong live PeerId → peerid_mismatch", () => {
@@ -86,12 +104,12 @@ describe("DOD-AE-APPEND-1: verifyPeerAuthFrame", () => {
     expect(verifyPeerAuthFrame({ ...base, signature: wrongSig })).toEqual({ ok: false, reason: "signature_invalid" });
   });
 
-  it("rejects when the manifest node lacks a peerId (pre-M12 manifest) → manifest_pubkey_mismatch", () => {
+  it("rejects when the manifest node lacks a peerId (pre-M12 manifest) → manifest_entry_incomplete", () => {
     const noPeerId: ConsortiumManifest = {
       ...manifest,
       nodes: manifest.nodes.map((n) => (n.nodeId === "aws-use1" ? { ...n, peerId: undefined } : n)),
     };
-    expect(verifyPeerAuthFrame({ ...base, manifest: noPeerId })).toEqual({ ok: false, reason: "manifest_pubkey_mismatch" });
+    expect(verifyPeerAuthFrame({ ...base, manifest: noPeerId })).toEqual({ ok: false, reason: "manifest_entry_incomplete" });
   });
 
   it("nonce is checked before signature — a swapped nonce names the replay cause, not signature_invalid", () => {
