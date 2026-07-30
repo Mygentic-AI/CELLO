@@ -341,7 +341,34 @@ Format the proof as a numbered flow. Include:
 **The version cascade, dist-tags, and the post-publish verification live in `/cello-publish`** — load
 the skill, do not reconstruct them from memory here.
 
-**Never tell users to run `npx clear-npx-cache`.** It wipes every npx-installed tool. Pinning a new version is sufficient.
+## Pinned Versions Are Forbidden — We Use `latest`
+
+**Do not pin a version. Anywhere.** Not in an MCP registration, not in a `package.json`, not in a
+task definition, not in an install command you hand someone. `latest` is the default and the rule.
+
+**Why it is a rule and not a preference:** a pin is invisible after the day it is made. Someone pins
+for a reason that is good at the time, never unpins, and weeks later a different session is staring
+at behaviour that makes no sense — a fix that is definitely published, definitely on `main`, and
+definitely not running. The hunt that follows is expensive and it ends, every time, at a pin nobody
+remembers writing. The cost is never paid by whoever pinned it.
+
+This has already happened here more than once: an MCP registered at `connect@0.0.60` while `latest`
+was `0.0.102` (42 versions of drift, discovered by accident), and the demo agent pinned at
+`daemon@0.0.93` with stale transitive deps underneath it.
+
+**`^0.0.x` IS A PIN.** Under npm semver a caret below `0.1.0` matches nothing but that exact patch,
+so `"^0.0.94"` floats to precisely nothing. Writing a caret and believing it floats is the most
+common way a pin gets created by someone who thought they were avoiding one. `npm i pkg@latest`
+writes one of these into `package.json` — check afterwards, and change it to `latest`.
+
+**If you must pin temporarily** — bisecting, reproducing a specific break — say so out loud in the
+same breath, and unpin before the session ends. A pin that outlives its reason is the failure mode.
+
+**Verify, never assume, that a pin is gone.** `claude mcp get <name>` and read the `Args`; grep the
+`package.json`; check the task definition. The whole problem is that pins are silent.
+
+**Never tell users to run `npx clear-npx-cache`.** It wipes every npx-installed tool. Promoting and
+installing `latest` is sufficient.
 
 **`claude mcp add` syntax:** Use `--` to separate claude's flags from npx's flags, otherwise `--yes` is misinterpreted.
 
