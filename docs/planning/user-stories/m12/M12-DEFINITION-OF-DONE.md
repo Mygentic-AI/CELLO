@@ -321,7 +321,9 @@ description: >
   unaffected; (c) a cross-directory conversation seals with the relay pinned to a directory that is
   the home of NEITHER participant — the case that is currently untested and worst;
   (d) no directory-to-directory message forwarding is introduced, and the notification queue is not
-  replicated. — ❌
+  replicated. — ✅ **ALL FOUR MET (Entry 59).** Live enforcer `j-gcp-live.spine.test.ts` GREEN in 151s
+  with agents on `gcp-usc1`+`gcp-euw1` and the relay pinned to `gcp-use1` — the home of neither.
+  `relay.seal.broker.resolved` → `delivered` → `notarization.recorded`, no redirect, no forwarding.
   **Why it was not built:** relay SELECTION (directory picks a relay per session, health-aware) was
   built — `pickRelay()`. The return direction was deferred to a config value and never revisited.
   The asymmetry is the defect: dynamic outbound, hardcoded inbound.
@@ -358,7 +360,7 @@ description: >
   pinned URL (`not_in_consortium` → `failover to gcp-use1` → `auth.challenge.verified`);
   (d) **kill-switch pause biting across all three nodes** — never exercised;
   (d) **kill-switch pause biting across all three nodes** — still never exercised;
-  (e) **seal** — ✅ PROVEN AND FIXED (Entries 44, 52–55). Was intermittent because every seal was
+  (e) **seal** — ✅ PROVEN AND FIXED (Entries 44, 52–55, 58–59), including the neither-home case. Was intermittent because every seal was
   adjudicated by ONE relay-pinned directory that could only reach agents homed there; the relay now
   follows a redirect to the node holding the seal initiator's stream. Cross-node seal completes in
   ~280ms where it previously timed out after 11 minutes. Bilateral seal completed across GCP with an identical

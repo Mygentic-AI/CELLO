@@ -3645,3 +3645,60 @@ stranded participant's own home directory already holds its receipt. It needs a 
 request/response frame, and a client-side check on timeout. Andre chose the proof-only shape
 (signature + root, no re-derived readable certificate) over rebuilding the certificate, because a
 subtly mismatched rebuild is a hidden failure while an asymmetry is a visible one.
+
+---
+
+## Entry 59 — 2026-07-30 — THE LIVE ENFORCER PASSES; and Entry 58's conclusion was drawn from a broken build
+
+### The result
+
+`j-gcp-live.spine.test.ts` GREEN in 151s. Agents on `gcp-usc1` and `gcp-euw1`; the relay pinned to
+`gcp-use1` — **the home of neither participant**. Responder closes first. Full path: register on two
+different directories → cross-node discovery → session over the relay → content both ways →
+**bilateral seal with matching roots on both sides**.
+
+```
+13:58:02.631  relay.seal.broker.resolved  9cb77b68…   (= gcp-euw1)
+13:58:03.225  seal.certificate.legibility.built
+13:58:03.227  seal.certificate.delivered
+13:58:06.214  notarization.recorded
+13:58:06.270  conversation.seal.recorded
+```
+
+`DOD-SEAL-BROKER-1` acceptance (a)–(d) all met. No redirect, no directory-to-directory forwarding, no
+replicated queue.
+
+### Correction: the receipt fetch was never needed
+
+Entry 58 stated the receipt fetch was "genuinely required rather than a workaround for a fixable gap",
+on the evidence that the enforcer still failed after the broker fix. **That evidence was invalid.** At
+that point `createRelayNode` was dropping `directoryEndpointsByPubkey`, so broker selection could not
+work — the seal was completing via the REDIRECT, and after a redirect the adjudicating node holds only
+one participant's stream. I measured the redirect path and attributed the result to the broker path.
+
+With broker selection actually working, the adjudicating directory is the counterparty's home AND holds
+the initiator's visiting connection, so it reaches BOTH. `seal.result.served` never fires. The
+hypothesis I tested and wrongly concluded against was correct.
+
+**I built a protocol addition — store read, contract change, frame pair, client timeout hook — on a
+conclusion drawn from a build I knew was broken.** I even wrote in Entry 58 that testing beat building
+on an assumption. Then the very next thing I did was build on one, because the test appeared to have
+settled it. A test run against a build with a known dropped option settles nothing.
+
+### What to do with the fetch
+
+Keep it, but demote it in the record from "the fix" to "a safety net", and be clear it is UNPROVEN in
+production because nothing has exercised it:
+- it covers the redirect path, where the adjudicating node genuinely holds one stream
+- it covers a broker whose address is unconfigured
+- it removes the worst state in the system — an agent reporting failure for a durable seal
+
+It is also the only part of today's work with no live evidence behind it. That belongs in its own
+acceptance line rather than riding on this one.
+
+### The shape of today, once more
+
+Seven defects, one signature: **every layer correct, one silent hand-off between them.** patches/ not
+copied into an image; a share write returning ok while nothing persisted; a failover that never
+triggered; an ephemeral IP baked into a signed manifest; a deferral returning success; a factory
+dropping an option; and a queue that cannot reach the peer it is queued for.

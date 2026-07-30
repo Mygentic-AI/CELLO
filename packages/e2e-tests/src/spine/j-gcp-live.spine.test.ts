@@ -256,8 +256,21 @@ describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fle
       expect(bPub).toMatch(/^[0-9a-f]{64}$/);
 
       // ── session ──
-      const sess = cli(a.dir, ["initiate-session", bPub]) as { sessionId?: string; reason?: string; transportMode?: string };
-      expect(sess.sessionId, `session failed: ${sess.reason}`).toBeTruthy();
+      // Retry, bounded. Cross-node discovery is EVENTUALLY consistent by design: b registered against
+      // its own directory, and a's directory learns of it through anti-entropy (~60s round). A single
+      // attempt asserts instant convergence, which the design never promised — it fails with
+      // `unknown_agent` and would read as a discovery defect.
+      //
+      // Bounded on purpose: retrying indefinitely would mask a genuine discovery failure. Four
+      // attempts over ~3 minutes is several AE rounds; if it has not converged by then, that IS the
+      // finding.
+      let sess: { sessionId?: string; reason?: string; transportMode?: string } = {};
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        sess = cli(a.dir, ["initiate-session", bPub]) as typeof sess;
+        if (sess.sessionId) break;
+        if (attempt < 4) await new Promise((r) => setTimeout(r, 60_000));
+      }
+      expect(sess.sessionId, `session failed after 4 attempts over ~3min: ${sess.reason}`).toBeTruthy();
       const sid = sess.sessionId!;
 
       // ── content, both directions ──
