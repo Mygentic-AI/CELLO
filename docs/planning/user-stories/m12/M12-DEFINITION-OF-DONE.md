@@ -167,7 +167,12 @@ description: >
   reconnect, the mutual handshake over the stream (`verifyPeerAuthFrame` plus our own signed frame),
   and the digest→detail→pull round protocol with write-hints. Manifest gains `peerId` population and
   the directory VERIFIES its manifest at load (design §1a/§1b). Peers failing identity verification are
-  refused with the cause named. — ❌
+  refused with the cause named. — 🟡 BUILT (`ae-channel.ts`; the ❌ reflected main, which never saw the
+  branch). Handshake + rounds over the wire covered by `ae-channel.test.ts` 13/13, including
+  fail-closed on wrong key, relayed frames, a member answering for a node we did not dial, self-dial,
+  pre-auth round frames and a frame deadline; the O(compare) claim is pinned by a frame-counting test
+  (a converged round sends digests and nothing else). Proven between three real processes over Noise in
+  `j-antientropy` 5/5 (→ Entry 70b). Owed for ✅: a reviewer verdict, quoted.
 - **DOD-AE-APPEND-1** [trustless-cello] — **the behavioral claim, riding the three above:** append-only
   tables sync between directories over the authenticated libp2p channel via root-comparison + delta
   pull; divergence detection is O(compare), transfer is delta-only; peers that fail identity
