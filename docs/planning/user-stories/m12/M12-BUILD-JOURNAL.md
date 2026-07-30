@@ -3574,3 +3574,74 @@ than as a full certificate. That choice wants deciding before coding, not during
 `j-gcp-live.spine.test.ts` currently FAILS, correctly, on exactly this. It is the regression guard
 for the fix and should stay red until the fix lands — a red enforcer naming a real defect is worth
 more than a green one that skips it.
+
+---
+
+## Entry 58 — 2026-07-30 — DOD-SEAL-BROKER-1 WORKS: the relay asks the brokering directory, no redirect needed
+
+Andre's reframing was right and the fix is smaller than either option I had proposed.
+
+### What changed
+
+The relay was pinned to one directory for every conversation in the consortium. It already knew which
+directory brokered each session and threw that away — `recordAssignment` verified the assignment
+signature with `.some()` over the consortium pubkeys and discarded which one matched. Now `.find()`,
+recorded per session, and used when a receipt is needed.
+
+Address resolution deliberately does NOT come from the client-presented assignment: a client could
+then name any address it liked. The relay learns the broker from the SIGNATURE it already verifies,
+and resolves the address from its own environment (`CELLO_DIRECTORY_ENDPOINTS`, pubkey=multiaddr) —
+the same public-data trust source as `CELLO_DIRECTORY_PUBKEYS`. That also avoided extending the
+signed assignment payload, which would have been a coordinated directory+relay+client change with
+version-skew risk.
+
+### Proven on the case that had never been tested
+
+Agents on `gcp-usc1` and `gcp-euw1`; the relay's configured directory is `gcp-use1` — **the home of
+NEITHER participant.** Before and after, same conversation shape:
+
+```
+BEFORE  relay.seal.broker.address_unknown
+        seal.certificate.undeliverable   homedOn gcp-euw1, processedBy gcp-use1
+        relay.seal.redirected
+        (then legibility + delivered on euw1)
+
+NOW     relay.seal.broker.resolved  9cb77b68…   (= gcp-euw1)
+        seal.certificate.legibility.built
+        seal.certificate.delivered
+        notarization.recorded
+```
+
+No `undeliverable`, no redirect, no wasted round trip. The redirect from Entry 55 remains as the
+safety net for a broker whose address is unconfigured; it is no longer the mechanism.
+
+### One silent hand-off, again
+
+`createRelayNode` copies options field by field into the node, so `directoryEndpointsByPubkey` was
+dropped on the floor. The env parsed correctly, the resolver ran, the map was empty — and the relay
+logged `broker.address_unknown` for a pubkey whose address was demonstrably present in its own
+metadata. Cost a full build-deploy-test cycle.
+
+That is the same shape as most of today's defects: **every layer correct, one silent hand-off in
+between.** Six of them now: patches/ not copied into an image, a share write that returned ok, a
+failover that never triggered, an ephemeral IP baked into a manifest, a deferral that returned
+success, and a factory that dropped an option.
+
+### And the question this answered that I had not settled
+
+I hoped the broker fix might make the fetch unnecessary — reasoning that the brokering directory is
+the counterparty's home AND holds the initiator's visiting connection, so it might reach both. **It
+does not.** The enforcer still fails with the initiator timing out while
+`conversation.seal.recorded` is in the log. So the visiting connection is not available at delivery
+time, and the receipt fetch is genuinely required rather than a workaround for a fixable gap.
+
+Good that I tested it instead of building on the assumption; that was one deploy cycle against
+possibly a day of protocol work aimed at the wrong thing.
+
+### Next: the receipt fetch
+
+The seal is notarized and durable, and `seal_notarizations` IS a Tier-A anti-entropy table — so the
+stranded participant's own home directory already holds its receipt. It needs a read, a
+request/response frame, and a client-side check on timeout. Andre chose the proof-only shape
+(signature + root, no re-derived readable certificate) over rebuilding the certificate, because a
+subtly mismatched rebuild is a hidden failure while an asymmetry is a visible one.
