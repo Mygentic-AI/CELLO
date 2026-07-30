@@ -1915,6 +1915,55 @@ own story) deliberately, never smuggled in as a rider. Source:
      (b) after `cello_dismiss`, session no longer appears in either section; (c) `cello_dismiss`
      on an active session returns `session_not_terminal`.
 
+- **DOD-SEALED-INBOX-2** ❌ OPEN (raised 2026-07-30) — `cello_inbox` calls unsealed sessions sealed.
+  The inbox is the one surface that asserts a seal, and for three of four statuses the assertion is
+  false.
+
+  **Observed live (2026-07-30).** A Cowork session left two messages for `CELLO_Feedback` and the
+  daemon was killed mid-flight. `cello_inbox` returned the session under `sealed_unread` with
+  `sealed_unread_guidance: "These sessions are sealed with unread messages…"`. It was not sealed:
+  `cello_sealed_receipt` said `not_sealed_yet`, `cello_sessions` said `status: "interrupted"`, and
+  the daemon log had no `seal.certificate.frontier.verified` for it (the two sessions that DID seal
+  that day both have it). **The agent reading the inbox repeated "it's sealed" to the operator as
+  fact.** It took a direct "is it actually sealed?" to catch — nothing in the system contradicts the
+  label unless you go and ask a second surface.
+
+  **Root cause — the label, not the query.** `session-node-manager.ts`:
+  `#TERMINAL_STATUSES = ('sealed','abandoned','seal_interrupted_pending','interrupted')`.
+  `getSealedUnread()` selects on that set and `notification-handlers.ts` reports it as
+  `sealed_unread`. The set is correct — all four are terminal — but only `sealed` is notarized:
+  `abandoned` forfeited the receipt deliberately, `seal_interrupted_pending` is awaiting
+  notarization, `interrupted` was never closed. **The seam is visible in `DOD-SEALED-INBOX-1` above:**
+  its design paragraph says "sealed-unread (**terminal** sessions with unread)" while its AC 5 names
+  the wire field `sealed_unread`. The design said terminal, the wire said sealed, and nothing
+  reconciled them.
+
+  **Why this is not a papercut.** CELLO's product IS the receipt. "This conversation is notarized" is
+  the one claim the entire stack exists to support and the one an operator repeats to a counterparty.
+  A surface that answers "sealed" for a session with no seal is the protocol misreporting its own
+  core guarantee — on the surface most likely to be read by an agent rather than a human, and
+  therefore most likely to be relayed onward unchecked.
+
+  **ACs:**
+  1. Every `sealed_unread` entry carries its real `status`, so notarization cannot be inferred from
+     the field name alone.
+  2. The guidance string no longer asserts that the sessions are sealed. It describes them as
+     terminal (closed, no longer active) and directs the reader to `cello_transcript` /
+     `cello_dismiss` as before.
+  3. The field is renamed `terminal_unread`, with `sealed_unread` retained as an alias for one
+     release — prompt text and the shipped skills reference the current name. This is a RESPONSE
+     field, so the Cowork argument-stripping constraint does not apply (see
+     `cello_session_id`, 2026-07-29).
+  4. Shipped prompt text moves with the field in the same version: `SKILL.md`, the plugin skills,
+     and any slash command that reads the inbox.
+  5. Test: an `interrupted` session with unread received messages must not be described as sealed by
+     ANY field name or guidance string in the `cello_inbox` response. Same for `abandoned` and
+     `seal_interrupted_pending`.
+  6. Test: a genuinely `sealed` session with unread messages still appears, and its entry still
+     reports `status: "sealed"`.
+
+  Full write-up, including the live probe table: [[2026-07-30_1330_inbox-calls-unsealed-sessions-sealed]].
+
 - **DOD-AWAY-WRAP-1** ✅ DONE — Away autoresponder must not fire on a `[[WRAP]]`-signalled message; it must close the session silently instead.
 
   **Observed behavior (live test 2026-07-23):** When CELLO_Feedback initiated a session with Ms_Chelly (away), the daemon fired the away autoresponse immediately at session open — before the caller had sent any content. This forced CELLO_Feedback to read the away notice before it could send anything (`session_not_current` / unread block). After reading, CELLO_Feedback sent its actual message with `signal: "wrap"`. The daemon fired the away autoresponse a *second* time, producing a spurious extra message in the transcript (seq 2 in both live tests). The session then sealed, leaving Ms_Chelly with a `sealed_unread` item containing the original caller message — but also a confusing duplicate away echo.
