@@ -46,7 +46,18 @@ description: >
   2026-07-04). — ❌
 - **DOD-INV-SHARES-LOCAL** [trustless-cello] — `agent_key_shares` (or successor) appears in NO
   sync set, NO anti-entropy exchange, and NO off-node artifact except the node's own encrypted
-  backup. A share never transits between nodes by any mechanism. — ❌
+  backup. A share never transits between nodes by any mechanism. — ✅ **ENFORCED MECHANICALLY**
+  by `m12-inv-shares-local.test.ts` (11/11), → Entry 60. The defense is that every wire-reachable
+  store method resolves its peer-supplied table name through a CLOSED registry that throws on
+  anything it does not know — necessary because `planRound` deliberately pulls tables it does not
+  track (`ae-round.ts:63-70`), so the dangerous frame is a peer simply asking
+  `ae_pull_a { table: "agent_key_shares" }`. All 8 wire-reachable entry points are asserted to
+  refuse it **before touching the database** (the pool throws "POOL REACHED" if reached, so a
+  refusal that came too late fails red). Revert-tested: injecting the share table into the registry
+  turns 5 tests red, `serveTierA` failing with POOL REACHED — the leak surfacing as a red test.
+  Refusal is generic (a renamed share table is still refused), and no AE module names the table or
+  its ciphertext column. Off-node backup carve-out: the dump carries KMS-wrapped `encrypted_share`
+  ciphertext, and `pg-backup-to-gcs.test.ts` covers it.
 - **DOD-INV-KILL-SWITCH** [trustless-cello] — suspension state fails CLOSED and converges
   suspended-wins: a pause reaches every up node despite partition and restart; an un-suspension
   requires verifiably newer authenticated state; a tie resolves suspended. A paused agent sealing
@@ -328,8 +339,17 @@ description: >
   built — `pickRelay()`. The return direction was deferred to a config value and never revisited.
   The asymmetry is the defect: dynamic outbound, hardcoded inbound.
   **Not covered by this line:** delivering the finished receipt to BOTH agents. The brokering
-  directory reliably holds one participant's connection, not both. That becomes a fetch rather than
-  a redesign, because receipts already replicate to every directory — tracked separately.
+  directory reliably holds one participant's connection, not both.
+  **CORRECTION (Entry 60) — the premise recorded here was false.** This said a fetch would suffice
+  "because receipts already replicate to every directory". They do not. `seal_notarizations` is
+  declared in `TIER_A_SPECS` but is NOT in the pg store's sync registry — it needs the canonical
+  chain writer (`insertWithChain`) and was left out deliberately rather than half-wired
+  (`pg-ae-store.ts` "Scope"). So a receipt exists only on the directory that recorded it, and the
+  `seal_result_request` fetch can only be answered by that same directory — the one that already
+  tried to deliver it. The fetch is therefore near-useless until receipts replicate, which makes
+  the chain-writer unit its prerequisite, not an unrelated follow-up. Now asserted in
+  `m12-inv-shares-local.test.ts`, so this cannot be mis-stated again: when the chain-writer lands,
+  that test goes red and forces both the registry list and this assumption to be revisited.
 
 - **DOD-MOVE-OPSAGENT-1** [trustless-cello] — ops-agent runs on GCP; email via the SES HTTPS API
   (WIF or SigV4 credentials handled without SA keys — no key files exist, org-enforced); its
