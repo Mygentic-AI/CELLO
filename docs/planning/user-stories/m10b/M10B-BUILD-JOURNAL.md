@@ -3256,3 +3256,38 @@ eighth frozen vector is the only thing standing between this repo and that bug.*
 - ⚠️ **Local `cello_dev` DB:** V53–V55 were applied by hand (psql) to unblock the integration
   suites, so its `flyway_schema_history` still reports max(version)=52 while the schema is at 55.
   Harmless locally, but flyway would disagree — rebuild the local DB rather than trusting it.
+
+---
+
+## Entry 41 — `DOD-END-SCAN-1` ✅, and the first §1a violation was mine
+
+Flipped from evidence rather than from Entry 38's claim, because a journal entry is not proof that
+code does what it says.
+
+**Clause by clause.** `m10b-scan-1-submission-scan.test.ts` (9 green) covers injection payloads,
+control characters, markup, the PROTOCOL length cap, empty bodies, never-mutates, a stable
+`scanner_version`, and that the version rides refusals too. The SECRETS clause had **no named test**,
+so it was checked directly rather than assumed: a body carrying an AWS key pair is rejected, out of
+222 secret rules compiled at startup. Pipeline properties read off `submission-ingress.ts` — the scan
+runs BEFORE the mint, a failure records `rejected` and returns with no clean-and-continue, and the
+pass refuses to start when the corpus will not compile.
+
+**The best evidence was accidental.** Before `re2-wasm` was fixed the dev drain answered 500 with a
+wasm ENOENT; afterwards, 200 with `minted: 1`. That is a live negative control nobody designed: it
+proves the scanner is load-bearing on the real path rather than a no-op that would have passed
+either way.
+
+**Not verified, and recorded as such:** D-16's *decode-then-judge* half. Refuse-on-sight for
+concealment is covered by the injection and charset rules; decoding a legitimate encoding before
+judging it is exercised by nothing here.
+
+### The violation
+
+I wrote a **14-line blockquote** onto that DoD line minutes after §1a capped them at five — the exact
+"journal entry wearing the wrong hat" the rule names, committed by the session that had just read the
+rule. Trimmed to four lines pointing here.
+
+Worth saying plainly because it is the cheapest possible demonstration of why the rule exists: the
+instinct to put the reasoning where I was working, rather than where it belongs, survived reading the
+prohibition against doing so. The cap is mechanical for that reason — it does not depend on the
+author agreeing with it in the moment.

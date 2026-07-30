@@ -394,22 +394,10 @@ the additions M10B is accountable for.
   and a forged version "is a lie stored as evidence." Scan **before** hash, always: on fail reject, never
   clean-and-continue. Aligns with policy D-16 (concealment with no innocent use refuses on sight;
   legitimate encodings are decoded and judged).
-  > **✅ 2026-07-30 — evidenced clause by clause, not from the journal.**
-  > `m10b-scan-1-submission-scan.test.ts` (9 green) covers injection, control characters, markup, the
-  > PROTOCOL length cap, empty bodies, never-mutates, a stable `scanner_version`, and that the version
-  > rides refusals too. The SECRETS clause had no named test, so it was checked directly rather than
-  > assumed: a body carrying an AWS key pair is rejected (222 secret rules compile at startup).
-  > Pipeline properties verified in `submission-ingress.ts`: the scan runs BEFORE the mint, a failure
-  > records `rejected` and returns with no clean-and-continue, and the pass refuses to start when the
-  > corpus will not compile.
-  >
-  > **The live evidence is accidental and better than a test.** Before `re2-wasm` was fixed the dev
-  > drain answered 500 with a wasm ENOENT; after, 200 with `minted: 1`. The scanner is load-bearing on
-  > the real path — not a no-op that would have passed either way.
-  >
-  > NOT verified: D-16's *decode-then-judge* half (legitimate encodings decoded before judgement).
-  > Refuse-on-sight for concealment is covered by the injection and charset rules; decoding is not
-  > exercised by any test here. Small, and worth a test when someone is next in this file. — ✅
+  > **✅ 2026-07-30** — 9 tests cover injection/charset/markup/cap/version; the SECRETS clause had no
+  > named test so it was checked directly (AWS key pair rejected, 222 rules). Live: the dev drain went
+  > 500 → `minted:1` once `re2-wasm` worked, so the scanner is load-bearing on the real path.
+  > NOT verified: D-16's decode-then-judge half. → Entry 41 — ✅
 - **DOD-END-ACCOUNTABILITY-1** — submitter accountability on the graduated threshold of §7 constraint 3:
   **reject always** (fail-closed), but **flag as suspect only on a pattern** — repeated rejects, or a
   single egregious hit (a real credential, a clear injection payload) — never on one heuristic near-miss.
