@@ -2043,6 +2043,62 @@ own story) deliberately, never smuggled in as a rider. Source:
   cannot catch a regression here, because in a temp daemon with no sessions the daemon-wide handler
   answers `ok` too. The wire name is therefore asserted directly, verified by mutation.
 
+- **DOD-LOGOUT-EXIT-1** ❌ OPEN (raised 2026-07-30) — `cello logout` reports the daemon stopped while
+  the process is still alive and still talking to a directory node.
+
+  **Observed live (2026-07-30).** After `cello logout`, `cello status` returned `{"daemon":
+  "stopped"}` and the socket, lock file, SQLCipher handle and singleton were all correctly released —
+  but the process (pid 27942) was still running 20+ seconds later, holding 130 MB and an ESTABLISHED
+  outbound connection to a directory node (manifest polling). It exited only when killed by hand.
+  `cello logout`'s own help says *"Stops the daemon. Waits until it has actually exited."*
+
+  **Why it matters beyond an orphan process.** A `stopped` that leaves a live process still reaching
+  the directory makes the next investigation start from a false premise — an operator who has logged
+  out reasonably believes nothing of theirs is on the network. It also silently breaks the "kill
+  switch" reading of logout: the visible state says off, the network behaviour says on. And it hides
+  itself: because the handles ARE released, every local check agrees with the lie.
+
+  **ACs:**
+  1. `cello logout` does not return success until the daemon process has actually exited (its help
+     already promises this); if it does not exit within a bounded wait, the command says so and exits
+     non-zero rather than reporting `stopped`.
+  2. On shutdown the daemon closes its outbound directory connections and stops the manifest poller,
+     rather than releasing local handles and continuing to poll.
+  3. `cello status` distinguishes "no daemon" from "a daemon process exists but has released its
+     socket" — the second is a broken shutdown, not a clean stop, and must not read as `stopped`.
+  4. Test: after logout returns, no process holds the daemon binary for that CELLO_DIR, asserted on
+     the process, not on the lock file.
+
+- **DOD-TESTDAEMON-REAP-1** ❌ OPEN (raised 2026-07-30) — the test harness leaks its subject daemon;
+  one had been running for 1h50m past its test.
+
+  **Observed live (2026-07-30).** pid 26248, a `cello-daemon` with `CELLO_DIR=/private/tmp/
+  cello-subject-26225` — its own socket, SQLCipher DB, singleton and log. It had created an agent
+  (`live-subject`) and its log was ~1h50m of `registry.poll.failed` /
+  `directory.consortium.node.unresolved` / `directory.signaling.reconnecting` against the real dev
+  directory. It survived the operator's `cello logout` because it was never part of that home, and
+  had to be killed by hand.
+
+  **Not a singleton violation** — and the investigation it caused is the point. Two daemons on one
+  machine looked like a broken singleton until each process's open files were checked; the singleton
+  is per-`CELLO_DIR` and both homes correctly held exactly one. The isolation worked. The reaping did
+  not.
+
+  **Why it matters.** A leaked subject daemon holds a listening port and hammers the dev directory
+  with poll traffic from a machine nobody is watching, indefinitely, once per test run that leaks.
+  It also poisons exactly the kind of debugging done here: a stray `cello-daemon` in `ps` is the
+  first thing anyone suspects when sessions misbehave.
+
+  **ACs:**
+  1. A harness that spawns a subject daemon terminates it in teardown, including when the test fails
+     or the runner is interrupted.
+  2. Its `CELLO_DIR` is removed on teardown; a leftover `/private/tmp/cello-subject-*` is a failure
+     signal, not debris to ignore.
+  3. A subject daemon does not poll the real dev directory — it points at a stub, or its poller is
+     off. A test fixture must not generate production traffic.
+  4. Test/CI check: after the suite, no `cello-subject-*` directory and no daemon process for one
+     remains.
+
 - **DOD-AWAY-WRAP-1** ✅ DONE — Away autoresponder must not fire on a `[[WRAP]]`-signalled message; it must close the session silently instead.
 
   **Observed behavior (live test 2026-07-23):** When CELLO_Feedback initiated a session with Ms_Chelly (away), the daemon fired the away autoresponse immediately at session open — before the caller had sent any content. This forced CELLO_Feedback to read the away notice before it could send anything (`session_not_current` / unread block). After reading, CELLO_Feedback sent its actual message with `signal: "wrap"`. The daemon fired the away autoresponse a *second* time, producing a spurious extra message in the transcript (seq 2 in both live tests). The session then sealed, leaving Ms_Chelly with a `sealed_unread` item containing the original caller message — but also a confusing duplicate away echo.
