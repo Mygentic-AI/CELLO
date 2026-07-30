@@ -4502,3 +4502,40 @@ Directory suite **986**, relay 171, typecheck and lint clean.
 **The unit does NOT go ✅.** Its remaining owed item is `DOD-AE-APPEND-1`'s multi-process proof, and
 these fixes are themselves unreviewed — one pass has run on the artifacts as they were, not as they now
 are.
+
+### Entry 70b — the AE fixes verified against the milestone-close gate, not just the unit suite
+
+Entry 70's changes altered `RoundResult`'s shape, moved failure containment into the engine, filtered
+peer advertisements, and renamed four handshake reasons. Every one of those crosses the wire between
+real processes, and this morning's NODE_ID unit proved that "directory suite green" cannot see the
+spine cluster — it is excluded from `pnpm run test`. So it was run:
+
+```
+J-ANTIENTROPY — 3 directory processes converge over /cello/anti-entropy/1.0.0
+  ✓ authenticates peers against the manifest-pinned identity (handshake over real Noise)   1.5s
+  ✓ divergent seeded state converges on ALL THREE nodes (Tier-A union)                    19.9s
+  ✓ a node absent for a BURST of writes converges on rejoin (no operator action)         208.5s
+  ✓ a PAUSE written while a node is partitioned converges to it on heal (Tier-B)           7.1s
+  ✓ a burn written on ONE node converges to the others and stays burned                   16.8s
+  5 passed (310s)
+```
+
+Both kill-switch clauses pass against real partitions — which matters more than usual here, because
+all three HIGH findings in Entry 70 were on that path and two of the fixes changed how a round reports
+and contains failure.
+
+**Incidental confirmation for Entry 68b:** the harness builds each node's database from scratch, and
+Flyway applied **V1→V56 in order, 56 migrations, clean**. That is direct evidence for the merged
+branch's migrations being coherent from zero — the GCP case — and leaves the AWS out-of-order question
+exactly where Entry 68b left it, since AWS is the one database that did NOT start from zero.
+
+**One operational note worth keeping.** The run first failed with
+`Bind for 0.0.0.0:5433 failed: port is already allocated` — the OTHER worktree's Postgres holds 5433.
+The `CELLO_PG_HOST_PORT` knob added earlier in this milestone is what makes this recoverable: setting
+`DATABASE_URL` to port 5434 moves both halves together (which server the harness brings up, and which
+one the nodes are told to use), because the harness derives the compose env from the same string. Two
+worktrees, two ports, no shared state:
+
+```
+DATABASE_URL="postgresql://postgres:dev@localhost:5434/cello_dev" pnpm run test:spine
+```
