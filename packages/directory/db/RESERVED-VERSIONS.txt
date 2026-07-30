@@ -1,0 +1,28 @@
+# Migration versions that are DELIBERATELY ABSENT from this branch.
+#
+# Format: one bare integer per line; `#` comments and blank lines ignored. `infra/deploy.sh`'s
+# contiguity check subtracts these before deciding a gap is an error.
+#
+# WHY THIS FILE EXISTS. The contiguity check blocks a deploy when a version number is missing,
+# because a gap normally means another branch claimed those numbers — and once that branch merges,
+# its LOWER-numbered migrations meet a database already at a HIGHER version, `flyway migrate` aborts
+# under `set -e`, the entrypoint dies before `exec node`, and all three regions roll back at once.
+#
+# The check's own remedy is "a written handshake, not a flag: whichever branch merges second
+# renumbers above the other". This file IS that handshake, written down in the repo instead of held
+# in one session's head. An UNDECLARED gap still blocks the deploy, which is the property worth
+# keeping — this only exempts numbers somebody deliberately gave away and recorded.
+#
+# Adding a number here is a claim that it will NEVER be applied on this branch. If the other branch
+# renumbers upward as it must, that stays true forever.
+
+# ── 49, 50 — claimed by the M12 anti-entropy branch (2026-07-29) ────────────────────────────────
+# M10B and M12 both reached for V49 concurrently. M10B renumbered V49→V51 and V50→V52 and MERGED
+# FIRST; those are applied in production (max version 55 in all three regions as of 2026-07-29).
+# M12's V49/V50 remain on its unmerged branch and, per the handshake rule, must be renumbered ABOVE
+# main's highest before it merges — so 49 and 50 will never be applied here.
+#
+# Without this declaration the gap they leave blocks EVERY directory deploy from main indefinitely,
+# which is how a correct safety check turns into a permanent outage of the deploy path.
+49
+50

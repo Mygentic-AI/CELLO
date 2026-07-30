@@ -256,7 +256,17 @@ else
   # renumbers its migrations to sit above the other's.
   MIGRATION_NUMS=$(ls "${SCRIPT_DIR}/../packages/directory/db/migrations"/V*.sql 2>/dev/null \
     | sed 's/.*\/V\([0-9]*\)__.*/\1/' | sort -n | uniq)
-  MISSING_VERSIONS=$(comm -23 <(seq 1 "${HIGHEST_MIGRATION}" | sort) <(echo "${MIGRATION_NUMS}" | sort) | sort -n | tr '\n' ' ')
+  # Versions deliberately given away to another branch and recorded — the "written handshake" this
+  # check's remedy calls for, kept in the repo rather than in one session's memory. An UNDECLARED gap
+  # still blocks; this only exempts numbers somebody consciously reserved and explained.
+  RESERVED_FILE="${SCRIPT_DIR}/../packages/directory/db/RESERVED-VERSIONS.txt"
+  RESERVED_VERSIONS=$(sed 's/#.*//' "${RESERVED_FILE}" 2>/dev/null | tr -d ' \t' | grep -E '^[0-9]+$' | sort -n | uniq)
+  if [[ -n "${RESERVED_VERSIONS}" ]]; then
+    echo "  Reserved (declared absent, see $(basename "${RESERVED_FILE}")): $(echo "${RESERVED_VERSIONS}" | tr '\n' ' ')"
+  fi
+  MISSING_VERSIONS=$(comm -23 \
+    <(comm -23 <(seq 1 "${HIGHEST_MIGRATION}" | sort) <(echo "${MIGRATION_NUMS}" | sort) | sort) \
+    <(echo "${RESERVED_VERSIONS}" | sort) | sort -n | tr '\n' ' ')
   if [[ -n "${MISSING_VERSIONS// /}" ]]; then
     echo "  ERROR: migration version gap(s): ${MISSING_VERSIONS}" >&2
     echo "         Another branch has almost certainly claimed these numbers. Flyway will REFUSE them" >&2
