@@ -176,7 +176,13 @@ description: >
 - **DOD-AE-APPEND-1** [trustless-cello] — **the behavioral claim, riding the three above:** append-only
   tables sync between directories over the authenticated libp2p channel via root-comparison + delta
   pull; divergence detection is O(compare), transfer is delta-only; peers that fail identity
-  verification are refused. Proven by a multi-process integration test, not unit tests. — ❌
+  verification are refused. Proven by a multi-process integration test, not unit tests. — 🟡 the
+  multi-process proof EXISTS and is green: `j-antientropy.spine.test.ts` 5/5 across **three real
+  directory processes** over Noise (→ Entry 70b) — divergent state converges on all three, a node absent
+  for a burst catches up on rejoin with no operator action, and both kill-switch clauses hold across a
+  real partition. Clause evidence: O(compare) by frame count (a converged round sends digests and
+  nothing else), delta-only by the bucket-walk test, identity refusal by six fail-closed cases. Owed for
+  ✅: it rides AE-CHANNEL-1, whose verdict is not yet in.
 - **DOD-AE-CHAINED-TABLES-1** [trustless-cello] — the two hash-chained Tier-A tables
   (`seal_notarizations`, `user_accounts`) serve AND apply through anti-entropy, so a seal receipt no
   longer exists only on the directory that recorded it. Chain columns are node-local: an applying node
