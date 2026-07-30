@@ -1964,6 +1964,77 @@ own story) deliberately, never smuggled in as a rider. Source:
 
   Full write-up, including the live probe table: [[2026-07-30_1330_inbox-calls-unsealed-sessions-sealed]].
 
+- **DOD-FRONTIER-STRAND-1** ❌ OPEN (raised 2026-07-30) — a leaf appended locally but never recorded
+  by the counterparty strands the session as **permanently unsealable**, and nothing detects or
+  repairs it.
+
+  **Found live during cleanup (2026-07-30).** Session `dbb93dfcf415b7cbfe13626f5b168a3f`
+  (Ms_Chelly ↔ CELLO_Support, **both agents on the same daemon**) had sat `interrupted` since
+  2026-07-23. A normal close was refused from BOTH directions with
+  `seal_interrupted_rejected_by_counterparty`. The two transcripts diverge at exactly one leaf:
+
+  ```
+  Ms_Chelly     (5): 0 sent greeting │ 1 recv "Hello" │ 2 sent greeting AGAIN │ 3 recv "another" │ 4 sent WRAP
+  CELLO_Support (4): 0 recv greeting │ 1 sent "Hello" │        —              │ 2 sent "another" │ 3 recv WRAP
+  ```
+
+  The **second away autoresponse** — the spurious echo `DOD-AWAY-WRAP-1` was written to eliminate —
+  was appended to Ms_Chelly's local tree and never recorded on the counterparty. This session
+  predates that fix, so the echo itself is already addressed. **What is NOT addressed is the
+  consequence:** the frontiers permanently disagree (5 vs 4), so each side refuses to co-sign the
+  other, and the session can never produce a receipt. Force-abandon is the only exit, and it forfeits
+  the seal. One undelivered leaf cost the conversation its notarization, forever.
+
+  **Why this outlives the away bug.** The away echo was one way to produce an undelivered local leaf.
+  Any future path that appends before it delivers produces the same strand, and the system currently
+  has no detection (nothing flagged it for a week), no diagnosis (the refusal names the counterparty,
+  not the mismatch), and no repair. That both ends were on ONE daemon rules out a network partition
+  as the explanation — a local append simply was not mirrored.
+
+  **ACs:**
+  1. A leaf is appended to the local tree only once its delivery to the counterparty is recorded, OR
+     an undelivered append is reconciled/rolled back rather than left in the tree. Whichever is
+     chosen, an append that the counterparty never records must not be a terminal state.
+  2. `seal_interrupted_rejected_by_counterparty` reports the ACTUAL mismatch — both frontier
+     sequence numbers and the diverging leaf index — instead of directing the operator to ask the
+     counterparty to check their end. Here both ends were the same daemon, so that guidance was
+     unfollowable.
+  3. A frontier mismatch on an interrupted session is surfaced (log event + `cello_sessions` field)
+     rather than discovered only when a close is attempted. This one went a week unnoticed.
+  4. Tests: (a) a session whose two sides disagree by one leaf is detected as mismatched, not merely
+     refused; (b) the refusal message names both frontiers; (c) the reconcile path (per AC 1) turns a
+     one-leaf divergence into a sealable session, or the leaf is proven never to have been appended.
+
+- **DOD-CLI-SESSIONS-SCOPE-1** ❌ OPEN (raised 2026-07-30) — CLI `cello sessions` ignores the selected
+  agent and lists every agent's sessions; the MCP `cello_sessions` scopes correctly. The dual
+  surfaces disagree.
+
+  **Observed live (2026-07-30).** With `CELLO_Feedback` selected, `cello_sessions` (MCP) returned
+  `totalMatched: 0` while `cello sessions` (CLI) returned 2 — rows belonging to `Ms_Chelly` and
+  `CELLO_Support`. Selecting each of the five agents in turn and re-running the CLI returned the same
+  2 rows every time, which is the tell: the CLI is not filtering by agent at all. It also accepts no
+  `--agent` flag (`Unknown flag '--agent' for 'cello sessions'`), so there is no way to ask it for
+  one agent's sessions.
+
+  **Why it matters beyond tidiness.** This is exactly the divergence `DOD-ONBOARD-HELP-1` §2b parity
+  exists to prevent: the same verb, one name, two behaviours. A multi-agent operator reading the CLI
+  concludes an agent has open sessions it does not have — and during this cleanup it briefly made a
+  correct MCP answer look wrong. On a surface whose whole job is to tell you what state you are in,
+  answering for the wrong principal is a correctness bug, not a UX one.
+
+  **ACs:**
+  1. `cello sessions` returns only the selected agent's sessions, matching `cello_sessions` exactly
+     for the same selection.
+  2. `cello sessions --agent <name>` is accepted, mirroring the MCP tool's `agent` parameter (the
+     `DOD-AGENT-PARAM-1` convention).
+  3. Where a listing spans agents, it is opt-in (`--all-agents`) and labels each row with its agent —
+     never the default.
+  4. Test: with agent A selected and open sessions existing only for agent B, `cello sessions`
+     returns none, and `cello sessions --agent B` returns B's.
+  5. Parity test extension: for every dual-surface verb, the CLI and MCP forms return the same set for
+     the same agent selection. The existing parity test checks that NAMES match; it does not check
+     that ANSWERS match, which is how this survived.
+
 - **DOD-AWAY-WRAP-1** ✅ DONE — Away autoresponder must not fire on a `[[WRAP]]`-signalled message; it must close the session silently instead.
 
   **Observed behavior (live test 2026-07-23):** When CELLO_Feedback initiated a session with Ms_Chelly (away), the daemon fired the away autoresponse immediately at session open — before the caller had sent any content. This forced CELLO_Feedback to read the away notice before it could send anything (`session_not_current` / unread block). After reading, CELLO_Feedback sent its actual message with `signal: "wrap"`. The daemon fired the away autoresponse a *second* time, producing a spurious extra message in the transcript (seq 2 in both live tests). The session then sealed, leaving Ms_Chelly with a `sealed_unread` item containing the original caller message — but also a confusing duplicate away echo.
