@@ -1826,6 +1826,11 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     node,
     directoryPubkey: opts.directoryPubkey,
     directoryPubkeys: opts.directoryPubkeys,
+    // This factory copies options FIELD BY FIELD, so a new option that is not listed here is
+    // dropped in silence — the env parses, the resolver runs, and the value is simply never there.
+    // That cost a full deploy-and-test cycle: the relay logged `broker.address_unknown` for a
+    // pubkey whose address was correctly present in its own environment.
+    directoryEndpointsByPubkey: opts.directoryEndpointsByPubkey,
     directory: opts.directory,
     store: opts.store,
     sessionWal: opts.sessionWal,

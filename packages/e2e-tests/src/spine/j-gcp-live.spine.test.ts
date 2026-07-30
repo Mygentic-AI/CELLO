@@ -30,7 +30,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -42,9 +42,19 @@ const CLIENT_ROOT = process.env["CELLO_CLIENT_ROOT"] ?? join(REPO_ROOT, "..", "c
 const CLI = join(CLIENT_ROOT, "core", "cli", "dist", "bin", "cello.js");
 const DAEMON = join(CLIENT_ROOT, "core", "daemon", "dist", "bin", "cello-daemon.js");
 
-/** Two agents on DIFFERENT directories — the cross-node property is the whole point. */
+/**
+ * Two agents on DIFFERENT directories, and NEITHER is the relay's configured directory.
+ *
+ * The relay is pinned to `gcp-use1` (`relay_primary_directory`), so choosing `usc1` and `euw1` here
+ * exercises the worst case: the directory the relay would ask by default can reach NEITHER
+ * participant. That is the case that went untested while sealing was being fixed, and it is the one
+ * DOD-SEAL-BROKER-1 exists for — the relay must instead ask whichever directory BROKERED the
+ * session, which by construction has a relationship to the conversation.
+ *
+ * Picking use1 for one side would let a fix that only handles "misses one participant" pass.
+ */
 const DIRECTORIES = [
-  { nodeId: "gcp-use1", url: "http://34.75.172.108:9090" },
+  { nodeId: "gcp-usc1", url: "http://34.136.176.190:9090" },
   { nodeId: "gcp-euw1", url: "http://34.34.166.245:9090" },
 ];
 
@@ -53,8 +63,30 @@ let manifestPath: string;
 let rootKeys: string;
 const daemons: ChildProcess[] = [];
 
+/**
+ * Run a command and return its output, WITHOUT throwing on a non-zero exit.
+ *
+ * The CLI exits non-zero when it returns `{"ok":false,...}` — correctly. But execFileSync turns that
+ * into an exception, so the harness died before it could read the `reason`, and the test reported a
+ * stack trace at the call site instead of "session failed: relay_unavailable". The refusal IS the
+ * result here; it has to be parsed, not thrown.
+ */
 function sh(cmd: string, args: string[], env?: Record<string, string>): string {
-  return execFileSync(cmd, args, { encoding: "utf8", env: { ...process.env, ...env }, timeout: 600_000 }).trim();
+  const r = spawnSync(cmd, args, { encoding: "utf8", env: { ...process.env, ...env }, timeout: 600_000 });
+  return `${r.stdout ?? ""}${r.stderr ?? ""}`.trim();
+}
+
+/**
+ * stdout ONLY. For commands whose stdout IS the value and whose stderr is operator commentary.
+ *
+ * `sh` merges both streams so a CLI refusal can be parsed rather than thrown — but merging corrupts a
+ * value-returning command: the capability minter prints the blob on stdout and "# issuer …/# nonce …"
+ * on stderr, and concatenating them produced a capability the client rejected as malformed. Two
+ * different needs, two functions.
+ */
+function shOut(cmd: string, args: string[]): string {
+  const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 600_000 });
+  return (r.stdout ?? "").trim();
 }
 
 /**
@@ -91,7 +123,7 @@ function firstJsonObject(out: string): unknown {
 /**
  * ASYNC CLI runner. Required for the bilateral close and nothing else.
  *
- * `cli()` uses execFileSync, which BLOCKS THE EVENT LOOP — so two closes scheduled with setTimeout
+ * `cli()` is synchronous and BLOCKS THE EVENT LOOP — so two closes scheduled with setTimeout
  * run strictly sequentially, and the first waits out its full bilateral window for a second close
  * that cannot start until it returns. That produced an 812-second "failure" for a seal the fleet had
  * actually completed in 3 seconds. A bilateral ceremony cannot be driven by synchronous calls.
@@ -131,7 +163,7 @@ function cli(dir: string, args: string[]): unknown {
 /** Mint a real pre-auth capability. Deliberately NOT a bypass: the point is to exercise the
  *  production registration path, not a variant with the capability check disabled. */
 function mintCapability(): string {
-  return sh("node", [join(REPO_ROOT, "infra", "scripts", "mint-preauth-capability.mjs"), "--ttl-minutes", "60"]);
+  return shOut("node", [join(REPO_ROOT, "infra", "scripts", "mint-preauth-capability.mjs"), "--ttl-minutes", "60"]);
 }
 
 describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fleet", () => {
