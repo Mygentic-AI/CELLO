@@ -4290,3 +4290,58 @@ fabricated-region case. **They initially landed inside a describe block gated on
 silently SKIPPED** — a test that never runs being its own instance of the pattern this milestone keeps
 finding. Moved to the un-gated block; now deleting the consumer turns 2 red, where previously nothing
 noticed. Directory suite 980 green.
+
+---
+
+## Entry 68 — 2026-07-30 — merged main into the branch, and it surfaced an AWS-wake blocker
+
+Re-read `M12-PROCEDURE.md` and `M12-DEFINITION-OF-DONE.md` from `origin/main` before anything else,
+per the notice. Working from memory of them was exactly what the notice forbade.
+
+### The merge
+
+This branch sat **180 commits** while main moved — the failure §2e names ("five were unmerged
+simultaneously while main moved under all of them"). Seven conflicts:
+
+| file | resolution |
+|---|---|
+| `M12-DEFINITION-OF-DONE.md` | main's restructure wholesale — invariants are properties enforced as reviewer lenses, not ❌ deliverables |
+| `directory-frames.ts` | main's side; **mine was an orphaned docstring** for the receipt-fetch frame I deleted earlier today — the type went, the comment stayed |
+| both `package.json` | main's `latest`; `^0.0.24` is a pin and pins are forbidden. Kept this branch's `@google-cloud/*` |
+| `cello-ssm-parameters.yaml` | V50 → **V56**; main is the migration-number authority (§2e) |
+| `sign-consortium-manifest.mjs` | main's `manifestVersion` (SSM-driven, validated above); mine came from argv and would have ignored it |
+| `pnpm-lock.yaml` | regenerated from main's |
+
+**One unintended loss, caught by diffing unit lines before and after rather than trusting the
+resolution.** `DOD-AE-CHAINED-TABLES-1` had been inserted inside the Tier-I region main replaced, so
+resolving that hunk deleted it. Re-added beside the AE lines, rewritten to the new ≤5-line form with
+the reviewer's verdict QUOTED — not restored verbatim. That check is the merge-time equivalent of
+§1a's "verify the write landed", and it is worth doing every time a structural hunk is taken wholesale.
+
+Gates on the MERGED tree: directory **981**, relay **171**, typecheck clean, lint clean.
+
+### The blocker the merge created — needs a decision before AWS wakes
+
+**Flyway runs with `validateOnMigrate` ON and `outOfOrder` OFF** (`infra/deploy.sh:251`), and
+`docker-entrypoint.sh` runs `flyway migrate` under `set -e`, so a validation failure aborts the
+container before the service starts.
+
+- This branch adds **V49** (`agent_suspensions_ae_seq`) and **V50** (`grant_flyway_history_read`).
+- Main carries **V51–V56**, and the SSM comment records that **production already ran V55**.
+
+So AWS has V51–V56 applied and has never seen V49/V50. On merge, Flyway finds two resolved migrations
+BELOW the applied high-water mark → out-of-order → **abort at startup**, on every AWS task.
+
+GCP is fine and must stay that way: its databases were built from this branch, so V49/V50 are already
+in their history and V51–V56 will apply cleanly on top, in order. **That also rules out the obvious
+fix** — renumbering V49/V50 to V57/V58 would leave the GCP nodes with two applied migrations that no
+longer exist on disk, which fails validation from the other side.
+
+Remaining options, all requiring a decision rather than a code change: `flyway repair`/baseline on
+AWS, a one-deploy `outOfOrder=true`, or simply never — AWS is slated for teardown in P4, and if it is
+torn down without waking, this never fires.
+
+**Stated precisely about what is verified and what is inferred:** the Flyway settings, the migration
+numbers on both sides, and the "production ran V55" note are read from files. That the GCP databases
+have V49/V50 in `flyway_schema_history` is INFERRED from their images being built from this branch —
+consistent with everything observed, not directly queried.
