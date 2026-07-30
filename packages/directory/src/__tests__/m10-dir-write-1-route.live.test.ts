@@ -76,7 +76,8 @@ describeIntegration("DOD-DIR-WRITE-1 — the wired /internal/signal/submit route
 
   afterAll(async () => {
     if (server) await new Promise<void>((r) => server.close(() => r()));
-    await pool.query("DELETE FROM signal_records WHERE subject LIKE $1", [`${tag}%`]).catch(() => {});
+    // V55 dropped `signal_records.subject`; clean up by the per-run submitter key instead.
+    await pool.query("DELETE FROM signal_records WHERE issuer_pubkey = $1", [submitterPub]).catch(() => {});
     await pool.query("DELETE FROM authorized_issuers WHERE label = $1", [tag]).catch(() => {});
     await pool.end();
   });

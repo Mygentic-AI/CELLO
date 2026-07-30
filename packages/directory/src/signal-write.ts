@@ -239,21 +239,42 @@ export async function submitSignal(args: {
     //    type.
     const envelopeBytes = new Uint8Array(req.envelope);
 
-    // FORM: is this canonical trust-signal-envelope bytes at all? (bad CBOR, wrong arity, wrong
-    // domain tag, non-canonical encoding → `envelope_undecodable`.)
+    // FORM vs MEANING, and the shared decoder does BOTH — which is why this classifies rather than
+    // labelling everything `envelope_undecodable`.
+    //
+    // The vendored decoder this replaced checked only shape, so a semantic violation fell through to
+    // the re-hash below and was named `envelope_invalid`. `decodeTrustSignalEnvelope` re-encodes
+    // through `toPreimage`, so it ALSO enforces enum membership, NFC, lowercase-hex pubkey, integer
+    // bounds and 32-byte supersedes_hash — and throws for all of it. Reporting an out-of-enum
+    // `subject_kind` as "undecodable" is a FORM label on a MEANING failure: it sends an operator to
+    // debug their CBOR encoder when their enum value is wrong. Silently swapping one named reason for
+    // another during a refactor is error substitution, so the distinction is restored explicitly.
+    //
+    // The classifier asks only what the shared decoder cannot answer after the fact: were these bytes
+    // STRUCTURALLY an envelope? A 12-element CBOR array carrying the domain tag means the submitter's
+    // encoder produced the right shape, so any remaining failure is about a field's VALUE or its
+    // canonical encoding → `envelope_invalid`. Anything else is genuinely not an envelope.
     let envelope: TrustSignalEnvelope;
     try {
       envelope = decodeTrustSignalEnvelope(envelopeBytes);
     } catch (err) {
-      throw new SubmitRejected("envelope_undecodable", err instanceof Error ? err.message : String(err));
+      const detail = err instanceof Error ? err.message : String(err);
+      let structural = false;
+      try {
+        const raw = decodeCbor(envelopeBytes);
+        structural = Array.isArray(raw) && raw.length === 12 && raw[0] === "CELLO-TSIG-v1";
+      } catch {
+        structural = false; // not even CBOR — unambiguously a form failure
+      }
+      throw new SubmitRejected(structural ? "envelope_invalid" : "envelope_undecodable", detail);
     }
 
-    // MEANING: the re-hash RE-VALIDATES — hashTrustSignalEnvelope → toPreimage enforces the semantic
-    // rules (enum membership, NFC, lowercase-hex pubkey, integer bounds, 32-byte supersedes_hash) and
-    // throws a PLAIN Error on a violation. It MUST be caught and named here, or a canonical-but-
-    // invalid envelope (an out-of-enum subject_kind round-trips fine at the byte level) escapes as an
-    // unmapped exception: an HTTP 500 with no `signal.submission.rejected` log, on the security-core
-    // module, on hostile input. Form is checked above; meaning is checked here; both are loud + named.
+    // MEANING, second line of defence. `decodeTrustSignalEnvelope` already ran `toPreimage`, so a
+    // semantic violation is now caught and classified ABOVE and this catch is unreachable for those
+    // inputs. It stays because "unreachable" is a property of today's decoder, not a guarantee: if the
+    // decoder ever stops re-encoding internally, an unmapped throw here would be an HTTP 500 with no
+    // `signal.submission.rejected` line, on the security-core module, on hostile input. A cheap catch
+    // is the right trade against that.
     let derived: string;
     try {
       derived = Buffer.from(hashTrustSignalEnvelope(envelope)).toString("hex");
