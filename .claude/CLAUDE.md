@@ -361,8 +361,18 @@ so `"^0.0.94"` floats to precisely nothing. Writing a caret and believing it flo
 common way a pin gets created by someone who thought they were avoiding one. `npm i pkg@latest`
 writes one of these into `package.json` — check afterwards, and change it to `latest`.
 
-**If you must pin temporarily** — bisecting, reproducing a specific break — say so out loud in the
-same breath, and unpin before the session ends. A pin that outlives its reason is the failure mode.
+**THE LEGITIMATE EXCEPTION: testing something not yet promoted.** A version published to `beta` but
+not yet on `latest` cannot be reached by `latest` — that is the whole point of the two tags. Testing
+it is a real need and pinning is a valid way to get there. Bisecting a regression and reproducing a
+specific break are the same shape.
+
+Even then, **prefer the TAG over the version**: `npm i -g @cello-protocol/cli@beta` gets the
+unpromoted build without writing a number anybody has to remember to remove. A tag keeps floating; a
+number does not. Reach for an exact version only when you need one specific build and `beta` has
+already moved past it.
+
+When you do pin: **say so in the same breath**, and **unpin before the session ends**. A pin that
+outlives its reason is the entire failure mode — nobody ever pins intending to leave it.
 
 **Verify, never assume, that a pin is gone.** `claude mcp get <name>` and read the `Args`; grep the
 `package.json`; check the task definition. The whole problem is that pins are silent.
