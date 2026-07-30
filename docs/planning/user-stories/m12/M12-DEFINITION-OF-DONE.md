@@ -308,6 +308,27 @@ description: >
   handshake is failing (`protocol_error` dialside, `wire closed while waiting for ae_auth_a`
   responder-side). Dialling now works — that was a separate defect — but no round has completed in
   production. **Owed:** the AE handshake, and the cello-client bundled-manifest half. → Entries 24-26
+- **DOD-SEAL-BROKER-1** [trustless-cello] — **the relay asks the BROKERING directory, per session,
+  not a configured one.** Today `relay_primary_directory` pins the relay to one directory for every
+  conversation in the consortium, chosen at deploy time and unrelated to who is talking — so the
+  directory asked to produce a receipt may be the home directory of one participant, or of neither.
+  Everything downstream is recovery from an arbitrary choice.
+  The information needed already exists: the signed session assignment carries the owning directory
+  and is delivered to both agents. The relay is the only participant not told.
+  **Done means:** (a) the directory identifies itself when it hands a session to the relay;
+  (b) the relay records that per session and uses it when it needs a receipt produced, falling back
+  to the configured directory ONLY when absent, so existing single-directory deployments are
+  unaffected; (c) a cross-directory conversation seals with the relay pinned to a directory that is
+  the home of NEITHER participant — the case that is currently untested and worst;
+  (d) no directory-to-directory message forwarding is introduced, and the notification queue is not
+  replicated. — ❌
+  **Why it was not built:** relay SELECTION (directory picks a relay per session, health-aware) was
+  built — `pickRelay()`. The return direction was deferred to a config value and never revisited.
+  The asymmetry is the defect: dynamic outbound, hardcoded inbound.
+  **Not covered by this line:** delivering the finished receipt to BOTH agents. The brokering
+  directory reliably holds one participant's connection, not both. That becomes a fetch rather than
+  a redesign, because receipts already replicate to every directory — tracked separately.
+
 - **DOD-MOVE-OPSAGENT-1** [trustless-cello] — ops-agent runs on GCP; email via the SES HTTPS API
   (WIF or SigV4 credentials handled without SA keys — no key files exist, org-enforced); its
   DB-access pattern redesigned so it needs NO cross-cloud database connection (per-node health
