@@ -569,6 +569,27 @@ the additions M10B is accountable for.
   withdrawn on next check. Rides `DOD-VERIFY-1`'s existing TTL-re-check-on-use machinery (spec §14.7) —
   this line decides what that machinery is FOR, it does not build new transport. *A reference, not a
   tattoo.* Surfaced to the holder, never a silent disappearance. — ❌
+  > **⚠️ THE MACHINERY THIS LINE RIDES DOES NOT EXIST — verified 2026-07-30, before building on it.**
+  > `DOD-VERIFY-1` is marked ✅ in M10's DoD, but there is no TTL re-check anywhere: the receive path
+  > hard-codes `verdict: "active"` (`inbound-sessions.ts`), the daemon's only trust-signal frame to
+  > the directory is `trust_signal_ack`, and the directory exposes no signal-status query for a
+  > recipient to call. So BOTH this line and `DOD-END-SUSPEND-1` are specified to ride transport that
+  > was never built, and the "does not build new transport" clause is false for both.
+  >
+  > **It had already produced a live falsehood.** The `directory_attestation` handed to every
+  > recipient's LLM claimed each signal "was checked against the CELLO directory's notary ledger at
+  > the moment of this session: its hash is present and its status is active." That is CELLO lending
+  > its authority to a check it never performed — the precise failure `INV-UNTRUSTED` exists to
+  > prevent, committed by CELLO rather than by a peer. Fixed (`c12dcdc`): the attestation now
+  > describes the cryptographic check that genuinely happens and states that currency was NOT
+  > re-checked, with `currency_rechecked: false` alongside for machine consumption.
+  >
+  > **What this line actually costs, now that the mechanism is known to be missing:** a directory
+  > status route (hash → active | revoked | superseded | withdrawn), a daemon client for it, a TTL
+  > and a cache, the re-check wired into presentation AND consumption, and surfacing to the holder.
+  > That is a unit of its own, not a rider — and `DOD-END-SUSPEND-1` then becomes nearly free because
+  > it is the same route answering differently. Sequencing note: build the re-check FIRST, then
+  > withdrawal and suspension are both thin.
 - **DOD-END-SUSPEND-1** — suspending an issuer's account (the M8 LEVER-001 kill switch) marks everything
   that issuer minted as **no longer vouched**, reversibly; restoration brings them back; permanent
   revocation is what makes it final (D-25). Why it is not optional: an attacker holding a compromised key
