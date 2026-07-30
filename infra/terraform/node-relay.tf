@@ -44,6 +44,18 @@ locals {
   # infra/scripts/gcp-node-identities.sh (verified byte-identical to what each node logs for
   # itself). Rotating a node key means re-running that script and re-applying.
   directory_pubkeys = join(",", [for region, node in var.directory_nodes : var.directory_node_pubkeys[node.node_id]])
+
+  # DOD-SEAL-BROKER-1: pubkey=multiaddr for every directory, so the relay can call back to the one
+  # that BROKERED a session instead of the single `relay_primary_directory` pinned below. That pin is
+  # chosen at deploy time and bears no relation to who is talking — it may be the home directory of
+  # one participant, or of neither, and every seal in the consortium went through it.
+  #
+  # Derived from the SAME topology as the pubkeys, so a node added to the consortium cannot be
+  # forgotten here — the failure mode would be that node's sessions silently falling back to the pin.
+  directory_endpoints = join(",", [
+    for region, node in var.directory_nodes :
+    "${var.directory_node_pubkeys[node.node_id]}=/ip4/${google_compute_address.node[region].address}/tcp/8080/ws/p2p/${var.directory_node_peer_ids[node.node_id]}"
+  ])
 }
 
 variable "directory_node_pubkeys" {
@@ -311,7 +323,8 @@ resource "google_compute_instance_template" "relay" {
       peer_id_hint      = each.value.node_id
       gsm_node_key      = "${google_secret_manager_secret.relay["${each.value.node_id}--node-key"].id}/versions/latest"
       gsm_transport     = "${google_secret_manager_secret.relay["${each.value.node_id}--transport-key"].id}/versions/latest"
-      directory_pubkeys = local.directory_pubkeys
+      directory_pubkeys   = local.directory_pubkeys
+      directory_endpoints = local.directory_endpoints
       # The relay REQUIRES a single directory as its registration target, separate from the set it
       # accepts instructions from. Registering is how the relay pool gets populated at all — until
       # it happens every directory reports relay.manifest.not_found and brokers no sessions.

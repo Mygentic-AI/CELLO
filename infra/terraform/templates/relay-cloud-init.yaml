@@ -51,6 +51,9 @@ write_files:
       # The relay requires the singular and falls back to it when the plural is unset.
       CELLO_DIRECTORY_PUBKEY=${primary_directory_pubkey}
       CELLO_DIRECTORY_PUBKEYS=${directory_pubkeys}
+      # DOD-SEAL-BROKER-1: pubkey=multiaddr per directory. Lets the relay ask the directory that
+      # BROKERED a session to produce its receipt, instead of always asking the one pinned below.
+      CELLO_DIRECTORY_ENDPOINTS=${directory_endpoints}
       CELLO_DIRECTORY_MULTIADDR=${primary_directory_multiaddr}
       # TWO libp2p listeners, and they must not share a port. CELLO_RELAY_LISTEN_ADDR defaults to
       # /ip4/0.0.0.0/tcp/4001 — the same port as the WS listener below — and libp2p treats a

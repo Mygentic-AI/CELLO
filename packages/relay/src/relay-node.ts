@@ -198,6 +198,19 @@ export interface RelayNodeOptions {
    * frame path still authenticates against the single `directoryPubkey` only.
    */
   directoryPubkeys?: Uint8Array[];
+  /**
+   * DOD-SEAL-BROKER-1: directory pubkey (hex) -> libp2p multiaddr for the directories in this
+   * consortium. Lets the relay call back to the directory that BROKERED a session instead of one
+   * pinned in configuration with no relationship to the conversation.
+   *
+   * Public data supplied by the environment, the same pattern as `directoryPubkeys` — the relay
+   * still holds no consortium state internally and stays a standalone artifact.
+   *
+   * Deliberately NOT read from the client-presented assignment: a client could then name any address
+   * it liked. The relay learns WHICH directory brokered a session from the assignment SIGNATURE,
+   * which it already verifies against the pubkey set, and resolves the address itself.
+   */
+  directoryEndpointsByPubkey?: Record<string, string>;
   directory?: DirectoryAdapter;
   store?: RelayStore;
   logger?: Logger;
@@ -239,6 +252,10 @@ export class CelloRelayNode {
   readonly #directoryPubkey: Uint8Array;
   /** FED-OPTIONB-SETUP-001: consortium directory pubkeys a client-presented assignment may be signed by. */
   readonly #directoryPubkeys: Uint8Array[];
+  /** DOD-SEAL-BROKER-1: directory pubkey hex -> multiaddr. Empty in single-directory deployments. */
+  readonly #directoryEndpointsByPubkey: Record<string, string>;
+  /** DOD-SEAL-BROKER-1: session id hex -> pubkey hex of the directory that signed its assignment. */
+  readonly #sessionBrokerPubkey = new Map<string, string>();
   readonly #directory: DirectoryAdapter | null;
   readonly #store: RelayStore;
   readonly #logger: Logger;
@@ -288,6 +305,7 @@ export class CelloRelayNode {
     this.#directoryPubkey = opts.directoryPubkey;
     // FED-OPTIONB-SETUP-001: the consortium set always contains the primary directoryPubkey, plus any
     // additional sovereign nodes. Deduped so a repeated pubkey doesn't cost an extra verify attempt.
+    this.#directoryEndpointsByPubkey = opts.directoryEndpointsByPubkey ?? {};
     this.#directoryPubkeys = [opts.directoryPubkey];
     for (const pk of opts.directoryPubkeys ?? []) {
       if (!this.#directoryPubkeys.some((existing) => Buffer.from(existing).equals(Buffer.from(pk)))) {
@@ -576,10 +594,17 @@ export class CelloRelayNode {
     // FED-OPTIONB-SETUP-001 (any-directory): the assignment may be signed by ANY sovereign consortium
     // directory node — not just node 0. Accept if the signature verifies against any configured
     // directory pubkey. In a single-node deployment this set is just [directoryPubkey] (unchanged).
-    const verified = this.#directoryPubkeys.some((pk) => verify(pk, tbs, assignment.directory_signature));
-    if (!verified) {
+    // DOD-SEAL-BROKER-1: find, not some. The signature already says WHICH sovereign directory
+    // brokered this session; discarding that is why the relay later fell back to a configured
+    // directory unrelated to the conversation.
+    const signer = this.#directoryPubkeys.find((pk) => verify(pk, tbs, assignment.directory_signature));
+    if (!signer) {
       return { ok: false, reason: "directory_signature_invalid" };
     }
+    this.#sessionBrokerPubkey.set(
+      Buffer.from(assignment.session_id).toString("hex"),
+      Buffer.from(signer).toString("hex"),
+    );
 
     const genesisRoot = computeGenesisPrevRoot(
       assignment.participant_a,
@@ -1319,7 +1344,17 @@ export class CelloRelayNode {
     const sealResult = this.submitForSeal(sessionId);
     if (!sealResult.ok) return;
 
-    let dirResult = await this.#directory!.processSeal(sessionId, sealResult.data);
+    // DOD-SEAL-BROKER-1: ask the directory that BROKERED this session, not the configured one.
+    //
+    // The configured directory (`relay_primary_directory`) is chosen at deploy time and has no
+    // relationship to who is talking — it may be the home of one participant, or of NEITHER. The
+    // brokering directory always has a relationship: it set the session up, and in the cross-directory
+    // case it is the counterparty's home, so it holds at least one participant's connection.
+    //
+    // Falls back to the configured directory when the broker is unknown or its address is not
+    // configured, so single-directory deployments are unaffected.
+    const brokerTarget = this.#resolveSessionBroker(Buffer.from(sessionId).toString("hex"));
+    let dirResult = await this.#directory!.processSeal(sessionId, sealResult.data, brokerTarget ?? undefined);
 
     // FOLLOW THE REDIRECT, once. The seal must be adjudicated by the node holding the seal
     // initiator's signaling stream: `seal_verified` is pushed from a LOCAL stream map, and
@@ -1340,6 +1375,43 @@ export class CelloRelayNode {
     } else {
       this.rejectSeal(sessionId, dirResult.reason);
     }
+  }
+
+  /**
+   * DOD-SEAL-BROKER-1: resolve the directory that brokered a session to something dialable.
+   *
+   * Returns null when the broker is unknown (assignment recorded before this shipped, or a
+   * directory-presented assignment) or when its address is absent from configuration — the caller
+   * then uses the configured directory, which is the pre-existing behaviour.
+   *
+   * peerId is derived from the multiaddr's trailing /p2p/ segment rather than configured separately,
+   * so the two cannot disagree.
+   */
+  #resolveSessionBroker(sessionIdHex: string): { peerId: string; multiaddr: string } | null {
+    const brokerPubkey = this.#sessionBrokerPubkey.get(sessionIdHex);
+    if (!brokerPubkey) return null;
+    const multiaddr = this.#directoryEndpointsByPubkey[brokerPubkey];
+    if (!multiaddr) {
+      this.#logger.warn("relay.seal.broker.address_unknown", {
+        sessionId: truncHex(sessionIdHex),
+        brokerPubkey: brokerPubkey.slice(0, 16),
+        reason: "no multiaddr configured for the brokering directory — falling back to the configured directory",
+      });
+      return null;
+    }
+    const peerId = multiaddr.split("/p2p/")[1]?.split("/")[0];
+    if (!peerId) {
+      this.#logger.warn("relay.seal.broker.multiaddr_lacks_peer_id", {
+        sessionId: truncHex(sessionIdHex),
+        brokerPubkey: brokerPubkey.slice(0, 16),
+      });
+      return null;
+    }
+    this.#logger.info("relay.seal.broker.resolved", {
+      sessionId: truncHex(sessionIdHex),
+      brokerPubkey: brokerPubkey.slice(0, 16),
+    });
+    return { peerId, multiaddr };
   }
 
   // ─── Idle session sweep (CELLO-M6B-009) ──────────────────────────────────────
@@ -1660,6 +1732,19 @@ export interface CreateRelayNodeOptions {
   directoryPubkey: Uint8Array;
   /** FED-OPTIONB-SETUP-001: consortium directory pubkeys (any-directory). Falls back to [directoryPubkey]. */
   directoryPubkeys?: Uint8Array[];
+  /**
+   * DOD-SEAL-BROKER-1: directory pubkey (hex) -> libp2p multiaddr for the directories in this
+   * consortium. Lets the relay call back to the directory that BROKERED a session instead of one
+   * pinned in configuration with no relationship to the conversation.
+   *
+   * Public data supplied by the environment, the same pattern as `directoryPubkeys` — the relay
+   * still holds no consortium state internally and stays a standalone artifact.
+   *
+   * Deliberately NOT read from the client-presented assignment: a client could then name any address
+   * it liked. The relay learns WHICH directory brokered a session from the assignment SIGNATURE,
+   * which it already verifies against the pubkey set, and resolves the address itself.
+   */
+  directoryEndpointsByPubkey?: Record<string, string>;
   directory?: DirectoryAdapter;
   keyProvider?: KeyProvider;
   store?: RelayStore;

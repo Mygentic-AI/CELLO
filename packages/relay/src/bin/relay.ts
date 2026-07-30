@@ -77,6 +77,10 @@ const dirPubkeyHex = process.env["CELLO_DIRECTORY_PUBKEY"];
 // Comma-separated 64-hex Ed25519 pubkeys; falls back to the single CELLO_DIRECTORY_PUBKEY for
 // single-node / pre-federation deployments. Same trust source as today's single pubkey (set by deploy).
 const dirPubkeysHex = process.env["CELLO_DIRECTORY_PUBKEYS"];
+// DOD-SEAL-BROKER-1: pubkey=multiaddr pairs, comma-separated, so the relay can call back to the
+// directory that BROKERED a session rather than the one pinned in configuration. Public data, same
+// trust source as CELLO_DIRECTORY_PUBKEYS. Optional — absent means the pre-existing behaviour.
+const dirEndpointsRaw = process.env["CELLO_DIRECTORY_ENDPOINTS"];
 const startedAt = Date.now();
 
 // Logger is injected, never imported directly. StdoutLogger emits structured JSON lines.
@@ -171,6 +175,34 @@ if (dirPubkeysHex) {
     if (!dirPubkeys.some((existing) => Buffer.from(existing).equals(Buffer.from(pk)))) {
       dirPubkeys.push(pk);
     }
+  }
+}
+
+// DOD-SEAL-BROKER-1: pubkey=multiaddr, comma-separated. Malformed entries are FATAL for the same
+// reason a bad pubkey is: silently dropping one sends every seal for that directory's sessions back
+// to the configured fallback, which is exactly the behaviour this replaces — and it would look like
+// the feature simply not working rather than like a configuration error.
+const dirEndpointsByPubkey: Record<string, string> = {};
+if (dirEndpointsRaw) {
+  for (const entry of dirEndpointsRaw.split(",").map((x) => x.trim()).filter((x) => x.length > 0)) {
+    const eq = entry.indexOf("=");
+    const pkHex = eq === -1 ? "" : entry.slice(0, eq).trim().toLowerCase();
+    const addr = eq === -1 ? "" : entry.slice(eq + 1).trim();
+    if (!/^[0-9a-f]{64}$/.test(pkHex) || !addr.startsWith("/")) {
+      logRelayServiceStartFailed(logger, {
+        reason: `CELLO_DIRECTORY_ENDPOINTS entry must be "<64-hex pubkey>=<multiaddr>": ${entry.slice(0, 40)}…`,
+        region: awsRegion,
+      });
+      process.exit(1);
+    }
+    if (!addr.includes("/p2p/")) {
+      logRelayServiceStartFailed(logger, {
+        reason: `CELLO_DIRECTORY_ENDPOINTS multiaddr must carry a /p2p/ peer id: ${addr.slice(0, 60)}…`,
+        region: awsRegion,
+      });
+      process.exit(1);
+    }
+    dirEndpointsByPubkey[pkHex] = addr;
   }
 }
 // FED-OPTIONB-SETUP-001 (fallback-finder #3): make the any-directory wiring VISIBLE at startup. With a
@@ -393,6 +425,7 @@ try {
     listenAddresses: wsListenAddr ? [listenAddr, wsListenAddr] : [listenAddr],
     directoryPubkey: dirPubkey,
     directoryPubkeys: dirPubkeys,
+    directoryEndpointsByPubkey: dirEndpointsByPubkey,
     keyProvider: kp,
     transportPrivateKey,
     directory: directoryAdapter,
