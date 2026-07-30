@@ -14,32 +14,22 @@ section that follows it, or in `infra/CLAUDE.md`.
 
 ---
 
-## ⚡ POWER STATE — LIVE (all 3 regions, as of 2026-07-29 06:37 UTC)
+## ⚡ POWER STATE — HIBERNATED (all 3 regions, as of 2026-07-30 19:36 UTC)
 
-Woken 06:21:59–06:37:36 UTC (15 min 37 s). Previous down-window ~10 h.
+Down since 19:31–19:36 UTC. Previous uptime ~37 h (woken 2026-07-29 06:37 UTC).
 
-**ALB DNS names — these rotate on every wake; query AWS, do not trust this list once it is a day old:**
-- **us-east-1:** dir `cello-dir-dev-428525449` / relay `cello-relay-dev-643475689` / portal `cello-portal-dev-1221300993`
-- **eu-central-1:** dir `cello-dir-dev-996797499` / relay `cello-relay-dev-673997780`
-- **ap-northeast-1:** dir `cello-dir-dev-394807507` / relay `cello-relay-dev-38653167`
+Torn down: 7 ALBs, 3 NAT Gateways (EIPs retained), 3 ssmmessages endpoints. ECS→0 across all 8
+services, 4 RDS stopped, demo EC2 `i-0ad3e7c22470f266e` stopped. All **8** hostnames blackholed to
+`198.51.100.1` TTL 60. Portal capture: **2 listener rules + 1 SNI cert** — the ops dashboard will
+restore itself on wake.
 
-**Verified live, not just from the script's own log:** 8/8 DNS names off the blackhole; 7 ALBs
-`active`; all 8 ECS services 1/1 `COMPLETED`; 4 RDS `available`; demo EC2 `running`; all 9 directory
-target groups `healthy`; `http://directory-{us1,eu1,ap1}/manifest` → **200** in all three regions;
-`operations.cello.mygentic.ai` → **307** (ops dashboard restored automatically, second cycle running).
+**ECS Exec unavailable while hibernated.** Make no AWS changes until `wake.sh --execute` has run —
+missing ALBs and stopped RDS are intentional, not faults to repair.
 
-**Inventory diff was NOT identical this cycle — and that is correct.** us-east-1
-`cello-directory-dev:337 → :352` and ap-northeast-1 `:124 → :125`: the directory pipeline shipped new
-task definitions while we were hibernated, and the wake correctly started the *newer* revision.
-Both services are 1/1 `COMPLETED` on the new task defs and serving. A taskdef delta after a
-down-window during which CI ran is expected; only a *structural* delta (missing TG, listener, route,
-endpoint) is a real finding.
-
-**Gotcha for anyone health-checking the directory:** its ALB has an **HTTP:80 listener only** — no
-HTTPS — and `/health` is not a public path (the app returns 400). `https://directory-*/health`
-returns `000` on a perfectly healthy node. The real client path is `http://directory-*/manifest`.
+Restore with `./infra/scripts/wake.sh --execute --yes` (~15–18 min).
 
 ---
+
 
 ## 🟢 GALLERY IS LIVE — gallery.cello.mygentic.ai + portal schema/seed (2026-07-29, ~09:00–10:30 UTC)
 
