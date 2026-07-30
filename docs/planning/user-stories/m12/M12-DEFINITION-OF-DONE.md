@@ -457,6 +457,21 @@ description: >
 
 ## Decisions
 
+### M12-D-MERGE-HOLD (2026-07-30) — `m12/node-dir-gcp` does NOT merge to main yet
+
+§2e says a reviewed-green unit merges rather than sits, and this branch is reviewed and green. It is
+held anyway, for a reason that outranks the sitting cost:
+
+`pipeline-mappings.json` maps `packages/directory/` → `cello-directory-pipeline` and
+`packages/relay/` → `cello-relay-pipeline`, and `get-pipeline-state` reports the directory pipeline
+live (`Succeeded`). This branch changes both packages heavily, so a merge **fires AWS pipelines while
+AWS is hibernated** — which the standing rule forbids touching — and the V49/V50 out-of-order blocker
+(Entry 68/68b) lands the moment a task actually starts.
+
+Least-likely-to-need-reversing: hold. Merging is one command whenever AWS is awake or torn down;
+un-firing a pipeline against hibernated infrastructure is not. Unblocks on either the AWS teardown
+decision or a wake — and the Flyway question in Entry 68b should be answered first either way.
+
 - **M12-D1** (2026-07-28, Andre): Milestone ID is **M12**. The rebuild has nothing to do with the
   waitlist, so an M11 suffix would confuse; it is big enough to take a number. The former roadmap
   M12–M17 (Social Trust … Federation) are renumbered M13–M18 — `implementation-roadmap.md` and
