@@ -3033,3 +3033,113 @@ it could not catch an omission, because it only checks that the listed names are
   this entry was written.
 - Neither `DOD-END-INGRESS-1` nor `DOD-END-SCAN-1` has had its `cello-unit-reviewer` pass yet. Both
   are owed one before either tag flips.
+
+---
+
+## Entry 39 — `same_operator` moves into the hash, and finds three write paths that were lying
+
+**`M10B-D30`. The fork I raised should never have been a fork.** I wrote up "where does
+`same_operator` live" as a three-way decision needing Andre's call. He answered that putting it
+outside the payload was "the most obvious decision ever" and that I had failed to follow the spec —
+and he was right on the second point in a way that matters more than the first. `DOD-END-COUNT-1`
+already said the flag was "an envelope-visible fact". Shipping it in the payload was a deviation
+from a written line, not an ambiguity in one. Escalating a deviation as a decision is how a spec
+stops being load-bearing.
+
+I also overweighted the migration cost. The launch-triage rule says a wire change is expensive when
+it strands existing data — the stranded set here was EMPTY (alpha, no users, the only minted
+endorsements live in test fixtures). "Expensive in principle" is not the rule.
+
+### What shipped
+
+Preimage arity 11 → 12, `same_operator` APPENDED — slot order IS the wire format, so append-only.
+Boolean-normalised on encode and on strict decode, so no reader ever has to distinguish "not
+co-owned" from "field missing". The predicate excludes flagged endorsements from `min_count` and
+reports `excluded_same_operator` beside the countable total; a refusal reporting the RAW count would
+tell an operator they have enough while the predicate disagrees.
+
+**Excluded from the count, not suppressed.** The endorsement is still presented and still readable —
+"these two agents share an operator" is true and useful, and D-27 caps its worth at the endorser's
+own tier. What it must never do is help clear a COUNT, because a count is exactly the thing one
+operator can inflate alone.
+
+### ONE FIELD, THREE WRITE PATHS, TWO OF THEM SILENTLY DEFAULTING
+
+This is the entry's real content, because the same defect appeared twice in two hours in two
+different files, and the second one made the milestone's headline security property a no-op.
+
+1. **`deliverWalletSignal` → `putWalletSignal`** omitted it. The wrong flag was not the damage:
+   PRESENTATION re-encodes the envelope from that row, so a co-owned endorsement's bytes stopped
+   hashing to the notarized value and the RECIPIENT rejected it — while the holder's log said
+   `attached: 1`. A field lost on the way into the wallet is silent until it surfaces one hop away
+   as somebody else's `hash_mismatch`.
+2. **`putReceivedSignal`** omitted it, and this one is worse. `evaluateSignalPolicy` filters on
+   `sameOperator`; that INSERT is the only way a received signal ever gets one. The column took its
+   `0` default, every arriving endorsement read as not-co-owned, and **`DOD-END-COUNT-1` was inert
+   in production** — with sixteen green unit tests, all of which construct rows by hand and never
+   touch the store.
+3. The portal's mint set it correctly throughout.
+
+**The lesson is not "check your INSERT column list."** It is that a hand-built fixture cannot test a
+persistence layer, and a `NOT NULL DEFAULT` turns a dropped field into a plausible value rather than
+an error. Every assertion about a stored field now has to arrive through the real write path — which
+is what the five new `dod-consume-1` tests do (putReceivedSignal → listReceived →
+evaluateSignalPolicy). Revert-tested: three fail while all sixteen hand-built floor tests stay green.
+That contrast IS the finding.
+
+**The upgrade path was broken too**, and worse than incomplete: `contact_trust_signals` never had
+the column, and `wallet_trust_signals` gained it only in the fresh DDL. A NEW operator worked; an
+EXISTING one hit "table has no column named same_operator" on the first insert and could neither
+receive nor present anything. Invisible in CI because every test database is fresh. Both tables now
+take an additive ALTER (`NOT NULL DEFAULT 0` is legal for ALTER, so migrated == fresh), with no
+backfill needed — 0 is correct for every row minted before the slot existed.
+
+### Two more defects the wire change exposed
+
+- **The NOTARY carried its own vendored envelope decoder** (`signal-write.ts`) with its own arity
+  constant and its own re-encode — 40 lines duplicating the shared component at the one party whose
+  job is to agree with everyone. It rejected every 12-slot envelope with `envelope_undecodable`: a
+  valid endorsement refused by the only party that can notarize it. Replaced with the shared
+  decoder, NOT a bumped constant — patching 11→12 fixes the instance and leaves the mechanism. Two
+  more vendored copies died in portal tests, both of which re-hash and would have reported
+  `hashOk: false` on every co-owned signal.
+- **The J-END fixture registered every agent under one dev account**, so Bob and Alice shared an
+  `account_id` — the journey's headline "a stranger endorses Alice" hop was exercising the CO-OWNED
+  path, i.e. the one this milestone discounts. A false green on the central claim, invisible while
+  the flag sat unread in the payload. Bob now gets his own account, asserted distinct before he
+  issues.
+
+Also: four different `protocol-types` versions were declared across trustless-cello (0.0.18,
+0.0.23×3) against 0.0.33 published. `^0.0.23` is an EXACT pin under npm semver — caret on a 0.0.x
+matches nothing else — so directory, relay, e2e-tests and interfaces had been running different wire
+code from each other. All aligned.
+
+### Guards added, because each defect's cost was how long it stayed invisible
+
+- The presenter re-derives its own hash and **refuses to send a signal it cannot reproduce**,
+  logging both hashes and every scalar field. Presenting bytes that disagree with the hash beside
+  them is always a bug at the presenter; it should not be discoverable only by asking the recipient.
+  When every selected signal fails it is an error naming the count — never `attached: 0`, which
+  reads identically to holding nothing.
+- The recipient's `hash_mismatch` warning logs BOTH hashes. It previously logged the claimed one
+  only: "these two values differ", showing one of them.
+- A frozen vector carries `same_operator: true`. All seven said `false` — which is also exactly what
+  a party that ignores the field and hardcodes `false` emits, so the suite could not tell them apart.
+  My first version of that anchor compared live-false against the FROZEN hash and never fired; the
+  revert test caught it (one failure where I expected two). Live-vs-live is the form with teeth.
+- The portal drain counts `errored` rows. It logged a per-row throw and incremented nothing, so a
+  pass that lost three rows returned every counter at zero — which reads as "nothing wrong".
+- `cello_trust_signals_list` shows the operator which of their endorsements are capped, and the
+  recipient's projection carries `same_operator` with its own framing (case (b)'s "rendered as a
+  positive" clause, which was NOT met when the hop first went green).
+
+### State
+
+- **J-END 10/10 hops live**, including HOP 9 = case (b). `DOD-END-COUNT-1` ✅, case (b) ✅.
+- Published `v0.0.145` — daemon 0.0.92, protocol-types 0.0.34, connect 0.0.101. Beta; binary-verified
+  (`npm pack` + grep dist for all three fixes); cross-pins are real versions. `latest` promotion is
+  Andre's.
+- `cello-unit-reviewer` pass on all of the above is IN FLIGHT — a first dispatch died on a 529 with
+  no output, which is NO verdict, not a pass.
+- Case (d) (withdrawal) still ❌ and blocked on `DOD-END-WITHDRAW-1`; refuse/withdraw ops still
+  accumulate unhandled in the queue, which is what keeps `DOD-END-INGRESS-1` amber.

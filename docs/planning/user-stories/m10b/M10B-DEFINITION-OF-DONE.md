@@ -599,36 +599,47 @@ the additions M10B is accountable for.
   fact, so a count predicate MUST bucket or exclude flagged endorsements; a naive `count >= N` otherwise
   passes on ten agents under one operator. Keeps `DOD-FLOOR-1`'s "envelope fields only" rule intact —
   the predicate input is the envelope, the join is recipient-local.
-  > **🅿️ PARKED 2026-07-30 — a WIRE decision, and the DoD line and the implementation disagree about
-  > where `same_operator` lives.** This line says it is "an envelope-visible fact". It is not:
-  > `DOD-END-SUBJECTKIND-1` shipped the flag in the **PAYLOAD** (`same_operator: boolean` inside the
-  > CBOR), because the envelope's field set is fixed — `subject_kind`, `subject`, `issuer_kind`,
-  > `issuer_pubkey`, `type`, `schema_version`, `issued_at`, `expires_at`, `supersedes_hash` — and
-  > carries no slot for it.
+  > **✅ RESOLVED 2026-07-30 — OPTION 1 TAKEN. `same_operator` IS an envelope field (slot 12).**
+  > `M10B-D30`. Andre's call, and he was blunt about it: putting it outside the payload was "the most
+  > obvious decision ever" and the fork should never have been raised. He was right — this DoD line
+  > already SAID "an envelope-visible fact", so shipping it in the payload under `DOD-END-SUBJECTKIND-1`
+  > was a deviation from the spec, not an ambiguity in it. Writing the deviation up as a three-way
+  > decision was the error; the line's own words were the answer.
   >
-  > So the count predicate cannot both exclude flagged endorsements AND honour
-  > `INV-FLOOR-ENVELOPE-ONLY` as things stand. The three ways out, and why this is Andre's call:
+  > The migration-trap argument I attached to option 1 was also overweighted: the stranded set is
+  > EMPTY (alpha, no users, and the only minted endorsements are in test fixtures), so the wire break
+  > cost hours, not a migration. The correct reading of the launch-triage rule is that a wire change is
+  > expensive when there is something to strand — not that it is expensive in principle.
   >
-  > 1. **Add `same_operator` to the envelope.** Correct in principle — the envelope is the signed,
-  >    hashed, verifiable surface, and a floor predicate should read only that. But it is a WIRE
-  >    change: the field is inside the hash, so it needs `protocol-types`, the directory, the daemon
-  >    and the portal moving together, and **a signal minted before the field exists can never
-  >    retroactively have it**. That is the migration trap named in the repo's own launch triage.
-  > 2. **Let the predicate read this ONE payload field.** Cheapest, and it breaks the invariant that
-  >    keeps floor predicates from becoming type-aware. Once one field is exempt the rule is advisory.
-  > 3. **Leave the count as-is and cap worth by TIER only** (D-27), accepting that `min_count` can be
-  >    cleared by same-operator endorsements. Weakest — it is precisely the "ten agents under one
-  >    operator" hole this line exists to close.
+  > WHAT SHIPPED: preimage arity 11 → 12, `same_operator` APPENDED (append-only; slot order IS the wire
+  > format), boolean-normalised on both encode and strict decode so no reader must distinguish
+  > "not same-operator" from "field absent". The predicate excludes flagged endorsements from
+  > `min_count` and reports `excluded_same_operator` alongside the countable total — a refusal that
+  > reported the raw count would tell an operator they have enough when the predicate disagrees.
   >
-  > **The hole is NOT open in practice today**, which is why parking is safe: `min_count` has exactly
-  > one caller (`DEFAULT_UNKNOWN_POLICY`, `min_count: 1`) paired with
-  > `require_issuer_kind: "portal"`, and a client-supplied endorsement is `issuer_kind: agent` — so it
-  > cannot satisfy that policy at all. The farming hole opens the moment a policy asks for
-  > `min_count` WITHOUT pinning `issuer_kind`, and nothing today does.
+  > EXCLUDED FROM THE COUNT, NOT SUPPRESSED. The endorsement is still presented and still readable;
+  > D-27 caps its worth at the endorser's own tier. What it must never do is help clear a COUNT,
+  > because a count is exactly the thing one operator can inflate alone.
   >
-  > Recommendation if asked: (1), taken deliberately and early, because it is the only option that
-  > survives contact with `INV-FLOOR-ENVELOPE-ONLY` — and doing it later strands every endorsement
-  > minted in the meantime. — 🅿️
+  > THREE DEFECTS THIS FLUSHED OUT, all of which had been invisible while the flag sat unread in the
+  > payload — recorded because each one shipped past a green gate:
+  >   1. The DIRECTORY carried its own hand-rolled envelope decoder with its own arity constant (11),
+  >      so it rejected every 12-slot envelope with `envelope_undecodable`. A valid endorsement refused
+  >      by the only party that can notarize it. Replaced with the shared decoder, not a bumped
+  >      constant. (`signal-write.ts`)
+  >   2. `deliverWalletSignal` did not pass `same_operator` to `putWalletSignal`, so a co-owned
+  >      endorsement stored `false`. Presentation re-encodes from that row, so the bytes stopped
+  >      hashing to the notarized value and the RECIPIENT rejected it while the holder logged
+  >      "attached: 1". Nothing asserted that a delivered signal is still presentable.
+  >   3. The J-END fixture registered every agent under one dev account, so Bob and Alice shared an
+  >      `account_id` — the journey's headline "a stranger endorses Alice" hop was exercising the
+  >      CO-OWNED path, i.e. the one this line discounts. A false green on the central claim.
+  >
+  > Guards added, because each defect's real cost was how long it stayed invisible: the presenter now
+  > refuses to send a signal whose bytes it cannot reproduce; the recipient's `hash_mismatch` logs
+  > BOTH hashes; a frozen vector carries `same_operator: true` (all seven said `false`, which is also
+  > what a hardcoded bug says); and `cello_trust_signals_list` shows the operator which of their
+  > endorsements are capped. Live: J-END HOP 9. Revert-tested. — ✅
 - **DOD-END-FLOOR-2** — endorsement-aware floor predicates: count, issuer tier, and issuer identity, all
   computed by joining the presented envelope's `issuer_pubkey` against the recipient's own contacts. This
   is compatible with `INV-FLOOR-ENVELOPE-ONLY` (nothing reaches into the payload) and is what D-27's
@@ -676,9 +687,22 @@ the additions M10B is accountable for.
     pickup path, and lands as pending when her daemon next starts; on selecting the agent she is told an
     item awaits her decision (`DOD-END-DELIVER-1`, `DOD-END-PENDING-1`). Nothing errors, nothing is lost,
     and the notification does not repeat once seen.
-  - **(b) same-operator positive** — Alice's established Agent A endorses her new Agent B; Bob, who has
-    whitelisted Agent A, sees the `same_operator` fact rendered as a positive, and a `min_count` floor
-    does not count it (`DOD-END-COUNT-1`).
+  - **(b) same-operator positive** — a co-owned endorsement is minted, FLAGGED on the envelope, delivered,
+    accepted, presented and READ — and excluded from `min_count` (`DOD-END-COUNT-1`). Live as J-END HOP 9.
+    > **THE LITERAL WORDING IS UNREACHABLE, and the substitution is the interesting part.** As written
+    > this says "Alice's established Agent A endorses her new Agent B" — two agents on ONE daemon. That
+    > shape is refused at the CLIENT with `self_subject` before it can ever reach the portal, which HOP 8
+    > proves deliberately. So the only reachable co-owned shape is two agents on DIFFERENT daemons that
+    > share an account, and that is what HOP 9 runs: Charlie endorses Alice (own daemon → the client
+    > guard correctly cannot see the link), and the PORTAL catches it from account linkage. That division
+    > of labour — client catches what it can prove, portal catches what only it can see — is the whole
+    > design of D-29, and this hop is the only place it is exercised live.
+    >
+    > "Rendered as a positive" was NOT met when the hop first went green: the recipient's projection did
+    > not expose `same_operator` at all, so the fact was silently discounted rather than shown. It now
+    > ships with its own framing — the operator vouching for their own agent is useful if you already
+    > trust that operator and worth nothing as independent corroboration — because the same sentence
+    > means different things depending on who wrote it. — ✅
   - **(c) self-endorsement refused** — an account-subject same-operator submission is rejected at intake
     with a named reason (`DOD-END-SUBJECTKIND-1`).
   - **(d) withdrawal reaches a prior recipient** — Bob withdraws after Charlie has already verified and
