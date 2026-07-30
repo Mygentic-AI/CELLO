@@ -400,7 +400,17 @@ export type SealInterruptedAckFrame = { type: "seal_interrupted_ack"; sessionId:
 /** initiatorPubkey is included so the directory can route the rejection back to the initiator by direct lookup in #streams. */
 export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"; sessionId: string; initiatorPubkey: string; reason: string };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SessionOfferReject | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest | SubmissionWrite;
+/**
+ * M10B / `M10B-D25r2`: "what happened to what I submitted?" (INBOUND).
+ *
+ * DELIBERATELY EMPTY BEYOND ITS TYPE. There is no `issuer_pubkey` field, and its absence is the
+ * security property: the read is scoped to the identity the stream's challenge-response already
+ * established, so there is nothing here to forge. A pubkey parameter would let any agent that can
+ * dial this node collect another's outcomes.
+ */
+export type SubmissionResultsRequest = { type: "submission_results_request" };
+
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SessionOfferReject | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest | SubmissionWrite | SubmissionResultsRequest;
 
 /**
  * M10B / DOD-END-SUBMIT-1: acknowledge a sealed submission (OUTBOUND).
@@ -428,6 +438,46 @@ export function encodeSubmissionWriteError(frame: { submission_id: string; reaso
   // happens to be in flight — and two concurrent submissions is not exotic, it is the second
   // endorsement.
   return ENC.encode({ type: "submission_write_error", submission_id: frame.submission_id, reason: frame.reason });
+}
+
+/**
+ * M10B / `M10B-D25r2`: the issuer's outcomes for what it submitted (OUTBOUND).
+ *
+ * THE READ SCOPE IS THE STREAM'S AUTHENTICATED IDENTITY, never a field in the request. The caller
+ * proved possession of the key by completing the challenge-response, and only rows recorded against
+ * that key are returned — so there is no `issuer_pubkey` parameter to forge. A request-supplied
+ * pubkey would let any agent that can dial the node collect every other agent's outcomes, including
+ * refusal messages sealed to somebody else: unopenable, but never theirs to hold.
+ *
+ * `ciphertext` stays sealed to the issuer's k_local key. The directory carries the refusal message
+ * without being able to read it, the same posture the submission queue has on the way in.
+ */
+export function encodeSubmissionResults(frame: {
+  results: Array<{
+    submission_id: string;
+    outcome: string;
+    reason: string | null;
+    signal_hash: string | null;
+    ciphertext: Uint8Array | null;
+    created_at: string;
+  }>;
+}): Uint8Array {
+  return ENC.encode({
+    type: "submission_results",
+    results: frame.results.map((r) => ({
+      submission_id: r.submission_id,
+      outcome: r.outcome,
+      reason: r.reason,
+      signal_hash: r.signal_hash,
+      ciphertext: r.ciphertext,
+      created_at: r.created_at,
+    })),
+  });
+}
+
+/** M10B: refuse a results fetch, NAMING the cause. Silence would be indistinguishable from "none". */
+export function encodeSubmissionResultsError(frame: { reason: string }): Uint8Array {
+  return ENC.encode({ type: "submission_results_error", reason: frame.reason });
 }
 
 /**
@@ -656,6 +706,11 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     if (ciphertext.length === 0 || ciphertext.length > MAX_SUBMISSION_CIPHERTEXT_BYTES) return null;
     if (intake_key_id.length === 0 || intake_key_id.length > MAX_INTAKE_KEY_ID_CHARS) return null;
     return { type: "submission_write", submission_id, intake_key_id, ciphertext };
+  }
+
+  if (o["type"] === "submission_results_request") {
+    // No fields to validate — see the type's comment for why it carries none.
+    return { type: "submission_results_request" };
   }
 
   if (o["type"] === "seal_attempt") {

@@ -44,6 +44,7 @@ import {
   applyRevocationFlag,
 } from "./agent-write-repository.js";
 import { drainSubmissions, deleteSubmission } from "./submission-queue-repository.js";
+import { recordSubmissionResult } from "./submission-results-repository.js";
 
 // READ-001 freshness window is now shared from agent-presence-repository (one source of truth for
 // the account-presence read and the cross-node discovery lookup).
@@ -802,6 +803,66 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
         logger.error("signal.ingress.drain.failed", { error: err instanceof Error ? err.message : String(err), owningNodeId });
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "drain failed" }));
+      }
+      return;
+    }
+
+    // M10B / `M10B-D25r2` — the portal records what it decided about a submission, so the ISSUER can
+    // find out. Without this the submitter learns nothing: minted, refused by the subject, rejected
+    // by the scan and unattributable all look identical from their side, and a refusal message the
+    // subject deliberately wrote is simply dropped.
+    if (req.method === "POST" && req.url === "/internal/submissions/result") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!internalApiKey || providedKey !== internalApiKey) {
+        logger.warn("signal.ingress.auth.failed", { route: "result", remoteAddr: req.socket.remoteAddress, owningNodeId });
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      let body: { submission_id: string; issuer_pubkey: string; outcome: string; reason: string | null; signal_hash: string | null; ciphertext: Uint8Array | null };
+      try {
+        const p = JSON.parse((await readBody(req)).toString("utf8")) as Record<string, unknown>;
+        if (typeof p.submission_id !== "string" || p.submission_id.length === 0) throw new Error("submission_id must be a non-empty string");
+        // 64 lowercase hex, and validated HERE rather than trusted: this value is the read scope for
+        // every later fetch, so a malformed one silently makes the result unreachable by anybody —
+        // written, never delivered, and indistinguishable from never having been recorded.
+        if (typeof p.issuer_pubkey !== "string" || !/^[0-9a-f]{64}$/.test(p.issuer_pubkey.toLowerCase())) {
+          throw new Error("issuer_pubkey must be 64 hex characters");
+        }
+        if (typeof p.outcome !== "string" || p.outcome.length === 0) throw new Error("outcome must be a non-empty string");
+        body = {
+          submission_id: p.submission_id,
+          issuer_pubkey: p.issuer_pubkey.toLowerCase(),
+          outcome: p.outcome,
+          reason: typeof p.reason === "string" ? p.reason : null,
+          signal_hash: typeof p.signal_hash === "string" ? p.signal_hash : null,
+          ciphertext: typeof p.ciphertext === "string" ? new Uint8Array(Buffer.from(p.ciphertext, "base64")) : null,
+        };
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "malformed_request", detail: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
+      try {
+        const { inserted } = await recordSubmissionResult(pool, {
+          submissionId: body.submission_id,
+          acceptingNode: owningNodeId,
+          issuerPubkey: body.issuer_pubkey,
+          outcome: body.outcome,
+          reason: body.reason,
+          signalHash: body.signal_hash,
+          ciphertext: body.ciphertext,
+        });
+        // `inserted: false` means a result already existed and the FIRST one stands (no UPDATE grant).
+        // Reported rather than swallowed: a portal seeing it can tell "already recorded" from "just
+        // recorded", which is the difference between a safe retry and a lost outcome.
+        logger.info("signal.result.recorded", { submissionId: body.submission_id, outcome: body.outcome, inserted, owningNodeId });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, inserted }));
+      } catch (err) {
+        logger.error("signal.result.record.failed", { submissionId: body.submission_id, error: err instanceof Error ? err.message : String(err), owningNodeId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "record failed" }));
       }
       return;
     }

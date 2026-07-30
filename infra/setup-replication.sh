@@ -172,7 +172,7 @@ done
 # `ALTER PUBLICATION cello_pub SET TABLE ${PUBLICATION_TABLES}`, which ERRORS on a table that does not
 # exist — so this line would fail replication setup on any fresh region (the region-expansion test) or
 # any re-run after V48. Found 2026-07-28 while scoping M10B's own publication changes.
-PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,seal_notarizations,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts,registrations,pre_authorization_tokens,agent_revocations,agent_suspensions,agent_presence,directory_nodes,pickup_queue,capability_claim_codes,signal_records,authorized_issuers"
+PUBLICATION_TABLES="agent_profiles,conversation_seals,conversation_seal_staging,seal_notarizations,directory_checkpoints,checkpoint_node_signatures,relay_registrations,sessions,pending_notifications,user_accounts,registrations,pre_authorization_tokens,agent_revocations,agent_suspensions,agent_presence,directory_nodes,pickup_queue,capability_claim_codes,signal_records,authorized_issuers,submission_results"
 TABLE_COUNT=$(echo "${PUBLICATION_TABLES}" | tr ',' '\n' | wc -l | tr -d ' ')
 
 # Per-node sequence-stagger config (applied in Step 6). Each node mints ids ≡ its offset

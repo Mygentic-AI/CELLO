@@ -34,7 +34,11 @@ Resources:
     Properties:
       Name: !Sub "/cello/${Environment}/ops-agent/expected-migration-version"
       Type: String
-      Value: "48"
+      # V56 (submission_results). NOTE: this sat at "48" while production ran V55 — the V51-V55
+      # migrations landed without updating it, which is the crash-loop this parameter exists to
+      # prevent on a FRESH deploy (the ops-agent refuses to start when the DB is behind what it
+      # expects, and an expectation frozen in the past inverts that check into a lie).
+      Value: "56"
       Description: !Sub >
         Expected Flyway migration version for the CELLO ops-agent (${Environment}).
         Update after each schema migration, then restart the ECS task.
