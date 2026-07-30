@@ -31,15 +31,20 @@
  * under FOR UPDATE and merges it (burn preserved via the merge's OR). No merge logic is duplicated in
  * SQL, and the seam needs no change.
  *
- * **Scope.** This store round-trips the four tables it can serve AND apply with no external coupling:
- * Tier-A agent_profiles + agent_revocations, Tier-B agent_suspensions + agent_presence. The two
- * hash-chained Tier-A tables (user_accounts, seal_notarizations) need the canonical local chain
- * writer (`insertWithChain` — chain columns are node-local audit trails, written locally on apply
- * per design §2 "Hash chains under anti-entropy"); they are DELIBERATELY absent here rather than
- * half-wired (advertised-but-unappliable), and are the immediate follow-up unit.
+ * **Scope.** Six tables round-trip: Tier-A agent_profiles, agent_revocations, user_accounts and
+ * seal_notarizations; Tier-B agent_suspensions and agent_presence.
+ *
+ * The two hash-chained Tier-A tables apply through the INJECTED `ChainWriter`, never the generic
+ * INSERT — that would write them outside the tamper-evident chain that is their reason for existing.
+ * Chain columns are node-local: an applying node recomputes them against ITS OWN tip and never copies
+ * the origin's (design §2 "Hash chains under anti-entropy"). With no writer injected, those two tables
+ * are SKIPPED with an ERROR rather than written unchained — and the rest of the round still runs,
+ * because starving Tier-B would take the kill switch down with them.
  */
 
 import type pg from "pg";
+import type { HashChainedTable } from "./hash-chain.js";
+import type { Logger } from "@cello-protocol/interfaces";
 import {
   encodeTierARecord, type TierATableSpec, type TableRow,
   AGENT_PROFILES_SPEC, AGENT_REVOCATIONS_SPEC, USER_ACCOUNTS_SPEC, SEAL_NOTARIZATIONS_SPEC,
@@ -72,10 +77,14 @@ interface TierAPg {
   readonly chained?: boolean;
 }
 
+// ORDER IS LOAD-BEARING: the engine applies Tier-A in this order and design §3.3 requires
+// accounts → profiles → (Tier-B) suspensions, because each references the one before it. Inert today
+// only because `account_id` is not in AGENT_PROFILES_SPEC — and that spec gained a column one commit
+// ago, so "inert today" is not a reason to leave it wrong.
 const TIER_A: readonly TierAPg[] = [
+  { spec: USER_ACCOUNTS_SPEC, bytea: [], chained: true },
   { spec: AGENT_PROFILES_SPEC, bytea: [] },
   { spec: AGENT_REVOCATIONS_SPEC, bytea: ["signature"] },
-  { spec: USER_ACCOUNTS_SPEC, bytea: [], chained: true },
   {
     spec: SEAL_NOTARIZATIONS_SPEC,
     bytea: ["session_id", "sealed_root", "participant_a_pubkey", "participant_b_pubkey", "frost_signature"],
@@ -90,7 +99,7 @@ const TIER_A: readonly TierAPg[] = [
  */
 export interface ChainWriter {
   insertWithChain(
-    tableName: never,
+    tableName: HashChainedTable,
     record: Record<string, unknown>,
     columns: string[],
     values: unknown[],
@@ -232,10 +241,12 @@ function isUniqueViolation(err: unknown): boolean {
 export class PgAeStore implements AeStoreView {
   readonly #pool: pg.Pool;
   readonly #chainWriter: ChainWriter | undefined;
+  readonly #logger: Logger | undefined;
 
-  constructor(pool: pg.Pool, chainWriter?: ChainWriter) {
+  constructor(pool: pg.Pool, chainWriter?: ChainWriter, logger?: Logger) {
     this.#pool = pool;
     this.#chainWriter = chainWriter;
+    this.#logger = logger;
   }
 
   tierATables(): readonly string[] { return TIER_A.map((t) => t.spec.table); }
@@ -324,35 +335,85 @@ export class PgAeStore implements AeStoreView {
         );
       }
       if (t.chained) {
-        // ABSENT IS NOT FINE: without the writer this table cannot be applied correctly, and falling
-        // through to the generic INSERT would write it UNCHAINED — the advertised-but-unappliable
-        // state the registry exists to prevent. Refuse, naming what is missing.
+        // ABSENT IS NOT FINE — but the blast radius must stay on THIS table. Without the writer this
+        // table cannot be applied correctly and must not fall through to the generic INSERT (that
+        // writes it UNCHAINED). It is skipped with an ERROR rather than thrown, because
+        // `runAntiEntropyRound` applies all of Tier-A and THEN Tier-B with no try between them: a
+        // throw here skips `agent_suspensions` and `agent_presence` entirely, so a permanent failure
+        // on a receipt would stop the KILL SWITCH replicating to this node, every round, forever.
+        // Refusing the table and continuing the round preserves both properties.
         if (!this.#chainWriter) {
-          throw new Error(
-            `pg-ae-store: ${t.spec.table} is hash-chained and no chain writer was injected — refusing ` +
-              `to apply it unchained`,
-          );
+          this.#logger?.error("antientropy.apply.skipped", {
+            table: t.spec.table,
+            offered: records.length,
+            reason: "table is hash-chained and no ChainWriter was injected — refusing to apply it unchained",
+          });
+          return inserted;
         }
+
         // BYTEA columns arrive hex-encoded on the wire; the chain writer takes real values, and the
         // record it serializes must match what is stored or the chain hash will not reproduce.
+        //
+        // The round-trip assert is not belt-and-braces. `Buffer.from(str, "hex")` does NOT throw on
+        // bad input — it stops at the first non-hex character and drops a trailing odd nibble. The
+        // generic path four lines below hands hex to Postgres' `decode(…,'hex')`, which RAISES. So
+        // without this, the chained path — the one carrying seal receipts — would be the quieter of
+        // the two, in a file whose own header says authentication is not honesty. The wire hash is
+        // computed over the hex STRING, so a truncated value passes the content-address check, and
+        // `insertWithChain` would then chain-hash the truncation: `verifyChain` returns valid on a
+        // corrupt receipt. For a notary that is the worst available outcome — the tamper-evidence
+        // attests to the damage.
         const record: Record<string, unknown> = {};
         for (const c of cols) {
           const v = body[c] ?? null;
-          record[c] = t.bytea.includes(c) && typeof v === "string" ? Buffer.from(v, "hex") : v;
+          if (t.bytea.includes(c) && typeof v === "string") {
+            const buf = Buffer.from(v, "hex");
+            if (buf.toString("hex") !== v.toLowerCase()) {
+              throw new Error(
+                `pg-ae-store: ${t.spec.table}.${c} is not valid hex — refusing to apply a record that ` +
+                  `would be silently truncated`,
+              );
+            }
+            record[c] = buf;
+          } else {
+            record[c] = v;
+          }
         }
         // chain_hash is computed by the writer; it is passed as a placeholder it overwrites.
         const columns = [...cols, "chain_hash"];
         const values = [...cols.map((c) => record[c]), ""];
-        record["chain_hash"] = "";
         try {
           await this.#chainWriter.insertWithChain(
-            t.spec.table as never, record, columns, values, columns.length - 1,
+            t.spec.table as HashChainedTable, record, columns, values, columns.length - 1,
           );
           inserted += 1;
         } catch (err) {
-          // A duplicate is convergence, not failure: the same notarization reaching a node twice (or
-          // from two peers) is the normal steady state. Anything else is a real write failure.
-          if ((err as { code?: string } | null)?.code !== "23505") throw err;
+          const e = err as { code?: string; constraint?: string } | null;
+          // A duplicate on the NATURAL KEY is convergence: the same row reaching a node twice, or
+          // from two peers, is the steady state. A duplicate on any OTHER unique constraint is not —
+          // `user_accounts.phone_stub_hash` is UNIQUE and is NOT the natural key, so two nodes minting
+          // an account for one phone stub is an identity FORK, which is exactly the divergence
+          // anti-entropy exists to surface. Swallowing it as "convergence" would discard the evidence.
+          const naturalKeyViolation =
+            e?.code === "23505" && (e.constraint === undefined || e.constraint.includes(t.spec.naturalKey[0]!));
+          if (!naturalKeyViolation) {
+            if (e?.code === "23505") {
+              this.#logger?.error("antientropy.apply.constraint_conflict", {
+                table: t.spec.table,
+                constraint: e.constraint,
+                reason: "unique violation on a NON-natural-key constraint — two nodes hold conflicting rows",
+              });
+              continue;
+            }
+            // A write failure on one record must not take the round down with it (and Tier-B, and the
+            // kill switch). Name it loudly and keep going; a persistent one recurs in the log every
+            // round rather than silently blocking suspension propagation.
+            this.#logger?.error("antientropy.apply.failed", {
+              table: t.spec.table,
+              reason: e instanceof Error ? e.message : String(err),
+            });
+            continue;
+          }
         }
         continue;
       }

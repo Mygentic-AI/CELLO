@@ -4126,3 +4126,65 @@ same diff, and only a review caught it.
 
 **Caveat kept:** the down-node clause is proven for those paths, not for a full-region outage. That is
 `DOD-OUTAGE-CLAIM-1` and it is still unproven.
+
+---
+
+## Entry 66 — 2026-07-30 — DOD-AE-CHAINED-TABLES-1 reviewed: 8 findings, all closed
+
+The review confirmed the three claims I asked it to attack — chain-across-nodes correctness, the
+BYTEA round-trip, and the `chain_hash` placeholder index — by tracing `serializeRecord`,
+`ALWAYS_EXCLUDED_FROM_CHAIN`/`TABLE_EXTRA_EXCLUDED`, and the advisory-lock ordering. **The BYTEA
+divergence I predicted was not there.** What it found instead was worse and one line away.
+
+### F1 — the same line had a quieter hole
+
+`Buffer.from(str, "hex")` does not throw on bad input: it stops at the first non-hex character and
+drops a trailing odd nibble. The generic path four lines below hands hex to Postgres' `decode(…,'hex')`,
+which RAISES `22023`. So this unit introduced a path **quieter than the one beside it**, in the file
+whose own header says authentication is not honesty.
+
+The wire hash is computed over the hex STRING, so a truncated value passes the content-address check.
+`insertWithChain` would then chain-hash the truncation and store it — `verifyChain` returns
+`{valid: true}` on a corrupt receipt. For a notary that is the worst available outcome: **the
+tamper-evidence attests to the damage.** Now a round-trip assert refuses it by name.
+
+### F2 — one poisoned receipt could disarm the kill switch
+
+`runAntiEntropyRound` applies all of Tier-A and then Tier-B with no `try` between them. Any throw out
+of `applyTierA` skips `agent_suspensions` and `agent_presence` entirely — and the two chained tables
+sat LAST in the registry. So a persistently failing receipt (or a missing writer) would block
+suspension and burn propagation to that node every round, forever, behind a WARN indistinguishable
+from a peer being down. A burned agent stays co-signable there.
+
+Fixed by keeping the refusal but bounding its blast radius: a missing writer SKIPS the table with an
+ERROR, and a per-record write failure logs and continues. Nothing is ever written unchained; the round
+still reaches Tier-B. Note the tension is real — moving Tier-B first would have violated the FK order
+(§3.3 requires profiles → suspensions), so "just reorder" was not available.
+
+### F3 — the 23505 swallow was not scoped to the natural key
+
+`user_accounts.phone_stub_hash` is UNIQUE and is NOT the natural key. Two nodes minting an account for
+one phone stub — precisely the divergence AE exists to surface — raised 23505 and was discarded as
+"convergence" with no log and no counter. Now only a natural-key violation counts as convergence;
+anything else is reported as `antientropy.apply.constraint_conflict`.
+
+### F4–F7
+
+The composition-root duck-type check was **always true** — every `CELLO_ENV` branch returns a real
+`PgDirectoryStore`, there is no stub — and the cast it required erased the one compile-time check that
+would catch a future store swap. Deleted; the writer is passed directly. The module header still
+declared these tables absent — the very comment this unit's own commit message cites as having
+"quietly stopped being true", so shipping without rewriting it would have repeated the failure it
+diagnoses. `tableName: never` erased the `HASH_CHAINED_TABLES` check; restored. Registry order
+contradicted the documented FK order (accounts → profiles); reordered and now asserted, because "inert
+today" stopped being reassuring when `AGENT_PROFILES_SPEC` gained a column one commit earlier.
+
+### The hollow test, and what fixed it
+
+The reviewer named two wrong implementations that passed all five original tests: dropping the
+hex→Buffer conversion, and passing `0` as `chainHashIndex`. Both are silent in production and fatal to
+the chain. The fix is its suggested assertion — `serializeRecord(aeRecord) === serializeRecord(localRecord)`
+— which pins the clause directly: the same logical row must feed the same bytes into the chain on both
+paths. Revert-tested: dropping the conversion turns 3 red, mis-indexing turns 1 red. Previously: zero.
+
+Directory suite 967 green.

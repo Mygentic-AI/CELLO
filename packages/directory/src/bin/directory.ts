@@ -1171,16 +1171,11 @@ try {
       ? {
           identity: { nodeId, sign: (tbs: Uint8Array) => directoryKeyProvider.sign(tbs) },
           // The chain writer is the SAME PgDirectoryStore the node writes through, so a replicated
-          // notarization extends this node's one canonical chain rather than a second one. Guarded by
-          // capability, not by env: a stub store (local mode) has no insertWithChain, and passing
-          // undefined makes PgAeStore refuse the chained tables loudly instead of writing them
-          // unchained.
-          store: new PgAeStore(
-            pgPool,
-            typeof (store as { insertWithChain?: unknown }).insertWithChain === "function"
-              ? (store as unknown as ConstructorParameters<typeof PgAeStore>[1])
-              : undefined,
-          ),
+          // notarization extends this node's one canonical chain rather than a second one. Passed
+          // directly: every CELLO_ENV branch above resolves to a real PgDirectoryStore, so the
+          // capability check that used to guard this could never be false — and the cast it needed
+          // erased the one compile-time check that would catch a future store swap.
+          store: new PgAeStore(pgPool, store, logger),
           manifest: () => directoryManifestStore.getVerifiedManifest(),
           intervalMs: aeIntervalMs,
         }

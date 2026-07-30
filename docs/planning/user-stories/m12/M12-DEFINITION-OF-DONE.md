@@ -161,19 +161,27 @@ description: >
   columns, both opaque. No email, no phone, no recoverable identifier: consistent with "the directory
   is hash-only; the portal holds the recoverable value". It does widen who holds the stub-hash set from
   one node to N, which is a real change and not nothing — a stub hash is still a confirmation oracle
-  for a guessed phone number. Accepted because the alternative is worse: an account row that exists on
-  one node only makes `agent_profiles.account_id` a dangling FK everywhere else, and account-scoped
-  operations then depend on which directory you reached — the exact per-node divergence anti-entropy
-  exists to remove. Revisit if the account table ever gains a recoverable field; that would flip it.
+  for a guessed phone number.
+  **Corrected reason (reviewer F7):** I first justified this as preventing a dangling
+  `agent_profiles.account_id` FK on other nodes. That is NOT the operative reason — `account_id` is not
+  in the profiles sync set, so it does not travel today and cannot dangle. The real reason is
+  forward-looking and narrower: the account is the unit account-scoped operations resolve against
+  (`getAgentsByAccount`, the portal's `/internal/agent-write` seam), so an account existing on one node
+  only makes those answers depend on which directory you reached — the per-node divergence anti-entropy
+  exists to remove. It also unblocks replicating `account_id` itself later without a second decision.
+  Revisit if the table ever gains a recoverable field; that would flip it.
   **Done means:** both tables serve and apply through anti-entropy; a receipt written on one node is
   readable from another with a locally-computed chain; the `m12-inv-shares-local.test.ts` assertion
   that pins the pending set to exactly `{seal_notarizations, user_accounts}` is updated in the same
   commit (it is designed to go red here); `agent_key_shares` is still refused. — 🟡 **BUILT, NOT YET
   PROVEN LIVE** (→ Entry 64). Both tables are in the registry; apply routes through the injected
   canonical `insertWithChain` so a replicated row extends THIS node's chain; a store built without the
-  writer REFUSES the chained tables rather than writing them unchained; wire-input hash recomputation
-  is preserved on the new path; duplicates are treated as convergence (23505), not failure. The
-  registry/spec assertion is now strict equality in BOTH directions. Directory suite 962 green.
+  writer SKIPS the chained tables with an ERROR rather than writing them unchained OR aborting the
+  round; wire-input hash recomputation is preserved on the new path; a duplicate on the NATURAL KEY is
+  convergence while one on any other unique constraint is reported as a fork. The registry/spec
+  assertion is strict equality in BOTH directions, and registry ORDER is pinned FK-safe
+  (accounts → profiles). **Reviewed; 8 findings, all closed (Entry 66)** — including a silent hex
+  truncation that would have let the chain certify a corrupt receipt. Directory suite 967 green.
   **Owed:** a live cross-node proof (a receipt written on one node readable from another), which needs
   a deploy — parked with the kill-switch fix. The `user_accounts` / `phone_stub_hash` privacy question
   is settled below.

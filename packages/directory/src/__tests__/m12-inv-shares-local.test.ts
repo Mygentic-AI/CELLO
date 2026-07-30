@@ -62,9 +62,9 @@ describe("DOD-INV-SHARES-LOCAL: the share table is unreachable through anti-entr
     // a deliberate decision + an audit of whether it may leave the node. A denylist would let the
     // next table in silently and only catch the one name someone thought to forbid.
     expect(store.tierATables()).toEqual([
+      "user_accounts",
       "agent_profiles",
       "agent_revocations",
-      "user_accounts",
       "seal_notarizations",
     ]);
     expect(store.tierBTables()).toEqual(["agent_suspensions", "agent_presence"]);
