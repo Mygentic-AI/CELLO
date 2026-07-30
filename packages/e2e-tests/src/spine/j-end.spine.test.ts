@@ -752,5 +752,18 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     const coOwned = inbound.trust_signals!.find((x) => x.signal_hash === coHash);
     expect(coOwned, `the co-owned endorsement reached Bob: ${JSON.stringify(inbound.trust_signals)}`).toBeTruthy();
     expect(String(coOwned!.claim.statement), "Charlie's words survive intact").toContain("same fleet");
+
+    // ── CURRENCY IS SCOPED TO WHAT WAS PRESENTED NOW ──────────────────────────────────────────────
+    // Alice presented this endorsement in THIS session, so the directory checked its status while
+    // establishing the session and Bob is told so. The assertion matters because the projection
+    // lists every signal ever received from a contact: a carried-over copy from an earlier session
+    // was, until this was fixed, handed to the LLM under a sentence claiming its status had just
+    // been confirmed — so an endorsement revoked last week kept vouching indefinitely.
+    const presented = coOwned as unknown as { currency_checked_this_session?: boolean };
+    expect(presented.currency_checked_this_session, "presented in this session → the directory checked it").toBe(true);
+    // And the attestation must SCOPE the claim rather than asserting it over everything listed.
+    const att = String((inbound as unknown as { directory_attestation?: string }).directory_attestation);
+    expect(att, "scoped to this session").toMatch(/only the signals presented in THIS session/i);
+    expect(att, "and points at the per-signal flag").toMatch(/currency_checked_this_session/);
   }, 180_000);
 });
