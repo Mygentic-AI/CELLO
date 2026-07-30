@@ -195,7 +195,11 @@ if (dirEndpointsRaw) {
       });
       process.exit(1);
     }
-    if (!addr.includes("/p2p/")) {
+    // A NON-EMPTY peer id, not merely the presence of "/p2p/". `…/ws/p2p/` passed the substring test
+    // and then failed at seal time as relay.seal.broker.multiaddr_lacks_peer_id — turning a
+    // configuration typo into a per-seal fallback hours later instead of a startup fatal, which is
+    // what the surrounding block exists to do.
+    if (!/\/p2p\/[A-Za-z0-9]+$/.test(addr)) {
       logRelayServiceStartFailed(logger, {
         reason: `CELLO_DIRECTORY_ENDPOINTS multiaddr must carry a /p2p/ peer id: ${addr.slice(0, 60)}…`,
         region: awsRegion,

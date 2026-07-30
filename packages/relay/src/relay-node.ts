@@ -601,11 +601,6 @@ export class CelloRelayNode {
     if (!signer) {
       return { ok: false, reason: "directory_signature_invalid" };
     }
-    this.#sessionBrokerPubkey.set(
-      Buffer.from(assignment.session_id).toString("hex"),
-      Buffer.from(signer).toString("hex"),
-    );
-
     const genesisRoot = computeGenesisPrevRoot(
       assignment.participant_a,
       assignment.participant_b,
@@ -618,6 +613,11 @@ export class CelloRelayNode {
     // M7-WIRE-001 AC-008: bind session Peer IDs when provided by directory.
     // Stored privately — never exposed via public API (SI-003).
     const sessionKey = Buffer.from(assignment.session_id).toString("hex");
+
+    // DOD-SEAL-BROKER-1: the brokering directory, recorded AFTER recordSession succeeded. Setting it
+    // above the `session_already_exists` return let a re-presented assignment rewrite the broker for a
+    // session the store had just refused to re-record — writing state for a rejected operation.
+    this.#sessionBrokerPubkey.set(sessionKey, Buffer.from(signer).toString("hex"));
     if (assignment.initiator_session_peer_id && assignment.counterparty_session_peer_id) {
       this.#sessionPeerIdBindings.set(sessionKey, {
         initiator: assignment.initiator_session_peer_id,
@@ -1364,15 +1364,48 @@ export class CelloRelayNode {
     //
     // Exactly one hop: a second redirect would mean the consortium disagrees about homing, and
     // chasing it risks a loop. Better to reject with the reason than to spin.
+    let adjudicator: "broker" | "configured" | "redirect" = brokerTarget ? "broker" : "configured";
+
+    // ROUTE AROUND AN UNREACHABLE BROKER. Targeting the broker introduced a second way to fail that
+    // the configured-directory path never had: the broker's address can be stale, rotated, or
+    // firewalled. `processSeal` dials only the target it is given and returns the transport error as
+    // `reason` with NO redirect, so without this the seal is rejected outright — one unreachable node
+    // making the system unusable, which the sovereign-node redundancy invariant forbids. Before this
+    // line existed the configured directory would have been asked and would have redirected.
+    //
+    // Any broker failure that carries no redirect earns the retry, rather than only ones that look
+    // transport-shaped: misclassifying a transport error as a protocol rejection costs an available
+    // seal, while the reverse costs one wasted dial. Re-adjudication cannot double-notarize — the
+    // notarization is idempotent on (session_id, seal_type).
+    if (!dirResult.ok && !dirResult.redirect && brokerTarget) {
+      this.#logger.warn("relay.seal.broker.unreachable", {
+        sessionId: truncHex(Buffer.from(sessionId).toString("hex")),
+        brokerMultiaddr: brokerTarget.multiaddr,
+        reason: dirResult.reason,
+        action: "retrying against the configured directory",
+      });
+      dirResult = await this.#directory!.processSeal(sessionId, sealResult.data);
+      adjudicator = "configured";
+    }
+
     if (!dirResult.ok && dirResult.redirect) {
       const { nodeId, peerId, multiaddr } = dirResult.redirect;
       this.#logger.info("relay.seal.redirected", { nodeId, reason: dirResult.reason });
       dirResult = await this.#directory!.processSeal(sessionId, sealResult.data, { peerId, multiaddr });
+      adjudicator = "redirect";
     }
 
     if (dirResult.ok) {
       this.confirmSeal(sessionId);
     } else {
+      // F6: rejectSeal DISCARDS its reason (`_reason`) and sends nothing to the participants, so
+      // without this the only trace of the cause was one stdout line — and both agents simply waited
+      // out the full bilateral window and reported a timeout. The cause dies here otherwise.
+      this.#logger.warn("relay.seal.rejected", {
+        sessionId: truncHex(Buffer.from(sessionId).toString("hex")),
+        reason: dirResult.reason,
+        adjudicator,
+      });
       this.rejectSeal(sessionId, dirResult.reason);
     }
   }
@@ -1380,16 +1413,25 @@ export class CelloRelayNode {
   /**
    * DOD-SEAL-BROKER-1: resolve the directory that brokered a session to something dialable.
    *
-   * Returns null when the broker is unknown (assignment recorded before this shipped, or a
-   * directory-presented assignment) or when its address is absent from configuration — the caller
-   * then uses the configured directory, which is the pre-existing behaviour.
+   * Returns null when the broker is unknown (an assignment recorded before this shipped) or when its
+   * address is absent from configuration — the caller then uses the configured directory, which is
+   * the pre-existing behaviour. NOT directory-presented assignments: those route through the same
+   * `recordAssignment()`, so they populate the broker map too.
    *
    * peerId is derived from the multiaddr's trailing /p2p/ segment rather than configured separately,
    * so the two cannot disagree.
    */
   #resolveSessionBroker(sessionIdHex: string): { peerId: string; multiaddr: string } | null {
     const brokerPubkey = this.#sessionBrokerPubkey.get(sessionIdHex);
-    if (!brokerPubkey) return null;
+    if (!brokerPubkey) {
+      // Logged for symmetry with the other two null branches — a silent null here is
+      // indistinguishable from "no broker selection in this build" when reading a seal trace.
+      this.#logger.debug("relay.seal.broker.unrecorded", {
+        sessionId: truncHex(sessionIdHex),
+        reason: "no broker recorded for this session — using the configured directory",
+      });
+      return null;
+    }
     const multiaddr = this.#directoryEndpointsByPubkey[brokerPubkey];
     if (!multiaddr) {
       this.#logger.warn("relay.seal.broker.address_unknown", {
@@ -1539,6 +1581,12 @@ export class CelloRelayNode {
 
     // Remove the bound session Peer IDs (M7-WIRE-001 SI-003).
     this.#sessionPeerIdBindings.delete(sessionIdHex);
+
+    // The brokering directory (DOD-SEAL-BROKER-1). Safe to drop here: the seal path reads it before
+    // confirmSeal/rejectSeal reach cleanup. Without this the relay accumulated one entry per session
+    // for its entire lifetime — and because sessionTrackingEntryCount did not report it, the eight
+    // teardown-parity assertions kept passing while the leak grew.
+    this.#sessionBrokerPubkey.delete(sessionIdHex);
   }
 
   /**
@@ -1551,6 +1599,7 @@ export class CelloRelayNode {
     participantRefs: number;
     hasBinding: boolean;
     hasIdleTimer: boolean;
+    hasBroker: boolean;
   } {
     let participantRefs = 0;
     for (const sessions of this.#participantSessions.values()) {
@@ -1560,6 +1609,7 @@ export class CelloRelayNode {
       participantRefs,
       hasBinding: this.#sessionPeerIdBindings.has(sessionIdHex),
       hasIdleTimer: this.#sessionIdleTimers.has(sessionIdHex),
+      hasBroker: this.#sessionBrokerPubkey.has(sessionIdHex),
     };
   }
 
