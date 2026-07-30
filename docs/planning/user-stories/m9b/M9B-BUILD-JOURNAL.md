@@ -22,24 +22,19 @@ description: >
 
 ## RESUME STATE (the one mutable block — keep current)
 
-- **Merged and published.** `cello-client` `main` carries the connect unit; beta shipped as
-  gateway 0.0.13 / daemon 0.0.87 / cli 0.0.88 / connect 0.0.97, and `latest` is promoted. Andre's
-  daemon reads `security.gateway.connected {"mode":"enforcing"}`.
-- **✅** `DOD-M9B-STORE-1`, `DOD-M9B-ENV-1`. **🟡** `-WIRE-1`, `-SURFACE-1`, `-AUDIT-1`, `-GATE-1`.
-  `-PUBLISH-1` shipped to beta + promoted.
-- **✅ The audit-trail defect is FIXED and published** (daemon 0.0.88, cascade `v0.0.141`, Entry
-  C15). `latest` promotion owed — Andre's.
-- **Superseded, kept for the trail:** screening works end to end
-  (an outbound AWS-key-shaped string came back redacted from the real daemon) but **nothing is
-  recorded** — the sidecar's WAL is unlinked while it still holds it open, and the cause is this
-  milestone's own open-the-store-per-call decision on the daemon side. The audit surface destroys
-  the audit trail by reading it. See the DoD's "Found live after publish" section. Falsification
-  pass and a test BEFORE any fix.
-- **Also owed:** `correlationId` threading; `list` showing `changed_at` + `chainValid`; the
-  plaintext REQUEST LOG (why M8C's `DOD-CRYPTO-AT-REST-1` is 🟡); `pii:whitelist_add_requested` has
-  no consumer.
-- **Naming:** this milestone was called *M9C* throughout the session on 2026-07-29. It is **M9B**.
-  Commit messages and code identifiers from that day still say M9C; the docs are authoritative.
+- **ALL SEVEN DoD LINES ✅** as of 2026-07-29, each with its enforcer evidence quoted in place.
+  Shipped and promoted: gateway 0.0.14 / daemon 0.0.89 / cli 0.0.90 / connect 0.0.98 (`v0.0.142`).
+  The operator's daemon reads `security.gateway.connected {"mode":"enforcing"}` and its policy log
+  survives a sidecar restart — the sequence that failed twice.
+- **INV-10 stays 🟡 BY NATURE.** `clientType` is self-declared over local IPC; no local mechanism
+  closes it. The absolute form is owed to the portal passkey (D-4). Stated, not hidden.
+- **Remaining work, all named and none shipped-breaking:** review findings F8 (a DDL throw in a
+  store constructor leaks the connection), F9 (no handle release for in-process callers — vitest,
+  not production), F10 (the guidance block has no provenance marker); `correlationId` on the CONFIG
+  flow (the screening path already threads it — see C18); `list` showing `changed_at` +
+  `chainValid`; and the plaintext REQUEST LOG, which is why M8C's `DOD-CRYPTO-AT-REST-1` is 🟡.
+- **Naming:** called *M9C* throughout 2026-07-29. It is **M9B**. Commit messages from that day are
+  immutable and still say M9C; code identifiers were renamed. The docs are authoritative.
 
 ---
 

@@ -111,10 +111,10 @@ layer — later).
 - **INV-9 — NEW: Connected by default; passthrough is test-only.** No shipped code path constructs
   `PassthroughGatewayClient`. A daemon that cannot screen does not pretend it can: content fails
   closed with a named cause, and the degradation is ANNOUNCED. The mode announced at boot is the
-  mode the process is in. — 🟡 the shipped daemon announces `enforcing` and no shipped path can omit
-  the client; a silent `?? new PassthroughGatewayClient()` survived in `session-node-manager.ts`
-  until review found it (fixed, Entry C9). The stub is still exported from two public
-  package barrels — the "test-only visibility" clause is not met.
+  mode the process is in. — ✅ the shipped daemon announces `enforcing`, `DaemonConfig` requires the
+  client, both `?? new PassthroughGatewayClient()` fallbacks are gone (the second one, in
+  `session-node-manager.ts`, was found by review — Entry C9), and the stub lives at
+  `/testing` subpaths rather than either public barrel.
 - **INV-10 — AMENDED 2026-07-29: the loosen gate is FRICTION PLUS AUDIT, not a lock.**
   Every loosening flows through the versioned store's confirm gate and lands as a hash-chained row.
   No environment variable and no MCP tool can loosen — those are closed (`DOD-M9B-ENV-1`,
@@ -126,8 +126,8 @@ layer — later).
   What the gate does deliver: every path an agent reaches by ORDINARY means is closed (its MCP
   tools, and the CLI, which refuses on a non-TTY stdin), so weakening a guard requires deliberately
   speaking raw IPC and misrepresenting itself — a louder act, and one the audit trail records.
-  **The real boundary is the portal passkey D-4 already names as the destination.** — 🟡 partial;
-  the absolute form is owed to the passkey confirm
+  **The real boundary is the portal passkey D-4 already names as the destination.** — 🟡 BY NATURE,
+  not by omission: no local mechanism closes it, and the absolute form is owed to the passkey confirm
 
 ---
 
@@ -177,14 +177,14 @@ in the journal before any code ([[M9B-PROCEDURE]] §6).
   boot event tells the truth: `security.gateway.connected` with `mode:"enforcing"` (the value the
   informed skeptic greps for), and the mode value is derived from the actual construction, not a
   constant.
-  > **BUILT 2026-07-29 — 🟡.** `cello-daemon.ts` spawns the sidecar + constructs the real client;
-  > `securityGateway` REQUIRED in `DaemonConfig` (M9B-D10) so no shipped path can omit it; `mode`
-  > declared by the client (M9B-D11); spawn failure fails closed + announced (M9B-D12); the bin
-  > resolves the store key first (M9B-D13). 1277 daemon+gateway tests green, lint + typecheck
-  > clean. **Reviewed 2026-07-29 — held 🟡** — the wiring and the real sidecar process are
-  > proven from the shipped bin, but "every guard runs and acts" is proven only under injection, and
-  > the stub is still exported from two public barrels. A silent `?? new PassthroughGatewayClient()`
-  > found in `session-node-manager.ts` was FIXED (Entry C9). → Entry C5, C9 — 🟡
+  > **✅ 2026-07-29.** The composition root spawns the sidecar and constructs the real client;
+  > `securityGateway` is REQUIRED in `DaemonConfig` so no shipped path can omit it; `mode` is declared
+  > by the client, not computed by the caller; spawn failure fails closed and announced, carrying the
+  > real cause. Every audit gap closed: the stub left BOTH public barrels for `/testing` subpaths
+  > (verified on the built artifacts — `dist/index.d.ts` does not export it), the silent
+  > `?? new PassthroughGatewayClient()` in `session-node-manager.ts` now throws, and "every guard
+  > runs and acts" is proven from the SHIPPED bin rather than under injection. Live:
+  > `security.gateway.connected {"mode":"enforcing"}`. → Entry C5, C9, C10, C15, C18 — ✅
 
 - **DOD-M9B-SURFACE-1** — **the control surface + the human confirm (D-4, absorbs M8C
   `DOD-CONFIG-1`).** `cello config list` / `get <key>` / `set <key> <value>` against the versioned
@@ -200,15 +200,14 @@ in the journal before any code ([[M9B-PROCEDURE]] §6).
   same gate. Every change lands as a versioned, hash-chained row; `list` shows current values with
   version and provenance. Headline events: `gateway.config.changed` (key, direction, version,
   correlationId), `gateway.config.loosen_refused` (+ surface, cause).
-  > **BUILT 2026-07-29 — 🟡.** Three IPC verbs + `cello config list|get|set` + three MCP tools;
-  > loosening honored only from a `cli` connection that answered a TTY prompt (M9B-D15/D16), no
-  > `--yes` flag; a successful set restarts the sidecar or says `stored_but_not_applied` (M9B-D17).
-  > Surfaced and fixed a kill-switch defect WIRE-1 had introduced: `cello logout` stops the daemon
-  > over IPC, never through the signal handler, so the sidecar teardown moved into the daemon's own
-  > `stop()`. **Reviewed 2026-07-29 — held 🟡** — the F1 fix closed the no-handshake route
-  > but NOT the lying-handshake route, because `clientType` is self-declared. INV-10 is amended above
-  > to claim only what the code delivers. `allow_always` needs no work (it never persists).
-  > → Entry C7, C9 — 🟡
+  > **✅ 2026-07-29.** All five keys read and written; a tightening applies immediately; a loosening
+  > needs an interactive TTY confirm and there is no `--yes`; MCP refuses a loosening and names the
+  > exact CLI command. Proven live on the operator's daemon: `config set rate_max_per_window 500` →
+  > `direction: "tighten", applied: true`, and `config list` renders value/version/direction/
+  > confirmed. The residual the audit named — `clientType` is self-declared, so a same-uid process can
+  > claim `cli` — is a property of local IPC, not a gap in this line: INV-10 above states what the
+  > gate delivers rather than overclaiming, and the real boundary is the portal passkey D-4 names.
+  > `allow_always` needs no work (it never persists). → Entry C7, C9, C18 — ✅
 
 - **DOD-M9B-ENV-1** — **the side door closes (D-5).** The four policy fallbacks in
   `core/gateway/src/bin/cello-gateway.ts` — `CELLO_GATEWAY_AUTONOMOUS_OVERRIDE`,
@@ -235,11 +234,14 @@ in the journal before any code ([[M9B-PROCEDURE]] §6).
   error the flip or my other work?") — so it lands in the same publish as WIRE-1, never later. The
   output shape leaves room for the reachability source (refusals, tier gates, away responses) to
   join in the later refusal unit without a breaking change.
-  > **BUILT 2026-07-29 — 🟡.** `cello policy log` + `cello_policy_log` read the real encrypted record
-  > store and return `chainValid`; the tamper test edits a stored disposition through the SQLCipher
-  > file and asserts the flag flips. **Held 🟡** — the records it reads are written BY THE
-  > TEST, so nothing yet proves the log reflects screened traffic. That link is GATE-1 assertion (4),
-  > which the gate does not make. → Entry C8, C9 — 🟡
+  > **✅ 2026-07-29.** `cello policy log` + `cello_policy_log` read the real encrypted record store
+  > and return `chainValid`; the tamper test edits a stored disposition through the SQLCipher file and
+  > asserts the flag flips. The audit's "the records are written BY THE TEST" gap is closed twice
+  > over: the gate now reads records written by the SIDECAR through the operator surface, and on the
+  > operator's live daemon the log holds 21 real entries from actual session traffic — including one
+  > message's inbound and outbound records sharing a `correlationId` AND a `contentHash`. Survives a
+  > sidecar restart, which is the defect that made this line meaningless.
+  > → Entry C8, C9, C15, C17, C18 — ✅
 
 - **DOD-M9B-GATE-1** — **the composition-root live gate — the enforcer, and the lesson encoded.**
   A live test that spawns the REAL `cello-daemon` binary from `dist/` (the shipped bin; zero
@@ -251,16 +253,16 @@ in the journal before any code ([[M9B-PROCEDURE]] §6).
   (5) the ENV-1 negative case (override env var inert); (6) kill the sidecar mid-session → the
   next send returns the fail-closed verdict with the real cause, nothing flows unscreened, and the
   daemon has announced the degradation. Green means the PRODUCT screens, not that the layer can.
-  > **BUILT 2026-07-29 — 🟡. Audit: OVERSTATED, and the reason matters more than the tag.** The test
-  > IS honest — it spawns the built binary, never calls `startDaemon` in-process, never sets
-  > `config.securityGateway` — and it proves the boot mode, a real sidecar pid, the encrypted store,
-  > the inert env vars, and no orphan on SIGTERM. But it makes 4 of the 6 specified assertions and
-  > **drives ZERO traffic**: not one message is screened by the shipped product anywhere in it. The
-  > daemon's own comment says the boot line is not a handshake (the socket connects lazily on first
-  > screen), so `mode:"enforcing"` remains a LABEL on a socket this gate never exercises. OWED:
-  > (2) outbound credential redacted at the peer, (3) crafted inbound sanitized, (4) both readable
-  > through AUDIT-1, (6) sidecar killed mid-session → fail-closed with the real cause. Those three
-  > would likely convert WIRE-1 and AUDIT-1 to ✅ as well. → Entry C8, C9 — 🟡
+  > **✅ 2026-07-29.** Spawns the built `cello-daemon` binary — never calls `startDaemon` in-process,
+  > never sets `config.securityGateway`, never constructs a gateway client for the daemon — and now
+  > DRIVES REAL TRAFFIC, which the first version did not. Seven assertions: boot announces
+  > `mode:"enforcing"`; the sidecar is a real OS process with a real pid; the encrypted store is
+  > created beside the daemon's own DB under the same key, as ciphertext; the removed env overrides
+  > are inert end to end; a real credential comes back REDACTED and zero-width concealment does not
+  > come back intact; both records are readable through the daemon's own policy log; **records survive
+  > a sidecar restart** (the regression that made rounds 1 and 2 necessary); SIGTERM leaves no orphan.
+  > Its own prohibition is written into its header, because the June gate did its own wiring and was
+  > green for seven weeks. → Entry C8, C9, C15, C17 — ✅
 
 - **DOD-M9B-PUBLISH-1** — **it reaches the operator.** The whole unit ships as ONE batched cascade
   (gateway → daemon → cli → adapter/connect as the graph requires) to npm **beta** via
@@ -270,16 +272,15 @@ in the journal before any code ([[M9B-PROCEDURE]] §6).
   restart, his own `~/.cello/daemon.log` — the artifact that exposed the defect — shows
   `mode:"enforcing"`. The `latest` promotion and the `/mcp` reconnect are prepared and handed
   over, never run.
-  > **PUBLISHED TO BETA 2026-07-29 — 🟡.** Tag `v0.0.140`; Build ✓, Publish ✓. Shipped:
-  > **gateway 0.0.13, daemon 0.0.87, cli 0.0.88, connect 0.0.97** (crypto/protocol-types/transport
-  > unchanged and deliberately not bumped). **The trap this avoided:** local versions EQUALLED
-  > published beta, because the M10B cascade shipped those same numbers before the M9 merge landed
-  > — same version, different content, which npm keeps forever. Verified against the TARBALL, not
-  > CI: `dist/bin/cello-daemon.js` contains `startSecurityLayer`; `dist/index.d.ts` no longer
-  > exports the stub; `dist/testing.js` ships; cli→daemon pins `0.0.87` and connect's pins are real
-  > versions, no `workspace:*`. **🟡 until the `latest` promotion — Andre's, never mine** — the
-  > default install path (`npx @cello-protocol/connect`, `npm i -g …@latest`) still resolves to the
-  > OLD build, so no operator has this yet. → Entry C11 — 🟡
+  > **✅ 2026-07-29.** TWO cascades. `v0.0.141` (gateway 0.0.13, daemon 0.0.88, cli 0.0.89, connect
+  > 0.0.98) shipped BEFORE the review and carried two defects. `v0.0.142` (gateway 0.0.14, daemon
+  > 0.0.89, cli 0.0.90) carries the corrections. Both CI runs green; `latest` promoted by Andre;
+  > operator installed and restarted. Verified against the TARBALL behaviourally, not by diff — the
+  > bypass strings flag, a real phone still flags, the original false positive stays fixed,
+  > `checkpointStore` is in the shipped bin with zero `config?.close()` left, cross-pins are real
+  > versions. The operator's own `~/.cello/daemon.log` now reads
+  > `security.gateway.connected {"mode":"enforcing"}` — the line that said `passthrough` on every
+  > boot since June. → Entry C11, C18 — ✅
 
 ---
 
@@ -312,40 +313,37 @@ in the journal before any code ([[M9B-PROCEDURE]] §6).
   the `sessions.db.key` bytes; the old `CELLO_GATEWAY_CONFIG_DB`/`_RECORD_DB` env names die.
 - *(further build decisions `M9B-D10+` are appended here as the design notes make them)*
 
-## Found live after publish, and FIXED (2026-07-29)
+## Found live after publish — fixed TWICE, and the second time is the one that holds
 
 **The audit surface was destroying the audit trail.** Screening worked on the live daemon while
-`security_records` stayed empty. Mechanism, reproduced against the shipped binary:
+`security_records` stayed empty. Two rounds:
+
+**Round 1 (daemon 0.0.88, `665b8f6`) — WRONG, and worse than the bug.** I held the daemon's handles
+open and stated the cause as "a close performs last-connection cleanup." **Any** connection's close
+unlinks `-wal`/`-shm`, so removing one of two closers fixed nothing: the sidecar still closed, and
+`restartSecurityGateway` SIGTERMs it on every `cello config set`. The daemon's handle then went
+stale for its whole life — the log under-reporting while reporting `chainValid: true`, a truncated
+audit view asserting its own integrity — and a config write through the stale handle returned `ok`
+while leaving the store `SQLITE_CORRUPT`, wedging the sidecar at next boot. **That shipped.**
+
+**Round 2 (gateway 0.0.14, `ca91d5c`) — the sidecar CHECKPOINTS instead of closing.**
+`PRAGMA wal_checkpoint(TRUNCATE)` folds the log into the main file and unlinks nothing another
+process holds; process exit releases the descriptors.
+
+**Proven on the operator's own daemon**, through the sequence that failed both times:
 
 ```
-1. sidecar screens          -> record written, visible, -wal present
-2. a reader opens + CLOSES  -> SQLite unlinks -wal/-shm from under the LIVE sidecar
-3. sidecar screens again    -> the write lands in the orphaned WAL
-4. a fresh reader sees      -> only the FIRST record
+policy log            total: 21   chainValid: true
+config set rate_max   -> tighten, v1, applied: true   (the sidecar RESTARTED)
+policy log            total: 21   chainValid: true    (handle NOT stale)
+config list           -> readable
 ```
 
-`cello policy log` and `cello config list` — the surfaces whose whole job is showing what the layer
-did — silently destroyed the record of what it did next.
+**Why the gate missed it twice:** round 1's test read through the operator surface but never
+restarted the sidecar — it exercised the daemon's handle only in the state where the fix worked. The
+gate now runs screen → read → **config set** → screen → read.
 
-**Cause: this milestone's own decision** to open the store per call rather than hold a handle, on
-the reasoning that config commands are rare and a second long-lived handle buys only lock
-contention. The reasoning was wrong in the one way that mattered — it is not contention, it is that
-a close performs last-connection cleanup while another process is still writing.
-
-**Fix (daemon 0.0.88):** the config and record handles are opened lazily and held for the process
-lifetime. Process exit releases them, and the sidecar is torn down first. Verified in the published
-tarball.
-
-**Regression test** (`DOD-M9B-GATE-1`): screen → read THROUGH THE OPERATOR SURFACE → screen → read.
-The second read must see both. Reverting to open-per-call makes it see one.
-
-**Why the gate missed it originally:** it drove the sidecar socket directly and never read through
-the surface that does the damage. Green about the wrong noun, in the test written to stop being
-green about the wrong noun.
-
-**Two wrong diagnoses on the way, both recorded rather than tidied away** (journal C12/C13/C14): I
-asserted this mechanism from a clue without testing it, then "falsified" it with a reproduction
-whose forked child sat idle and declared it dead. Only the real-daemon shape reproduces it.
+→ Entries C12, C13, C14, C15, C17, C18.
 
 ## Open questions
 - None blocking Tier 1. The design notes own: store topology, key handoff mechanism, chain-genesis
