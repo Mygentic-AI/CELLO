@@ -34,202 +34,39 @@ description: >
 
 ---
 
-## Tier I — Invariants (must hold in every phase, every line)
+## Tier I — Invariants (properties, NOT deliverables — no status tags)
 
-- **DOD-INV-SOVEREIGN** [all] — no single node can complete a threshold ceremony alone; no
-  privileged node exists in any topology, sync, or deploy decision; no provider-specific
-  networking or hardcoded endpoint enters protocol code; a down node is routed around, never
-  fatal. — ✅ **HELD ACROSS THE MILESTONE, per clause** (→ Entry 65b). Judged from evidence, not
-  by grep — this invariant is cross-cutting by nature.
-  (a) *No node completes a ceremony alone:* `T = majority(validators)` from the single derivation in
-  `dkg-topology.ts`, and T distinct FROST identifiers are required — now enforced twice, at the
-  manifest (`duplicateNodeIds`) and at round 1 in the client, where the identifiers actually in play
-  are first visible. The one claimed counter-example this session (a duplicate nodeId collapsing the
-  threshold) was FALSE and is retracted in Entry 62: the arithmetic runs the other way.
-  (b) *No privileged node:* anti-entropy is peer-to-peer with no coordinator; the seal's adjudicator
-  is now chosen per session BY SIGNATURE (`DOD-SEAL-BROKER-1`) rather than by a deploy-time constant —
-  this milestone REMOVED the one privileged-node pattern that existed.
-  (c) *No hardcoded endpoint / provider-specific networking in protocol code:* the relay carries
-  directory addresses as env-only config with no directory import (reviewer-verified); the directory
-  derives peers from the signed manifest. Node addresses live in Terraform, never in source.
-  (d) *A down node is routed around:* quorum registration (M8B) registers among the AVAILABLE
-  directories; the client fails over on a primary absent from declared manifest membership; and this
-  session FIXED the one regression against this clause — an unreachable brokering directory had begun
-  killing seals outright instead of falling back (F1).
-  **Caveat kept deliberately:** (d) is proven for the paths above, NOT yet for a full-region outage —
-  that is `DOD-OUTAGE-CLAIM-1` (P3) and remains unproven.
-- **DOD-INV-THRESHOLD** [trustless-cello, cello-client] — `T = majority(validators)` everywhere.
-  `consortiumNodeCount` and every threshold/DKG/kill-switch derivation counts **validator-role
-  nodes only**; replicas never enter the arithmetic. All-N / T=N never appears (settled
-  2026-07-04). — ✅ **SINGLE SOURCE, BOTH REPOS** (→ Entry 61). Exactly one derivation exists:
-  `dkg-topology.ts` (the `dkgThreshold` line), covered by `dkg-topology.test.ts` (10/10). A repo-wide grep for a second
-  majority/threshold computation in `packages/directory/src` and `packages/relay/src` returns only
-  that line plus prose comments. Both repos filter through the SAME `validatorNodes()` in
-  `@cello-protocol/protocol-types` — directory via `dkg-topology.ts`, client via
-  `register-handler.ts:139` — so a replica cannot enter the arithmetic on either side.
-- **DOD-INV-SHARES-LOCAL** [trustless-cello] — `agent_key_shares` (or successor) appears in NO
-  sync set, NO anti-entropy exchange, and NO off-node artifact except the node's own encrypted
-  backup. A share never transits between nodes by any mechanism. — ✅ **ENFORCED MECHANICALLY**
-  by `m12-inv-shares-local.test.ts` (11/11), → Entry 60. The defense is that every wire-reachable
-  store method resolves its peer-supplied table name through a CLOSED registry that throws on
-  anything it does not know — necessary because `planRound` deliberately pulls tables it does not
-  track (`ae-round.ts:63-70`), so the dangerous frame is a peer simply asking
-  `ae_pull_a { table: "agent_key_shares" }`. All 8 wire-reachable entry points are asserted to
-  refuse it **before touching the database** (the pool throws "POOL REACHED" if reached, so a
-  refusal that came too late fails red). Revert-tested: injecting the share table into the registry
-  turns 5 tests red, `serveTierA` failing with POOL REACHED — the leak surfacing as a red test.
-  Refusal is generic (a renamed share table is still refused), and no AE module names the table or
-  its ciphertext column. Off-node backup carve-out: the dump carries KMS-wrapped `encrypted_share`
-  ciphertext, and `pg-backup-to-gcs.test.ts` covers it.
-- **DOD-INV-KILL-SWITCH** [trustless-cello] — suspension state fails CLOSED and converges
-  suspended-wins: a pause reaches every up node despite partition and restart; an un-suspension
-  requires verifiably newer authenticated state; a tie resolves suspended. A paused agent sealing
-  because an UP node lacked the state is a critical finding. — 🟡 PROVEN LOCALLY, NOT ON THE FLEET
-  **Proven** by `j-antientropy.spine.test.ts` against three real directory PROCESSES with a real
-  partition (5/5 green, 2026-07-29): "a PAUSE written while a node is partitioned converges to it on
-  heal (Tier-B)" and "a burn written on ONE node converges to the others and stays burned". That is
-  the convergence and monotonicity half, on the real merge code.
-  **Owed:** the same exercise on the live GCP fleet. Blocked on a practical detail, not a design
-  one: `/internal/agent-write` is the portal's account-scoped seam and requires `accountId` +
-  `agentId`, which capability-minted test agents do not have. Either mint an agent through the
-  portal path or write the suspension directly to one node's `agent_suspensions` (needs VPC access —
-  the IAP SSH rule exists, Cloud SQL is behind PSC). The invariant most worth checking live is the
-  last clause: **a paused agent must not be able to seal via a node that lacks the state.**
-- **DOD-INV-NODEID** [all] — every node is born `<cloud>-<region>` (e.g. `aws-use1`, `gcp-usc1`)
-  and is never renamed; no two manifest entries ever hold the same FROST identifier in one
-  manifest version. — 🟠 **PARTIAL — and the Entry 61 claim was WRONG (corrected in Entry 62).**
-  **Clause 3 (identifier uniqueness): enforced, and it already was.** Three checks predate this unit:
-  `sign-gcp-consortium-manifest.mjs:84-86` refuses to SIGN a roster with a duplicate nodeId;
-  `file-directory-manifest-store.ts:214-228` (§1c) refuses at the VERIFY boundary over `nodeId`,
-  `pubkey` AND `peerId` across ALL entries — strictly stronger than what this unit added; and
-  `@noble/curves` `DKG.round2` throws `Duplicate id=…`, so no key with colliding identifiers can be
-  produced at all. Because the verify anchor is mandatory whenever a manifest path is set, the new
-  `computeDkgTopology` guard is **unreachable in production** — it closes the unverified/test-mode gap
-  and is defense-in-depth at the arithmetic site. Keep it; do not claim it closed a live hole.
-  **I had the threshold arithmetic INVERTED.** `majority(D) ≤ majority(E)` for `D ≤ E`, so an inflated
-  entry count derived an equal-or-STRICTER threshold, never a weaker one — and for the 3-entry/1-dup
-  case `majority(3) = majority(2) = 2`, i.e. no change at all. T=2 still requires two DISTINCT
-  identifiers, so a single node could never satisfy it: **DOD-INV-SOVEREIGN was never at risk.** The
-  real pre-fix defect is inflated advertised redundancy (`signers.max = 4`, `participants: 4` persisted
-  on the share when only 3 distinct holders exist — you believe you can lose two nodes and can lose
-  one), and the ceremony fails closed regardless.
-  **Clause 1 is now ENFORCED (Entry 67).** `validateNodeId` refuses a NODE_ID that names no cloud,
-  names a cloud the node is not running on, or is a bare region on a non-AWS node — the likeliest
-  copy-paste, because it is the CORRECT value for the AWS node next door. The one documented legacy
-  form (an AWS node whose id is exactly its own region) is kept, pinned to that node's own region so it
-  cannot become a general escape hatch, and logged as `directory.node_id.legacy_form` rather than
-  silently accepted. Revert-tested: restoring presence-only turns 5 red. Falsified against the live
-  fleet before shipping — a startup fatal that rejected `gcp-usc1`/`gcp-euw1`/`gcp-use1` would
-  crash-loop every node, so all three were run through the compiled validator with the exact
-  `CELLO_CLOUD=gcp` the cloud-init sets. Directory suite 974 green.
-  **Clause 2 ("never renamed") is still NOT enforced** — no guard compares the configured NODE_ID
-  against what this node's persisted state was written under. Signing reads the identifier from the
-  STORED share, so a rename does not invalidate existing shares; it breaks the AE handshake loudly with
-  `manifest_pubkey_mismatch`. Parked with full reasoning below. (Consequence is milder than this line implied — signing
-  reads the identifier from the STORED share, not a re-derivation, so a rename does not invalidate
-  existing shares; it breaks the AE handshake loudly with `manifest_pubkey_mismatch`.)
-  **The gap that actually matters is still open:** every check above compares manifest nodeId
-  *strings*, but a node's FROST identifier comes from its OWN deployed `NODE_ID`
-  (`frost-handler.ts:758`). Two entries with DISTINCT nodeIds whose boxes are deployed with the SAME
-  `NODE_ID` do collide, and pass all four checks. The enforcing check is in `runNetworkDkg` after
-  round 1: assert the round-1 identifiers are distinct AND that each equals
-  `Identifier.derive(roster[i].nodeId)` — both inputs are already in hand.
-  **Both owed items now closed (Entry 63).** The handler-level test exists
-  (`registration.test.ts` → "DOD-INV-NODEID: duplicate validator nodeIds → register rejected, cause
-  named in the log"), asserting the `register_error` frame, no profile created, and
-  `directory.dkg.duplicate_node_ids` carrying `duplicateNodeIds`, `distinctValidators` and
-  `manifestVersion`. Revert-tested: removing the 17-line guard turns it red, where previously the
-  whole topology suite stayed green. And the round-1 identifier check shipped in cello-client
-  (`network-directory-node.ts`): after round 1, colliding identifiers are refused with a message
-  naming the likely cause (two nodes deployed under one `NODE_ID`) — the first point where the
-  identifiers ACTUALLY in play are visible, rather than manifest strings that cannot see the
-  collapse. Daemon suite 1121/1121; directory suite 957.
-- **DOD-AE-CHAINED-TABLES-1** [trustless-cello] — **the two chain-backed Tier-A tables actually
-  replicate.** `TIER_A_SPECS` declares four tables; `pg-ae-store.ts`'s registry implements two.
-  `seal_notarizations` and `user_accounts` are declared-but-absent — deliberately, rather than
-  advertised-but-unappliable, because applying them needs the canonical chain writer. Consequence
-  today: **a seal receipt exists only on the directory that recorded it.** For a notary product that
-  is the durability gap that matters — lose that one node and the proof of those conversations is
-  gone with it (its own backups aside). It is also why the seal-receipt fetch was deleted rather than
-  fixed (Entry 60).
-  **Design settled during Entry 63 investigation — do not re-derive:**
-  (a) `insertWithChain` is ALREADY a public method on `PgDirectoryStore` taking an optional external
-  client, so NO extraction is needed — the "Scope" comment's premise no longer holds. Inject a narrow
-  `{ insertWithChain(...) }` writer into `PgAeStore` rather than coupling it to the whole store.
-  (b) `applyTierA`'s generic path (plain INSERT + ON CONFLICT DO NOTHING) cannot serve these two;
-  give `TierAPg` an optional per-table apply hook, mirroring how `TierBPg` already carries its own
-  `insert`/`update`.
-  (c) Chain columns are node-local and written locally on apply — a node recomputes `prev_hash`/
-  `chain_hash` against ITS OWN tip, never copying the origin's. `encodeTierARecord` already hashes
-  only `immutableColumns`, so the record hash is chain-free and converges. No spec change needed.
-  (d) Idempotency is already correct: `recordNotarization` catches SQLSTATE 23505 generically (not by
-  constraint name) and does not rethrow, and V31's `UNIQUE (session_id, seal_type)` matches the spec's
-  natural key exactly — so a bilateral row CAN land on a node already holding the unilateral one.
-  (e) `supersedes_notarization_id` is a node-local BIGSERIAL FK and must stay out of the record; a
-  node can re-derive it locally from `(session_id, seal_type)` if it wants the pointer.
-  **Settled (Entry 64):** `user_accounts` replicates exactly `account_id` + `phone_stub_hash` — two
-  columns, both opaque. No email, no phone, no recoverable identifier: consistent with "the directory
-  is hash-only; the portal holds the recoverable value". It does widen who holds the stub-hash set from
-  one node to N, which is a real change and not nothing — a stub hash is still a confirmation oracle
-  for a guessed phone number.
-  **Corrected reason (reviewer F7):** I first justified this as preventing a dangling
-  `agent_profiles.account_id` FK on other nodes. That is NOT the operative reason — `account_id` is not
-  in the profiles sync set, so it does not travel today and cannot dangle. The real reason is
-  forward-looking and narrower: the account is the unit account-scoped operations resolve against
-  (`getAgentsByAccount`, the portal's `/internal/agent-write` seam), so an account existing on one node
-  only makes those answers depend on which directory you reached — the per-node divergence anti-entropy
-  exists to remove. It also unblocks replicating `account_id` itself later without a second decision.
-  Revisit if the table ever gains a recoverable field; that would flip it.
-  **Done means:** both tables serve and apply through anti-entropy; a receipt written on one node is
-  readable from another with a locally-computed chain; the `m12-inv-shares-local.test.ts` assertion
-  that pins the pending set to exactly `{seal_notarizations, user_accounts}` is updated in the same
-  commit (it is designed to go red here); `agent_key_shares` is still refused. — 🟡 **BUILT, NOT YET
-  PROVEN LIVE** (→ Entry 64). Both tables are in the registry; apply routes through the injected
-  canonical `insertWithChain` so a replicated row extends THIS node's chain; a store built without the
-  writer SKIPS the chained tables with an ERROR rather than writing them unchained OR aborting the
-  round; wire-input hash recomputation is preserved on the new path; a duplicate on the NATURAL KEY is
-  convergence while one on any other unique constraint is reported as a fork. The registry/spec
-  assertion is strict equality in BOTH directions, and registry ORDER is pinned FK-safe
-  (accounts → profiles). **Reviewed; 8 findings, all closed (Entry 66)** — including a silent hex
-  truncation that would have let the chain certify a corrupt receipt. Directory suite 967 green.
-  **Owed:** a live cross-node proof (a receipt written on one node readable from another), which needs
-  a deploy — parked with the kill-switch fix. The `user_accounts` / `phone_stub_hash` privacy question
-  is settled below.
+> **CHANGED 2026-07-30. These nine carried ❌ tags and should never have.** An invariant is a property
+> every unit must not violate — you never *build* one, so it cannot be a deliverable, and a permanent
+> ❌ on a property reads as unfinished work no unit can ever finish. They are **enforced per-unit as
+> reviewer lenses**: [[M12-PROCEDURE]] §2b, where every one of the nine now has a lens that fires on
+> every diff. Stated once here, untagged, because they are the yardstick's fine print.
 
-- **DOD-INV-NO-VPN** [trustless-cello] — no VPN, VPC peering, Private Service Access consumer, or
-  any cross-cloud network tunnel is created. Directory sync happens only over the authenticated
-  libp2p transport. Nothing external ever connects to a node's Postgres. — ✅ **VERIFIED
-  (→ Entry 61).** Zero `google_compute_vpn_*`, `google_compute_router`, `google_compute_network_peering`,
-  `service_networking`, or `google_compute_interconnect` resources anywhere in `infra/terraform/`.
-- **DOD-INV-RELAY-EXTRACTABLE** [trustless-cello] — the relay gains no consortium state, no
-  database, no shared internal config package, no directory import; config stays env-only. It
-  remains a standalone shippable artifact (future enterprise private relay). — ✅ **VERIFIED, and
-  re-checked against the one diff that threatened it** (→ Entry 60/61). Zero directory imports —
-  `DirectoryAdapter` is structurally typed precisely to avoid one (`relay-node.ts:173`). Deps are
-  only `crypto`, `interfaces`, `protocol-types`, `transport` (contracts, not config). The unit
-  reviewer passed this lens explicitly on DOD-SEAL-BROKER-1: `CELLO_DIRECTORY_ENDPOINTS` is env-only,
-  parsed in `bin/relay.ts`, held as a plain `Record<string,string>`. An enterprise private relay
-  leaves it unset and gets the pre-existing behaviour.
-- **DOD-INV-IAC** [trustless-cello] — every GCP and AWS resource exists in IaC; any manual
-  emergency fix lands in IaC + the STATE file (`infra/STATE.md` / `infra/GCP-STATE.md`,
-  updated immediately per action, never batched) before its unit closes. Region-expansion test:
-  a new region with zero manual steps. — 🟠 **GCP AUDITED CLEAN; AWS NOT AUDITED** (→ Entry 65).
-  Live inventory vs `terraform state`, per resource class: addresses **8/8**, firewall rules **7/7**,
-  Cloud SQL instances **3/3**. VM instances are MIG-created and correctly absent from state (Terraform
-  owns the MIG, not its instances). Secrets: 19 managed, 23 live — and all **4** unmanaged ones are
-  documented, not drift: `cello-gcp-{usc1,euw1,use1}-preauth-issuer-key` are the per-node issuers
-  superseded by the consortium-wide key and dropped from Terraform management rather than destroyed
-  (`prevent_destroy` blocked the delete, correctly), and `cello-github-github-oauthtoken-c3e205` is
-  the Cloud Build GitHub connection's own token, service-created. Both are already recorded in
-  `infra/GCP-STATE.md`.
-  **AWS is deliberately NOT audited here:** the environment is hibernated, missing resources during
-  hibernate are intentional, and touching hibernated infra corrupts the inventory the wake script
-  depends on. It is also slated for teardown (P4), so the audit belongs there, against a live
-  environment, not now.
-- **DOD-INV-NO-SAAS / DOD-INV-DOMAIN** [all] — no paid SaaS; all URLs are
-  `*.cello.mygentic.ai`. — ✅ **VERIFIED (→ Entry 61).** A URL sweep of `infra/terraform/*.tf` and
-  the directory + relay sources returns nothing outside `*.cello.mygentic.ai` and infrastructure
-  hosts (googleapis, amazonaws, loopback) — no third-party SaaS endpoint anywhere.
+- **SOVEREIGN** [all] — no single node completes a threshold ceremony alone; no privileged node in any
+  topology, sync, or deploy decision; no provider-specific networking or hardcoded endpoint in protocol
+  code; a down node is routed around, never fatal.
+- **THRESHOLD** [trustless-cello, cello-client] — `T = majority(validators)` everywhere.
+  `consortiumNodeCount` and every threshold/DKG/kill-switch derivation counts **validator-role nodes
+  only**; replicas never enter the arithmetic. All-N / T=N never appears (settled 2026-07-04).
+- **SHARES-LOCAL** [trustless-cello] — `agent_key_shares` (or successor) appears in NO sync set, NO
+  anti-entropy exchange, and NO off-node artifact except the node's own encrypted backup. A share never
+  transits between nodes by any mechanism.
+- **KILL-SWITCH** [trustless-cello] — suspension fails CLOSED and converges suspended-wins: a pause
+  reaches every up node despite partition and restart; an un-suspension requires verifiably newer
+  authenticated state; a tie resolves suspended. A paused agent sealing because an UP node lacked the
+  state is a critical finding.
+- **NODEID** [all] — every node is born `<cloud>-<region>` (`aws-use1`, `gcp-usc1`) and is never
+  renamed; no two manifest entries ever hold the same FROST identifier in one manifest version.
+- **NO-VPN** [trustless-cello] — no VPN, VPC peering, Private Service Access consumer, or cross-cloud
+  tunnel. Directory sync happens only over the authenticated libp2p transport. Nothing external ever
+  connects to a node's Postgres.
+- **RELAY-EXTRACTABLE** [trustless-cello] — the relay gains no consortium state, no database, no shared
+  internal config package, no directory import; config stays env-only. It remains a standalone
+  shippable artifact (future enterprise private relay).
+- **IAC** [trustless-cello] — every GCP and AWS resource exists in IaC; any manual emergency fix lands
+  in IaC + the STATE file before its unit closes. Region-expansion test: a new region with zero manual
+  steps. (Inventory discipline — `terraform plan` is the GCP inventory, [[M12-PROCEDURE]] §5.)
+- **NO-SAAS / DOMAIN** [all] — no paid SaaS; all URLs are `*.cello.mygentic.ai`.
 
 ---
 
@@ -293,21 +130,46 @@ description: >
   claims verified), 3 blocking amendments applied (total-order suspension merge; honest
   burn/trust-model + M12-P6; retirement list gains replication creds/params/5432 path) plus
   6 non-blocking → Entries 8, 9 (see M12-P5, checkpoint scope)
-- **DOD-AE-APPEND-1** [trustless-cello] — append-only tables sync between directories over the
-  authenticated libp2p channel via root-comparison + delta pull; divergence detection is
-  O(compare), transfer is delta-only; peers that fail identity verification are refused. — ✅ all
-  four clauses now earned. **Root-comparison / O(compare):** `ae_state` carries ONE DIGEST per
-  table and nothing else; detail is fetched only for tables whose digests differ, and a Tier-A
-  difference then walks buckets (256-entry vector → hashes for ONLY the differing buckets, which
-  makes `differingBuckets` a live production path rather than dead code). Pinned by a test that
-  counts wire frames: a converged round sends `ae_state_req` and NOTHING else — no bucket walk, no
-  hash list, no version map, no body pull. **Delta-only transfer:** bodies pulled by hash; a
-  divergent table with 40 shared + 1 differing record pulls exactly 1. **Identity verification
-  refuses:** 19 fail-closed assertions (wrong key, relayed frames, unknown node, wrong-node answer,
-  self-dial, stale timestamp, pre-auth round frames). **Authenticated channel:** live in
-  J-ANTIENTROPY. Enforcer re-run green against the digest-first protocol (5/5). Done-audit
-  2026-07-28 correctly ruled the earlier ✅ overstated on O(compare); this closes it. → Entries 9-17
+> **SPLIT 2026-07-30 — the line below was ONE ❌ concealing ~10 built-and-reviewed sub-units.** The
+> anti-entropy work decomposes into a pure logic layer, a pg-backed store, a libp2p channel, and the
+> behavioral claim that rides them; keeping it as one line meant the status authority could not tell
+> you where the largest unit in the milestone stood, and only the journal could — the journal that had
+> just lost ten entries. Statuses below are inherited from Entries 16–25 and are deliberately
+> conservative: nothing is ✅ whose reviewer verdict is not quoted ([[M12-PROCEDURE]] §2).
 
+- **DOD-AE-PRIMITIVES-1** [trustless-cello] — the pure, transport-and-DB-agnostic logic layer:
+  bucketed set-reconciliation (digest + delta), record-hash and the Tier-A per-table encoders,
+  Tier-B suspension/presence merges + version summaries + version-reconcile, the round planner
+  (`planRound`), handshake verification (`verifyPeerAuthFrame`), the engine (`runAntiEntropyRound`)
+  over an injected `AeStoreView`, and the peer-auth TBS in `@cello-protocol/crypto` (published).
+  Proven by an in-memory two-node convergence test wiring the REAL encoders and merges: divergent
+  nodes converge (Tier-A union; Tier-B higher-seq-wins with monotonic burn on both) and TERMINATE —
+  round 2 applies zero. — 🟡 built on `m12/ae-append`; directory suite 806 green; crypto TBS beta
+  v0.0.130 verified against the tarball. **Owed before ✅: the verdicts for `verifyPeerAuthFrame` and
+  `runAntiEntropyRound`, which Entry 25 left in flight, quoted.** → Entries 16–25
+- **DOD-AE-STORE-1** [trustless-cello] — a Postgres-backed `AeStoreView`: SELECT the synced tables into
+  the encoders for advertise; INSERT-if-absent / merge-upsert for apply. **It must reproduce the
+  MemStore semantics the convergence proof used** — a pg store that diverges from the proven semantics
+  makes the proof describe something nobody runs. `agent_revocations.signature` is BYTEA and MUST be
+  hex-encoded in the SELECT (pg returns a Buffer; no type-parser override is installed). — ❌
+- **DOD-AE-CHANNEL-1** [trustless-cello] — the `/cello/anti-entropy/1.0.0` libp2p handler: dial and
+  reconnect, the mutual handshake over the stream (`verifyPeerAuthFrame` plus our own signed frame),
+  and the digest→detail→pull round protocol with write-hints. Manifest gains `peerId` population and
+  the directory VERIFIES its manifest at load (design §1a/§1b). Peers failing identity verification are
+  refused with the cause named. — ❌
+- **DOD-AE-APPEND-1** [trustless-cello] — **the behavioral claim, riding the three above:** append-only
+  tables sync between directories over the authenticated libp2p channel via root-comparison + delta
+  pull; divergence detection is O(compare), transfer is delta-only; peers that fail identity
+  verification are refused. Proven by a multi-process integration test, not unit tests. — ❌
+- **DOD-AE-CHAINED-TABLES-1** [trustless-cello] — the two hash-chained Tier-A tables
+  (`seal_notarizations`, `user_accounts`) serve AND apply through anti-entropy, so a seal receipt no
+  longer exists only on the directory that recorded it. Chain columns are node-local: an applying node
+  recomputes them against its own tip. — 🟡 **BUILT, NOT PROVEN LIVE.** Reviewer verdict, quoted:
+  *"SPEC: FAITHFUL — every clause implemented; the one unproven clause is journaled (Entry 64) and
+  correctly carries 🟡, not ✅. Do not flip it without the live cross-node proof."* Its three blocking
+  findings — *"SILENT FALLBACKS FOUND"* (hex truncation the chain would have certified), *"ERROR
+  SUBSTITUTION"*, *"HOLLOW TESTS FOUND"* — are all closed. Owed: the live cross-node proof (needs a
+  deploy). → Entries 64, 66
 - **DOD-AE-MUTABLE-1** [trustless-cello] — mutable-table sync with per-table conflict rules per
   the design doc; `agent_suspensions` convergence proven adversarially: pause during partition,
   node restart mid-sync, stale-node rejoin, un-pause requiring newer authenticated state, tie →

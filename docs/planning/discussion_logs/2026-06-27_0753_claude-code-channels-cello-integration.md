@@ -283,3 +283,5 @@ These would become SPARC stories (Specification → Pseudocode → Architecture 
 contain a working `claude/channel` capability declaration and `pushChannelNotification`
 implementation — useful only as a reference for the notification payload shape. They are
 not production code and are not a foundation to build on.
+
+- [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist|The CELLO Claude Code plugin and the channels allowlist]] — this design, built and shipped as a plugin; establishes that a marketplace alone does not clear the dev-channel warning but `allowedChannelPlugins` does.

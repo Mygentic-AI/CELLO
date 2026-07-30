@@ -156,6 +156,39 @@ the only thing that catches a divergence like this.
 
 ---
 
+## 🗄️ SCHEMA — V55 LIVE IN ALL THREE REGIONS (2026-07-29 ~12:5x UTC)
+
+**The directory stopped storing the EDGE.** `signal_records.subject` — WHO a signal is about — is
+dropped. Verified per region against the database, not inferred from pipeline status:
+`max(version)=55`, `subject` column count `0`, `bool_and(success)=true`, and us-east-1 still reads
+**33 active signals** through the rebuilt view, so the notary path works after the drop.
+`http://directory-{us1,eu1,ap1}/manifest` → 200. Task definitions us-east-1 `:370`, eu-central-1
+`:141`, ap-northeast-1 `:132`.
+
+**Why (M10B-D34, Andre):** everything a signal asserts — both parties included — is in the plaintext
+envelope, which is hashed; the hash goes to the directory and the plaintext to the daemon. Holding a
+queryable `subject` meant any node operator could read the endorsement graph off a replicated table
+with one SELECT. Dropping it destroys the pairing: a graph needs both ends.
+
+**`issuer_pubkey` DELIBERATELY REMAINS.** `DOD-END-REVOKE-2`'s authority check compares a tombstone's
+`revoker_pubkey` against it; dropping it would have silently reverted the M10 F6 fix ("any submitter
+key can tombstone anyone's endorsement"). Whether the issuer identity should also leave, with revoke
+authority moving entirely to the portal, is an OPEN QUESTION recorded in `M10B-D34` — not settled as
+a side effect of a column drop.
+
+**Sequenced so nothing broke:** the portal first recorded its own mints (portal migration 0008) and
+switched to a hash-only `/internal/signals/active-among`; only then did the directory drop the column
+and remove `/internal/active-signals`. Each step left the portal working.
+
+**PIPELINE LESSON, PAID TWICE TODAY.** `ProductionDeploy` and `StagingDeploy` both target us-east-1,
+so two concurrent executions do not queue — they DEADLOCK: the older `ProductionDeployUsEast1` waits
+on an ECS deployment a newer execution already replaced, times out after ~45 min, and eu/ap never
+start (their actions read `None` while the pipeline looks busy). The fix is to abandon the superseded
+execution. The prevention is to batch pushes: **do not push anything, including docs, while a
+directory deploy is in flight.**
+
+---
+
 ## Hibernate / wake — standing behaviour
 
 Cycle timing: **~15–18 min** for a wake, all 3 regions in parallel. RDS reaching `available` is the
@@ -1863,3 +1896,113 @@ CELLO_IMAGE_TAG=v1.2.3 ./infra/deploy.sh dev us-east-1
 # Override GitHub connection ID (default: dev connection UUID)
 CELLO_GITHUB_CONNECTION_ID=<uuid> ./infra/deploy.sh staging eu-central-1
 ```
+
+---
+
+## Portal intake key — M10B `DOD-END-INGRESS-1` (provisioned 2026-07-30, us-east-1)
+
+The key a submitting daemon seals a trust-signal submission TO, so the DIRECTORY cannot read it. Its
+absence is why `cello_trust_signals_issue` refused with `intake_key_absent` on dev: the deployed
+consortium manifest (v1) carries a node roster and signatures but no `intake_key`, and the daemon
+refuses to send unsealed rather than let the directory read a submission.
+
+- **Secrets Manager `cello/dev/portal/intake-key-0`** (us-east-1) — Ed25519 **seed**, 32-byte hex.
+  Created 2026-07-30. The seed was generated INTO Secrets Manager by a script that never prints it
+  and never passes it on argv (SI-001); only the public key was emitted. Read by the PORTAL to open
+  sealed submissions — never by the directory, which is the entire point.
+- **Public key** = `87da56bf2ca5ef75d62d88dfed1f667f9fa565ee0a5306aeeef50f5d7053b3d1`
+- **`key_id`** = `intake-dev-1`. Generation-scoped by design (`M10B-D11`): rotation publishes a NEW
+  id and RETAINS the old seed until no undrained row references it, because in-flight rows are sealed
+  to whichever generation was published when they were sent. Opening every row with one current seed
+  turns a routine rotation into the permanent destruction of every queued endorsement.
+
+**Manifest v2 signed and published to SSM (2026-07-30):**
+- SSM `/cello/dev/portal/intake-key-id` = `intake-dev-1` — **all 3 regions**.
+- SSM `/cello/dev/portal/intake-key-pubkey` = `87da56bf…b3d1` — **all 3 regions**.
+- SSM `/cello/dev/consortium/manifest-version` = `2` — **all 3 regions**. NEW parameter. The signing
+  script hardcoded `version: 1`, so adding `intake_key` would have produced two DIFFERENT manifests
+  both calling themselves v1. The client's anti-rollback is `version < lastSeen`, so same-version is
+  adopted and it would have worked — but "same version, different content" is the hazard that has
+  already cost this project a burned npm release, and correctness should not rest on that check
+  being `<` rather than `<=`. Optional with default 1, so every earlier manifest still reproduces.
+- SSM `/cello/dev/directory/consortium-manifest` → **param version 2, all 3 regions**, carrying the
+  signed manifest v2 with `intake_key`.
+- Signature **independently verified** against the client's pinned
+  `BUNDLED_CONSORTIUM_ROOT_KEYS[0]` (`8e9b99e5…4199`) — not merely the signer's own self-check. The
+  officer pubkey the script emits matches what the shipped client pins, so daemons will accept it.
+
+**Portal wiring done in IaC (2026-07-30):** `cello-portal-app.yaml` gains `IntakeSeedsSecretArn`
+(defaulted to the secret's ARN), injects it as `PORTAL_INTAKE_SEEDS`, and adds it to the task's
+secret-read policy. The secret VALUE was rewritten from a bare seed into the wire format the portal
+parses — `key_id:hexseed`, comma-separated across live generations — so one secret holds every live
+generation. That is deliberate: rotation must retain the previous seed until no undrained row still
+references it, and splitting generations across secrets would make "which are live" a deploy-time
+question instead of a value.
+
+**Still owed:**
+1. **Directory redeploy** — the task definition resolves `{{resolve:ssm:…/consortium-manifest}}` at
+   DEPLOY time, so running tasks still carry the v1 manifest baked into their env. Until the stack
+   updates, `intake_key_absent` persists.
+2. **Portal redeploy** — same reason: the new secret is wired in the template, not in the running
+   task definition.
+
+---
+
+## ⛔ `cello-ecs-directory-dev` CANNOT BE CFN-DEPLOYED AFTER A HIBERNATE/WAKE CYCLE (found 2026-07-30)
+
+**Symptom.** `./infra/deploy.sh dev us-east-1` fails on `cello-ecs-directory-dev`:
+
+```
+RegistryPathRule  Resource handler returned message: "One or more listeners not found
+                  (Service: ElasticLoadBalancingV2, Status Code: 400)"  HandlerErrorCode: NotFound
+```
+
+**Verified cause, not inferred.** The stack's `HttpListener` physical id is
+`…:listener/app/cello-dir-dev/9f3cee2f6df31fc9/276eb2ef7ba777` and `describe-listeners` on it returns
+`ListenerNotFound`. The LIVE ALB is a different one — `…/cello-dir-dev/ff340fbf2683cbe2` — with a
+healthy port-80 listener. So every `AWS::ElasticLoadBalancingV2::ListenerRule` in the stack points at
+an ALB that no longer exists.
+
+**Why it happens every cycle, by design.** `hibernate.sh` DELETES the dir and relay ALBs (its own
+header: *"ALBs (dir + relay per region) ~$150/mo"*) and `wake.sh` recreates them OUTSIDE
+CloudFormation, then UPSERTs Route53 to the new aliases. This file already records that mechanism for
+the CodeBuild `STAGING_DIRECTORY_URL` (§ "Why it keeps coming back"). What was NOT recorded is that it
+also strands the ECS stack's listener ARNs — so the stack is drifted after EVERY wake, and any update
+that touches a listener rule fails.
+
+**Why nobody hit it before:** the migration-contiguity pre-flight was blocking every directory deploy
+from main independently (V48→V51 gap, fixed 2026-07-30 with `RESERVED-VERSIONS.txt`), so no deploy got
+far enough to reach the CFN stage.
+
+**What it blocks right now.** The consortium manifest reaches tasks as
+`{{resolve:ssm:…/consortium-manifest}}`, resolved into the task definition at DEPLOY time. Manifest v2
+(carrying the portal `intake_key`) is published in SSM in all three regions, but the RUNNING tasks
+still serve v1 — confirmed by `GET /manifest` on directory-us1 returning `version: 1` with no
+`intake_key`. Until this is resolved, `cello_trust_signals_issue` keeps refusing with
+`intake_key_absent` against dev, and no live end-to-end trust-signal test is possible.
+
+**NOT attempted, deliberately.** Repairing this means CFN resource import of the live ALB/listener, or
+letting CloudFormation replace the ALB — the second mints a new DNS name and takes the directory down
+in that region while Route53 catches up. That is hard to reverse and outward-facing on a live
+environment, so it needs an explicit decision rather than a reflex. The runtime is HEALTHY; only
+CloudFormation's model of it is stale.
+
+**Three ways out, for whoever picks this up:**
+1. **CFN resource import** — adopt the live ALB/listener ARNs into the stack. No downtime, fiddly.
+2. **Let CFN replace the ALB** — clean model, but a new DNS name and a real outage window per region.
+3. **Read the manifest at RUNTIME from SSM instead of baking it into the task definition** — sidesteps
+   the deploy dependency entirely for manifest changes and is arguably the better design (publishing a
+   manifest should not require a deploy). Does not fix the drift, but removes this blocker from the
+   critical path. Needs an SSM read on the directory task role.
+
+**RESOLVED 2026-07-30 — manifest v2 IS LIVE, via task-definition revisions (CFN drift path).**
+`GET /manifest` on directory-us1 now returns `version: 2` with `intake_key: intake-dev-1`, so
+`intake_key_absent` is cleared on dev. The CFN stack could not be updated (stale ALB listener ARNs
+after the hibernate/wake cycle — see the entry above), so the manifest was applied the way this repo
+has done it before under drift: read the running task definition, patch
+`CELLO_DIRECTORY_CONSORTIUM_MANIFEST_B64` from the SSM value, register a new revision, update the
+service. Revisions: **us-east-1 :397, eu-central-1 :155, ap-northeast-1 :146**.
+
+These three revisions are CFN DRIFT and will be overwritten the next time the ECS directory stack
+deploys successfully — which is fine and intended, because the stack resolves the SAME SSM parameter.
+The drift is the manifest arriving EARLY, not a different value.

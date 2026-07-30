@@ -177,8 +177,25 @@ if (intakeKeyPub && !/^[0-9a-f]{64}$/.test(intakeKeyPub)) {
   process.exit(1);
 }
 
+// VERSION IS READ, NOT HARDCODED — because content changed while the number did not.
+//
+// Adding `intake_key` to a manifest already deployed as v1 produces two DIFFERENT manifests both
+// calling themselves v1. The client's anti-rollback compares `version < lastSeen`, so a same-version
+// manifest IS adopted and this happens to work — but "same version, different content" is the exact
+// hazard that has already cost this project a burned npm release, and relying on the comparison
+// being `<` rather than `<=` makes correctness depend on an implementation detail of a check whose
+// purpose is something else entirely.
+//
+// Optional with a default of 1 so every previously-emitted manifest still reproduces byte-for-byte.
+const versionRaw = ssmOptional("/cello/" + env + "/consortium/manifest-version", regions[0]);
+if (versionRaw !== null && !/^[1-9][0-9]*$/.test(versionRaw)) {
+  console.error(`manifest-version must be a positive integer, got ${JSON.stringify(versionRaw)} — refusing to emit`);
+  process.exit(1);
+}
+const manifestVersion = versionRaw === null ? 1 : Number(versionRaw);
+
 const manifest = {
-  version,
+  version: manifestVersion,
   not_before: "2026-01-01T00:00:00Z",
   expires: "2030-01-01T00:00:00Z",
   nodes,

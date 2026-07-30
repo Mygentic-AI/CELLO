@@ -45,6 +45,11 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
 
   const nowSec = (): number => Math.floor(Date.now() / 1000);
 
+  // Baseline row count, captured per test. The refusal assertions used to filter on
+  // `signal_records.subject`; V55 dropped that column and the whole suite is `describe.skip` outside
+  // CELLO_ENV=local, so the break shipped unseen. A before/after total depends on no column at all.
+  let rowsBefore = 0;
+
   function envelope(over: Partial<TrustSignalEnvelope> = {}): TrustSignalEnvelope {
     return {
       subject_kind: "agent",
@@ -57,6 +62,7 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
       issued_at: nowSec(),
       expires_at: null,
       supersedes_hash: null,
+      same_operator: false,
       ...over,
     };
   }
@@ -113,14 +119,20 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
 
   afterAll(async () => {
     if (pool) {
-      await pool.query("DELETE FROM signal_records WHERE subject LIKE $1", [`${tag}%`]).catch(() => {});
+      // V55 dropped `signal_records.subject`. Rows are keyed by their content hash and this suite's
+      // envelopes are tagged per run, so the durable cleanup is by issuer — the submitter key is
+      // regenerated per run, which makes it exactly as selective as the old subject prefix.
+      await pool.query("DELETE FROM signal_records WHERE issuer_pubkey = $1", [submitterPub]).catch(() => {});
       await pool.query("DELETE FROM authorized_issuers WHERE label = $1", [tag]).catch(() => {});
       await pool.end();
     }
   });
 
   beforeEach(async () => {
-    await pool.query("DELETE FROM signal_records WHERE subject LIKE $1", [`${tag}%`]);
+    await pool.query("DELETE FROM signal_records WHERE issuer_pubkey = $1", [submitterPub]);
+    // Baseline captured AFTER the cleanup, or the delete lands between capture and assertion and the
+    // difference goes NEGATIVE — which reads as "rows disappeared" rather than "ordering is wrong".
+    rowsBefore = Number((await pool.query("SELECT COUNT(*) AS n FROM signal_records")).rows[0].n);
   });
 
   describe("the happy path", () => {
@@ -153,8 +165,11 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
     it("REFUSES a submitter that is not in authorized_issuers at all", async () => {
       await expect(submitSignal(await signedSubmit({ pub: strangerPub, priv: strangerKey })))
         .rejects.toMatchObject({ reason: "unknown_issuer" });
-      const { rows } = await pool.query("SELECT COUNT(*) AS n FROM signal_records WHERE subject LIKE $1", [`${tag}%`]);
-      expect(Number(rows[0].n), "nothing may be written on a refused submission").toBe(0);
+      const { rows } = await pool.query("SELECT COUNT(*) AS n FROM signal_records");
+      // V55 dropped `signal_records.subject`, which was this assertion's discriminator. A
+      // before/after total is the durable form: it depends on no column at all, so the next
+      // schema change cannot silently turn "nothing was written" into "the query errored".
+      expect(Number(rows[0].n) - rowsBefore, "nothing may be written on a refused submission").toBe(0);
     });
 
     it("REFUSES a REVOKED issuer — and says so, distinctly from 'unknown'", async () => {
@@ -211,7 +226,11 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
       // submitter never computed — and it would verify nowhere.
       const env = envelope();
       const bad = Buffer.from(encodeTrustSignalEnvelope(env));
-      bad[0] = 0x8c; // claim 12 elements in the array header; the preimage has exactly 11
+      // Claim 13 elements in the array header; the preimage has exactly 12. This said `0x8c` (12)
+      // when the preimage was 11 — and M10B made 12 the CORRECT arity, so the corruption silently
+      // became a valid envelope and the test passed by accepting what it exists to refuse. It was
+      // invisible because the whole suite is `describe.skip` outside CELLO_ENV=local.
+      bad[0] = 0x8d;
       const body = encodeCbor({
         v: 1, op: "submit", envelope: new Uint8Array(bad),
         signal_hash: hex(hashTrustSignalEnvelope(env)), scanner_version: "scan-v1", issued_at: nowSec(),
@@ -234,9 +253,11 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
       // That rejection must flow through the named/logged path, not escape as an unmapped Error (which
       // would be an HTTP 500 with no `signal.submission.rejected` line, on the security-core module).
       const env = envelope();
+      // TWELVE elements since M10B appended `same_operator` — the arity IS the wire format, so an
+      // 11-element literal now fails on SHAPE and never reaches the semantic check this test is for.
       const arr = [
         "CELLO-TSIG-v1", "user" /* not account|agent */, env.subject, env.issuer_kind,
-        env.issuer_pubkey, env.type, env.schema_version, env.payload, env.issued_at, null, null,
+        env.issuer_pubkey, env.type, env.schema_version, env.payload, env.issued_at, null, null, false,
       ];
       const badEnvBytes = encodeCbor(arr);
       const body = encodeCbor({
@@ -487,12 +508,13 @@ describeIntegration("DOD-DIR-WRITE-1 — the signed-submission chokepoint", () =
       // Without the `is_tombstone = false` filter this would pass the notarized-gate and let an envelope be
       // queued under a hash the chokepoint never accepted or scanned (§14.1).
       const tombHash = "f".repeat(64);
+      // No `subject` column since V55 — the directory does not store who a signal is about.
       await pool.query(
         `INSERT INTO signal_records
-           (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type, status, scanner_version, is_tombstone)
-         VALUES ($1, 'revoke:us-east-1', 'agent', $2, 'portal', 'x', 'phone', 'revoked', '(tombstone)', true)
+           (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type, status, scanner_version, is_tombstone)
+         VALUES ($1, 'revoke:us-east-1', 'agent', 'portal', 'x', 'phone', 'revoked', '(tombstone)', true)
          ON CONFLICT DO NOTHING`,
-        [tombHash, `${tag}-tombstone-subj`],
+        [tombHash],
       );
       await expect(deliverSignal(await signedDeliver({ signalHash: tombHash })))
         .rejects.toMatchObject({ reason: "signal_not_notarized" });

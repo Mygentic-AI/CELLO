@@ -125,6 +125,27 @@ def validate_moniker(value, field):
     return value.strip()
 
 
+def validate_prose(value, field, limit):
+    """Editorial text — a title or a summary — bound for a permanent public page.
+
+    Refused rather than escaped at read time, on the same terms as monikers and
+    turn bodies. Empty is normalised to absent so a blank string cannot render as
+    a heading with nothing in it.
+    """
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > limit:
+        raise ReceiptContentError(
+            f"{field}_too_long", f"{field} is {len(text)} characters; the limit is {limit}."
+        )
+    if "<" in text or ">" in text:
+        raise ReceiptContentError(f"markup_in_{field}", f"{field} contains markup.")
+    return text
+
+
 def check_message_count(message_count, turns):
     """The count and the transcript must agree.
 

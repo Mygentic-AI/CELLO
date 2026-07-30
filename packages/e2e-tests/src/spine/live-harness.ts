@@ -51,6 +51,20 @@ const HERE = fileURLToPath(new URL(".", import.meta.url));
 export const TRUSTLESS_ROOT = resolve(HERE, "../../../..");
 // cello-client is a sibling repo (REPOSPLIT): the daemon / mcp / cli binaries.
 export const CELLO_CLIENT_ROOT = resolve(TRUSTLESS_ROOT, "../cello-client");
+/**
+ * cello-portal, the third sibling — and reaching it is what stops `J-END` being a FALSE GREEN.
+ *
+ * Every earlier spine journey simulates the portal by seeding `signal_records` directly (`j-canary`
+ * says so in its own comment), which was sound when the portal's role was to insert a row and the
+ * directory's genericity was under test. M10B inverts that: the portal's INGRESS — drain, open the
+ * seal, verify and derive the issuer from the signature, scan, compose, mint, deliver — IS the thing
+ * under test. A journey that seeds the directory would skip all of it and still pass.
+ *
+ * So the journey drives the REAL portal modules. Re-implementing that pipeline inside the test would
+ * be the "byte-identical local copy on each side" that `M10B-D28` forbids for the submission wire,
+ * applied to the pipeline instead — and the copy that drifts is the one nobody runs in production.
+ */
+export const PORTAL_ROOT = resolve(TRUSTLESS_ROOT, "../cello-portal");
 
 export const BINS = {
   // trustless-cello (this repo)
@@ -403,6 +417,8 @@ export interface SpineCluster {
   restartDirectory: () => Promise<Proc>;
   relayMultiaddr: string;
   directoryUrl: string; // http://127.0.0.1:<healthPort> — node 0's CELLO_DIRECTORY_URL
+  /** `/internal/*` base URLs, one per node — present only when `internalApiKey` was passed. */
+  internalApiUrls: string[];
   /** The bootstrap/health URL of every directory node (directoryUrls[0] === directoryUrl). */
   directoryUrls: string[];
   /** The Postgres URL of every sovereign node's OWN database (per-node K_server share). */
@@ -561,6 +577,16 @@ export interface StartSpineClusterOpts {
    * (certificate_frontier_unverifiable). Off by default; production never sets it.
    */
   directoryInflateFrontierForTest?: number;
+  /**
+   * M10B / `J-END`: start each directory's `/internal/*` API with this key, and expose the port.
+   *
+   * OPT-IN rather than always-on. `/internal/*` carries the portal-facing reads and writes — the
+   * submission drain, the agent-by-pubkey resolution — and a journey that does not need them should
+   * not be running an extra authenticated surface it never exercises. Under `CELLO_ENV=local` the
+   * directory starts the internal server only when this is set, so the flag mirrors production's
+   * own condition rather than inventing a test-only one.
+   */
+  internalApiKey?: string;
 }
 
 /**
@@ -669,6 +695,17 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
     // that manifest must carry these URLs, so onDirectoryUrlsReady writes it before any spawn.
     const healthPorts: number[] = [];
     for (let i = 0; i < count; i++) healthPorts.push(await freePort());
+    // Allocated up front for the same reason as the health ports: the env is built per node below,
+    // and a port picked mid-loop would not be knowable to a caller before the spawn.
+    const internalApiPorts: number[] = [];
+    const internalApiUrls: string[] = [];
+    if (opts.internalApiKey) {
+      for (let i = 0; i < count; i++) {
+        const p = await freePort();
+        internalApiPorts.push(p);
+        internalApiUrls.push(`http://127.0.0.1:${p}`);
+      }
+    }
     for (let i = 0; i < count; i++) directoryUrls.push(`http://127.0.0.1:${healthPorts[i]}`);
     // M12: fixed transport identity + ws port per node, so a manifest can PIN the dial identity
     // before boot (the AE handshake binds the manifest peerId to the live Noise connection).
@@ -756,6 +793,9 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
             }
           : {}),
         // DOD-LEG-2 negative test: make the directory publish an inflated (still-signed) frontier.
+        ...(opts.internalApiKey
+          ? { INTERNAL_API_KEY: opts.internalApiKey, INTERNAL_API_PORT: String(internalApiPorts[i]) }
+          : {}),
         ...(opts.directoryInflateFrontierForTest
           ? { CELLO_DIRECTORY_INFLATE_FRONTIER_FOR_TEST: String(opts.directoryInflateFrontierForTest) }
           : {}),
@@ -822,6 +862,7 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
 
     return {
       tmpDir,
+      internalApiUrls,
       relay: relayRef,
       get directory(): Proc {
         return liveDirs[0];

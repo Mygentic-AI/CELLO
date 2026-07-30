@@ -2547,3 +2547,773 @@ an agent-issued endorsement delivered into a wallet, and nothing can issue one u
 `daemon@0.0.80` + `cli@0.0.81` carry the fixes.
 
 **Gate:** 2105 tests, lint, typecheck, build green.
+
+---
+
+## Entry 33 — `DOD-END-SURFACE-1` begins: the consent verbs, and three guards that caught dead code — 2026-07-29
+
+**What went in.** The operator half of consent: the `cello_use_agent` nudge, `cello_consent_list` /
+`_accept` / `_refuse` at MCP+CLI parity, and the M10B-D4 refusal message. Commits `3744b19`,
+`bd58925`, `7fe7faf` in cello-client (pushed; they sit on top of the M12 agent's `fb9c23f` cascade,
+so they are NOT in the promoted `latest` — they ride the next one).
+
+**The nudge, and why it does not mark anything notified.** `cello_use_agent` reads
+`countUnnotifiedConsent` and returns `pending_consent` + guidance. It is a COUNT and nothing else.
+Marking notified on selection would record the operator as told about something they were never
+shown; the nudge is a number, the LIST is what shows the items, and `cello_consent_list` is what
+records that they saw them. That keeps `M10B-D5`'s two lifetimes apart — the notification goes
+quiet once seen, the DECISION persists until made. A failed read returns
+`pending_consent: "unknown"` rather than silence (§5a): silence is exactly how an endorsement dies
+unnoticed, so an unknown is surfaced as an unknown.
+
+**The refusal message is a third OP, not a new structure.** `SubmissionOp` gains `refuse` next to
+`submit`/`withdraw`. `op` is a protocol verb — what the caller is ASKING FOR — which is the axis
+INV-ZEROBUMP permits, unlike branching on what a signal MEANS. The widening adds no field and
+reorders nothing, so **every signature already made over a `submit` or `withdraw` body still
+verifies**; a test pins the arity equality so a later change that breaks it cannot pass quietly
+(§5b: is any signature or hash over these bytes? Yes — hence the check). Subject is the target
+signal hash, exactly as for a withdrawal: both verbs act on an existing signal instead of asserting
+a fact about a party.
+
+**Order is the invariant.** The refusal is recorded BEFORE anything that can fail, and every failure
+path returns the refusal with `issuer_notified: false`. A refusal contingent on the network would
+leave a signal Alice believes she rejected sitting in an unrefused state, and she would retry
+against a signal already refused. The test asserts the source POSITIONS of `setConsentState` versus
+compose/send rather than prose about ordering.
+
+**This is `composeSealedSubmission`'s first real caller**, which closes one of the two ACs
+`DOD-END-SUBMIT-1` handed forward ("nothing retries yet — the safety property is real but has no
+caller"). It needs the manifest's intake key at request time, so `verifyStartupManifest` now returns
+the verified manifest object — set ONLY on the path where signatures, validity window, and
+anti-rollback all passed. A sealing key read off an unverified manifest is a key an attacker chose:
+it would seal the operator's words to the attacker instead of the portal.
+
+### Three guards caught real defects, in the order they fired
+
+This is the part worth keeping, because each guard caught something a human reading the diff would
+have called fine.
+
+1. **The daemon vocabulary SOURCE AUDIT** failed the first commit: my nudge guidance named
+   `cello_consent_list_pending`, a tool that did not exist — the guidance was written before the
+   tool was built. Exactly the audit-what-ships case: a string the daemon shows an operator is a
+   promise about the surface.
+2. **The name-parity rule** (MCP name ≡ `cello_` + CLI verb) then rejected
+   `cello_consent_list_pending` against `cello consent list`. Renamed the TOOL rather than bending
+   the CLI verb to match a suffix carrying no meaning — there is nothing else to list.
+3. **`KNOWN_COMMANDS`** rejected an unlisted `consent` command. That guard exists so that adding a
+   CLI verb is deliberate; adding it to the list is the deliberation.
+
+### The defect none of them could catch, and the gap it exposes
+
+The verbs shipped **dead on both surfaces**. The daemon reads `params?.hash_prefix`; the MCP tool
+and the CLI both sent `signal_hash`. Every accept and every refuse would have returned
+`invalid_prefix`.
+
+All three guards above were green across it, and that is the point: **parity of NAMES is not parity
+of CALLS.** They check that a tool exists, that its name matches its CLI verb, and that a name shown
+to an operator resolves to something real. None of them looks at arguments. A verb can be perfectly
+named, correctly listed, fully documented, and completely non-functional.
+
+The fix went to `hash_prefix` rather than moving the handler to `signal_hash`: the handler
+deliberately takes a prefix of ≥8 hex chars, matching `cello trust-signals view <hash>`, and an
+operator reading a hash off `cello consent list` should not have to paste 64 characters to act on it.
+
+The new test (`m10b-surface-1-consent-params.test.ts`) is a source audit: it extracts every
+`params?.<name>` a handler reads and asserts each surface sends only names in that set. Revert-tested
+both times it changed. It also needed fixing twice while being written, which is itself a finding
+worth recording — the first extractor assumed an inline object literal and broke the moment both
+call sites built params conditionally, and the second mistook a function's own opening brace for an
+object literal, making a type annotation (`params:`) look like a parameter being sent. **A source
+audit is code, and it fails in the ways code fails.** Both times it was generalised rather than
+loosened, and the revert test was re-run after each change to prove it still bites.
+
+### State
+
+- Gate: 2143 tests, lint, typecheck, build — all green in cello-client.
+- `cello-unit-reviewer` dispatched on `fb9c23f..HEAD` with the four claimed clauses; findings and
+  fixes land in the next entry.
+- **Clauses still owed on this line:** issue an endorsement for a counterparty; read a refusal
+  message as the ISSUER (the daemon-side drain of the `refuse` op); list held signals + status;
+  withdraw; per-counterparty include/omit at presentation; quota visibility (`DOD-END-QUOTA-1`).
+
+---
+
+## Entry 34 — SURFACE-1 reviewed: the surface said "read this" and returned a byte count — 2026-07-29
+
+`cello-unit-reviewer` on `fb9c23f..HEAD`, no model override. 14 findings, all addressed
+(cello-client `a5a2183`). Two are worth the milestone's memory; one I corrected rather than applied.
+
+### F2 — the clause's whole purpose was unmet while three tests were green
+
+`cello_consent_list` returned `payload_bytes: 412`. Both surfaces — the MCP `accept` description and
+the CLI `consent` help, **both added by the same diff** — instructed the operator to *read the
+plaintext before accepting*. So an operator who followed the instruction received a number and
+accepted blind, on a claim someone else had written about them. That is the entire point of
+`DOD-END-ACCEPT-1` ("someone could create a rogue endorsement that says you're a piece of shit"),
+and it was missing while the tests, the name-parity audits and the vocabulary audit were all green.
+
+The plaintext was reachable the whole time — `wallet_view_signal` decodes it four hundred lines
+away. Nothing pointed at it. **A surface that instructs and a handler that does not comply is a
+worse failure than a surface that says nothing**, because the operator acts on the instruction.
+
+### F5 — a check that was true at startup and quietly stopped being true
+
+`verifyStartupManifest` verifies signatures, validity window and anti-rollback ONCE, at daemon start.
+The daemon then holds that object for its whole lifetime; nothing refreshes it. `composeSealedSubmission`
+checked that `intake_key` was **present and well-formed** — never that the manifest was still inside
+its window.
+
+Three weeks on, the portal rotates the intake key and publishes v+1; this daemon seals to the retired
+key, a directory node accepts it, and the operator is told the message was sent. The portal cannot
+open it and — since identity is derived from the signature inside the seal — cannot even attribute
+it. The message vanishes with no error anywhere.
+
+The generalisable form: **§5a's "absent is not fine" has a time dimension.** A verification result is
+not a fact, it is a fact *with an expiry*, and the check belongs where the key is USED, not only
+where it was fetched. Now refuses `manifest_expired`, naming the manifest and the instant.
+
+### The one I corrected — F13
+
+The review called `consent_notified_at` (milliseconds) an outlier "among epoch-seconds siblings" and
+proposed converting it. Backwards: the store's own convention block says hashed ENVELOPE fields are
+seconds and LOCAL BOOKKEEPING is milliseconds (`received_at`, `verified_at`). Converting would have
+*introduced* the inconsistency. Documented in that block instead. Worth recording that a reviewer's
+premise is checkable and sometimes wrong — the fix here was to read the convention the file already
+stated, not to act on the finding as written.
+
+### The hollow tests, which is the finding I would keep if I could keep only one
+
+**The nudge had ZERO coverage.** Deleting the entire block from `cello_use_agent` left the whole repo
+green, because the tests I wrote exercised the three STORE methods it calls. They were real tests of
+real code — just not of the code the clause added. An implementation that computed the count and
+never attached it to the response passed everything.
+
+And the refusal-message test pinned SOURCE TEXT only. Four wrong implementations passed it, including
+one that seals with a **different agent's key provider** — which is INV-ATTRIBUTION itself, the thing
+the compile-time guard was written to protect. The guard proves no *override parameter* exists; it
+cannot prove the right provider was passed.
+
+Both are the same mistake in different clothes: **testing what the code is made of instead of what it
+does.** Fixed with a live-daemon test over a real socket, a direct pin on the guidance-key class, and
+behavioural tests that compose → seal → open → decode so attribution is asserted on BYTES. Residual
+gap stated rather than papered over: no end-to-end test drives the refuse HANDLER with a live
+signaling stream; the handler-to-transport hop is still source-audit only.
+
+### Also: F1, and why the fix was a rule rather than a patch
+
+The nudge told CLI operators to run `cello_consent_list` — untypeable. `renderForSurface` rewrites
+only keys in a literal set of three, and `pending_consent_guidance` was not one. The class of bug is
+"a handler invents a new `*_guidance` key without knowing a registry exists", so the fix closes the
+class: any key ending in `guidance` is an instruction. Patching the single key would have left the
+next handler to rediscover it.
+
+### Published
+
+Two cascades, because the first shipped before the review ran: `v0.0.135`
+(daemon 0.0.82 / cli 0.0.83 / connect 0.0.92, verified against the tarballs — real cross-pins, no
+`workspace:*`) and `v0.0.136` (daemon 0.0.83 / cli 0.0.84 / connect 0.0.93) carrying the fixes.
+Republishing was not optional: npm version ≡ published content, and leaving 0.0.82 in place with
+different source would hand anyone who installed it the blind-consent build permanently.
+
+**`latest` promotion is Andre's and is NOT run here** — prepared in the handoff below.
+
+---
+
+## Entry 35 — the issue verb, and why it is not called `cello_endorse` — 2026-07-29
+
+`cello_trust_signals_issue` / `cello trust-signals issue <pubkey> <text…>` (cello-client `3e71255`).
+Severity-1 in this milestone's own triage — *"Bob's agent supplies an endorsement for Alice"* — and
+until now the submission machinery built by `DOD-END-SUBMIT-1` had no way for an operator to invoke
+it. A mechanism reachable only by daemon IPC is the `DOD-SETTINGS-SURFACE-1` mistake repeated.
+
+**The naming was the design decision.** `cello_endorse` is the obvious name and it would have baked
+the type into the operator surface permanently — a per-type construct in cello-client, which is
+exactly what the zero-bump lens is instructed to flag. The verb is type-free instead, and it is
+type-free *by construction* rather than by discipline: **the submission wire carries no type field
+at all.** `SubmissionBody` is `{v, op, subject_kind, subject, submitter_pubkey, body, issued_at}` —
+the PORTAL decides what it mints. So a second client-sourced type needs no new verb, no new
+parameter, and no client change, which is precisely what `DOD-END-PLAYBOOK-1` has to demonstrate
+with an empty client diff. The proof got easier because the surface refused to learn the type.
+
+**The refactor came first, deliberately.** `refuse` and `issue` are the same journey with a different
+`op`. Rather than write the second copy, the compose→seal→send path was extracted to
+`submitForAgent`, which owns every guard: the online check (so sending never brings a stopped agent
+online as a side effect), the body cap (so an oversized paste never dies in the transport wearing a
+transport's error label), the key-provider lookup, and the forwarding of compose/send causes. **A
+second hand-written copy is how two paths that must agree stop agreeing** — the next verb would have
+inherited whichever subset its author remembered. INV-ATTRIBUTION holds inside the helper by
+construction: the provider is looked up from the selected agent and there is no parameter through
+which a caller could name another identity.
+
+Behaviour preservation is the spec for a refactor, so the refusal source-audits were **re-pointed at
+the shared path rather than deleted** (§5b — triage by subject-under-test, never by file), plus four
+assertions covering the guards once in the place they now live.
+
+**Refused at the source, with actionable reasons:** a subject that is not 64 hex chars, an empty
+body, and SELF-issuance. The portal is the real enforcer of `INV-NO-SELF-STANDING` (only it sees
+account linkage), but an agent endorsing *itself* is detectable here with certainty, and refusing
+early beats a silent rejection at intake minutes later.
+
+The success response says **`queued`, never "issued"** — the portal must still drain, authenticate,
+scan and mint, and the subject must then ACCEPT before anyone else sees it. Three steps that have
+not happened.
+
+**The exhaustive SKILL.md audit paid for itself immediately**, failing the build on this verb being
+undocumented. It had been a fixed sample of six tool names until Entry 34 rewrote it to run off
+`DUAL_SURFACE_VERBS`; the first thing it caught was a gap predating this milestone
+(`cello_dismiss`), and the second was this one.
+
+### PREPARED FOR ANDRE — the `latest` promotion (NOT run here)
+
+Two cascades published to **beta** and verified against the tarballs (real cross-pins, no
+`workspace:*`, the changed symbols present in `dist/`): `v0.0.135` then `v0.0.136`.
+
+`latest` still points at the M12 agent's earlier set, so none of M10B's consent or issue surface is
+on the default install path yet. The promotion is operator-run, always:
+
+```bash
+npm dist-tag add @cello-protocol/connect@0.0.93 latest
+npm dist-tag add @cello-protocol/cli@0.0.84 latest
+npm dist-tag add @cello-protocol/daemon@0.0.83 latest
+npm dist-tag add @cello-protocol/gateway@0.0.9 latest
+npm dist-tag add @cello-protocol/crypto@0.0.27 latest
+npm dist-tag add @cello-protocol/transport@0.0.31 latest
+npm dist-tag add @cello-protocol/protocol-types@0.0.29 latest
+```
+
+**Do not run this yet if the issue-verb review is still open** — `3e71255` landed AFTER `v0.0.136`,
+so the issue verb is not in any published artifact. A third cascade is owed once that review's
+findings are fixed, and promoting before it would put the reviewed-consent surface on `latest` while
+the issue verb exists only in git.
+
+---
+
+## Entry 36 — issue-verb review: two claims the code made about itself were false — 2026-07-29
+
+`cello-unit-reviewer` on `3e71255`. 8 findings, all fixed (cello-client `3d6a223`). The pattern in the
+two blocking ones is worth naming, because it is not "the code is wrong" — it is **the code asserting
+a property it does not have.**
+
+### F2 — INV-ATTRIBUTION held by CONVENTION while the comment claimed CONSTRUCTION
+
+`submitForAgent` carried: *"the key provider is looked up from the SELECTED agent's name and there is
+no parameter to pass a different identity."* There was one — `sel: { name, pubkey }`, caller-supplied,
+declared on the line immediately below. Both call sites passed the correctly-resolved selection, so
+there was no live bug. The invariant was true; the reason given for it was not.
+
+And the test that "pinned" it asserted `expect(helper).not.toMatch(/opts\.(keyProvider|submitterPubkey)/)`
+— **the absence of two identifiers that had never existed in that function.** It could not fail. It
+would have passed against an implementation that took a caller-supplied identity, which is the exact
+thing it was written to forbid.
+
+The fix makes the claim true rather than softening it: the helper takes `connectionId` and calls
+`resolveSelectedAgent` itself, so there is no identity input left to get wrong.
+
+**Why this is worse than an ordinary bug.** The next verb — withdraw — is written by someone who
+reads that comment. "There is no parameter to pass a different identity" tells them the shape is safe
+to copy, so they pass an agent name out of `params` without re-resolving, and nothing in the file, the
+tests, or the type system stops them. **A false security comment is load-bearing in the wrong
+direction.**
+
+### F1 — the shared path was extracted, and one behaviour did not come with it
+
+`stored: false` means a directory node reports it already held this submission id: either a benign
+retry or single-node censorship, indistinguishable from the client. The refuse path branched on it
+and warned. The issue path — *eleven lines later in the same function* — emitted `stored` as a bare
+field, and the CLI prints only `guidance`, so an operator would never see it at all.
+
+The commit that introduced this contains a comment saying that collapsing the two "destroys the only
+information that could ever tell them apart", immediately above a path that collapses them.
+
+The fix puts the warning **inside** `submitForAgent` rather than at the second call site. The
+generalisable form: **when you extract a shared path, the guards that move are obvious and the
+REPORTING that did not move is not.** A guard omitted at one call site is a bug; a guard omitted in
+the shared path is a bug available to every future caller.
+
+### F5 — a certainty claim that was one agent deep
+
+The self-issuance guard compared the subject against `sel.pubkey` — the *selected* agent — under a
+comment describing it as "detectable right here with certainty". The daemon holds `loadedAgents`:
+every agent on the machine. An operator running two of their own agents could issue from one about
+the other and pass straight through. **Solo multi-agent is CELLO's first wedge**, so that is the most
+likely way to reach this check, not the least. Now checks every loaded agent and names which one.
+
+### F7 — three behaviour moves the refactor did not surface, recorded here because that is the rule
+
+Behaviour preservation is a refactor's spec, so a move that is *arguably better* still has to be
+stated rather than normalised away:
+
+1. The 4000-char cap now runs **after** the account-subject gate, previously before — so an oversized
+   message on an account-subject item returns `account_subject_message_unsupported` rather than
+   `message_too_long`. More correct; still a change.
+2. Send-failure guidance lost its trailing *"Retrying is safe — the submission id is derived from the
+   content."* Three of four send branches already carry retry advice inside their own guidance, so
+   the loss lands only on `submission_refused_by_node`, where retrying is the wrong advice anyway.
+   Net improvement, unstated until now.
+3. Offline guidance went from *"refuse again with the same message"* to *"try again"* — necessarily
+   generic once shared.
+
+### What the guards caught, and what they could not
+
+The reviewer verified the full guard inventory survived the extraction intact, line by line against
+the pre-image, and confirmed the parameter names matched character-for-character (the `bd58925`
+dead-verb class). What **nothing** caught: the deliverable had no behavioural test at all — renaming
+`subject_pubkey` in the handler would have left the whole suite green.
+
+So the milestone now has a structural guard it lacked: **every tool in `DUAL_SURFACE_VERBS` must
+resolve to a real daemon handler.** Name-parity checked the CLI and the MCP shim against the
+vocabulary; nothing checked the vocabulary against the DAEMON. Revert-tested by mistyping the proxied
+method name.
+
+### Also landed — per-counterparty include/omit (a `DOD-END-SURFACE-1` clause)
+
+`contact_signal_prefs`, keyed on `agent_id` — never `agent_name`, which is a mutable display label
+reusable after retirement and would silently hand a NEW agent the retired one's disclosure choices.
+Applied LAST at presentation and only ever to **narrow**: consent is enforced upstream in SQL, so an
+explicit `present: true` cannot resurrect something consent excluded. `null` CLEARS a choice, which
+is a distinct state from `false` — without the distinction an operator could never undo an omission
+without knowing what the default had been.
+
+### Note on the shared checkout
+
+A second session is working in the same `cello-client` tree (it landed `DOD-M9B-STORE-1`, the gateway
+SQLCipher work, as `449bbba`). Staging is now file-by-file rather than `git add -A`; the six earlier
+M10B commits were checked and contain none of its files.
+
+---
+
+### 2026-07-29 — Entry 37: DESIGN NOTE — `DOD-END-SCAN-1` (written before any code)
+
+**Target behavior (one sentence).** A submission's plaintext body is judged by a deterministic,
+versioned rule corpus BEFORE it is hashed, and on any hit the submission is REJECTED with the reason
+named — never cleaned, never partially accepted — while the exact rule set that judged it is recorded
+in a `scanner_version` derived from the corpus itself.
+
+**Spec anchors.** Spec §7 constraints 2 (versioned shared component, byte-identical across nodes) and
+3 (reject always, fail-closed). Policy D-16 (concealment with no innocent use refuses on sight;
+legitimate encodings are decoded and judged). `M10B-D15` (derived `scanner_version`), `M10B-D16`
+(shared corpus, portal-owned verdict), `M10B-D17` (the `./detect` subpath). SHA-256 → FIPS 180-4.
+
+**Producer/consumer chain.**
+- *Rule corpus* — produced by `@cello-protocol/gateway/detect` (`compileInjectionPatterns`,
+  `compileSecretRules`, RE2-backed, no I/O, no model). Consumed by the portal's intake. If the corpus
+  changes, `scanner_version` changes with it — that is the whole point of deriving it.
+- *`scanner_version`* — produced HERE by hashing the canonical serialization of the active rule set.
+  Consumed by `mint.ts` and stored by the directory as a SIGNED field. If it were hand-maintained and
+  went stale, the directory would notarize evidence of a scan that did not happen — the directory
+  cannot re-run the scan, which is precisely why `DOD-DIR-WRITE-1` made the field signed.
+- *Verdict* — produced here, consumed by the ingress drain loop, which acks the row and (for an
+  attributable submission) reports the cause back to the submitter.
+
+**The seam.** `src/server/trust/submission-scan.ts` in cello-portal, between
+`authenticateSubmission` (Entry 36's step 2) and `mint.ts`. It imports from
+`@cello-protocol/gateway/detect` and NEVER the package barrel — the barrel pulls
+`GatewayConfigStore`/`GatewayRecordStore`, the HTTP server and the sidecar spawner into a Next.js
+Fargate app. It must not know what a signal TYPE is: it judges bytes, and the same call judges the
+body of an endorsement, a withdrawal and a refusal message identically.
+
+**Invariants at stake.**
+- `INV-UNTRUSTED` — the scanner never rewrites the body. A "cleaned" body would be the portal
+  restating the submitter's words in its own voice, which is exactly how framing dies quietly. Reject
+  or pass, nothing in between.
+- `INV-ZEROBUMP` — no branch on signal type. The corpus judges text.
+- `INV-ATTRIBUTION` — untouched; the scanner runs AFTER authentication and never re-derives identity.
+- Fail-closed (§5a) — an unrecognised verdict, an uncompiled corpus, or a thrown detector must
+  REJECT. A scanner that can be silently off cannot back a signed `scanner_version`; that is the same
+  reasoning that excluded the Layer-2 ONNX classifier (`M10B-D16`), and it applies to our own failure
+  modes too.
+
+**Approach + rejected alternative.** Compile the corpus once at module load, derive `scanner_version`
+from its canonical serialization, and expose one `scanSubmissionBody(body)` returning
+`{ ok: true, scannerVersion }` or `{ ok: false, reason, scannerVersion }`. **Rejected: reusing the
+gateway's `InboundScreener` disposition.** Its stated posture is the OPPOSITE of intake's — "not, by
+itself, an auto-block; CELLO is not a moderation tool; this surfaces evidence, it does not police
+content" — so reusing it produces a scanner that passes its own tests and never refuses anything.
+The corpus is shared; the policy is the portal's. **Also rejected: scanning after hashing**, which
+would notarize the hash of content that is then rejected, leaving a permanent record of a signal
+that was never minted.
+
+**Falsification pass.** Checked before writing code: `@cello-protocol/gateway` is NOT currently a
+portal dependency — it must be added, and `./detect` is a real exports entry (verified in the
+package's `exports` map, not assumed). `compileInjectionPatterns` is async-ready
+(`injectionPatternsReady`), so the module cannot judge before the corpus is compiled and must refuse
+rather than pass while it is warming. Redaction (`redactSecrets`) exists and must NOT be used for its
+rewriting behaviour — only its FINDINGS matter here, because rewriting is the thing INV-UNTRUSTED
+forbids.
+
+**Decisions this note makes.**
+1. Charset class, length cap and URL policy are part of the hashed corpus serialization, so changing
+   any of them changes `scanner_version` — they are rules, not configuration.
+2. The length cap at intake is independent of the client's 4000-char submit cap: the client cap is a
+   courtesy to the operator, this one is a protocol constraint, and the portal must not trust a
+   client-side bound it did not enforce.
+
+**Test plan sketch.** Red-first: an injection payload is rejected with `scanner_injection_pattern`;
+a live-looking credential is rejected with `scanner_secret`; control characters and markup are
+rejected; an over-long body is rejected; a normal sentence PASSES (the positive control without which
+"reject everything" would pass every negative test); the same body scanned twice yields the same
+`scanner_version`; a body is never mutated. Enforcer: the ingress path, and ultimately
+`DOD-END-JOURNEY-1` case (a) where a refusal message is scanned on the same path.
+
+---
+
+## Entry 38 — `DOD-END-INGRESS-1` and `DOD-END-SCAN-1`, and a subpath that was inert — 2026-07-29
+
+Three repos moved. Directory: the drain surface. Portal: the drain client, the authentication step,
+the scanner. cello-client: the corpus made enumerable, then made *usable*.
+
+### The directory: two routes, because the split IS the exactly-once property
+
+`DOD-END-QUEUE-1` built the mailbox and its repository; **nothing exposed it**, so every submission
+the client surface reported as "queued" sat in a table nobody read.
+
+`POST /internal/submissions/drain` READS; it does not delete. `POST /internal/submissions/ack`
+removes, after the portal reaches a TERMINAL outcome (minted, rejected, poison — all three delete,
+differing only in what goes back to the submitter). Delete-on-read is the obvious single-route design
+and it turns **every crash into a silent loss** of a submission whose operator was told it was
+queued — and since the ciphertext is opaque to the directory, nothing downstream could ever notice.
+Revert-tested: putting the delete back into drain fails the crash-recovery assertion.
+
+Auth is required even though the payload is opaque. The SET of queued ids, their arrival order and
+their intake key ids is traffic analysis — how much, how often, against which key generation.
+*"It is encrypted"* is not a reason to serve it to anyone.
+
+### The portal: what "derive `issuer_pubkey` from the signature" actually means
+
+Written down because the phrase invites a wrong implementation. **Ed25519 has no key recovery**
+(RFC 8032), so it cannot mean recovering a key from signature bytes. It means the body CLAIMS a key
+and that claim is worth **nothing** until the signature verifies against it. The operational rule the
+code enforces: `submitter_pubkey` is never read for any purpose before `verify` returns true — only
+shape-checked. Tested directly with the forgery: Mallory writes a body claiming Bob's pubkey and
+signs it with her own.
+
+Every failure RETURNS rather than throwing, because the caller drains a batch and one poisoned row
+must not stop the rest — a single malformed submission that aborted the drain would be a trivial
+denial of service against every other submitter.
+
+### `scanner_version` is derived, and that required making the corpus enumerable
+
+`M10B-D15` says derive it; nothing could. Added `injectionPatternIds`, `secretRuleIds` and
+`detectorCorpusDigest` to the `./detect` subpath — over the **ACTIVE** set, not the source list,
+because `compileSecretRules` deliberately skips a rule that will not compile under RE2. That
+distinction is what makes §7's "byte-identical across nodes" mechanically checkable instead of
+aspirational: **two intakes agree iff their derived versions agree.** Sorted before hashing, so a
+mere reorder does not fake a rule change.
+
+### THE FINDING WORTH KEEPING — the subpath was complete-looking and inert
+
+`./detect` never exported `initLinearRegex`. **The corpus cannot compile without it.** Omit it and
+`compileInjectionPatterns` runs happily, leaves `compiled` null, and `scanInjectionPatterns` returns
+`[]` for every input — every rule silently matching nothing. A consumer installing that gets a
+scanner **that cheerfully passes a prompt-injection payload**, which is strictly worse than one that
+fails to load, because it reports success.
+
+Two things made it invisible:
+1. **From inside the monorepo it works**, because the gateway's own startup calls `initLinearRegex`
+   before anything else. Nothing in cello-client exercised the subpath as an outside consumer would.
+2. **The exports map deliberately offers no deep-import escape** (that narrowness is the point of
+   `M10B-D17`), so there was no workaround — the omission was fatal rather than annoying.
+
+It surfaced only when the portal's scanner was built against the PUBLISHED package. Generalised:
+**a narrow entry point has to be tested from outside, as a consumer, or "narrow" and "broken" are
+indistinguishable.** The pinned export-list guard I wrote earlier caught every ADDITION deliberately;
+it could not catch an omission, because it only checks that the listed names are present.
+
+### Published
+
+`v0.0.138` (gateway 0.0.11 — corpus digest) and `v0.0.139` (gateway 0.0.12 — the initializer).
+0.0.11 is on npm and is the unusable one; anyone reading this should use **0.0.12 or later**.
+
+### State
+
+- Directory drain routes: 6 integration tests green, **NOT deployed** — rides the next directory
+  deploy (~25–30 min, 3 regions). No migration, so nothing to renumber against the other session.
+- Portal: drain client (7 tests) + `authenticateSubmission` (6 tests) green and pushed.
+- Portal scanner: written, **not yet verified** — it needs gateway 0.0.12, which was publishing as
+  this entry was written.
+- Neither `DOD-END-INGRESS-1` nor `DOD-END-SCAN-1` has had its `cello-unit-reviewer` pass yet. Both
+  are owed one before either tag flips.
+
+---
+
+## Entry 39 — `same_operator` moves into the hash, and finds three write paths that were lying
+
+**`M10B-D30`. The fork I raised should never have been a fork.** I wrote up "where does
+`same_operator` live" as a three-way decision needing Andre's call. He answered that putting it
+outside the payload was "the most obvious decision ever" and that I had failed to follow the spec —
+and he was right on the second point in a way that matters more than the first. `DOD-END-COUNT-1`
+already said the flag was "an envelope-visible fact". Shipping it in the payload was a deviation
+from a written line, not an ambiguity in one. Escalating a deviation as a decision is how a spec
+stops being load-bearing.
+
+I also overweighted the migration cost. The launch-triage rule says a wire change is expensive when
+it strands existing data — the stranded set here was EMPTY (alpha, no users, the only minted
+endorsements live in test fixtures). "Expensive in principle" is not the rule.
+
+### What shipped
+
+Preimage arity 11 → 12, `same_operator` APPENDED — slot order IS the wire format, so append-only.
+Boolean-normalised on encode and on strict decode, so no reader ever has to distinguish "not
+co-owned" from "field missing". The predicate excludes flagged endorsements from `min_count` and
+reports `excluded_same_operator` beside the countable total; a refusal reporting the RAW count would
+tell an operator they have enough while the predicate disagrees.
+
+**Excluded from the count, not suppressed.** The endorsement is still presented and still readable —
+"these two agents share an operator" is true and useful, and D-27 caps its worth at the endorser's
+own tier. What it must never do is help clear a COUNT, because a count is exactly the thing one
+operator can inflate alone.
+
+### ONE FIELD, THREE WRITE PATHS, TWO OF THEM SILENTLY DEFAULTING
+
+This is the entry's real content, because the same defect appeared twice in two hours in two
+different files, and the second one made the milestone's headline security property a no-op.
+
+1. **`deliverWalletSignal` → `putWalletSignal`** omitted it. The wrong flag was not the damage:
+   PRESENTATION re-encodes the envelope from that row, so a co-owned endorsement's bytes stopped
+   hashing to the notarized value and the RECIPIENT rejected it — while the holder's log said
+   `attached: 1`. A field lost on the way into the wallet is silent until it surfaces one hop away
+   as somebody else's `hash_mismatch`.
+2. **`putReceivedSignal`** omitted it, and this one is worse. `evaluateSignalPolicy` filters on
+   `sameOperator`; that INSERT is the only way a received signal ever gets one. The column took its
+   `0` default, every arriving endorsement read as not-co-owned, and **`DOD-END-COUNT-1` was inert
+   in production** — with sixteen green unit tests, all of which construct rows by hand and never
+   touch the store.
+3. The portal's mint set it correctly throughout.
+
+**The lesson is not "check your INSERT column list."** It is that a hand-built fixture cannot test a
+persistence layer, and a `NOT NULL DEFAULT` turns a dropped field into a plausible value rather than
+an error. Every assertion about a stored field now has to arrive through the real write path — which
+is what the five new `dod-consume-1` tests do (putReceivedSignal → listReceived →
+evaluateSignalPolicy). Revert-tested: three fail while all sixteen hand-built floor tests stay green.
+That contrast IS the finding.
+
+**The upgrade path was broken too**, and worse than incomplete: `contact_trust_signals` never had
+the column, and `wallet_trust_signals` gained it only in the fresh DDL. A NEW operator worked; an
+EXISTING one hit "table has no column named same_operator" on the first insert and could neither
+receive nor present anything. Invisible in CI because every test database is fresh. Both tables now
+take an additive ALTER (`NOT NULL DEFAULT 0` is legal for ALTER, so migrated == fresh), with no
+backfill needed — 0 is correct for every row minted before the slot existed.
+
+### Two more defects the wire change exposed
+
+- **The NOTARY carried its own vendored envelope decoder** (`signal-write.ts`) with its own arity
+  constant and its own re-encode — 40 lines duplicating the shared component at the one party whose
+  job is to agree with everyone. It rejected every 12-slot envelope with `envelope_undecodable`: a
+  valid endorsement refused by the only party that can notarize it. Replaced with the shared
+  decoder, NOT a bumped constant — patching 11→12 fixes the instance and leaves the mechanism. Two
+  more vendored copies died in portal tests, both of which re-hash and would have reported
+  `hashOk: false` on every co-owned signal.
+- **The J-END fixture registered every agent under one dev account**, so Bob and Alice shared an
+  `account_id` — the journey's headline "a stranger endorses Alice" hop was exercising the CO-OWNED
+  path, i.e. the one this milestone discounts. A false green on the central claim, invisible while
+  the flag sat unread in the payload. Bob now gets his own account, asserted distinct before he
+  issues.
+
+Also: four different `protocol-types` versions were declared across trustless-cello (0.0.18,
+0.0.23×3) against 0.0.33 published. `^0.0.23` is an EXACT pin under npm semver — caret on a 0.0.x
+matches nothing else — so directory, relay, e2e-tests and interfaces had been running different wire
+code from each other. All aligned.
+
+### Guards added, because each defect's cost was how long it stayed invisible
+
+- The presenter re-derives its own hash and **refuses to send a signal it cannot reproduce**,
+  logging both hashes and every scalar field. Presenting bytes that disagree with the hash beside
+  them is always a bug at the presenter; it should not be discoverable only by asking the recipient.
+  When every selected signal fails it is an error naming the count — never `attached: 0`, which
+  reads identically to holding nothing.
+- The recipient's `hash_mismatch` warning logs BOTH hashes. It previously logged the claimed one
+  only: "these two values differ", showing one of them.
+- A frozen vector carries `same_operator: true`. All seven said `false` — which is also exactly what
+  a party that ignores the field and hardcodes `false` emits, so the suite could not tell them apart.
+  My first version of that anchor compared live-false against the FROZEN hash and never fired; the
+  revert test caught it (one failure where I expected two). Live-vs-live is the form with teeth.
+- The portal drain counts `errored` rows. It logged a per-row throw and incremented nothing, so a
+  pass that lost three rows returned every counter at zero — which reads as "nothing wrong".
+- `cello_trust_signals_list` shows the operator which of their endorsements are capped, and the
+  recipient's projection carries `same_operator` with its own framing (case (b)'s "rendered as a
+  positive" clause, which was NOT met when the hop first went green).
+
+### State
+
+- **J-END 10/10 hops live**, including HOP 9 = case (b). `DOD-END-COUNT-1` ✅, case (b) ✅.
+- Published `v0.0.145` — daemon 0.0.92, protocol-types 0.0.34, connect 0.0.101. Beta; binary-verified
+  (`npm pack` + grep dist for all three fixes); cross-pins are real versions. `latest` promotion is
+  Andre's.
+- `cello-unit-reviewer` pass on all of the above is IN FLIGHT — a first dispatch died on a 529 with
+  no output, which is NO verdict, not a pass.
+- Case (d) (withdrawal) still ❌ and blocked on `DOD-END-WITHDRAW-1`; refuse/withdraw ops still
+  accumulate unhandled in the queue, which is what keeps `DOD-END-INGRESS-1` amber.
+
+---
+
+## Entry 40 — the review, and the third layer of the same hole
+
+The `cello-unit-reviewer` pass on the `same_operator` work. Two dispatches died on API
+errors first (529, then ENOTFOUND) — **a killed reviewer is NO verdict, not a pass**, so the
+third dispatch was the first real one. Eight findings, seven fixed here, one deliberately not.
+
+### F1 — the finding that matters: `evaluateSignalPolicy` has no production caller
+
+I fixed this defect twice today and it was still there a layer up. The sequence:
+
+1. The flag was inert because it sat **in the payload**, which no floor predicate may read.
+2. Moved to the envelope → inert because **`putReceivedSignal` dropped it on the INSERT**.
+3. Fixed → **still inert, because nothing calls the predicate.** A repo-wide grep returns its
+   definition, one comment, and two test files. No session path, no contact handler, no
+   gateway. No operator-facing surface sets a `SignalRequirementPolicy` either —
+   `cello_contact_set_signal` governs what I PRESENT, not what I REQUIRE.
+
+Ten of Alice's own agents clear a floor of three today for the same reason they did before
+this milestone: **no floor is ever evaluated.** `DOD-FLOOR-1` (M10, ✅) has the identical
+hole — its journey evidence calls `evaluateSignalPolicy` *from the test*, which is the
+hand-built-rows shape again: the test supplies the caller production lacks.
+
+**Not wired, deliberately, and this is a triage call rather than a deferral.**
+`DEFAULT_UNKNOWN_POLICY` is `{min_count: 1, require_issuer_kind: "portal"}`. Enforcing that
+at session acceptance today refuses every UNKNOWN contact holding no portal signal — i.e.
+most agents — and "two agents connect" is the product's core value. A floor never evaluated
+is a missing security property; a floor wired wrong is a broken product. `DOD-END-COUNT-1`
+and case (b) went back to 🟡 rather than carrying a ✅ the code cannot support.
+
+### F3 — and the reason nobody saw it: 45 test files that never run
+
+Replacing the directory's vendored decoder with the shared one silently changed a named
+reason: `decodeTrustSignalEnvelope` runs `toPreimage`'s semantic validation internally, so an
+out-of-enum `subject_kind` started reporting as `envelope_undecodable` — a FORM label on a
+MEANING failure, sending an operator to debug their CBOR encoder over a bad enum value. That
+is error substitution introduced by a refactor. Restored explicitly by classifying: a
+12-element array carrying the domain tag is structurally an envelope, so what remains is a
+VALUE problem.
+
+**The bigger thing is why it went unnoticed.** Every directory integration suite is
+`describe.skip` unless `CELLO_ENV=local`, and the gate does not set it. "935 tests green"
+exercised NONE of the submit chokepoint — the security-core module whose decoder I had just
+replaced. Running it found four breaks, three predating this milestone:
+
+- a test asserting `envelope_invalid` was already failing on my swap;
+- `bad[0] = 0x8c` corrupted the arity header to claim 12 when the preimage had 11 — and M10B
+  made **12 correct**, so the corruption became a VALID envelope and the test passed by
+  accepting exactly what it exists to refuse;
+- V55 dropped `signal_records.subject` and four queries across three suites still used it;
+- `m10-present-1-dumb-check.test.ts` — the suite for `checkPresentedSignals`, the function the
+  entire currency attestation rests on — was broken by V55 and unrun.
+
+36 tests now green under `CELLO_ENV=local`. Under that env 121 further failures are local
+credential problems rather than rot, so un-skipping wholesale would be noise; that triage is
+its own unit.
+
+### The attestation: wrong twice, in opposite directions
+
+Worth recording because the error was mine and the mechanism is instructive.
+
+1. I grepped the DAEMON, found `verdict: "active"` hard-coded and no ledger query, and wrote
+   that the attestation lied about a currency check. **It does not** — `#processSessionRequest`
+   calls `checkPresentedSignals` against `signal_records_effective` and forwards only active
+   rows. That was a claim about the PRODUCER reached by reading only the CONSUMER, which the
+   repo's debugging rules name explicitly.
+2. Reverted — and the restored sentence was *also* wrong, in the other direction. The
+   projection lists **every signal ever received from a contact**, while the directory checks
+   only what was presented in THIS session. Charlie holds three endorsements from Alice, she
+   presents one, all three are handed to his LLM under a sentence saying their status was just
+   confirmed — so one revoked last week keeps vouching.
+
+Fixed by threading `presentedSignalHashes` onto the inbound event and marking each signal
+`currency_checked_this_session`. That closes most of `DOD-END-WITHDRAW-1`'s "recipient holding
+a copy" clause at the point that actually matters — what a consuming model is told — with no
+new transport.
+
+### The rest
+
+- **F4** — the `same_operator` ALTER swallowed every failure. `sqlcipher-db.ts` sets no
+  `busy_timeout` and "two daemons on one DB" is a named real condition, so SQLITE_BUSY
+  swallows identically to duplicate-column; the daemon then runs with sessions forming
+  normally while no presented signal is ever stored. Now re-reads `PRAGMA table_info` and
+  rethrows. Revert-tested.
+- **F5** — `cello trust-signals list` never rendered the flag: MCP saw it, the CLI operator did
+  not. Half a parity fix on the surface `DOD-END-SURFACE-1` exists to keep in step.
+- **F6** — the envelope stopped being a pure function of the signed submission. `same_operator`
+  is computed from live account linkage and hashed in, so a re-mint after a crash could flip it
+  and notarize a SECOND endorsement from one submission — the duplicate `0009` prevents,
+  arriving where it cannot see. Now pinned to the derived submission id (`0010`).
+- **F7** — a comment claimed a refusal the code does not perform (the throw is caught by its own
+  function and degraded to a warn). Behaviour right, comment wrong, which is worse than either.
+- **F8** — `errored` rows do have a ceiling (`sweepStaleSubmissions`), but the sweep DELETES, so
+  the terminal state is a submission that vanished with no result and no notice. Named, not fixed.
+
+The reviewer also corrected one of my own claims: dropping `deliverWalletSignal`'s flag fails
+**1** daemon test, not "2 protocol-types tests" — protocol-types cannot depend on the daemon.
+And it found that `trust-signal-envelope.test.ts` stays entirely green under a hardcoded-false
+encoder, because every assertion round-trips through the same encoder and decoder. **The
+eighth frozen vector is the only thing standing between this repo and that bug.**
+
+### State
+
+- J-END **10/10 live** after all seven fixes. cello-client 2286 / trustless-cello 935 / portal
+  164, plus 36 directory integration tests that had never run.
+- Published `v0.0.145` (daemon 0.0.92, protocol-types 0.0.34, connect 0.0.101), binary-verified.
+  The post-review fixes are NOT yet published — they ride the next cascade.
+- `DOD-END-COUNT-1` 🟡 and case (b) 🟡, honestly, until the predicate has a caller.
+- ⚠️ **Local `cello_dev` DB:** V53–V55 were applied by hand (psql) to unblock the integration
+  suites, so its `flyway_schema_history` still reports max(version)=52 while the schema is at 55.
+  Harmless locally, but flyway would disagree — rebuild the local DB rather than trusting it.
+
+---
+
+## Entry 41 — `DOD-END-SCAN-1` ✅, and the first §1a violation was mine
+
+Flipped from evidence rather than from Entry 38's claim, because a journal entry is not proof that
+code does what it says.
+
+**Clause by clause.** `m10b-scan-1-submission-scan.test.ts` (9 green) covers injection payloads,
+control characters, markup, the PROTOCOL length cap, empty bodies, never-mutates, a stable
+`scanner_version`, and that the version rides refusals too. The SECRETS clause had **no named test**,
+so it was checked directly rather than assumed: a body carrying an AWS key pair is rejected, out of
+222 secret rules compiled at startup. Pipeline properties read off `submission-ingress.ts` — the scan
+runs BEFORE the mint, a failure records `rejected` and returns with no clean-and-continue, and the
+pass refuses to start when the corpus will not compile.
+
+**The best evidence was accidental.** Before `re2-wasm` was fixed the dev drain answered 500 with a
+wasm ENOENT; afterwards, 200 with `minted: 1`. That is a live negative control nobody designed: it
+proves the scanner is load-bearing on the real path rather than a no-op that would have passed
+either way.
+
+**Not verified, and recorded as such:** D-16's *decode-then-judge* half. Refuse-on-sight for
+concealment is covered by the injection and charset rules; decoding a legitimate encoding before
+judging it is exercised by nothing here.
+
+### The violation
+
+I wrote a **14-line blockquote** onto that DoD line minutes after §1a capped them at five — the exact
+"journal entry wearing the wrong hat" the rule names, committed by the session that had just read the
+rule. Trimmed to four lines pointing here.
+
+Worth saying plainly because it is the cheapest possible demonstration of why the rule exists: the
+instinct to put the reasoning where I was working, rather than where it belongs, survived reading the
+prohibition against doing so. The cap is mechanical for that reason — it does not depend on the
+author agreeing with it in the moment.
+
+---
+
+## Entry 42 — `DOD-END-SUBJECTKIND-1` ✅: a stale tag, not missing work
+
+The last ❌ in the re-cut scope turned out to be built, tested and live. Checked clause by clause
+rather than assumed, since the previous line taught that lesson an hour earlier.
+
+| clause | evidence |
+|---|---|
+| agent-subject, same operator → mint and FLAG | `FLAGS a same-operator endorsement rather than minting it as a plain vouch`; and live today — `co-own: own` on a real endorsement between two of Andre's agents |
+| account-subject, same operator → REFUSE | `REFUSES an account-subject submission from the SAME operator, by name` → `same_operator_account_subject`. **Revert-tested**: deleting the branch fails exactly that test |
+| missing agent→account resolution → REFUSE, named | `REFUSES to mint for a subject the directory does not know` → `subject_not_registered`, which was the live drain's first rejection today |
+| default target is the specific agent (M10-D5) | the subject on every minted endorsement is the agent pubkey, observed live |
+
+Plus the linkage tests that keep the flag meaningful: phone-stub linkage catches the second-account
+case, and "does NOT flag genuinely different operators" is the negative control — without it, an
+implementation that flagged everything would pass.
+
+**D-27's tier cap is not this line's.** "Worth capped at the endorser's own tier to the recipient" is
+recipient-side policy and moved with `DOD-END-TIER-1` in the re-cut. What ships here is the FLAG;
+what a recipient does with it is the moved line.
+
+**Two stale tags in a row** (`SCAN-1`, now this) says something about the scoreboard rather than the
+code: tags were being written when a unit was declared done and not revisited when later work
+finished the clause. Both flips took ~10 minutes to evidence and neither needed a line of code.

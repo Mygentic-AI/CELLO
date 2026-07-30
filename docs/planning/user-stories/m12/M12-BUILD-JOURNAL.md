@@ -15,6 +15,18 @@ description: >
 
 ## RESUME STATE (keep current — overwrite this block only)
 
+- **🚨 PROCEDURE + DoD CHANGED 2026-07-30 — RE-READ BOTH BEFORE YOUR NEXT UNIT.** Nothing about the
+  work is wrong; the documents were adjusted to match how M12 actually runs. New: §1a journal entries
+  append at EOF and are verified after writing (this milestone silently lost 10 entries to no-op'd
+  prepends); §1b document discipline + a two-pass cap on design-doc units; §2d the done-auditor is
+  scoped to LIVE CLOUD STATE only, never re-reviewing code; §2e parallel branches — one branch per
+  unit, pushed on creation, **commit by explicit path never `git add -A`**, and a reviewed-green unit
+  MERGES rather than sitting (five were unmerged at once). §5's "one thread, one coder" is GONE — it
+  contradicted `M12-D4`; subagents stay read-only, parallel coders on branches are the model. A tag
+  flips only when the reviewer's verdict is QUOTED — "review in flight" is not a closing state. The
+  nine invariants lost their ❌ tags and are lenses in §2b. `DOD-AE-APPEND-1` is SPLIT into
+  PRIMITIVES-1 / STORE-1 / CHANNEL-1 / APPEND-1 — your next red line has a different name.
+
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
 - **Next red:** AE-APPEND-1 part 4 — remaining Tier-A specs (DELIBERATE-START unit, see Entry 20's

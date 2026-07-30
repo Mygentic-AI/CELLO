@@ -142,6 +142,7 @@ import { buildSealLegibility, bindLegibilityToTbs } from "./seal-legibility.js";
 import { WALL_CLOCK } from "./directory-types.js";
 import type { DirectoryStore } from "@cello-protocol/interfaces";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
+import { listSubmissionResults } from "./submission-results-repository.js";
 import {
   encodeSignalingAuthChallenge,
   encodeSignalingAuthFailed,
@@ -179,6 +180,8 @@ import {
   encodeSealUpgradeRejected,
   encodeTrustSignalPickup,
   encodeSubmissionWriteResult,
+  encodeSubmissionResults,
+  encodeSubmissionResultsError,
   encodeSubmissionWriteError,
   encodeManifestPollResponse,
   encodePong,
@@ -2250,6 +2253,14 @@ export class CelloDirectoryNode {
           //
           // Nothing is opened, parsed, or interpreted. The row is {id, intake_key_id, ciphertext}.
           void this.#processSubmissionWrite(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "submission_results_request") {
+          // M10B / `M10B-D25r2` — the issuer asks what happened to what it submitted.
+          //
+          // SCOPED BY `authedPubkeyHex`, the identity the stream's challenge-response established.
+          // There is deliberately no pubkey parameter to pass: a request-supplied one would let any
+          // agent that can dial this node collect every other agent's outcomes, including refusal
+          // messages sealed to somebody else. Unopenable by them, but never theirs to hold.
+          void this.#processSubmissionResultsRequest(stream, authedPubkeyHex!);
         } else if (parsed.type === "session_request") {
           // REG-001 AC-009: refuse session_request if registration is required and the agent
           // has not completed it. requireRegistration defaults to false for backward compat.
@@ -2680,6 +2691,41 @@ export class CelloDirectoryNode {
    * check it and this node cannot. It is a dedupe key and a routing hint; the PORTAL re-derives it
    * from the opened body and discards a row whose id disagrees (M10B-D20).
    */
+  /**
+   * M10B / `M10B-D25r2`: return this issuer's submission outcomes.
+   *
+   * The read is scoped to the AUTHENTICATED key and the ciphertexts stay sealed to it, so this node
+   * hands back a refusal message it cannot itself read — the mirror of accepting a submission it
+   * cannot read on the way in.
+   */
+  async #processSubmissionResultsRequest(stream: Stream, authedPubkeyHex: string): Promise<void> {
+    try {
+      const results = await listSubmissionResults(this.#pgPool!, authedPubkeyHex);
+      this.#logger?.info("signal.results.served", {
+        issuer: truncHex(authedPubkeyHex), count: results.length,
+      });
+      this.#sendFrame(stream, encodeSubmissionResults({
+        results: results.map((r) => ({
+          submission_id: r.submissionId,
+          outcome: r.outcome,
+          reason: r.reason,
+          signal_hash: r.signalHash,
+          ciphertext: r.ciphertext,
+          created_at: r.createdAt,
+        })),
+      }));
+    } catch (err: unknown) {
+      // NAMED, never silence. An empty answer and a failed one are the same shape to the caller
+      // otherwise, and "you have no results" is the wrong thing to tell someone whose refusal is
+      // sitting in a table this node could not reach.
+      this.#logger?.error("signal.results.serve.failed", {
+        issuer: truncHex(authedPubkeyHex),
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      this.#sendFrame(stream, encodeSubmissionResultsError({ reason: "results_unavailable" }));
+    }
+  }
+
   async #processSubmissionWrite(
     stream: Stream,
     authedPubkeyHex: string,

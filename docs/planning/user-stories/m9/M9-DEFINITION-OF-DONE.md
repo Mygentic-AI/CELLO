@@ -56,12 +56,9 @@ description: >
     message inbound+outbound with a verifiable chain + the real correlationId). Reviewed: CFG-001 closed
     B1/H1/H2/M1/M2/L1 + a hash-chain hollow-test; REC-001 closed correlationId(HIGH)/screen_error(MED)/2 LOW
     + 2 hollow-test gaps.
-  - **Phase-1: 11/12 ✅ gate-green; the 12th is DEFERRED by decision — Phase-1 is launch-complete.**
-    **M9-IN-002 part 2** (🟡½ — real DeBERTa model + transformers.js inference) is deferred by Andre
-    (2026-06-23) until the 568 MB model + runtime infra are lined up; it is to be built WITH that infra,
-    not blind. The live gateway runs Layer-1 + outbound + governance + config + records without it
-    (absent model → Layer-2 off, graceful). Everything launchable for Phase-1 is gate-green.
-    Build opened 2026-06-22.
+  - **Phase-1: 11/12 ✅ gate-green.** The ONLY remaining story is **M9-IN-002 part 2** (🟡½ — real DeBERTa
+    model + transformers.js inference; the live bin loads no model), gated on external infra (568 MB model +
+    a memory-capable test env). Build opened 2026-06-22.
 
 ## The build gate (resolved)
 
@@ -109,7 +106,7 @@ block/redact/warn handling run locally. Config and records are local. Ends at **
 | ✅ **M9-IN-001** | Inbound Layer 1 — deterministic sanitization: invisible-character strip, RE2 patterns, entropy scoring, encoded-payload decode, special-token strip, size/length cap. | Each check fires on a crafted input and the sanitized text + notes reach the agent via `cello_receive`. | SCAN-001 |
 | | _COMPLETE: all steps built + unit-tested, AND AC-002 done — the Step-9 injection matcher runs on the RE2 engine (native `re2` preferred, `re2-wasm` fallback; both ReDoS-safe). Live: the sanitizer feeds the gateway inbound screen, and the seam test proves sanitized content reaches the agent. Step-9 matches are observe-signal, not auto-block (block is IN-002/policy)._ | | |
 | 🟡½ **M9-IN-002** | Inbound Layer 2 — DeBERTa injection scanner (pre-downloaded INT8, in-process). | A known injection is scored and blocked; a clean message passes; no network call. | SCAN-002 |
-| | _Part 1 built: scanner verdict logic (score≥70 block / ≥35 flag / <35 pass; score governs — AC-003) with a pluggable classifier + graceful degrade, and the model installer (consent-gated download, size-verified, no-bundle). Model decided: protectai/deberta-v3-small-prompt-injection-v2 fp32 + transformers.js + confirm-install. **Part 2 DEFERRED by decision (Andre, 2026-06-23):** the real classifier (transformers.js over the local ONNX) + the gated real-inference test (AC-001/002/SI-001) wait until the 568 MB model is downloaded and the runtime infra is lined up — to be built WITH that infra, not blind. Open sub-decision at build time: the transformers.js runtime install mechanism (lean opt-in/lazy, matching the model-not-bundled call). The live gateway runs Layer-1 + outbound + governance + config + records without it (absent model → L2 off, graceful) — Phase-1 is launchable. SHA-pin blocked by the dev harness (documented)._ | | |
+| | _Part 1 built: scanner verdict logic (score≥70 block / ≥35 flag / <35 pass; score governs — AC-003) with a pluggable classifier + graceful degrade, and the model installer (consent-gated download, size-verified, no-bundle). Model decided: protectai/deberta-v3-small-prompt-injection-v2 fp32 + transformers.js + confirm-install. Part 2 (the real classifier + the gated real-inference test for AC-001/002/SI-001) needs the runtime + the 568 MB model — a focused effort with that infra. SHA-pin blocked by the dev harness (documented)._ | | |
 | ✅ **M9-IN-003** | Inbound language allowlist (English default) via a small n-gram detector; confident-only, allow on short/low-confidence; flagged message held with a legible note. | A confident non-English message is held with guidance; "ok thanks" is not. | new |
 | | _Detector built + unit-tested (dominant Unicode script: non-Latin confident → held, short/Latin → allowed, configurable allowlist). NOT yet wired live: a non-English `block` needs the terminal-block inbound handling (L4/M2 split). Latin-script LANGUAGE discrimination (English vs French) is the separate design session._ | | |
 | ✅ **M9-OUT-001** | Outbound secret detection + redaction: the full gitleaks dictionary + the generic-entropy catch-all. Redact-by-default. | Each secret type is redacted; a novel high-entropy key is caught; the LLM is told what was redacted. | SCAN-003 / REDACT-001 (part) |
@@ -124,19 +121,6 @@ block/redact/warn handling run locally. Config and records are local. Ends at **
 | ✅ **M9-CFG-001** | Config storage: the gateway's own local SQLCipher DB, versioned (append-only rows), with tighten-free / loosen-needs-confirmation. Portal/CLI/file-import front-ends. | A setting change is versioned and attested-ready; loosening a guard requires confirmation; tightening is free. | new |
 | ✅ **M9-REC-001** | Local security-pass records: the gateway records what it did to each message (clean / redacted / blocked / warned), and computes a fingerprint of each record. (The cheap half of #5; sending to the directory is Phase 2.) | Every message produces a record with a fingerprint; clean passes are recorded too. | REDACT-004 (part) |
 | ✅ **M9-GATE-1** | **End-to-end gate, one machine.** Send a message → screened → secret redacted / injection blocked / warning handled → LLM gets the right answer. A message comes in → screened. | The whole loop is green against the real daemon + gateway on one machine. No directory attestation. | new |
-
-> 🔴 **STATUS CORRECTION (2026-07-09) — CFG-001 and REC-001 did NOT ship the storage they specify.**
-> The row above says "the gateway's own local **SQLCipher** DB", and CFG-001's behavior clause says "its own
-> SQLCipher database (a separate file and key from the daemon's)". The shipped code is
-> `new DatabaseSync(dbPath)` — plaintext `node:sqlite`, no cipher key (`core/gateway/src/config/config-store.ts`,
-> `core/gateway/src/records/record-store.ts`). REC-001 inherits it by storing into "CFG-001's DB or a sibling".
-> Both files justify plaintext with a comment claiming the daemon does the same; that stopped being true on
-> 2026-06-25. **Do not treat these two as done on the storage clause.**
->
-> The remediation is tracked OUTSIDE M9 — as `DOD-CRYPTO-AT-REST-1` in
-> [[M8C-DEFINITION-OF-DONE]] — because it is local data-custody (the daemon's SQLCipher domain), not the
-> screening layer M9 owns. This note exists only so nobody closes CFG-001/REC-001 believing the store is
-> encrypted. It is not.
 
 **Retired (cut in the prune — do not build):**
 - **REDACT-002** (Layer 5, LLM-call governor) — out; that governs the agent's own LLM use, upstream of `cello_send`.
@@ -179,11 +163,3 @@ Built only when needed. Each has a home:
   can start now.
 - Until #5 (M9-ATTEST-001) is built, do not market the product as "tamper-proof" — that claim
   only becomes true once records are attested to the directory.
-
----
-
-## Related Documents
-
-- [[M8C-DEFINITION-OF-DONE]] — DOD-M9INT-1 is the committed home for the m9-build merge + seam
-  wiring (Tier 0 of M8C); the semantic gate re-runs this DoD's gate against the merged daemon
-- [[2026-06-21_1600_m9-content-channel-seam-and-entry-plan|M9 Content-Channel Seam and Entry Plan]] — the daemon attachment point the merge wires

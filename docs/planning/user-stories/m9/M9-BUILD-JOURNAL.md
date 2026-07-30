@@ -5,20 +5,23 @@ date: 2026-06-21
 milestone: M9
 status: open
 description: >
-  Append-only build journal for M9 (the security gateway). One entry per unit of work.
-  NEVER edit a prior entry. This is the live-state + audit-trail follow-through doc: a
-  fresh context reads the last few entries to resume. Pairs with M9-DEFINITION-OF-DONE.md
-  (the target) and M9-PROCEDURE.md (the runbook). See M9-PROCEDURE.md §0 for read order
-  and §1 for what each entry must contain.
+  Append-only build journal for M9 (the security and governance layer) — the June 2026 Phase-1
+  build. One entry per unit of work. NEVER edit a prior entry. Pairs with
+  M9-DEFINITION-OF-DONE.md (the target) and M9-PROCEDURE.md (the runbook).
+
+  M9 SHIPPED THIS LAYER AND IT NEVER RAN. The 2026-07-27 policy audit found the composition
+  root never set config.securityGateway, so every shipped daemon fell back to an always-allow
+  stub. The fix is a SEPARATE milestone with its own folder and its own three documents:
+  see [[M9B-DEFINITION-OF-DONE]], [[M9B-PROCEDURE]], [[M9B-BUILD-JOURNAL]] in
+  docs/planning/user-stories/m9b/. Do not add connect-unit entries to this file.
 ---
 
 # M9 Build Journal (append-only)
 
 > Newest entries at the BOTTOM. Never edit or delete a prior entry. Each entry: DoD-ID,
 > what was red, what was found, commit hashes, reviewer outcome, blockers, decisions.
-> (M9-PROCEDURE.md §1, §9.)
+> Design-significant units get a DESIGN NOTE entry before any code (M9-PROCEDURE §6).
 
----
 
 ## 2026-06-21 — M9 planning complete (no code yet)
 
@@ -890,3 +893,4 @@ At part-2 build time, the open sub-decision is the transformers.js runtime insta
 lazy to keep the client small, matching the model-not-bundled call). Do NOT build part 2 blind — it needs
 the model + runtime + a memory-capable env to write AND verify; unrunnable inference code would violate the
 "only a live run is done" discipline. State: gateway 130 + daemon 395 green; nothing pushed; nothing on `main`.
+

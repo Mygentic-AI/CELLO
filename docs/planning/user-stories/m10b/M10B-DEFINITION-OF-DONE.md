@@ -42,7 +42,9 @@ description: >
   is not ✅ until the published artifact works.
 
 ## Status legend
-✅ PROVEN (enforcer-green) · 🟡 BUILT/UNVERIFIED-LIVE · 🟠 PARTIAL · ❌ NOT BUILT · 🅿️ PARKED
+✅ PROVEN (enforcer-green) · 🟡 BUILT/UNVERIFIED-LIVE · 🟠 PARTIAL · ❌ NOT BUILT · 🅿️ PARKED ·
+**➡️ MOVED** (out of M10B by the 2026-07-30 re-cut — text kept in place, ships in the
+first-after-launch milestone; see the Re-cut block in the scope fence)
 
 > **If the dev environment is hibernated** ([[M10B-PROCEDURE]] §2e — check with
 > `dig +short directory-us1.cello.mygentic.ai`, `198.51.100.x` = hibernated), the only lines that
@@ -132,43 +134,90 @@ amendment, deliberately).
 > **Changed 2026-07-28:** issuance rate limiting moved from OUT to IN — Andre, answering the open
 > question directly: *"Okay, but the other one I really need."* It is now `DOD-END-QUOTA-1`.
 
+### 🚨 RE-CUT 2026-07-30 — the scope fence moved. Read this before pulling the next red line.
+
+Source: [[2026-07-30_m10b-scope-and-cost-review]]. **The fence is now the live journey: if
+`DOD-END-JOURNEY-1`'s cases cannot observe a line failing, it is not launch scope**
+([[M10B-PROCEDURE]] §5d). Two calls from Andre on 2026-07-30, both recorded verbatim in intent:
+
+- **The issuance quota moves to first-after-launch.** Asked whether to ship the cap now given it sits
+  behind the agent→account lookup *and* a safe account-linking flow (the existing function is an
+  authorization bypass), Andre chose **first thing after launch**. Nothing on the wire changes — the cap
+  is portal-side enforcement — so there is no migration trap in deferring it, and at alpha with one
+  issuer there is nobody to farm endorsements. This **reverses the 2026-07-28 move above**; it does not
+  reverse the decision that we need the cap.
+- **Withdrawal ships as "takes effect for every future session."** Asked whether that is enough for
+  launch versus building the between-session re-check for already-stored copies, Andre chose **new
+  sessions is enough**. The re-check is a fast-follow. A stale stored copy is a papercut at this scale;
+  a withdrawal that does not stop future sessions would be a trust break, and that half already works.
+
+**MOVED OUT — first-after-launch milestone.** Each line keeps its text below, tagged `➡️ MOVED`, so the
+reasoning survives the move: `DOD-END-QUOTA-1` (with `DOD-END-ACCOUNTLINK-1` and `M10B-D18`'s
+agent→account route as one coherent unit — the cap is unbuildable without them and they are unsafe
+half-built), `DOD-END-SUSPEND-1`, `DOD-END-FLOOR-2`, `DOD-END-TIER-1`, `DOD-END-ACCOUNTABILITY-1`,
+`DOD-END-PLAYBOOK-1`, journey case **(d)**, the stored-copy re-check half of `DOD-END-WITHDRAW-1`, the
+policy-engine WIRING behind `DOD-END-COUNT-1`, and the tier-sign presentation half of
+`DOD-END-RENDER-1`.
+
+**Why those and not others** — the floor/tier/count group is *recipient-side trust policy*, a different
+concern from the endorsement pipeline this milestone is, and the milestone proved it the hard way:
+`evaluateSignalPolicy` has **zero production callers**, so endorsement-aware rules were being written
+for an engine nothing invokes. Wiring it needs an operator-facing policy source and opt-in defaults —
+its own unit. The quota and suspension are abuse controls against an attacker who cannot exist at alpha.
+
+**NOT DELIVERABLES — removed from the scoreboard entirely:** the five Tier I invariant lines (now
+lenses, above) and `DOD-END-ARCH-1` as a status-tagged line (a determination is a phase, not a unit —
+[[M10B-PROCEDURE]] §6a; it stays below marked ✅ for the historical record only).
+
+**M10B CLOSES ON:** the client→directory→portal ingress, intake scanning, self-endorsement refusal,
+delivery, the pending-consent queue, accept/refuse with the optional message, the agent-scoping fix, the
+revoke-authority fix, quoted-untrusted rendering, the landed operator-surface clauses plus the refusal
+readback, the submitter return path, and the live journey's core job + cases (a), (a2), (b), (c).
+
 ---
 
-## Tier I — Invariants (must hold in every line and every journey)
+## Tier I — Invariants (properties, NOT deliverables — no status tags)
+
+> **CHANGED 2026-07-30 by the scope & cost review. These five carried ❌ tags and should never have.**
+> An invariant is a property every unit must not violate — you do not *build* it, so it cannot be a
+> deliverable, and a status tag on one reads as unfinished work that no unit can ever finish. They are
+> **enforced per-unit as reviewer lenses**, which is where they were already being caught all along:
+> [[M10B-PROCEDURE]] §2b. Stated once here, with no tags, because the DoD is the yardstick and they
+> are the yardstick's fine print. Full text of each lens is in §2b; the one-line statements follow.
 
 All M10 invariants (`DOD-INV-DIR-DUMB`, `-CHOKEPOINT`, `-ZERO-BUMP`, `-TYPE-CARRY`, `-CANONICAL`,
 `-AGENT-SCOPED`, `-FRAMING`, `-NO-SCORE`, `-STATELESS-RECIPIENT`) continue to hold unchanged. These are
 the additions M10B is accountable for.
 
-- **DOD-END-INV-ZEROBUMP** — the milestone adds no type-shaped construct anywhere. No `switch(type)`,
-  no type enum, no `CHECK` on `type`, no per-type column, no branch on the literal `"endorsement"` in
-  cello-client or trustless-cello. Every new construct keys on `issuer_kind`, the consent state, or the
-  issuer's identity. Enforced per-unit by `cello-unit-reviewer`; a type-literal branch is a blocking
-  finding. — ❌
-- **DOD-END-INV-ATTRIBUTION** — `issuer_pubkey` is bound to the **authenticated** identity that supplied
-  the plaintext, and is never accepted as a caller-supplied request field. Direct precedent:
-  `accepting_node` in `DOD-DIR-WRITE-1` ("written by the node itself, never accepted from the request —
-  a submitter that could choose it could collide rows deliberately"). If the ingress trusts a claimed
-  `issuer_pubkey`, anyone can mint an endorsement attributed to anyone, and `issuer_kind` framing becomes
-  a lie the hash then makes permanent. — ❌
-- **DOD-END-INV-CONSENT** — nothing about a subject is presentable, discoverable, or countable without
-  that subject's explicit acceptance (D-23, D-24). A refused or still-pending endorsement is
-  indistinguishable, to every third party, from one that was never created. **The issuer is not a third
-  party** — Bob knows what he issued, and `M10B-D4` lets Alice send him a refusal message *at her
-  option*. The invariant governs everyone else, and it is never satisfied by telling Bob less than
-  Alice chose to tell him. — ❌
-- **DOD-END-INV-UNTRUSTED** — endorsement plaintext reaches a consuming LLM only as quoted-untrusted
-  ("Bob says: …"), never with portal-attested framing, byte-for-byte or not at all. This is M10's
-  `INV-FRAMING` applied to the first content that genuinely needs it; `issuer_kind` is inside the hash
-  (§4), which is what makes the framing unforgeable. — ❌
-- **DOD-END-INV-NO-SELF-STANDING** — an operator cannot manufacture standing for themselves. Account-
-  subject self-endorsement is refused at intake; agent-subject same-operator endorsement is minted,
-  flagged, and excluded from every count predicate (D-27, D-29). Quality capping without quantity
-  capping is not sufficient — ten agents under one operator must not clear a `min_count` gate. — ❌
+- **ZEROBUMP** — no type-shaped construct anywhere: no `switch(type)`, no type enum, no `CHECK` on
+  `type`, no per-type column, no branch on the literal `"endorsement"`. Every new construct keys on
+  `issuer_kind`, the consent state, or the issuer's identity.
+- **ATTRIBUTION** — `issuer_pubkey` is bound to the **authenticated** identity that supplied the
+  plaintext, never accepted as a caller-supplied field. Precedent: `accepting_node` in
+  `DOD-DIR-WRITE-1`. Trust a claimed `issuer_pubkey` and anyone can mint an endorsement attributed to
+  anyone — a lie the hash then makes permanent.
+- **CONSENT** — nothing about a subject is presentable, discoverable, or countable without that
+  subject's explicit acceptance (D-23, D-24). A refused or pending endorsement is indistinguishable, to
+  every third party, from one that never existed. **The issuer is not a third party**: Bob knows what he
+  issued, and `M10B-D4` lets Alice tell him at her option.
+- **UNTRUSTED** — endorsement plaintext reaches a consuming LLM only as quoted-untrusted ("Bob says: …"),
+  never in the portal's attested voice. M10's `INV-FRAMING` applied to the first content that needs it;
+  `issuer_kind` is inside the hash (§4), which is what makes the framing unforgeable.
+- **NO-SELF-STANDING** — an operator cannot manufacture standing for themselves. Account-subject
+  self-endorsement is refused at intake; agent-subject same-operator endorsement is minted, flagged, and
+  excluded from every count predicate (D-27, D-29). Quality capping without quantity capping is not
+  sufficient.
 
 ---
 
 ## Tier 0 — The determination (gates every build line)
+
+> **NOT A DELIVERABLE — kept below for the historical record only (2026-07-30 review).** A determination
+> is a **phase**, not a unit: giving it a status tag turned an unbounded polish loop into something that
+> looked like an unfinished deliverable, and it consumed an entire overnight session across four review
+> passes plus a fifth that died unread, shipping zero code. The rule that replaces it is
+> [[M10B-PROCEDURE]] §6a — **one review pass, two is the cap, then remaining findings become ACs on the
+> units that build them.** Future milestones: journal entries and a completion note, no DoD line.
 
 - **DOD-END-ARCH-1** — **the design determination, written before any code, reviewed like any unit.**
   Written AGAINST spec §6 (three issuer flows + the 2026-07-11 amendment), §7 (intake), §15 (zero-bump),
@@ -326,19 +375,37 @@ the additions M10B is accountable for.
   (portal verification code; the directory read path `queryAccountFacts` /
   `GET /internal/track-record/...`). Drain semantics are exactly-once with the failure reason preserved
   to the submitter; a poisoned row leaves the queue rather than blocking it. Named events:
-  `signal.ingress.drained`, `signal.ingress.authenticated`, `signal.ingress.rejected` (+ cause). — ❌
+  `signal.ingress.drained`, `signal.ingress.authenticated`, `signal.ingress.rejected` (+ cause).
+  > **BUILT + REVIEWED + PROVEN LIVE 2026-07-29 → Entry 38, J-END.** Directory drain/ack routes (read
+  > and ack are SEPARATE: drain does not delete, so a crash mid-mint re-delivers rather than losing a
+  > submission the operator was told was queued), the portal's drain loop, and an authenticated
+  > trigger route. `J-END` hop 2 drives the REAL modules end to end — authenticate → dedupe on the
+  > DERIVED id → scan → compose → mint → deliver → ack — against a live directory and Postgres.
+  > 12 review findings fixed, the worst being that `op` was read for a log line and never branched
+  > on, so a private refusal message would have been minted as a public endorsement.
+  > **THREE CLAUSES GENUINELY UNMET, stated rather than rounded up:** nothing is preserved to the
+  > SUBMITTER (`submission_results` / `M10B-D25r2` does not exist in either repo); `refuse` and
+  > `withdraw` ops are recognised but left QUEUED pending their handlers; and account-subject
+  > submissions are refused by name pending `DOD-END-SUBJECTKIND-1`. — 🟡
 - **DOD-END-SCAN-1** — the deterministic intake scanner (spec §7): injection patterns (primary), secrets,
   constrained charset (a sentence — no control chars, no markup), length cap, URL handling. **Versioned
   and byte-identical**, and the version travels INSIDE the signed submission body — `DOD-DIR-WRITE-1`
   already makes `scanner_version` a signed field precisely because the directory cannot re-run the scan
   and a forged version "is a lie stored as evidence." Scan **before** hash, always: on fail reject, never
   clean-and-continue. Aligns with policy D-16 (concealment with no innocent use refuses on sight;
-  legitimate encodings are decoded and judged). — ❌
+  legitimate encodings are decoded and judged).
+  > **✅ 2026-07-30** — 9 tests cover injection/charset/markup/cap/version; the SECRETS clause had no
+  > named test so it was checked directly (AWS key pair rejected, 222 rules). Live: the dev drain went
+  > 500 → `minted:1` once `re2-wasm` worked, so the scanner is load-bearing on the real path.
+  > NOT verified: D-16's decode-then-judge half. → Entry 41 — ✅
 - **DOD-END-ACCOUNTABILITY-1** — submitter accountability on the graduated threshold of §7 constraint 3:
   **reject always** (fail-closed), but **flag as suspect only on a pattern** — repeated rejects, or a
   single egregious hit (a real credential, a clear injection payload) — never on one heuristic near-miss.
   A reputational penalty on a false positive is real harm; the two consequences keep different
-  thresholds. — ❌
+  thresholds.
+  > **➡️ MOVED 2026-07-30 — first-after-launch.** Rejection is fail-closed and already ships
+  > (`DOD-END-SCAN-1`); this line is only the *flagging* half — an abuse control with no abuser at
+  > alpha, and one whose false-positive cost is borne by real reputations. — ➡️ MOVED
 - **DOD-END-SUBJECTKIND-1** — the same-operator branch, one deterministic check off the existing verified
   phone-stub operator linkage, branching on `subject_kind` (policy D-29):
   - `subject_kind: agent`, same operator → **mint and flag** `same_operator`. This is a co-ownership
@@ -349,7 +416,12 @@ the additions M10B is accountable for.
   Default target is the specific agent unless requested and agreed (M10-D5). Supersedes the 2026-04-10
   log's blanket same-owner rejection, which is marked superseded there. The account-subject case depends
   on the portal resolving agent pubkey → account (`DOD-END-ARCH-1`); if that resolution is missing the
-  mint is REFUSED with a named cause, never minted unflagged. — ❌
+  mint is REFUSED with a named cause, never minted unflagged.
+  > **✅ 2026-07-30** — all four clauses in `submission-ingress.ts`, 21 tests green: agent-subject
+  > same-operator MINTS FLAGGED (live today — `co-own: own` on a real endorsement); account-subject
+  > same-operator REFUSES as `same_operator_account_subject`; a missing agent→account resolution
+  > REFUSES as `subject_not_registered` (also live). Revert-tested. D-27's tier CAP moved with
+  > `DOD-END-TIER-1`. → Entry 42 — ✅
 - **DOD-END-QUOTA-1** — **the issuance quota (`M10B-D6`).** At most **100** endorsements per **rolling
   30 days**, enforced **per account** (not per agent — a per-agent cap is bypassed by spinning up
   agents, which is the same farming hole `INV-NO-SELF-STANDING` exists to close), counted at the portal
@@ -364,7 +436,10 @@ the additions M10B is accountable for.
   > identity is an agent pubkey, and **no agent-pubkey → account resolution exists** — the directory
   > has only the forward direction (`/internal/agents-by-account`). Without D-18's route this cap
   > degrades to per-agent, which is the exact farming hole the line's own parenthetical says it must
-  > close. Build D-18 first, or this line ships the vulnerability it was written to prevent. — ❌
+  > close. Build D-18 first, or this line ships the vulnerability it was written to prevent.
+  > **➡️ MOVED 2026-07-30 — first-after-launch, Andre's call.** Ships as ONE unit with `M10B-D18`'s
+  > agent→account route and `DOD-END-ACCOUNTLINK-1`; portal-side enforcement, so no wire change and no
+  > migration cost in deferring. Nobody to farm endorsements at alpha with one issuer. — ➡️ MOVED
 
 ---
 
@@ -410,8 +485,10 @@ the additions M10B is accountable for.
   > either dismiss the pending decision or nag forever, and tests pin both directions including that
   > a NEW arrival raises it again. Keyed by consent state, never by type — a test drives an unknown
   > client-sourced type through it. Scoped per agent on the same axis as presentation. 10 tests.
-  > **STAGED:** the `cello_use_agent` wiring and the MCP/CLI verbs ride `DOD-END-SURFACE-1`, so the
-  > "operator is told" clause is not yet met end-to-end. — 🟡 store built, surface owed
+  > **SURFACE LANDED 2026-07-29 → Entry 33, 34.** `cello_use_agent` returns `pending_consent` + guidance
+  > (a COUNT; it deliberately does not mark notified — listing does, so the operator is never marked
+  > told about something they were not shown). Verbs at MCP+CLI parity. Covered by a live-daemon test
+  > after the review found the nudge had ZERO coverage. — ✅
 - **DOD-END-ACCEPT-1** — accept-before-present (D-23). The subject reads the endorsement and accepts or
   refuses it; **only an accepted endorsement is presentable.** Andre's reason, recorded verbatim in the
   policy audit: *"Otherwise someone could create a rogue endorsement that says you're a piece of shit and
@@ -431,9 +508,13 @@ the additions M10B is accountable for.
   > bare `catch {}`, which runs on every `startDaemon` and would otherwise flip a REFUSED endorsement
   > back to `accepted` on restart. Presentability is `consent_state = 'accepted'` in the SQL of
   > `listAllActive`, so `include` cannot route around it and anything not exactly `accepted` fails
-  > closed. Keys on `issuer_kind`, never on type. 13 tests. **STAGED, and stated rather than
-  > narrowed:** the refusal MESSAGE (`M10B-D4`) and the operator verbs ride
-  > `DOD-END-SURFACE-1`. — 🟡 state built, surface owed
+  > closed. Keys on `issuer_kind`, never on type. 13 tests.
+  > **REFUSAL MESSAGE + VERBS LANDED 2026-07-29 → Entry 33, 34.** `M10B-D4` rides the submission queue
+  > as a third `op` (`refuse`) — no field added, no order changed, so every existing signature still
+  > verifies. The refusal is recorded and its write CHECKED before anything that can fail; silence is
+  > the default; the issuer learns only what the subject chose to tell him. Account-subject items
+  > refuse but WITHHOLD the message — which agent may speak for an account is unsettled, and a signed
+  > message is not the place to guess (Open questions). — ✅
 - **DOD-END-DISCOVER-1** — non-discoverability, proven by a negative test (D-24): no path lets any third
   party enumerate, count, or infer endorsements about a subject who has not presented them. The
   directory's fingerprint is useless without the text, and only the subject holds the text. Andre,
@@ -475,7 +556,11 @@ the additions M10B is accountable for.
     refused with a named cause and logged.
   - Refusing to link must never silently leave the agent unlinked *and* report success.
   Without this line, `operator_linkage_unresolved` points at nothing and a transient registration error
-  becomes a permanent, unannounced disqualification. — ❌
+  becomes a permanent, unannounced disqualification.
+  > **➡️ MOVED 2026-07-30 — first-after-launch, WITH `DOD-END-QUOTA-1` and `M10B-D18` as one unit.**
+  > They are the same dependency chain and half-building it is the dangerous state: the ACs above stay
+  > blocking whenever it is built. Until then nothing calls `linkAgentToAccount()` and the bypass stays
+  > unreachable — **do not wire it as a convenience in the meantime.** — ➡️ MOVED
 - **DOD-END-SCOPE-FIX-1** — **an M10 defect this milestone surfaced and must fix FIRST (Entry 10).**
   `listPresentable` — which implements M10-D5/M10-D14 subject scoping (account-subject rows presentable
   by any agent under the account; agent-subject only by its own subject) — has **zero production
@@ -551,7 +636,37 @@ the additions M10B is accountable for.
   copy (D-19). The endorsement stops being presentable, and any recipient holding it sees it marked
   withdrawn on next check. Rides `DOD-VERIFY-1`'s existing TTL-re-check-on-use machinery (spec §14.7) —
   this line decides what that machinery is FOR, it does not build new transport. *A reference, not a
-  tattoo.* Surfaced to the holder, never a silent disappearance. — ❌
+  tattoo.* Surfaced to the holder, never a silent disappearance. *(Status below — rescoped 2026-07-30.)*
+  > **⚠️ PARTLY BUILT — and I got this wrong once, so the correction is recorded with it.**
+  > *Verified 2026-07-30.* I first wrote here that the machinery did not exist at all, having grepped
+  > the DAEMON, found `verdict: "active"` hard-coded and no ledger query, and concluded there was no
+  > check anywhere. That is a claim about the PRODUCER reached by reading only the CONSUMER. The
+  > producer is the DIRECTORY, and it does check.
+  >
+  > **What EXISTS:** at session establishment `#processSessionRequest` calls `checkPresentedSignals`
+  > against `signal_records_effective` (`effective_status = 'active'`) and forwards only survivors —
+  > degrading to forwarding NONE if it cannot check, so arrival implies the check ran. A withdrawal
+  > that lands in the ledger therefore ALREADY takes effect for every FUTURE session automatically,
+  > without new transport. That is most of what this line asks for.
+  >
+  > **What is MISSING** is narrower than "the machinery": a re-check for a copy a recipient is
+  > ALREADY HOLDING, between sessions. Today the currency check is point-in-time at session setup, so
+  > a signal revoked mid-session, or one sitting in a recipient's `contact_trust_signals` from an
+  > earlier session, is not re-evaluated until the next session forms. The DoD's own words — "any
+  > recipient holding it sees it marked withdrawn on next check" — are about exactly that stored copy.
+  >
+  > **Revised cost:** a status route the daemon can reach (the existing check is internal to session
+  > setup, and `/internal/*` is portal-facing behind an API key a daemon must never hold, so this is a
+  > post-auth signaling FRAME on the agent's home stream, not an HTTP route), a TTL and cache, the
+  > re-check wired into consumption, and surfacing to the holder. `DOD-END-SUSPEND-1` then rides the
+  > same frame answering differently. Smaller than I first wrote, and in a different place.
+  >
+  > **✂️ RESCOPED 2026-07-30 — Andre's call. M10B ships the half that already works.** Asked directly
+  > whether "stops appearing in any new session" is enough for launch, he chose yes. So this line's
+  > launch scope is: a withdrawal recorded in the ledger takes effect for **every future session**,
+  > which `checkPresentedSignals` already does and `d701b1c3` asserts live. **➡️ MOVED to
+  > first-after-launch:** the between-session re-check of a copy a recipient already holds, together
+  > with `DOD-END-SUSPEND-1`, which needs the same frame. — 🟡 launch half live, re-check moved
 - **DOD-END-SUSPEND-1** — suspending an issuer's account (the M8 LEVER-001 kill switch) marks everything
   that issuer minted as **no longer vouched**, reversibly; restoration brings them back; permanent
   revocation is what makes it final (D-25). Why it is not optional: an attacker holding a compromised key
@@ -562,7 +677,11 @@ the additions M10B is accountable for.
   answers. Reversibility is the difference from withdrawal: a suspension lifts, so the state must be a
   reversible mark on the issuer, never a tombstone written per-signal. **Verify before building** that
   the directory can join a suspended account to the signals issued by its agents' pubkeys; if that join
-  does not exist, it is part of this unit and it is where the work actually is. — ❌
+  does not exist, it is part of this unit and it is where the work actually is.
+  > **➡️ MOVED 2026-07-30 — first-after-launch, with the re-check `DOD-END-WITHDRAW-1` needs.** It
+  > rides the same missing machinery and answers it differently, so building them together is cheaper
+  > than either alone. The attacker it defends against (a compromised key minting for sock puppets)
+  > requires issuers this milestone does not have yet. — ➡️ MOVED
 
 ---
 
@@ -577,20 +696,111 @@ the additions M10B is accountable for.
   anonymous and an identified variant, and an endorsement has only one — its entire worth comes from
   the recipient recognising the issuer, which is what `DOD-END-FLOOR-2`'s tier join computes. An
   anonymous endorsement would be an unattributable claim, which is worth nothing and is exactly what a
-  farm would emit. Do not build an anonymous variant to satisfy a policy that does not reach here. — ❌
+  farm would emit. Do not build an anonymous variant to satisfy a policy that does not reach here.
+  > **✂️ SPLIT 2026-07-30 — the safety half SHIPPED, the polish half MOVED.** What ships: the endorser's
+  > words reach a consuming LLM quoted, attributed and flagged, never in the portal's voice — the
+  > UNTRUSTED lens, proven at J-END hop 5, and `same_operator` now surfaced with its own framing rather
+  > than silently discounted (Entry 39). **➡️ MOVED:** the tier-signed reading (an endorser's tier
+  > deciding the fact's *sign*), which is `DOD-END-FLOOR-2`'s recipient-side join and moves with it.
+  > The anonymous-variant clause is an instruction NOT to build something — it is a review lens, never a
+  > deliverable, and is not tracked. — 🟡 safety half live, tier-sign moved
 - **DOD-END-COUNT-1** — floor/count handling (D-29 sub-question 1). `same_operator` is an envelope-visible
   fact, so a count predicate MUST bucket or exclude flagged endorsements; a naive `count >= N` otherwise
   passes on ten agents under one operator. Keeps `DOD-FLOOR-1`'s "envelope fields only" rule intact —
-  the predicate input is the envelope, the join is recipient-local. — ❌
+  the predicate input is the envelope, the join is recipient-local.
+  > **✅ RESOLVED 2026-07-30 — OPTION 1 TAKEN. `same_operator` IS an envelope field (slot 12).**
+  > `M10B-D30`. Andre's call, and he was blunt about it: putting it outside the payload was "the most
+  > obvious decision ever" and the fork should never have been raised. He was right — this DoD line
+  > already SAID "an envelope-visible fact", so shipping it in the payload under `DOD-END-SUBJECTKIND-1`
+  > was a deviation from the spec, not an ambiguity in it. Writing the deviation up as a three-way
+  > decision was the error; the line's own words were the answer.
+  >
+  > The migration-trap argument I attached to option 1 was also overweighted: the stranded set is
+  > EMPTY (alpha, no users, and the only minted endorsements are in test fixtures), so the wire break
+  > cost hours, not a migration. The correct reading of the launch-triage rule is that a wire change is
+  > expensive when there is something to strand — not that it is expensive in principle.
+  >
+  > WHAT SHIPPED: preimage arity 11 → 12, `same_operator` APPENDED (append-only; slot order IS the wire
+  > format), boolean-normalised on both encode and strict decode so no reader must distinguish
+  > "not same-operator" from "field absent". The predicate excludes flagged endorsements from
+  > `min_count` and reports `excluded_same_operator` alongside the countable total — a refusal that
+  > reported the raw count would tell an operator they have enough when the predicate disagrees.
+  >
+  > EXCLUDED FROM THE COUNT, NOT SUPPRESSED. The endorsement is still presented and still readable;
+  > D-27 caps its worth at the endorser's own tier. What it must never do is help clear a COUNT,
+  > because a count is exactly the thing one operator can inflate alone.
+  >
+  > THREE DEFECTS THIS FLUSHED OUT, all of which had been invisible while the flag sat unread in the
+  > payload — recorded because each one shipped past a green gate:
+  >   1. The DIRECTORY carried its own hand-rolled envelope decoder with its own arity constant (11),
+  >      so it rejected every 12-slot envelope with `envelope_undecodable`. A valid endorsement refused
+  >      by the only party that can notarize it. Replaced with the shared decoder, not a bumped
+  >      constant. (`signal-write.ts`)
+  >   2. `deliverWalletSignal` did not pass `same_operator` to `putWalletSignal`, so a co-owned
+  >      endorsement stored `false`. Presentation re-encodes from that row, so the bytes stopped
+  >      hashing to the notarized value and the RECIPIENT rejected it while the holder logged
+  >      "attached: 1". Nothing asserted that a delivered signal is still presentable.
+  >   3. The J-END fixture registered every agent under one dev account, so Bob and Alice shared an
+  >      `account_id` — the journey's headline "a stranger endorses Alice" hop was exercising the
+  >      CO-OWNED path, i.e. the one this line discounts. A false green on the central claim.
+  >
+  > Guards added, because each defect's real cost was how long it stayed invisible: the presenter now
+  > refuses to send a signal whose bytes it cannot reproduce; the recipient's `hash_mismatch` logs
+  > BOTH hashes; a frozen vector carries `same_operator: true` (all seven said `false`, which is also
+  > what a hardcoded bug says); and `cello_trust_signals_list` shows the operator which of their
+  > endorsements are capped. Live: J-END HOP 9. Revert-tested.
+  >
+  > **🟡 TAG CORRECTED 2026-07-30 AFTER REVIEW — the exclusion is NOT ENFORCED, because nothing calls
+  > the predicate.** `evaluateSignalPolicy` has ZERO production callers: a repo-wide grep across
+  > cello-client returns its definition, one comment, and two test files. No session path, no contact
+  > handler and no gateway invokes it, and no operator-facing surface sets a `SignalRequirementPolicy`
+  > (`cello_contact_set_signal` governs which of MY signals I PRESENT, not what I REQUIRE).
+  >
+  > So this is the SAME defect a third layer up, and the sequence is worth stating plainly: the flag
+  > was inert because it sat unread in the payload → moved to the envelope → inert because the INSERT
+  > dropped it → fixed → **still inert, because the consumer is a library function nobody invokes.**
+  > Ten of Alice's own agents clear a floor of three today for the same reason they did before this
+  > milestone: no floor is ever evaluated. `DOD-FLOOR-1` (M10, ✅) has the same hole — its journey
+  > evidence calls `evaluateSignalPolicy` FROM THE TEST, which is the hand-built-rows shape again:
+  > the test supplies the caller production lacks.
+  >
+  > **WHY IT IS NOT WIRED IN THIS PASS, deliberately.** `DEFAULT_UNKNOWN_POLICY` is
+  > `{min_count: 1, require_issuer_kind: "portal"}`. Enforcing that at session acceptance today would
+  > refuse every UNKNOWN contact holding no portal signal — i.e. most agents — and "two agents
+  > connect" is the product's core value. A floor that is never evaluated is a missing security
+  > property; a floor wired wrong is a broken product. Wiring it safely needs a policy SOURCE (the
+  > operator setting a requirement per tier or per contact), opt-in defaults, and a refusal the
+  > operator can see and act on — a unit of its own, not a line of glue.
+  >
+  > **WHAT IS ACTUALLY TRUE:** the predicate is correct and revert-tested; the envelope slot, both
+  > store round-trips, presentation and the recipient's rendering are correct and live. The exclusion
+  > cannot be reached in production.
+  >
+  > **✂️ RESCOPED 2026-07-30 — this line CLOSES on what it owns; the caller MOVES.** The envelope
+  > field, both write paths, presentation, the recipient's rendering and the predicate itself are M10B's
+  > and are done. **➡️ MOVED to first-after-launch:** wiring `evaluateSignalPolicy` into a live path,
+  > which needs an operator-facing policy source and opt-in defaults — with `DOD-END-FLOOR-2` and
+  > `DOD-END-TIER-1`, one unit. The reasoning above stands unchanged: a floor that is never evaluated is
+  > a missing property, a floor wired wrong refuses most connections and breaks the product's core
+  > value. **Carry the debt forward explicitly — `DOD-FLOOR-1` (M10, ✅) has the same hole**, and by the
+  > new rule that belongs to M10 as a labelled debt line, not to this milestone. — ✅ (owned scope)
 - **DOD-END-FLOOR-2** — endorsement-aware floor predicates: count, issuer tier, and issuer identity, all
   computed by joining the presented envelope's `issuer_pubkey` against the recipient's own contacts. This
   is compatible with `INV-FLOOR-ENVELOPE-ONLY` (nothing reaches into the payload) and is what D-27's
   tier-signed reading requires. **Explicitly out:** any predicate of the form "an endorsement SUBSTITUTES
-  for requirement X" — that is policy D-12, tabled. Endorsements ship without it; substitution cannot. — ❌
+  for requirement X" — that is policy D-12, tabled. Endorsements ship without it; substitution cannot.
+  > **➡️ MOVED 2026-07-30 — first-after-launch, WITH the policy-engine wiring.** This is recipient-side
+  > trust *policy*, not the endorsement *pipeline*, and the engine it extends has zero production
+  > callers (`DOD-END-COUNT-1`). Writing endorsement-aware predicates for an engine nothing invokes is
+  > the exact shape the new scope fence exists to catch. — ➡️ MOVED
 - **DOD-END-TIER-1** — an endorsement NEVER moves a contact's tier automatically (policy D-10). It informs,
   and it may PROMPT — *"Alice was introduced by Bob, whom you've whitelisted — promote her?"* — but only
   the operator changes a tier. Automatic promotion through the trust-signal path would reopen, by another
-  route, exactly the hole DEC-AB-3 closed when it removed accept-promotes. — ❌
+  route, exactly the hole DEC-AB-3 closed when it removed accept-promotes.
+  > **➡️ MOVED 2026-07-30 — first-after-launch, with the rest of the policy group.** Note what it
+  > actually asks for: automatic promotion must NOT exist, and it does not — nothing in the endorsement
+  > path touches a tier. The *prompt* is the buildable half and it belongs with the recipient-side
+  > surface. A line whose launch content is "we did not build a thing" is a review lens. — ➡️ MOVED
 
 ---
 
@@ -603,7 +813,21 @@ the additions M10B is accountable for.
   include/omit at presentation; **see my remaining issuance quota and when the window frees up**
   (`DOD-END-QUOTA-1` — a quota the operator cannot see is a wall they hit blind). Andre's standing rule
   applies — **don't ship dead features**: an endorsement mechanism reachable only by daemon IPC is the
-  `DOD-SETTINGS-SURFACE-1` mistake repeated. — ❌
+  `DOD-SETTINGS-SURFACE-1` mistake repeated.
+  > **FIVE OF NINE CLAUSES LANDED 2026-07-29, reviewed twice → Entries 33–36.** Issue
+  > (`cello_trust_signals_issue`, type-free by construction — the wire carries no type field, so a
+  > second client-sourced type needs no new verb); list pending WITH the issuer's plaintext; accept;
+  > refuse with the optional `M10B-D4` message; list held + consent status; per-counterparty
+  > include/omit (`contact_signal_prefs`, narrows only). All at MCP+CLI parity, in the ONE
+  > vocabulary, documented in the shipped SKILL.md, and behind a new structural guard that every
+  > declared tool resolves to a real daemon handler.
+  > **THREE CLAUSES ARE BLOCKED ON UNBUILT MECHANISMS, and building their surfaces first would ship
+  > exactly the dead features this line forbids:** *read a refusal message I received as issuer*
+  > needs the portal drain (`DOD-END-INGRESS-1` ❌ — nothing consumes the `refuse` op yet);
+  > *withdraw one I issued* needs `DOD-END-WITHDRAW-1` (❌), and the issuer additionally holds no
+  > local record of what they submitted, so there is nothing to name; *see my remaining quota* needs
+  > `DOD-END-QUOTA-1` (❌, portal-enforced). Each is one line of work once its mechanism exists.
+  > — 🟡 five landed, three blocked on their mechanisms
 - **DOD-END-JOURNEY-1** — **live journey, across real processes.** Bob's agent supplies an endorsement for
   Alice → portal authenticates Bob, scans, mints, notarizes → Alice receives it PENDING → Alice accepts →
   Alice presents it to Charlie → Charlie verifies (hash ∈ directory, active) and consumes it with
@@ -615,13 +839,56 @@ the additions M10B is accountable for.
     pickup path, and lands as pending when her daemon next starts; on selecting the agent she is told an
     item awaits her decision (`DOD-END-DELIVER-1`, `DOD-END-PENDING-1`). Nothing errors, nothing is lost,
     and the notification does not repeat once seen.
-  - **(b) same-operator positive** — Alice's established Agent A endorses her new Agent B; Bob, who has
-    whitelisted Agent A, sees the `same_operator` fact rendered as a positive, and a `min_count` floor
-    does not count it (`DOD-END-COUNT-1`).
+  - **(b) same-operator positive** — a co-owned endorsement is minted, FLAGGED on the envelope, delivered,
+    accepted, presented and READ — and excluded from `min_count` (`DOD-END-COUNT-1`). Live as J-END HOP 9.
+    > **THE LITERAL WORDING IS UNREACHABLE, and the substitution is the interesting part.** As written
+    > this says "Alice's established Agent A endorses her new Agent B" — two agents on ONE daemon. That
+    > shape is refused at the CLIENT with `self_subject` before it can ever reach the portal, which HOP 8
+    > proves deliberately. So the only reachable co-owned shape is two agents on DIFFERENT daemons that
+    > share an account, and that is what HOP 9 runs: Charlie endorses Alice (own daemon → the client
+    > guard correctly cannot see the link), and the PORTAL catches it from account linkage. That division
+    > of labour — client catches what it can prove, portal catches what only it can see — is the whole
+    > design of D-29, and this hop is the only place it is exercised live.
+    >
+    > "Rendered as a positive" was NOT met when the hop first went green: the recipient's projection did
+    > not expose `same_operator` at all, so the fact was silently discounted rather than shown. It now
+    > ships with its own framing — the operator vouching for their own agent is useful if you already
+    > trust that operator and worth nothing as independent corroboration — because the same sentence
+    > means different things depending on who wrote it.
+    >
+    > **🟡 3-of-4 after review.** Minted ✅, flagged on the envelope ✅, delivered/accepted/presented ✅,
+    > rendered as a positive ✅. The fourth clause — "a `min_count` floor does not count it" — is NOT
+    > enforced in production: nothing calls `evaluateSignalPolicy` (see `DOD-END-COUNT-1`). HOP 9
+    > proves every hop up to and including the recipient reading it; it cannot prove a floor that is
+    > never evaluated. — 🟡
   - **(c) self-endorsement refused** — an account-subject same-operator submission is rejected at intake
     with a named reason (`DOD-END-SUBJECTKIND-1`).
   - **(d) withdrawal reaches a prior recipient** — Bob withdraws after Charlie has already verified and
-    stored it; Charlie sees it withdrawn on next check (`DOD-END-WITHDRAW-1`). — ❌
+    stored it; Charlie sees it withdrawn on next check (`DOD-END-WITHDRAW-1`).
+    > **➡️ MOVED 2026-07-30** — it is the journey case for the re-check half of `DOD-END-WITHDRAW-1`,
+    > and moves with it. **The launch half is not left unproven:** `d701b1c3` asserts live that a
+    > withdrawn signal is not forwarded into a NEW session, which is what Andre's call scoped M10B to.
+    > — ➡️ MOVED
+  > **THE CORE JOB AND THREE CASES RUN LIVE 2026-07-29 — `j-end.spine.test.ts`, 9 hops green.**
+  > Real daemons, a real directory, a real Postgres, and the PORTAL'S OWN ingress modules loaded
+  > across the repo boundary (`portal-ingress.ts`) rather than re-implemented — because a journey
+  > written on the established spine pattern would seed `signal_records` directly, skip drain,
+  > authenticate, scan and mint entirely, and still go green.
+  > **Proven:** the core job end to end, with hop 5 asserting INV-UNTRUSTED survives to a consuming
+  > context (CELLO's `claim` does NOT contain Bob's sentence; his `statement` is verbatim, flagged,
+  > attributed to his key); **(a)** partial — refusal recorded, message queued as an `op: refuse`,
+  > and Charlie sees EXACTLY ONE endorsement (two would mean a refused one presented, zero would mean
+  > the accepted one stopped); **(a2)** the mint succeeds with the subject's daemon DOWN, nothing is
+  > lost, and selecting her agent on return tells her — the FIRST test of that nudge anywhere, a
+  > review having found the clause had zero coverage; **(c)** self-endorsement refused at the source,
+  > including two agents on ONE daemon, which is the farming shape and the ordinary one given solo
+  > multi-agent is the first wedge.
+  > **WHAT IT FOUND:** the consent gate was INERT — every endorsement auto-accepted, because the
+  > envelope was attributed to the portal instead of its author, so `issuerKind === "agent"` never
+  > matched. Both repos' unit suites were green through that; none of them looked at the envelope.
+  > **Not provable yet, each blocked on a named thing:** (a)'s correction loop needs the refuse-op
+  > handler + `submission_results`; **(b)** needs `DOD-END-SUBJECTKIND-1`; **(d)** needs
+  > `DOD-END-WITHDRAW-1`. — 🟡 core job + 3 cases live, 2 cases blocked
 - **DOD-END-PLAYBOOK-1** — **the architectural proof, M10B's equivalent of the canary.** With M10B's
   machinery in place, a SECOND client-sourced type is taken from nothing to live end-to-end as a pure
   [[M10-TYPE-PLAYBOOK]] run — **`git status --porcelain` clean and `git diff --stat` empty in cello-client
@@ -632,7 +899,12 @@ the additions M10B is accountable for.
   `canary_test` was in `DOD-ZEROBUMP-CANARY-1`. This resolves what would otherwise contradict the scope
   fence and [[M10B-PROCEDURE]] §5d ("attestation types beyond `endorsement` are OUT"): the proof needs a
   second type, not a second *product*. **Do not reach into the parked commercial family for it** — a
-  referral or review type ships policy decisions that have not been made. — ❌
+  referral or review type ships policy decisions that have not been made.
+  > **➡️ MOVED 2026-07-30 — first-after-launch.** It proves an *architectural* claim (the source
+  > generalises), not a customer-facing one, and its failure is invisible to every journey case. The
+  > claim stays falsifiable — the zero-diff bar does not decay — and the per-unit ZEROBUMP lens has been
+  > enforcing the same property on every diff all along. Run it before the second real client-sourced
+  > type, which is when a failed generalisation would first cost anything. — ➡️ MOVED
 
 ---
 
@@ -1341,6 +1613,80 @@ What remains genuinely open is scoped INTO `DOD-END-ARCH-1` rather than left flo
 distribution and rotation question opened by `M10B-D2`, the queue's ack/poison and retention semantics,
 and how an account subject is named at intake. None of these blocks the milestone; all are the
 determination's job.
+
+### THE SPINE HARNESS HAS NEVER RUN PORTAL CODE — and M10B's journey is ABOUT portal code
+
+Raised 2026-07-29, and it is a **false-green hazard**, which is why it is here rather than left to
+discover during the run.
+
+Every existing spine journey SIMULATES the portal by seeding `signal_records` directly. `j-canary`
+says so in its own comment: *"In production the portal does this via the signed submission API. In
+this test we seed directly."* That was sound for M10, where the portal's role was to insert a row and
+the thing under test was the directory's genericity.
+
+**It is not sound for M10B.** The thing under test IS the portal's ingress — drain, open the seal,
+verify the signature and derive `issuer_pubkey` from it, scan, compose with split voices, mint,
+deliver. A `J-END` written on the established pattern would seed `signal_records` and skip
+`drainAndMint`, `authenticateSubmission` and `scanSubmissionBody` entirely, then go green. It would
+certify the client-supplied source while testing none of it — and it would look exactly like a
+passing journey.
+
+`cello-portal` is not in the trustless-cello pnpm workspace, so the harness cannot import it today.
+
+**The shape that works, and it is not exotic:** `live-harness.ts` already reaches ACROSS repos —
+`CELLO_CLIENT_ROOT` and `TRUSTLESS_ROOT` are both exported from it, and the daemons it spawns are
+cello-client binaries. Adding `PORTAL_ROOT` and importing the ingress modules under `tsx` is the same
+move again, and it keeps the journey exercising the REAL code rather than a second implementation of
+it. A reimplementation in the test would be precisely the "byte-identical local copy on each side"
+that `M10B-D28` forbids for the submission wire, applied to the pipeline instead.
+
+Recording it now because the wrong choice here is invisible: the journey passes either way.
+
+### NO MANIFEST CARRIES AN `intake_key`, SO THE CLIENT-SUPPLIED SOURCE IS INERT — measured 2026-07-29
+
+Not a design question; a provisioning gap, stated here because the surface now exists and hides it
+well. `cello_trust_signals_issue` and the `M10B-D4` refusal message both refuse with
+`intake_key_absent` against **every real manifest**, because the portal's intake keypair has never
+been generated.
+
+Measured, not inferred: `/cello/dev/portal/intake-key-id` and `/cello/dev/portal/intake-key-pubkey`
+both return `ParameterNotFound` in us-east-1, and the portal source contains no `intake` reference at
+all. `infra/scripts/sign-consortium-manifest.mjs:121-141` already reads both SSM parameters and
+spreads `intake_key` into the signed body **only when both are present** — so the signing plumbing is
+complete and simply has nothing to read.
+
+What is owed, in order: generate an Ed25519 intake keypair; the SEED into Secrets Manager (the portal
+reads it to open seals), the `key_id` + public half into those two SSM parameters via
+`cello-ssm-parameters.yaml` — **not by hand**, since a manually-created resource fails the next
+`deploy.sh` with `ResourceAlreadyExists`; re-sign and publish the manifest. Rotation semantics are
+already decided (`M10B-D11`): the queue row records its `intake_key_id` precisely so a rotated-out
+private key is retained until no undrained row references it.
+
+**This does NOT block `DOD-END-JOURNEY-1`.** [[M10B-PROCEDURE]] §2e is explicit that "live, across
+real processes" means real OS processes, not deployed AWS, and the spine harness
+(`packages/e2e-tests/src/spine/auth-manifest.ts`) already mints a manifest carrying an intake key —
+`m10b-manifest-intake-key.test.ts` covers it. So the milestone's proof is unaffected; what is
+affected is anyone trying the deployed dev environment by hand and concluding the feature is broken.
+
+### WHICH AGENT MAY SPEAK FOR AN ACCOUNT — now load-bearing, raised 2026-07-29 (SURFACE-1 review F7)
+
+An **account-subject** pending item is visible to EVERY agent on a daemon: `listPendingConsent` scopes
+with `(subject_kind <> 'agent' OR lower(subject) = ?)`, deliberately, because the item is about the
+account rather than about one agent. Two consequences surfaced once the consent surface existed:
+
+1. **Any agent can refuse it.** Defensible — it is the account's own decision — but unruled.
+2. **The refusal MESSAGE would be signed with that agent's K_local**, so the issuer would receive a
+   signed statement from an agent that was not the subject of anything. Signing is not the place to
+   guess, so `cello_consent_refuse` currently **refuses the message** for account-subject items
+   (`account_subject_message_unsupported`) while the refusal itself stands. Named, not silent.
+3. **The nudge can be silenced for the wrong agent.** One agent listing pending items marks the
+   account-subject rows notified for all of them, so another agent may never be told. That is the
+   silent-death-of-an-endorsement failure the nudge exists to prevent, and it fires on an ordinary
+   two-agent daemon. Fixing it properly means per-agent notification state (a
+   `consent_notifications(agent_pubkey, signal_hash)` table), which is a schema change.
+
+This is not a fork needing Andre — it needs a rule, and the rule belongs with `DOD-END-ARCH-1`'s
+"how an account subject is named at intake", which is the same question from the other end.
 
 ## Parked
 

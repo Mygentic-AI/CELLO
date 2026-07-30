@@ -42,7 +42,7 @@
 
 import { createHash } from "node:crypto";
 import { verify } from "@cello-protocol/crypto";
-import { encodeCbor, decodeCbor, hashTrustSignalEnvelope, type TrustSignalEnvelope } from "@cello-protocol/protocol-types";
+import { encodeCbor, decodeCbor, decodeTrustSignalEnvelope, hashTrustSignalEnvelope, type TrustSignalEnvelope } from "@cello-protocol/protocol-types";
 import type { Pool } from "pg";
 import type { Logger } from "@cello-protocol/interfaces";
 import { enqueuePickup } from "./agent-write-repository.js";
@@ -239,21 +239,42 @@ export async function submitSignal(args: {
     //    type.
     const envelopeBytes = new Uint8Array(req.envelope);
 
-    // FORM: is this canonical trust-signal-envelope bytes at all? (bad CBOR, wrong arity, wrong
-    // domain tag, non-canonical encoding → `envelope_undecodable`.)
+    // FORM vs MEANING, and the shared decoder does BOTH — which is why this classifies rather than
+    // labelling everything `envelope_undecodable`.
+    //
+    // The vendored decoder this replaced checked only shape, so a semantic violation fell through to
+    // the re-hash below and was named `envelope_invalid`. `decodeTrustSignalEnvelope` re-encodes
+    // through `toPreimage`, so it ALSO enforces enum membership, NFC, lowercase-hex pubkey, integer
+    // bounds and 32-byte supersedes_hash — and throws for all of it. Reporting an out-of-enum
+    // `subject_kind` as "undecodable" is a FORM label on a MEANING failure: it sends an operator to
+    // debug their CBOR encoder when their enum value is wrong. Silently swapping one named reason for
+    // another during a refactor is error substitution, so the distinction is restored explicitly.
+    //
+    // The classifier asks only what the shared decoder cannot answer after the fact: were these bytes
+    // STRUCTURALLY an envelope? A 12-element CBOR array carrying the domain tag means the submitter's
+    // encoder produced the right shape, so any remaining failure is about a field's VALUE or its
+    // canonical encoding → `envelope_invalid`. Anything else is genuinely not an envelope.
     let envelope: TrustSignalEnvelope;
     try {
       envelope = decodeTrustSignalEnvelope(envelopeBytes);
     } catch (err) {
-      throw new SubmitRejected("envelope_undecodable", err instanceof Error ? err.message : String(err));
+      const detail = err instanceof Error ? err.message : String(err);
+      let structural = false;
+      try {
+        const raw = decodeCbor(envelopeBytes);
+        structural = Array.isArray(raw) && raw.length === 12 && raw[0] === "CELLO-TSIG-v1";
+      } catch {
+        structural = false; // not even CBOR — unambiguously a form failure
+      }
+      throw new SubmitRejected(structural ? "envelope_invalid" : "envelope_undecodable", detail);
     }
 
-    // MEANING: the re-hash RE-VALIDATES — hashTrustSignalEnvelope → toPreimage enforces the semantic
-    // rules (enum membership, NFC, lowercase-hex pubkey, integer bounds, 32-byte supersedes_hash) and
-    // throws a PLAIN Error on a violation. It MUST be caught and named here, or a canonical-but-
-    // invalid envelope (an out-of-enum subject_kind round-trips fine at the byte level) escapes as an
-    // unmapped exception: an HTTP 500 with no `signal.submission.rejected` log, on the security-core
-    // module, on hostile input. Form is checked above; meaning is checked here; both are loud + named.
+    // MEANING, second line of defence. `decodeTrustSignalEnvelope` already ran `toPreimage`, so a
+    // semantic violation is now caught and classified ABOVE and this catch is unreachable for those
+    // inputs. It stays because "unreachable" is a property of today's decoder, not a guarantee: if the
+    // decoder ever stops re-encoding internally, an unmapped throw here would be an HTTP 500 with no
+    // `signal.submission.rejected` line, on the security-core module, on hostile input. A cheap catch
+    // is the right trade against that.
     let derived: string;
     try {
       derived = Buffer.from(hashTrustSignalEnvelope(envelope)).toString("hex");
@@ -1004,51 +1025,18 @@ export async function getRegistryDocument(pool: Pool): Promise<{ version: number
 }
 
 /**
- * Decode canonical envelope bytes back into the envelope.
+ * The envelope decoder is the SHARED one from @cello-protocol/protocol-types (INV-CANONICAL / M10-D16:
+ * ONE implementation, not three). It refuses anything that is not exactly canonical by re-encoding with
+ * the encoder and comparing bytes — a submission the notary cannot canonicalize must never be stored
+ * "best effort", because a best-effort hash is one two parties can disagree about.
  *
- * The preimage is a fixed-order ARRAY (M10-D15) — element 0 is the domain tag. Refuse anything that
- * is not exactly that shape: a submission we cannot canonicalize must never be stored "best effort",
- * because a best-effort hash is a hash two parties can disagree about.
+ * THIS WAS A HAND-ROLLED COPY, and it broke live. It carried its own arity constant (11) and its own
+ * re-encode, so when M10B appended slot 12 the portal minted 12-slot envelopes and the notary rejected
+ * every one with `envelope_undecodable` — a valid signal refused by the only party that can notarize it.
+ * The copy was 40 lines that had to be kept in step with the wire format by hand, at the party where
+ * being wrong is most expensive. Bumping the constant to 12 would have fixed the symptom and left the
+ * mechanism; importing the shared decoder removes it.
+ *
+ * The rejection itself behaved correctly — loud 422, row left on the queue, nothing lost — which is why
+ * this surfaced as a failed journey rather than as silently corrupt notarizations.
  */
-function decodeTrustSignalEnvelope(bytes: Uint8Array): TrustSignalEnvelope {
-  const arr = decodeCbor(bytes);
-  if (!Array.isArray(arr) || arr.length !== 11) {
-    throw new Error(`envelope must be an 11-element CBOR array (the fixed preimage), got ${Array.isArray(arr) ? `${arr.length} elements` : typeof arr}`);
-  }
-  const [domain, subject_kind, subject, issuer_kind, issuer_pubkey, type, schema_version, payload, issued_at, expires_at, supersedes_hash] = arr as unknown[];
-  if (domain !== "CELLO-TSIG-v1") {
-    throw new Error(`envelope domain tag is '${String(domain)}', expected 'CELLO-TSIG-v1' — this is not a trust-signal envelope`);
-  }
-  const toBytes = (v: unknown): Uint8Array =>
-    v instanceof Uint8Array ? v : Buffer.isBuffer(v) ? new Uint8Array(v) : (() => { throw new Error("expected raw bytes"); })();
-
-  const env: TrustSignalEnvelope = {
-    subject_kind: subject_kind as "account" | "agent",
-    subject: subject as string,
-    issuer_kind: issuer_kind as "portal" | "agent",
-    issuer_pubkey: issuer_pubkey as string,
-    type: type as string,
-    schema_version: Number(schema_version),
-    payload: toBytes(payload),
-    issued_at: Number(issued_at),
-    expires_at: expires_at === null || expires_at === undefined ? null : Number(expires_at),
-    supersedes_hash: supersedes_hash === null || supersedes_hash === undefined ? null : toBytes(supersedes_hash),
-  };
-
-  // Re-encoding must reproduce the input EXACTLY. This is what makes the decode safe: if any field
-  // round-trips differently (a number that came back as a float, a byte string we mis-read), the
-  // bytes differ and we refuse — rather than hashing our RE-encoding of what we think they meant and
-  // notarizing a hash the submitter never computed.
-  const reencoded = encodeCbor([
-    "CELLO-TSIG-v1", env.subject_kind, env.subject, env.issuer_kind, env.issuer_pubkey, env.type,
-    env.schema_version > 0xffff_ffff ? BigInt(env.schema_version) : env.schema_version,
-    env.payload,
-    env.issued_at > 0xffff_ffff ? BigInt(env.issued_at) : env.issued_at,
-    env.expires_at === null ? null : (env.expires_at > 0xffff_ffff ? BigInt(env.expires_at) : env.expires_at),
-    env.supersedes_hash,
-  ]);
-  if (Buffer.compare(Buffer.from(reencoded), Buffer.from(bytes)) !== 0) {
-    throw new Error("envelope bytes are not canonical — re-encoding them does not reproduce the input");
-  }
-  return env;
-}

@@ -341,9 +341,25 @@ Format the proof as a numbered flow. Include:
 **The version cascade, dist-tags, and the post-publish verification live in `/cello-publish`** — load
 the skill, do not reconstruct them from memory here.
 
-**Never tell users to run `npx clear-npx-cache`.** It wipes every npx-installed tool. Pinning a new version is sufficient.
+**No pinned versions — always `latest`.** A pin is invisible: someone pins for a good reason, never
+unpins, and a later session burns hours on a fix that is published but not running. Note `^0.0.x` IS
+a pin (a caret below `0.1.0` floats to nothing), and `npm i pkg@latest` writes one into
+`package.json` — check after. Verify with `claude mcp get`, not memory.
 
-**`claude mcp add` syntax:** Use `--` to separate claude's flags from npx's flags, otherwise `--yes` is misinterpreted.
+**Exception:** testing a build not yet promoted to `latest`. Use the TAG (`@beta`) rather than a
+number, say so out loud, and unpin before the session ends.
+
+**Never tell users to run `npx clear-npx-cache`.** It wipes every npx-installed tool. Promoting and
+installing `latest` is sufficient.
+
+**The plugin is the install route, not `claude mcp add`.** `cello-client` publishes a marketplace
+(`.claude-plugin/marketplace.json`, name `cello-protocol`) and a plugin (`plugins/cello/`) carrying the
+MCP shim, four skills, the receptionist agent, and the channel binding. Users run
+`/plugin marketplace add Mygentic-AI/cello-client` then `/plugin install cello@cello-protocol`.
+**Tool names under the plugin are `mcp__plugin_cello_cello__*`, not `mcp__cello__*`** — anything
+keyed on the old prefix (permission allowlists, hooks, docs) silently stops matching. Never register
+both routes at once; that runs the shim twice. Manual `claude mcp add` survives as a fallback only,
+and there `--` separates claude's flags from npx's or `--yes` is misinterpreted.
 
 ---
 
@@ -359,13 +375,17 @@ CELLO is split across two repos. `trustless-cello` (server-side) depends on pack
 
 **`workspace:*` references to cello-client packages in trustless-cello are a bug.** `workspace:*` resolves to the local copy in the pnpm workspace. After REPOSPLIT-002, the local copies in `trustless-cello/packages/crypto/`, `packages/transport/`, etc. are stale and no longer maintained. Using `workspace:*` means directory and relay run against old code silently. There is no type error. Tests pass. The bug is invisible until something breaks in production.
 
-**The correct reference format is a pinned semver range:**
+**The correct reference is `latest`** — the lockfile is what makes the build reproducible, not the
+range:
 ```json
-"@cello-protocol/crypto": "^0.0.7",
-"@cello-protocol/transport": "^0.0.4",
-"@cello-protocol/protocol-types": "^0.0.3",
-"@cello-protocol/client": "^0.0.20"
+"@cello-protocol/crypto": "latest",
+"@cello-protocol/transport": "latest",
+"@cello-protocol/protocol-types": "latest"
 ```
+`pnpm-lock.yaml` is committed and records the exact resolved version, so a pinned range buys nothing
+it does not already give — while `^0.0.x` floats to nothing and goes stale silently. On 2026-07-30
+these refs sat at three different versions (0.0.18, 0.0.23, 0.0.26) against 0.0.33 published, so the
+directory decoded an 11-field envelope while the portal minted 12 and refused every endorsement.
 
 **Interfaces stays local.** `@cello-protocol/interfaces` is maintained in `trustless-cello` and is the only package that remains as `workspace:*` — it is not a cello-client package.
 

@@ -32,15 +32,20 @@ function randomHash(): string {
   return randomBytes(32).toString("hex");
 }
 
-async function seedSignal(hash: string, opts: { status?: string; node?: string; subject?: string } = {}): Promise<void> {
+// `subject` is gone from the signature too, not merely unwritten: V55 removed the column, so an
+// option that silently does nothing would be worse than none — a caller would believe they were
+// seeding a distinguishable row.
+async function seedSignal(hash: string, opts: { status?: string; node?: string } = {}): Promise<void> {
   const status = opts.status ?? "active";
   const node = opts.node ?? "test-node";
-  const subject = opts.subject ?? `acct-${randomBytes(4).toString("hex")}`;
   await pool.query(
-    `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type, status, scanner_version, is_tombstone)
-     VALUES ($1, $2, 'account', $3, 'portal', $4, 'email', $5, '1.0', false)
+    // V55 dropped `signal_records.subject` — the directory does not store who a signal is about.
+    // `subject` stays in this helper's signature because callers read as documentation, but it is no
+    // longer written; the presented-signal check is keyed on the hash alone, which is the point.
+    `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type, status, scanner_version, is_tombstone)
+     VALUES ($1, $2, 'account', 'portal', $3, 'email', $4, '1.0', false)
      ON CONFLICT DO NOTHING`,
-    [hash, node, subject, randomBytes(32).toString("hex"), status],
+    [hash, node, randomBytes(32).toString("hex"), status],
   );
 }
 
@@ -73,8 +78,8 @@ describeIntegration("DOD-PRESENT-1 — directory dumb check (checkPresentedSigna
     await seedSignal(oldH);
     // Insert a non-revoked replacement that supersedes oldH
     await pool.query(
-      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type, status, supersedes_hash, scanner_version, is_tombstone)
-       VALUES ($1, 'test-node', 'account', 'acct-x', 'portal', $2, 'email', 'active', $3, '1.0', false)`,
+      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type, status, supersedes_hash, scanner_version, is_tombstone)
+       VALUES ($1, 'test-node', 'account', 'portal', $2, 'email', 'active', $3, '1.0', false)`,
       [newH, randomBytes(32).toString("hex"), oldH],
     );
     const result = await checkPresentedSignals(pool, [oldH]);
@@ -120,8 +125,8 @@ describeIntegration("DOD-PRESENT-1 — directory dumb check (checkPresentedSigna
     const h = randomHash();
     // Seed with an entirely unknown type string
     await pool.query(
-      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type, status, scanner_version, is_tombstone)
-       VALUES ($1, 'test-node', 'account', 'acct-x', 'portal', $2, 'never_seen_before_xyz', 'active', '1.0', false)`,
+      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type, status, scanner_version, is_tombstone)
+       VALUES ($1, 'test-node', 'account', 'portal', $2, 'never_seen_before_xyz', 'active', '1.0', false)`,
       [h, randomBytes(32).toString("hex")],
     );
     const result = await checkPresentedSignals(pool, [h]);

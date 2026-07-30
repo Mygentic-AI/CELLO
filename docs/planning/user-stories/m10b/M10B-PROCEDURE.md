@@ -12,6 +12,9 @@ description: >
   trust-signal machinery (three-repo discipline, publish cascade, design-note template) and M11's
   corrections (reviewer dispatch carries NO model override). No separate SPEC or DECISIONS doc: the
   two M10 design docs remain the spec-of-record and decisions live in the DoD's Decisions section.
+  AMENDED 2026-07-30 by the scope & cost review: the five milestone invariants live HERE as review
+  lenses (§2b) and carry no DoD status tags; document discipline is now a hard rule (§1a); the
+  two-pass review cap covers design determinations (§6a); the scope fence is the live journey (§5d).
 ---
 
 # M10B Procedure — How to Work the Milestone
@@ -128,12 +131,36 @@ Then start the loop (§2).
 ## 1. The artifacts
 | Artifact | Role |
 |---|---|
-| **M10B-DEFINITION-OF-DONE** | The **yardstick + sole status authority** — ordered, status-tagged, carries Decisions + Open questions + Parked. Flip tags in place; one line of evidence + `→ Entry N`, never an essay. |
+| **M10B-DEFINITION-OF-DONE** | The **yardstick + sole status authority** — ordered, status-tagged, carries Decisions + Open questions + Parked. Flip tags in place; **one line of evidence + `→ Entry N`, never an essay** (§1a makes this enforceable). Deliverables only: an invariant is not a line (§2b), and a determination is a phase, not a unit (§6a). |
 | **M10B-BUILD-JOURNAL** | The **audit trail + evidence home** — append-only. Full proofs, bug forensics, run output live HERE, pointed to from the DoD. Never edit a prior entry. New file per tier (`M10B-BUILD-JOURNAL-T{n}.md`) seeded with a 10-line resume block. |
 | **M10-TYPE-PLAYBOOK** | The **per-type runbook**, unchanged and still authoritative. `DOD-END-PLAYBOOK-1` is a run of it. If a step in it turns out to be wrong for a client-sourced type, fix the playbook in the same commit. |
 | **The e2e fixture harness** | **Enforcer, daemon/directory layer** — extend `packages/e2e-tests/src/session-fixture.ts` / the spine harness with non-breaking `opts`; a from-scratch fixture is a BLOCKING review finding. |
 | **The live journey** | **Enforcer, end-to-end layer** — real processes, three parties (endorser, subject, recipient). Lines whose behavior ends in an LLM's context or spans endorser→portal→directory→subject→recipient are ✅ only after the live journey. Vitest green ≠ done. |
 | **The playbook-run proof** | **Enforcer, architectural layer** — `DOD-END-PLAYBOOK-1`. A second client-sourced type goes end-to-end with empty diffs in both repos, or the generalisation failed. |
+
+## 1a. Document discipline — the rule the 2026-07-30 review added
+
+**The failure this closes, measured:** the DoD reached **1,629 lines** and the journal **3,258** for one
+feature — ~5k lines of process prose, with the same correction routinely written three times (journal
+entry, DoD blockquote, commit essay). The DoD's own header says *"this document stays a scoreboard."*
+It stopped being one, and that cost real time: every later review had to re-read the archaeology before
+it could read the code.
+
+**Four rules, and they are mechanical:**
+
+1. **A DoD line is a status tag, one line of evidence, and `→ Entry N`. Nothing else.** If a status
+   annotation runs past ~3 lines, it is a journal entry wearing the wrong hat — move it and leave the
+   pointer. **No blockquote on a DoD line may exceed 5 lines.**
+2. **Supersession history lives ONLY in the journal.** A DoD line names the current shape of a decision;
+   it never carries the corpse of the previous one. `M10B-D12` → `D12r` → `D12r2` → `D12r3` → `D12r4`
+   inside the yardstick means the coder must first work out which of five things to build — that is a
+   navigation tax charged to every future reader.
+3. **A decision on its THIRD rewrite stops being written and starts being MEASURED.** Two prose
+   revisions is the cap. The third attempt is a spike: run it against real Postgres / the real fixture /
+   the real bytes, and write down what happened. Entries 11 and 15 — the two that ran SQL instead of
+   arguing about SQL — settled more than every prose pass combined.
+4. **One authoritative home per fact.** The journal holds forensics and proof; the DoD holds status;
+   the commit message holds the why in prose. Do not restate a correction in all three — cross-reference.
 
 ## 2. The core loop (one unit = one DoD line)
 1. **Find the red** — lowest non-✅ DoD line. Don't skip ahead.
@@ -192,6 +219,14 @@ confined to one repo until you have read both sides.
 One `cello-unit-reviewer` dispatch per unit, **no model override**. The DISPATCH supplies: the DoD line
 text VERBATIM (all clauses), the coder's clause checklist, the diff (commit range or files), and the
 repo(s). Standing M10B-specific instructions to include:
+
+> ### 🚨 THE FIVE MILESTONE INVARIANTS LIVE HERE — they are LENSES, not DoD lines (2026-07-30 review)
+> An invariant is a property every unit must not violate. **You do not build it, so it cannot be a
+> deliverable, and it must never carry a status tag.** M10B shipped five of them as ❌ DoD lines
+> (attribution, consent, untrusted-content, self-standing, zero-bump); the tags read as unfinished
+> work, and every review pass re-litigated properties that were already being enforced right here.
+> **The five below ARE those invariants.** Each fires on EVERY unit's diff, whether or not the DoD
+> line mentions it. The DoD lists them once, without tags, pointing at this section.
 
 - **Zero-bump lens, sharpened for this milestone.** Flag ANY per-type construct in cello-client or
   trustless-cello — type enums used for gating, `switch(type)`, per-type columns, per-type validation
@@ -554,6 +589,26 @@ only here.
 - **The scope is the SOURCE and the two MECHANISMS, not the catalog.** Attestation types beyond
   `endorsement` are OUT — they become playbook runs once the source exists. Adding one because it looks
   cheap is scope creep.
+- **🚨 THE SCOPE FENCE IS THE LIVE JOURNEY (2026-07-30 review).** *If the live journey's cases cannot
+  OBSERVE a line failing, that line is not launch scope.* Apply it when the line is written, not after
+  it is built. Three shapes it catches, all of which M10B built or nearly built before anyone asked:
+  - **Recipient-side trust POLICY** (floor predicates, tier effects, count rules) is a different concern
+    from the endorsement PIPELINE. M10B proved the point the hard way: the policy engine
+    (`evaluateSignalPolicy`) has **zero production callers**, so endorsement-aware rules were being
+    written for an engine nothing invokes. Wiring it needs an operator-facing policy SOURCE and safe
+    defaults — its own unit, after launch.
+  - **Abuse controls at alpha with one issuer.** A cap or a suspension cascade defends against an
+    attacker who cannot exist yet. Ship the mechanism they ride, defer the control.
+  - **A line that is really a follow-on to a mechanism that already works.** Withdrawal already takes
+    effect for every FUTURE session; only the re-check of an already-stored copy is missing. Rescope to
+    what is missing rather than carrying the whole line as ❌.
+- **PRE-EXISTING DEFECTS: fix them (standing rule), but LABEL them as debt, not as this milestone.**
+  ~15% of M10B went on breakage that predated it — M10's live agent-scoping hole, delivery destroying
+  the second endorsement of any subject, a supersession guard inert since revocation became tombstones,
+  a live test red for four days. Every one of those was right to fix. They get their OWN DoD line marked
+  `(debt — from M{N})`, so the feature's true cost stays legible and an overstated ✅ in an earlier
+  milestone is charged where it was earned. A floor "proven" by a test that supplies the caller
+  production lacks is that shape: it belongs to the milestone that claimed it.
 - **Nothing that is gated on policy D-12 (tabled).** Any rule of the form "an endorsement SUBSTITUTES
   for requirement X" is out of scope until D-12 is answered. Endorsements ship, are held, presented, and
   withdrawn without it.
@@ -587,6 +642,29 @@ These units are NOT mechanical; each gets a **design note in the journal before 
   refused endorsement is made indistinguishable from a nonexistent one.
 - **`DOD-END-REVOKE-2`** — the revocation authority model: exact-pubkey for agent-issued alongside
   role-based for portal-issued, and what the tombstone carries.
+
+## 6a. The two-pass review cap COVERS design determinations (2026-07-30 review)
+
+**The measured failure:** `DOD-END-ARCH-1` — a determination, not a unit — consumed an entire overnight
+session across **four completed review passes plus a fifth that died having read nothing**, and shipped
+**zero lines of code**. Passes 2–4 largely reviewed pass 1's fixes. The journal's own words for the last
+one: *"confirmation, not discovery."* The repo's standing rule — **one review pass per artifact, two is
+the hard cap** — existed the whole time and was not applied to a document.
+
+**The rule, restated so it cannot be read as code-only:**
+
+1. **A determination gets ONE review pass. TWO is the cap.** The same cap as any other artifact.
+2. **At pass two, remaining findings become ACs on the units that build them.** That is the cap's own
+   prescribed escape, and it is not a compromise — a unit-level review that finds the determination
+   wrong about its own line fixes it *in that unit*, which is where the cost belongs. `M10B-D29` reached
+   this conclusion after four passes; reach it after two.
+3. **The flip standard is the fourth reviewer's, and it is sufficient:** *would a competent coder
+   following this build the right thing, with the remaining unknowns named as unknowns?* Named, sized,
+   and assigned beats settled.
+4. **A determination is a PHASE, not a DoD line.** It gets journal entries and a completion note; giving
+   it a status tag makes an unbounded polish loop look like an unfinished deliverable.
+5. **A killed reviewer is not a pass** (unchanged — Entry 18). It produces no verdict in either
+   direction.
 
 ### The design-note template (use this structure)
 
@@ -635,6 +713,9 @@ of the current journal file up to date.
 
 - [[M10B-DEFINITION-OF-DONE]] — the yardstick + sole status authority (Decisions, Open questions, Parked)
 - [[M10B-BUILD-JOURNAL]] — audit trail + evidence home; Entry 0 is the milestone thesis
+- [[2026-07-30_m10b-scope-and-cost-review]] — **where §1a, §2b's invariant note, §5d's scope fence and
+  §6a come from**: the measured account of why one feature outran the milestone that built the whole
+  trust-signal system, and the re-cut Andre approved on 2026-07-30
 - [[M10-TYPE-PLAYBOOK]] — the per-type runbook, unchanged; `DOD-END-PLAYBOOK-1` is a run of it
 - [[M10-TRUST-SIGNAL-STORAGE-AND-CREATION]] — spec-of-record (HOW): §6 three issuer flows, §7 intake,
   §14.1/§14.2, §15 zero-bump

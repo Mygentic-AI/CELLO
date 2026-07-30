@@ -855,6 +855,41 @@ streams for one pubkey, two processes holding the same FROST share, double-accep
 > prescribe plus any crash, and the recovery action propagates it. `DOD-INV-ONE-PRIMARY` forbids exactly
 > this across machines; we have been violating it on one.
 
+## ✅ DOD-CRYPTO-AT-REST-1 — the gateway writes security records + config to disk UNENCRYPTED
+
+> **FULLY CLOSED 2026-07-30 (the named defect fixed 2026-07-29 by `DOD-M9B-STORE-1`** (M9's reopened connect unit, branch `m9/connect-unit`,
+> commit `449bbba`). `core/gateway` got its own SQLCipher opener — it cannot import the daemon's,
+> since the daemon depends on the gateway and not the reverse — and both stores now live in ONE
+> encrypted file, `~/.cello/gateway.db`, opened with the DAEMON'S key file. One key, one backup
+> unit, which is policy decision D-3.
+>
+> Two clauses were amended by evidence rather than met (`M9B-D6`, `M9B-D7`, journal Entry C2):
+> `cello_backup`/`cello_restore` are still `not_implemented` stubs, so a round-trip proof is OWED
+> to the backup build and recorded there; and NO plaintext importer was built, because the layer
+> never ran in the product, so no production plaintext store has ever existed and an importer would
+> be dead code born dead.
+>
+> The two gateway entries also left the `node:sqlite` quarantine allowlist in
+> `cello-client/eslint.config.mjs` — only `daemon/identity-migration.ts` remains.
+>
+> **✅ CLOSED 2026-07-30.** The last plaintext path is gone. The gateway's REQUEST LOG
+> (`CELLO_GATEWAY_REQUEST_LOG`) wrote metadata plus a content SHA-256 outside the encrypted store —
+> only tests set it, but this line's title is "the gateway writes ... to disk UNENCRYPTED", and one
+> env var away from true is not false.
+>
+> It was REMOVED rather than guarded, because it was redundant: the record store already carries
+> direction, disposition, contentHash and correlationId. No reference in either repo and no shipped
+> path that set it — though the field WAS on the package's `.` export via `GatewayServerOptions`, so
+> its removal is a semver-breaking type change (review L2 corrected my claim to the contrary; the
+> deletion itself landed in `39f8100`, not `8334651`). Its three test consumers now read the ENCRYPTED store
+> instead, which makes them better tests: they assert on the durable audit trail rather than a debug
+> side-channel. See [[M9B-DEFINITION-OF-DONE]] and [[M9B-BUILD-JOURNAL]] Entry C19.
+
+<details>
+<summary>The original finding, kept verbatim</summary>
+
+</details>
+
 ## 🔴 DOD-CRYPTO-AT-REST-1 — the gateway writes security records + config to disk UNENCRYPTED
 
 **Found 2026-07-09, while chasing an unrelated npm warning.** Not an M9 concern despite living in
@@ -1076,7 +1111,15 @@ bare `{type:"timeout"}` — verified in `daemon.ts`, not assumed). §3's "exit 0
 - **DOD-CONFIG-1** — `cello config list/get/set [--agent <name>]` on M9-CFG-001's versioned
   store (extend, never a parallel subsystem); tighten-free/loosen-needs-confirmation enforced;
   every M8C-introduced setting (away message, privacy mode, auto-start, TTL, queue caps,
-  per-session size limit, Telegram settings, primary-transfer policy) readable + writable. — ❌
+  per-session size limit, Telegram settings, primary-transfer policy) readable + writable.
+  — 🟡 **ABSORBED 2026-07-29 by `DOD-M9B-SURFACE-1`** (policy D-4). `cello config list|get|set`
+  exists on M9-CFG-001's versioned store, tighten-free / loosen-confirmed is enforced end to end,
+  and the confirmation is an interactive TTY prompt — deliberately with no `--yes` flag, since a
+  flag a script can pass is the environment-variable bypass renamed. **The SECURITY-LAYER half is
+  built; the M8C-settings half is NOT** — away message, TTL, auto-start and the rest still live on
+  `cello settings` / `agent_settings`, which is a different store with a different governance
+  model (no confirmation gate). Whether the two surfaces merge is an open product decision, not a
+  gap this unit left. See [[M9-DEFINITION-OF-DONE]] `DOD-M9B-SURFACE-1`.
   - **Friction riders (F6, F12 — verified open 2026-07-06):**
     - **F6** — directory-node selection becomes a first-class, documented setting/flag, not the
       env-var-only `CELLO_DIRECTORY_URL` (defaults silently to US — `directory-bootstrap.ts:32`).
@@ -1871,6 +1914,190 @@ own story) deliberately, never smuggled in as a rider. Source:
   7. Tests: (a) sealed session with unread does NOT appear in `unread`, appears in `sealed_unread`;
      (b) after `cello_dismiss`, session no longer appears in either section; (c) `cello_dismiss`
      on an active session returns `session_not_terminal`.
+
+- **DOD-SEALED-INBOX-2** ❌ OPEN (raised 2026-07-30) — `cello_inbox` calls unsealed sessions sealed.
+  The inbox is the one surface that asserts a seal, and for three of four statuses the assertion is
+  false.
+
+  **Observed live (2026-07-30).** A Cowork session left two messages for `CELLO_Feedback` and the
+  daemon was killed mid-flight. `cello_inbox` returned the session under `sealed_unread` with
+  `sealed_unread_guidance: "These sessions are sealed with unread messages…"`. It was not sealed:
+  `cello_sealed_receipt` said `not_sealed_yet`, `cello_sessions` said `status: "interrupted"`, and
+  the daemon log had no `seal.certificate.frontier.verified` for it (the two sessions that DID seal
+  that day both have it). **The agent reading the inbox repeated "it's sealed" to the operator as
+  fact.** It took a direct "is it actually sealed?" to catch — nothing in the system contradicts the
+  label unless you go and ask a second surface.
+
+  **Root cause — the label, not the query.** `session-node-manager.ts`:
+  `#TERMINAL_STATUSES = ('sealed','abandoned','seal_interrupted_pending','interrupted')`.
+  `getSealedUnread()` selects on that set and `notification-handlers.ts` reports it as
+  `sealed_unread`. The set is correct — all four are terminal — but only `sealed` is notarized:
+  `abandoned` forfeited the receipt deliberately, `seal_interrupted_pending` is awaiting
+  notarization, `interrupted` was never closed. **The seam is visible in `DOD-SEALED-INBOX-1` above:**
+  its design paragraph says "sealed-unread (**terminal** sessions with unread)" while its AC 5 names
+  the wire field `sealed_unread`. The design said terminal, the wire said sealed, and nothing
+  reconciled them.
+
+  **Why this is not a papercut.** CELLO's product IS the receipt. "This conversation is notarized" is
+  the one claim the entire stack exists to support and the one an operator repeats to a counterparty.
+  A surface that answers "sealed" for a session with no seal is the protocol misreporting its own
+  core guarantee — on the surface most likely to be read by an agent rather than a human, and
+  therefore most likely to be relayed onward unchecked.
+
+  **ACs:**
+  1. Every `sealed_unread` entry carries its real `status`, so notarization cannot be inferred from
+     the field name alone.
+  2. The guidance string no longer asserts that the sessions are sealed. It describes them as
+     terminal (closed, no longer active) and directs the reader to `cello_transcript` /
+     `cello_dismiss` as before.
+  3. The field is renamed `terminal_unread`, with `sealed_unread` retained as an alias for one
+     release — prompt text and the shipped skills reference the current name. This is a RESPONSE
+     field, so the Cowork argument-stripping constraint does not apply (see
+     `cello_session_id`, 2026-07-29).
+  4. Shipped prompt text moves with the field in the same version: `SKILL.md`, the plugin skills,
+     and any slash command that reads the inbox.
+  5. Test: an `interrupted` session with unread received messages must not be described as sealed by
+     ANY field name or guidance string in the `cello_inbox` response. Same for `abandoned` and
+     `seal_interrupted_pending`.
+  6. Test: a genuinely `sealed` session with unread messages still appears, and its entry still
+     reports `status: "sealed"`.
+
+  Full write-up, including the live probe table: [[2026-07-30_1330_inbox-calls-unsealed-sessions-sealed]].
+
+- **DOD-FRONTIER-STRAND-1** ❌ OPEN (raised 2026-07-30) — a leaf appended locally but never recorded
+  by the counterparty strands the session as **permanently unsealable**, and nothing detects or
+  repairs it.
+
+  **Found live during cleanup (2026-07-30).** Session `dbb93dfcf415b7cbfe13626f5b168a3f`
+  (Ms_Chelly ↔ CELLO_Support, **both agents on the same daemon**) had sat `interrupted` since
+  2026-07-23. A normal close was refused from BOTH directions with
+  `seal_interrupted_rejected_by_counterparty`. The two transcripts diverge at exactly one leaf:
+
+  ```
+  Ms_Chelly     (5): 0 sent greeting │ 1 recv "Hello" │ 2 sent greeting AGAIN │ 3 recv "another" │ 4 sent WRAP
+  CELLO_Support (4): 0 recv greeting │ 1 sent "Hello" │        —              │ 2 sent "another" │ 3 recv WRAP
+  ```
+
+  The **second away autoresponse** — the spurious echo `DOD-AWAY-WRAP-1` was written to eliminate —
+  was appended to Ms_Chelly's local tree and never recorded on the counterparty. This session
+  predates that fix, so the echo itself is already addressed. **What is NOT addressed is the
+  consequence:** the frontiers permanently disagree (5 vs 4), so each side refuses to co-sign the
+  other, and the session can never produce a receipt. Force-abandon is the only exit, and it forfeits
+  the seal. One undelivered leaf cost the conversation its notarization, forever.
+
+  **Why this outlives the away bug.** The away echo was one way to produce an undelivered local leaf.
+  Any future path that appends before it delivers produces the same strand, and the system currently
+  has no detection (nothing flagged it for a week), no diagnosis (the refusal names the counterparty,
+  not the mismatch), and no repair. That both ends were on ONE daemon rules out a network partition
+  as the explanation — a local append simply was not mirrored.
+
+  **ACs:**
+  1. A leaf is appended to the local tree only once its delivery to the counterparty is recorded, OR
+     an undelivered append is reconciled/rolled back rather than left in the tree. Whichever is
+     chosen, an append that the counterparty never records must not be a terminal state.
+  2. `seal_interrupted_rejected_by_counterparty` reports the ACTUAL mismatch — both frontier
+     sequence numbers and the diverging leaf index — instead of directing the operator to ask the
+     counterparty to check their end. Here both ends were the same daemon, so that guidance was
+     unfollowable.
+  3. A frontier mismatch on an interrupted session is surfaced (log event + `cello_sessions` field)
+     rather than discovered only when a close is attempted. This one went a week unnoticed.
+  4. Tests: (a) a session whose two sides disagree by one leaf is detected as mismatched, not merely
+     refused; (b) the refusal message names both frontiers; (c) the reconcile path (per AC 1) turns a
+     one-leaf divergence into a sealable session, or the leaf is proven never to have been appended.
+
+- **DOD-CLI-SESSIONS-SCOPE-1** ✅ FIXED (2026-07-30, cello-client `6b9964c`) — CLI `cello sessions` ignores the selected
+  agent and lists every agent's sessions; the MCP `cello_sessions` scopes correctly. The dual
+  surfaces disagree.
+
+  **Observed live (2026-07-30).** With `CELLO_Feedback` selected, `cello_sessions` (MCP) returned
+  `totalMatched: 0` while `cello sessions` (CLI) returned 2 — rows belonging to `Ms_Chelly` and
+  `CELLO_Support`. Selecting each of the five agents in turn and re-running the CLI returned the same
+  2 rows every time, which is the tell: the CLI is not filtering by agent at all. It also accepts no
+  `--agent` flag (`Unknown flag '--agent' for 'cello sessions'`), so there is no way to ask it for
+  one agent's sessions.
+
+  **Why it matters beyond tidiness.** This is exactly the divergence `DOD-ONBOARD-HELP-1` §2b parity
+  exists to prevent: the same verb, one name, two behaviours. A multi-agent operator reading the CLI
+  concludes an agent has open sessions it does not have — and during this cleanup it briefly made a
+  correct MCP answer look wrong. On a surface whose whole job is to tell you what state you are in,
+  answering for the wrong principal is a correctness bug, not a UX one.
+
+  **ACs:**
+  1. `cello sessions` returns only the selected agent's sessions, matching `cello_sessions` exactly
+     for the same selection.
+  2. `cello sessions --agent <name>` is accepted, mirroring the MCP tool's `agent` parameter (the
+     `DOD-AGENT-PARAM-1` convention).
+  3. Where a listing spans agents, it is opt-in (`--all-agents`) and labels each row with its agent —
+     never the default.
+  4. Test: with agent A selected and open sessions existing only for agent B, `cello sessions`
+     returns none, and `cello sessions --agent B` returns B's.
+  5. Parity test extension: for every dual-surface verb, the CLI and MCP forms return the same set for
+     the same agent selection. The existing parity test checks that NAMES match; it does not check
+     that ANSWERS match, which is how this survived. — ⏳ **still open**: AC 1-4 shipped, this
+     generalisation did not. `cello sessions` is now covered; no other dual-surface verb is.
+
+  **Fixed 2026-07-30** (cello-client `6b9964c`): routed through the parity path, so it also gained
+  `--agent`, the online check, and the same no-selection refusal as its siblings; the daemon-wide view
+  survives as `--all-agents`. Verified live — 44 rows for the selected agent, 115 for
+  `--agent Ms_Chelly`, 261 for `--all-agents`. Test note worth keeping: the two behavioural tests
+  cannot catch a regression here, because in a temp daemon with no sessions the daemon-wide handler
+  answers `ok` too. The wire name is therefore asserted directly, verified by mutation.
+
+- **DOD-LOGOUT-EXIT-1** ❌ OPEN (raised 2026-07-30) — `cello logout` reports the daemon stopped while
+  the process is still alive and still talking to a directory node.
+
+  **Observed live (2026-07-30).** After `cello logout`, `cello status` returned `{"daemon":
+  "stopped"}` and the socket, lock file, SQLCipher handle and singleton were all correctly released —
+  but the process (pid 27942) was still running 20+ seconds later, holding 130 MB and an ESTABLISHED
+  outbound connection to a directory node (manifest polling). It exited only when killed by hand.
+  `cello logout`'s own help says *"Stops the daemon. Waits until it has actually exited."*
+
+  **Why it matters beyond an orphan process.** A `stopped` that leaves a live process still reaching
+  the directory makes the next investigation start from a false premise — an operator who has logged
+  out reasonably believes nothing of theirs is on the network. It also silently breaks the "kill
+  switch" reading of logout: the visible state says off, the network behaviour says on. And it hides
+  itself: because the handles ARE released, every local check agrees with the lie.
+
+  **ACs:**
+  1. `cello logout` does not return success until the daemon process has actually exited (its help
+     already promises this); if it does not exit within a bounded wait, the command says so and exits
+     non-zero rather than reporting `stopped`.
+  2. On shutdown the daemon closes its outbound directory connections and stops the manifest poller,
+     rather than releasing local handles and continuing to poll.
+  3. `cello status` distinguishes "no daemon" from "a daemon process exists but has released its
+     socket" — the second is a broken shutdown, not a clean stop, and must not read as `stopped`.
+  4. Test: after logout returns, no process holds the daemon binary for that CELLO_DIR, asserted on
+     the process, not on the lock file.
+
+- **DOD-TESTDAEMON-REAP-1** ❌ OPEN (raised 2026-07-30) — the test harness leaks its subject daemon;
+  one had been running for 1h50m past its test.
+
+  **Observed live (2026-07-30).** pid 26248, a `cello-daemon` with `CELLO_DIR=/private/tmp/
+  cello-subject-26225` — its own socket, SQLCipher DB, singleton and log. It had created an agent
+  (`live-subject`) and its log was ~1h50m of `registry.poll.failed` /
+  `directory.consortium.node.unresolved` / `directory.signaling.reconnecting` against the real dev
+  directory. It survived the operator's `cello logout` because it was never part of that home, and
+  had to be killed by hand.
+
+  **Not a singleton violation** — and the investigation it caused is the point. Two daemons on one
+  machine looked like a broken singleton until each process's open files were checked; the singleton
+  is per-`CELLO_DIR` and both homes correctly held exactly one. The isolation worked. The reaping did
+  not.
+
+  **Why it matters.** A leaked subject daemon holds a listening port and hammers the dev directory
+  with poll traffic from a machine nobody is watching, indefinitely, once per test run that leaks.
+  It also poisons exactly the kind of debugging done here: a stray `cello-daemon` in `ps` is the
+  first thing anyone suspects when sessions misbehave.
+
+  **ACs:**
+  1. A harness that spawns a subject daemon terminates it in teardown, including when the test fails
+     or the runner is interrupted.
+  2. Its `CELLO_DIR` is removed on teardown; a leftover `/private/tmp/cello-subject-*` is a failure
+     signal, not debris to ignore.
+  3. A subject daemon does not poll the real dev directory — it points at a stub, or its poller is
+     off. A test fixture must not generate production traffic.
+  4. Test/CI check: after the suite, no `cello-subject-*` directory and no daemon process for one
+     remains.
 
 - **DOD-AWAY-WRAP-1** ✅ DONE — Away autoresponder must not fire on a `[[WRAP]]`-signalled message; it must close the session silently instead.
 

@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CELLO &amp; Buzz — A room, and a phone number.</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@200;400;700;800&family=Crimson+Pro:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --accent: #D91E8A;
+            --accent-dark: #B01870;
+            --accent-wash: #fce4f2;
+            --text-primary: #1a1a1a;
+            --text-secondary: #4a4a4a;
+            --text-muted: #6a6a6a;
+            --bg-slide: #ffffff;
+            --bg-subtle: #fafafa;
+            --border: #e0e0e0;
+            --dim: #d32f2f;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html {
+            scroll-behavior: smooth;
+            scroll-snap-type: y mandatory;
+        }
+
+        body {
+            font-family: 'Crimson Pro', Georgia, serif;
+            color: var(--text-primary);
+            line-height: 1.6;
+            font-size: 18px;
+            background: linear-gradient(135deg, #fafafa 0%, #f0f0f0 100%);
+            font-weight: 300;
+        }
+
+        .slide {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 60px 80px;
+            scroll-snap-align: start;
+            background: var(--bg-slide);
+            position: relative;
+        }
+
+        .slide:nth-child(even) { background: var(--bg-subtle); }
+
+        .slide.center { justify-content: center; align-items: center; text-align: center; }
+
+        .slide-number {
+            position: absolute;
+            bottom: 30px;
+            right: 40px;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .slide-number .brand-footer { color: var(--accent); }
+
+        .brand {
+            position: absolute;
+            top: 30px;
+            left: 40px;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 14px;
+            font-weight: 800;
+            color: var(--accent);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 72px;
+            font-weight: 800;
+            letter-spacing: -2px;
+            line-height: 1.05;
+            margin-bottom: 24px;
+            color: var(--text-primary);
+        }
+
+        h2 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 47px;
+            font-weight: 700;
+            letter-spacing: -1px;
+            line-height: 1.15;
+            margin-bottom: 28px;
+            color: var(--text-primary);
+        }
+
+        h3 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 16px;
+        }
+
+        .accent { color: var(--accent); }
+        .dim-text { color: var(--text-muted); }
+
+        .subtitle {
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-size: 24px;
+            color: var(--text-secondary);
+            font-weight: 300;
+            line-height: 1.5;
+            max-width: 1000px;
+        }
+
+        .kicker {
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-size: 21px;
+            font-weight: 300;
+            color: var(--text-muted);
+            letter-spacing: 0.5px;
+            margin-bottom: 28px;
+        }
+
+        .scene-quote {
+            font-size: 25px;
+            font-weight: 300;
+            color: var(--text-secondary);
+            line-height: 1.55;
+            max-width: 900px;
+            font-style: italic;
+        }
+        .scene-quote strong {
+            font-style: normal;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* Pull bar — the recurring emphasis device */
+        .pull {
+            padding: 26px 34px;
+            border-left: 5px solid var(--accent);
+            background: var(--bg-subtle);
+            border-radius: 0 8px 8px 0;
+        }
+        .slide:nth-child(even) .pull { background: #fff; }
+        .pull p {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 26px;
+            font-weight: 800;
+            color: var(--text-primary);
+            line-height: 1.3;
+        }
+        .pull p.sub {
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-size: 19px;
+            font-weight: 300;
+            color: var(--text-secondary);
+            margin-top: 10px;
+        }
+
+        /* Dash list */
+        ul.dash {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+        ul.dash li {
+            display: flex;
+            gap: 18px;
+            align-items: flex-start;
+            font-size: 23px;
+            color: var(--text-secondary);
+            line-height: 1.45;
+        }
+        ul.dash li .b { color: var(--accent); font-weight: 800; flex-shrink: 0; }
+        ul.dash li strong { color: var(--text-primary); font-weight: 600; }
+
+        /* Card grids */
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+
+        .card {
+            background: white;
+            padding: 28px;
+            border-radius: 12px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.07);
+            border-top: 4px solid var(--accent);
+        }
+        .card .label {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 11px;
+            font-weight: 800;
+            color: var(--accent);
+            letter-spacing: 2px;
+            margin-bottom: 14px;
+            text-transform: uppercase;
+        }
+        .card h4 {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 20px;
+            font-weight: 800;
+            margin-bottom: 10px;
+            line-height: 1.25;
+        }
+        .card p {
+            font-size: 16px;
+            color: var(--text-secondary);
+            line-height: 1.55;
+        }
+        .card p + p { margin-top: 10px; }
+        .card p strong { color: var(--text-primary); font-weight: 600; }
+
+        .card.muted { border-top-color: #ccc; box-shadow: 0 4px 24px rgba(0,0,0,0.04); }
+        .card.muted .label { color: var(--text-muted); }
+
+        /* Node diagram */
+        .node-diagram {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            margin: 28px 0;
+        }
+        .node {
+            width: 88px; height: 88px;
+            border-radius: 50%;
+            background: white;
+            border: 2px solid var(--border);
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px; font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            gap: 5px; flex-shrink: 0;
+            text-align: center; line-height: 1.3;
+        }
+        .node i { font-size: 24px; color: var(--text-muted); }
+        .node.hot { background: var(--accent-wash); border: 2px solid var(--accent); color: var(--accent); }
+        .node.hot i { color: var(--accent); }
+        .node.cool { background: #f0f7ff; border-color: #4a90d9; color: #35719e; }
+        .node.cool i { color: #4a90d9; }
+        .node.platform { width: 100px; height: 100px; background: #f5f5f5; border-color: #ccc; color: #999; }
+        .node.platform i { font-size: 28px; color: #bbb; }
+
+        .connector { flex: 1; height: 2px; position: relative; min-width: 36px; background: var(--border); }
+        .connector.broken {
+            background: repeating-linear-gradient(90deg,
+                var(--accent) 0px, var(--accent) 6px,
+                transparent 6px, transparent 14px);
+        }
+        .connector-label {
+            position: absolute; top: -20px; left: 50%;
+            transform: translateX(-50%);
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px; font-weight: 800;
+            color: var(--accent); letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+        .node-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+        .node-caption {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px; font-weight: 800;
+            letter-spacing: 1px; text-transform: uppercase;
+            color: var(--text-muted); text-align: center; line-height: 1.4;
+        }
+        .node-caption.danger { color: var(--accent); }
+
+        /* Mode rows — the canyon */
+        .mode-row {
+            display: flex; align-items: center; gap: 24px;
+            padding: 20px 26px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: white;
+        }
+        .mode-row.empty {
+            background: linear-gradient(135deg, #fce4ec 0%, #f8bbd9 100%);
+            border: 2px solid var(--accent);
+        }
+        .mode-row .mode-n {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 12px; font-weight: 800;
+            letter-spacing: 1px; color: var(--accent);
+            width: 74px; flex-shrink: 0;
+        }
+        .mode-row .mode-name {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 20px; font-weight: 800;
+            width: 330px; flex-shrink: 0; line-height: 1.25;
+        }
+        .mode-row .mode-name span {
+            display: block;
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-size: 15px; font-weight: 300;
+            color: var(--text-muted); font-style: italic;
+            margin-top: 2px;
+        }
+        .mode-row .mode-tool { font-size: 18px; color: var(--text-secondary); flex: 1; }
+        .mode-row .mode-verdict {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 14px; font-weight: 800;
+            letter-spacing: 1px; text-transform: uppercase;
+            color: var(--text-muted); flex-shrink: 0;
+        }
+        .mode-row.empty .mode-verdict { color: var(--accent); }
+
+        /* Ladder */
+        .rung { display: flex; align-items: stretch; }
+        .rung .n {
+            background: var(--accent); color: white; width: 56px;
+            display: flex; align-items: center; justify-content: center;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 22px; font-weight: 800; flex-shrink: 0;
+            border-radius: 8px 0 0 8px;
+        }
+        .rung .body {
+            background: white; flex: 1; padding: 18px 26px;
+            border: 1px solid var(--border); border-left: none;
+            border-radius: 0 8px 8px 0;
+        }
+        .rung .body .t {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 13px; font-weight: 800; color: var(--accent);
+            letter-spacing: 1px; margin-bottom: 5px;
+            display: flex; align-items: center; gap: 12px;
+        }
+        .rung .body p { font-size: 17px; color: var(--text-secondary); line-height: 1.5; }
+        .rung.next .n { background: #bbb; }
+        .rung.next .body .t { color: var(--text-muted); }
+
+        .pill {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 9px; font-weight: 800; letter-spacing: 1px;
+            padding: 3px 9px; border-radius: 20px;
+            background: var(--accent); color: white;
+            text-transform: uppercase;
+        }
+        .pill.soon { background: #ddd; color: #777; }
+
+        /* Stats */
+        .stats-row { display: flex; gap: 64px; margin-top: 44px; }
+        .stat-number {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 52px; font-weight: 800;
+            color: var(--text-primary); line-height: 1;
+        }
+        .stat-label { font-size: 15px; color: var(--text-secondary); margin-top: 8px; font-weight: 400; line-height: 1.4; }
+
+        /* Manifesto over-list */
+        .over { display: flex; flex-direction: column; gap: 16px; }
+        .over-item {
+            display: flex; align-items: baseline; gap: 16px;
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 25px; font-weight: 800;
+            line-height: 1.3;
+        }
+        .over-item .num {
+            font-size: 12px; color: var(--accent);
+            letter-spacing: 1px; width: 30px; flex-shrink: 0;
+        }
+        .over-item .yes { color: var(--text-primary); }
+        .over-item .over-word {
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-weight: 300; font-style: italic;
+            color: var(--accent); font-size: 22px;
+        }
+        .over-item .no { color: var(--text-muted); font-weight: 400; }
+
+        /* Mono / receipt */
+        .mono {
+            font-family: 'SF Mono', Menlo, Consolas, monospace;
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.7;
+        }
+        .receipt {
+            background: #fff;
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            padding: 22px 26px;
+        }
+        .receipt .rrow { display: flex; gap: 14px; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+        .receipt .rrow:last-child { border-bottom: none; }
+        .receipt .rk {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 10px; font-weight: 800; letter-spacing: 1px;
+            color: var(--text-muted); text-transform: uppercase;
+            width: 140px; flex-shrink: 0; padding-top: 3px;
+        }
+        .receipt .rv { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 13px; color: var(--text-primary); word-break: break-all; line-height: 1.5; }
+        .receipt .rv.ok { color: var(--accent); font-weight: 600; }
+
+        /* Signal table */
+        table.signals { width: 100%; border-collapse: collapse; font-size: 17px; }
+        table.signals td { padding: 12px 12px; border-bottom: 1px solid var(--border); }
+        table.signals tr:last-child td { border-bottom: none; }
+        table.signals td.k {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-weight: 800; font-size: 11px; color: var(--accent);
+            letter-spacing: 1px; white-space: nowrap; width: 130px;
+        }
+        table.signals td.v { color: var(--text-secondary); }
+
+        .xlist { list-style: none; display: flex; flex-direction: column; gap: 2px; }
+        .xlist li {
+            font-size: 18px; padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: flex-start; gap: 14px;
+            line-height: 1.45; color: var(--text-secondary);
+        }
+        .xlist li:last-child { border-bottom: none; }
+        .xlist li .x { color: var(--dim); flex-shrink: 0; font-weight: 700; }
+        .xlist li strong { color: var(--text-primary); font-weight: 600; }
+
+        .nav-hint {
+            position: fixed; bottom: 30px; left: 50%;
+            transform: translateX(-50%);
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 12px; color: var(--text-muted);
+            letter-spacing: 1px; opacity: 0.6;
+        }
+
+        .big-statement {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 62px; font-weight: 800;
+            color: var(--text-primary); line-height: 1.15;
+            letter-spacing: -1.5px;
+        }
+
+        /* Title-card wordmark */
+        .wordmark {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 190px;
+            font-weight: 800;
+            letter-spacing: -6px;
+            line-height: 0.9;
+            color: var(--accent);
+            margin-bottom: 18px;
+        }
+        .descriptor {
+            font-family: 'Bricolage Grotesque', sans-serif;
+            font-size: 40px;
+            font-weight: 700;
+            letter-spacing: -0.8px;
+            line-height: 1.2;
+            color: var(--text-primary);
+            margin-bottom: 16px;
+        }
+        .descriptor .soft { color: var(--text-muted); font-weight: 400; }
+        .title-rule {
+            width: 120px; height: 5px;
+            background: var(--accent);
+            border-radius: 3px;
+            margin-bottom: 28px;
+        }
+        .rule { width: 48px; height: 4px; background: var(--accent); border-radius: 2px; margin: 34px auto; }
+
+        @media screen and (max-width: 1024px) {
+            .wordmark { font-size: 96px; letter-spacing: -3px; }
+            .descriptor { font-size: 26px; }
+            .slide { padding: 40px; }
+            h1 { font-size: 44px; }
+            h2 { font-size: 34px; }
+            .big-statement { font-size: 38px; }
+            .grid-3, .grid-4, .grid-2 { grid-template-columns: 1fr; }
+            .stats-row { flex-wrap: wrap; gap: 32px; }
+            .mode-row { flex-wrap: wrap; gap: 12px; }
+            .mode-row .mode-name { width: auto; }
+        }
+
+        /* ============ PRINT: A4 landscape, one slide per page ============ */
+        @media print {
+            @page { size: A4 landscape; margin: 0; }
+
+            html, body {
+                scroll-snap-type: none;
+                background: white;
+                font-size: 16px;
+            }
+
+            .slide {
+                width: 297mm;
+                height: 209.5mm;
+                min-height: 0;
+                max-height: 209.5mm;
+                overflow: hidden;
+                padding: 26px 46px 34px;
+                page-break-after: always;
+                break-after: page;
+                page-break-inside: avoid;
+                break-inside: avoid;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                box-sizing: border-box;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            .slide:last-of-type { page-break-after: auto; break-after: auto; }
+
+            h1 { font-size: 46px; margin-bottom: 14px; letter-spacing: -1.5px; }
+            h2 { font-size: 31px; margin-bottom: 16px; }
+            h3 { font-size: 10px; margin-bottom: 9px; letter-spacing: 2.5px; }
+            .subtitle { font-size: 17px; }
+            .kicker { font-size: 15px; margin-bottom: 16px; }
+            .scene-quote { font-size: 17px; }
+            .big-statement { font-size: 40px; letter-spacing: -1px; }
+            .rule { margin: 20px auto; }
+
+            .wordmark { font-size: 128px; letter-spacing: -4px; margin-bottom: 12px; }
+            .descriptor { font-size: 26px; margin-bottom: 10px; letter-spacing: -0.5px; }
+            .title-rule { width: 84px; height: 4px; margin-bottom: 18px; }
+
+            .pull { padding: 16px 22px; }
+            .pull p { font-size: 18px; }
+            .pull p.sub { font-size: 14px; margin-top: 6px; }
+
+            ul.dash { gap: 11px; }
+            ul.dash li { font-size: 16px; gap: 13px; }
+
+            .grid-2 { gap: 18px; }
+            .grid-3 { gap: 15px; }
+            .grid-4 { gap: 12px; }
+            .card { padding: 17px; border-radius: 9px; box-shadow: 0 2px 10px rgba(0,0,0,0.07); }
+            .card .label { font-size: 9px; margin-bottom: 8px; letter-spacing: 1.5px; }
+            .card h4 { font-size: 15px; margin-bottom: 6px; }
+            .card p { font-size: 12.5px; line-height: 1.5; }
+            .card p + p { margin-top: 7px; }
+
+            .node-diagram { margin: 16px 0; }
+            .node { width: 64px; height: 64px; font-size: 8px; gap: 3px; }
+            .node i { font-size: 17px; }
+            .node.platform { width: 72px; height: 72px; }
+            .node.platform i { font-size: 20px; }
+            .connector { min-width: 26px; }
+            .connector-label { font-size: 8px; top: -15px; }
+            .node-caption { font-size: 8px; }
+
+            .mode-row { padding: 13px 18px; gap: 16px; }
+            .mode-row .mode-n { font-size: 10px; width: 58px; }
+            .mode-row .mode-name { font-size: 15px; width: 250px; }
+            .mode-row .mode-name span { font-size: 12px; }
+            .mode-row .mode-tool { font-size: 13.5px; }
+            .mode-row .mode-verdict { font-size: 11px; }
+
+            .rung .n { width: 42px; font-size: 17px; }
+            .rung .body { padding: 12px 18px; }
+            .rung .body .t { font-size: 10.5px; margin-bottom: 3px; gap: 9px; }
+            .rung .body p { font-size: 13px; line-height: 1.45; }
+            .pill { font-size: 7.5px; padding: 2px 7px; }
+
+            .stats-row { margin-top: 26px; gap: 48px; }
+            .stat-number { font-size: 36px; }
+            .stat-label { font-size: 11.5px; margin-top: 5px; }
+
+            .over { gap: 10px; }
+            .over-item { font-size: 17px; gap: 12px; }
+            .over-item .num { font-size: 9px; width: 22px; }
+            .over-item .over-word { font-size: 15px; }
+
+            .receipt { padding: 14px 18px; border-radius: 8px; }
+            .receipt .rrow { padding: 4px 0; gap: 10px; }
+            .receipt .rk { font-size: 8px; width: 105px; padding-top: 2px; }
+            .receipt .rv { font-size: 10px; line-height: 1.45; }
+            .mono { font-size: 10.5px; }
+
+            table.signals { font-size: 13px; }
+            table.signals td { padding: 8px 9px; }
+            table.signals td.k { font-size: 9px; width: 100px; }
+
+            .xlist li { font-size: 13.5px; padding: 8px 0; gap: 11px; }
+
+            .brand { top: 18px; left: 30px; font-size: 10px; }
+            .slide-number { bottom: 16px; right: 30px; font-size: 10px; gap: 11px; }
+            .nav-hint { display: none; }
+        }
+    </style>
+
+    <style>
+        .vs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: white; }
+        .vs-col { padding: 0; }
+        .vs-col.right { border-left: 1px solid var(--border); }
+        .vs-head { font-family: 'Bricolage Grotesque', sans-serif; font-size: 13px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; padding: 16px 24px; background: var(--bg-subtle); color: var(--text-muted); border-bottom: 1px solid var(--border); }
+        .vs-col.right .vs-head { background: var(--accent-wash); color: var(--accent); }
+        .vs-row { padding: 13px 24px; border-bottom: 1px solid #f0f0f0; font-size: 16px; color: var(--text-secondary); line-height: 1.45; }
+        .vs-row:last-child { border-bottom: none; }
+        .vs-row strong { color: var(--text-primary); font-weight: 600; }
+        .qa { display: flex; flex-direction: column; gap: 14px; }
+        .qa-item { border-left: 4px solid var(--border); padding: 4px 0 4px 20px; }
+        .qa-item .q { font-family: 'Bricolage Grotesque', sans-serif; font-size: 17px; font-weight: 800; color: var(--text-muted); margin-bottom: 5px; }
+        .qa-item .a { font-size: 18px; color: var(--text-primary); line-height: 1.45; }
+        .qa-item .a strong { color: var(--accent); font-weight: 600; }
+        @media print {
+            .vs-head { font-size: 10px; padding: 10px 16px; }
+            .vs-row { font-size: 12px; padding: 8px 16px; }
+            .qa { gap: 9px; }
+            .qa-item { padding-left: 14px; }
+            .qa-item .q { font-size: 12px; margin-bottom: 3px; }
+            .qa-item .a { font-size: 13px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- 01 — TITLE -->
+<section class="slide">
+    <h3 style="margin-bottom: 22px;">Positioning note · July 2026</h3>
+    <div class="wordmark" style="font-size: 150px;">CELLO<br><span style="color: var(--text-muted); font-size: 0.55em;">&amp; Buzz</span></div>
+    <div class="title-rule"></div>
+    <p class="descriptor">A room, and a <span class="accent">phone number</span>.<br><span class="soft">What Jack Dorsey shipped, what we ship, and why they are not the same thing.</span></p>
+
+    <div class="stats-row">
+        <div>
+            <div class="stat-number">38<span class="accent">min</span></div>
+            <div class="stat-label">Of Buzz walkthrough with<br>zero agent-to-agent contact</div>
+        </div>
+        <div>
+            <div class="stat-number">0</div>
+            <div class="stat-label">Ways to reach an agent<br>outside your workspace</div>
+        </div>
+        <div>
+            <div class="stat-number">1</div>
+            <div class="stat-label">Question that separates<br>the two products</div>
+        </div>
+    </div>
+    <div class="slide-number"><span class="brand-footer">MYGENTIC AI</span><span>01</span></div>
+</section>
+
+<!-- 02 — THE SIX SECOND ANSWER -->
+<section class="slide center">
+    <div class="brand">CELLO</div>
+    <h3>When someone asks "isn't this Buzz?"</h3>
+    <div class="big-statement">Buzz is a <span class="dim-text">room</span>.<br>CELLO is a <span class="accent">phone number</span>.</div>
+    <div class="rule"></div>
+    <p class="subtitle" style="text-align: center;">You both have to be in the room.<br>A phone number works even when the other person has never heard of you.</p>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>02</span></div>
+</section>
+
+<!-- 03 — WHAT BUZZ IS -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Give them their due — 01 of 02</h3>
+    <h2>What Buzz actually is.</h2>
+    <p class="kicker">Open source, built on Nostr, from Block. It is the best version of this idea anyone has shipped.</p>
+
+    <div class="grid-3">
+        <div class="card">
+            <div class="label">The core</div>
+            <h4>Slack, with agents as members</h4>
+            <p>Agents are first-class participants in channels — not integrations bolted on the side. Humans and agents in the same rooms.</p>
+        </div>
+        <div class="card">
+            <div class="label">Harness</div>
+            <h4>Swappable underneath</h4>
+            <p>Claude Code, Codex, Goose, opencode — mount whichever you like under each agent, and the chat context survives the swap.</p>
+        </div>
+        <div class="card">
+            <div class="label">Work</div>
+            <h4>Git built in</h4>
+            <p>Parallel worktrees, feature branches, and git remotes hosted on your relay. Aimed at GitHub as much as at Slack.</p>
+        </div>
+        <div class="card">
+            <div class="label">Presence</div>
+            <h4>Audio huddles</h4>
+            <p>Live voice with an agent that already holds the channel's context. Closer to how people actually think out loud.</p>
+        </div>
+        <div class="card">
+            <div class="label">Compute</div>
+            <h4>Shared local models</h4>
+            <p>Run a model on one machine and let teammates use it. A genuinely good answer to per-seat frontier pricing.</p>
+        </div>
+        <div class="card muted">
+            <div class="label">Where it lives</div>
+            <h4>On a relay</h4>
+            <p>Chats, projects and repos sit on a relay — one you host, or one Block hosts for you. That is the perimeter.</p>
+        </div>
+    </div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>03</span></div>
+</section>
+
+<!-- 04 — WHAT IT DOESN'T DO -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Give them their due — 02 of 02</h3>
+    <h2>And what it doesn't do.</h2>
+    <p class="kicker">Not a criticism. A boundary — and every product has one.</p>
+
+    <ul class="xlist" style="margin-bottom: 32px;">
+        <li><span class="x">✗</span><span><strong>No agent-to-agent.</strong> Every interaction is a human talking to an agent inside a room. Agents don't hold conversations with each other.</span></li>
+        <li><span class="x">✗</span><span><strong>No address.</strong> There is no way to name an agent that isn't already in your workspace, so there is no way to reach one.</span></li>
+        <li><span class="x">✗</span><span><strong>No identity layer.</strong> Nostr gives you a public key. A key tells you two messages came from the same holder — never whether to trust them.</span></li>
+        <li><span class="x">✗</span><span><strong>No screening, no record.</strong> Nothing evaluates who is knocking, nothing defends against an injected instruction, and nothing produces proof of what was said.</span></li>
+    </ul>
+
+    <div class="pull">
+        <p>Buzz answers "how does my team work with agents."</p>
+        <p class="sub">It does not answer "how does my agent reach one that isn't on my team." That question is not smaller. It is the other half.</p>
+    </div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>04</span></div>
+</section>
+
+<!-- 05 — THE QUESTION -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The fork</h3>
+    <h2>One question separates<br>every product in this space.</h2>
+
+    <div class="pull" style="margin: 10px 0 36px;">
+        <p>"Can you reach an agent that isn't in your workspace?"</p>
+    </div>
+
+    <div class="grid-2">
+        <div class="card muted">
+            <div class="label">If the answer is no</div>
+            <h4>You are a workspace</h4>
+            <p>Slack. Teams. Discord. Buzz. Good products — and the value is real. But the perimeter is the product: everyone you can reach is someone you already invited.</p>
+            <p><strong>Growth is by adoption.</strong> Every new counterparty is a new account, a new invite, a new relay.</p>
+        </div>
+        <div class="card">
+            <div class="label">If the answer is yes</div>
+            <h4>You are an address layer</h4>
+            <p>Phone numbers. Email. CELLO. Nobody joins anything. Two parties who share no server, no account and no vendor still connect.</p>
+            <p><strong>Growth is by reach.</strong> The network is everyone who has a client — not everyone in your room.</p>
+        </div>
+    </div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>05</span></div>
+</section>
+
+<!-- 06 — SIDE BY SIDE -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Side by side</h3>
+    <h2>Where each one wins.</h2>
+    <p class="kicker">Written straight. Anyone can check it, and the credibility is worth more than the point.</p>
+
+    <div class="vs-grid">
+        <div class="vs-col">
+            <div class="vs-head">Buzz does this better</div>
+            <div class="vs-row"><strong>It exists today</strong> — installable, usable, with a real interface</div>
+            <div class="vs-row"><strong>A place to work</strong> — channels, history, presence, huddles</div>
+            <div class="vs-row"><strong>Git and hosting</strong> — worktrees, branches, deploys, remotes</div>
+            <div class="vs-row"><strong>Shared compute</strong> — one machine's model, the whole team</div>
+            <div class="vs-row"><strong>Distribution</strong> — Block behind it, and a viral launch</div>
+        </div>
+        <div class="vs-col right">
+            <div class="vs-head">Only CELLO does this</div>
+            <div class="vs-row"><strong>Reach outside the perimeter</strong> — an agent you don't control, in a harness you don't run</div>
+            <div class="vs-row"><strong>Know who is knocking</strong> — stacked, verifiable trust signals before connect</div>
+            <div class="vs-row"><strong>Survive a hostile payload</strong> — injection defense, outbound leak control, a kill switch</div>
+            <div class="vs-row"><strong>Prove what was said</strong> — a sealed, tamper-evident transcript both sides hold</div>
+            <div class="vs-row"><strong>Hold nothing</strong> — no server sees message content, ours included</div>
+        </div>
+    </div>
+
+    <div class="pull" style="margin-top: 30px;">
+        <p class="sub" style="margin-top: 0;">They are not on the same axis. One is where your team works. The other is how anyone reaches you.</p>
+    </div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>06</span></div>
+</section>
+
+<!-- 07 — WHY NOT JUST ADD IT -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The obvious objection</h3>
+    <h2>"So why doesn't Block<br>just add this?"</h2>
+    <p class="kicker">The best question anyone will ask you. It has an answer.</p>
+
+    <ul class="dash" style="margin-bottom: 34px;">
+        <li><span class="b">01</span><span><strong>A key is not an identity.</strong> Nostr hands you a public key and stops. Reaching strangers safely needs attestation — verified signals, endorsements, policy — and that is a system, not a field.</span></li>
+        <li><span class="b">02</span><span><strong>Their perimeter is their product.</strong> Relays, hosted repos, shared compute and payments all assume everyone is inside. Opening the edge means giving up the thing that makes a workspace valuable.</span></li>
+        <li><span class="b">03</span><span><strong>It isn't a feature, it's an architecture.</strong> Split-key signing, a federated directory, hash-chained transcripts. Months of work that only functions if it was designed in before there were users.</span></li>
+    </ul>
+
+    <div class="pull">
+        <p>They would have to stop being a workspace to build it.</p>
+        <p class="sub">And if they ever do, they need exactly what CELLO is — which is a better outcome for us than it sounds.</p>
+    </div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>07</span></div>
+</section>
+
+<!-- 08 — COMPLEMENT -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Not either / or</h3>
+    <h2>CELLO runs <span class="accent">inside</span> Buzz.</h2>
+    <p class="kicker">Buzz mounts any harness, and honours globally installed skills and plugins. CELLO installs at exactly that level.</p>
+
+    <div class="node-diagram">
+        <div class="node-wrap">
+            <div class="node platform"><i class="fa-solid fa-comments"></i>BUZZ<br>WORKSPACE</div>
+            <div class="node-caption">Your team</div>
+        </div>
+        <div class="connector"><span class="connector-label">mounts</span></div>
+        <div class="node-wrap">
+            <div class="node hot"><i class="fa-solid fa-robot"></i>AGENT<br>+ CELLO</div>
+            <div class="node-caption">Harness of your choice</div>
+        </div>
+        <div class="connector broken"><span class="connector-label">CELLO address</span></div>
+        <div class="node-wrap">
+            <div class="node cool"><i class="fa-solid fa-user-astronaut"></i>ANY<br>AGENT</div>
+            <div class="node-caption">No Buzz. No relay.<br>No account with you.</div>
+        </div>
+    </div>
+
+    <div class="pull" style="margin-top: 10px;">
+        <p>Your Buzz agent just spoke to someone outside Buzz.</p>
+        <p class="sub">That is what an address does — and it is the demo, not the argument. <strong style="color: var(--text-muted);">Status: to be verified before it is claimed publicly.</strong></p>
+    </div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>08</span></div>
+</section>
+
+<!-- 09 — LINES TO SAY -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>Say it out loud</h3>
+    <h2>The five you will be asked.</h2>
+
+    <div class="qa">
+        <div class="qa-item">
+            <div class="q">"Isn't this just Buzz?"</div>
+            <div class="a">Buzz is where your team works. CELLO is how your agent reaches someone who <strong>doesn't work there</strong>.</div>
+        </div>
+        <div class="qa-item">
+            <div class="q">"Buzz is open source and built on an open protocol. Same openness?"</div>
+            <div class="a">Open protocol, closed perimeter. Nostr gives you a key. A key never tells you <strong>whether to trust the person holding it</strong>.</div>
+        </div>
+        <div class="qa-item">
+            <div class="q">"Isn't MCP or A2A already this?"</div>
+            <div class="a">Those assume you already know and trust the endpoint. <strong>The stranger is the hard part</strong> — and it's the part nobody built.</div>
+        </div>
+        <div class="qa-item">
+            <div class="q">"Do both sides need CELLO installed?"</div>
+            <div class="a">Yes — the way email needs a mail client at both ends. What they <em>don't</em> need: your workspace, your server, your account, an API key, or <strong>a single line of integration code</strong>.</div>
+        </div>
+        <div class="qa-item">
+            <div class="q">"What stops Block from crushing you?"</div>
+            <div class="a">Nothing stops them building it. But they'd have to <strong>stop being a workspace</strong> — and every workspace that opens its edge needs what we are.</div>
+        </div>
+    </div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>09</span></div>
+</section>
+
+<!-- 10 — CLOSE -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>The story</h3>
+    <h1>I thought they<br>launched my product.</h1>
+    <p class="subtitle" style="margin-bottom: 34px;">Then I watched all thirty-eight minutes of it, and not one agent ever spoke to another agent.</p>
+
+    <div class="pull">
+        <p>They didn't build it. They proved people want it — and stopped at the edge of the room.</p>
+        <p class="sub">A claw is a weekend. Identity, trust signals and a tamper-evident record are months, and only work if the architecture was right before there were users. That is the part you cannot buy back late — and it is the part we spent this time on.</p>
+    </div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>10</span></div>
+</section>
+
+<div class="nav-hint">SCROLL TO NAVIGATE • PRESS F11 FOR FULLSCREEN • ⌘P TO SAVE AS A4 PDF</div>
+
+</body>
+</html>

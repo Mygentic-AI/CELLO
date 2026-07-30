@@ -43,6 +43,8 @@ import {
   isAgentOwnedByAccount,
   applyRevocationFlag,
 } from "./agent-write-repository.js";
+import { drainSubmissions, deleteSubmission } from "./submission-queue-repository.js";
+import { recordSubmissionResult } from "./submission-results-repository.js";
 
 // READ-001 freshness window is now shared from agent-presence-repository (one source of truth for
 // the account-presence read and the cross-node discovery lookup).
@@ -63,6 +65,11 @@ export interface InternalApiServerOptions {
  * Create the internal API HTTP server.
  * Returns the server — caller must call .listen().
  */
+/** Default rows per drain when the caller does not say. */
+const DEFAULT_DRAIN_LIMIT = 100;
+/** Hard ceiling on a single drain — see the clamp comment on the route. */
+const MAX_DRAIN_LIMIT = 500;
+
 export function createInternalApiServer(opts: InternalApiServerOptions): Server {
   const { pool, internalApiKey, logger, owningNodeId } = opts;
 
@@ -659,6 +666,246 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
     }
 
     // ── M10B: which of THESE hashes are still active? ───────────────────────────────────────────
+    // ── M10B / DOD-END-DELIVER-1: resolve an agent SUBJECT to its delivery identity ──────────────
+    //
+    // A client-supplied endorsement names its subject by K_LOCAL PUBKEY — the only identifier a
+    // contact actually holds, and the only one the submission wire carries (no account identifier
+    // ever crosses it, deliberately). But `/internal/signal/deliver` queues a sealed copy per
+    // `agent_id`. Without this resolution the portal can NOTARIZE an endorsement about Alice and
+    // then have no way to reach her: minted, permanent, and invisible to its own subject.
+    //
+    // AUTHENTICATED, and not merely for consistency. This links a pubkey seen on the wire to an
+    // ACCOUNT, which is exactly the correlation the directory's no-PII posture withholds from
+    // everyone except the portal.
+    if (req.method === "POST" && req.url === "/internal/agent-by-pubkey") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!internalApiKey || providedKey !== internalApiKey) {
+        logger.warn("signal.deliver.auth.failed", { remoteAddr: req.socket.remoteAddress, owningNodeId });
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      let pubkey: string;
+      try {
+        const parsed = JSON.parse((await readBody(req)).toString("utf8")) as { k_local_pubkey?: unknown };
+        // LOWERCASED before the shape check, because hex case must never decide deliverability: a
+        // subject arriving upper-cased would resolve to found:false and the endorsement would be
+        // minted and never delivered, with nothing anywhere reporting a problem.
+        const raw = typeof parsed.k_local_pubkey === "string" ? parsed.k_local_pubkey.toLowerCase() : "";
+        if (!/^[0-9a-f]{64}$/.test(raw)) throw new Error("k_local_pubkey must be 64 hex characters");
+        pubkey = raw;
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "malformed_request", detail: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
+      try {
+        // `phone_stub_hash` rides along because it is the OPERATOR LINKAGE (policy D-29): two
+        // accounts that verified the same phone are the same human, and same-operator endorsements
+        // must not manufacture standing. It is a SHA-256 stub, never a number — the directory holds
+        // no PII by design — so this discloses nothing beyond "these two share a verifier".
+        const { rows } = await pool.query<{ agent_id: string | null; account_id: string | null; phone_stub_hash: string | null }>(
+          `SELECT agent_id, account_id, NULLIF(phone_stub_hash, '') AS phone_stub_hash
+             FROM agent_profiles WHERE lower(k_local_pubkey) = $1 LIMIT 1`,
+          [pubkey],
+        );
+        // NOT a 404 for an unknown pubkey. "This agent is not registered here" is a legitimate
+        // answer, not a failure: a 404 is indistinguishable from a routing mistake, and an error
+        // would make the portal's drain loop treat an ordinary unknown subject as an outage.
+        if (rows.length === 0 || !rows[0].agent_id) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ found: false, agent_id: null, account_id: null, phone_stub_hash: null }));
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          found: true, agent_id: rows[0].agent_id, account_id: rows[0].account_id,
+          phone_stub_hash: rows[0].phone_stub_hash,
+        }));
+      } catch (err) {
+        logger.error("signal.deliver.resolve.failed", { error: err instanceof Error ? err.message : String(err), owningNodeId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "resolve failed" }));
+      }
+      return;
+    }
+
+    // ── M10B / DOD-END-INGRESS-1: the portal drains the sealed submission queue ──────────────────
+    //
+    // TWO ROUTES, and the split IS the exactly-once property. `drain` READS; it does not delete. A
+    // portal that dies between reading a row and minting from it sees that row again on its next
+    // pass. Delete-on-read would turn every crash into a silent loss of a submission whose operator
+    // was told it had been queued — and since the ciphertext is opaque here, nothing downstream
+    // could ever notice it had gone.
+    //
+    // The row leaves only on `ack`, which the portal sends after a TERMINAL outcome: minted,
+    // rejected, or poison. All three delete; they differ only in what the portal sends back to the
+    // submitter (M10B-D22b: poison sends nothing, because an unverifiable submission is
+    // unattributable by construction).
+    //
+    // The directory still reads nothing. It hands back the same opaque bytes it was given, and it
+    // cannot tell an endorsement from a withdrawal from a refusal — that discriminator (`op`) rides
+    // INSIDE the seal (INV-DIR-DUMB).
+    if (req.method === "POST" && req.url === "/internal/submissions/drain") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!internalApiKey || providedKey !== internalApiKey) {
+        // LOGGED, like every other /internal/ auth failure. Without it a credential-guessing sweep
+        // is invisible — and, more mundanely, a rotated key produces a portal-side "all nodes
+        // unreachable" with NOTHING on the directory side to correlate it against.
+        logger.warn("signal.ingress.auth.failed", { route: "drain", remoteAddr: req.socket.remoteAddress, owningNodeId });
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      // AUTH MATTERS EVEN THOUGH THE PAYLOAD IS OPAQUE. The set of queued ids, their arrival order
+      // and their intake key ids is traffic analysis: how much is being submitted, how often, and
+      // against which key generation. "It is encrypted" is not a reason to serve it to anyone.
+      let limit = DEFAULT_DRAIN_LIMIT;
+      try {
+        const body = await readBody(req);
+        if (body.length > 0) {
+          const parsed = JSON.parse(body.toString("utf8")) as { limit?: unknown };
+          if (parsed.limit !== undefined) {
+            const n = Number(parsed.limit);
+            if (!Number.isFinite(n) || n < 1) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "malformed_request", detail: "limit must be a positive number" }));
+              return;
+            }
+            // CLAMPED, not refused. A caller asking for a million rows is being reasonable about its
+            // own appetite and unreasonable about ours; an unbounded read pins the database and the
+            // portal's memory at once. The applied limit is ECHOED so the caller can tell it was
+            // clamped and page, rather than believing it drained everything.
+            limit = Math.min(Math.floor(n), MAX_DRAIN_LIMIT);
+          }
+        }
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "malformed_request", detail: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
+      try {
+        const rows = await drainSubmissions(pool, limit);
+        logger.info("signal.ingress.drained", { count: rows.length, limit, owningNodeId });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          limit,
+          submissions: rows.map((r) => ({
+            submission_id: r.submissionId,
+            intake_key_id: r.intakeKeyId,
+            // Hex because JSON has no bytes. Lossless and unambiguous, and it matches every other
+            // blob this API hands out. NEVER empty: the portal refuses a zero-length ciphertext,
+            // because an empty `bytea` is exactly what transport truncation looks like.
+            ciphertext: Buffer.from(r.ciphertext).toString("hex"),
+          })),
+        }));
+      } catch (err) {
+        logger.error("signal.ingress.drain.failed", { error: err instanceof Error ? err.message : String(err), owningNodeId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "drain failed" }));
+      }
+      return;
+    }
+
+    // M10B / `M10B-D25r2` — the portal records what it decided about a submission, so the ISSUER can
+    // find out. Without this the submitter learns nothing: minted, refused by the subject, rejected
+    // by the scan and unattributable all look identical from their side, and a refusal message the
+    // subject deliberately wrote is simply dropped.
+    if (req.method === "POST" && req.url === "/internal/submissions/result") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!internalApiKey || providedKey !== internalApiKey) {
+        logger.warn("signal.ingress.auth.failed", { route: "result", remoteAddr: req.socket.remoteAddress, owningNodeId });
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      let body: { submission_id: string; issuer_pubkey: string; outcome: string; reason: string | null; signal_hash: string | null; ciphertext: Uint8Array | null };
+      try {
+        const p = JSON.parse((await readBody(req)).toString("utf8")) as Record<string, unknown>;
+        if (typeof p.submission_id !== "string" || p.submission_id.length === 0) throw new Error("submission_id must be a non-empty string");
+        // 64 lowercase hex, and validated HERE rather than trusted: this value is the read scope for
+        // every later fetch, so a malformed one silently makes the result unreachable by anybody —
+        // written, never delivered, and indistinguishable from never having been recorded.
+        if (typeof p.issuer_pubkey !== "string" || !/^[0-9a-f]{64}$/.test(p.issuer_pubkey.toLowerCase())) {
+          throw new Error("issuer_pubkey must be 64 hex characters");
+        }
+        if (typeof p.outcome !== "string" || p.outcome.length === 0) throw new Error("outcome must be a non-empty string");
+        body = {
+          submission_id: p.submission_id,
+          issuer_pubkey: p.issuer_pubkey.toLowerCase(),
+          outcome: p.outcome,
+          reason: typeof p.reason === "string" ? p.reason : null,
+          signal_hash: typeof p.signal_hash === "string" ? p.signal_hash : null,
+          ciphertext: typeof p.ciphertext === "string" ? new Uint8Array(Buffer.from(p.ciphertext, "base64")) : null,
+        };
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "malformed_request", detail: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
+      try {
+        const { inserted } = await recordSubmissionResult(pool, {
+          submissionId: body.submission_id,
+          acceptingNode: owningNodeId,
+          issuerPubkey: body.issuer_pubkey,
+          outcome: body.outcome,
+          reason: body.reason,
+          signalHash: body.signal_hash,
+          ciphertext: body.ciphertext,
+        });
+        // `inserted: false` means a result already existed and the FIRST one stands (no UPDATE grant).
+        // Reported rather than swallowed: a portal seeing it can tell "already recorded" from "just
+        // recorded", which is the difference between a safe retry and a lost outcome.
+        logger.info("signal.result.recorded", { submissionId: body.submission_id, outcome: body.outcome, inserted, owningNodeId });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, inserted }));
+      } catch (err) {
+        logger.error("signal.result.record.failed", { submissionId: body.submission_id, error: err instanceof Error ? err.message : String(err), owningNodeId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "record failed" }));
+      }
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/internal/submissions/ack") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!internalApiKey || providedKey !== internalApiKey) {
+        logger.warn("signal.ingress.auth.failed", { route: "ack", remoteAddr: req.socket.remoteAddress, owningNodeId });
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      let submissionId: string;
+      try {
+        const parsed = JSON.parse((await readBody(req)).toString("utf8")) as { submission_id?: unknown };
+        if (typeof parsed.submission_id !== "string" || parsed.submission_id.length === 0) {
+          throw new Error("submission_id must be a non-empty string");
+        }
+        submissionId = parsed.submission_id;
+      } catch (err) {
+        // REFUSED, not quietly accepted. A malformed ack answered with 200 would let a broken portal
+        // believe it was clearing rows forever while the queue grew without bound — and the symptom
+        // would surface days later as a full disk, nowhere near the cause.
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "malformed_request", detail: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
+      try {
+        const removed = await deleteSubmission(pool, submissionId);
+        // IDEMPOTENT: `removed: false` is not an error. A portal retrying an ack after a timeout
+        // wants the row gone, and it is gone — reporting a failure would push it into a retry loop
+        // over an outcome it has already achieved.
+        logger.info("signal.ingress.acked", { submissionId, removed, owningNodeId });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ removed }));
+      } catch (err) {
+        logger.error("signal.ingress.ack.failed", { submissionId, error: err instanceof Error ? err.message : String(err), owningNodeId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "ack failed" }));
+      }
+      return;
+    }
+
     // POST /internal/signals/active-among  { "hashes": ["<64 hex>", …] } → { "active": [...] }
     //
     // THE NOTARY-SHAPED QUESTION, and the replacement for /internal/active-signals. That route asks

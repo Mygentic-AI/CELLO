@@ -68,8 +68,8 @@ If there are pending session requests, unread messages, or sealed unread session
 
 1. **Calculate age:** compute how long ago the message arrived using `createdAt` (ms epoch) vs the current time. Express it as "X minutes ago", "X hours ago", etc.
 2. **Read the content:**
-   - For `unread` items: call `cello_transcript({ session_id })`.
-   - For `sealed_unread` items: call `cello_transcript({ session_id })`. **Calling `cello_transcript` clears the item from `sealed_unread` automatically** — no further action needed. If the operator wants to dismiss without reading, use `cello_dismiss({ session_id })` instead (clears from inbox, does not mark messages as read).
+   - For `unread` items: call `cello_transcript({ cello_session_id })`.
+   - For `sealed_unread` items: call `cello_transcript({ cello_session_id })`. **Calling `cello_transcript` clears the item from `sealed_unread` automatically** — no further action needed. If the operator wants to dismiss without reading, use `cello_dismiss({ cello_session_id })` instead (clears from inbox, does not mark messages as read).
 3. **Report to the operator** in this format:
 
 ```
