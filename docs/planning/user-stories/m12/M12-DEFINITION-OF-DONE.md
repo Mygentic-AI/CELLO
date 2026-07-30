@@ -116,6 +116,38 @@ description: >
   naming the likely cause (two nodes deployed under one `NODE_ID`) — the first point where the
   identifiers ACTUALLY in play are visible, rather than manifest strings that cannot see the
   collapse. Daemon suite 1121/1121; directory suite 957.
+- **DOD-AE-CHAINED-TABLES-1** [trustless-cello] — **the two chain-backed Tier-A tables actually
+  replicate.** `TIER_A_SPECS` declares four tables; `pg-ae-store.ts`'s registry implements two.
+  `seal_notarizations` and `user_accounts` are declared-but-absent — deliberately, rather than
+  advertised-but-unappliable, because applying them needs the canonical chain writer. Consequence
+  today: **a seal receipt exists only on the directory that recorded it.** For a notary product that
+  is the durability gap that matters — lose that one node and the proof of those conversations is
+  gone with it (its own backups aside). It is also why the seal-receipt fetch was deleted rather than
+  fixed (Entry 60).
+  **Design settled during Entry 63 investigation — do not re-derive:**
+  (a) `insertWithChain` is ALREADY a public method on `PgDirectoryStore` taking an optional external
+  client, so NO extraction is needed — the "Scope" comment's premise no longer holds. Inject a narrow
+  `{ insertWithChain(...) }` writer into `PgAeStore` rather than coupling it to the whole store.
+  (b) `applyTierA`'s generic path (plain INSERT + ON CONFLICT DO NOTHING) cannot serve these two;
+  give `TierAPg` an optional per-table apply hook, mirroring how `TierBPg` already carries its own
+  `insert`/`update`.
+  (c) Chain columns are node-local and written locally on apply — a node recomputes `prev_hash`/
+  `chain_hash` against ITS OWN tip, never copying the origin's. `encodeTierARecord` already hashes
+  only `immutableColumns`, so the record hash is chain-free and converges. No spec change needed.
+  (d) Idempotency is already correct: `recordNotarization` catches SQLSTATE 23505 generically (not by
+  constraint name) and does not rethrow, and V31's `UNIQUE (session_id, seal_type)` matches the spec's
+  natural key exactly — so a bilateral row CAN land on a node already holding the unilateral one.
+  (e) `supersedes_notarization_id` is a node-local BIGSERIAL FK and must stay out of the record; a
+  node can re-derive it locally from `(session_id, seal_type)` if it wants the pointer.
+  **Open question to settle IN the unit, not before:** `user_accounts` replicates `phone_stub_hash`
+  to every node. That is hash-only and consistent with "no PII in the directory", but it widens who
+  holds the set of stub hashes — decide explicitly and journal it, rather than inheriting the
+  decision from the spec having been written first.
+  **Done means:** both tables serve and apply through anti-entropy; a receipt written on one node is
+  readable from another with a locally-computed chain; the `m12-inv-shares-local.test.ts` assertion
+  that pins the pending set to exactly `{seal_notarizations, user_accounts}` is updated in the same
+  commit (it is designed to go red here); `agent_key_shares` is still refused. — ❌
+
 - **DOD-INV-NO-VPN** [trustless-cello] — no VPN, VPC peering, Private Service Access consumer, or
   any cross-cloud network tunnel is created. Directory sync happens only over the authenticated
   libp2p transport. Nothing external ever connects to a node's Postgres. — ✅ **VERIFIED
