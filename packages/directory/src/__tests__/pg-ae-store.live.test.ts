@@ -312,9 +312,25 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
 
   // ── Tier-A coverage: agent_profiles insert-if-absent ─────────────────────────────────────────
   it("applyTierA inserts an agent_profiles row and is idempotent by k_local_pubkey", async () => {
-    const body = { k_local_pubkey: `${P}kp`, primary_pubkey: "pp", ml_dsa_pubkey: "", phone_stub_hash: "", registered_at: "1785200000000" };
+    const body = { k_local_pubkey: `${P}kp`, agent_id: `${P}aid`, primary_pubkey: "pp", ml_dsa_pubkey: "", phone_stub_hash: "", registered_at: "1785200000000" };
     const hash = encodeTierARecord(AGENT_PROFILES_SPEC, body).hash;
     expect(await store.applyTierA("agent_profiles", [{ hash, body }])).toBe(1);
     expect(await store.applyTierA("agent_profiles", [{ hash, body }])).toBe(0); // insert-if-absent
+  });
+
+  it("REFUSES an agent_profiles body with no agent_id — the state it would create is unrepairable", async () => {
+    // This body used to be accepted, and accepting it is how the live fleet ended up holding profiles
+    // with a NULL agent_id. Two consequences, both permanent because Tier-A apply is insert-if-absent
+    // and ON CONFLICT DO NOTHING keeps the local copy forever:
+    //   1. the suspension/burn gates JOIN on agent_id, so the row makes the kill switch answer
+    //      "not suspended" on this node;
+    //   2. agent_id is in the content address, so a NULL copy and a populated copy of the same agent
+    //      hash differently and the two nodes never converge — a standing fork signature.
+    // A later round cannot fix either, so the door is the only place to refuse it.
+    const body = { k_local_pubkey: `${P}kpnull`, primary_pubkey: "pp2", ml_dsa_pubkey: "", phone_stub_hash: "", registered_at: "1785200000001" };
+    const hash = encodeTierARecord(AGENT_PROFILES_SPEC, body).hash;
+    await expect(store.applyTierA("agent_profiles", [{ hash, body }])).rejects.toThrow(/missing required column\(s\) agent_id/);
+    const r = await pool.query("SELECT 1 FROM agent_profiles WHERE k_local_pubkey = $1", [`${P}kpnull`]);
+    expect(r.rows.length, "nothing may be written when the body is refused").toBe(0);
   });
 });

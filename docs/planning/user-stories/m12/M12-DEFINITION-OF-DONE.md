@@ -466,6 +466,28 @@ description: >
 
 ## Decisions
 
+### M12-D-NULL-AGENTID (2026-07-30) — refuse at the door; the fleet backfill is owed and is NOT code
+
+Adding `agent_id` to `AGENT_PROFILES_SPEC` (so the kill-switch join works on replicas) also put it in
+the CONTENT ADDRESS. A node holding `(k1, agent_id=NULL)` and one holding `(k1, agent_id=X)` therefore
+hash the same agent differently, and Tier-A apply is insert-if-absent — `ON CONFLICT DO NOTHING` keeps
+the NULL forever. Neither the fork nor the broken gate can be repaired by a later round.
+
+**Chosen: refuse a profile body with a null `agent_id` at apply.** Least likely to need reversing — it
+stops the state spreading, and with the per-record containment now in place it fails loudly per record
+instead of taking the round (and Tier-B, and the kill switch) down with it.
+
+**Rejected: modelling `agent_id` as Tier-B.** It is not mutable; it is *absent* on some rows. Encoding
+"missing" as "mutable" would licence overwriting a populated identity with a null one, which is worse
+than the bug.
+
+**Owed, and it is data repair, not code:** the live GCP fleet already holds NULL-`agent_id` profiles
+(four of eight observed on `gcp-usc1`). Those rows still fork, and this guard does not heal them —
+nothing in AE can. They are throwaway enforcer agents, so the cheap fix is to delete them and let AE
+re-replicate correctly. **Not done autonomously:** deleting rows from a live directory's
+`agent_profiles` is destructive and irreversible, and "it is only test data" is exactly the assumption
+worth checking with Andre before acting on. Needs his go.
+
 ### M12-D-MERGE-HOLD (2026-07-30) — `m12/node-dir-gcp` does NOT merge to main yet
 
 §2e says a reviewed-green unit merges rather than sits, and this branch is reviewed and green. It is

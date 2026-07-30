@@ -88,6 +88,14 @@ interface TierAPg {
    * test, so a migration that renames one goes red instead of silently re-classifying every duplicate.
    */
   readonly naturalKeyConstraint: string;
+  /**
+   * Columns that must be non-null in an applied body, beyond the natural key.
+   *
+   * Tier-A apply is insert-if-absent, so a row that lands wrong CANNOT be repaired by a later round —
+   * `ON CONFLICT DO NOTHING` keeps the local copy forever. That makes "refuse it at the door" the only
+   * available correctness lever, and it is why this is a refusal rather than a coercion.
+   */
+  readonly requiredColumns?: readonly string[];
 }
 
 // ORDER IS LOAD-BEARING: the engine applies Tier-A in this order and design §3.3 requires
@@ -96,7 +104,16 @@ interface TierAPg {
 // ago, so "inert today" is not a reason to leave it wrong.
 const TIER_A: readonly TierAPg[] = [
   { spec: USER_ACCOUNTS_SPEC, bytea: [], chained: true, naturalKeyConstraint: "user_accounts_pkey" },
-  { spec: AGENT_PROFILES_SPEC, bytea: [], naturalKeyConstraint: "agent_profiles_k_local_unique" },
+  {
+    spec: AGENT_PROFILES_SPEC,
+    bytea: [],
+    naturalKeyConstraint: "agent_profiles_k_local_unique",
+    // agent_id is what the suspension/burn gates JOIN on. A profile carrying NULL there is one the
+    // kill switch cannot evaluate — the join yields zero rows and the gate answers "not suspended" —
+    // and because agent_id is also in the content address, a NULL copy and a populated copy hash
+    // differently and can never converge. Refusing it keeps that state from spreading further.
+    requiredColumns: ["agent_id"],
+  },
   { spec: AGENT_REVOCATIONS_SPEC, bytea: ["signature"], naturalKeyConstraint: "agent_revocations_pkey" },
   {
     spec: SEAL_NOTARIZATIONS_SPEC,
@@ -404,6 +421,14 @@ export class PgAeStore implements AeStoreView {
     let inserted = 0;
     for (const rec of records) {
       const body = rec.body as Record<string, unknown>;
+      const missing = (t.requiredColumns ?? []).filter((c) => body[c] === null || body[c] === undefined);
+      if (missing.length > 0) {
+        throw new Error(
+          `pg-ae-store: ${t.spec.table} record is missing required column(s) ${missing.join(", ")} — ` +
+            `refusing to apply. Tier-A apply is insert-if-absent, so a row accepted with these null ` +
+            `could never be repaired by a later round.`,
+        );
+      }
       const recomputed = encodeTierARecord(t.spec, body as TableRow).hash;
       if (recomputed !== rec.hash) {
         throw new Error(
