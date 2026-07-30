@@ -41,6 +41,8 @@ export interface IngressResult {
   poison: number;
   duplicates: number;
   unhandledOps: number;
+  /** Rows that THREW and were left queued — no decision reached. Distinct from a rejection. */
+  errored: number;
   nodeErrors: Array<{ nodeIndex: number; reason: string }>;
 }
 

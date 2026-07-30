@@ -631,4 +631,126 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     expect(crossLocal.reason).toBe("self_subject");
     expect(String(crossLocal.guidance), "names BOTH agents so the operator understands why").toMatch(/bob-second/i);
   }, 120_000);
+
+  it("HOP 9 (case b): a CO-OWNED endorsement is minted, flagged, presentable — and does not count", async () => {
+    // ── THE NEGATIVE CONTROL FOR THE ENTIRE CO-OWNERSHIP RULE ──────────────────────────────────────
+    // Every other hop proves a stranger's endorsement works. This one proves the co-owned case is
+    // handled the SPECIFIC way the policy requires — minted and readable, but excluded from counts —
+    // because the two failure modes on either side are both worse than the bug:
+    //
+    //   refuse it outright  → discards a true, useful fact ("these two agents share an operator")
+    //   count it            → one operator manufactures unlimited standing from their own machines
+    //
+    // CHARLIE is the endorser. He is on his OWN daemon, so the client-side `self_subject` guard from
+    // HOP 8 cannot see the link and correctly lets it through — the client only knows the agents it
+    // holds. But he still shares Alice's `account_id` in `agent_profiles` (the harness registers every
+    // agent under one dev account; HOP 1 split only BOB off), so the PORTAL — the party that can see
+    // account linkage — is the one that catches it. That division of labour is the point of D-29.
+    const linkage = psqlSpine(
+      `SELECT count(DISTINCT account_id) FROM agent_profiles ` +
+      `WHERE lower(k_local_pubkey) IN (lower('${pubkeys["charlie"]}'), lower('${pubkeys["alice"]}'))`,
+    );
+    expect(linkage.replace(/\s/g, ""), "Charlie and Alice must SHARE an account for this hop").toContain("1");
+
+    const charlie = await connectMcp(dirFor["charlie"], "jend-charlie-coowned");
+    mcpConns.push(charlie);
+    expect(((await charlie.call("cello_use_agent", { name: "charlie" })) as { ok?: boolean }).ok).toBe(true);
+
+    const coOwnedText = "Alice and I run the same fleet; her agent has never dropped a session.";
+    const issued = (await charlie.call("cello_trust_signals_issue", {
+      subject_pubkey: pubkeys["alice"],
+      body: coOwnedText,
+    })) as { ok?: boolean; reason?: string; guidance?: string; submission_id?: string };
+    // ACCEPTED AT THE CLIENT. A client that refused here would be guessing about linkage it cannot
+    // see, and would block the legitimate case of two genuinely different people on one account.
+    expect(issued.ok, `co-owned issue refused at the client: ${issued.reason} — ${issued.guidance}`).toBe(true);
+
+    const { loadPortalIngress } = await import("./portal-ingress.js");
+    const { HttpDirectoryClient } = await import(
+      pathToFileURL(join(PORTAL_ROOT, "src/server/directory/http-client.ts")).href
+    ) as { HttpDirectoryClient: new (baseUrl: string, apiKey: string) => unknown };
+    const { getSubmissionSigner } = await import(
+      pathToFileURL(join(PORTAL_ROOT, "src/server/trust/submission-signer.ts")).href
+    ) as { getSubmissionSigner: (env: string) => unknown };
+    const portal = await loadPortalIngress();
+    const pass = await portal.drainAndMint({
+      client: new HttpDirectoryClient(cluster.internalApiUrls[0], INTERNAL_API_KEY),
+      intakeSeeds: new Map([[INTAKE_KEY_ID, intakeSeed]]),
+      signer: getSubmissionSigner("local"),
+      directoryBaseUrl: cluster.internalApiUrls[0],
+    });
+    // MINTED, NOT REFUSED — and `errored` is asserted at zero because a co-owned mint that THREW
+    // would otherwise read as "not minted" and be indistinguishable from a policy refusal.
+    expect(pass.minted, `co-owned endorsement not minted: ${JSON.stringify(pass)}`).toBe(1);
+    expect(pass.errored, "no row may be left undecided").toBe(0);
+
+    // ── THE FLAG IS INSIDE THE NOTARIZED HASH — ASSERTED WHERE IT IS OBSERVABLE ───────────────────
+    // NOT from the directory's ledger: `signal_records` holds metadata and hashes, never the envelope
+    // bytes (INV-DIR-DUMB — the notary notarizes, it does not store content). So the assertion is made
+    // at the SUBJECT's wallet, which does hold the delivered envelope, via `cello_trust_signals_list`.
+    //
+    // Reading it there is the stronger check anyway: the wallet row is what presentation re-encodes
+    // from, so a `true` here means the flag survived mint → notarize → seal → deliver → decode →
+    // STORE. That store step is precisely where it was being dropped.
+    // ── ALICE CAN STILL ACCEPT AND PRESENT IT ─────────────────────────────────────────────────────
+    // This is the half that was broken: `deliverWalletSignal` dropped the flag, so her wallet stored
+    // `false`, presentation re-encoded `false`, and the bytes no longer hashed to the value above.
+    // The recipient rejected a perfectly valid signal and the holder saw "attached: 1".
+    await daemons[1].stop();
+    daemons[1] = await startDaemon(dirFor["alice"], cluster.directoryUrl, "jend-alice-coowned", { manifestEnv });
+    const alice = await connectMcp(dirFor["alice"], "jend-alice-b");
+    mcpConns.push(alice);
+    expect(((await alice.call("cello_use_agent", { name: "alice" })) as { ok?: boolean }).ok).toBe(true);
+
+    const held = (await alice.call("cello_trust_signals_list", {})) as {
+      signals?: Array<{ signal_hash: string; type: string; same_operator?: boolean; consent_state?: string }>;
+    };
+    const coRow = (held.signals ?? []).find((x) => x.type === "endorsement" && x.same_operator === true);
+    expect(coRow, `the co-owned endorsement must be FLAGGED in her wallet: ${JSON.stringify(held.signals)}`).toBeTruthy();
+    // AND THE THIRD-PARTY ONE MUST NOT BE. Without this the hop would pass on an implementation that
+    // flags every endorsement, which is the failure mode that makes the flag meaningless.
+    const strangerRow = (held.signals ?? []).find((x) => x.type === "endorsement" && x.same_operator !== true);
+    expect(strangerRow, "Bob's genuine third-party endorsement must NOT be flagged").toBeTruthy();
+
+    // THE CO-OWNED ONE BY HASH, never "the first pending row". By this hop Alice's queue holds more
+    // than one endorsement from earlier cases, and taking the first accepted the wrong signal — the
+    // hop then failed on the statement text, which reads as a payload bug rather than a test selecting
+    // the wrong row. `coRow` is already identified by the flag, so its hash is the precise selector.
+    const coHash = coRow!.signal_hash;
+    const pending = (await alice.call("cello_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
+    expect(
+      (pending.pending ?? []).some((p) => p.signal_hash === coHash),
+      `the co-owned endorsement must be awaiting her decision: ${JSON.stringify(pending)}`,
+    ).toBe(true);
+    const accepted = (await alice.call("cello_consent_accept", { hash_prefix: coHash!.slice(0, 16) })) as {
+      ok?: boolean; reason?: string; guidance?: string;
+    };
+    expect(accepted.ok, `accept refused: ${accepted.reason} — ${accepted.guidance}`).toBe(true);
+
+    // BOB is the recipient — he was split onto his own account in HOP 1, so he is a genuinely
+    // different operator receiving a co-owned endorsement about Alice.
+    const bobRecv = await connectMcp(dirFor["bob"], "jend-bob-recv");
+    mcpConns.push(bobRecv);
+    expect(((await bobRecv.call("cello_use_agent", { name: "bob" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await alice.call("cello_contact_add", { pubkey: pubkeys["bob"] })) as { ok?: boolean }).ok).toBe(true);
+
+    const awaiting = bobRecv.call("cello_await_session", { timeout_ms: 30_000 });
+    const init = (await alice.call("cello_initiate_session", { target_pubkey: pubkeys["bob"] })) as { ok?: boolean };
+    expect(init.ok, `initiate failed: ${JSON.stringify(init)}`).toBe(true);
+    const inbound = (await awaiting) as {
+      trust_signals?: Array<{ type: string; signal_hash: string; claim: Record<string, unknown> }>;
+    };
+
+    // READABLE, NOT SUPPRESSED. The presenter's own reproducibility check had to pass for this to
+    // arrive at all — a dropped field would have made Bob log `hash_mismatch` and present nothing.
+    if (inbound.trust_signals === undefined) {
+      const why = daemons.flatMap((d, i) => d.output.split("\n")
+        .filter((l) => /signal\.|trust_signal/.test(l))
+        .map((l) => `[daemon ${i}] ${l}`)).slice(-16).join("\n");
+      expect.fail(`a co-owned endorsement must still be PRESENTED, not hidden. Logs:\n${why}`);
+    }
+    const coOwned = inbound.trust_signals!.find((x) => x.signal_hash === coHash);
+    expect(coOwned, `the co-owned endorsement reached Bob: ${JSON.stringify(inbound.trust_signals)}`).toBeTruthy();
+    expect(String(coOwned!.claim.statement), "Charlie's words survive intact").toContain("same fleet");
+  }, 180_000);
 });
