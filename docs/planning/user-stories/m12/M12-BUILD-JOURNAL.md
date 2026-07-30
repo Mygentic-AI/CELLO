@@ -4345,3 +4345,40 @@ torn down without waking, this never fires.
 numbers on both sides, and the "production ran V55" note are read from files. That the GCP databases
 have V49/V50 in `flyway_schema_history` is INFERRED from their images being built from this branch —
 consistent with everything observed, not directly queried.
+
+### Entry 68b — CORRECTION to 68: I queried GCP instead of leaving it inferred, and the inference was incomplete
+
+Entry 68 marked one claim as inferred rather than verified: that the GCP databases hold V49/V50. I
+then queried `flyway_schema_history` on `gcp-usc1` rather than leaving it that way:
+
+```
+["V55","V54","V53","V52","V51","V50","V49","V48","V47","V46","V45","V44"]
+```
+
+**V49 and V50 are there — and so are V51–V55.** The half I had inferred was right; the half I had
+assumed without noticing I was assuming it was wrong. I had reasoned that GCP could only hold what
+this branch's image carried, and this branch had no V51+. It holds both sets, so something built from
+`main` has also run against these databases — consistent with another session deploying here, which
+the shared-checkout warnings in the procedure already imply.
+
+**What this changes:**
+
+- **GCP is not at risk at all.** It is at V55; the merged branch adds only V56, which applies in order.
+- **The AWS blocker stands**, and for the reason given: AWS ran V51–V55 and has never seen V49/V50, so
+  those two sit below its high-water mark. `outOfOrder` is off, `validateOnMigrate` is on, and
+  `docker-entrypoint.sh` runs under `set -e`.
+- **Renumbering is still ruled out**, now on measured grounds rather than inferred ones: V49/V50 are
+  genuinely in GCP's history, so moving them to V57/V58 would strand two applied-but-absent migrations
+  there — trading an AWS-only problem for a fleet-wide one.
+
+**And one thing I cannot explain from the evidence, stated rather than papered over:** a main-built
+image running against a database holding V49/V50 should itself have tripped `validateOnMigrate` —
+those two are applied but absent from that image's `db/migrations`. It evidently did not. Either the
+deploy path differs from my model of it, or a Flyway ignore-missing setting is in play that I have not
+found. That gap matters, because the same mechanism that let missing migrations pass on GCP may or may
+not be what decides whether AWS's out-of-order case actually fires. It should be resolved by reading
+the AWS deploy path before anyone wakes AWS — not by assuming either way.
+
+The lesson is the one the milestone keeps re-teaching: I labelled the claim I knew I was inferring,
+and the wrong one was the claim sitting next to it that I never noticed I had assumed. A single query
+settled both.
