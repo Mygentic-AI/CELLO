@@ -4382,3 +4382,37 @@ the AWS deploy path before anyone wakes AWS — not by assuming either way.
 The lesson is the one the milestone keeps re-teaching: I labelled the claim I knew I was inferring,
 and the wrong one was the claim sitting next to it that I never noticed I had assumed. A single query
 settled both.
+
+---
+
+## Entry 69 — 2026-07-30 — DOD-AE-STORE-1: the pg store proven to agree with the encoders, against real Postgres
+
+The unit's own text names the risk precisely: *"a pg store that diverges from the proven semantics
+makes the proof describe something nobody runs."* The convergence proof runs in memory. If Postgres
+produces a different record hash for the same logical row, two nodes holding identical data advertise
+different content addresses, see permanent divergence, and pull from each other forever — **nothing
+errors; the round simply never settles.**
+
+`m12-ae-store-parity.live.test.ts` (5/5, real docker-compose Postgres on 5433, gated
+`CELLO_ENV=local`). It asserts the store's advertised hash equals what `encodeTierARecord` computes for
+the same row; that a served body re-encodes to the hash the store claimed (the same check the
+RECEIVING node's `applyTierA` performs, so a mismatch would mean a node refuses its peer's honest
+record); and that the table digest is stable across reads and matches one computed from the store's own
+hash list.
+
+**The trap the DoD calls out is real and now pinned.** `agent_revocations.signature` is BYTEA, pg
+returns a Buffer, and no type-parser override is installed. Rather than temporarily breaking
+`tierASelectExpr` to revert-test it — with a reviewer possibly reading that file — the test proves its
+own discriminating power directly: the same row encoded with a Buffer signature and with its hex string
+produce **different hashes**. So the parity assertions cannot be passing vacuously, and if those two
+ever became equal this test goes red before the parity ones do.
+
+Written as a `.live.test.ts` against real Postgres deliberately. A fake pool returns whatever the test
+author already believed, which is exactly no evidence for a claim about what Postgres does.
+
+Also verified read-only for this unit: `tierASelectExpr` hex-encodes every column in a table's `bytea`
+list, and `AGENT_REVOCATIONS_SPEC` carries `signature` in that list — the two halves the constraint
+needs, checked rather than assumed.
+
+**Not claiming the unit ✅.** Under the tag rule a flip needs a reviewer's verdict quoted, and this
+unit has not had its pass. Directory suite 981 green.
