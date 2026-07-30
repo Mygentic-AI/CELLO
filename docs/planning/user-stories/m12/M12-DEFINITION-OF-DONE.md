@@ -177,7 +177,19 @@ description: >
 - **DOD-INV-IAC** [trustless-cello] — every GCP and AWS resource exists in IaC; any manual
   emergency fix lands in IaC + the STATE file (`infra/STATE.md` / `infra/GCP-STATE.md`,
   updated immediately per action, never batched) before its unit closes. Region-expansion test:
-  a new region with zero manual steps. — ❌
+  a new region with zero manual steps. — 🟠 **GCP AUDITED CLEAN; AWS NOT AUDITED** (→ Entry 65).
+  Live inventory vs `terraform state`, per resource class: addresses **8/8**, firewall rules **7/7**,
+  Cloud SQL instances **3/3**. VM instances are MIG-created and correctly absent from state (Terraform
+  owns the MIG, not its instances). Secrets: 19 managed, 23 live — and all **4** unmanaged ones are
+  documented, not drift: `cello-gcp-{usc1,euw1,use1}-preauth-issuer-key` are the per-node issuers
+  superseded by the consortium-wide key and dropped from Terraform management rather than destroyed
+  (`prevent_destroy` blocked the delete, correctly), and `cello-github-github-oauthtoken-c3e205` is
+  the Cloud Build GitHub connection's own token, service-created. Both are already recorded in
+  `infra/GCP-STATE.md`.
+  **AWS is deliberately NOT audited here:** the environment is hibernated, missing resources during
+  hibernate are intentional, and touching hibernated infra corrupts the inventory the wake script
+  depends on. It is also slated for teardown (P4), so the audit belongs there, against a live
+  environment, not now.
 - **DOD-INV-NO-SAAS / DOD-INV-DOMAIN** [all] — no paid SaaS; all URLs are
   `*.cello.mygentic.ai`. — ✅ **VERIFIED (→ Entry 61).** A URL sweep of `infra/terraform/*.tf` and
   the directory + relay sources returns nothing outside `*.cello.mygentic.ai` and infrastructure

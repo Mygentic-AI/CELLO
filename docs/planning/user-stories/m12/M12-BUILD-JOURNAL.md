@@ -4071,3 +4071,31 @@ on which directory you happened to reach. Revisit if that table ever gains a rec
 
 Directory suite 962 green. **Owed:** the live cross-node proof, which needs a deploy — parked with the
 kill-switch fix.
+
+### Entry 65 — DOD-INV-IAC: the GCP side audited against live inventory
+
+Not "the code looks right" — actual `gcloud` inventory compared against `terraform state`, per class:
+
+| class | terraform | live | verdict |
+|---|---|---|---|
+| `google_compute_address` | 8 | 8 | clean |
+| `google_compute_firewall` | 7 | 7 | clean |
+| `google_sql_database_instance` | 3 | 3 | clean |
+| `google_secret_manager_secret` | 19 | 23 | 4 unmanaged — all documented |
+| VM instances | n/a | 4 | correct: MIG-created, Terraform owns the MIG |
+
+The four unmanaged secrets are `cello-gcp-{usc1,euw1,use1}-preauth-issuer-key` — the per-node issuers
+superseded by the consortium-wide key, dropped from Terraform management rather than destroyed because
+`prevent_destroy` blocked the delete (correctly) — and `cello-github-github-oauthtoken-c3e205`, the
+Cloud Build GitHub connection's own token, service-created. Both cases were already in
+`infra/GCP-STATE.md`, so this is documented exception rather than drift, which is the distinction the
+invariant is actually about.
+
+One methodology note worth keeping: my first comparison was meaningless. I diffed Terraform *resource
+keys* (`europe-west1`, `consortium_officer`) against live secret *names*
+(`cello-gcp-euw1-node-key`) — two sets that cannot intersect by construction, which would have
+reported all 23 as unmanaged. The real comparison needs `terraform show -json` and the `secret_id`
+attribute. A count that comes out suspiciously round is worth re-deriving before it becomes a finding.
+
+AWS is deliberately excluded: hibernated, and touching hibernated infra corrupts the wake inventory. It
+is slated for teardown (P4), where the audit belongs — against a live environment.
