@@ -3291,3 +3291,29 @@ Worth saying plainly because it is the cheapest possible demonstration of why th
 instinct to put the reasoning where I was working, rather than where it belongs, survived reading the
 prohibition against doing so. The cap is mechanical for that reason — it does not depend on the
 author agreeing with it in the moment.
+
+---
+
+## Entry 42 — `DOD-END-SUBJECTKIND-1` ✅: a stale tag, not missing work
+
+The last ❌ in the re-cut scope turned out to be built, tested and live. Checked clause by clause
+rather than assumed, since the previous line taught that lesson an hour earlier.
+
+| clause | evidence |
+|---|---|
+| agent-subject, same operator → mint and FLAG | `FLAGS a same-operator endorsement rather than minting it as a plain vouch`; and live today — `co-own: own` on a real endorsement between two of Andre's agents |
+| account-subject, same operator → REFUSE | `REFUSES an account-subject submission from the SAME operator, by name` → `same_operator_account_subject`. **Revert-tested**: deleting the branch fails exactly that test |
+| missing agent→account resolution → REFUSE, named | `REFUSES to mint for a subject the directory does not know` → `subject_not_registered`, which was the live drain's first rejection today |
+| default target is the specific agent (M10-D5) | the subject on every minted endorsement is the agent pubkey, observed live |
+
+Plus the linkage tests that keep the flag meaningful: phone-stub linkage catches the second-account
+case, and "does NOT flag genuinely different operators" is the negative control — without it, an
+implementation that flagged everything would pass.
+
+**D-27's tier cap is not this line's.** "Worth capped at the endorser's own tier to the recipient" is
+recipient-side policy and moved with `DOD-END-TIER-1` in the re-cut. What ships here is the FLAG;
+what a recipient does with it is the moved line.
+
+**Two stale tags in a row** (`SCAN-1`, now this) says something about the scoreboard rather than the
+code: tags were being written when a unit was declared done and not revisited when later work
+finished the clause. Both flips took ~10 minutes to evidence and neither needed a line of code.
