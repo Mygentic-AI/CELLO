@@ -483,6 +483,34 @@ description: >
 
 ## Decisions
 
+### M12-D-V49-V50-ORDER (2026-07-31) — merge is safe with `outOfOrder=true` for ONE AWS deploy
+
+Entry 68b left a question open: why did a directory image run cleanly against a database holding
+migrations its own image did not carry? **Answered, from measurement rather than a doc claim.**
+
+Flyway is 10.21.0 (`packages/directory/Dockerfile`), invoked as a bare `flyway migrate` with no config
+overrides. The observation that settles it: images whose highest local migration was V50 ran
+successfully against a GCP database already at V55. That is only possible if migrations *above* the
+local maximum are tolerated — Flyway calls those FUTURE, and tolerating them is the default. So there
+was never a mystery: my images ignored V51–V55 as future, and nothing ran that should have failed.
+
+**The AWS case is different in kind, and the risk stands.** After merging, a main-built image RESOLVES
+V49/V50 as files, while the AWS database has them neither applied nor above its high-water mark (V55).
+That is OUT-OF-ORDER, not future — a resolved migration below the max applied — and `outOfOrder`
+defaults to false, so `flyway migrate` aborts under `set -e` and the task never starts.
+
+**Recommendation: one deploy with `outOfOrder=true`, then back to the default.** V49 adds two columns
+to `agent_suspensions` (`ADD COLUMN IF NOT EXISTS`, both additive); V50 is a single GRANT. Neither is
+referenced by V51–V56 — verified: no file in that range mentions `agent_suspensions` — so applying them
+late cannot corrupt anything that ran ahead of them.
+
+Rejected: renumbering to V57/V58 (GCP has V49/V50 APPLIED, so the files would go missing there —
+trading an AWS-only problem for a fleet-wide one); and `repair`/`baseline`, which rewrite history to
+paper over a discrepancy that is real and harmless.
+
+Cost if we do nothing: none until AWS wakes with the merge in place. If AWS is torn down without
+waking, this never fires.
+
 ### M12-D-AE-WRITE-HINTS (2026-07-30) — `ae_hint` deferred, with the latency it costs stated
 
 `DOD-AE-CHANNEL-1` says "the digest→detail→pull round protocol **with write-hints**". digest→detail→pull
