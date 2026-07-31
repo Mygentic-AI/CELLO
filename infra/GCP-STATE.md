@@ -182,6 +182,38 @@ tolerates exactly one node down.
 | `gcp-use1` | 34.75.172.108 | 2026-07-30 |
 | `gcp-relay-use1` | 34.139.119.165 (internal 10.10.0.28) | 2026-07-30 |
 
+## Ops dashboard (DOD-GCP-OPS-1) — LIVE 2026-07-31 (hostname not yet pointed)
+
+The operator surface. It owns `DOD-INV-WAVE-GATE`, `DOD-WAVE-ASSEMBLY-1` and six `DOD-OPS-*` lines,
+and it is the **only** caller of the waitlist's internal surface — without it the waitlist runs and
+nobody can be admitted from it.
+
+| Resource | Value |
+|---|---|
+| Cloud Run service | `cello-ops-dashboard`, us-east1, image `ops-e6d0f32`, **min=0, MAX=1** |
+| Run URL | https://cello-ops-dashboard-jk4mcnqbeq-ue.a.run.app — debugging only (`DOD-INV-DOMAIN`) |
+| Hostname | `operations.cello.mygentic.ai` — **NOT yet served.** No load balancer or certificate for it exists; that is the remaining piece of this line |
+| Repo | `Andre-Mygentic/cello-ops-dashboard`, built by `cloudbuild.yaml` in that repo |
+| Database | the shared `cello_portal` Cloud SQL. Applies its own four `ops_*` migrations at container start; **ledger now 41 rows = 11 portal + 26 waitlist + 4 ops**, three prefixes, no collisions |
+| Service account | `cello-ops-dashboard` — its own, not the portal's or the waitlist's |
+| Secrets | `cello-ops-allowed-emails` (**read at RUNTIME, not injected** — the 60s cache is what makes removing an operator take a minute rather than a deploy), plus `cello-portal-database-url`, `cello-waitlist-internal-token`, `cello-ops-agent-ses-credentials` |
+| Verified live | `/sign-in` 200 · `/` without a session 307s to `/sign-in` rather than leaking · **no-enumeration holds**: an allowed and an unknown address both return byte-identical `202 {"status":"sent_if_allowed"}` |
+
+**MAX 1 instance is a correctness constraint, not a cost one.** The sign-in send is fire-and-forget
+(which is what makes the no-enumeration timing hold) and migrations run at container start, so a
+second instance starting under load would race the first through `scripts/migrate.mjs`.
+
+**`PGSSLMODE=disable` is required here and not on the waitlist**, which is worth knowing before
+debugging it again. `db.ts` and `migrate.mjs` default to `ssl: { rejectUnauthorized: true }` because
+on AWS they dialled an RDS endpoint. Cloud Run reaches Cloud SQL over a unix socket and the connector
+holds the encrypted hop, so there is no network leg to weaken. libpq silently ignores `sslmode` on a
+unix socket — which is why the Python waitlist needed nothing — but node-postgres attempts an SSL
+negotiation the socket cannot answer. The container exited 1 with
+`[migrate] FAILED: The server does not support SSL connections` while Cloud Run reported only
+"failed to start and listen on PORT"; the useful half was in the container log, not the deploy error.
+
+---
+
 ## Waitlist (DOD-GCP-RUNTIME-1 / M12 cutover item C) — LIVE 2026-07-31
 
 The M11 waitlist off AWS. **One Cloud Run service replaces 13 Lambda functions, an API Gateway,

@@ -216,6 +216,25 @@ resource "google_cloud_run_v2_service" "ops_dashboard" {
         name  = "CELLO_ENV"
         value = var.environment
       }
+
+      // NOT A DOWNGRADE, and it is required rather than optional here.
+      //
+      // db.ts and scripts/migrate.mjs default to `ssl: { rejectUnauthorized: true }`
+      // because on AWS they dialled an RDS endpoint over the network. Cloud Run
+      // reaches Cloud SQL over a UNIX SOCKET inside the instance sandbox, and the
+      // Cloud SQL connector holds the encrypted hop to the database — there is no
+      // network leg for this flag to weaken.
+      //
+      // The waitlist needs no equivalent because libpq silently ignores sslmode on
+      // a unix socket; node-postgres does not, and attempts an SSL negotiation the
+      // socket cannot answer. The container therefore exited 1 with
+      // `[migrate] FAILED: The server does not support SSL connections` and Cloud
+      // Run reported only "failed to start and listen on PORT" — the useful half
+      // was in the container log, not the deploy error.
+      env {
+        name  = "PGSSLMODE"
+        value = "disable"
+      }
     }
   }
 }
