@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { checkNodeHealth, summariseNodeHealth } from "../node-health.js";
+import { checkNodeHealth, summariseNodeHealth, runNodeSweep } from "../node-health.js";
 import { buildHealthReport } from "../server.js";
 
 function fetchReturning(byUrl: Record<string, { status: number; body?: unknown }>): typeof fetch {
@@ -78,6 +78,41 @@ describe("checkNodeHealth", () => {
     });
     expect(out[0]?.schemaVersion).toBeNull();
     expect(out[1]?.schemaVersion).toBeNull();
+  });
+});
+
+describe("a node that answers headers then STALLS the body", () => {
+  it("is bounded by the per-node budget, not by undici's 300s body timeout", async () => {
+    // The sweep is awaited on the startup path, so an unbounded body read could keep the health port
+    // from ever opening — Cloud Run then kills the instance and restarts it. A sick directory would
+    // take down the registration path, which is the exact failure this design claims to avoid.
+    const hangingFetch = (async (_u: string, init?: { signal?: AbortSignal }) => ({
+      ok: true,
+      status: 200,
+      json: () =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        }),
+    })) as unknown as typeof fetch;
+
+    const started = Date.now();
+    const out = await checkNodeHealth(["http://10.0.0.9:9090"], { fetchFn: hangingFetch, timeoutMs: 60 });
+    expect(Date.now() - started, "must not wait on the body past the budget").toBeLessThan(2_000);
+    expect(out[0]?.reachable).toBe(false);
+    expect(out[0]?.reason).toMatch(/timeout/i);
+  });
+
+  it("names the CAUSE rather than collapsing everything into 'unreachable'", async () => {
+    // A live node serving 503 and a node that is not there are different problems in different
+    // subsystems. Reporting both as "unreachable" sends an operator to check a VM that is fine.
+    const out = await checkNodeHealth(["http://10.0.0.1:9090", "http://10.0.0.7:9090"], {
+      fetchFn: fetchReturning({ "10.0.0.1": { status: 503 } }),
+    });
+    expect(out[0]?.reason).toBe("HTTP 503");
+    expect(out[1]?.reason, "a refused connection is not an HTTP status").not.toMatch(/HTTP 5/);
+
+    // And the cause survives into the operator-visible line.
+    expect(summariseNodeHealth(out, 56).detail).toContain("HTTP 503");
   });
 });
 
@@ -147,5 +182,58 @@ describe("node health is REPORTED, never a startup gate", () => {
   it("omits the nodes check entirely when no sweep was configured", () => {
     // Absent rather than "ok" — a check that was never run must not read as one that passed.
     expect(buildHealthReport(base).checks.nodes).toBeUndefined();
+  });
+});
+
+describe("runNodeSweep — the WIRING, not just the pure functions", () => {
+  function recordingLogger() {
+    const calls: Array<{ level: string; event: string; detail: Record<string, unknown> }> = [];
+    const at = (level: string) => (event: string, detail?: Record<string, unknown>) =>
+      calls.push({ level, event, detail: detail ?? {} });
+    return { calls, info: at("info"), warn: at("warn") };
+  }
+
+  it("emits ops_agent.nodes.degraded at warn, NAMING the drifted node", async () => {
+    // Until this existed the entire sweep could be deleted from the server and every test in this
+    // file still passed — the only production consumer was the only untested part.
+    const logger = recordingLogger();
+    const summary = await runNodeSweep("http://10.0.0.1:9090,http://10.0.0.2:9090", 56, logger, {
+      fetchFn: fetchReturning({
+        "10.0.0.1": { status: 200, body: { status: "ok", nodeId: "gcp-use1", schemaVersion: 56 } },
+        "10.0.0.2": { status: 200, body: { status: "ok", nodeId: "gcp-usc1", schemaVersion: 55 } },
+      }),
+    });
+
+    expect(summary?.healthy).toBe(false);
+    const degraded = logger.calls.find((c) => c.event === "ops_agent.nodes.degraded");
+    expect(degraded?.level).toBe("warn");
+    expect(String(degraded?.detail["detail"])).toContain("gcp-usc1");
+  });
+
+  it("emits ops_agent.nodes.ok when the consortium agrees", async () => {
+    const logger = recordingLogger();
+    const summary = await runNodeSweep("http://10.0.0.1:9090", 56, logger, {
+      fetchFn: fetchReturning({ "10.0.0.1": { status: 200, body: { status: "ok", nodeId: "a", schemaVersion: 56 } } }),
+    });
+    expect(summary?.healthy).toBe(true);
+    expect(logger.calls.find((c) => c.event === "ops_agent.nodes.ok")?.level).toBe("info");
+  });
+
+  it("an UNSET DIRECTORY_HEALTH_URLS is announced, not silent", async () => {
+    // The failure this closes: the caller used to skip the sweep entirely when the variable was
+    // empty, so a typo'd terraform value produced no log at all — and the "no nodes configured"
+    // branch written to catch exactly that was unreachable from production.
+    const logger = recordingLogger();
+    const summary = await runNodeSweep(undefined, 56, logger);
+    expect(summary).toBeNull();
+    const disabled = logger.calls.find((c) => c.event === "ops_agent.nodes.sweep_disabled");
+    expect(disabled, "a monitor that stops monitoring must say so").toBeDefined();
+    expect(disabled?.level).toBe("warn");
+  });
+
+  it("treats a whitespace-only value as unset rather than sweeping an empty url", async () => {
+    const logger = recordingLogger();
+    expect(await runNodeSweep("  , ,  ", 56, logger)).toBeNull();
+    expect(logger.calls.some((c) => c.event === "ops_agent.nodes.sweep_disabled")).toBe(true);
   });
 });

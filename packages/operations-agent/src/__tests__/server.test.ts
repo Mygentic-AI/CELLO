@@ -207,7 +207,21 @@ describe("buildHealthReport", () => {
       telegramConnected: true,
     });
     expect(report.healthy).toBe(false);
-    expect(report.checks.database).toBe("failed");
+    // The bare word "failed" covered a bad password, a moved address, a down connector, the wrong
+    // database and a missing table — six subsystems, one string. It now carries the cause, and says
+    // so explicitly when the cause was not captured rather than pretending there was none.
+    expect(report.checks.database).toBe("failed (cause not captured)");
+  });
+
+  it("names the SQLSTATE behind a failed connection when one was captured", () => {
+    const report = buildHealthReport({
+      dbConnected: false,
+      migrationVersion: null,
+      expectedMigrationVersion: 26,
+      telegramConnected: true,
+      databaseError: '28P01: password authentication failed for user "postgres"',
+    });
+    expect(report.checks.database).toContain("28P01");
   });
 
   it("returns unhealthy when migration version does not match", () => {

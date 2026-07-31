@@ -22,10 +22,16 @@ import { TelegramAdapter } from "../telegram-adapter.js";
 
 const silent = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 
-function adapterWith(responses: Array<{ status: number; body?: unknown }>, opts: { onFatal: () => void }) {
+function adapterWith(
+  responses: Array<{ status: number; body?: unknown }>,
+  opts: { onFatal: () => void; cycle?: boolean },
+) {
   let i = 0;
   const fetchFn = vi.fn(async () => {
-    const r = responses[Math.min(i++, responses.length - 1)]!;
+    // Default CLAMPS to the last entry (a sequence that settles). `cycle` repeats the whole list,
+    // which is what models two pollers trading the slot indefinitely.
+    const idx = opts.cycle ? i++ % responses.length : Math.min(i++, responses.length - 1);
+    const r = responses[idx]!;
     return {
       ok: r.status >= 200 && r.status < 300,
       status: r.status,
@@ -75,20 +81,46 @@ describe("a Telegram poll conflict during a rollout", () => {
     expect(onFatal, "a conflict that outlives the grace window is a second deployment").toHaveBeenCalled();
   });
 
-  it("resets the grace window once a poll succeeds", async () => {
-    // Otherwise conflicts accumulated across unrelated rollouts over the process's whole lifetime
-    // would eventually trip the fatal path during a perfectly ordinary deploy.
+  it("a SUSTAINED alternating conflict is still fatal — a second poller does not conflict continuously", async () => {
+    // THE ONE THAT MATTERS, and the one the first version of this fix got wrong.
+    //
+    // A real second poller does not produce uninterrupted 409s. Telegram terminates the pending
+    // request when a new one arrives, so two instances trade the slot: whenever one is busy handling
+    // an update, the other's long poll completes with 200. An implementation that zeroes the window
+    // on any single success therefore never fires, and two ops agents run against each other forever
+    // with updates going to whoever won each race. The earlier test asserted that behaviour as if it
+    // were the requirement; this asserts the opposite.
+    const onFatal = vi.fn();
+    const { adapter } = adapterWith([{ status: 409 }, { status: 200, body: { ok: true, result: [] } }], {
+      onFatal,
+      cycle: true, // 409, 200, 409, 200, … — the shape a real second poller produces
+    });
+
+    const deadline = Date.now() + 3_000;
+    while (!onFatal.mock.calls.length && Date.now() < deadline) {
+      await adapter.pollOnce(); // alternates 409, 200, 409, 200, …
+    }
+
+    expect(onFatal, "alternating conflicts must still reach the fatal path").toHaveBeenCalled();
+  });
+
+  it("a conflict run ENDS once conflicts genuinely stop", async () => {
+    // The other half: after a real rollout the old instance is gone and every poll succeeds, so the
+    // run must clear. Without this the process would eventually exit over a conflict that ended
+    // minutes earlier.
     const onFatal = vi.fn();
     const { adapter } = adapterWith(
-      [{ status: 409 }, { status: 200, body: { ok: true, result: [] } }, { status: 409 }],
+      [{ status: 409 }, { status: 200, body: { ok: true, result: [] } }],
       { onFatal },
     );
 
-    await adapter.pollOnce();
-    await adapter.pollOnce();
-    await new Promise((r) => setTimeout(r, 250)); // longer than the grace window
+    await adapter.pollOnce();                                   // conflict run starts
+    await new Promise((r) => setTimeout(r, 250));               // quiet for longer than the window
+    await adapter.pollOnce();                                   // a success after real quiet → clears
+    await new Promise((r) => setTimeout(r, 250));
     await adapter.pollOnce();
 
-    expect(onFatal, "the success in between must clear the earlier conflict").not.toHaveBeenCalled();
+    expect(onFatal, "a run that genuinely ended must not resurface").not.toHaveBeenCalled();
   });
+
 });

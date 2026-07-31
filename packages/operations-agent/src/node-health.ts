@@ -18,6 +18,8 @@ export interface NodeHealth {
   nodeId: string | null;
   reachable: boolean;
   schemaVersion: number | null;
+  /** Why it is not reachable, in the node's own terms. Null when it answered. */
+  reason?: string | null;
 }
 
 export interface NodeHealthOptions {
@@ -37,19 +39,22 @@ export async function checkNodeHealth(urls: readonly string[], opts: NodeHealthO
 
   return Promise.all(
     urls.map(async (url): Promise<NodeHealth> => {
-      const unknown: NodeHealth = { url, nodeId: null, reachable: false, schemaVersion: null };
+      const fail = (reason: string): NodeHealth => ({ url, nodeId: null, reachable: false, schemaVersion: null, reason });
+      const controller = new AbortController();
+      // The timer must outlive the HEADERS. Clearing it once fetch resolves leaves the body
+      // unbounded — undici's default bodyTimeout is 300s — so a node that answers headers and then
+      // stalls would hold this sweep far past its budget. That matters more than it sounds: the
+      // sweep is awaited during startup, so one half-responsive directory could keep the health port
+      // from ever opening and get the whole ops agent killed and restarted. A sick directory must
+      // never take down the registration path.
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        let res: Response;
-        try {
-          res = await fetchFn(`${url.replace(/\/$/, "")}/health`, { signal: controller.signal });
-        } finally {
-          clearTimeout(timer);
-        }
+        const res = await fetchFn(`${url.replace(/\/$/, "")}/health`, { signal: controller.signal });
         // A non-2xx body is not to be trusted: a degraded node may still serialise a schemaVersion,
-        // and reading it would report a version the node itself is not standing behind.
-        if (!res.ok) return unknown;
+        // and reading it would report a version the node itself is not standing behind. But it IS
+        // alive and answering — a distinct condition from unreachable, and it sends an operator to a
+        // different place.
+        if (!res.ok) return fail(`HTTP ${res.status}`);
 
         const body = (await res.json()) as { nodeId?: unknown; schemaVersion?: unknown };
         // Integer or nothing. A string "56" or a NaN must not become a version that compares equal
@@ -62,9 +67,19 @@ export async function checkNodeHealth(urls: readonly string[], opts: NodeHealthO
           nodeId: typeof body.nodeId === "string" ? body.nodeId : null,
           reachable: true,
           schemaVersion: v,
+          reason: null,
         };
-      } catch {
-        return unknown;
+      } catch (err) {
+        // Name the cause. "unreachable" alone covers connection refused, DNS failure, the abort, and
+        // a malformed body from a LIVE node — and an operator reading it goes to check the VM and the
+        // firewall, which is the wrong subsystem for the last two.
+        const e = err as { name?: string; code?: string; message?: string };
+        const reason = e?.name === "AbortError"
+          ? `timeout after ${timeoutMs}ms`
+          : (e?.code ?? e?.message ?? "unknown error");
+        return fail(String(reason));
+      } finally {
+        clearTimeout(timer);
       }
     }),
   );
@@ -102,7 +117,41 @@ export function summariseNodeHealth(
     );
   }
   if (unreachable.length > 0) {
-    parts.push(`unreachable: ${unreachable.map((n) => n.nodeId ?? n.url).join(", ")}`);
+    parts.push(
+      `unreachable: ${unreachable.map((n) => `${n.nodeId ?? n.url}${n.reason ? ` (${n.reason})` : ""}`).join(", ")}`,
+    );
   }
   return { healthy: false, detail: parts.join("; ") };
+}
+
+/**
+ * Run one sweep and report it. Extracted and exported so the WIRING is testable — the previous
+ * version lived inline in `main()`, which meant deleting it entirely broke no test.
+ *
+ * Returns the summary, or null when no nodes are configured. An empty configuration is LOGGED rather
+ * than passed through: `summariseNodeHealth([])` deliberately reports unhealthy for exactly that
+ * case, but the caller used to skip the call altogether when the variable was unset, so a typo'd
+ * terraform variable produced total silence and the guard written for it was unreachable.
+ */
+export async function runNodeSweep(
+  urlsRaw: string | undefined,
+  expectedVersion: number,
+  logger: { info: (e: string, c?: Record<string, unknown>) => void; warn: (e: string, c?: Record<string, unknown>) => void },
+  opts: NodeHealthOptions = {},
+): Promise<{ healthy: boolean; detail: string } | null> {
+  const urls = (urlsRaw ?? "").split(",").map((u) => u.trim()).filter(Boolean);
+  if (urls.length === 0) {
+    logger.warn("ops_agent.nodes.sweep_disabled", {
+      component: "health-check",
+      detail: "DIRECTORY_HEALTH_URLS is empty — per-node schema drift is NOT being monitored",
+    });
+    return null;
+  }
+
+  const summary = summariseNodeHealth(await checkNodeHealth(urls, opts), expectedVersion);
+  // warn, not error: a degraded consortium never stops this agent (see buildHealthReport), so an
+  // error level here would be an alarm nobody can act on by restarting.
+  if (summary.healthy) logger.info("ops_agent.nodes.ok", { detail: summary.detail, component: "health-check" });
+  else logger.warn("ops_agent.nodes.degraded", { detail: summary.detail, component: "health-check" });
+  return summary;
 }

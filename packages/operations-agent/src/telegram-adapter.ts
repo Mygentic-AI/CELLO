@@ -211,8 +211,10 @@ export class TelegramAdapter implements MessagingChannel {
   /** Whether the background polling loop is running. */
   #pollingActive: boolean = false;
 
-  /** When the current run of conflicts began. Null whenever the last poll was not conflicted. */
+  /** When the current run of conflicts began. Null only after a sustained conflict-FREE window. */
   #conflictSince: number | null = null;
+  /** When the most recent 409 arrived — what decides whether a run has genuinely ended. */
+  #lastConflictAt: number = 0;
   readonly #onFatalConflict: () => void;
   readonly #conflictGraceMs: number;
   readonly #conflictRetryMs: number;
@@ -525,6 +527,7 @@ export class TelegramAdapter implements MessagingChannel {
       // misconfiguration the original exit existed to catch.
       const now = Date.now();
       this.#conflictSince ??= now;
+      this.#lastConflictAt = now;
       const heldFor = now - this.#conflictSince;
 
       if (heldFor >= this.#conflictGraceMs) {
@@ -542,11 +545,6 @@ export class TelegramAdapter implements MessagingChannel {
       await new Promise<void>((r) => setTimeout(r, this.#conflictRetryMs));
       return [];
     }
-    // Any non-conflicted answer means we hold the poll: the window starts fresh. Without this,
-    // conflicts accumulated across unrelated rollouts over the process's lifetime would eventually
-    // trip the fatal path during a perfectly ordinary deploy.
-    this.#conflictSince = null;
-
     if (!response.ok) {
       const body = await response.json() as TelegramGetUpdatesResult & { error_code?: number; description?: string };
       const errorCode = (body as { error_code?: number }).error_code !== undefined
@@ -560,6 +558,20 @@ export class TelegramAdapter implements MessagingChannel {
         correlationId,
       });
       throw new Error(`Telegram getUpdates failed: ${description}`);
+    }
+
+    // A SUCCESSFUL poll ends the conflict run only once conflicts have genuinely stopped — not on
+    // the first 200 that happens to land between two 409s.
+    //
+    // The distinction matters because a real second poller does not produce uninterrupted conflicts.
+    // Telegram terminates the pending request when a new one arrives, so two instances trade the
+    // slot: whenever one is busy handling an update (a DB write, an OTP email, a sendMessage — and
+    // precisely when the bot is in use), the other's long poll completes normally. Zeroing the window
+    // on any single success therefore lets two agents run against each other forever without the
+    // fatal path ever firing, which is exactly what the guard exists to stop. The first version of
+    // this fix did that, and a test asserted it as if it were the requirement.
+    if (this.#conflictSince !== null && Date.now() - this.#lastConflictAt >= this.#conflictGraceMs) {
+      this.#conflictSince = null;
     }
 
     const body = await response.json() as TelegramGetUpdatesResult;

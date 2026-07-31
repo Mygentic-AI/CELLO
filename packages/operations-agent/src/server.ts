@@ -66,7 +66,7 @@ import type {
 } from "@cello-protocol/interfaces";
 import { TelegramAdapter } from "./telegram-adapter.js";
 import { SesOtpDeliveryProvider } from "./ses/ses-otp-delivery-provider.js";
-import { checkNodeHealth, summariseNodeHealth } from "./node-health.js";
+import { runNodeSweep } from "./node-health.js";
 import { DirectoryPreAuthorizationClient } from "./directory-pre-auth-client.js";
 import { LambdaWaitlistGateClient } from "./waitlist-gate-client.js";
 import { RegistrationEngine } from "./registration/engine.js";
@@ -116,6 +116,8 @@ export type HealthCheckInput = {
   migrationVersion: number | null;
   expectedMigrationVersion: number;
   telegramConnected: boolean;
+  /** The SQLSTATE/message behind a failed connection, so the refusal names its cause. */
+  databaseError?: string | null;
   /** Per-node sweep (M12). Optional so the AWS deployment, which has one node, is unaffected. */
   nodeHealth?: { healthy: boolean; detail: string };
 };
@@ -285,7 +287,7 @@ export function resolveAdapters(config: AdapterConfig): ResolvedAdapters {
 export function buildHealthReport(input: HealthCheckInput): HealthReport {
   const { dbConnected, migrationVersion, expectedMigrationVersion, telegramConnected } = input;
 
-  const databaseCheck = dbConnected ? "ok" : "failed";
+  const databaseCheck = dbConnected ? "ok" : `failed (${input.databaseError ?? "cause not captured"})`;
 
   let migrationsCheck: string;
   if (!dbConnected) {
@@ -331,6 +333,7 @@ export function buildHealthReport(input: HealthCheckInput): HealthReport {
 async function checkDatabase(pool: pg.Pool): Promise<{
   connected: boolean;
   migrationVersion: number | null;
+  error: string | null;
 }> {
   try {
     const result = await pool.query<{ version: number }>(
@@ -338,9 +341,16 @@ async function checkDatabase(pool: pg.Pool): Promise<{
     );
     const raw = result.rows[0]?.version ?? null;
     const version = raw !== null ? Number(raw) : null;
-    return { connected: true, migrationVersion: version };
-  } catch {
-    return { connected: false, migrationVersion: null };
+    return { connected: true, migrationVersion: version, error: null };
+  } catch (err) {
+    // The cause is CARRIED, not discarded. `database: "failed"` covered a bad password, a moved PSC
+    // address, a down VPC connector, the wrong database name, an SSL negotiation failure and a
+    // missing flyway_schema_history — all identical to the operator, who then has six subsystems to
+    // check. Postgres already handed us the answer as a SQLSTATE; throwing it away here is the same
+    // defect that made the startup refusal name the wrong variable.
+    const e = err as { code?: string; message?: string };
+    const detail = [e?.code, e?.message].filter(Boolean).join(": ") || "unknown error";
+    return { connected: false, migrationVersion: null, error: detail };
   }
 }
 
@@ -427,7 +437,7 @@ async function main(): Promise<void> {
   });
 
   // ── Health checks ─────────────────────────────────────────────────────────
-  const { connected: dbConnected, migrationVersion } = await checkDatabase(pool);
+  const { connected: dbConnected, migrationVersion, error: databaseError } = await checkDatabase(pool);
 
   // The composition root guarantees env !== "local" always wires TelegramAdapter.
   // No instanceof guard needed — we rely on the composition root invariant.
@@ -442,28 +452,12 @@ async function main(): Promise<void> {
   // The per-node sweep (M12). Each sovereign directory runs its own Flyway, so schema correctness is
   // a per-node fact; reading each node's /health avoids holding admin credentials for every node's
   // database, which would be a standing cross-node privilege in a system built to have none.
-  const nodeHealthUrls = (process.env["DIRECTORY_HEALTH_URLS"] ?? "")
-    .split(",")
-    .map((u) => u.trim())
-    .filter(Boolean);
-  let nodeHealth: { healthy: boolean; detail: string } | undefined;
-  if (nodeHealthUrls.length > 0) {
-    nodeHealth = summariseNodeHealth(await checkNodeHealth(nodeHealthUrls), EXPECTED_MIGRATION_VERSION);
-    // warn, not error: this never stops the agent (see buildHealthReport), so an error level here
-    // would be an alarm nobody can act on by restarting.
-    if (!nodeHealth.healthy) {
-      logger.warn("ops_agent.nodes.degraded", { detail: nodeHealth.detail, component: "health-check" });
-    } else {
-      logger.info("ops_agent.nodes.ok", { detail: nodeHealth.detail, component: "health-check" });
-    }
-  }
-
   const healthReport = buildHealthReport({
     dbConnected,
     migrationVersion,
     expectedMigrationVersion: EXPECTED_MIGRATION_VERSION,
     telegramConnected,
-    ...(nodeHealth ? { nodeHealth } : {}),
+    databaseError,
   });
 
   if (!healthReport.healthy) {
@@ -510,19 +504,53 @@ async function main(): Promise<void> {
 
   // ── HTTP health endpoint on port 8080 ──────────────────────────────────────
   // ECS health check polls GET /health; also used by staging smoke test (AC-007).
+  /** Latest per-node sweep, served from /health. Null until the first sweep completes. */
+  let latestNodeHealth: { healthy: boolean; detail: string } | null = null;
+
   const healthServer = createServer((_req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", migrationVersion }));
+    // The latest sweep travels with the health body. Without this `checks.nodes` had no consumer at
+    // all: it could never make `healthy` false, so it never reached the refusal string either, and
+    // its only reader was a test.
+    res.end(JSON.stringify({
+      status: "ok",
+      migrationVersion,
+      ...(latestNodeHealth ? { nodes: latestNodeHealth } : {}),
+    }));
   });
 
   healthServer.listen(8080, () => {
     logger.info("ops_agent.health_server.started", { port: 8080 });
   });
 
+  // ── Per-node sweep: AFTER the port is open, and on a repeat ────────────────
+  //
+  // After, because the sweep talks to three directories over the network and this is the only thing
+  // that issues registration capabilities to a human. Awaiting it before `listen` meant one
+  // half-responsive directory could keep the port closed past the startup probe, and the platform
+  // would kill and restart the instance — a sick directory taking down the registration path, which
+  // is precisely the failure this design claims to avoid.
+  //
+  // Repeated, because the first version ran once at boot. Directory deploys and ops-agent deploys are
+  // independent, so drift that appears after this process started is the NORMAL case — and running
+  // only at startup meant the drift this feature exists to catch was still invisible.
+  const NODE_SWEEP_INTERVAL_MS = 5 * 60_000;
+  const sweep = async (): Promise<void> => {
+    latestNodeHealth = await runNodeSweep(process.env["DIRECTORY_HEALTH_URLS"], EXPECTED_MIGRATION_VERSION, logger);
+  };
+  await sweep();
+  const sweepTimer = setInterval(() => { void sweep(); }, NODE_SWEEP_INTERVAL_MS);
+  // unref so a pending timer never holds the process open during shutdown.
+  sweepTimer.unref();
+
   // ── Graceful shutdown ──────────────────────────────────────────────────────
   const shutdown = async () => {
     logger.info("ops_agent.shutting_down", {});
+    clearInterval(sweepTimer);
     engine.stop();
+    // Release the Telegram long poll so the NEXT instance does not have to wait out a conflict —
+    // the overlap this shortens is the one that used to crash-loop every rollout.
+    void (adapters.channel as { stop?: () => unknown }).stop?.();
     healthServer.close();
     await pool.end();
     process.exit(0);
