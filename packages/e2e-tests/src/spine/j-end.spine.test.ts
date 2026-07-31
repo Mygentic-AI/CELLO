@@ -165,7 +165,7 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     expect(linkage.replace(/\s/g, ""), "Bob and Alice must be DISTINCT operators for this hop").toContain("2");
 
     const statement = "Alice led the payments migration and shipped it with no incident.";
-    const res = (await conn.call("cello_trust_signals_issue", {
+    const res = (await conn.call("cello_attestations_issue", {
       subject_pubkey: pubkeys["alice"],
       body: statement,
     })) as { ok?: boolean; reason?: string; guidance?: string; submission_id?: string };
@@ -276,7 +276,7 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     // the NORMAL case, and the delivery is asynchronous by design.
     let pending: Array<Record<string, unknown>> = [];
     for (let i = 0; i < 40; i++) {
-      const res = (await conn.call("cello_consent_list", {})) as { ok?: boolean; pending?: Array<Record<string, unknown>> };
+      const res = (await conn.call("cello_attestation_consent_list", {})) as { ok?: boolean; pending?: Array<Record<string, unknown>> };
       pending = res.pending ?? [];
       if (pending.length > 0) break;
       await new Promise((r) => setTimeout(r, 500));
@@ -300,18 +300,18 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
 
   it("HOP 4: Alice ACCEPTS, and only then is it presentable", async () => {
     const conn = mcpConns[mcpConns.length - 1];
-    const listed = (await conn.call("cello_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
+    const listed = (await conn.call("cello_attestation_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
     const hash = listed.pending?.[0]?.signal_hash;
     expect(hash, "still pending before the decision").toBeTruthy();
 
-    const accepted = (await conn.call("cello_consent_accept", { hash_prefix: hash!.slice(0, 16) })) as {
+    const accepted = (await conn.call("cello_attestation_consent_accept", { hash_prefix: hash!.slice(0, 16) })) as {
       ok?: boolean; consent_state?: string; reason?: string; guidance?: string;
     };
     expect(accepted.ok, `accept refused: ${accepted.reason} — ${accepted.guidance}`).toBe(true);
     expect(accepted.consent_state).toBe("accepted");
 
     // The queue is empty and the signal is presentable — the two halves of the same decision.
-    const after = (await conn.call("cello_consent_list", {})) as { pending?: unknown[] };
+    const after = (await conn.call("cello_attestation_consent_list", {})) as { pending?: unknown[] };
     expect(after.pending, "nothing left awaiting a decision").toHaveLength(0);
 
     const held = (await conn.call("cello_trust_signals_list", {})) as { signals?: Array<{ consent_state?: string }> };
@@ -415,7 +415,7 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
 
     // ── Bob issues a SECOND endorsement, one Alice will not stand behind ──
     const wrong = "Alice single-handedly rewrote the billing system over a weekend.";
-    const issued = (await bob.call("cello_trust_signals_issue", {
+    const issued = (await bob.call("cello_attestations_issue", {
       subject_pubkey: pubkeys["alice"], body: wrong,
     })) as { ok?: boolean; reason?: string; guidance?: string };
     expect(issued.ok, `issue refused: ${issued.reason} — ${issued.guidance}`).toBe(true);
@@ -447,14 +447,14 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
 
     let pending: Array<{ signal_hash: string }> = [];
     for (let i = 0; i < 40; i++) {
-      const res = (await alice2.call("cello_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
+      const res = (await alice2.call("cello_attestation_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
       pending = res.pending ?? [];
       if (pending.length > 0) break;
       await new Promise((r) => setTimeout(r, 500));
     }
     expect(pending.length, "the second endorsement is awaiting her decision").toBe(1);
 
-    const refused = (await alice2.call("cello_consent_refuse", {
+    const refused = (await alice2.call("cello_attestation_consent_refuse", {
       hash_prefix: pending[0].signal_hash.slice(0, 16),
       message: "I reviewed that migration, I did not write it. Happy to be endorsed for the review.",
     })) as { ok?: boolean; consent_state?: string; message_queued?: boolean; message_error?: string };
@@ -469,7 +469,7 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     // a `consent_refuse` that was a total no-op would leave the endorsement PENDING — equally
     // unpresentable — and the "exactly one" count below would still be green. The count
     // distinguishes accepted-from-not, never refused-from-pending.
-    const afterRefusal = (await alice2.call("cello_consent_list", {})) as { pending?: unknown[] };
+    const afterRefusal = (await alice2.call("cello_attestation_consent_list", {})) as { pending?: unknown[] };
     expect(afterRefusal.pending, "no decision is left outstanding").toHaveLength(0);
     const heldNow = (await alice2.call("cello_trust_signals_list", {})) as { signals?: Array<{ consent_state?: string }> };
     expect(
@@ -487,7 +487,18 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
       signer: getSubmissionSigner("local"),
       directoryBaseUrl: cluster.internalApiUrls[0],
     });
-    expect(refusePass.unhandledOps, "the queued row is a `refuse` op, recognised and left queued").toBe(1);
+    // THE HANDLER EXISTS NOW. This asserted `unhandledOps === 1` — "recognised and left queued" —
+    // which was correct while the refuse handler was unbuilt. It shipped (`handleRefuse`), so the
+    // drain now CONSUMES the refusal and records its outcome, and the old assertion failed for the
+    // one reason a test should never fail: the feature was finished.
+    expect(refusePass.unhandledOps, "the refuse op is HANDLED, not left sitting").toBe(0);
+    // The outcome must actually be written back, sealed to the issuer — a handler that swallowed the
+    // refusal would also produce unhandledOps === 0, so the row is what makes this assertion mean
+    // anything.
+    expect(
+      psqlSpine(`SELECT count(*) FROM submission_results`).replace(/\s/g, ""),
+      "the refusal outcome is recorded for the issuer to collect",
+    ).not.toBe("0");
     expect(refusePass.minted, "a refusal must never mint anything").toBe(0);
 
     // ── AND CHARLIE NEVER SEES IT. The refused endorsement is unpresentable by every path. ──
@@ -514,7 +525,7 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     // Alice's daemon goes DOWN before Bob submits anything.
     await daemons[1].stop();
 
-    const issued = (await bob.call("cello_trust_signals_issue", {
+    const issued = (await bob.call("cello_attestations_issue", {
       subject_pubkey: pubkeys["alice"],
       body: "Alice reviewed the auth rewrite and caught two race conditions.",
     })) as { ok?: boolean; reason?: string; guidance?: string };
@@ -563,10 +574,10 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     expect(String(nudge.pending_consent_guidance), "and told what to run about it").toMatch(/consent/i);
 
     // NOTHING WAS LOST: the endorsement is there, awaiting her decision.
-    const listed = (await alice3.call("cello_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
+    const listed = (await alice3.call("cello_attestation_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
     expect(listed.pending, "the endorsement survived her absence").toHaveLength(1);
 
-    // AND THE NOTIFICATION DOES NOT REPEAT once seen. `cello_consent_list` above stamped
+    // AND THE NOTIFICATION DOES NOT REPEAT once seen. `cello_attestation_consent_list` above stamped
     // `consent_notified_at`, so a fresh selection must now carry no nudge.
     //
     // A FRESH CONNECTION IS REQUIRED, and the previous version of this got it wrong: re-selecting
@@ -582,7 +593,7 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
 
     // But the DECISION persists — two different lifetimes (M10B-D5). One flag would either nag
     // forever or silently dismiss a pending decision, and only asserting both halves catches either.
-    const afterSeen = (await alice4.call("cello_consent_list", {})) as { pending?: unknown[] };
+    const afterSeen = (await alice4.call("cello_attestation_consent_list", {})) as { pending?: unknown[] };
     expect(afterSeen.pending, "the decision survives the notice being seen").toHaveLength(1);
   }, 180_000);
 
@@ -592,7 +603,12 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     // on the client with certainty — and refusing there gives a real answer now instead of a silent
     // rejection at intake minutes later.
     const bob = mcpConns[0];
-    const self = (await bob.call("cello_trust_signals_issue", {
+    // COUNT BEFORE. This used to assert an absolute `"1"` ("only the earlier refusal message"), which
+    // silently depended on HOP 6 leaving its row behind. The moment the refuse handler shipped and
+    // consumed that row, this failed — while the property it guards was never in question. The
+    // clause is "the self-endorsement adds nothing to the queue", so measure exactly that.
+    const queuedBefore = psqlSpine(`SELECT count(*) FROM submission_queue`).replace(/\s/g, "");
+    const self = (await bob.call("cello_attestations_issue", {
       subject_pubkey: pubkeys["bob"],
       body: "Bob is exceptionally reliable and should be trusted with anything.",
     })) as { ok?: boolean; reason?: string; guidance?: string };
@@ -606,7 +622,7 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     // AND NOTHING WAS QUEUED. A refusal that still wrote to the queue would leave the portal to
     // reject it later, which is the silent-rejection path this guard exists to avoid.
     const queued = psqlSpine(`SELECT count(*) FROM submission_queue`).replace(/\s/g, "");
-    expect(queued, "a refused self-endorsement must not reach the queue").toBe("1"); // only the earlier refusal message
+    expect(queued, "a refused self-endorsement must not reach the queue").toBe(queuedBefore);
 
     // THE CROSS-AGENT CASE IS THE ONE THAT MATTERS FOR FARMING, and it needs a second agent on
     // BOB'S OWN daemon — Charlie runs on a separate daemon here, so he is a genuinely different
@@ -623,7 +639,7 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     const second = bobAgents.agents.find((a) => a.name === "bob-second");
     expect(second?.pubkey, "the second agent has a key").toBeTruthy();
 
-    const crossLocal = (await bob.call("cello_trust_signals_issue", {
+    const crossLocal = (await bob.call("cello_attestations_issue", {
       subject_pubkey: second!.pubkey,
       body: "My other agent is extremely trustworthy.",
     })) as { ok?: boolean; reason?: string; guidance?: string };
@@ -657,7 +673,7 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     expect(((await charlie.call("cello_use_agent", { name: "charlie" })) as { ok?: boolean }).ok).toBe(true);
 
     const coOwnedText = "Alice and I run the same fleet; her agent has never dropped a session.";
-    const issued = (await charlie.call("cello_trust_signals_issue", {
+    const issued = (await charlie.call("cello_attestations_issue", {
       subject_pubkey: pubkeys["alice"],
       body: coOwnedText,
     })) as { ok?: boolean; reason?: string; guidance?: string; submission_id?: string };
@@ -717,12 +733,12 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     // hop then failed on the statement text, which reads as a payload bug rather than a test selecting
     // the wrong row. `coRow` is already identified by the flag, so its hash is the precise selector.
     const coHash = coRow!.signal_hash;
-    const pending = (await alice.call("cello_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
+    const pending = (await alice.call("cello_attestation_consent_list", {})) as { pending?: Array<{ signal_hash: string }> };
     expect(
       (pending.pending ?? []).some((p) => p.signal_hash === coHash),
       `the co-owned endorsement must be awaiting her decision: ${JSON.stringify(pending)}`,
     ).toBe(true);
-    const accepted = (await alice.call("cello_consent_accept", { hash_prefix: coHash!.slice(0, 16) })) as {
+    const accepted = (await alice.call("cello_attestation_consent_accept", { hash_prefix: coHash!.slice(0, 16) })) as {
       ok?: boolean; reason?: string; guidance?: string;
     };
     expect(accepted.ok, `accept refused: ${accepted.reason} — ${accepted.guidance}`).toBe(true);
