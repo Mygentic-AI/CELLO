@@ -53,9 +53,11 @@ changes another item, say so there — that is what this file is for.
 |---|---|---|---|
 | A | — | — | ✅ done (see §4) |
 | B | — | — | ✅ done (see §4) |
-| C | *unclaimed* | | |
-| D | *unclaimed* | | |
+| C | another agent | 2026-07-31 | 🔄 in progress (waitlist port) |
+| D | *unclaimed* | | blocked on C phase 3 |
 | E | *unclaimed* | | |
+| F | — | — | ✅ done (see §4) |
+| G | *unclaimed* | | found by F |
 
 ---
 
@@ -120,6 +122,40 @@ Phases, in dependency order:
 
 **Keep SES.** Google has no email-sending service; the GCP ops-agent already calls SES with static
 credentials and that pattern is proven.
+
+### ✅ F — GCP standalone, with AWS genuinely hibernated
+**Done 2026-07-31, after the hibernate.** Every previous "GCP standalone" proof ran with AWS still
+up, so the claim had never actually been tested. AWS confirmed unreachable first
+(`directory-us1|eu1|ap1` all dead), then, on the **published** client (`cli@0.0.108` /
+`daemon@0.0.105` — what an operator installs):
+
+two agents created and registered by DKG on GCP → both online, signaling connected → session over
+the GCP relay → messages BOTH directions (`delivered: true`) → **sealed**, root
+`131da59649534b…`, `attestation_mode: live` for both participants.
+
+The standalone claim is now real rather than inferred.
+
+### ❌ G — Registration does not fail over; signaling does  *(found by F)*
+
+**A real redundancy gap, and it is the invariant's own words.** During F, `gcp-use1` was momentarily
+unreachable from the test machine. The daemon handled it correctly for signaling — the log shows
+`directory.bootstrap.unavailable (connect_error)` → `directory.bootstrap.failover` →
+`directory.auth.challenge.verified` → `directory.signaling.connected`, i.e. it routed around the node
+and authenticated against another.
+
+**`register-agent` did not.** It returned `directory_unreachable` with guidance to "check
+CELLO_DIRECTORY_URL and network connectivity" — pointing the operator at their own network for a
+consortium that had two healthy nodes. A retry minutes later succeeded unchanged, confirming it was
+transient and that nothing about the request was wrong.
+
+Two things to fix:
+1. **The registration path should use the same failover the signaling path already has.** "Silently
+   fails when a node is down rather than routing around it" is the exact wording of the sovereign-node
+   redundancy invariant.
+2. **`start-agent` reports `online` when registration failed.** Agent B showed `state: online`,
+   `standing_receiver_ready: true` while having **no profile in any directory** — the same condition
+   as Andre's five agents (item E). Local state claiming a thing the directory does not back is how
+   this whole class of fault stays invisible.
 
 ### ❌ D — Repoint the corp site's `/api/waitlist`
 The only Lightsail touchpoint. Lightsail itself stays and needs nothing else. Blocked on C phase 3.
