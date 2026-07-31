@@ -11,6 +11,8 @@ locals {
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
     "sqladmin.googleapis.com",
+    # Cloud Run — the portal (DOD-MOVE-PORTAL-1). Stateless request/response, scale-to-zero.
+    "run.googleapis.com",
     "secretmanager.googleapis.com",
     # Envelope keys for share material at rest (DOD-ADAPTER-GCP-1 → KmsEnvelopeKeyProvider).
     "cloudkms.googleapis.com",

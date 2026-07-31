@@ -76,3 +76,15 @@ variable "preauth_issuer_pubkey" {
   type        = string
   default     = ""
 }
+
+# ── DOD-MOVE-PORTAL-1 ────────────────────────────────────────────────────────────────────────
+variable "portal_image_tag" {
+  type        = string
+  description = "Immutable tag of the portal image in Artifact Registry. Never 'latest' — the registry enforces immutable tags, and a floating tag makes 'which code is live' unanswerable."
+}
+
+variable "portal_db_tier" {
+  type        = string
+  default     = "db-g1-small"
+  description = "Cloud SQL tier for the portal database. Smaller than a node's: it carries account/session rows, not FROST shares or an anti-entropy working set."
+}
