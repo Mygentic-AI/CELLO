@@ -2037,6 +2037,40 @@ own story) deliberately, never smuggled in as a rider. Source:
   co-attendance (M8D), and the `sequence_behind_tree` branch itself — it is the symptom's alarm, not
   the defect. Leave it logging.
 
+  **Implementation status (2026-07-31, cello-client `fix/dod-firstmsg-witness-1`, `d8d34de` +
+  `4197ef0`).** ACs 1-6 implemented, gate green (2344 tests, lint, typecheck, build).
+  **ACs 7 and 8 are still OWED** — see the blocker below.
+
+  > **Which change actually fixes this — corrected after review.** The **assignment carry (AC4) is
+  > the fix**; the retry is a safety net, and it is worth being precise about that rather than
+  > crediting the retry. Because `#doSubmitOnce` presents the record inline and awaits its ack, a
+  > `session_not_found` on the *first* attempt can now only mean (a) there is no assignment to
+  > present, (b) the assignment was terminally rejected, or (c) the relay lost a session we had
+  > recorded. Once the responder carries its own assignment, (a) stops happening — which is the
+  > entire live population.
+
+  **Two defects the review caught in the first implementation, both now fixed:**
+
+  1. **The retry resurrected sealed sessions.** The relay DESTROYS a session on seal
+     (`confirmSeal`) and on idle sweep, and `relay-store.ts` keeps no tombstone — `recordSession`
+     re-creates any absent key fresh (`seq_counter: 0`, empty `leaf_log`, status `active`). So a
+     post-seal send answers `session_not_found`, **byte-identical at the wire to the first-message
+     race** — and the 2 post-seal rows in the evidence table above are exactly that shape.
+     Re-presenting the still-valid assignment there recreated the sealed session as a ghost.
+     Now discriminated on OUR state (`recordedBefore`, snapshotted before the first attempt), never
+     on the relay's reason string; a recorded-then-missing session returns `relay_session_gone`.
+  2. **AC3 was not actually implemented** in the first pass — `#doRecord`'s return value was still
+     discarded at the exact line this DoD's trace names as the gap. Now used: `session_not_recorded`
+     (retryable) and `relay_assignment_rejected` (terminal).
+
+  **⚠ AC7/AC8 blocked by unrelated pre-existing rot — not by this fix.** The live proof needs the
+  spine suite, and `j-loopback.spine.test.ts` fails at *agent setup*, before any session: it calls
+  `cello register`, a command that no longer exists (the CLI moved to `create-agent` +
+  `register-agent <name> <token>`). `j-optionb-setup.spine.test.ts` carries the same stale call, so
+  this is suite-wide rot, not one test. Repairing it is its own unit of work. Until then this fix
+  has deterministic unit coverage — including verified revert tests — but **no live same-machine
+  assertion**, and the DoD must not be flipped on unit green alone.
+
 - **DOD-FRONTIER-STRAND-1** ❌ OPEN (raised 2026-07-30) — a leaf appended locally but never recorded
   by the counterparty strands the session as **permanently unsealable**, and nothing detects or
   repairs it.
