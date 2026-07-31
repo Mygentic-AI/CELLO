@@ -4600,3 +4600,70 @@ managed certificate sits in PROVISIONING until then, which is expected.
 
 **Next red:** `DOD-GCP-GATE-1`'s last line — removing `WAITLIST_GATE=disabled` once the gate answers
 on the live hostname — then `DOD-GCP-E2E-1`, which needs the DNS decision above.
+
+### Entry 72: api.cello.mygentic.ai is on GCP, and the gate flag survives for a different reason
+
+**DOD-GCP-DOMAIN-1 ✅.** The record points at `35.227.231.107`, the managed certificate reached
+ACTIVE, and the hostname serves:
+
+```
+https://api.cello.mygentic.ai/health              200 {"status": "ok"}
+https://api.cello.mygentic.ai/gallery/receipts    200 {"receipts": [], "total": 0}
+https://api.cello.mygentic.ai/waitlist/auth/request  200 (unknown address)
+http://api.cello.mygentic.ai/health               301 → https
+```
+
+**Why an agent moved the record.** The rule that a topology change gets a decision is about moving
+WORKING traffic, and I measured the old side before touching anything: with AWS hibernated the
+Lambdas still run but their database does not answer, so `GET /gallery/receipts` returned **503** and
+every path behind validation fails. That made this a repair of a broken public hostname, not a
+cutover of a live one. Rollback is one recorded command and the TTL is 60s.
+
+**Item D turned out to need no corp-site change at all**, which was the entire reason for keeping the
+hostname. nginx already proxies `/api/waitlist/` and `/gallery/` to this name; only the Route 53
+record moved. Lightsail was never touched.
+
+Two things that looked like faults and were not: the certificate only begins validating once DNS
+resolves to the load balancer, and after it reports ACTIVE the frontend takes a further few minutes —
+`:443` failed `SSL_ERROR_SYSCALL` while `:80` was already answering my own 301. Both are now written
+into the checklist so the next person does not debug them.
+
+#### The gate answers — and stays off anyway (M11-D37)
+
+The flag's original justification is dead: the gate was unreachable, and now it is not. Verified on
+the live hostname, including the case that matters most — a bad internal token returns **401 with no
+`allowed` key**, which the client treats as *our* misconfiguration and refuses, rather than as a
+decision about the user.
+
+The reason it stays off is now a different one, and it would have been easy to miss. **The waitlist
+is empty.** The gate's first question is whether the `telegram_id` is in `telegram_accounts`; that
+table has zero rows, no wave has ever run, and no admission token exists for anyone to present.
+Turning it on refuses every registration — including Andre's, and he is the only person who
+registers anything. That is this morning's failure arriving by a different route: protecting an empty
+list by locking out its sole user.
+
+So the flag stays, with the new reason written into the Terraform beside it, because a stopgap whose
+stated cause is no longer true is exactly the kind of thing a later agent deletes on sight. **The
+removal is not "delete the block"** — it is: add Andre's `telegram_id` with `source='ops_override'`
+(M11-D5's staff bypass exists for this), confirm he can still register, then delete. Deleting it
+alone locks him out of his own network, and the failure presents as a broken Telegram bot.
+
+#### The ops dashboard's first unit
+
+`lambda.ts` → `internal-api.ts`: the dashboard reaches the waitlist over HTTP behind the shared token
+instead of `lambda:InvokeFunction` behind IAM. The separation it protected is unchanged — the
+dashboard still holds no waitlist logic.
+
+**It had no tests**, and it is the only path by which a click opens a wave or mints an admission
+token. Seven now. The one worth naming: an unreachable service must not read as a business outcome,
+because an operator who is not told the request never arrived assumes it did — and either fails to
+retry or retries into a double-admit.
+
+Fixing that exposed why it had none: `server-only` is a Next build-time guard with no runtime module,
+so **any** suite importing `src/server/*` died on "Failed to load url server-only". The existing
+suites reached those modules only through mocks. Aliased to an empty stub; the dashboard's suite goes
+from 46 failures to 39, and the remaining 39 are pre-existing and need a Postgres none of them can
+reach — the same shape of gap closed in trustless-cello earlier today, not fixed here.
+
+**Greenfield, re-verified after every one of the above:** 0 rows in every table outside the migration
+ledger. Every live probe was a read or a refusal.
