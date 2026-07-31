@@ -42,10 +42,11 @@ resource "google_secret_manager_secret_version" "waitlist_internal_token" {
   secret_data = random_password.waitlist_internal_token.result
 }
 
-// Per-secret, per-workload. Both the service (to check a presented token) and
-// the scheduler (to present one) need it, and nothing else does.
+// Per-secret, per-workload. Three need it: the service checks a presented token,
+// and the scheduler and the ops-agent each present one — the ops-agent because
+// the Telegram gate is one of the eight handlers on the internal surface.
 resource "google_secret_manager_secret_iam_member" "waitlist_internal_token" {
-  for_each = toset(["waitlist", "waitlist-scheduler"])
+  for_each = toset(["waitlist", "waitlist-scheduler", "ops-agent"])
 
   project   = var.project_id
   secret_id = google_secret_manager_secret.waitlist_internal_token.secret_id
@@ -150,7 +151,7 @@ resource "google_cloud_run_v2_service" "waitlist" {
       // degraded, never lost.
       env {
         name  = "WAITLIST_EMAIL_SERVICE_URL"
-        value = "https://api.cello.mygentic.ai"
+        value = "https://${var.waitlist_hostname}"
       }
 
       env {
