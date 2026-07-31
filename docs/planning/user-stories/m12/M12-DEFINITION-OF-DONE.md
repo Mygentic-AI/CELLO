@@ -404,7 +404,31 @@ description: >
 - **DOD-MOVE-PORTAL-1** [cello-portal, trustless-cello] — portal serves from GCP. **Coupling
   clause:** the portal RDS also carries the M11 waitlist tables, and the waitlist (Lambdas, SES
   hooks) STAYS on AWS — the unit must resolve app-first vs move-both vs defer-DB explicitly
-  against M12-P2 (parked decision) before touching anything. — ❌
+  against M12-P2 (parked decision) before touching anything. — ✅ **2026-07-31.**
+
+  **Coupling clause resolved: APP-FIRST with a NEW GCP database**, decided explicitly and written
+  into `infra/terraform/portal.tf`'s header rather than drifted into. The waitlist tables and their
+  SES-hooked Lambdas stay on AWS; nothing a customer touches depends on them.
+
+  **Live at https://portal.cello.mygentic.ai** — the SAME hostname it had on AWS, and that is
+  load-bearing, not sentiment: the GitHub OAuth callback is registered against it and WEBAUTHN_RP_ID
+  is part of what every passkey is cryptographically bound to, so serving from the run.app URL would
+  have invalidated every enrolled passkey permanently. A Cloud Run domain mapping needs the domain
+  user-verified (a manual console step), so a global external ALB fronts it instead — proof of
+  control is the DNS record, which is already ours. Managed cert ACTIVE, :80 redirects to :443
+  because WebAuthn requires a secure origin.
+
+  **Signs with Cloud KMS Ed25519** (`EC_SIGN_ED25519`), so the revision holds no private key —
+  M10-D6 preserved across the move rather than traded for a seed in an env var. Public half enrolled
+  as `submitter` in all three directories' `authorized_issuers`, verified present on each.
+
+  **Portal→directory proven THROUGH THE APP**, not just at the network layer: `POST
+  /api/internal/ingress/drain` → `{"ok":true, …, "nodeErrors":[]}`, and refuses 401 without the
+  trigger secret. Reaching the directories at all required two fixes found by running it — 8081 was
+  dropped by the COS host firewall while every cloud rule read correct, and the client factory
+  refused a correctly-configured deployment because "configured" meant *a* key rather than a key per
+  directory (one key across three nodes authenticates to at most one, so failover fails closed at
+  exactly the moment it is needed).
 - **DOD-E2E-GCP-1** [trustless-cello, cello-client] — **GCP standalone enforcer:** with AWS
   unreachable, on the rebuilt system: fresh registration → DKG → seal → live two-agent session →
   kill one directory → sealing continues (T−1=1) → client failover → anti-entropy convergence
