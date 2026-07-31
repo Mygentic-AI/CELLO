@@ -6,6 +6,11 @@ These cover the two things that make it safe to bolt onto a request path — it
 must never raise, and it must never be silent about not working.
 """
 
+import pytest
+
+# No Postgres anywhere in this file. See waitlist_testdb.clean_tables.
+pytestmark = pytest.mark.no_database
+
 import _dispatch
 
 

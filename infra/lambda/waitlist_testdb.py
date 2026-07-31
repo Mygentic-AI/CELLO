@@ -56,7 +56,16 @@ def _apply_migrations():
     conn.close()
 
 
-@pytest.fixture(scope="session", autouse=True)
+# NOT autouse. It used to be, and that made a missing Postgres skip EVERY test
+# under infra/lambda — including test_router.py, test_app.py and
+# test_dispatch.py, which never open a connection. 62 tests covering the Cloud
+# Run entry layer reported `skipped` on any machine without the container, which
+# reads as green in a summary line. The suite is the yardstick for the whole
+# port; it must not be able to go quiet.
+#
+# `clean_tables` below requests it for every test that has not declared itself
+# database-free, so the behaviour for DB-using suites is unchanged.
+@pytest.fixture(scope="session")
 def database():
     if not MIGRATIONS.is_dir():
         pytest.skip(f"migrations not found at {MIGRATIONS}")
@@ -70,7 +79,15 @@ def database():
 
 
 @pytest.fixture(autouse=True)
-def clean_tables(database):
+def clean_tables(request):
+    # A module marked `no_database` never reaches the fixture that can skip, so
+    # it runs — passing or failing — with no Postgres anywhere. The marker is on
+    # the module rather than in a list here, so a new database-free suite opts
+    # itself in and cannot be forgotten by a central register.
+    if request.node.get_closest_marker("no_database"):
+        return
+    request.getfixturevalue("database")
+
     conn = psycopg2.connect(PGURL)
     conn.autocommit = True
     with conn.cursor() as cur:

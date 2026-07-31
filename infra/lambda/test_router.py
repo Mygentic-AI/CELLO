@@ -31,6 +31,9 @@ import json
 
 import pytest
 
+# No Postgres anywhere in this file. See waitlist_testdb.clean_tables.
+pytestmark = pytest.mark.no_database
+
 import _router
 
 
@@ -159,7 +162,11 @@ def test_an_unknown_path_is_refused_by_name():
 # ─── the internal surface: five handlers that had no trigger ──────────────────
 
 
-INTERNAL = ["waitlist-migrate", "waitlist-waves", "waitlist-gate", "waitlist-firstwin", "waitlist-utm"]
+# DERIVED, not listed. This was five hand-written names and INTERNAL_TARGETS
+# grew to eight in the same unit — so waitlist-email, waitlist-feedback and
+# waitlist-outreach had no refusal test at all. Omitting a name from a hand list
+# makes the loop shorter, never red.
+INTERNAL = sorted(_router.INTERNAL_TARGETS)
 
 
 @pytest.mark.parametrize("name", INTERNAL)
