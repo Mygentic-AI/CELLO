@@ -4527,3 +4527,76 @@ blocked every good build, caught only because the build was actually run.
 failing on `af1ea85e`, a directory seal fix. That is M12's work, legitimately touching the directory,
 seen by an M11 scanner because both milestones now share `main`. Recording it rather than widening
 the scan — a scanner loosened to make someone else's commit pass is how the execute-api hole survived.
+
+### Entry 71: the waitlist is live on GCP, and two defects only the deploy could find
+
+**DOD-GCP-RUNTIME-1 ✅.** `cello-waitlist` on Cloud Run us-east1, image `waitlist-963fb277`, min=1,
+four Cloud Scheduler jobs enabled. **13 Lambda functions, an API Gateway, 4 EventBridge rules, an SNS
+subscription and a NAT gateway are now one service and four jobs**, with the handlers unmodified.
+
+```
+/health                        200 {"status": "ok"}
+/gallery/receipts              200 {"receipts": [], "total": 0}    ← real GCP Cloud SQL
+/internal/* (no token)         401
+/internal/waitlist-email       200 {"sent": 0, "skipped": 0, "failed": 0, "retired": 0}
+  + {"action":"sweep_re_engagement"}  200 {"re_engage_enqueued": 0}
+4 schedulers                   ENABLED, status OK
+0 rows                         in every table outside the ledger, re-checked after live drains
+```
+
+#### The apply took four attempts, and three of the four were worth writing down
+
+- **IAM propagation lags the apply.** First run: `Permission denied on secret … for Revision service
+  account cello-waitlist@`, with all three bindings already created. Re-running works. The portal's
+  section of GCP-STATE.md already carried this note; it now sits where a second person will hit it.
+- **A newly-enabled API is not usable in the same apply.** `cloudscheduler.googleapis.com` was added
+  to `project.tf` and the four jobs in that same run still failed 403 *"API has not been used in
+  project … before or it is disabled"*. Enabling it in IaC is still right — a console-clicked API is
+  exactly the manual step the region-expansion test exists to catch — but it takes two runs.
+- **Cloud Build: use the default machine type.** `E2_HIGHCPU_8`, copied from `ops-agent.yaml` (which
+  builds a TypeScript monorepo), left a submission QUEUED for over fifteen minutes with nothing else
+  running. The default pool does the same build in 38 seconds.
+
+#### The two real defects, both invisible until it ran
+
+**Four env vars the CFN template set and the Terraform did not.** The one-minute drain returned 500
+on its first tick and the exception boundary named `RuntimeError` from `waitlist-email` —
+`WAITLIST_SES_CONFIG_SET`, which it refuses to send without, and correctly: the configuration set is
+what publishes bounce and complaint events to SNS, so sending without one delivers mail while
+silently disabling suppression (`DOD-INV-EMAIL-SUPPRESS`).
+
+Fixing only the one that raised would have been the mistake. Transcribing the whole `Environment`
+block found three more, and **the quiet ones are worse**: `WAITLIST_SITE` and `WAITLIST_API_BASE`
+build the confirm link inside E1 — the most-clicked URL in the product — and `WAITLIST_FROM_EMAIL` is
+the sender. Nothing raises for any of them. Mail simply goes out with a broken link, and it fails for
+the recipient rather than for us.
+
+**The router discarded every bare payload.** Not all handlers return an API Gateway envelope: the
+ones that had no HTTP trigger return their result *directly*, because `lambda.invoke` delivered
+whatever they returned. `waitlist-email` returns `{"sent": n, "skipped": n, "failed": n,
+"retired": n}`; the re-engagement sweep returns `{"re_engage_enqueued": n}`. `to_http` read
+`result.get("body", "")`, found no `body` key, and answered an **empty 200** — so a successful send
+was indistinguishable from a no-op, on the job that runs every sixty seconds forever.
+
+That is the same defect class as the request-side one in Entry 69, in the other direction: one shape
+assumed where the thirteen handlers use two. The discriminator is `statusCode`, not the presence of
+`body`, because a handler may legitimately answer 204 empty and that must not be re-serialised.
+Three of the five new tests were red first, and the fix is proven on the deployed service rather than
+in a unit test — the sweep's `{"re_engage_enqueued": 0}` demonstrates BOTH fixes at once, since it
+also proves the `action` key now reaches the handler instead of silently running a second drain.
+
+#### DOD-GCP-DOMAIN-1 is 🟠, and the missing half is deliberate
+
+The enforcer is done, and it was the load-bearing part: `verify-m11-invariants.sh` denied only AWS
+hostnames, so after the port it would have gone green while the entire product pointed at
+`*.run.app`. Both Cloud Run hostname shapes and `cloudfunctions.net` are denied now.
+
+The load balancer is up at **`35.227.231.107`**. What is not done is pointing
+`api.cello.mygentic.ai` at it — and that is the cutover itself, the moment traffic leaves API
+Gateway. This milestone's own ground rule, written the morning of the same day after a topology
+change arrived inside a bug fix and cost five agents three hours: **a topology change gets a decision
+and a checklist, not a side effect.** So the record stays where it is until a human moves it. The
+managed certificate sits in PROVISIONING until then, which is expected.
+
+**Next red:** `DOD-GCP-GATE-1`'s last line — removing `WAITLIST_GATE=disabled` once the gate answers
+on the live hostname — then `DOD-GCP-E2E-1`, which needs the DNS decision above.
