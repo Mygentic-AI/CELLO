@@ -53,8 +53,9 @@ changes another item, say so there — that is what this file is for.
 |---|---|---|---|
 | A | — | — | ✅ done (see §4) |
 | B | — | — | ✅ done (see §4) |
-| J | *unclaimed* | | cold-boot distribution (client) |
-| I | *unclaimed* | | relay redundancy |
+| J | — | 2026-07-31 | ✅ done — daemon@0.0.107 / cli@0.0.110 |
+| K | — | 2026-07-31 | ✅ done (see §4) |
+| I | — | 2026-07-31 | ✅ done — two relays live |
 | C | waitlist-port session | 2026-07-31 | 🔄 in progress — landing under **M11** as the `DOD-GCP-*` tier |
 | D | waitlist-port session | 2026-07-31 | ✅ **done** — `api.cello.mygentic.ai` → `35.227.231.107` (GCP), INSYNC |
 | E | *unclaimed* | | |
@@ -306,6 +307,27 @@ same session should still prefer the last-known-good node (so a running daemon d
 
 This is a change to the published client (`daemon@0.0.10x`), not config. Small — the resolver's
 cold-start path needs one extra branch that rolls the primary from the shuffled roster.
+
+### ✅ K — Fix the AE replication gap (7 tables missing from anti-entropy)
+
+**Done 2026-07-31.** The AWS Postgres mesh replicated 21 tables. M12's anti-entropy covered 4.
+The other 17 tables' code was intact — still written, read, queried — but the data stopped
+crossing nodes when the mesh was replaced, because AE requires explicit registration and nobody
+made the full list.
+
+Found when Telegram registration broke: `capability_claim_codes` was written on gcp-use1, the DKG
+routed round 1 to gcp-usc1, which had never heard of it → `CLAIM_CODE_INVALID`.
+
+Seven tables added to the AE registry:
+`capability_claim_codes`, `authorized_issuers`, `signal_records`, `submission_results`,
+`relay_registrations`, `directory_nodes`, `conversation_seals`.
+
+Eight tables confirmed node-local by design (not added): `sessions`, `pickup_queue`,
+`pending_notifications`, `directory_checkpoints`, `checkpoint_node_signatures`,
+`registrations`, `pre_authorization_tokens`, `conversation_seal_staging`.
+
+Deployed to all three validators. The same gap explains why `authorized_issuers` had to be
+enrolled manually on three nodes earlier today — that was papering over this.
 
 ## 5. Not doing, and why
 
