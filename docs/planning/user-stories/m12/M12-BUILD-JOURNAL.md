@@ -4818,3 +4818,88 @@ root cause traced, never attributed. What I found, stated as far as the evidence
 passing), and settle the visibility question. This is another session's test in a file I did not touch,
 so it is recorded here rather than fixed mid-publish — but it should not be left to keep costing tag
 runs.
+
+## Entry 74 — the system works on GCP, end to end, and survives a node going down
+
+*2026-07-31. Triage session: "get a working system up there… I don't actually believe you're going
+to get a working system until you've got a system that we try and it doesn't work."*
+
+Everything below was found by RUNNING the thing, not by reading it. That is the entry's whole point:
+four separate faults, each of which read as correct in the code and in the cloud config.
+
+### What was broken, in the order it was found
+
+**1. No client could connect to anything.** The published client bundles the roster of directories it
+bootstraps from, and that roster still named the three AWS nodes — whose hostnames resolve to
+`198.51.100.1`, the placeholder hibernation left behind. Every operator was pointed at nothing. The
+GCP fleet had been healthy for days; the thing that reaches it had not moved.
+
+**2. The internal API (8081) was unreachable — dropped by the HOST, not the VPC.** COS ships `INPUT`
+with policy DROP, and the cloud-init unit opened 4000/8080/9090 — the ports that are public by design
+— and never 8081, which was added later. Every cloud-level rule read as correct: the GCP firewall
+allowed 8081 from the three node subnets, both sides listened on `*:8081`, and 8080 crossed the same
+path fine. The packet was allowed onto the wire and then dropped by the receiving box, which presents
+as a connection TIMEOUT and points at the network rather than the host.
+
+**3. The portal refused to build a directory client while being correctly configured.**
+*"No directory client configured. Set DIRECTORY_API_URL + DIRECTORY_API_KEY"* — on a deployment where
+the URLs and a key per node were both set. The gate asked only whether the SINGLE key was present,
+which predates nodes holding their own keys, and its message named the two variables a GCP operator
+does not want. Replaced with a stricter gate — a key for EVERY url — which also closes the dangerous
+middle ground: one key across three directories authenticates to at most one, so the system looks
+healthy right up to the moment failover routes to a node that rejects it.
+
+**4. The ops agent demanded configuration it then discarded.** It refused to start with
+`RDS_CREDENTIALS required for CELLO_ENV=dev`, three lines above the code that prefers `DATABASE_URL`
+and throws the RDS pieces away. On GCP there is no RDS to take credentials from. The check was inline
+in `main()` behind `env !== "local"`, so the only way to exercise it was to boot the process — which
+is why it survived. Extracted to `resolveDatabaseUrl` and tested.
+
+### The mistake worth recording
+
+Moving the client's fallback URL to a DNS name. It reaches the same node and reads better.
+`buildManifestDeps` loads the bundled roster only when the resolved URL MATCHES a node endpoint
+byte-for-byte; anything else falls through to the pre-roster path with **step-6 directory
+authentication OFF**. So cold boot would have silently lost the defence against a MITM redirecting
+`/bootstrap` — no error, no log, just a weaker client. The existing tests caught it as
+`expected undefined to be defined`, which is not what that failure looks like it means.
+
+The review then found the same defect in PROSE: `README.md` told operators to set
+`CELLO_DIRECTORY_URL` to the dead AWS host, so an operator "fixing" it to the live DNS name lands in
+exactly that branch. Hardening a constant while leaving the document that overrides it achieves
+nothing. The downgrade now `warn`s with `step6: "disabled"` (loopback and private ranges stay `info`,
+because the e2e harness is designed and must not cry wolf).
+
+### What is now proven live
+
+Two agents registered from scratch by DKG across the three GCP directories, came online, established a
+session over the relay, exchanged messages both directions, and sealed with a live attestation from
+both participants.
+
+Then the degraded run, which is the claim that matters: **`gcp-euw1` stopped, exactly T=2 of 3
+remaining.** An existing pair still sessioned, exchanged both ways, and SEALED
+(`sealed_root fd96bc5b…`). A **brand-new** agent still registered by DKG at exactly T and came online.
+euw1 restarted → all three nodes converged to 45 profiles with identical rows, **including the agent
+registered while euw1 was dark**, picked up by anti-entropy with no manual step.
+
+The kill switch was fired on `gcp-use1` ONLY and read `paused=true seq=1 origin=gcp-use1` on all
+three — it propagates by Tier-B merge, not by being written three times — and it BITES: a session
+request to that agent is refused `agent_suspended`.
+
+### Live surface
+
+- Portal: **https://portal.cello.mygentic.ai** (kept its AWS hostname — the GitHub OAuth callback is
+  registered against it and every passkey is cryptographically bound to it; moving would have
+  invalidated all of them permanently). Signs with Cloud KMS Ed25519, so the revision holds no
+  private key, and its public half is enrolled as a `submitter` on all three directories.
+- Ops agent: Cloud Run, min=max=1, CPU always allocated — a long-polling Telegram bot that scales to
+  zero stops answering, and an operator waiting on a registration token cannot tell that from broken.
+- Published: `daemon@0.0.102` / `cli@0.0.105` (tag `v0.0.159`), verified in the tarball.
+
+### Owed
+
+`latest` promotion (operator-run — asked once). SES is a live AWS dependency for OTP delivery via
+static credentials; it must go before that account closes. Ops-agent DB health covers `use1` only.
+`multiaddr` is in the signed manifest with no consumer — the worthwhile fix is cross-checking the
+probe's `peerId` against the declared one. And a CLI help-parity test failed once in a full run and
+did not reproduce in three attempts including the identical command; recorded rather than dismissed.
