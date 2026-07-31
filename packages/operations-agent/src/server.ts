@@ -68,7 +68,7 @@ import { TelegramAdapter } from "./telegram-adapter.js";
 import { SesOtpDeliveryProvider } from "./ses/ses-otp-delivery-provider.js";
 import { runNodeSweep } from "./node-health.js";
 import { DirectoryPreAuthorizationClient } from "./directory-pre-auth-client.js";
-import { LambdaWaitlistGateClient } from "./waitlist-gate-client.js";
+import { HttpWaitlistGateClient } from "./http-waitlist-gate-client.js";
 import { RegistrationEngine } from "./registration/engine.js";
 
 // ─── Expected migration version ───────────────────────────────────────────────
@@ -257,6 +257,21 @@ export function resolveAdapters(config: AdapterConfig): ResolvedAdapters {
 
   // Explicit opt-out only — see the waitlistGate comment below.
   const waitlistGateDisabled = process.env["WAITLIST_GATE"] === "disabled";
+
+  // REQUIRED whenever the gate is ON, and asserted here rather than discovered
+  // at the first registration. Without these the client would build fine and
+  // then refuse every admission — correctly, since it fails closed, but with
+  // the fault surfacing in a Telegram chat rather than at boot.
+  const waitlistServiceUrl = process.env["WAITLIST_SERVICE_URL"] ?? "";
+  const waitlistInternalToken = process.env["INTERNAL_INVOKE_TOKEN"] ?? "";
+  if (!waitlistGateDisabled && (!waitlistServiceUrl || !waitlistInternalToken)) {
+    throw new Error(
+      "The waitlist gate is enabled but WAITLIST_SERVICE_URL and/or INTERNAL_INVOKE_TOKEN are not " +
+        "set. Refusing to start: a gate that cannot reach the waitlist refuses every registration, " +
+        "and it should say so here rather than in a user's chat. Set both, or set " +
+        "WAITLIST_GATE=disabled deliberately.",
+    );
+  }
   if (waitlistGateDisabled) {
     logger.warn("ops_agent.waitlist_gate.disabled", {
       component: "server",
@@ -274,23 +289,22 @@ export function resolveAdapters(config: AdapterConfig): ResolvedAdapters {
       directoryInternalUrl,
       apiKey: directoryApiKey,
     }),
-    // us-east-1 regardless of this service's region: the waitlist is a single
-    // global service (M11-D26), so there is exactly one gate function and it is
-    // not per-region like the directory.
+    // OVER HTTP, NOT A LAMBDA INVOKE (DOD-GCP-GATE-1). The gate now lives on the
+    // waitlist Cloud Run service. LambdaWaitlistGateClient could never have
+    // worked from here: this service holds SES_CREDENTIALS for the SES client
+    // explicitly and has no AWS_ACCESS_KEY_ID, so the SDK's credential chain
+    // finds nothing. It had not failed in production only because it had never
+    // been called.
+    //
+    // Still a single global service (M11-D26): one gate, not one per region.
     //
     // OPT-OUT, NOT OPT-IN. Absent or any other value → the gate is built and admission is
     // enforced, so a missing variable can never silently admit everyone. Only the explicit string
     // "disabled" turns it off, and that is logged at warn on every boot.
-    //
-    // Why an opt-out exists at all: the gate is an AWS Lambda backed by the portal RDS. On GCP,
-    // with AWS hibernated, it cannot be reached — and it fails closed, correctly, which refuses
-    // every registration. Gating admission to an EMPTY, unlaunched waitlist is protecting nothing
-    // while blocking the only person who needs to register. When the waitlist ports to GCP
-    // (M12 cutover item C) this goes back on.
     ...(waitlistGateDisabled ? {} : {
-      waitlistGate: new LambdaWaitlistGateClient({
-        region: "us-east-1",
-        functionName: `cello-waitlist-gate-${env}`,
+      waitlistGate: new HttpWaitlistGateClient({
+        baseUrl: waitlistServiceUrl,
+        internalToken: waitlistInternalToken,
         logger,
       }),
     }),

@@ -222,9 +222,33 @@ resource "google_cloud_run_v2_service" "ops_agent" {
       // REMOVE THIS when the waitlist ports to GCP (cutover item C). It is an explicit opt-out:
       // absent or any other value leaves the gate ON, and the agent warns on every boot while it is
       // off, so this cannot become the silent default.
+      //
+      // STILL DISABLED, AND THE REMOVAL IS ONE LINE (DOD-GCP-GATE-1). The client below now speaks
+      // HTTP to the waitlist service, and the two variables it needs are wired. What is NOT yet
+      // true is that the service is deployed and serving on api.cello.mygentic.ai — until it is,
+      // turning the gate on would refuse every registration, which is the exact situation this
+      // opt-out was added for. Delete this block in the same change that verifies the gate answers.
       env {
         name  = "WAITLIST_GATE"
         value = "disabled"
+      }
+
+      // The gate over HTTP. resolveAdapters REFUSES TO BOOT when the gate is on and either of these
+      // is missing, so wiring them before flipping the switch is not optional — and the refusal
+      // happens here, at deploy, rather than in a user's Telegram chat.
+      env {
+        name  = "WAITLIST_SERVICE_URL"
+        value = "https://${var.waitlist_hostname}"
+      }
+
+      env {
+        name = "INTERNAL_INVOKE_TOKEN"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.waitlist_internal_token.secret_id
+            version = "latest"
+          }
+        }
       }
 
       env {

@@ -223,3 +223,49 @@ def test_an_unknown_internal_name_is_refused_not_dispatched():
     )
     assert status == 404
     assert json.loads(body)["error"] == "unknown_internal_target"
+
+
+# ─── bare payloads: the shape lambda.invoke returned ─────────────────────────
+#
+# Not every handler returns an API Gateway envelope. The ones that had no HTTP
+# trigger return their result DIRECTLY, because `lambda.invoke` delivered
+# whatever they returned — `waitlist-email` returns
+# {"sent": n, "skipped": n, "failed": n, "retired": n} and its re-engagement
+# sweep returns {"re_engage_enqueued": n}. Read as an envelope, those have no
+# `body` key, so `result.get("body", "")` discards the entire result and answers
+# an empty 200. Found on the deployed service: the one-minute drain returned 200
+# with nothing in it, so nobody could tell a successful send from a no-op.
+
+
+def test_a_bare_payload_is_serialised_rather_than_discarded():
+    status, headers, body = _router.to_http({"sent": 3, "skipped": 1, "failed": 0, "retired": 0})
+
+    assert status == 200
+    assert json.loads(body) == {"sent": 3, "skipped": 1, "failed": 0, "retired": 0}
+    assert ("content-type", "application/json") in headers
+
+
+def test_the_re_engagement_sweep_result_survives_too():
+    _, _, body = _router.to_http({"re_engage_enqueued": 7})
+    assert json.loads(body)["re_engage_enqueued"] == 7
+
+
+def test_an_envelope_is_still_treated_as_an_envelope():
+    """The discriminator is `statusCode`, not the presence of `body` — a handler
+    may legitimately answer 204 with no body, and that must not be mistaken for
+    a bare payload and echoed back as JSON."""
+    status, _, body = _router.to_http({"statusCode": 204, "body": ""})
+    assert status == 204
+    assert body == ""
+
+
+def test_an_envelope_carrying_an_error_is_not_re_serialised():
+    status, _, body = _router.to_http({"statusCode": 409, "body": '{"error":"email_already_registered"}'})
+    assert status == 409
+    assert json.loads(body)["error"] == "email_already_registered"
+
+
+def test_an_empty_bare_payload_still_answers_json():
+    """A drain that did nothing must say so, not answer an empty body."""
+    _, _, body = _router.to_http({})
+    assert body == "{}"

@@ -158,7 +158,9 @@ describe("resolveAdapters selects a gate for every environment", () => {
    */
   it("gives a real, enforcing client to a non-local environment", async () => {
     const { resolveAdapters } = await import("../server.js");
-    const { LambdaWaitlistGateClient } = await import("../waitlist-gate-client.js");
+    const { HttpWaitlistGateClient } = await import("../http-waitlist-gate-client.js");
+    process.env["WAITLIST_SERVICE_URL"] = "https://api.cello.mygentic.ai";
+    process.env["INTERNAL_INVOKE_TOKEN"] = "test-token";
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
     const adapters = resolveAdapters({
@@ -171,7 +173,7 @@ describe("resolveAdapters selects a gate for every environment", () => {
       sesFromAddress: "noreply@mygentic.ai",
     } as never);
 
-    expect(adapters.waitlistGate).toBeInstanceOf(LambdaWaitlistGateClient);
+    expect(adapters.waitlistGate).toBeInstanceOf(HttpWaitlistGateClient);
   });
 
   it("gives local the stub that admits everybody — and only local", async () => {

@@ -68,6 +68,16 @@ fi
 # product, on a domain no user recognises, and the denylist did not look for it.
 BAD_DOMAIN='https?://(www\.)?(cello\.(dev|so|ai|io|app|com)|getcello|trycello|cello-protocol\.(com|io))'
 BAD_DOMAIN+='|[a-z0-9]+\.execute-api\.[a-z0-9-]+\.amazonaws\.com'
+# THE SAME MISS, ON THE NEW CLOUD. Every hostname above is an AWS one, so after
+# the GCP port this check would have gone green while every URL in the product
+# pointed at a *.run.app host — an invariant checker that cannot fail on the
+# platform you are running on is worse than none, because it reports the
+# invariant as HELD. Cloud Run's default hostnames are
+# `<service>-<hash>-<region>.a.run.app` and `<service>-<projectnum>.<region>.run.app`;
+# Cloud Functions' are `*.cloudfunctions.net`. The waitlist service is reachable
+# at api.cello.mygentic.ai precisely so no run.app name is needed anywhere.
+BAD_DOMAIN+='|[a-z0-9-]+\.a\.run\.app|[a-z0-9-]+\.[a-z0-9-]+\.run\.app'
+BAD_DOMAIN+='|[a-z0-9-]+\.cloudfunctions\.net'
 # The clause says "code, copy, or CONFIGURATION". The CloudFormation template is
 # configuration, and it is where the API host and WAITLIST_SITE are decided — 12
 # occurrences of a domain, none of them previously scanned. This is the same miss

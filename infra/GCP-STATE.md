@@ -182,6 +182,46 @@ tolerates exactly one node down.
 | `gcp-use1` | 34.75.172.108 | 2026-07-30 |
 | `gcp-relay-use1` | 34.139.119.165 (internal 10.10.0.28) | 2026-07-30 |
 
+## Waitlist (DOD-GCP-RUNTIME-1 / M12 cutover item C) — LIVE 2026-07-31
+
+The M11 waitlist off AWS. **One Cloud Run service replaces 13 Lambda functions, an API Gateway,
+4 EventBridge rules, an SNS subscription and a NAT gateway.** The 13 handlers are UNMODIFIED; the
+entry layer (`infra/lambda/_router.py`, `_app.py`) is what API Gateway used to be.
+
+| Resource | Value |
+|---|---|
+| Cloud Run service | `cello-waitlist`, us-east1, image `waitlist-963fb277`, min=1 |
+| Run URL | https://cello-waitlist-jk4mcnqbeq-ue.a.run.app — **debugging only.** `DOD-INV-DOMAIN` forbids a `run.app` hostname in code, copy or configuration, and `verify-m11-invariants.sh` now denies it |
+| Load balancer | global external ALB, IP **`35.227.231.107`**, serverless NEG `cello-waitlist-neg`, managed cert `cello-waitlist-cert`; :80 redirects to :443 |
+| Hostname | **api.cello.mygentic.ai** — DNS **NOT yet pointed** (still API Gateway). Pointing it IS the cutover, and it is deliberately a separate human decision. The cert stays PROVISIONING until then; that is expected, not a fault |
+| Database | the PORTAL Cloud SQL `cello-portal` / `cello_portal`, over the `/cloudsql` unix socket. `DOD-INV-SINGLE-DB`: one database, additive schema, no new instance. Ledger 37 rows (11 portal + 26 waitlist), 19 waitlist tables + the `waitlist_queue` view |
+| Service accounts | `cello-waitlist` (cloudsql.client) and `cello-waitlist-scheduler` (logging only). NOT the portal's — `secretAccessor` is per-secret, so a shared identity would hand each one the other's key material |
+| Secrets | `cello-waitlist-internal-token` (generated); reuses `cello-portal-database-url` and `cello-ops-agent-ses-credentials` |
+| Schedules | 4 Cloud Scheduler jobs, all ENABLED, `Etc/UTC` pinned: `email-drain` `* * * * *`, `feedback-sweep` `17 6 * * *`, `re-engage-sweep` `23 6 * * *`, `outreach-sweep` `47 6 * * *` |
+| SES | stays on AWS — Google has no email-sending service. Same static credentials the ops-agent already uses |
+| Verified live | `/health` 200 · `/gallery/receipts` 200 `{"receipts": [], "total": 0}` against the real database · `/internal/*` 401 without a token · the drain answers `{"sent": 0, "skipped": 0, "failed": 0, "retired": 0}` and the sweep `{"re_engage_enqueued": 0}` · all 4 schedulers reporting OK |
+| Data | **ZERO rows in every table** outside the migration ledger, re-checked after deploy and after live drains. No migration contains an INSERT, so re-applying cannot seed. |
+
+**The internal surface is a security boundary.** Eight handlers are reachable only via
+`/internal/<name>` behind a shared token: five had NO trigger on AWS (IAM-gated invoke only —
+`waves` opens a wave and mints admission tokens, `gate` burns one, `firstwin` mints three premium
+invite codes) and three were EventBridge-driven. Cloud Scheduler presents BOTH OIDC and the token.
+An unset token answers 503 rather than admitting.
+
+**Two things that cost a retry each, worth knowing before the next apply:**
+- **IAM propagation lags the apply.** The first apply failed `Permission denied on secret ... for
+  Revision service account cello-waitlist@`, with all three bindings already created. Re-running
+  succeeds. Same note as the portal's.
+- **A newly-enabled API is not usable in the same apply.** `cloudscheduler.googleapis.com` was added
+  to `project.tf` and the four jobs in that same run still failed 403 "API has not been used in
+  project ... before or it is disabled". Enabled + re-apply works.
+
+**Cloud Build: use the DEFAULT machine type.** `infra/cloudbuild/waitlist.yaml` originally copied
+`E2_HIGHCPU_8` from `ops-agent.yaml`; a submission sat QUEUED over fifteen minutes with nothing else
+running. On the default pool the same build takes 38 seconds.
+
+---
+
 ## Portal (DOD-MOVE-PORTAL-1) — LIVE 2026-07-31
 
 | Resource | Value |

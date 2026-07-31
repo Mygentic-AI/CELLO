@@ -42,10 +42,11 @@ resource "google_secret_manager_secret_version" "waitlist_internal_token" {
   secret_data = random_password.waitlist_internal_token.result
 }
 
-// Per-secret, per-workload. Both the service (to check a presented token) and
-// the scheduler (to present one) need it, and nothing else does.
+// Per-secret, per-workload. Three need it: the service checks a presented token,
+// and the scheduler and the ops-agent each present one — the ops-agent because
+// the Telegram gate is one of the eight handlers on the internal surface.
 resource "google_secret_manager_secret_iam_member" "waitlist_internal_token" {
-  for_each = toset(["waitlist", "waitlist-scheduler"])
+  for_each = toset(["waitlist", "waitlist-scheduler", "ops-agent"])
 
   project   = var.project_id
   secret_id = google_secret_manager_secret.waitlist_internal_token.secret_id
@@ -150,7 +151,7 @@ resource "google_cloud_run_v2_service" "waitlist" {
       // degraded, never lost.
       env {
         name  = "WAITLIST_EMAIL_SERVICE_URL"
-        value = "https://api.cello.mygentic.ai"
+        value = "https://${var.waitlist_hostname}"
       }
 
       env {
@@ -166,6 +167,44 @@ resource "google_cloud_run_v2_service" "waitlist" {
       env {
         name  = "SES_REGION"
         value = "us-east-1"
+      }
+
+      // FOUR VARIABLES THE CFN TEMPLATE SET AND THIS DID NOT, found by the
+      // deployed service rather than by reading: the one-minute drain schedule
+      // returned 500 on its first tick, and the exception boundary named
+      // `RuntimeError` from waitlist-email. Transcribed from the Environment
+      // block of cello-waitlist.yaml so the set is complete rather than the one
+      // that happened to raise.
+      //
+      // WAITLIST_SES_CONFIG_SET is the one that raises — waitlist-email refuses
+      // to send without it, correctly: the configuration set is what publishes
+      // bounce and complaint events to SNS, and sending without it means
+      // suppression silently never happens (DOD-INV-EMAIL-SUPPRESS). The
+      // configuration set is an SES resource and SES stays on AWS; this name is
+      // read from the live account, not invented.
+      env {
+        name  = "WAITLIST_SES_CONFIG_SET"
+        value = "cello-waitlist-${var.environment}"
+      }
+
+      // The other three are quieter and worse: nothing raises. They build the
+      // links inside every email — WAITLIST_SITE is the origin of the confirm
+      // link, WAITLIST_API_BASE is the endpoint it calls. Absent, E1 goes out
+      // carrying a broken confirmation URL, which is the most-clicked link in
+      // the product and fails for the recipient, not for us.
+      env {
+        name  = "WAITLIST_SITE"
+        value = "https://${var.waitlist_site_domain}"
+      }
+
+      env {
+        name  = "WAITLIST_API_BASE"
+        value = "https://${var.waitlist_site_domain}/api/waitlist"
+      }
+
+      env {
+        name  = "WAITLIST_FROM_EMAIL"
+        value = var.waitlist_from_email
       }
 
       env {
