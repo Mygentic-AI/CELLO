@@ -209,6 +209,27 @@ A 40-min wake (2026-07-22) was an RDS outlier, not the norm.
 the `wake.sh` post-wake checklist item **"0. REDEPLOY THE OPS DASHBOARD"** (~line 676) is stale and
 should be deleted.
 
+### ⚠️ `portal.cello.mygentic.ai` NO LONGER BELONGS TO AWS (M12, 2026-07-31)
+
+It resolves to the **GCP** load balancer (`34.111.250.93`) and the portal serves from Cloud Run. Two
+places in the hibernate/wake pair would have moved it back **as a side effect of an unrelated
+operation**, and both are now guarded:
+
+- `hibernate.sh` blackholed `portal` along with every AWS name. That would have taken a LIVE service
+  off the air by hibernating a different cloud — and because a blackhole is a *successful* UPSERT to
+  an unroutable address, the only symptom would have been every operator's browser hanging.
+- `wake.sh` UPSERTed `portal` back to the restored AWS ALB. Waking AWS would have silently pointed
+  the hostname at a freshly-restored empty portal, with no error, because an UPSERT to a healthy ALB
+  looks exactly like success.
+
+`operations.*` is untouched by this and still rides the AWS portal ALB — it genuinely does go away
+with it.
+
+**Do not "fix" either script by restoring those lines.** The hostname carries the GitHub OAuth
+callback and every registered passkey; moving it is a deliberate decision, never a side effect. The
+new GCP-side names (`directory-use1|usc1|euw1.cello.mygentic.ai`) are not in either script's
+inventory and need no guard.
+
 **Blackhole, not NXDOMAIN.** Every name is UPSERTed to `198.51.100.1` (TEST-NET-2) on hibernate.
 A dangling alias answers NXDOMAIN, which seeds negative caches at every resolver between client and
 Route53 and re-poisons them on wake — a documented ~50 min post-wake client outage (2026-07-24).

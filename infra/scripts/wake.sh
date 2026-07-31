@@ -530,7 +530,21 @@ for REGION in "${TARGET_REGIONS[@]}"; do
         --load-balancer-arns "$NEW_PORTAL_ARN" --region "${REGION}" \
         --query 'LoadBalancers[0].CanonicalHostedZoneId' --output text)
     fi
-    update_r53_alias "portal" "${NEW_PORTAL_DNS}" "${PORTAL_ALB_ZONE}"
+    # portal.* IS NOT REPOINTED HERE ANY MORE — M12, 2026-07-31.
+    #
+    # The portal serves from GCP (Cloud Run behind a global external ALB, A record →
+    # 34.111.250.93). This line used to UPSERT portal.cello.mygentic.ai back to the AWS ALB, so
+    # simply WAKING AWS would have taken the live portal down and pointed it at a freshly-restored
+    # empty one — with no error anywhere, because an UPSERT to a healthy ALB looks like success.
+    #
+    # It also cannot be fixed by "waking then re-pointing": the operator would have to notice, and
+    # the window is however long that takes. Waking AWS must not be able to move the portal at all.
+    #
+    # If the portal is ever moved back, re-point it deliberately rather than restoring this line —
+    # the hostname carries the GitHub OAuth callback and every registered passkey, so moving it is a
+    # decision, not a side effect of a wake.
+    warn "  [${REGION}] portal.${DOMAIN} NOT repointed — it serves from GCP (see M12 / GCP-STATE.md)"
+
     # operations.* rides the SAME ALB as the portal (a host rule, not its own
     # load balancer — a dedicated ALB is ~$16/mo for a dashboard one person
     # opens a few times a day). So its alias must be re-pointed here too, or it

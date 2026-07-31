@@ -20,7 +20,7 @@
 #   ACM certs, Secrets Manager, SSM parameters, KMS keys, CloudWatch, WAF
 #
 # Route53 A records are NOT left dangling: after ALB deletion each dir/relay
-# (+ portal) name is UPSERTed to a plain A record at a blackhole IP (TEST-NET-2,
+# (+ operations) name is UPSERTed to a plain A record at a blackhole IP (TEST-NET-2,
 # TTL 60). A dangling alias answers NXDOMAIN, and clients polling the names all
 # night seed negative DNS caches at every resolver layer between them and
 # Route53 — on wake, a stale layer re-poisons the layers below it and the wake
@@ -563,7 +563,15 @@ for REGION in "${TARGET_REGIONS[@]}"; do
   # operations.* rides the portal ALB as a host rule and has its own alias record,
   # so it goes NXDOMAIN the moment that ALB is deleted — same negative-cache trap
   # as the rest. wake.sh already UPSERTs it back to the new portal ALB alias.
-  [[ "${REGION}" == "us-east-1" ]] && { blackhole_r53 "portal"; blackhole_r53 "operations"; }
+  # portal.* IS DELIBERATELY ABSENT — M12, 2026-07-31.
+  #
+  # It resolves to the GCP load balancer now, and the portal keeps serving whether AWS is up or
+  # down. Blackholing it here would take a LIVE service off the air as a side effect of hibernating
+  # a different cloud — and because a blackhole is a successful UPSERT to an unroutable address, the
+  # only symptom would be every operator's browser hanging.
+  #
+  # operations.* stays: it rides the AWS portal ALB and genuinely does go away with it.
+  [[ "${REGION}" == "us-east-1" ]] && { blackhole_r53 "operations"; }
 
   # -- 3d. Delete ssmmessages VPC endpoint -------------------------------------
   ep_id=$(echo "$R" | jq -r '.ssmmessages_endpoint.id')
