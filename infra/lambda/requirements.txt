@@ -1,0 +1,25 @@
+# The waitlist service's runtime dependencies (DOD-GCP-RUNTIME-1).
+#
+# Deliberately three. On AWS these were supplied by the Lambda runtime plus a
+# Docker-built psycopg2 layer (deploy-lambdas.sh); a container has to say so
+# itself. The handlers import nothing else outside the standard library —
+# verified by grep across every handler.py and shared module, not assumed.
+#
+# NO WEB FRAMEWORK. M11-D36: _router.build_event/to_http already speak the WSGI
+# shape, so a framework would only add a second routing layer competing with
+# PUBLIC_ROUTES, which must stay a faithful copy of the CFN RouteKeys.
+
+# The database driver. -binary ships a wheel, so the image builds without a
+# compiler and without the linux/amd64 cross-build dance deploy-lambdas.sh
+# needs for Lambda.
+psycopg2-binary==2.9.9
+
+# SES only. boto3 is still genuinely required after the port: waitlist-email
+# sends through SES with static credentials, because Google has no
+# email-sending service and that pattern is already proven by the GCP ops-agent.
+boto3==1.35.36
+
+# The WSGI server. Threads, not processes-only: _dispatch fires its nudge on a
+# daemon thread, and gthread lets one container serve the next request while a
+# drain is in flight.
+gunicorn==23.0.0
