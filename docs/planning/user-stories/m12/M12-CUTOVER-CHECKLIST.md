@@ -83,6 +83,32 @@ per handler, real logic already factored out behind it), `_dburl.py` (which alre
 Spans three repos: handlers in `trustless-cello/infra/lambda`, schema in `corp-cello-site/migrations`,
 database shared with `cello-portal`.
 
+**GCP portal database — measured 2026-07-31, so you do not have to look:**
+
+- **Portal schema: COMPLETE.** All 11 portal migrations applied (`0001_init` → `0011_minted_signals_issuer`),
+  15 tables: `account`, `sessions`, `webauthn_credentials`, `webauthn_challenges`, `totp_secrets`,
+  `backup_codes`, `magic_link_requests`, `magic_link_tokens`, `auth_verify_attempts`,
+  `github_connections`, `minted_signals`, `processed_submissions`, `submission_mint_inputs`,
+  `track_record_refresh_log`, `schema_migrations`.
+- **Waitlist tables: ZERO.** None of `waitlist_signups`, `email_jobs`, `auth_tokens`, `points_ledger`,
+  `waitlist_sessions`, `gallery_items`, `social_profiles` exist. The 26 waitlist migrations have not
+  been applied. **This is phase 1 of your work.**
+
+**Two things that make phase 1 easier than it looks:**
+
+1. **The shared ledger is clean here.** On AWS `schema_migrations` held 41 rows (26 waitlist + 11
+   portal + 4 orphans from renamed/removed migrations). On GCP it holds exactly the 11 portal rows,
+   so applying the waitlist set lands a clean 37 — **the orphan-reconciliation item resolves itself
+   by not being carried over.** Nothing to reconcile.
+2. **Both migration sets start at `0001` and that is fine.** Portal has `0001_init`, waitlist has
+   `0001_m11_waitlist_p0`. The ledger keys on the full stem, not the number — proven on AWS where
+   both sets coexisted in one table. Do not renumber anything.
+
+**Access note:** the portal Cloud SQL has a public IP with `authorized_networks` deliberately EMPTY,
+and `ssl_mode = ENCRYPTED_ONLY`. `gcloud sql connect` will allowlist your IP to let you in — **it does
+not remove it afterwards.** Clear it when you are done:
+`gcloud sql instances patch cello-portal --clear-authorized-networks --quiet`.
+
 Phases, in dependency order:
 1. Waitlist schema into the GCP portal Cloud SQL (26 migrations; reconcile the 4 ledger rows with no
    current file while you are there).
