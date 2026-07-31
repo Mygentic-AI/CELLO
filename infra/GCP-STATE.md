@@ -234,7 +234,7 @@ resolve to `198.51.100.1` — the placeholder hibernation left behind.
 
 | | |
 |---|---|
-| Published (beta) | **`daemon@0.0.102`, `cli@0.0.105`** — tag `v0.0.159`, smoke-tag green (supersedes 0.0.101/0.0.104 from tag v0.0.158) |
+| Published (beta) | **`daemon@0.0.103`, `cli@0.0.106`** — tag `v0.0.160`, smoke-tag green (supersedes 0.0.101/0.0.104 and 0.0.102/0.0.105) |
 | Verified on the tarball | `dist/bundled-consortium-manifest.js` contains gcp-use1/usc1/euw1 and no AWS ids; `PRODUCTION_DIRECTORY_URL = http://34.75.172.108:9090`; the step-6 downgrade warning (`step6`) is present in `dist/manifest-deps.js`; `cli` pins `daemon@0.0.102` exactly |
 | Manifest | v2, officer root key `e8300a2b…b104`, intake key `intake-dev-1` / `87da56bf…b3d1` (the AWS key, carried over — clients already trust manifests naming it) |
 | **`latest` promotion** | **NOT DONE — Andre runs it.** Commands are in the session hand-off |
@@ -312,3 +312,19 @@ Still open from that review, not blocking: `multiaddr` is in the signed manifest
 the client dials whatever the plaintext `/bootstrap` returns. The worthwhile fix is to cross-check the
 probe's `peerId` against the manifest's declared one in `manifestNodesToEndpoints` and reject a
 mismatch. Step-6 already defends the identity, so this is defence-in-depth at the dial layer.
+
+### The declared peer id is now checked (2026-07-31)
+
+The last open review finding. Every manifest node carries `peerId` and `multiaddr` inside the SIGNED
+body, and nothing read either — the client dialled whatever the plaintext `/bootstrap` probe returned,
+so the signature covered a field no code consulted. That reads as a dial-layer defence while being
+none. A probe answering with an undeclared peer id now refuses the dial
+(`directory.consortium.node.peer_id_mismatch`) instead of connecting and being rejected a round later
+at step-6. A node declaring no `peerId` is tolerated — pre-field manifests carry none, and treating
+"not declared" as "mismatch" turns hardening into an outage — and one bad entry drops only that node.
+
+**Verified against the LIVE fleet using the PUBLISHED tarball**, because this change could have
+stranded every client if the declared ids disagreed with production: clean-install of
+`cli@0.0.106` → `daemon@0.0.103`, `declaredNodes: 3, resolvedNodes: 3`, no mismatch; then a full
+operator path on those exact bits — create → register (DKG) → `directory_signaling: connected`,
+state `online`, standing receiver ready.
