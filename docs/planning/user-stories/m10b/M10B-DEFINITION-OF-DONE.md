@@ -888,9 +888,16 @@ the additions M10B is accountable for.
   > **WHAT IT FOUND:** the consent gate was INERT — every endorsement auto-accepted, because the
   > envelope was attributed to the portal instead of its author, so `issuerKind === "agent"` never
   > matched. Both repos' unit suites were green through that; none of them looked at the envelope.
-  > **Not provable yet, each blocked on a named thing:** (a)'s correction loop needs the refuse-op
-  > handler + `submission_results`; **(b)** needs `DOD-END-SUBJECTKIND-1`; **(d)** needs
-  > `DOD-END-WITHDRAW-1`. — 🟡 core job + 3 cases live, 2 cases blocked
+  > **ALL BLOCKERS CLEARED — 2026-07-31, Entry 44. 10 of 10 hops green.** (a)'s correction loop had
+  > the refuse-op handler and `submission_results` shipped under it; **(b)** was waiting on
+  > `DOD-END-SUBJECTKIND-1`, closed 2026-07-30; **(d)** moved out with `DOD-END-WITHDRAW-1` and its
+  > launch half is proven separately. The re-run also found the test itself had rotted twice: 18 call
+  > sites still used the pre-rename verbs (spine tests are EXCLUDED from `pnpm run test`, so the unit
+  > gate never opened this file), and HOP 6 still asserted `unhandledOps === 1` — "the handler is not
+  > built" — failing because the feature was FINISHED. HOP 6 now also asserts the outcome row reaches
+  > `submission_results`, since a handler that swallowed the refusal would pass the count alone.
+  > **The one unproven clause is not M10B's:** "a `min_count` floor does not count it" needs
+  > `DOD-FLOOR-1`, an M10 trust-signal feature deliberately not wired (see `DOD-END-COUNT-1`). — ✅
 - **DOD-END-PLAYBOOK-1** — **the architectural proof, M10B's equivalent of the canary.** With M10B's
   machinery in place, a SECOND client-sourced type is taken from nothing to live end-to-end as a pure
   [[M10-TYPE-PLAYBOOK]] run — **`git status --porcelain` clean and `git diff --stat` empty in cello-client

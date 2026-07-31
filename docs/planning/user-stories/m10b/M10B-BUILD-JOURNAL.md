@@ -3405,3 +3405,50 @@ now, not two.
 
 Shipped: daemon 0.0.104, cli 0.0.107, connect 0.0.109 — verified in the tarballs, promoted, and the
 fan-out proof re-run against the live consortium.
+
+---
+
+## Entry 44 — `DOD-END-JOURNEY-1` ✅, and why a DoD line goes stale in the safe direction
+
+Ran J-END expecting to confirm two blocked cases were still blocked. All ten hops are green, and both
+"blockers" had been dead for a day.
+
+| case | listed blocker | actual state |
+|---|---|---|
+| (a) correction loop | "needs the refuse-op handler + `submission_results`" | both shipped; the loop runs |
+| (b) co-owned endorsement | "needs `DOD-END-SUBJECTKIND-1`" | closed 2026-07-30 |
+| (d) withdrawal re-check | "needs `DOD-END-WITHDRAW-1`" | moved out deliberately; launch half proven |
+
+**Nothing re-checks a line when its blocker closes elsewhere.** X's owner flips X and moves on; the
+lines that were waiting on X keep their amber tag indefinitely. So the DoD accumulates work that is
+already done, every review re-finds it, and the milestone reads as though the finish line keeps
+moving. It goes stale in the *safe* direction — pessimistic, never optimistic — which is why it went
+unnoticed: nobody audits a line claiming to be less finished than it is.
+
+### The test had rotted twice
+
+**Eighteen call sites still used the pre-rename verbs.** `cello_trust_signals_issue` and
+`cello_consent_*` became `cello_attestations_issue` and `cello_attestation_consent_*` this morning;
+the MCP calls returned `MCP error …`, which is not JSON, so nine hops died inside the harness's
+`JSON.parse`. I did not catch it because **spine tests are excluded from `pnpm run test`** — every
+green gate quoted today, 2344 tests, never opened this file. A rename verified against the unit suite
+is not verified. That is the same lesson as Entry 43's inclusion list, one layer out: the check that
+would have caught it was not in the set being run.
+
+**And HOP 6 asserted `unhandledOps === 1`** with the comment "the handler is not built". It is built.
+The test failed *because the feature was finished* — an assertion pinned to a gap rather than to a
+property. It now asserts the op is HANDLED and that an outcome row reaches `submission_results`,
+because a handler that silently swallowed the refusal would satisfy the count on its own. HOP 8's
+hardcoded `"1"` had the same defect one step removed: it depended on HOP 6 leaving its row behind, so
+finishing the handler broke it. It measures the delta now, which is what the clause always meant.
+
+Rule: **when a test asserts the ABSENCE of a mechanism, it becomes a tripwire on your own roadmap.**
+Assert the property you want, and let the unbuilt case be a skipped test with a name that says so.
+
+### What is left
+
+The one unproven clause in this journey is "a `min_count` floor does not count it" — and that needs
+`DOD-FLOOR-1`, an M10 trust-signal feature that is deliberately unwired because switching it on would
+refuse counterparties who have no signals yet. It is not M10B work, and `DOD-END-COUNT-1` inherits
+that: M10B produced `same_operator` correctly and proved it live; the consumer lives in another
+milestone that is off on purpose.
