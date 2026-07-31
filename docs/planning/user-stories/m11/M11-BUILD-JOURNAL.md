@@ -4365,3 +4365,90 @@ It also refuted-then-confirmed the `PGSSLMODE=disable` claim, and added the scop
 the proxy holds a real mutual-TLS session so nothing leaving the machine is downgraded, but the
 database password does cross the loopback leg — on a shared or CI host the answer is
 `--auto-iam-authn`, which removes the password from the flow entirely.
+
+### Entry 69: the entry layer, and two defects the tests could not have caught
+
+**DOD-GCP-ROUTER-1 ✅.** The 13 handlers run under Cloud Run unmodified — no `handler.py` is in the
+diff. 587 tests with a database, 85 without one.
+
+**What the layer actually is.** `_router.py` holds the adapter and the route table (transcribed from
+the 21 RouteKeys in `cello-waitlist.yaml`) and a fail-closed internal guard; `_app.py` is the WSGI
+application; `_dispatch.py` crosses from Lambda invoke to HTTP. Three things needed care and each
+would have failed silently:
+
+- **Request cookies** go in the top-level `cookies` list, duplicates preserved. De-duplicating would
+  recreate the documented bug where one stale cookie masks the live session behind it.
+- **Response cookies.** `waitlist-auth` returns `{"cookies": […]}` on exactly the path that issues a
+  session. A router copying statusCode/headers/body — the obvious three — and dropping that mints
+  sessions the browser never receives. `to_http` returns header PAIRS so Set-Cookie cannot fold.
+- **Fire-and-forget.** `InvocationType="Event"` returned once AWS accepted the request. `urlopen`
+  waits for the *response*, and that response IS the drain — SES round-trips on the request path of
+  somebody waiting for a sign-in link. Translating it literally would have added the delay this
+  module exists to remove. Daemon thread; a test hangs the post and asserts the caller returns.
+
+#### The review found two defects that no test in the file could have seen
+
+**The gallery API could not load at all.** `load_handler` put only the shared root on `sys.path`,
+never the handler's own directory — and `waitlist-gallery` does `from _receipt_validation import …`,
+`waitlist-email` does `from templates import TEMPLATES`. Gallery raised `ModuleNotFoundError` on
+first request and answered a bare gunicorn 500. Email was worse for looking fine: its import is
+inside `render()`, so the module loaded, every job failed at render, each failure was caught per-job
+and retried until it retired, and the log blamed the template. **No mail would ever have left.** The
+module's own docstring says *"the production loader must not be more naive than the test one"* — and
+`load_lambda` has exactly the line that was missing.
+
+**The internal payload wrapper discarded four targets' parameters.** `{"body": json.dumps(payload)}`
+is right for the four handlers that sniff a key and fall back to a body. Four others read the top
+level, because `lambda.invoke` delivered the bare dict. None of them errored — they succeeded at work
+nobody asked for:
+
+```
+{"dry_run": true}                -> migrate  lost the flag and APPLIED the migrations
+{"action": "sweep_re_engagement"} -> email    lost the action and ran a one-minute drain
+{"action": "call_completed"}      -> outreach became sweep_day_six, which GRANTS invite codes
+```
+
+`STATE.md` documents the first of those as the *safe* call — "it lists what WOULD be applied and
+touches nothing". Through the internal path it was the destructive one, and the response looked like
+a successful apply because it was one.
+
+**Why nothing caught either, which is the transferable part.** `test_app.py`'s autouse fixture
+monkeypatches `dispatch` for every case, so `load_handler` — the only novel code in the module — had
+**zero** coverage; an implementation that raised unconditionally passed all 20 tests. And the payload
+test asserted that `waitlist-waves` found `capacity` inside `body`, which is true, and **pinned the
+defect as correct**, because waves is one of the four that sniff. A test can be green, meaningful,
+and still be the reason a defect ships.
+
+Both fixes are revert-tested: restoring the wrapper fails 8 cases; removing the `sys.path` insert
+fails the two loader tests with the exact `ModuleNotFoundError`.
+
+#### The suite can no longer go quiet
+
+`database` was session-scoped **autouse**, so a missing Postgres skipped *every* test under
+`infra/lambda` — including the 85 covering the entry layer, which never open a connection. They
+reported `skipped` on any machine without the container, which reads as green in a summary line, on
+the yardstick for the whole port. Now a module declares `pytestmark = pytest.mark.no_database` and
+runs regardless; the marker is on the module rather than in a central list, so a new database-free
+suite opts itself in and cannot be forgotten.
+
+```
+with a database:  587 passed
+without one:       85 passed, 502 skipped   (was: 0 passed, 587 skipped)
+```
+
+#### Coordination: the gate is deliberately OFF on GCP
+
+A second agent hit the latent gate defect live and shipped the right stopgap (`36004604`):
+`WAITLIST_GATE` is an explicit **opt-out** in `infra/terraform/ops-agent.tf`, currently `disabled`,
+because a fail-closed admission check against a hibernated Lambda was blocking the only person who
+needs to register — for an empty, unlaunched waitlist. The shape is correct: anything but the exact
+string `disabled` leaves it ON, so a missing variable cannot silently admit the world.
+
+**`DOD-GCP-GATE-1` now owes one clause more: remove that env.** A stopgap that outlives its cause is
+indistinguishable from a hole, and shipping the HTTP gate client without removing the flag would
+leave admission permanently open while the line reads done.
+
+**Next red:** `DOD-GCP-RUNTIME-1`. Two producers are owed there and named by the review —
+`INTERNAL_INVOKE_TOKEN` and `WAITLIST_EMAIL_SERVICE_URL` have no wiring anywhere in `infra/` yet, so
+the internal surface (including the mail drain) refuses until it lands. Both fail loud, which is why
+this is a sequencing note and not a defect.
