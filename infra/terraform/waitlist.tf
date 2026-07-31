@@ -169,6 +169,44 @@ resource "google_cloud_run_v2_service" "waitlist" {
         value = "us-east-1"
       }
 
+      // FOUR VARIABLES THE CFN TEMPLATE SET AND THIS DID NOT, found by the
+      // deployed service rather than by reading: the one-minute drain schedule
+      // returned 500 on its first tick, and the exception boundary named
+      // `RuntimeError` from waitlist-email. Transcribed from the Environment
+      // block of cello-waitlist.yaml so the set is complete rather than the one
+      // that happened to raise.
+      //
+      // WAITLIST_SES_CONFIG_SET is the one that raises — waitlist-email refuses
+      // to send without it, correctly: the configuration set is what publishes
+      // bounce and complaint events to SNS, and sending without it means
+      // suppression silently never happens (DOD-INV-EMAIL-SUPPRESS). The
+      // configuration set is an SES resource and SES stays on AWS; this name is
+      // read from the live account, not invented.
+      env {
+        name  = "WAITLIST_SES_CONFIG_SET"
+        value = "cello-waitlist-${var.environment}"
+      }
+
+      // The other three are quieter and worse: nothing raises. They build the
+      // links inside every email — WAITLIST_SITE is the origin of the confirm
+      // link, WAITLIST_API_BASE is the endpoint it calls. Absent, E1 goes out
+      // carrying a broken confirmation URL, which is the most-clicked link in
+      // the product and fails for the recipient, not for us.
+      env {
+        name  = "WAITLIST_SITE"
+        value = "https://${var.waitlist_site_domain}"
+      }
+
+      env {
+        name  = "WAITLIST_API_BASE"
+        value = "https://${var.waitlist_site_domain}/api/waitlist"
+      }
+
+      env {
+        name  = "WAITLIST_FROM_EMAIL"
+        value = var.waitlist_from_email
+      }
+
       env {
         name  = "CELLO_ENV"
         value = var.environment

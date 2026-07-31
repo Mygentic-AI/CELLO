@@ -89,6 +89,18 @@ variable "waitlist_hostname" {
   description = "The waitlist API hostname. UNCHANGED from AWS on purpose: the corp site's nginx already proxies to it, every E1 link ever sent points at it, and __Host-cello_wl_session is bound to this exact origin. Keeping it makes the cutover a DNS record rather than a site redeploy."
 }
 
+variable "waitlist_site_domain" {
+  type        = string
+  default     = "cello.mygentic.ai"
+  description = "The public site the waitlist emails link to. Matches SiteDomainName in cello-waitlist.yaml — E1's confirm link is built from it, so a wrong value ships broken links to real inboxes."
+}
+
+variable "waitlist_from_email" {
+  type        = string
+  default     = "CELLO <noreply@mygentic.ai>"
+  description = "SES sender for waitlist mail. Matches FromEmailAddress in cello-waitlist.yaml; the address must stay SES-verified."
+}
+
 variable "waitlist_image_tag" {
   type        = string
   description = "Immutable tag of the waitlist image in Artifact Registry. Never 'latest' — same reason as the portal: a floating tag makes 'which code is live' unanswerable, and this service owns admission."

@@ -161,6 +161,26 @@ def to_http(result):
     signed in, which reads as a credential problem and is a plumbing one. This
     already happened once on the request side (see _session.py) and cost days.
     """
+    # TWO RETURN SHAPES, and `statusCode` is the discriminator.
+    #
+    # The four HTTP-facing handlers answer an API Gateway envelope
+    # ({statusCode, headers, body, cookies}). The ones that had no HTTP trigger
+    # return their result DIRECTLY, because `lambda.invoke` delivered whatever
+    # they returned: `waitlist-email` returns
+    # {"sent": n, "skipped": n, "failed": n, "retired": n} and its re-engagement
+    # sweep returns {"re_engage_enqueued": n}.
+    #
+    # Reading a bare payload as an envelope finds no `body` key and answers an
+    # EMPTY 200 — the counts are discarded and a successful send is
+    # indistinguishable from a no-op. Observed on the deployed service: the
+    # one-minute drain answered 200 with nothing in it.
+    #
+    # The discriminator is `statusCode` rather than the presence of `body`,
+    # because a handler may legitimately answer 204 with an empty body and that
+    # must not be mistaken for a payload and echoed back as JSON.
+    if "statusCode" not in result:
+        return 200, [("content-type", "application/json")], json.dumps(result)
+
     status = result.get("statusCode", 200)
     pairs = [(k, v) for k, v in (result.get("headers") or {}).items()]
     for cookie in result.get("cookies") or []:
