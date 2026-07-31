@@ -97,10 +97,35 @@ if (!/^[0-9a-f]{64}$/i.test(officerSeedHex)) throw new Error("officer seed is no
 const officerSeed = Buffer.from(officerSeedHex, "hex");
 const officerPub = Buffer.from(ed25519.getPublicKey(officerSeed)).toString("hex");
 
+// The PORTAL INTAKE KEY (M10B / DOD-END-INGRESS-1). A submitting daemon seals its trust-signal
+// submission to this public key so the DIRECTORY cannot read the contents; with no intake key the
+// client refuses with `intake_key_absent` rather than sending in the clear.
+//
+// It belongs in the manifest, not beside it: the manifest is what a cold-boot daemon has before it
+// can reach any directory, and "your first submission fails until you have polled" is
+// indistinguishable from the feature being broken. Being inside the signed body is also what stops
+// an intake key being swapped for one an eavesdropper holds.
+//
+// Only the PUBLIC half is emitted. The secret is `<key_id>:<64-hex seed>`; the seed is derived from
+// and never printed. This is deliberately the same key the AWS deployment used — clients already
+// trust manifests naming it, and a fresh one would invalidate them.
+const intakeSecret = execFileSync(
+  "gcloud",
+  ["secrets", "versions", "access", "latest", "--secret", "cello-portal-intake-key-0", "--project", PROJECT],
+  { encoding: "utf8" },
+).trim();
+const [intakeKeyId, intakeSeedHex] = intakeSecret.split(":");
+if (!intakeKeyId || !/^[0-9a-f]{64}$/i.test(intakeSeedHex ?? "")) {
+  throw new Error("portal intake secret is not '<key_id>:<64-hex seed>'");
+}
+const intakePub = Buffer.from(ed25519.getPublicKey(Buffer.from(intakeSeedHex, "hex"))).toString("hex");
+
 // ── Build ────────────────────────────────────────────────────────────────────────────────────
 
 const manifest = {
-  version: 1,
+  // 2, matching the shape that carries `intake_key`. Version 1 was this roster without it, which a
+  // client accepts and then refuses every trust-signal submission against.
+  version: 2,
   not_before: "2026-01-01T00:00:00Z",
   expires: "2030-01-01T00:00:00Z",
   nodes: nodes.map((n) => ({
@@ -123,6 +148,7 @@ const manifest = {
     multiaddr: `/ip4/${n.address}/tcp/8080/ws`,
     role: "validator",
   })),
+  intake_key: { key_id: intakeKeyId, pubkey: intakePub },
   signatures: [],
 };
 

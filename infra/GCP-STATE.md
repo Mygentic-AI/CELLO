@@ -225,3 +225,36 @@ asia-northeast1: 100 CPUs, otherwise same.
 ## Credits
 
 ~$23k, valid to Nov 2027 (Andre, 2026-07-28). GCP cost is never a design constraint.
+
+## Client — the bundled roster now points at GCP (2026-07-31)
+
+Until this, **no client could connect to anything**. The published client bundles the roster of
+sovereign directories and bootstraps from it; that roster named the three AWS nodes, whose hostnames
+resolve to `198.51.100.1` — the placeholder hibernation left behind.
+
+| | |
+|---|---|
+| Published (beta) | `daemon@0.0.101`, `cli@0.0.104` — tag `v0.0.158`, smoke-tag green |
+| Verified on the tarball | `dist/bundled-consortium-manifest.js` contains gcp-use1/usc1/euw1 and no AWS ids; `PRODUCTION_DIRECTORY_URL = http://34.75.172.108:9090`; `cli` pins `daemon@0.0.101` exactly |
+| Manifest | v2, officer root key `e8300a2b…b104`, intake key `intake-dev-1` / `87da56bf…b3d1` (the AWS key, carried over — clients already trust manifests naming it) |
+| **`latest` promotion** | **NOT DONE — Andre runs it.** Commands are in the session hand-off |
+
+**`PRODUCTION_DIRECTORY_URL` must be one of the bundled `endpoint` values, byte for byte.**
+`buildManifestDeps` loads the bundled roster only when the resolved directory URL matches a node in
+it, and otherwise falls through to the pre-roster path with step-6 directory authentication OFF. A
+DNS name that resolves to the very same node does NOT match, so cold boot silently loses the defence
+against a MITM redirecting `/bootstrap` — no error, no log. A test now asserts that relationship.
+`directory-use1|usc1|euw1.cello.mygentic.ai` resolve to the nodes for humans and curl.
+
+### Live end-to-end proof on GCP (2026-07-31, two isolated daemons)
+
+Registration exercised the real path — a minted pre-auth capability, not a build with the check off.
+
+1. `create-agent` → `register-agent` — DKG across all three GCP directories, T = majority(3) = 2.
+2. Both agents `online`, `directory_signaling: connected`, standing receiver ready.
+3. Session established between them over the relay.
+4. Messages delivered BOTH directions (`delivered: true`).
+5. `close-session` returned a sealed Merkle root with a live attestation from both participants.
+
+Two test agents (`M12_Smoke`, `M12_Peer`) remain registered in the GCP directories; their daemons are
+stopped. Harmless, and removable with `cello remove-agent`.

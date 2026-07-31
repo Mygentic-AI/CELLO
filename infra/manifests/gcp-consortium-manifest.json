@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "not_before": "2026-01-01T00:00:00Z",
   "expires": "2030-01-01T00:00:00Z",
   "nodes": [
@@ -34,10 +34,14 @@
       "role": "validator"
     }
   ],
+  "intake_key": {
+    "key_id": "intake-dev-1",
+    "pubkey": "87da56bf2ca5ef75d62d88dfed1f667f9fa565ee0a5306aeeef50f5d7053b3d1"
+  },
   "signatures": [
     {
       "officerIndex": 0,
-      "signature": "43610d4b4a2488543dee8866aa21d6fc8cca708b35139d823807d4df4a9c7b6d1ec3863c1a15d2e2d16bcb1859cbddb1cdc9e3fcc85f38aad693d0625d9f1c0a"
+      "signature": "d85802b8c9ea876ff3b2774e7c5feab8413b953d5a4f41291309a9bd38ea90ab53203c50fa41f8b74b2fc4370880098ad1f0c317081a898990afafffd5c49508"
     }
   ]
 }
