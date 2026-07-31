@@ -18,27 +18,25 @@ section that follows it, or in `infra/CLAUDE.md`.
 
 ---
 
-## ⚡ POWER STATE — LIVE (all 3 regions, as of 2026-07-31 10:54 UTC)
+## ⚡ POWER STATE — HIBERNATED (all 3 regions, as of 2026-07-31 15:12 UTC)
 
-Woken 10:36:11–10:54:24 UTC (18 min 13 s). Previous down-window ~15 h.
+Down since ~15:08–15:12 UTC. Previous uptime ~4.5 h (woken 10:36–10:54 UTC).
 
-**ALB DNS names — these rotate on every wake; query AWS, do not trust this list once it is a day old.**
-Portal/ops ALB this cycle: `cello-portal-dev-154897317.us-east-1.elb.amazonaws.com`.
+Torn down: 7 ALBs, 3 NAT Gateways (EIPs retained), 3 ssmmessages endpoints. ECS→0 across all
+services, 4 RDS stopped, demo EC2 stopped. All 8 hostnames blackholed to `198.51.100.1` TTL 60.
+Portal capture: **2 listener rules + 1 SNI cert** — ops dashboard restores itself on wake.
 
-**Verified live, independently of the script's own log:** 8/8 DNS names off the blackhole;
-`http://directory-{us1,eu1,ap1}/manifest` → **200** in all three regions; 7 ALBs `active`; all 8 ECS
-services 1/1 `COMPLETED`; 4 RDS `available`; demo EC2 `running`; `operations.cello.mygentic.ai`
-→ **307** (ops dashboard restored automatically, third cycle running); daemon
-`directory_signaling: connected`.
+**First run with the reordered teardown (`914ee8a3`).** The blackhole UPSERT now precedes
+`delete-load-balancer`, closing the window in which the alias pointed at a deleted ALB and Route53
+answered NXDOMAIN. Confirmed live in the run log: every blackhole line precedes its region's delete
+lines (eu L193/199→L204/214, ap L203/210→L226/235, us L243-252→L256-260).
 
-**Inventory diff not identical in us-east-1, correctly:** directory taskdef `430 → 432` — CI shipped
-while we were hibernated and the wake started the newer revision, now 1/1 and serving. eu-central-1
-and ap-northeast-1 were IDENTICAL. A taskdef delta after a down-window during which CI ran is
-expected; only a *structural* delta (missing TG, listener, route, endpoint) is a real finding.
+**`--execute` now requires a passing dry-run of the current script contents** (`--skip-dryrun-check`
+to override). Markers live in `infra/.dryrun-ok/`, keyed by SHA-256 of the script, gitignored.
 
-**Gotcha for anyone health-checking the directory:** its ALB has an **HTTP:80 listener only** — no
-HTTPS — and `/health` is not a public path (the app returns 400). `https://directory-*/health`
-returns `000` on a perfectly healthy node. The real client path is `http://directory-*/manifest`.
+**ECS Exec unavailable while hibernated.** No AWS changes until `wake.sh --execute` has run.
+Restore with `./infra/scripts/wake.sh --execute --yes` (~15–18 min; a dry-run is required first if
+the script has changed since the last one).
 
 ---
 
