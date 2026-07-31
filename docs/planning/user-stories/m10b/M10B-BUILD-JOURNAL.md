@@ -3317,3 +3317,91 @@ what a recipient does with it is the moved line.
 **Two stale tags in a row** (`SCAN-1`, now this) says something about the scoreboard rather than the
 code: tags were being written when a unit was declared done and not revisited when later work
 finished the clause. Both flips took ~10 minutes to evidence and neither needed a line of code.
+
+---
+
+## Entry 43 — the fan-out had never reached a node, and a stale DNS cache spent an hour proving it wasn't the protocol
+
+Three things landed today. Two were bugs of the same shape as Entry 41's, and the third was not a bug
+at all — which is the part worth writing down.
+
+### The surface split — attestations are not a wallet subcommand
+
+`cello_trust_signals_issue` became `cello_attestations_issue`, plus a new `cello_attestations_issued`,
+and `cello_consent_*` became `cello_attestation_consent_*`. On the wire an attestation IS a trust
+signal, which is exactly why they shared a name — and why the person-to-person primitive read as the
+fifth subcommand of a wallet listing. A trust signal is the NETWORK verifying an attribute of yours;
+an attestation is a PERSON vouching for a PERSON. Same bytes, different affordance. Andre's framing:
+these are tacit affordances, and getting them wrong is a UX defect whether or not the code works.
+
+The rename then left **five dead command names** behind, including `helpForSpec("consent")` — so
+`cello attestation-consent <bad-sub>` died with `Fatal: registry: no command 'consent'`, on the one
+path whose job is helping a confused user. A search-and-replace for `cello consent ` missed every
+prose reference, because they end in a backtick or a quote. All of it shipped in 0.0.101 green.
+
+### The finding that started it: an INCLUSION list nobody can forget safely
+
+`cello trust-signals results` shipped CLI-only and `wallet_list_issued` shipped with no surface at
+all, because the parity test iterated a hand-maintained list of verbs and asked "is each one wired
+up?". Omitting an entry makes the loop SHORTER, never red. The one thing nobody wired is the one
+thing unchecked.
+
+Inverted: the test now scans `handlers.set("cello_…")` across the daemon as ground truth and demands
+each capability be reachable from BOTH surfaces or exempted in writing. Two more tests cover the same
+class — every `helpForSpec()` literal must resolve, and a DENYLIST of retired verb names must appear
+in no shipping source. The denylist found a sixth dead reference the moment it ran.
+
+Rule: **when a test iterates a curated list, it cannot fail for the item that is missing.** Iterate
+what the system HAS; keep an exemption list with written reasons.
+
+### `DOD-END-RESULTS-1` — the fan-out had never reached a non-home node
+
+`openVisitingConnection` returns SYNCHRONOUSLY; the SignalingManager starts in `reconnecting` and
+dials in the background. The results fan-out called `fetchSubmissionResults` on the very next line, so
+every node answered `signaling_reconnecting` before a packet left the machine.
+
+| state | `unreachable_nodes` |
+|---|---|
+| infra hibernated | `consortium_unresolved` — empty roster, no map to work from |
+| DNS fixed, daemon 0.0.100 | `["us-east-1","eu-central-1","ap-northeast-1"]` |
+| daemon 0.0.104 (fixed) | `[]` — all three reached |
+
+The tell was never the failure, it was the SPREAD: three continents recorded unreachable **5ms
+apart**. No network failure resolves in 5ms. `runCrossNodeSetup` (outbound-sessions.ts:491) and both
+seal-broker paths already await `waitForSignalingConnected`; this call site was the only one that did
+not.
+
+### The hour that was not a protocol failure
+
+Before the fix could be verified, every cross-node session died. It presented in sequence as
+`counterparty_offline`, then `directory_below_threshold`, then `ceremony_exhausted` — three errors
+pointing at three different subsystems, none of them at the cause.
+
+The cause was a **stale local DNS cache**. Hibernate deletes the ALBs; wake recreates them with new
+IPs; this host kept serving the pre-wake addresses. libp2p signaling still connected off the bundled
+manifest, so `cello status` showed all five agents `online` with receivers ready while nothing that
+needed the HTTP endpoint worked. `dns_error` was in the daemon log 26 times per node from startup and
+never reached the operator.
+
+Two lessons, both cheap and both outstanding:
+1. **The daemon knew.** `dns_error` was produced at the moment it was known and discarded into a log
+   nobody reads under pressure. Every operator-visible error named something else.
+2. **`online` is too weak a word.** An agent with signaling up but no resolvable endpoint cannot hold
+   a session, yet it renders identically to one that can. That gap is what made a host-level cache
+   problem read as "our core value proposition does not work."
+
+This is the same failure class as the two bugs above — a fact deleted at the point it was known — and
+it is why `signal.results.node.unreachable` now carries the per-node reason, and why an empty roster
+reports `consortium_unresolved` instead of "no directory node answered".
+
+### Stale note corrected
+
+`DOD-END-SUBMIT-1` still reads "nothing generates the manifest's `intake_key`, so against every real
+manifest today this refuses with `intake_key_absent`". That is no longer true: a live submission today
+returns `intake_key_id: "intake-dev-1", stored: true`. The intake keypair was provisioned and the
+manifest signed in three regions since the note was written. The line's OTHER handed-forward AC
+(nothing retries) is still blocked on `DOD-END-SURFACE-1`, so the tag stays 🟡 — but for one reason
+now, not two.
+
+Shipped: daemon 0.0.104, cli 0.0.107, connect 0.0.109 — verified in the tarballs, promoted, and the
+fan-out proof re-run against the live consortium.
