@@ -138,6 +138,52 @@ export type HealthReport = {
  * Throws immediately if any required configuration is missing for non-local envs.
  * This implements the "fail at startup with a clear error" composition root rule.
  */
+/**
+ * Resolve the database connection string, or say why it cannot be.
+ *
+ * DATABASE_URL wins outright when set, and when it is set the RDS_* pieces are NOT required — they
+ * exist only to be assembled INTO a url, so demanding them alongside one is demanding configuration
+ * that is then discarded. That is not hypothetical: it is what refused to start the agent on GCP,
+ * where the database is reached by a single connection string and there is no RDS to describe. The
+ * error named a variable whose value the process would have thrown away three lines later.
+ *
+ * Extracted and exported so the precondition is testable. It used to be inline in main(), guarded by
+ * `env !== "local"`, which meant the only way to exercise it was to boot the process.
+ */
+export function resolveDatabaseUrl(
+  env: CelloEnv,
+  vars: NodeJS.ProcessEnv,
+): { ok: true; url: string } | { ok: false; reason: string } {
+  const direct = vars["DATABASE_URL"];
+  if (direct) return { ok: true, url: direct };
+
+  let username = "cello_ops_agent";
+  let password = "";
+  const raw = vars["RDS_CREDENTIALS"];
+  if (raw) {
+    let parsed: { username?: string; password?: string };
+    try {
+      parsed = JSON.parse(raw) as { username?: string; password?: string };
+    } catch {
+      return { ok: false, reason: "RDS_CREDENTIALS JSON parse failed" };
+    }
+    username = parsed.username ?? username;
+    password = parsed.password ?? password;
+  } else if (env !== "local") {
+    // Both routes named, because an operator on GCP has no RDS to take credentials from and would
+    // otherwise be sent looking for one.
+    return {
+      ok: false,
+      reason: `CELLO_ENV=${env} needs a database: set DATABASE_URL, or RDS_CREDENTIALS with RDS_ENDPOINT`,
+    };
+  }
+
+  const host = vars["RDS_ENDPOINT"] ?? "localhost";
+  const port = vars["RDS_PORT"] ?? "5432";
+  const dbname = vars["RDS_DB_NAME"] ?? "cello_dev";
+  return { ok: true, url: `postgresql://${username}:${encodeURIComponent(password)}@${host}:${port}/${dbname}` };
+}
+
 export function resolveAdapters(config: AdapterConfig): ResolvedAdapters {
   const { env, logger } = config;
 
@@ -349,37 +395,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // ── Parse RDS credentials ─────────────────────────────────────────────────
-  let rdsUsername = "cello_ops_agent";
-  let rdsPassword = "";
-  const rdsCredentialsRaw = process.env["RDS_CREDENTIALS"];
-  if (rdsCredentialsRaw) {
-    try {
-      const parsed = JSON.parse(rdsCredentialsRaw) as {
-        username?: string;
-        password?: string;
-      };
-      rdsUsername = parsed.username ?? rdsUsername;
-      rdsPassword = parsed.password ?? rdsPassword;
-    } catch {
-      logger.error("ops_agent.startup.failed", {
-        reason: "RDS_CREDENTIALS JSON parse failed",
-        component: "server",
-      });
-      process.exit(1);
-    }
-  } else if (env !== "local") {
-    logger.error("ops_agent.startup.failed", {
-      reason: "RDS_CREDENTIALS required for CELLO_ENV=" + env,
-      component: "server",
-    });
+  // ── Build database connection pool ────────────────────────────────────────
+  const resolved = resolveDatabaseUrl(env, process.env);
+  if (!resolved.ok) {
+    logger.error("ops_agent.startup.failed", { reason: resolved.reason, component: "server" });
     process.exit(1);
   }
-
-  // ── Build database connection pool ────────────────────────────────────────
-  const databaseUrl =
-    process.env["DATABASE_URL"] ??
-    `postgresql://${rdsUsername}:${encodeURIComponent(rdsPassword)}@${process.env["RDS_ENDPOINT"] ?? "localhost"}:${process.env["RDS_PORT"] ?? "5432"}/${process.env["RDS_DB_NAME"] ?? "cello_dev"}`;
+  const databaseUrl = resolved.url;
 
   const pool = new pg.Pool({
     connectionString: databaseUrl,
