@@ -207,6 +207,99 @@ resource "google_cloud_run_v2_service" "portal" {
         }
       }
 
+      // The portal keeps the hostname it had on AWS. That is not sentiment: the GitHub OAuth app's
+      // callback is registered against it, and WEBAUTHN_RP_ID is part of what a passkey is bound to —
+      // change the host and every existing passkey stops working, permanently. Keeping the name makes
+      // the move a DNS change instead of a re-registration for every operator.
+      env {
+        name  = "PORTAL_BASE_URL"
+        value = "https://${var.portal_hostname}"
+      }
+
+      env {
+        name  = "WEBAUTHN_ORIGIN"
+        value = "https://${var.portal_hostname}"
+      }
+
+      env {
+        name  = "WEBAUTHN_RP_ID"
+        value = var.portal_hostname
+      }
+
+      // Singular, for the paths that predate the failover list. Points at the same first node.
+      env {
+        name  = "DIRECTORY_API_URL"
+        value = "http://${google_compute_address.node_internal[keys(var.directory_nodes)[0]].address}:8081"
+      }
+
+      env {
+        name  = "PORTAL_DIRECTORY_BASE_URL"
+        value = "http://${google_compute_address.node_internal[keys(var.directory_nodes)[0]].address}:8081"
+      }
+
+      // Cloud KMS, not AWS KMS. Set here so the signer selection is a deployment fact rather than a
+      // compiled-in choice; the version is pinned because a rotation needs re-enrolment on every
+      // directory and must therefore be deliberate.
+      env {
+        name  = "PORTAL_GCP_KMS_KEY"
+        value = "${google_kms_crypto_key.portal_submission.id}/cryptoKeyVersions/1"
+      }
+
+      env {
+        name = "GITHUB_CLIENT_ID"
+        value_source {
+          secret_key_ref {
+            secret  = "cello-portal-github-client-id"
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "GITHUB_CLIENT_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = "cello-portal-github-client-secret"
+            version = "latest"
+          }
+        }
+      }
+
+      // The intake key. Carried over from AWS rather than regenerated, because the consortium manifest
+      // clients already trust was signed with its public half — a fresh key here would invalidate
+      // every endorsement path against manifests already in the wild.
+      env {
+        name = "PORTAL_INTAKE_SEEDS"
+        value_source {
+          secret_key_ref {
+            secret  = "cello-portal-intake-key-0"
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "PORTAL_INGRESS_TRIGGER_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = "cello-portal-ingress-trigger-secret"
+            version = "latest"
+          }
+        }
+      }
+
+      // Only reached when env is `local`; carried so a local run against these secrets behaves the
+      // same way, and so the variable is not silently absent if the signer selection ever changes.
+      env {
+        name = "PORTAL_SUBMISSION_SEED"
+        value_source {
+          secret_key_ref {
+            secret  = "cello-portal-submission-seed"
+            version = "latest"
+          }
+        }
+      }
+
       startup_probe {
         initial_delay_seconds = 5
         period_seconds        = 5
@@ -321,6 +414,89 @@ resource "google_secret_manager_secret_version" "portal_directory_api_keys" {
 resource "google_secret_manager_secret_iam_member" "portal_directory_api_keys" {
   project   = var.project_id
   secret_id = google_secret_manager_secret.portal_directory_api_keys.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workload["portal"].email}"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// The portal's SIGNING key (M10-D6), on Cloud KMS.
+//
+// Every trust-signal submission and every directory query the portal makes is signed with an Ed25519
+// key whose public half is enrolled in each directory's `authorized_issuers`. On AWS the private half
+// lived in KMS and signing was an API call, so the running task carried no key material. Cloud KMS
+// supports the same key type, so that property moves with the portal instead of being traded for a
+// seed in an environment variable.
+//
+// This is necessarily a NEW key: KMS private material is non-exportable by design, on either cloud.
+// That costs nothing here because the GCP directories start with empty databases — the public half is
+// enrolled fresh rather than migrated.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+resource "google_kms_key_ring" "portal" {
+  name     = "cello-portal"
+  project  = var.project_id
+  location = "us-east1"
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_kms_crypto_key" "portal_submission" {
+  name     = "portal-submission"
+  key_ring = google_kms_key_ring.portal.id
+  purpose  = "ASYMMETRIC_SIGN"
+
+  version_template {
+    algorithm        = "EC_SIGN_ED25519"
+    protection_level = "SOFTWARE"
+  }
+
+  // Rotation is deliberately absent. A new version would sign with a key nobody has enrolled, so
+  // every signature would be refused by every directory until the new public half is registered on
+  // each one. Rotation here is a coordinated act, not a schedule.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_kms_crypto_key_iam_member" "portal_sign" {
+  crypto_key_id = google_kms_crypto_key.portal_submission.id
+  role          = "roles/cloudkms.signerVerifier"
+  member        = "serviceAccount:${google_service_account.workload["portal"].email}"
+}
+
+// Separate from signing: reading the public key is what enrolment and verification need, and it is
+// the half an operator may want to grant on its own.
+resource "google_kms_crypto_key_iam_member" "portal_pubkey" {
+  crypto_key_id = google_kms_crypto_key.portal_submission.id
+  role          = "roles/cloudkms.publicKeyViewer"
+  member        = "serviceAccount:${google_service_account.workload["portal"].email}"
+}
+
+output "portal_submission_key_version" {
+  value       = "${google_kms_crypto_key.portal_submission.id}/cryptoKeyVersions/1"
+  description = "The portal's Ed25519 signing key version — its public half must be enrolled in every directory's authorized_issuers."
+}
+
+// The portal keeps its AWS hostname — see PORTAL_BASE_URL above for why changing it is not free.
+variable "portal_hostname" {
+  type        = string
+  default     = "portal.cello.mygentic.ai"
+  description = "Public hostname for the portal. The GitHub OAuth callback and every registered passkey are bound to this value."
+}
+
+// The five secrets copied from AWS need an accessor grant each; without it the revision fails to start
+// with a permission error on the secret rather than anything resembling a config problem.
+resource "google_secret_manager_secret_iam_member" "portal_copied" {
+  for_each = toset([
+    "cello-portal-github-client-id",
+    "cello-portal-github-client-secret",
+    "cello-portal-intake-key-0",
+    "cello-portal-ingress-trigger-secret",
+    "cello-portal-submission-seed",
+  ])
+  project   = var.project_id
+  secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.workload["portal"].email}"
 }
