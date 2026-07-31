@@ -2,61 +2,77 @@
 #
 # The enforcer for DOD-GCP-SCHEMA-1 (M11 P4).
 #
-# Checks the three clauses of the line against the LIVE GCP portal Cloud SQL,
-# not against a local database and not against the migration files:
+# Checks the line's clauses against the LIVE GCP portal Cloud SQL:
 #
-#   1. All 20 waitlist tables exist.
-#   2. The shared ledger holds exactly 37 rows (11 portal + 26 waitlist).
-#   3. Re-running the migrator applies 0 (idempotent).
+#   1. The checkout holds the 26 migrations the line names, EXPECTED_TABLES
+#      agrees with what those files actually create, and every one of the 26
+#      stems has a ledger row.
+#   2. All 19 waitlist tables + the waitlist_queue view exist, and
+#      queue_position is not a stored column (DOD-QUEUE-VIEW-1).
+#   3. The ledger holds 11 portal + 26 waitlist rows — as a SET, not a total.
+#   4. Nothing is pending: the migrator, in DRY RUN, has nothing left to apply.
 #
-# Clause 3 is the one that cannot be checked by looking. It runs the real
-# migrator a second time and asserts the applied count is zero — the property
-# that separates "the tables are there" from "the ledger and the schema agree".
+# READ-ONLY AGAINST THE DATABASE. Clause 4 used to call the migrator in APPLY
+# mode to prove "a second run applies 0". That made the checker a writer: point
+# MIGRATIONS_DIR at a checkout carrying an unmerged 0027 and the check APPLIES
+# it to the live portal database, then reports `not idempotent` — naming the
+# migrator for what is checkout drift, after the write already happened and
+# could not be undone by re-running. The dry run proves the same property. The
+# handler verifies every applied checksum (rejecting an edited migration) and
+# rejects any `<stem>.sql`-keyed ledger row BEFORE it returns, so all of that
+# strength survives; only the write is gone.
 #
-# WHY THE TABLE LIST IS SPELLED OUT rather than counted. The first pass at this
-# check on 2026-07-31 asked whether `waitlist_signups`, `gallery_items` and
-# `social_profiles` existed. None of those names appear in any migration, so it
-# reported "zero waitlist tables" — correctly, and for a database that held all
-# twenty it would have said the same thing. A check whose names cannot exist
-# passes for the wrong reason. These twenty are extracted from the migration
-# files; if a migration adds a table, add it here and the count moves with it.
+# WHY THE TABLE LIST IS BOTH DERIVED AND PINNED. Each catches what the other
+# cannot. The hand list fails loudly on a name that cannot exist — that is how
+# `skips` died in under a minute, having been grepped out of a COMMENT reading
+# "CREATE TABLE IF NOT EXISTS skips the table wholesale". But a hand list is
+# also the classic hollow shape: drop a name and the loop just gets shorter,
+# never red. So the files are parsed independently and diffed against the list,
+# and the count is pinned so a genuinely new table has to be a decision.
+#
+# DO NOT rewrite the presence check as "no unexpected tables". That direction
+# cannot fail on an invented name, which is the property that matters here.
 #
 # ACCESS: the Cloud SQL Auth Proxy, never `gcloud sql connect` — the latter
-# allowlists the caller's IP on the instance and does not remove it, which makes
-# reading the database a write to its configuration.
+# allowlists the caller's IP on the instance and does not remove it, which turns
+# reading the database into a write to its configuration.
 #
 #   ./infra/scripts/verify-gcp-waitlist-schema.sh
 #
-# Exits non-zero on the first failed clause, naming which one and what it saw.
+# Exits non-zero on the first failed clause, naming the clause and the cause.
 set -euo pipefail
 
 PROJECT="${GCP_PROJECT:-cello-infra}"
 INSTANCE="${GCP_SQL_INSTANCE:-cello-infra:us-east1:cello-portal}"
-# 56432, NOT 55432, and this is not arbitrary. 55432 is where the local
-# `cello-portal-postgres` container binds, and it is the default in
-# waitlist_testdb.py (`postgres://m11:m11@localhost:55432/m11_test`) — so the
-# whole Python suite points at that port. Running the proxy there puts the
-# PRODUCTION GCP database on the address the test harness reaches for.
-#
-# It is worse than a clash, because both can hold it at once: Docker binds
-# `*:55432` (v6) and the proxy binds `127.0.0.1:55432` (v4), so both "succeed"
-# and which one a client reaches depends on how its resolver orders localhost.
-# A suite that thinks it is on a scratch database would be writing to Cloud SQL.
-# Observed 2026-07-31 — the tests failed with `password authentication failed
-# for user "m11"`, which is the proxy answering, not Docker.
-PORT="${PROXY_PORT:-56432}"
 DB="${GCP_DB_NAME:-cello_portal}"
-DB_USER="${GCP_DB_USER:-cello_portal}"
-MIGRATIONS_DIR="${MIGRATIONS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/../corp-cello-site/migrations}"
-LAMBDA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lambda"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+MIGRATIONS_DIR="${MIGRATIONS_DIR:-${REPO_ROOT}/../corp-cello-site/migrations}"
+LAMBDA_DIR="${REPO_ROOT}/infra/lambda"
 
-# Nineteen. Derived by stripping SQL comments FIRST and then matching CREATE
-# TABLE — because not doing so is how this list first said twenty. A comment in
-# 0002 reads "CREATE TABLE IF NOT EXISTS skips the table wholesale", and a naive
-# grep read `skips` as a table name. It failed loudly here rather than passing
-# vacuously, which is the only reason it was cheap: this check requires each
-# name to be PRESENT, so an invented one fails. A check written the other way
-# round — "no unexpected tables" — would have swallowed it.
+# 56432, NOT 55432, and this is not arbitrary. 55432 is where the local
+# `cello-portal-postgres` container binds, and waitlist_testdb.py defaults to
+# `postgres://m11:m11@localhost:55432/m11_test` — the whole Python suite reaches
+# for that port. Running the proxy there puts the PRODUCTION database on the
+# address the tests use. Worse, both can hold it at once: Docker binds `*:55432`
+# (v6) and the proxy binds `127.0.0.1:55432` (v4), so both succeed and which one
+# a client reaches depends on how its resolver orders localhost.
+PORT="${PROXY_PORT:-56432}"
+
+# Pinned, not overridable. An enforcer whose assertion can be relaxed by
+# exporting a variable asserts nothing. The portal set is closed at 0011; the
+# waitlist count is what the DoD line says, and the file count is checked
+# against it so "the line is stale" and "a migration did not apply" are
+# different messages instead of the same number.
+EXPECTED_PORTAL_ROWS=11
+EXPECTED_WAITLIST_MIGRATIONS=26
+EXPECTED_TABLE_COUNT=19
+
+# The 19. Every name must be PRESENT — see the header for why that direction.
+# Verified 2026-07-31 to have ZERO overlap with the portal's own 15 tables:
+# without that, `CREATE TABLE IF NOT EXISTS` would no-op on a collision and this
+# check would go green on a table the waitlist never created. `waitlist_sessions`
+# vs the portal's `sessions`, and `auth_tokens` vs `magic_link_tokens`, are the
+# near-misses; both are distinct.
 EXPECTED_TABLES=(
   auth_link_requests auth_tokens creator_tracking email_jobs
   points_ledger post_review_queue published_receipts referral_codes
@@ -65,11 +81,7 @@ EXPECTED_TABLES=(
   waitlist_social_profiles waitlist_tokens waitlist_touchpoints
   waitlist_users waves
 )
-# Not a table, and load-bearing: DOD-QUEUE-VIEW-1 requires queue_position to be
-# COMPUTED, never a stored column. If this view is absent the status page and E1
-# have no position to render.
 EXPECTED_VIEWS=(waitlist_queue)
-EXPECTED_LEDGER_ROWS="${EXPECTED_LEDGER_ROWS:-37}"
 
 fail() { echo "FAIL — $*" >&2; exit 1; }
 
@@ -77,101 +89,145 @@ command -v cloud-sql-proxy >/dev/null || fail "cloud-sql-proxy not installed (br
 command -v psql >/dev/null || fail "psql not installed"
 [ -d "$MIGRATIONS_DIR" ] || fail "migrations dir not found: $MIGRATIONS_DIR"
 
-# --quota-project is required. Without it ADC bills the quota to whatever
-# `gcloud config` happens to name, and the proxy dies with accessNotConfigured
-# on sqladmin.googleapis.com if that project has the API disabled.
-# Refuse a port somebody else already holds, rather than binding beside them on
-# a different address family and letting the caller's resolver pick. This is the
-# guard for the hazard described at PORT above: silently sharing 55432 with the
-# local Postgres is how a test run reaches production.
+# ── Clause 1a: the checkout is the one the DoD line describes ────────────────
+# MIGRATIONS_DIR points into a sibling working tree at whatever commit it
+# happens to be on. Every database clause below is measured against that
+# pointer, so it is checked FIRST and by itself — a stale checkout is not a
+# database finding and must not be reported as one.
+STEMS=()
+while IFS= read -r line; do STEMS+=("$line"); done < <(cd "$MIGRATIONS_DIR" && ls -1 *.sql | sed 's/\.sql$//' | sort)
+[ "${#STEMS[@]}" -eq "$EXPECTED_WAITLIST_MIGRATIONS" ] || fail \
+  "clause 1 — ${MIGRATIONS_DIR} holds ${#STEMS[@]} migrations, the DoD line says ${EXPECTED_WAITLIST_MIGRATIONS}. \
+That checkout is stale or ahead of the line. This is NOT a database finding — fix the checkout, or update the line."
+
+# ── Clause 1b: EXPECTED_TABLES still matches what the files create ───────────
+# Comments stripped FIRST (/* */ then --). Not doing that is how `skips` got in.
+DERIVED=()
+while IFS= read -r line; do DERIVED+=("$line"); done < <(
+  cat "$MIGRATIONS_DIR"/*.sql \
+    | perl -0pe 's{/\*.*?\*/}{}gs; s{--[^\n]*}{}g' \
+    | grep -oEi 'CREATE TABLE( IF NOT EXISTS)? [a-z0-9_]+' \
+    | awk '{print $NF}' | sort -u
+)
+[ "${#DERIVED[@]}" -eq "$EXPECTED_TABLE_COUNT" ] || fail \
+  "clause 1 — the migrations now create ${#DERIVED[@]} tables, the DoD line says ${EXPECTED_TABLE_COUNT}. \
+A table was added, or the extraction broke. Decide which, then update BOTH the line and this number."
+if ! diff <(printf '%s\n' "${DERIVED[@]}") <(printf '%s\n' "${EXPECTED_TABLES[@]}" | sort) >/dev/null; then
+  fail "clause 1 — EXPECTED_TABLES has drifted from the migration files:
+$(diff <(printf '%s\n' "${DERIVED[@]}") <(printf '%s\n' "${EXPECTED_TABLES[@]}" | sort) | sed 's/^/    /')
+  (< = in the files, > = in this script's list)"
+fi
+echo "ok   clause 1a/1b — ${#STEMS[@]} migrations in the checkout, creating the expected ${#DERIVED[@]} tables"
+
+# ── the proxy ────────────────────────────────────────────────────────────────
+# Refuse a port somebody already holds rather than binding beside them on
+# another address family and letting the caller's resolver choose.
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   fail "port $PORT is already in use — refusing to start the proxy beside it. \
-Something else (a local Postgres? another proxy?) holds it, and sharing the port means \
-callers reach whichever one their resolver picks. Free it, or set PROXY_PORT."
+Something else holds it, and sharing the port means callers reach whichever one their resolver picks. \
+Free it, or set PROXY_PORT."
 fi
 
 cloud-sql-proxy --quota-project "$PROJECT" --port "$PORT" "$INSTANCE" >/tmp/gcp-schema-proxy.log 2>&1 &
 PROXY_PID=$!
-cleanup() { kill "$PROXY_PID" 2>/dev/null || true; }
-trap cleanup EXIT
+cleanup() { kill -0 "$PROXY_PID" 2>/dev/null && kill "$PROXY_PID" 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
 
+# Break the moment the proxy dies, rather than sleeping 30s over a bind error it
+# reported in the first 50ms.
 for _ in $(seq 1 30); do
   grep -q "ready for new connections" /tmp/gcp-schema-proxy.log 2>/dev/null && break
+  kill -0 "$PROXY_PID" 2>/dev/null || break
   sleep 1
 done
 grep -q "ready for new connections" /tmp/gcp-schema-proxy.log \
   || fail "proxy did not start — $(tail -3 /tmp/gcp-schema-proxy.log)"
 
-PGPASSWORD="$(gcloud secrets versions access latest \
-  --secret=cello-portal-database-url --project="$PROJECT" \
-  | sed -E 's#^postgresql://[^:]+:([^@]+)@.*$#\1#' \
-  | python3 -c 'import sys,urllib.parse;print(urllib.parse.unquote(sys.stdin.read().strip()))')"
+# One parse, one source, and an assertion that it matched. `sed s///` passes its
+# input through UNCHANGED on a non-match, so a secret whose shape ever differs
+# would silently make PGPASSWORD the whole connection string — surfacing as
+# "cannot reach the database" and sending the operator to Cloud SQL IAM over a
+# regex four lines up. `[^@]+` also truncates at the first `@`, so a rotation to
+# a password containing one would break the same way.
+SECRET="$(gcloud secrets versions access latest --secret=cello-portal-database-url --project="$PROJECT")"
+read -r DB_USER PGPASSWORD < <(printf '%s' "$SECRET" | python3 -c '
+import sys
+from urllib.parse import urlsplit
+u = urlsplit(sys.stdin.read().strip())
+print(u.username or "", u.password or "")
+')
 export PGPASSWORD
+[ -n "$DB_USER" ] && [ -n "$PGPASSWORD" ] || fail \
+  "cello-portal-database-url did not parse as postgresql://user:pass@… — the secret's shape changed. \
+This is NOT a credentials failure."
+
 URL="postgresql://${DB_USER}@127.0.0.1:${PORT}/${DB}"
+psql "$URL" -tAc "SELECT 1" >/dev/null || fail "cannot reach $DB through the proxy on port $PORT"
 
-psql "$URL" -tAc "SELECT 1" >/dev/null || fail "cannot reach $DB through the proxy"
-
-# ── Clause 1: all 20 waitlist tables exist ───────────────────────────────────
+# ── Clause 2: the tables, the view, and the absent stored column ─────────────
 missing=()
 for t in "${EXPECTED_TABLES[@]}"; do
-  found="$(psql "$URL" -tAc \
-    "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='${t}'")"
+  found="$(psql "$URL" -tAc "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='${t}'")"
   [ "$found" = "1" ] || missing+=("$t")
 done
-if [ ${#missing[@]} -ne 0 ]; then
-  fail "clause 1 — ${#missing[@]} of ${#EXPECTED_TABLES[@]} waitlist tables missing: ${missing[*]}"
-fi
+[ ${#missing[@]} -eq 0 ] || fail "clause 2 — ${#missing[@]} of ${#EXPECTED_TABLES[@]} waitlist tables missing: ${missing[*]}"
+
 for v in "${EXPECTED_VIEWS[@]}"; do
-  found="$(psql "$URL" -tAc \
-    "SELECT 1 FROM pg_views WHERE schemaname='public' AND viewname='${v}'")"
-  [ "$found" = "1" ] || fail "clause 1 — view ${v} missing (DOD-QUEUE-VIEW-1)"
+  found="$(psql "$URL" -tAc "SELECT 1 FROM pg_views WHERE schemaname='public' AND viewname='${v}'")"
+  [ "$found" = "1" ] || fail "clause 2 — view ${v} missing (DOD-QUEUE-VIEW-1)"
 done
-# queue_position must be COMPUTED. A stored column of that name means someone
-# materialised the ranking, which DOD-QUEUE-VIEW-1 forbids outright.
+
+# queue_position must be COMPUTED. A stored column of that name would satisfy
+# "the tables are there" while breaking the line it belongs to.
 stored="$(psql "$URL" -tAc \
   "SELECT 1 FROM information_schema.columns
-    WHERE table_schema='public' AND table_name='waitlist_users'
-      AND column_name='queue_position'")"
-[ -z "$stored" ] || fail "clause 1 — waitlist_users.queue_position exists as a STORED column; DOD-QUEUE-VIEW-1 requires it computed"
-echo "ok   clause 1 — all ${#EXPECTED_TABLES[@]} waitlist tables + the ${#EXPECTED_VIEWS[@]} view present, position not stored"
+    WHERE table_schema='public' AND table_name='waitlist_users' AND column_name='queue_position'")"
+[ -z "$stored" ] || fail "clause 2 — waitlist_users.queue_position exists as a STORED column; DOD-QUEUE-VIEW-1 requires it computed"
+echo "ok   clause 2 — ${#EXPECTED_TABLES[@]} tables + ${#EXPECTED_VIEWS[@]} view present, position not stored"
 
-# ── Clause 2: the shared ledger holds exactly 37 rows ────────────────────────
-rows="$(psql "$URL" -tAc "SELECT count(*) FROM schema_migrations")"
-[ "$rows" = "$EXPECTED_LEDGER_ROWS" ] \
-  || fail "clause 2 — ledger holds $rows rows, expected $EXPECTED_LEDGER_ROWS (11 portal + 26 waitlist)"
-echo "ok   clause 2 — ledger holds $rows rows"
+# ── Clause 3: the ledger as a SET, not a total ───────────────────────────────
+# `count(*) = 37` is an arithmetic identity: 12 portal + 25 waitlist also makes
+# 37, and so do 37 rows written by hand. The DoD asserts a composition, so the
+# composition is what gets checked — every waitlist stem present by name.
+absent="$(psql "$URL" -tAc "
+  SELECT string_agg(s, ', ' ORDER BY s) FROM unnest(ARRAY[$(printf "'%s'," "${STEMS[@]}" | sed 's/,$//')]) s
+   WHERE s NOT IN (SELECT version FROM schema_migrations)")"
+[ -z "$absent" ] || fail "clause 3 — waitlist migrations missing from the ledger: $absent"
 
-# ── Clause 3: a second run applies 0 ─────────────────────────────────────────
-# The real migrator, not a reimplementation of it.
-#
-# PGSSLMODE=disable is NOT a downgrade, and it is the knob the handler already
-# exposes for this. The handler defaults to `require` because on AWS it talks to
-# the RDS endpoint directly. Here the hop is to 127.0.0.1 — the Cloud SQL Auth
-# Proxy is the TLS client, and it holds the mutual-TLS session to the instance.
-# Demanding SSL on the loopback leg fails with "server does not support SSL",
-# which reads like a misconfigured database and is actually a correctly
-# configured proxy. The wire to Google is encrypted either way.
-second="$(cd "$LAMBDA_DIR" && \
-  DATABASE_URL="$URL" \
-  PGSSLMODE=disable \
-  PGPASSWORD="$PGPASSWORD" \
-  MIGRATIONS_DIR="$MIGRATIONS_DIR" \
-  PYTHONPATH="$LAMBDA_DIR" \
+total="$(psql "$URL" -tAc "SELECT count(*) FROM schema_migrations")"
+expected_total=$(( EXPECTED_PORTAL_ROWS + ${#STEMS[@]} ))
+[ "$total" = "$expected_total" ] || fail \
+  "clause 3 — ledger holds $total rows, expected $expected_total (${EXPECTED_PORTAL_ROWS} portal + ${#STEMS[@]} waitlist). \
+All ${#STEMS[@]} waitlist stems ARE present, so this is an unexpected EXTRA row — not a missing migration."
+echo "ok   clause 3 — all ${#STEMS[@]} waitlist stems in the ledger, $total rows total (${EXPECTED_PORTAL_ROWS} portal + ${#STEMS[@]} waitlist)"
+
+# ── Clause 4: nothing pending — DRY RUN, never apply ─────────────────────────
+# PGSSLMODE=disable is NOT a downgrade. The Cloud SQL Auth Proxy is the TLS
+# client: it holds an ephemeral-certificate mutual-TLS session to the instance
+# and validates the server against the instance CA. This flag governs only the
+# loopback hop, and the proxy listens on 127.0.0.1 by default, so nothing is
+# exposed off-host. (On a SHARED or CI host, prefer `--auto-iam-authn`, which
+# removes the password from the flow entirely rather than sending it over
+# loopback — this script's default assumes a single-user machine.)
+pending="$(cd "$LAMBDA_DIR" && \
+  DATABASE_URL="$URL" PGSSLMODE=disable PGPASSWORD="$PGPASSWORD" \
+  MIGRATIONS_DIR="$MIGRATIONS_DIR" PYTHONPATH="$LAMBDA_DIR" \
   python3 -c '
 import json, sys
 sys.path.insert(0, "waitlist-migrate")
 import handler
-print(json.dumps(handler.lambda_handler({}, None)))
+r = handler.lambda_handler({"dry_run": True}, None)
+b = json.loads(r["body"]) if isinstance(r.get("body"), str) else r
+# NO .get default. `b.get("pending", [])` would default to the PASSING value,
+# so any change to the return shape reports the schema green off an error.
+print(json.dumps(b["pending"]))
 ')"
-applied="$(printf '%s' "$second" | python3 -c '
-import json,sys
-body = json.load(sys.stdin)
-if isinstance(body.get("body"), str):
-    body = json.loads(body["body"])
-print(len(body.get("applied", [])))
-')"
-[ "$applied" = "0" ] || fail "clause 3 — a second run applied $applied migrations, expected 0. Not idempotent."
-echo "ok   clause 3 — second run applied 0"
+count="$(printf '%s' "$pending" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+[ "$count" = "0" ] || fail \
+  "clause 4 — ${count} migration(s) are PENDING against ${INSTANCE}: ${pending}. \
+Either the checkout at ${MIGRATIONS_DIR} is ahead of the database, or a migration did not apply. \
+Nothing was written — this check is read-only."
+echo "ok   clause 4 — nothing pending (dry run, no write)"
 
 echo
-echo "DOD-GCP-SCHEMA-1: all three clauses green against ${INSTANCE}"
+echo "DOD-GCP-SCHEMA-1: all clauses green against ${INSTANCE}"
