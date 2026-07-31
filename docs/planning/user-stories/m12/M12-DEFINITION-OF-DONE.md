@@ -408,7 +408,19 @@ description: >
 - **DOD-E2E-GCP-1** [trustless-cello, cello-client] — **GCP standalone enforcer:** with AWS
   unreachable, on the rebuilt system: fresh registration → DKG → seal → live two-agent session →
   kill one directory → sealing continues (T−1=1) → client failover → anti-entropy convergence
-  verified → kill-switch pause bites across all three nodes. — 🟡 PARTIAL (manual, not enforced)
+  verified → kill-switch pause bites across all three nodes. — 🟡 PARTIAL — **every behavioural
+  clause is now proven; what remains is that it is a MANUAL sequence, not a CI enforcer.**
+
+  **FULL DEGRADED-MODE RUN, 2026-07-31, on the published client (`daemon@0.0.102`):**
+  `gcp-euw1` stopped (container down, `:9090` unreachable from outside, exactly T=2 of 3 left).
+  With it down: an existing pair opened a session over the relay, exchanged messages BOTH
+  directions (`delivered: true`), and **sealed** — `sealed_root fd96bc5b…`, `attestation_mode: live`
+  for both participants. Then a BRAND-NEW agent registered by DKG at exactly T
+  (`M12_Degraded`, `agent_id 9b07e502…`) and came online, `directory_signaling: connected`.
+  euw1 restarted → all three nodes converged to 45 profiles with identical rows, INCLUDING the
+  agent registered while euw1 was dark — picked up by anti-entropy with no manual step.
+  This is the outage claim, demonstrated rather than asserted: existing agents keep working AND
+  new ones can still be created with one of three sovereign nodes down.
   **Proven manually on the live GCP system (Entries 37–38), AWS contributing nothing:**
   fresh registration → 3-node FROST DKG → cross-node discovery → presence replication →
   cross-node brokering → threshold signing → **session established over the GCP relay**, both
@@ -424,8 +436,14 @@ description: >
   triggered only on UNREACHABILITY, so a directory that resolves but belongs to another consortium
   was a permanent black hole. Fixed against DECLARED manifest membership; verified live with NO
   pinned URL (`not_in_consortium` → `failover to gcp-use1` → `auth.challenge.verified`);
-  (d) **kill-switch pause biting across all three nodes** — never exercised;
-  (d) **kill-switch pause biting across all three nodes** — still never exercised;
+  (d) **kill-switch pause biting across all three nodes** — ✅ **EXERCISED 2026-07-31.** Fired on
+  `gcp-use1` ONLY, via `/internal/agent-write` `{writeKind: "revocation_flag", payload: {mode: "pause"}}`
+  → `HTTP 200 {"ok":true}`. All three nodes then read
+  `paused=true burned=false seq=1 origin=gcp-use1` — it reached usc1 and euw1 by anti-entropy
+  (Tier-B mutable merge), not by being written three times. And it BITES rather than merely being
+  recorded: a session request to the paused agent is refused
+  `{"ok":false,"reason":"agent_suspended"}`. Note en route: `mode: "paused"` was rejected
+  structurally with `invalid_payload` before any DB write — the validator is doing its job.
   (e) **seal** — ✅ PROVEN AND FIXED (Entries 44, 52–55, 58–59), including the neither-home case. Was intermittent because every seal was
   adjudicated by ONE relay-pinned directory that could only reach agents homed there; the relay now
   follows a redirect to the node holding the seal initiator's stream. Cross-node seal completes in
