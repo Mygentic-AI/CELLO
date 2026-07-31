@@ -111,4 +111,4 @@ ops_agent_image_tag = "ops-fea4a304"
 
 # DOD-GCP-RUNTIME-1 — the M11 waitlist off AWS. Built by Cloud Build, never from
 # a laptop; the tag is the commit that produced it.
-waitlist_image_tag = "waitlist-ba86f417"
+waitlist_image_tag = "waitlist-963fb277"

@@ -190,7 +190,7 @@ entry layer (`infra/lambda/_router.py`, `_app.py`) is what API Gateway used to b
 
 | Resource | Value |
 |---|---|
-| Cloud Run service | `cello-waitlist`, us-east1, image `waitlist-ba86f417`, min=1 |
+| Cloud Run service | `cello-waitlist`, us-east1, image `waitlist-963fb277`, min=1 |
 | Run URL | https://cello-waitlist-jk4mcnqbeq-ue.a.run.app — **debugging only.** `DOD-INV-DOMAIN` forbids a `run.app` hostname in code, copy or configuration, and `verify-m11-invariants.sh` now denies it |
 | Load balancer | global external ALB, IP **`35.227.231.107`**, serverless NEG `cello-waitlist-neg`, managed cert `cello-waitlist-cert`; :80 redirects to :443 |
 | Hostname | **api.cello.mygentic.ai** — DNS **NOT yet pointed** (still API Gateway). Pointing it IS the cutover, and it is deliberately a separate human decision. The cert stays PROVISIONING until then; that is expected, not a fault |
@@ -199,7 +199,8 @@ entry layer (`infra/lambda/_router.py`, `_app.py`) is what API Gateway used to b
 | Secrets | `cello-waitlist-internal-token` (generated); reuses `cello-portal-database-url` and `cello-ops-agent-ses-credentials` |
 | Schedules | 4 Cloud Scheduler jobs, all ENABLED, `Etc/UTC` pinned: `email-drain` `* * * * *`, `feedback-sweep` `17 6 * * *`, `re-engage-sweep` `23 6 * * *`, `outreach-sweep` `47 6 * * *` |
 | SES | stays on AWS — Google has no email-sending service. Same static credentials the ops-agent already uses |
-| Verified live | `/health` 200 · `/gallery/receipts` 200 `{"receipts": [], "total": 0}` against the real database · `/internal/*` 401 without a token |
+| Verified live | `/health` 200 · `/gallery/receipts` 200 `{"receipts": [], "total": 0}` against the real database · `/internal/*` 401 without a token · the drain answers `{"sent": 0, "skipped": 0, "failed": 0, "retired": 0}` and the sweep `{"re_engage_enqueued": 0}` · all 4 schedulers reporting OK |
+| Data | **ZERO rows in every table** outside the migration ledger, re-checked after deploy and after live drains. No migration contains an INSERT, so re-applying cannot seed. |
 
 **The internal surface is a security boundary.** Eight handlers are reachable only via
 `/internal/<name>` behind a shared token: five had NO trigger on AWS (IAM-gated invoke only —
