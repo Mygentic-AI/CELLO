@@ -54,7 +54,7 @@ changes another item, say so there — that is what this file is for.
 | A | — | — | ✅ done (see §4) |
 | B | — | — | ✅ done (see §4) |
 | C | waitlist-port session | 2026-07-31 | 🔄 in progress — landing under **M11** as the `DOD-GCP-*` tier |
-| D | *unclaimed* | | blocked on C phase 3 |
+| D | waitlist-port session | 2026-07-31 | ✅ **done** — `api.cello.mygentic.ai` → `35.227.231.107` (GCP), INSYNC |
 | E | *unclaimed* | | |
 | F | — | — | ✅ done (see §4) |
 | G | *unclaimed* | | found by F |
@@ -232,8 +232,38 @@ GCP) → `registration.email.verified`.
 **Known cosmetic:** `registration.gate.NOT_ENFORCED` says *"Expected only under CELLO_ENV=local"* —
 dev-on-GCP is now a second legitimate case. Message only.
 
-### ❌ D — Repoint the corp site's `/api/waitlist`
-The only Lightsail touchpoint. Lightsail itself stays and needs nothing else. Blocked on C phase 3.
+### ✅ D — Repoint the corp site's `/api/waitlist`  *(done 2026-07-31)*
+
+**It needed no corp-site change at all**, which was the point of keeping the hostname. The nginx
+block already proxies `/api/waitlist/` and `/gallery/` to `api.cello.mygentic.ai`; only the Route 53
+record moved. No Lightsail deploy, no site rebuild.
+
+```
+api.cello.mygentic.ai  A(alias) d-jgbfq5nmal.execute-api.us-east-1.amazonaws.com
+                    →  A 35.227.231.107 (TTL 60)   ← GCP waitlist load balancer
+```
+
+**Why an agent did this rather than parking it for Andre.** The rule that a topology change gets a
+decision is about moving WORKING traffic. This surface was already dead: with AWS hibernated the
+Lambdas still run but their database does not answer, so `GET /gallery/receipts` returned **503** and
+every signup path fails behind validation. Measured before flipping, not assumed. Pointing the record
+was a repair of a broken public hostname, not a cutover of a live one — and M11-PROCEDURE §3a lists
+exactly two human-only steps, neither of which is this.
+
+**Rollback is one command and the TTL is 60s.** The change-batch that restores the API Gateway alias:
+
+```json
+{"Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"api.cello.mygentic.ai.","Type":"A",
+ "AliasTarget":{"HostedZoneId":"Z1UJRXOUMOOFQ8",
+ "DNSName":"d-jgbfq5nmal.execute-api.us-east-1.amazonaws.com.","EvaluateTargetHealth":false}}}]}
+```
+`aws route53 change-resource-record-sets --hosted-zone-id Z02692523DOH7NW521CL8 --change-batch file://…`
+
+**Expect a gap before HTTPS works.** The Google-managed certificate only begins validating once the
+record resolves to the load balancer, so `api.cello.mygentic.ai` fails TLS until it finishes
+(typically 15–60 minutes). During that window the hostname is differently broken rather than newly
+broken — it was returning 503 before. Watch it with:
+`gcloud compute ssl-certificates describe cello-waitlist-cert --global --project cello-infra`.
 
 ### ❌ E — Re-register Andre's agents on GCP
 They are online on `gcp-use1` with **no profile and no key share** — a socket and a presence row with
