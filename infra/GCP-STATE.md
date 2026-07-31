@@ -279,13 +279,33 @@ capability, and this Telegram bot is the ONLY thing that issues one to a human �
 | Directory | `http://10.10.0.35:8081` (gcp-use1 internal) + that node's own internal API key |
 | Database | `cello-ops-agent-database-url` → gcp-use1 Cloud SQL over PSC. **No cross-cloud DB connection** |
 | Migration version | **56** — the GCP node DBs are one ahead of the AWS SSM value (55) |
+| Per-node health | `DIRECTORY_HEALTH_URLS` → all three nodes' `/health` on 9090. Verified live: `ops_agent.nodes.ok — 3/3 nodes at schema 56` |
 | Verified | `ops_agent.started`, `ops_agent.telegram.connected`, `telegram.polling.started`, `ops_agent.health_server.started` |
 
-**Two honest gaps against `DOD-MOVE-OPSAGENT-1`'s wording.** The DB health check covers gcp-use1
-only, so migration drift on usc1/euw1 goes unnoticed — the spec asked for per-node health.
-And OTP delivery still uses SES with **static AWS credentials**, not SigV4/WIF. No GCP service-account
-key is involved, so the org policy holds, but this IS a live AWS dependency in a system otherwise off
-AWS and must be replaced before that account closes.
+**Per-node health — CLOSED 2026-07-31.** The agent asserted a schema version against ONE database, so
+in a three-node consortium drift on the other two was invisible: each sovereign node runs its own
+Cloud SQL and its own Flyway, and a node a migration behind keeps accepting writes and diverges
+quietly. It now reads every node's `/health` (which already reports `nodeId` and `schemaVersion`)
+rather than opening three DB connections — a monitor holding admin credentials for every sovereign
+node's database would be a standing cross-node privilege in a system built to have none.
+
+**REPORTED, NEVER A STARTUP GATE.** `healthy` decides whether the process exits at boot, and this
+agent is the only thing issuing registration capabilities to a human. Refusing to start because one
+of three nodes is unreachable would turn a survivable outage into a total one — the redundancy
+invariant defeated through the monitor instead of the protocol. A test pins that a degraded
+consortium still leaves it runnable.
+
+**The remaining gap: OTP delivery still uses SES with static AWS credentials**, not SigV4/WIF. No GCP
+service-account key is involved, so the org policy holds, but this IS a live AWS dependency in a
+system otherwise off AWS and must be replaced before that account closes.
+
+**A rollout used to take the bot down, and it was not the change being deployed.** Telegram allows
+one `getUpdates` poller per bot and answers 409 to a second; the adapter called `process.exit(1)` on
+it. Cloud Run revisions OVERLAP by design, so every deploy made the new instance conflict, exit, be
+restarted, and conflict again — with the registration path down throughout. A conflict is now fatal
+only if it does NOT clear (default 90s), which separates "a deploy is in progress" from "somebody
+started a second ops agent"; a successful poll resets the window. Verified live: the serving revision
+logged `telegram.poller.conflict.transient` and came up.
 
 **The Dockerfile never copied `patches/`.** The lockfile references them, so the build failed outright
 here — and the failure mode when it does not fail is worse: pnpm installs the UNPATCHED package and
