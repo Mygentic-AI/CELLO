@@ -44,10 +44,19 @@ multi-device feature. See the last section.
 
 # Open — ranked
 
-## 1. Sealed receipts are missing the conversation's opening message
+## 1. ✅ FIXED — Sealed receipts are missing the conversation's opening message
 
-**Designation:** [[2026-07-31_1043_two-sessions-one-agent-co-attendance]] §7a — **needs a DoD line
-opened.** Decided 2026-07-31 to ship this first, alone, and before the next `latest` promotion.
+**Designation: `DOD-FIRSTMSG-WITNESS-1`** — ✅ **SHIPPED 2026-07-31**, daemon `0.0.106` / cli
+`0.0.109`, verified in the tarball, J-END 10/10. The responder now presents the relay assignment
+itself, so the first message is genuinely witnessed rather than re-ordered. Reviewed twice; the
+blocking finding was that the one line that IS the fix had no test — reverting it left the whole
+suite green. That is closed and revert-tested.
+
+**Carry forward to item 5:** three paths still end unwitnessed (relay down, terminal assignment
+rejection, retry exhaustion), so **relay position is not total** and item 5's dedup rekey cannot
+assume it is.
+
+**Original entry follows.**
 
 When a conversation's very first message is sent before the relay has finished registering the
 session, the relay rejects it and never counts it. The daemon keeps the message anyway — losing
@@ -100,6 +109,23 @@ the system contradicts the label unless you go and ask a second surface.
 
 For a product whose entire proposition is verifiable trust, the failure mode here is not a wrong
 label — it is the product making a false claim about notarization and an agent relaying it onward.
+
+**Diagnosed 2026-07-31 — the fix is small and the location is exact.**
+`session-node-manager.ts:1005` defines `#TERMINAL_STATUSES` as
+`('sealed','abandoned','seal_interrupted_pending','interrupted')`. `getSealedUnread` (`:1039`)
+selects on that set, so it returns all four — correctly, they are all terminal-with-unread. The
+defect is downstream: `notification-handlers.ts:99` labels the whole set *"These sessions are sealed
+with unread messages"*, and the field is named `sealed_unread`. **The name is half the false claim**
+— an agent reading the JSON says "sealed" without ever reaching the guidance string.
+
+Three consumers to change plus its test: `notification-handlers.ts`, `session-read-handlers.ts`,
+`session-node-manager.ts`, and `plugins/cello/skills/receptionist/SKILL.md` (which ships, so it
+instructs agents directly — audit what ships, not only what compiles).
+
+Smallest correct fix: return each row's `status` alongside the count, and make the guidance state
+that only `sealed` is notarized. Renaming the field to something status-neutral (`ended_unread`) is
+the honest version, but it is a wire change for the shim and the receptionist skill, so it wants its
+own pass rather than riding a doc update.
 
 ---
 

@@ -1964,7 +1964,38 @@ own story) deliberately, never smuggled in as a rider. Source:
 
   Full write-up, including the live probe table: [[2026-07-30_1330_inbox-calls-unsealed-sessions-sealed]].
 
-- **DOD-FIRSTMSG-WITNESS-1** ❌ OPEN (raised 2026-07-31) — a session's **first message is submitted
+- **DOD-FIRSTMSG-WITNESS-1** ✅ **SHIPPED 2026-07-31** (raised the same day) — daemon `0.0.106`,
+  cli `0.0.109`, verified in the tarball. The responder now carries `relay_directory_signature`
+  through the wire boundary and presents `client_record_assignment` itself, so the first message is
+  **genuinely witnessed** — it lands in the relay's leaf log and therefore in the certificate — not
+  merely re-ordered. Reviewed twice; the second pass raised one blocking finding and one I fixed
+  alongside it:
+  - **F1 (blocking)** — the single line that IS the fix (`inbound-sessions.ts:651`) had no test.
+    Restoring the pre-fix literal left the ENTIRE suite green, including both new test files: they
+    pinned the parser and the builders, nothing pinned the caller. A seam-2 test now drives the real
+    inbound path and asserts the directory's signature comes back out of the object `acceptSession`
+    receives. **Revert-tested** — the old literal fails it, with the line number in the message.
+  - **F2** — a record TIMEOUT was classified retryable, so a connected-but-unanswering relay cost
+    3 × 10 s inside `sendContent`, on the submit chain SHARED by every session that agent holds on
+    that relay, with no IPC timeout above it. Now `relay_unavailable`: proceed unwitnessed at once,
+    which is what AC2 asks on an outage.
+
+  **⚠️ RESIDUAL — `DOD-FRONTIER-STRAND-1` MUST NOT ASSUME RELAY POSITION IS TOTAL.** Three paths
+  still end with an unwitnessed leaf: the relay genuinely unavailable (correct per AC2),
+  `relay_assignment_rejected` (terminal for that session), and retry exhaustion. A dedup keyed on
+  relay-assigned position therefore inherits "this leaf has no position at all" and must handle it.
+  Write that into that line's spec before building on it.
+
+  **Owed as ACs (review pass two; the cap is two, so these did not get a third round):** no backoff
+  between retry attempts, the responder's `signature.missing` warn not gated on `transport_mode`
+  (inert today — the daemon never requests direct mode), a guard-narrowing edge where `recorded` is
+  force-cleared, and a `session_sealed` test that does not survive its own revert test and should be
+  labelled a non-regression guard rather than coverage.
+
+  **Gate:** typecheck, lint, 2346 unit tests, and **J-END 10/10 hops** against a build carrying the
+  fix. Original problem statement follows.
+
+- **DOD-FIRSTMSG-WITNESS-1 (original, for history)** —  a session's **first message is submitted
   to the relay before the relay holds the session**, is rejected `session_not_found`, is appended
   locally anyway, and is **never resubmitted**. The relay's counter never counts it, so the local
   record sits exactly one ahead for the life of the conversation. Because the bilateral certificate

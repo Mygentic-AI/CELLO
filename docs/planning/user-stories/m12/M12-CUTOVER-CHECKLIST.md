@@ -53,11 +53,16 @@ changes another item, say so there — that is what this file is for.
 |---|---|---|---|
 | A | — | — | ✅ done (see §4) |
 | B | — | — | ✅ done (see §4) |
-| C | another agent | 2026-07-31 | 🔄 in progress (waitlist port) |
+| C | waitlist-port session | 2026-07-31 | 🔄 in progress — landing under **M11** as the `DOD-GCP-*` tier |
 | D | *unclaimed* | | blocked on C phase 3 |
 | E | *unclaimed* | | |
 | F | — | — | ✅ done (see §4) |
 | G | *unclaimed* | | found by F |
+
+**C is being worked under M11, not M12.** The waitlist is M11's deliverable and M11's DoD is its
+sole status authority, so the port gets `DOD-GCP-*` lines in `M11-DEFINITION-OF-DONE` rather than
+new M12 lines. M12 owns the cloud; M11 owns the waitlist. This checklist stays the coordination
+record — it just is not where the status lives.
 
 ---
 
@@ -92,9 +97,28 @@ database shared with `cello-portal`.
   `backup_codes`, `magic_link_requests`, `magic_link_tokens`, `auth_verify_attempts`,
   `github_connections`, `minted_signals`, `processed_submissions`, `submission_mint_inputs`,
   `track_record_refresh_log`, `schema_migrations`.
-- **Waitlist tables: ZERO.** None of `waitlist_signups`, `email_jobs`, `auth_tokens`, `points_ledger`,
-  `waitlist_sessions`, `gallery_items`, `social_profiles` exist. The 26 waitlist migrations have not
-  been applied. **This is phase 1 of your work.**
+- **Waitlist tables: ~~ZERO~~ → ALL PRESENT (applied 2026-07-31).** Phase 1 is DONE; see
+  `DOD-GCP-SCHEMA-1` in [[M11-DEFINITION-OF-DONE]], which is where this line's status lives.
+  **19 tables** plus the `waitlist_queue` view, ledger at 37 rows, second run applies 0. Enforcer:
+  `infra/scripts/verify-gcp-waitlist-schema.sh`.
+
+  ```
+  auth_link_requests   auth_tokens         creator_tracking    email_jobs
+  points_ledger        post_review_queue   published_receipts  referral_codes
+  referrals            session_telemetry   status_notes        telegram_accounts
+  waitlist_agent_links waitlist_sessions   waitlist_social_profiles
+  waitlist_tokens      waitlist_touchpoints                    waitlist_users
+  waves                + VIEW waitlist_queue
+  ```
+
+  *(This bullet has now been wrong twice, in opposite directions, and both are worth keeping.
+  First it named `waitlist_signups`, `gallery_items` and `social_profiles` — no migration creates
+  any of those, so it reported "zero waitlist tables" for a database that would have said the same
+  with all of them present. Then the correction said twenty and invented `skips`, by grepping
+  `CREATE TABLE` across a COMMENT in `0002` that reads "CREATE TABLE IF NOT EXISTS skips the table
+  wholesale". Strip SQL comments before extracting names, and write the assertion so each expected
+  name must be PRESENT — that direction fails loudly on an invented one, which is how `skips` was
+  caught in under a minute.)*
 
 **Two things that make phase 1 easier than it looks:**
 
@@ -106,17 +130,42 @@ database shared with `cello-portal`.
    `0001_m11_waitlist_p0`. The ledger keys on the full stem, not the number — proven on AWS where
    both sets coexisted in one table. Do not renumber anything.
 
-**Access note:** the portal Cloud SQL has a public IP with `authorized_networks` deliberately EMPTY,
-and `ssl_mode = ENCRYPTED_ONLY`. `gcloud sql connect` will allowlist your IP to let you in — **it does
-not remove it afterwards.** Clear it when you are done:
-`gcloud sql instances patch cello-portal --clear-authorized-networks --quiet`.
+**Access — use the proxy, NOT `gcloud sql connect`.** The portal Cloud SQL has a public IP with
+`authorized_networks` deliberately EMPTY and `ssl_mode = ENCRYPTED_ONLY`. `gcloud sql connect`
+allowlists your IP to let you in and does **not** remove it afterwards — so reading the database
+mutates its config, and forgetting the cleanup leaves a home IP allowlisted on a production
+instance. The Cloud SQL Auth Proxy authenticates with IAM and needs no allowlist entry at all:
+
+```bash
+brew install cloud-sql-proxy
+cloud-sql-proxy --quota-project cello-infra --port 55432 cello-infra:us-east1:cello-portal &
+psql "postgresql://cello_portal@127.0.0.1:55432/cello_portal"   # password from the secret below
+```
+
+`--quota-project` is required: ADC otherwise bills the quota to whatever `gcloud config` names,
+and the proxy dies with `accessNotConfigured` on `sqladmin.googleapis.com` if that project has
+the API disabled. Password: `gcloud secrets versions access latest
+--secret=cello-portal-database-url --project=cello-infra` (URL-encoded — unquote before use).
+
+Verified 2026-07-31: `authorized_networks` is currently empty, so the earlier `gcloud sql connect`
+session did clean up after itself.
 
 Phases, in dependency order:
 1. Waitlist schema into the GCP portal Cloud SQL — the 26 migrations, applied into the existing
    ledger alongside the portal's 11. Nothing to reconcile (see above).
-2. Router + per-handler adapters; the existing 512 lines of tests call the handlers directly and
-   must stay green.
-3. Cloud Run + Cloud Scheduler (8 schedules) in Terraform; SES posts bounces to a Cloud Run URL.
+2. Router + per-handler adapters; the existing tests call the handlers directly and must stay green.
+   **That is 8,468 lines across 18 test files, not 512** (measured 2026-07-31; the 512 figure is
+   wrong everywhere it appears, including `aws-to-gcp-migration.md` §7). Good news, not bad: the
+   handlers carry 7,205 lines and the tests outweigh them. The moment a test needs *editing* to
+   pass, the port has become a rewrite — stop and say so.
+3. Cloud Run + Cloud Scheduler in Terraform; SES posts bounces to a Cloud Run URL.
+   **Four schedules, not eight** (measured: every `ScheduleExpression` in the CFN tree) — email
+   drain `rate(1 minute)`, feedback sweep `cron(17 6 * * ? *)`, re-engage `cron(23 6 * * ? *)`,
+   outreach sweep `cron(47 6 * * ? *)`.
+   Also: only **4 of the 13 handlers are HTTP-facing** (signup, auth, actions, gallery — 21 API
+   Gateway routes). Bounce is SNS-driven. **Migrate, waves, gate, firstwin and utm have no trigger
+   at all** — they are direct `lambda invoke` targets, so a path router does not reach them and
+   they need a deliberate invoke path. Their caller is the ops dashboard (see below).
 4. Repoint the corp site's `/api/waitlist` (item D).
 5. Verify a signup end to end, then delete the AWS waitlist stack.
 
@@ -173,5 +222,17 @@ day-to-day CELLO does not actually work for him. Small, and it is the one that a
   non-transferable by design; the only routes are re-registration or a resharing ceremony.
 - **Keeping any AWS protocol infrastructure.** Hibernated. If it is ever woken, note that `wake.sh`
   no longer repoints `portal.*` — that guard is now on main.
-- **Porting the ops dashboard** (`operations.cello.mygentic.ai`). AWS-only, rides the AWS portal ALB,
-  dark while hibernated. Raise it if anyone misses it.
+- ~~**Porting the ops dashboard**~~ — **RAISED, and now IN SCOPE under M11 as `DOD-GCP-OPS-1`
+  (2026-07-31).** It rides the AWS portal ALB and hibernate deletes the ALBs, so it is dark right
+  now, and it is not a nice-to-have: it owns `DOD-INV-WAVE-GATE`, `DOD-WAVE-ASSEMBLY-1` and six
+  `DOD-OPS-*` lines, and it is the **only caller of the five direct-invoke handlers** (waves, gate,
+  firstwin, utm, migrate). Port the waitlist without it and the result is a waitlist nobody can be
+  admitted from — no wave can open, no token can be minted, no post can be credited. It fails the
+  launch-triage test outright.
+
+  It needs no AWS wake either: source is local with a GitHub remote
+  (`Andre-Mygentic/cello-ops-dashboard`), it is a Next.js container going to Cloud Run, its four
+  `ops_*` migrations self-apply at boot against the portal DB, and its one AWS-side input — the
+  `cello/ops/allowed-emails` secret — is readable while hibernated (verified 2026-07-31).
+
+  Sequenced AFTER the waitlist port, as its own unit with its own reviewer pass. Not tangled in.

@@ -322,13 +322,44 @@ def test_two_tokens_racing_for_one_telegram_account_burn_only_one(gate):
 
     allowed = [r for r in results.values() if r.get("allowed")]
     burned = query("SELECT count(*) FROM waitlist_tokens WHERE used_at IS NOT NULL")[0][0]
+    live = query("SELECT count(*) FROM waitlist_tokens WHERE used_at IS NULL")[0][0]
 
-    assert len(allowed) == 1, f"one telegram account, one admission: {results}"
+    # EXACTLY ONE GRANT IS CONSUMED. This is the harm in the docstring and the
+    # only thing that is irreversible — a burned token cannot be un-burned.
     assert burned == 1, (
         f"{burned} grants were consumed for {len(allowed)} admission(s) — "
         "a burned grant with no link is gone forever"
     )
+    # AND THE OTHER ONE IS STILL SPENDABLE. This is the half that was never
+    # asserted, and it is the actual "no grant was lost" property: counting
+    # burns alone cannot tell a token that survived from one that vanished.
+    assert live == 1, "the losing request's token must remain usable — it paid for nothing"
     assert query("SELECT count(*) FROM telegram_accounts")[0][0] == 1
+
+    # BOTH REQUESTS MAY BE ALLOWED, and that is not the bug this test guards.
+    #
+    # `len(allowed) == 1` was asserted here and failed on ~9 runs in 100 (measured,
+    # 2026-07-31). The losing interleaving is benign: the winner burns and links,
+    # the loser's link check then finds that row and returns
+    # `already_linked` WITHOUT burning — so one grant is consumed, one telegram
+    # account exists, and the loser's token stays live. Nothing is lost, and the
+    # answer is true: that telegram_id IS linked.
+    #
+    # The docstring names the real defect as "both burned, one lost its grant
+    # with nothing linked". Two allowed:true responses were a SYMPTOM of that
+    # state, not the damage, and asserting the symptom made the test fail on a
+    # correct outcome one run in eleven. What has teeth is the burn count, the
+    # surviving token, and the single account — all asserted above.
+    assert allowed, f"at least one request must be admitted: {results}"
+    for name, r in results.items():
+        if r.get("allowed"):
+            assert r.get("reason") in ("token_burned", "already_linked"), (
+                f"{name} was allowed for an unrecognised reason {r.get('reason')!r} — "
+                "an admission whose cause is not one of the two known paths is not understood"
+            )
+    assert sum(1 for r in results.values() if r.get("reason") == "token_burned") == 1, (
+        f"exactly one request may burn: {results}"
+    )
 
 
 def test_an_agent_bound_to_someone_else_refuses_rather_than_no_opping(gate):

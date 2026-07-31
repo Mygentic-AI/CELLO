@@ -4613,6 +4613,75 @@ The relay-mediated path bypasses the `leaf_count_mismatch` gate entirely because
 
 ---
 
+
+## 2026-07-31 — `DOD-FIRSTMSG-WITNESS-1` ✅ — the receipt was short one message, and the test that proved the fix proved nothing
+
+**Raised and shipped the same day.** A session's first message is submitted to the relay before the
+relay holds the session, is rejected `session_not_found`, is appended locally anyway, and is never
+resubmitted. The relay's counter never counts it, so the local record sits exactly one ahead for the
+life of the conversation. The bilateral certificate is rebuilt **exclusively from relay-witnessed
+leaves** — neither party's local tree is an input — so **the sealed receipt omits the conversation's
+opening message and is issued anyway, and verifies.**
+
+It fires 16/16 when the first message beats registration, and only when both agents are on one
+machine, because local delivery is instant while relay registration is a round trip to another
+region. That is the solo-multi-agent case — the daily use and the demo.
+
+### The fix
+
+The responder now carries `relay_directory_signature` through the wire boundary and presents
+`client_record_assignment` itself, so it creates the relay's session state rather than waiting for
+someone else to. The first message is therefore **genuinely witnessed** — it lands in the leaf log
+and so in the certificate — not merely re-ordered. That distinction was worth checking explicitly:
+"no longer drifts" and "the opening message is in the receipt" are different claims, and only the
+second one is the defect.
+
+### What the second review pass found
+
+**F1, blocking — the one line that IS the fix had no test.** `inbound-sessions.ts:651` hands the
+built relay params to `acceptSession`. Restore the pre-fix inline literal there and the **entire
+suite stays green**, both new test files included: they pinned the parser and the two builders, and
+nothing pinned the caller. The new test file's own header claimed to have closed exactly that hole.
+It hadn't.
+
+The seam-2 test now drives the real inbound path and asserts the directory's signature comes back
+out of the object `acceptSession` actually receives. Revert-tested: the old literal fails it, with
+the line number in the message.
+
+> **The rule, again, one layer out from 2026-07-31's M10B entry:** a test can pin every piece of a
+> fix and still not pin the fix. Ask what single line, if reverted, should turn the suite red — then
+> check that it does.
+
+**F2 — a record TIMEOUT was classified retryable.** `#doRecord` returns false on timeout, which
+mapped to `session_not_recorded`, which is inside the retry set: 3 × `HASH_SUBMIT_TIMEOUT_MS` inside
+`sendContent`, on the submit chain **shared by every session that agent holds on that relay**, with
+no IPC timeout above it. A connected-but-unanswering relay blocked `cello_send` for half a minute
+where it used to block for ten seconds. A timeout is a relay-health signal, not "not ready yet" —
+the retry exists for a relay still registering, which answers in milliseconds. Now
+`relay_unavailable`: proceed unwitnessed immediately, which is what AC2 asks on an outage.
+
+### The residual, which matters more than the fix
+
+**Relay position is NOT total.** Three paths still end with an unwitnessed leaf: relay genuinely
+unavailable, `relay_assignment_rejected` (terminal for that session), and retry exhaustion.
+`DOD-FRONTIER-STRAND-1` intends to rekey duplicate detection on relay-assigned position — it must
+handle "this leaf has no position at all" and cannot assume the fix made position universal. Written
+into that line's entry so it is not built on a false premise.
+
+### Owed as ACs
+
+Review pass two, and the cap is two, so these did not get a third round: no backoff between retry
+attempts; the responder's `signature.missing` warn not gated on `transport_mode` (inert today —
+the daemon never requests direct mode); a guard-narrowing edge where `recorded` is force-cleared;
+and a `session_sealed` test that does not survive its own revert test and should be labelled a
+non-regression guard rather than coverage.
+
+**Shipped:** daemon `0.0.106`, cli `0.0.109`, verified in the tarball. Gate: typecheck, lint, 2346
+unit tests, **J-END 10/10** against a build carrying the fix. Merged via an isolated worktree so the
+in-flight checkout of the original branch was never touched.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
