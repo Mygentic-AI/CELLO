@@ -190,12 +190,32 @@ description: >
 - **DOD-AE-CHAINED-TABLES-1** [trustless-cello] — the two hash-chained Tier-A tables
   (`seal_notarizations`, `user_accounts`) serve AND apply through anti-entropy, so a seal receipt no
   longer exists only on the directory that recorded it. Chain columns are node-local: an applying node
-  recomputes them against its own tip. — 🟡 **BUILT, NOT PROVEN LIVE.** Reviewer verdict, quoted:
-  *"SPEC: FAITHFUL — every clause implemented; the one unproven clause is journaled (Entry 64) and
-  correctly carries 🟡, not ✅. Do not flip it without the live cross-node proof."* Its three blocking
-  findings — *"SILENT FALLBACKS FOUND"* (hex truncation the chain would have certified), *"ERROR
-  SUBSTITUTION"*, *"HOLLOW TESTS FOUND"* — are all closed. Owed: the live cross-node proof (needs a
-  deploy). → Entries 64, 66
+  recomputes them against its own tip. — ✅ **2026-07-31 — the owed live cross-node proof is in.**
+  Reviewer verdict, quoted: *"SPEC: FAITHFUL — every clause implemented; the one unproven clause is
+  journaled (Entry 64) and correctly carries 🟡, not ✅. Do not flip it without the live cross-node
+  proof."* Its three blocking findings — *"SILENT FALLBACKS FOUND"* (hex truncation the chain would
+  have certified), *"ERROR SUBSTITUTION"*, *"HOLLOW TESTS FOUND"* — were closed earlier.
+
+  **The proof, on the live fleet after the V57 roll:**
+
+  | node | seals | accounts | seal `fd96bc5b4e8be5` chain_hash |
+  |---|---|---|---|
+  | gcp-use1 | 14 | 47 | `21b1dcd122255b` |
+  | gcp-usc1 | 14 | 47 | `c8b09a63f6b23d` |
+  | gcp-euw1 | 14 | 47 | `2c6b755f803b31` |
+
+  Both clauses, separately:
+  - **A seal receipt no longer exists only on the directory that recorded it.** Identical counts and
+    identical `sealed_root` values on all three.
+  - **Chain columns are node-local.** The SAME seal carries a DIFFERENT `chain_hash` on each node —
+    which is what recomputing against your own tip looks like. Had the column been replicated
+    verbatim the three would be identical, and the chain would be asserting a predecessor that node
+    never had.
+
+  **Why this particular seal is the strongest case available:** `fd96bc5b…` is the seal produced
+  during the degraded-mode run, while **gcp-euw1 was down**. euw1 holds it now, and holds it under
+  its own chain — acquired entirely through anti-entropy after it came back, with no operator step.
+  → Entries 64, 66, 75
 - **DOD-AE-MUTABLE-1** [trustless-cello] — mutable-table sync with per-table conflict rules per
   the design doc; `agent_suspensions` convergence proven adversarially: pause during partition,
   node restart mid-sync, stale-node rejoin, un-pause requiring newer authenticated state, tie →
