@@ -168,6 +168,16 @@ resource "google_cloud_run_v2_service" "ops_agent" {
         }
       }
 
+      // EVERY node's health endpoint, not just the one it talks to. Each sovereign directory runs
+      // its own Flyway, so schema correctness is a per-node fact — a node a migration behind keeps
+      // accepting writes and diverges quietly. Reading /health avoids holding admin credentials for
+      // every node's database, which would be a standing cross-node privilege in a system built to
+      // have none. Internal addresses on 9090; a degraded sweep is reported, never a startup gate.
+      env {
+        name  = "DIRECTORY_HEALTH_URLS"
+        value = join(",", [for k, n in var.directory_nodes : "http://${google_compute_address.node_internal[k].address}:9090"])
+      }
+
       env {
         name  = "SES_FROM_ADDRESS"
         value = var.ops_agent_ses_from_address

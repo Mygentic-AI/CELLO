@@ -66,6 +66,7 @@ import type {
 } from "@cello-protocol/interfaces";
 import { TelegramAdapter } from "./telegram-adapter.js";
 import { SesOtpDeliveryProvider } from "./ses/ses-otp-delivery-provider.js";
+import { checkNodeHealth, summariseNodeHealth } from "./node-health.js";
 import { DirectoryPreAuthorizationClient } from "./directory-pre-auth-client.js";
 import { LambdaWaitlistGateClient } from "./waitlist-gate-client.js";
 import { RegistrationEngine } from "./registration/engine.js";
@@ -115,14 +116,21 @@ export type HealthCheckInput = {
   migrationVersion: number | null;
   expectedMigrationVersion: number;
   telegramConnected: boolean;
+  /** Per-node sweep (M12). Optional so the AWS deployment, which has one node, is unaffected. */
+  nodeHealth?: { healthy: boolean; detail: string };
 };
 
 export type HealthReport = {
+  /**
+   * Whether the agent may RUN. Deliberately excludes the per-node sweep — see `checks.nodes`.
+   */
   healthy: boolean;
   checks: {
     database: string;
     migrations: string;
     telegram: string;
+    /** Absent when no nodes are configured to sweep. */
+    nodes?: string;
   };
 };
 
@@ -293,6 +301,15 @@ export function buildHealthReport(input: HealthCheckInput): HealthReport {
 
   const telegramCheck = telegramConnected ? "ok" : "failed";
 
+  // REPORTED, NOT GATING — and the asymmetry is the point.
+  //
+  // `healthy` decides whether the process exits at startup. A directory being down must NEVER stop
+  // the ops agent from running: it is the only thing that issues registration capabilities to a
+  // human, the consortium tolerates T-of-N by design, and refusing to start because one sovereign
+  // node is unreachable would turn a survivable outage into a total one. That is the exact failure
+  // the redundancy invariant exists to prevent, arriving through the monitor instead of the protocol.
+  //
+  // So drift and unreachability are surfaced in `checks.nodes` and logged, and the caller decides.
   const healthy =
     dbConnected &&
     migrationVersion === expectedMigrationVersion &&
@@ -304,6 +321,7 @@ export function buildHealthReport(input: HealthCheckInput): HealthReport {
       database: databaseCheck,
       migrations: migrationsCheck,
       telegram: telegramCheck,
+      ...(input.nodeHealth ? { nodes: input.nodeHealth.healthy ? "ok" : input.nodeHealth.detail } : {}),
     },
   };
 }
@@ -421,11 +439,31 @@ async function main(): Promise<void> {
     verifiedBotUsername = telegramResult.botUsername;
   }
 
+  // The per-node sweep (M12). Each sovereign directory runs its own Flyway, so schema correctness is
+  // a per-node fact; reading each node's /health avoids holding admin credentials for every node's
+  // database, which would be a standing cross-node privilege in a system built to have none.
+  const nodeHealthUrls = (process.env["DIRECTORY_HEALTH_URLS"] ?? "")
+    .split(",")
+    .map((u) => u.trim())
+    .filter(Boolean);
+  let nodeHealth: { healthy: boolean; detail: string } | undefined;
+  if (nodeHealthUrls.length > 0) {
+    nodeHealth = summariseNodeHealth(await checkNodeHealth(nodeHealthUrls), EXPECTED_MIGRATION_VERSION);
+    // warn, not error: this never stops the agent (see buildHealthReport), so an error level here
+    // would be an alarm nobody can act on by restarting.
+    if (!nodeHealth.healthy) {
+      logger.warn("ops_agent.nodes.degraded", { detail: nodeHealth.detail, component: "health-check" });
+    } else {
+      logger.info("ops_agent.nodes.ok", { detail: nodeHealth.detail, component: "health-check" });
+    }
+  }
+
   const healthReport = buildHealthReport({
     dbConnected,
     migrationVersion,
     expectedMigrationVersion: EXPECTED_MIGRATION_VERSION,
     telegramConnected,
+    ...(nodeHealth ? { nodeHealth } : {}),
   });
 
   if (!healthReport.healthy) {
