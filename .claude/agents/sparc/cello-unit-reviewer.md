@@ -208,6 +208,11 @@ the clause claims. Known hollow-test shapes, look for these first:
   condition and checking the rejection.
 - Covers the presenting consumer but not every producer/consumer of a shared
   datum.
+- **Iterates a hand-maintained list** ("every entry in X is wired up"). Omitting
+  an entry makes the loop shorter, never red — so the one thing nobody wired is
+  the one thing unchecked. Demand the inverse: iterate what the SYSTEM has
+  (scan the registrations, the schema, the directory) and assert each is
+  accounted for, with an explicit exemption list carrying written reasons.
 
 **THE REVERT TEST — apply it to every new test in the diff.** *"Would this test
 still pass if the fix were reverted?"* If yes, it is not coverage of this unit,
