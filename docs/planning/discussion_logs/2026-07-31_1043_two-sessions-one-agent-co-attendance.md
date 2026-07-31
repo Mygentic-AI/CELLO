@@ -15,6 +15,46 @@ description: >
 §9 open items CLOSED by third-party validation on 2026-07-31 (code anchors re-verified, §7c resolved
 from the live log) — see §7c and §9.**
 
+> ### Build order — DECIDED 2026-07-31, after post-M12 verification
+>
+> **§7a goes first, on its own, and before the next `latest` promotion.** It fires deterministically
+> (16 of 16 — every conversation where the first message beat relay registration and then continued),
+> it is same-machine-only, and same-machine IS the solo multi-agent wedge: Andre's daily use and the
+> demo. Per §7d the consequence is that **the certificate omits the conversation's opening message
+> while still being issued**. A trust product survives clunky UX; it does not survive a receipt that
+> quietly isn't over the whole conversation. The fix is producer-side and contained.
+>
+> *Practical reason for "before the promotion" specifically:* a daemon fix that lands before the
+> pending promotion costs operators one upgrade instead of two. After it, §7a needs its own
+> publish-and-upgrade round.
+>
+> **Co-attendance and §7b come after.** Co-attendance changes delivery semantics across several
+> surfaces and earns a real test pass; §7b has had zero observed instances since its producer was
+> closed, so it is latent rather than bleeding. Both are forgivable at launch — a session stealing a
+> sibling's message is visible and workable-around; a receipt missing its first message is neither.
+>
+> This order is also the one §7b's own fix *requires*: keying dedup on relay position inherits a
+> broken key while §7a's drift persists (recorded against `DOD-FRONTIER-STRAND-1` in
+> [[M8C-DEFINITION-OF-DONE]]).
+>
+> ### ⚠ Post-M12 verification — what moved
+>
+> Verified against post-M12 code on 2026-07-31. **The co-attendance surface is untouched by M12** —
+> the queue, the doorbell, the cursor and `use_agent` are all client/daemon-side and exactly where
+> this document says. M12 moved directories, relay, portal and ops-agent; it did not touch delivery.
+> §5's premise re-checked and holds: the relay still assigns `seq` from its own counter and still
+> rejects a `last_seen_seq` ahead of it, so two sessions on one identity still cannot collide.
+>
+> **§7c/§7d are the exception — not wrong, but written against a world M12 changed. Re-read them
+> against current code before implementing, and treat their line numbers as stale (the symbol names
+> still anchor).** Three changes:
+> 1. The relay now asks the **brokering directory per session** and follows a **seal redirect** to
+>    the node that can finish the seal — §7c describes two close paths; there is now a hop inside one
+>    of them.
+> 2. The certificate-root code was **refactored**: `recomputedRoot` is real and still cross-checked
+>    against the relay's root, but no longer at the cited lines.
+> 3. `seal_notarizations` now **replicates by anti-entropy**, which it did not when this was written.
+
 > **Picking this up cold? Go to §10 first.** Every claim below is anchored to a file and symbol there,
 > grouped by section, along with the log events to grep. You should not need to search for anything.
 
@@ -252,6 +292,11 @@ places.
 
 ### 7c. ✅ RESOLVED (2026-07-31, third-party validation) — the worse possibility is the true one
 
+> **⚠ Post-M12: the two close paths described here still exist, but there is now a hop inside one of
+> them** — the relay asks the brokering directory per session and follows a **seal redirect** to the
+> node that can finish the seal. Line numbers stale, symbols hold. The finding (the auto-ack path
+> never compares the parties' trees) is unaffected; the path it travels is longer.
+
 **The both-parties-present path does not catch what the interrupted path does.** There are two
 bilateral close paths, and only one compares the parties' state:
 
@@ -291,6 +336,11 @@ fix; adding a party-vs-party root comparison to the auto-ack path would only con
 divergence into seal failures.
 
 ### 7d. ✅ Residue closed — what computes the certificate's root, and what it therefore attests
+
+> **⚠ Line numbers below are pre-M12 and stale; the symbols hold.** The certificate-root code was
+> refactored during M12 — `recomputedRoot` is still real and still cross-checked against the relay's
+> root, but not at the cited lines. The *conclusion* of this section is unaffected. Re-read against
+> current code before implementing. See the build-order block at the top.
 
 **Both, cross-checked.** `processSeal` (`packages/directory/src/directory-node.ts:4740-4760`) is
 called **in-process by the relay** once both SEAL leaves are submitted, receiving the relay's leaf log
@@ -424,6 +474,12 @@ reopens the window: `core/daemon/src/session-node-manager.ts:3682-3695`.
 | Rebuild from disk, ordered by leaf index | `core/daemon/src/session-node-manager.ts:4141-4152` `#loadTreeFromDb` |
 
 ### Seal paths — start here for §7c
+
+> **⚠ Every `trustless-cello/packages/directory` line number in this table is PRE-M12 and stale.**
+> The seal path moved during M12: a per-session brokering-directory lookup plus a **seal redirect**
+> hop, a refactor of the certificate-root code, and `seal_notarizations` now replicating by
+> anti-entropy. Symbol names (`processSeal`, `rootsMatch`, `recomputedRoot`) are the anchor — grep
+> for those, not the lines. `core/daemon` rows are unaffected: M12 did not touch the client.
 
 | what | where |
 |---|---|
