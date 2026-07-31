@@ -4452,3 +4452,78 @@ leave admission permanently open while the line reads done.
 `INTERNAL_INVOKE_TOKEN` and `WAITLIST_EMAIL_SERVICE_URL` have no wiring anywhere in `infra/` yet, so
 the internal surface (including the mail drain) refuses until it lands. Both fail loud, which is why
 this is a sequencing note and not a defect.
+
+### Entry 70: the container, the Terraform, and the gate over HTTP
+
+Three units advanced. Statuses stay honest: the container and the gate client are built and proven;
+the service is not deployed, so `DOD-GCP-RUNTIME-1` and `DOD-GCP-GATE-1` are not ✅.
+
+**The container was BUILT AND RUN before it was committed** — `DOD-OPS-SHELL-1` already shipped a
+Dockerfile that had never once been built, 53 tests passing over an image that could not boot, so
+that is not a mistake worth repeating. With no database configured: `/health` 200 (liveness only,
+reaching no handler), an unknown path 404 naming the path, and `/internal/*` answering 503
+`internal_token_not_configured` rather than admitting.
+
+Then **against the real GCP portal Cloud SQL, read-only**:
+
+```
+/gallery/receipts       200 {"receipts": [], "page": 1, "per_page": 20, "total": 0}
+/waitlist/auth/session  401 no_active_session
+```
+
+That is the whole chain — container, gunicorn, WSGI shell, router, real handler, real database —
+working before a line of Terraform existed. It also confirms the Entry 69 loader fix **in the built
+image** rather than in a test: `waitlist-gallery` is the handler that could not be imported at all,
+and it answers. Zero `ModuleNotFoundError` in the container log. Greenfield after the run: 0 rows
+across every table outside the ledger. Every request was a read.
+
+The first attempt failed 503 `database_unreachable`, and the structured log carried
+`could not translate host name "host.docker.internal"` with a correlationId — the user-facing
+message stayed generic while the operator got the actual cause. That is the error-fidelity rule
+working on a real diagnosis rather than a rehearsed one.
+
+**Terraform: one Cloud Run service and four Cloud Scheduler jobs**, replacing 13 Lambda functions, an
+API Gateway, 4 EventBridge rules, an SNS subscription and a NAT gateway. Details worth keeping:
+
+- **Four schedules, not eight**, measured from the template. The crons are TRANSLATED, not copied:
+  EventBridge uses a 6-field AWS form (`cron(17 6 * * ? *)`), Cloud Scheduler uses 5-field unix cron.
+  `time_zone` is pinned to `Etc/UTC` explicitly, because Cloud Scheduler otherwise defaults to the
+  project timezone and would move every sweep by hours without saying so.
+- **Its own service account**, not the portal's, despite sharing a database. The portal holds
+  recoverable operator email under a KMS master key; the waitlist holds signup rows and SES
+  credentials, and `secretAccessor` is granted per-secret precisely so one cannot read the other's.
+- **Not scale-to-zero**, unlike the portal: the dispatcher runs every minute and the immediate-drain
+  nudge is a self-directed call. A cold start per tick adds seconds back onto the sign-in link
+  `_dispatch.py` exists to make fast.
+- **Two auth layers on the internal surface** — OIDC proves to Cloud Run that the caller is the
+  scheduler, the shared token proves to the APPLICATION that the call is internal. I wrote the
+  comment claiming both before wiring the second, and fixed it rather than leaving a comment that
+  lies.
+
+**The gate over HTTP.** The rule does not move and neither does where it is evaluated; only the
+transport. 12 tests enumerate every way the gate can fail to answer — unreachable, timeout, 500, a
+200 with no boolean `allowed`, a 409, unparseable output, our own 401/503 — and every one throws.
+One thing the Lambda client did not need: **401 and 503 are OUR misconfiguration, not a decision
+about the user.** Without that split, forgetting to set a token would reach a real person as "you
+are not invited". And `resolveAdapters` now refuses to boot with the gate ON and no URL or token,
+because the alternative is a client that constructs fine and then refuses every admission with the
+fault surfacing in a Telegram chat instead of in the deploy.
+
+**Two enforcers went red for their own reasons, which is the useful part.**
+
+`DOD-INV-DOMAIN`'s checker could not fail on GCP: every hostname it denied was an AWS one, so after
+the port it would have gone green while the entire product pointed at `*.run.app`. Both Cloud Run
+hostname shapes and `cloudfunctions.net` are now denied, verified against a probe. **An invariant
+checker that cannot fail on the platform you are running on is worse than none, because it reports
+the invariant as held.**
+
+And the Cloud Build smoke step failed for its own bug rather than the image's: `docker run` in Cloud
+Build starts a SIBLING container on the shared daemon, so `127.0.0.1` in the step is not the service
+and a published port lands on a host the step cannot reach. The image was fine and gunicorn was
+serving; the step still reported "/health never answered". A broken smoke test that would have
+blocked every good build, caught only because the build was actually run.
+
+**Not silenced, and not mine:** `verify-m11-invariants.sh` reports `DOD-INV-NO-DIRECTORY-RELAY`
+failing on `af1ea85e`, a directory seal fix. That is M12's work, legitimately touching the directory,
+seen by an M11 scanner because both milestones now share `main`. Recording it rather than widening
+the scan — a scanner loosened to make someone else's commit pass is how the execute-api hole survived.
