@@ -54,6 +54,28 @@ locals {
         "roles/monitoring.metricWriter",
       ]
     }
+    # ITS OWN SA, not the portal's, even though they share one database. The
+    # portal holds recoverable operator email under a KMS master key; the
+    # waitlist holds signup rows and SES credentials. Sharing an identity would
+    # mean a bug in either one reaches the other's secrets, and secretAccessor
+    # is granted per-secret here precisely so that cannot happen by default.
+    waitlist = {
+      display_name = "CELLO waitlist service"
+      roles = [
+        "roles/cloudsql.client",
+        "roles/logging.logWriter",
+        "roles/monitoring.metricWriter",
+      ]
+    }
+    # Cloud Scheduler's own identity. It holds NO database or secret access —
+    # it only needs to prove who it is when it calls the service's internal
+    # surface, which then does its own authorisation.
+    waitlist-scheduler = {
+      display_name = "CELLO waitlist scheduler"
+      roles = [
+        "roles/logging.logWriter",
+      ]
+    }
     cloud-build = {
       display_name = "CELLO CI (Cloud Build)"
       roles = [

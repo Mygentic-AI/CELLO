@@ -83,6 +83,11 @@ variable "portal_image_tag" {
   description = "Immutable tag of the portal image in Artifact Registry. Never 'latest' — the registry enforces immutable tags, and a floating tag makes 'which code is live' unanswerable."
 }
 
+variable "waitlist_image_tag" {
+  type        = string
+  description = "Immutable tag of the waitlist image in Artifact Registry. Never 'latest' — same reason as the portal: a floating tag makes 'which code is live' unanswerable, and this service owns admission."
+}
+
 variable "portal_db_tier" {
   type        = string
   default     = "db-g1-small"

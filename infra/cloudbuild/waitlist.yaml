@@ -1,0 +1,70 @@
+# Cloud Build — CELLO waitlist service image → Artifact Registry.
+# Run by trigger (COMMIT_SHA set) or manually:
+#   gcloud builds submit --config infra/cloudbuild/waitlist.yaml \
+#     --service-account projects/cello-infra/serviceAccounts/cello-cloud-build@cello-infra.iam.gserviceaccount.com \
+#     --substitutions _TAG=manual-$(git rev-parse --short HEAD) .
+#
+# NEVER `docker push` from a laptop (CLAUDE.md). The image that serves signups
+# and mints admission tokens must be traceable to a commit, and a locally-pushed
+# tag is traceable to nothing.
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+timeout: 1800s
+
+substitutions:
+  _REGISTRY: us-east1-docker.pkg.dev/cello-infra/cello
+  _TAG: ${COMMIT_SHA}
+
+steps:
+  # The build context is infra/lambda, not the repo root: the handlers and their
+  # shared modules are all that ships, and `COPY . .` from the root would put the
+  # entire monorepo — including every private key fixture under packages/ — into
+  # a public-ingress container image.
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - infra/lambda/Dockerfile
+      - -t
+      - ${_REGISTRY}/waitlist:${_TAG}
+      - infra/lambda
+
+  # THE IMAGE MUST START. A Dockerfile that has never been run is how
+  # DOD-OPS-SHELL-1 shipped 53 passing tests over a container that could not
+  # boot. /health is liveness-only, so it answers with no database configured —
+  # which makes it exactly the right smoke test for a build step.
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        docker run -d --name smoke -p 8080:8080 ${_REGISTRY}/waitlist:${_TAG}
+        for i in $(seq 1 30); do
+          if curl -sf http://127.0.0.1:8080/health >/dev/null; then
+            echo "health ok"
+            # A handler that cannot be IMPORTED is the defect this catches:
+            # waitlist-gallery imports a private sibling, and a loader that
+            # misses it 500s every gallery route in production while every
+            # unit test passes.
+            curl -sf -o /dev/null -w 'gallery: %{http_code}\n' \
+              http://127.0.0.1:8080/gallery/receipts || true
+            if docker logs smoke 2>&1 | grep -q ModuleNotFoundError; then
+              echo "FAIL: a handler could not be imported" >&2
+              docker logs smoke >&2
+              exit 1
+            fi
+            docker rm -f smoke >/dev/null
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "FAIL: /health never answered" >&2
+        docker logs smoke >&2
+        exit 1
+
+# No :latest tag on purpose: two concurrent builds finishing out of order would leave :latest
+# older than main. Every consumer pins an immutable ${_TAG} (= commit SHA) tag.
+images:
+  - ${_REGISTRY}/waitlist:${_TAG}
