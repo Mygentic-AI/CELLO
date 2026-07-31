@@ -4770,3 +4770,51 @@ now exists. Daemon **1130/1130**.
 **Also owed and unchanged:** none of this is published. The branch carries operator-facing behaviour
 (the removed fetch, the close fix, the registration guidance) and reaches operators only through
 `/cello-publish` + Andre's `latest` promotion.
+
+### Entry 73b — the publish, and a shutdown-test flake that must not be papered over
+
+Andre gave the go-ahead on all four carried items. Deploy: directory `aefix-50bc7a2a` built and rolled
+node-by-node across all three GCP nodes, each polled to a real `/bootstrap` 200 before the next. That
+image is the first to carry the kill-switch join-key fix, chain-table replication, and every AE review
+fix. NULL-`agent_id` cleanup got as far as the gcloud tokens expiring — parked, browser OAuth.
+
+**The publish.** `cello-client` main had moved **72 commits** while this branch sat — including the
+submission-results READ fan-out, which is the change CELLO_Support and I settled over CELLO earlier
+tonight. She built it and shipped it, so this branch rebased onto her work rather than the reverse. Two
+files overlapped (`daemon.ts`, `session-node-manager.ts`) and both auto-merged. Merged to main as a
+fast-forward, cascade bumped (daemon 0.0.97, cli 0.0.99, connect 0.0.107 — the two dependents re-pin so
+npm cannot keep serving the old daemon build), tagged **v0.0.151**.
+
+Worth recording: the tag counter is at 150 while connect is at 106. The skill warns the two have
+drifted and to take the next free counter rather than assume they match — they do not, by 44.
+
+Also worth recording: the first typecheck after the merge failed with three errors naming types in
+OTHER packages. Not a conflict — `core/daemon` reads its siblings' BUILT `.d.ts`, and 72 commits of
+sibling changes leave those stale. `tsc --build` at the root cleared all three. Someone will otherwise
+"fix" a merge that is fine.
+
+### The flake, and why it is not being dismissed as one
+
+The tag run FAILED on `session-node-manager.test.ts:1416` — a SIGTERM shutdown test expecting sessions
+marked `interrupted`, getting `active`. Nothing published; the publish jobs skipped. Fail-closed worked.
+
+**The same commit passed on the main-branch run 4 minutes earlier.** Same tree, two runs, opposite
+outcomes — and main already carries two other intermittent failures this week. So it is a flake, and I
+re-ran rather than re-tagged.
+
+But a flake in a SHUTDOWN path is a real defect, and the standing rule is that a failing test gets its
+root cause traced, never attributed. What I found, stated as far as the evidence goes:
+
+- The handler is sound — it `await`s `handle.stop(signal)` before `process.exit(0)`.
+- The test waits for `daemon.started` before signalling, so it is not a handler-registration race.
+- The test's exit gate accepts `code === 0 || code === null`, and **null means terminated BY SIGNAL** —
+  i.e. a run where the handler never completed would still be treated as a clean exit and then find
+  the sessions `active`. That gate cannot distinguish the failure from success.
+- The likeliest mechanism, NOT yet proven: the test INSERTs its two rows from a separate SQLite
+  connection and then depends on the daemon's shutdown `UPDATE` seeing them. Cross-connection
+  visibility on a WAL database is exactly the kind of thing that turns on machine timing.
+
+**Owed:** tighten the exit gate to require `code === 0` (so a signal-kill fails loudly instead of
+passing), and settle the visibility question. This is another session's test in a file I did not touch,
+so it is recorded here rather than fixed mid-publish — but it should not be left to keep costing tag
+runs.
