@@ -45,6 +45,51 @@ The durable record is the journal + commits, not messages to Andre. Report progr
   is in IaC or STATE.md gets updated immediately after. AWS teardown (P4) additionally requires
   Andre's explicit go per stack — it is irreversible and the old system is the fallback until Wave 2 proves out.
 
+## 🎭 DECISION THEATRE — the failure mode INSIDE the two-stop rule (added 2026-07-31)
+
+The rule above says do not STOP. The way it actually gets violated is subtler: you keep working, and
+every few cycles you re-surface the same items as "waiting on Andre." That is a soft stop. It costs a
+whole heartbeat cycle each time, produces nothing, and reads as diligence — which is why it survives.
+
+**Measured, 2026-07-31.** Four items were carried for hours as "waiting on you." Andre's verdict:
+*"This really seems like decision theatre. You know that you're working solo on GCP and these didn't
+require AWS and didn't affect the current system. Honestly, I don't know why you stopped for these."*
+He was right on three of the four:
+- **A GCP fleet deploy.** Declined ONCE (correctly — never re-run a declined command), then re-listed
+  as blocked for hours instead of asking plainly a second time.
+- **Deleting NULL-`agent_id` rows** that were my OWN throwaway enforcer agents, on an alpha fleet with
+  zero users. Treated as if it were live customer data.
+- **A migration-ordering question** listed as needing him, then self-corrected one message later as not
+  needing him at all.
+Only the fourth (an npm publish, which reaches operators) was a real gate.
+
+### The three questions. All three must be NO for it to be yours.
+
+1. **Does it reach OUTSIDE this system?** npm, a counterparty, a customer, a bill, a public claim,
+   someone else's machine. Internal GCP + local + this repo is not outside.
+2. **Is it genuinely irreversible?** Not "destructive-sounding" — irreversible. Deleting rows you
+   created, on an alpha fleet with no users, that anti-entropy will re-replicate, is not.
+3. **Is it already authorized in writing?** §Reality Check authorizes GCP actions inside `cello-infra`.
+   §2e says a reviewed-green unit merges. §3a says pick and log. Re-asking a settled authorization is
+   the purest form of this.
+
+Any YES → it is a real gate. **All NO → it is yours. Do it, journal it, move on.**
+
+### The rules that follow
+
+- **ASK ONCE, IN ONE LINE, THEN PARK IT.** If it is a real gate, say so once — then it goes to the DoD
+  Parked section and you never mention it again until he answers. Re-listing is the theatre.
+- **A DECLINED command is not a standing block.** Do not re-run it; do ask once, plainly, why or
+  whether to proceed. Silence is not a refusal renewed every 30 minutes.
+- **REDO > ASK**, the same way redo > block. On internal alpha work with a green gate, doing it wrong
+  costs one redo; asking costs a cycle and often gets "why did you stop for that?".
+- **Check which mental model you imported.** "Destructive", "live data", "published package",
+  "migration cost" are real brakes in a production system with customers. This has one user, no
+  customers, and total data loss is the milestone plan. A brake that would be right somewhere else is
+  not right here just because it sounds responsible.
+- **Never bundle a real gate with fake ones.** Four items presented together, three of them yours,
+  makes the one that matters harder to see and trains him to skim the list.
+
 ## THE MILESTONE IN ONE PARAGRAPH
 Rebuild CELLO at the launch topology across two clouds: **N=3 directories — one AWS (us-east-1)
 + two GCP — with T = majority(validators) = 2**, relays on both clouds, and the Postgres
@@ -291,7 +336,9 @@ AWS side; genuine failure → stop waiting, diagnose; terminal → CronDelete it
 metronome — if working, keep working. Fired prompt: (1) procedure/DoD/journal in context? re-read +
 re-arm if dropped; (2) stalled on a decision? apply §3a; (3) blocked on a human-only step? work a
 different line; (4) >15 min since commit? commit; (5) last unit unreviewed? dispatch now;
-(6) one status line. Self-terminate when all DoD tiers are ✅.
+(6) **decision theatre check — are you carrying anything as "waiting on Andre"? Run the three
+questions (§Decision Theatre). All NO → do it now. Any YES → it belongs in DoD Parked, and you do not
+mention it again this cycle;** (7) one status line. Self-terminate when all DoD tiers are ✅.
 
 ## 4. First actions (P0 order — strictly)
 1. **DOD-GCP-PROJECT-1** — create `cello-infra`, link billing, enable APIs deliberately, create
