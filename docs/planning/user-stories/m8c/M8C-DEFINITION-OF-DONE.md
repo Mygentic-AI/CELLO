@@ -1985,11 +1985,38 @@ own story) deliberately, never smuggled in as a rider. Source:
   other, and the session can never produce a receipt. Force-abandon is the only exit, and it forfeits
   the seal. One undelivered leaf cost the conversation its notarization, forever.
 
+  > **🔧 ROOT CAUSE CORRECTED 2026-07-31 — the leaf was NOT undelivered. It was delivered and
+  > DROPPED BY THE RECEIVER'S DEDUP RULE.** The daemon log for this exact session shows the second
+  > away response sent at `08:28:41.967` (`session.away.response.sent`, Ms_Chelly, leaf 2) and
+  > `session.content.deduplicated` on the counterparty **2 ms later** at `08:28:41.969`, hash
+  > `36b005e032de…`, matched against the copy already at position 0. Delivery worked. The receiver
+  > refused to append because `DOD-MSG-5` ("a content_hash satisfies AT MOST ONE Merkle leaf, exactly
+  > once", `session-node-manager.ts:3557`) dedups on **content alone** — and the two away responses
+  > were byte-identical.
+  >
+  > This matters because **AC 1 below is aimed at a delivery problem that did not occur.** "Append
+  > only once delivery is recorded, or roll back the undelivered append" would not have prevented
+  > this strand: delivery WAS recorded. The correct fix is to key duplicate detection on the
+  > relay-assigned **position** rather than the content hash — a redelivery carries the same
+  > position, a genuinely new identical message carries a new one. Full analysis, including the
+  > cross-party scope of the current check, in
+  > [[2026-07-31_1043_two-sessions-one-agent-co-attendance]] §7b.
+  >
+  > **Sequencing constraint discovered with it.** This same session also carries
+  > `session.relay.hash.submit.failed` on its FIRST message and two `session.content.sequence_behind_tree`
+  > warnings — i.e. it is also a **position-drifted** session (that log's §7a: a first message that
+  > beats relay registration is recorded locally but never counted by the relay, leaving the local
+  > record permanently one ahead). So the position-keyed dedup fix inherits a broken key unless the
+  > drift is fixed first, and the spec must say what dedup does when a message has **no** relay
+  > witness at all — which is exactly the drifted/relay-degraded case. Fix §7a before, or with, §7b.
+
   **Why this outlives the away bug.** The away echo was one way to produce an undelivered local leaf.
   Any future path that appends before it delivers produces the same strand, and the system currently
   has no detection (nothing flagged it for a week), no diagnosis (the refusal names the counterparty,
   not the mismatch), and no repair. That both ends were on ONE daemon rules out a network partition
-  as the explanation — a local append simply was not mirrored.
+  as the explanation — a local append simply was not mirrored. *(2026-07-31: the "appends before it
+  delivers" framing is one producer; the dedup drop above is a second, and the one that actually
+  fired here. Both produce the same strand.)*
 
   **ACs:**
   1. A leaf is appended to the local tree only once its delivery to the counterparty is recorded, OR
