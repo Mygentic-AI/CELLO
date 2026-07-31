@@ -83,6 +83,12 @@ variable "portal_image_tag" {
   description = "Immutable tag of the portal image in Artifact Registry. Never 'latest' — the registry enforces immutable tags, and a floating tag makes 'which code is live' unanswerable."
 }
 
+variable "waitlist_hostname" {
+  type        = string
+  default     = "api.cello.mygentic.ai"
+  description = "The waitlist API hostname. UNCHANGED from AWS on purpose: the corp site's nginx already proxies to it, every E1 link ever sent points at it, and __Host-cello_wl_session is bound to this exact origin. Keeping it makes the cutover a DNS record rather than a site redeploy."
+}
+
 variable "waitlist_image_tag" {
   type        = string
   description = "Immutable tag of the waitlist image in Artifact Registry. Never 'latest' — same reason as the portal: a floating tag makes 'which code is live' unanswerable, and this service owns admission."
