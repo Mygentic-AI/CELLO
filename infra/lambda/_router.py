@@ -58,8 +58,30 @@ PUBLIC_ROUTES = {
 }
 
 # Reachable ONLY through internal_invoke. Never added to PUBLIC_ROUTES.
+#
+# Two groups, one rule. The first five had NO trigger on AWS — IAM-gated invoke
+# only. The last three were driven by EventBridge schedules, which on GCP become
+# Cloud Scheduler jobs, and a scheduler reaches a service the same way anyone
+# else does: over HTTP. Left public, `/waitlist-email` would let a stranger
+# drive the mail queue and `/waitlist-outreach` would let them grant invite
+# codes, so they sit behind the same token.
+#
+# Everything that is neither a public route nor the SNS bounce URL is here. A
+# handler that is not in one of those three places is not reachable at all,
+# which is the property that makes this list worth reading as a whole.
 INTERNAL_TARGETS = frozenset(
-    {"waitlist-migrate", "waitlist-waves", "waitlist-gate", "waitlist-firstwin", "waitlist-utm"}
+    {
+        # no trigger on AWS: IAM-gated lambda:InvokeFunction only
+        "waitlist-migrate",
+        "waitlist-waves",
+        "waitlist-gate",
+        "waitlist-firstwin",
+        "waitlist-utm",
+        # EventBridge schedules -> Cloud Scheduler, over HTTP
+        "waitlist-email",
+        "waitlist-feedback",
+        "waitlist-outreach",
+    }
 )
 
 

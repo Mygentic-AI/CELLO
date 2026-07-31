@@ -20,48 +20,77 @@ without us (the 1-minute schedule). A failed nudge therefore degrades to exactly
 today's latency, never to a lost email. It is logged every time, because a
 degradation nobody can see is how "the link takes ages" became unattributable in
 the first place.
+
+ON GCP THIS IS AN HTTP POST, not a Lambda invoke (DOD-GCP-ROUTER-1). The shape
+of the guarantee is unchanged and so is every log event; only the transport
+moved. What needed care is the "fire and forget" half. `InvocationType="Event"`
+returned as soon as AWS accepted the request — it never waited for the drain.
+The naive HTTP translation waits for the RESPONSE, which is the drain: SES calls
+and all, on the request path of somebody waiting for a sign-in link. That would
+not move the delay, it would add it.
+
+So the POST runs on a daemon thread and the caller returns immediately. The
+return value therefore means "handed off", and the outcome is logged from the
+thread under the same two event names as before — a nudge that fails still says
+so, which is the property that stopped the latency being unattributable.
 """
 
+import json
 import os
+import threading
+import urllib.error
+import urllib.request
 
-import boto3
+# The service's own base URL. On Cloud Run the email drain is a path on the same
+# service, so this normally points at itself — which is fine and is exactly what
+# the Lambda did (one function invoking another in the same account).
+EMAIL_SERVICE_URL = os.environ.get("WAITLIST_EMAIL_SERVICE_URL")
+INTERNAL_TOKEN = os.environ.get("INTERNAL_INVOKE_TOKEN")
 
-EMAIL_FUNCTION = os.environ.get("WAITLIST_EMAIL_FUNCTION")
+# Generous, because it only bounds the DAEMON thread — no caller waits on it.
+# Its job is to stop a wedged connection leaking a thread per signup.
+NUDGE_TIMEOUT_SECONDS = 30
 
-_lambda = None
 
-
-def _client():
-    global _lambda
-    if _lambda is None:
-        _lambda = boto3.client("lambda")
-    return _lambda
+def _post(url, correlation_id, log):
+    request = urllib.request.Request(
+        url,
+        data=json.dumps({"action": "drain"}).encode(),
+        headers={"content-type": "application/json", "x-cello-internal-token": INTERNAL_TOKEN or ""},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=NUDGE_TIMEOUT_SECONDS) as response:
+            log("waitlist.email.nudge.sent", correlation_id, url=url, status=response.status)
+    except Exception as err:  # noqa: BLE001 — a failed nudge must never escape this thread
+        # The mail is NOT lost: the row is committed and the scheduled drain will
+        # take it within a minute. Losing the sign-in response over a failed
+        # optimisation would turn a slow link into no link at all.
+        log("waitlist.email.nudge.failed", correlation_id, url=url, error=str(err))
 
 
 def nudge_dispatcher(correlation_id, log):
-    """Fire-and-forget invoke of the email dispatcher. Returns whether it went.
-
-    `InvocationType="Event"` so the caller does not wait for the send — the
-    person is waiting on an HTTP response, and blocking it on SES would move the
-    delay rather than remove it.
+    """Hand the drain off without waiting for it. Returns whether it was sent.
 
     Concurrency with the scheduled run is safe: claim_jobs uses
     FOR UPDATE SKIP LOCKED, and test_two_simultaneous_dispatcher_runs_send_each_email_once
     covers exactly this.
     """
-    if not EMAIL_FUNCTION:
+    if not EMAIL_SERVICE_URL:
         # Unset means the caller was deployed without the wiring. Say so —
         # silence here would look identical to a working nudge.
         log("waitlist.email.nudge.unconfigured", correlation_id)
         return False
 
-    try:
-        _client().invoke(FunctionName=EMAIL_FUNCTION, InvocationType="Event", Payload=b"{}")
-        log("waitlist.email.nudge.sent", correlation_id, function=EMAIL_FUNCTION)
-        return True
-    except Exception as err:  # noqa: BLE001 — a failed nudge must never fail the request
-        # The mail is NOT lost: the row is committed and the scheduled drain will
-        # take it within a minute. Losing the sign-in response over a failed
-        # optimisation would turn a slow link into no link at all.
-        log("waitlist.email.nudge.failed", correlation_id, error=str(err))
+    if not INTERNAL_TOKEN:
+        # The internal surface refuses an unauthenticated call, so posting
+        # without a token would burn a thread to earn a 401. Naming it here
+        # points at the missing configuration instead of at the email service.
+        log("waitlist.email.nudge.unconfigured", correlation_id, reason="no_internal_token")
         return False
+
+    url = EMAIL_SERVICE_URL.rstrip("/") + "/internal/waitlist-email"
+    threading.Thread(
+        target=_post, args=(url, correlation_id, log), daemon=True, name="email-nudge"
+    ).start()
+    return True
