@@ -234,8 +234,8 @@ resolve to `198.51.100.1` — the placeholder hibernation left behind.
 
 | | |
 |---|---|
-| Published (beta) | `daemon@0.0.101`, `cli@0.0.104` — tag `v0.0.158`, smoke-tag green |
-| Verified on the tarball | `dist/bundled-consortium-manifest.js` contains gcp-use1/usc1/euw1 and no AWS ids; `PRODUCTION_DIRECTORY_URL = http://34.75.172.108:9090`; `cli` pins `daemon@0.0.101` exactly |
+| Published (beta) | **`daemon@0.0.102`, `cli@0.0.105`** — tag `v0.0.159`, smoke-tag green (supersedes 0.0.101/0.0.104 from tag v0.0.158) |
+| Verified on the tarball | `dist/bundled-consortium-manifest.js` contains gcp-use1/usc1/euw1 and no AWS ids; `PRODUCTION_DIRECTORY_URL = http://34.75.172.108:9090`; the step-6 downgrade warning (`step6`) is present in `dist/manifest-deps.js`; `cli` pins `daemon@0.0.102` exactly |
 | Manifest | v2, officer root key `e8300a2b…b104`, intake key `intake-dev-1` / `87da56bf…b3d1` (the AWS key, carried over — clients already trust manifests naming it) |
 | **`latest` promotion** | **NOT DONE — Andre runs it.** Commands are in the session hand-off |
 
@@ -291,3 +291,24 @@ AWS and must be replaced before that account closes.
 here — and the failure mode when it does not fail is worse: pnpm installs the UNPATCHED package and
 produces an image that boots fine and is subtly wrong. `packages/directory/Dockerfile` has carried
 this copy and a warning for some time; the ops-agent one had drifted.
+
+### Review findings on the roster change, closed (2026-07-31)
+
+The two HIGH findings were the same defect in PROSE that the code change had just fixed — hardening a
+constant while leaving the document that overrides it achieves nothing.
+
+- `README.md` gave `CELLO_DIRECTORY_URL` a default of `directory-us1.cello.mygentic.ai` — a dead AWS
+  host. An operator "fixing" it to the live `directory-use1` NAME gets a working client with step-6
+  **off**, because the roster is matched byte-for-byte, not by "reaches the same machine".
+- The comment inside the gate claimed the production default "IS in the bundle" — false in both
+  halves, and it read as authorisation for exactly the substitution the change exists to prevent.
+- **The downgrade is now announced.** It logged at `info` with a reason indistinguishable from the
+  benign local-dev case. Loopback/private stay `info`; anything else `warn`s with `step6: "disabled"`.
+- Two tests had less grip than they looked: the threshold test asserted `Math.floor(n/2)+1 === 2`,
+  arithmetic on a literal no production code runs (a client demanding all 3 nodes kept it green) —
+  it counts through `validatorNodes()` now; and `intake_key` had no named assertion.
+
+Still open from that review, not blocking: `multiaddr` is in the signed manifest but has no consumer —
+the client dials whatever the plaintext `/bootstrap` returns. The worthwhile fix is to cross-check the
+probe's `peerId` against the manifest's declared one in `manifestNodesToEndpoints` and reject a
+mismatch. Step-6 already defends the identity, so this is defence-in-depth at the dial layer.
