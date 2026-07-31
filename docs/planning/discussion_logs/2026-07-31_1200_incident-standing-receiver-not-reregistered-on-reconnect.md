@@ -43,6 +43,40 @@ restart recovered it.
 | 11:48:43 | Negative cache expires. Resolution healthy; zero `dns_error` since. |
 | 11:49:18 | Presence refreshed for all five. Recovered. |
 
+## CORRECTION (2026-07-31, after shipping daemon 0.0.105)
+
+**The fix below does not address this incident.** Recorded in full rather than quietly amended,
+because the reasoning error is the reusable part.
+
+`targetStreamFound` reads `this.#streams.get(targetHex)` in `directory-node.ts:3492` — a map of
+pubkey → **authenticated signaling stream**, populated at auth time. It is not the standing receiver.
+Re-registering the receiver does not repopulate that map.
+
+The trigger is wrong too. `onConnected` fires on a RECONNECT, and there was no reconnect in the
+window that failed: the client's first `directory.signaling.disconnected` was at 11:42, twenty-three
+minutes AFTER the 11:19 failure. The hook would never have fired.
+
+The real chain:
+
+1. The directory's `#streams` entry for the agent disappeared server-side sometime after 10:57.
+2. The client never noticed — no disconnect, therefore no reconnect, therefore **no re-authentication**,
+   therefore nothing repopulated that map.
+3. At 11:19 the directory found no stream and answered `target_offline`.
+
+So the defect is **detection**, not re-registration: the client treats a dead stream as alive. The
+heartbeat exists to catch precisely this (15 s interval, 15 s timeout — `signaling-manager.ts:278–279`)
+and accounted for only **42 of 3,556** stream deaths. **That is the bug**, and it was mis-filed below
+as a secondary curiosity.
+
+What shipped in 0.0.105 is still correct on its own terms — an agent that reconnects should
+re-register, and the idempotency guard makes it a no-op otherwise — but it closes a different hole.
+
+**Reasoning error to avoid repeating:** the produce/consume trace stopped at a plausible producer
+(`ensureStandingReceiverForAgent`) without confirming that the CONSUMER (`targetStreamFound`) reads
+what that producer writes. They are different maps. Confirm the consumer's actual source before
+accepting a producer as the gap — "it is the thing that registers something" is not the same as
+"it is the thing this check reads".
+
 ## Root cause
 
 **Produce path.** `startAgentInternal` (`core/daemon/src/daemon.ts:1661–1710`) adds the agent to
