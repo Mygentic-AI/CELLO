@@ -110,6 +110,23 @@ the system contradicts the label unless you go and ask a second surface.
 For a product whose entire proposition is verifiable trust, the failure mode here is not a wrong
 label — it is the product making a false claim about notarization and an agent relaying it onward.
 
+**Diagnosed 2026-07-31 — the fix is small and the location is exact.**
+`session-node-manager.ts:1005` defines `#TERMINAL_STATUSES` as
+`('sealed','abandoned','seal_interrupted_pending','interrupted')`. `getSealedUnread` (`:1039`)
+selects on that set, so it returns all four — correctly, they are all terminal-with-unread. The
+defect is downstream: `notification-handlers.ts:99` labels the whole set *"These sessions are sealed
+with unread messages"*, and the field is named `sealed_unread`. **The name is half the false claim**
+— an agent reading the JSON says "sealed" without ever reaching the guidance string.
+
+Three consumers to change plus its test: `notification-handlers.ts`, `session-read-handlers.ts`,
+`session-node-manager.ts`, and `plugins/cello/skills/receptionist/SKILL.md` (which ships, so it
+instructs agents directly — audit what ships, not only what compiles).
+
+Smallest correct fix: return each row's `status` alongside the count, and make the guidance state
+that only `sealed` is notarized. Renaming the field to something status-neutral (`ended_unread`) is
+the honest version, but it is a wire change for the shim and the receptionist skill, so it wants its
+own pass rather than riding a doc update.
+
 ---
 
 ## 4. Logging out says the daemon stopped while it is still on the network
