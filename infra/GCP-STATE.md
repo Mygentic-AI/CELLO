@@ -1,5 +1,9 @@
 # GCP Infrastructure State — Authoritative Record
 
+> **⚠️ READ FIRST: [`docs/planning/aws-to-gcp-migration.md`](../docs/planning/aws-to-gcp-migration.md)**
+> — what is running where across BOTH clouds, and what breaks if you stop what. This file
+> describes one cloud in isolation; it cannot tell you which one is authoritative.
+
 > **Rule (same as STATE.md):** update IMMEDIATELY after every GCP change, never batched.
 > A session that changes GCP without updating this file is incomplete.
 

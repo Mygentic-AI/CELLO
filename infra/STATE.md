@@ -1,5 +1,9 @@
 # CELLO Infrastructure State
 
+> **⚠️ READ FIRST: [`docs/planning/aws-to-gcp-migration.md`](../docs/planning/aws-to-gcp-migration.md)**
+> — what is running where across BOTH clouds, and what breaks if you stop what. This file
+> describes one cloud in isolation; it cannot tell you which one is authoritative.
+
 This file is the authoritative record of what actually exists in AWS.
 It is updated automatically by `infra/deploy.sh` after every successful deployment.
 
