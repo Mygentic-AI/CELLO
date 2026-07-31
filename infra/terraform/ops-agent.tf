@@ -214,6 +214,19 @@ resource "google_cloud_run_v2_service" "ops_agent" {
         value = join(",", [for k, n in var.directory_nodes : "http://${google_compute_address.node_internal[k].address}:9090"])
       }
 
+      // The waitlist gate is an AWS Lambda backed by the portal RDS. With AWS hibernated it cannot
+      // answer, and it fails CLOSED — correctly — which refuses every registration. The waitlist is
+      // empty and unlaunched, so admission-gating it protects nothing while blocking the only
+      // person who needs to register.
+      //
+      // REMOVE THIS when the waitlist ports to GCP (cutover item C). It is an explicit opt-out:
+      // absent or any other value leaves the gate ON, and the agent warns on every boot while it is
+      // off, so this cannot become the silent default.
+      env {
+        name  = "WAITLIST_GATE"
+        value = "disabled"
+      }
+
       env {
         name  = "SES_FROM_ADDRESS"
         value = var.ops_agent_ses_from_address

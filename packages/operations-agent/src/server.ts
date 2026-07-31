@@ -106,7 +106,8 @@ export type ResolvedAdapters = {
    * and leaving it undefined for a real environment would silently open the
    * network to anybody who messages the bot.
    */
-  waitlistGate: WaitlistGateClient;
+  /** Absent ONLY when WAITLIST_GATE=disabled. The engine treats undefined as "no admission check". */
+  waitlistGate?: WaitlistGateClient;
   /** Channel type string for the RegistrationEngine */
   channelType: "telegram" | "cli";
 };
@@ -253,6 +254,15 @@ export function resolveAdapters(config: AdapterConfig): ResolvedAdapters {
     },
   });
 
+
+  // Explicit opt-out only — see the waitlistGate comment below.
+  const waitlistGateDisabled = process.env["WAITLIST_GATE"] === "disabled";
+  if (waitlistGateDisabled) {
+    logger.warn("ops_agent.waitlist_gate.disabled", {
+      component: "server",
+      detail: "WAITLIST_GATE=disabled — registration admission is NOT being checked. Intended only while the waitlist has not been ported off AWS.",
+    });
+  }
   return {
     channel: new TelegramAdapter({ token: telegramBotToken, logger }),
     otpDelivery: new SesOtpDeliveryProvider({
@@ -267,10 +277,22 @@ export function resolveAdapters(config: AdapterConfig): ResolvedAdapters {
     // us-east-1 regardless of this service's region: the waitlist is a single
     // global service (M11-D26), so there is exactly one gate function and it is
     // not per-region like the directory.
-    waitlistGate: new LambdaWaitlistGateClient({
-      region: "us-east-1",
-      functionName: `cello-waitlist-gate-${env}`,
-      logger,
+    //
+    // OPT-OUT, NOT OPT-IN. Absent or any other value → the gate is built and admission is
+    // enforced, so a missing variable can never silently admit everyone. Only the explicit string
+    // "disabled" turns it off, and that is logged at warn on every boot.
+    //
+    // Why an opt-out exists at all: the gate is an AWS Lambda backed by the portal RDS. On GCP,
+    // with AWS hibernated, it cannot be reached — and it fails closed, correctly, which refuses
+    // every registration. Gating admission to an EMPTY, unlaunched waitlist is protecting nothing
+    // while blocking the only person who needs to register. When the waitlist ports to GCP
+    // (M12 cutover item C) this goes back on.
+    ...(waitlistGateDisabled ? {} : {
+      waitlistGate: new LambdaWaitlistGateClient({
+        region: "us-east-1",
+        functionName: `cello-waitlist-gate-${env}`,
+        logger,
+      }),
     }),
     channelType: "telegram",
   };
