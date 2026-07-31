@@ -19,7 +19,7 @@
  * The health check endpoint is tested by calling the exported handler directly.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
@@ -96,6 +96,19 @@ describe("resolveAdapters", () => {
    * AC-001: production adapter selection uses TelegramAdapter, SesOtpDeliveryProvider,
    * DirectoryPreAuthorizationClient.
    */
+  // DOD-GCP-GATE-1: the gate reaches the waitlist over HTTP, and resolveAdapters
+  // refuses to start when it is enabled without a URL and token. These three
+  // cases assert adapter WIRING, so they supply the configuration rather than
+  // asserting its absence — the assertion itself has its own test.
+  beforeEach(() => {
+    process.env["WAITLIST_SERVICE_URL"] = "https://api.cello.mygentic.ai";
+    process.env["INTERNAL_INVOKE_TOKEN"] = "test-token";
+  });
+  afterEach(() => {
+    delete process.env["WAITLIST_SERVICE_URL"];
+    delete process.env["INTERNAL_INVOKE_TOKEN"];
+  });
+
   it("CELLO_ENV=dev: wires real adapters", () => {
     const config: AdapterConfig = {
       env: "dev",

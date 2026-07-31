@@ -12,7 +12,7 @@
  * says so at warn on every boot.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resolveAdapters } from "../server.js";
 
 const BASE = {
@@ -32,8 +32,22 @@ function loggerSpy() {
 }
 
 let saved: string | undefined;
-beforeEach(() => { saved = process.env["WAITLIST_GATE"]; delete process.env["WAITLIST_GATE"]; });
-afterEach(() => { if (saved === undefined) delete process.env["WAITLIST_GATE"]; else process.env["WAITLIST_GATE"] = saved; });
+// The gate reaches the waitlist over HTTP now (DOD-GCP-GATE-1), and
+// resolveAdapters refuses to start when it is ON without them — deliberately,
+// so a gate that cannot reach the waitlist says so at boot rather than in a
+// user's chat. Supplied here so these tests keep asserting what they were
+// written for: WHICH value disables the gate, not how it is configured.
+beforeEach(() => {
+  saved = process.env["WAITLIST_GATE"];
+  delete process.env["WAITLIST_GATE"];
+  process.env["WAITLIST_SERVICE_URL"] = "https://api.cello.mygentic.ai";
+  process.env["INTERNAL_INVOKE_TOKEN"] = "test-token";
+});
+afterEach(() => {
+  if (saved === undefined) delete process.env["WAITLIST_GATE"]; else process.env["WAITLIST_GATE"] = saved;
+  delete process.env["WAITLIST_SERVICE_URL"];
+  delete process.env["INTERNAL_INVOKE_TOKEN"];
+});
 
 describe("the waitlist gate opt-out", () => {
   it("is ON when the variable is absent — the default must never admit", () => {

@@ -40,16 +40,24 @@ steps:
       - -c
       - |
         set -euo pipefail
-        docker run -d --name smoke -p 8080:8080 ${_REGISTRY}/waitlist:${_TAG}
+        # --network=cloudbuild, and addressed by NAME rather than 127.0.0.1.
+        # `docker run` here starts a SIBLING container on the shared daemon, not
+        # a child of this step, so loopback in this step is not the service.
+        # Published ports land on the daemon's host, which the step cannot reach
+        # either. The first version used -p 8080:8080 and curl'd 127.0.0.1; the
+        # image was fine and gunicorn was serving, and the step still reported
+        # "FAIL: /health never answered" — a broken smoke test that would have
+        # blocked every good build.
+        docker run -d --name smoke --network=cloudbuild ${_REGISTRY}/waitlist:${_TAG}
         for i in $(seq 1 30); do
-          if curl -sf http://127.0.0.1:8080/health >/dev/null; then
+          if curl -sf http://smoke:8080/health >/dev/null; then
             echo "health ok"
             # A handler that cannot be IMPORTED is the defect this catches:
             # waitlist-gallery imports a private sibling, and a loader that
             # misses it 500s every gallery route in production while every
             # unit test passes.
             curl -sf -o /dev/null -w 'gallery: %{http_code}\n' \
-              http://127.0.0.1:8080/gallery/receipts || true
+              http://smoke:8080/gallery/receipts || true
             if docker logs smoke 2>&1 | grep -q ModuleNotFoundError; then
               echo "FAIL: a handler could not be imported" >&2
               docker logs smoke >&2
