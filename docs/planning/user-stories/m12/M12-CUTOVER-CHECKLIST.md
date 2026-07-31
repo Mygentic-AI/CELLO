@@ -53,6 +53,7 @@ changes another item, say so there — that is what this file is for.
 |---|---|---|---|
 | A | — | — | ✅ done (see §4) |
 | B | — | — | ✅ done (see §4) |
+| J | *unclaimed* | | cold-boot distribution (client) |
 | I | *unclaimed* | | relay redundancy |
 | C | waitlist-port session | 2026-07-31 | 🔄 in progress — landing under **M11** as the `DOD-GCP-*` tier |
 | D | waitlist-port session | 2026-07-31 | ✅ **done** — `api.cello.mygentic.ai` → `35.227.231.107` (GCP), INSYNC |
@@ -289,6 +290,22 @@ whole thing is a 7-line config change.
 
 **Desired state:** `relay_nodes` has two entries (us-east1 + europe-west1), both relays register with
 the consortium, and a session can be established when one relay is down.
+
+### ❌ J — Randomise the cold-boot directory selection
+
+Today every fresh daemon hits `gcp-use1` first. If it answers, the daemon stays there — no roster
+probe, no distribution. So ten new operators all land on the same validator and the same relay.
+
+**The code for distribution already exists.** `fisherYatesShuffle` is in `directory-bootstrap.ts` and
+is used for failover candidates. The gap is that the shuffle only fires when the primary is DOWN.
+When it's up, everyone gets it.
+
+**The fix:** when a manifest is configured and the daemon has no prior "home" (first connect or after
+logout), pick a random roster member instead of probing the fixed primary first. Reconnects within the
+same session should still prefer the last-known-good node (so a running daemon doesn't bounce).
+
+This is a change to the published client (`daemon@0.0.10x`), not config. Small — the resolver's
+cold-start path needs one extra branch that rolls the primary from the shuffled roster.
 
 ## 5. Not doing, and why
 
