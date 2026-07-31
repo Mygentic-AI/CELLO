@@ -110,8 +110,8 @@ not remove it afterwards.** Clear it when you are done:
 `gcloud sql instances patch cello-portal --clear-authorized-networks --quiet`.
 
 Phases, in dependency order:
-1. Waitlist schema into the GCP portal Cloud SQL (26 migrations; reconcile the 4 ledger rows with no
-   current file while you are there).
+1. Waitlist schema into the GCP portal Cloud SQL — the 26 migrations, applied into the existing
+   ledger alongside the portal's 11. Nothing to reconcile (see above).
 2. Router + per-handler adapters; the existing 512 lines of tests call the handlers directly and
    must stay green.
 3. Cloud Run + Cloud Scheduler (8 schedules) in Terraform; SES posts bounces to a Cloud Run URL.
