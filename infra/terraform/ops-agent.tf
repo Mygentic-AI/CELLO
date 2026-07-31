@@ -152,9 +152,13 @@ resource "google_cloud_run_v2_service" "ops_agent" {
         value = var.environment
       }
 
+      // The FULL ENDPOINT URL, not a base — DirectoryPreAuthorizationClient posts to this value
+      // verbatim (`this.#url = opts.directoryInternalUrl`). Setting the bare host made every
+      // registration POST to `/` and get a 404, which surfaced to the operator as "CELLO hit a
+      // temporary server error". The name reads like a base URL; it is not.
       env {
         name  = "DIRECTORY_INTERNAL_URL"
-        value = "http://${google_compute_address.node_internal[local.ops_agent_node].address}:8081"
+        value = "http://${google_compute_address.node_internal[local.ops_agent_node].address}:8081/internal/pre-authorize"
       }
 
       env {
