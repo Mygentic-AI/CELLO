@@ -1,0 +1,28 @@
+-- V57 — let the OPS AGENT role read the migration history it is checked against.
+--
+-- The exact situation V50 fixed for cello_service, arriving for the second role. The ops agent
+-- refuses to start when the applied schema version is not the one it expects — a deliberate gate, so
+-- an agent never reports health against a schema it does not understand — and that check queries
+-- flyway_schema_history, which Flyway creates and which is owned by whoever ran the migration.
+--
+-- V26 created cello_ops_agent scoped to the registration tables and nothing else, which is correct
+-- and should stay that way: it must never reach agent_profiles, agent_key_shares or the seals. But
+-- that scope did not include Flyway's own bookkeeping table, so the role could not read the table its
+-- startup guard depends on, and the guard would have reported a permissions fault as a schema fault.
+--
+-- Why this is needed NOW and was not on AWS: there, the ops agent and Flyway both connect through
+-- the same RDS master path, so the table is readable by construction. On GCP they are deliberately
+-- different roles.
+--
+-- The alternative was to point the ops agent at cello_service, which HAS this grant (V50). That was
+-- rejected: cello_service holds no rights on channel_identities, so registration would have failed at
+-- the step that records the operator's channel identity — and widening cello_service to cover it
+-- would hand the directory node process access to registration data it has no reason to touch. Using
+-- the role built for this job and granting it one read is the smaller change in every direction.
+--
+-- SELECT only. The history table is Flyway's record of what has been applied; the ops agent has no
+-- business writing to it, and granting more would let it rewrite the evidence of which schema it is
+-- actually running against.
+--
+-- Idempotent: the role is created by V26 on every node before this runs.
+GRANT SELECT ON TABLE flyway_schema_history TO cello_ops_agent;

@@ -29,17 +29,34 @@ locals {
 // The node's connection string, assembled from the same values secrets.tf gives the node itself
 // rather than re-derived.
 //
-// `cello_service`, NOT the `postgres` owner — and the first version of this file got that wrong.
-// The owner bypasses every RLS policy (no table declares FORCE ROW LEVEL SECURITY) and the REVOKE
-// never applied to it, so handing it to the ops agent would leave `conversation_seals`,
-// `attestations` and `agent_key_shares` freely mutable by a process that has no business touching
-// them — re-opening for the ops agent exactly what sql.tf closed for the node, in the commit whose
-// headline was "no cross-node database privilege".
+// `cello_ops_agent` — the role built for exactly this, by V26, and neither of the two roles this
+// file reached for first.
 //
-// Verified against the live database rather than assumed: as `cello_service`, reading
-// `flyway_schema_history` returns 56, and an INSERT into `registrations` reaches the NOT NULL
-// constraint check — i.e. it passes permission and RLS and fails only on the row's own contents.
-// Those are the two things this process does.
+// The `postgres` owner was wrong: it bypasses every RLS policy (no table declares FORCE ROW LEVEL
+// SECURITY) and the REVOKE never applied to it, so it would leave `conversation_seals`,
+// `attestations` and `agent_key_shares` freely mutable by a process that has no business touching
+// them. `cello_service` was also wrong, and only probing BOTH tables showed it: it can write
+// `registrations` but has no rights at all on `channel_identities`, so registration would have
+// failed at the step that records the operator's channel identity — a failure that would only have
+// appeared when a real person tried to register.
+//
+// Privileges verified directly against the live database with has_table_privilege, not inferred:
+//   cello_ops_agent → registrations INSERT ✓, channel_identities INSERT ✓, flyway_schema_history ✗
+// V57 grants that last read (SELECT only), mirroring what V50 did for cello_service.
+// The role itself exists in every node database (V26 creates it idempotently); what it lacks on
+// Cloud SQL is a password it can log in with. This sets one without touching its grants.
+resource "random_password" "ops_agent_db" {
+  length  = 32
+  special = false
+}
+
+resource "google_sql_user" "ops_agent" {
+  name     = "cello_ops_agent"
+  project  = var.project_id
+  instance = google_sql_database_instance.node[local.ops_agent_node].name
+  password = random_password.ops_agent_db.result
+}
+
 resource "google_secret_manager_secret" "ops_agent_database_url" {
   project   = var.project_id
   secret_id = "cello-ops-agent-database-url"
@@ -52,8 +69,8 @@ resource "google_secret_manager_secret_version" "ops_agent_database_url" {
   secret = google_secret_manager_secret.ops_agent_database_url.id
   secret_data = format(
     "postgresql://%s:%s@%s:5432/%s",
-    google_sql_user.cello_service[local.ops_agent_node].name,
-    random_password.db_app[local.ops_agent_node].result,
+    google_sql_user.ops_agent.name,
+    random_password.ops_agent_db.result,
     google_compute_address.sql_psc[local.ops_agent_node].address,
     google_sql_database.cello[local.ops_agent_node].name,
   )
@@ -220,7 +237,7 @@ variable "ops_agent_image_tag" {
 
 variable "ops_agent_expected_migration_version" {
   type        = string
-  default     = "56"
+  default     = "57"
   description = "Schema version the ops agent asserts. Bump with every new V{N} migration — a stale value crash-loops it on a fresh deploy."
 }
 
