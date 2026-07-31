@@ -13,6 +13,10 @@ description: >
 
 # AWS → GCP migration — current state
 
+> **Finishing the cutover?** The claimable work list is
+> [`docs/planning/user-stories/m12/M12-CUTOVER-CHECKLIST.md`](user-stories/m12/M12-CUTOVER-CHECKLIST.md)
+> — claim your item there before starting, so two agents do not take the same one.
+>
 > **If you are an agent picking up a fault, read §1 and §4 first.** Most of what looked like protocol
 > bugs on 2026-07-31 were this migration seen from inside. The system moved; nothing said so.
 
