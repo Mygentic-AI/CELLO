@@ -65,6 +65,13 @@ describe("DOD-INV-SHARES-LOCAL: the share table is unreachable through anti-entr
       "user_accounts",
       "agent_profiles",
       "agent_revocations",
+      "capability_claim_codes",
+      "authorized_issuers",
+      "signal_records",
+      "submission_results",
+      "relay_registrations",
+      "directory_nodes",
+      "conversation_seals",
       "seal_notarizations",
     ]);
     expect(store.tierBTables()).toEqual(["agent_suspensions", "agent_presence"]);

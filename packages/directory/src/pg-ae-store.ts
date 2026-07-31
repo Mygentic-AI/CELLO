@@ -130,6 +130,7 @@ const TIER_A: readonly TierAPg[] = [
   { spec: RELAY_REGISTRATIONS_SPEC, bytea: [], naturalKeyConstraint: "relay_registrations_relay_id_key" },
   { spec: DIRECTORY_NODES_SPEC, bytea: [], naturalKeyConstraint: "directory_nodes_node_id_key" },
   { spec: CONVERSATION_SEALS_SPEC, bytea: [], naturalKeyConstraint: "conversation_seals_conversation_id_key" },
+  // seal_notarizations last because its chained writer needs conversation_seals and profiles present.
   {
     spec: SEAL_NOTARIZATIONS_SPEC,
     bytea: ["session_id", "sealed_root", "participant_a_pubkey", "participant_b_pubkey", "frost_signature"],

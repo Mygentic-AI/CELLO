@@ -79,6 +79,13 @@ describe("DOD-AE-CHAINED-TABLES-1: seal_notarizations and user_accounts replicat
       "user_accounts",
       "agent_profiles",
       "agent_revocations",
+      "capability_claim_codes",
+      "authorized_issuers",
+      "signal_records",
+      "submission_results",
+      "relay_registrations",
+      "directory_nodes",
+      "conversation_seals",
       "seal_notarizations",
     ]);
   });
