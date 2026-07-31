@@ -14,19 +14,27 @@ section that follows it, or in `infra/CLAUDE.md`.
 
 ---
 
-## ⚡ POWER STATE — HIBERNATED (all 3 regions, as of 2026-07-30 19:36 UTC)
+## ⚡ POWER STATE — LIVE (all 3 regions, as of 2026-07-31 10:54 UTC)
 
-Down since 19:31–19:36 UTC. Previous uptime ~37 h (woken 2026-07-29 06:37 UTC).
+Woken 10:36:11–10:54:24 UTC (18 min 13 s). Previous down-window ~15 h.
 
-Torn down: 7 ALBs, 3 NAT Gateways (EIPs retained), 3 ssmmessages endpoints. ECS→0 across all 8
-services, 4 RDS stopped, demo EC2 `i-0ad3e7c22470f266e` stopped. All **8** hostnames blackholed to
-`198.51.100.1` TTL 60. Portal capture: **2 listener rules + 1 SNI cert** — the ops dashboard will
-restore itself on wake.
+**ALB DNS names — these rotate on every wake; query AWS, do not trust this list once it is a day old.**
+Portal/ops ALB this cycle: `cello-portal-dev-154897317.us-east-1.elb.amazonaws.com`.
 
-**ECS Exec unavailable while hibernated.** Make no AWS changes until `wake.sh --execute` has run —
-missing ALBs and stopped RDS are intentional, not faults to repair.
+**Verified live, independently of the script's own log:** 8/8 DNS names off the blackhole;
+`http://directory-{us1,eu1,ap1}/manifest` → **200** in all three regions; 7 ALBs `active`; all 8 ECS
+services 1/1 `COMPLETED`; 4 RDS `available`; demo EC2 `running`; `operations.cello.mygentic.ai`
+→ **307** (ops dashboard restored automatically, third cycle running); daemon
+`directory_signaling: connected`.
 
-Restore with `./infra/scripts/wake.sh --execute --yes` (~15–18 min).
+**Inventory diff not identical in us-east-1, correctly:** directory taskdef `430 → 432` — CI shipped
+while we were hibernated and the wake started the newer revision, now 1/1 and serving. eu-central-1
+and ap-northeast-1 were IDENTICAL. A taskdef delta after a down-window during which CI ran is
+expected; only a *structural* delta (missing TG, listener, route, endpoint) is a real finding.
+
+**Gotcha for anyone health-checking the directory:** its ALB has an **HTTP:80 listener only** — no
+HTTPS — and `/health` is not a public path (the app returns 400). `https://directory-*/health`
+returns `000` on a perfectly healthy node. The real client path is `http://directory-*/manifest`.
 
 ---
 
