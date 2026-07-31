@@ -11,8 +11,9 @@ description: >
 
 # Two sessions, one agent
 
-**Status: design decided (co-attendance). Two implementation defects proven and unfixed. One
-receipt-integrity question OPEN and gating a conclusion below — see §7.**
+**Status: design decided (co-attendance). Two implementation defects proven and unfixed. All four
+§9 open items CLOSED by third-party validation on 2026-07-31 (code anchors re-verified, §7c resolved
+from the live log) — see §7c and §9.**
 
 > **Picking this up cold? Go to §10 first.** Every claim below is anchored to a file and symbol there,
 > grouped by section, along with the log events to grep. You should not need to search for anything.
@@ -95,7 +96,15 @@ sibling replies first**, which is the common case. Catching up has to mean *"eve
 bookmark, whoever wrote it"* — which the second session needs anyway, to decide whether it still has
 anything to add.
 
-*(Asserted from reading the code, not tested — see §7.)*
+*(Validation 2026-07-31: partially corrected. The "stuck forever" claim is overstated — a
+both-directions catch-up door already exists: `cello_get_transcript` returns sent + received and
+advances both the connection cursor and the persisted watermark via `safeCursorAdvance` /
+`safeWatermarkAdvance` (`session-read-handlers.ts:130-146`, whose comment names exactly this
+sibling-send scenario). And under the *current* gate the second session is never blocked at all —
+the `unreadReceived === 0` authority passes once anyone has read (§2b). The real spec requirement
+stands in weakened form: `cello_receive since_seq` alone cannot clear a tightened cursor bar, so the
+spec must either extend `since_seq` to both directions or route catch-up through the transcript
+path.)*
 
 ## 4. The send window — a race that makes a strict gate theatre
 
@@ -193,9 +202,11 @@ Seal rate is unaffected: 75% with the drift, 72% without.
 
 ### 7b. The lost receipts — identical content, deduplicated on one side only
 
-Two conversations were **force-abandoned with no receipt**, rejected repeatedly with the two sides
-disagreeing on how many messages exist. Operator text: *"The two sides have divergent session
-histories and cannot form a bilateral commitment."*
+Two conversations were **rejected with `leaf_count_mismatch`**, the two sides disagreeing on how
+many messages exist. Operator text: *"The two sides have divergent session histories and cannot
+form a bilateral commitment."* *(Correction 2026-07-31: only one — `dbb93dfc…` — actually ended
+with no receipt. The other, `1c9ad6a8…`, sealed three minutes after its rejection via the relay
+auto-ack path, which performs no comparison at all — see §7c.)*
 
 **Cause, proven.** The away autoresponder fired twice with **identical text**. The sender appended it;
 the receiver hashed it, found that hash already at position 0, concluded redelivery, and **did not
@@ -225,24 +236,47 @@ liveness drop) carries the original position and would still be caught. Scope no
 content hash to canonical position is *also* hash-keyed, so it's one assumption in at least two
 places.
 
-### 7c. 🔴 OPEN — and it gates a conclusion above
+### 7c. ✅ RESOLVED (2026-07-31, third-party validation) — the worse possibility is the true one
 
-**Nine conversations had divergent records. Only two failed to seal.** The other seven were notarized.
-Both failures came through the interrupted-close path, which explicitly compares leaf counts; the
-seven closed with both parties live.
+**The both-parties-present path does not catch what the interrupted path does.** There are two
+bilateral close paths, and only one compares the parties' state:
 
-I stated that the receipt survives when both parties are present. **That claim rests on not knowing
-why those seven passed.** Either the divergence model is wrong for them, or the both-parties-present
-path does not catch what the interrupted path does. Both possibilities matter, and the second is
-worse.
+1. **Directory-signaling close** (`seal_interrupted_request` → `inbound-seal-request.ts:108`) —
+   compares leaf counts against local state. This is the only path that can notice divergence, and
+   it is the path the observed `leaf_count_mismatch` rejections came through.
+2. **Relay auto-ack close** (`submitSealLeaf` → `session.seal.autoacknowledged` → FROST ceremony) —
+   each party independently submits a SEAL ctrl leaf over **its own** root
+   (`session-node-manager.ts:3281`); **nothing ever compares the two parties' trees to each
+   other.** The auto-ack gate refuses only on `#contentDesynced` (observed tamper), not on
+   divergence.
 
-What is established: the bilateral check compares **the two parties' roots to each other**, never
-against the relay's record; the unilateral rebuild uses **only relay-witnessed leaves**, so an
-unwitnessed message makes it short. What is not established is why divergent records passed the
-bilateral comparison.
+**Proof from the live log.** Session `1c9ad6a8…` (divergent, one of the two `leaf_count_mismatch`
+sessions) was rejected `leaf_count_mismatch` via path 1 at 08:17:29 on 2026-07-23 — and **sealed
+successfully via path 2 three minutes later** (08:20:45 `session.seal.leaf.submitted` ×2 →
+`autoacknowledged` → `session.seal.completed`, sealed root `2aa6dc6b…`). The same divergent session:
+one path rejects it, the other notarizes it.
 
-**Do not act on the "receipts are safe when both parties are present" conclusion until this is
-closed.**
+Second proof: session `05f3fb04…` ended with the two sides' trees at **different roots** at leaf 14
+(`0111cd4b…` vs `2dbaeebd…`), yet sealed — and the certificate's `sealedRoot` (`104840…`) matches
+**neither** side's local root. At least one party therefore holds a certificate whose root its own
+record cannot reproduce. The certificate root is derived from the relay-witnessed chain, and each
+client's `frontier.verified` check verifies against relay-shipped signed leaves — never against its
+own local tree — so local divergence is invisible to the entire live-close verification chain.
+
+Re-run of the log analysis (loopback sessions, divergence = conflicting roots at the same leaf index
+or a leaf index appended on only one side): **12 divergent conversations, 10 sealed, 1 never
+attempted a seal, 1 (`dbb93dfc…`) rejected with no receipt.** So "two conversations were
+force-abandoned with no receipt" (§7b) overcounts by one: `1c9ad6a8…` did get a receipt, through
+path 2.
+
+**Consequence for the spec:** "receipts are safe when both parties are present" is true only in the
+sense that a certificate gets issued — not that the certificate matches both parties' records. The
+seal attests the relay-witnessed chain; a locally-divergent party still gets (and verifies) the
+certificate. Fixing the divergence *producers* (§7a drift, §7b content-dedup) is therefore the real
+fix; adding a party-vs-party root comparison to the auto-ack path would only convert silent
+divergence into seal failures. One small residue, cheap to chase: which component computes the
+bilateral certificate's root (relay running root vs. rebuild) was not pinned down — it is provably
+not either party's local tree root.
 
 ## 8. What changes for the operator
 
@@ -262,10 +296,10 @@ closed.**
 
 | # | Item | Status |
 |---|---|---|
-| 1 | Why seven divergent conversations sealed anyway (§7c) | 🔴 **OPEN — gates §7's conclusion** |
-| 2 | Catch-up deadlock across a sibling's reply (§3b) | Read from code, **not tested** |
-| 3 | Whether `--scope current` honours an explicit `--agent` | Unchecked, five minutes |
-| 4 | `--agent` declared `consumesValue: false` on most commands, `true` on one | Noticed, not chased; likely nothing |
+| 1 | Why seven divergent conversations sealed anyway (§7c) | ✅ **CLOSED 2026-07-31** — the auto-ack close path never compares the parties' trees; proven live (`1c9ad6a8…` rejected then sealed). See §7c. |
+| 2 | Catch-up deadlock across a sibling's reply (§3b) | ✅ **Closed by code reading** — `cello_get_transcript` is the both-directions catch-up door: it advances the cursor AND the persisted watermark (`session-read-handlers.ts:137-146`), and its own comment names the second-connection sibling-send case as its purpose. No deadlock today (the `unreadReceived === 0` authority also passes); under a tightened gate the transcript path is the designated door — the spec should either point at it or extend `since_seq` to both directions. Still untested at runtime. |
+| 3 | Whether `--scope current` honours an explicit `--agent` | ✅ **CLOSED — it does.** `--agent` replays `cello_use_agent` on the CLI's fresh connection (`parity-commands.ts:133-153`) without writing the shared file; the daemon's scope-current handler reads that connection's current agent (`notification-handlers.ts:51`). The §6 receptionist fix works as written. Caveat: the replay fails loud (`selected_agent_offline`) rather than auto-starting an offline agent — correct for the receptionist. |
+| 4 | `--agent` declared `consumesValue: false` on most commands, `true` on one | ✅ **CLOSED — deliberate, documented at `registry.ts:217-223`**: `splitAgentFlag` owns the value; `consumesValue: false` keeps `--agent --bogus` fail-loud. The lone `true` (registry.ts:509) loses that protection for its command — a one-line harmonization, not a defect. |
 
 ## 10. Where to look — code anchors
 
