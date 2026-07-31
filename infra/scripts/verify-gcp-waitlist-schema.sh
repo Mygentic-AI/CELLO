@@ -32,7 +32,19 @@ set -euo pipefail
 
 PROJECT="${GCP_PROJECT:-cello-infra}"
 INSTANCE="${GCP_SQL_INSTANCE:-cello-infra:us-east1:cello-portal}"
-PORT="${PROXY_PORT:-55432}"
+# 56432, NOT 55432, and this is not arbitrary. 55432 is where the local
+# `cello-portal-postgres` container binds, and it is the default in
+# waitlist_testdb.py (`postgres://m11:m11@localhost:55432/m11_test`) — so the
+# whole Python suite points at that port. Running the proxy there puts the
+# PRODUCTION GCP database on the address the test harness reaches for.
+#
+# It is worse than a clash, because both can hold it at once: Docker binds
+# `*:55432` (v6) and the proxy binds `127.0.0.1:55432` (v4), so both "succeed"
+# and which one a client reaches depends on how its resolver orders localhost.
+# A suite that thinks it is on a scratch database would be writing to Cloud SQL.
+# Observed 2026-07-31 — the tests failed with `password authentication failed
+# for user "m11"`, which is the proxy answering, not Docker.
+PORT="${PROXY_PORT:-56432}"
 DB="${GCP_DB_NAME:-cello_portal}"
 DB_USER="${GCP_DB_USER:-cello_portal}"
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/../corp-cello-site/migrations}"
@@ -68,6 +80,16 @@ command -v psql >/dev/null || fail "psql not installed"
 # --quota-project is required. Without it ADC bills the quota to whatever
 # `gcloud config` happens to name, and the proxy dies with accessNotConfigured
 # on sqladmin.googleapis.com if that project has the API disabled.
+# Refuse a port somebody else already holds, rather than binding beside them on
+# a different address family and letting the caller's resolver pick. This is the
+# guard for the hazard described at PORT above: silently sharing 55432 with the
+# local Postgres is how a test run reaches production.
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  fail "port $PORT is already in use — refusing to start the proxy beside it. \
+Something else (a local Postgres? another proxy?) holds it, and sharing the port means \
+callers reach whichever one their resolver picks. Free it, or set PROXY_PORT."
+fi
+
 cloud-sql-proxy --quota-project "$PROJECT" --port "$PORT" "$INSTANCE" >/tmp/gcp-schema-proxy.log 2>&1 &
 PROXY_PID=$!
 cleanup() { kill "$PROXY_PID" 2>/dev/null || true; }

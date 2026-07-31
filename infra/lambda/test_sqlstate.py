@@ -7,6 +7,8 @@ when the real problem is permissions sends them to Flyway, where they will find
 everything clean and no further clue.
 """
 
+import urllib.parse
+
 import pytest
 
 from _sqlstate import classify
@@ -154,11 +156,25 @@ def test_every_real_connection_failure_lands_in_its_own_bucket():
     from waitlist_testdb import PGURL
 
     base = PGURL.rsplit("/", 1)[0]
+
+    # DERIVED FROM PGURL, never a hardcoded port. This read
+    # `PGURL.replace(":55432/", ":55499/")`, which silently did NOTHING whenever
+    # PGURL used any other port — leaving this case pointing at the LIVE test
+    # database. The connection then succeeded and the failure surfaced as
+    # "the connection should have been refused", which reads like a machine with
+    # something odd listening rather than a test coupled to a default. Observed
+    # 2026-07-31 running against port 55433, because 55432 was already held.
+    parsed = urllib.parse.urlparse(PGURL)
+    closed_port = 55499
+    if parsed.port == closed_port:  # never build the "refused" case on a live port
+        closed_port = 55498
+    refused = parsed._replace(netloc=f"{parsed.netloc.rsplit(':', 1)[0]}:{closed_port}").geturl()
+
     cases = [
         ("wrong password", PGURL.replace("m11:m11@", "m11:nope@", 1), "database_credential_rejected"),
         ("unknown role", PGURL.replace("m11:m11@", "nobodyhere:x@", 1), "database_credential_rejected"),
         ("missing database", f"{base}/no_such_portal_db", "database_not_found"),
-        ("refused port", PGURL.replace(":55432/", ":55499/", 1), "database_unreachable"),
+        ("refused port", refused, "database_unreachable"),
     ]
 
     for label, url, expected in cases:
