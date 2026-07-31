@@ -97,24 +97,28 @@ database shared with `cello-portal`.
   `backup_codes`, `magic_link_requests`, `magic_link_tokens`, `auth_verify_attempts`,
   `github_connections`, `minted_signals`, `processed_submissions`, `submission_mint_inputs`,
   `track_record_refresh_log`, `schema_migrations`.
-- **Waitlist tables: ZERO.** The 26 waitlist migrations have not been applied. **This is phase 1 of
-  your work.** The set they create, extracted from the migration files rather than recalled — 20
-  tables:
+- **Waitlist tables: ~~ZERO~~ → ALL PRESENT (applied 2026-07-31).** Phase 1 is DONE; see
+  `DOD-GCP-SCHEMA-1` in [[M11-DEFINITION-OF-DONE]], which is where this line's status lives.
+  **19 tables** plus the `waitlist_queue` view, ledger at 37 rows, second run applies 0. Enforcer:
+  `infra/scripts/verify-gcp-waitlist-schema.sh`.
 
   ```
   auth_link_requests   auth_tokens         creator_tracking    email_jobs
   points_ledger        post_review_queue   published_receipts  referral_codes
-  referrals            session_telemetry   skips               status_notes
-  telegram_accounts    waitlist_agent_links                    waitlist_sessions
-  waitlist_social_profiles                 waitlist_tokens     waitlist_touchpoints
-  waitlist_users       waves
+  referrals            session_telemetry   status_notes        telegram_accounts
+  waitlist_agent_links waitlist_sessions   waitlist_social_profiles
+  waitlist_tokens      waitlist_touchpoints                    waitlist_users
+  waves                + VIEW waitlist_queue
   ```
 
-  *(Corrected 2026-07-31: this bullet first named `waitlist_signups`, `gallery_items` and
-  `social_profiles`. No migration creates any of those — the real names are `waitlist_users`,
-  `published_receipts` and `waitlist_social_profiles`. The conclusion was right and the check was
-  hollow: absent names return "zero tables" against a database that has all twenty. Verify the
-  set above, not that one.)*
+  *(This bullet has now been wrong twice, in opposite directions, and both are worth keeping.
+  First it named `waitlist_signups`, `gallery_items` and `social_profiles` — no migration creates
+  any of those, so it reported "zero waitlist tables" for a database that would have said the same
+  with all of them present. Then the correction said twenty and invented `skips`, by grepping
+  `CREATE TABLE` across a COMMENT in `0002` that reads "CREATE TABLE IF NOT EXISTS skips the table
+  wholesale". Strip SQL comments before extracting names, and write the assertion so each expected
+  name must be PRESENT — that direction fails loudly on an invented one, which is how `skips` was
+  caught in under a minute.)*
 
 **Two things that make phase 1 easier than it looks:**
 

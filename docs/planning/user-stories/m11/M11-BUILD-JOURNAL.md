@@ -4228,3 +4228,70 @@ rather than `?h=`; nginx prefers the real file and falls back to the client page
 **Standing:** GALLERY-1 ✅ · GALLERY-INDEX-1 ✅ · GALLERY-CONTENT-1 ✅ · GALLERY-SEED-1 🟡 (m8c's
 message count is uncorroborated by any line in its own document — named, pinned by a test, and the
 only one).
+
+### Entry 67: the waitlist schema is on GCP, and the enforcer caught its own lie first
+
+**DOD-GCP-SCHEMA-1 ✅** — first unit of the new P4 tier (M12 cutover item C, worked under M11 per
+M11-D35).
+
+**What ran.** The real `waitlist-migrate` handler, not a reimplementation of it. Both knobs it
+needed already existed and are there by design: `MIGRATIONS_DIR` (default `/var/task/migrations`)
+and `DATABASE_URL`, which `_dburl.py` prefers over the Secrets Manager path. So the migrator that
+was written for a VPC-attached Lambda ran unmodified against Cloud SQL — no fork, no second
+migrator, no edits.
+
+```
+dry run   → already_applied_here: 0 · ledger_rows_total: 11 · pending: 26
+             0001_m11_waitlist_p0.sql … 0026_receipt_title_and_summary.sql
+apply     → applied: 26 (same first, same last)
+enforcer  → ok clause 1 — all 19 waitlist tables + the 1 view present, position not stored
+            ok clause 2 — ledger holds 37 rows
+            ok clause 3 — second run applied 0
+```
+
+**The enforcer was written before the migrations ran and failed for the right reason** —
+`clause 1 — 20 of 20 waitlist tables missing`, naming all twenty. That is the revert test satisfied
+by construction rather than by argument.
+
+**Then it failed a second time, and that one was mine.** `clause 1 — 1 of 20 waitlist tables
+missing: skips`. There is no table called `skips`. I had extracted the expected names with a grep
+for `CREATE TABLE` across the migration files, and `0002` contains the comment *"CREATE TABLE IF
+NOT EXISTS skips the table wholesale rather than reconciling it"*. The regex read prose as schema.
+
+Worth recording because of the direction it failed in. The check asserts every expected name is
+PRESENT, so an invented name fails loudly and instantly. Written the other way round — "no
+unexpected tables exist" — `skips` would have sat in the list forever, quietly asserting nothing.
+This is the same defect class as the one this unit corrected in the M12 checklist an hour earlier,
+where the table list named `waitlist_signups`, `gallery_items` and `social_profiles`: none of those
+exist either, so "zero waitlist tables" was returned for a database that would have answered
+identically holding all of them. Same root cause — names recalled rather than extracted; opposite
+outcomes, purely because of which way the assertion pointed.
+
+Real count: **19 tables + the `waitlist_queue` view**. The view is asserted too, along with the
+absence of a stored `waitlist_users.queue_position` column, because `DOD-QUEUE-VIEW-1` requires the
+position to be computed and a materialised column would satisfy "the tables are there" while
+breaking the line.
+
+**Two things confirmed rather than assumed:**
+
+- **The shared ledger works exactly as designed.** 11 portal rows + 26 waitlist rows = 37, no
+  collision, no renumbering, despite both sets starting at `0001`. The ledger keys on the full stem
+  (`0001_init` vs `0001_m11_waitlist_p0`). The ops dashboard's four `ops_*` migrations will make it
+  41 when `DOD-GCP-OPS-1` lands — three prefixes, one table, by design.
+- **The 4 orphan rows do not exist here.** AWS carried 41 rows for 37 files. GCP was built clean, so
+  the reconciliation item resolves by never being inherited. Nothing to carry.
+
+**One gotcha for whoever runs this next.** The handler defaults to `sslmode=require`, correct
+against an RDS endpoint and wrong through the Cloud SQL Auth Proxy, which terminates TLS itself and
+speaks plaintext on loopback: `server does not support SSL, but SSL was required`. It reads like a
+misconfigured database and is a correctly configured proxy. `PGSSLMODE=disable` is the knob the
+handler already exposes, and it is not a downgrade — the proxy holds the mutual-TLS session to the
+instance. Recorded in the enforcer next to the line that sets it.
+
+**Access note, also recorded in the checklist:** use the Cloud SQL Auth Proxy, never
+`gcloud sql connect`. The latter allowlists the caller's IP on the instance and does not remove it,
+which turns reading the database into a write to its configuration.
+
+**Gate:** the enforcer is the gate for this unit — it is a live-database check, and there is no
+package to lint or typecheck. `DOD-INV-SINGLE-DB` holds: one database, additive schema, no new
+instance. Next red: `DOD-GCP-ROUTER-1`.
