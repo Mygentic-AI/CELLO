@@ -175,7 +175,7 @@ top of it. It does not get a vote on the architecture.
 Investigating ordering turned up two defects that are **independent of the co-attendance decision**
 and outrank it on the "would this ruin a customer" test.
 
-### 7a. Position drift — loopback only, deterministic, benign so far
+### 7a. Position drift — loopback only, deterministic, and NOT benign (see §7d)
 
 The branch that fires when the relay says a message belongs at a position the local record has passed
 — its own comment says the invariant "is at risk" — **has fired 32 times in the live log**, always off
@@ -199,6 +199,20 @@ because local delivery is instant while relay registration is a round trip to an
 remote counterparty cannot win that race.
 
 Seal rate is unaffected: 75% with the drift, 72% without.
+
+**⚠ That measurement was the wrong question, and this line originally called the drift benign on the
+strength of it.** §7d establishes that the certificate is built **exclusively from relay-witnessed
+leaves**. The drifted message is by definition the one the relay never witnessed (its submission was
+rejected `session_not_found`) and it was never resubmitted — the persistent off-by-one is itself the
+proof the relay's counter never counted it.
+
+**So the certificate for an affected conversation omits its opening message.** Both parties' local
+transcripts contain it; the notarized record does not; nothing anywhere reconciles the two. Certificates
+kept being issued at the normal rate — over a record short one message. Rate was never the measure.
+
+This is a receipt-integrity defect, not a bookkeeping one, and it is the strongest argument for fixing
+the producer (make the first message wait for relay registration, or resubmit on registration) rather
+than tolerating the drift.
 
 ### 7b. The lost receipts — identical content, deduplicated on one side only
 
@@ -274,9 +288,33 @@ sense that a certificate gets issued — not that the certificate matches both p
 seal attests the relay-witnessed chain; a locally-divergent party still gets (and verifies) the
 certificate. Fixing the divergence *producers* (§7a drift, §7b content-dedup) is therefore the real
 fix; adding a party-vs-party root comparison to the auto-ack path would only convert silent
-divergence into seal failures. One small residue, cheap to chase: which component computes the
-bilateral certificate's root (relay running root vs. rebuild) was not pinned down — it is provably
-not either party's local tree root.
+divergence into seal failures.
+
+### 7d. ✅ Residue closed — what computes the certificate's root, and what it therefore attests
+
+**Both, cross-checked.** `processSeal` (`packages/directory/src/directory-node.ts:4740-4760`) is
+called **in-process by the relay** once both SEAL leaves are submitted, receiving the relay's leaf log
+*and* the relay's running root. The directory then rebuilds the tree **from scratch** over
+`encodeStructure2` of each relay-witnessed leaf and **refuses to take the relay's word for it**:
+
+```ts
+const recomputedRoot = merkleRoot(buildMerkleTree(leafInputs));
+if (!bufEqual(recomputedRoot, relayRoot)) → merkle_root_mismatch
+```
+
+— then verifies each leaf's Structure-1 signature, the `prev_root` chain, and the `last_seen_seq`
+causal chain. Two independent computations of the same root that must agree; the directory does not
+trust the relay. That is a good property, and it is not the one people assume it is.
+
+**Neither party's local record is an input at any point.** `reported_root` never enters this path —
+it appears only in the separate seal-*attempt* flow (PERSIST-014, `:3996`) and in the unilateral
+rebuild. So the certificate attests **the relay-witnessed leaf sequence, independently rebuilt and
+signature-verified**. It does not attest that either participant's transcript matches it.
+
+This is why there is no comparison to add on the auto-ack path: the client's tree is not merely
+unchecked, it is **outside the model**. Introducing it would be a protocol change, not a fix.
+
+**And it inverts §7a's conclusion — see below.**
 
 ## 8. What changes for the operator
 
@@ -392,8 +430,10 @@ reopens the window: `core/daemon/src/session-node-manager.ts:3682-3695`.
 | The client seals over **its own** record | `core/daemon/src/seal-flows.ts:371` `getSessionTreeRootHex` |
 | `leaf_count_mismatch` — the check the two failures hit | `core/daemon/src/inbound-seal-request.ts:101-108` |
 | Carried leaves are **relay-witnessed only** (own from `hash_submit_ack`, counterparty from `leaf_deliver`) — why an unwitnessed message breaks a unilateral rebuild | `core/daemon/src/session-seal-leaf-store.ts:1-16` |
-| **Bilateral: compares the two parties' roots to each other, never the relay's** ← the §7c question lives here | `trustless-cello/packages/directory/src/directory-node.ts:3996` `rootsMatch` |
+| **The bilateral certificate's root (§7d)** — called in-process by the relay; rebuilds from the relay's leaf log and cross-checks against the relay's running root. **Neither party's tree is an input.** | `trustless-cello/packages/directory/src/directory-node.ts:4740-4760` `processSeal` |
+| ⚠ `rootsMatch` — party-vs-party, but this is the seal-**attempt** frame (PERSIST-014). It only acks or notifies; it does NOT notarize. Easy to mistake for the bilateral path | `trustless-cello/packages/directory/src/directory-node.ts:3996` |
 | Unilateral: rebuild + verify against `reported_root` | `trustless-cello/packages/directory/src/directory-node.ts:4027, 4118-4121` |
+| The auto-ack path that compares nothing (§7c path 2) — refuses only on observed tamper | `core/daemon/src/session-node-manager.ts:3281` `submitSealLeaf` / `#contentDesynced` |
 | Client-side frontier re-derivation | `core/daemon/src/seal-coordinator.ts:160-185` |
 
 ### The command-line selection file (§6)
