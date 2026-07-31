@@ -400,7 +400,41 @@ description: >
 - **DOD-MOVE-OPSAGENT-1** [trustless-cello] — ops-agent runs on GCP; email via the SES HTTPS API
   (WIF or SigV4 credentials handled without SA keys — no key files exist, org-enforced); its
   DB-access pattern redesigned so it needs NO cross-cloud database connection (per-node health
-  via node-local API or equivalent — resolve in the unit, journal the design). — ❌
+  via node-local API or equivalent — resolve in the unit, journal the design). — ✅ **2026-07-31,
+  reviewed and all blocking findings closed.**
+
+  **Why it was not optional:** registering an agent needs a pre-authorization capability, and this
+  Telegram bot is the ONLY thing that issues one to a human. Without it on GCP, nobody new can
+  register at all.
+
+  Cloud Run, min = max = 1, `cpu_idle = false` — a long-polling bot that scales to zero stops
+  answering, and two instances would race for the same update. No cross-cloud DB connection: it
+  reads gcp-use1's Cloud SQL over PSC. Per-node health reads every node's `/health` rather than
+  opening three database connections, because a monitor holding admin credentials for every
+  sovereign node's database would be a standing cross-node privilege in a system built to have none.
+  **Verified live: `ops_agent.nodes.ok — 3/3 nodes at schema 56`.**
+
+  **DEVIATION, journaled and accepted:** OTP delivery uses the SES HTTPS API (SigV4-signed by the
+  SDK) but with STATIC AWS credentials from Secret Manager, not WIF. No GCP service-account key
+  exists, so the org policy holds — but this is a live AWS dependency in a system otherwise off AWS
+  and must be replaced before that account closes.
+
+  **The review found three defects in code written to prevent the very thing that then happened**,
+  all fixed and re-verified live:
+  - The second-poller guard could never fire — the conflict window was zeroed by any non-409
+    response (including a 429, which is evidence you do NOT hold the poll), and a real second poller
+    alternates rather than conflicting continuously. Two ops agents could have run forever.
+  - A sick directory could take down registration: the per-node timeout bounded the response
+    HEADERS only, and the sweep was awaited before the health port opened, so one half-responsive
+    node could hold the port shut past the startup probe and get the instance killed on a loop.
+  - The DB credential was the schema OWNER, which bypasses every RLS policy — handing a process
+    that writes registration rows the ability to mutate `conversation_seals`, `attestations` and
+    `agent_key_shares`. Now `cello_service`, verified against the live database.
+
+  Also closed: `unreachable` and `database: failed` both collapsed several distinct causes into one
+  exit-point label (the same class the unit was opened to fix); the sweep ran once at boot and went
+  silent when unconfigured; and the two secrets carried from AWS were referenced but never declared
+  in IaC — now declared and imported.
 - **DOD-MOVE-PORTAL-1** [cello-portal, trustless-cello] — portal serves from GCP. **Coupling
   clause:** the portal RDS also carries the M11 waitlist tables, and the waitlist (Lambdas, SES
   hooks) STAYS on AWS — the unit must resolve app-first vs move-both vs defer-DB explicitly

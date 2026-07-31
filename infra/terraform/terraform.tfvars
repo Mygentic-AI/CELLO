@@ -107,4 +107,4 @@ preauth_issuer_pubkey = "4468292bbe38ab929e504a1d962abeebe4f02db0a380b4d7880eb4f
 
 # DOD-MOVE-PORTAL-1 — the operator surface on GCP.
 portal_image_tag = "portal-bcb959c"
-ops_agent_image_tag = "ops-8dd7a0bc"
+ops_agent_image_tag = "ops-fea4a304"
