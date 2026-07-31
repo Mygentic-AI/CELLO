@@ -158,6 +158,16 @@ export type TelegramAdapterOptions = {
    * Pass a mock in unit tests to avoid network calls.
    */
   fetch?: typeof globalThis.fetch;
+  /**
+   * What to do when a poll conflict OUTLIVES the grace window — i.e. a genuine second poller rather
+   * than a deployment overlap. Defaults to exiting the process. Injected so tests can observe the
+   * decision without killing the runner.
+   */
+  onFatalConflict?: () => void;
+  /** How long a conflict may persist before it is treated as a second deployment. Default 90s. */
+  conflictGraceMs?: number;
+  /** Pause between retries while conflicted. Default 3s. */
+  conflictRetryMs?: number;
 };
 
 export type StartOptions = {
@@ -201,7 +211,16 @@ export class TelegramAdapter implements MessagingChannel {
   /** Whether the background polling loop is running. */
   #pollingActive: boolean = false;
 
+  /** When the current run of conflicts began. Null whenever the last poll was not conflicted. */
+  #conflictSince: number | null = null;
+  readonly #onFatalConflict: () => void;
+  readonly #conflictGraceMs: number;
+  readonly #conflictRetryMs: number;
+
   constructor(opts: TelegramAdapterOptions) {
+    this.#onFatalConflict = opts.onFatalConflict ?? (() => process.exit(1));
+    this.#conflictGraceMs = opts.conflictGraceMs ?? 90_000;
+    this.#conflictRetryMs = opts.conflictRetryMs ?? 3_000;
     this.#token = opts.token;
     this.#logger = opts.logger;
     this.#fetch = opts.fetch ?? globalThis.fetch;
@@ -492,11 +511,41 @@ export class TelegramAdapter implements MessagingChannel {
     }
 
     if (response.status === 409) {
-      // SI-002: log only botUsername, never the token
-      this.#logger.error("telegram.poller.conflict", { botUsername: this.#botUsername });
-      process.exit(1);
-      return []; // unreachable in production; prevents fall-through when mocked in tests
+      // Telegram allows ONE getUpdates poller per bot and answers 409 to a second.
+      //
+      // This used to exit(1) immediately, which is correct for one long-lived VM — a second poller
+      // there means a real misconfiguration. On a platform whose rollouts overlap by design (the old
+      // instance still polls while the new one starts) it is a crash loop: the new instance exits,
+      // is restarted, and conflicts again, so the bot that issues every registration capability is
+      // down for the whole rollout.
+      //
+      // The overlap resolves itself within a minute, so a conflict is survivable if it CLEARS and
+      // fatal only if it does not. That distinction — a deploy in progress vs. a second ops agent —
+      // is the one that matters, and backing off forever would silently tolerate exactly the
+      // misconfiguration the original exit existed to catch.
+      const now = Date.now();
+      this.#conflictSince ??= now;
+      const heldFor = now - this.#conflictSince;
+
+      if (heldFor >= this.#conflictGraceMs) {
+        // SI-002: log only botUsername, never the token
+        this.#logger.error("telegram.poller.conflict", { botUsername: this.#botUsername, heldForMs: heldFor });
+        this.#onFatalConflict();
+        return [];
+      }
+
+      this.#logger.warn("telegram.poller.conflict.transient", {
+        botUsername: this.#botUsername,
+        heldForMs: heldFor,
+        graceMs: this.#conflictGraceMs,
+      });
+      await new Promise<void>((r) => setTimeout(r, this.#conflictRetryMs));
+      return [];
     }
+    // Any non-conflicted answer means we hold the poll: the window starts fresh. Without this,
+    // conflicts accumulated across unrelated rollouts over the process's lifetime would eventually
+    // trip the fatal path during a perfectly ordinary deploy.
+    this.#conflictSince = null;
 
     if (!response.ok) {
       const body = await response.json() as TelegramGetUpdatesResult & { error_code?: number; description?: string };

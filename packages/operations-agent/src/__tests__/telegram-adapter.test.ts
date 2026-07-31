@@ -391,7 +391,7 @@ describe("AC-006b: offset advances to update_id + 1 after processing", () => {
 
 // ─── AC-006c: HTTP 409 from getUpdates → process.exit(1) ─────────────────────
 
-describe("AC-006c: HTTP 409 from getUpdates → telegram.poller.conflict + process.exit(1)", () => {
+describe("AC-006c: a PERSISTENT HTTP 409 → telegram.poller.conflict + process.exit(1)", () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -418,7 +418,11 @@ describe("AC-006c: HTTP 409 from getUpdates → telegram.poller.conflict + proce
       };
     }) as unknown as typeof fetch;
 
-    const adapter = new TelegramAdapter({ token, logger, fetch: fetchFn });
+    // M12: the conflict must PERSIST to be fatal. A single 409 is now a deployment overlap — the
+    // old instance is still polling while the new one starts — and exiting on it crash-loops the bot
+    // through every rollout. `conflictGraceMs: 0` reproduces the original contract: a conflict that
+    // has already outlived its window.
+    const adapter = new TelegramAdapter({ token, logger, fetch: fetchFn, conflictGraceMs: 0 });
     await adapter.start({ skipPolling: true });
 
     // Run a poll cycle — should hit 409; with process.exit mocked, pollOnce() must
@@ -431,6 +435,31 @@ describe("AC-006c: HTTP 409 from getUpdates → telegram.poller.conflict + proce
     expect(conflictLog!.context.botUsername).toBe("CelloConnectStagingBot");
 
     expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("does NOT exit on the first conflict under the default grace window", async () => {
+    // The behaviour change, pinned. Without this the file would still describe a poller that dies on
+    // any 409, which is what made every Cloud Run rollout an outage of the registration path.
+    const logger = makeTestLogger();
+    const fetchFn = vi.fn().mockImplementation(async (url: string) => {
+      if (typeof url === "string" && url.includes("getMe")) {
+        return { ok: true, status: 200, json: async () => ME_RESPONSE };
+      }
+      return { ok: false, status: 409, json: async () => ({ ok: false, error_code: 409 }) };
+    }) as unknown as typeof fetch;
+
+    const adapter = new TelegramAdapter({
+      token: "fake-token-for-testing",
+      logger,
+      fetch: fetchFn,
+      conflictRetryMs: 1,
+    });
+    await adapter.start({ skipPolling: true });
+    await adapter.pollOnce();
+
+    expect(exitSpy, "a rollout overlap must not kill the bot").not.toHaveBeenCalled();
+    const transient = logger.calls.find((c) => c.event === "telegram.poller.conflict.transient");
+    expect(transient?.level, "but it must still be visible").toBe("warn");
   });
 });
 
