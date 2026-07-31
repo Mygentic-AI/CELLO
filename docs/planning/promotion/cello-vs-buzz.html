@@ -754,6 +754,7 @@
             <div class="vs-row"><strong>Git and hosting</strong> — worktrees, branches, deploys, remotes</div>
             <div class="vs-row"><strong>Shared compute</strong> — one machine's model, the whole team</div>
             <div class="vs-row"><strong>Distribution</strong> — Block behind it, and a viral launch</div>
+            <div class="vs-row"><strong>Simpler by construction</strong> — one relay, one writer, no convergence problem to solve</div>
         </div>
         <div class="vs-col right">
             <div class="vs-head">Only CELLO does this</div>
@@ -762,6 +763,7 @@
             <div class="vs-row"><strong>Survive a hostile payload</strong> — injection defense, outbound leak control, a kill switch</div>
             <div class="vs-row"><strong>Prove what was said</strong> — a sealed, tamper-evident transcript both sides hold</div>
             <div class="vs-row"><strong>Hold nothing</strong> — no server sees message content, ours included</div>
+            <div class="vs-row"><strong>Answer to no single node</strong> — a majority threshold, no privileged writer, nobody who can rewrite it</div>
         </div>
     </div>
 
@@ -771,7 +773,38 @@
     <div class="slide-number"><span class="brand-footer">CELLO</span><span>06</span></div>
 </section>
 
-<!-- 07 — WHY NOT JUST ADD IT -->
+<!-- 07 — THE ARCHITECTURE AXIS -->
+<section class="slide">
+    <div class="brand">CELLO</div>
+    <h3>For the reader who checks</h3>
+    <h2>Same substrate.<br>Opposite <span class="accent">authority</span>.</h2>
+    <p class="kicker">Both are append-only logs of signed, content-addressed records. Everything that matters is in what happens next.</p>
+
+    <div class="grid-2">
+        <div class="card muted">
+            <div class="label">Buzz</div>
+            <h4>One relay is the authority</h4>
+            <p>Every event is signed — then ordered and stored by a <strong>single relay per workspace</strong>, with no gossip and no replication between relays. Mutable pointers advance by atomic compare-and-swap.</p>
+            <p>Conflict never arises, because there is only ever one writer. It is simpler, it is faster, and it works.</p>
+            <p><strong>The trade:</strong> that operator can, in principle, drop or reorder your history.</p>
+        </div>
+        <div class="card">
+            <div class="label">CELLO</div>
+            <h4>No node is the authority</h4>
+            <p>Sovereign directories, one per region, across different cloud providers. No privileged node. Signing takes a majority, so <strong>no single node can produce a valid result alone</strong>.</p>
+            <p>There is nothing to compare-and-swap against, so state has to genuinely converge. That is real engineering cost, and we pay it.</p>
+            <p><strong>What it buys:</strong> a record no operator can rewrite — ours included.</p>
+        </div>
+    </div>
+
+    <div class="pull" style="margin-top: 28px;">
+        <p>Buzz makes conflict impossible by having one writer. We make a dishonest writer impossible by having none.</p>
+        <p class="sub">Signatures prove who spoke. A seal proves <em>what was said</em> — a hash-chained transcript both sides hold, notarised by a directory that never sees the content.</p>
+    </div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>07</span></div>
+</section>
+
+<!-- 08 — WHY NOT JUST ADD IT -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>The obvious objection</h3>
@@ -781,17 +814,18 @@
     <ul class="dash" style="margin-bottom: 34px;">
         <li><span class="b">01</span><span><strong>A key is not an identity.</strong> Nostr hands you a public key and stops. Reaching strangers safely needs attestation — verified signals, endorsements, policy — and that is a system, not a field.</span></li>
         <li><span class="b">02</span><span><strong>Their perimeter is their product.</strong> Relays, hosted repos, shared compute and payments all assume everyone is inside. Opening the edge means giving up the thing that makes a workspace valuable.</span></li>
-        <li><span class="b">03</span><span><strong>It isn't a feature, it's an architecture.</strong> Split-key signing, a federated directory, hash-chained transcripts. Months of work that only functions if it was designed in before there were users.</span></li>
+        <li><span class="b">03</span><span><strong>It isn't a feature, it's an architecture.</strong> Split-key signing, a federated directory, hash-chained transcripts — and a topology with no privileged writer. That last one is the call you cannot walk back; everything above it assumes it was made on day one.</span></li>
+        <li><span class="b">04</span><span><strong>And it forecloses the next thing.</strong> Agents co-authoring shared documents needs either a central coordinator or CRDTs. A single authoritative relay has already picked the coordinator — putting the operator inside every collaborative workflow.</span></li>
     </ul>
 
     <div class="pull">
         <p>They would have to stop being a workspace to build it.</p>
         <p class="sub">And if they ever do, they need exactly what CELLO is — which is a better outcome for us than it sounds.</p>
     </div>
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>07</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>08</span></div>
 </section>
 
-<!-- 08 — COMPLEMENT -->
+<!-- 09 — COMPLEMENT -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>Not either / or</h3>
@@ -819,14 +853,14 @@
         <p>Your Buzz agent just spoke to someone outside Buzz.</p>
         <p class="sub">That is what an address does — and it is the demo, not the argument. <strong style="color: var(--text-muted);">Status: to be verified before it is claimed publicly.</strong></p>
     </div>
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>08</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>09</span></div>
 </section>
 
-<!-- 09 — LINES TO SAY -->
+<!-- 10 — LINES TO SAY -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>Say it out loud</h3>
-    <h2>The five you will be asked.</h2>
+    <h2>The six you will be asked.</h2>
 
     <div class="qa">
         <div class="qa-item">
@@ -846,14 +880,18 @@
             <div class="a">Yes — the way email needs a mail client at both ends. What they <em>don't</em> need: your workspace, your server, your account, an API key, or <strong>a single line of integration code</strong>.</div>
         </div>
         <div class="qa-item">
+            <div class="q">"Nostr already signs every event. Isn't that non-repudiation?"</div>
+            <div class="a">It proves who wrote one event. It never proves what the conversation <em>was</em> — drop an event and every remaining signature still verifies. <strong>Signatures prove who spoke; a seal proves what was said.</strong></div>
+        </div>
+        <div class="qa-item">
             <div class="q">"What stops Block from crushing you?"</div>
             <div class="a">Nothing stops them building it. But they'd have to <strong>stop being a workspace</strong> — and every workspace that opens its edge needs what we are.</div>
         </div>
     </div>
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>09</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>10</span></div>
 </section>
 
-<!-- 10 — CLOSE -->
+<!-- 11 — CLOSE -->
 <section class="slide">
     <div class="brand">CELLO</div>
     <h3>The story</h3>
@@ -864,7 +902,7 @@
         <p>They didn't build it. They proved people want it — and stopped at the edge of the room.</p>
         <p class="sub">A claw is a weekend. Identity, trust signals and a tamper-evident record are months, and only work if the architecture was right before there were users. That is the part you cannot buy back late — and it is the part we spent this time on.</p>
     </div>
-    <div class="slide-number"><span class="brand-footer">CELLO</span><span>10</span></div>
+    <div class="slide-number"><span class="brand-footer">CELLO</span><span>11</span></div>
 </section>
 
 <div class="nav-hint">SCROLL TO NAVIGATE • PRESS F11 FOR FULLSCREEN • ⌘P TO SAVE AS A4 PDF</div>
