@@ -58,6 +58,7 @@ changes another item, say so there — that is what this file is for.
 | E | *unclaimed* | | |
 | F | — | — | ✅ done (see §4) |
 | G | *unclaimed* | | found by F |
+| H | — | — | ✅ done (see §4) |
 
 **C is being worked under M11, not M12.** The waitlist is M11's deliverable and M11's DoD is its
 sole status authority, so the port gets `DOD-GCP-*` lines in `M11-DEFINITION-OF-DONE` rather than
@@ -205,6 +206,31 @@ Two things to fix:
    `standing_receiver_ready: true` while having **no profile in any directory** — the same condition
    as Andre's five agents (item E). Local state claiming a thing the directory does not back is how
    this whole class of fault stays invisible.
+
+### ✅ H — The Telegram registration path works on GCP  *(2026-07-31)*
+
+The full onboarding path an operator actually uses — Telegram → SES OTP → pre-auth capability → DKG —
+now runs on GCP. Two things blocked it, both mine, both fixed:
+
+**1. The waitlist gate refused everything.** It is an AWS Lambda backed by the portal RDS, it fails
+CLOSED by design, and with AWS hibernated it cannot answer. It was gating admission to an EMPTY,
+unlaunched waitlist while blocking the only person who needs to register. Now an explicit **opt-out**:
+`WAITLIST_GATE=disabled`, and ONLY that exact string — absent, empty, `off`, `false`, `DISABLED` all
+leave the gate ON, because an opt-IN flag fails by admitting the world when a variable goes missing.
+Warns on every boot while off. **Remove the terraform env when the waitlist lands on GCP (item C).**
+
+**2. `DIRECTORY_INTERNAL_URL` is the FULL ENDPOINT URL, not a base.** `DirectoryPreAuthorizationClient`
+posts to it verbatim (`this.#url = opts.directoryInternalUrl`). AWS had
+`http://…/internal/pre-authorize`; the GCP terraform was written with the bare host, so every
+registration POSTed to `/` and got a 404 — which reached the operator as *"CELLO hit a temporary
+server error finishing your registration."* The variable NAME reads like a base URL. It is not.
+
+Everything upstream worked first time, on a path that had never run on GCP: `telegram.contact.verified`
+→ `registration.phone.verified` → `registration.email.hash_stored` → `otp.delivery.sent` (SES from
+GCP) → `registration.email.verified`.
+
+**Known cosmetic:** `registration.gate.NOT_ENFORCED` says *"Expected only under CELLO_ENV=local"* —
+dev-on-GCP is now a second legitimate case. Message only.
 
 ### ❌ D — Repoint the corp site's `/api/waitlist`
 The only Lightsail touchpoint. Lightsail itself stays and needs nothing else. Blocked on C phase 3.
