@@ -144,6 +144,28 @@ Falsification performed before proposing it:
    idle reaper (ALB or NAT idle timeout) is closing quiet signaling streams, that is a second defect
    worth fixing on its own — the fix above would then be masking a churn problem rather than solving
    it.
+
+   Measurements taken, for whoever picks this up (whole log, 2026-07-31):
+
+   | Signal | Count |
+   |---|---|
+   | `directory.signaling.disconnected` — `Cannot write to a stream that is closed` | 3514 |
+   | `directory.signaling.disconnected` — `heartbeat_timeout` | 42 |
+   | `reader.error` — `The operation was aborted due to timeout` | 2061 |
+   | `reader.error` — `The stream has been reset` | 623 |
+   | `reader.error` — `signaling_closed` | 533 |
+
+   Two observations. First, the dominant disconnect is the client discovering the stream is
+   **already** closed when it tries to write — i.e. it learns at write time, not from a close event,
+   which is why nothing reacts promptly. Second, `heartbeat_timeout` is rare (42) relative to the
+   3514, so the heartbeat is NOT what detects this: the manager's defaults are a 15 s interval and a
+   15 s timeout (`signaling-manager.ts:278–279`), which at a ~70 s stream lifetime means roughly four
+   successful pings before the stream dies anyway. So the churn is not slow-heartbeat-vs-idle-reaper
+   in the simple form.
+
+   Not investigated: the origin of `The operation was aborted due to timeout` (2061). It reads like
+   an `AbortSignal`, i.e. something on our side giving up on a read, but it is not raised in
+   `signaling-manager.ts` and the source was not traced. That is the thread to pull first.
 3. **Should `cello status` report reachability rather than socket state?** As written, an operator
    has no way to discover they are unreachable. See the companion work surfacing unresolved
    directory endpoints in `cello_status`.
