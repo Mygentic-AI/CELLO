@@ -4,7 +4,7 @@
 environment = "dev"
 
 # Immutable commit-SHA tag built by Cloud Build. Never a moving tag — see infra/cloudbuild/*.yaml.
-directory_image_tag = "dir-7681d9b9"
+directory_image_tag = "dir-bdcb5773"
 
 # One node = one region = one independent deployment. The map key is the region, which makes two
 # nodes in one region unrepresentable rather than merely discouraged.
@@ -89,6 +89,13 @@ relay_nodes = {
     subnet_index = 0
     machine_type = "e2-small"
     hostname     = "relay-gcp-use1.cello.mygentic.ai"
+  }
+  europe-west1 = {
+    node_id      = "gcp-relay-euw1"
+    zone         = "europe-west1-b"
+    subnet_index = 2
+    machine_type = "e2-small"
+    hostname     = "relay-gcp-euw1.cello.mygentic.ai"
   }
 }
 
