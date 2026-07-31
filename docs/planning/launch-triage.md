@@ -303,6 +303,56 @@ claim that something needs no action is worth exactly the enforcer behind it, an
 
 ---
 
+## 12. A failed endorsement submission is not retried
+
+If the directory node you send an endorsement to is down, the submission fails and you run the
+command again. There is no automatic failover to another node, even though the consortium has three.
+
+**Why it is here and not fixed:** it is a papercut, not a loss — nothing is destroyed and the error
+names the cause. Andre triaged it as ship-without on 2026-07-31. It is `DOD-END-SUBMIT-1`'s one
+remaining handed-forward AC and one of `DOD-END-SURFACE-1`'s nine clauses.
+
+---
+
+## 13. The trust-signal floor is built and deliberately switched off
+
+`DOD-FLOOR-1` is the "minimum bar to talk to me" — a counterparty must present N signals, or a
+particular type, before a session is accepted. It is implemented and unit-tested, and NOTHING CALLS
+IT. That is correct for launch: switching it on with any default would start refusing counterparties
+who have no signals yet, which is everybody on day one.
+
+**This is an M10 line, not M10B.** It sat on the M10B list because M10B produces the `same_operator`
+flag the floor's counting rule consumes (`DOD-END-COUNT-1`) — M10B produced it correctly and proved
+it live; the consumer lives here. Recorded 2026-07-31 so it stops being re-discovered as endorsement
+debt.
+
+**When it matters:** the first time an operator wants to be selective about who reaches them. Not
+before there are signals worth demanding.
+
+---
+
+## 14. "Online" does not mean reachable
+
+`cello status` shows an agent as `online` with `standing_receiver_ready: true` whenever its signalling
+connection is up — even when the daemon cannot resolve a single directory endpoint and no session can
+possibly form.
+
+**Found the hard way, 2026-07-31.** After the infra wake, this host held a stale DNS cache (hibernate
+deletes the ALBs; wake recreates them with new IPs). libp2p kept connecting off the bundled manifest,
+so all five agents reported healthy while every cross-node session died. It surfaced in sequence as
+`counterparty_offline`, then `directory_below_threshold`, then `ceremony_exhausted` — three errors
+naming three different subsystems, none of them the cause. `dns_error` was in the daemon log 26 times
+per node from startup and never reached the operator.
+
+The immediate trigger turned out to be the AWS→GCP migration, and the DNS surfacing is being handled
+separately. What stays open is the status word itself: an agent that cannot hold a session should not
+render identically to one that can.
+
+**Cost if unfixed:** roughly an hour, every time, and the first conclusion is always "the protocol is
+broken."
+
+---
+
 ## Related Documents
 
 - [[M8C-DEFINITION-OF-DONE]] — full technical detail and status for every designation above
