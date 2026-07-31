@@ -356,7 +356,7 @@ description: >
   → Entry 24
 - **DOD-MANIFEST-GCP-1** [cello-client, trustless-cello] — fresh consortium manifest signed:
   three `gcp-*` validators with roles, adopted by clients via poll; step-6 directory identity
-  verification passes against the new manifest. — 🟡 DIRECTORY HALF DONE. Manifest signed over the
+  verification passes against the new manifest. — ✅ **2026-07-31 — both owed halves closed.** Manifest signed over the
   three validators (`role: validator`, T = majority(3) = 2) with a FRESH officer key generated in
   GCP Secret Manager — not the AWS one, per M12-D4's zero-shared-state rule, which also keeps this
   off a hibernated AWS account. Live on all three nodes:
@@ -369,7 +369,25 @@ description: >
   strength of `antientropy.round.started`; rounds STARTING is not rounds COMPLETING, and the §1c
   handshake is failing (`protocol_error` dialside, `wire closed while waiting for ae_auth_a`
   responder-side). Dialling now works — that was a separate defect — but no round has completed in
-  production. **Owed:** the AE handshake, and the cello-client bundled-manifest half. → Entries 24-26
+  production. ~~**Owed:** the AE handshake, and the cello-client bundled-manifest half.~~
+
+  **BOTH CLOSED 2026-07-31 (Entries 74-75).**
+
+  **1. Anti-entropy completes in production** — proven three independent ways on the live fleet, each
+  a different tier of the store:
+  - Tier-A immutable: 45 agent profiles identical on all three nodes, **including one registered
+    while gcp-euw1 was down** — it acquired that row on rejoin with no operator step.
+  - Tier-A chained: 14 seal notarizations on each, same `sealed_root`, node-local `chain_hash`
+    (see `DOD-AE-CHAINED-TABLES-1`).
+  - Tier-B mutable: a kill-switch pause written on gcp-use1 alone read
+    `paused=true seq=1 origin=gcp-use1` on all three.
+
+  **2. The cello-client bundled-manifest half** — the roster in the published client now names the
+  three `gcp-*` validators, verified in the TARBALL (`daemon@0.0.103`), not merely on main. A client
+  built from it resolves `declaredNodes: 3, resolvedNodes: 3` and completes registration, DKG,
+  session, seal against the live fleet. The manifest also moved to **v2** so it carries `intake_key`;
+  v1 was the same roster without it, which a client accepts and then refuses every trust-signal
+  submission against. → Entries 24-26, 74-75
 - **DOD-SEAL-BROKER-1** [trustless-cello] — **the relay asks the BROKERING directory, per session,
   not a configured one.** Today `relay_primary_directory` pins the relay to one directory for every
   conversation in the consortium, chosen at deploy time and unrelated to who is talking — so the
