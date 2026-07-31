@@ -145,6 +145,29 @@ and port with them.
 **Not a rewrite and not a reduced version** — an adapter layer, a router, one HTTP call, and
 Terraform, against ~14k lines of logic that do not change.
 
+### The schema is already durable — verified 2026-07-31, no dump needed
+
+Step 1 of the finish plan was "dump the waitlist schema before hibernating". It turned out to be
+unnecessary, and the reason is better than a dump: **the schema is versioned code, not a snapshot.**
+
+- **26 `.sql` migrations, 1,265 lines, in `corp-cello-site/migrations`** — a THIRD repo. The waitlist
+  spans three: handlers in `trustless-cello/infra/lambda`, schema in `corp-cello-site`, and the
+  database shared with `cello-portal`. `deploy-lambdas.sh` packages the `.sql` files into the
+  `waitlist-migrate` function at build time.
+- **The live database matches exactly.** `waitlist-migrate` invoked with `{"dry_run": true}` against
+  production returned `pending: []`, `already_applied_here: 26`. No hand-applied drift.
+- **No data to preserve** — the list is empty and unlaunched (confirmed by Andre, 2026-07-31).
+
+**Therefore the waitlist port has ZERO dependency on the live AWS database, and hibernating AWS is
+unconditionally safe for it.** The schema rebuilds from the migration files against the GCP portal
+Cloud SQL.
+
+One thing to look at during the port, not blocking: the dry run reported `ledger_rows_total: 41`
+against 26 waitlist files + 11 portal files = 37. The `schema_migrations` ledger is SHARED between
+the portal app and the waitlist — which is convenient on GCP, since both land in the same Cloud SQL —
+but four ledger rows have no current file, presumably renamed or removed migrations. Worth
+reconciling when the ledger is recreated rather than carried.
+
 **Phases, in dependency order:** schema into the GCP portal DB → router + adapters with the existing
 tests green → Cloud Run + Cloud Scheduler in Terraform → repoint the corp site's `/api/waitlist` →
 verify signup end to end → AWS goes dark.
