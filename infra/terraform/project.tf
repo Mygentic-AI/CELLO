@@ -13,6 +13,10 @@ locals {
     "sqladmin.googleapis.com",
     # Cloud Run — the portal (DOD-MOVE-PORTAL-1). Stateless request/response, scale-to-zero.
     "run.googleapis.com",
+    # The waitlist's four schedules (DOD-GCP-RUNTIME-1), replacing EventBridge.
+    # In IaC rather than clicked: a console-enabled API is exactly the manual
+    # step the region-expansion test exists to catch.
+    "cloudscheduler.googleapis.com",
     "secretmanager.googleapis.com",
     # Envelope keys for share material at rest (DOD-ADAPTER-GCP-1 → KmsEnvelopeKeyProvider).
     "cloudkms.googleapis.com",
