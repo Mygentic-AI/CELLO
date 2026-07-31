@@ -4295,3 +4295,73 @@ which turns reading the database into a write to its configuration.
 **Gate:** the enforcer is the gate for this unit — it is a live-database check, and there is no
 package to lint or typecheck. `DOD-INV-SINGLE-DB` holds: one database, additive schema, no new
 instance. Next red: `DOD-GCP-ROUTER-1`.
+
+### Entry 68: the review found the enforcer writing to production to prove it was read-only
+
+`cello-unit-reviewer` on DOD-GCP-SCHEMA-1. **Every blocking finding was in the enforcer, not in the
+migration work** — the reviewer's own summary: the right migrator ran unmodified, the ledger behaved
+as designed, the table set is exactly right. Fixed all of them; the two worst shared one root.
+
+**F2 — the checker was a writer.** The idempotency clause called `lambda_handler({}, None)` — APPLY
+mode. Point `MIGRATIONS_DIR` at a checkout carrying an unmerged `0027` and the *verification script*
+applies it to the live GCP portal database, commits the DDL, and then prints
+
+> `FAIL — clause 3 — a second run applied 1 migrations, expected 0. Not idempotent.`
+
+The migrator is idempotent. The cause is checkout drift. The message names the migrator, sends the
+operator to audit it, and the write it just made is not undone by re-running. Textbook error
+substitution, with a production side effect attached. Now `{"dry_run": True}` — the handler runs its
+checksum verification and its `<stem>.sql` ledger-key guard *before* the dry-run return, so every bit
+of strength survives and only the write is gone.
+
+**F1 — a stale checkout passed all three clauses.** A tree stale at `0021` goes green on everything:
+`0022`–`0026` create no tables, so presence cannot see them; the ledger count reads the database,
+which is already correct; and `pending` is computed from the short file list, so it is empty. Five
+migrations whose application status is never observed, on a line whose text is "the 26 migrations are
+applied". `MIGRATIONS_DIR` is an unpinned pointer into a sibling working tree at whatever commit it
+happens to be on, and every database clause was measured against it. The checkout is now checked
+first, alone, and its failure says explicitly *"this is NOT a database finding"*.
+
+**F3 — the default was the passing value.** `body.get("applied", [])` → `len([])` → `0` → green. The
+next unit in this tier reshapes exactly these handlers into HTTP responses, so a `{"statusCode": 500}`
+would have reported the schema green off an error. Bare subscript now; `KeyError` propagates and
+`set -e` kills the run.
+
+**F5 — `count(*) = 37` asserted arithmetic, not a set.** 12 portal + 25 waitlist is also 37. So are 37
+rows written by hand. It now asserts every waitlist stem *by name* and derives the total, which also
+splits one ambiguous message into two: "a migration is missing" and "there is an unexpected extra
+row" were previously the same number.
+
+**F6 — the password came from a `sed` that cannot fail.** `s///` on a non-match passes input through
+UNCHANGED, so a secret of a different shape would silently make `PGPASSWORD` the whole connection
+string and surface as *"cannot reach the database"* — sending the operator to Cloud SQL IAM over a
+regex four lines up. One `urlsplit` now yields user and password together, asserted non-empty.
+
+**The table list is now BOTH pinned and derived**, because each catches what the other cannot. A hand
+list fails loudly on a name that cannot exist — how `skips` died in a minute. A hand list also cannot
+fail on an *omission*: drop a name and the loop simply gets shorter. They fail on disjoint conditions,
+so the files are parsed independently and diffed against the list, and the count is pinned so a new
+table has to be a decision. The old header also said "20" in three places while the list said 19,
+including a sentence asserting the twenty were extracted from the files — the exact false provenance
+that produced `skips`.
+
+**Tripwires verified to bite, and to name the right subsystem:**
+
+```
+25-file checkout   → clause 1 — /tmp/… holds 25 migrations, the DoD line says 26.
+                     That checkout is stale or ahead. This is NOT a database finding.
+bogus CREATE TABLE → clause 1 — the migrations now create 20 tables, the line says 19.
+live instance      → 26 stems in the ledger · 37 rows · nothing pending (read-only)
+```
+
+**The reviewer confirmed two things independently rather than taking them from me:** the 19-name list
+is set-identical to a fresh extraction (0 drops, 0 renames, 0 matviews, no `CREATE TABLE` hidden in a
+`$$` body), and those 19 have zero name overlap with the portal's 15 — which matters, because on a
+collision `CREATE TABLE IF NOT EXISTS` would no-op and clause 2 would go green on a table the waitlist
+never created. `waitlist_sessions` vs `sessions` and `auth_tokens` vs `magic_link_tokens` are the
+near-misses; both clean. That note is now in the script.
+
+It also refuted-then-confirmed the `PGSSLMODE=disable` claim, and added the scope note worth keeping:
+the proxy holds a real mutual-TLS session so nothing leaving the machine is downgraded, but the
+database password does cross the loopback leg — on a shared or CI host the answer is
+`--auto-iam-authn`, which removes the password from the flow entirely.
