@@ -111,6 +111,13 @@ write_files:
       # -I (insert), and idempotent: COS rebuilds these rules on every boot, and this unit re-runs
       # on every boot, so a -D before each -I keeps a restart from stacking duplicates.
       ExecStart=/bin/sh -c 'for p in 4000 8080 9090; do iptables -w -D INPUT -p tcp --dport $p -j ACCEPT 2>/dev/null; iptables -w -I INPUT -p tcp --dport $p -j ACCEPT; done'
+      # 8081 — the internal API: the portal's account-scoped seam and the path the kill switch runs
+      # through. Opened SEPARATELY and scoped to the VPC, unlike the ports above: those are public by
+      # design, this one must never be. The GCP rule already restricts it to the three node subnets,
+      # so the -s here is the second of two independent gates — if one is ever loosened by accident,
+      # the other still holds. /16 covers the whole VPC, which is every subnet a node or the portal's
+      # Direct VPC egress can appear on, without naming each one here as regions are added.
+      ExecStartPost=/bin/sh -c 'iptables -w -D INPUT -p tcp -s 10.10.0.0/16 --dport 8081 -j ACCEPT 2>/dev/null; iptables -w -I INPUT -p tcp -s 10.10.0.0/16 --dport 8081 -j ACCEPT'
 
       [Install]
       WantedBy=multi-user.target

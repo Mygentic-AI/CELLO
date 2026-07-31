@@ -119,6 +119,19 @@ resource "google_cloud_run_v2_service" "portal" {
   template {
     service_account = google_service_account.workload["portal"].email
 
+    // DIRECT VPC EGRESS. The directories' internal API (8081) is deliberately absent from every
+    // public firewall rule — it is the portal's account-scoped seam and the path the kill switch runs
+    // through. So the portal joins the VPC rather than the API being exposed to reach it.
+    // PRIVATE_RANGES_ONLY: only RFC1918 traffic takes this path, so ordinary egress (OAuth, SES) still
+    // goes straight out and does not need a NAT.
+    vpc_access {
+      network_interfaces {
+        network    = google_compute_network.cello_vpc.id
+        subnetwork = google_compute_subnetwork.regional["us-east1"].id
+      }
+      egress = "PRIVATE_RANGES_ONLY"
+    }
+
     // Scale to zero. Credits are the binding constraint, and an idle operator surface should cost
     // nothing. Cold start is a page load, not a protocol timeout — no peer is waiting on it.
     scaling {
@@ -153,9 +166,25 @@ resource "google_cloud_run_v2_service" "portal" {
       // The GCP consortium, by public address. The portal talks to directories the same way any
       // client does — over their public API — so it needs no VPC path to them and stays deployable
       // anywhere.
+      // The INTERNAL address and the INTERNAL API port. 9090 is the health port and does not serve
+      // these routes — pointing here at 9090 produced a uniform 404 that looked like a missing
+      // endpoint rather than a wrong port.
       env {
         name  = "DIRECTORY_API_URLS"
-        value = join(",", [for k, n in var.directory_nodes : "http://${google_compute_address.node[k].address}:9090"])
+        value = join(",", [for k, n in var.directory_nodes : "http://${google_compute_address.node_internal[k].address}:8081"])
+      }
+
+      // One key per url, SAME ORDER. Each directory holds its own internal API key, so a single key
+      // would authenticate to at most one of them and failover would fail over to nodes that reject
+      // it. The portal validates the counts match rather than pairing them off.
+      env {
+        name = "DIRECTORY_API_KEYS"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.portal_directory_api_keys.secret_id
+            version = "latest"
+          }
+        }
       }
 
       env {
@@ -263,6 +292,35 @@ resource "google_secret_manager_secret_version" "portal_kms_master_key" {
 resource "google_secret_manager_secret_iam_member" "portal_kms_master_key" {
   project   = var.project_id
   secret_id = google_secret_manager_secret.portal_kms_master_key.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workload["portal"].email}"
+}
+
+// The three internal API keys as ONE positional list, in the SAME iteration order as
+// DIRECTORY_API_URLS above — both use `var.directory_nodes`, so the pairing holds.
+//
+// Composed here from the generated values rather than read back from Secret Manager: the keys already
+// exist in state (secrets.tf mints them), so a data source would add a dependency and a round trip to
+// learn something Terraform already knows. The portal refuses a length mismatch, so a node added
+// without a key here fails loudly at boot instead of silently losing failover to that node.
+resource "google_secret_manager_secret" "portal_directory_api_keys" {
+  project   = var.project_id
+  secret_id = "cello-portal-directory-api-keys"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "portal_directory_api_keys" {
+  secret = google_secret_manager_secret.portal_directory_api_keys.id
+  secret_data = join(",", [
+    for k, n in var.directory_nodes : random_id.node_secret["${n.node_id}--internal-api-key"].hex
+  ])
+}
+
+resource "google_secret_manager_secret_iam_member" "portal_directory_api_keys" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.portal_directory_api_keys.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.workload["portal"].email}"
 }
