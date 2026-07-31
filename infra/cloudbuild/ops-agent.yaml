@@ -1,0 +1,28 @@
+# Cloud Build — CELLO operations agent image → Artifact Registry.
+# Run by trigger (COMMIT_SHA set) or manually:
+#   gcloud builds submit --config infra/cloudbuild/ops-agent.yaml \
+#     --service-account projects/cello-infra/serviceAccounts/cello-cloud-build@cello-infra.iam.gserviceaccount.com \
+#     --substitutions _TAG=manual-$(git rev-parse --short HEAD) .
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+timeout: 1800s
+
+substitutions:
+  _REGISTRY: us-east1-docker.pkg.dev/cello-infra/cello
+  _TAG: ${COMMIT_SHA}
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - packages/operations-agent/Dockerfile
+      - -t
+      - ${_REGISTRY}/ops-agent:${_TAG}
+      - .
+
+# No :latest tag on purpose: two concurrent builds finishing out of order would leave :latest
+# older than main. Every consumer pins an immutable ${_TAG} (= commit SHA) tag.
+images:
+  - ${_REGISTRY}/ops-agent:${_TAG}

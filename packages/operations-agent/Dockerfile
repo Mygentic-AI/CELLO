@@ -29,6 +29,11 @@ RUN npm install -g pnpm@10.33.2
 # Copy workspace manifests and lockfile first (Docker layer cache)
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 
+# The lockfile references patches/, so pnpm reads those files during install. WITHOUT this copy the
+# install fails outright (ENOENT on the patch) — and when it does not fail, it installs the UNPATCHED
+# package: an image that boots fine and is subtly wrong. Copied before the install in BOTH stages.
+COPY patches/ patches/
+
 # Copy all package.json files for workspace dependency resolution
 # (all workspace packages in the tsconfig chain + lockfile need their package.json)
 # Post-REPOSPLIT: ops-agent → interfaces only; crypto/protocol-types are in cello-client
@@ -70,6 +75,7 @@ RUN npm install -g pnpm@10.33.2
 # referenced in lockfile need their package.json present for pnpm resolution)
 # Post-REPOSPLIT: ops-agent → interfaces only; crypto/protocol-types are in cello-client
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY patches/ patches/
 COPY packages/interfaces/package.json ./packages/interfaces/
 COPY packages/operations-agent/package.json ./packages/operations-agent/
 
