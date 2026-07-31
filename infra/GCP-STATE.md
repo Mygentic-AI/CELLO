@@ -182,11 +182,28 @@ tolerates exactly one node down.
 
 | Resource | Value |
 |---|---|
-| Cloud Run service | `cello-portal`, us-east1, image `portal-7cbbe9d` |
-| URL | https://cello-portal-jk4mcnqbeq-ue.a.run.app (until a `*.cello.mygentic.ai` mapping is attached) |
+| Cloud Run service | `cello-portal`, us-east1, image `portal-317ffba` |
+| Hostname | **https://portal.cello.mygentic.ai** — the same name it had on AWS |
+| Load balancer | global external ALB, IP `34.111.250.93`, serverless NEG `cello-portal-neg`, managed cert `cello-portal-cert`; :80 redirects to :443 |
+| DNS | Route 53 zone `Z02692523DOH7NW521CL8`, A record → `34.111.250.93` (was `198.51.100.1`, the hibernate placeholder) |
+| Run URL | https://cello-portal-jk4mcnqbeq-ue.a.run.app (still serves; the LB fronts it) |
 | Cloud SQL | `cello-portal`, us-east1, POSTGRES_17, `db-g1-small`, deletion_protection ON |
-| Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`) |
-| Verified | 307 → `/sign-in` → 200, renders "CELLO — Operator Portal"; migrations ran to `0011_minted_signals_issuer` |
+| Signing key | Cloud KMS `cello-portal/portal-submission` v1, `EC_SIGN_ED25519`, us-east1. Pubkey `6f0203b8…80e5`, enrolled `submitter` in all 3 node DBs |
+| Directory path | `DIRECTORY_API_URLS` → the three PINNED internal IPs on **8081**, over Direct VPC egress; one key per node in `cello-portal-directory-api-keys`, positionally paired |
+| Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`), `cello-portal-directory-api-keys`, and copied from AWS: `-github-client-id`, `-github-client-secret`, `-intake-key-0`, `-ingress-trigger-secret`, `-submission-seed` |
+| Verified | 307 → `/sign-in`; internal API reachable cross-VM (correct key → 400 validation, wrong key → 401); issuer enrolled on usc1/euw1/use1 |
+
+**Why the hostname was kept.** The GitHub OAuth callback is registered against
+`portal.cello.mygentic.ai`, and `WEBAUTHN_RP_ID` is part of what every passkey is bound to. Serving
+from the run.app URL would invalidate every enrolled passkey permanently — a passkey cannot be moved
+between origins. A Cloud Run domain mapping was the first choice and needs the domain user-verified in
+the project (a manual console step); the load balancer proves control through DNS instead.
+
+**8081 is dropped by the HOST, not the VPC.** COS ships `INPUT` with policy DROP. The cloud-init unit
+opened 4000/8080/9090 and not 8081, so the internal API was unreachable while every cloud-level rule
+read as correct — a connection TIMEOUT, which points at the network rather than the box. `8081` is now
+opened by cloud-init, scoped to `10.10.0.0/16` as a second gate behind the GCP rule. Confirmed on all
+three replacement instances.
 
 **The master key is not rotatable by accident.** `cello-portal-kms-master-key` decrypts the recoverable
 values the portal holds (the email the directory never sees). `prevent_destroy` on the random_id, the
