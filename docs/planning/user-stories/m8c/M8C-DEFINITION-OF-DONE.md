@@ -1964,6 +1964,79 @@ own story) deliberately, never smuggled in as a rider. Source:
 
   Full write-up, including the live probe table: [[2026-07-30_1330_inbox-calls-unsealed-sessions-sealed]].
 
+- **DOD-FIRSTMSG-WITNESS-1** ❌ OPEN (raised 2026-07-31) — a session's **first message is submitted
+  to the relay before the relay holds the session**, is rejected `session_not_found`, is appended
+  locally anyway, and is **never resubmitted**. The relay's counter never counts it, so the local
+  record sits exactly one ahead for the life of the conversation. Because the bilateral certificate
+  is rebuilt **exclusively from relay-witnessed leaves** (§7d — neither party's local tree is an
+  input), **the sealed receipt omits the conversation's opening message and is issued anyway.**
+
+  **Ranked #1 on [[launch-triage]].** Fires on same-machine sessions, which is the solo multi-agent
+  wedge — the daily use and the demo. Work order:
+  [[2026-07-31_first-message-witness-workorder]]. Source: §7a + §7d of
+  [[2026-07-31_1043_two-sessions-one-agent-co-attendance]].
+
+  **Producer → consumer, traced 2026-07-31 (this refines the work order's stated cause).**
+
+  ```
+  PRODUCER   #doRecord (session-relay-client.ts) presents client_record_assignment
+             → relay #store creates the session state. This is the ONLY thing that
+               creates it.
+  CONSUMER   #doSubmit → hash_submit → relay #processHashSubmitLocked
+             → getSession → session_not_found (relay-node.ts:1040)
+  GAP        #doSubmit awaits #doRecord and then DISCARDS ITS RETURN VALUE:
+
+               await this.#doRecord(node, sessionIdHex);   // ← result dropped
+               const stream = this.#stream;
+               if (!stream) return { ok: false, reason: "relay_unavailable" };
+
+             #doRecord returns false on every not-yet-recorded path (relay not yet
+             connected, transient failure, prior rejection) and returns TRUE when
+             there is no assignment to present. Either way the doomed frame is sent.
+  ```
+
+  **Second producer gap:** the inbound path builds `relayParams` inline with **no `assignment`
+  field at all** (`inbound-sessions.ts:545`), so a responder can never record its own session — it
+  is permanently dependent on the initiator doing it. Only the initiator path carries it
+  (`buildRelayConnectParams`, `daemon.ts:463`, and only when `relay_directory_signature` is present).
+
+  **Live evidence (`~/.cello/daemon.log`, 757k lines).** 25 `session.relay.hash.submit.failed`,
+  all `session_not_found`:
+
+  | shape | count | drifted |
+  |---|---|---|
+  | No record before the failure, zero prior submits — **the first message** | **23** | 15 |
+  | Post-seal send (recorded fine, seal leaves already submitted) | 2 | 0 |
+
+  In every one of the 23 the `session.relay.assignment.recorded` event lands **5 ms to 2.1 s AFTER**
+  the failed submit — the record is in flight, not absent. There is not a single
+  `session.relay.assignment.record.timeout`, `.rejected`, or `.send.failed` event in the whole log,
+  and zero `session.relay.assignment.signature.missing`.
+
+  **ACs:**
+  1. Every message the relay must witness is either witnessed, or the send fails loudly. A leaf
+     appended locally with no witness, never retried, is not an acceptable terminal state.
+  2. **"Not yet recorded" and "relay unreachable" are told apart and handled differently.** The
+     first is a local precondition we control → bounded wait / retry for the record, then submit.
+     The second → proceed unwitnessed as today, so a relay outage never makes the inbox unreadable.
+     Collapsing the two states fails this AC.
+  3. `#doSubmit` does not send a `hash_submit` for a session it knows is unrecorded; the unrecorded
+     case returns a **distinct, retryable** reason rather than being silently indistinguishable from
+     a relay outage.
+  4. The inbound/responder path carries the assignment, so a pure-receiver session can record itself.
+  5. **The client never assigns its own canonical sequence** — `seq` still comes from the relay's
+     counter (`relay-node.ts:1125-1131`). Never lose content. The hash submit still runs BEFORE
+     direct delivery (reversing it breaks the offline-recipient park path).
+  6. Test: a first message submitted before the relay holds the session ends up witnessed (or fails
+     loudly) — red before green, extending `packages/e2e-tests/src/session-fixture.ts`.
+  7. Live: a same-machine session whose first message beats registration produces **zero**
+     `session.content.sequence_behind_tree` events, asserted on the daemon log — not on a unit test.
+  8. The sealed certificate's leaf count equals the transcript's message count for that session.
+
+  **Out of scope, deliberately:** the content-hash dedup (§7b, `DOD-FRONTIER-STRAND-1` below),
+  co-attendance (M8D), and the `sequence_behind_tree` branch itself — it is the symptom's alarm, not
+  the defect. Leave it logging.
+
 - **DOD-FRONTIER-STRAND-1** ❌ OPEN (raised 2026-07-30) — a leaf appended locally but never recorded
   by the counterparty strands the session as **permanently unsealable**, and nothing detects or
   repairs it.
