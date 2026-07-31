@@ -48,6 +48,9 @@ import type { Logger } from "@cello-protocol/interfaces";
 import {
   encodeTierARecord, type TierATableSpec, type TableRow,
   AGENT_PROFILES_SPEC, AGENT_REVOCATIONS_SPEC, USER_ACCOUNTS_SPEC, SEAL_NOTARIZATIONS_SPEC,
+  CAPABILITY_CLAIM_CODES_SPEC, AUTHORIZED_ISSUERS_SPEC, SIGNAL_RECORDS_SPEC,
+  SUBMISSION_RESULTS_SPEC, RELAY_REGISTRATIONS_SPEC, DIRECTORY_NODES_SPEC,
+  CONVERSATION_SEALS_SPEC,
 } from "./ae-table-encoders.js";
 import {
   encodeTierBVersion, type TierBVersionSpec, type MutableRow,
@@ -115,6 +118,18 @@ const TIER_A: readonly TierAPg[] = [
     requiredColumns: ["agent_id"],
   },
   { spec: AGENT_REVOCATIONS_SPEC, bytea: ["signature"], naturalKeyConstraint: "agent_revocations_pkey" },
+  // ── The tables that were in the AWS Postgres mesh but never ported to AE ──────────────────────
+  // Found 2026-07-31 when capability_claim_codes broke Telegram registration: the code was written
+  // once on gcp-use1, and the DKG routed round 1 to gcp-usc1, which had never heard of it.
+  // The fix: every table in setup-replication.sh's PUBLICATION_TABLES that has a stable natural key
+  // belongs here. The AWS mesh replicated them automatically; AE requires explicit registration.
+  { spec: CAPABILITY_CLAIM_CODES_SPEC, bytea: [], naturalKeyConstraint: "capability_claim_codes_pkey" },
+  { spec: AUTHORIZED_ISSUERS_SPEC, bytea: [], naturalKeyConstraint: "authorized_issuers_pkey" },
+  { spec: SIGNAL_RECORDS_SPEC, bytea: [], naturalKeyConstraint: "signal_records_pkey" },
+  { spec: SUBMISSION_RESULTS_SPEC, bytea: ["ciphertext"], naturalKeyConstraint: "submission_results_pkey" },
+  { spec: RELAY_REGISTRATIONS_SPEC, bytea: [], naturalKeyConstraint: "relay_registrations_relay_id_key" },
+  { spec: DIRECTORY_NODES_SPEC, bytea: [], naturalKeyConstraint: "directory_nodes_node_id_key" },
+  { spec: CONVERSATION_SEALS_SPEC, bytea: [], naturalKeyConstraint: "conversation_seals_conversation_id_key" },
   {
     spec: SEAL_NOTARIZATIONS_SPEC,
     bytea: ["session_id", "sealed_root", "participant_a_pubkey", "participant_b_pubkey", "frost_signature"],

@@ -114,19 +114,142 @@ export const SEAL_NOTARIZATIONS_SPEC: TierATableSpec = {
   ],
 };
 
+// ─── THE TABLES THAT WERE REPLICATED ON AWS BUT MISSING HERE ───────────────────────────────────
+// The AWS Postgres mesh replicated 21 tables. Only 4 were ported to AE. The remaining 15 were
+// noticed on 2026-07-31 when registration broke because capability_claim_codes was one of them.
+// The specs below restore the missing cross-node consistency. Node-local tables (sessions,
+// pickup_queue, pending_notifications, directory_checkpoints, checkpoint_node_signatures,
+// registrations, pre_authorization_tokens) are NOT included — they are intentionally per-node.
+
 /**
- * The registered Tier-A specs. Four tables populated (immutable/mutable column split audited
- * against migration + every production UPDATE). STILL OWED (each needs its own audit / decision):
- * relay_registrations (`deregistered_at` single-flip → Tier-B-style), signal_records (`status`
- * amend), conversation_seals (+ its unpublished children travel together per design §2), and the
- * checkpoint tables directory_checkpoints / checkpoint_node_signatures (entangled with the parked
- * checkpoint machinery, M12-P5 — defer until that story is settled).
+ * capability_claim_codes (V43). Short CELLO- codes the ops-agent hands to operators; the agent
+ * redeems against whichever directory it connects to (the migration comment says exactly this).
+ * Natural key: `code` (TEXT PK). Immutable at insert; `redeemed_at` is a one-time audit stamp
+ * excluded from the hash to avoid the apply-side UPDATE. `expires_at` IS stable and included so
+ * stale codes are not silently accepted as valid after convergence.
+ */
+export const CAPABILITY_CLAIM_CODES_SPEC: TierATableSpec = {
+  table: "capability_claim_codes",
+  naturalKey: ["code"],
+  immutableColumns: ["code", "capability", "expires_at"],
+};
+
+/**
+ * authorized_issuers (V46). The set of Ed25519 pubkeys the directory trusts to submit trust signals.
+ * Needs to be the same on every node — a portal key enrolled on one and not the others produces
+ * exactly the manual three-node enrolment that was done today because this was missing.
+ * Natural key: `pubkey`. `status` (active/revoked) is mutable → excluded; it rides Tier B when
+ * that gets wired. `added_at`/`revoked_at` are per-node timestamps → excluded.
+ */
+export const AUTHORIZED_ISSUERS_SPEC: TierATableSpec = {
+  table: "authorized_issuers",
+  naturalKey: ["pubkey"],
+  immutableColumns: ["pubkey", "role", "label"],
+};
+
+/**
+ * signal_records (V46). Trust-signal notarizations. Natural key: (signal_hash, accepting_node).
+ * All identity columns are immutable. `supersedes_hash` is the one nullable column and IS included
+ * — it is part of the record's semantic identity (the supersession chain) and never changes after
+ * insert.
+ */
+export const SIGNAL_RECORDS_SPEC: TierATableSpec = {
+  table: "signal_records",
+  naturalKey: ["signal_hash", "accepting_node"],
+  immutableColumns: [
+    "signal_hash",
+    "accepting_node",
+    "subject_kind",
+    "subject",
+    "issuer_kind",
+    "issuer_pubkey",
+    "type",
+    "supersedes_hash",
+  ],
+};
+
+/**
+ * submission_results (V56). The outcome the portal wrote back per submission. Natural key:
+ * (submission_id, accepting_node). `ciphertext` is BYTEA — consumer must hex-encode. All columns
+ * set at INSERT, no UPDATE path.
+ */
+export const SUBMISSION_RESULTS_SPEC: TierATableSpec = {
+  table: "submission_results",
+  naturalKey: ["submission_id", "accepting_node"],
+  immutableColumns: [
+    "submission_id",
+    "accepting_node",
+    "issuer_pubkey",
+    "outcome",
+    "reason",
+    "signal_hash",
+    "ciphertext",
+  ],
+};
+
+/**
+ * relay_registrations (V19). One row per relay. Natural key: `relay_id` (UNIQUE TEXT). The
+ * `deregistered_at` column is a one-time NULL→timestamp flip and is EXCLUDED from the hash
+ * (mutable → Tier B when wired). `chain_hash` and `id` (BIGSERIAL) are local → excluded.
+ * `registered_at` is a stable TIMESTAMPTZ set at INSERT → included.
+ */
+export const RELAY_REGISTRATIONS_SPEC: TierATableSpec = {
+  table: "relay_registrations",
+  naturalKey: ["relay_id"],
+  immutableColumns: ["relay_id", "public_key_hex", "region", "registered_at"],
+};
+
+/**
+ * directory_nodes (V17). The consortium's own node registry. Natural key: `node_id` (UNIQUE TEXT).
+ * `endpoint` and `status` are mutable → excluded. `created_at` is per-node → excluded.
+ */
+export const DIRECTORY_NODES_SPEC: TierATableSpec = {
+  table: "directory_nodes",
+  naturalKey: ["node_id"],
+  immutableColumns: ["node_id", "region"],
+};
+
+/**
+ * conversation_seals (V2). Sealed conversation records. Natural key: `conversation_id` (UUID UNIQUE).
+ * `chain_hash` and `id` (BIGSERIAL) are local → excluded. All other columns are set at seal time
+ * and never updated.
+ */
+export const CONVERSATION_SEALS_SPEC: TierATableSpec = {
+  table: "conversation_seals",
+  naturalKey: ["conversation_id"],
+  immutableColumns: [
+    "conversation_id",
+    "merkle_root",
+    "close_type",
+    "close_reason_code",
+    "participant_count",
+    "seal_date",
+  ],
+};
+
+/**
+ * The registered Tier-A specs — all tables that must converge to the same value across nodes.
+ * Previously four; expanded 2026-07-31 to cover the tables that were in the AWS Postgres mesh
+ * but were never registered for AE.
+ *
+ * NOT included (node-local by design):
+ *   sessions, pickup_queue, pending_notifications — per-node delivery state
+ *   directory_checkpoints, checkpoint_node_signatures — parked checkpoint machinery (M12-P5)
+ *   registrations, pre_authorization_tokens — per-node Telegram registration state machine
+ *   conversation_seal_staging — ephemeral staging rows consumed during the seal ceremony
  */
 export const TIER_A_SPECS: readonly TierATableSpec[] = [
   AGENT_PROFILES_SPEC,
   AGENT_REVOCATIONS_SPEC,
   USER_ACCOUNTS_SPEC,
   SEAL_NOTARIZATIONS_SPEC,
+  CAPABILITY_CLAIM_CODES_SPEC,
+  AUTHORIZED_ISSUERS_SPEC,
+  SIGNAL_RECORDS_SPEC,
+  SUBMISSION_RESULTS_SPEC,
+  RELAY_REGISTRATIONS_SPEC,
+  DIRECTORY_NODES_SPEC,
+  CONVERSATION_SEALS_SPEC,
 ];
 
 /**
