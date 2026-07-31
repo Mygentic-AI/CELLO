@@ -609,6 +609,20 @@ costs a migration touching hibernated infrastructure to get it.
 **Revisit** when the next migration ships for another reason (fold it in then, near-free), or if the
 consequence ever stops being loud.
 
+### PARKED — NULL-`agent_id` cleanup, blocked on `gcloud auth login` (2026-07-31)
+
+Andre gave the go-ahead; the fleet deploy of `aefix-50bc7a2a` completed on all three nodes, and then
+the gcloud tokens expired: *"Reauthentication failed. cannot prompt during non-interactive execution."*
+Reaching the rows needs IAP SSH, so this is a browser OAuth flow — reason 1 under §Decision Theatre
+(a), not a judgement call.
+
+Ready to run the moment auth is back: the probe carries a `nullids` command (enumerate, for Andre to
+eyeball) and a `delnull` command (delete). The plan is enumerate first, confirm they are the throwaway
+enforcer agents, then delete and let anti-entropy re-replicate them with a populated `agent_id`.
+
+Not urgent: new NULL-`agent_id` profiles are already refused at the door by the required-columns guard,
+so the set cannot grow. What remains is the existing rows, which fork and cannot heal.
+
 ## Parked
 
 - **M12-P1** — **Demo agent move** (EC2 `i-0ad3e7c22470f266e`, not in IaC). Candidate, not
