@@ -106,6 +106,24 @@ variable "waitlist_image_tag" {
   description = "Immutable tag of the waitlist image in Artifact Registry. Never 'latest' — same reason as the portal: a floating tag makes 'which code is live' unanswerable, and this service owns admission."
 }
 
+# ── DOD-GCP-OPS-1 ────────────────────────────────────────────────────────────
+variable "ops_dashboard_image_tag" {
+  type        = string
+  description = "Immutable tag of the ops-dashboard image. Built by Cloud Build from Andre-Mygentic/cello-ops-dashboard; never :latest, and never pushed from a laptop — this image can open waves and mint admission tokens."
+}
+
+variable "ops_dashboard_hostname" {
+  type        = string
+  default     = "operations.cello.mygentic.ai"
+  description = "Where the dashboard serves. OPS_PUBLIC_URL is built from it, and sign-in links are built from THAT rather than from a request Host header, which is attacker-controlled."
+}
+
+variable "ops_dashboard_operator_email" {
+  type        = string
+  default     = "andre@mygentic.ai"
+  description = "Seeds the allowlist — the ONLY access control the dashboard has. An empty list is the correct fail-closed default and also a dashboard nobody can sign into, so this names the sole operator. Add anyone else by adding a secret VERSION, not by editing this: the resource ignores changes to the value so an apply cannot silently reset a hand-added operator."
+}
+
 variable "portal_db_tier" {
   type        = string
   default     = "db-g1-small"
