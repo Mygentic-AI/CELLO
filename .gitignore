@@ -34,3 +34,4 @@ infra/hibernation-snapshots/
 # test run into a dirty tree.
 __pycache__/
 *.pyc
+infra/.dryrun-ok/

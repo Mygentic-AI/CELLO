@@ -96,14 +96,35 @@ issues += check_rules("directory",
 issues += check_rules("relay",
     before.get("rules_relay", []), after.get("rules_relay", []))
 
+# A changed ECS task-definition revision is EXPECTED, not drift: CI ships new
+# taskdefs while the environment is hibernated, and the wake correctly starts the
+# NEWER revision. Reporting that identically to a missing target group trains the
+# operator to skim a red diff — which is exactly when a real structural delta gets
+# missed. Observed on two healthy wakes (2026-07-29 337→352, 2026-07-31 430→432).
+# Classified as informational: printed, never fatal, never counted as a difference.
+informational = []
+
 all_keys = sorted(set(fb.keys()) | set(fa.keys()))
 for key in all_keys:
     if should_ignore(key):
         continue
     bv = fb.get(key, "<MISSING>")
     av = fa.get(key, "<MISSING>")
-    if bv != av:
+    if bv == av:
+        continue
+    # Only a revision bump on an otherwise-present service is benign. A service that
+    # APPEARED or VANISHED is structural and must still be a hard difference.
+    if key.endswith(".taskdef") and "<MISSING>" not in (bv, av):
+        informational.append(f"  {key}:\n    before: {bv}\n    after:  {av}")
+    else:
         issues.append(f"  {key}:\n    before: {bv}\n    after:  {av}")
+
+if informational:
+    print("ℹ️   %d task-definition revision change(s) — expected when CI shipped during the"
+          " down-window; the wake started the newer revision:\n" % len(informational))
+    for i in informational:
+        print(i)
+    print("")
 
 if not issues:
     print("✅  No differences — environment is identical (structurally).")
