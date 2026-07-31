@@ -266,3 +266,28 @@ key was present, and its message named the two variables a GCP operator does not
 a key per URL, which also closes the dangerous middle ground: one key across three directories
 authenticates to at most one, so the system looks healthy until failover routes to a node that
 rejects it. Found by calling the live route, not by reading.
+
+## Operations agent on GCP (2026-07-31)
+
+**Why it is launch-critical, not monitoring:** registering an agent requires a pre-authorization
+capability, and this Telegram bot is the ONLY thing that issues one to a human — the portal does not.
+
+| | |
+|---|---|
+| Cloud Run | `cello-ops-agent`, us-east1, `INGRESS_TRAFFIC_INTERNAL_ONLY`, image `ops-c04bb0fa` |
+| Scaling | **min = max = 1, `cpu_idle = false`** — the Telegram adapter long-polls, so it needs a process between requests; two instances would race for the same update; a throttled poll loop goes deaf while looking healthy |
+| Directory | `http://10.10.0.35:8081` (gcp-use1 internal) + that node's own internal API key |
+| Database | `cello-ops-agent-database-url` → gcp-use1 Cloud SQL over PSC. **No cross-cloud DB connection** |
+| Migration version | **56** — the GCP node DBs are one ahead of the AWS SSM value (55) |
+| Verified | `ops_agent.started`, `ops_agent.telegram.connected`, `telegram.polling.started`, `ops_agent.health_server.started` |
+
+**Two honest gaps against `DOD-MOVE-OPSAGENT-1`'s wording.** The DB health check covers gcp-use1
+only, so migration drift on usc1/euw1 goes unnoticed — the spec asked for per-node health.
+And OTP delivery still uses SES with **static AWS credentials**, not SigV4/WIF. No GCP service-account
+key is involved, so the org policy holds, but this IS a live AWS dependency in a system otherwise off
+AWS and must be replaced before that account closes.
+
+**The Dockerfile never copied `patches/`.** The lockfile references them, so the build failed outright
+here — and the failure mode when it does not fail is worse: pnpm installs the UNPATCHED package and
+produces an image that boots fine and is subtly wrong. `packages/directory/Dockerfile` has carried
+this copy and a warning for some time; the ops-agent one had drifted.
