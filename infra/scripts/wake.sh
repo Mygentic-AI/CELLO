@@ -21,6 +21,9 @@
 #   ./wake.sh --region ap-northeast-1 --execute
 #   ./wake.sh --execute                        # live all regions
 #   ./wake.sh --execute --yes                  # skip confirmation
+#
+# --execute requires a passing dry-run of the CURRENT file first (no CI here).
+# Deliberate override: --skip-dryrun-check
 # ==============================================================================
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hibernate-common.sh"
@@ -35,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)  DRY_RUN=1 ;;
     --region)   shift; TARGET_REGIONS+=("$1") ;;
     --yes|-y)   ASSUME_YES=1 ;;
+    --skip-dryrun-check) SKIP_DRYRUN_CHECK=1 ;;
     -h|--help)  grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) fatal "Unknown argument: $1" ;;
   esac
@@ -42,6 +46,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 require_tools
+require_dryrun_pass
 
 [[ -f "${STATE_FILE}" ]] || fatal "State file not found: ${STATE_FILE}. Run hibernate.sh first."
 S="$(cat "${STATE_FILE}")"
@@ -674,6 +679,7 @@ done
 
 echo ""
 if [[ "${DRY_RUN}" == "1" ]]; then
+  record_dryrun_pass
   banner "DRY-RUN COMPLETE — no changes made." "${REGIONS_STR}"
   echo "Re-run with ${C_BOLD}--execute${C_RESET} to apply."
 elif [[ "$FAILED" -gt 0 ]]; then
@@ -687,18 +693,19 @@ else
   banner "WAKE COMPLETE" "${REGIONS_STR}"
   echo ""
   echo "Post-wake checklist:"
-  echo "  0. ${C_BOLD}REDEPLOY THE OPS DASHBOARD${C_RESET} — operations.cello.mygentic.ai does NOT"
-  echo "     come back on its own. It rides the portal ALB via a host rule, and hibernate"
-  echo "     deletes that ALB, taking the rule and its certificate with it. Wake recreates"
-  echo "     the listener and re-points the DNS, but not the rule. Until this runs, the"
-  echo "     hostname resolves and routes nowhere:"
-  echo "       DEPLOY_OPS_DASHBOARD=1 CELLO_IMAGE_TAG=<sha> ./infra/deploy.sh dev us-east-1"
-  echo "     (the deploy resolves the NEW listener ARN; the stack still holds the dead one)"
-  echo "  1. Verify /manifest endpoints serve a current manifest"
+  echo "  1. Verify the directory serves the CLIENT path — this is the check that means"
+  echo "     something:  curl -o /dev/null -w '%{http_code}' http://directory-us1.${DOMAIN}/manifest"
+  echo "     Expect 200. The directory ALB is ${C_BOLD}HTTP:80 only${C_RESET} and /health is not a public"
+  echo "     path, so https://directory-*/health returns 000 on a perfectly healthy node."
+  echo "     Do not debug an outage off that 000 (cost ~20 min on 2026-07-31)."
   echo "  2. Relay manifests auto-re-signed when relay re-registered (check CloudWatch logs)"
   echo "  3. ECS Exec available again (ssmmessages endpoint restored)"
   echo "  4. Any client that ran DURING hibernation may hold negative DNS cache for the"
   echo "     resolver chain's negative TTL (minutes → ~1 h on TTL-mangling networks like"
   echo "     phone hotspots). Verify from the CLIENT path before debugging the server."
   echo "     (Blackhole records during hibernate prevent this going forward.)"
+  echo "  5. operations.${DOMAIN} restores ITSELF — no manual redeploy. hibernate captures"
+  echo "     the portal host rule + SNI cert and wake replays them. Verified 3 cycles"
+  echo "     (2026-07-28/29/31). If it 000s, that is a regression worth chasing, not the"
+  echo "     old known-broken behaviour."
 fi

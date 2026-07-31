@@ -18,32 +18,30 @@ section that follows it, or in `infra/CLAUDE.md`.
 
 ---
 
-## ⚡ POWER STATE — LIVE (all 3 regions, as of 2026-07-29 06:37 UTC)
+## ⚡ POWER STATE — LIVE (all 3 regions, as of 2026-07-31 10:54 UTC)
 
-Woken 06:21:59–06:37:36 UTC (15 min 37 s). Previous down-window ~10 h.
+Woken 10:36:11–10:54:24 UTC (18 min 13 s). Previous down-window ~15 h.
 
-**ALB DNS names — these rotate on every wake; query AWS, do not trust this list once it is a day old:**
-- **us-east-1:** dir `cello-dir-dev-428525449` / relay `cello-relay-dev-643475689` / portal `cello-portal-dev-1221300993`
-- **eu-central-1:** dir `cello-dir-dev-996797499` / relay `cello-relay-dev-673997780`
-- **ap-northeast-1:** dir `cello-dir-dev-394807507` / relay `cello-relay-dev-38653167`
+**ALB DNS names — these rotate on every wake; query AWS, do not trust this list once it is a day old.**
+Portal/ops ALB this cycle: `cello-portal-dev-154897317.us-east-1.elb.amazonaws.com`.
 
-**Verified live, not just from the script's own log:** 8/8 DNS names off the blackhole; 7 ALBs
-`active`; all 8 ECS services 1/1 `COMPLETED`; 4 RDS `available`; demo EC2 `running`; all 9 directory
-target groups `healthy`; `http://directory-{us1,eu1,ap1}/manifest` → **200** in all three regions;
-`operations.cello.mygentic.ai` → **307** (ops dashboard restored automatically, second cycle running).
+**Verified live, independently of the script's own log:** 8/8 DNS names off the blackhole;
+`http://directory-{us1,eu1,ap1}/manifest` → **200** in all three regions; 7 ALBs `active`; all 8 ECS
+services 1/1 `COMPLETED`; 4 RDS `available`; demo EC2 `running`; `operations.cello.mygentic.ai`
+→ **307** (ops dashboard restored automatically, third cycle running); daemon
+`directory_signaling: connected`.
 
-**Inventory diff was NOT identical this cycle — and that is correct.** us-east-1
-`cello-directory-dev:337 → :352` and ap-northeast-1 `:124 → :125`: the directory pipeline shipped new
-task definitions while we were hibernated, and the wake correctly started the *newer* revision.
-Both services are 1/1 `COMPLETED` on the new task defs and serving. A taskdef delta after a
-down-window during which CI ran is expected; only a *structural* delta (missing TG, listener, route,
-endpoint) is a real finding.
+**Inventory diff not identical in us-east-1, correctly:** directory taskdef `430 → 432` — CI shipped
+while we were hibernated and the wake started the newer revision, now 1/1 and serving. eu-central-1
+and ap-northeast-1 were IDENTICAL. A taskdef delta after a down-window during which CI ran is
+expected; only a *structural* delta (missing TG, listener, route, endpoint) is a real finding.
 
 **Gotcha for anyone health-checking the directory:** its ALB has an **HTTP:80 listener only** — no
 HTTPS — and `/health` is not a public path (the app returns 400). `https://directory-*/health`
 returns `000` on a perfectly healthy node. The real client path is `http://directory-*/manifest`.
 
 ---
+
 
 ## 🟢 GALLERY IS LIVE — gallery.cello.mygentic.ai + portal schema/seed (2026-07-29, ~09:00–10:30 UTC)
 
@@ -2031,3 +2029,33 @@ service. Revisions: **us-east-1 :397, eu-central-1 :155, ap-northeast-1 :146**.
 These three revisions are CFN DRIFT and will be overwritten the next time the ECS directory stack
 deploys successfully — which is fine and intended, because the stack resolves the SAME SSM parameter.
 The drift is the manifest arriving EARLY, not a different value.
+
+---
+
+## `submission_results` — written correctly, does not replicate yet (2026-07-30)
+
+**Proven working:** the M10B refusal return path. A live refusal from the demo agent was drained
+(`refused: 1`, `minted: 0`), and eu-central-1 holds the row with the right attribution —
+`issuer_pubkey da0c73f8…` (CELLO_Feedback), `outcome refused`, `accepting_node eu-central-1`. The
+directory serves results scoped to the authenticated stream identity (`signal.results.served`,
+`issuer: da0c73f8`), and the daemon's fetch returns cleanly.
+
+**The gap:** the issuer's daemon asked **us-east-1**; the row is on **eu-central-1**, because the
+portal records a result on the node that ACCEPTED the submission (nodeIndex 1 that day). V56 was
+added to `PUBLICATION_TABLES` in `setup-replication.sh` but the script was never run, so the table
+was not in `cello_pub`.
+
+**Done:** `ALTER PUBLICATION cello_pub ADD TABLE submission_results` on all three regions, as the RDS
+MASTER role via ECS exec (the app role is not the publication owner, and `setup-replication.sh`
+cannot run from a laptop — RDS is VPC-private).
+
+**Still not working:** `ALTER SUBSCRIPTION … REFRESH PUBLICATION` on us-east-1 reports 2
+subscriptions and then produces no output, and the eu row has not copied in. Not diagnosed further.
+
+**Two ways to finish it, and the second may be better:**
+1. Finish the subscription refresh so the table replicates like `signal_records`.
+2. **Fan the fetch out across nodes**, exactly as the portal's drain does. The drain already learned
+   this lesson for the submission QUEUE — "collect from ALL nodes, never fail over" — because a row
+   lives only on the node that accepted it. Results have the same property at the moment they are
+   written, so depending on replication makes the return path fragile in the same way. The composite
+   PK already makes multi-node rows safe.

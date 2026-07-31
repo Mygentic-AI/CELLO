@@ -19,14 +19,21 @@
 #   Target groups, security groups, VPC/subnets/routes, IAM, ECR, S3, Route53
 #   ACM certs, Secrets Manager, SSM parameters, KMS keys, CloudWatch, WAF
 #
-# Route53 A records are NOT left dangling: after ALB deletion each dir/relay
-# (+ operations) name is UPSERTed to a plain A record at a blackhole IP (TEST-NET-2,
-# TTL 60). A dangling alias answers NXDOMAIN, and clients polling the names all
-# night seed negative DNS caches at every resolver layer between them and
-# Route53 — on wake, a stale layer re-poisons the layers below it and the wake
-# looks broken from the client for up to ~1 h. A name that resolves (to a dead
-# IP) is never negatively cached; connections just fail fast at TCP.
-# wake.sh UPSERTs the records back to the new ALB aliases.
+# Route53 A records are NOT left dangling: BEFORE each ALB is deleted, the SEVEN
+# AWS-owned names (dir/relay ×3, operations) are UPSERTed to a plain A record at a
+# blackhole IP (TEST-NET-2, TTL 60). A dangling alias answers NXDOMAIN, and
+# clients polling the names all night seed negative DNS caches at every resolver
+# layer between them and Route53 — on wake, a stale layer re-poisons the layers
+# below it and the wake looks broken from the client for up to ~1 h. A name that
+# resolves (to a dead IP) is never negatively cached; connections just fail fast
+# at TCP. wake.sh UPSERTs the records back to the new ALB aliases.
+# ORDER MATTERS: blackhole first, THEN delete. Deleting first leaves a window in
+# which the name genuinely answers NXDOMAIN — the very thing this prevents.
+#
+# SEVEN, not eight: portal.* is EXCLUDED. It resolves to the GCP load balancer and
+# the portal keeps serving whether AWS is up or down, so blackholing it here would
+# take a live service on another cloud off the air as a side effect of hibernating
+# this one — silently, because a blackhole is a successful UPSERT.
 # Incident: docs/planning/discussion_logs/2026-07-24_1630_post-wake-directory-dns-resolution-incident.md
 #
 # Usage:
@@ -35,6 +42,9 @@
 #   ./hibernate.sh --region ap-northeast-1 --execute  # live single region
 #   ./hibernate.sh --execute                       # live all 3 regions
 #   ./hibernate.sh --execute --yes                 # skip confirmation prompt
+#
+# --execute requires a passing dry-run of the CURRENT file first (no CI here).
+# Deliberate override: --skip-dryrun-check
 # ==============================================================================
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hibernate-common.sh"
@@ -50,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)         DRY_RUN=1 ;;
     --region)          shift; TARGET_REGIONS+=("$1") ;;
     --yes|-y)          ASSUME_YES=1 ;;
+    --skip-dryrun-check) SKIP_DRYRUN_CHECK=1 ;;
     -h|--help)         grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) fatal "Unknown argument: $1" ;;
   esac
@@ -60,6 +71,7 @@ done
 REGIONS_STR="${TARGET_REGIONS[*]}"
 
 require_tools
+require_dryrun_pass
 banner "HIBERNATE — CELLO infrastructure" "${REGIONS_STR}"
 
 # ==============================================================================
@@ -144,8 +156,20 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     local region="$2"
     if [[ "$alb_arn" == "None" || -z "$alb_arn" ]]; then echo '[]'; return; fi
     local listener_arn
+    # PICK THE LISTENER DETERMINISTICALLY. `Listeners[0]` is NOT stable: the API
+    # returns them in arbitrary order, and the portal ALB has two (HTTP:80 redirect
+    # + HTTPS:443). The host rules and SNI certs that matter — operations.* — live
+    # on 443; the :80 listener carries only a default redirect rule. Taking [0]
+    # captured 2 rules on 2026-07-28/29/31 and 1 rule on the very next run, which
+    # would have restored the redirect listener's default INSTEAD of the operations
+    # host rule and brought the ops dashboard back dead with nothing reporting it.
+    # Prefer 443; fall back to the first listener for the dir/relay ALBs (HTTP-only).
     listener_arn=$(aws elbv2 describe-listeners --load-balancer-arn "$alb_arn" \
-      --region "$region" --query 'Listeners[0].ListenerArn' --output text 2>/dev/null || echo "None")
+      --region "$region" --query 'Listeners[?Port==`443`].ListenerArn | [0]' --output text 2>/dev/null || echo "None")
+    if [[ "$listener_arn" == "None" || -z "$listener_arn" ]]; then
+      listener_arn=$(aws elbv2 describe-listeners --load-balancer-arn "$alb_arn" \
+        --region "$region" --query 'Listeners[0].ListenerArn' --output text 2>/dev/null || echo "None")
+    fi
     if [[ "$listener_arn" == "None" || -z "$listener_arn" ]]; then echo '[]'; return; fi
     # Capture rules with target group ARNs (we keep the TGs, so ARNs survive)
     aws elbv2 describe-rules --listener-arn "$listener_arn" --region "$region" \
@@ -514,27 +538,26 @@ for REGION in "${TARGET_REGIONS[@]}"; do
       --query 'DBInstance.DBInstanceStatus' --output text
   fi
 
-  # -- 3c. Delete ALBs ---------------------------------------------------------
-  # Delete ALBs BEFORE NAT (ALB deletion is fast; NAT deletion takes time)
-  step "  [${REGION}] Deleting ALBs (target groups are KEPT)"
-  for alb_key in alb_dir_arn alb_relay_arn portal_alb_arn; do
-    alb_arn=$(echo "$R" | jq -r ".${alb_key}")
-    if [[ "$alb_arn" != "None" && -n "$alb_arn" ]]; then
-      run aws elbv2 delete-load-balancer --load-balancer-arn "${alb_arn}" \
-        --region "${REGION}" --no-cli-pager
-      ok "  Deleted ALB: ${alb_arn}"
-    fi
-  done
-
-  # -- 3c2. Blackhole DNS — prevent NXDOMAIN negative-cache poisoning ----------
-  # The ALBs are gone, so the alias records above now answer NXDOMAIN. Clients
-  # (the local daemon retries directory signaling every 30 s) would cache that
-  # negative answer at every resolver layer for the whole down-window, and a
-  # stale layer re-poisons the layers below it on wake (2026-07-24 incident:
-  # ~50 min post-wake client outage from a carrier-rewritten 2819 s negative
-  # TTL). UPSERT each name to a plain A record at a blackhole IP instead:
-  # the name keeps resolving (NOERROR — never negatively cached), connections
-  # fail fast at TCP, and wake.sh's alias UPSERT overwrites this cleanly.
+  # -- 3c. Blackhole DNS FIRST — prevent NXDOMAIN negative-cache poisoning -----
+  # ORDERING IS LOAD-BEARING: this MUST run BEFORE the ALBs are deleted.
+  #
+  # An alias record whose ALB has been deleted answers NXDOMAIN. Clients (the
+  # local daemon polls each directory node ~13x/min) cache that negative answer
+  # at every resolver layer for the zone's negative TTL, and a stale layer
+  # re-poisons the layers below it on wake (2026-07-24 incident: ~50 min
+  # post-wake client outage from a carrier-rewritten 2819 s negative TTL).
+  #
+  # Until 2026-07-31 the delete ran first and this block second, leaving a
+  # seconds-wide window in which the name answered NXDOMAIN — which is exactly
+  # the poisoning the blackhole exists to prevent, and a plausible origin of the
+  # stale negative entry that blinded a freshly-restarted daemon that day.
+  # Flipping the order closes the window: the name goes straight from the live
+  # alias to the blackhole A record and never answers NXDOMAIN at all.
+  #
+  # Safe to flip: ECS is already at 0 (step 3a), so nothing is being served when
+  # the record moves. UPSERT to a plain A record at an unroutable IP — the name
+  # keeps resolving (NOERROR, never negatively cached), connections fail fast at
+  # TCP, and wake.sh's alias UPSERT overwrites this cleanly.
   step "  [${REGION}] Blackholing DNS records (prevents negative-cache poisoning)"
   BLACKHOLE_IP="198.51.100.1"   # TEST-NET-2 (RFC 5737) — guaranteed unroutable
   blackhole_r53() {
@@ -573,6 +596,18 @@ for REGION in "${TARGET_REGIONS[@]}"; do
   # operations.* stays: it rides the AWS portal ALB and genuinely does go away with it.
   [[ "${REGION}" == "us-east-1" ]] && { blackhole_r53 "operations"; }
 
+  # -- 3c2. Delete ALBs (AFTER the blackhole above — see the ordering note) ----
+  # Delete ALBs BEFORE NAT (ALB deletion is fast; NAT deletion takes time)
+  step "  [${REGION}] Deleting ALBs (target groups are KEPT)"
+  for alb_key in alb_dir_arn alb_relay_arn portal_alb_arn; do
+    alb_arn=$(echo "$R" | jq -r ".${alb_key}")
+    if [[ "$alb_arn" != "None" && -n "$alb_arn" ]]; then
+      run aws elbv2 delete-load-balancer --load-balancer-arn "${alb_arn}" \
+        --region "${REGION}" --no-cli-pager
+      ok "  Deleted ALB: ${alb_arn}"
+    fi
+  done
+
   # -- 3d. Delete ssmmessages VPC endpoint -------------------------------------
   ep_id=$(echo "$R" | jq -r '.ssmmessages_endpoint.id')
   if [[ -n "$ep_id" && "$ep_id" != "null" ]]; then
@@ -601,6 +636,7 @@ for pid in "${TEAR_PIDS[@]}"; do wait "$pid"; done
 # ==============================================================================
 echo ""
 if [[ "${DRY_RUN}" == "1" ]]; then
+  record_dryrun_pass
   banner "DRY-RUN COMPLETE — no changes made. Review the plan above." "${REGIONS_STR}"
   echo "Re-run with ${C_BOLD}--execute${C_RESET} to apply."
 else

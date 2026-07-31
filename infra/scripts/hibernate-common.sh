@@ -24,6 +24,50 @@ STATE_FILE="${STATE_FILE:-${INFRA_DIR}/hibernation-state.json}"
 # --- Execution mode -----------------------------------------------------------
 DRY_RUN="${DRY_RUN:-1}"
 
+# --- Dry-run gate -------------------------------------------------------------
+# WHY THIS EXISTS: a7cef102 (2026-07-26 11:11) added the portal capture to
+# hibernate.sh above the block that assigns $portal_alb_arn. Under `set -u` that
+# aborts on the first region — the script was completely unrunnable. Nobody found
+# out for 32 hours, because nothing exercises these scripts except a human running
+# one, and the next human to run one was doing it for real. There is no CI here
+# (CodePipeline only builds images), so the gate has to live in the script.
+#
+# Rule: --execute refuses to run unless a dry-run of the CURRENT file contents has
+# passed. The dry-run is read-only and costs ~2 min. It would have caught the above
+# instantly. Escape hatch: --skip-dryrun-check, so this can never strand a wake at
+# 3am — but it must be typed deliberately.
+DRYRUN_MARKER_DIR="${INFRA_DIR}/.dryrun-ok"
+
+_script_hash() { shasum -a 256 "$0" 2>/dev/null | cut -d' ' -f1; }
+_marker_path() { echo "${DRYRUN_MARKER_DIR}/$(basename "$0").$(_script_hash)"; }
+
+# Called at the end of a successful dry-run.
+record_dryrun_pass() {
+  [[ "${DRY_RUN}" == "1" ]] || return 0
+  mkdir -p "${DRYRUN_MARKER_DIR}" 2>/dev/null || return 0
+  # Keep only the current hash — a stale marker for old contents is worse than none.
+  rm -f "${DRYRUN_MARKER_DIR}/$(basename "$0")".* 2>/dev/null || true
+  : > "$(_marker_path)" 2>/dev/null || true
+}
+
+# Called before any live mutation.
+require_dryrun_pass() {
+  [[ "${DRY_RUN}" == "1" ]] && return 0
+  [[ "${SKIP_DRYRUN_CHECK:-0}" == "1" ]] && {
+    warn "Dry-run gate SKIPPED by --skip-dryrun-check. You are running unverified script contents."
+    return 0
+  }
+  [[ -f "$(_marker_path)" ]] && return 0
+  err "No dry-run has passed for the CURRENT contents of $(basename "$0")."
+  err "These scripts have no CI. A syntax-clean edit can still abort mid-run under 'set -u'"
+  err "(that is exactly what happened on 2026-07-26 and went unnoticed for 32 hours)."
+  echo ""
+  echo "  Run the read-only dry-run first:   $0"
+  echo "  Then re-run with --execute."
+  echo "  Deliberate override:               $0 --execute --skip-dryrun-check"
+  exit 1
+}
+
 # --- Colors -------------------------------------------------------------------
 if [[ -t 1 ]]; then
   C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'

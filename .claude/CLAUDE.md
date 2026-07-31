@@ -24,21 +24,14 @@ CELLO is a peer-to-peer identity and trust layer for agent-to-agent communicatio
 
 Full plan, findings, and trail: `docs/planning/user-stories/m8b/2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan.md`.
 
-**⏳ Deferred — `DOD-CRYPTO-AT-REST-1`: the gateway writes to disk UNENCRYPTED. Do not lose this.**
-`core/gateway`'s two stores open plaintext `node:sqlite` (`config-store.ts`, `record-store.ts`), so the
-hash-chained security-pass records and the governance config — including which guards are loosened — sit
-unencrypted on the operator's disk. **This violates `M9-CFG-001`'s own spec**, which says "its own
-SQLCipher database (a separate file and key from the daemon's)". Both files justify plaintext with a
-comment claiming the daemon does the same; that stopped being true on 2026-06-25. No private keys are
-exposed (those live in the daemon's SQLCipher DB). Full ACs, the packaging constraint, and the migration
-requirement: `docs/planning/user-stories/m8c/M8C-DEFINITION-OF-DONE.md` → `DOD-CRYPTO-AT-REST-1`.
-
 **`node:sqlite` is VERBOTEN in this project. We use SQLCipher, period.** It stores plaintext and makes
 Node print `ExperimentalWarning: SQLite` on every command below Node 24. AI coders keep reaching for it
 because it is a builtin. `cello-client/eslint.config.mjs` now blocks it across `core/*/src` (allowed in
-`__tests__`), with the three known production violations quarantined in one visible allowlist. Never add
-to that allowlist. SQLCipher opens plaintext files directly (verified 2026-07-09), so there is no
-legacy-read case that needs the builtin either.
+`__tests__`), with the remaining production violation — `core/daemon/src/identity-migration.ts`, the
+last one — quarantined in one visible allowlist. Never add to that allowlist. (The two `core/gateway`
+stores left it on 2026-07-29: `DOD-M9B-STORE-1` gave the gateway its own SQLCipher opener keyed by the
+daemon's key file, closing `DOD-CRYPTO-AT-REST-1`.) SQLCipher opens plaintext files directly (verified
+2026-07-09), so there is no legacy-read case that needs the builtin either.
 
 ---
 

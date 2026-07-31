@@ -161,11 +161,22 @@ a minute; it settles. This never blocks the operator install anyway, because `cl
 **exact** version (e.g. cli@0.0.32 → daemon@0.0.35), so `npm i -g @cello-protocol/cli@latest` pulls the
 correct daemon regardless of daemon's dist-tag propagation.
 
-**Operators then just install `@latest`** — no pinning, ever:
+**Operators then just install `@latest`** — no pinning, ever. **Use `--prefer-online`:**
 ```bash
-npm i -g @cello-protocol/cli@latest @cello-protocol/connect@latest
+npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest
 cello logout && cello login   # restart the daemon onto the new binary (CLI lifecycle, not pkill)
 # then reconnect the MCP: /mcp  (or restart Claude Code)
+```
+
+**Why `--prefer-online` is not optional right after a promotion.** `@latest` is resolved on the
+OPERATOR'S machine, from npm's cached packument (`~/.npm/_cacache`) — npm reads `dist-tags.latest` out
+of that cached JSON rather than asking the registry. Promote and install seconds apart and the cache
+still predates the tag, so `@latest` installs the PREVIOUS version, the install reports success, and
+`cello -v` shows the old number. It looks identical to a promotion that did not take. This burned two
+rounds on 2026-07-31 (installed 0.0.99 then 0.0.100 while `latest` was 0.0.100 then 0.0.102).
+`--prefer-online` forces revalidation. Verify on disk, not from the install's output:
+```bash
+node -p "require('$(npm prefix -g)/lib/node_modules/@cello-protocol/cli/package.json').version"
 ```
 
 If a version was published empty by mistake, `npm deprecate @cello-protocol/<pkg>@<bad> "..."` it after

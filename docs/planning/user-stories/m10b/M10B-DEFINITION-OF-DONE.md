@@ -259,14 +259,26 @@ the additions M10B is accountable for.
     `wallet_trust_signals` (M10-D4) with the queue as a view over it, or a separate pending table that
     promotes a row on acceptance. Must not violate `INV-AGENT-SCOPED`, and the queue must be named and
     keyed by **consent state**, never by type (`INV-ZEROBUMP`).
-  - **Naming — DECIDED, see `M10B-D7`.** `endorsement` stays the only type string; "attestation" stays
+  - **Naming — SUPERSEDED 2026-07-31 by Andre's direct call.** `endorsement` remains the only WIRE
+    TYPE STRING (unchanged, nothing on the protocol moved). But "attestation" **now IS in code**, as
+    the operator-facing verb family: `cello attestations issue|issued`, `cello attestation-consent`,
+    `cello_attestations_*`. Reason: an attestation is a PERSON vouching for a PERSON, a trust signal
+    is the NETWORK verifying an attribute — same bytes, different affordance, and burying the
+    person-to-person primitive under a wallet listing hid the one capability collaboration rests on.
+    Do NOT "restore" the old naming. Original `M10B-D7` text follows for history:
+    `endorsement` stays the only type string; "attestation" stays
     a design-vault word and does not enter code. The code's name for the family is `issuer_kind: agent`.
     Scope of any doc cleanup: the M10B documents and [[M10-TYPE-PLAYBOOK]] ONLY — do not sweep the vault.
   - **Expiry.** D-26 gives endorsements no expiry, which is a deliberate exception to Playbook §0's
     "validity window: `expires_at` policy." Confirm `expires_at: null` flows correctly through
     `DOD-VERIFY-1`'s freshness path (spec §14.7) rather than being read as already-expired.
-  - **WRITTEN 2026-07-28 → Entry 4. REVIEWED, FOUR BLOCKING FINDINGS → Entry 7. STILL 🟡 — Tier 1 does
-    not start.** The reviewer independently re-derived every code claim in Entry 4 and **all of them
+  - **WRITTEN 2026-07-28 → Entry 4. REVIEWED, FOUR BLOCKING FINDINGS → Entry 7. ✅ CLOSED 2026-07-31
+    — Andre's triage.** This line gated Tier 1. Tier 1 was built, shipped and proven end to end
+    (`DOD-END-JOURNEY-1`, 10/10 hops), so the gate cleared in practice and nobody walked back to flip
+    it. Every finding is resolved below: the notarization path needed no work, expiry closed with no
+    work, the intake key rides the manifest, and the `INV-UNTRUSTED` projection change is proven live
+    at J-END hop 5 — CELLO's `claim` does not contain the issuer's sentence; his `statement` is
+    verbatim, flagged, and attributed to his key. **Original text follows.** The reviewer independently re-derived every code claim in Entry 4 and **all of them
     held**; the findings are against the *decisions*. Standing: the **notarization path needs no work
     at all** (the portal stays the only submitter — the §4 first-action question dissolves rather than
     being answered); `DOD-END-INV-UNTRUSTED` **needs a projection change no DoD line owned**
@@ -342,10 +354,12 @@ the additions M10B is accountable for.
   > `src/__tests__` is excluded from typecheck). Review found 8; all fixed, including a broken ack
   > correlation, an over-certain error message, and two hollow tests. → **Entries 22, 26, 27**.
   > **`M10B-D32`: "standard failover across nodes" is the SignalingManager's reconnect** — there is
-  > no client-side multi-node write path, verified. **Two ACs handed forward, both blocking on
-  > `DOD-END-SURFACE-1`:** nothing retries yet (the safety property is real but has no caller), and
-  > **nothing generates the manifest's `intake_key`**, so against every real manifest today this
-  > refuses with `intake_key_absent`. 🟡 on the directory deploy + the protocol-types publish. — 🟡
+  > no client-side multi-node write path, verified. **ONE AC handed forward, blocking on `DOD-END-SURFACE-1`:**
+  > nothing retries yet (the safety property is real but has no caller). **The intake-key AC is
+  > CLEARED — 2026-07-31, Entry 43:** the keypair is provisioned and the manifest signed in three
+  > regions, and a live submission returns `intake_key_id: "intake-dev-1", stored: true`, so
+  > `intake_key_absent` no longer fires against a real manifest. The directory deploy and the
+  > protocol-types publish are both done. Still 🟡 — for the retry AC alone, not for four reasons. — 🟡
 - **DOD-END-QUEUE-1** — **the directory side: a mailbox it cannot read.** A queue table holding the
   sealed blob, its recipient (the portal intake key id), and delivery bookkeeping — **no plaintext, no
   payload, no subject, no PII**, exactly the `DOD-DIR-WRITE-1` / M10-D22 posture, and a test asserts the
@@ -827,7 +841,11 @@ the additions M10B is accountable for.
   > *withdraw one I issued* needs `DOD-END-WITHDRAW-1` (❌), and the issuer additionally holds no
   > local record of what they submitted, so there is nothing to name; *see my remaining quota* needs
   > `DOD-END-QUOTA-1` (❌, portal-enforced). Each is one line of work once its mechanism exists.
-  > — 🟡 five landed, three blocked on their mechanisms
+  > **UPDATE 2026-07-31 — EIGHT OF NINE.** *Read a refusal message I received as issuer* is LANDED:
+  > the refuse-op consumer, `submission_results`, and the `cello_attestations_issued` verb all shipped,
+  > and J-END hop 6 proves the loop live. *Withdraw one I issued* moves out with `DOD-END-WITHDRAW-1`
+  > (Andre's 2026-07-30 rescope). **`DOD-END-QUOTA-1` is the only real gap left** — the operator
+  > cannot see their remaining issuance quota. — 🟡 eight of nine, quota outstanding
 - **DOD-END-JOURNEY-1** — **live journey, across real processes.** Bob's agent supplies an endorsement for
   Alice → portal authenticates Bob, scans, mints, notarizes → Alice receives it PENDING → Alice accepts →
   Alice presents it to Charlie → Charlie verifies (hash ∈ directory, active) and consumes it with
@@ -886,9 +904,16 @@ the additions M10B is accountable for.
   > **WHAT IT FOUND:** the consent gate was INERT — every endorsement auto-accepted, because the
   > envelope was attributed to the portal instead of its author, so `issuerKind === "agent"` never
   > matched. Both repos' unit suites were green through that; none of them looked at the envelope.
-  > **Not provable yet, each blocked on a named thing:** (a)'s correction loop needs the refuse-op
-  > handler + `submission_results`; **(b)** needs `DOD-END-SUBJECTKIND-1`; **(d)** needs
-  > `DOD-END-WITHDRAW-1`. — 🟡 core job + 3 cases live, 2 cases blocked
+  > **ALL BLOCKERS CLEARED — 2026-07-31, Entry 44. 10 of 10 hops green.** (a)'s correction loop had
+  > the refuse-op handler and `submission_results` shipped under it; **(b)** was waiting on
+  > `DOD-END-SUBJECTKIND-1`, closed 2026-07-30; **(d)** moved out with `DOD-END-WITHDRAW-1` and its
+  > launch half is proven separately. The re-run also found the test itself had rotted twice: 18 call
+  > sites still used the pre-rename verbs (spine tests are EXCLUDED from `pnpm run test`, so the unit
+  > gate never opened this file), and HOP 6 still asserted `unhandledOps === 1` — "the handler is not
+  > built" — failing because the feature was FINISHED. HOP 6 now also asserts the outcome row reaches
+  > `submission_results`, since a handler that swallowed the refusal would pass the count alone.
+  > **The one unproven clause is not M10B's:** "a `min_count` floor does not count it" needs
+  > `DOD-FLOOR-1`, an M10 trust-signal feature deliberately not wired (see `DOD-END-COUNT-1`). — ✅
 - **DOD-END-PLAYBOOK-1** — **the architectural proof, M10B's equivalent of the canary.** With M10B's
   machinery in place, a SECOND client-sourced type is taken from nothing to live end-to-end as a pure
   [[M10-TYPE-PLAYBOOK]] run — **`git status --porcelain` clean and `git diff --stat` empty in cello-client

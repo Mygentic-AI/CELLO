@@ -27,22 +27,37 @@ import { join } from "node:path";
 import {
   startSpineCluster,
   startDaemon,
-  provisionAgent,
   connectMcp,
   cello,
   psqlSpine,
+  AUTH_DIRECTORY_NODE_KEY_HEX,
+  AUTH_DIRECTORY_NODE_ID,
+  AUTH_DIRECTORY_NODE_PUBKEY,
+  writeConsortiumManifest,
   type SpineCluster,
   type Proc,
   type McpConn,
+  type ManifestEnv,
 } from "./live-harness.js";
 
 let cluster: SpineCluster;
+let manifestEnv: ManifestEnv;
 const daemons: Proc[] = [];
 const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
-  cluster = await startSpineCluster({});
+  cluster = await startSpineCluster({ directoryNodeKeyHex: AUTH_DIRECTORY_NODE_KEY_HEX });
+  // M12 added a per-session brokering-directory lookup: without a signed consortium manifest the
+  // daemon has no home nodeId and cannot resolve its OWN node, so a same-daemon initiate fails
+  // `discovery_node_unresolvable`. The manifest is what makes same-node routing resolvable.
+  manifestEnv = writeConsortiumManifest(cluster.tmpDir, "loop", [{
+    nodeId: AUTH_DIRECTORY_NODE_ID,
+    pubkey: AUTH_DIRECTORY_NODE_PUBKEY,
+    region: "local",
+    provider: "aws",
+    endpoint: cluster.directoryUrl,
+  }]);
 }, 180_000);
 
 afterAll(async () => {
@@ -71,12 +86,24 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
     // ONE celloDir → ONE daemon hosting BOTH ends.
     const celloDir = mkdtempSync(join(tmpdir(), "cello-loop-"));
     dirs.push(celloDir);
-    await provisionAgent(celloDir, "agentA");
-    const pubB = await provisionAgent(celloDir, "agentB");
-    const daemon = await startDaemon(celloDir, cluster.directoryUrl, "loop");
+    // The daemon must be running BEFORE create-agent (the CLI drives it over IPC). `cello register`
+    // was removed when the flow split into create-agent (local key) + register-agent (publish to the
+    // directory); this test still called it and so died at setup, before reaching any session.
+    const daemon = await startDaemon(celloDir, cluster.directoryUrl, "loop", { manifestEnv });
     daemons.push(daemon);
-    expect(cello(["register", "agentA", `DEV-loop-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDir }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-loop-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDir }).status).toBe(0);
+    JSON.parse(cello(["create-agent", "agentA"], { CELLO_DIR: celloDir }).stdout) as { pubkey: string };
+    const pubB = (JSON.parse(cello(["create-agent", "agentB"], { CELLO_DIR: celloDir }).stdout) as { pubkey: string }).pubkey;
+
+    // register-agent publishes to the directory, so the signaling stream has to be up first.
+    for (let i = 0; i < 50; i++) {
+      const st = JSON.parse(cello(["status"], { CELLO_DIR: celloDir }).stdout.trim()) as { directory_signaling?: string };
+      if (st.directory_signaling === "connected") break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    const regA = cello(["register-agent", "agentA", `DEV-loop-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDir });
+    expect(regA.status, `register-agent A failed: ${regA.stdout}`).toBe(0);
+    const regB = cello(["register-agent", "agentB", `DEV-loop-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDir });
+    expect(regB.status, `register-agent B failed: ${regB.stdout}`).toBe(0);
 
     // TWO MCP connections to the ONE daemon — one drives agent A, the other agent B.
     const connA = await connectMcp(celloDir, "loop-A");
