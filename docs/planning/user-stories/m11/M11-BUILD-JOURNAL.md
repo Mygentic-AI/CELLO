@@ -4667,3 +4667,63 @@ reach — the same shape of gap closed in trustless-cello earlier today, not fix
 
 **Greenfield, re-verified after every one of the above:** 0 rows in every table outside the migration
 ledger. Every live probe was a read or a refusal.
+
+### Entry 73: the ops dashboard is on GCP, and its security tests ran for the first time
+
+**DOD-GCP-OPS-1 🟠** — deployed and working; only the hostname is owed.
+
+```
+/sign-in                       200
+/ without a session            307 → /sign-in, no leak
+no-enumeration, DEPLOYED       allowed and unknown both 202 {"status":"sent_if_allowed"}
+shared ledger                  41 = 11 portal + 26 waitlist + 4 ops
+suite                          74 passed / 0 failed   (baseline: 46 FAILURES)
+```
+
+**Both AWS couplings are gone.** `lambda.ts` → `internal-api.ts`, reaching the waitlist over HTTP
+behind the shared token instead of `lambda:InvokeFunction` behind IAM — the IAM grant *was* the
+authorization, so the token is now the boundary. And the allowlist onto GCP Secret Manager, **read at
+runtime rather than injected as an env var**, which is a deliberate departure from the house pattern:
+its 60-second cache exists so REMOVING an operator takes effect in a minute rather than at the next
+deploy, and `secret_key_ref` would have silently converted that into "whenever the instance
+restarts". Revocation latency is the direction that matters for an access-control list, and it is
+exactly the property a transport swap loses without anyone noticing. SES stays — Google has no
+email-sending service.
+
+**Why the suite had never been green, which is the finding worth keeping.** 39 of its tests are the
+no-enumeration tests — the dashboard's entire security surface — and none of them had ever run.
+Two layers hid that. `server-only` is a Next build-time guard with no runtime module, so *any* suite
+importing `src/server/*` died on "Failed to load url server-only"; the existing suites reached those
+modules only through mocks, which is also why the module that opens waves had no tests at all. With
+that stubbed they reached the database and failed honestly; with a database and the four `ops_*`
+migrations applied they pass. **A failing import and a missing database had been standing in for a
+security suite.**
+
+The 11 allowlist tests were ported rather than rewritten, and verified to still bite: reverting the
+guard so an unreadable secret ADMITS instead of refusing kills 4 of them. The AWS
+`AccessDeniedException` case became a 403, which is the same fault — a service account without
+`secretAccessor`.
+
+**`PGSSLMODE=disable` is required here and was not on the waitlist**, and the asymmetry is worth
+writing down. `db.ts` and `migrate.mjs` default to `ssl: { rejectUnauthorized: true }` because on AWS
+they dialled an RDS endpoint. Cloud Run reaches Cloud SQL over a unix socket with the connector
+holding the encrypted hop, so there is no network leg to weaken — and **libpq ignores `sslmode` on a
+unix socket**, which is why the Python waitlist needed nothing, while node-postgres attempts a
+negotiation the socket cannot answer. Cloud Run reported only *"failed to start and listen on
+PORT=3000"*; the actual cause, `[migrate] FAILED: The server does not support SSL connections`, was
+in the container log.
+
+**I nearly destroyed the other agent's relay.** The first plan carried
+`google_compute_address.relay["europe-west1"] will be destroyed` and several siblings. Nothing was
+wrong with my change — my `terraform.tfvars` was stale and theirs had just added `gcp-relay-euw1`,
+so shared state made a stale checkout look like a deletion. Caught by reading the resource lines
+rather than the `Plan:` summary. After syncing: 0 to destroy. **On shared Terraform state, the
+summary line is not the thing to read.**
+
+**Max 1 instance is a correctness constraint**, not a cost one: the sign-in send is fire-and-forget
+(which is what makes the no-enumeration timing hold) and migrations run at container start, so a
+second instance starting under load would race the first through `scripts/migrate.mjs`.
+
+**Owed:** `operations.cello.mygentic.ai` has no load balancer or certificate, so the dashboard is
+reachable only at a `run.app` URL that `DOD-INV-DOMAIN` forbids referencing anywhere. Same shape as
+the waitlist's — global external ALB, serverless NEG, managed cert, then the Route 53 record.
