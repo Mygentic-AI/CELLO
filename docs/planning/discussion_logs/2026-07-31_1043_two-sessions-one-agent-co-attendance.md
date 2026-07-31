@@ -14,6 +14,9 @@ description: >
 **Status: design decided (co-attendance). Two implementation defects proven and unfixed. One
 receipt-integrity question OPEN and gating a conclusion below — see §7.**
 
+> **Picking this up cold? Go to §10 first.** Every claim below is anchored to a file and symbol there,
+> grouped by section, along with the log events to grep. You should not need to search for anything.
+
 ## 1. The symptom
 
 Two Claude sessions drive the same agent on the same daemon. A message arrives. One session gets it;
@@ -263,6 +266,132 @@ closed.**
 | 2 | Catch-up deadlock across a sibling's reply (§3b) | Read from code, **not tested** |
 | 3 | Whether `--scope current` honours an explicit `--agent` | Unchecked, five minutes |
 | 4 | `--agent` declared `consumesValue: false` on most commands, `true` on one | Noticed, not chased; likely nothing |
+
+## 10. Where to look — code anchors
+
+**Line numbers are hints; the symbol names are the anchor.** Everything below was read directly during
+this investigation on 2026-07-31 except the three marked ⚠, which come from earlier vault documents
+and were not re-verified. Repo roots: `cello-client/` (client + daemon + CLI),
+`trustless-cello/` (relay + directory).
+
+### The interception itself (§2)
+
+| what | where |
+|---|---|
+| The shared content queue — keyed `(agentName, sessionId)`, **not** by connection | `core/daemon/src/session-node-manager.ts:260` `#receivedContent` |
+| The destructive drain — `buf.shift()` | `core/daemon/src/session-node-manager.ts:3932` `takeReceivedContent` |
+| Where `cello_receive` pops it | `core/daemon/src/session-content-handlers.ts:419` |
+| The 20 ms poll loop, and the benign "nothing arrived" return that hides the theft | `core/daemon/src/session-content-handlers.ts:~470-483` |
+| The multicast doorbell — loops every connection where the agent is current | `core/daemon/src/notification-dispatcher.ts:154-176` `dispatchCelloMessage` |
+| Producer side: buffer push then doorbell | `core/daemon/src/session-node-manager.ts:3855-3890` `#appendVerifiedContent` |
+
+**Note:** the plain blocking receive has **no logging on either outcome** — the only log in that path
+is `session.receive.since_seq` (`session-content-handlers.ts:390`), which is the other branch. Adding
+observability here is item 4 of §8.
+
+### Attachment — no exclusivity, no count (§2, §3)
+
+| what | where |
+|---|---|
+| `cello_use_agent` — checks existence and *this* connection only; never consults another | `core/daemon/src/agent-handlers.ts:322-375` |
+| `isAttended()` — boolean on first match, deliberately never counts | `core/daemon/src/daemon.ts:846` |
+| Per-connection state init (`currentAgent: null` on connect) | ⚠ `core/daemon/src/daemon.ts:919` |
+
+### The reply gate and the send window (§2b, §4)
+
+| what | where |
+|---|---|
+| The gate, its two authorities, and the long comment stating the trade | `core/daemon/src/session-content-handlers.ts:80-130` (`caughtUp` at ~103) |
+| `session.send.blocked` — logs both authorities so you can tell which refused | `core/daemon/src/session-content-handlers.ts:109` |
+| **Await 1** — security screening, a round trip to the gateway process | `session-content-handlers.ts` ~line 140, `securityGateway.screenOutbound` |
+| **Await 2** — relay submit + direct delivery | `session-content-handlers.ts` ~line 229, `sessionNodeManager.sendContent` |
+| The append — no gate re-check between it and either await | `core/daemon/src/session-content-handlers.ts:262` `appendSessionLeaf` |
+| Sender advances its own cursor | `core/daemon/src/session-content-handlers.ts:271` |
+| **Agent-scoped** read watermark advanced on receive — why the loser's send is permitted | `core/daemon/src/session-content-handlers.ts:421` `advanceLastDeliveredSeq` |
+
+**The pattern the fix should copy** is already in the same file's inbound sibling — a post-await
+re-check in the same synchronous window as the write, with an explicit comment that any further await
+reopens the window: `core/daemon/src/session-node-manager.ts:3682-3695`.
+
+### The catch-up gap (§3b)
+
+| what | where |
+|---|---|
+| `since_seq` branch — reads the durable transcript, filters `direction === "received"` (this is the gap: a sibling's send is never returned) | `core/daemon/src/session-content-handlers.ts:366-394` |
+| `safeCursorAdvance` — deliberately refuses to advance past a gap, e.g. a sibling's sent leaf | `core/daemon/src/session-content-handlers.ts:33-36` (interface), call sites at `:388`, `:427` |
+
+### Relay ordering — the sequencer (§5)
+
+| what | where |
+|---|---|
+| **The whole answer**: `last_seen_seq` sanity check, `seq = state.seq_counter + 1`, `prevRoot = state.running_root` | `trustless-cello/packages/relay/src/relay-node.ts:1125-1131` |
+| "the relay is the Structure-2 ordering authority" + `relay.hash.submitted` | `trustless-cello/packages/relay/src/relay-node.ts:1182-1195` |
+| One stream per **agent**, submits globally FIFO-serialized — why two sessions on one identity cannot collide | `core/daemon/src/session-relay-client.ts:1-28` (header comment) |
+
+### Ordering, drift and held content (§7a)
+
+| what | where |
+|---|---|
+| The strict in-order gate, the hold-and-release, and the `sequence_behind_tree` contradiction branch | `core/daemon/src/session-node-manager.ts:3737-3785` |
+| `#witnessedSeq` — hash → canonical position. **Also hash-keyed**, so it shares §7b's assumption | `core/daemon/src/session-node-manager.ts:288` |
+| `#heldContent` — out-of-order arrivals, not yet durable leaves | `core/daemon/src/session-node-manager.ts:294`, released by `#releaseHeld` at `:3902` |
+
+### Duplicate detection (§7b)
+
+| what | where |
+|---|---|
+| **The rule**, stated as design intent: *"a content_hash satisfies AT MOST ONE Merkle leaf, exactly once"* + the `indexOfHash` scan | `core/daemon/src/session-node-manager.ts:3557-3566` |
+| The post-screening re-check (second dedup site) | `core/daemon/src/session-node-manager.ts:3682-3695` |
+| The one-shot rule that closed the *producer* | `docs/planning/user-stories/m8c/M8C-DEFINITION-OF-DONE.md` → `DOD-INBOX-ONESHOT-1` (line ~2123) |
+
+### Persistence and rebuild (needed for §7c)
+
+| what | where |
+|---|---|
+| Append → `INSERT INTO session_tree_leaves` + keeps `sessions.message_count` in sync | `core/daemon/src/session-node-manager.ts:2993-3020` |
+| Rebuild from disk, ordered by leaf index | `core/daemon/src/session-node-manager.ts:4141-4152` `#loadTreeFromDb` |
+
+### Seal paths — start here for §7c
+
+| what | where |
+|---|---|
+| The client seals over **its own** record | `core/daemon/src/seal-flows.ts:371` `getSessionTreeRootHex` |
+| `leaf_count_mismatch` — the check the two failures hit | `core/daemon/src/inbound-seal-request.ts:101-108` |
+| Carried leaves are **relay-witnessed only** (own from `hash_submit_ack`, counterparty from `leaf_deliver`) — why an unwitnessed message breaks a unilateral rebuild | `core/daemon/src/session-seal-leaf-store.ts:1-16` |
+| **Bilateral: compares the two parties' roots to each other, never the relay's** ← the §7c question lives here | `trustless-cello/packages/directory/src/directory-node.ts:3996` `rootsMatch` |
+| Unilateral: rebuild + verify against `reported_root` | `trustless-cello/packages/directory/src/directory-node.ts:4027, 4118-4121` |
+| Client-side frontier re-derivation | `core/daemon/src/seal-coordinator.ts:160-185` |
+
+### The command-line selection file (§6)
+
+| what | where |
+|---|---|
+| Why it persists — the per-invocation current-agent problem | `core/cli/src/parity-commands.ts:12-28` |
+| The path: `~/.cello/current-agent` | `core/cli/src/parity-commands.ts:44-46` |
+| Read / write / clear | `core/cli/src/parity-commands.ts:56-83` |
+| Only writer (`use-agent`) and only clearer (`stop-agent`) | `core/cli/src/parity-commands.ts:314-338` |
+| The receptionist's bash loop that writes it every time | `plugins/cello/agents/cello-receptionist.md` |
+| `inbox` command definition (`--agent`, `--scope`) — for open item 3 | `core/cli/src/registry.ts:659-680` |
+| ⚠ `contactCommand` doesn't replay the selection — `settings set` / `moniker set` write to the wrong agent on a multi-agent machine | ⚠ `core/cli/src/commands.ts:590` (from [[2026-07-13_dead-code-and-defect-reduction-workplan]] §1.3) |
+
+### Reproducing the evidence from the live log
+
+Everything quantitative in §7 came from `~/.cello/daemon.log` (JSON lines, one object per line — parse
+with `json.loads`, group by `sessionId`). The events that matter:
+
+| event | what it tells you |
+|---|---|
+| `session.content.sequence_behind_tree` | the drift; carries `canonicalSeq` + `nextExpected` (offset is always 1) |
+| `session.relay.hash.submit.failed` + `session.content.unwitnessed` | the **cause** of the drift — always at the session's first message |
+| `session.content.deduplicated` | carries `contentHashHex` + the existing position; cross-reference against `content.recovered` (legitimate) vs `session.away.response.sent` (the §7b bug) |
+| `session.tree.appended` | `leafIndex` + `newRootHex` + `correlationId` — **the divergence is visible as one side appending without the other**, and identical roots prove identical records |
+| `transcript.message.recorded` | carries `agentName` — count distinct agents per session to classify **loopback (2) vs remote (1)** |
+| `leaf_count_mismatch` (in `reason`) | the two lost receipts |
+| `seal.certificate.frontier.verified` / `session.sealed.received` | seal outcomes, for the control comparison |
+
+**Two classification tricks used throughout:** distinct `agentName` values per session separates
+same-machine from remote conversations; and in a loopback conversation every message produces **two**
+`transcript.message.recorded` events (one per local agent), so halve the count to get real messages.
 
 ## Related
 
