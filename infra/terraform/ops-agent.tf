@@ -227,11 +227,24 @@ resource "google_cloud_run_v2_service" "ops_agent" {
       // absent or any other value leaves the gate ON, and the agent warns on every boot while it is
       // off, so this cannot become the silent default.
       //
-      // STILL DISABLED, AND THE REMOVAL IS ONE LINE (DOD-GCP-GATE-1). The client below now speaks
-      // HTTP to the waitlist service, and the two variables it needs are wired. What is NOT yet
-      // true is that the service is deployed and serving on api.cello.mygentic.ai — until it is,
-      // turning the gate on would refuse every registration, which is the exact situation this
-      // opt-out was added for. Delete this block in the same change that verifies the gate answers.
+      // THE ORIGINAL REASON IS GONE. THE FLAG IS NOT, AND THE NEW REASON IS DIFFERENT (M11-D37).
+      //
+      // It was added because the gate could not be REACHED: an AWS Lambda behind a hibernated
+      // database, failing closed. That is fixed — the gate answers on api.cello.mygentic.ai and
+      // was verified there: an unknown account gets `{"allowed": false, "error": "token_required"}`,
+      // a missing id gets `missing_telegram_id`, and a bad internal token gets a 401 that is
+      // deliberately NOT a decision.
+      //
+      // It stays off because the WAITLIST IS EMPTY. The gate's first question is "is this
+      // telegram_id in telegram_accounts?", that table has zero rows, and no wave has ever run, so
+      // no token exists to present. Turning it on would refuse every registration — including
+      // Andre's own, and he is the only person who registers anything. It would protect an empty
+      // list by locking out its sole user.
+      //
+      // THE REMOVAL IS NOT "delete this block". It is: add Andre's telegram_id to
+      // telegram_accounts with source='ops_override' (M11-D5, the staff bypass, which exists for
+      // exactly this), confirm he can still register, and THEN delete it. Deleting it alone locks
+      // him out of his own network, and the failure will look like a broken bot.
       env {
         name  = "WAITLIST_GATE"
         value = "disabled"
