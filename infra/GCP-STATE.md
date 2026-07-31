@@ -191,7 +191,7 @@ tolerates exactly one node down.
 | Signing key | Cloud KMS `cello-portal/portal-submission` v1, `EC_SIGN_ED25519`, us-east1. Pubkey `6f0203b8…80e5`, enrolled `submitter` in all 3 node DBs |
 | Directory path | `DIRECTORY_API_URLS` → the three PINNED internal IPs on **8081**, over Direct VPC egress; one key per node in `cello-portal-directory-api-keys`, positionally paired |
 | Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`), `cello-portal-directory-api-keys`, and copied from AWS: `-github-client-id`, `-github-client-secret`, `-intake-key-0`, `-ingress-trigger-secret`, `-submission-seed` |
-| Verified | 307 → `/sign-in`; internal API reachable cross-VM (correct key → 400 validation, wrong key → 401); issuer enrolled on usc1/euw1/use1 |
+| Verified | 307 → `/sign-in` over https on the real hostname; **portal→directory proven through the app** — POST `/api/internal/ingress/drain` returns `ok:true` with `nodeErrors: []` (refuses 401 without the trigger secret); issuer enrolled on usc1/euw1/use1 |
 
 **Why the hostname was kept.** The GitHub OAuth callback is registered against
 `portal.cello.mygentic.ai`, and `WEBAUTHN_RP_ID` is part of what every passkey is bound to. Serving
@@ -258,3 +258,11 @@ Registration exercised the real path — a minted pre-auth capability, not a bui
 
 Two test agents (`M12_Smoke`, `M12_Peer`) remain registered in the GCP directories; their daemons are
 stopped. Harmless, and removable with `cello remove-agent`.
+
+**"Configured" means a key for EVERY directory.** The portal reached the nodes fine and then refused
+to build a client: *"No directory client configured. Set DIRECTORY_API_URL + DIRECTORY_API_KEY"* — on a
+deployment where the URLs and a key per node were both set. The gate asked only whether the SINGLE
+key was present, and its message named the two variables a GCP operator does not want. It now requires
+a key per URL, which also closes the dangerous middle ground: one key across three directories
+authenticates to at most one, so the system looks healthy until failover routes to a node that
+rejects it. Found by calling the live route, not by reading.
