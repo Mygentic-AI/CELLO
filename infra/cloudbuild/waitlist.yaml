@@ -9,7 +9,12 @@
 # tag is traceable to nothing.
 options:
   logging: CLOUD_LOGGING_ONLY
-  machineType: E2_HIGHCPU_8
+  # DEFAULT machine type, unlike ops-agent.yaml which this was copied from. That
+  # one builds a TypeScript monorepo and wants E2_HIGHCPU_8; this is a pip
+  # install and a docker build of three dependencies. The larger type is not
+  # free in scheduling terms — a submission sat QUEUED for 15+ minutes with
+  # nothing else running, while every default-pool build that day started
+  # immediately and finished in five.
 timeout: 1800s
 
 substitutions:
