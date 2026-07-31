@@ -53,6 +53,7 @@ changes another item, say so there — that is what this file is for.
 |---|---|---|---|
 | A | — | — | ✅ done (see §4) |
 | B | — | — | ✅ done (see §4) |
+| I | *unclaimed* | | relay redundancy |
 | C | waitlist-port session | 2026-07-31 | 🔄 in progress — landing under **M11** as the `DOD-GCP-*` tier |
 | D | *unclaimed* | | blocked on C phase 3 |
 | E | *unclaimed* | | |
@@ -241,6 +242,23 @@ no identity behind them, because they were registered against the AWS consortium
 day-to-day CELLO does not actually work for him. Small, and it is the one that affects him personally.
 
 ---
+
+### ❌ I — Add a second relay (europe-west1)
+
+One relay is a single point of failure for session transport. All sessions today go through
+`gcp-relay-use1` (us-east1). If it goes down, no new sessions can be established — even though the
+directories and the client would be fine.
+
+A second relay in europe-west1 also exercises the relay-selection and relay-failover paths that have
+never been tested. The client receives `relay_endpoints` as an array; the directory already advertises
+multiple relays. Adding a second one tests whether those code paths actually work.
+
+**What it takes:** one new entry in `relay_nodes` in `terraform.tfvars`, an apply, and a directory
+restart so the new relay registers. The terraform already `for_each`es over `relay_nodes`, so the
+whole thing is a 7-line config change.
+
+**Desired state:** `relay_nodes` has two entries (us-east1 + europe-west1), both relays register with
+the consortium, and a session can be established when one relay is down.
 
 ## 5. Not doing, and why
 
