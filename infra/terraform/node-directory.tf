@@ -36,6 +36,42 @@ resource "google_compute_address" "node" {
 
 # SSH via IAP only. This path has never been exercised (Entry 5 carry-forward) and the DoD line
 # requires one live login as evidence.
+# A PINNED internal address per directory, mirroring the relay's (node-relay.tf) and for the same
+# reason it was needed there: a MIG instance replacement moves an ephemeral internal IP, and anything
+# that recorded the old one silently points at nothing. The portal reaches the internal API over the
+# VPC by this address, so an unpinned one would break the operator surface on every directory deploy —
+# and it would break it quietly, since the public protocol ports would keep working.
+resource "google_compute_address" "node_internal" {
+  for_each     = var.directory_nodes
+  name         = "cello-${each.value.node_id}-internal"
+  project      = var.project_id
+  region       = each.key
+  subnetwork   = google_compute_subnetwork.regional[each.key].id
+  address_type = "INTERNAL"
+  purpose      = "GCE_ENDPOINT"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# The internal API (8081) — the portal's account-scoped seam, and the path the kill switch runs
+# through. Reachable ONLY from inside the VPC: it is deliberately absent from the public rules below,
+# and this opens it to the private ranges alone.
+resource "google_compute_firewall" "node_internal_api" {
+  name          = "cello-directory-allow-internal-api"
+  project       = var.project_id
+  network       = google_compute_network.cello_vpc.id
+  direction     = "INGRESS"
+  source_ranges = [for r in local.region_subnets : r]
+  target_tags   = ["cello-directory"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8081"]
+  }
+}
+
 resource "google_compute_firewall" "node_ssh_iap" {
   name          = "cello-directory-allow-iap-ssh"
   project       = var.project_id
@@ -119,6 +155,7 @@ resource "google_compute_instance_template" "directory" {
 
   network_interface {
     subnetwork = google_compute_subnetwork.regional[each.key].id
+    network_ip = google_compute_address.node_internal[each.key].address
     access_config {
       nat_ip = google_compute_address.node[each.key].address
     }
@@ -235,4 +272,11 @@ output "directory_node_addresses" {
 output "directory_node_sql_endpoints" {
   description = "PSC address of each node's Cloud SQL instance. Reachable ONLY from that node's subnet."
   value       = { for k, v in var.directory_nodes : v.node_id => google_compute_address.sql_psc[k].address }
+}
+
+# The addresses the portal dials for the internal API. Emitted because a value that must be copied
+# into another service's config should come from state, not from someone reading the console.
+output "directory_node_internal_addresses" {
+  value       = { for k, n in var.directory_nodes : n.node_id => google_compute_address.node_internal[k].address }
+  description = "Pinned internal IPs of the directory nodes — the VPC-only path to their internal API (8081)."
 }
