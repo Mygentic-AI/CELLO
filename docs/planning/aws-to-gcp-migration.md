@@ -191,6 +191,23 @@ snooze, not a parking state.
 
 ---
 
+## 8b. The portal went down during the hibernate — and the guard existed
+
+**2026-07-31, ~15:08–15:25Z.** `hibernate.sh` blackholed `portal.cello.mygentic.ai` to
+`198.51.100.1` and the portal was unreachable for roughly seventeen minutes.
+
+The guard that prevents exactly this was written earlier the same day — it removes `portal` from the
+blackhole set because the portal serves from GCP. It was on `m12/node-dir-gcp`. The hibernation agent
+ran the copy on `main`. The branch merged at ~15:25, after the hibernate had already executed.
+
+Restored by UPSERTing the record back to `34.111.250.93` (TTL 60). Certificate stayed ACTIVE
+throughout — the load balancer and Cloud Run were healthy the whole time; only DNS pointed away.
+
+**The lesson is not "add a guard".** The guard was right. It protected nothing because it lived
+somewhere the operator's tooling does not read. A safety change to shared operational scripts belongs
+on `main` the moment it is written — 240 commits of infrastructure sitting on a branch is also 240
+commits of guards nobody else has.
+
 ## 9. How this went wrong, recorded so it does not repeat
 
 The client roster was repointed from the AWS directories to the GCP ones and shipped **as a bug fix**.
