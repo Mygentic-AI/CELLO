@@ -110,6 +110,12 @@ resource "google_cloud_run_v2_service" "portal" {
   // the app's own (GitHub OAuth), not the network's.
   ingress = "INGRESS_TRAFFIC_ALL"
 
+  // OFF, deliberately, and the asymmetry with the database is the point: the Cloud SQL instance keeps
+  // deletion_protection because losing it loses accounts, while this service is a stateless container
+  // that Terraform must be able to replace. During a migration that is a property we want — a service
+  // Terraform cannot recreate is one that has to be repaired by hand in the console.
+  deletion_protection = false
+
   template {
     service_account = google_service_account.workload["portal"].email
 
@@ -153,6 +159,16 @@ resource "google_cloud_run_v2_service" "portal" {
       }
 
       env {
+        name = "PORTAL_KMS_MASTER_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.portal_kms_master_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
         name = "PORTAL_DATABASE_URL"
         value_source {
           secret_key_ref {
@@ -187,4 +203,66 @@ resource "google_cloud_run_v2_service_iam_member" "portal_public" {
 output "portal_url" {
   value       = google_cloud_run_v2_service.portal.uri
   description = "The portal's Cloud Run URL — the operator surface, until a *.cello.mygentic.ai mapping is attached."
+}
+
+// The Cloud Run service agent must be able to PULL the portal image.
+//
+// Granted explicitly because this org strips every automatic service-agent grant — the same behaviour
+// that forced explicit grants for Cloud Build's P4SA (see infra/GCP-STATE.md). The failure mode is
+// worth naming: without this, `terraform apply` returns
+// "Error code 7 … The service has encountered an internal error", which reads like a transient GCP
+// fault and is actually PERMISSION_DENIED on the image pull.
+data "google_project" "this" {
+  project_id = var.project_id
+}
+
+resource "google_artifact_registry_repository_iam_member" "cloudrun_pull" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.cello.location
+  repository = google_artifact_registry_repository.cello.name
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:service-${data.google_project.this.number}@serverless-robot-prod.iam.gserviceaccount.com"
+}
+
+// The portal's data-at-rest key (`PORTAL_KMS_MASTER_KEY`, 32 bytes / 64 hex).
+//
+// prevent_destroy because this key is not rotatable by accident: it decrypts the recoverable values
+// the portal holds (the email the directory deliberately never sees — it stores hashes only). Lose it
+// and that data is gone, with nothing to restore from.
+//
+// A NEW key, not the AWS one, and that is a consequence of the app-first decision above: the GCP
+// database starts empty, so there is nothing here encrypted under the old key. If the AWS portal data
+// is ever migrated, it must come with ITS key or be re-encrypted — copying rows without the key
+// produces a database of unreadable ciphertext.
+resource "random_id" "portal_kms_master_key" {
+  byte_length = 32
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_secret_manager_secret" "portal_kms_master_key" {
+  project   = var.project_id
+  secret_id = "cello-portal-kms-master-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_secret_manager_secret_version" "portal_kms_master_key" {
+  secret      = google_secret_manager_secret.portal_kms_master_key.id
+  secret_data = random_id.portal_kms_master_key.hex
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "portal_kms_master_key" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.portal_kms_master_key.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workload["portal"].email}"
 }

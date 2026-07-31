@@ -104,3 +104,6 @@ consortium_threshold = 1
 # presents its capability to whichever directory it reaches.
 # Derived from cello-consortium-preauth-issuer-key with infra/scripts/derive-pubkey.js.
 preauth_issuer_pubkey = "4468292bbe38ab929e504a1d962abeebe4f02db0a380b4d7880eb4f4dbd56c07"
+
+# DOD-MOVE-PORTAL-1 — the operator surface on GCP.
+portal_image_tag = "portal-7cbbe9d"

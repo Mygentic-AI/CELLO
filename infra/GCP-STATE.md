@@ -178,6 +178,28 @@ tolerates exactly one node down.
 | `gcp-use1` | 34.75.172.108 | 2026-07-30 |
 | `gcp-relay-use1` | 34.139.119.165 (internal 10.10.0.28) | 2026-07-30 |
 
+## Portal (DOD-MOVE-PORTAL-1) — LIVE 2026-07-31
+
+| Resource | Value |
+|---|---|
+| Cloud Run service | `cello-portal`, us-east1, image `portal-7cbbe9d` |
+| URL | https://cello-portal-jk4mcnqbeq-ue.a.run.app (until a `*.cello.mygentic.ai` mapping is attached) |
+| Cloud SQL | `cello-portal`, us-east1, POSTGRES_17, `db-g1-small`, deletion_protection ON |
+| Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`) |
+| Verified | 307 → `/sign-in` → 200, renders "CELLO — Operator Portal"; migrations ran to `0011_minted_signals_issuer` |
+
+**The master key is not rotatable by accident.** `cello-portal-kms-master-key` decrypts the recoverable
+values the portal holds (the email the directory never sees). `prevent_destroy` on the random_id, the
+secret, and the version. It is a NEW key: the GCP database started empty, so nothing here is encrypted
+under the AWS one — if that data is ever migrated it must come with ITS key or be re-encrypted.
+
+**Two grants this org's policy does not create automatically** (same behaviour that bit Cloud Build):
+- Cloud Run service agent → `roles/artifactregistry.reader` on the `cello` repo. Without it, creating
+  the service fails as `Error code 7 … internal error`, which reads like a transient GCP fault and is
+  actually PERMISSION_DENIED on the image pull.
+- The portal SA → `secretmanager.secretAccessor` on each secret. IAM propagation lags the apply, so a
+  first attempt in the same run can still fail; retrying after ~1 minute succeeds.
+
 ## Quotas (verified 2026-07-28 — ample, no requests needed)
 
 us-east1 / us-central1 / europe-west1 / europe-west3: 200 CPUs (24 E2), 8 static IPs, 4 TB disk.
