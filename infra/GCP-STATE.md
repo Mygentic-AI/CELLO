@@ -277,9 +277,9 @@ capability, and this Telegram bot is the ONLY thing that issues one to a human �
 | Cloud Run | `cello-ops-agent`, us-east1, `INGRESS_TRAFFIC_INTERNAL_ONLY`, image `ops-c04bb0fa` |
 | Scaling | **min = max = 1, `cpu_idle = false`** — the Telegram adapter long-polls, so it needs a process between requests; two instances would race for the same update; a throttled poll loop goes deaf while looking healthy |
 | Directory | `http://10.10.0.35:8081` (gcp-use1 internal) + that node's own internal API key |
-| Database | `cello-ops-agent-database-url` → gcp-use1 Cloud SQL over PSC. **No cross-cloud DB connection** |
-| Migration version | **56** — the GCP node DBs are one ahead of the AWS SSM value (55) |
-| Per-node health | `DIRECTORY_HEALTH_URLS` → all three nodes' `/health` on 9090. Verified live: `ops_agent.nodes.ok — 3/3 nodes at schema 56` |
+| Database | `cello-ops-agent-database-url` → gcp-use1 Cloud SQL over PSC as **`cello_ops_agent`** (V26's least-privilege role — never the `postgres` owner, never `cello_service`). **No cross-cloud DB connection** |
+| Migration version | **57** — V57 grants `cello_ops_agent` SELECT on `flyway_schema_history`, mirroring V50 for `cello_service` |
+| Per-node health | `DIRECTORY_HEALTH_URLS` → all three nodes' `/health` on 9090, **every 5 minutes**, after the port opens. Verified live: `3/3 nodes at schema 57`, and it caught both a real transient (`unreachable: 10.10.1.25 (timeout after 5000ms)` during a node roll) and its recovery |
 | Verified | `ops_agent.started`, `ops_agent.telegram.connected`, `telegram.polling.started`, `ops_agent.health_server.started` |
 
 **Per-node health — CLOSED 2026-07-31.** The agent asserted a schema version against ONE database, so
@@ -348,3 +348,27 @@ stranded every client if the declared ids disagreed with production: clean-insta
 `cli@0.0.106` → `daemon@0.0.103`, `declaredNodes: 3, resolvedNodes: 3`, no mismatch; then a full
 operator path on those exact bits — create → register (DKG) → `directory_signaling: connected`,
 state `online`, standing receiver ready.
+
+### The role the ops agent connects as — three attempts, and why the first two were wrong
+
+1. **`postgres` (the owner)** — bypasses every RLS policy and the REVOKE never applied to it, so a
+   process that writes registration rows could mutate `conversation_seals`, `attestations` and
+   `agent_key_shares`. Caught by review.
+2. **`cello_service`** — can write `registrations` but has **no rights at all** on
+   `channel_identities`. Registration would have failed at the step that records the operator's
+   channel identity, and only when a real person first tried. Caught by probing BOTH tables; the
+   first probe passed and I wrote "verified" on the strength of it.
+3. **`cello_ops_agent`** ✅ — the role V26 created for exactly this workload, scoped to the
+   registration tables and explicitly barred from `agent_profiles` and the key shares. Privileges
+   confirmed with `has_table_privilege` against the live database, not read off the migrations.
+
+`V57` grants that role SELECT on `flyway_schema_history` — the identical gap V50 fixed for
+`cello_service`. Without it the startup guard reports a permissions fault as a schema fault, which
+is exactly what it did: `database: "failed (42501: permission denied for table
+flyway_schema_history)"`. That message naming its SQLSTATE is itself one of the review fixes; the
+previous version would have said only `failed`.
+
+**Cloud Run will not retry a revision it has given up on.** Revision 00005 crash-looped against the
+pre-V57 schema, and once the grant landed, `terraform apply` was a no-op — same spec, same revision,
+still dead. The template now carries an `expected-schema` label tied to the migration version, so a
+schema bump always mints a FRESH revision instead of reusing a failed one.

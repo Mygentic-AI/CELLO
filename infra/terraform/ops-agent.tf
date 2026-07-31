@@ -101,6 +101,14 @@ resource "google_cloud_run_v2_service" "ops_agent" {
   deletion_protection = false
 
   template {
+    // The schema this revision was built to expect. Cloud Run keys a new revision off any template
+    // change, so tying the label to the migration version means a schema bump always produces a
+    // FRESH revision rather than reusing one that failed against the old schema and was given up on.
+    // It is also the first thing worth knowing when a revision refuses to start.
+    labels = {
+      "expected-schema" = var.ops_agent_expected_migration_version
+    }
+
     service_account = google_service_account.workload["ops-agent"].email
 
     // Both the directory internal API (8081) and Cloud SQL over PSC are private addresses, so this
