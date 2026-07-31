@@ -95,8 +95,14 @@ describe("directory migration numbering", () => {
     const highWaterMark = Math.max(...all, ...OWNED_BY_ANOTHER_BRANCH);
     const nextFree = highWaterMark + 1;
     expect(all).not.toContain(nextFree);
-    // Sanity: the agreement says V55 is next. If this drifts, the comment above is stale and the
+    // Sanity: the agreement says V58 is next. If this drifts, the comment above is stale and the
     // other branch has not been told.
-    expect(nextFree, "coordination agreement says V57 is the next free number").toBe(57);
+    //
+    // V57 was consumed on 2026-07-31 by m12/node-dir-gcp — GRANT SELECT ON flyway_schema_history TO
+    // cello_ops_agent, so the ops agent can read the history its startup guard checks (V50 did the
+    // same for cello_service). It is APPLIED on all three GCP nodes, so it cannot be renumbered.
+    // This assertion firing is the tripwire working: whoever takes 58 updates this line and thereby
+    // tells the other branch.
+    expect(nextFree, "coordination agreement says V58 is the next free number").toBe(58);
   });
 });
