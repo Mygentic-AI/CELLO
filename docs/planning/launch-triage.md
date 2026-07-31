@@ -44,10 +44,19 @@ multi-device feature. See the last section.
 
 # Open — ranked
 
-## 1. Sealed receipts are missing the conversation's opening message
+## 1. ✅ FIXED — Sealed receipts are missing the conversation's opening message
 
-**Designation:** [[2026-07-31_1043_two-sessions-one-agent-co-attendance]] §7a — **needs a DoD line
-opened.** Decided 2026-07-31 to ship this first, alone, and before the next `latest` promotion.
+**Designation: `DOD-FIRSTMSG-WITNESS-1`** — ✅ **SHIPPED 2026-07-31**, daemon `0.0.106` / cli
+`0.0.109`, verified in the tarball, J-END 10/10. The responder now presents the relay assignment
+itself, so the first message is genuinely witnessed rather than re-ordered. Reviewed twice; the
+blocking finding was that the one line that IS the fix had no test — reverting it left the whole
+suite green. That is closed and revert-tested.
+
+**Carry forward to item 5:** three paths still end unwitnessed (relay down, terminal assignment
+rejection, retry exhaustion), so **relay position is not total** and item 5's dedup rekey cannot
+assume it is.
+
+**Original entry follows.**
 
 When a conversation's very first message is sent before the relay has finished registering the
 session, the relay rejects it and never counts it. The daemon keeps the message anyway — losing
