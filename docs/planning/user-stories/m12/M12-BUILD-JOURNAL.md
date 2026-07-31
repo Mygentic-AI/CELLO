@@ -4903,3 +4903,84 @@ static credentials; it must go before that account closes. Ops-agent DB health c
 `multiaddr` is in the signed manifest with no consumer — the worthwhile fix is cross-checking the
 probe's `peerId` against the declared one. And a CLI help-parity test failed once in a full run and
 did not reproduce in three attempts including the identical command; recorded rather than dismissed.
+
+## Entry 75 — the review earned its keep: three defects inside the guards themselves
+
+*2026-07-31, continuing from Entry 74.*
+
+### The pattern in this entry
+
+Every defect below was in code written to PREVENT the thing that then happened. That is worth naming
+on its own, because it is not the shape people look for: the guard exists, it is commented, it is
+tested — and it does not fire.
+
+### Client — the roster review
+
+Two HIGH findings, and both were the same defect in PROSE that the code change had just fixed.
+`README.md` told operators to set `CELLO_DIRECTORY_URL` to the dead AWS host, so an operator
+"fixing" it to the live `directory-use1` NAME lands in the branch that turns step-6 directory
+authentication OFF — the roster is matched byte-for-byte, not by "reaches the same machine". The
+comment inside that gate claimed the production default "IS in the bundle", false in both halves.
+**Hardening a constant while leaving the document that overrides it achieves nothing.**
+
+The downgrade is now announced: loopback and private ranges stay `info`, anything else `warn`s with
+`step6: "disabled"`. It used to be indistinguishable from the benign e2e-harness case.
+
+Two tests had less grip than they looked. The threshold test asserted `Math.floor(n/2)+1 === 2` —
+arithmetic on a literal that no production code runs, green against a client demanding all three
+nodes. It counts through `validatorNodes()` now.
+
+Also closed: the manifest's `peerId` was signed and **read by nothing** — the client dialled whatever
+the plaintext `/bootstrap` returned, so the signature covered a field no code consulted. A probe
+answering with an undeclared peer id now refuses the dial. Verified on the PUBLISHED tarball against
+the live fleet, because this one could have stranded every client: `declaredNodes: 3, resolvedNodes:
+3`, then a full register/online path on the shipped bits.
+
+And a second `FileManifestProvider` — same name as the live one, reading a package-root JSON that was
+never in the tarball, declaring `staging-node-us-east-1` from a topology that no longer exists.
+Removed; absence asserted on the built artifact after a clean rebuild. `tsc --build` silently skipped
+the sibling packages until `.tsbuildinfo` was cleared too, which is exactly how an orphan survives a
+"clean" build.
+
+### Ops agent — the three that mattered
+
+**The second-poller guard could never fire.** The conflict window was zeroed by any non-409 response
+— including a 429, which is evidence you do NOT hold the poll. Worse, a real second poller does not
+conflict continuously: Telegram hands the slot back whenever the other instance is busy, so two
+agents could have run against each other forever. My own test asserted that bypass as the
+requirement. The reset now needs a sustained conflict-free window, and the harness CYCLES rather than
+clamping — clamping meant the "alternating" case was never alternating.
+
+**A sick directory could have taken down registration.** The per-node abort timer was cleared when
+fetch resolved, so it bounded the HEADERS only, leaving the body on undici's 300s default — and the
+sweep was awaited BEFORE the health port opened. One half-responsive directory could hold the port
+shut past the startup probe and get the instance killed on a loop.
+
+**The DB credential was the schema owner** — and the fix for that was wrong too, which is the most
+useful thing in this entry. `postgres` bypasses RLS, so I switched to `cello_service`, probed
+`registrations`, saw it pass, and wrote "verified". `cello_service` has **no rights at all** on
+`channel_identities`; registration would have failed at the step that records the operator's channel
+identity, and only when a real person first tried. **A probe that passes tells you about the thing
+you probed and nothing else.** The right answer already existed: V26 built `cello_ops_agent` for this
+workload. V57 grants it the one read it lacked, mirroring V50.
+
+### What the fixes then proved, live
+
+- `database: "failed (42501: permission denied for table flyway_schema_history)"` — the
+  cause-carrying error naming its own SQLSTATE the first time it fired. The old version said `failed`.
+- The periodic sweep caught `unreachable: 10.10.1.25 (timeout after 5000ms)` during a node roll and
+  `3/3 nodes at schema 57` on the next pass. Detection AND recovery, on the real fleet.
+- The old revision's sweeps at 09:33 / 09:38 / 09:43 caught the 56→57 schema change in real time.
+
+### Deployment lesson
+
+**Cloud Run will not retry a revision it has given up on.** Revision 00005 crash-looped against the
+pre-V57 schema; once the grant landed, `terraform apply` was a no-op — same spec, same dead revision.
+The template now carries an `expected-schema` label tied to the migration version, so a schema bump
+always mints a fresh revision.
+
+### State
+
+`DOD-MOVE-PORTAL-1` ✅, `DOD-MOVE-OPSAGENT-1` ✅ (reviewed, blocking findings closed).
+`DOD-E2E-GCP-1` behaviourally complete — manual, not a CI enforcer. Published `daemon@0.0.103` /
+`cli@0.0.106`. Everything remaining is AWS-gated.
