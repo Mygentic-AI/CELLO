@@ -22,6 +22,7 @@ import {
   startDaemon,
   connectMcp,
   cello,
+  registerAgent,
   psqlSpine,
   CELLO_CLIENT_ROOT,
   type SpineCluster,
@@ -103,7 +104,7 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
       await new Promise((r) => setTimeout(r, 500));
     }
     expect(signaling, "directory_signaling must connect after create-agent (ONBOARD election)").toBe("connected");
-    const reg = cello(["register", "xavier", `DEV-remove-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dir });
+    const reg = registerAgent("xavier", `DEV-remove-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dir });
     expect(reg.status, `register failed: ${reg.stdout}`).toBe(0);
 
     // ── Remove X: one-way, echoes the retired agent_id, states it is one-way. ──
@@ -233,11 +234,11 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
       await new Promise((r) => setTimeout(r, 500));
     }
     expect(signaling).toBe("connected");
-    expect(cello(["register", "alpha", `DEV-rm2-a-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dir }).status).toBe(0);
+    expect(registerAgent("alpha", `DEV-rm2-a-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dir }).status).toBe(0);
 
     // beta = a SECONDARY agent; registering it creates its dedicated per-agent signaling manager.
     expect(cello(["create-agent", "beta"], { CELLO_DIR: dir }).status).toBe(0);
-    expect(cello(["register", "beta", `DEV-rm2-b-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dir }).status).toBe(0);
+    expect(registerAgent("beta", `DEV-rm2-b-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dir }).status).toBe(0);
 
     // Remove beta — its per-agent signaling MUST be dropped (the leak fix).
     expect(cello(["remove-agent", "beta"], { CELLO_DIR: dir }).status).toBe(0);
@@ -274,7 +275,7 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     const cX = JSON.parse(cello(["create-agent", "xtarget"], { CELLO_DIR: dirX }).stdout) as { pubkey: string };
     const pubX = cX.pubkey;
     await waitConnected(dirX);
-    expect(cello(["register", "xtarget", `DEV-revx-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirX }).status).toBe(0);
+    expect(registerAgent("xtarget", `DEV-revx-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirX }).status).toBe(0);
 
     // Initiator A: register + online.
     const dirA = mkdtempSync(join(tmpdir(), "cello-revA-"));
@@ -282,7 +283,7 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     daemons.push(await startDaemon(dirA, cluster.directoryUrl, "revA"));
     expect(cello(["create-agent", "ainit"], { CELLO_DIR: dirA }).status).toBe(0);
     await waitConnected(dirA);
-    expect(cello(["register", "ainit", `DEV-reva-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("ainit", `DEV-reva-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     const connA = await connectMcp(dirA, "rev-A");
     mcpConns.push(connA);
     expect(((await connA.call("cello_start_agent", { name: "ainit" })) as { ok?: boolean }).ok).toBe(true);

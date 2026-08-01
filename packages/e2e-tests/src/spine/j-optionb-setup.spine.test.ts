@@ -30,6 +30,7 @@ import {
   provisionAgent,
   connectMcp,
   cello,
+  registerAgent,
   writeConsortiumManifest,
   writeSignedManifestTo,
   type SpineCluster,
@@ -105,7 +106,7 @@ describe("J-OPTIONB-SETUP — any-relay/any-directory session setup (DOD-OPTIONB
     expect(connected, "signaling never connected to the non-node-0 directory").toBe(true);
 
     for (const name of ["agentA", "agentB"]) {
-      const r = cello(["register", name, `DEV-optionb-${name}-${randomBytes(6).toString("hex")}`], env);
+      const r = registerAgent(name, `DEV-optionb-${name}-${randomBytes(6).toString("hex")}`, env);
       expect(r.status, `register ${name} failed: ${r.stdout}`).toBe(0);
     }
 

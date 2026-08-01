@@ -25,6 +25,7 @@ import {
   provisionAgent,
   connectMcp,
   cello,
+  registerAgent,
   ipcCall,
   type SpineCluster,
   type Proc,
@@ -71,8 +72,8 @@ describe("J-INT — interrupted + retry survival, live (DOD-INT-1 / DOD-RETRY-1)
     daemons.push(daemonA, daemonB);
 
     // Register both (real DKG) so the session can be brokered + FROST-assigned.
-    expect(cello(["register", "agentA", `DEV-int-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-int-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-int-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-int-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
 
     const connA = await connectMcp(celloDirA, "int-A");
     const connB = await connectMcp(celloDirB, "int-B");
@@ -152,8 +153,8 @@ describe("J-INT — interrupted + retry survival, live (DOD-INT-1 / DOD-RETRY-1)
     let daemonA = await startDaemon(dirA, cluster.directoryUrl, "int2A");
     let daemonB = await startDaemon(dirB, cluster.directoryUrl, "int2B");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-int2-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-int2-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-int2-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-int2-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
 
     let connA = await connectMcp(dirA, "int2-A");
     let connB = await connectMcp(dirB, "int2-B");

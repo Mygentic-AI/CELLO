@@ -21,6 +21,7 @@ import {
   startDaemon,
   provisionAgent,
   cello,
+  registerAgent,
   writeConsortiumManifest,
   writeSignedManifestTo,
   type SpineCluster,
@@ -105,7 +106,7 @@ describe("J-TOFN-DKG — multi-node 2-of-3 FROST DKG (DOD-DKG-1)", () => {
 
     // Real multi-node FROST DKG.
     const token = `DEV-dkg-${randomBytes(6).toString("hex")}`;
-    const res = cello(["register", name, token], env);
+    const res = registerAgent(name, token, env);
     expect(res.status, `register failed: ${res.stdout}`).toBe(0);
     const parsed = JSON.parse(res.stdout.trim()) as { ok?: boolean; primary_pubkey?: string };
     expect(parsed.ok, `register not ok: ${res.stdout}`).toBe(true);
@@ -185,7 +186,7 @@ describe("J-TOFN-DKG — multi-node 2-of-3 FROST DKG (DOD-DKG-1)", () => {
     expect(connected, `signaling never connected\n${daemon.output.split("\n").slice(-30).join("\n")}`).toBe(true);
 
     const token = `DEV-quorum-${randomBytes(6).toString("hex")}`;
-    const res = cello(["register", name, token], env);
+    const res = registerAgent(name, token, env);
     expect(
       res.status,
       `quorum register failed (a node is down — should still register among the quorum): ${res.stdout}\n${daemon.output.split("\n").slice(-40).join("\n")}`,

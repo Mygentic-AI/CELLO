@@ -26,6 +26,7 @@ import {
   provisionAgent,
   connectMcp,
   cello,
+  registerAgent,
   psqlSpine,
   CELLO_CLIENT_ROOT,
   type McpConn,
@@ -249,22 +250,25 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     // so the directory routes each agent's dkg_complete/register_success back to it.
     // The CLI is synchronous and the daemon serializes registration, so these run one at
     // a time. Each returns register_success {agent_id, primary_pubkey}.
-    function registerAgent(name: string): { agentId: string; primaryPubkey: string } {
+    // Named distinctly from the harness's `registerAgent` it calls: this one PARSES the
+    // register_success payload and asserts on it. Sharing the name would shadow the import and
+    // recurse.
+    function registerAndParse(name: string): { agentId: string; primaryPubkey: string } {
       const token = `DEV-spine4-${name}-${randomBytes(6).toString("hex")}`;
-      const res = cello(["register", name, token], env);
+      const res = registerAgent(name, token, env);
       const diag =
-        `\n--- cello register ${name} stdout ---\n${res.stdout}\n` +
+        `\n--- cello register-agent ${name} stdout ---\n${res.stdout}\n` +
         `--- daemon log (last 60) ---\n${daemon.output.split("\n").slice(-60).join("\n")}\n` +
         `--- directory log (last 60) ---\n${cluster.directory.output.split("\n").slice(-60).join("\n")}`;
-      expect(res.status, `cello register ${name} failed:${diag}`).toBe(0);
+      expect(res.status, `cello register-agent ${name} failed:${diag}`).toBe(0);
       const parsed = JSON.parse(res.stdout.trim()) as { ok?: boolean; agent_id?: string; primary_pubkey?: string };
       expect(parsed.ok, `register ${name} not ok: ${res.stdout}`).toBe(true);
       expect(typeof parsed.agent_id, `register ${name} missing agent_id`).toBe("string");
       expect(parsed.primary_pubkey, `register ${name} missing primary_pubkey`).toMatch(/^[0-9a-f]{64}$/);
       return { agentId: parsed.agent_id!, primaryPubkey: parsed.primary_pubkey! };
     }
-    const regA = registerAgent("agentA");
-    const regB = registerAgent("agentB");
+    const regA = registerAndParse("agentA");
+    const regB = registerAndParse("agentB");
 
     // Two distinct agents — distinct directory-issued agent_id AND distinct DKG primary_pubkey
     // (each primary_pubkey is the product of a SEPARATE real ceremony, not a fixed stub value).
@@ -398,7 +402,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     // Register both (DEV tokens). Registration brings each agent's per-agent signaling
     // stream up — that is what makes agentB a reachable target at the directory.
     for (const name of ["agentA", "agentB"]) {
-      const r = cello(["register", name, `DEV-spine5-${name}-${randomBytes(6).toString("hex")}`], env);
+      const r = registerAgent(name, `DEV-spine5-${name}-${randomBytes(6).toString("hex")}`, env);
       expect(r.status, `cello register ${name} failed:\n${r.stdout}`).toBe(0);
     }
 
@@ -465,9 +469,9 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "spine6A");
     const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "spine6B");
     daemons.push(daemonA, daemonB);
-    const rA = cello(["register", "agentA", `DEV-spine6-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA });
+    const rA = registerAgent("agentA", `DEV-spine6-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA });
     expect(rA.status, `register agentA failed:\n${rA.stdout}`).toBe(0);
-    const rB = cello(["register", "agentB", `DEV-spine6-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirB });
+    const rB = registerAgent("agentB", `DEV-spine6-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB });
     expect(rB.status, `register agentB failed:\n${rB.stdout}`).toBe(0);
 
     const connA = await connectMcp(celloDirA, "spine6-A");
@@ -553,8 +557,8 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "spine7A");
     const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "spine7B");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-spine7-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-spine7-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-spine7-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-spine7-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
 
     const connA = await connectMcp(celloDirA, "spine7-A");
     mcpConns.push(connA);

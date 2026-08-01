@@ -18,7 +18,7 @@ description: >
 
 ## RESUME STATE (overwritten in place — the ONLY thing in this file that is)
 
-**Updated:** 2026-08-01, after Entry 5.
+**Updated:** 2026-08-01, after Entry 6.
 
 - **Everything is MERGED TO `main`** in both repos (the `m8d/co-attendance` worktrees still exist and
   track it). Client `main` @ `20c331b`; docs `main` @ the Entry 5 commit.
@@ -45,9 +45,13 @@ description: >
   then `npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest`,
   `cello logout && cello login`, and `/mcp`. (`--prefer-online` is not optional right after a
   promotion — `@latest` resolves from the operator's cached packument.)
-- **🚫 THE BINDING CONSTRAINT: Docker is unavailable here** (`docker info` fails), so the spine
-  harness cannot run — and it is M8D's own live enforcer (`M8D-PROCEDURE` §2d). **No live-journey AC
-  can close on this machine until Docker is up**, `DOD-COATTEND-VISIBLE-1` AC 6 included.
+- **✅ Docker is UP and the spine suite RUNS** (it just needed starting; 30 orphaned Compose
+  networks pruned to free the address pool). Flyway: 57 migrations, clean. The 66-site
+  `cello register` rot is **repaired and verified live** — `j-conn` 2/2, `j-presence` 1/1.
+  **Runnable, not green:** `j-content` now hits a SECOND, unrelated blocker
+  (`discovery_node_unresolvable` — the harness only sets `NODE_ID` when a directory node key is
+  supplied, so the directory defaults to `local` while manifests list `aws-spine-N`), and `j-sign`
+  fails for a third reason not yet diagnosed. Four files run, not twenty.
 - **Tier 1 stays FENCED** behind M8C's `DOD-FIRSTMSG-WITNESS-1` (ACs 7–8 owed — blocked on the same
   spine rot) and `DOD-FRONTIER-STRAND-1` (❌ open, an unbuilt M8C line). Note `FIRSTMSG`'s *code* is
   shipped, so §7a's drift no longer persists; what is owed there is live proof.
@@ -517,3 +521,54 @@ Two of my own defects this round, both the same shape as the thing I was fixing:
 2. I made `agents` a required dep without updating the `contact-handlers-seam` harness, so the gate
    went red on a test that encodes the OLD contract. Correct outcome: the harness now declares who
    exists, and two new clauses pin that **nothing is written** on either refusal.
+
+## Entry 6 — the live spine suite runs again (2026-08-01)
+
+**Docker was the whole blocker, and it just needed starting.** Two incidental fixes to get there:
+Docker Desktop launched, and **30 orphaned Compose networks pruned** — every one with zero
+containers, left by old worktrees — because the address pool was exhausted and `compose up` could
+not create a network at all. Postgres then came up and **Flyway applied 57 migrations cleanly to
+v57**.
+
+### The rot, fixed and verified live
+
+66 `cello register <name> <token>` call sites across 20 files. The CLI had split onboarding into
+`create-agent` + `register-agent`, so every one of those files died in agent **setup**, before a
+session existed — which is what left the suite unrunnable and blocked
+`DOD-FIRSTMSG-WITNESS-1`'s ACs 7–8.
+
+```
+✓ src/spine/j-conn.spine.test.ts (2 tests) 29102ms       ← was: "register solo: expected 1 to be +0"
+✓ src/spine/j-presence.spine.test.ts (1 test) 82106ms
+```
+
+Real Postgres, real Flyway, a real directory and relay, real daemon binaries.
+
+**The subtlety, recorded because it is where a careless version of this repair goes wrong.**
+`registerAgent()` deliberately **does not create the agent**. Every spine file already provisions
+first, by one of two routes: `provisionAgent()` writes a **key file** (imported into the encrypted
+`agents` table by identity-migration at daemon start), or the test calls `cello create-agent`
+explicitly. A create inside the helper would be a no-op in every current case — and in any case
+where it were *not* a no-op it would mint a **second K_local seed under the same name**, so the test
+would register a pubkey that is not the one it provisioned and asserted on. Silently. I wrote the
+create-and-tolerate version first, checked which files provision, and removed it.
+
+`j-spine` had its own local `registerAgent` that parses `register_success`; the new import shadowed
+it into infinite recursion. **Typecheck caught that, not a test run** — renamed to `registerAndParse`.
+
+### The SECOND blocker underneath, which is not mine and not the same thing
+
+With registration working, `j-content`'s first case now runs a full relay store-and-forward deposit
+— and the remaining nine fail on:
+
+> `discovery_node_unresolvable` — *"The counterparty's home node (**local**) is not in the signed
+> consortium manifest."*
+
+The harness sets `NODE_ID` **only** when a directory node key is supplied
+(`live-harness.ts` ~772); otherwise the directory keeps its default id `local`, while
+`auth-manifest.ts`'s `spineNodeId(i)` builds manifests listing `aws-spine-N`. Post-M12 drift of a
+different kind, in a different file, and **its own unit of work.** Not folded into the register
+repair — a commit that fixes two unrelated causes is a commit nobody can revert cleanly.
+
+`j-sign` also fails, for a third reason not yet diagnosed. **The suite is not green; it is
+RUNNABLE**, which it was not this morning. No claim beyond that: I ran four files, not twenty.

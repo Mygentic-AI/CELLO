@@ -24,6 +24,7 @@ import {
   provisionAgent,
   connectMcp,
   cello,
+  registerAgent,
   writeConsortiumManifest,
   writeSignedManifestTo,
   type SpineCluster,
@@ -97,7 +98,7 @@ describe("J-RELAYSIG — relay-signed ordering receipts (DOD-RELAYSIG-1)", () =>
     expect(connected, "signaling never connected").toBe(true);
 
     for (const name of ["agentA", "agentB"]) {
-      const r = cello(["register", name, `DEV-relaysig-${name}-${randomBytes(6).toString("hex")}`], env);
+      const r = registerAgent(name, `DEV-relaysig-${name}-${randomBytes(6).toString("hex")}`, env);
       expect(r.status, `register ${name} failed: ${r.stdout}`).toBe(0);
     }
 

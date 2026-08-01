@@ -981,6 +981,31 @@ export interface CliResult {
   status: number;
 }
 
+/**
+ * `cello register-agent <name> <token>` — the verb the spine suite was written before.
+ *
+ * The suite used `cello register <name> <token>`, which no longer exists: onboarding split into
+ * `create-agent <name>` (make the identity locally) and `register-agent <name> <token>` (publish it
+ * to the directory, running a real DKG). 66 call sites across 20 files still used the retired verb,
+ * so every one failed at agent SETUP — before any session existed — which is what left the live
+ * suite unrunnable and blocked DOD-FIRSTMSG-WITNESS-1's ACs 7-8.
+ *
+ * IT DELIBERATELY DOES NOT CREATE THE AGENT, and that is the whole subtlety of this repair. Every
+ * spine file already provisions first, by one of two routes: `provisionAgent()` writes a KEY FILE
+ * (imported into the encrypted `agents` table by identity-migration at daemon start), or the test
+ * calls `cello create-agent` explicitly. A `create-agent` inside this helper would therefore be a
+ * no-op in every current case — and in any case where it were NOT a no-op it would mint a SECOND,
+ * different K_local seed under the same name, and the test would then register a pubkey that is not
+ * the one it provisioned and asserted on. Silently. A helper that is dead weight when it works and
+ * wrong when it fires does not belong in a fixture.
+ *
+ * So this is a verb rename with one home, not a convenience wrapper. Callers keep asserting on the
+ * register result, which is where the DKG happens and where they were always looking.
+ */
+export function registerAgent(name: string, token: string, env: Record<string, string>): CliResult {
+  return cello(["register-agent", name, token], env);
+}
+
 export function cello(args: string[], env: Record<string, string>): CliResult {
   try {
     const stdout = execFileSync(process.execPath, [BINS.cli, ...args], {
