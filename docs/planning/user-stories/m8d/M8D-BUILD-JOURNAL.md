@@ -18,47 +18,46 @@ description: >
 
 ## RESUME STATE (overwritten in place — the ONLY thing in this file that is)
 
-**Updated:** 2026-08-01, after Entry 7.
+**Updated:** 2026-08-01, end of the autonomous run.
 
-- **Everything is MERGED TO `main`** in both repos (the `m8d/co-attendance` worktrees still exist and
-  track it). Client `main` @ `20c331b`; docs `main` @ the Entry 5 commit.
-- **Done.** `DOD-RECEPTIONIST-AGENT-1` **✅** (all four ACs, AC 4 at execution level).
-  `DOD-COATTEND-VISIBLE-1` **🟡** (ACs 1–5, 7 enforcer-green; AC 6 is a live journey).
-  `DOD-INBOX-AGENT-1` *(debt — from M8C)* **✅** — reviewed, and the review found the same
-  accept-and-drop shape in four more places, including the shim line the fix itself wrote.
-  `DOD-FRONTIER-STRAND-1` **AC2 only** landed (M8C line; ACs 1/3/4 still open, so the fence holds).
-- **PUBLISHED to beta, binary-verified (two rounds):** `v0.0.170` → daemon `0.0.111` / cli `0.0.114`
-  / connect `0.0.113`, then `v0.0.171` → **daemon `0.0.112`, cli `0.0.115`, connect `0.0.114`**,
-  which is HEAD. Verified by `npm pack` + grep: `dist/co-attendance.js`, `dist/resolve-named-agent.js`
-  (all four refusal reasons), `session.frontier.mismatch`, the doorbell body, and connect's six
-  `agent !== undefined` sites. Cross-pins are real versions (`cli@0.0.115 → daemon@0.0.112`).
-- **`latest` NOT promoted — operator-run, always.** Prepared, for when Andre wants the reinstall:
-  ```
-  npm dist-tag add @cello-protocol/connect@0.0.115 latest   # ← 0.0.115, the reconnect-truth fix
-  npm dist-tag add @cello-protocol/cli@0.0.115 latest
-  npm dist-tag add @cello-protocol/daemon@0.0.112 latest
-  npm dist-tag add @cello-protocol/gateway@0.0.23 latest
-  npm dist-tag add @cello-protocol/crypto@0.0.38 latest
-  npm dist-tag add @cello-protocol/transport@0.0.42 latest
-  npm dist-tag add @cello-protocol/protocol-types@0.0.40 latest
-  ```
-  then `npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest`,
-  `cello logout && cello login`, and `/mcp`. (`--prefer-online` is not optional right after a
-  promotion — `@latest` resolves from the operator's cached packument.)
-- **✅ Docker is UP and the spine suite RUNS** (it just needed starting; 30 orphaned Compose
-  networks pruned to free the address pool). Flyway: 57 migrations, clean. The 66-site
-  `cello register` rot is **repaired and verified live** — `j-conn` 2/2, `j-presence` 1/1.
-  **Runnable, not green:** `j-content` now hits a SECOND, unrelated blocker
-  (`discovery_node_unresolvable` — the harness only sets `NODE_ID` when a directory node key is
-  supplied, so the directory defaults to `local` while manifests list `aws-spine-N`), and `j-sign`
-  fails for a third reason not yet diagnosed. Four files run, not twenty.
-- **Tier 1 stays FENCED** behind M8C's `DOD-FIRSTMSG-WITNESS-1` (ACs 7–8 owed — blocked on the same
-  spine rot) and `DOD-FRONTIER-STRAND-1` (❌ open, an unbuilt M8C line). Note `FIRSTMSG`'s *code* is
-  shipped, so §7a's drift no longer persists; what is owed there is live proof.
-- **Owed to Andre.** (1) Docker up, or a decision to close live ACs elsewhere. (2) The live
-  two-session `claude --channels` journey for AC 6. (3) The `latest` promotion, when he wants the
-  reinstall. (4) A call on whether M8D should absorb `DOD-FRONTIER-STRAND-1` to lift its own fence.
-- **Gate at HEAD.** 2417 passed / 11 skipped, lint + typecheck + build clean.
+- **Everything is MERGED to `main` and pushed**, both repos. Client `main` carries through the
+  v0.0.173 cascade; docs `main` through Entry 12.
+- **PUBLISHED to beta, binary-verified:** **daemon `0.0.113`**, **cli `0.0.116`**, connect `0.0.115`.
+  `latest` **NOT promoted — that is Andre's, always.** Command set below.
+- **M8D itself:** `DOD-COATTEND-VISIBLE-1` 🟡 (ACs 1–5, 7 green; **AC 6 is the live two-session
+  `claude --channels` journey — needs Andre**). `DOD-RECEPTIONIST-AGENT-1` ✅.
+  `DOD-INBOX-AGENT-1` ✅ *(debt)*.
+- **The fence — `DOD-FRONTIER-STRAND-1` is effectively CLOSED:** ACs 1, 2, 3 done and reviewed;
+  AC4(a)(b) covered; **AC4(c) recorded as superseded** by the DoD's own root-cause correction
+  (M8D-D2, Entry 10). Residual: sessions stranded BEFORE the fix are still stranded — repair is a
+  future line, not claimed.
+- **`DOD-FIRSTMSG-WITNESS-1` ACs 7–8 are the LAST fence item and are still OPEN.** The blocker is
+  gone (the spine suite runs; **j-loopback is green end to end**), but the green run never staged
+  AC7's scenario — a first message beating relay registration. Closing it needs a test that FORCES
+  that race. **Do not read zero `sequence_behind_tree` on the happy path as AC7 met** (Entry 12).
+- **Spine suite: RUNNABLE, not green.** Four rot layers repaired (register verb, `cello_session_id`,
+  the required signal token, and the token riding the content). `j-conn` 2/2, `j-presence` 1/1,
+  `j-loopback` 1/1. `j-content` 1/10 (the rest are real park/recover behavioural assertions);
+  `j-sign` fails for an undiagnosed reason. **Nine of twenty files have not been run at all.**
+- **Docker must be running** for any of that (`open -a Docker`; 30 orphaned Compose networks were
+  pruned once to free the address pool).
+
+### The promotion, ready to run (operator-only)
+
+```
+npm dist-tag add @cello-protocol/daemon@0.0.113 latest
+npm dist-tag add @cello-protocol/cli@0.0.116 latest
+npm dist-tag add @cello-protocol/connect@0.0.115 latest
+npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest
+cello logout && cello login      # then /mcp to reconnect
+```
+`--prefer-online` is not optional: `@latest` resolves from the operator's own cached packument.
+
+### The next unit, if picking this up cold
+
+`DOD-FIRSTMSG-WITNESS-1` AC7 — force the first-message-beats-registration race and assert **zero**
+`session.content.sequence_behind_tree`. Everything needed now exists: the spine runs, `j-loopback`
+is the vehicle, and the drift branch is already instrumented.
 
 ---
 
