@@ -14,8 +14,8 @@ description: >
 
 # M8D — Co-attendance
 
-**Started:** 2026-08-01 · **Status:** all six DoD lines built, gated and published (daemon `0.0.116` /
-cli `0.0.119`). Four are 🟡 BUILT/UNVERIFIED-LIVE pending the two-session `claude --channels` journey.
+**Started:** 2026-08-01 · **Status:** all six DoD lines built, gated, **reviewed** and published
+(daemon `0.0.117` / cli `0.0.120`). Four are 🟡 BUILT/UNVERIFIED-LIVE pending the two-session `claude --channels` journey.
 
 Co-attendance is the property that several sessions can attend one agent at once — a second terminal,
 a listener, an operator watching over a running conversation. **Exclusivity was rejected permanently
@@ -104,7 +104,28 @@ racing sibling through exactly as it waved the first.
 re-check must ask a question the original authorities cannot answer — otherwise it is the same
 check, spelled twice.*
 
-### 4. Three units shipped with the fix fully deletable and the suite green
+### 4. The send-window fix guarded the narrower of the two awaits
+
+**Symptom.** After the fix, two sessions could still both reply — reproduced by review on a real
+daemon with two real IPC connections: two `ok:true`, two frames on the wire, two leaves.
+
+**Root cause.** The re-check was placed before `sendContent` on the argument that a send cannot be
+*refused* after the wire (true — the counterparty already holds it, and refusing manufactures the
+frontier strand). The conclusion did not follow. **`sendContent` IS the last await, and the wider
+one** — relay submit, stream open, stream close, a network round trip in production, against the
+gateway round trip the check covered. The DoD names two awaits; one was guarded and it was written
+up as both.
+
+**Fix.** A **claim**, not another check: a per-(agent, session) in-flight marker taken in the same
+synchronous window as the frontier comparison and released when the wire call settles. A sibling that
+finds it held is refused *before its own wire call*, so nothing is stranded and the argument that
+ruled out a post-wire refusal never applies.
+
+**Rule.** *When a constraint rules out the obvious fix, the next idea is not automatically safe.
+"I cannot check after X" and "so checking before X is enough" are different claims, and the second
+one needs its own proof.*
+
+### 5. Three units shipped with the fix fully deletable and the suite green
 
 **Symptom.** A reviewer removed the entire wiring of a "finished" fix and got 1296/1296 green with a
 clean typecheck. Three separate times in one milestone.
@@ -118,7 +139,7 @@ carries a revert result.
 **Rule.** *The revert test is the acceptance criterion, not the assertion count. "Green" without it
 means "the fix is not connected to anything."*
 
-### 5. A test that passed against the broken build
+### 6. A test that passed against the broken build
 
 **Symptom.** The first version of the write-failure test passed before the fix existed.
 
@@ -128,7 +149,7 @@ so the fix was to break `db.prepare` instead.
 
 **Rule.** *When testing a swallow, do not replace the swallower.*
 
-### 6. Dead code that could not be given a red build
+### 7. Dead code that could not be given a red build
 
 **Symptom.** The review asked for a deleted clause to be re-pointed at `ContentTakeLedger.forget()` so
 a deferred deletion would keep its red build. The clause was written; it passed; `forget()` was then
@@ -140,7 +161,7 @@ is *handed* the content instead of timing out, and the sibling-theft discriminat
 **Rule.** *Unreachable code has no red build to manufacture — that is what unreachable means. Record
 the deletion probe as the proof; do not ship a green clause that cannot fail.*
 
-### 7. A review finding that was wrong, caught by the typecheck
+### 8. A review finding that was wrong, caught by the typecheck
 
 **Symptom.** A finding said a `record ?` guard was dead code. Removing it failed `tsc`.
 

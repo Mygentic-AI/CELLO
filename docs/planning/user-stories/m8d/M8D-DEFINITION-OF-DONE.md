@@ -252,7 +252,19 @@ a visible one.
   > answer. **CATCHUP needed no production change and that is the finding**: `cello_get_transcript`
   > already is the both-directions door (M8D-D3) and both refusals already point at it. K2 is what
   > makes the line non-vacuous — it proves `cello_receive` genuinely cannot cross a sibling's sent
-  > leaf. Revert probe: 2 red. **AC7-class live proof still owed** for both. → Entry 20
+  > leaf. **AC7-class live proof still owed** for both. → Entries 20, 23
+  >
+  > **Reviewed — and the review was BLOCKING. Fixed.** The first build re-checked only before
+  > `screenOutbound`, on the correct observation that a send cannot be *refused* after the wire. But
+  > `sendContent` IS the last await and the wider one, so the race still committed two replies
+  > (reproduced on a real daemon, two real IPC connections). Closed with an **in-flight claim** taken
+  > in the same synchronous window as the frontier comparison: a sibling that finds it held is
+  > refused BEFORE its own wire call, so nothing is stranded. Also fixed: the stalling gateway held
+  > only the first entrant, so AC5's concurrent case was never exercised (now two clauses, one per
+  > authority, plus the wire-parked reproduction); K1 asserted a number scraped off a refusal instead
+  > of the send succeeding; the CATCHUP clauses are renamed CHARACTERIZATION because the line shipped
+  > no production code and cannot survive a revert; and a pre-existing raw watermark vault on the
+  > `since_seq` path was marking undecryptable rows as read. Revert probe: 3 red. → Entry 23
 
   Between the gate passing and the message being recorded there are **two awaits** — the security
   screening (`securityGateway.screenOutbound`, a round trip to the gateway process) and the send
