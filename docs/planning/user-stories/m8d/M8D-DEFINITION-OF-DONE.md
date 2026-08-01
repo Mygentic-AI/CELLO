@@ -316,8 +316,10 @@ earned.
   before dedup ran. The position is now threaded from the verified ordering record through both
   call sites, and all THREE decision points changed (pre-screen dedup, the post-screening re-check,
   and the ordering lookup) — fixing fewer would have re-created the defect one branch later.
-  Relay-degraded sessions keep hash-dedup but now ANNOUNCE it
-  (`session.content.dedup.unwitnessed`). → Entry 9
+  Relay-degraded sessions keep hash-dedup, announced only when a relay IS attached (a no-relay
+  session has no witness by design). **Reviewed; the first version double-appended a true
+  redelivery under §7a drift and had no coverage of the production threading hop — both fixed and
+  pinned.** → Entries 9 and 11
 
   **AC3 — a stranded session LOOKS stranded.** The gap was RETENTION, not detection: two frontiers
   are only comparable when the sides talk, so a close attempt IS the detection point — but the answer

@@ -747,3 +747,71 @@ because the position is absent from the receiver's tree.
 recorded as superseded-by-correction, with the residual repair capability written down as its own
 future line rather than folded in at the end of a long session. Building a leaf-repair path into the
 seal at this hour is precisely how a subtle receipt bug ships.
+
+## Entry 11 — the review caught a regression I introduced in the direction I claimed to have pinned (2026-08-01, autonomous)
+
+**Commit** `6e314b7`. Gate: **2432 passed / 11 skipped**, clean. Two blocking findings, both proven
+by the reviewer **by execution**, both mine.
+
+### F2 — position-keyed dedup DOUBLE-APPENDED under drift
+
+`hashAt(canonicalSeqIn)` treats the relay position as an index into the tree. That holds only while
+`leafIndex === canonicalSeq` — and **§7a drift breaks exactly that**: a first message whose relay
+submit fails is appended locally and never counted by the relay, so the tree runs permanently one
+ahead. In a drifted session a **true redelivery** then found different content at that index,
+concluded "not a duplicate", and appended a second leaf.
+
+```
+post-fix (a54f548):  appendedCount 1   tree size 3   ← double-append
+pre-fix  (8a29794):  appendedCount 0   tree size 2   ← correct
+```
+
+**My own commit message named this as one of the two silent receipt-destroying directions**, and the
+change meant to prevent it created it. The DoD had even predicted the shape in one line — *"the
+position-keyed dedup fix inherits a broken key unless the drift is fixed first"* — and I built it
+without handling drift.
+
+Fixed by splitting three cases instead of two: position holds this content → redelivery; position at
+or beyond the frontier → genuinely new (the AC1 case); **position behind the frontier holding
+different content → drift**, so the position is not an index and the content-hash rule is the only
+correct answer available. That is the pre-existing behaviour, so it is not a regression in either
+direction, and it is announced.
+
+### F1 — the fix had no production coverage at all
+
+The four AC1 clauses call `ingestReceivedContent` **directly with a literal position**. The reviewer
+replaced the position with `undefined` at both real call sites: **the entire 1285-test daemon suite
+stayed green while the defect was fully restored.**
+
+That is the same shape as the finding on `DOD-FIRSTMSG-WITNESS-1` one line earlier — *"they pinned
+the parser and the builders, nothing pinned the caller."* Here I pinned the callee.
+
+Now driven through the real `recoverParkedEntry` path, signature gate included. **Verified by
+revert:** with the threading removed the new clause goes red and the four old ones stay green.
+
+**Writing that test found a fourth defect in my own work:** my first attempt built ordering records
+with `protocol-types`' `encodeStructure1`, which takes an **object**. Called positionally it produced
+malformed records that were silently rejected — so the "witnessed" path was never exercised and the
+first message only appended via the degraded branch. The positional wire helper in
+`session-relay-client` is the right one. A test that silently exercises the wrong path is worse than
+no test, and only tracing the actual log events found it.
+
+### F3–F5
+
+- **F3 (error substitution):** five of the responder's six refusal reasons never carry frontier
+  detail, so a CURRENT daemon refusing `signing_key_unavailable` was told *"it is running an older
+  daemon."* Only `leaf_count_mismatch` renders that now; the rest report the reason verbatim and
+  diagnose nothing.
+- **F4:** the degraded-dedup warn now gates on a relay being attached, as its sibling
+  `session.content.unwitnessed` does. **D4 asserted the opposite and was wrong** — a no-relay session
+  has no witness BY DESIGN, so warning there fires on the normal case. Rewritten.
+- **F5:** the rejection frame spreads detail FIRST so fixed fields win; spread last, a future
+  `{ reason: 1 }` would silently overwrite the discriminator every consumer switches on.
+
+### What this says about the milestone
+
+Three units in a row now (`DOD-INBOX-AGENT-1`, the reconnect fix, this) where **the review found the
+defect the unit was written to prevent, reproduced inside the fix itself.** The pattern is not
+carelessness about the concept — it is that each fix was verified against the layer it was written
+at, and not through the layer that actually runs. The remedy that keeps working: drive the REAL entry
+point, then revert the fix and watch the test go red.
