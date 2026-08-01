@@ -18,46 +18,65 @@ description: >
 
 ## RESUME STATE (overwritten in place — the ONLY thing in this file that is)
 
-**Updated:** 2026-08-01, end of the autonomous run.
+**Updated:** 2026-08-01, end of the autonomous run (Entry 14).
 
-- **Everything is MERGED to `main` and pushed**, both repos. Client `main` carries through the
-  v0.0.173 cascade; docs `main` through Entry 12.
-- **PUBLISHED to beta, binary-verified:** **daemon `0.0.113`**, **cli `0.0.116`**, connect `0.0.115`.
-  `latest` **NOT promoted — that is Andre's, always.** Command set below.
-- **M8D itself:** `DOD-COATTEND-VISIBLE-1` 🟡 (ACs 1–5, 7 green; **AC 6 is the live two-session
-  `claude --channels` journey — needs Andre**). `DOD-RECEPTIONIST-AGENT-1` ✅.
-  `DOD-INBOX-AGENT-1` ✅ *(debt)*.
-- **The fence — `DOD-FRONTIER-STRAND-1` is effectively CLOSED:** ACs 1, 2, 3 done and reviewed;
-  AC4(a)(b) covered; **AC4(c) recorded as superseded** by the DoD's own root-cause correction
-  (M8D-D2, Entry 10). Residual: sessions stranded BEFORE the fix are still stranded — repair is a
-  future line, not claimed.
-- **`DOD-FIRSTMSG-WITNESS-1` ACs 7–8 are the LAST fence item and are still OPEN.** The blocker is
-  gone (the spine suite runs; **j-loopback is green end to end**), but the green run never staged
-  AC7's scenario — a first message beating relay registration. Closing it needs a test that FORCES
-  that race. **Do not read zero `sequence_behind_tree` on the happy path as AC7 met** (Entry 12).
-- **Spine suite: RUNNABLE, not green.** Four rot layers repaired (register verb, `cello_session_id`,
-  the required signal token, and the token riding the content). `j-conn` 2/2, `j-presence` 1/1,
-  `j-loopback` 1/1. `j-content` 1/10 (the rest are real park/recover behavioural assertions);
-  `j-sign` fails for an undiagnosed reason. **Nine of twenty files have not been run at all.**
-- **Docker must be running** for any of that (`open -a Docker`; 30 orphaned Compose networks were
-  pruned once to free the address pool).
+- **Everything MERGED to `main` and pushed**, both repos. Gate verified **by exit code**: 2437
+  passed / 11 skipped, lint + typecheck + build clean.
+- **PUBLISHED to beta, binary-verified:** **daemon `0.0.114`**, **cli `0.0.117`**, connect `0.0.115`.
+  `latest` **NOT promoted — operator-only.** Commands below.
 
-### The promotion, ready to run (operator-only)
+### ✅ The Tier-1 fence has LIFTED
+
+- `DOD-FIRSTMSG-WITNESS-1` **ACs 7 + 8 asserted LIVE** (j-loopback, real Postgres/directory/relay).
+- `DOD-FRONTIER-STRAND-1` **ACs 1, 2, 3 done and reviewed**; AC4(c) superseded (M8D-D2).
+
+### M8D itself
+
+| Line | State |
+|---|---|
+| `DOD-COATTEND-VISIBLE-1` | 🟡 — ACs 1–5, 7 green. **AC 6 = the live two-session `claude --channels` journey. Needs Andre.** |
+| `DOD-RECEPTIONIST-AGENT-1` | ✅ |
+| `DOD-INBOX-AGENT-1` *(debt)* | ✅ |
+| **`DOD-COATTEND-1`** | ❌ **NEXT UNIT — Tier 1 is open.** Design-significant → design note first (§6). |
+| `DOD-COATTEND-CATCHUP-1` / `-SENDWINDOW-1` | ❌ land together, after COATTEND-1 |
+
+### The next unit, concretely
+
+`DOD-COATTEND-1` — delivery reads a **durable record against a per-connection bookmark** instead of
+draining the shared `#receivedContent` (`buf.shift()`, keyed by `(agentName, sessionId)` — NOT by
+connection, which is the defect). The machinery already exists and should be reused rather than
+rebuilt: `readTranscript` is the durable record, the per-connection cursor and `safeCursorAdvance`
+already exist, and the `since_seq` branch already reads the transcript non-destructively. The
+doorbell **stays multicast** — it is correct; the queue is what changes.
+
+### 🚨 Three rules this run learned the hard way — read before writing code
+
+1. **Verify the gate by EXIT CODE, never by reading the tail.** I committed on a red gate once
+   tonight after reading past `ELIFECYCLE`.
+2. **Drive the REAL entry point, then revert the fix and watch the test go red.** Three separate
+   units this milestone shipped with the fix fully deletable and the suite green. Testing the callee
+   is not testing the fix.
+3. **Never `as never` a deps object.** It defeats the type contract wholesale — tsc stayed clean
+   while three tests threw.
+
+### Owed to Andre
+
+1. **The `latest` promotion** (below). 2. **AC 6's live two-session journey.**
 
 ```
-npm dist-tag add @cello-protocol/daemon@0.0.113 latest
-npm dist-tag add @cello-protocol/cli@0.0.116 latest
+npm dist-tag add @cello-protocol/daemon@0.0.114 latest
+npm dist-tag add @cello-protocol/cli@0.0.117 latest
 npm dist-tag add @cello-protocol/connect@0.0.115 latest
 npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest
-cello logout && cello login      # then /mcp to reconnect
+cello logout && cello login      # then /mcp
 ```
-`--prefer-online` is not optional: `@latest` resolves from the operator's own cached packument.
 
-### The next unit, if picking this up cold
+### Spine suite — runnable, NOT green
 
-`DOD-FIRSTMSG-WITNESS-1` AC7 — force the first-message-beats-registration race and assert **zero**
-`session.content.sequence_behind_tree`. Everything needed now exists: the spine runs, `j-loopback`
-is the vehicle, and the drift branch is already instrumented.
+`j-conn` 2/2, `j-presence` 1/1, `j-loopback` 1/1. **Docker must be running.** Known remaining:
+`j-persist` and other session-establishing files need the 3-node consortium + manifest setup already
+applied to `j-content` (`discovery_node_unresolvable`); `j-sign` fails undiagnosed; nine of twenty
+files have never been run.
 
 ---
 
