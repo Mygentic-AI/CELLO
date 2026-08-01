@@ -902,3 +902,47 @@ asserted live, and the dedup key itself is fixed and reviewed. **Tier 1 opens.**
 (§6): where the per-connection bookmark physically lives, how it survives a connection death and a
 daemon restart, what replaces `#receivedContent`'s destructive drain, and what happens to a message
 whose only reader disconnects mid-poll.
+
+## Entry 14 — the AC3 review, and the third proven-by-execution coverage hole (2026-08-01, autonomous)
+
+Four blocking findings. The worst is not any single bug: **the reviewer deleted every line of
+AC3's wiring and got 1296/1296 green with a clean typecheck** — one journal entry after Entry 11
+wrote the remedy down verbatim.
+
+| # | Finding | Why it mattered |
+|---|---|---|
+| **H1** | **The field was on the wrong surface, three ways.** | AC3 names `cello_sessions`. I produced it into `cello_status.interrupted_sessions`, declared it on `ActiveSessionInfo` (which nothing produces it on), and omitted it from `InterruptedSessionInfo` — it typechecked only because TS exempts spread properties from excess-property checks. And the surface I chose is a **capped 10-row health snapshot** whose own comment says it is "not a session archive". **A session stranded a week is exactly the one that has fallen off that cap.** The original defect, unchanged, on the surface the AC named. |
+| **H2** | Whole wiring deletable, suite green. | Now two clauses drive the REAL inbound seal handler against a real daemon; verified by revert. |
+| **H3** | The responder could record but **never clear**. | `clearFrontierMismatch` was not even on its deps. The side that DETECTS strands kept reporting a week-old one on a session that had just co-signed — S2's own defect, on the detecting side. S2 missed it by testing `store.clear()` in isolation. |
+| **M4/M6** | Optional deps; initiator silent. | Both deps are now REQUIRED — which is what would have made H3 a compile error — and the initiator logs `session.frontier.mismatch` too. AC3 asks for a log event and only the responder emitted one. |
+
+**L1 is the one I am most annoyed by.** `frontier-mismatch.ts` contained a **raw 0x00 byte**, so
+`file` reported `data` and git treated it as **binary**: `git show` rendered `Bin 0 -> 5184 bytes`
+and every future change would have been invisible in review — in a repo whose review process is
+reading the diff. **I made this exact mistake earlier today in `co-attendance.ts` and fixed it
+there**, then reproduced it here by writing the pattern from memory instead of copying the fixed
+file.
+
+### And I committed on a red gate
+
+The fix-up commit went out with **three failing tests**. The gate printed `ELIFECYCLE` and I read
+past it to the lines above. That is the one rule the procedure states without qualification, and the
+cost is not the three tests — it is that every "gate clean" claim earlier in this session now has to
+be re-earned rather than trusted. Fixed immediately, and the gate is now checked **by exit code**
+rather than by eyeballing the tail.
+
+The failures were caused by the fix working as intended: making the deps required broke three
+constructions that did not name them. Two used **`as never`** on the deps object, which defeats the
+type contract wholesale — so tsc stayed clean while the tests threw. Those casts are gone.
+
+### H4 — attribution without checking, which §5c forbids
+
+The `signal: "over"` commit diagnosed its own consequence correctly and then repaired **one** file
+of thirteen, leaving ~20 exact-content assertions deterministically red. Worse: the commit before it
+had already attributed j-content's failures to *"real behavioral assertions… protocol behavior, not
+setup"* — and at least two of those are stale assertions that same series introduced. All corrected,
+as `toBe(exact)` rather than `toContain` (M2: the delivered value is fully determined, so the
+substring form was a loosening that stays green for duplicated, injected or reordered content).
+
+Also corrected: **the token is appended by the MCP shim, not the daemon.** I had it backwards in a
+commit message and a code comment.
