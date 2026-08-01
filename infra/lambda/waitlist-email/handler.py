@@ -241,6 +241,12 @@ def claim_jobs(conn, limit, correlation_id):
                    u.email, u.display_name, u.email_status, u.content_alerts,
                    u.email_verified,
                    u.status AS user_status, u.wave_number,
+                   -- Read HERE, at send time, not captured when the job was
+                   -- enqueued. points_summary is debounced: its row is written on
+                   -- the first award and then pushed forward by every later one,
+                   -- so a total stamped at enqueue would be the number the user
+                   -- had BEFORE most of the points the mail is announcing.
+                   u.points_total,
                    q.queue_position, q.queue_size,
                    rc.code AS referral_code
             FROM email_jobs j

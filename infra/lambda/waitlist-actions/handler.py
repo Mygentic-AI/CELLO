@@ -48,6 +48,12 @@ INTERVIEW_COMMIT_POINTS = 30
 # 0023 means there is only ever one row.
 CONTENT_ALERTS_POINTS = 10
 
+# How long the "your points went up" email waits for the user to stop earning.
+# Long enough that a survey → readiness → interview → alerts run in one sitting
+# collapses into a single email; short enough that the mail still reads as a
+# response to what they just did rather than as unrelated marketing.
+POINTS_SUMMARY_QUIET_SECONDS = int(os.environ.get("POINTS_SUMMARY_QUIET_SECONDS", "180"))
+
 MAX_FREEFORM_LEN = 4000
 MAX_URL_LEN = 2048
 
@@ -118,6 +124,64 @@ def require_session(cur, event):
     return session["waitlist_user_id"]
 
 
+def schedule_points_summary(cur, user_id, correlation_id):
+    """Push the 'your points went up' email out to now() + the quiet period.
+
+    A DEBOUNCE, HELD IN THE DATABASE. Working through the status page pays out
+    four separate times in about as many minutes; confirming each one by email is
+    four emails for what the user experienced as one sitting. So the mail is not
+    sent per award — each award resets a countdown, and only silence sends it.
+
+    THE COUNTDOWN CANNOT LIVE IN THE BROWSER. A JavaScript timer dies with the
+    tab, and somebody who fills in three sections and then closes the browser is
+    exactly who this email is for. `scheduled_at` is already a durable
+    server-side timer — claim_jobs only takes rows at or past it — so the
+    countdown is just a date, and no new machinery is needed to hold it.
+
+    ONE ROW PER USER, which is what 0027's partial unique index buys. Without it
+    four awards enqueue four rows and the debounce has rebuilt the problem it
+    exists to solve. The upsert names that index's predicate so Postgres infers
+    it rather than the primary key.
+
+    NOT REACHED BY THE REFERRAL BONUS, and that is what keeps the debounce
+    bounded. Every reason that flows through award() is once-per-user (0009), so
+    the worst case is five resets and then it sends. The referral bonus is the
+    one award somebody else can trigger repeatedly; it lives in _referral.py, has
+    its own email, and so never touches this countdown.
+
+    Best-effort by design: the points are already committed to the ledger, and a
+    failure here must not roll back an award the user has earned over a
+    notification about it.
+    """
+    cur.execute("SAVEPOINT points_summary")
+    try:
+        cur.execute(
+            """
+            INSERT INTO email_jobs (user_id, template, scheduled_at)
+            VALUES (%s, 'points_summary', now() + make_interval(secs => %s))
+            ON CONFLICT (user_id) WHERE template = 'points_summary' AND status = 'pending'
+            DO UPDATE SET scheduled_at = now() + make_interval(secs => %s)
+            """,
+            (user_id, POINTS_SUMMARY_QUIET_SECONDS, POINTS_SUMMARY_QUIET_SECONDS),
+        )
+        cur.execute("RELEASE SAVEPOINT points_summary")
+        log(
+            "waitlist.points.summary.scheduled",
+            correlation_id,
+            waitlistId=str(user_id),
+            quietSeconds=POINTS_SUMMARY_QUIET_SECONDS,
+        )
+    except Exception as err:  # noqa: BLE001 — never lose an award over its notification
+        cur.execute("ROLLBACK TO SAVEPOINT points_summary")
+        log(
+            "waitlist.points.summary.schedule_failed",
+            correlation_id,
+            level="ERROR",
+            waitlistId=str(user_id),
+            error=str(err),
+        )
+
+
 def award(cur, user_id, points, reason, meta, correlation_id):
     """Insert a ledger row, tolerating the once-per-user index.
 
@@ -134,6 +198,10 @@ def award(cur, user_id, points, reason, meta, correlation_id):
         )
         cur.execute("RELEASE SAVEPOINT award")
         log("waitlist.points.awarded", correlation_id, waitlistId=str(user_id), reason=reason, points=points)
+        # Only on a REAL award. A duplicate or a capped award returns before this,
+        # so re-clicking something already paid for cannot keep pushing the
+        # countdown out and delaying a summary the user has earned.
+        schedule_points_summary(cur, user_id, correlation_id)
         return points
     except psycopg2.errors.UniqueViolation:
         cur.execute("ROLLBACK TO SAVEPOINT award")
