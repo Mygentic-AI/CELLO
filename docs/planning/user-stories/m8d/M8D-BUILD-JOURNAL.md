@@ -1457,3 +1457,64 @@ From window 1 only, reply to the counterparty. Then in **window 2**, without rec
 Whatever happens, paste the raw output into a journal entry and flip the four lines on the strength
 of **that**, not on this plan. If a step fails, the failure is worth more than the tag — it is the
 first live evidence any of this has had.
+
+### 2026-08-02 — Entry 23: the reviewer caught the half of the race I closed and wrote up as whole
+
+**F1, blocking, reproduced on a real daemon with two real IPC connections:** two `ok:true`, two
+frames on the wire, two leaves.
+
+My reasoning in Entry 20 had a hole, and it is worth naming precisely because the first half was
+right:
+
+> ✅ A send **cannot** be refused after `sendContent` — the counterparty already holds it, and
+> refusing would strand the session with disagreeing frontiers.
+> ❌ *"…therefore checking only before it is sufficient."*
+
+**`sendContent` IS the last await, and the wider one** — relay submit, stream open, stream close, a
+network round trip in production, against the gateway round trip my check covered. I closed the
+narrower half of the window and wrote Entry 20 as though the race were closed. The DoD names *two*
+awaits; I guarded one and said so as if it were both.
+
+**The fix is a CLAIM, not another check.** A per-(agent, session) in-flight marker, taken in the same
+synchronous window as the frontier comparison and released when the wire call settles. A sibling that
+finds it held is refused **before its own wire call** — nothing is on the wire, nothing is stranded,
+and the very argument that ruled out a post-wire refusal never applies. Releasing on settle is safe
+because the continuation from `await` through `appendSessionLeaf` never yields; `finally`, so a throw
+cannot wedge a session into permanent refusal.
+
+### The test that agreed with me instead of checking
+
+`StallingGateway` held only the **first** entrant, so S1/S2 exercised the *sequential* race while
+their own docstring and AC5 both say *"both stall in screening"*. It passed, and it was measuring the
+half the frontier comparison already handled. Now it holds N, and the two shapes are **separate
+clauses pinning separate authorities** — concurrent → the claim, completed-sibling → the frontier
+comparison — plus S4, the reviewer's wire-parked reproduction, which was red before this fix.
+
+### F8 — and my first fix for it was too blunt
+
+The `since_seq` path raw-vaulted the watermark to the highest received sequence, jumping anything
+between. The jumped leaf can be a row that failed to decrypt: `readTranscript` drops it,
+`getUnreadReceivedCount` counts it — so **a message nobody could read was marked read**, clearing the
+gate's second authority.
+
+I replaced it with the standard gap-safe walk and **M8C-SINCESEQ-1 S1/S2/S3 went red** — correctly.
+`since_seq: N` is the caller **asserting it already holds through N**, so rows at or below N are its
+claim, and seeding the walk at the stored watermark makes ordinary catch-up stop dead at the first
+row the caller skipped. Seeded at `sinceSeq` instead: advances through the delivered run, stops at a
+hole **inside** the batch, which is where the undecryptable row lives and is the whole of F8. The
+suite corrected me; I did not talk it out of the failure.
+
+### And a green run that was not green
+
+`2454 passed | 0 failed` with **exit 1** — an unhandled rejection from my own S4, where a
+deliberately abandoned send rejects at teardown. *Every test passing is not the same as a green run*,
+which is the same lesson as reading past `ELIFECYCLE`, arriving from the other direction.
+
+Also fixed: F3 (the refusal is **advisory** — a loser that retries without reading gets through,
+deliberately, now stated in S5 rather than left for someone to discover in production), F4 (K1
+asserted a number scraped off a refusal instead of the send succeeding), F5 (the CATCHUP clauses are
+**characterization** — the line shipped no production code, so they cannot survive a revert; renamed
+so they stop reading as proof of a change), F6, F7.
+
+**⚠️ daemon `0.0.116` / cli `0.0.119` PREDATE this fix** and carry the open wire window. Entry 21's
+promotion block is stale; the next cascade supersedes it.
