@@ -18,7 +18,7 @@ description: >
 
 ## RESUME STATE (overwritten in place — the ONLY thing in this file that is)
 
-**Updated:** 2026-08-01, end of the autonomous run (Entry 14).
+**Updated:** 2026-08-01, autonomous run (Entry 16).
 
 - **Everything MERGED to `main` and pushed**, both repos. Gate verified **by exit code**: 2437
   passed / 11 skipped, lint + typecheck + build clean.
@@ -37,7 +37,7 @@ description: >
 | `DOD-COATTEND-VISIBLE-1` | 🟡 — ACs 1–5, 7 green. **AC 6 = the live two-session `claude --channels` journey. Needs Andre.** |
 | `DOD-RECEPTIONIST-AGENT-1` | ✅ |
 | `DOD-INBOX-AGENT-1` *(debt)* | ✅ |
-| **`DOD-COATTEND-1`** | ❌ **NEXT UNIT — Tier 1 is open.** Design-significant → design note first (§6). |
+| **`DOD-COATTEND-1`** | 🟡 **GREEN on the fixture** (ACs 1–6, revert-verified). AC 7 = live journey. **Review not yet run.** |
 | `DOD-COATTEND-CATCHUP-1` / `-SENDWINDOW-1` | ❌ land together, after COATTEND-1 |
 
 ### The next unit, concretely
@@ -1035,3 +1035,46 @@ clause must be verified by reverting the production change and watching it go re
 
 **Decisions this note makes.** (1) The durable record is the transcript, not a new table — no schema
 change, so no client migration. (2) `#receivedContent` is demoted, not deleted, this unit.
+
+## Entry 16 — DOD-COATTEND-1: the line M8D exists for is green (2026-08-01, autonomous)
+
+**Commit** `73bda73`. Gate **by exit code**: 2439 passed / 11 skipped, 226 files, lint + typecheck
+clean. Two sessions attend one agent, a message arrives, and **both receive it**.
+
+**The design note was right that almost nothing new was needed**, and checking that first is what
+made this a small diff instead of a new subsystem: the transcript is already the durable record, the
+per-connection cursor and `safeCursorAdvance` already exist and are already hole-safe, and
+`#appendVerifiedContent` writes the transcript row **before** it pushes to the buffer — so the record
+can never lag the queue it replaces. The blocking receive was the only path still popping.
+
+**AC3 fell out rather than being built.** The old queue could genuinely lose a message when the
+reading connection died — an in-flight `shift()` removed it from everyone's view and the dying reader
+never delivered it. With the record as the source of truth that is impossible. T5 pins it, and it is
+why the record is *strictly better* than the buffer rather than merely different.
+
+### One ordering bug this introduced — caught by an existing test, not by me
+
+Reading the durable record means a **sealed** session's rows are still present, so content kept being
+delivered on a terminated session and F1-b's `session_sealed` answer became unreachable. Under the
+destructive queue the ordering did not matter, because the seal EVICTED the buffer and the read found
+nothing. The terminal check is now hoisted above the record read. **This is the second time this run
+that an existing test caught a consequence I had not thought through** — the first was the
+`as never` deps.
+
+### Two contracts deliberately changed, rewritten rather than deleted
+
+1. **Five Tier-0 clauses asserted the loser is TOLD a sibling took its message.** There is no loser
+   now. They asserted **the visibility of a defect that no longer occurs**, so keeping them would pin
+   the defect — the opposite of their purpose. Replaced with one supersession clause. What Tier 0
+   actually delivered (attendance counts, attach never refused, `isAttended` untouched, a quiet
+   counterparty still reading as quiet) is unchanged and still guarded.
+2. **`M8C-SINCESEQ-1` S4** asserted a plain receive must NOT return a transcript row that was never
+   buffered — exactly what Tier 1 changes. Inverted, keeping the half that did not move: a plain
+   receive still returns the single-message shape, never the `since_seq` batch shape.
+
+**The `taken_by_sibling_session` discriminator is NOT deleted.** Deadness is proven by deletion plus
+a red build, never by "nothing reaches it today", and the drift and relay-degraded paths have not
+been re-examined against it. Its own unit.
+
+**Owed:** AC 7 — the live two-session `claude --channels` journey (Andre). And the unit has not yet
+had its `cello-unit-reviewer` pass.

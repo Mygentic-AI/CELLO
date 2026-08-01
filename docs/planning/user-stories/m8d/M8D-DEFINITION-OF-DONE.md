@@ -143,7 +143,14 @@ a visible one.
 
 ## Tier 1 — the redesign
 
-- **DOD-COATTEND-1** ❌ NOT BUILT (raised 2026-08-01) — **per-session delivery.** A message can no
+- **DOD-COATTEND-1** 🟡 BUILT/UNVERIFIED-LIVE (2026-08-01) — **per-session delivery.**
+
+  > ACs 1–6 green on the two-connection fixture (6 clauses, real daemon + IPC; three connections
+  > for listener mode). Delivery reads the durable transcript against the per-connection cursor;
+  > the doorbell stays multicast; AC3 falls out of the record being the source of truth.
+  > **Verified by revert** — restore `buf.shift()` and T1–T4 go red. **AC 7 owed**: the live
+  > two-session `claude --channels` journey. → Entry 16
+ A message can no
   longer be taken by the wrong session: delivery reads a **durable record against a per-session
   bookmark** instead of popping a shared queue.
 
