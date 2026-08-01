@@ -23,6 +23,7 @@ import {
   startSpineCluster,
   startDaemon,
   cello,
+  registerAgent,
   type SpineCluster,
   type Proc,
 } from "./live-harness.js";
@@ -70,11 +71,11 @@ describe("J-CONN — per-agent directory connections, no keystone (CELLO-M7-CONN
     //    election), then register runs a real DKG over alpha's own stream. ──
     expect(cello(["create-agent", "alpha"], { CELLO_DIR: dir }).status, "create alpha").toBe(0);
     await waitConnected("after create alpha");
-    expect(cello(["register", "alpha", devToken("a")], { CELLO_DIR: dir }).status, "register alpha").toBe(0);
+    expect(registerAgent("alpha", devToken("a"), { CELLO_DIR: dir }).status, "register alpha").toBe(0);
 
     // ── beta: a SECOND agent with its OWN dedicated connection + DKG (proves multi-agent per-agent). ──
     expect(cello(["create-agent", "beta"], { CELLO_DIR: dir }).status, "create beta").toBe(0);
-    expect(cello(["register", "beta", devToken("b")], { CELLO_DIR: dir }).status, "register beta").toBe(0);
+    expect(registerAgent("beta", devToken("b"), { CELLO_DIR: dir }).status, "register beta").toBe(0);
 
     // ── Remove alpha (the former keystone primary). Pre-CONN-001 this lingered authenticated as the
     //    removed agent and stranded the daemon. ──
@@ -92,7 +93,7 @@ describe("J-CONN — per-agent directory connections, no keystone (CELLO-M7-CONN
     //    directory connection were stranded (the bug), this real DKG would TIME OUT. It must succeed. ──
     expect(cello(["create-agent", "demo1"], { CELLO_DIR: dir }).status, "create demo1").toBe(0);
     await waitConnected("after create demo1");
-    const regDemo = cello(["register", "demo1", devToken("d")], { CELLO_DIR: dir });
+    const regDemo = registerAgent("demo1", devToken("d"), { CELLO_DIR: dir });
     expect(regDemo.status, `Demo1 registration must NOT strand after removing the former primary: ${regDemo.stdout}`).toBe(0);
 
     // demo1 and beta are both live; alpha stays retired (gone from the active list).
@@ -118,7 +119,7 @@ describe("J-CONN — per-agent directory connections, no keystone (CELLO-M7-CONN
     // Sole agent "solo" (also the would-be keystone primary). Create + register.
     expect(cello(["create-agent", "solo"], { CELLO_DIR: dir }).status, "create solo").toBe(0);
     await waitConnected();
-    expect(cello(["register", "solo", devToken("solo1")], { CELLO_DIR: dir }).status, "register solo").toBe(0);
+    expect(registerAgent("solo", devToken("solo1"), { CELLO_DIR: dir }).status, "register solo").toBe(0);
 
     // Remove solo. With a SOLE agent, pre-CONN-001 the keystone had no identity left at all after
     // removal — the worst stranding case. Recreate the freed name + register a NEW identity.
@@ -127,7 +128,7 @@ describe("J-CONN — per-agent directory connections, no keystone (CELLO-M7-CONN
     const created2 = cello(["create-agent", "solo"], { CELLO_DIR: dir });
     expect(created2.status, "recreate solo").toBe(0);
     await waitConnected();
-    const reg2 = cello(["register", "solo", devToken("solo2")], { CELLO_DIR: dir });
+    const reg2 = registerAgent("solo", devToken("solo2"), { CELLO_DIR: dir });
     expect(reg2.status, `re-registering the reused name must NOT strand: ${reg2.stdout}`).toBe(0);
   }, 150_000);
 });

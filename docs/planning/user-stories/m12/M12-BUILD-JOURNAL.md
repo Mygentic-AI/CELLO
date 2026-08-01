@@ -4984,3 +4984,115 @@ always mints a fresh revision.
 `DOD-MOVE-PORTAL-1` ✅, `DOD-MOVE-OPSAGENT-1` ✅ (reviewed, blocking findings closed).
 `DOD-E2E-GCP-1` behaviourally complete — manual, not a CI enforcer. Published `daemon@0.0.103` /
 `cli@0.0.106`. Everything remaining is AWS-gated.
+
+---
+
+## Entry 76 — 2026-08-01 — three bugs between a working system and a second agent
+
+*Greenfield databases, a full Telegram registration, and the first proof that a returning user can
+add a second agent on GCP. Andre drove every step from the real client and the real bot; nothing
+below was found by a test suite.*
+
+### The one that mattered: anti-entropy had been dead the whole time
+
+`SIGNAL_RECORDS_SPEC` listed a `subject` column. V46 created it. **V55 dropped it.** The spec was
+written by reading V46's `CREATE TABLE` and none of the nine migrations after it.
+
+The blast radius is the part worth remembering. `handling_ae_state_req` builds a digest per Tier-A
+table; one table's query throwing `column "subject" does not exist` aborts the whole request. So
+**one wrong column name in one spec stopped replication of all eleven Tier-A tables across all three
+nodes.** Every round, every peer, silently — a `warn` line on hosts nobody was tailing.
+
+It surfaced nowhere near itself. Telegram registration failed with `CLAIM_CODE_INVALID`. The ops
+agent mints the claim code against `DIRECTORY_INTERNAL_URL` (use1); the client, since cold-boot
+randomisation, picks a directory at random; the code was on exactly one node and reached no others.
+
+**Two things had been hiding it, and both were things we had called wins.**
+
+- On AWS every client landed on us-east-1 — the same node that minted the code — so a totally broken
+  replication layer produced a perfectly working registration. Randomisation did not cause this bug;
+  it *revealed* one that federation had been carrying.
+- The earlier "use the long-form token" workaround worked because a raw capability blob needs no
+  database lookup. It routed around the dead path and made the failure look like a claim-code format
+  problem. **A workaround that works is a diagnosis that stopped early.**
+
+Nothing could have caught it. The unit tests pin the Tier-A table LIST and its ORDER, not the
+columns; TypeScript cannot check a SQL identifier. `ae-spec-schema.test.ts` now replays every
+migration in numeric order — `CREATE TABLE`, `ADD COLUMN`, `DROP COLUMN` — and asserts every spec
+column survives to HEAD. It also asserts the parser honours `DROP COLUMN`, so it cannot pass
+vacuously on the exact bug it exists to catch.
+
+Verified live after deploy: `auth_failed_count=0`, rounds completing, `pulled:3 applied:3` on the
+first round as usc1 collected what it had been missing.
+
+### Adding a second agent was impossible — a transition that was only ever a variable name
+
+`handleExistingUser` inserted the registration in `INITIAL` under a comment promising it would
+"immediately transition to AWAITING_CONTACT", then did `const awaitingRecord = record` and returned
+it. **The transition was never written. Only the name implied it had been.**
+
+`handleNewUser` had already been fixed to insert directly into its destination state, with a comment
+explaining that insert-then-transition left a window where a record could sit in `INITIAL` and ask
+for a phone number out of order. This path never got the same treatment — and here it was not a
+window, it was the steady state.
+
+Two things hid it: the tests asserted on records they constructed themselves in `AWAITING_CONTACT`
+rather than the one the method returns, so the single wrong field was the single field never read.
+And on AWS the waitlist gate refused re-registration before this code ran, so the loop only became
+reachable once `WAITLIST_GATE=disabled` went on.
+
+### And the fix appeared to do nothing — because the states were dead ends
+
+Andre kept looping after that deployed. `INITIAL` and `PHONE_CONFIRMED` replied "Please share your
+phone number using the button below" and **returned the record unchanged**. `handleMessage` routes
+on state, the state never moved, so the next message hit the same case and got the same reply. There
+was no message a user could send to escape — a fresh `CONFIRM` hit it too.
+
+Fixing the producer does nothing for rows the old code already wrote, and a 7-day TTL is not a
+recovery path. **A transient state that cannot advance is not a prompt, it is a trap.** Both states
+now recover: `INITIAL` heals to `AWAITING_CONTACT` and processes the message the user actually sent;
+`PHONE_CONFIRMED` advances to `AWAITING_EMAIL`, since the phone is already verified and hashed and
+re-requesting it asks again for PII the system has stored.
+
+`INITIAL` re-asks the gate before healing. `AWAITING_CONTACT` is the state that requests a phone
+number, and the gate exists so nobody unvetted is asked for PII — promoting unconditionally would
+hand the PII prompt to a record that may be sitting there *because* it was refused. A refused record
+goes to `AWAITING_WAITLIST_TOKEN`. There is a test for that ordering specifically; it is the way this
+fix could have done real harm.
+
+### Diagnostic notes worth keeping
+
+- **The error message named the wrong layer three times.** `CLAIM_CODE_INVALID` is a claim-code
+  reason on a replication defect. `auth_failed` is an authentication event on a SQL error. The one
+  line that actually named the cause — `column "subject" does not exist` — was inside a `reason`
+  field on a warn log, not in anything surfaced to a user or an operator.
+- **I checked the deployed image before blaming the code.** `dir-bdcb5773` already contained the
+  7-table AE fix at both registration sites, which ruled out "the fix was never deployed" — the
+  answer the previous instance of this bug had. Same symptom, different cause.
+- Three of my own queries were wrong before any of this: joining `agent_presence` → `agent_profiles`
+  before AE had converged, a grep filter eating hex-prefixed output, and reading
+  `agent_key_shares.agent_id` as an agent id when it holds the k_local pubkey.
+
+### Build
+
+`public.ecr.aws` returned `toomanyrequests: Rate exceeded` and failed two Cloud Builds. All three
+Dockerfiles now pull `node:24-slim` from `mirror.gcr.io` — same upstream artifact, and a GCP build no
+longer depends on a registry belonging to the cloud we are migrating off.
+
+### State
+
+Greenfield on all three directories, then registered **two** agents through the real Telegram bot:
+`Miss_Chelly` (`06c94560`) and `CELLO_Coder_1` (`80e8f3ce`). Both `online` with
+`standing_receiver_ready`, and both replicated to all three nodes — `profiles=2 shares=2 presence=2`,
+identical ids, one FROST share per node. The second-agent path has now run on GCP for the first time.
+
+Commits: `69825467` (AE column + migration-replay guard), `a4700cd3` (handleExistingUser),
+`2a5becd2` (transient-state recovery), `75c263e2` (base images).
+
+### Open, and deliberately so
+
+- **`WAITLIST_GATE=disabled` is ON.** Registration admission is not being checked. It is how the
+  re-registration path became reachable at all; it must go back on before launch.
+- **One bad table still kills the entire AE round for every table.** That is what turned a one-word
+  typo into a silent multi-day outage. Per-table isolation would make the next one a noisy warning
+  instead of an invisible stop. Not done — recorded so it is a decision, not an oversight.

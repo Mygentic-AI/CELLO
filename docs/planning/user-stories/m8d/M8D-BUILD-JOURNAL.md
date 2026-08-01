@@ -18,22 +18,47 @@ description: >
 
 ## RESUME STATE (overwritten in place — the ONLY thing in this file that is)
 
-**Updated:** 2026-08-01, after Entry 3.
+**Updated:** 2026-08-01, after Entry 6.
 
-- **Worktrees.** `cello-client-m8d` and `trustless-cello-m8d`, both on branch `m8d/co-attendance`.
-  Bases: `origin/main` @ `2349236` (client) and `main` @ `ec96852d` (docs).
-- **Done.** `DOD-RECEPTIONIST-AGENT-1` **✅** — all four ACs, AC 4 at execution level
-  (`78a6ba7` → `a02dee9` → `bd37ede`). `DOD-COATTEND-VISIBLE-1` **🟡** — ACs 1–5, 7 enforcer-green,
-  reviewed, every finding fixed (`51ab230` → `0f37607`).
-- **Next red.** `DOD-COATTEND-1` (Tier 1) — **but Tier 1 is FENCED** behind M8C's
-  `DOD-FIRSTMSG-WITNESS-1` (ACs 7–8 owed) and `DOD-FRONTIER-STRAND-1` (open); re-confirmed closed
-  2026-08-01. **Nothing in M8D is workable until that fence lifts.** The blocker is spine rot: 66
-  `cello register` call sites across 20 files, owned by M8C, deliberately not taken here (see the
-  DoD's scope fence).
-- **Owed to Andre (procedure stop-reason 1 — do not block on it).** The live two-session
-  `claude --channels` journey for `DOD-COATTEND-VISIBLE-1` AC 6, and a `connect` beta publish so the
-  doorbell body ships (the in-context half of AC 2 is shim-side).
-- **Gate at HEAD.** 2396 passed / 11 skipped, lint + typecheck + build clean.
+- **Everything is MERGED TO `main`** in both repos (the `m8d/co-attendance` worktrees still exist and
+  track it). Client `main` @ `20c331b`; docs `main` @ the Entry 5 commit.
+- **Done.** `DOD-RECEPTIONIST-AGENT-1` **✅** (all four ACs, AC 4 at execution level).
+  `DOD-COATTEND-VISIBLE-1` **🟡** (ACs 1–5, 7 enforcer-green; AC 6 is a live journey).
+  `DOD-INBOX-AGENT-1` *(debt — from M8C)* **✅** — reviewed, and the review found the same
+  accept-and-drop shape in four more places, including the shim line the fix itself wrote.
+  `DOD-FRONTIER-STRAND-1` **AC2 only** landed (M8C line; ACs 1/3/4 still open, so the fence holds).
+- **PUBLISHED to beta, binary-verified (two rounds):** `v0.0.170` → daemon `0.0.111` / cli `0.0.114`
+  / connect `0.0.113`, then `v0.0.171` → **daemon `0.0.112`, cli `0.0.115`, connect `0.0.114`**,
+  which is HEAD. Verified by `npm pack` + grep: `dist/co-attendance.js`, `dist/resolve-named-agent.js`
+  (all four refusal reasons), `session.frontier.mismatch`, the doorbell body, and connect's six
+  `agent !== undefined` sites. Cross-pins are real versions (`cli@0.0.115 → daemon@0.0.112`).
+- **`latest` NOT promoted — operator-run, always.** Prepared, for when Andre wants the reinstall:
+  ```
+  npm dist-tag add @cello-protocol/connect@0.0.114 latest
+  npm dist-tag add @cello-protocol/cli@0.0.115 latest
+  npm dist-tag add @cello-protocol/daemon@0.0.112 latest
+  npm dist-tag add @cello-protocol/gateway@0.0.23 latest
+  npm dist-tag add @cello-protocol/crypto@0.0.38 latest
+  npm dist-tag add @cello-protocol/transport@0.0.42 latest
+  npm dist-tag add @cello-protocol/protocol-types@0.0.40 latest
+  ```
+  then `npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest`,
+  `cello logout && cello login`, and `/mcp`. (`--prefer-online` is not optional right after a
+  promotion — `@latest` resolves from the operator's cached packument.)
+- **✅ Docker is UP and the spine suite RUNS** (it just needed starting; 30 orphaned Compose
+  networks pruned to free the address pool). Flyway: 57 migrations, clean. The 66-site
+  `cello register` rot is **repaired and verified live** — `j-conn` 2/2, `j-presence` 1/1.
+  **Runnable, not green:** `j-content` now hits a SECOND, unrelated blocker
+  (`discovery_node_unresolvable` — the harness only sets `NODE_ID` when a directory node key is
+  supplied, so the directory defaults to `local` while manifests list `aws-spine-N`), and `j-sign`
+  fails for a third reason not yet diagnosed. Four files run, not twenty.
+- **Tier 1 stays FENCED** behind M8C's `DOD-FIRSTMSG-WITNESS-1` (ACs 7–8 owed — blocked on the same
+  spine rot) and `DOD-FRONTIER-STRAND-1` (❌ open, an unbuilt M8C line). Note `FIRSTMSG`'s *code* is
+  shipped, so §7a's drift no longer persists; what is owed there is live proof.
+- **Owed to Andre.** (1) Docker up, or a decision to close live ACs elsewhere. (2) The live
+  two-session `claude --channels` journey for AC 6. (3) The `latest` promotion, when he wants the
+  reinstall. (4) A call on whether M8D should absorb `DOD-FRONTIER-STRAND-1` to lift its own fence.
+- **Gate at HEAD.** 2417 passed / 11 skipped, lint + typecheck + build clean.
 
 ---
 
@@ -360,3 +385,190 @@ not a two-line edit — so it is out of scope for this line and recorded here ra
 level, with revert-measured teeth. This line has **no in-context hop** — its behavior ends in a bash
 loop on the operator's machine, not inside Claude's context — so unlike `DOD-COATTEND-VISIBLE-1` it
 needs no live `claude --channels` journey to close.
+
+## Entry 4 — Tier 0 published to beta; a debt line raised and fixed; the fence measured (2026-08-01)
+
+### The publish — verified against the BINARY, not the CI status
+
+Tag `v0.0.170`, cascade bumped all seven published packages. Every job green, including
+`Published-artifact smoke test (tag)` — which is the real success signal.
+
+| package | beta |
+|---|---|
+| crypto / protocol-types / transport / gateway | `0.0.37` / `0.0.39` / `0.0.41` / `0.0.22` |
+| **daemon** | **`0.0.111`** |
+| **cli** | **`0.0.114`** |
+| **connect** | **`0.0.113`** |
+
+Binary verification (`npm pack` + grep `dist/`, per `/cello-publish` step 5):
+
+- `daemon@0.0.111` ships `dist/co-attendance.js`, `taken_by_sibling_session`,
+  `session.receive.taken_by_sibling`, and `forget(connectionId)` — i.e. the discriminator AND the
+  review fix that stopped it firing on every reconnect.
+- `connect@0.0.113` ships the doorbell body (`sessions are attending this agent`).
+- Cross-pins are **real versions, never `workspace:*`**: `cli@0.0.114 → daemon@0.0.111`,
+  `connect@0.0.113 → crypto@0.0.37, transport@0.0.41`.
+
+**`latest` NOT promoted** — that is operator-run, always. Prepared command set in the handoff below.
+
+**Not in this publish:** `DOD-INBOX-AGENT-1` landed after the tag was cut and needs the next one.
+
+### DOD-INBOX-AGENT-1 (debt — from M8C) — raised and fixed
+
+The `DOD-RECEPTIONIST-AGENT-1` review noted the receptionist **skill** carries the same defect as
+the subagent, one layer up, and could not be fixed the same way because the door did not exist:
+
+> `cello_check_notifications` called `resolveCurrentAgent(connState)` with **no** explicit-agent
+> argument, while every sibling handler calls `resolveCurrentAgent(connState, params?.agent)`.
+
+The parameter already existed and already worked (`daemon.ts:1764` — `explicitAgent` wins); this one
+caller never passed it. So `{ agent: "bob" }` was accepted, silently dropped, and answered for
+whatever agent the **connection** held — `ok: true`, wrong desk, no signal. **I3 pins the worst
+shape: asking about `carol` returned alice's inbox under `ok: true`.**
+
+Why it is not cosmetic: skills and subagents in one Claude Code session **share one MCP connection**,
+so a sibling's `cello_use_agent` re-points yours mid-loop. That is the receptionist's shared-file
+collision with a socket standing in for `~/.cello/current-agent`.
+
+Fixed on all three surfaces so the chain actually connects: daemon passes the param and refuses an
+unknown (`agent_not_found`) or empty (`missing_agent_value`) name; the MCP shim exposes `agent` on
+`cello_inbox`; and `SKILL.md` step 3 now names the agent — closing a contradiction where its own
+step 1 told the operator to always pass the agent explicitly and step 3 then did not.
+
+Gate: **2401 passed / 11 skipped**, lint, typecheck, build clean. Review dispatched.
+
+### The fence, measured rather than estimated
+
+Two corrections to Entry 2's framing and to the DoD note I wrote earlier today:
+
+1. **The spine rot is mixed, not uniformly a migration.** `j-conn`, `j-remove` and `j-suspend`
+   already call `create-agent` separately and need only the verb renamed; the other **17** files call
+   `register` alone and need the create step added. 66 sites, 20 files.
+2. **Docker is unavailable in this environment** (`docker info` fails), so `docker-compose` Postgres
+   + Flyway cannot come up and **the spine suite cannot be run here at all.** That upgrades the
+   reason for not taking the repair from *scope* to *verifiability*: a 66-site edit that cannot be
+   executed even once is a blind edit, which §5c forbids.
+
+**This is the binding constraint on the rest of the milestone**, and it is worth naming precisely
+because it is easy to mistake for a scope decision: the spine harness is M8D's own live enforcer
+(`M8D-PROCEDURE` §2d), so **no live-journey AC can close on this machine until Docker is up** —
+`DOD-COATTEND-VISIBLE-1` AC 6 included.
+
+## Entry 5 — the same defect in five places, and the enforcer that was blind to it (2026-08-01)
+
+**Commits.** `4d42ec9` (DOD-INBOX-AGENT-1) → `20c331b` (every review finding + FRONTIER AC2).
+Gate at `20c331b`: **2417 passed / 11 skipped**, lint, typecheck, build clean.
+
+### The finding worth remembering
+
+The review's central point was not any single defect. It was that **the unit's own thesis — a
+parameter accepted and silently dropped — reproduced in four more places the fix never looked**,
+including the shim line the fix had just written:
+
+```ts
+...(agent ? { agent } : {}),     // zod's z.string().optional() ACCEPTS ""
+```
+
+A truthiness test. So an unsubstituted `<exact name>` placeholder — the exact case the skill's
+prose warns about — reached the daemon as *"no agent given"*, was answered for whatever desk the
+connection held, `ok: true`. **It made the daemon's brand-new empty-name guard unreachable from the
+only surface that matters.** Three sibling tools had the same drop; two of them WRITE.
+
+Full set, all fixed behind one `resolveNamedAgent`: the empty string (shim), a non-string value
+(direct IPC — §5a: unreachable is a property of today's call graph, not of the code), the
+`scope: "all"` branch (same parameter, refused when empty, ignored when unknown — *depending on
+scope*), and `contact-handlers.ts`, where `{ agent: "carol" }` filed a contact row keyed to an agent
+that does not exist because `addContact` never validated the name.
+
+### The enforcer was already there, and it was blind
+
+`m8c-agent-param-1-tools.test.ts` exists **for exactly this defect class** — its header says a
+declared-but-dropped parameter "is worse than no param". It iterates a **hand-maintained list**, and
+`cello_inbox` was never in it. *That is why this survived `DOD-AGENT-PARAM-1` and needed a human to
+find it a milestone later.* **Omitting an entry makes the loop shorter, never red.**
+
+Adding `cello_inbox` to the list would have left the blindness exactly as it was. So the list is now
+backed by a **derived** guard: scan the shim source, and every tool that *declares* `agent` must
+forward it under the key the daemon reads and must not drop an empty one — whether or not anyone
+listed it. **It found a live instance on its first run** (`cello_contact_add`'s
+`if (agent) params.agent = agent`), which is the whole argument for it.
+
+### Error substitution: "does not exist" for an agent that does
+
+A `load_failed` agent was reported as `agent_not_found`, with guidance pointing at `cello_agents` —
+which **filters `load_failed` agents out**. The operator would look, see nothing, confirm the wrong
+diagnosis, and never reach `cello_status`, which shows the real error. Now `agent_load_failed`,
+carrying the underlying error and a warning that `cello_agents` will mislead.
+
+### Also landed: DOD-FRONTIER-STRAND-1 **AC2 only** (M8C)
+
+Worked because it is the fence M8D opens behind, and it is daemon-local so Docker is not needed. The
+refusal now carries **both** frontiers plus the diverging index, and logs `session.frontier.mismatch`
+at WARN. The old text — *"ask the counterparty to check their interrupted sessions on their end"* —
+is unfollowable when both agents run on ONE daemon, which is precisely how session `dbb93dfc…` sat
+stranded for a week: it named the one action that could not be taken and withheld the two numbers
+that identify the problem.
+
+**ACs 1, 3 and 4 of that line remain OPEN.** AC1 (position-keyed dedup, per the 2026-07-31 root-cause
+correction) is the producer-side fix and is a unit of its own. **This does not close
+`DOD-FRONTIER-STRAND-1`, and the Tier-1 fence therefore does not lift.**
+
+### What I got wrong, recorded
+
+Two of my own defects this round, both the same shape as the thing I was fixing:
+
+1. The shim truthiness drop above — I wrote the guard and the bypass in the same commit.
+2. I made `agents` a required dep without updating the `contact-handlers-seam` harness, so the gate
+   went red on a test that encodes the OLD contract. Correct outcome: the harness now declares who
+   exists, and two new clauses pin that **nothing is written** on either refusal.
+
+## Entry 6 — the live spine suite runs again (2026-08-01)
+
+**Docker was the whole blocker, and it just needed starting.** Two incidental fixes to get there:
+Docker Desktop launched, and **30 orphaned Compose networks pruned** — every one with zero
+containers, left by old worktrees — because the address pool was exhausted and `compose up` could
+not create a network at all. Postgres then came up and **Flyway applied 57 migrations cleanly to
+v57**.
+
+### The rot, fixed and verified live
+
+66 `cello register <name> <token>` call sites across 20 files. The CLI had split onboarding into
+`create-agent` + `register-agent`, so every one of those files died in agent **setup**, before a
+session existed — which is what left the suite unrunnable and blocked
+`DOD-FIRSTMSG-WITNESS-1`'s ACs 7–8.
+
+```
+✓ src/spine/j-conn.spine.test.ts (2 tests) 29102ms       ← was: "register solo: expected 1 to be +0"
+✓ src/spine/j-presence.spine.test.ts (1 test) 82106ms
+```
+
+Real Postgres, real Flyway, a real directory and relay, real daemon binaries.
+
+**The subtlety, recorded because it is where a careless version of this repair goes wrong.**
+`registerAgent()` deliberately **does not create the agent**. Every spine file already provisions
+first, by one of two routes: `provisionAgent()` writes a **key file** (imported into the encrypted
+`agents` table by identity-migration at daemon start), or the test calls `cello create-agent`
+explicitly. A create inside the helper would be a no-op in every current case — and in any case
+where it were *not* a no-op it would mint a **second K_local seed under the same name**, so the test
+would register a pubkey that is not the one it provisioned and asserted on. Silently. I wrote the
+create-and-tolerate version first, checked which files provision, and removed it.
+
+`j-spine` had its own local `registerAgent` that parses `register_success`; the new import shadowed
+it into infinite recursion. **Typecheck caught that, not a test run** — renamed to `registerAndParse`.
+
+### The SECOND blocker underneath, which is not mine and not the same thing
+
+With registration working, `j-content`'s first case now runs a full relay store-and-forward deposit
+— and the remaining nine fail on:
+
+> `discovery_node_unresolvable` — *"The counterparty's home node (**local**) is not in the signed
+> consortium manifest."*
+
+The harness sets `NODE_ID` **only** when a directory node key is supplied
+(`live-harness.ts` ~772); otherwise the directory keeps its default id `local`, while
+`auth-manifest.ts`'s `spineNodeId(i)` builds manifests listing `aws-spine-N`. Post-M12 drift of a
+different kind, in a different file, and **its own unit of work.** Not folded into the register
+repair — a commit that fixes two unrelated causes is a commit nobody can revert cleanly.
+
+`j-sign` also fails, for a third reason not yet diagnosed. **The suite is not green; it is
+RUNNABLE**, which it was not this morning. No claim beyond that: I ran four files, not twenty.

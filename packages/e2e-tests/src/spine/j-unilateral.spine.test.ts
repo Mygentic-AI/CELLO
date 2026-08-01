@@ -35,7 +35,7 @@ import {
   startDaemon,
   provisionAgent,
   connectMcp,
-  cello,
+  registerAgent,
   type SpineCluster,
   type Proc,
   type McpConn,
@@ -87,8 +87,8 @@ async function setupAtoBSession(label: string): Promise<{
   });
   const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, `${label}B`);
   daemons.push(daemonA, daemonB);
-  expect(cello(["register", "agentA", `DEV-${label}-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA }).status).toBe(0);
-  expect(cello(["register", "agentB", `DEV-${label}-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirB }).status).toBe(0);
+  expect(registerAgent("agentA", `DEV-${label}-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
+  expect(registerAgent("agentB", `DEV-${label}-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
 
   const connA = await connectMcp(celloDirA, `${label}-A`);
   mcpConns.push(connA);
@@ -127,8 +127,8 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     });
     const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "uniB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-uni-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-uni-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-uni-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-uni-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
 
     const connA = await connectMcp(celloDirA, "uni-A");
     mcpConns.push(connA);

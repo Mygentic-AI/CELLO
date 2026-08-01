@@ -28,6 +28,7 @@ import {
   provisionAgent,
   connectMcp,
   cello,
+  registerAgent,
   ipcCall,
   type SpineCluster,
   type Proc,
@@ -76,8 +77,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // no per-daemon standing receiver at initialize() anymore. The outbound deposit (A) and pull (B)
     // each dial the relay from their own agent's standing-receiver node, so both agents must be
     // started first. (Pre-re-key this test relied on the per-daemon receiver and started no agent.)
-    expect(cello(["register", "agentA", `DEV-tr-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-tr-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-tr-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-tr-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
     const connTA = await connectMcp(dirA, "tr-A");
     const connTB = await connectMcp(dirB, "tr-B");
     mcpConns.push(connTA, connTB);
@@ -128,8 +129,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const daemonA = await startDaemon(dirA, cluster.directoryUrl, "sendparkA");
     const daemonB = await startDaemon(dirB, cluster.directoryUrl, "sendparkB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-sp-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-sp-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-sp-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-sp-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
 
     const connA = await connectMcp(dirA, "sp-A");
     const connB = await connectMcp(dirB, "sp-B");
@@ -173,8 +174,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const daemonA = await startDaemon(dirA, cluster.directoryUrl, "recA");
     let daemonB = await startDaemon(dirB, cluster.directoryUrl, "recB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-rec-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-rec-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-rec-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-rec-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
 
     let connA = await connectMcp(dirA, "rec-A");
     let connB = await connectMcp(dirB, "rec-B");
@@ -253,8 +254,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const daemonA = await startDaemon(dirA, cluster.directoryUrl, "tamperA");
     const daemonB = await startDaemon(dirB, cluster.directoryUrl, "tamperB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-tp-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-tp-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-tp-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-tp-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
     const connA = await connectMcp(dirA, "tp-A");
     const connB = await connectMcp(dirB, "tp-B");
     mcpConns.push(connA, connB);
@@ -317,8 +318,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const daemonA = await startDaemon(dirA, cluster.directoryUrl, "dedupA");
     const daemonB = await startDaemon(dirB, cluster.directoryUrl, "dedupB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-dd-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-dd-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-dd-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-dd-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
     const connA = await connectMcp(dirA, "dd-A");
     const connB = await connectMcp(dirB, "dd-B");
     mcpConns.push(connA, connB);
@@ -369,8 +370,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const daemonA = await startDaemon(dirA, cluster.directoryUrl, "ackA");
     const daemonB = await startDaemon(dirB, cluster.directoryUrl, "ackB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-ak-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-ak-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-ak-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-ak-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
     const connA = await connectMcp(dirA, "ak-A");
     const connB = await connectMcp(dirB, "ak-B");
     mcpConns.push(connA, connB);
@@ -408,8 +409,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     let daemonA = await startDaemon(dirA, cluster.directoryUrl, "flushA");
     const daemonB = await startDaemon(dirB, cluster.directoryUrl, "flushB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-fl-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-fl-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-fl-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-fl-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
     let connA = await connectMcp(dirA, "fl-A");
     const connB = await connectMcp(dirB, "fl-B");
     mcpConns.push(connA, connB);
@@ -480,8 +481,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const daemonA = await startDaemon(dirA, cluster.directoryUrl, "soA");
     const daemonB = await startDaemon(dirB, cluster.directoryUrl, "soB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-so-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-so-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-so-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-so-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
     const connA = await connectMcp(dirA, "so-A");
     const connB = await connectMcp(dirB, "so-B");
     mcpConns.push(connA, connB);
@@ -524,8 +525,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const daemonA = await startDaemon(dirA, cluster.directoryUrl, "arA");
     let daemonB = await startDaemon(dirB, cluster.directoryUrl, "arB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-ar-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-ar-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-ar-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-ar-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
     let connA = await connectMcp(dirA, "ar-A");
     let connB = await connectMcp(dirB, "ar-B");
     mcpConns.push(connA, connB);
@@ -591,8 +592,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const daemonA = await startDaemon(dirA, cluster.directoryUrl, "msg8A");
     const daemonB = await startDaemon(dirB, cluster.directoryUrl, "msg8B");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-m8-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-m8-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-m8-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-m8-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
     const connA = await connectMcp(dirA, "m8-A");
     const connB = await connectMcp(dirB, "m8-B");
     mcpConns.push(connA, connB);

@@ -24,6 +24,7 @@ import {
   startDaemon,
   connectMcp,
   cello,
+  registerAgent,
   provisionAgent,
   psqlSpineN,
   copyAgentProfileBetweenNodes,
@@ -107,7 +108,7 @@ describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
     expect(connected, "signaling never connected").toBe(true);
 
     for (const name of ["ainit", "xtarget"]) {
-      const r = cello(["register", name, `DEV-suspn-${name}-${randomBytes(6).toString("hex")}`], env);
+      const r = registerAgent(name, `DEV-suspn-${name}-${randomBytes(6).toString("hex")}`, env);
       expect(r.status, `register ${name} failed: ${r.stdout}`).toBe(0);
     }
 
@@ -170,7 +171,7 @@ describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
     const pubB = (JSON.parse(createOut.stdout.trim()) as { pubkey?: string }).pubkey!;
     expect(pubB, `binit must have a K_local pubkey: ${createOut.stdout}`).toMatch(/^[0-9a-f]{64}$/);
     {
-      const r = cello(["register", "binit", `DEV-suspn-binit-${randomBytes(6).toString("hex")}`], env);
+      const r = registerAgent("binit", `DEV-suspn-binit-${randomBytes(6).toString("hex")}`, env);
       expect(r.status, `register binit failed: ${r.stdout}`).toBe(0);
     }
     const connB = await connectMcp(celloDir, "suspn-B");

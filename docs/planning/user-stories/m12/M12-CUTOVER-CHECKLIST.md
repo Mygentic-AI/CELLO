@@ -56,12 +56,24 @@ changes another item, say so there — that is what this file is for.
 | J | — | 2026-07-31 | ✅ done — daemon@0.0.107 / cli@0.0.110 |
 | K | — | 2026-07-31 | ✅ done (see §4) |
 | I | — | 2026-07-31 | ✅ done — two relays live |
-| C | waitlist-port session | 2026-07-31 | 🔄 in progress — landing under **M11** as the `DOD-GCP-*` tier |
+| C | waitlist-port session | 2026-07-31 | ✅ **done** — the flow works end to end on GCP; see note below |
 | D | waitlist-port session | 2026-07-31 | ✅ **done** — `api.cello.mygentic.ai` → `35.227.231.107` (GCP), INSYNC |
-| E | *unclaimed* | | |
 | F | — | — | ✅ done (see §4) |
 | G | — | 2026-08-01 | ✅ guidance fix — says retry, not check config |
 | H | — | — | ✅ done (see §4) |
+
+**C is DONE.** The waitlist runs on GCP end to end — signup through to registration. Work continues
+on it, but that work is product iteration (flow tweaks, additions Andre wants) and fixes that predate
+the migration entirely. Neither is a cutover question: "does it run on GCP" and "is it the flow I
+want" are different questions, and only the first one is M12's.
+
+**E IS DELETED, NOT DONE.** It asked to re-register Andre's existing agents on GCP. He never wanted
+that — the opposite: GCP was the opportunity to start GREENFIELD with brand-new agents, which is
+exactly what happened (`Miss_Chelly` and `CELLO_Coder_1`, registered from scratch on 2026-08-01
+against wiped directories). The item was added without being asked for, and it contradicted a
+decision recorded two tables above it in this very document: *"Agent identities — ❌ Not migrated, by
+decision — fresh agents."* An invented item that argues with the record is worse than a missing one;
+it is deleted rather than ticked, so nothing reads as though the work was ever wanted.
 
 **C is being worked under M11, not M12.** The waitlist is M11's deliverable and M11's DoD is its
 sole status authority, so the port gets `DOD-GCP-*` lines in `M11-DEFINITION-OF-DONE` rather than
@@ -244,11 +256,31 @@ GCP) → `registration.email.verified`.
 **Known cosmetic:** `registration.gate.NOT_ENFORCED` says *"Expected only under CELLO_ENV=local"* —
 dev-on-GCP is now a second legitimate case. Message only.
 
-### ✅ D — Repoint the corp site's `/api/waitlist`  *(done 2026-07-31)*
+### ✅ D — Repoint the corp site's `/api/waitlist`  *(2026-07-31; completed 2026-08-01)*
 
-**It needed no corp-site change at all**, which was the point of keeping the hostname. The nginx
-block already proxies `/api/waitlist/` and `/gallery/` to `api.cello.mygentic.ai`; only the Route 53
-record moved. No Lightsail deploy, no site rebuild.
+**This was recorded as needing no corp-site change. That was wrong, and it cost a day of the
+waitlist being down.**
+
+The DNS move was necessary but not sufficient. nginx resolves a literal hostname in `proxy_pass`
+once, when it loads its config, and then holds those addresses for the life of the process. The
+Lightsail host (`cello-site`, eu-west-1) last started 2026-06-13, so it went on sending every
+`/api/waitlist/` and `/api/gallery/` request to the AWS API Gateway addresses it had resolved in
+June — six weeks before the repoint. That backend is still running; its RDS is hibernated, so it
+answers `503 database_unreachable`, which the signup form renders as "We couldn't check whether
+you're already signed in."
+
+**Why it was missed.** The endpoint checked at cutover was `/signup`, which validates its payload
+before touching the database — so the retired AWS backend and the live GCP one answered it
+identically. The one probe run was the one probe that could not tell them apart. `/auth/session`
+would have shown it immediately.
+
+Fixed 2026-08-01 (`corp-cello-site` 4630f5f): the hostname now lives in a variable with an explicit
+`resolver`, which forces per-request resolution, so the next endpoint move needs no deploy. Verified
+live — `auth/session` 401, signup 400, gallery 200 on both hosts, `/api/` backstop still 404.
+
+**The general rule this earns:** a DNS repoint does not reach a process that already resolved. When
+cutting over a hostname, either restart what consumes it or verify from the consumer's side — and
+probe an endpoint that actually touches the moved dependency, not one that short-circuits first.
 
 ```
 api.cello.mygentic.ai  A(alias) d-jgbfq5nmal.execute-api.us-east-1.amazonaws.com
@@ -276,13 +308,6 @@ record resolves to the load balancer, so `api.cello.mygentic.ai` fails TLS until
 (typically 15–60 minutes). During that window the hostname is differently broken rather than newly
 broken — it was returning 503 before. Watch it with:
 `gcloud compute ssl-certificates describe cello-waitlist-cert --global --project cello-infra`.
-
-### ❌ E — Re-register Andre's agents on GCP
-They are online on `gcp-use1` with **no profile and no key share** — a socket and a presence row with
-no identity behind them, because they were registered against the AWS consortium. Until this is done
-day-to-day CELLO does not actually work for him. Small, and it is the one that affects him personally.
-
----
 
 ### ❌ I — Add a second relay (europe-west1)
 

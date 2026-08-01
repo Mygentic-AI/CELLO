@@ -48,6 +48,12 @@ INTERVIEW_COMMIT_POINTS = 30
 # 0023 means there is only ever one row.
 CONTENT_ALERTS_POINTS = 10
 
+# How long the "your points went up" email waits for the user to stop earning.
+# Long enough that a survey → readiness → interview → alerts run in one sitting
+# collapses into a single email; short enough that the mail still reads as a
+# response to what they just did rather than as unrelated marketing.
+POINTS_SUMMARY_QUIET_SECONDS = int(os.environ.get("POINTS_SUMMARY_QUIET_SECONDS", "180"))
+
 MAX_FREEFORM_LEN = 4000
 MAX_URL_LEN = 2048
 
@@ -118,6 +124,64 @@ def require_session(cur, event):
     return session["waitlist_user_id"]
 
 
+def schedule_points_summary(cur, user_id, correlation_id):
+    """Push the 'your points went up' email out to now() + the quiet period.
+
+    A DEBOUNCE, HELD IN THE DATABASE. Working through the status page pays out
+    four separate times in about as many minutes; confirming each one by email is
+    four emails for what the user experienced as one sitting. So the mail is not
+    sent per award — each award resets a countdown, and only silence sends it.
+
+    THE COUNTDOWN CANNOT LIVE IN THE BROWSER. A JavaScript timer dies with the
+    tab, and somebody who fills in three sections and then closes the browser is
+    exactly who this email is for. `scheduled_at` is already a durable
+    server-side timer — claim_jobs only takes rows at or past it — so the
+    countdown is just a date, and no new machinery is needed to hold it.
+
+    ONE ROW PER USER, which is what 0027's partial unique index buys. Without it
+    four awards enqueue four rows and the debounce has rebuilt the problem it
+    exists to solve. The upsert names that index's predicate so Postgres infers
+    it rather than the primary key.
+
+    NOT REACHED BY THE REFERRAL BONUS, and that is what keeps the debounce
+    bounded. Every reason that flows through award() is once-per-user (0009), so
+    the worst case is five resets and then it sends. The referral bonus is the
+    one award somebody else can trigger repeatedly; it lives in _referral.py, has
+    its own email, and so never touches this countdown.
+
+    Best-effort by design: the points are already committed to the ledger, and a
+    failure here must not roll back an award the user has earned over a
+    notification about it.
+    """
+    cur.execute("SAVEPOINT points_summary")
+    try:
+        cur.execute(
+            """
+            INSERT INTO email_jobs (user_id, template, scheduled_at)
+            VALUES (%s, 'points_summary', now() + make_interval(secs => %s))
+            ON CONFLICT (user_id) WHERE template = 'points_summary' AND status = 'pending'
+            DO UPDATE SET scheduled_at = now() + make_interval(secs => %s)
+            """,
+            (user_id, POINTS_SUMMARY_QUIET_SECONDS, POINTS_SUMMARY_QUIET_SECONDS),
+        )
+        cur.execute("RELEASE SAVEPOINT points_summary")
+        log(
+            "waitlist.points.summary.scheduled",
+            correlation_id,
+            waitlistId=str(user_id),
+            quietSeconds=POINTS_SUMMARY_QUIET_SECONDS,
+        )
+    except Exception as err:  # noqa: BLE001 — never lose an award over its notification
+        cur.execute("ROLLBACK TO SAVEPOINT points_summary")
+        log(
+            "waitlist.points.summary.schedule_failed",
+            correlation_id,
+            level="ERROR",
+            waitlistId=str(user_id),
+            error=str(err),
+        )
+
+
 def award(cur, user_id, points, reason, meta, correlation_id):
     """Insert a ledger row, tolerating the once-per-user index.
 
@@ -134,6 +198,10 @@ def award(cur, user_id, points, reason, meta, correlation_id):
         )
         cur.execute("RELEASE SAVEPOINT award")
         log("waitlist.points.awarded", correlation_id, waitlistId=str(user_id), reason=reason, points=points)
+        # Only on a REAL award. A duplicate or a capped award returns before this,
+        # so re-clicking something already paid for cannot keep pushing the
+        # countdown out and delaying a summary the user has earned.
+        schedule_points_summary(cur, user_id, correlation_id)
         return points
     except psycopg2.errors.UniqueViolation:
         cur.execute("ROLLBACK TO SAVEPOINT award")
@@ -356,26 +424,98 @@ def handle_content_alerts(cur, user_id, body, correlation_id):
         enabled=enabled,
     )
 
-    # PAID ON OPT-IN ONLY, and paid once. The ask is real — up to two emails a
-    # day during launch — so it is credited like every other action rather than
-    # being the one thing on the page expected for free.
+    # THE CREDIT FOLLOWS THE SUBSCRIPTION, IN BOTH DIRECTIONS. Opting in pays;
+    # opting out takes it back. This REVERSES 0023, which kept the points on
+    # opt-out, and the reason for the reversal is that keeping them is simply
+    # wrong: the ten points are payment for accepting up to two emails a day, so
+    # somebody who has stopped accepting them is holding a rank they are no
+    # longer paying for. Re-opting pays again, which makes the toggle honest in
+    # both directions rather than a one-way door dressed up as a checkbox.
     #
-    # Opting out does NOT claw back (0023): the ledger is append-only by design,
-    # and making the balance non-monotonic over ten points is a worse trade than
-    # letting somebody keep them. The once-per-user index is what stops the
-    # obvious abuse — off/on/off/on cannot pay more than once, so the award is
-    # not a function of how many times a checkbox was clicked.
+    # A DELETE, NOT A COMPENSATING NEGATIVE ROW, and 0023's objections to it do
+    # not survive contact with the schema:
+    #
+    #   - "the cap triggers assume rows are never removed" — the cap function
+    #     caps only share_conversion and public_post; for content_alerts it
+    #     returns before doing anything. It also recomputes SUM(points) from the
+    #     table on every insert, so it reads removals correctly regardless.
+    #   - "the ledger is append-only" — nothing enforces that. There is no rule
+    #     and no policy forbidding DELETE, and points_ledger_sync_trigger is
+    #     declared AFTER INSERT OR DELETE OR UPDATE, so a removal already
+    #     maintains points_total. Deletion was anticipated by the design.
+    #
+    # FARMING IS STILL IMPOSSIBLE, and now by construction rather than by the
+    # index alone: a user has either one content_alerts row or none, so the net
+    # is 0 or 10 no matter how many times the box is clicked. Deleting the row
+    # also frees the once-per-user index, which is what lets a re-opt pay again.
     awarded = 0
+    removed = 0
     if enabled:
         awarded = award(
             cur, user_id, CONTENT_ALERTS_POINTS, "content_alerts", {}, correlation_id
         )
+    else:
+        cur.execute(
+            "DELETE FROM points_ledger WHERE waitlist_user_id = %s AND reason = 'content_alerts' "
+            "RETURNING points",
+            (user_id,),
+        )
+        reversed_rows = cur.fetchall()
+        removed = sum(row["points"] for row in reversed_rows)
+        if removed:
+            log(
+                "waitlist.points.reversed",
+                correlation_id,
+                waitlistId=str(user_id),
+                reason="content_alerts",
+                points=removed,
+            )
+            # Tell them, once, in the same beat as the unsubscribe. Silently
+            # removing rank would be the version of this that feels punitive.
+            _enqueue_opt_out_notice(cur, user_id, correlation_id)
 
     return {
         "content_alerts": stored,
         "awarded": awarded,
+        # Positive number of points taken back, so the UI can say so outright
+        # rather than inferring it from a total that moved.
+        "removed": removed,
         "points_total": points_total(cur, user_id),
     }
+
+
+def _enqueue_opt_out_notice(cur, user_id, correlation_id):
+    """Confirm the unsubscribe, and say the waitlist place is untouched.
+
+    The anxious reading of "your points were removed" is that unsubscribing cost
+    you your spot. It did not — content_alerts is one segment, and the waitlist
+    mail is a different one (DOD-INV-EMAIL-SEGMENTS) — but that is only obvious
+    to somebody who knows the schema. So the mail exists to say the quiet part.
+
+    Sent NOW rather than through the points-summary debounce: this one is a
+    direct consequence of a click the user just made, and folding a subscription
+    change into a delayed points digest would bury it.
+
+    Best-effort behind a SAVEPOINT — the unsubscribe itself is already committed
+    and must not be undone because its confirmation could not be queued.
+    """
+    cur.execute("SAVEPOINT alerts_opt_out_notice")
+    try:
+        cur.execute(
+            "INSERT INTO email_jobs (user_id, template, scheduled_at) "
+            "VALUES (%s, 'alerts_opt_out', now())",
+            (user_id,),
+        )
+        cur.execute("RELEASE SAVEPOINT alerts_opt_out_notice")
+    except Exception as err:  # noqa: BLE001 — never undo an unsubscribe over its receipt
+        cur.execute("ROLLBACK TO SAVEPOINT alerts_opt_out_notice")
+        log(
+            "waitlist.content_alerts.notice_failed",
+            correlation_id,
+            level="ERROR",
+            waitlistId=str(user_id),
+            error=str(err),
+        )
 
 
 ROUTES = {

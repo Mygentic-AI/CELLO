@@ -24,6 +24,7 @@ import {
   startDaemon,
   connectMcp,
   cello,
+  registerAgent,
   psqlSpine,
   type SpineCluster,
   type Proc,
@@ -69,7 +70,7 @@ describe("J-SUSPEND — pause blocks signing, reversible (CELLO-M8-LEVER-001 DOD
     const cX = JSON.parse(cello(["create-agent", "xtarget"], { CELLO_DIR: dirX }).stdout) as { pubkey: string };
     const pubX = cX.pubkey;
     await waitConnected(dirX);
-    expect(cello(["register", "xtarget", `DEV-suspx-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirX }).status).toBe(0);
+    expect(registerAgent("xtarget", `DEV-suspx-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirX }).status).toBe(0);
 
     // Initiator A: registered + online, holding a VALID FROST client share (real DKG).
     const dirA = mkdtempSync(join(tmpdir(), "cello-suspA-"));
@@ -78,7 +79,7 @@ describe("J-SUSPEND — pause blocks signing, reversible (CELLO-M8-LEVER-001 DOD
     const cA = JSON.parse(cello(["create-agent", "ainit"], { CELLO_DIR: dirA }).stdout) as { pubkey: string };
     const pubA = cA.pubkey;
     await waitConnected(dirA);
-    expect(cello(["register", "ainit", `DEV-suspa-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("ainit", `DEV-suspa-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     const connA = await connectMcp(dirA, "susp-A");
     mcpConns.push(connA);
     expect(((await connA.call("cello_start_agent", { name: "ainit" })) as { ok?: boolean }).ok).toBe(true);

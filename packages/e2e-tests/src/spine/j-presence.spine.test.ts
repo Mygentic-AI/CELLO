@@ -19,6 +19,7 @@ import {
   startDaemon,
   provisionAgent,
   cello,
+  registerAgent,
   psqlSpineN,
   copyAgentProfileBetweenNodes,
   copyAgentPresenceBetweenNodes,
@@ -83,7 +84,7 @@ describe("J-PRESENCE — cross-node presence visibility (DOD-PRESENCE-1)", () =>
     }
 
     // Register the agent so it has a profile.
-    const reg = cello(["register", "presA", `DEV-pres-${randomBytes(6).toString("hex")}`], env);
+    const reg = registerAgent("presA", `DEV-pres-${randomBytes(6).toString("hex")}`, env);
     expect(reg.status, `register failed: ${reg.stdout}`).toBe(0);
 
     // Wait for the presence write (edge-triggered on stream auth, which happened before register).

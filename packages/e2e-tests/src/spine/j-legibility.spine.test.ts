@@ -40,7 +40,7 @@ import {
   startDaemon,
   provisionAgent,
   connectMcp,
-  cello,
+  registerAgent,
   type SpineCluster,
   type Proc,
   type McpConn,
@@ -94,8 +94,8 @@ describe("J-LEGIBILITY — malicious-tail bilateral seal, cert read cross-proces
     const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "legA");
     const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "legB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-leg-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-leg-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-leg-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-leg-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
 
     const connA = await connectMcp(celloDirA, "leg-A");
     mcpConns.push(connA);

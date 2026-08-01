@@ -27,6 +27,7 @@ import {
   startDaemon,
   provisionAgent,
   cello,
+  registerAgent,
   listenMultiaddr,
   psqlSpineN,
   writeConsortiumManifest,
@@ -135,7 +136,7 @@ describe("J-TOFN — 3-directory spine substrate (DOD-SPINE-1)", () => {
 
       // Real FROST DKG against node i (DEV- token accepted under CELLO_ENV=local).
       const token = `DEV-tofn-${name}-${randomBytes(6).toString("hex")}`;
-      const res = cello(["register", name, token], env);
+      const res = registerAgent(name, token, env);
       const diag = `\n--- register node ${i} ---\n${res.stdout}\n--- directory-${i} log ---\n${cluster.directories[i].output.split("\n").slice(-30).join("\n")}`;
       expect(res.status, `register against node ${i} failed:${diag}`).toBe(0);
       expect((JSON.parse(res.stdout.trim()) as { ok?: boolean }).ok, `register against node ${i} not ok:${diag}`).toBe(true);

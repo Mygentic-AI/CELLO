@@ -23,6 +23,7 @@ import {
   provisionAgent,
   connectMcp,
   cello,
+  registerAgent,
   CELLO_CLIENT_ROOT,
   type SpineCluster,
   type Proc,
@@ -72,8 +73,8 @@ describe("J-PERSIST — durable encrypted transcript survives restart (DOD-LOG-1
     const daemonA = await startDaemon(dirA, cluster.directoryUrl, "perA");
     let daemonB = await startDaemon(dirB, cluster.directoryUrl, "perB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-per-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-per-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-per-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-per-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
 
     const connA = await connectMcp(dirA, "per-A");
     let connB = await connectMcp(dirB, "per-B1");
