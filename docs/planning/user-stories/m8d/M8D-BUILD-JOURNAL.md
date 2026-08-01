@@ -1569,3 +1569,61 @@ verified against the layer it was written at rather than the layer that runs. Ti
 gate's cursor because both are "a per-connection sequence number"; the send window guarded the
 gateway await because that is the one the test could stall. Neither was caught by a green suite —
 both were caught by an adversarial reader who reproduced them by execution.
+
+### 2026-08-02 — Entry 25: review pass 2 — I made the SAME mistake a third time, one file over
+
+The claim itself came back sound (all five questions answered by reading every line and by
+execution: same synchronous window ✅, release-before-append genuinely safe ✅ — *"not theatre"* —
+factory scope correct ✅, no leak ✅, no wrong refusals ✅).
+
+**H1 was in the other half of the commit, and it is the same mistake as F1, made a third time.**
+
+My `since_seq` watermark walk was contiguous over the **received-only** batch, and the comment I
+wrote reasoned about undecryptable rows. But leaf indices are contiguous across **both** directions,
+so a **SENT** leaf — this agent's own reply, or a sibling's — is a hole in any received-only set. The
+walk therefore stopped on the most ordinary event in the protocol:
+
+| shape | after reading everything |
+|---|---|
+| sent, received | still **1 unread** |
+| received, sibling-sent, received *(the M8D shape)* | still **1 unread** |
+
+So **reading everything stopped clearing unread**: the badge could not be cleared, and a stateless
+CLI caller — fresh connection per command, so the cursor authority can never help it — was **refused
+forever through the very door the guidance points at**. That is CATCHUP §3b's own defect (*a rule
+satisfiable only through a door the caller is not pointed at*) rebuilt on the watermark.
+
+`daemon.ts` says *"every sibling send is a hole"* **in as many words**, one file over — in the comment
+**I wrote** for the delivery bookmark. I fixed it for delivery and reintroduced it for the watermark
+inside the same milestone. Third occurrence, so it goes in the write-up as its own rule.
+
+Also: **H2 — my F7 fix was a dead ternary.** Reaching that branch means BOTH authorities said no (the
+gate passes if *either* is satisfied), so `connectionCursor < currentSeq` is always true there and the
+label could only print `unread_watermark`. Filtering for `connection_cursor` would return zero hits
+forever — *the exact defect F7 was raised to fix*. **H3 — the claim had no expiry**; `finally` covers
+throw and reject, not a promise that never settles, so one hung stream would have refused every
+sibling send on that conversation until daemon restart. A duplicate reply traded for a dead
+conversation is the wrong way round. **L5 — F6 and F7 had no assertions**; both now pinned, and the
+F6 revert probe goes red.
+
+Gate: **2456 passed / 11 skipped, exit 0**.
+
+### Spine: j-content is 3/10, and it is NOT ours — established by controlled comparison
+
+Ran `j-content` against the daemon build **before** the M8D review fixes and **after** them: the
+**identical 7 failures**, same set, both times. So they are pre-existing spine rot, not M8D
+regressions — worth stating because the first failure I read looked exactly like our defect
+(*"B reads the exact parked plaintext it had missed: expected `msg1-online` to be `msg2-…`"*, which is
+the redelivery-loop shape) and attributing it without the second run would have been wrong twice
+over.
+
+Two causes are already identifiable from the output:
+- **`Tool cello_get_sealed_receipt not found`** — the MCP tool is `cello_sealed_receipt`. Rename rot;
+  the spine still calls the old name.
+- **`expected 'first [[OVER]]' to be 'first'`** — assertions written before turn-signals were
+  appended to content.
+
+The rest (parked-message auto-recover reporting `recovered:0`, the ACK-ladder timeout, the dedup
+timeout) need real diagnosis and are **M8C `DOD-MSG-*` territory, not M8D**. Parked as its own line
+rather than pulled into this milestone — but flagged clearly, because parked-message delivery *is*
+core launch value and 7/10 red on it is not a documentation problem.
