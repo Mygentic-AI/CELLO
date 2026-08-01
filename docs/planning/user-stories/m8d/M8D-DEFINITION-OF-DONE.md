@@ -79,24 +79,27 @@ deliberately second:
 and does not wait behind the receipt work. It is cheap, additive, and converts a silent failure into
 a visible one.
 
-> **Fence status — UPDATED 2026-08-01 (late).** Superseded the earlier "Docker unavailable, do not
-> touch the spine" note, which was true when written and is not now.
+> **✅ FENCE LIFTED — 2026-08-01 (autonomous run).** Tier 1 is OPEN.
 >
-> - **Docker is UP and the spine suite RUNS.** It only needed starting (plus pruning 30 orphaned
->   Compose networks, which had exhausted the address pool). Flyway applies 57 migrations cleanly.
-> - **The 66-site `cello register` rot is REPAIRED** across 20 files and verified live — `j-conn`
->   2/2, `j-presence` 1/1 against real Postgres, a real directory, relay and daemon binaries.
-> - **A second blocker was found under it and fixed for `j-content`:** without a consortium manifest
->   a daemon never learns its own node id, so it cannot prove co-location and routes two LOCAL
->   agents down the cross-node path — which then fails to resolve `local` in a manifest it does not
->   have. Registration also needs a real threshold, so a one-node cluster cannot DKG at all. It now
->   uses the same 3-node consortium four other spine files already use.
-> - **`DOD-FRONTIER-STRAND-1` ACs 1 + 2 are DONE** (see the debt section below). **ACs 3 and 4(c)
->   remain open, so the fence has NOT lifted** and Tier 1 does not open yet.
+> - **`DOD-FIRSTMSG-WITNESS-1` ACs 7 + 8: asserted LIVE** on a real loopback conversation (j-loopback,
+>   real Postgres + directory + relay). AC7 = zero `sequence_behind_tree` AND zero
+>   `session.content.unwitnessed` (the pair, so it is not vacuous). AC8 = the receipt now reports
+>   `content_leaf_count`, asserted equal to the transcript's message count; revert-tested.
+> - **`DOD-FRONTIER-STRAND-1` ACs 1, 2, 3 done and reviewed**; AC4(c) superseded by the DoD's own
+>   root-cause correction (M8D-D2).
 >
-> The suite is **runnable, not green**: `j-content`'s remaining cases fail on real park/recover
-> behavioral assertions, and `j-sign` fails for a third, undiagnosed reason. Four files were run,
-> not twenty — no claim beyond that.
+> The fence existed so Tier 1 would not be built against a **drifting position key**. That drift's
+> producer is fixed and proven live, and the dedup key itself is fixed and reviewed. That is the
+> condition the fence was protecting.
+>
+> **Two caveats carried forward, neither blocking:** AC7's run never STAGED the race (a first message
+> beating relay registration) — it proves the invariant holds, not that the 16/16 producer is
+> reproduced. And sessions stranded BEFORE the dedup fix remain stranded; repair is its own future
+> line.
+>
+> **Spine suite: runnable, not green.** `j-conn` 2/2, `j-presence` 1/1, `j-loopback` 1/1;
+> `j-content` 1/10 (real park/recover assertions); `j-sign` undiagnosed; nine of twenty files not yet
+> run. Docker must be running.
 
 ---
 

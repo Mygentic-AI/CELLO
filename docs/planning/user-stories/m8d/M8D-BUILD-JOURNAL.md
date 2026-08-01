@@ -856,3 +856,49 @@ AC7 is about a first message that BEATS relay registration, and this run never s
 is the happy path holding, not the drift case proven. **AC7 remains open and is not claimed.**
 Closing it needs a test that forces the race — the producer that made drift fire 16/16 times in the
 live log.
+
+## Entry 13 — the Tier-1 fence LIFTS (2026-08-01, autonomous)
+
+Both M8C lines M8D opens behind are now closed enough that the fence's *purpose* is served. Stating
+that precisely, because "the fence lifted" is exactly the kind of claim that should not be waved
+through.
+
+### `DOD-FIRSTMSG-WITNESS-1` — ACs 7 and 8 asserted LIVE
+
+**AC7** runs against the daemon log on a real loopback conversation: **zero**
+`session.content.sequence_behind_tree`, plus **zero** `session.content.unwitnessed` — the second half
+is what stops it being vacuous, because the alarm staying quiet only means something if the messages
+were actually submitted and witnessed.
+
+**AC8** now has something to assert against. `cello_sealed_receipt` reported **no size at all**,
+which is precisely why an incomplete certificate was indistinguishable from a complete one: seal RATE
+was unaffected by the drift (75% vs 72%), so every surface said "sealed" over a record short one
+message. The receipt now carries `leaf_count` and `content_leaf_count`, and j-loopback asserts
+`content_leaf_count === transcript.messages.length` against a real bilateral seal. **Revert-tested:**
+remove the two fields and the assertion goes red naming the missing coverage.
+
+> **A hollow test caught in the act.** The first AC8 attempt was guarded on
+> `if (typeof receipt.leaf_count === "number")`. The field did not exist, so the guard was **always
+> false** — the assertion never ran, the suite went green, and it read as coverage. Found by printing
+> the actual payload, not by the tests passing. **A conditional assertion on a possibly-absent field
+> is a hollow test with a plausible excuse**, and it is the third time this milestone that "green"
+> meant "never executed".
+
+**The one thing AC7 still does not prove:** the run never staged the race — a first message beating
+relay registration. The fix turns `session_not_found` into a retry, so forcing it needs a seam that
+delays the relay's record, and a test-only seam in the submit path buys less than it risks. AC7 as
+asserted proves the invariant holds on the same-machine path; it does not reproduce the 16/16
+producer.
+
+### `DOD-FRONTIER-STRAND-1` — ACs 1, 2, 3 done and reviewed; 4(c) superseded (M8D-D2)
+
+### Therefore
+
+The fence existed so Tier 1 would not be built **against a drifting position key** — §7a's drift
+would have been inherited by any position-keyed work. That drift's producer is fixed and now
+asserted live, and the dedup key itself is fixed and reviewed. **Tier 1 opens.**
+
+`DOD-COATTEND-1` is the next unit and it is design-significant, so it gets a design note before code
+(§6): where the per-connection bookmark physically lives, how it survives a connection death and a
+daemon restart, what replaces `#receivedContent`'s destructive drain, and what happens to a message
+whose only reader disconnects mid-poll.
