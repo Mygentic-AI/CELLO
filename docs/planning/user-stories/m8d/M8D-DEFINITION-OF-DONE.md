@@ -421,6 +421,16 @@ earned.
   five also fail pre-Tier-1, so they are genuine M8C `DOD-MSG-*` debt. **Parked, not dismissed** —
   parked-message delivery *is* core launch value. → Entries 25, 27
 
+  **The other never-run spine files fail at SETUP, not at their assertions.** `j-unilateral` (and by
+  the same signature the rest of that group) dies on
+  `discovery_node_unresolvable — "The counterparty's home node (local) is not in the signed
+  consortium manifest"`, at `cello_initiate_session`, before a single clause runs. So that group is
+  blocked on **one** prerequisite — a signed multi-node consortium manifest for the local cluster —
+  not on N separate defects. Worth knowing before anyone budgets for it: fixing the manifest setup
+  plausibly unblocks most of the group at once, and until it exists those files can neither pass nor
+  give evidence. The MCP rename fix (above) is already applied to them, so they will not re-fail on
+  that once setup exists.
+
 
 - **DOD-FRONTIER-MISMATCH-DURABLE-1** 🅿️ PARKED *(debt — from M8C, raised 2026-08-01)* — **the
   retained frontier mismatch does not survive a daemon restart.**
