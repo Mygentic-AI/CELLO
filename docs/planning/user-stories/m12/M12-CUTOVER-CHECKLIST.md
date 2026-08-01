@@ -60,7 +60,7 @@ changes another item, say so there — that is what this file is for.
 | D | waitlist-port session | 2026-07-31 | ✅ **done** — `api.cello.mygentic.ai` → `35.227.231.107` (GCP), INSYNC |
 | E | *unclaimed* | | |
 | F | — | — | ✅ done (see §4) |
-| G | *unclaimed* | | found by F |
+| G | — | 2026-08-01 | ✅ guidance fix — says retry, not check config |
 | H | — | — | ✅ done (see §4) |
 
 **C is being worked under M11, not M12.** The waitlist is M11's deliverable and M11's DoD is its
@@ -188,7 +188,16 @@ the GCP relay → messages BOTH directions (`delivered: true`) → **sealed**, r
 
 The standalone claim is now real rather than inferred.
 
-### ❌ G — Registration does not fail over; signaling does  *(found by F)*
+### ✅ G — Registration guidance fixed (2026-08-01)
+
+The error `directory_unreachable` on a transient blip told the operator to "check
+CELLO_DIRECTORY_URL and network connectivity" — correct for a real misconfiguration,
+wrong for a one-second network hiccup that resolves on retry. The fail-fast behaviour was
+correct and deliberate (registration is a rare manual op, not a long-running loop). Only
+the guidance text was wrong. Fixed in `register-handler.ts`.
+
+The deeper "registration should fail over like signaling does" is a separate design question
+that does not need to be answered at launch — the retry instruction is sufficient.
 
 **A real redundancy gap, and it is the invariant's own words.** During F, `gcp-use1` was momentarily
 unreachable from the test machine. The daemon handled it correctly for signaling — the log shows
