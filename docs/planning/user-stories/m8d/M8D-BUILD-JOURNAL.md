@@ -95,3 +95,85 @@ as AC 7 of `DOD-COATTEND-VISIBLE-1`), and M8C's out-of-scope reference to co-att
 at this milestone.
 
 ---
+
+## Entry 1 — DOD-COATTEND-VISIBLE-1: clause checklist + event set (written before any code, 2026-08-01)
+
+**Target, one sentence.** Two sessions attend one agent, one message arrives: the session that gets
+nothing is told *"a sibling session took it"* in a machine-readable field — not the quiet-counterparty
+string — both sessions know they are not alone, and both outcomes leave a line in the daemon log.
+
+**Worktrees.** `cello-client-m8d` (branch `m8d/co-attendance`, off `origin/main` @ `2349236`) and
+`trustless-cello-m8d` (branch `m8d/co-attendance`, off `main` @ `ec96852d`).
+
+**Scope-fence check (procedure §5d).** Every clause below fails observably with two connections on
+one agent and cannot be observed with one. In scope.
+
+### Clause checklist (the yardstick the reviewer gets)
+
+| # | Clause (DoD verbatim, compressed) | How it is satisfied |
+|---|---|---|
+| 1 | "Nothing arrived" ≠ "a sibling took it" — distinct `guidance` **and a machine-readable discriminator**, not a rewording | the timeout return gains `reason: "taken_by_sibling_session"` + `taken_by_sibling: {count, last_sequence, connections}`. The quiet-counterparty return keeps `reason` absent. `reason` is already the discriminator field on this return's sibling branch (`counterparty_gone`), so this is the existing shape, not a new one. |
+| 2 | attendance count on `cello_use_agent`, `cello_status`, and the arrival alert; `isAttended()` untouched | new `countAttendance(perConnectionState, agentName)` in `co-attendance.ts`. `isAttended` is NOT modified and keeps its first-match early return — the away-response decision it drives is byte-identical. |
+| 3 | the blocking receive logs on **both** outcomes | see event set below |
+| 4 | a second session attaching to an attended agent is told so **at attach time**, and attach is **not refused** | `cello_use_agent` returns `attendance` always + `co_attendance` guidance when >1. No refusal path added; `agent_already_current` is unchanged. |
+| 5 | test: two connections, one message, loser distinguishable + both outcomes in the log | `m8d-coattend-visible-1.test.ts` on the two-connection fixture |
+| 6 | live two-session `claude --channels` journey | enforcer #2 — needs Andre to drive the second window (procedure's stop-reason 1). Line stays 🟡 until run. |
+| 7 | doc correction: `launch-triage` §"reply guard — confirmed working" | same commit as the code |
+
+### The event set (AC 3 — named before code)
+
+| event | level | when | context fields |
+|---|---|---|---|
+| `session.receive.delivered` | info | buffered content handed to a caller | `sessionId`, `agentName`, `connectionId`, `sequenceNumber`, `attendance`, `correlationId` |
+| `session.receive.empty` | info | timeout with nothing, no sibling take observed | `sessionId`, `agentName`, `connectionId`, `timeoutMs`, `attendance`, `liveness` |
+| `session.receive.taken_by_sibling` | **warn** | timeout, and another connection consumed content on this session inside this caller's wait window | `sessionId`, `agentName`, `connectionId`, `timeoutMs`, `attendance`, `takenCount`, `lastTakenSeq`, `takenBy` (connection ids) |
+| `agent.attend.coattended` | info | `cello_use_agent` succeeds and attendance > 1 | `connectionId`, `agentName`, `attendance` |
+
+`correlationId` threads the receive call; the theft warn carries the *taking* connection ids so the
+log alone reconstructs the race. **No content and no content-derived text on any of them** — sequence
+numbers and connection ids are routing metadata (`DOD-INV-CONTENTFREE` holds).
+
+### Where the code goes, and why not elsewhere
+
+The ledger records **which connection** consumed a message. Connection identity is an IPC-layer
+concept; `SessionNodeManager` is deliberately connection-agnostic — `#receivedContent` being keyed
+`(agentName, sessionId)` **and not by connection** is the Tier-1 defect itself. Teaching it about
+connections here would start the redesign inside the launch-gate slice. So the ledger lives beside the
+per-connection cursor, in the daemon/IPC layer: new module `core/daemon/src/co-attendance.ts`, wired
+through `SessionContentDeps` exactly as `getConnectionCursor`/`advanceConnectionCursor` already are.
+
+**Tier 0 changes nothing about delivery.** `takeReceivedContent` stays `buf.shift()`; the doorbell
+stays multicast; no attach is refused. The only new behavior is observation.
+
+**Ledger bound.** In-memory, per `(agentName, sessionId)`: last 64 takes, and at most 512 tracked
+sessions with least-recently-written eviction. An unbounded map on a daemon that runs for days is a
+leak, and an eviction that is not stated is a silent cap.
+
+### Falsification pass (procedure §2 step 3, run before writing code)
+
+- **Does the call site have the method on the INTERFACE?** `SessionContentDeps.sessionNodeManager` is
+  typed as the `SessionNodeManager` *class*, so a new method would have been reachable — the reason it
+  does not go there is responsibility, not access. `perConnectionState` is already a declared field of
+  `AgentHandlerDeps` (`agent-handlers.ts:38`), so the attendance count needs no new plumbing there.
+  `NotificationDispatcher` already holds `#currentAgentMap`, so the arrival alert can count without a
+  new dependency at all.
+- **Does the fix location match where responsibility lives?** Yes — see above. The cursor precedent is
+  the one being copied.
+- **Would it create redundancy?** Attendance is computed in three places from **one** helper over the
+  same `currentAgent` map the doorbell already routes on, so the count can never disagree with who
+  actually gets woken. A second private counter would be able to.
+- **What else breaks?** `isAttended` drives M8C-AWAY-1's auto-ack suppression. It is not touched, so
+  the away path cannot move. The `since_seq` branch returns before the blocking loop and is not
+  touched, so `session.receive.since_seq` keeps its meaning.
+
+### Decision recorded
+
+- **M8D-D1 — the two-connection fixture.** `packages/e2e-tests/src/session-fixture.ts`, named by
+  CLAUDE.md and by this procedure, **does not exist in either repo** — grep finds it only in M5/M6/M7
+  archaeology and in `cello-client/docs/dead-code-report.md`. The live equivalent, and the only
+  existing two-connection-on-one-agent harness, is the in-file pattern in
+  `core/daemon/src/__tests__/m8c-cursor-1.test.ts` (real `startDaemon`, real IPC socket, `connectAs()`
+  twice on one agent). M8D **extracts that pattern** into
+  `core/daemon/src/__tests__/helpers/two-connection-fixture.ts` and both repoints `m8c-cursor-1` at it
+  and builds on it. This is extending the established fixture, not writing one from scratch — the rule
+  the CLAUDE.md line exists to enforce.
