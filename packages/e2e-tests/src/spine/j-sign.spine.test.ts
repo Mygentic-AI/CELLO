@@ -129,12 +129,12 @@ async function sealSession(connA: McpConn, connB: McpConn, pubB: string, daemon:
   expect(inbound.type, `B must accept the session: ${JSON.stringify(inbound)}`).toBe("new_session");
   const sessionIdB = inbound.session_id!;
 
-  expect(((await connA.call("cello_send", { session_id: sessionIdA, content: "consortium seal" })) as { ok?: boolean }).ok).toBe(true);
-  expect(((await connB.call("cello_receive", { session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("consortium seal");
+  expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: "consortium seal", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+  expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("consortium seal");
 
   const [closeA, closeB] = (await Promise.all([
-    connA.call("cello_close_session", { session_id: sessionIdA }),
-    connB.call("cello_close_session", { session_id: sessionIdB }),
+    connA.call("cello_close_session", { cello_session_id: sessionIdA }),
+    connB.call("cello_close_session", { cello_session_id: sessionIdB }),
   ])) as Array<{ ok?: boolean; sealed_root?: string; seal_type?: string }>;
   const diag = `\ncloseA: ${JSON.stringify(closeA)}\ncloseB: ${JSON.stringify(closeB)}\n--- directory-0 seal ---\n${daemon.output.split("\n").filter((l) => /seal|frost|single/i.test(l)).slice(-12).join("\n")}`;
   expect(closeA.ok, `A close failed:${diag}`).toBe(true);

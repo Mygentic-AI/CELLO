@@ -181,7 +181,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
     const sessionId = init.sessionId!;
     expect(((await awaitP) as { type?: string }).type).toBe("new_session");
-    expect(((await connA.call("cello_send", { session_id: sessionId, content: "while-online" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: "while-online", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
 
     // ── B goes OFFLINE. ──
     await connB.close();
@@ -190,7 +190,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
 
     // A sends again — direct delivery now fails (B is down). R1: the hash is still witnessed
     // (sequence assigned), and 2b deposits the SEALED content to the relay store-and-forward.
-    await connA.call("cello_send", { session_id: sessionId, content: "while-offline — must park" });
+    await connA.call("cello_send", { cello_session_id: sessionId, content: "while-offline — must park", signal: "over" });
 
     // The load-bearing assertion: the daemon auto-parked the un-deliverable content.
     const deposited = await daemonA.waitForLine(/"event":"content\.park\.deposited"/, 25_000);
@@ -224,7 +224,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
     const sessionId = init.sessionId!;
     expect(((await awaitP) as { type?: string }).type).toBe("new_session");
-    expect(((await connA.call("cello_send", { session_id: sessionId, content: "msg1-online" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: "msg1-online", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
 
     // ── B goes OFFLINE (abrupt crash — lid-shut/SIGKILL, so on restart the session is
     // detected 'interrupted' with source daemon_restart); A sends the message that gets parked. ──
@@ -232,7 +232,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     mcpConns.splice(mcpConns.indexOf(connB), 1);
     await daemonB.kill();
     const PARKED = "msg2-while-offline — the message B must recover";
-    await connA.call("cello_send", { session_id: sessionId, content: PARKED });
+    await connA.call("cello_send", { cello_session_id: sessionId, content: PARKED, signal: "over" });
     await daemonA.waitForLine(/"event":"content\.park\.deposited"/, 25_000);
 
     // ── B comes back: its session is now 'interrupted'; B recovers the parked content. ──
@@ -274,7 +274,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     );
 
     // And it surfaces as readable PLAINTEXT via cello_receive — not raw ciphertext around the funnel.
-    const recv = (await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null };
+    const recv = (await connB.call("cello_receive", { cello_session_id: sessionId })) as { ok?: boolean; content?: string | null };
     expect(recv.ok).toBe(true);
     expect(recv.content, "B reads the exact parked plaintext it had missed").toBe(PARKED);
   }, 120_000);
@@ -338,7 +338,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(tail, "honest content recovered").toMatch(/"event":"content\.recovered"/);
 
     // The session stays ALIVE despite tamper+corrupt: B still reads the honest message.
-    const recv = (await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null };
+    const recv = (await connB.call("cello_receive", { cello_session_id: sessionId })) as { ok?: boolean; content?: string | null };
     expect(recv.ok).toBe(true);
     expect(recv.content, "session alive — the honest message is readable").toBe(honest.toString("utf8"));
   }, 120_000);
@@ -371,7 +371,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const msg = `dup-me-${randomBytes(4).toString("hex")}`;
     const msgBytes = Buffer.from(msg);
     const hashHex = contentHashHex(msgBytes);
-    expect(((await connA.call("cello_send", { session_id: sessionId, content: msg })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: msg, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
     const firstReceive = await daemonB.waitForLine(new RegExp(`"event":"session\\.content\\.received"[^\\n]*"contentHashHex":"${hashHex}"`), 15_000);
     expect(firstReceive).toMatch(/"sequenceNumber":0/);
 
@@ -423,7 +423,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // resolves A's awaiting-ACK timer.
     const msg = `acked-${randomBytes(4).toString("hex")}`;
     const hashHex = contentHashHex(Buffer.from(msg));
-    expect(((await connA.call("cello_send", { session_id: sessionId, content: msg })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: msg, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
 
     // The ladder reaches `persisted` and the sender acts on it (content.delivery.acked, level persisted).
     const acked = await daemonA.waitForLine(new RegExp(`"event":"content\\.delivery\\.acked"[^\\n]*"contentHash":"${hashHex}"`), 12_000);
@@ -501,7 +501,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; recovered?: number };
     expect(rec.ok).toBe(true);
     expect(rec.recovered, "B recovers the startup-flushed message").toBeGreaterThanOrEqual(1);
-    const recv = (await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null };
+    const recv = (await connB.call("cello_receive", { cello_session_id: sessionId })) as { ok?: boolean; content?: string | null };
     expect(recv.ok).toBe(true);
     expect(recv.content, "B reads the content the crashed sender re-parked").toBe(content);
   }, 120_000);
@@ -535,17 +535,17 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // sequence FROM THE FRAME — proven by session.content.ordering.recorded with source:content_frame,
     // independent of the separate leaf_deliver witness stream (which previously was the only ordering
     // signal and the source of the content-before-witness race).
-    expect(((await connA.call("cello_send", { session_id: sessionId, content: "first" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: "first", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
     const ord0 = await daemonB.waitForLine(/"event":"session\.content\.ordering\.recorded"[^\n]*"source":"content_frame"/, 15_000);
     expect(ord0, "B records the canonical sequence from the content frame (idx 0)").toMatch(/"canonicalSeq":0/);
     await daemonB.waitForLine(/"event":"session\.content\.received"[^\n]*"sequenceNumber":0/, 10_000);
 
-    expect(((await connA.call("cello_send", { session_id: sessionId, content: "second" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: "second", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
     await daemonB.waitForLine(/"event":"session\.content\.ordering\.recorded"[^\n]*"canonicalSeq":1[^\n]*"source":"content_frame"/, 15_000);
     await daemonB.waitForLine(/"event":"session\.content\.received"[^\n]*"sequenceNumber":1/, 10_000);
 
     // B reads them in canonical order — leaf index === the relay-committed sequence the frame carried.
-    const read = async () => ((await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null }).content;
+    const read = async () => ((await connB.call("cello_receive", { cello_session_id: sessionId })) as { ok?: boolean; content?: string | null }).content;
     expect(await read()).toBe("first");
     expect(await read()).toBe("second");
   }, 120_000);
@@ -575,14 +575,14 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
     const sessionId = init.sessionId!;
     expect(((await awaitP) as { type?: string }).type).toBe("new_session");
-    expect(((await connA.call("cello_send", { session_id: sessionId, content: "online-first" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: "online-first", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
 
     // ── B OFFLINE. A sends → parks (with the signed ordering record). ──
     await connB.close();
     mcpConns.splice(mcpConns.indexOf(connB), 1);
     await daemonB.kill();
     const PARKED = "parked-while-offline — B must AUTO-recover it";
-    await connA.call("cello_send", { session_id: sessionId, content: PARKED });
+    await connA.call("cello_send", { cello_session_id: sessionId, content: PARKED, signal: "over" });
     await daemonA.waitForLine(/"event":"content\.park\.deposited"/, 25_000);
 
     // ── B comes back online. cello_start_agent must AUTO-drain the mailbox — NO content_park_recover. ──
@@ -603,7 +603,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(auto).toMatch(/"recovered":1/);
     expect(daemonB.output, "auto-recovered content traverses the inbound funnel").toMatch(/"event":"session\.content\.received"/);
 
-    const recv = (await connB.call("cello_receive", { session_id: sessionId })) as { ok?: boolean; content?: string | null };
+    const recv = (await connB.call("cello_receive", { cello_session_id: sessionId })) as { ok?: boolean; content?: string | null };
     expect(recv.ok).toBe(true);
     expect(recv.content, "B reads the parked message WITHOUT any explicit content_park_recover").toBe(PARKED);
   }, 120_000);
@@ -642,13 +642,13 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(((await awaitP) as { type?: string }).type).toBe("new_session");
 
     // A sends exactly one message; B receives it → B's signed content frontier covers msg1.
-    expect(((await connA.call("cello_send", { session_id: sessionId, content: "msg1" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("msg1");
+    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: "msg1", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("msg1");
 
     // Both close → bilateral seal. The transcript is now COMMITTED + FROST-notarized.
     const [closeA, closeB] = (await Promise.all([
-      connA.call("cello_close_session", { session_id: sessionId }),
-      connB.call("cello_close_session", { session_id: sessionId }),
+      connA.call("cello_close_session", { cello_session_id: sessionId }),
+      connB.call("cello_close_session", { cello_session_id: sessionId }),
     ])) as Array<{ ok?: boolean; sealed_root?: string }>;
     const diag =
       `\ncloseA:${JSON.stringify(closeA)}\ncloseB:${JSON.stringify(closeB)}` +

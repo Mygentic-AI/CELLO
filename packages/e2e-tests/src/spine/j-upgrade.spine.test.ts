@@ -97,13 +97,13 @@ describe("J-UPGRADE — auto-acknowledge close, live (DOD-UP-2)", () => {
 
     // One message that B receives + verifies — the precondition for auto-ack (B is online and
     // has verified the content behind the tree).
-    expect(((await connA.call("cello_send", { session_id: sessionIdA, content: "upgrade auto-ack message" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("upgrade auto-ack message");
+    expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: "upgrade auto-ack message", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("upgrade auto-ack message");
 
     // A closes. B's AGENT issues NO close call — the whole point. A working auto-ack makes B's
     // DAEMON submit the responder SEAL leaf on ingesting A's SEAL ctrl leaf, so A's close
     // completes BILATERAL.
-    const close = (await connA.call("cello_close_session", { session_id: sessionIdA })) as {
+    const close = (await connA.call("cello_close_session", { cello_session_id: sessionIdA })) as {
       ok?: boolean; sealed_root?: string; seal_type?: string; reason?: string;
     };
     const diag =

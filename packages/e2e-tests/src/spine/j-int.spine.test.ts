@@ -95,7 +95,7 @@ describe("J-INT — interrupted + retry survival, live (DOD-INT-1 / DOD-RETRY-1)
     const inbound = (await awaitP) as { type?: string };
     expect(inbound.type, "B must receive the inbound session").toBe("new_session");
 
-    const sent = (await connA.call("cello_send", { session_id: sessionId, content: "int-1 message before the crash" })) as {
+    const sent = (await connA.call("cello_send", { cello_session_id: sessionId, content: "int-1 message before the crash", signal: "over" })) as {
       ok?: boolean;
     };
     expect(sent.ok, `cello_send failed:\n${JSON.stringify(sent)}`).toBe(true);
@@ -168,7 +168,7 @@ describe("J-INT — interrupted + retry survival, live (DOD-INT-1 / DOD-RETRY-1)
     expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
     const sessionId = init.sessionId!;
     expect(((await awaitP) as { type?: string }).type).toBe("new_session");
-    expect(((await connA.call("cello_send", { session_id: sessionId, content: "int2 message before crash" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: "int2 message before crash", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
 
     // ── Crash BOTH daemons; both restart with the session forced to `interrupted`. ──
     await daemonA.kill();
@@ -203,7 +203,7 @@ describe("J-INT — interrupted + retry survival, live (DOD-INT-1 / DOD-RETRY-1)
     }
 
     // ── A runs the bilateral seal-interrupted agreement. ──
-    const closed = (await connA.call("cello_close_session", { session_id: sessionId })) as {
+    const closed = (await connA.call("cello_close_session", { cello_session_id: sessionId })) as {
       ok?: boolean;
       reason?: string;
       status?: string;

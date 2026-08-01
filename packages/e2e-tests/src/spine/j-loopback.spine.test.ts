@@ -132,18 +132,28 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
     expect(sessionIdB, "both ends share the same session_id (the re-key is local bookkeeping only)").toBe(sessionIdA);
 
     // A → B message, both ends on one daemon.
-    expect(((await connA.call("cello_send", { session_id: sessionIdA, content: "loopback hello" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("loopback hello");
+    // The response is carried into the assertion message (as j-spine does): a bare `expected false
+    // to be true` names nothing, and this send crosses the read-before-write gate, the security
+    // gateway and the relay submit — three different reasons that look identical when the reason is
+    // thrown away.
+    const sentA = (await connA.call("cello_send", { cello_session_id: sessionIdA, content: "loopback hello", signal: "over" })) as { ok?: boolean; reason?: string; guidance?: string };
+    expect(sentA.ok, `cello_send failed: ${JSON.stringify(sentA)}`).toBe(true);
+    // The daemon APPENDS the signal token to the wire content (cello_send does it, so the token is
+    // what the leaf hash binds and what the transcript records). Asserting equality with the raw
+    // text pins a shape the protocol left behind; assert the message and the token separately.
+    const receivedB = ((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content;
+    expect(receivedB).toContain("loopback hello");
+    expect(receivedB, "the signal token rides the content — cello_send appends it").toContain("[[OVER]]");
 
     // AC-003 isolation: A's connection cannot reach B's end and vice versa — distinct (agent,
     // session_id) records. (A receiving on B's session would mean cross-end leakage.)
-    const aOnBsEnd = (await connA.call("cello_receive", { session_id: sessionIdB, timeout_ms: 2_000 })) as { content?: string | null; reason?: string; ok?: boolean };
+    const aOnBsEnd = (await connA.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 2_000 })) as { content?: string | null; reason?: string; ok?: boolean };
     expect(aOnBsEnd.content ?? null, "A must NOT read B's end of the session (cross-end isolation)").toBeNull();
 
     // Both close → bilateral seal. Each end signs with its OWN K_local; both surface the SAME root.
     const [closeA, closeB] = (await Promise.all([
-      connA.call("cello_close_session", { session_id: sessionIdA }),
-      connB.call("cello_close_session", { session_id: sessionIdB }),
+      connA.call("cello_close_session", { cello_session_id: sessionIdA }),
+      connB.call("cello_close_session", { cello_session_id: sessionIdB }),
     ])) as Array<{ ok?: boolean; sealed_root?: string; seal_type?: string; reason?: string }>;
     const diag = `\ncloseA: ${JSON.stringify(closeA)}\ncloseB: ${JSON.stringify(closeB)}` +
       `\n--- daemon seal/session ---\n${daemon.output.split("\n").filter((l) => /seal|session|rekey|node\.created/i.test(l)).slice(-20).join("\n")}`;

@@ -504,7 +504,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
 
     // A sends; B receives the same plaintext.
     const plaintext = "spine6 hello over the wire";
-    const sent = (await connA.call("cello_send", { session_id: sessionId, content: plaintext })) as {
+    const sent = (await connA.call("cello_send", { cello_session_id: sessionId, content: plaintext, signal: "over" })) as {
       ok?: boolean;
       reason?: string;
     };
@@ -514,7 +514,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
       `\n--- daemonB session/transport ---\n` +
       daemonB.output.split("\n").filter((l) => /session\.|transport\.|connect|counterparty|dial/.test(l)).slice(-25).join("\n");
     expect(sent.ok, `cello_send failed:${sendDiag}`).toBe(true);
-    const recv = (await connB.call("cello_receive", { session_id: inbound.session_id, timeout_ms: 15_000 })) as {
+    const recv = (await connB.call("cello_receive", { cello_session_id: inbound.session_id, timeout_ms: 15_000 })) as {
       ok?: boolean;
       content?: string | null;
     };
@@ -578,16 +578,16 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     const sessionIdB = inbound.session_id!;
 
     // One message so the sealed tree is non-trivial.
-    expect(((await connA.call("cello_send", { session_id: sessionIdA, content: "spine7 sealed message" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("spine7 sealed message");
+    expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: "spine7 sealed message", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("spine7 sealed message");
 
     // BOTH parties close → both submit SEAL ctrl leaves → relay-mediated directory FROST seal.
     // The seal only notarizes once BOTH have closed, so each close blocks awaiting
     // session_sealed — they MUST run concurrently (a sequential await would deadlock the
     // first on the second).
     const [closeA, closeB] = (await Promise.all([
-      connA.call("cello_close_session", { session_id: sessionIdA }),
-      connB.call("cello_close_session", { session_id: sessionIdB }),
+      connA.call("cello_close_session", { cello_session_id: sessionIdA }),
+      connB.call("cello_close_session", { cello_session_id: sessionIdB }),
     ])) as Array<{ ok?: boolean; sealed_root?: string; reason?: string }>;
     const closeDiag = `\ncloseA: ${JSON.stringify(closeA)}\ncloseB: ${JSON.stringify(closeB)}` +
       `\n--- daemonA seal/relay ---\n${daemonA.output.split("\n").filter((l) => /seal|relay|hash_submit/.test(l)).slice(-15).join("\n")}` +

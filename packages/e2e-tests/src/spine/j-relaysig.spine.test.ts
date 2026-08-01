@@ -124,8 +124,8 @@ describe("J-RELAYSIG — relay-signed ordering receipts (DOD-RELAYSIG-1)", () =>
     expect(inbound.type, `B must accept the session: ${JSON.stringify(inbound)}`).toBe("new_session");
     const sessionIdB = inbound.session_id!;
 
-    expect(((await connA.call("cello_send", { session_id: sessionIdA, content: "relay receipt proof" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("relay receipt proof");
+    expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: "relay receipt proof", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("relay receipt proof");
 
     // Give the relay ACK round-trip + receipt store a moment to settle.
     await sleep(1500);

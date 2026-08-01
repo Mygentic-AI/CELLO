@@ -94,12 +94,12 @@ describe("J-PERSIST — durable encrypted transcript survives restart (DOD-LOG-1
     const M1 = "PERSIST-NEEDLE-alpha hello from A";   // A → B (B: received)
     const M2 = "PERSIST-NEEDLE-bravo hi back from B"; // B → A (B: sent)
     const M3 = "PERSIST-NEEDLE-charlie second from A"; // A → B (B: received)
-    expect(((await connA.call("cello_send", { session_id: sessionId, content: M1 })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(M1);
-    expect(((await connB.call("cello_send", { session_id: sessionId, content: M2 })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connA.call("cello_receive", { session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(M2);
-    expect(((await connA.call("cello_send", { session_id: sessionId, content: M3 })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(M3);
+    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: M1, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(M1);
+    expect(((await connB.call("cello_send", { cello_session_id: sessionId, content: M2, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA.call("cello_receive", { cello_session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(M2);
+    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: M3, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(M3);
 
     // ── KILL B's daemon and restart it on the SAME CELLO_DIR (the in-memory buffer is gone). ──
     await connB.close();

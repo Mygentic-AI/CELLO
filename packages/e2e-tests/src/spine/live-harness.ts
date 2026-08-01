@@ -1059,7 +1059,16 @@ export async function connectMcp(celloDir: string, label: string): Promise<McpCo
       };
       // cello-mcp wraps results as content:[{type:"text", text: JSON.stringify(value)}].
       const text = res.content?.find((c) => c.type === "text")?.text;
-      return text !== undefined ? JSON.parse(text) : res;
+      if (text === undefined) return res;
+      try {
+        return JSON.parse(text);
+      } catch {
+        // NOT every tool result is JSON: an MCP-level failure comes back as a plain string such as
+        // "MCP error -32603: ...". Blind JSON.parse turned that into `Unexpected token 'M'`, which
+        // names the parser and DESTROYS the only sentence that says what actually went wrong — the
+        // reader is sent to the harness instead of to the failing tool. Surface it verbatim.
+        throw new Error(`MCP tool "${name}" did not return JSON: ${text}`);
+      }
     },
     close: async () => {
       try {

@@ -107,8 +107,8 @@ async function setupAtoBSession(label: string): Promise<{
   expect(inbound.type).toBe("new_session");
   const sessionIdB = inbound.session_id!;
 
-  expect(((await connA.call("cello_send", { session_id: sessionIdA, content: `${label} sealed message` })) as { ok?: boolean }).ok).toBe(true);
-  expect(((await connB.call("cello_receive", { session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`${label} sealed message`);
+  expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: `${label} sealed message`, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+  expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`${label} sealed message`);
 
   return { connA, connB, daemonA, daemonB, sessionIdA, pubB };
 }
@@ -151,8 +151,8 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     // One message so the sealed tree carries a real (non-trivial) transcript: a msg leaf
     // from A, a msg leaf from B's ack, then A's single SEAL ctrl leaf at close. The
     // directory's recomputed root MUST match A's reported root over exactly this chain.
-    expect(((await connA.call("cello_send", { session_id: sessionIdA, content: "unilateral sealed message" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("unilateral sealed message");
+    expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: "unilateral sealed message", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("unilateral sealed message");
 
     // B GOES GONE — abrupt SIGKILL (crash / power loss), no graceful close, no SEAL leaf
     // from B. The directory will record B ABSENT and never push it seal_verified.
@@ -165,7 +165,7 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     // A closes. With the counterparty gone past grace, cello_close_session escalates to a
     // unilateral seal: it submits A's SEAL ctrl leaf + a seal_unilateral request, the
     // directory verifies + FROST-notarizes (B ABSENT), and A verifies the returned cert.
-    const close = (await connA.call("cello_close_session", { session_id: sessionIdA })) as {
+    const close = (await connA.call("cello_close_session", { cello_session_id: sessionIdA })) as {
       ok?: boolean;
       sealed_root?: string;
       seal_type?: string;
@@ -261,7 +261,7 @@ describe("J-UNILATERAL — DOD-LIVE-2: the ABSENT gate (gone→ABSENT vs alive-b
     // relay to log the gone transition BEFORE A closes (otherwise the relay still reads 'alive').
     await cluster.relay.waitForLine(/"liveness":"gone"/, 30_000);
 
-    const close = (await connA.call("cello_close_session", { session_id: sessionIdA })) as {
+    const close = (await connA.call("cello_close_session", { cello_session_id: sessionIdA })) as {
       ok?: boolean; sealed_root?: string; seal_type?: string; reason?: string;
     };
     const diag =
@@ -291,7 +291,7 @@ describe("J-UNILATERAL — DOD-LIVE-2: the ABSENT gate (gone→ABSENT vs alive-b
     // B is alive the whole time — do NOT kill it, and B's agent issues NO close call.
     expect(daemonB.output, "B daemon should be running (not killed)").toMatch(/daemon\.started/);
 
-    const close = (await connA.call("cello_close_session", { session_id: sessionIdA })) as {
+    const close = (await connA.call("cello_close_session", { cello_session_id: sessionIdA })) as {
       ok?: boolean; sealed_root?: string; seal_type?: string; reason?: string;
     };
     const diag =
