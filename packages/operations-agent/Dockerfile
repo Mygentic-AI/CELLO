@@ -16,7 +16,12 @@
 # (@cello-protocol/interfaces) are resolved from the workspace root's node_modules.
 
 # ─── Stage 1: Build ───────────────────────────────────────────────────────────
-FROM public.ecr.aws/docker/library/node:24-slim AS build
+# BASE IMAGE VIA mirror.gcr.io, NOT public.ecr.aws (M12). Same upstream artifact — both are
+# mirrors of the official Docker Hub `node` image — but Cloud Build pulling AWS's public registry
+# started returning `toomanyrequests: Rate exceeded` and failed two builds in a row. mirror.gcr.io
+# is Google's pull-through cache, so a GCP build is not rate-limited by a registry belonging to the
+# cloud we are migrating off. The directory and relay Dockerfiles were changed with this one.
+FROM mirror.gcr.io/library/node:24-slim AS build
 
 WORKDIR /app
 
@@ -55,7 +60,7 @@ COPY tsconfig.base.json ./
 RUN pnpm --filter @cello-protocol/operations-agent run build
 
 # ─── Stage 2: Production ──────────────────────────────────────────────────────
-FROM public.ecr.aws/docker/library/node:24-slim AS production
+FROM mirror.gcr.io/library/node:24-slim AS production
 
 # Install curl for ECS container health check (CMD-SHELL: curl -sf http://localhost:8080/health)
 RUN apt-get update && \

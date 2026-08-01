@@ -46,6 +46,23 @@ import psycopg2
 from _dburl import portal_database_url
 import psycopg2.extras
 
+# IMPORTED HERE, AT MODULE LEVEL, AND IT HAS TO STAY THAT WAY.
+#
+# This used to be `from templates import TEMPLATES` inside render(), which works
+# on Lambda — the handler's own directory is permanently on sys.path there — and
+# fails on Cloud Run. `_app.py` puts the handler directory on sys.path only for
+# the duration of the module import and removes it again in a `finally`, so a
+# LOCAL import deferred to call time resolves against a path that no longer
+# contains this directory. The result was `No module named 'templates'` raised
+# from render(), every queued email marked `waitlist.email.retired`, and a 200
+# returned to the scheduler — a mail queue that reported success and delivered
+# nothing (2026-08-01; the first real signup got no email).
+#
+# At module scope the import runs while the loader still has the path set, and
+# sys.modules caches it for the process. Any local import in this package must
+# be at module level for the same reason; do not move this into a function.
+from templates import TEMPLATES
+
 # Kept only so an explicit override still works. The live value is resolved
 # lazily by portal_database_url(), because binding the environment variable here
 # is exactly what let the 2026-07-27 rotation take the whole waitlist down: the
@@ -83,9 +100,48 @@ _ses = None
 
 
 def ses():
+    """The SES client, built with EXPLICIT credentials when they are supplied.
+
+    boto3's default chain — environment, credentials file, instance metadata —
+    resolves on Lambda, where the execution role supplies credentials, and
+    resolves to NOTHING on Cloud Run, which has no AWS identity of any kind. The
+    result was `Unable to locate credentials` from send_raw_email, one failed
+    attempt per queued message, and no mail (2026-08-01).
+
+    Terraform was already mounting the credentials as SES_CREDENTIALS — the same
+    secret the ops agent uses — but nothing in Python ever read the variable, so
+    the mount looked like configuration while changing nothing. The format is
+    the ops agent's, verbatim, so one secret keeps serving both:
+
+        {"accessKeyId": "...", "secretAccessKey": "..."}
+
+    Absent the variable this falls back to the default chain, which keeps Lambda
+    and local development working unchanged.
+    """
     global _ses
     if _ses is None:
-        _ses = boto3.client("ses", region_name=AWS_REGION_NAME)
+        raw = os.environ.get("SES_CREDENTIALS")
+        if raw:
+            try:
+                creds = json.loads(raw)
+            except ValueError as exc:
+                # Loudly, and naming the variable. A malformed secret silently
+                # falling back to the default chain would reproduce exactly the
+                # failure this exists to fix, one layer further from the cause.
+                raise RuntimeError(
+                    f"SES_CREDENTIALS is set but is not valid JSON: {exc}"
+                ) from exc
+            missing = [k for k in ("accessKeyId", "secretAccessKey") if not creds.get(k)]
+            if missing:
+                raise RuntimeError(f"SES_CREDENTIALS is missing {', '.join(missing)}")
+            _ses = boto3.client(
+                "ses",
+                region_name=AWS_REGION_NAME,
+                aws_access_key_id=creds["accessKeyId"],
+                aws_secret_access_key=creds["secretAccessKey"],
+            )
+        else:
+            _ses = boto3.client("ses", region_name=AWS_REGION_NAME)
     return _ses
 
 
@@ -392,8 +448,6 @@ def render(job):
     An unrecognised template must FAIL LOUDLY. A silent skip would mark the job
     done with nothing sent and no signal that a template was never wired up.
     """
-    from templates import TEMPLATES
-
     template = TEMPLATES.get(job["template"])
     if template is None:
         raise KeyError(

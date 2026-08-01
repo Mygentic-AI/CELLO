@@ -148,10 +148,18 @@ export const AUTHORIZED_ISSUERS_SPEC: TierATableSpec = {
 };
 
 /**
- * signal_records (V46). Trust-signal notarizations. Natural key: (signal_hash, accepting_node).
- * All identity columns are immutable. `supersedes_hash` is the one nullable column and IS included
- * — it is part of the record's semantic identity (the supersession chain) and never changes after
- * insert.
+ * signal_records (V46, as amended through V55). Trust-signal notarizations. Natural key:
+ * (signal_hash, accepting_node). All identity columns are immutable. `supersedes_hash` is the one
+ * nullable column and IS included — it is part of the record's semantic identity (the supersession
+ * chain) and never changes after insert.
+ *
+ * NO `subject` COLUMN. V55 dropped it. Writing this spec from the CREATE TABLE in V46 alone named a
+ * column that nine later migrations had removed, and the cost was not local: the digest query for
+ * ONE bad table throws, `handling_ae_state_req` fails, and the peer's whole round dies — so a single
+ * wrong column name silently halted replication of ALL eleven Tier-A tables across all three nodes.
+ * Registration then failed with CLAIM_CODE_INVALID, because claim codes minted on one node never
+ * reached the node the client actually picked. Read the table's migrations to HEAD, never its
+ * CREATE TABLE; `ae-spec-schema.test.ts` now asserts every spec column against the built schema.
  */
 export const SIGNAL_RECORDS_SPEC: TierATableSpec = {
   table: "signal_records",
@@ -160,7 +168,6 @@ export const SIGNAL_RECORDS_SPEC: TierATableSpec = {
     "signal_hash",
     "accepting_node",
     "subject_kind",
-    "subject",
     "issuer_kind",
     "issuer_pubkey",
     "type",
