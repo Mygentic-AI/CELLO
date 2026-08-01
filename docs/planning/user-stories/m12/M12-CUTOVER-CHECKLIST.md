@@ -244,11 +244,31 @@ GCP) → `registration.email.verified`.
 **Known cosmetic:** `registration.gate.NOT_ENFORCED` says *"Expected only under CELLO_ENV=local"* —
 dev-on-GCP is now a second legitimate case. Message only.
 
-### ✅ D — Repoint the corp site's `/api/waitlist`  *(done 2026-07-31)*
+### ✅ D — Repoint the corp site's `/api/waitlist`  *(2026-07-31; completed 2026-08-01)*
 
-**It needed no corp-site change at all**, which was the point of keeping the hostname. The nginx
-block already proxies `/api/waitlist/` and `/gallery/` to `api.cello.mygentic.ai`; only the Route 53
-record moved. No Lightsail deploy, no site rebuild.
+**This was recorded as needing no corp-site change. That was wrong, and it cost a day of the
+waitlist being down.**
+
+The DNS move was necessary but not sufficient. nginx resolves a literal hostname in `proxy_pass`
+once, when it loads its config, and then holds those addresses for the life of the process. The
+Lightsail host (`cello-site`, eu-west-1) last started 2026-06-13, so it went on sending every
+`/api/waitlist/` and `/api/gallery/` request to the AWS API Gateway addresses it had resolved in
+June — six weeks before the repoint. That backend is still running; its RDS is hibernated, so it
+answers `503 database_unreachable`, which the signup form renders as "We couldn't check whether
+you're already signed in."
+
+**Why it was missed.** The endpoint checked at cutover was `/signup`, which validates its payload
+before touching the database — so the retired AWS backend and the live GCP one answered it
+identically. The one probe run was the one probe that could not tell them apart. `/auth/session`
+would have shown it immediately.
+
+Fixed 2026-08-01 (`corp-cello-site` 4630f5f): the hostname now lives in a variable with an explicit
+`resolver`, which forces per-request resolution, so the next endpoint move needs no deploy. Verified
+live — `auth/session` 401, signup 400, gallery 200 on both hosts, `/api/` backstop still 404.
+
+**The general rule this earns:** a DNS repoint does not reach a process that already resolved. When
+cutting over a hostname, either restart what consumes it or verify from the consumer's side — and
+probe an endpoint that actually touches the moved dependency, not one that short-circuits first.
 
 ```
 api.cello.mygentic.ai  A(alias) d-jgbfq5nmal.execute-api.us-east-1.amazonaws.com
