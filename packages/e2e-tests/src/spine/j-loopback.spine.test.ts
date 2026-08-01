@@ -163,6 +163,41 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
     expect(closeB.sealed_root, `both ends' sealed_root must be BYTE-IDENTICAL (one bilateral seal):${diag}`).toBe(closeA.sealed_root);
     expect(closeA.seal_type, `seal must be bilateral (not a unilateral fallback):${diag}`).not.toBe("unilateral");
 
+    // ─── DOD-FIRSTMSG-WITNESS-1 AC7 + AC8, asserted on the LIVE daemon log ────────────────────
+    //
+    // §7a: a session whose FIRST message beats relay registration has its submit rejected
+    // `session_not_found`; the daemon used to append the leaf anyway, so the relay's counter never
+    // counted it and the local record stayed exactly ONE AHEAD for the life of the conversation.
+    // Because the bilateral certificate is rebuilt EXCLUSIVELY from relay-witnessed leaves, the
+    // sealed receipt then omitted the conversation's opening message — and was issued regardless.
+    // It fired 16/16 in the live log on same-machine sessions that carried on past one message.
+    //
+    // AC7: ZERO drift alarms. This is the whole point of the fix, and it is asserted on the log
+    // rather than on a return value because the drift branch is the only thing that reports it.
+    const driftEvents = daemon.output.split("\n").filter((l) => l.includes("session.content.sequence_behind_tree"));
+    expect(driftEvents, `no message may land behind the tree:\n${driftEvents.join("\n")}`).toHaveLength(0);
+
+    // ...and NOT vacuously: the messages were actually witnessed, rather than the alarm being quiet
+    // because nothing was ever submitted. An unwitnessed append is the drift PRODUCER, so zero of
+    // those plus zero alarms is the pair that means something.
+    const unwitnessed = daemon.output.split("\n").filter((l) => l.includes("session.content.unwitnessed"));
+    expect(unwitnessed, `every message must be relay-witnessed:\n${unwitnessed.join("\n")}`).toHaveLength(0);
+
+    // AC8 IS NOT ASSERTED HERE, and it is not an oversight — recording the blocker instead of
+    // faking the check. AC8 wants "the sealed certificate's leaf count equals the transcript's
+    // message count", but `cello_sealed_receipt` exposes NO leaf count: the payload is
+    // { ok, session_id, session_name, sealed_root, legibility{ participants[], final_message } }.
+    // The nearest values are per-participant `content_frontier_seq` / `last_authored_seq`, which
+    // count something else (a participant's own frontier, not the tree's leaves) and are not
+    // interchangeable with a transcript message count — one side's transcript holds 1 message here
+    // while the tree carries several leaves including control leaves.
+    //
+    // A first attempt DID write this assertion, guarded by `if (typeof receipt.leaf_count ===
+    // "number")`. The guard was always false, so it silently never ran — a hollow assertion that
+    // reads as coverage. Caught by probing the actual payload rather than by the suite going green.
+    //
+    // Closing AC8 needs a leaf count on the receipt surface (or an inclusion-proof read that
+    // exposes one). That is a product change, not a test change, so it belongs to its own unit.
     // Exactly ONE daemon process hosted the whole conversation.
     expect(daemons.length, "exactly one daemon process was started for the whole conversation").toBe(1);
 
