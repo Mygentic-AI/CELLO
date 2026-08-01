@@ -27,9 +27,24 @@ description: >
   `DOD-INBOX-AGENT-1` *(debt — from M8C)* **✅** — reviewed, and the review found the same
   accept-and-drop shape in four more places, including the shim line the fix itself wrote.
   `DOD-FRONTIER-STRAND-1` **AC2 only** landed (M8C line; ACs 1/3/4 still open, so the fence holds).
-- **PUBLISHED to beta, binary-verified:** daemon `0.0.111`, cli `0.0.114`, connect `0.0.113`
-  (tag `v0.0.170`, smoke-tag green). `latest` **NOT** promoted — operator-run. `DOD-INBOX-AGENT-1`
-  landed after the tag; **everything from `4d42ec9` onward needs the NEXT publish.**
+- **PUBLISHED to beta, binary-verified (two rounds):** `v0.0.170` → daemon `0.0.111` / cli `0.0.114`
+  / connect `0.0.113`, then `v0.0.171` → **daemon `0.0.112`, cli `0.0.115`, connect `0.0.114`**,
+  which is HEAD. Verified by `npm pack` + grep: `dist/co-attendance.js`, `dist/resolve-named-agent.js`
+  (all four refusal reasons), `session.frontier.mismatch`, the doorbell body, and connect's six
+  `agent !== undefined` sites. Cross-pins are real versions (`cli@0.0.115 → daemon@0.0.112`).
+- **`latest` NOT promoted — operator-run, always.** Prepared, for when Andre wants the reinstall:
+  ```
+  npm dist-tag add @cello-protocol/connect@0.0.114 latest
+  npm dist-tag add @cello-protocol/cli@0.0.115 latest
+  npm dist-tag add @cello-protocol/daemon@0.0.112 latest
+  npm dist-tag add @cello-protocol/gateway@0.0.23 latest
+  npm dist-tag add @cello-protocol/crypto@0.0.38 latest
+  npm dist-tag add @cello-protocol/transport@0.0.42 latest
+  npm dist-tag add @cello-protocol/protocol-types@0.0.40 latest
+  ```
+  then `npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest`,
+  `cello logout && cello login`, and `/mcp`. (`--prefer-online` is not optional right after a
+  promotion — `@latest` resolves from the operator's cached packument.)
 - **🚫 THE BINDING CONSTRAINT: Docker is unavailable here** (`docker info` fails), so the spine
   harness cannot run — and it is M8D's own live enforcer (`M8D-PROCEDURE` §2d). **No live-journey AC
   can close on this machine until Docker is up**, `DOD-COATTEND-VISIBLE-1` AC 6 included.
