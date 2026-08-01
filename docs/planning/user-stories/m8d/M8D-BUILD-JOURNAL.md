@@ -698,3 +698,52 @@ hash, which is what identified it. The agent is now attended in `beforeEach` (th
 
 **Still open on that line: AC3 and AC4(c).** AC3 wants a frontier mismatch surfaced *before* a close
 is attempted. Next unit.
+
+## Entry 10 — AC3 shipped; AC4(c) is tied to a superseded framing (2026-08-01, autonomous)
+
+**Commit** `e3ee86e`. Gate: **2430 passed / 11 skipped**, clean.
+
+### AC3 — the gap was RETENTION, not detection
+
+Worth stating because the AC's wording ("rather than discovered only when a close is attempted")
+reads like a demand for earlier detection. It cannot be: two frontiers are only comparable when the
+two sides talk, and that IS the seal attempt. What was actually broken is that the answer was
+discarded the instant it was produced — the refusal was a transient string in one command's output,
+and every later `cello_status` listed the session as plain `interrupted`, indistinguishable from one
+merely waiting for both parties.
+
+Both sides now retain it (the responder where it detects, the initiator when AC2's numbers come back
+on the rejection), an interrupted session carries a `frontierMismatch` field, and a **successful seal
+clears it** — a flag that outlives its condition is the same defect inverted.
+
+The renderer was extracted to a pure function deliberately: an inline closure inside
+`buildInterruptedSessions` is only reachable by standing up a daemon and driving a real seal
+exchange, so the AC's literal deliverable would have shipped uncovered. Same class of gap as the
+shim's missing coverage found earlier today.
+
+### M8D-D2 — AC4(c) does not apply as written, and is not silently skipped
+
+> **AC4(c):** *"the reconcile path (per AC 1) turns a one-leaf divergence into a sealable session, or
+> the leaf is proven never to have been appended."*
+
+That clause is anchored to **AC1's ORIGINAL framing** — "a leaf is appended only once its delivery is
+recorded, or an undelivered append is reconciled/rolled back". The DoD's own **ROOT CAUSE CORRECTED**
+block (2026-07-31) superseded that: the leaf was never undelivered. It was **delivered and dropped by
+the receiver's dedup rule**, and the corrected fix keys dedup on the relay position. So:
+
+- **There is no "reconcile path per AC1" to test** — the corrected AC1 *prevents* the divergence at
+  the producer instead of repairing it afterwards. New strands from this cause can no longer form.
+- **"The leaf is proven never to have been appended" is false for this defect** — it *was* appended,
+  on the sender's side. That alternative describes a different failure than the one that happened.
+
+**What genuinely remains, and is NOT claimed as done:** sessions stranded *before* this fix
+(`dbb93dfc…` among them) are still stranded. Repairing them needs a real capability — detect, request
+the missing leaves from the counterparty, re-ingest, re-verify the roots — which touches the seal path
+and is a unit of its own, not the tail of this one. AC1's fix does make such a repair *possible*
+where it previously was not: a re-sent message carrying its original relay position will now append,
+because the position is absent from the receiver's tree.
+
+**Decision (§3a — take the best practice, log it, proceed):** ACs 1, 2 and 3 are done; AC4(c) is
+recorded as superseded-by-correction, with the residual repair capability written down as its own
+future line rather than folded in at the end of a long session. Building a leaf-repair path into the
+seal at this hour is precisely how a subtle receipt bug ships.

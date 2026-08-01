@@ -306,7 +306,7 @@ earned.
   > class-enforcer that should have caught this was a hand-maintained list; it is now backed by a
   > **derived** guard, which found a live instance on its first run. → Entry 5
 
-- **DOD-FRONTIER-STRAND-1 AC1 + AC2** ✅ *(M8C line — these two ACs)*, worked because that line is
+- **DOD-FRONTIER-STRAND-1 ACs 1, 2, 3** ✅ *(M8C line — these three ACs)*, worked because that line is
   the fence M8D opens behind.
 
   **AC1 — dedup keys on the relay-assigned POSITION, not the content hash.** A redelivery carries
@@ -318,6 +318,17 @@ earned.
   and the ordering lookup) — fixing fewer would have re-created the defect one branch later.
   Relay-degraded sessions keep hash-dedup but now ANNOUNCE it
   (`session.content.dedup.unwitnessed`). → Entry 9
+
+  **AC3 — a stranded session LOOKS stranded.** The gap was RETENTION, not detection: two frontiers
+  are only comparable when the sides talk, so a close attempt IS the detection point — but the answer
+  was discarded, and every later `cello_status` showed plain `interrupted`. Both sides now retain it,
+  an interrupted session carries a `frontierMismatch` field, and a successful seal clears it. → Entry 10
+
+  **AC4(c) — superseded by the 2026-07-31 root-cause correction, NOT skipped.** It tests "the
+  reconcile path per AC1", which existed only in AC1's original framing; the corrected AC1 prevents
+  the divergence at the producer instead of repairing it. Sessions stranded BEFORE the fix remain
+  stranded — repairing them is a real capability (request missing leaves, re-ingest, re-verify) and
+  is recorded as a future line, not claimed here. → Entry 10, decision M8D-D2
 
   **AC2 — the refusal names the mismatch.** A frontier mismatch now reports **both** leaf counts and the diverging index, and
   logs `session.frontier.mismatch` at WARN. The old refusal told the operator to *"ask the
