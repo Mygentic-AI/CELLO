@@ -274,9 +274,24 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     );
 
     // And it surfaces as readable PLAINTEXT via cello_receive — not raw ciphertext around the funnel.
-    const recv = (await connB.call("cello_receive", { cello_session_id: sessionId })) as { ok?: boolean; content?: string | null };
-    expect(recv.ok).toBe(true);
-    expect(recv.content, "B reads the exact parked plaintext it had missed").toBe(PARKED);
+    //
+    // TWO reads, and the FIRST one is msg1 — that changed with DOD-COATTEND-1 (M8D) and the change
+    // is a FIX, not a regression. Verified by building the daemon at the commit before Tier 1 and
+    // re-running this clause: pre-Tier-1 the first read returned the PARKED message and msg1 was
+    // never readable at all. B's daemon RESTARTED here, and delivery used to be a destructive
+    // in-memory queue — so msg1, which B received live but never read through a client, was in the
+    // transcript and unreachable through cello_receive forever. That is precisely the content loss
+    // DOD-COATTEND-1 AC3 exists to end, and this clause was asserting the lossy behavior.
+    //
+    // Post-Tier-1 delivery reads the durable record against a per-connection bookmark, so a
+    // reconnecting session resumes from what IT has read: the unread msg1 first, then the parked
+    // msg2. Nothing is skipped and nothing is lost. The clause's own intent — "B reads the exact
+    // parked plaintext it had missed" — still holds; it is simply no longer the first thing read.
+    //
+    // The `[[OVER]]` suffix is in-band: the shim appends the turn signal to the content itself.
+    const read = async () => ((await connB.call("cello_receive", { cello_session_id: sessionId })) as { ok?: boolean; content?: string | null }).content;
+    expect(await read(), "the live message B never read is delivered first — not lost").toBe("msg1-online [[OVER]]");
+    expect(await read(), "B reads the exact parked plaintext it had missed").toBe(`${PARKED} [[OVER]]`);
   }, 120_000);
 
   it("DOD-MSG-7 (desync only on tamper) — tampered parked content is the ONLY desync; recovery-failure keeps the session alive", async () => {
@@ -545,9 +560,15 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     await daemonB.waitForLine(/"event":"session\.content\.received"[^\n]*"sequenceNumber":1/, 10_000);
 
     // B reads them in canonical order — leaf index === the relay-committed sequence the frame carried.
+    //
+    // The `[[OVER]]` suffix is part of the content, not decoration: the shim appends the turn signal
+    // IN-BAND (`${content} ${token}` in cello-mcp.ts) and the receiver's `cello_receive` reads it
+    // back off the content to derive its guidance. These assertions predated in-band signals and
+    // compared against the bare payload, so they failed on a correct build — asserting the exact
+    // wire string is what makes them a check on ORDER rather than on formatting.
     const read = async () => ((await connB.call("cello_receive", { cello_session_id: sessionId })) as { ok?: boolean; content?: string | null }).content;
-    expect(await read()).toBe("first");
-    expect(await read()).toBe("second");
+    expect(await read()).toBe("first [[OVER]]");
+    expect(await read()).toBe("second [[OVER]]");
   }, 120_000);
 
   it("DOD-MSG-4 (auto-recover) — B drains its parked mailbox automatically on reconnect, with NO explicit recover call", async () => {
@@ -661,7 +682,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // exactly one in-session message (msg1), so B's signed frontier reflects that — never more.
     type LegPart = { pubkey: string; content_frontier_seq: number };
     type Receipt = { ok?: boolean; sealed_root?: string; legibility?: { participants: LegPart[] } };
-    const receipt = (await connB.call("cello_get_sealed_receipt", { session_id: sessionId })) as Receipt;
+    const receipt = (await connB.call("cello_sealed_receipt", { cello_session_id: sessionId })) as Receipt;
     expect(receipt.ok, `B reads the sealed receipt:${diag}`).toBe(true);
     expect(receipt.sealed_root, `receipt root matches the seal:${diag}`).toBe(closeB.sealed_root);
     const frontierOf = (r: Receipt, pubkeyHex: string): number => {
@@ -701,7 +722,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
 
     // The session is STILL sealed and byte-identical — the straggler never re-entered the transcript,
     // and B's certificate frontier is UNCHANGED: the rejected straggler could not inflate it.
-    const receipt2 = (await connB.call("cello_get_sealed_receipt", { session_id: sessionId })) as Receipt;
+    const receipt2 = (await connB.call("cello_sealed_receipt", { cello_session_id: sessionId })) as Receipt;
     expect(receipt2.ok, "session still sealed + readable after the straggler").toBe(true);
     expect(receipt2.sealed_root, "sealed root unchanged — the straggler did not mutate the transcript").toBe(closeB.sealed_root);
     expect(frontierOf(receipt2, pubB), "B's content frontier is unchanged — the straggler did not inflate it").toBe(bFrontierAtSeal);

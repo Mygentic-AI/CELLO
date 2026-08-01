@@ -103,7 +103,7 @@ describe("J-LEG-FRONTIER — inflated published frontier is rejected (DOD-LEG-2 
 
     // No seal is produced: neither party ever accepts a frontier, and no sealed receipt exists.
     expect(daemonA.output + daemonB.output, "the inflated frontier must never be accepted").not.toMatch(/"event":"seal\.certificate\.frontier\.verified"/);
-    const receipt = (await connB.call("cello_get_sealed_receipt", { session_id: sessionId })) as { ok?: boolean };
+    const receipt = (await connB.call("cello_sealed_receipt", { cello_session_id: sessionId })) as { ok?: boolean };
     expect(receipt.ok, "no sealed receipt exists when the seal is refused").not.toBe(true);
   }, 90_000);
 });

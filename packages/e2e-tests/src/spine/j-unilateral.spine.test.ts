@@ -233,7 +233,7 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     // (b) THE FINDING-3 CORE: the receipt is RETRIEVABLE afterward via cello_get_sealed_receipt —
     //     the read that returned sealed_receipt_not_found before the fix. Same store the bilateral
     //     seal writes; works because the daemon now persists the verified unilateral cert.
-    const receipt = (await connA.call("cello_get_sealed_receipt", { session_id: sessionIdA })) as {
+    const receipt = (await connA.call("cello_sealed_receipt", { cello_session_id: sessionIdA })) as {
       ok?: boolean;
       reason?: string;
       sealed_root?: string;

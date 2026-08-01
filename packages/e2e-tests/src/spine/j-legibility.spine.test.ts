@@ -151,7 +151,7 @@ describe("J-LEGIBILITY — malicious-tail bilateral seal, cert read cross-proces
     // ── AC-006: B reads the certificate from a DIFFERENT process than the directory that
     // built it — via the persisted cert-read surface (cello_get_sealed_receipt over the real
     // cello-mcp → daemon IPC), NOT an internal method call.
-    const receipt = (await connB.call("cello_get_sealed_receipt", { session_id: sessionIdB })) as {
+    const receipt = (await connB.call("cello_sealed_receipt", { cello_session_id: sessionIdB })) as {
       ok?: boolean; sealed_root?: string; legibility?: Legibility; reason?: string;
     };
     expect(receipt.ok, `B must read the sealed receipt:${diag}\nreceipt: ${JSON.stringify(receipt)}`).toBe(true);
