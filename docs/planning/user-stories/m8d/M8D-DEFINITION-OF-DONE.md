@@ -398,21 +398,28 @@ earned.
 - **DOD-SPINE-JCONTENT-1** 🅿️ **PARKED** *(M8C `DOD-MSG-*` debt — raised 2026-08-02)* — **the live
   parked-message journey is 3/10.**
 
-  `j-content.spine.test.ts` run against real Postgres + directory + relay: **7 of 10 red.**
-  **NOT an M8D regression** — established by controlled comparison, the identical failure set
-  against the daemon build *before* and *after* the M8D review fixes. Recorded because the first
-  failure reads exactly like the co-attendance redelivery loop (*"B reads the exact parked plaintext
-  it had missed"*), and attributing it without the second run would have been wrong.
+  `j-content.spine.test.ts` against real Postgres + directory + relay was **7 of 10 red**; now
+  **5 of 10 green** (2026-08-02). Three causes were separated and two are fixed:
 
-  Two causes are already visible without diagnosis:
-  - `Tool cello_get_sealed_receipt not found` — the MCP tool is `cello_sealed_receipt`. Rename rot.
-  - `expected 'first [[OVER]]' to be 'first'` — assertions predating turn-signals on content.
+  - **Rename rot, two-part** — the MCP tool is `cello_sealed_receipt` taking `cello_session_id`; the
+    IPC method it proxies to is still `cello_get_sealed_receipt` taking `session_id`. Four spine
+    files called the IPC name over the MCP surface. **Fixed.** (The audit-what-ships class: the
+    daemon-side name never changed, so nothing daemon-side could have caught it.)
+  - **In-band signals** — the shim appends the turn token to the content itself, so a receiver reads
+    `"first [[OVER]]"`. Assertions predating that compared the bare payload. **Fixed.**
+  - **The recover clause was asserting content LOSS.** It expected B, after a daemon restart, to read
+    the *parked* message first. Building the daemon at the commit **before Tier 1** showed why: back
+    then the live message B had received but never read was **unreachable forever** (destructive
+    in-memory queue, emptied by the restart, row stranded in the transcript). **Fixed — and it is
+    now the first live multi-process evidence for `DOD-COATTEND-1` AC3.**
 
-  The rest need real work: auto-recover reporting `recovered:0`, the ACK-ladder timeout, the dedup
-  timeout. **Parked, not dismissed** — parked-message delivery ("leave a message for an offline
-  agent") *is* core launch value, so 7/10 red is not a documentation problem. It belongs to the M8C
-  `DOD-MSG-*` lines, and pulling it into M8D would be the rabbit hole `.claude/CLAUDE.md` warns
-  about. → Entry 25
+  **Correction to Entry 25:** it called these failures "not ours" on a comparison of builds before
+  and after the M8D *review fixes* — Tier 1 was in both, so that comparison could not see this. The
+  pre-Tier-1 build was the experiment that could.
+
+  **Five remain** (MSG-7, MSG-5 dedup, MSG-1 ACK ladder, MSG-4 auto-recover, MSG-8 straggler); all
+  five also fail pre-Tier-1, so they are genuine M8C `DOD-MSG-*` debt. **Parked, not dismissed** —
+  parked-message delivery *is* core launch value. → Entries 25, 27
 
 
 - **DOD-FRONTIER-MISMATCH-DURABLE-1** 🅿️ PARKED *(debt — from M8C, raised 2026-08-01)* — **the

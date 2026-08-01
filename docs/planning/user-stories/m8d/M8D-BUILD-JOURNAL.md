@@ -1677,3 +1677,49 @@ Four lines sit at 🟡 awaiting only the promotion and the live journey — both
 Three of them were literally the same mistake — a walk over a received-only view, which has holes
 wherever the agent sent something — and the third was introduced one file away from the comment
 warning about it.
+
+### 2026-08-02 — Entry 27: the spine had a clause pinning the bug M8D exists to fix — and Entry 25 was wrong
+
+**Correcting myself first.** Entry 25 said j-content's failures were "not ours", on a controlled
+comparison of the daemon build *before* and *after* the M8D **review fixes**. That comparison was
+real but could not answer the question: **Tier 1 was present in both builds.** The experiment that
+could was building at the commit *before* `73bda73` — and it changed the answer.
+
+### The finding
+
+`DOD-MSG-3/4 (recover)` expected B, after a daemon restart, to read the **parked** message first.
+Pre-Tier-1, that is exactly what happened — and `msg1`, which B had received live but never read
+through a client, was **never readable at all**. Delivery was a destructive in-memory queue: the
+restart emptied it, and the row sat in the transcript unreachable through `cello_receive` forever.
+
+**The spine was asserting the content loss `DOD-COATTEND-1` AC3 exists to end.**
+
+Post-Tier-1 B reads the unread `msg1`, then the parked `msg2`. Nothing skipped, nothing lost. The
+clause now asserts both, in order, with the archaeology attached.
+
+That makes it **the first live multi-process evidence for AC3** — real Postgres, real directory, real
+relay, two real daemon binaries, a real restart. No unit test can produce that, and the milestone had
+none of it. It does not close AC7 (that is the in-context `claude --channels` journey and still needs
+Andre), but it is a strictly stronger class of proof than the fixture for the property it covers.
+
+### The other two causes, separated by measurement
+
+- **Rename rot, two-part.** The MCP tool is `cello_sealed_receipt` taking `cello_session_id`; the IPC
+  method behind it is still `cello_get_sealed_receipt` taking `session_id`. Four spine files called
+  the IPC name, with the IPC param, over the MCP surface. The **audit-what-ships** class again: the
+  daemon-side name never changed, so nothing daemon-side could have caught it.
+- **In-band signals.** The shim appends the turn token to the content (`${content} ${token}`), so a
+  receiver reads `"first [[OVER]]"`. Assertions predating that compared the bare payload and failed
+  on a correct build.
+
+**j-content: 3/10 → 5/10.** The five that remain (MSG-7, MSG-5 dedup, MSG-1 ACK ladder, MSG-4
+auto-recover, MSG-8 straggler) also fail pre-Tier-1, so they are genuine M8C `DOD-MSG-*` debt and
+stay parked under `DOD-SPINE-JCONTENT-1`.
+
+### The lesson worth keeping
+
+**A controlled comparison is only as good as what it holds constant.** Mine held Tier 1 constant
+while asking whether Tier 1 was responsible, and produced a confident, wrong answer that I wrote into
+the journal. The tell was available: the failure I dismissed (*"B reads the exact parked plaintext it
+had missed"*) is the co-attendance shape, and I noted that it *looked* like our defect — then
+explained the resemblance away instead of testing it.
