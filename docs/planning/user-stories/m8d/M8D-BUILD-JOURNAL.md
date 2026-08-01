@@ -1518,3 +1518,54 @@ so they stop reading as proof of a change), F6, F7.
 
 **⚠️ daemon `0.0.116` / cli `0.0.119` PREDATE this fix** and carry the open wire window. Entry 21's
 promotion block is stale; the next cascade supersedes it.
+
+### 2026-08-02 — Entry 24: 🟢 THE PROMOTION SET — daemon 0.0.117 / cli 0.0.120 (supersedes Entries 19 and 21)
+
+`v0.0.177` green end to end, **smoke-tag ✅**. Verified in the tarball: `sendInFlight` and
+`sibling_send_in_flight` both in `package/dist/session-content-handlers.js`; cross-pin
+`cli@0.0.120 → daemon@0.0.117`.
+
+**Three cascades went out overnight. Only this one is correct.** `0.0.114` carried the redelivery
+loop; `0.0.116` carried the open `sendContent` window. Promoting either would ship a known defect
+into the journey it exists to prove.
+
+```bash
+npm dist-tag add @cello-protocol/cli@0.0.120 latest
+npm dist-tag add @cello-protocol/daemon@0.0.117 latest
+npm dist-tag add @cello-protocol/connect@0.0.115 latest
+npm dist-tag add @cello-protocol/gateway@0.0.23 latest
+npm dist-tag add @cello-protocol/crypto@0.0.38 latest
+npm dist-tag add @cello-protocol/protocol-types@0.0.40 latest
+npm dist-tag add @cello-protocol/transport@0.0.42 latest
+```
+
+The last five are already on `latest` (harmless *"already set"* warning) — listed so the graph is
+promoted as one consistent set. The `+latest: …` line is the confirmation, not the verify loop.
+
+```bash
+npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest
+cello logout && cello login          # CLI lifecycle — never pkill
+node -p "require('$(npm prefix -g)/lib/node_modules/@cello-protocol/cli/package.json').version"   # 0.0.120
+```
+
+Then `/mcp`, then the runbook in **Entry 22**.
+
+### State of the milestone
+
+| line | status |
+|---|---|
+| `DOD-RECEPTIONIST-AGENT-1` | ✅ PROVEN |
+| `DOD-INBOX-AGENT-1` | ✅ PROVEN |
+| `DOD-COATTEND-VISIBLE-1` | 🟡 built + reviewed · AC6 live owed |
+| `DOD-COATTEND-1` | 🟡 built + **reviewed twice** (blocking findings fixed) · AC7 live owed |
+| `DOD-COATTEND-CATCHUP-1` | 🟡 built + reviewed · live owed |
+| `DOD-COATTEND-SENDWINDOW-1` | 🟡 built + reviewed (blocking F1 fixed) · live owed |
+
+All six built, gated (**2454 passed / 11 skipped, exit 0**), reviewed, published, verified in the
+binary. Every 🟡 is waiting on the same two operator-only steps and nothing else.
+
+**Both blocking review findings this milestone were the same mistake in different clothes:** a fix
+verified against the layer it was written at rather than the layer that runs. Tier 1 reused the
+gate's cursor because both are "a per-connection sequence number"; the send window guarded the
+gateway await because that is the one the test could stall. Neither was caught by a green suite —
+both were caught by an adversarial reader who reproduced them by execution.
