@@ -431,18 +431,31 @@ export class RegistrationStateMachine {
       });
     }
 
-    // Create in INITIAL state, then immediately transition to AWAITING_CONTACT
+    // INSERTED DIRECTLY INTO AWAITING_CONTACT, for the same reason handleNewUser is (see the note
+    // above its own insert) — and here it was not a window, it was the steady state.
+    //
+    // This path used to insert INITIAL under a comment promising it would "immediately transition to
+    // AWAITING_CONTACT", assign `const awaitingRecord = record`, and return. The transition was never
+    // written; only the name suggested it had been. So every returning user's record sat in INITIAL,
+    // their shared contact arrived, handleMessage hit `case "INITIAL"` — a transient state whose
+    // handler re-prompts for contact — and answered "Please share your phone number using the button
+    // below" to the phone number they had just shared. Forever. Adding a second agent was impossible.
+    //
+    // It survived because the tests drove the state machine from an AWAITING_CONTACT record they
+    // built themselves rather than from the one this method returns, and because on AWS the gate
+    // refused re-registration before reaching here — so the loop was masked by a different bug.
     const record = await repository.insert({
       phoneStubHash,
       channel,
       channelUserId,
-      state: "INITIAL",
+      state: "AWAITING_CONTACT",
       expiresAt,
     });
 
-    // Store expectedEmailStubHash in state_data for later continuity check
+    // Store expectedEmailStubHash in state_data for later continuity check. Same-state transition:
+    // it records data, it does not advance the flow.
     if (expectedEmailStubHash) {
-      await repository.transition(record.id, "INITIAL", {
+      await repository.transition(record.id, "AWAITING_CONTACT", {
         stateData: { expectedEmailStubHash },
       });
     }
