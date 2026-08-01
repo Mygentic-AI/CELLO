@@ -96,6 +96,62 @@ describe("DOD-M12-REREG-1 — returning user, second agent", () => {
     expect(reprompts).toHaveLength(0);
   });
 
+  it("a record already stranded in INITIAL recovers instead of looping forever", async () => {
+    // Fixing handleExistingUser does nothing for the rows the old code already wrote. Andre's was
+    // one: it sat in INITIAL, and INITIAL re-prompted without ever transitioning, so no message —
+    // not even a fresh CONFIRM — could get it out. The state itself had to become recoverable.
+    const { deps, channel } = makeDeps();
+    const stranded = { id: "reg-1", state: "INITIAL", channel: "telegram", channelUserId: "tg-1" } as unknown as RegistrationRecord;
+
+    const after = await new RegistrationStateMachine(deps).handleMessage(
+      stranded,
+      "CONTACT:tg-1:+971585089156",
+      "tg-1",
+    );
+
+    const replies = channel.send.mock.calls.map((c) => String(c[1]));
+    expect(replies.some((m) => m.includes(RE_PROMPT))).toBe(false);
+    expect(after.state).not.toBe("INITIAL");
+  });
+
+  it("recovery from INITIAL still asks the gate before requesting a phone number", async () => {
+    // The dangerous way to fix the loop: promote INITIAL straight to AWAITING_CONTACT. A record
+    // refused by the gate would then be asked for PII — the exact ordering the gate exists to
+    // prevent, inverted in the name of unsticking a user.
+    const REFUSED = {
+      check: vi.fn().mockResolvedValue({ allowed: false, error: "token_required", message: "not linked" }),
+      redeem: vi.fn(),
+    };
+    const { repository, channel, logger } = makeDeps();
+    const deps = {
+      repository, channel, logger,
+      otpDelivery: { send: vi.fn() }, preAuth: { requestToken: vi.fn() },
+      waitlistGate: REFUSED,
+    } as never;
+    const stranded = { id: "reg-1", state: "INITIAL", channel: "telegram", channelUserId: "tg-1" } as unknown as RegistrationRecord;
+
+    const after = await new RegistrationStateMachine(deps).handleMessage(stranded, "CONTACT:tg-1:+971585089156", "tg-1");
+
+    expect(REFUSED.check).toHaveBeenCalledWith("tg-1");
+    expect(after.state).toBe("AWAITING_WAITLIST_TOKEN");
+    const replies = channel.send.mock.calls.map((c) => String(c[1]));
+    expect(replies.some((m) => m.toLowerCase().includes("phone number"))).toBe(false);
+  });
+
+  it("PHONE_CONFIRMED advances to email rather than re-asking for the phone", async () => {
+    // The phone is already verified and hashed at this point. Re-requesting it is not just a dead
+    // end, it asks again for PII the system has already stored.
+    const { deps, channel } = makeDeps();
+    const stranded = { id: "reg-1", state: "PHONE_CONFIRMED", channel: "telegram", channelUserId: "tg-1" } as unknown as RegistrationRecord;
+
+    const after = await new RegistrationStateMachine(deps).handleMessage(stranded, "anything", "tg-1");
+
+    expect(after.state).toBe("AWAITING_EMAIL");
+    const replies = channel.send.mock.calls.map((c) => String(c[1]));
+    expect(replies.some((m) => m.includes(RE_PROMPT))).toBe(false);
+    expect(replies.some((m) => m.includes("email"))).toBe(true);
+  });
+
   it("still records the expected email hash for continuity", async () => {
     // The state data write rode on the INITIAL→INITIAL transition. Moving the insert to
     // AWAITING_CONTACT must not drop it, or returning users lose email-continuity enforcement.

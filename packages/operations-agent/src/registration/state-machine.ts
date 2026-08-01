@@ -239,14 +239,23 @@ export class RegistrationStateMachine {
         // Terminal state — ignore further messages
         return record;
 
+      // TRANSIENT STATES ARE RECOVERED, NOT JUST RE-PROMPTED.
+      //
+      // Both of these used to send "Please share your phone number using the button below" and
+      // return the record UNCHANGED. That is a dead end, not a prompt: the state never advances, so
+      // the next message lands in the same case and gets the same reply. A user who reached INITIAL
+      // shared their contact, was asked for it again, shared it again, and was asked again — with no
+      // message they could send to escape, because the machine routes on state and the state never
+      // moved. Andre hit exactly this adding a second agent, including on a fresh CONFIRM.
+      //
+      // Fixing whatever put a record here (handleExistingUser, above) is necessary but not
+      // sufficient — records ALREADY in these states stay trapped forever, and a 7-day TTL is not a
+      // recovery path. So these now heal the record and process the message the user actually sent.
       case "INITIAL":
+        return this.#recoverFromInitial(record, message, from, correlationId);
+
       case "PHONE_CONFIRMED":
-        // Transient states that should not linger — re-prompt for contact
-        await this.#deps.channel.send(
-          from,
-          `${CONTACT_PROMPT_PREFIX}Please share your phone number using the button below to continue registration.`,
-        );
-        return record;
+        return this.#recoverFromPhoneConfirmed(record, from, correlationId);
       case "EMAIL_CONFIRMED":
         // Email was verified but pre-auth token request failed. Retry it.
         return this.#retryPreAuth(record, from);
@@ -476,6 +485,95 @@ export class RegistrationStateMachine {
     );
 
     return awaitingRecord;
+  }
+
+  /**
+   * Recover a record stranded in INITIAL and then process the message that arrived.
+   *
+   * THE GATE IS RE-ASKED FIRST, and that is the whole reason this is not a one-line transition.
+   * AWAITING_CONTACT is the state that asks for a phone number, and the gate exists so that nobody
+   * unvetted is ever asked for PII. Promoting INITIAL → AWAITING_CONTACT unconditionally would take
+   * a record that may have landed here precisely because it was refused and hand it the PII prompt —
+   * inverting the ordering the gate is for. A refused record goes to AWAITING_WAITLIST_TOKEN, which
+   * is where handleNewUser would have put it.
+   */
+  async #recoverFromInitial(
+    record: RegistrationRecord,
+    message: string,
+    from: string,
+    correlationId: string,
+  ): Promise<RegistrationRecord> {
+    const { repository, logger, waitlistGate } = this.#deps;
+
+    if (waitlistGate) {
+      const decision = await this.#askGate(
+        () => waitlistGate.check(record.channelUserId),
+        record.channelUserId,
+        "check",
+      );
+      if (!decision.allowed) {
+        logger.info("registration.state.recovered_gated", {
+          registrationId: record.id,
+          channel: record.channel,
+          correlationId,
+          reason: decision.error,
+        });
+        const gated = await repository.transition(record.id, "AWAITING_WAITLIST_TOKEN");
+        await this.#deps.channel.send(
+          from,
+          "This account is no longer able to register. If you have a waitlist invitation token, " +
+            "send it now. Otherwise see https://cello.mygentic.ai",
+        );
+        return gated;
+      }
+    }
+
+    const healed = await repository.transition(record.id, "AWAITING_CONTACT");
+    logger.info("registration.state.recovered_initial", {
+      registrationId: record.id,
+      channel: record.channel,
+      correlationId,
+    });
+
+    // Handle the message the user ACTUALLY sent, rather than making them send it a third time. If it
+    // was their shared contact, this verifies it; if it was anything else, AWAITING_CONTACT's own
+    // handler asks for the contact — from a state that can now accept one.
+    return this.#handleAwaitingContact(healed, message, from, correlationId);
+  }
+
+  /**
+   * Recover a record stranded in PHONE_CONFIRMED.
+   *
+   * The phone is already verified — the record only got stuck between that write and the
+   * AWAITING_EMAIL transition. Asking for the phone number again (which is what this state used to
+   * do) is both useless and wrong: it re-requests PII the system has already hashed and stored.
+   * Advance to the step that was actually next.
+   */
+  async #recoverFromPhoneConfirmed(
+    record: RegistrationRecord,
+    from: string,
+    correlationId: string,
+  ): Promise<RegistrationRecord> {
+    const { repository, logger, channel } = this.#deps;
+
+    const awaitingEmail = await repository.transition(record.id, "AWAITING_EMAIL");
+    logger.info("registration.state.recovered_phone_confirmed", {
+      registrationId: record.id,
+      channel: record.channel,
+      correlationId,
+    });
+
+    const expectedEmailHash = (await repository.getStateDataField(
+      record.id,
+      "expectedEmailStubHash",
+    )) as string | null;
+    await channel.send(
+      from,
+      expectedEmailHash
+        ? "Phone verified! Please enter the same email address you registered with the first time."
+        : "Phone verified! Next, please provide your email address.",
+    );
+    return awaitingEmail;
   }
 
   /**
