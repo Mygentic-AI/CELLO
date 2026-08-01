@@ -183,21 +183,31 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
     const unwitnessed = daemon.output.split("\n").filter((l) => l.includes("session.content.unwitnessed"));
     expect(unwitnessed, `every message must be relay-witnessed:\n${unwitnessed.join("\n")}`).toHaveLength(0);
 
-    // AC8 IS NOT ASSERTED HERE, and it is not an oversight — recording the blocker instead of
-    // faking the check. AC8 wants "the sealed certificate's leaf count equals the transcript's
-    // message count", but `cello_sealed_receipt` exposes NO leaf count: the payload is
-    // { ok, session_id, session_name, sealed_root, legibility{ participants[], final_message } }.
-    // The nearest values are per-participant `content_frontier_seq` / `last_authored_seq`, which
-    // count something else (a participant's own frontier, not the tree's leaves) and are not
-    // interchangeable with a transcript message count — one side's transcript holds 1 message here
-    // while the tree carries several leaves including control leaves.
+    // AC8: the certificate covers the WHOLE conversation.
     //
-    // A first attempt DID write this assertion, guarded by `if (typeof receipt.leaf_count ===
-    // "number")`. The guard was always false, so it silently never ran — a hollow assertion that
-    // reads as coverage. Caught by probing the actual payload rather than by the suite going green.
+    // This is the assertion §7a's original measurement missed. Seal RATE was unaffected by the
+    // drift (75% vs 72%) because a certificate was still ISSUED — over a record short one message.
+    // Rate was never the measure; coverage is, and until now the receipt reported no size at all,
+    // which is exactly why an incomplete certificate looked identical to a complete one.
     //
-    // Closing AC8 needs a leaf count on the receipt surface (or an inclusion-proof read that
-    // exposes one). That is a product change, not a test change, so it belongs to its own unit.
+    // content_leaf_count, not leaf_count: the sealed tree also carries the control leaves the seal
+    // itself appends, so comparing the FULL count to a transcript length would drift by those and
+    // read as a defect when nothing is wrong.
+    const transcript = (await connA.call("cello_transcript", { cello_session_id: sessionIdA })) as {
+      messages?: Array<{ sequence?: number }>;
+    };
+    const receipt = (await connA.call("cello_sealed_receipt", { cello_session_id: sessionIdA })) as {
+      ok?: boolean; leaf_count?: number; content_leaf_count?: number;
+    };
+    expect(receipt.ok, `the sealed receipt must be retrievable: ${JSON.stringify(receipt)}`).toBe(true);
+    // Asserted UNCONDITIONALLY. A first attempt guarded this on `typeof leaf_count === "number"`,
+    // the field did not exist, and the check silently never ran while the suite went green.
+    expect(typeof receipt.content_leaf_count, "the receipt must report its coverage").toBe("number");
+    expect(
+      receipt.content_leaf_count,
+      `the certificate must cover every message in the transcript — a receipt short one leaf IS the §7a defect: ${JSON.stringify(receipt)}`,
+    ).toBe(transcript.messages?.length);
+
     // Exactly ONE daemon process hosted the whole conversation.
     expect(daemons.length, "exactly one daemon process was started for the whole conversation").toBe(1);
 
