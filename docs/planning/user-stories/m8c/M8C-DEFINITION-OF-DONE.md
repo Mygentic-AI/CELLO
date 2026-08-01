@@ -2065,7 +2065,7 @@ own story) deliberately, never smuggled in as a rider. Source:
   8. The sealed certificate's leaf count equals the transcript's message count for that session.
 
   **Out of scope, deliberately:** the content-hash dedup (§7b, `DOD-FRONTIER-STRAND-1` below),
-  co-attendance (M8D), and the `sequence_behind_tree` branch itself — it is the symptom's alarm, not
+  co-attendance ([[M8D-DEFINITION-OF-DONE]], opened 2026-08-01), and the `sequence_behind_tree` branch itself — it is the symptom's alarm, not
   the defect. Leave it logging.
 
   **Implementation status (2026-07-31, cello-client `fix/dod-firstmsg-witness-1`, `d8d34de` +

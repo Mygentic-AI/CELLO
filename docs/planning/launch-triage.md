@@ -178,8 +178,10 @@ conversation's two sides don't agree on position. Item 1 first, structurally —
 
 ## 6. Two windows on one agent silently steal each other's messages
 
-**Designation:** [[2026-07-31_1043_two-sessions-one-agent-co-attendance]] §2 — **needs a DoD line
-opened.** Only the detection half belongs at launch; the redesign is a separate milestone (M8D).
+**Designation: `DOD-COATTEND-VISIBLE-1`** ([[M8D-DEFINITION-OF-DONE]], Tier 0 — opened 2026-08-01).
+Source: [[2026-07-31_1043_two-sessions-one-agent-co-attendance]] §2. Only the detection half belongs at
+launch and it is that line; the redesign is Tier 1 of the same milestone and opens behind M8C's two
+receipt lines.
 
 Run two Claude sessions against the same agent and a message arrives: one session gets it, the other
 is told nothing arrived, and neither is told the other exists. The wake-up is broadcast to every
