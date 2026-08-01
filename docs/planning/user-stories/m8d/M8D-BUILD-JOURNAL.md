@@ -18,16 +18,18 @@ description: >
 
 ## RESUME STATE (overwritten in place — the ONLY thing in this file that is)
 
-**Updated:** 2026-08-01, after Entry 4.
+**Updated:** 2026-08-01, after Entry 5.
 
 - **Everything is MERGED TO `main`** in both repos (the `m8d/co-attendance` worktrees still exist and
-  track it). Client `main` @ `4d42ec9`; docs `main` @ the Entry 4 commit.
+  track it). Client `main` @ `20c331b`; docs `main` @ the Entry 5 commit.
 - **Done.** `DOD-RECEPTIONIST-AGENT-1` **✅** (all four ACs, AC 4 at execution level).
   `DOD-COATTEND-VISIBLE-1` **🟡** (ACs 1–5, 7 enforcer-green; AC 6 is a live journey).
-  `DOD-INBOX-AGENT-1` *(debt — from M8C)* built + gate-green, **review in flight**.
+  `DOD-INBOX-AGENT-1` *(debt — from M8C)* **✅** — reviewed, and the review found the same
+  accept-and-drop shape in four more places, including the shim line the fix itself wrote.
+  `DOD-FRONTIER-STRAND-1` **AC2 only** landed (M8C line; ACs 1/3/4 still open, so the fence holds).
 - **PUBLISHED to beta, binary-verified:** daemon `0.0.111`, cli `0.0.114`, connect `0.0.113`
   (tag `v0.0.170`, smoke-tag green). `latest` **NOT** promoted — operator-run. `DOD-INBOX-AGENT-1`
-  landed after the tag and needs the NEXT publish.
+  landed after the tag; **everything from `4d42ec9` onward needs the NEXT publish.**
 - **🚫 THE BINDING CONSTRAINT: Docker is unavailable here** (`docker info` fails), so the spine
   harness cannot run — and it is M8D's own live enforcer (`M8D-PROCEDURE` §2d). **No live-journey AC
   can close on this machine until Docker is up**, `DOD-COATTEND-VISIBLE-1` AC 6 included.
@@ -37,7 +39,7 @@ description: >
 - **Owed to Andre.** (1) Docker up, or a decision to close live ACs elsewhere. (2) The live
   two-session `claude --channels` journey for AC 6. (3) The `latest` promotion, when he wants the
   reinstall. (4) A call on whether M8D should absorb `DOD-FRONTIER-STRAND-1` to lift its own fence.
-- **Gate at HEAD.** 2401 passed / 11 skipped, lint + typecheck + build clean.
+- **Gate at HEAD.** 2417 passed / 11 skipped, lint + typecheck + build clean.
 
 ---
 
@@ -432,3 +434,71 @@ Two corrections to Entry 2's framing and to the DoD note I wrote earlier today:
 because it is easy to mistake for a scope decision: the spine harness is M8D's own live enforcer
 (`M8D-PROCEDURE` §2d), so **no live-journey AC can close on this machine until Docker is up** —
 `DOD-COATTEND-VISIBLE-1` AC 6 included.
+
+## Entry 5 — the same defect in five places, and the enforcer that was blind to it (2026-08-01)
+
+**Commits.** `4d42ec9` (DOD-INBOX-AGENT-1) → `20c331b` (every review finding + FRONTIER AC2).
+Gate at `20c331b`: **2417 passed / 11 skipped**, lint, typecheck, build clean.
+
+### The finding worth remembering
+
+The review's central point was not any single defect. It was that **the unit's own thesis — a
+parameter accepted and silently dropped — reproduced in four more places the fix never looked**,
+including the shim line the fix had just written:
+
+```ts
+...(agent ? { agent } : {}),     // zod's z.string().optional() ACCEPTS ""
+```
+
+A truthiness test. So an unsubstituted `<exact name>` placeholder — the exact case the skill's
+prose warns about — reached the daemon as *"no agent given"*, was answered for whatever desk the
+connection held, `ok: true`. **It made the daemon's brand-new empty-name guard unreachable from the
+only surface that matters.** Three sibling tools had the same drop; two of them WRITE.
+
+Full set, all fixed behind one `resolveNamedAgent`: the empty string (shim), a non-string value
+(direct IPC — §5a: unreachable is a property of today's call graph, not of the code), the
+`scope: "all"` branch (same parameter, refused when empty, ignored when unknown — *depending on
+scope*), and `contact-handlers.ts`, where `{ agent: "carol" }` filed a contact row keyed to an agent
+that does not exist because `addContact` never validated the name.
+
+### The enforcer was already there, and it was blind
+
+`m8c-agent-param-1-tools.test.ts` exists **for exactly this defect class** — its header says a
+declared-but-dropped parameter "is worse than no param". It iterates a **hand-maintained list**, and
+`cello_inbox` was never in it. *That is why this survived `DOD-AGENT-PARAM-1` and needed a human to
+find it a milestone later.* **Omitting an entry makes the loop shorter, never red.**
+
+Adding `cello_inbox` to the list would have left the blindness exactly as it was. So the list is now
+backed by a **derived** guard: scan the shim source, and every tool that *declares* `agent` must
+forward it under the key the daemon reads and must not drop an empty one — whether or not anyone
+listed it. **It found a live instance on its first run** (`cello_contact_add`'s
+`if (agent) params.agent = agent`), which is the whole argument for it.
+
+### Error substitution: "does not exist" for an agent that does
+
+A `load_failed` agent was reported as `agent_not_found`, with guidance pointing at `cello_agents` —
+which **filters `load_failed` agents out**. The operator would look, see nothing, confirm the wrong
+diagnosis, and never reach `cello_status`, which shows the real error. Now `agent_load_failed`,
+carrying the underlying error and a warning that `cello_agents` will mislead.
+
+### Also landed: DOD-FRONTIER-STRAND-1 **AC2 only** (M8C)
+
+Worked because it is the fence M8D opens behind, and it is daemon-local so Docker is not needed. The
+refusal now carries **both** frontiers plus the diverging index, and logs `session.frontier.mismatch`
+at WARN. The old text — *"ask the counterparty to check their interrupted sessions on their end"* —
+is unfollowable when both agents run on ONE daemon, which is precisely how session `dbb93dfc…` sat
+stranded for a week: it named the one action that could not be taken and withheld the two numbers
+that identify the problem.
+
+**ACs 1, 3 and 4 of that line remain OPEN.** AC1 (position-keyed dedup, per the 2026-07-31 root-cause
+correction) is the producer-side fix and is a unit of its own. **This does not close
+`DOD-FRONTIER-STRAND-1`, and the Tier-1 fence therefore does not lift.**
+
+### What I got wrong, recorded
+
+Two of my own defects this round, both the same shape as the thing I was fixing:
+
+1. The shim truthiness drop above — I wrote the guard and the bypass in the same commit.
+2. I made `agents` a required dep without updating the `contact-handlers-seam` harness, so the gate
+   went red on a test that encodes the OLD contract. Correct outcome: the harness now declares who
+   exists, and two new clauses pin that **nothing is written** on either refusal.

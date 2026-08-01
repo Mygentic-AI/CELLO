@@ -284,6 +284,40 @@ a visible one.
 
 ---
 
+## Debt raised and paid during M8D
+
+Per [[M8D-PROCEDURE]] §5d: a defect this milestone SURFACED but did not cause gets its own line,
+marked as debt, so M8D's true cost stays legible and the earlier milestone is charged where it was
+earned.
+
+- **DOD-INBOX-AGENT-1** ✅ PROVEN *(debt — from M8C)* (raised + closed 2026-08-01) —
+  **`cello_check_notifications` accepted an `agent` parameter and silently dropped it.** Every
+  sibling handler passes `params?.agent` into `resolveCurrentAgent`; this one never did. So
+  `{ agent: "bob" }` was answered for whatever agent the CONNECTION held — `ok: true`, wrong desk,
+  no signal. Asking about `carol` returned alice's inbox.
+
+  Surfaced by `DOD-RECEPTIONIST-AGENT-1`'s review: the receptionist **skill** has the same defect as
+  the subagent, one MCP layer up (skills and subagents in one Claude Code session share one socket,
+  so a sibling's `cello_use_agent` re-points yours), and **could not be fixed the same way because
+  the door did not exist**. Origin traced exactly: `DOD-AGENT-PARAM-1` (2026-07-13) exposed `agent`
+  on eight session tools and missed this one.
+
+  > Review found the same accept-and-drop shape in **four more places the fix had not looked** —
+  > including the shim line the fix itself wrote (`z.string().optional()` accepts `""`, and a
+  > truthiness spread dropped it), a non-string value, the `scope: "all"` branch, and
+  > `contact-handlers.ts`, where it **writes**. All now behind one `resolveNamedAgent`. The
+  > class-enforcer that should have caught this was a hand-maintained list; it is now backed by a
+  > **derived** guard, which found a live instance on its first run. → Entry 5
+
+- **DOD-FRONTIER-STRAND-1 AC2** ✅ *(M8C line — this AC only)*, worked because it is the fence M8D
+  opens behind. A frontier mismatch now reports **both** leaf counts and the diverging index, and
+  logs `session.frontier.mismatch` at WARN. The old refusal told the operator to *"ask the
+  counterparty to check their end"* — unfollowable when both agents run on one daemon, which is how
+  session `dbb93dfc…` sat stranded for a week. **ACs 1, 3 and 4 remain open in
+  [[M8C-DEFINITION-OF-DONE]]**; this does not close that line. → Entry 5
+
+---
+
 ## Out of scope, deliberately
 
 - **Exclusivity / one-session-per-agent** — rejected in §3, permanently. See the scope fence.
