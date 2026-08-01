@@ -1078,3 +1078,70 @@ been re-examined against it. Its own unit.
 
 **Owed:** AC 7 — the live two-session `claude --channels` journey (Andre). And the unit has not yet
 had its `cello-unit-reviewer` pass.
+
+### 2026-08-01 — Entry 17: DESIGN NOTE — DOD-COATTEND-CATCHUP-1 + DOD-COATTEND-SENDWINDOW-1 (one note, before any code)
+
+They get one note because the DoD says they **land together or not at all**, and a probe against the
+post-Tier-1 daemon just showed why — both halves are live *right now*:
+
+```
+A send (sibling reply):        {"ok":true,"sequence_number":1}
+B send AFTER A's reply:        {"ok":true,"sequence_number":2}   ← B was NOT blocked
+B receive (looking for A's):   {"ok":true,"content":null}        ← B never saw it
+```
+
+**B replied blind, and the counterparty gets two replies to one message.** That is
+`SENDWINDOW-1`'s defect, reproduced on today's build. And it confirms the DoD's own correction:
+*"under the current gate the second session is never blocked at all"* — the `unreadReceived === 0`
+authority passes once **anyone** has read.
+
+**Target behavior.** B cannot reply while behind a sibling's send; B has a working door to clear that
+bar; and the gate is re-evaluated in the same synchronous window as the append.
+
+### M8D-D3 — the door is `cello_get_transcript`. Decided, per CATCHUP AC1 ("pick ONE and say so").
+
+Rejected: extending the plain receive / `since_seq` to both directions. Post-Tier-1 the blocking
+receive reads the durable record filtered to `direction === "received"`; widening it would make
+`cello_receive` return **the agent's own sent messages**, which is a different verb wearing the same
+name and would confuse every existing caller.
+
+Chosen: `cello_get_transcript`, which already **is** the both-directions door — it advances the
+connection cursor *and* the persisted watermark via `safeCursorAdvance` / `safeWatermarkAdvance`,
+and its own comment names the sibling-send case as its purpose. `safeCursorAdvance` walks a
+contiguous run over BOTH directions, so a sibling's sent leaf is in the delivered set and the cursor
+clears past it. The send gate's refusal guidance **already** points there ("Or cello_transcript for
+the whole conversation"), so no caller has to be re-pointed — which is the cheapest possible way to
+satisfy "point every caller at it".
+
+### The tension SENDWINDOW must not paper over
+
+The gate is `connectionCursor >= currentSeq || unreadReceived === 0`. **The second authority is what
+lets B send blind** — and it cannot simply be deleted. It exists for `DOD-CURSOR-DURABLE-1`: a
+stateless client (the `cello` CLI, a fresh process and therefore cursor `-1` per command) can never
+satisfy the first authority, so removing the second would refuse **every CLI send forever** once the
+counterparty has spoken. That regression is worse than the defect being fixed.
+
+So the tightening has to distinguish *"this connection is behind a SIBLING'S SEND"* (block — the
+agent has said something this session has not seen) from *"this connection is stateless"* (allow —
+the agent has demonstrably read). `advanceLastDeliveredSeq` being **agent-scoped** is exactly why
+those two look identical today, and AC3 requires the tightening be stated *against* that rather than
+around it.
+
+### The window itself
+
+Between the gate and `appendSessionLeaf` there are **two awaits** — `securityGateway.screenOutbound`
+and `sessionNodeManager.sendContent`. The gate is never re-checked after either, so two sessions can
+both clear, both wait, and both write: nothing changed between them, because no leaf was appended.
+**The pattern to copy already exists inbound** (`session-node-manager.ts:3682-3695`): a post-await
+re-check in the same synchronous window as the write, with a comment stating that any further await
+reopens the window. Tightening the gate WITHOUT closing this produces a strict-looking rule the race
+walks straight through — which is why the DoD binds the two lines together.
+
+### NOT STARTED, deliberately
+
+This is a correctness-critical change to the send gate with a known regression trap (stateless
+clients) sitting directly on it, at the tail of a very long autonomous run, with the Tier-1 review
+still in flight and able to move the ground under it. The same judgment was applied to
+`FRONTIER-STRAND-1` AC1 earlier tonight and was right then: **the design and the evidence are the
+deliverable here; the diff is the next session's first unit.** The probe above is the red test,
+already written down.
