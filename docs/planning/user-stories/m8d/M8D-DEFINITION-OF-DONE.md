@@ -79,6 +79,19 @@ deliberately second:
 and does not wait behind the receipt work. It is cheap, additive, and converts a silent failure into
 a visible one.
 
+> **Fence re-confirmed CLOSED, 2026-08-01.** `DOD-FRONTIER-STRAND-1` is still ❌ open, and
+> `DOD-FIRSTMSG-WITNESS-1`'s ACs 7–8 are still owed. Both stay in [[M8C-DEFINITION-OF-DONE]]; M8D
+> does not adopt them. **Tier 1 therefore does not open**, and Tier 0 + `DOD-RECEPTIONIST-AGENT-1`
+> are the whole of what M8D can work today.
+>
+> The thing actually blocking ACs 7–8 is spine-suite rot: 66 call sites across 20 `*.spine.test.ts`
+> files still invoke `cello register <name> <token>`, a verb the CLI replaced with `create-agent` +
+> `register-agent`. It is a migration, not a rename — each site becomes two commands — and M8C's DoD
+> already calls it its own unit of work. **Deliberately NOT taken inside M8D**: it fails M8D's scope
+> fence (no two-connection fixture run can observe it), it needs live docker-compose Postgres +
+> Flyway to verify, and folding it in would entangle M8D's tag flips with M8C's. Recorded here as
+> the fence, owned there.
+
 ---
 
 ## Tier 0 — LAUNCH GATE: make the theft visible
