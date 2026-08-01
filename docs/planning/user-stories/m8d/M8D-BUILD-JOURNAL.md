@@ -815,3 +815,45 @@ defect the unit was written to prevent, reproduced inside the fix itself.** The 
 carelessness about the concept — it is that each fix was verified against the layer it was written
 at, and not through the layer that actually runs. The remedy that keeps working: drive the REAL entry
 point, then revert the fix and watch the test go red.
+
+## Entry 12 — J-LOOPBACK is green; four rot layers, each hidden by the one above (2026-08-01, autonomous)
+
+**The live loopback journey passes end to end** — two agents on ONE daemon, full exchange plus
+bilateral seal, byte-identical root, 44 s against real Postgres, a real directory and relay.
+
+### The layers, in the order they became visible
+
+| # | Rot | Scale |
+|---|---|---|
+| 0 | **The harness destroyed every error message** | 1 line |
+| 1 | `cello register` — retired verb | 66 sites / 20 files |
+| 2 | `session_id` → `cello_session_id` on the MCP surface | 79 sites / 14 files |
+| 3 | `cello_send` now REQUIRES a signal token | 32 sites / 14 files |
+| 4 | The daemon APPENDS that token to the content, so equality assertions on the raw text fail | per-assertion |
+
+**Layer 0 is the one worth remembering.** The harness blindly `JSON.parse`d every tool result, so an
+MCP-level failure surfaced as `Unexpected token 'M', "MCP error "... is not valid JSON`. That names
+the PARSER and destroys the only sentence saying what went wrong — it made a plain schema mismatch
+look like an opaque harness bug. One `try/catch` later the next run said
+`Invalid arguments for tool cello_send` in plain words, and layers 2–4 fell in under an hour. **The
+cheapest fix in the whole sequence was the one that made the other three findable.**
+
+Layer 2 is a genuine two-spellings hazard, not a simple rename: the daemon's IPC handler still takes
+`session_id` and only the shim's tool schema renamed, so **both spellings are live and exactly one is
+correct per surface.**
+
+### Two self-inflicted bugs, both caught by the compiler rather than by me
+
+The param-rename regex also renamed a **result field access** in `j-spine`; the signal-token regex
+broke on a **template literal containing `}`** (`` `${label} sealed message` ``). Blanket regexes over
+test files need the typechecker behind them — neither would have been caught by running the tests,
+because both files stopped compiling.
+
+### What this does NOT prove — stated because the temptation is real
+
+The run shows **zero** `session.content.sequence_behind_tree`, zero relay submit failures and zero
+unwitnessed content. That is `DOD-FIRSTMSG-WITNESS-1` AC7's *assertion*, but **not its scenario**:
+AC7 is about a first message that BEATS relay registration, and this run never staged that race. It
+is the happy path holding, not the drift case proven. **AC7 remains open and is not claimed.**
+Closing it needs a test that forces the race — the producer that made drift fire 16/16 times in the
+live log.
