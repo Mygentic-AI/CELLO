@@ -67,12 +67,14 @@ Exclusivity, if ever wanted, becomes a flag on top of co-attendance — never th
 ### Ordering — M8D opens BEHIND two M8C lines
 
 The spec's build-order block (decided 2026-07-31) puts receipt integrity first, and M8D is
-deliberately second:
+deliberately second. **This table is kept in sync with the fence note below it** — on 2026-08-02 rows
+1 and 2 still read "owed" and "❌ open" for work the very next paragraph recorded as done, which is
+exactly the kind of stale claim that sends the next reader to re-do finished work:
 
 | Order | Line | Where | Why first |
 |---|---|---|---|
-| 1 | `DOD-FIRSTMSG-WITNESS-1` | [[M8C-DEFINITION-OF-DONE]] | ✅ shipped in daemon `0.0.106`, **ACs 7 + 8 still owed** (blocked on spine-suite rot). A certificate that omits the conversation's opening message is unforgivable; a stolen message is visible and workable-around. |
-| 2 | `DOD-FRONTIER-STRAND-1` | [[M8C-DEFINITION-OF-DONE]] | ❌ open. Its position-keyed dedup fix inherits a broken key while §7a's drift persists. |
+| 1 | `DOD-FIRSTMSG-WITNESS-1` | [[M8C-DEFINITION-OF-DONE]] | ✅ shipped in daemon `0.0.106`; **ACs 7 + 8 asserted LIVE 2026-08-01** on a real loopback conversation — see the fence note below. A certificate that omits the conversation's opening message is unforgivable; a stolen message is visible and workable-around. |
+| 2 | `DOD-FRONTIER-STRAND-1` | [[M8C-DEFINITION-OF-DONE]] | ✅ **ACs 1, 2, 3 done and reviewed 2026-08-01**; AC4(c) superseded by the DoD's own root-cause correction (M8D-D2). Its position-keyed dedup fix no longer inherits a broken key — §7a's drift producer is fixed and proven live. |
 | 3 | **M8D — this document** | here | Changes delivery semantics across several surfaces and earns a real test pass. |
 
 **`DOD-COATTEND-VISIBLE-1` is the exception** — it is the launch-gate slice per [[launch-triage]] §6
