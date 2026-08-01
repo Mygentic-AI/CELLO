@@ -965,3 +965,73 @@ substring form was a loosening that stays green for duplicated, injected or reor
 
 Also corrected: **the token is appended by the MCP shim, not the daemon.** I had it backwards in a
 commit message and a code comment.
+
+### 2026-08-01 — Entry 15: DESIGN NOTE — DOD-COATTEND-1 (written before any code)
+
+**Target behavior (one sentence, stated for BOTH sessions).** Two sessions attend one agent, one
+message arrives, and **both** `cello_receive` calls return it — neither removes it from the other's
+view — because delivery reads a durable record against a per-connection bookmark instead of popping
+a shared queue.
+
+**Spec anchors.** §2 (the root cause), §3 (co-attendance, not exclusivity), §8 items 1 and 5. Code
+anchors from §10: `#receivedContent` (`session-node-manager.ts:260`), `takeReceivedContent` (`:4061`,
+`buf.shift()`), the pop site (`session-content-handlers.ts` receive loop), `dispatchCelloMessage`
+(`notification-dispatcher.ts:154`), and the producer `#appendVerifiedContent` (`:3992-4005`).
+
+**The seam, and why almost nothing new is needed.** The durable record and the bookmark BOTH already
+exist:
+
+- `recordTranscriptMessage` writes the readable row **before** the buffer push (`:3996` then `:4003`),
+  so the transcript is always at least as fresh as the queue. Reading the record can never lag it.
+- `readTranscript(agent, session)` returns rows ordered by sequence — this is the durable record.
+- `getConnectionCursor(connectionId, sessionId)` / `safeCursorAdvance` are the per-connection
+  bookmark, already hole-safe (they refuse to vault past a gap).
+- The `since_seq` branch already reads the transcript non-destructively. **The blocking receive is
+  the only path that still pops.**
+
+So the change is: the poll loop asks *"is there a received row with sequence > my cursor?"* instead
+of `takeReceivedContent`. `#receivedContent` stops being the source of truth and becomes (at most) a
+wake hint.
+
+**Producer/consumer chain.** Producer `#appendVerifiedContent` → transcript row (durable) + doorbell
+(multicast, unchanged). Consumer: each connection's poll reads the transcript above ITS OWN cursor
+and advances only its own. Nothing a consumer does mutates state another consumer reads — which is
+precisely what `buf.shift()` violated.
+
+**Invariants at stake (§2b lenses).**
+- *Cannot become exclusivity*: no attach is refused, no lock, no primary; the doorbell **stays
+  multicast** (AC 2 says so explicitly — it was never the defect).
+- *Cannot lose content*: the transcript is durable, so a connection dying mid-poll loses nothing —
+  this strictly IMPROVES on the queue, where an in-flight `shift()` could drop a message on a dead
+  connection. That is AC 3, and it is the reason to prefer the record over the buffer.
+- *Content-free*: nothing changes on any push.
+
+**Approach, and the alternative rejected.** Chosen: read the durable record per connection.
+Rejected: **keep the queue and give each connection its own copy** (fan-out on arrival). It looks
+simpler and is worse — N buffers to evict, unbounded growth per attached session, a message
+duplicated in memory for every listener, and it still loses content when a connection dies holding
+the only unread copy. It also fails AC 5 (listener mode with N sessions) by construction.
+
+**Falsification pass, run before coding.**
+- *Does the call site have what it needs?* `SessionContentDeps` already carries
+  `getConnectionCursor`, `safeCursorAdvance` and `sessionNodeManager` — `readTranscript` is on the
+  class. **No new dependency.**
+- *Does the fix location match responsibility?* Yes — the cursor's reader and writer already live in
+  `session-content-handlers.ts` by that file's own header ("two halves of one state machine").
+- *Redundancy?* `takeReceivedContent` may end up with no production caller. Deadness must then be
+  PROVEN (grep + exports map + red build), not assumed — `peekLatestReceivedContentHex` shares the
+  buffer and M8C-AWAY-1 uses it.
+- *What else breaks?* `advanceLastDeliveredSeq` (agent-scoped) still drives the unread badge; the
+  terminal/sealed branch and the `counterparty_gone` branch are untouched; `DOD-COATTEND-VISIBLE-1`'s
+  take-ledger becomes redundant for its stated purpose once nothing is stolen — **it must not be
+  deleted in this unit**, because the drift/degraded paths still dedup by content.
+
+**Test plan (red first, on the TWO-connection fixture).** Two connections, one message → **both**
+receive it, and the tree/transcript still holds exactly one leaf. Then a third attaches
+mid-conversation and catches up from its own bookmark (AC 5, three connections). Then a connection
+dies mid-poll and a fresh one still sees the message (AC 3). **And per this run's hard-won rule: each
+clause must be verified by reverting the production change and watching it go red** — not by testing
+`readTranscript` in isolation.
+
+**Decisions this note makes.** (1) The durable record is the transcript, not a new table — no schema
+change, so no client migration. (2) `#receivedContent` is demoted, not deleted, this unit.
