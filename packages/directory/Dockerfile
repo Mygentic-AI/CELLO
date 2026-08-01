@@ -8,7 +8,7 @@
 # crypto/transport/protocol-types resolved from npm (REPOSPLIT-002).
 
 # ─── Stage 1: Build ────────────────────────────────────────────────────────
-FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS build
+FROM --platform=linux/amd64 mirror.gcr.io/library/node:24-slim AS build
 
 WORKDIR /app
 
@@ -43,7 +43,7 @@ RUN pnpm --filter @cello-protocol/interfaces run typecheck && \
     cd packages/directory && npx tsc --build tsconfig.build.json
 
 # ─── Stage 2: Production ───────────────────────────────────────────────────
-FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-slim AS production
+FROM --platform=linux/amd64 mirror.gcr.io/library/node:24-slim AS production
 
 # Install curl (health check), Java (Flyway), build tools (native addons), awscli (Secrets Manager fetch), psql (ECS Exec operations)
 #
