@@ -151,6 +151,14 @@ a visible one.
   Both sessions are woken, both enter the 20 ms poll loop, whichever hits the next tick first gets
   the message and **removes** it.
 
+  > **Inherited from Tier 0 — do not adopt its assumption unexamined (review finding, 2026-08-01).**
+  > `attendance` counts connections that **SELECTED** this agent. It is not the set of connections
+  > that can **CONSUME** its content: `resolveCurrentAgent` lets a connection operate on the sole
+  > online agent *without* attending it, and such a connection's `cello_receive` drains the same
+  > shared buffer. So a genuine thief can be invisible to the count. Tier 0 only reports, so this is
+  > a labelling matter there; Tier 1 assigns **bookmarks**, and a bookmark keyed on attendance would
+  > silently exclude exactly that connection.
+
   **ACs:**
   1. Delivery is driven by a **per-connection bookmark over the durable record**, not by draining a
      shared buffer. Two attached sessions each receive the same message; neither removes it from the
