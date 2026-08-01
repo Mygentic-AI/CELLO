@@ -23,6 +23,7 @@ import {
   provisionAgent,
   connectMcp,
   cello,
+  registerAgent,
   writeConsortiumManifest,
   writeSignedManifestTo,
   type SpineCluster,
@@ -98,7 +99,7 @@ async function setupTwoAgents(label: string): Promise<{ celloDir: string; daemon
 
   // Multi-node DKG for both agents.
   for (const name of ["agentA", "agentB"]) {
-    const res = cello(["register", name, `DEV-${label}-${name}-${randomBytes(6).toString("hex")}`], env);
+    const res = registerAgent(name, `DEV-${label}-${name}-${randomBytes(6).toString("hex")}`, env);
     expect(res.status, `${label}: register ${name} failed: ${res.stdout}`).toBe(0);
     expect((JSON.parse(res.stdout.trim()) as { ok?: boolean }).ok, `${label}: register ${name} not ok: ${res.stdout}`).toBe(true);
   }

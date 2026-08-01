@@ -35,7 +35,7 @@ import {
   startDaemon,
   provisionAgent,
   connectMcp,
-  cello,
+  registerAgent,
   psqlSpine,
   type SpineCluster,
   type Proc,
@@ -75,8 +75,8 @@ describe("J-UPGRADE-001 — unilateral → bilateral upgrade on the absent party
     });
     let daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "upbB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-upb-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-upb-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-upb-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-upb-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
 
     const connA = await connectMcp(celloDirA, "upb-A");
     mcpConns.push(connA);

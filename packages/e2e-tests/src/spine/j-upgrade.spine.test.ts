@@ -32,7 +32,7 @@ import {
   startDaemon,
   provisionAgent,
   connectMcp,
-  cello,
+  registerAgent,
   type SpineCluster,
   type Proc,
   type McpConn,
@@ -75,8 +75,8 @@ describe("J-UPGRADE — auto-acknowledge close, live (DOD-UP-2)", () => {
     });
     const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "upB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-up-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-up-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-up-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-up-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
 
     const connA = await connectMcp(celloDirA, "up-A");
     mcpConns.push(connA);

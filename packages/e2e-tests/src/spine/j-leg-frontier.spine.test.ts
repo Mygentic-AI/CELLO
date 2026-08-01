@@ -23,7 +23,7 @@ import {
   startDaemon,
   provisionAgent,
   connectMcp,
-  cello,
+  registerAgent,
   type SpineCluster,
   type Proc,
   type McpConn,
@@ -58,8 +58,8 @@ describe("J-LEG-FRONTIER — inflated published frontier is rejected (DOD-LEG-2 
     const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "frA");
     const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "frB");
     daemons.push(daemonA, daemonB);
-    expect(cello(["register", "agentA", `DEV-fr-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirA }).status).toBe(0);
-    expect(cello(["register", "agentB", `DEV-fr-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDirB }).status).toBe(0);
+    expect(registerAgent("agentA", `DEV-fr-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-fr-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
 
     const connA = await connectMcp(celloDirA, "fr-A");
     const connB = await connectMcp(celloDirB, "fr-B");
