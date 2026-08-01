@@ -572,3 +572,45 @@ repair — a commit that fixes two unrelated causes is a commit nobody can rever
 
 `j-sign` also fails, for a third reason not yet diagnosed. **The suite is not green; it is
 RUNNABLE**, which it was not this morning. No claim beyond that: I ran four files, not twenty.
+
+## Entry 7 — DESIGN NOTE: DOD-FRONTIER-STRAND-1 AC1, and why it is not a two-line fix (2026-08-01)
+
+**Written before any code.** AC1's corrected framing (2026-07-31) says: *"key duplicate detection on
+the relay-assigned position rather than the content hash — a redelivery carries the same position, a
+genuinely new identical message carries a new one."* That reads like a one-line change. It is not,
+and the reason is worth writing down before someone tries it as one.
+
+**The blocker, traced.** `ingestReceivedContent` (`session-node-manager.ts:3519`) takes
+`(agentName, sessionId, content, contentHash, correlationId)` — **no position**. The dedup it
+performs is `getSessionTree(...).indexOfHash(contentHashHex)` (`:3588`). The canonical position is
+not passed in either; it is looked up at `:3772` as:
+
+```ts
+const canonicalSeq = this.#witnessedSeq.get(key)?.get(contentHashHex);
+```
+
+**`#witnessedSeq` is ITSELF keyed by content hash.** So two byte-identical messages collapse in the
+witness map *before* dedup is ever consulted. **You cannot key dedup on position while position is
+retrieved by hash** — the discriminator would be derived from the very thing it is meant to replace.
+The spec anticipated exactly this ("the map from content hash to canonical position is *also*
+hash-keyed, so it's one assumption in at least two places"); this note is the confirmation, with the
+line numbers.
+
+**So the real shape of AC1** is: carry the relay-assigned position **on the delivery path** into
+ingest, instead of recovering it from a hash-keyed side map. The position does exist on the wire —
+`j-content`'s `DOD-MSG-4` case asserts *"the content frame carries the relay's signed Structure2; B
+verifies it and orders from the FRAME, not the witness stream"* — so this is a threading change
+through the frame → ingest boundary, plus re-keying `#witnessedSeq`, plus the second dedup site at
+`:3717` (the post-screening re-check).
+
+**Why it must not be rushed.** Dedup decides whether a leaf is APPENDED. Get it wrong in the
+permissive direction and identical messages double-append, inflating the tree against the
+counterparty's; get it wrong in the strict direction and a genuine message is dropped — which is
+*the exact strand* (`dbb93dfc…`) this AC exists to prevent. Both failure modes are silent and both
+destroy a receipt. It is correctness-critical on the content path and earns a full unit: design
+note, red tests on the two-connection fixture AND the now-runnable spine, then implement.
+
+**Not started deliberately.** The preceding work in this session already spans two publishes and a
+three-layer spine repair; opening a crypto-adjacent correctness change on top of that is how the
+subtle version of this bug ships. AC2 (diagnosis) is done and independently valuable — a strand can
+still form, but it can no longer be undiagnosable.
