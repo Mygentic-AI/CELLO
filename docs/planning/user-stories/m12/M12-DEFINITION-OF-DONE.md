@@ -822,9 +822,60 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   calls append-only. Fix is either hermetic isolation (point the store's pool at a scratch
   `search_path` holding a `LIKE public.user_accounts INCLUDING ALL` copy) or stopping the deletes.
   Not in M12's path; recorded so the two reds are known-and-explained, not ambient. → Entry 20
+- **M12-P9 — One bad Tier-A column stops ALL replication, on every node.** `handling_ae_state_req`
+  builds a digest per Tier-A table with no per-table isolation, so a single table's query throwing
+  aborts the whole request and the peer's entire round dies. `SIGNAL_RECORDS_SPEC` naming a column
+  V55 had dropped therefore halted replication of all eleven tables across all three nodes —
+  silently, as a `warn` on hosts nobody tails, surfacing days later and one layer away as
+  `CLAIM_CODE_INVALID` during Telegram registration. **The spec bug is fixed and guarded
+  (`DOD-M12-AE-SCHEMA-1`); the fragility that turned a typo into a fleet-wide outage is NOT.**
+  Hardening = per-table try/catch so a bad table degrades to one noisy warning and the other ten
+  keep replicating. Deliberately deferred, not overlooked. → Entry 76
 - **M12-P4** — **Replica nodes at launch.** The role split ships in P1, but whether any
   replica-role nodes actually deploy at launch (vs the capability lying dormant) is undecided —
   zero replicas is a valid launch shape.
+
+### DOD-M12-AE-SCHEMA-1 — every Tier-A spec column exists in the schema at HEAD ✅
+
+**Why it exists:** `SIGNAL_RECORDS_SPEC` listed `subject`, created in V46 and dropped in V55. The
+spec was written from V46's `CREATE TABLE` without reading the nine migrations after it. Unit tests
+pin the Tier-A table LIST and ORDER, not columns, and no type can check a SQL identifier — so
+nothing in the gate could catch it, and anti-entropy died fleet-wide with no test turning red.
+
+- `ae-spec-schema.test.ts` replays every migration in numeric order (`CREATE TABLE`, `ADD COLUMN`,
+  `DROP COLUMN`) and asserts every `naturalKey` + `immutableColumns` entry of every `TIER_A_SPECS`
+  member survives to HEAD. Static; no database.
+- It asserts the parser honours `DROP COLUMN` (`subject_kind` present, `subject` absent), so it
+  cannot pass vacuously on the very bug it exists to catch, and asserts a floor on tables parsed so
+  a regex that silently matches nothing fails loudly.
+- Revert-tested: restoring `subject` to the spec fails with the blast radius named in the message.
+- Live: `auth_failed_count=0`, rounds completing, `pulled:3 applied:3` on first convergence. → Entry 76
+
+### DOD-M12-REREG-1 — a returning user can add a second agent ✅
+
+**Why it exists:** two independent defects made this impossible, and the second made fixing the
+first look like a no-op. `handleExistingUser` inserted in `INITIAL` under a comment promising a
+transition to `AWAITING_CONTACT` that was never written — `const awaitingRecord = record` only made
+it look done. And `INITIAL`/`PHONE_CONFIRMED` re-prompted for contact while returning the record
+unchanged, so the state never moved and no message — including a fresh `CONFIRM` — could escape.
+
+- `handleExistingUser` inserts directly into `AWAITING_CONTACT`, as `handleNewUser` already did.
+- `INITIAL` recovers to `AWAITING_CONTACT` and then handles the message the user actually sent;
+  `PHONE_CONFIRMED` advances to `AWAITING_EMAIL` rather than re-requesting PII already hashed.
+- **`INITIAL` re-asks the gate before healing.** `AWAITING_CONTACT` is the state that requests a
+  phone number; promoting unconditionally would hand the PII prompt to a record that may be there
+  *because* it was refused. Refused → `AWAITING_WAITLIST_TOKEN`. Pinned by its own test — this is
+  the way the fix could have caused real harm.
+- Tests drive the REAL record returned by `handleExistingUser` through `handleMessage`, which is
+  precisely what the prior tests did not do. All revert-tested against the old code.
+- **Live evidence:** greenfield databases, then two agents registered through the real Telegram bot
+  — `Miss_Chelly` (`06c94560`) and `CELLO_Coder_1` (`80e8f3ce`), both `online` with
+  `standing_receiver_ready`, both on all three nodes (`profiles=2 shares=2 presence=2`, one FROST
+  share per node). No long-form token, no database surgery. → Entry 76
+
+**Caveat, stated plainly:** this ran with `WAITLIST_GATE=disabled`. The re-registration path was
+only reachable because the gate was off; admission is not being checked and must go back on before
+launch.
 
 ---
 
