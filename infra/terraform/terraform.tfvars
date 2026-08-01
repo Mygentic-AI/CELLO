@@ -114,8 +114,8 @@ preauth_issuer_pubkey = "4468292bbe38ab929e504a1d962abeebe4f02db0a380b4d7880eb4f
 
 # DOD-MOVE-PORTAL-1 — the operator surface on GCP.
 portal_image_tag = "portal-bcb959c"
-ops_agent_image_tag = "ops-fea4a304"
-waitlist_image_tag = "waitlist-963fb277"
+ops_agent_image_tag = "ops-75c263e2"
+waitlist_image_tag = "waitlist-a12fd1a3"
 
 # DOD-GCP-OPS-1 — built by Cloud Build from Andre-Mygentic/cello-ops-dashboard.
 ops_dashboard_image_tag = "ops-e6d0f32"
