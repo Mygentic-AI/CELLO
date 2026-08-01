@@ -1336,3 +1336,51 @@ skipped**, lint, typecheck, build — by exit code.
 **Not yet published.** These are on `main` but not on npm; the next cascade picks them up. The
 promotion commands in Entry 19 are for daemon 0.0.115 / cli 0.0.118 and remain correct for what is
 published now.
+
+### 2026-08-02 — Entry 21: second cascade published — THIS is the promotion set (supersedes Entry 19)
+
+`v0.0.176` green end to end, **smoke-tag ✅**. Verified against the tarball, not the CI status:
+`frontier_moved_during_send` and `session_moved_under_send` both present in
+`package/dist/session-content-handlers.js`; cross-pin `cli@0.0.119 → daemon@0.0.116`, a real version.
+
+| package | promote to | carries |
+|---|---|---|
+| **cli** | **0.0.119** | pins the daemon below |
+| **daemon** | **0.0.116** | Tier 1 + all COATTEND-1 review fixes + SENDWINDOW + CATCHUP |
+| connect | 0.0.115 | unchanged (depends on crypto + transport, not daemon) |
+| gateway / crypto / protocol-types / transport | 0.0.23 / 0.0.38 / 0.0.40 / 0.0.42 | unchanged |
+
+**Entry 19's command block is now stale — use THIS one.** Two cascades went out overnight; only the
+newest matters, and promoting the older would reintroduce the redelivery loop.
+
+```bash
+npm dist-tag add @cello-protocol/cli@0.0.119 latest
+npm dist-tag add @cello-protocol/daemon@0.0.116 latest
+npm dist-tag add @cello-protocol/connect@0.0.115 latest
+npm dist-tag add @cello-protocol/gateway@0.0.23 latest
+npm dist-tag add @cello-protocol/crypto@0.0.38 latest
+npm dist-tag add @cello-protocol/protocol-types@0.0.40 latest
+npm dist-tag add @cello-protocol/transport@0.0.42 latest
+```
+
+The last five are already on `latest` and will print a harmless *"latest is already set"* — listed so
+the whole graph is promoted as one consistent set. The `+latest: …` line is the authoritative
+confirmation; the verify loop lags the CDN by a minute or two.
+
+Then, locally — **`--prefer-online` is not optional**, `@latest` resolves from this machine's cached
+packument and a fresh promotion is invisible to it:
+
+```bash
+npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest
+cello logout && cello login          # CLI lifecycle — never pkill, that kills the live agents
+node -p "require('$(npm prefix -g)/lib/node_modules/@cello-protocol/cli/package.json').version"   # 0.0.119
+```
+
+Then `/mcp` (or restart Claude Code).
+
+### What that unblocks — the only thing left on Tier 0 + Tier 1
+
+The live **two-session `claude --channels` journey**: `DOD-COATTEND-1` AC7 and
+`DOD-COATTEND-VISIBLE-1` AC6, plus the first live exercise of SENDWINDOW/CATCHUP. Four lines are
+🟡 BUILT/UNVERIFIED-LIVE purely for want of it — every one is green on a real daemon over real IPC
+with a revert probe behind it, but **vitest green ≠ done** is this project's rule and it holds here.
