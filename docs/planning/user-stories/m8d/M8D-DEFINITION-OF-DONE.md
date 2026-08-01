@@ -343,6 +343,27 @@ earned.
 
 ---
 
+## Parked — deferred with a home, not silently
+
+- **DOD-FRONTIER-MISMATCH-DURABLE-1** 🅿️ PARKED *(debt — from M8C, raised 2026-08-01)* — **the
+  retained frontier mismatch does not survive a daemon restart.**
+
+  `FrontierMismatchStore` is in-memory. Measured against AC3's own evidentiary sentence — *"This one
+  went a week unnoticed"* — that is a real gap, not a neutral trade: the daemon restarts on every
+  `cello logout`/`login`, every version bump (four in one day during this milestone) and every
+  crash. The likely week looks like *mismatch observed day 1 → restart day 2 → flag gone → plain
+  `interrupted` row for five more days*, which is the pre-fix behaviour. "A restart costs one
+  re-detection, never a wrong answer" is true and beside the point: **the AC is about not needing
+  the re-detection.**
+
+  Parked rather than built because the obvious fix is a client-side schema migration on every
+  operator's machine, which AC3 does not ask for and which the launch-triage lens does not justify
+  tonight. **Two cheaper options that would still satisfy the AC** and should be weighed first:
+  derive the flag on read from the persisted seal-rejection record, or write it to the existing
+  `sessions` row rather than a new table. → Entry 14
+
+---
+
 ## Out of scope, deliberately
 
 - **Exclusivity / one-session-per-agent** — rejected in §3, permanently. See the scope fence.
