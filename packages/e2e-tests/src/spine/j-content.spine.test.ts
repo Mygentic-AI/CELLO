@@ -643,7 +643,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
 
     // A sends exactly one message; B receives it → B's signed content frontier covers msg1.
     expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: "msg1", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { cello_session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("msg1");
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`msg1 [[OVER]]`);
 
     // Both close → bilateral seal. The transcript is now COMMITTED + FROST-notarized.
     const [closeA, closeB] = (await Promise.all([

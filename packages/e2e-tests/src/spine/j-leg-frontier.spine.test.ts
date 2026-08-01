@@ -77,9 +77,9 @@ describe("J-LEG-FRONTIER — inflated published frontier is rejected (DOD-LEG-2 
 
     // One exchanged message so both parties have signed leaves (a real frontier to inflate).
     expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: "hi", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { cello_session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("hi");
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`hi [[OVER]]`);
     expect(((await connB.call("cello_send", { cello_session_id: sessionId, content: "ok", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connA.call("cello_receive", { cello_session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("ok");
+    expect(((await connA.call("cello_receive", { cello_session_id: sessionId, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`ok [[OVER]]`);
 
     // Both close → bilateral FROST seal. The directory inflates the published frontier (+10) and
     // signs it. The closes may not resolve as success (B refuses the unverifiable cert) — that is

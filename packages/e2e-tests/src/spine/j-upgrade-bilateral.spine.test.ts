@@ -96,7 +96,7 @@ describe("J-UPGRADE-001 — unilateral → bilateral upgrade on the absent party
     expect(inbound.type).toBe("new_session");
     const sessionIdB = inbound.session_id!;
     expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: "upgrade-to-bilateral message", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("upgrade-to-bilateral message");
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`upgrade-to-bilateral message [[OVER]]`);
 
     // ── B GOES GONE (SIGKILL). A closes after grace → UNILATERAL seal. ──
     await daemonB.kill();

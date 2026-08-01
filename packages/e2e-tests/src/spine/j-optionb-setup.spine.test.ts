@@ -134,7 +134,7 @@ describe("J-OPTIONB-SETUP — any-relay/any-directory session setup (DOD-OPTIONB
     const sessionIdB = inbound.session_id!;
 
     expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: "option-b any-directory proof", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("option-b any-directory proof");
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`option-b any-directory proof [[OVER]]`);
 
     // Give the client_record_assignment + ack round-trip a moment to settle into the relay log.
     await sleep(1500);

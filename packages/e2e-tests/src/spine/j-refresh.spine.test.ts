@@ -133,7 +133,7 @@ async function sealSession(connA: McpConn, connB: McpConn, pubB: string, _daemon
   const sessionIdB = inbound.session_id!;
 
   expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: "refresh proof", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-  expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("refresh proof");
+  expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`refresh proof [[OVER]]`);
 
   const [closeA, closeB] = (await Promise.all([
     connA.call("cello_close_session", { cello_session_id: sessionIdA }),

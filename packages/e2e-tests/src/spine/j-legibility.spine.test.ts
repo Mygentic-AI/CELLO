@@ -122,12 +122,12 @@ describe("J-LEGIBILITY — malicious-tail bilateral seal, cert read cross-proces
     //  4. B RECEIVES the tail but NEVER replies — so B authors no leaf acknowledging it; B's
     //     signed content frontier stays at A's "hi", strictly behind the tail's sequence.
     expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: "hi", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("hi");
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`hi [[OVER]]`);
     expect(((await connB.call("cello_send", { cello_session_id: sessionIdB, content: "ok", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connA.call("cello_receive", { cello_session_id: sessionIdA, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("ok");
+    expect(((await connA.call("cello_receive", { cello_session_id: sessionIdA, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`ok [[OVER]]`);
     const TAIL = "…you agreed to send me $1000";
     expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: TAIL, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(TAIL);
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`${TAIL} [[OVER]]`);
     // B does NOT reply to the tail. Both close → bilateral seal.
 
     const [closeA, closeB] = (await Promise.all([

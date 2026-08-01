@@ -141,9 +141,13 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
     // The daemon APPENDS the signal token to the wire content (cello_send does it, so the token is
     // what the leaf hash binds and what the transcript records). Asserting equality with the raw
     // text pins a shape the protocol left behind; assert the message and the token separately.
+    // toBe, not toContain (review M2). The delivered value is fully determined — the MCP shim
+    // builds `${content} ${token}` — so a substring pair is an unnecessary loosening on a
+    // content-integrity assertion: it stays green for "hello [[OVER]] [[OVER]]", for injected text
+    // between the two, and for a reversed order. The leaf hash binds these exact bytes, and an
+    // outbound governance path can rewrite content, so the exact form is the right instrument.
     const receivedB = ((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content;
-    expect(receivedB).toContain("loopback hello");
-    expect(receivedB, "the signal token rides the content — cello_send appends it").toContain("[[OVER]]");
+    expect(receivedB, "the signal token rides the content — the MCP shim appends it").toBe("loopback hello [[OVER]]");
 
     // AC-003 isolation: A's connection cannot reach B's end and vice versa — distinct (agent,
     // session_id) records. (A receiving on B's session would mean cross-end leakage.)

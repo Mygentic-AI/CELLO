@@ -108,7 +108,7 @@ async function setupAtoBSession(label: string): Promise<{
   const sessionIdB = inbound.session_id!;
 
   expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: `${label} sealed message`, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-  expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`${label} sealed message`);
+  expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`${label} sealed message [[OVER]]`);
 
   return { connA, connB, daemonA, daemonB, sessionIdA, pubB };
 }
@@ -152,7 +152,7 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     // from A, a msg leaf from B's ack, then A's single SEAL ctrl leaf at close. The
     // directory's recomputed root MUST match A's reported root over exactly this chain.
     expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: "unilateral sealed message", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("unilateral sealed message");
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`unilateral sealed message [[OVER]]`);
 
     // B GOES GONE — abrupt SIGKILL (crash / power loss), no graceful close, no SEAL leaf
     // from B. The directory will record B ABSENT and never push it seal_verified.

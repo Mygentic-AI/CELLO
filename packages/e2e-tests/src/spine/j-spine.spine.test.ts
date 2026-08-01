@@ -518,7 +518,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
       ok?: boolean;
       content?: string | null;
     };
-    expect(recv.content, `B should receive A's plaintext: ${JSON.stringify(recv)}`).toBe(plaintext);
+    expect(recv.content, `B should receive A's plaintext: ${JSON.stringify(recv)}`).toBe(`${plaintext} [[OVER]]`);
 
     // Relay witnessed the HASH (Structure 2): hash_submit from A's session node, then
     // leaf_deliver forwarded to B's connected session node. The plaintext never touched
@@ -579,7 +579,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
 
     // One message so the sealed tree is non-trivial.
     expect(((await connA.call("cello_send", { cello_session_id: sessionIdA, content: "spine7 sealed message", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe("spine7 sealed message");
+    expect(((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content).toBe(`spine7 sealed message [[OVER]]`);
 
     // BOTH parties close → both submit SEAL ctrl leaves → relay-mediated directory FROST seal.
     // The seal only notarizes once BOTH have closed, so each close blocks awaiting
