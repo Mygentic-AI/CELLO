@@ -689,6 +689,58 @@ def referral_used(job):
     return "Someone joined CELLO with your link", _shell(content), text
 
 
+def alerts_opt_out(job):
+    """Confirms the unsubscribe and, more importantly, that the spot is safe.
+
+    Opting out removes the ten points it paid, so the rank drops in the same
+    moment the subscription ends. The anxious reading is that unsubscribing cost
+    them their place in the queue. It did not — content alerts are one segment,
+    waitlist mail is another — but nobody outside the schema knows that, so the
+    mail says it plainly and stays short.
+
+    No call to action and no link back to re-subscribe. Somebody who just opted
+    out is the last person who should be asked to reconsider in the receipt for
+    doing it; the checkbox is still there whenever they want it.
+    """
+    name = _greeting(job)
+    total = job.get("points_total") or 0
+    position = _position_line(job)
+
+    parts = [
+        f'<h1 style="margin:0 0 8px;font-size:28px;font-weight:700;color:#111;letter-spacing:-0.5px;">'
+        f"You're unsubscribed, {name}.</h1>",
+        f'<p style="margin:0 0 8px;font-size:16px;color:#666;line-height:1.6;">'
+        f"You won't get content alerts any more. The ten points that opt-in paid have been "
+        f"returned with it, so your total is now <strong style=\"color:#111;\">{total}</strong>.</p>",
+        f'<p style="margin:0 0 8px;font-size:16px;color:#666;line-height:1.6;">'
+        f"<strong style=\"color:#111;\">You are still on the waitlist.</strong> This changed one "
+        f"email setting, nothing else — you'll still hear from us about your place in the queue.</p>",
+    ]
+    if position:
+        parts.append(
+            f'<p style="margin:0 0 0;font-size:16px;color:#666;line-height:1.6;">{esc(position)}</p>'
+        )
+
+    text_lines = [
+        f"Hi {name},",
+        "",
+        "You won't get content alerts any more. The ten points that opt-in paid have been "
+        f"returned with it, so your total is now {total}.",
+        "",
+        "You are still on the waitlist. This changed one email setting, nothing else — "
+        "you'll still hear from us about your place in the queue.",
+    ]
+    if position:
+        text_lines += ["", position]
+    text_lines += ["", "— The CELLO team", SITE]
+
+    return (
+        "You've unsubscribed from CELLO content alerts",
+        _shell("".join(parts)),
+        "\n".join(text_lines),
+    )
+
+
 # Only implemented templates belong here. A missing entry is a loud failure in
 # the dispatcher, which is the correct outcome for a job referencing a template
 # nobody has written yet.
@@ -704,4 +756,5 @@ TEMPLATES = {
     "e3_update": e3_update,
     "points_summary": points_summary,
     "referral_used": referral_used,
+    "alerts_opt_out": alerts_opt_out,
 }
