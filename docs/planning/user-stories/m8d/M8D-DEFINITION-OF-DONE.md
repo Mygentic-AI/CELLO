@@ -83,7 +83,13 @@ a visible one.
 
 ## Tier 0 — LAUNCH GATE: make the theft visible
 
-- **DOD-COATTEND-VISIBLE-1** ❌ NOT BUILT (raised 2026-08-01) — **the launch half of §2.** Today the
+- **DOD-COATTEND-VISIBLE-1** 🟡 BUILT/UNVERIFIED-LIVE (2026-08-01) — **the launch half of §2.**
+
+  > ACs 1–5 + 7 enforcer-green (9 clauses, two connections, real daemon + IPC; 2386/11 gate clean at
+  > `0f37607`). **AC 6 owed** — the live two-session `claude --channels` journey, which also needs a
+  > `connect` beta publish (the doorbell body is shim-side). Review caught the discriminator firing
+  > with no sibling present; fixed + pinned by C8. → Entry 2
+ Today the
   loser of a race gets `{ ok: true, content: null, guidance: "No content arrived within timeout_ms…" }`
   — **word-for-word identical to a quiet counterparty** — and the plain blocking receive path
   **writes nothing to the log on either outcome**, so the theft leaves no trace anywhere. Nobody, in

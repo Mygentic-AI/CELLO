@@ -16,6 +16,21 @@ description: >
 > Convention (carried from M10B): a DoD tag flip carries ONE line of evidence plus `→ Entry N`.
 > The full proof lives here.
 
+## RESUME STATE (overwritten in place — the ONLY thing in this file that is)
+
+**Updated:** 2026-08-01, after Entry 2.
+
+- **Worktrees.** `cello-client-m8d` and `trustless-cello-m8d`, both on branch `m8d/co-attendance`.
+  Bases: `origin/main` @ `2349236` (client) and `main` @ `ec96852d` (docs).
+- **Done.** `DOD-COATTEND-VISIBLE-1` 🟡 — ACs 1–5, 7 enforcer-green; reviewed, every finding fixed
+  (`51ab230` → `0f37607`). `DOD-RECEPTIONIST-AGENT-1` built + gate-green (`78a6ba7`), **review in
+  flight** — not tagged until it returns.
+- **Next red.** `DOD-COATTEND-1` (Tier 1) — but Tier 1 is FENCED behind M8C's `DOD-FIRSTMSG-WITNESS-1`
+  (ACs 7–8 owed) and `DOD-FRONTIER-STRAND-1` (open). Confirm both before opening it.
+- **Owed to Andre (procedure stop-reason 1, do not block on it).** The live two-session
+  `claude --channels` journey for AC 6, and a `connect` beta publish so the doorbell body ships.
+- **Gate at HEAD.** 2386 passed / 11 skipped, lint + typecheck + build clean.
+
 ---
 
 ## Entry 0 — Milestone opened (2026-08-01)
@@ -177,3 +192,90 @@ leak, and an eviction that is not stated is a silent cap.
   `core/daemon/src/__tests__/helpers/two-connection-fixture.ts` and both repoints `m8c-cursor-1` at it
   and builds on it. This is extending the established fixture, not writing one from scratch — the rule
   the CLAUDE.md line exists to enforce.
+
+## Entry 2 — DOD-COATTEND-VISIBLE-1 built, reviewed, and one real defect caught (2026-08-01)
+
+**Commits.** `51ab230` (the unit) → `0f37607` (every review finding fixed). Branch
+`m8d/co-attendance` in both worktrees. Gate at `0f37607`: **2386 passed / 11 skipped**, lint, typecheck
+and build clean.
+
+**Enforcer output — `m8d-coattend-visible-1.test.ts`, 9 clauses, real daemon + real IPC socket:**
+
+```
+✓ src/__tests__/m8d-coattend-visible-1.test.ts (9 tests) 1685ms
+✓ src/__tests__/m8c-cursor-1.test.ts (13 tests) 226ms
+  Tests  22 passed (22)
+```
+
+### The review found a defect that inverted the point of the line
+
+`cello-unit-reviewer`, one pass on `51ab230`, verified by execution rather than by reading. The HIGH:
+
+> **`ContentTakeLedger` was never pruned when a connection died.** A fresh connection presents cursor
+> `-1`, so every take a now-dead connection had ever recorded sat above that bar and came back as
+> `reason: "taken_by_sibling_session"`.
+
+The `cello` CLI opens a fresh connection **per command** — `m8c-cursor-1`'s own C6/D1 clauses document
+that as the normal path — so this fired on ordinary single-operator use, on every MCP reconnect, and
+on every Claude Code restart. On the CLI it never cleared: the remedy named in its own guidance
+advances the *connection* cursor, which dies with the next command's connection. The message
+contradicted itself mid-sentence: *"Another session attending 'alice' … — 1 sessions are attending."*
+
+**Worse than the silence it replaced.** An operator told a phantom sibling stole their mail learns to
+disbelieve the signal, and the real theft then arrives wearing words they have been trained to ignore.
+`session.receive.taken_by_sibling` would have been a signal that fires on the normal case.
+
+**Fix:** `contentTakes.forget(connectionId)` in `onDisconnect`, beside the
+`connectionCursors.delete(connectionId)` that was already there — the same lifetime for the same
+reason. Once a connection is gone its takes are history, and history is not "another session took it".
+
+**Why the tests missed it, stated plainly:** every clause C1–C7 considered two connections
+*simultaneously alive*. None asked what a connection sees when its **predecessor** is gone — which is
+the CLI's only mode. C8 is that clause. Verified by revert: remove `forget()` and **C8 alone** goes
+red (`1 failed | 8 passed`).
+
+### Everything else the review raised, and what was done
+
+| Sev | Finding | Resolution |
+|---|---|---|
+| HIGH | discriminator fired with no sibling | `forget()` on disconnect; **C8** |
+| MED | `counterparty_gone` displaced by the theft branch — `reason` is the field callers switch on, and "read then reply" points a reply at a dead connection | terminal condition wins `reason`; theft rides as a field + the first half of the guidance; **C9** |
+| MED | `attendance` snapshotted before a 30 s poll, stale at every exit it was reported on | recomputed at each exit |
+| MED | prose claimed the taker was *attending* — a connection can consume via `resolveCurrentAgent` **without** attending, so a real thief need not be counted | reworded to "another session on this daemon"; `attendance` stays its own field |
+| LOW | the per-session cap under-counted silently | `truncated` on the answer |
+| LOW | doorbell body rendered `NaN` on an older daemon; "the other one" is wrong at N>2 | explicit absent-guard + N-correct prose; **five new `channel-params` cases** |
+| LOW | `co_attendance: true` had no consumer | deleted — `attendance > 1` already is that boolean |
+| LOW | fixture re-derived `msgLeafHash` | imported from `@cello-protocol/crypto` |
+
+The reviewer confirmed independently: the **exclusivity**, **content-free**, **await-window** and
+**refactor** lenses are clean; the `m8c-cursor-1` repoint preserved **38/38 assertions and 13/13
+clauses** (verified mechanically, not by eye); and the coder's red/green claim was exact (5 red / 2
+declared-control-green at base `2349236`).
+
+### Two corrections to Entry 1
+
+The journal is append-only, so these are recorded here rather than edited above.
+
+1. **Entry 1's event table defines `session.receive.taken_by_sibling` as a take *"inside this caller's
+   wait window."*** The code has no wait window and never had one — it reports any take above the
+   caller's cursor. The cursor is the right bar (a window would have to guess how long a theft counts
+   for, and would miss the ordinary case where the sibling's take lands microseconds before this
+   caller's handler starts), but the note was never updated to match, and **that gap is exactly what
+   produced the HIGH**: with no window and no pruning, "above the cursor" reached back through all of
+   daemon history. The correct definition is: *a take recorded by another LIVE connection, above this
+   caller's read cursor.*
+2. **AC 7 was already satisfied before this milestone opened.** Verified independently by the
+   reviewer: `launch-triage.md:39-40` names the read-before-reply guard as one of two wrong claims;
+   `:319` says the guarantee *"holds for a single session, but two sessions on one agent do not gate
+   each other, and the scenario had never been run. Still open (item 6)"*; and §6 (`:179-196`) is this
+   DoD line. The "already solid" list survives **only as a retraction**. **No residual false claim, so
+   no edit was made** — the AC is closed by verification, not by a change.
+
+### Status
+
+`DOD-COATTEND-VISIBLE-1` → **🟡 BUILT/UNVERIFIED-LIVE.** ACs 1–5 and 7 are enforcer-green; **AC 6 is
+owed** — a live two-session `claude --channels` journey on one agent, which needs Andre to drive the
+second window (procedure stop-reason 1). Vitest green is not done, and the line does not go ✅ on it.
+
+AC 6 also needs the shim published: the doorbell body lives in `@cello-protocol/connect`
+(`channel-params.ts`), so the in-context half of AC 2 is only observable after a beta publish.
