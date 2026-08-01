@@ -1145,3 +1145,77 @@ still in flight and able to move the ground under it. The same judgment was appl
 `FRONTIER-STRAND-1` AC1 earlier tonight and was right then: **the design and the evidence are the
 deliverable here; the diff is the next session's first unit.** The probe above is the red test,
 already written down.
+
+### 2026-08-01 — Entry 18: the DOD-COATTEND-1 review came back BLOCKING, and it was right
+
+The enforcer's own summary of its finding, quoted because the framing is the lesson:
+
+> "The mechanism chosen — durable record plus per-connection bookmark — is the right one and the
+> reasoning behind it is sound. The defect is that it reuses the *gate's* gap-safe cursor as the
+> *delivery* bookmark, and gap-safety is correct for one question and fatal for the other."
+
+Two questions that look like one:
+
+| | question | wants |
+|---|---|---|
+| the gate | has this connection seen **every** leaf? | to STOP at a gap |
+| delivery | what have I already **handed** this connection? | to never stop |
+
+Tier 1 answered the second with the first. And the gap is not exotic — **a message this agent SENT
+from another connection**. Leaf indices are contiguous across both directions, so every sibling send
+is a hole in a co-attending connection's received-only view. The bookmark could not cross it, so the
+same message came back on every call and the next one never arrived. A Claude session on the far
+side of the shim replies to it, forever.
+
+**Worse than the defect Tier 1 fixed**, and not confined to co-attendance: a fresh `connectionId`
+starts at −1, so an MCP reconnect — or *any* `cello` CLI command, which opens a connection per
+command — lands in the loop on any session that has ever sent. And the screened-out shape cannot
+self-heal: a security-gateway terminal block commits a leaf and writes **no transcript row**, a
+permanent hole, so one block would have broken `cello_receive` for that session on every connection
+for the life of the session.
+
+Fix: a **separate** delivery bookmark, monotonic MAX, dying with its connection. `safeCursorAdvance`
+and every gate call site untouched — M8C-CURSOR-1's guarantee is unchanged because nothing consults
+the new map to authorize a send.
+
+**F2, the one I would not have found.** `recordTranscriptMessage` swallows a write failure. Its
+comment explained why that was survivable: *"cello_receive still delivers it live from the in-memory
+buffer (masking the loss)."* Tier 1 deleted that buffer read — **and left the sentence**, reassuring
+the next reader about a safety net that no longer existed. So a full disk became: message verified,
+leafed, hash-chained, doorbell rung, every session told *"Call cello receive again to keep waiting."*
+A local SQLCipher failure wearing the counterparty's label, one subsystem and 30 seconds away.
+
+Now the write **reports**, the ingest returns `{ok:false, transcript_write_failed}` — the failure arm
+its contract already had, not a new exception for every caller — and the receive answers
+`content_undeliverable` naming the local fault. The committed leaf stays: unwinding it to tidy a
+reporting problem would corrupt a frontier the counterparty already co-signs against.
+
+### Three things worth keeping from how this went
+
+**1. The reviewer was wrong once, and the typecheck caught it.** F7 said the `record ?` guard was
+dead. It is not: a transcript-only session (rows, no `sessions` row) does not return — it falls
+through with `record === null`. I removed the guard on the reviewer's say-so and `tsc` refused it. A
+review finding is evidence, not an instruction.
+
+**2. My first F2 test passed against the broken build.** It stubbed `recordTranscriptMessage` — which
+replaces the `try/catch` that *is* the defect, so the throw under test was my own stub's. Had to
+break `db.prepare` instead, under the catch. Same family as everything else this milestone: *verify
+through the layer that runs, not the layer you are writing at.*
+
+**3. C8 could not be re-pointed, and that IS the finding.** The review asked for it back so the
+deferred `taken_by_sibling_session` deletion would keep a red build. I wrote the clause; it passed;
+I deleted `contentTakes.forget()` and it **still** passed. Delivery is non-destructive now, so a
+fresh connection is HANDED the content instead of timing out, and the discriminator is unreachable.
+The ledger, `forget()`, `missedBy()` and the branch are provably dead — **measured, not argued** —
+and unreachable code has no red build to manufacture. Shipping a green clause that cannot fail would
+have hidden exactly that, so the probe is recorded where the clause would have been.
+
+Revert probe on the shipped tests: **4 red** (T2, T4, T7, T8). T2 and T4 were hollow exactly as
+reported — one leaf short of the defect they guard, and T4 "caught up" by receiving once.
+
+Gate: 2444 passed / 11 skipped, lint, typecheck, build — **verified by exit code**, not by reading
+past `ELIFECYCLE`.
+
+**⚠️ The beta cascade published earlier tonight (daemon 0.0.114 / cli 0.0.117 / connect 0.0.115)
+PREDATES this fix and must NOT be promoted.** It carries the redelivery loop, which would break the
+two-session live journey it exists to serve. Republishing before handing over promotion commands.
