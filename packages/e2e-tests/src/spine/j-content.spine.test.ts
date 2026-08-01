@@ -30,10 +30,13 @@ import {
   cello,
   registerAgent,
   ipcCall,
+  writeConsortiumManifest,
+  writeSignedManifestTo,
   type SpineCluster,
   type Proc,
   type McpConn,
 } from "./live-harness.js";
+import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 import { sealToRecipient, contentHashHex } from "./content-seal-fixture.js";
 
 let cluster: SpineCluster;
@@ -42,8 +45,39 @@ const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
-  cluster = await startSpineCluster();
-}, 180_000);
+  // A THREE-node consortium, matching the pattern j-refresh/j-tofn/j-relaysig already use.
+  //
+  // These tests used a single directory and gave their daemons no consortium manifest, and both
+  // halves of that are now wrong:
+  //  - With no manifest the daemon never learns its own directory node id (step-6 identity supplies
+  //    it), so classifyOnlineResult cannot prove co-location and — by its own documented rule —
+  //    routes two LOCAL agents down the CROSS-NODE path, which then fails to resolve "local" in a
+  //    manifest the daemon does not have. That rule landed in ba570d1, after these tests were
+  //    written, and the retired `cello register` verb hid it: the file never got far enough to see.
+  //  - Adding a manifest alone is not enough either: registration runs a real FROST DKG against the
+  //    consortium, and a one-node cluster cannot satisfy it (`dkg_failed: Wrong signers info:
+  //    min=2 max=1`). The threshold needs a real N.
+  const holder = mkdtempSync(join(tmpdir(), "cello-content-consortium-"));
+  dirs.push(holder);
+  const consortiumManifestPath = join(holder, "consortium-manifest.json");
+  cluster = await startSpineCluster({
+    directoryCount: 3,
+    directoryNodeKeysHex: [0, 1, 2].map((i) => spineNodeKeypair(i).privateKeyHex),
+    directoryConsortiumManifestPath: consortiumManifestPath,
+    onDirectoryUrlsReady: (urls) => {
+      writeSignedManifestTo(consortiumManifestPath, urls.map((url, i) => spineDirectoryNode(i, url)));
+    },
+  });
+}, 300_000);
+
+/** A daemon that KNOWS ITS OWN NODE — which is what lets two local agents talk to each other. */
+async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> {
+  const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
+  return startDaemon(celloDir, cluster.directoryUrls[0], label, {
+    manifestEnv: writeConsortiumManifest(celloDir, label, nodes),
+  });
+}
+
 
 afterAll(async () => {
   for (const c of mcpConns) await c.close();
@@ -70,8 +104,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     dirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB"); // recipient K_local (the mailbox key)
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "msgA");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "msgB");
+    const daemonA = await startLocalDaemon(dirA, "msgA");
+    const daemonB = await startLocalDaemon(dirB, "msgB");
     daemons.push(daemonA, daemonB);
     // DOD-LOOP-1: the standing receiver is now PER-AGENT (created by cello_start_agent) — there is
     // no per-daemon standing receiver at initialize() anymore. The outbound deposit (A) and pull (B)
@@ -126,8 +160,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     dirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB");
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "sendparkA");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "sendparkB");
+    const daemonA = await startLocalDaemon(dirA, "sendparkA");
+    const daemonB = await startLocalDaemon(dirB, "sendparkB");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-sp-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-sp-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
@@ -171,8 +205,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     dirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB");
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "recA");
-    let daemonB = await startDaemon(dirB, cluster.directoryUrl, "recB");
+    const daemonA = await startLocalDaemon(dirA, "recA");
+    let daemonB = await startLocalDaemon(dirB, "recB");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-rec-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-rec-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
@@ -205,7 +239,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     for (const f of ["daemon.sock", "daemon.lock"]) {
       try { rmSync(join(dirB, f), { force: true }); } catch { /* best-effort */ }
     }
-    daemonB = await startDaemon(dirB, cluster.directoryUrl, "recB-restart");
+    daemonB = await startLocalDaemon(dirB, "recB-restart");
     daemons.push(daemonB);
     await daemonB.waitForLine(/"event":"session\.interrupted\.detected"/, 15_000);
     expect(cello(["login"], { CELLO_DIR: dirB }).status).toBe(0);
@@ -251,8 +285,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     dirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB");
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "tamperA");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "tamperB");
+    const daemonA = await startLocalDaemon(dirA, "tamperA");
+    const daemonB = await startLocalDaemon(dirB, "tamperB");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-tp-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-tp-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
@@ -315,8 +349,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     dirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB");
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "dedupA");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "dedupB");
+    const daemonA = await startLocalDaemon(dirA, "dedupA");
+    const daemonB = await startLocalDaemon(dirB, "dedupB");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-dd-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-dd-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
@@ -367,8 +401,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     dirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB");
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "ackA");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "ackB");
+    const daemonA = await startLocalDaemon(dirA, "ackA");
+    const daemonB = await startLocalDaemon(dirB, "ackB");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-ak-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-ak-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
@@ -406,8 +440,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     dirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB");
-    let daemonA = await startDaemon(dirA, cluster.directoryUrl, "flushA");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "flushB");
+    let daemonA = await startLocalDaemon(dirA, "flushA");
+    const daemonB = await startLocalDaemon(dirB, "flushB");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-fl-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-fl-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
@@ -450,7 +484,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // re-park needs the OWNING agent's standing receiver, which exists only once that agent is
     // online — so the deposit fires when agentA does cello_start_agent (which triggers the per-agent
     // flushAwaitingContent), NOT at the pre-IPC startup pass (no agent online there yet).
-    daemonA = await startDaemon(dirA, cluster.directoryUrl, "flushA-restart");
+    daemonA = await startLocalDaemon(dirA, "flushA-restart");
     daemons.push(daemonA);
     expect(cello(["login"], { CELLO_DIR: dirA }).status).toBe(0);
     connA = await connectMcp(dirA, "fl-A2");
@@ -478,8 +512,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     dirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB");
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "soA");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "soB");
+    const daemonA = await startLocalDaemon(dirA, "soA");
+    const daemonB = await startLocalDaemon(dirB, "soB");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-so-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-so-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
@@ -522,8 +556,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     dirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB");
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "arA");
-    let daemonB = await startDaemon(dirB, cluster.directoryUrl, "arB");
+    const daemonA = await startLocalDaemon(dirA, "arA");
+    let daemonB = await startLocalDaemon(dirB, "arB");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-ar-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-ar-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
@@ -555,7 +589,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     for (const f of ["daemon.sock", "daemon.lock"]) {
       try { rmSync(join(dirB, f), { force: true }); } catch { /* best-effort */ }
     }
-    daemonB = await startDaemon(dirB, cluster.directoryUrl, "arB-restart");
+    daemonB = await startLocalDaemon(dirB, "arB-restart");
     daemons.push(daemonB);
     await daemonB.waitForLine(/"event":"session\.interrupted\.detected"/, 15_000);
     expect(cello(["login"], { CELLO_DIR: dirB }).status).toBe(0);
@@ -589,8 +623,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     dirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB");
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "msg8A");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "msg8B");
+    const daemonA = await startLocalDaemon(dirA, "msg8A");
+    const daemonB = await startLocalDaemon(dirB, "msg8B");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-m8-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-m8-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
