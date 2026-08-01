@@ -1384,3 +1384,76 @@ The live **two-session `claude --channels` journey**: `DOD-COATTEND-1` AC7 and
 `DOD-COATTEND-VISIBLE-1` AC6, plus the first live exercise of SENDWINDOW/CATCHUP. Four lines are
 🟡 BUILT/UNVERIFIED-LIVE purely for want of it — every one is green on a real daemon over real IPC
 with a revert probe behind it, but **vitest green ≠ done** is this project's rule and it holds here.
+
+### 2026-08-02 — Entry 22: the live journey, written out — so it is a copy-paste, not a design exercise
+
+Four lines are 🟡 for one reason: nobody has run two sessions on one agent for real. That is an
+operator-only step, so the least useful thing I can do is describe it again — this is the actual
+script, with **what counts as a pass stated in advance** so the result cannot be rationalised
+afterwards.
+
+**Prerequisite:** the promotion in Entry 21, then `cello logout && cello login`, then `/mcp`.
+`cello -v` must read **0.0.119** *on disk* before starting — a promotion that did not propagate looks
+exactly like one that did.
+
+#### Setup — two windows, ONE agent
+
+```bash
+# Terminal 1
+claude --channels
+# Terminal 2 (same machine, same agent)
+claude --channels
+```
+
+In **both**: `cello_use_agent <your-agent>`. Selecting is not optional — an unselected connection
+routes no doorbells, and an empty inbox then looks like a protocol bug.
+
+Have a counterparty agent ready to send (a second identity, or the demo agent).
+
+#### J1 — `DOD-COATTEND-1` AC7 · both sessions see the counterparty's message
+
+Counterparty sends **one** message. In **each** window: `cello_receive`.
+
+- ✅ **PASS** — both windows return the **same** message with the **same** `sequence_number`.
+- ❌ **FAIL** — one window returns it and the other reports nothing arrived. That is the original
+  defect, and it means the published daemon is not the one running.
+
+#### J2 — `DOD-COATTEND-VISIBLE-1` AC6 · the second session reports being un-alone *in its own words*
+
+The AC is deliberately about the model's own account, not a field: read what Claude says in window 2
+after `cello_status` / on delivery.
+
+- ✅ **PASS** — it mentions another session is attending (attendance ≥ 2) without being asked to.
+- ❌ **FAIL** — it describes the session as if it were alone. The count is being carried but not
+  surfaced legibly, which is the Tier-0 defect one layer up.
+
+#### J3 — `DOD-COATTEND-SENDWINDOW-1` · two sessions cannot both answer
+
+Counterparty sends **one** question. Both windows read it. Then reply from **both windows as close to
+simultaneously as you can** — this is the one step that needs a little hurry.
+
+- ✅ **PASS** — one reply is sent; the other is refused with `session_moved_under_send`, naming
+  `cello_transcript` and saying not to simply resend. **The counterparty receives ONE reply.**
+- ⚠️ **INCONCLUSIVE** — both succeed *and the counterparty got two replies*. The race window is
+  small; the unit test stages it deterministically by holding the gateway open, which no human can do
+  by hand. Record it as inconclusive, **not** as a failure — and note the unit test is the stronger
+  evidence here.
+- ❌ **FAIL** — a reply vanishes with no refusal and no error. That is the defect wearing a different
+  coat.
+
+#### J4 — `DOD-COATTEND-CATCHUP-1` · a session behind a sibling's send can get back
+
+From window 1 only, reply to the counterparty. Then in **window 2**, without receiving: `cello_send`.
+
+- If refused: run `cello_transcript <session>` in window 2, then send again → ✅ **PASS** if it now
+  goes through.
+- If **not** refused: that is **expected and correct**, not a failure — two windows of one agent do
+  not gate each other at gate time, deliberately (the principal is the agent, not the socket). Then
+  confirm the door directly: `cello_transcript` in window 2 shows **window 1's sent message**, which
+  `cello_receive` never will.
+
+#### Recording the result
+
+Whatever happens, paste the raw output into a journal entry and flip the four lines on the strength
+of **that**, not on this plan. If a step fails, the failure is worth more than the tag — it is the
+first live evidence any of this has had.
