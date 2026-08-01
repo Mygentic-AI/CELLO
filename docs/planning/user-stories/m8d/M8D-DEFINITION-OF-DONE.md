@@ -79,27 +79,24 @@ deliberately second:
 and does not wait behind the receipt work. It is cheap, additive, and converts a silent failure into
 a visible one.
 
-> **Fence re-confirmed CLOSED, 2026-08-01.** `DOD-FRONTIER-STRAND-1` is still ❌ open, and
-> `DOD-FIRSTMSG-WITNESS-1`'s ACs 7–8 are still owed. Both stay in [[M8C-DEFINITION-OF-DONE]]; M8D
-> does not adopt them. **Tier 1 therefore does not open**, and Tier 0 + `DOD-RECEPTIONIST-AGENT-1`
-> are the whole of what M8D can work today.
+> **Fence status — UPDATED 2026-08-01 (late).** Superseded the earlier "Docker unavailable, do not
+> touch the spine" note, which was true when written and is not now.
 >
-> The thing actually blocking ACs 7–8 is spine-suite rot: **66 call sites across 20
-> `*.spine.test.ts` files** still invoke `cello register <name> <token>`, a verb the CLI replaced
-> with `create-agent` + `register-agent`. **Measured, 2026-08-01** (correcting a first estimate that
-> called it uniformly a migration): it is *mixed* — `j-conn`, `j-remove` and `j-suspend` already call
-> `create-agent` separately and need only the verb renamed; the other 17 files call `register` alone
-> and need the create step added. So it is a rename in 3 files and a migration in 17.
+> - **Docker is UP and the spine suite RUNS.** It only needed starting (plus pruning 30 orphaned
+>   Compose networks, which had exhausted the address pool). Flyway applies 57 migrations cleanly.
+> - **The 66-site `cello register` rot is REPAIRED** across 20 files and verified live — `j-conn`
+>   2/2, `j-presence` 1/1 against real Postgres, a real directory, relay and daemon binaries.
+> - **A second blocker was found under it and fixed for `j-content`:** without a consortium manifest
+>   a daemon never learns its own node id, so it cannot prove co-location and routes two LOCAL
+>   agents down the cross-node path — which then fails to resolve `local` in a manifest it does not
+>   have. Registration also needs a real threshold, so a one-node cluster cannot DKG at all. It now
+>   uses the same 3-node consortium four other spine files already use.
+> - **`DOD-FRONTIER-STRAND-1` ACs 1 + 2 are DONE** (see the debt section below). **ACs 3 and 4(c)
+>   remain open, so the fence has NOT lifted** and Tier 1 does not open yet.
 >
-> **NOT taken inside M8D, and the blocking reason is now stronger than scope.** `docker info` fails
-> in this environment, so `docker-compose` Postgres + Flyway cannot come up and **the spine suite
-> cannot be run at all here.** A 66-site repair that cannot be executed once is a blind edit, which
-> §5c forbids outright. It also fails M8D's scope fence (no two-connection fixture run observes it)
-> and M8C's DoD already calls it its own unit of work. Recorded here as the fence, owned there.
->
-> **Consequence worth stating plainly:** this same harness is M8D's own live enforcer
-> (`M8D-PROCEDURE` §2d), so **no live-journey AC in this milestone can be closed on this machine
-> until Docker is available** — including `DOD-COATTEND-VISIBLE-1` AC 6's automated counterpart.
+> The suite is **runnable, not green**: `j-content`'s remaining cases fail on real park/recover
+> behavioral assertions, and `j-sign` fails for a third, undiagnosed reason. Four files were run,
+> not twenty — no claim beyond that.
 
 ---
 
