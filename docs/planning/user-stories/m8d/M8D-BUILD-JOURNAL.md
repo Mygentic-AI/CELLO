@@ -1219,3 +1219,57 @@ past `ELIFECYCLE`.
 **⚠️ The beta cascade published earlier tonight (daemon 0.0.114 / cli 0.0.117 / connect 0.0.115)
 PREDATES this fix and must NOT be promoted.** It carries the redelivery loop, which would break the
 two-session live journey it exists to serve. Republishing before handing over promotion commands.
+
+### 2026-08-01 — Entry 19: republished — the earlier cascade must NOT be promoted
+
+`v0.0.175` is green end to end: Build ✅, Publish ✅, **smoke-tag ✅** (the real signal — it
+clean-installs the published packages and loads their module graphs).
+
+| package | beta | note |
+|---|---|---|
+| **daemon** | **0.0.115** | carries the review fixes |
+| **cli** | **0.0.118** | pins daemon at an exact version, so it had to move |
+| connect | 0.0.115 | unchanged — depends on crypto + transport, **not** daemon |
+| crypto / protocol-types / transport / gateway | 0.0.38 / 0.0.40 / 0.0.42 / 0.0.23 | untouched |
+
+Verified against the **binary**, not the CI status — `npm pack @cello-protocol/daemon@0.0.115`,
+`grep dist/`:
+
+- `getDeliveryBookmark` → `dist/daemon.js`, `dist/session-content-handlers.js` ✅ (F1)
+- `content_undeliverable` → `dist/session-content-handlers.js`, `dist/session-node-manager.js` ✅ (F2)
+- `findNextReceivedAfter` → both ✅ (F5)
+- cross-pin `cli@0.0.118 → daemon@0.0.115`, a real version, never `workspace:*` ✅
+
+**The cascade published earlier tonight (daemon 0.0.114 / cli 0.0.117) is superseded and must not be
+promoted** — it carries the redelivery loop, which would break the very two-session journey the
+promotion exists to enable.
+
+### ⏳ OWED TO ANDRE — the promotion (operator-run, always)
+
+```bash
+npm dist-tag add @cello-protocol/cli@0.0.118 latest
+npm dist-tag add @cello-protocol/daemon@0.0.115 latest
+npm dist-tag add @cello-protocol/connect@0.0.115 latest
+npm dist-tag add @cello-protocol/gateway@0.0.23 latest
+npm dist-tag add @cello-protocol/crypto@0.0.38 latest
+npm dist-tag add @cello-protocol/protocol-types@0.0.40 latest
+npm dist-tag add @cello-protocol/transport@0.0.42 latest
+```
+
+The last four are already on `latest` and will print a harmless *"latest is already set"* — they are
+listed so the whole graph is promoted as one consistent set rather than from memory. The `+latest:
+@cello-protocol/<pkg>@<ver>` line is the authoritative confirmation, not the verify loop (the npm CDN
+lags 1–2 min).
+
+Then, to pick it up locally — **`--prefer-online` is not optional**, because `@latest` resolves from
+the packument cached on *this* machine and a fresh promotion is invisible to it:
+
+```bash
+npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest
+cello logout && cello login          # CLI lifecycle — never pkill, that kills the live agents
+node -p "require('$(npm prefix -g)/lib/node_modules/@cello-protocol/cli/package.json').version"   # must print 0.0.118
+```
+
+Then `/mcp` (or restart Claude Code) to reconnect the shim. That unblocks **AC7 / VISIBLE-1 AC6** —
+the live two-session `claude --channels` journey, the last thing standing between Tier 0 + Tier 1 and
+a ✅ instead of a 🟡.
