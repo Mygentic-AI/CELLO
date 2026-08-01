@@ -317,7 +317,14 @@ The previous pass ended with a list of eight things marked "confirmed working, n
 Five days of deliberate defect-hunting found real bugs in four of them:
 
 - **the read-before-reply guard** — the guarantee holds for a single session, but two sessions on
-  one agent do not gate each other, and the scenario had never been run. Still open (item 6).
+  one agent do not gate each other, and the scenario had never been run. **M8D built the fix
+  (2026-08-01/02)** and it is published: delivery no longer pops a shared queue, so the second
+  session is not robbed; and the send path re-checks the conversation's frontier immediately before
+  the wire, so two sessions can no longer both answer one question. Note the gate-time behaviour is
+  UNCHANGED and deliberately so — a message this agent sent from another local window does not block
+  its other windows; the principal is the agent, not the socket. **Still open only for live proof**
+  (the two-session `claude --channels` journey); everything else is green on a real daemon over real
+  IPC with a revert probe behind it.
 - **auto-away-replies** — fired before the caller had said anything, and fired a second time on a
   closing message, injecting a duplicate into the sealed transcript. Fixed 2026-07-23/24.
 - **session-request expiry** — requests whose session had already closed stayed in the pending queue
