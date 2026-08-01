@@ -18,7 +18,7 @@ description: >
 
 ## RESUME STATE (overwritten in place — the ONLY thing in this file that is)
 
-**Updated:** 2026-08-01, after Entry 6.
+**Updated:** 2026-08-01, after Entry 7.
 
 - **Everything is MERGED TO `main`** in both repos (the `m8d/co-attendance` worktrees still exist and
   track it). Client `main` @ `20c331b`; docs `main` @ the Entry 5 commit.
@@ -34,7 +34,7 @@ description: >
   `agent !== undefined` sites. Cross-pins are real versions (`cli@0.0.115 → daemon@0.0.112`).
 - **`latest` NOT promoted — operator-run, always.** Prepared, for when Andre wants the reinstall:
   ```
-  npm dist-tag add @cello-protocol/connect@0.0.114 latest
+  npm dist-tag add @cello-protocol/connect@0.0.115 latest   # ← 0.0.115, the reconnect-truth fix
   npm dist-tag add @cello-protocol/cli@0.0.115 latest
   npm dist-tag add @cello-protocol/daemon@0.0.112 latest
   npm dist-tag add @cello-protocol/gateway@0.0.23 latest
@@ -614,3 +614,44 @@ note, red tests on the two-connection fixture AND the now-runnable spine, then i
 three-layer spine repair; opening a crypto-adjacent correctness change on top of that is how the
 subtle version of this bug ships. AC2 (diagnosis) is done and independently valuable — a strand can
 still form, but it can no longer be undiagnosable.
+
+## Entry 8 — a mirror believed over the source, caught live on the operator's own daemon (2026-08-01)
+
+**Third instance of one shape in one day**, which is why it gets an entry rather than a line:
+
+| where | the mirror | the source it contradicted |
+|---|---|---|
+| `DOD-RECEPTIONIST-AGENT-1` | `~/.cello/current-agent`, a machine-wide file | the daemon's per-connection selection |
+| `DOD-INBOX-AGENT-1` | an `agent` parameter accepted and dropped | the agent the caller actually named |
+| **this** | the shim's `#currentAgent` cache | the daemon, which had just refused to restore it |
+
+**Found by another session, minutes after the promotion.** Its reconnect doorbell said *"the local
+daemon is back and you are acting as Miss_Chelly"*; `cello_stop_using_agent` then answered
+`released: null` and `cello_agents` showed `selected: false, attendance: 0`.
+
+**The first diagnosis on the scene was "the restart reset per-connection state, so the notification
+didn't reflect the daemon's view."** That is the symptom restated. The cause: `#replayHandshake`
+called `cello_use_agent` on reconnect and **discarded the result**. `#currentAgent` is otherwise
+cleared only on an explicit de-selection, so a refused replay left the cache asserting an agent the
+daemon never attached — and `onReconnect` builds its announcement from that cache. The claim was
+manufactured by the very call that had just failed.
+
+It fires exactly where it hurts: a just-restarted daemon may not have the agent online yet, and
+`cello_use_agent` deliberately does **not** auto-start on the replay path (a reconnect must never
+silently re-arm an agent the operator stopped). So `logout/login` — which is what a version upgrade
+IS — is the case that lies. Andre's read that the session had been *"legacy using it"* is precisely
+right: it selected under the old daemon and the replay onto the new one was refused.
+
+**Both halves pinned.** `agent_already_current` stays SUCCESS (R3) — treating every non-`ok` as a
+refusal would clear a cache that is correct. A successful replay still keeps routing across a restart
+(R2), which is the entire reason the cache exists; clearing unconditionally would have "fixed" R1 by
+deleting the feature.
+
+**The harness needed its own fix to be real.** `server.close()` only stops ACCEPTING — the
+established socket survives it, so the proxy never saw a drop and all three clauses timed out
+instead of testing a restart. Destroying the live socket is what makes it a daemon restart.
+
+**Published:** connect **`0.0.115`** (tag `v0.0.172`, smoke-tag green), verified in the tarball
+(`restored`, `agent_already_current` in `dist/ipc-proxy.js`; cross-pins `crypto@0.0.38`,
+`transport@0.0.42` — both already at `latest`). Only `core/adapter-claude-code` changed and connect
+is a **leaf** in the publish graph, so no cascade: one bump, one promotion command.
