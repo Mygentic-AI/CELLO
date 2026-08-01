@@ -525,6 +525,10 @@ same-machine from remote conversations; and in a loopback conversation every mes
 
 ## Related
 
+- [[M8D-DEFINITION-OF-DONE]] — **the milestone this document is the spec-of-record for** (opened
+  2026-08-01). §2/§3/§3b/§4/§6/§8 become four DoD lines there; §7a and §7b stay in
+  [[M8C-DEFINITION-OF-DONE]] as `DOD-FIRSTMSG-WITNESS-1` and `DOD-FRONTIER-STRAND-1`.
+- [[M8D-PROCEDURE]] — how to work it; §10's anchors are the map it tells the coder to use
 - [[2026-07-29_1730_coworker-session-scoped-mcp-calls-fail]] — where this was first seen and left open
 - [[2026-07-01_1030_command-surface-and-notifications-design]] — Gap 1, the group-chat model, and the
   decision to use read-before-write rather than attendance locking
