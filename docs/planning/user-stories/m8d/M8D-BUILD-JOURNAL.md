@@ -18,22 +18,26 @@ description: >
 
 ## RESUME STATE (overwritten in place — the ONLY thing in this file that is)
 
-**Updated:** 2026-08-01, after Entry 3.
+**Updated:** 2026-08-01, after Entry 4.
 
-- **Worktrees.** `cello-client-m8d` and `trustless-cello-m8d`, both on branch `m8d/co-attendance`.
-  Bases: `origin/main` @ `2349236` (client) and `main` @ `ec96852d` (docs).
-- **Done.** `DOD-RECEPTIONIST-AGENT-1` **✅** — all four ACs, AC 4 at execution level
-  (`78a6ba7` → `a02dee9` → `bd37ede`). `DOD-COATTEND-VISIBLE-1` **🟡** — ACs 1–5, 7 enforcer-green,
-  reviewed, every finding fixed (`51ab230` → `0f37607`).
-- **Next red.** `DOD-COATTEND-1` (Tier 1) — **but Tier 1 is FENCED** behind M8C's
-  `DOD-FIRSTMSG-WITNESS-1` (ACs 7–8 owed) and `DOD-FRONTIER-STRAND-1` (open); re-confirmed closed
-  2026-08-01. **Nothing in M8D is workable until that fence lifts.** The blocker is spine rot: 66
-  `cello register` call sites across 20 files, owned by M8C, deliberately not taken here (see the
-  DoD's scope fence).
-- **Owed to Andre (procedure stop-reason 1 — do not block on it).** The live two-session
-  `claude --channels` journey for `DOD-COATTEND-VISIBLE-1` AC 6, and a `connect` beta publish so the
-  doorbell body ships (the in-context half of AC 2 is shim-side).
-- **Gate at HEAD.** 2396 passed / 11 skipped, lint + typecheck + build clean.
+- **Everything is MERGED TO `main`** in both repos (the `m8d/co-attendance` worktrees still exist and
+  track it). Client `main` @ `4d42ec9`; docs `main` @ the Entry 4 commit.
+- **Done.** `DOD-RECEPTIONIST-AGENT-1` **✅** (all four ACs, AC 4 at execution level).
+  `DOD-COATTEND-VISIBLE-1` **🟡** (ACs 1–5, 7 enforcer-green; AC 6 is a live journey).
+  `DOD-INBOX-AGENT-1` *(debt — from M8C)* built + gate-green, **review in flight**.
+- **PUBLISHED to beta, binary-verified:** daemon `0.0.111`, cli `0.0.114`, connect `0.0.113`
+  (tag `v0.0.170`, smoke-tag green). `latest` **NOT** promoted — operator-run. `DOD-INBOX-AGENT-1`
+  landed after the tag and needs the NEXT publish.
+- **🚫 THE BINDING CONSTRAINT: Docker is unavailable here** (`docker info` fails), so the spine
+  harness cannot run — and it is M8D's own live enforcer (`M8D-PROCEDURE` §2d). **No live-journey AC
+  can close on this machine until Docker is up**, `DOD-COATTEND-VISIBLE-1` AC 6 included.
+- **Tier 1 stays FENCED** behind M8C's `DOD-FIRSTMSG-WITNESS-1` (ACs 7–8 owed — blocked on the same
+  spine rot) and `DOD-FRONTIER-STRAND-1` (❌ open, an unbuilt M8C line). Note `FIRSTMSG`'s *code* is
+  shipped, so §7a's drift no longer persists; what is owed there is live proof.
+- **Owed to Andre.** (1) Docker up, or a decision to close live ACs elsewhere. (2) The live
+  two-session `claude --channels` journey for AC 6. (3) The `latest` promotion, when he wants the
+  reinstall. (4) A call on whether M8D should absorb `DOD-FRONTIER-STRAND-1` to lift its own fence.
+- **Gate at HEAD.** 2401 passed / 11 skipped, lint + typecheck + build clean.
 
 ---
 
@@ -360,3 +364,71 @@ not a two-line edit — so it is out of scope for this line and recorded here ra
 level, with revert-measured teeth. This line has **no in-context hop** — its behavior ends in a bash
 loop on the operator's machine, not inside Claude's context — so unlike `DOD-COATTEND-VISIBLE-1` it
 needs no live `claude --channels` journey to close.
+
+## Entry 4 — Tier 0 published to beta; a debt line raised and fixed; the fence measured (2026-08-01)
+
+### The publish — verified against the BINARY, not the CI status
+
+Tag `v0.0.170`, cascade bumped all seven published packages. Every job green, including
+`Published-artifact smoke test (tag)` — which is the real success signal.
+
+| package | beta |
+|---|---|
+| crypto / protocol-types / transport / gateway | `0.0.37` / `0.0.39` / `0.0.41` / `0.0.22` |
+| **daemon** | **`0.0.111`** |
+| **cli** | **`0.0.114`** |
+| **connect** | **`0.0.113`** |
+
+Binary verification (`npm pack` + grep `dist/`, per `/cello-publish` step 5):
+
+- `daemon@0.0.111` ships `dist/co-attendance.js`, `taken_by_sibling_session`,
+  `session.receive.taken_by_sibling`, and `forget(connectionId)` — i.e. the discriminator AND the
+  review fix that stopped it firing on every reconnect.
+- `connect@0.0.113` ships the doorbell body (`sessions are attending this agent`).
+- Cross-pins are **real versions, never `workspace:*`**: `cli@0.0.114 → daemon@0.0.111`,
+  `connect@0.0.113 → crypto@0.0.37, transport@0.0.41`.
+
+**`latest` NOT promoted** — that is operator-run, always. Prepared command set in the handoff below.
+
+**Not in this publish:** `DOD-INBOX-AGENT-1` landed after the tag was cut and needs the next one.
+
+### DOD-INBOX-AGENT-1 (debt — from M8C) — raised and fixed
+
+The `DOD-RECEPTIONIST-AGENT-1` review noted the receptionist **skill** carries the same defect as
+the subagent, one layer up, and could not be fixed the same way because the door did not exist:
+
+> `cello_check_notifications` called `resolveCurrentAgent(connState)` with **no** explicit-agent
+> argument, while every sibling handler calls `resolveCurrentAgent(connState, params?.agent)`.
+
+The parameter already existed and already worked (`daemon.ts:1764` — `explicitAgent` wins); this one
+caller never passed it. So `{ agent: "bob" }` was accepted, silently dropped, and answered for
+whatever agent the **connection** held — `ok: true`, wrong desk, no signal. **I3 pins the worst
+shape: asking about `carol` returned alice's inbox under `ok: true`.**
+
+Why it is not cosmetic: skills and subagents in one Claude Code session **share one MCP connection**,
+so a sibling's `cello_use_agent` re-points yours mid-loop. That is the receptionist's shared-file
+collision with a socket standing in for `~/.cello/current-agent`.
+
+Fixed on all three surfaces so the chain actually connects: daemon passes the param and refuses an
+unknown (`agent_not_found`) or empty (`missing_agent_value`) name; the MCP shim exposes `agent` on
+`cello_inbox`; and `SKILL.md` step 3 now names the agent — closing a contradiction where its own
+step 1 told the operator to always pass the agent explicitly and step 3 then did not.
+
+Gate: **2401 passed / 11 skipped**, lint, typecheck, build clean. Review dispatched.
+
+### The fence, measured rather than estimated
+
+Two corrections to Entry 2's framing and to the DoD note I wrote earlier today:
+
+1. **The spine rot is mixed, not uniformly a migration.** `j-conn`, `j-remove` and `j-suspend`
+   already call `create-agent` separately and need only the verb renamed; the other **17** files call
+   `register` alone and need the create step added. 66 sites, 20 files.
+2. **Docker is unavailable in this environment** (`docker info` fails), so `docker-compose` Postgres
+   + Flyway cannot come up and **the spine suite cannot be run here at all.** That upgrades the
+   reason for not taking the repair from *scope* to *verifiability*: a 66-site edit that cannot be
+   executed even once is a blind edit, which §5c forbids.
+
+**This is the binding constraint on the rest of the milestone**, and it is worth naming precisely
+because it is easy to mistake for a scope decision: the spine harness is M8D's own live enforcer
+(`M8D-PROCEDURE` §2d), so **no live-journey AC can close on this machine until Docker is up** —
+`DOD-COATTEND-VISIBLE-1` AC 6 included.

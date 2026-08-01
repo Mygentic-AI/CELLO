@@ -84,13 +84,22 @@ a visible one.
 > does not adopt them. **Tier 1 therefore does not open**, and Tier 0 + `DOD-RECEPTIONIST-AGENT-1`
 > are the whole of what M8D can work today.
 >
-> The thing actually blocking ACs 7–8 is spine-suite rot: 66 call sites across 20 `*.spine.test.ts`
-> files still invoke `cello register <name> <token>`, a verb the CLI replaced with `create-agent` +
-> `register-agent`. It is a migration, not a rename — each site becomes two commands — and M8C's DoD
-> already calls it its own unit of work. **Deliberately NOT taken inside M8D**: it fails M8D's scope
-> fence (no two-connection fixture run can observe it), it needs live docker-compose Postgres +
-> Flyway to verify, and folding it in would entangle M8D's tag flips with M8C's. Recorded here as
-> the fence, owned there.
+> The thing actually blocking ACs 7–8 is spine-suite rot: **66 call sites across 20
+> `*.spine.test.ts` files** still invoke `cello register <name> <token>`, a verb the CLI replaced
+> with `create-agent` + `register-agent`. **Measured, 2026-08-01** (correcting a first estimate that
+> called it uniformly a migration): it is *mixed* — `j-conn`, `j-remove` and `j-suspend` already call
+> `create-agent` separately and need only the verb renamed; the other 17 files call `register` alone
+> and need the create step added. So it is a rename in 3 files and a migration in 17.
+>
+> **NOT taken inside M8D, and the blocking reason is now stronger than scope.** `docker info` fails
+> in this environment, so `docker-compose` Postgres + Flyway cannot come up and **the spine suite
+> cannot be run at all here.** A 66-site repair that cannot be executed once is a blind edit, which
+> §5c forbids outright. It also fails M8D's scope fence (no two-connection fixture run observes it)
+> and M8C's DoD already calls it its own unit of work. Recorded here as the fence, owned there.
+>
+> **Consequence worth stating plainly:** this same harness is M8D's own live enforcer
+> (`M8D-PROCEDURE` §2d), so **no live-journey AC in this milestone can be closed on this machine
+> until Docker is available** — including `DOD-COATTEND-VISIBLE-1` AC 6's automated counterpart.
 
 ---
 
