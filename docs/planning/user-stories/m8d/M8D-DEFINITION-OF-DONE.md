@@ -205,7 +205,7 @@ a visible one.
   7. Live: two-session `claude --channels` journey on one agent — both sessions see the counterparty's
      message.
 
-- **DOD-COATTEND-CATCHUP-1** ❌ NOT BUILT (raised 2026-08-01) — **catch-up means everything since my
+- **DOD-COATTEND-CATCHUP-1** 🟡 BUILT/UNVERIFIED-LIVE (2026-08-02) — **catch-up means everything since my
   bookmark, whoever wrote it (§3b).** Receiving only ever returns the *counterparty's* messages: the
   `since_seq` branch filters `direction === "received"` (`session-content-handlers.ts:366-394`), so a
   **sibling session's reply is in the record but never delivered through that path**. The second
@@ -234,8 +234,23 @@ a visible one.
   4. Test: session A replies; session B, which never saw A's reply, catches up through the documented
      door and clears the bar. Red before green.
 
-- **DOD-COATTEND-SENDWINDOW-1** ❌ NOT BUILT (raised 2026-08-01) — **the send gate is re-checked in
+- **DOD-COATTEND-SENDWINDOW-1** 🟡 BUILT/UNVERIFIED-LIVE (2026-08-02) — **the send gate is re-checked in
   the same synchronous window as the append (§4).**
+
+  > **Both lines landed together, as AC4 requires.** The race is real and was reproduced
+  > deterministically by holding the first send inside `screenOutbound`: both sessions passed the
+  > gate, both waited, both wrote. Now a frontier snapshot taken at the gate is re-read immediately
+  > before the wire, with the no-await comment AC1 asks for. **AC1's LOCATION is deviated from,
+  > deliberately** — it asks for the re-check beside `appendSessionLeaf`, but outbound the append
+  > runs AFTER `sendContent`, so refusing there would leave the counterparty holding content this
+  > side never leafed: `DOD-FRONTIER-STRAND-1` manufactured on purpose to satisfy the letter of an
+  > AC. Outbound, the commit point is the wire. **AC3 honored, not sidestepped**: the gate is not
+  > re-run, because its second authority is the agent-scoped watermark that would pass the racing
+  > sibling exactly as it passed the first — the re-check asks a question that authority cannot
+  > answer. **CATCHUP needed no production change and that is the finding**: `cello_get_transcript`
+  > already is the both-directions door (M8D-D3) and both refusals already point at it. K2 is what
+  > makes the line non-vacuous — it proves `cello_receive` genuinely cannot cross a sibling's sent
+  > leaf. Revert probe: 2 red. **AC7-class live proof still owed** for both. → Entry 20
 
   Between the gate passing and the message being recorded there are **two awaits** — the security
   screening (`securityGateway.screenOutbound`, a round trip to the gateway process) and the send

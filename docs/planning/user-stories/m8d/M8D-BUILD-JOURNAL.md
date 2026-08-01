@@ -1273,3 +1273,66 @@ node -p "require('$(npm prefix -g)/lib/node_modules/@cello-protocol/cli/package.
 Then `/mcp` (or restart Claude Code) to reconnect the shim. That unblocks **AC7 / VISIBLE-1 AC6** —
 the live two-session `claude --channels` journey, the last thing standing between Tier 0 + Tier 1 and
 a ✅ instead of a 🟡.
+
+### 2026-08-02 — Entry 20: SENDWINDOW + CATCHUP, landed together — and Entry 17's framing was wrong
+
+Entry 17 deferred these and framed SENDWINDOW as *"tighten the gate so B cannot send while behind a
+sibling's send."* **Reading the actual DoD line showed that is not what it asks for**, and the gate's
+own comment says the opposite in as many words:
+
+> "a message this agent SENT from a different local connection does not block. Two attended windows
+> on one agent do not gate each other… **This is deliberate; do not 'fix' it.**"
+
+The real defect is a **TOCTOU race**, not a steady-state bar (AC5 says it plainly: *"two connections
+both pass the gate, both proceed through a stalled screening await; exactly one append occurs"*).
+Both callers are **legitimately** caught up when checked — that is the whole point. Then both wait,
+and nothing changes between them *precisely because* no leaf has been appended yet.
+
+Reproduced deterministically by holding the first send inside `screenOutbound` (the passthrough
+resolves in the same microtask, so under it the race is unobservable and a test built on it would
+pass against the broken build). Before: **two replies committed, two leaves**. After: one.
+
+### The AC1 deviation, taken deliberately
+
+AC1 asks for the re-check *"in the same synchronous window as `appendSessionLeaf`"*. Inbound that is
+exactly right — the append **is** the commit point. **Outbound it is not:** `sendContent` puts the
+message on the wire and runs *before* the append. Refusing at the append would leave the counterparty
+holding content this side never leafed — frontiers disagree, neither will co-sign, unsealable except
+by forfeiting the receipt. That is `DOD-FRONTIER-STRAND-1`, *the defect that stranded `dbb93dfc…` for
+a week*, manufactured on purpose to satisfy the letter of an AC. So the re-check sits immediately
+before the wire, and the no-await comment lives there.
+
+**AC3 honored rather than sidestepped.** The re-check is a *frontier comparison*, not a re-run of the
+gate — because the gate's second authority is the **agent-scoped** watermark, so the instant any
+connection reads, `unreadReceived === 0` for all of them and a re-run would wave the racing sibling
+through exactly as it waved the first. It asks what that authority cannot: *did the session move
+under me while I was gone?*
+
+### CATCHUP needed no production code, and that is the finding
+
+`cello_get_transcript` already **is** the both-directions door, and both refusals — the existing gate
+and the new `session_moved_under_send` — already point at it, which is the strongest argument for
+this door over widening `cello_receive` (post-Tier-1 that would make *receive* return **the agent's
+own sent messages**: a different verb wearing the same name). **K2 is what keeps the line honest** —
+it proves `cello_receive` delivers the counterparty's message and *still* cannot move the cursor past
+the sibling's sent leaf. Without it, K1 would pass on a build where both doors worked and prove
+nothing about the choice.
+
+### Two measurement corrections
+
+**K1 expected cursor 1 and got 2.** Rather than theorise I dumped the transcript, and there was a
+third leaf: `{sequence: 2, direction: "sent", text: "Dispatched."}` — the **M8C-AWAY-1 auto-reply**,
+fired because the test ingested into an *unattended* agent. Not a bug; my setup summoned a subsystem
+the clause is not about. The clauses now attach before seeding.
+
+**S2 asserted `/cello_transcript/` and failed against guidance reading `cello transcript`.** Guidance
+is rewritten per surface at the IPC boundary, so the assertion was pinning the *tool surface* instead
+of the *advice*. Matching both forms is the correct assertion — and it incidentally confirms the
+CATCHUP door renders correctly on the CLI surface too.
+
+Revert probe: disable the frontier comparison → **S1 and S2 go red**. Gate: **2450 passed / 11
+skipped**, lint, typecheck, build — by exit code.
+
+**Not yet published.** These are on `main` but not on npm; the next cascade picks them up. The
+promotion commands in Entry 19 are for daemon 0.0.115 / cli 0.0.118 and remain correct for what is
+published now.
