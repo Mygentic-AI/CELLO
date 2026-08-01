@@ -193,6 +193,20 @@ export class AeSyncService {
         identity: this.#cfg.identity,
         actualRemotePeerId: remotePeerId,
         store: this.#cfg.store,
+        // A table we could not read is DROPPED from this round's advertisement so the rest still
+        // reconcile. That degradation is only acceptable while it is LOUD: this warn is the sole
+        // signal that one table has quietly stopped replicating, and it names the table and the
+        // cause rather than the stage — the 2026-08-01 outage was diagnosable only because the
+        // underlying error text (`column "subject" does not exist`) survived into a log at all.
+        onTableError: (tier, table, err) => {
+          logger.warn("antientropy.table.skipped", {
+            remotePeerId,
+            tier,
+            table,
+            reason: describeThrown(err),
+            detail: "This table was NOT advertised, so it did not reconcile this round. Every other table did.",
+          });
+        },
       });
     } catch (err) {
       // A failed handshake / protocol violation. The stream is already closed by the responder's

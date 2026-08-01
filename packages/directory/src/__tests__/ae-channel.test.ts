@@ -12,7 +12,7 @@
  *  - The responder REFUSES to serve any round frame before the handshake completes (fail closed).
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { decode as cborDecode } from "cbor-x";
 import type { ConsortiumManifest } from "@cello-protocol/protocol-types";
@@ -152,6 +152,8 @@ async function runBoth(opts?: {
   dialerActualRemotePeerId?: string; responderActualRemotePeerId?: string;
   dialerStore?: AeStoreView; responderStore?: AeStoreView;
   rounds?: number;
+  /** M12-P9: observe tables the responder could not advertise. Default undefined = today's behaviour. */
+  responderOnTableError?: (tier: "A" | "B", table: string, err: unknown) => void;
 }) {
   const [wireA, wireB] = wirePair();
   const dialerStore = opts?.dialerStore ?? new MemStore();
@@ -162,6 +164,7 @@ async function runBoth(opts?: {
     identity: opts?.responderId ?? B,
     actualRemotePeerId: opts?.responderActualRemotePeerId ?? A.peerId,
     store: responderStore,
+    onTableError: opts?.responderOnTableError,
     nowMs: () => Date.parse("2026-07-28T10:00:00Z"),
   });
   const dialer = runAeDialer({
@@ -483,5 +486,85 @@ describe("ae-channel: mutual handshake + rounds over the wire", () => {
     expect(res2.rounds[0].tierAPulled).toBe(1);
     expect(res2.rounds[0].tierAPlanned).toBe(3);
     expect(res2.rounds[0].tierAPlanned).toBeGreaterThan(res2.rounds[0].tierAPulled);
+  });
+});
+
+/**
+ * M12-P9 — one unreadable table must not stop every other table from replicating.
+ *
+ * `buildWireState` looped over every table with no isolation. On 2026-08-01 a Tier-A spec named a
+ * column a later migration had dropped, so ONE table's digest query threw; the throw escaped
+ * `handling_ae_state_req` and killed the peer's ENTIRE round. All eleven Tier-A tables stopped
+ * replicating across all three nodes, for days, surfacing a layer away as CLAIM_CODE_INVALID during
+ * Telegram registration.
+ *
+ * The spec bug is fixed and guarded (ae-spec-schema.test.ts). This covers the AMPLIFIER, and the two
+ * properties pull against each other: the round must SURVIVE, and the skip must be LOUD. A test
+ * asserting only the first would pass an implementation that swallows the error — trading a crash
+ * for a mesh that reports itself healthy while one table drifts apart forever.
+ */
+describe("M12-P9: a table that cannot be read is skipped, not fatal", () => {
+  /** A responder whose Tier-B digest throws, exactly as a bad column did in production. */
+  class OneBadTableStore extends MemStore {
+    override tierBTableDigest(): string {
+      throw new Error(`column "subject" does not exist`);
+    }
+  }
+
+  it("the round SURVIVES and the healthy tier still converges", async () => {
+    const responderStore = new OneBadTableStore();
+    responderStore.revocations.set("agX", rev("agX"));
+    responderStore.suspensions.set("agZ", susp("agZ", 3, true));
+
+    const { dialerResult, dialerStore } = await runBoth({ responderStore, responderOnTableError: () => {} });
+
+    // Before the fix this was ok:false — the responder threw mid-advertisement and took the round.
+    expect(dialerResult.ok).toBe(true);
+    if (!dialerResult.ok) return;
+    // And the tier that WAS readable replicated normally, which is the entire point.
+    expect(dialerResult.rounds[0].tierAApplied).toBe(1);
+    expect((dialerStore as MemStore).revocations.has("agX")).toBe(true);
+  });
+
+  it("the unreadable tier is OMITTED rather than advertised empty", async () => {
+    // Omission is load-bearing. The planner walks the PEER'S table list, and
+    // RemoteStoreView.tierBTables() is Object.keys(state.tierB) — so an omitted table is simply not
+    // reconciled. Advertising "" would instead DIFFER from the real digest and send the dialer into
+    // a detail fetch over a table we just proved unreadable.
+    const responderStore = new OneBadTableStore();
+    responderStore.suspensions.set("agZ", susp("agZ", 3, true));
+
+    const { dialerResult, dialerStore } = await runBoth({ responderStore, responderOnTableError: () => {} });
+    expect(dialerResult.ok).toBe(true);
+    if (!dialerResult.ok) return;
+    expect(dialerResult.rounds[0].tierBApplied).toBe(0);
+    expect((dialerStore as MemStore).suspensions.has("agZ")).toBe(false); // not pulled, not invented
+  });
+
+  it("REPORTS the skip, naming the table and the underlying cause", async () => {
+    // The property separating this fix from a silent fallback.
+    const onTableError = vi.fn();
+    const responderStore = new OneBadTableStore();
+    responderStore.revocations.set("agX", rev("agX"));
+
+    await runBoth({ responderStore, responderOnTableError: onTableError });
+
+    expect(onTableError).toHaveBeenCalled();
+    const [tier, table, err] = onTableError.mock.calls[0]!;
+    expect(tier).toBe("B");
+    expect(table).toBe("agent_suspensions");
+    // The CAUSE must survive, not merely the fact of failure — the 2026-08-01 outage was
+    // diagnosable only because this string reached a log at all.
+    expect(String((err as Error).message)).toContain("does not exist");
+  });
+
+  it("a healthy store reports nothing — the callback is not chatty", async () => {
+    const onTableError = vi.fn();
+    const responderStore = new MemStore();
+    responderStore.revocations.set("agX", rev("agX"));
+
+    const { dialerResult } = await runBoth({ responderStore, responderOnTableError: onTableError });
+    expect(dialerResult.ok).toBe(true);
+    expect(onTableError).not.toHaveBeenCalled();
   });
 });

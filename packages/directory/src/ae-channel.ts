@@ -166,11 +166,50 @@ interface WireState {
   tierB: Record<string, string>; // table → table digest
 }
 
-async function buildWireState(store: AeStoreView): Promise<WireState> {
+/**
+ * Advertise one digest per table — WITH PER-TABLE ISOLATION.
+ *
+ * This loop had none, and on 2026-08-01 that turned a one-word typo into a fleet-wide outage. A
+ * Tier-A spec named a column a later migration had dropped, so ONE table's digest query threw
+ * `column "subject" does not exist`; the throw escaped `handling_ae_state_req`, killed the whole
+ * request, and with it the peer's entire round. All ELEVEN Tier-A tables stopped replicating, on
+ * all three nodes, for days — visible only as a `warn` on hosts nobody was tailing, and surfacing
+ * a layer away as `CLAIM_CODE_INVALID` during Telegram registration.
+ *
+ * The spec bug is fixed and `ae-spec-schema.test.ts` prevents that class of it. This fixes the
+ * AMPLIFIER: any future table that throws for any reason — a dropped table, a revoked grant, a type
+ * change — now costs that one table's replication for the round, not everything.
+ *
+ * OMITTING IS THE CORRECT DEGRADATION, and specifically not "advertise an empty digest". The
+ * planner iterates the PEER'S table list, and `RemoteStoreView.tierATables()` is
+ * `Object.keys(state.tierA)` — so a table left out of the map disappears from the peer's list and
+ * is simply not reconciled this round. Advertising `""` instead would differ from the local digest
+ * and send the peer into a full bucket walk over a table we just proved we cannot read.
+ *
+ * `onTableError` IS NOT OPTIONAL IN SPIRIT. Swallowing the throw and quietly serving ten tables
+ * would replace a loud crash with a silent fallback — a mesh that looks healthy while one table
+ * drifts apart forever. The callback is how the skip stays louder than the failure it replaces.
+ */
+async function buildWireState(
+  store: AeStoreView,
+  onTableError?: (tier: "A" | "B", table: string, err: unknown) => void,
+): Promise<WireState> {
   const tierA: Record<string, string> = {};
-  for (const t of await store.tierATables()) tierA[t] = await store.tierATableDigest(t);
+  for (const t of await store.tierATables()) {
+    try {
+      tierA[t] = await store.tierATableDigest(t);
+    } catch (err: unknown) {
+      onTableError?.("A", t, err);
+    }
+  }
   const tierB: Record<string, string> = {};
-  for (const t of await store.tierBTables()) tierB[t] = await store.tierBTableDigest(t);
+  for (const t of await store.tierBTables()) {
+    try {
+      tierB[t] = await store.tierBTableDigest(t);
+    } catch (err: unknown) {
+      onTableError?.("B", t, err);
+    }
+  }
   return { tierA, tierB };
 }
 
@@ -456,6 +495,13 @@ export interface AeResponderInput {
   nowMs?: () => number;
   /** Per-frame receive deadline (default 30s). */
   frameTimeoutMs?: number;
+  /**
+   * A table whose digest could not be computed. It is DROPPED from this round's advertisement so
+   * the other tables still reconcile — see buildWireState. Wire this to a real `warn`: the skip is
+   * the only signal that a table has stopped replicating, and an unwired callback turns the fix
+   * into the silent fallback it exists to prevent.
+   */
+  onTableError?: (tier: "A" | "B", table: string, err: unknown) => void;
 }
 
 /**
@@ -464,7 +510,7 @@ export interface AeResponderInput {
  * before auth terminates the stream (fail closed); the libp2p layer logs the §6 event.
  */
 export async function serveAeResponder(input: AeResponderInput): Promise<void> {
-  const { wire, manifest, identity, actualRemotePeerId, store } = input;
+  const { wire, manifest, identity, actualRemotePeerId, store, onTableError } = input;
   const nowMs = input.nowMs ?? (() => Date.now());
   const timeoutMs = input.frameTimeoutMs ?? DEFAULT_FRAME_TIMEOUT_MS;
   // Declared OUTSIDE the try so the catch can report where we were. "Cannot write to a stream that
@@ -559,7 +605,7 @@ export async function serveAeResponder(input: AeResponderInput): Promise<void> {
       stage = `handling_${String(frame["type"])}`;
       switch (frame["type"]) {
         case "ae_state_req": {
-          const state = await buildWireState(store);
+          const state = await buildWireState(store, onTableError);
           stage = "sending_ae_state";
           wire.send(encodeAeFrame({ type: "ae_state", state }));
           break;
