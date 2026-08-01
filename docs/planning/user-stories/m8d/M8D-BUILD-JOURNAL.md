@@ -1627,3 +1627,53 @@ The rest (parked-message auto-recover reporting `recovered:0`, the ACK-ladder ti
 timeout) need real diagnosis and are **M8C `DOD-MSG-*` territory, not M8D**. Parked as its own line
 rather than pulled into this milestone — but flagged clearly, because parked-message delivery *is*
 core launch value and 7/10 red on it is not a documentation problem.
+
+### 2026-08-02 — Entry 26: 🟢 THE PROMOTION SET — daemon 0.0.118 / cli 0.0.121
+
+`v0.0.178` green, **smoke-tag ✅**. Verified in the tarball: `presentSeqs` (H1's both-directions
+walk), `cursor_and_watermark` (H2), `SEND_CLAIM_TTL_MS` + `claimHeldMs` (H3). Cross-pin
+`cli@0.0.121 → daemon@0.0.118`.
+
+**This supersedes Entries 19, 21 and 24. Four cascades went out; promote only this one.**
+
+| version | why NOT to promote it |
+|---|---|
+| daemon 0.0.114 | the redelivery loop (COATTEND-1 F1) |
+| daemon 0.0.115 | the `sendContent` wire window was still open |
+| daemon 0.0.116 | same |
+| daemon 0.0.117 | H1 — reading everything stopped clearing unread |
+| **daemon 0.0.118** | ✅ **this one** |
+
+That the set has been rewritten four times in one night is the point, not an embarrassment: each
+rewrite is a defect an adversarial reader found *after* the suite was green, and every one of them
+would have shipped into the live journey the promotion exists to enable. **The final one is the only
+one worth your `npm dist-tag` keystrokes.**
+
+```bash
+npm dist-tag add @cello-protocol/cli@0.0.121 latest
+npm dist-tag add @cello-protocol/daemon@0.0.118 latest
+npm dist-tag add @cello-protocol/connect@0.0.115 latest
+npm dist-tag add @cello-protocol/gateway@0.0.23 latest
+npm dist-tag add @cello-protocol/crypto@0.0.38 latest
+npm dist-tag add @cello-protocol/protocol-types@0.0.40 latest
+npm dist-tag add @cello-protocol/transport@0.0.42 latest
+```
+
+```bash
+npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest
+cello logout && cello login          # CLI lifecycle — never pkill
+node -p "require('$(npm prefix -g)/lib/node_modules/@cello-protocol/cli/package.json').version"   # 0.0.121
+```
+
+Then `/mcp`, then the runbook in **Entry 22**.
+
+### Milestone state
+
+All six lines built, gated (**2456 passed / 11 skipped, exit 0**), published and verified in the
+binary. `DOD-COATTEND-1` reviewed once, `SENDWINDOW`/`CATCHUP` reviewed **twice** (the two-pass cap).
+Four lines sit at 🟡 awaiting only the promotion and the live journey — both operator-only.
+
+**Every blocking finding this milestone came from an adversarial reader, never from a green suite.**
+Three of them were literally the same mistake — a walk over a received-only view, which has holes
+wherever the agent sent something — and the third was introduced one file away from the comment
+warning about it.
