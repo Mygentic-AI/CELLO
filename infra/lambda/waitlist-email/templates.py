@@ -584,6 +584,111 @@ def e3_update(job):
     return "Where you are on the CELLO waitlist", _shell("".join(parts)), "\n".join(text_lines)
 
 
+def points_summary(job):
+    """"Your points went up." Sent once the earning STOPS, not once per award.
+
+    The countdown lives in `email_jobs.scheduled_at` (0027): each award pushes
+    this job forward three minutes, so a survey → readiness → interview → alerts
+    run in one sitting arrives as ONE email instead of four in four minutes.
+
+    The total is read at SEND time from the row, never stamped at enqueue — by
+    the time this goes out the number has usually moved several times past
+    whatever it was when the countdown started.
+
+    The referral ask is here rather than in its own mail because this is the one
+    moment we know the reader is thinking about their rank: they just watched it
+    move. It is omitted entirely when there is no code to offer, rather than
+    linking somewhere that cannot work.
+    """
+    name = _greeting(job)
+    total = job.get("points_total") or 0
+    code = job.get("referral_code")
+    position = _position_line(job)
+
+    share = f"{SITE}/waitlist?ref={esc(code)}" if code else None
+
+    parts = [
+        f'<h1 style="margin:0 0 8px;font-size:28px;font-weight:700;color:#111;letter-spacing:-0.5px;">'
+        f"Nice one, {name}.</h1>",
+        f'<p style="margin:0 0 8px;font-size:16px;color:#666;line-height:1.6;">'
+        f"Your waitlist points are now <strong style=\"color:#111;\">{total}</strong>.</p>",
+    ]
+    if position:
+        parts.append(
+            f'<p style="margin:0 0 28px;font-size:16px;color:#666;line-height:1.6;">{esc(position)}</p>'
+        )
+    if share:
+        parts.append(
+            f'<p style="margin:0 0 16px;font-size:16px;color:#666;line-height:1.6;">'
+            f"Want to move up faster? Every person who joins with your link moves you up the queue.</p>"
+            f'<a href="{share}" style="display:inline-block;padding:16px 32px;background:{BRAND};color:#fff;'
+            f'text-decoration:none;border-radius:100px;font-size:16px;font-weight:600;">Share your link →</a>'
+        )
+
+    text_lines = [f"Hi {name},", "", f"Your CELLO waitlist points are now {total}."]
+    if position:
+        text_lines += ["", position]
+    if share:
+        text_lines += [
+            "",
+            "Want to move up faster? Every person who joins with your link moves you up:",
+            share,
+        ]
+    text_lines += ["", "— The CELLO team", SITE]
+
+    return "Your CELLO waitlist points went up", _shell("".join(parts)), "\n".join(text_lines)
+
+
+def referral_used(job):
+    """Somebody used your referral code. One email per referral.
+
+    NOT folded into points_summary: this is news about another person, and the
+    interesting part is that somebody joined, not that a number changed.
+
+    ONLY THE FIRST FOUR CHARACTERS of their local part, and no domain. Enough for
+    the referrer to recognise someone they actually invited; not enough to hand
+    them an address they were never given.
+    """
+    name = _greeting(job)
+    prefix = _ctx(job, "referred_prefix") or ""
+    total = job.get("points_total") or 0
+
+    # The WHOLE sentence changes, not one noun. Substituting a fallback word into
+    # a sentence built around a prefix produces "a new member whose email begins
+    # Someone signed up", which reads as a broken template rather than as an
+    # unknown — and the no-prefix case is real (a payload that failed to build).
+    if prefix:
+        html_who = (
+            f"a new member whose email begins "
+            f"<strong style=\"color:#111;\">{esc(prefix)}…</strong> signed up"
+        )
+        text_who = f"A new member whose email begins {prefix}… signed up"
+    else:
+        html_who = "somebody signed up"
+        text_who = "Somebody signed up"
+
+    content = (
+        f'<h1 style="margin:0 0 8px;font-size:28px;font-weight:700;color:#111;letter-spacing:-0.5px;">'
+        f"Someone joined with your link.</h1>"
+        f'<p style="margin:0 0 8px;font-size:16px;color:#666;line-height:1.6;">'
+        f"{name}, {html_who} using your referral code.</p>"
+        f'<p style="margin:0 0 28px;font-size:16px;color:#666;line-height:1.6;">'
+        f"Your points are now <strong style=\"color:#111;\">{total}</strong>.</p>"
+        f'<a href="{SITE}/status" style="display:inline-block;padding:16px 32px;background:{BRAND};color:#fff;'
+        f'text-decoration:none;border-radius:100px;font-size:16px;font-weight:600;">See your rank →</a>'
+    )
+
+    text = (
+        f"Hi {name},\n\n"
+        f"{text_who} using your referral code.\n"
+        f"Your CELLO waitlist points are now {total}.\n\n"
+        f"See your rank: {SITE}/status\n\n"
+        f"— The CELLO team\n{SITE}"
+    )
+
+    return "Someone joined CELLO with your link", _shell(content), text
+
+
 # Only implemented templates belong here. A missing entry is a loud failure in
 # the dispatcher, which is the correct outcome for a job referencing a template
 # nobody has written yet.
@@ -597,4 +702,6 @@ TEMPLATES = {
     "e_feedback_invite": e_feedback_invite,
     "e2_survey": e2_survey,
     "e3_update": e3_update,
+    "points_summary": points_summary,
+    "referral_used": referral_used,
 }

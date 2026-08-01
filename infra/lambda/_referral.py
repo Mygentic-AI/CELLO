@@ -115,4 +115,56 @@ def award_referrer_for(cur, referred_user_id, correlation_id, log):
         points=REFERRAL_POINTS,
         reason="email_verified",
     )
+    _notify_referrer(cur, referrer, referred_user_id, code, correlation_id, log)
     return REFERRAL_POINTS
+
+
+def _notify_referrer(cur, referrer, referred_user_id, code, correlation_id, log):
+    """Tell the referrer their code was used. One email per referral.
+
+    ITS OWN EMAIL, NOT PART OF THE POINTS SUMMARY, for two reasons. A referral is
+    news about another person rather than about your own clicking, so folding it
+    into "your points went up" loses the only interesting part. And it is the one
+    award somebody else can trigger repeatedly — routing it through the summary's
+    debounce would give that debounce an unbounded input and let a steady trickle
+    of sign-ups postpone the summary indefinitely. Keeping them separate is what
+    makes the countdown in 0027 provably bounded.
+
+    NOT DEDUPLICATED, deliberately: two people using your code are two events and
+    deserve two emails. 0027 gives points_summary a unique index and gives this
+    none, which is the difference in intent expressed in the schema.
+
+    ONLY THE FIRST FOUR CHARACTERS of the local part travel, and no domain. The
+    referrer can usually recognise someone they actually invited without being
+    handed an address they were never given. A local part shorter than four
+    characters is therefore disclosed in full — unavoidable if the feature is to
+    say anything at all, and worth knowing rather than discovering.
+
+    Best-effort: the referral and its points are already committed, and failing
+    to enqueue a notification must not roll them back.
+    """
+    cur.execute("SAVEPOINT referral_notify")
+    try:
+        cur.execute(
+            """
+            INSERT INTO email_jobs (user_id, template, scheduled_at, payload)
+            SELECT %s, 'referral_used', now(),
+                   jsonb_build_object(
+                       'referred_prefix', left(split_part(email, '@', 1), 4),
+                       'code', %s::text
+                   )
+              FROM waitlist_users WHERE waitlist_id = %s
+            """,
+            (referrer, code, referred_user_id),
+        )
+        cur.execute("RELEASE SAVEPOINT referral_notify")
+        log("waitlist.referral.notified", correlation_id, referrerId=str(referrer))
+    except Exception as err:  # noqa: BLE001 — never lose a referral over its notification
+        cur.execute("ROLLBACK TO SAVEPOINT referral_notify")
+        log(
+            "waitlist.referral.notify_failed",
+            correlation_id,
+            level="ERROR",
+            referrerId=str(referrer),
+            error=str(err),
+        )
