@@ -18,18 +18,22 @@ description: >
 
 ## RESUME STATE (overwritten in place — the ONLY thing in this file that is)
 
-**Updated:** 2026-08-01, after Entry 2.
+**Updated:** 2026-08-01, after Entry 3.
 
 - **Worktrees.** `cello-client-m8d` and `trustless-cello-m8d`, both on branch `m8d/co-attendance`.
   Bases: `origin/main` @ `2349236` (client) and `main` @ `ec96852d` (docs).
-- **Done.** `DOD-COATTEND-VISIBLE-1` 🟡 — ACs 1–5, 7 enforcer-green; reviewed, every finding fixed
-  (`51ab230` → `0f37607`). `DOD-RECEPTIONIST-AGENT-1` built + gate-green (`78a6ba7`), **review in
-  flight** — not tagged until it returns.
-- **Next red.** `DOD-COATTEND-1` (Tier 1) — but Tier 1 is FENCED behind M8C's `DOD-FIRSTMSG-WITNESS-1`
-  (ACs 7–8 owed) and `DOD-FRONTIER-STRAND-1` (open). Confirm both before opening it.
-- **Owed to Andre (procedure stop-reason 1, do not block on it).** The live two-session
-  `claude --channels` journey for AC 6, and a `connect` beta publish so the doorbell body ships.
-- **Gate at HEAD.** 2386 passed / 11 skipped, lint + typecheck + build clean.
+- **Done.** `DOD-RECEPTIONIST-AGENT-1` **✅** — all four ACs, AC 4 at execution level
+  (`78a6ba7` → `a02dee9` → `bd37ede`). `DOD-COATTEND-VISIBLE-1` **🟡** — ACs 1–5, 7 enforcer-green,
+  reviewed, every finding fixed (`51ab230` → `0f37607`).
+- **Next red.** `DOD-COATTEND-1` (Tier 1) — **but Tier 1 is FENCED** behind M8C's
+  `DOD-FIRSTMSG-WITNESS-1` (ACs 7–8 owed) and `DOD-FRONTIER-STRAND-1` (open); re-confirmed closed
+  2026-08-01. **Nothing in M8D is workable until that fence lifts.** The blocker is spine rot: 66
+  `cello register` call sites across 20 files, owned by M8C, deliberately not taken here (see the
+  DoD's scope fence).
+- **Owed to Andre (procedure stop-reason 1 — do not block on it).** The live two-session
+  `claude --channels` journey for `DOD-COATTEND-VISIBLE-1` AC 6, and a `connect` beta publish so the
+  doorbell body ships (the in-context half of AC 2 is shim-side).
+- **Gate at HEAD.** 2396 passed / 11 skipped, lint + typecheck + build clean.
 
 ---
 
@@ -279,3 +283,80 @@ second window (procedure stop-reason 1). Vitest green is not done, and the line 
 
 AC 6 also needs the shim published: the doorbell body lives in `@cello-protocol/connect`
 (`channel-params.ts`), so the in-context half of AC 2 is only observable after a beta publish.
+
+## Entry 3 — DOD-RECEPTIONIST-AGENT-1: a two-line fix, and three ways it could still go silent (2026-08-01)
+
+**Commits.** `78a6ba7` (the fix) → `a02dee9` (review findings) → `bd37ede` (AC 4 executed, not
+asserted). Gate at `bd37ede`: **2396 passed / 11 skipped**, lint, typecheck, build clean.
+
+**The fix itself is two lines**, exactly as the DoD says: drop `cello use-agent` (the only writer of
+the machine-wide `~/.cello/current-agent`) and poll `cello inbox --agent "$AGENT_NAME" --scope
+current`. `--agent` replays the selection on the CLI's own fresh connection and touches no shared
+state, so any number of receptionists now run side by side.
+
+### The review did not treat "two-line fix" as "small review"
+
+`cello-unit-reviewer`, one pass on `78a6ba7`. Its framing is the lesson: *the file is a shell script
+running unattended on an operator's machine*, and three separate paths through it ended in a
+**permanently silent answering service** — one that reports it is monitoring, announces nobody, and
+prints nothing on any stream. Two were pre-existing; one I introduced.
+
+| Sev | Path | Why it goes silent |
+|---|---|---|
+| HIGH | **I traded an exit-code check for a proxy.** The deleted guard branched on `$?`; my replacement branched on empty stdout. That holds for daemon refusals — but `bin/cello.ts` prints help/USAGE to **stdout** and exits 1 on an unknown flag or command. | `RESULT` non-empty → error branch skipped → `jq` fails on help text → swallowed → sleep 10 s → forever |
+| HIGH | **`jq` failures swallowed twice** (`jq … 2>/dev/null` and `[ "$PENDING" -gt 0 ] 2>/dev/null`). `SKILL.md` names `jq` a hard requirement; nothing checked for it. | no `jq` → empty `PENDING` → "integer expression expected" → swallowed → false → forever |
+| HIGH | **The poll could not see a sealed message.** `total_unread` comes from `getUnreadSummary`, which excludes terminal sessions; sealed ones live in a separate `sealed_unread`. | a caller who leaves a message and seals — `DOD-SEALED-INBOX-1`'s own case — counts zero on both tested fields |
+
+All three fixed, plus a guarded `mktemp`, a blank-stderr fallback, and the lost `use-agent`
+auto-start written into the comment so the refusal does not read as a regression.
+
+**The third one splits the two shipped files** and is worth remembering: `SKILL.md` step 4 handles
+`sealed_unread` explicitly, so the subagent that replaces the skill's polling could not see what the
+skill could.
+
+### The test-honesty finding, and why it was fixed rather than re-labelled
+
+R2 was labelled *"the defect itself"* and *"the assertion that fails on the old script's mechanism."*
+**It was neither.** It only ever ran the NEW shape, never the old one, and was green before the fix —
+an implementation that never had the bug passed it identically.
+
+Fixed by actually reproducing the defect. **R2a** stages the collision deterministically (no race): A
+staffs alice, B staffs bob and overwrites the shared file, and A's very next `--scope current` poll
+answers as **bob**. **R2b** shows `--agent` is immune to the same overwrite.
+
+The file header now states, **measured rather than asserted**, which clauses go red on revert
+(`R1d`–`R1h`) and which are mechanism pins that were always green (`R2a`–`R2c`, `R3`, `R4a`) — and
+that no single clause spans defect → remedy → shipped script, so none of them may claim to.
+
+### AC 4 was asserted, never executed — so now it runs
+
+Every clause matched a regex or called a TypeScript function. **Nothing executed the thing that
+ships**, and all three HIGH findings were execution semantics. `R5` now runs the real bash out of the
+shipped markdown, through the real **built** `cello` binary on `PATH`, against a real daemon, with
+both receptionists sharing **one** `CELLO_DIR`. `R5b` does the offline case end to end.
+
+**Teeth, measured.** Staging the ORIGINAL mechanism back into the script:
+
+```
+× R5  — JSON parse failure: both loops answered for the SAME desk
+× R5b — TIMED OUT at 60s
+```
+
+`R5b`'s timeout is the finding executed rather than argued: the old script silently auto-started the
+offline desk, found nothing pending, and slept forever.
+
+### Parked — not this line
+
+**`SKILL.md` step 3 still polls `cello_inbox({ scope: "current" })` with no agent**, one MCP layer up,
+while its own step 1 tells the operator to pass the agent explicitly "which another session or an MCP
+reconnect can change underneath you". Two skills in one Claude Code session share one MCP socket, so
+the second `cello_use_agent` re-points the first. **The subagent is now the stricter of the two
+shipped files.** Closing it needs an `agent` parameter on the `cello_inbox` MCP tool — a shim change,
+not a two-line edit — so it is out of scope for this line and recorded here rather than lost.
+
+### Status
+
+`DOD-RECEPTIONIST-AGENT-1` → **✅ PROVEN.** All four ACs enforcer-green, including AC 4 at execution
+level, with revert-measured teeth. This line has **no in-context hop** — its behavior ends in a bash
+loop on the operator's machine, not inside Claude's context — so unlike `DOD-COATTEND-VISIBLE-1` it
+needs no live `claude --channels` journey to close.

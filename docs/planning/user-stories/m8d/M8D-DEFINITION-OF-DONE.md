@@ -235,7 +235,7 @@ a visible one.
   5. Test: two connections both pass the gate, both proceed through a stalled screening await; exactly
      one append occurs and the other is refused with the naming event.
 
-- **DOD-RECEPTIONIST-AGENT-1** ❌ NOT BUILT (raised 2026-08-01) — **the receptionist stops re-pointing
+- **DOD-RECEPTIONIST-AGENT-1** ✅ PROVEN (2026-08-01) — **the receptionist stops re-pointing
   other terminals (§6).** `~/.cello/current-agent` is one machine-wide file shared by every `cello`
   process in every terminal (`parity-commands.ts:44-83`). `cello-receptionist.md` runs
   `cello use-agent "$AGENT_NAME"` and then polls `cello inbox --scope current` every 10 s, each poll a
@@ -262,6 +262,12 @@ a visible one.
      that signal (§6).
   4. Test: two receptionist loops for two agents run concurrently and each reports only its own
      agent's callers.
+
+  > All four ACs enforcer-green. AC 4 is proven at EXECUTION level — the real bash out of the
+  > shipped markdown, through the built `cello` binary, two receptionists on one `CELLO_DIR`;
+  > staging the old mechanism back turns it red (cross-talk) and hangs the offline case at 60 s.
+  > Review found three ways it could still sleep forever and announce nobody; all fixed. No
+  > in-context hop, so no live journey is owed. → Entry 3
 
   **Adjacent, not in this line:** `contactCommand` doesn't replay the selection, so `settings set` /
   `moniker set` write to the wrong agent on a multi-agent machine (`commands.ts:590`, from
