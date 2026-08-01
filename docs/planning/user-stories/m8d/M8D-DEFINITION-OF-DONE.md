@@ -145,11 +145,25 @@ a visible one.
 
 - **DOD-COATTEND-1** 🟡 BUILT/UNVERIFIED-LIVE (2026-08-01) — **per-session delivery.**
 
-  > ACs 1–6 green on the two-connection fixture (6 clauses, real daemon + IPC; three connections
-  > for listener mode). Delivery reads the durable transcript against the per-connection cursor;
-  > the doorbell stays multicast; AC3 falls out of the record being the source of truth.
-  > **Verified by revert** — restore `buf.shift()` and T1–T4 go red. **AC 7 owed**: the live
-  > two-session `claude --channels` journey. → Entry 16
+  > ACs 1–6 green on the two-connection fixture (8 clauses, real daemon + IPC; three connections
+  > for listener mode). Delivery reads the durable transcript against a **per-connection delivery
+  > bookmark**; the doorbell stays multicast; AC3 falls out of the record being the source of truth.
+  > **Verified by revert** — 4 clauses go red. **AC 7 owed**: the live two-session
+  > `claude --channels` journey. → Entries 16, 18
+  >
+  > **Reviewed, and the review was BLOCKING — fixed.** The first build reused the SEND GATE's
+  > gap-safe cursor as the delivery bookmark. The gate must stop at a gap ("has this connection
+  > seen every leaf?"); delivery is destroyed by stopping ("what have I already handed it?"). A
+  > sibling connection's SENT leaf is such a gap, so a co-attending session was re-served the same
+  > message forever and never reached the next one — worse than the theft this line fixes, and not
+  > confined to co-attendance (a fresh `connectionId` starts at −1, so an MCP reconnect or any
+  > `cello` CLI command lands in it). A security-gateway block, which commits a leaf with no
+  > transcript row, made it permanent. Fixed with a separate monotonic bookmark; the gate is
+  > untouched. Also fixed: a swallowed transcript write had become total silent content loss
+  > reported as "no content arrived — keep waiting" (F2), and the delivery read was doing a full
+  > transcript scan + blob decode ~47×/second per blocked connection (F5). Reviewer's F7 was
+  > wrong and the typecheck caught it. Two shipped clauses (T2, T4) were hollow exactly as
+  > reported. → Entry 18
  A message can no
   longer be taken by the wrong session: delivery reads a **durable record against a per-session
   bookmark** instead of popping a shared queue.
