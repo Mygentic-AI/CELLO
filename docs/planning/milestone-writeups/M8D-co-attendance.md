@@ -125,7 +125,30 @@ ruled out a post-wire refusal never applies.
 "I cannot check after X" and "so checking before X is enough" are different claims, and the second
 one needs its own proof.*
 
-### 5. Three units shipped with the fix fully deletable and the suite green
+### 5. The received-only view, three times
+
+**Symptom.** Three separate defects, one shape. (a) Delivery pinned to one message forever. (b) The
+`since_seq` watermark stopped advancing, so reading everything no longer cleared unread and a
+stateless CLI caller was refused forever. (c) The catch-up door had to exist at all.
+
+**Root cause.** Leaf indices are contiguous across **both** directions, so **any set built from
+received messages alone has holes wherever the agent sent something** — and a sibling connection's
+reply is the most ordinary event in the protocol. Every walk over a received-only set stops there.
+
+The third occurrence is the instructive one: `daemon.ts` already said *"every sibling send is a
+hole"* **in as many words**, in the comment written for (a) — and (b) was introduced one file over,
+inside the same milestone, by the same person who wrote that sentence.
+
+**Fix.** Every contiguity walk covers both directions. What may still stop a walk is a genuinely
+absent index — an undecryptable row or a screened-out leaf, which have no transcript row and *are*
+unread.
+
+**Rule.** *In a two-directional log with one index space, "the messages I received" is not a range —
+it is a set with holes. Any walk, cursor, or watermark built on it must either cover both directions
+or state in one line why the holes are acceptable. Writing the warning down does not inoculate you:
+this was reintroduced by the author of the warning, one file away, within days.*
+
+### 6. Three units shipped with the fix fully deletable and the suite green
 
 **Symptom.** A reviewer removed the entire wiring of a "finished" fix and got 1296/1296 green with a
 clean typecheck. Three separate times in one milestone.
@@ -139,7 +162,7 @@ carries a revert result.
 **Rule.** *The revert test is the acceptance criterion, not the assertion count. "Green" without it
 means "the fix is not connected to anything."*
 
-### 6. A test that passed against the broken build
+### 7. A test that passed against the broken build
 
 **Symptom.** The first version of the write-failure test passed before the fix existed.
 
@@ -149,7 +172,7 @@ so the fix was to break `db.prepare` instead.
 
 **Rule.** *When testing a swallow, do not replace the swallower.*
 
-### 7. Dead code that could not be given a red build
+### 8. Dead code that could not be given a red build
 
 **Symptom.** The review asked for a deleted clause to be re-pointed at `ContentTakeLedger.forget()` so
 a deferred deletion would keep its red build. The clause was written; it passed; `forget()` was then
@@ -161,7 +184,7 @@ is *handed* the content instead of timing out, and the sibling-theft discriminat
 **Rule.** *Unreachable code has no red build to manufacture — that is what unreachable means. Record
 the deletion probe as the proof; do not ship a green clause that cannot fail.*
 
-### 8. A review finding that was wrong, caught by the typecheck
+### 9. A review finding that was wrong, caught by the typecheck
 
 **Symptom.** A finding said a `record ?` guard was dead code. Removing it failed `tsc`.
 

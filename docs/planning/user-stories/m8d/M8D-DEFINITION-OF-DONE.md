@@ -395,6 +395,26 @@ earned.
 
 ## Parked — deferred with a home, not silently
 
+- **DOD-SPINE-JCONTENT-1** 🅿️ **PARKED** *(M8C `DOD-MSG-*` debt — raised 2026-08-02)* — **the live
+  parked-message journey is 3/10.**
+
+  `j-content.spine.test.ts` run against real Postgres + directory + relay: **7 of 10 red.**
+  **NOT an M8D regression** — established by controlled comparison, the identical failure set
+  against the daemon build *before* and *after* the M8D review fixes. Recorded because the first
+  failure reads exactly like the co-attendance redelivery loop (*"B reads the exact parked plaintext
+  it had missed"*), and attributing it without the second run would have been wrong.
+
+  Two causes are already visible without diagnosis:
+  - `Tool cello_get_sealed_receipt not found` — the MCP tool is `cello_sealed_receipt`. Rename rot.
+  - `expected 'first [[OVER]]' to be 'first'` — assertions predating turn-signals on content.
+
+  The rest need real work: auto-recover reporting `recovered:0`, the ACK-ladder timeout, the dedup
+  timeout. **Parked, not dismissed** — parked-message delivery ("leave a message for an offline
+  agent") *is* core launch value, so 7/10 red is not a documentation problem. It belongs to the M8C
+  `DOD-MSG-*` lines, and pulling it into M8D would be the rabbit hole `.claude/CLAUDE.md` warns
+  about. → Entry 25
+
+
 - **DOD-FRONTIER-MISMATCH-DURABLE-1** 🅿️ PARKED *(debt — from M8C, raised 2026-08-01)* — **the
   retained frontier mismatch does not survive a daemon restart.**
 
