@@ -100,9 +100,48 @@ _ses = None
 
 
 def ses():
+    """The SES client, built with EXPLICIT credentials when they are supplied.
+
+    boto3's default chain — environment, credentials file, instance metadata —
+    resolves on Lambda, where the execution role supplies credentials, and
+    resolves to NOTHING on Cloud Run, which has no AWS identity of any kind. The
+    result was `Unable to locate credentials` from send_raw_email, one failed
+    attempt per queued message, and no mail (2026-08-01).
+
+    Terraform was already mounting the credentials as SES_CREDENTIALS — the same
+    secret the ops agent uses — but nothing in Python ever read the variable, so
+    the mount looked like configuration while changing nothing. The format is
+    the ops agent's, verbatim, so one secret keeps serving both:
+
+        {"accessKeyId": "...", "secretAccessKey": "..."}
+
+    Absent the variable this falls back to the default chain, which keeps Lambda
+    and local development working unchanged.
+    """
     global _ses
     if _ses is None:
-        _ses = boto3.client("ses", region_name=AWS_REGION_NAME)
+        raw = os.environ.get("SES_CREDENTIALS")
+        if raw:
+            try:
+                creds = json.loads(raw)
+            except ValueError as exc:
+                # Loudly, and naming the variable. A malformed secret silently
+                # falling back to the default chain would reproduce exactly the
+                # failure this exists to fix, one layer further from the cause.
+                raise RuntimeError(
+                    f"SES_CREDENTIALS is set but is not valid JSON: {exc}"
+                ) from exc
+            missing = [k for k in ("accessKeyId", "secretAccessKey") if not creds.get(k)]
+            if missing:
+                raise RuntimeError(f"SES_CREDENTIALS is missing {', '.join(missing)}")
+            _ses = boto3.client(
+                "ses",
+                region_name=AWS_REGION_NAME,
+                aws_access_key_id=creds["accessKeyId"],
+                aws_secret_access_key=creds["secretAccessKey"],
+            )
+        else:
+            _ses = boto3.client("ses", region_name=AWS_REGION_NAME)
     return _ses
 
 
