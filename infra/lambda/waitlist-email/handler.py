@@ -46,6 +46,23 @@ import psycopg2
 from _dburl import portal_database_url
 import psycopg2.extras
 
+# IMPORTED HERE, AT MODULE LEVEL, AND IT HAS TO STAY THAT WAY.
+#
+# This used to be `from templates import TEMPLATES` inside render(), which works
+# on Lambda — the handler's own directory is permanently on sys.path there — and
+# fails on Cloud Run. `_app.py` puts the handler directory on sys.path only for
+# the duration of the module import and removes it again in a `finally`, so a
+# LOCAL import deferred to call time resolves against a path that no longer
+# contains this directory. The result was `No module named 'templates'` raised
+# from render(), every queued email marked `waitlist.email.retired`, and a 200
+# returned to the scheduler — a mail queue that reported success and delivered
+# nothing (2026-08-01; the first real signup got no email).
+#
+# At module scope the import runs while the loader still has the path set, and
+# sys.modules caches it for the process. Any local import in this package must
+# be at module level for the same reason; do not move this into a function.
+from templates import TEMPLATES
+
 # Kept only so an explicit override still works. The live value is resolved
 # lazily by portal_database_url(), because binding the environment variable here
 # is exactly what let the 2026-07-27 rotation take the whole waitlist down: the
@@ -392,8 +409,6 @@ def render(job):
     An unrecognised template must FAIL LOUDLY. A silent skip would mark the job
     done with nothing sent and no signal that a template was never wired up.
     """
-    from templates import TEMPLATES
-
     template = TEMPLATES.get(job["template"])
     if template is None:
         raise KeyError(
