@@ -655,3 +655,46 @@ instead of testing a restart. Destroying the live socket is what makes it a daem
 (`restored`, `agent_already_current` in `dist/ipc-proxy.js`; cross-pins `crypto@0.0.38`,
 `transport@0.0.42` — both already at `latest`). Only `core/adapter-claude-code` changed and connect
 is a **leaf** in the publish graph, so no cascade: one bump, one promotion command.
+
+## Entry 9 — DOD-FRONTIER-STRAND-1 AC1: the producer half of the strand (2026-08-01, autonomous)
+
+**Commit** `a54f548`. Gate: **2424 passed / 11 skipped**, lint, typecheck, build clean.
+
+Entry 7 predicted this would not be a one-line change. It was not, and the prediction was the
+useful part: **`ingestReceivedContent` took no position at all**, and the canonical position was
+recovered from `#witnessedSeq`, a map **keyed by content hash**. Two identical messages collapsed in
+it before dedup was ever consulted, so keying dedup "on position" would have derived the
+discriminator from the very thing it replaces.
+
+**What shipped.** `#recordFrameOrdering` now RETURNS the verified position instead of only stashing
+it; both callers (live content frame, park recovery) pass it into ingest; and **three** decision
+points changed together:
+
+| site | before | after |
+|---|---|---|
+| pre-screen dedup | `indexOfHash(hash)` | same hash **at that position** |
+| post-screening re-check | `indexOfHash(hash)` | same discriminator |
+| ordering lookup | hash-keyed map | the caller's per-message position, map as fallback |
+
+Fixing fewer than all three would have been theatre: the pre-screen check would correctly admit a
+second identical-but-distinct message and the post-screen check would drop it anyway.
+
+**The degraded path is announced, not silent.** A session with no relay witness has no
+discriminator, so hash-dedup is all that remains — today's protection against real redelivery, and
+today's blind spot. §5a permits proceeding rather than refusing (losing content is worse than
+mis-ordering it) **only if the degradation is announced**, so that path now warns
+`session.content.dedup.unwitnessed`. A silent fallback is exactly how the original strand went a
+week unnoticed.
+
+**Both failure directions pinned**, because both are silent and both destroy a receipt: too
+permissive → a real redelivery double-appends (D1, D3); too strict → a genuine message is dropped,
+which IS the strand (D2).
+
+**A test-quality note worth keeping.** The leaf-count assertions were initially racing M8C-AWAY-1's
+auto-ack: an unattended agent answers inbound content with its own SENT leaf, asynchronously. D1/D2
+passed and D3 failed purely on timing. Tracing the tree showed the extra leaf carried a *different*
+hash, which is what identified it. The agent is now attended in `beforeEach` (the same reason
+`m8c-cursor-1` does it), so these clauses assert dedup rather than scheduling.
+
+**Still open on that line: AC3 and AC4(c).** AC3 wants a frontier mismatch surfaced *before* a close
+is attempted. Next unit.

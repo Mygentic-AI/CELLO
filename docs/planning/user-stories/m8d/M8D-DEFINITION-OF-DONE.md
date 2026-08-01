@@ -309,8 +309,20 @@ earned.
   > class-enforcer that should have caught this was a hand-maintained list; it is now backed by a
   > **derived** guard, which found a live instance on its first run. → Entry 5
 
-- **DOD-FRONTIER-STRAND-1 AC2** ✅ *(M8C line — this AC only)*, worked because it is the fence M8D
-  opens behind. A frontier mismatch now reports **both** leaf counts and the diverging index, and
+- **DOD-FRONTIER-STRAND-1 AC1 + AC2** ✅ *(M8C line — these two ACs)*, worked because that line is
+  the fence M8D opens behind.
+
+  **AC1 — dedup keys on the relay-assigned POSITION, not the content hash.** A redelivery carries
+  the same position; a genuinely new identical message carries a new one. It could not be the
+  one-liner it reads as: `ingestReceivedContent` took no position, and the position was recovered
+  from `#witnessedSeq` — a map keyed by content hash, so two identical messages collapsed in it
+  before dedup ran. The position is now threaded from the verified ordering record through both
+  call sites, and all THREE decision points changed (pre-screen dedup, the post-screening re-check,
+  and the ordering lookup) — fixing fewer would have re-created the defect one branch later.
+  Relay-degraded sessions keep hash-dedup but now ANNOUNCE it
+  (`session.content.dedup.unwitnessed`). → Entry 9
+
+  **AC2 — the refusal names the mismatch.** A frontier mismatch now reports **both** leaf counts and the diverging index, and
   logs `session.frontier.mismatch` at WARN. The old refusal told the operator to *"ask the
   counterparty to check their end"* — unfollowable when both agents run on one daemon, which is how
   session `dbb93dfc…` sat stranded for a week. **ACs 1, 3 and 4 remain open in
