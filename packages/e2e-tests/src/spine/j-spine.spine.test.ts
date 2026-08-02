@@ -32,7 +32,10 @@ import {
   type McpConn,
   type Proc,
   type SpineCluster,
+  writeSignedManifestTo,
+  writeConsortiumManifest,
 } from "./live-harness.js";
+import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 // PERSIST-002 (DOD-STORE-1): per-agent identity material lives in the daemon's SQLCipher store
 // (the `agents` table), NOT flat files. Open it through the daemon's OWN keyed adapter to assert
@@ -52,8 +55,39 @@ const agentDirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
-  cluster = await startSpineCluster();
+  // A THREE-node consortium with a signed manifest — the pattern j-content / j-unilateral /
+  // j-persist use, and for the same two reasons. Without the DIRECTORY-side manifest the daemon
+  // never learns its own directory node id, so two LOCAL agents are routed down the CROSS-NODE
+  // path and cello_initiate_session dies on `discovery_node_unresolvable` before any clause runs.
+  // Without the CLIENT-side manifest (startLocalDaemon below) registration's FROST DKG has no
+  // consortium and `cello register-agent` exits 1. One node cannot satisfy the DKG threshold,
+  // hence directoryCount: 3.
+  const consortiumHolder = mkdtempSync(join(tmpdir(), "cello-spine-consortium-"));
+  agentDirs.push(consortiumHolder);
+  const consortiumManifestPath = join(consortiumHolder, "consortium-manifest.json");
+  cluster = await startSpineCluster({
+    directoryCount: 3,
+    directoryNodeKeysHex: [0, 1, 2].map((i) => spineNodeKeypair(i).privateKeyHex),
+    directoryConsortiumManifestPath: consortiumManifestPath,
+    onDirectoryUrlsReady: (urls) => {
+      writeSignedManifestTo(consortiumManifestPath, urls.map((url, i) => spineDirectoryNode(i, url)));
+    },
+  });
 }, 180_000);
+/**
+ * A daemon that KNOWS ITS OWN NODE — which is what lets two local agents talk to each other.
+ * The client manifest is written OUTSIDE CELLO_DIR so it cannot violate DOD-STORE-1 (no flat-file
+ * state under CELLO_DIR — everything belongs in the encrypted store).
+ */
+async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> {
+  const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
+  const manifestDir = mkdtempSync(join(tmpdir(), `cello-manifest-${label}-`));
+  agentDirs.push(manifestDir);
+  return startDaemon(celloDir, cluster.directoryUrls[0], label, {
+    manifestEnv: writeConsortiumManifest(manifestDir, label, nodes),
+  });
+}
+
 
 afterAll(async () => {
   // Close MCP connections (kills their cello-mcp procs) before stopping daemons.
@@ -71,7 +105,35 @@ afterAll(async () => {
   }
 });
 
-/** State of a named agent from a `cello_list_agents` result ({ agents: [...] }). */
+
+/**
+ * Parse the JSON object at the START of a CLI stdout, tolerating trailing human guidance.
+ *
+ * The newer commands emit JSON only; the older ones (login, register-agent, …) print the result and
+ * then a next-step hint. Asserting the whole stream is JSON pins a contract the CLI does not have.
+ * On failure this throws with the RAW stdout, because "invalid JSON" without the text is exactly the
+ * kind of message that sends the next reader to the wrong subsystem.
+ */
+function parseLeadingJson<T>(stdout: string, what: string): T {
+  const text = stdout.trim();
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "{") depth += 1;
+    else if (text[i] === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(0, i + 1)) as T;
+        } catch (err) {
+          throw new Error(`${what}: leading JSON did not parse (${String(err)})\n--- raw stdout ---\n${stdout}`);
+        }
+      }
+    }
+  }
+  throw new Error(`${what}: no JSON object found in stdout\n--- raw stdout ---\n${stdout}`);
+}
+
+/** State of a named agent from a `cello_agents` result ({ agents: [...] }). */
 function agentState(listResult: unknown, name: string): string | undefined {
   const agents = (listResult as { agents?: Array<{ name: string; state: string }> }).agents ?? [];
   return agents.find((a) => a.name === name)?.state;
@@ -86,7 +148,7 @@ async function startAgent(
   agentDirs.push(celloDir);
   // Provision the agent identity BEFORE the daemon starts — the daemon loads it at boot.
   const pubkeyHex = await provisionAgent(celloDir, agentName);
-  const daemon = await startDaemon(celloDir, cluster.directoryUrl, label);
+  const daemon = await startLocalDaemon(celloDir, label);
   daemons.push(daemon);
   return { celloDir, daemon, pubkeyHex };
 }
@@ -185,14 +247,14 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
 
     // DOD-SPINE-3: three-state model, observed in sequence. login does NOT auto-start
     // agents, so a freshly-loaded agent is "registered".
-    expect(agentState(await conn1.call("cello_list_agents"), "agentA"), "agentA starts registered").toBe(
+    expect(agentState(await conn1.call("cello_agents"), "agentA"), "agentA starts registered").toBe(
       "registered",
     );
 
     // registered → online (cello_start_agent; daemon-wide set).
     const started = (await conn1.call("cello_start_agent", { name: "agentA" })) as { ok?: boolean };
     expect(started.ok, `cello_start_agent failed: ${JSON.stringify(started)}`).toBe(true);
-    expect(agentState(await conn1.call("cello_list_agents"), "agentA"), "agentA online after start").toBe(
+    expect(agentState(await conn1.call("cello_agents"), "agentA"), "agentA online after start").toBe(
       "online",
     );
 
@@ -200,8 +262,8 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     const used = (await conn1.call("cello_use_agent", { name: "agentA" })) as { ok?: boolean };
     expect(used.ok, `cello_use_agent failed: ${JSON.stringify(used)}`).toBe(true);
 
-    const list1 = await conn1.call("cello_list_agents");
-    const list2 = await conn2.call("cello_list_agents");
+    const list1 = await conn1.call("cello_agents");
+    const list2 = await conn2.call("cello_agents");
     // conn1 sees agentA as current; conn2 — same daemon, same agent — sees it only online.
     expect(agentState(list1, "agentA"), "conn1: agentA is current").toBe("current");
     expect(agentState(list2, "agentA"), "conn2 must be unaffected by conn1's switch").toBe("online");
@@ -220,7 +282,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     const pubA = await provisionAgent(celloDir, "agentA");
     const pubB = await provisionAgent(celloDir, "agentB");
     expect(pubA).not.toBe(pubB);
-    const daemon = await startDaemon(celloDir, cluster.directoryUrl, "spine4");
+    const daemon = await startLocalDaemon(celloDir, "spine4");
     daemons.push(daemon);
     const env = { CELLO_DIR: celloDir };
 
@@ -261,7 +323,14 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
         `--- daemon log (last 60) ---\n${daemon.output.split("\n").slice(-60).join("\n")}\n` +
         `--- directory log (last 60) ---\n${cluster.directory.output.split("\n").slice(-60).join("\n")}`;
       expect(res.status, `cello register-agent ${name} failed:${diag}`).toBe(0);
-      const parsed = JSON.parse(res.stdout.trim()) as { ok?: boolean; agent_id?: string; primary_pubkey?: string };
+      // The older CLI commands print the JSON result and THEN human guidance on the same stream
+      // (`cli-args.ts` says so), so `JSON.parse(stdout)` fails with "Unexpected non-whitespace
+      // character after JSON". Parse the leading JSON object and keep the rest for diagnosis —
+      // never silently discard it, or a CLI that changed shape looks like a parse quirk.
+      const parsed = parseLeadingJson<{ ok?: boolean; agent_id?: string; primary_pubkey?: string }>(
+        res.stdout,
+        `cello register-agent ${name}`,
+      );
       expect(parsed.ok, `register ${name} not ok: ${res.stdout}`).toBe(true);
       expect(typeof parsed.agent_id, `register ${name} missing agent_id`).toBe("string");
       expect(parsed.primary_pubkey, `register ${name} missing primary_pubkey`).toMatch(/^[0-9a-f]{64}$/);
@@ -395,7 +464,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     agentDirs.push(celloDir);
     await provisionAgent(celloDir, "agentA");
     const pubB = await provisionAgent(celloDir, "agentB");
-    const daemon = await startDaemon(celloDir, cluster.directoryUrl, "spine5b");
+    const daemon = await startLocalDaemon(celloDir, "spine5b");
     daemons.push(daemon);
     const env = { CELLO_DIR: celloDir };
 
@@ -466,8 +535,8 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     agentDirs.push(celloDirA, celloDirB);
     await provisionAgent(celloDirA, "agentA");
     const pubB = await provisionAgent(celloDirB, "agentB");
-    const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "spine6A");
-    const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "spine6B");
+    const daemonA = await startLocalDaemon(celloDirA, "spine6A");
+    const daemonB = await startLocalDaemon(celloDirB, "spine6B");
     daemons.push(daemonA, daemonB);
     const rA = registerAgent("agentA", `DEV-spine6-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA });
     expect(rA.status, `register agentA failed:\n${rA.stdout}`).toBe(0);
@@ -554,8 +623,8 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     agentDirs.push(celloDirA, celloDirB);
     await provisionAgent(celloDirA, "agentA");
     const pubB = await provisionAgent(celloDirB, "agentB");
-    const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "spine7A");
-    const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "spine7B");
+    const daemonA = await startLocalDaemon(celloDirA, "spine7A");
+    const daemonB = await startLocalDaemon(celloDirB, "spine7B");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-spine7-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-spine7-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
