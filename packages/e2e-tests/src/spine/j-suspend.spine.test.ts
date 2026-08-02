@@ -29,7 +29,10 @@ import {
   type SpineCluster,
   type Proc,
   type McpConn,
+  writeSignedManifestTo,
+  writeConsortiumManifest,
 } from "./live-harness.js";
+import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -37,8 +40,37 @@ const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
-  cluster = await startSpineCluster({});
+  // A THREE-node consortium with a signed manifest — the pattern j-content / j-unilateral /
+  // j-persist use. Without the DIRECTORY-side manifest the daemon never learns its own directory
+  // node id, so two LOCAL agents route down the CROSS-NODE path and cello_initiate_session dies on
+  // `discovery_node_unresolvable` before any clause runs. Without the CLIENT-side manifest
+  // (startLocalDaemon below) registration's FROST DKG has no consortium and register-agent exits 1.
+  // One node cannot satisfy the DKG threshold, hence directoryCount: 3.
+  const consortiumHolder = mkdtempSync(join(tmpdir(), "cello-suspend-consortium-"));
+  dirs.push(consortiumHolder);
+  const consortiumManifestPath = join(consortiumHolder, "consortium-manifest.json");
+  cluster = await startSpineCluster({
+    directoryCount: 3,
+    directoryNodeKeysHex: [0, 1, 2].map((i) => spineNodeKeypair(i).privateKeyHex),
+    directoryConsortiumManifestPath: consortiumManifestPath,
+    onDirectoryUrlsReady: (urls) => {
+      writeSignedManifestTo(consortiumManifestPath, urls.map((url, i) => spineDirectoryNode(i, url)));
+    },
+  });
 }, 180_000);
+/**
+ * A daemon that KNOWS ITS OWN NODE — which is what lets two local agents talk to each other.
+ * The client manifest is written OUTSIDE CELLO_DIR so it cannot violate DOD-STORE-1.
+ */
+async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> {
+  const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
+  const manifestDir = mkdtempSync(join(tmpdir(), `cello-manifest-${label}-`));
+  dirs.push(manifestDir);
+  return startDaemon(celloDir, cluster.directoryUrls[0], label, {
+    manifestEnv: writeConsortiumManifest(manifestDir, label, nodes),
+  });
+}
+
 
 afterAll(async () => {
   for (const c of mcpConns) await c.close();
@@ -66,7 +98,7 @@ describe("J-SUSPEND — pause blocks signing, reversible (CELLO-M8-LEVER-001 DOD
     // Target X: registered (offline is fine — the suspend gate fires before any reachability check).
     const dirX = mkdtempSync(join(tmpdir(), "cello-suspX-"));
     dirs.push(dirX);
-    daemons.push(await startDaemon(dirX, cluster.directoryUrl, "suspX"));
+    daemons.push(await startLocalDaemon(dirX, "suspX"));
     const cX = JSON.parse(cello(["create-agent", "xtarget"], { CELLO_DIR: dirX }).stdout) as { pubkey: string };
     const pubX = cX.pubkey;
     await waitConnected(dirX);
@@ -75,7 +107,7 @@ describe("J-SUSPEND — pause blocks signing, reversible (CELLO-M8-LEVER-001 DOD
     // Initiator A: registered + online, holding a VALID FROST client share (real DKG).
     const dirA = mkdtempSync(join(tmpdir(), "cello-suspA-"));
     dirs.push(dirA);
-    daemons.push(await startDaemon(dirA, cluster.directoryUrl, "suspA"));
+    daemons.push(await startLocalDaemon(dirA, "suspA"));
     const cA = JSON.parse(cello(["create-agent", "ainit"], { CELLO_DIR: dirA }).stdout) as { pubkey: string };
     const pubA = cA.pubkey;
     await waitConnected(dirA);

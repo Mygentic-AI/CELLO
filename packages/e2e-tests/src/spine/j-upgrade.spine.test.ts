@@ -36,7 +36,10 @@ import {
   type SpineCluster,
   type Proc,
   type McpConn,
+  writeSignedManifestTo,
+  writeConsortiumManifest,
 } from "./live-harness.js";
+import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -44,8 +47,42 @@ const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
-  cluster = await startSpineCluster({});
+  // A THREE-node consortium with a signed manifest — the pattern j-content / j-unilateral /
+  // j-persist use. Without the DIRECTORY-side manifest the daemon never learns its own directory
+  // node id, so two LOCAL agents route down the CROSS-NODE path and cello_initiate_session dies on
+  // `discovery_node_unresolvable` before any clause runs. Without the CLIENT-side manifest
+  // (startLocalDaemon below) registration's FROST DKG has no consortium and register-agent exits 1.
+  // One node cannot satisfy the DKG threshold, hence directoryCount: 3.
+  const consortiumHolder = mkdtempSync(join(tmpdir(), "cello-upgrade-consortium-"));
+  dirs.push(consortiumHolder);
+  const consortiumManifestPath = join(consortiumHolder, "consortium-manifest.json");
+  cluster = await startSpineCluster({
+    directoryCount: 3,
+    directoryNodeKeysHex: [0, 1, 2].map((i) => spineNodeKeypair(i).privateKeyHex),
+    directoryConsortiumManifestPath: consortiumManifestPath,
+    onDirectoryUrlsReady: (urls) => {
+      writeSignedManifestTo(consortiumManifestPath, urls.map((url, i) => spineDirectoryNode(i, url)));
+    },
+  });
 }, 180_000);
+/**
+ * A daemon that KNOWS ITS OWN NODE — which is what lets two local agents talk to each other.
+ * The client manifest is written OUTSIDE CELLO_DIR so it cannot violate DOD-STORE-1.
+ */
+async function startLocalDaemon(
+  celloDir: string,
+  label: string,
+  extra?: { extraEnv?: Record<string, string> },
+): Promise<Proc> {
+  const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
+  const manifestDir = mkdtempSync(join(tmpdir(), `cello-manifest-${label}-`));
+  dirs.push(manifestDir);
+  return startDaemon(celloDir, cluster.directoryUrls[0], label, {
+    manifestEnv: writeConsortiumManifest(manifestDir, label, nodes),
+    ...(extra?.extraEnv ? { extraEnv: extra.extraEnv } : {}),
+  });
+}
+
 
 afterAll(async () => {
   for (const c of mcpConns) await c.close();
@@ -70,10 +107,10 @@ describe("J-UPGRADE — auto-acknowledge close, live (DOD-UP-2)", () => {
     // A keeps a real bilateral wait so a working auto-ack completes it bilaterally well within
     // the window. If auto-ack does NOT fire, A escalates to unilateral after this timeout — which
     // is exactly the RED signal this test catches.
-    const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "upA", {
+    const daemonA = await startLocalDaemon(celloDirA, "upA", {
       extraEnv: { CELLO_SEAL_BILATERAL_TIMEOUT_MS: "15000" },
     });
-    const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "upB");
+    const daemonB = await startLocalDaemon(celloDirB, "upB");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-up-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-up-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
