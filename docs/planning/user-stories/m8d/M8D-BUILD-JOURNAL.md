@@ -2094,3 +2094,58 @@ Gate: **2464 passed / 11 skipped**, lint, typecheck, build.
 **AC6 does NOT flip on this.** Its text asks for a live journey in which the second session reports
 being un-alone **in its own words**. Five vitest clauses are not that. This is the enabling fix; the
 live re-run closes it, and that needs a publish first.
+
+### 2026-08-02 — Entry 36: 🟢 PUBLISHED — daemon 0.0.119 / cli 0.0.122 / connect 0.0.116
+
+`v0.0.179` green, **smoke-tag ✅**. Verified in the tarballs:
+
+| package | check | result |
+|---|---|---|
+| **daemon 0.0.119** | `attendingNow` (the never-zero floor) | 8 sites ✅ |
+| | the `since_seq` catch-up exit carries attendance | ✅ |
+| **connect 0.0.116** | new doorbell wording present | ✅ |
+| **cli 0.0.122** | cross-pin → `daemon@0.0.119` | ✅ real version |
+
+**A grep that nearly lied.** `grep -c "may read it first"` on the shipped `connect` returned **1**,
+which reads as *"the retired phrase is still live"*. It is line **69 — my own archaeology comment
+quoting the old text** — while the live template on line **81** carries the new wording. `tsc`
+preserves comments, so a bare count over a built artifact cannot tell a shipped string from a
+comment about a shipped string. Checked with line context rather than a count, which is the same
+lesson as the tool-registration guard two entries back: **assert the SHAPE, not the substring.**
+
+### ⏳ OWED — the promotion (operator-run). Supersedes Entry 26.
+
+```bash
+npm dist-tag add @cello-protocol/cli@0.0.122 latest
+npm dist-tag add @cello-protocol/daemon@0.0.119 latest
+npm dist-tag add @cello-protocol/connect@0.0.116 latest
+npm dist-tag add @cello-protocol/gateway@0.0.23 latest
+npm dist-tag add @cello-protocol/crypto@0.0.38 latest
+npm dist-tag add @cello-protocol/protocol-types@0.0.40 latest
+npm dist-tag add @cello-protocol/transport@0.0.42 latest
+```
+
+```bash
+npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest
+cello logout && cello login
+node -p "require('$(npm prefix -g)/lib/node_modules/@cello-protocol/cli/package.json').version"   # 0.0.122
+```
+
+Then `/mcp`.
+
+### The AC6 re-run — ONE question, and it must not be scripted
+
+AC6 asks that the second session reports being un-alone **in its own words**. The way to get that
+wrong is to tell the session what to say; the way to get it right is to ask something open and see
+whether co-attendance surfaces on its own. So: two windows on one agent, then into the second one —
+
+> *"In your own words: what is the current state of this CELLO session, and is there anything I
+> should know about it before I reply?"*
+
+**Pass** = it mentions another session is attending, unprompted. **Fail** = it does not, and that is
+a finding about legibility rather than plumbing, because the number is now demonstrably on every
+read surface it could look at.
+
+*(Orchestration note, from Andre's correction: one paste at a time, handed over at the moment it is
+needed. The step run that way is the one that produced every piece of new information in this
+milestone's live testing.)*
