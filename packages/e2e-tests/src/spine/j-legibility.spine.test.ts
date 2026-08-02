@@ -41,10 +41,13 @@ import {
   provisionAgent,
   connectMcp,
   registerAgent,
+  writeSignedManifestTo,
+  writeConsortiumManifest,
   type SpineCluster,
   type Proc,
   type McpConn,
 } from "./live-harness.js";
+import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -52,8 +55,32 @@ const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
-  cluster = await startSpineCluster({});
+  // A THREE-node consortium with a signed manifest — the pattern j-content / j-unilateral use.
+  // Without it the daemon never learns its own directory node id, so two LOCAL agents are routed
+  // down the CROSS-NODE path and cello_initiate_session dies on `discovery_node_unresolvable`
+  // before any clause runs; and without the CLIENT-side manifest below, registration's FROST DKG
+  // has no consortium and `cello register-agent` exits 1. A one-node cluster cannot satisfy the
+  // DKG threshold either, hence directoryCount: 3.
+  const holder = mkdtempSync(join(tmpdir(), "cello-leg-consortium-"));
+  dirs.push(holder);
+  const consortiumManifestPath = join(holder, "consortium-manifest.json");
+  cluster = await startSpineCluster({
+    directoryCount: 3,
+    directoryNodeKeysHex: [0, 1, 2].map((i) => spineNodeKeypair(i).privateKeyHex),
+    directoryConsortiumManifestPath: consortiumManifestPath,
+    onDirectoryUrlsReady: (urls) => {
+      writeSignedManifestTo(consortiumManifestPath, urls.map((url, i) => spineDirectoryNode(i, url)));
+    },
+  });
 }, 180_000);
+/** A daemon that KNOWS ITS OWN NODE — which is what lets two local agents talk to each other. */
+async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> {
+  const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
+  return startDaemon(celloDir, cluster.directoryUrls[0], label, {
+    manifestEnv: writeConsortiumManifest(celloDir, label, nodes),
+  });
+}
+
 
 afterAll(async () => {
   for (const c of mcpConns) await c.close();
@@ -91,8 +118,8 @@ describe("J-LEGIBILITY — malicious-tail bilateral seal, cert read cross-proces
     dirs.push(celloDirA, celloDirB);
     const pubA = await provisionAgent(celloDirA, "agentA");
     const pubB = await provisionAgent(celloDirB, "agentB");
-    const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "legA");
-    const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "legB");
+    const daemonA = await startLocalDaemon(celloDirA, "legA");
+    const daemonB = await startLocalDaemon(celloDirB, "legB");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-leg-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-leg-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);

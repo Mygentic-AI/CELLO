@@ -24,10 +24,13 @@ import {
   provisionAgent,
   connectMcp,
   registerAgent,
+  writeSignedManifestTo,
+  writeConsortiumManifest,
   type SpineCluster,
   type Proc,
   type McpConn,
 } from "./live-harness.js";
+import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -36,8 +39,33 @@ const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
   // The directory inflates every published content_frontier_seq by 10 (still FROST-signed).
-  cluster = await startSpineCluster({ directoryInflateFrontierForTest: 10 });
+  // A THREE-node consortium with a signed manifest — the pattern j-content / j-unilateral use.
+  // Without it the daemon never learns its own directory node id, so two LOCAL agents are routed
+  // down the CROSS-NODE path and cello_initiate_session dies on `discovery_node_unresolvable`
+  // before any clause runs; and without the CLIENT-side manifest below, registration's FROST DKG
+  // has no consortium and `cello register-agent` exits 1. A one-node cluster cannot satisfy the
+  // DKG threshold either, hence directoryCount: 3.
+  const holder = mkdtempSync(join(tmpdir(), "cello-frontier-consortium-"));
+  dirs.push(holder);
+  const consortiumManifestPath = join(holder, "consortium-manifest.json");
+  cluster = await startSpineCluster({
+    directoryInflateFrontierForTest: 10,
+    directoryCount: 3,
+    directoryNodeKeysHex: [0, 1, 2].map((i) => spineNodeKeypair(i).privateKeyHex),
+    directoryConsortiumManifestPath: consortiumManifestPath,
+    onDirectoryUrlsReady: (urls) => {
+      writeSignedManifestTo(consortiumManifestPath, urls.map((url, i) => spineDirectoryNode(i, url)));
+    },
+  });
 }, 180_000);
+/** A daemon that KNOWS ITS OWN NODE — which is what lets two local agents talk to each other. */
+async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> {
+  const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
+  return startDaemon(celloDir, cluster.directoryUrls[0], label, {
+    manifestEnv: writeConsortiumManifest(celloDir, label, nodes),
+  });
+}
+
 
 afterAll(async () => {
   for (const c of mcpConns) await c.close();
@@ -55,8 +83,8 @@ describe("J-LEG-FRONTIER — inflated published frontier is rejected (DOD-LEG-2 
     dirs.push(celloDirA, celloDirB);
     const pubB = await provisionAgent(celloDirB, "agentB");
     await provisionAgent(celloDirA, "agentA");
-    const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "frA");
-    const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "frB");
+    const daemonA = await startLocalDaemon(celloDirA, "frA");
+    const daemonB = await startLocalDaemon(celloDirB, "frB");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-fr-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-fr-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
