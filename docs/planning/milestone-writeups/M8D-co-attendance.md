@@ -4,7 +4,7 @@ type: milestone-writeup
 date: 2026-08-02
 updated: 2026-08-02
 milestone: M8D
-status: open — all six lines built and published, four awaiting the live two-session journey
+status: open — five lines proven, VISIBLE-1 AC6 fixed and awaiting its live re-run
 description: >
   M8D lets several Claude sessions drive ONE agent identity without stealing each other's
   messages. Delivery moves from a destructive shared queue to a durable record read against a
@@ -14,8 +14,9 @@ description: >
 
 # M8D — Co-attendance
 
-**Started:** 2026-08-01 · **Status:** all six DoD lines built, gated, **reviewed** and published
-(daemon `0.0.117` / cli `0.0.120`). Four are 🟡 BUILT/UNVERIFIED-LIVE pending the two-session `claude --channels` journey.
+**Started:** 2026-08-01 · **Status:** five lines ✅ (three of them **proven live** on real binaries);
+`DOD-COATTEND-VISIBLE-1` AC6 failed its live test, was fixed, and awaits one re-run.
+Published: daemon `0.0.119` / cli `0.0.122` / connect `0.0.116`.
 
 Co-attendance is the property that several sessions can attend one agent at once — a second terminal,
 a listener, an operator watching over a running conversation. **Exclusivity was rejected permanently
@@ -206,6 +207,27 @@ shape that reaches there without a record.
   `appendSessionLeaf`, but outbound the append runs *after* the wire. Refusing there would leave the
   counterparty holding content this side never leafed: `DOD-FRONTIER-STRAND-1` (the defect that left
   `dbb93dfc…` unsealable for a week) manufactured on purpose to satisfy the letter of an AC.
+
+## What the live journey proved — and what it broke
+
+Three real `claude --channels` windows on the promoted binary: two attending one agent, one driving
+the counterparty.
+
+- **One message, two sessions, both received it** — identical content at identical
+  `sequence_number`, and the second session had sent nothing, so only genuine delivery explains it.
+  That is the milestone's central claim, on the shipped binary rather than a fixture.
+- **The catch-up door works** — the second session's transcript showed the *other* session's reply,
+  which `cello_receive` can never hand it.
+- **AC6 FAILED, and that was the run's most valuable output.** Asked an open question with no
+  mention of co-attendance, the second session said the transcript and wire were *"silent on it"*.
+  Attendance rode the **push** and `cello_status`; every **read** surface was silent — so any
+  session that never saw a doorbell (a fresh MCP client, *every* `cello` CLI invocation, anything
+  attached after the last arrival) could not learn it was not alone. Fixed; the re-run is owed.
+
+A correction worth keeping: the counterparty session reported *"two replies to one question — that's
+the defect"*. **It is not.** Two windows of one agent deliberately do not gate each other; the
+principal is the agent, not the socket. The mis-framing came from the prompt I wrote, and left alone
+it would have entered the record as a live-confirmed defect that does not exist.
 
 ## What this unblocks
 
