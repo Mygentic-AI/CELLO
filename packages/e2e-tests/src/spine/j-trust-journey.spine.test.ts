@@ -161,7 +161,12 @@ describe("J-TRUST-JOURNEY — DOD-T2-JOURNEY-1: live signal presentation→consu
         claim: "This operator verified ownership of a phone number via SMS OTP.",
         country_code: "US",
       }),
-      issued_at: 1_700_000_000, expires_at: null, supersedes_hash: null,
+      // MANDATORY (M10-D17): the envelope preimage is a CLOSED set of 12 slots, and
+      // `same_operator` was appended to it after this test was written — so the encoder refuses
+      // outright rather than minting a differently-hashed envelope that would fail verification
+      // later, somewhere else. FALSE is a claim, not filler: the issuer is a PORTAL attesting about
+      // a subject that is not the portal, which is exactly the case the flag distinguishes.
+      issued_at: 1_700_000_000, same_operator: false, expires_at: null, supersedes_hash: null,
     };
     const emailEnvelope: Envelope = {
       subject_kind: "account", subject: accountId,
@@ -170,7 +175,7 @@ describe("J-TRUST-JOURNEY — DOD-T2-JOURNEY-1: live signal presentation→consu
         claim: "This operator verified ownership of an email address via magic link.",
         domain: "example.com",
       }),
-      issued_at: 1_700_000_000, expires_at: null, supersedes_hash: null,
+      issued_at: 1_700_000_000, same_operator: false, expires_at: null, supersedes_hash: null,
     };
 
     const phoneEnvBytes = encodeTrustSignalEnvelope(phoneEnvelope);
@@ -184,9 +189,12 @@ describe("J-TRUST-JOURNEY — DOD-T2-JOURNEY-1: live signal presentation→consu
     // Insert into signal_records so the directory's dumb check (checkPresentedSignals) recognizes
     // these hashes as active when A presents them during session initiation.
     psqlSpine(
-      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type, status, scanner_version) VALUES ` +
-      `('${phoneHash}', 'local', 'account', '${accountId}', 'portal', '${"ab".repeat(32)}', 'phone', 'active', 'test-v0'), ` +
-      `('${emailHash}', 'local', 'account', '${accountId}', 'portal', '${"ab".repeat(32)}', 'email', 'active', 'test-v0')`,
+      // NO `subject` column — dropped from the directory's ledger deliberately. A federated,
+      // possibly-public directory notarizes the signal HASH and the subject KIND, never what the
+      // subject IS; the subject rides inside the envelope's hashed preimage.
+      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type, status, scanner_version) VALUES ` +
+      `('${phoneHash}', 'local', 'account', 'portal', '${"ab".repeat(32)}', 'phone', 'active', 'test-v0'), ` +
+      `('${emailHash}', 'local', 'account', 'portal', '${"ab".repeat(32)}', 'email', 'active', 'test-v0')`,
     );
 
     psqlSpine(

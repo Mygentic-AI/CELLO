@@ -146,7 +146,12 @@ describe("J-TRACK-RECORD — DOD-T3-JOURNEY-1: track-record supersession live jo
         session_count: 5,
         clean_close_rate: 1.0,
       }),
-      issued_at: 1_700_000_000, expires_at: null, supersedes_hash: null,
+      // MANDATORY (M10-D17): the envelope preimage is a CLOSED set of 12 slots, and
+      // `same_operator` was appended to it after this test was written — so the encoder refuses
+      // outright rather than minting a differently-hashed envelope that would fail verification
+      // later, somewhere else. FALSE is a claim, not filler: the issuer is a PORTAL attesting about
+      // a subject that is not the portal, which is exactly the case the flag distinguishes.
+      issued_at: 1_700_000_000, same_operator: false, expires_at: null, supersedes_hash: null,
     };
 
     const v1EnvBytes = encodeTrustSignalEnvelope(v1Envelope);
@@ -155,8 +160,11 @@ describe("J-TRACK-RECORD — DOD-T3-JOURNEY-1: track-record supersession live jo
 
     // Register v1 in signal_records and deliver to A
     psqlSpine(
-      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type, status, scanner_version) ` +
-      `VALUES ('${v1Hash}', 'local', 'agent', '${agentSubject}', 'portal', '${"ab".repeat(32)}', 'track_record', 'active', 'test-v0')`,
+      // NO `subject` column — dropped from the directory's ledger deliberately. A federated,
+      // possibly-public directory notarizes the signal HASH and the subject KIND, never what the
+      // subject IS; the subject rides inside the envelope's hashed preimage.
+      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type, status, scanner_version) ` +
+      `VALUES ('${v1Hash}', 'local', 'agent', 'portal', '${"ab".repeat(32)}', 'track_record', 'active', 'test-v0')`,
     );
     psqlSpine(
       `INSERT INTO pickup_queue (agent_id, signal_kind, ciphertext, signal_hash) ` +
@@ -207,7 +215,7 @@ describe("J-TRACK-RECORD — DOD-T3-JOURNEY-1: track-record supersession live jo
         session_count: 12,
         clean_close_rate: 0.92,
       }),
-      issued_at: 1_700_100_000, expires_at: null,
+      issued_at: 1_700_100_000, same_operator: false, expires_at: null,
       supersedes_hash: new Uint8Array(Buffer.from(v1Hash, "hex")),
     };
 
@@ -218,8 +226,8 @@ describe("J-TRACK-RECORD — DOD-T3-JOURNEY-1: track-record supersession live jo
     // Insert v2 into signal_records WITH supersedes_hash — DOD-SUPERSEDE-1 materializes
     // the old row to 'superseded'.
     psqlSpine(
-      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type, status, scanner_version, supersedes_hash) ` +
-      `VALUES ('${v2Hash}', 'local', 'agent', '${agentSubject}', 'portal', '${"ab".repeat(32)}', 'track_record', 'active', 'test-v0', '${v1Hash}')`,
+      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type, status, scanner_version, supersedes_hash) ` +
+      `VALUES ('${v2Hash}', 'local', 'agent', 'portal', '${"ab".repeat(32)}', 'track_record', 'active', 'test-v0', '${v1Hash}')`,
     );
 
     // Verify the supersession materialized: v1 is now 'superseded'
