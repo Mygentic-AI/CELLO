@@ -36,10 +36,13 @@ import {
   provisionAgent,
   connectMcp,
   registerAgent,
+  writeSignedManifestTo,
+  writeConsortiumManifest,
   type SpineCluster,
   type Proc,
   type McpConn,
 } from "./live-harness.js";
+import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 // The directory's delivery-grace window (seconds). Small so the live test does not wait
 // out the real 600s window. A can seal unilaterally ~GRACE seconds after B goes silent.
@@ -51,8 +54,46 @@ const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
-  cluster = await startSpineCluster({ deliveryGraceSeconds: GRACE_SECONDS });
-}, 180_000);
+  // A THREE-node consortium with a signed manifest — the same setup `j-content` / `j-refresh` /
+  // `j-tofn` already use, and for the same two reasons, both of which this file hit head-on:
+  //
+  //  - With NO manifest the daemon never learns its own directory node id (step-6 identity supplies
+  //    it), so `classifyOnlineResult` cannot prove co-location and routes two LOCAL agents down the
+  //    CROSS-NODE path — which then fails to resolve `"local"` in a manifest the daemon does not
+  //    have. That is verbatim what this file died on, at `cello_initiate_session`, before a single
+  //    clause ran: `discovery_node_unresolvable — The counterparty's home node (local) is not in
+  //    the signed consortium manifest`.
+  //  - A manifest alone is not enough: registration runs a real FROST DKG against the consortium,
+  //    and a one-node cluster cannot satisfy the threshold. The N has to be real.
+  const holder = mkdtempSync(join(tmpdir(), "cello-unilateral-consortium-"));
+  dirs.push(holder);
+  const consortiumManifestPath = join(holder, "consortium-manifest.json");
+  cluster = await startSpineCluster({
+    deliveryGraceSeconds: GRACE_SECONDS,
+    directoryCount: 3,
+    directoryNodeKeysHex: [0, 1, 2].map((i) => spineNodeKeypair(i).privateKeyHex),
+    directoryConsortiumManifestPath: consortiumManifestPath,
+    onDirectoryUrlsReady: (urls) => {
+      writeSignedManifestTo(consortiumManifestPath, urls.map((url, i) => spineDirectoryNode(i, url)));
+    },
+  });
+}, 300_000);
+
+/**
+ * A daemon that KNOWS ITS OWN NODE — which is what lets two local agents talk to each other.
+ *
+ * Mirrors `j-content`'s helper. The DIRECTORY-side manifest (written in beforeAll) is only half:
+ * without `CELLO_CONSORTIUM_MANIFEST` the DAEMON has no manifest either, so registration's FROST
+ * DKG has no consortium to run against and `cello register-agent` exits 1 — which is exactly where
+ * this file failed once the discovery error was cleared.
+ */
+async function startLocalDaemon(celloDir: string, label: string, extra?: { extraEnv?: Record<string, string> }): Promise<Proc> {
+  const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
+  return startDaemon(celloDir, cluster.directoryUrls[0], label, {
+    manifestEnv: writeConsortiumManifest(celloDir, label, nodes),
+    ...(extra?.extraEnv ? { extraEnv: extra.extraEnv } : {}),
+  });
+}
 
 afterAll(async () => {
   for (const c of mcpConns) await c.close();
@@ -82,10 +123,10 @@ async function setupAtoBSession(label: string): Promise<{
   dirs.push(celloDirA, celloDirB);
   await provisionAgent(celloDirA, "agentA");
   const pubB = await provisionAgent(celloDirB, "agentB");
-  const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, `${label}A`, {
+  const daemonA = await startLocalDaemon(celloDirA, `${label}A`, {
     extraEnv: { CELLO_SEAL_BILATERAL_TIMEOUT_MS: "3000" },
   });
-  const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, `${label}B`);
+  const daemonB = await startLocalDaemon(celloDirB, `${label}B`);
   daemons.push(daemonA, daemonB);
   expect(registerAgent("agentA", `DEV-${label}-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
   expect(registerAgent("agentB", `DEV-${label}-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
@@ -122,10 +163,10 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     const pubB = await provisionAgent(celloDirB, "agentB");
     // A's close should escalate to a unilateral seal quickly once B is gone — shrink the
     // bilateral-wait window so the live test doesn't sit out the 30s default.
-    const daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "uniA", {
+    const daemonA = await startLocalDaemon(celloDirA, "uniA", {
       extraEnv: { CELLO_SEAL_BILATERAL_TIMEOUT_MS: "3000" },
     });
-    const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "uniB");
+    const daemonB = await startLocalDaemon(celloDirB, "uniB");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-uni-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-uni-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
