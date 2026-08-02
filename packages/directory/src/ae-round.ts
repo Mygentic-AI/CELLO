@@ -24,6 +24,18 @@ import { versionKeysToPull } from "./version-reconcile.js";
 export interface LocalRoundState {
   tierA: ReadonlyMap<string, readonly string[]>;
   tierB: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /**
+   * Tables whose LOCAL read threw this round (M12-P9). They are excluded from the plan entirely.
+   *
+   * This exists because "absent from `tierA`" and "locally unreadable" must not mean the same
+   * thing. The `?? []` below deliberately reads an absent table as the empty set — correct for a
+   * table this node genuinely holds no rows in, and catastrophic for one whose read failed: the
+   * empty digest differs from the peer's, so the planner would ask for the WHOLE table it just
+   * proved it cannot read. Optional because a caller that had no read failure has nothing to
+   * declare; `localState` is the only producer, and it always sets them.
+   */
+  unreadableA?: ReadonlySet<string>;
+  unreadableB?: ReadonlySet<string>;
 }
 
 /**
@@ -61,6 +73,9 @@ export async function planRound(local: LocalRoundState, peer: PeerRoundState): P
   const plan: RoundPlan = { tierA: new Map(), tierB: new Map() };
 
   for (const [table, adv] of peer.tierA) {
+    // Excluded BEFORE the `?? []` below, which would otherwise turn an unreadable table into a
+    // full-table pull. See LocalRoundState.unreadableA.
+    if (local.unreadableA?.has(table)) continue;
     const localHashes = local.tierA.get(table) ?? [];
     // Digest match → converged, skip WITHOUT fetching the detail. A table the local node doesn't
     // track has a local digest over the empty set, which won't match a non-empty peer → falls
@@ -71,6 +86,7 @@ export async function planRound(local: LocalRoundState, peer: PeerRoundState): P
   }
 
   for (const [table, adv] of peer.tierB) {
+    if (local.unreadableB?.has(table)) continue;
     const localVersions = local.tierB.get(table) ?? new Map<string, string>();
     if (adv.digest === tierBTableDigest(localVersions)) continue;
     const pull = versionKeysToPull(localVersions, await adv.versions());

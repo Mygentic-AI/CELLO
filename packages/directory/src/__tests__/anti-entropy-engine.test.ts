@@ -269,10 +269,18 @@ describe("engine defenses: peer-chosen table names, containment, and shortfall",
  */
 class TwoTableStore implements AeStoreView {
   readonly appliedOrder: string[] = [];
-  constructor(private readonly order: string[], private readonly nonEmpty: Set<string> = new Set()) {}
+  constructor(
+    private readonly order: string[],
+    private readonly nonEmpty: Set<string> = new Set(),
+    /** Tables whose local read throws, exactly as a dropped column did on 2026-08-01. */
+    private readonly unreadable: Set<string> = new Set(),
+  ) {}
   tierATables(): string[] { return this.order; }
   tierBTables(): string[] { return []; }
-  tierARecordHashes(t: string): string[] { return this.nonEmpty.has(t) ? ["a".repeat(64)] : []; }
+  tierARecordHashes(t: string): string[] {
+    if (this.unreadable.has(t)) throw new Error(`column "subject" does not exist`);
+    return this.nonEmpty.has(t) ? ["a".repeat(64)] : [];
+  }
   tierATableDigest(t: string): string { return computeTableDigest(this.tierARecordHashes(t)); }
   tierBTableDigest(): string { return tierBTableDigest(new Map()); }
   tierBVersions(): Map<string, string> { return new Map(); }
@@ -299,5 +307,67 @@ describe("apply ORDER follows the LOCAL registry, not the peer's advertisement",
     await runAntiEntropyRound(local, peer);
 
     expect(local.appliedOrder).toEqual(["user_accounts", "agent_profiles"]);
+  });
+});
+
+/**
+ * M12-P9 (dialer half) — a table THIS node cannot read must not stop it pulling the others.
+ *
+ * The responder-side fix (ae-channel `buildWireState`) isolates what we ADVERTISE. This covers the
+ * half that actually converges: anti-entropy is pull-driven, and `localState` built the local
+ * comparison basis with the same unisolated loop, over the same SQL (`tierATableDigest` is
+ * literally `computeTableDigest(await tierARecordHashes(table))`). On 2026-08-01 all three nodes
+ * ran the same bad spec, so every node was a broken DIALER — isolating only the responder would
+ * have left that outage's blast radius exactly as it was.
+ *
+ * The correct degradation here is NOT the responder's. Omitting a table from `LocalRoundState`
+ * would hit `local.tierA.get(table) ?? []` in planRound and read as "we hold zero rows" — planning
+ * a full pull of a table we just proved we cannot read. That is the storm the responder fix exists
+ * to avoid, arrived at from the other side. The table must leave the PLAN, not default to empty.
+ */
+describe("M12-P9: a locally unreadable table is contained, not fatal and not a full pull", () => {
+  it("the round SURVIVES and every readable table still pulls", async () => {
+    const local = new TwoTableStore(["user_accounts", "agent_profiles"], new Set(), new Set(["agent_profiles"]));
+    const peer = new TwoTableStore(["user_accounts", "agent_profiles"], new Set(["user_accounts", "agent_profiles"]));
+
+    // Before the fix this REJECTED: the throw escaped localState and took the whole round.
+    const result = await runAntiEntropyRound(local, peer);
+
+    expect(local.appliedOrder).toEqual(["user_accounts"]); // the readable one reconciled...
+    expect(result.tierAApplied).toBe(1);
+  });
+
+  it("the unreadable table is dropped from the PLAN, not read as empty and fully pulled", async () => {
+    // The load-bearing assertion. `?? []` in planRound means a table missing from LocalRoundState
+    // compares as the empty set, differs from the peer's non-empty digest, and gets pulled WHOLE.
+    // Planned-count is what distinguishes "excluded" from "asked for everything".
+    const local = new TwoTableStore(["user_accounts", "agent_profiles"], new Set(), new Set(["agent_profiles"]));
+    const peer = new TwoTableStore(["user_accounts", "agent_profiles"], new Set(["user_accounts", "agent_profiles"]));
+
+    const result = await runAntiEntropyRound(local, peer);
+
+    expect(result.tierAPlanned).toBe(1); // ONLY user_accounts — not 2.
+    expect(local.appliedOrder).not.toContain("agent_profiles");
+  });
+
+  it("REPORTS the containment, naming the table and the underlying cause", async () => {
+    // The property separating containment from a silent fallback: a table that has stopped
+    // reconciling must be nameable from a log line, and the pg text is what points at the schema.
+    const local = new TwoTableStore(["user_accounts", "agent_profiles"], new Set(), new Set(["agent_profiles"]));
+    const peer = new TwoTableStore(["user_accounts", "agent_profiles"], new Set(["user_accounts", "agent_profiles"]));
+
+    const result = await runAntiEntropyRound(local, peer);
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]!.tier).toBe("A");
+    expect(result.failures[0]!.table).toBe("agent_profiles");
+    expect(result.failures[0]!.reason).toContain("does not exist");
+  });
+
+  it("a fully readable store reports no failures — containment is not chatty", async () => {
+    const local = new TwoTableStore(["user_accounts", "agent_profiles"]);
+    const peer = new TwoTableStore(["user_accounts", "agent_profiles"], new Set(["user_accounts"]));
+
+    expect((await runAntiEntropyRound(local, peer)).failures).toEqual([]);
   });
 });

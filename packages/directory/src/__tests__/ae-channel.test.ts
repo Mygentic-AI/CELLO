@@ -558,6 +558,35 @@ describe("M12-P9: a table that cannot be read is skipped, not fatal", () => {
     expect(String((err as Error).message)).toContain("does not exist");
   });
 
+  /**
+   * TIER A specifically. Every other test in this block throws from Tier B, and a review proved the
+   * gap by reverting ONLY the Tier-A try/catch: all 18 tests stayed green. The parked item names
+   * Tier A ("one bad Tier-A column"), and Tier A carries `agent_revocations` — so the tier that has
+   * to survive is the one that had no test.
+   */
+  it("isolates the TIER-A branch too, not just Tier B", async () => {
+    class BadTierAStore extends MemStore {
+      override tierATableDigest(): string {
+        throw new Error(`column "subject" does not exist`);
+      }
+    }
+    const onTableError = vi.fn();
+    const responderStore = new BadTierAStore();
+    responderStore.revocations.set("agX", rev("agX"));
+    responderStore.suspensions.set("agZ", susp("agZ", 3, true));
+
+    const { dialerResult, dialerStore } = await runBoth({ responderStore, responderOnTableError: onTableError });
+
+    expect(dialerResult.ok).toBe(true);
+    if (!dialerResult.ok) return;
+    const [tier, table] = onTableError.mock.calls[0]!;
+    expect(tier).toBe("A");
+    expect(table).toBe("agent_revocations");
+    // Tier A omitted, so nothing invented — and Tier B, the readable tier, still converged.
+    expect((dialerStore as MemStore).revocations.has("agX")).toBe(false);
+    expect(dialerResult.rounds[0].tierBApplied).toBe(1);
+  });
+
   it("a healthy store reports nothing — the callback is not chatty", async () => {
     const onTableError = vi.fn();
     const responderStore = new MemStore();

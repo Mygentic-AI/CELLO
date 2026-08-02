@@ -100,12 +100,53 @@ export interface RoundResult {
   failures: Array<{ tier: "A" | "B"; table: string; reason: string }>;
 }
 
-async function localState(store: AeStoreView): Promise<LocalRoundState> {
+/**
+ * Build this node's comparison basis — WITH PER-TABLE ISOLATION (M12-P9).
+ *
+ * This loop had none, and it is the half that converges. Anti-entropy is PULL-driven: the
+ * responder's advertisement can be perfectly isolated and a throw here still kills the dialer's
+ * entire round, because `runAntiEntropyRound` awaits this before anything else and the throw is not
+ * an `AeProtocolError`, so `runAeDialer` rethrows it. It is the SAME query that broke on
+ * 2026-08-01 — `tierATableDigest` is literally `computeTableDigest(await tierARecordHashes(table))`
+ * — and all three nodes ran the same spec, so every node was a broken dialer. Isolating only the
+ * responder would have left that outage's blast radius untouched.
+ *
+ * THE DEGRADATION IS NOT THE RESPONDER'S. There, omitting a table from the advertisement removes it
+ * from the peer's list and it is simply not reconciled. Here, omitting it from `tierA` hits
+ * `local.tierA.get(table) ?? []` in `planRound`, which reads as "we hold zero rows" — differing
+ * from the peer's digest and planning a pull of the ENTIRE table we just proved we cannot read.
+ * That is the same storm the responder fix avoids, reached from the other side. So the table is
+ * named in `unreadable` and dropped from the PLAN, never defaulted to empty.
+ *
+ * Failures are returned, not swallowed: they land in `RoundResult.failures`, which the sync service
+ * already logs per table at `error`. A table that has stopped reconciling has to be nameable from a
+ * log line, or this is a silent fallback wearing a try/catch.
+ */
+async function localState(store: AeStoreView): Promise<LocalRoundState & { failures: RoundResult["failures"] }> {
+  const failures: RoundResult["failures"] = [];
+  const reason = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
   const tierA = new Map<string, readonly string[]>();
-  for (const t of await store.tierATables()) tierA.set(t, await store.tierARecordHashes(t));
+  const unreadableA = new Set<string>();
+  for (const t of await store.tierATables()) {
+    try {
+      tierA.set(t, await store.tierARecordHashes(t));
+    } catch (err: unknown) {
+      unreadableA.add(t);
+      failures.push({ tier: "A", table: t, reason: reason(err) });
+    }
+  }
   const tierB = new Map<string, ReadonlyMap<string, string>>();
-  for (const t of await store.tierBTables()) tierB.set(t, await store.tierBVersions(t));
-  return { tierA, tierB };
+  const unreadableB = new Set<string>();
+  for (const t of await store.tierBTables()) {
+    try {
+      tierB.set(t, await store.tierBVersions(t));
+    } catch (err: unknown) {
+      unreadableB.add(t);
+      failures.push({ tier: "B", table: t, reason: reason(err) });
+    }
+  }
+  return { tierA, tierB, unreadableA, unreadableB, failures };
 }
 
 /** The peer's advertised state (digests + full detail). In production this crosses the wire; here
@@ -166,11 +207,16 @@ export async function runAntiEntropyRound(
 ): Promise<RoundResult> {
   const localTierA = await local.tierATables();
   const localTierB = await local.tierBTables();
+  const basis = await localState(local);
   const plan = await planRound(
-    await localState(local),
+    basis,
     await peerAdvertisement(peer, localTierA, localTierB, onUnknownTable),
   );
-  const failures: RoundResult["failures"] = [];
+  // Seeded with the tables this node could not READ (M12-P9), not just the ones it could not
+  // APPLY. Both are "this table did not reconcile this round, and here is why", and both have to
+  // reach the operator through the same channel — the apply-phase failures below are already
+  // logged per table at `error` by the sync service.
+  const failures: RoundResult["failures"] = [...basis.failures];
 
   // Iterate in the LOCAL registry's table order — never the peer's advertisement order. Two
   // reasons: (1) a table the local store doesn't know is simply never pulled (a hostile peer

@@ -194,17 +194,25 @@ export class AeSyncService {
         actualRemotePeerId: remotePeerId,
         store: this.#cfg.store,
         // A table we could not read is DROPPED from this round's advertisement so the rest still
-        // reconcile. That degradation is only acceptable while it is LOUD: this warn is the sole
-        // signal that one table has quietly stopped replicating, and it names the table and the
-        // cause rather than the stage — the 2026-08-01 outage was diagnosable only because the
-        // underlying error text (`column "subject" does not exist`) survived into a log at all.
+        // reconcile. That degradation is only acceptable while it is LOUD, and it names the table
+        // and the cause rather than the stage — the 2026-08-01 outage was diagnosable only because
+        // the underlying error text (`column "subject" does not exist`) survived into a log at all.
+        //
+        // `error`, NOT `warn`, and the level is the lesson rather than a preference. That outage
+        // was invisible for days precisely because its only signal was a warn on hosts nobody
+        // tails. A table whose read FAILS is not a bad round — it will fail every round until a
+        // human changes something, which is exactly the permanently-masking condition that has to
+        // page. `antientropy.round.table_failed` next to it is already `error` for a strictly
+        // milder, single-round fault; this cannot be quieter than that.
         onTableError: (tier, table, err) => {
-          logger.warn("antientropy.table.skipped", {
+          logger.error("antientropy.table.skipped", {
             remotePeerId,
             tier,
             table,
             reason: describeThrown(err),
-            detail: "This table was NOT advertised, so it did not reconcile this round. Every other table did.",
+            // Says what this callback KNOWS. It does not know the other tables reconciled — that
+            // depends on the peer, and on this node's own dialing direction.
+            detail: "This table was NOT advertised, so it did not reconcile this round. Every other table WAS advertised.",
           });
         },
       });
