@@ -107,19 +107,19 @@ a visible one.
 
 ## Tier 0 — LAUNCH GATE: make the theft visible
 
-- **DOD-COATTEND-VISIBLE-1** ✅ **PROVEN LIVE (2026-08-02)** — AC6 failed on the first live run,
-  was fixed at the read surfaces, and **passed on re-run**: asked an open question with no mention
-  of co-attendance, the second session led with *"another session is attending this same agent
-  alongside me… whatever I send, a second window on this identity could also be reading and
-  replying independently"* — the number **and** its consequence, unprompted. → Entries 33, 34, 38.
-  Historical detail of the failure kept below.
+- **DOD-COATTEND-VISIBLE-1** ✅ PROVEN LIVE (2026-08-02) — **the launch half of §2.**
 
-  <details><summary>The failure this line went through (kept — it is why the fix exists)</summary>
-  Co-attendance is carried on the PUSH (doorbell text + `attendance` tag) and on `cello_status`, but
-  every READ surface is silent: `cello_receive` and `cello_transcript` carry no attendance field. A
-  session that reads without having seen a doorbell cannot learn it is not alone — asked openly, the
-  second live session did not mention co-attendance and said the transcript and wire are "silent on
-  it". Fix is a read-surface change; the daemon already computes the number. → Entry 33 (2026-08-01) — **the launch half of §2.**
+  AC6 failed on the first live run, was fixed at the read surfaces, and **passed on re-run**: asked
+  an open question with no mention of co-attendance, the second session led with *"another session
+  is attending this same agent alongside me… whatever I send, a second window on this identity
+  could also be reading and replying independently"* — the number **and** its consequence,
+  unprompted. → Entries 33, 34, 38.
+
+  **The failure it went through, kept because it is why the fix exists:** co-attendance rode the
+  PUSH (doorbell text + `attendance` tag) and `cello_status`, while every READ surface was silent —
+  `cello_receive` and `cello_transcript` carried no attendance at all. A session that reads without
+  having seen a doorbell could not learn it was not alone, which is every `cello` CLI invocation and
+  any freshly reconnected client. → Entry 33
 
   > ACs 1–5 + 7 enforcer-green (9 clauses, two connections, real daemon + IPC; 2386/11 gate clean at
   > `0f37607`). **AC 6 owed** — the live two-session `claude --channels` journey, which also needs a
