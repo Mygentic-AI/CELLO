@@ -2002,3 +2002,47 @@ prompts of instructions and then made the operator work out which step we were o
 tabs. **The right shape is one paste at a time, told to the orchestrator at the moment it is
 needed**, with the sessions briefed on context but never given the sequence. The final AC6 probe was
 run that way and it is the step that produced the only new information of the whole journey.
+
+### 2026-08-02 — Entry 34: AC6's gap closed — attendance now rides the READ surfaces
+
+The live finding (Entry 33) was that co-attendance reached the **push** and nothing else. Fixed at
+the surfaces that were silent: `attendance` now rides **every** `cello_receive` exit — delivered
+content *and* the quiet timeout — plus `cello_get_transcript`.
+
+**The quiet exit is the one that mattered and the one easiest to skip.** It is the answer a session
+with no doorbell to learn from is most likely to reach: it attached, found nothing waiting, and
+would otherwise have no way to know another window holds the same agent. A fix that only tagged
+delivered content would have left the defect alive in precisely its most common shape.
+
+Two clauses exist to stop the field being decorative:
+
+- **V4** — a **sole** session must read `1`, not absent and not `2`. Without it the suite passes on
+  an implementation that hardcodes a number or reports the agent's total sessions.
+- **V5** — the count must **fall** when a sibling detaches. A number that only rises tells a session
+  it is co-attended long after it is alone — the same defect inverted, and the operator stops
+  believing it.
+
+**Deliberately NOT changed: the counterparty still sees one agent, with no session ordinal.** The
+live session observed that Chelly cannot tell two replies came from two windows. That stays: the
+counterparty deals with **one agent**, and putting a session ordinal on the wire would leak the
+operator's window structure to a third party for no protocol benefit.
+
+Also shipped alongside: the doorbell text, which was still warning of the theft this milestone
+fixed (*"another one may read it first — if cello_receive returns nothing, run cello_transcript"*).
+It now states delivery is non-destructive and points at `cello_transcript` for the reason the
+journey actually demonstrated — a sibling's **replies** never appear in `cello_receive`.
+
+### A probe that lied, and nearly got reported
+
+The first revert probe turned **2 of 5** red and I was a sentence away from writing "mostly
+load-bearing". It was the probe's `sed` missing three insertion sites, not the clauses being weak.
+Redone with an exact removal: **5 of 5 red**. *A revert test that under-reports is worse than none —
+it launders a weak clause as a checked one.* The tell was that the number was odd: a coherent fix
+either covers a surface or does not, so "some clauses survive" should have prompted a second look
+before a conclusion.
+
+Gate: **2461 passed / 11 skipped**, lint, typecheck, build — by exit code.
+
+**Not yet reviewed** (dispatched) and **not yet published** — `connect` and `daemon` have both moved
+and neither is on npm, so a further promotion is owed once the review lands. Deliberately batching
+those so the promotion happens once rather than twice.
