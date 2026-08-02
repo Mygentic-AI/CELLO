@@ -36,7 +36,7 @@ import {
   provisionAgent,
   connectMcp,
   registerAgent,
-  psqlSpine,
+  psqlSpineN,
   type SpineCluster,
   type Proc,
   type McpConn,
@@ -151,7 +151,7 @@ describe("J-UPGRADE-001 — unilateral → bilateral upgrade on the absent party
     expect(rootHex, `A must surface a sealed_root:${unilateralDiag}`).toMatch(/^[0-9a-f]{64}$/);
 
     // Corroborate the unilateral row exists in the directory's table (pre-upgrade baseline).
-    const uniCount = psqlSpine(`SELECT count(*) FROM seal_notarizations WHERE sealed_root = decode('${rootHex}','hex') AND seal_type='unilateral';`);
+    const uniCount = psqlSpineN(0, `SELECT count(*) FROM seal_notarizations WHERE sealed_root = decode('${rootHex}','hex') AND seal_type='unilateral';`);
     expect(uniCount, `directory must hold exactly one unilateral notarization for R1:${unilateralDiag}`).toBe("1");
 
     // ── B RETURNS: restart its daemon on the SAME CELLO_DIR, restart the agent → signaling
@@ -176,16 +176,16 @@ describe("J-UPGRADE-001 — unilateral → bilateral upgrade on the absent party
     // ── AUTHORITATIVE: the directory's OWN seal_notarizations table (daemon cannot fabricate). ──
     // The unilateral row is PRESERVED (append-only) AND a superseding bilateral row exists over R1.
     expect(
-      psqlSpine(`SELECT count(*) FROM seal_notarizations WHERE sealed_root = decode('${rootHex}','hex') AND seal_type='unilateral';`),
+      psqlSpineN(0, `SELECT count(*) FROM seal_notarizations WHERE sealed_root = decode('${rootHex}','hex') AND seal_type='unilateral';`),
       `the unilateral row must be preserved (append-only):${upgradeDiag}`,
     ).toBe("1");
     expect(
-      psqlSpine(`SELECT count(*) FROM seal_notarizations WHERE sealed_root = decode('${rootHex}','hex') AND seal_type='bilateral';`),
+      psqlSpineN(0, `SELECT count(*) FROM seal_notarizations WHERE sealed_root = decode('${rootHex}','hex') AND seal_type='bilateral';`),
       `a superseding bilateral notarization must exist over the SAME root R1:${upgradeDiag}`,
     ).toBe("1");
     // The bilateral row SUPERSEDES the unilateral one (its FK points at the unilateral row's id).
     expect(
-      psqlSpine(
+      psqlSpineN(0, 
         `SELECT (b.supersedes_notarization_id = u.id) FROM seal_notarizations b ` +
         `JOIN seal_notarizations u ON u.sealed_root = b.sealed_root AND u.seal_type='unilateral' ` +
         `WHERE b.sealed_root = decode('${rootHex}','hex') AND b.seal_type='bilateral';`,
@@ -205,15 +205,15 @@ describe("J-UPGRADE-001 — unilateral → bilateral upgrade on the absent party
     // does NOT add a second conversation_seals row — conversation_id is UNIQUE; the A↔B edge already
     // exists. Stored: relationship metadata + the root HASH only, never content.
     expect(
-      psqlSpine(`SELECT count(*) FROM conversation_seals WHERE merkle_root = '${rootHex}';`),
+      psqlSpineN(0, `SELECT count(*) FROM conversation_seals WHERE merkle_root = '${rootHex}';`),
       `exactly one conversation_seals row for R1 (unilateral wrote it; upgrade skipped it):${upgradeDiag}`,
     ).toBe("1");
     expect(
-      psqlSpine(`SELECT close_type FROM conversation_seals WHERE merkle_root = '${rootHex}';`),
+      psqlSpineN(0, `SELECT close_type FROM conversation_seals WHERE merkle_root = '${rootHex}';`),
       `the conversation_seals close_type must be SEAL_UNILATERAL:${upgradeDiag}`,
     ).toBe("SEAL_UNILATERAL");
     expect(
-      psqlSpine(`SELECT count(*) FROM conversation_participation cp JOIN conversation_seals cs ON cs.conversation_id = cp.conversation_id WHERE cs.merkle_root = '${rootHex}';`),
+      psqlSpineN(0, `SELECT count(*) FROM conversation_participation cp JOIN conversation_seals cs ON cs.conversation_id = cp.conversation_id WHERE cs.merkle_root = '${rootHex}';`),
       `both parties must be graph nodes (2 conversation_participation rows — the edge):${upgradeDiag}`,
     ).toBe("2");
   }, 180_000);

@@ -23,7 +23,7 @@ import {
   connectMcp,
   cello,
   registerAgent,
-  psqlSpine,
+  psqlSpineN,
   CELLO_CLIENT_ROOT,
   type SpineCluster,
   type Proc,
@@ -153,12 +153,12 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     // ── AC-002: an agent_revocations row for X's DIRECTORY agent_id is present, its signature VERIFIES
     // against X's registered K_local, and X's agent_profiles row is UNCHANGED (purely additive — SI-002).
     // Read straight from the directory's Postgres (its OWN write), not the daemon's self-report. ──
-    const regId = psqlSpine(`SELECT agent_id FROM agent_profiles WHERE k_local_pubkey = '${pub1}'`);
+    const regId = psqlSpineN(0, `SELECT agent_id FROM agent_profiles WHERE k_local_pubkey = '${pub1}'`);
     expect(regId, "X must have a directory-assigned agent_id after registration").toMatch(/\S/);
     let revRow = "";
     for (let i = 0; i < 20; i++) {
       // The directory INSERT is fire-and-forget after the ack — poll for the committed row.
-      revRow = psqlSpine(
+      revRow = psqlSpineN(0, 
         `SELECT encode(signature,'hex') || '|' || COALESCE(epoch_id,'') || '|' || COALESCE(reason,'') || '|' || revoked_at FROM agent_revocations WHERE agent_id = '${regId}'`,
       );
       if (revRow) break;
@@ -173,8 +173,8 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
       "the stored revocation signature must verify against X's registered K_local (self-signed fact)",
     ).toBe(true);
     // agent_profiles untouched — the revocation is additive, the identity binding stays resolvable.
-    expect(psqlSpine(`SELECT status FROM agent_profiles WHERE agent_id = '${regId}'`), "agent_profiles must be unchanged").toBe("active");
-    expect(psqlSpine(`SELECT k_local_pubkey FROM agent_profiles WHERE agent_id = '${regId}'`)).toBe(pub1);
+    expect(psqlSpineN(0, `SELECT status FROM agent_profiles WHERE agent_id = '${regId}'`), "agent_profiles must be unchanged").toBe("active");
+    expect(psqlSpineN(0, `SELECT k_local_pubkey FROM agent_profiles WHERE agent_id = '${regId}'`)).toBe(pub1);
 
     // DB-001 re-push idempotency: removing the ALREADY-RETIRED (but registered) agent again re-submits
     // its revocation — the recovery path for "directory unreachable at first removal." It re-acks
@@ -182,7 +182,7 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     // single revocation row is unchanged (UNIQUE(agent_id)).
     const rePush = JSON.parse(cello(["remove-agent", "xavier"], { CELLO_DIR: dir }).stdout) as { ok: boolean; directoryRevocation: string };
     expect(rePush.ok && rePush.directoryRevocation, "re-removing a retired registered agent re-pushes idempotently").toBe("recorded");
-    expect(psqlSpine(`SELECT count(*) FROM agent_revocations WHERE agent_id = '${regId}'`), "still exactly one revocation row").toBe("1");
+    expect(psqlSpineN(0, `SELECT count(*) FROM agent_revocations WHERE agent_id = '${regId}'`), "still exactly one revocation row").toBe("1");
 
     // ── SI-002: the retired row is KEPT — same agent_id, state=retired, K_local seed AND the FROST
     // signing share intact (a registered identity survives removal; it is a tombstone, not an erasure). ──
