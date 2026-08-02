@@ -1853,3 +1853,54 @@ a sibling's send has a door).
 
 Four lines — `DOD-COATTEND-1` AC7, `DOD-COATTEND-VISIBLE-1` AC6, `SENDWINDOW`, `CATCHUP` — are 🟡
 purely for want of that run, and every one of them is now backed by the promoted binary.
+
+### 2026-08-02 — Entry 31: ✅ J1 PASSED LIVE — one message, two sessions, both received it
+
+Three real `claude --channels` windows on the promoted binary (cli 0.0.121 / daemon 0.0.118): two
+attending **`CELLO_Coder_1`**, one driving **`Miss_Chelly`** as the counterparty. `cello_status`
+reported **`attendance: 2`** on the attended agent before anything was sent.
+
+`Miss_Chelly` sent **one** message. Both attending sessions called `cello_receive`:
+
+| | session 1 (this one) | session 2 (separate window) |
+|---|---|---|
+| `ok` | true | true |
+| `content` | `"J1 — one question, two sessions should both see this [[OVER]]"` | **identical** |
+| `sequence_number` | **0** | **0** |
+| `senderPubkey` | `6988436e…` | identical |
+
+**Same message, same leaf, to both — and neither read removed it.** On the pre-M8D build the first
+read drained the queue and the second returned `content: null` with the quiet-counterparty guidance,
+which is the defect the whole milestone exists to end. Session 2 also confirmed it had called
+`cello_send` **zero** times, so nothing but genuine delivery could have produced that output.
+
+Also observed live, unprompted:
+
+- **The doorbell is multicast and CONTENT-FREE.** It carried `attendance="2"`, the sender and the
+  session id — and not one word of the message body. `DOD-INV-CONTENTFREE` holding on the real wire,
+  not in a fixture.
+- **The attendance count reached the session surface**, both on `cello_status` and on the push.
+
+### What this closes, and what it does not
+
+`DOD-COATTEND-1` **AC7 is met**: the live two-session journey on one agent, both sessions seeing the
+counterparty's message. Tier 1's central claim is now proven live, cross-process, on the shipped
+binary — not merely on the two-connection fixture.
+
+**Stated precisely, because the difference matters:** `DOD-COATTEND-VISIBLE-1` AC6 asks that the
+second session *"reports being un-alone in its own words."* The attendance count was **delivered** to
+it (`attendance="2"` on the doorbell, and the guidance text names it), but session 2 was running to a
+scripted instruction and did not volunteer it. So the **plumbing** is proven and the **legibility**
+clause is not yet witnessed. AC6 stays open rather than being claimed on adjacent evidence.
+
+### A defect this run surfaced in the guidance itself
+
+The doorbell says:
+
+> *"2 sessions are attending this agent, so another one may read it first — if cello_receive returns
+> nothing, run cello_transcript."*
+
+That warning is **obsolete on this build.** Delivery is non-destructive now: a sibling reading first
+takes nothing away, and `cello_receive` returning nothing for that reason can no longer happen. The
+text describes the Tier-0 world and would teach an operator to expect theft that has been fixed —
+mild, but it is exactly the kind of stale instruction that outlives its cause. Raised as its own line.
