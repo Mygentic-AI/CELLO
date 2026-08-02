@@ -46,9 +46,14 @@ async function loadSealer(): Promise<{
   return { sealToRecipient: crypto.sealToRecipient, hash: crypto.hash };
 }
 
+// A hand-mirror of protocol-types' `TrustSignalEnvelope`, because the codec is dynamic-imported
+// from CELLO_CLIENT_ROOT's dist rather than type-linked. The preimage is a CLOSED set of 12 slots:
+// a slot missing HERE does not mint a shorter envelope — the encoder still refuses — it just moves
+// the failure from a red typecheck to a runtime throw. Every slot the encoder knows about belongs.
 interface Envelope {
   subject_kind: "account" | "agent"; subject: string; issuer_kind: "portal" | "agent"; issuer_pubkey: string;
   type: string; schema_version: number; payload: Uint8Array; issued_at: number;
+  same_operator: boolean;
   expires_at: number | null; supersedes_hash: Uint8Array | null;
 }
 async function loadCodec(): Promise<{
