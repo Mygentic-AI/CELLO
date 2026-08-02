@@ -1723,3 +1723,58 @@ while asking whether Tier 1 was responsible, and produced a confident, wrong ans
 the journal. The tell was available: the failure I dismissed (*"B reads the exact parked plaintext it
 had missed"*) is the co-attendance shape, and I noted that it *looked* like our defect — then
 explained the resemblance away instead of testing it.
+
+### 2026-08-02 — Entry 28: the "nine files never run" debt was one setup gap and three renames
+
+Four spine files recovered tonight, none of which needed a product change:
+
+| file | before | after | what it proves live |
+|---|---|---|---|
+| `j-unilateral` | 0/3 | **3/3** | unilateral seal → real FROST notarization with the counterparty ABSENT, + both halves of the ABSENT gate |
+| `j-leg-frontier` | 0/1 | **1/1** | a directory-inflated `content_frontier_seq` is re-derived, detected and rejected (SI-002) |
+| `j-persist` | 0/1 | **1/1** | the durable encrypted transcript survives a daemon restart (DOD-LOG-1) |
+| `j-content` | 3/10 | **5/10** | relay store-and-forward + the recover journey |
+| `j-legibility` | 0/1 | 0/1 *(reaches its real subject — left red on purpose)* | — |
+
+**`j-persist` is the one that matters for M8D.** Since Tier 1 the durable transcript **is** the
+delivery path, so *"B reads the full transcript back after a restart"* stopped being a logging
+nicety and became the co-attendance guarantee. It is now proven live, cross-process, with a real
+kill and restart.
+
+### What the debt actually was
+
+Not nine investigations. **One setup gap and three renames**, layered so each hid the next:
+
+1. **No consortium.** Two halves: a signed **directory-side** manifest (without it the daemon never
+   learns its own node id → two local agents route cross-node → `discovery_node_unresolvable`
+   before any clause runs) **and** a **client-side** `CELLO_CONSORTIUM_MANIFEST` per daemon (without
+   it registration's FROST DKG has no consortium → `register-agent` exits 1). `directoryCount: 3`,
+   because one node cannot satisfy the threshold.
+2. **MCP/IPC rename drift.** `cello_sealed_receipt` and `cello_transcript` are the MCP tools, taking
+   `cello_session_id`; `cello_get_sealed_receipt` / `cello_get_transcript` taking `session_id` are
+   the IPC methods behind them. The spine called the IPC names over the MCP surface. **The
+   daemon-side name never changed, so nothing daemon-side could have caught it** — the
+   audit-what-ships class, twice.
+3. **In-band turn signals.** The shim appends `[[OVER]]` to the content itself, so durable rows hold
+   it and *must* — the transcript has to round-trip what went on the wire or the certificate and the
+   readable history disagree. Assertions predating that compared bare payloads.
+4. **`agent_name` → `agent_id`.** A direct-SQL check queried `session_tree_leaves WHERE agent_name`,
+   a column that no longer exists there (`REMOVE-001`). Now resolves the id through `agents` — the
+   project rule: **join on the stable key, never the mutable label.**
+
+### Two things I got wrong, both caught by the tests rather than by me
+
+- I wrote the client manifest into `CELLO_DIR`, and `j-persist` asserts **DOD-STORE-1** — no
+  flat-file state there, because everything belongs in the encrypted store. The invariant is right,
+  so the scaffolding moved rather than the assertion being relaxed.
+- `j-legibility` is **left red on purpose.** Its `"…"` (U+2026) tail arrives as `"..."`. NFKC in the
+  gateway sanitizer folds it — but neither the outbound nor the inbound path substitutes text on an
+  `allow` verdict, so the delivered text changed **because the gateway returned a `redact` verdict**
+  for a money-demand tail. That is a product decision, and it changes the test's premise (the point
+  is that B receives the malicious tail verbatim). Patching the assertion would bake in whichever
+  reading is wrong.
+
+**Ten files still carry the same setup gap** (`j-spine`, `j-suspend`, `j-int`, `j-sig`, `j-remove`,
+`j-track-record`, `j-trust-journey`, `j-upgrade`, `j-upgrade-bilateral`, `j-canary`). The pattern is
+now proven on four; applying it is mechanical, and **should be done before anyone budgets diagnosis
+time for them.**
