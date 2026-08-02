@@ -25,7 +25,7 @@ import {
   connectMcp,
   cello,
   registerAgent,
-  psqlSpine,
+  psqlSpineN,
   type SpineCluster,
   type Proc,
   type McpConn,
@@ -126,9 +126,9 @@ describe("J-SUSPEND — pause blocks signing, reversible (CELLO-M8-LEVER-001 DOD
     // PAUSE A — write the replicated flag exactly as the write seam (WRITEAPI-001) would: a paused
     // row keyed by A's DIRECTORY agent_id. The portal→seam path is proven by WRITEAPI-001; here we
     // prove the directory HONOR-CHECK refuses A's ceremony.
-    const agentIdA = psqlSpine(`SELECT agent_id FROM agent_profiles WHERE k_local_pubkey = '${pubA}'`);
+    const agentIdA = psqlSpineN(0, `SELECT agent_id FROM agent_profiles WHERE k_local_pubkey = '${pubA}'`);
     expect(agentIdA, "A must have a directory agent_id after registration").toMatch(/\S/);
-    psqlSpine(
+    psqlSpineN(0, 
       `INSERT INTO agent_suspensions (agent_id, paused, authorized_by_account, updated_at) ` +
       `VALUES ('${agentIdA}', true, '00000000-0000-0000-0000-0000000000a1', now()) ` +
       `ON CONFLICT (agent_id) DO UPDATE SET paused = true, updated_at = now()`,
@@ -142,7 +142,7 @@ describe("J-SUSPEND — pause blocks signing, reversible (CELLO-M8-LEVER-001 DOD
     expect(afterPause.reason, "the directory must refuse a paused initiator with agent_suspended").toBe("agent_suspended");
 
     // UN-PAUSE A → signing restored: the reason is no longer agent_suspended (reversible — DOD-LEVER-1).
-    psqlSpine(`UPDATE agent_suspensions SET paused = false, updated_at = now() WHERE agent_id = '${agentIdA}'`);
+    psqlSpineN(0, `UPDATE agent_suspensions SET paused = false, updated_at = now() WHERE agent_id = '${agentIdA}'`);
     const afterClear = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
     expect(afterClear.reason, `un-pause must restore signing (no longer agent_suspended): ${JSON.stringify(afterClear)}`).not.toBe("agent_suspended");
   }, 150_000);

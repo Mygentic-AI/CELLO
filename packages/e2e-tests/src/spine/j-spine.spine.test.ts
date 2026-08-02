@@ -27,7 +27,7 @@ import {
   connectMcp,
   cello,
   registerAgent,
-  psqlSpine,
+  psqlSpineN,
   CELLO_CLIENT_ROOT,
   type McpConn,
   type Proc,
@@ -357,7 +357,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     const corroborateDeadline = Date.now() + 10_000;
     let lastSeen = "";
     for (;;) {
-      const rows = psqlSpine(
+      const rows = psqlSpineN(0, 
         `SELECT k_local_pubkey || '|' || primary_pubkey || '|' || coalesce(account_id::text,'NULL') ` +
           `FROM agent_profiles WHERE k_local_pubkey IN ('${pubA}','${pubB}') ORDER BY k_local_pubkey`,
       );
@@ -387,7 +387,7 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     }
     // Exactly ONE account dedups the two agents (DevTokenValidator's fixed phone_stub_hash
     // → one user_accounts row keyed UNIQUE on phone_stub_hash). This IS "two agents, one account".
-    const accountCount = psqlSpine(`SELECT count(*) FROM user_accounts WHERE account_id = '${sharedAccount}'`);
+    const accountCount = psqlSpineN(0, `SELECT count(*) FROM user_accounts WHERE account_id = '${sharedAccount}'`);
     expect(accountCount, "exactly one user_accounts row backs the shared account_id").toBe("1");
 
     // ── Per-agent persistence: PERSIST-002 (DOD-STORE-1) moved all per-agent material from flat files
