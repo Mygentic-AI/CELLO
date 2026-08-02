@@ -2149,3 +2149,35 @@ read surface it could look at.
 *(Orchestration note, from Andre's correction: one paste at a time, handed over at the moment it is
 needed. The step run that way is the one that produced every piece of new information in this
 milestone's live testing.)*
+
+### 2026-08-02 — Entry 37: promoted, and the AC6 fix VERIFIED LIVE on the running binary
+
+Andre ran the promotion. On disk: **cli 0.0.122 · daemon 0.0.119 · connect 0.0.116**, and
+`attendingNow` is present in the daemon the CLI actually spawns — checked in
+`node_modules/@cello-protocol/cli/node_modules/@cello-protocol/daemon/dist`, not from the install's
+output.
+
+Then the fix itself, live:
+
+```json
+{"ok":true,"content":"J1 — one question, two sessions should both see this [[OVER]]",
+ "attendance":2, "sequence_number":0, ...}
+```
+
+**`attendance: 2` on a read surface.** Before this fix that response had no such field, which is
+exactly why the live session reported the transcript and wire *"silent on it"*.
+
+Two properties fall out of that one call, neither of them arranged:
+
+- **It is a FRESH connection.** The daemon restarted for the promotion and this session re-attached,
+  so it never saw a doorbell for that message — and still learned two sessions hold the agent. That
+  is precisely the population AC6 is about, tested by accident of the restart rather than by setup.
+- **`sequence_number: 0` re-served across a daemon restart** — the durable transcript surviving a
+  restart, which `j-persist` pins in the spine and which Tier 1 made load-bearing when delivery
+  stopped draining a buffer.
+
+**What remains cannot be self-certified.** AC6 asks that a session *volunteers* co-attendance in its
+own words. I can read the field, but I built it — my mentioning it proves nothing about legibility.
+It needs the one unscripted question into a second window. The difference from the first attempt is
+that the number is now demonstrably sitting in every read response the session could consult, so a
+failure this time would be a genuine legibility finding rather than an absent field.
