@@ -60,24 +60,52 @@ describe("dist freshness: @cello-protocol/connect", () => {
     expect(distContent).not.toContain('"cello_receive_any"');
   });
 
-  it("registers all expected tools", () => {
-    // Tools present in @cello-protocol/connect@0.0.71 (the pinned e2e-tests version).
-    // Update this list whenever the pinned version is bumped and new tools are added.
+  it("registers all expected tools — asserted on the REGISTRATION, not a bare occurrence", () => {
+    // WHY `server.tool("x"` AND NOT `"x"`.
+    //
+    // This clause used to assert `distContent.toContain('"cello_get_sealed_receipt"')` and it
+    // PASSED — while no such MCP tool existed. `cello_get_sealed_receipt` is the IPC method the
+    // shim proxies to, so the string is in the bundle inside `proxy.call("cello_get_sealed_receipt")`
+    // and a substring check cannot tell a REGISTERED TOOL from a proxied method name. Measured on
+    // the installed dist, every renamed pair reads the same way to the old assertion:
+    //
+    //   cello_sealed_receipt      registered=1  appears=1
+    //   cello_get_sealed_receipt  registered=0  appears=1   <-- old assertion passed on this
+    //
+    // Three renames slipped past this guard for exactly that reason (sealed_receipt, transcript,
+    // list_agents), and each one broke live spine journeys that called the IPC name over the MCP
+    // surface. A guard that cannot fail is worse than no guard: it is a claim of coverage.
     const expectedTools = [
       "cello_await_session",
       "cello_backup",
       "cello_close_session",
       "cello_get_inclusion_proof",
-      "cello_get_sealed_receipt",
       "cello_initiate_session",
-      "cello_list_sessions",
       "cello_receive",
       "cello_restore",
       "cello_send",
+      "cello_sealed_receipt",
+      "cello_sessions",
       "cello_status",
+      "cello_transcript",
     ];
     for (const tool of expectedTools) {
-      expect(distContent, `missing tool: ${tool}`).toContain(`"${tool}"`);
+      expect(distContent, `missing REGISTERED tool: ${tool}`).toContain(`server.tool("${tool}"`);
+    }
+  });
+
+  it("does NOT register the IPC method names as tools — the drift that broke the spine", () => {
+    // The other half, and the one with teeth. These are real IPC methods the shim calls, so they
+    // are legitimately PRESENT in the bundle; what must never be true is that a caller can reach
+    // them as MCP tools. Asserting the absence of the string would be wrong (it would fail on a
+    // correct build); asserting the absence of the REGISTRATION is the actual contract.
+    for (const ipcOnly of [
+      "cello_get_sealed_receipt",
+      "cello_get_transcript",
+      "cello_list_sessions",
+      "cello_list_agents",
+    ]) {
+      expect(distContent, `${ipcOnly} is an IPC method, not an MCP tool`).not.toContain(`server.tool("${ipcOnly}"`);
     }
   });
 });
