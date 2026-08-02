@@ -1955,3 +1955,50 @@ in its own words."* The attendance count **reached** it — the doorbell carried
 named it in the guidance — but session 2 was following a scripted instruction and never volunteered
 it. The plumbing is proven; the legibility clause is not. Claiming it on adjacent evidence is exactly
 the "DONE means reviewed, not written" failure, so it stays open.
+
+### 2026-08-02 — Entry 33: AC6 FAILED, and the failure is the useful result
+
+Session 2 was asked an open question — *"in your own words, what is the state of this session, and
+is there anything I should know before replying?"* — with no mention of co-attendance. Its answer,
+quoted because it is the evidence:
+
+> *"Co-attendance did not come up on its own. It only surfaced because I manually described it in
+> the message content. Structurally, the transcript and the wire protocol are silent on it."*
+
+And on what the counterparty sees:
+
+> *"Chelly got two replies to one question, and nothing in the protocol marked that as unusual…
+> `cello_send`, `cello_receive`, and `cello_transcript` carry no co-attendance marker — no session
+> ordinal, no 'another window also has this open' flag, nothing."*
+
+**`DOD-COATTEND-VISIBLE-1` AC6 does not pass.** Logged as a defect, not closed.
+
+### The precise shape, because "it's not visible" is too coarse
+
+Co-attendance **is** carried on the **push** — the doorbell says *"N sessions are attending this
+agent"* and the tag carries `attendance="2"`, and `cello_status` reports it. What is silent is every
+**read** surface: `cello_receive`'s response and `cello_transcript`'s rows carry no attendance field
+at all. So a session that reads without having seen a doorbell — a fresh MCP connection, a `cello`
+CLI invocation, any session that attached after the last arrival — has **no way to learn it is not
+alone**. That is the gap, and it explains why session 2 answered as it did: it was reading, not
+being pushed to.
+
+Fixing it is a read-surface change (attendance on the receive/transcript responses), not a new
+mechanism — the daemon already computes the number for the push.
+
+### The counterparty-side observation is NOT the same thing, and is probably correct as-is
+
+Session 2 also noted the counterparty sees two `over` replies from one identity with nothing marking
+them as separate windows. That is **by design and should stay that way**: the counterparty deals with
+**one agent**, and leaking session ordinals across the wire would expose the operator's internal
+window structure to a third party for no protocol benefit. The confusion is real but the remedy is
+turn discipline on the sending side, not a wire field. Recorded so nobody "fixes" it later by adding
+a session ordinal to the protocol.
+
+### On the run itself
+
+Andre's criticism of how I orchestrated this is correct and worth keeping: I front-loaded three
+prompts of instructions and then made the operator work out which step we were on, flipping between
+tabs. **The right shape is one paste at a time, told to the orchestrator at the moment it is
+needed**, with the sessions briefed on context but never given the sequence. The final AC6 probe was
+run that way and it is the step that produced the only new information of the whole journey.

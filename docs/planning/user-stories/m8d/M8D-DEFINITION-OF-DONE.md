@@ -107,7 +107,12 @@ a visible one.
 
 ## Tier 0 — LAUNCH GATE: make the theft visible
 
-- **DOD-COATTEND-VISIBLE-1** 🟡 BUILT/UNVERIFIED-LIVE (2026-08-01) — **the launch half of §2.**
+- **DOD-COATTEND-VISIBLE-1** 🟠 PARTIAL — **AC6 FAILED LIVE (2026-08-02)**, all other ACs green.
+  Co-attendance is carried on the PUSH (doorbell text + `attendance` tag) and on `cello_status`, but
+  every READ surface is silent: `cello_receive` and `cello_transcript` carry no attendance field. A
+  session that reads without having seen a doorbell cannot learn it is not alone — asked openly, the
+  second live session did not mention co-attendance and said the transcript and wire are "silent on
+  it". Fix is a read-surface change; the daemon already computes the number. → Entry 33 (2026-08-01) — **the launch half of §2.**
 
   > ACs 1–5 + 7 enforcer-green (9 clauses, two connections, real daemon + IPC; 2386/11 gate clean at
   > `0f37607`). **AC 6 owed** — the live two-session `claude --channels` journey, which also needs a
