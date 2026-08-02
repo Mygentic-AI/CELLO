@@ -421,6 +421,28 @@ earned.
   five also fail pre-Tier-1, so they are genuine M8C `DOD-MSG-*` debt. **Parked, not dismissed** —
   parked-message delivery *is* core launch value. → Entries 25, 27
 
+  **UPDATE 2026-08-02 — the setup gap is FIXED for three files, and it was never a missing feature.**
+  `j-unilateral` **0/3 → 3/3**, `j-leg-frontier` **0/1 → 1/1**, `j-legibility` now reaches its real
+  subject. They simply never opted into the consortium setup `j-content` already documents. Two
+  halves, each hiding the next: a signed **directory-side** manifest (without it the daemon never
+  learns its own node id, routes two local agents cross-node, and dies on
+  `discovery_node_unresolvable`), **and** a **client-side** `CELLO_CONSORTIUM_MANIFEST` per daemon
+  (without it registration's FROST DKG has no consortium and `cello register-agent` exits 1).
+  `directoryCount: 3` because one node cannot satisfy the threshold. **Re-run the rest of the group
+  against this pattern before budgeting any diagnosis time for them.**
+
+  **`j-legibility`'s remaining failure is left RED on purpose, with the cause named.** The tail
+  `"…you agreed to send me $1000"` (U+2026) arrives at B as `"...you agreed"` — three ASCII periods.
+  `core/gateway/src/detect/sanitize.ts` applies **NFKC**, which folds U+2026 by design. Traced
+  further so the next reader need not: **neither the outbound nor the inbound path substitutes text
+  on an `allow` verdict** — both use the original bytes and only swap on `redact`
+  (`session-content-handlers.ts` `sendBytes`, `session-node-manager.ts:3855` `deliverContent`). So
+  the delivered text changed *because the gateway returned a `redact` verdict for this content*.
+  That is a governance decision about a money-demand tail, not a normalization leak — and it changes
+  this test's premise, since the point is that B receives the malicious tail verbatim. **Product
+  question, not a test edit**; patching the assertion to expect `"..."` would bake in whichever
+  reading is wrong.
+
   **The other never-run spine files fail at SETUP, not at their assertions.** `j-unilateral` (and by
   the same signature the rest of that group) dies on
   `discovery_node_unresolvable — "The counterparty's home node (local) is not in the signed
