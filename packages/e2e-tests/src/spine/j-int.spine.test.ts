@@ -30,7 +30,10 @@ import {
   type SpineCluster,
   type Proc,
   type McpConn,
+  writeSignedManifestTo,
+  writeConsortiumManifest,
 } from "./live-harness.js";
+import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -38,8 +41,37 @@ const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
-  cluster = await startSpineCluster();
+  // A THREE-node consortium with a signed manifest — the pattern j-content / j-unilateral /
+  // j-persist use. Without the DIRECTORY-side manifest the daemon never learns its own directory
+  // node id, so two LOCAL agents route down the CROSS-NODE path and cello_initiate_session dies on
+  // `discovery_node_unresolvable` before any clause runs. Without the CLIENT-side manifest
+  // (startLocalDaemon below) registration's FROST DKG has no consortium and register-agent exits 1.
+  // One node cannot satisfy the DKG threshold, hence directoryCount: 3.
+  const consortiumHolder = mkdtempSync(join(tmpdir(), "cello-int-consortium-"));
+  dirs.push(consortiumHolder);
+  const consortiumManifestPath = join(consortiumHolder, "consortium-manifest.json");
+  cluster = await startSpineCluster({
+    directoryCount: 3,
+    directoryNodeKeysHex: [0, 1, 2].map((i) => spineNodeKeypair(i).privateKeyHex),
+    directoryConsortiumManifestPath: consortiumManifestPath,
+    onDirectoryUrlsReady: (urls) => {
+      writeSignedManifestTo(consortiumManifestPath, urls.map((url, i) => spineDirectoryNode(i, url)));
+    },
+  });
 }, 180_000);
+/**
+ * A daemon that KNOWS ITS OWN NODE — which is what lets two local agents talk to each other.
+ * The client manifest is written OUTSIDE CELLO_DIR so it cannot violate DOD-STORE-1.
+ */
+async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> {
+  const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
+  const manifestDir = mkdtempSync(join(tmpdir(), `cello-manifest-${label}-`));
+  dirs.push(manifestDir);
+  return startDaemon(celloDir, cluster.directoryUrls[0], label, {
+    manifestEnv: writeConsortiumManifest(manifestDir, label, nodes),
+  });
+}
+
 
 afterAll(async () => {
   for (const c of mcpConns) await c.close();
@@ -67,8 +99,8 @@ describe("J-INT — interrupted + retry survival, live (DOD-INT-1 / DOD-RETRY-1)
     await provisionAgent(celloDirA, "agentA");
     const pubB = await provisionAgent(celloDirB, "agentB");
 
-    let daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "intA");
-    const daemonB = await startDaemon(celloDirB, cluster.directoryUrl, "intB");
+    let daemonA = await startLocalDaemon(celloDirA, "intA");
+    const daemonB = await startLocalDaemon(celloDirB, "intB");
     daemons.push(daemonA, daemonB);
 
     // Register both (real DKG) so the session can be brokered + FROST-assigned.
@@ -115,7 +147,7 @@ describe("J-INT — interrupted + retry survival, live (DOD-INT-1 / DOD-RETRY-1)
     }
 
     // ── Restart A's daemon on the SAME CELLO_DIR (same SQLCipher DB). ──
-    daemonA = await startDaemon(celloDirA, cluster.directoryUrl, "intA-restart");
+    daemonA = await startLocalDaemon(celloDirA, "intA-restart");
     daemons.push(daemonA);
 
     // The interrupted detection runs in SessionNodeManager.initialize() BEFORE the IPC
@@ -150,8 +182,8 @@ describe("J-INT — interrupted + retry survival, live (DOD-INT-1 / DOD-RETRY-1)
     dirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB");
-    let daemonA = await startDaemon(dirA, cluster.directoryUrl, "int2A");
-    let daemonB = await startDaemon(dirB, cluster.directoryUrl, "int2B");
+    let daemonA = await startLocalDaemon(dirA, "int2A");
+    let daemonB = await startLocalDaemon(dirB, "int2B");
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-int2-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-int2-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
@@ -184,8 +216,8 @@ describe("J-INT — interrupted + retry survival, live (DOD-INT-1 / DOD-RETRY-1)
         /* best-effort */
       }
     }
-    daemonA = await startDaemon(dirA, cluster.directoryUrl, "int2A-restart");
-    daemonB = await startDaemon(dirB, cluster.directoryUrl, "int2B-restart");
+    daemonA = await startLocalDaemon(dirA, "int2A-restart");
+    daemonB = await startLocalDaemon(dirB, "int2B-restart");
     daemons.push(daemonA, daemonB);
     // Both detect the interruption.
     await daemonA.waitForLine(/"event":"session\.interrupted\.detected"/, 15_000);
@@ -225,7 +257,7 @@ describe("J-INT — interrupted + retry survival, live (DOD-INT-1 / DOD-RETRY-1)
     const celloDir = mkdtempSync(join(tmpdir(), "cello-retry-"));
     dirs.push(celloDir);
     await provisionAgent(celloDir, "retryA");
-    let daemon = await startDaemon(celloDir, cluster.directoryUrl, "retryA");
+    let daemon = await startLocalDaemon(celloDir, "retryA");
     daemons.push(daemon);
 
     const sessionId = randomBytes(16).toString("hex");
@@ -251,7 +283,7 @@ describe("J-INT — interrupted + retry survival, live (DOD-INT-1 / DOD-RETRY-1)
         /* best-effort */
       }
     }
-    daemon = await startDaemon(celloDir, cluster.directoryUrl, "retryA-restart");
+    daemon = await startLocalDaemon(celloDir, "retryA-restart");
     daemons.push(daemon);
 
     // Retry queue survived: both entries present, in FIFO order (M2 must not jump M1).

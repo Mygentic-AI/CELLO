@@ -28,7 +28,10 @@ import {
   type SpineCluster,
   type Proc,
   type McpConn,
+  writeSignedManifestTo,
+  writeConsortiumManifest,
 } from "./live-harness.js";
+import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 type KeyedStmt = { get(...p: unknown[]): unknown };
 type KeyedDb = { prepare(sql: string): KeyedStmt; close(): void };
@@ -62,8 +65,37 @@ const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
-  cluster = await startSpineCluster({});
+  // A THREE-node consortium with a signed manifest — the pattern j-content / j-unilateral /
+  // j-persist use. Without the DIRECTORY-side manifest the daemon never learns its own directory
+  // node id, so two LOCAL agents route down the CROSS-NODE path and cello_initiate_session dies on
+  // `discovery_node_unresolvable` before any clause runs. Without the CLIENT-side manifest
+  // (startLocalDaemon below) registration's FROST DKG has no consortium and register-agent exits 1.
+  // One node cannot satisfy the DKG threshold, hence directoryCount: 3.
+  const consortiumHolder = mkdtempSync(join(tmpdir(), "cello-remove-consortium-"));
+  dirs.push(consortiumHolder);
+  const consortiumManifestPath = join(consortiumHolder, "consortium-manifest.json");
+  cluster = await startSpineCluster({
+    directoryCount: 3,
+    directoryNodeKeysHex: [0, 1, 2].map((i) => spineNodeKeypair(i).privateKeyHex),
+    directoryConsortiumManifestPath: consortiumManifestPath,
+    onDirectoryUrlsReady: (urls) => {
+      writeSignedManifestTo(consortiumManifestPath, urls.map((url, i) => spineDirectoryNode(i, url)));
+    },
+  });
 }, 180_000);
+/**
+ * A daemon that KNOWS ITS OWN NODE — which is what lets two local agents talk to each other.
+ * The client manifest is written OUTSIDE CELLO_DIR so it cannot violate DOD-STORE-1.
+ */
+async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> {
+  const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
+  const manifestDir = mkdtempSync(join(tmpdir(), `cello-manifest-${label}-`));
+  dirs.push(manifestDir);
+  return startDaemon(celloDir, cluster.directoryUrls[0], label, {
+    manifestEnv: writeConsortiumManifest(manifestDir, label, nodes),
+  });
+}
+
 
 afterAll(async () => {
   for (const c of mcpConns) await c.close();
@@ -83,7 +115,7 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
   it("register X → remove-agent X (retired row + keys + FROST share KEPT) → create-agent X = a NEW identity", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cello-remove-"));
     dirs.push(dir);
-    const daemon = await startDaemon(dir, cluster.directoryUrl, "remove");
+    const daemon = await startLocalDaemon(dir, "remove");
     daemons.push(daemon);
 
     // Create X — capture its stable agent_id + K_local pubkey.
@@ -222,7 +254,7 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     // did. We drive it on the binary and assert the log line.
     const dir = mkdtempSync(join(tmpdir(), "cello-remove2-"));
     dirs.push(dir);
-    const daemon = await startDaemon(dir, cluster.directoryUrl, "remove2");
+    const daemon = await startLocalDaemon(dir, "remove2");
     daemons.push(daemon);
 
     // alpha = the lexicographically-first agent; register it so its own per-agent signaling connects.
@@ -271,7 +303,7 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     // Target X: register (NOT yet removed).
     const dirX = mkdtempSync(join(tmpdir(), "cello-revX-"));
     dirs.push(dirX);
-    daemons.push(await startDaemon(dirX, cluster.directoryUrl, "revX"));
+    daemons.push(await startLocalDaemon(dirX, "revX"));
     const cX = JSON.parse(cello(["create-agent", "xtarget"], { CELLO_DIR: dirX }).stdout) as { pubkey: string };
     const pubX = cX.pubkey;
     await waitConnected(dirX);
@@ -280,7 +312,7 @@ describe("J-REMOVE — retire-and-keep + name reuse (CELLO-M7-REMOVE-001 DOD-REM
     // Initiator A: register + online.
     const dirA = mkdtempSync(join(tmpdir(), "cello-revA-"));
     dirs.push(dirA);
-    daemons.push(await startDaemon(dirA, cluster.directoryUrl, "revA"));
+    daemons.push(await startLocalDaemon(dirA, "revA"));
     expect(cello(["create-agent", "ainit"], { CELLO_DIR: dirA }).status).toBe(0);
     await waitConnected(dirA);
     expect(registerAgent("ainit", `DEV-reva-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);

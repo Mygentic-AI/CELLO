@@ -31,7 +31,10 @@ import {
   type SpineCluster,
   type Proc,
   type McpConn,
+  writeSignedManifestTo,
+  writeConsortiumManifest,
 } from "./live-harness.js";
+import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -39,8 +42,37 @@ const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
 beforeAll(async () => {
-  cluster = await startSpineCluster();
+  // A THREE-node consortium with a signed manifest — the pattern j-content / j-unilateral /
+  // j-persist use. Without the DIRECTORY-side manifest the daemon never learns its own directory
+  // node id, so two LOCAL agents route down the CROSS-NODE path and cello_initiate_session dies on
+  // `discovery_node_unresolvable` before any clause runs. Without the CLIENT-side manifest
+  // (startLocalDaemon below) registration's FROST DKG has no consortium and register-agent exits 1.
+  // One node cannot satisfy the DKG threshold, hence directoryCount: 3.
+  const consortiumHolder = mkdtempSync(join(tmpdir(), "cello-sig-consortium-"));
+  dirs.push(consortiumHolder);
+  const consortiumManifestPath = join(consortiumHolder, "consortium-manifest.json");
+  cluster = await startSpineCluster({
+    directoryCount: 3,
+    directoryNodeKeysHex: [0, 1, 2].map((i) => spineNodeKeypair(i).privateKeyHex),
+    directoryConsortiumManifestPath: consortiumManifestPath,
+    onDirectoryUrlsReady: (urls) => {
+      writeSignedManifestTo(consortiumManifestPath, urls.map((url, i) => spineDirectoryNode(i, url)));
+    },
+  });
 }, 180_000);
+/**
+ * A daemon that KNOWS ITS OWN NODE — which is what lets two local agents talk to each other.
+ * The client manifest is written OUTSIDE CELLO_DIR so it cannot violate DOD-STORE-1.
+ */
+async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> {
+  const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
+  const manifestDir = mkdtempSync(join(tmpdir(), `cello-manifest-${label}-`));
+  dirs.push(manifestDir);
+  return startDaemon(celloDir, cluster.directoryUrls[0], label, {
+    manifestEnv: writeConsortiumManifest(manifestDir, label, nodes),
+  });
+}
+
 
 afterAll(async () => {
   for (const c of mcpConns) await c.close();
@@ -83,7 +115,7 @@ describe("J-SIG — directory signaling resilience, live (DOD-SIG-1)", () => {
     const celloDir = mkdtempSync(join(tmpdir(), "cello-sig-"));
     dirs.push(celloDir);
     await provisionAgent(celloDir, "sigA");
-    const daemon = await startDaemon(celloDir, cluster.directoryUrl, "sigA");
+    const daemon = await startLocalDaemon(celloDir, "sigA");
     daemons.push(daemon);
     const env = { CELLO_DIR: celloDir };
 
@@ -103,7 +135,11 @@ describe("J-SIG — directory signaling resilience, live (DOD-SIG-1)", () => {
     expect(used.ok, `cello_use_agent failed: ${JSON.stringify(used)}`).toBe(true);
 
     // Kill the directory — the signaling stream breaks under the daemon.
-    await cluster.directory.stop();
+    // ALL of them (not just node 0). This file's subject is what the daemon does when the
+    // directory is GONE, and the consortium this test now needs for session setup has three nodes —
+    // so stopping `cluster.directory` alone leaves two serving and the daemon never degrades. That
+    // would not fail the test, it would make it assert nothing, which is worse.
+    for (const d of cluster.directories) await d.stop();
 
     // The daemon must NOTICE and degrade to reconnecting (heartbeat timeout / stream close),
     // not sit silently on a dead stream.
@@ -150,7 +186,7 @@ describe("J-SIG — directory signaling resilience, live (DOD-SIG-1)", () => {
     const celloDir = mkdtempSync(join(tmpdir(), "cello-sig-rec-"));
     dirs.push(celloDir);
     await provisionAgent(celloDir, "sigB");
-    const daemon = await startDaemon(celloDir, cluster.directoryUrl, "sigB");
+    const daemon = await startLocalDaemon(celloDir, "sigB");
     daemons.push(daemon);
     const env = { CELLO_DIR: celloDir };
 
@@ -168,7 +204,11 @@ describe("J-SIG — directory signaling resilience, live (DOD-SIG-1)", () => {
     expect(connectsBeforeKill, "should have authenticated at least once").toBeGreaterThanOrEqual(1);
 
     // Outage: kill the directory → daemon degrades to reconnecting.
-    await cluster.directory.stop();
+    // ALL of them (not just node 0). This file's subject is what the daemon does when the
+    // directory is GONE, and the consortium this test now needs for session setup has three nodes —
+    // so stopping `cluster.directory` alone leaves two serving and the daemon never degrades. That
+    // would not fail the test, it would make it assert nothing, which is worse.
+    for (const d of cluster.directories) await d.stop();
     const down = await waitForSignaling(env, "reconnecting", 25_000);
     expect(down.directory_signaling, `must degrade to reconnecting:\n${daemon.output.split("\n").slice(-30).join("\n")}`).toBe(
       "reconnecting",
