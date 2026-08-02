@@ -422,8 +422,23 @@ earned.
   and after the M8D *review fixes* — Tier 1 was in both, so that comparison could not see this. The
   pre-Tier-1 build was the experiment that could.
 
-  **Five remain** (MSG-7, MSG-5 dedup, MSG-1 ACK ladder, MSG-4 auto-recover, MSG-8 straggler); all
-  five also fail pre-Tier-1, so they are genuine M8C `DOD-MSG-*` debt. **Parked, not dismissed** —
+  **TEN FILES RECOVERED (2026-08-02), none needing a product change** — `j-unilateral` 3/3, `j-int`
+  3/3, `j-sig` 2/2, `j-persist` 1/1, `j-leg-frontier` 1/1, `j-upgrade` 1/1, `j-upgrade-bilateral`
+  1/1, `j-suspend` 1/1, `j-canary` 1/1, `j-combined-journey` 1/1; plus `j-spine` 0→4/7, `j-content`
+  3→5/10, `j-remove` 0→2/3. Causes, in order of how many files each blocked:
+  the two-part consortium setup · MCP/IPC rename drift (3 tools) · in-band turn signals ·
+  `agent_name` → `agent_id` · the **mandatory `same_operator` envelope slot** (appended to a closed
+  12-field preimage, so the encoder refuses rather than mis-hashing) · the **`subject` column
+  dropped** from `signal_records` (federated directories notarize the hash and the KIND, never what
+  the subject IS — the subject rides inside the hashed preimage).
+
+  **`j-end` is blocked on a different prerequisite and is NOT rot:** HOPs 0–1 pass; HOP 2 (the
+  portal drains → authenticates → scans → mints → delivers) reaches `cello-portal/src/server/db.ts`
+  and fails on **the portal's own Postgres refusing connections**. That is a third repo's
+  infrastructure, not a test defect — it needs the portal's database stood up, which is its own unit.
+
+  **Five remain in `j-content`** (MSG-7, MSG-5 dedup, MSG-1 ACK ladder, MSG-4 auto-recover, MSG-8
+  straggler); all five also fail pre-Tier-1, so they are genuine M8C `DOD-MSG-*` debt. **Parked, not dismissed** —
   parked-message delivery *is* core launch value. → Entries 25, 27
 
   **UPDATE 2026-08-02 — the setup gap is FIXED for three files, and it was never a missing feature.**
