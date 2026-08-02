@@ -432,10 +432,13 @@ earned.
   dropped** from `signal_records` (federated directories notarize the hash and the KIND, never what
   the subject IS — the subject rides inside the hashed preimage).
 
-  **`j-end` is blocked on a different prerequisite and is NOT rot:** HOPs 0–1 pass; HOP 2 (the
-  portal drains → authenticates → scans → mints → delivers) reaches `cello-portal/src/server/db.ts`
-  and fails on **the portal's own Postgres refusing connections**. That is a third repo's
-  infrastructure, not a test defect — it needs the portal's database stood up, which is its own unit.
+  **`j-end` ✅ 10/10 (2026-08-02) — it needed no code at all, only the portal's database.** HOP 2
+  reaches `cello-portal/src/server/db.ts`, and that is deliberate: the harness calls the portal *the
+  third sibling* and says reaching it is what stops `J-END` being a **false green** (every earlier
+  journey simulates the portal by seeding `signal_records` directly). Its Postgres simply was not
+  running — separate compose file, separate port (**55432**, db `cello_portal`). Bringing it up
+  failed twice with `network <id> not found`, a container holding a dead network reference: pruning
+  networks does **not** fix that, `docker compose down --remove-orphans && up -d` does.
 
   **Five remain in `j-content`** (MSG-7, MSG-5 dedup, MSG-1 ACK ladder, MSG-4 auto-recover, MSG-8
   straggler); all five also fail pre-Tier-1, so they are genuine M8C `DOD-MSG-*` debt. **Parked, not dismissed** —
