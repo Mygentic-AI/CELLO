@@ -1828,3 +1828,28 @@ use the single-node AUTH path on purpose.
 closed after the label, so those daemons silently kept no manifest and registration died with exit
 1 — indistinguishable, from the test output, from a DKG bug. The helper now merges `extraEnv` so
 options travel *through* the wiring rather than bypassing it.
+
+### 2026-08-02 — Entry 30: ✅ PROMOTED — Andre ran it; verified against the running binary
+
+`+latest:` confirmed for **cli 0.0.121** and **daemon 0.0.118**; the other five printed the harmless
+*"latest is already set"*, exactly as Entry 26 predicted. Reinstalled with `--prefer-online`,
+`cello logout && cello login`, daemon back up with 2 agents (`CELLO_Coder_1`, `Miss_Chelly`).
+
+Verified where it counts — **on disk and in the running daemon**, not from the install's output:
+
+| check | result |
+|---|---|
+| `cello -v` | **0.0.121** |
+| daemon under the cli | **0.0.118** |
+| `getDeliveryBookmark` | ✅ the redelivery loop is fixed in the binary that is running |
+| `sendInFlight` | ✅ the `sendContent` wire window is closed |
+| `presentSeqs` | ✅ the watermark walk covers both directions |
+| `cursor_and_watermark` | ✅ the gate names its authority |
+
+**One human-only step remains: `/mcp` (or restart Claude Code), then the live journey.** The script,
+with pass/fail fixed in advance, is **Entry 22** — J1 (both sessions receive), J2 (the second session
+reports being un-alone in its own words), J3 (two sessions cannot both answer), J4 (a session behind
+a sibling's send has a door).
+
+Four lines — `DOD-COATTEND-1` AC7, `DOD-COATTEND-VISIBLE-1` AC6, `SENDWINDOW`, `CATCHUP` — are 🟡
+purely for want of that run, and every one of them is now backed by the promoted binary.
