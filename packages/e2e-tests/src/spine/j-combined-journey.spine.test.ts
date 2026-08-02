@@ -155,13 +155,19 @@ describe("J-COMBINED-JOURNEY — DOD-T4-JOURNEY-1: all signal classes, v1 close"
     const issuerPubkey = "ab".repeat(32);
 
     const envelopes: Array<{ envelope: Envelope; kind: string; subjectKind: "account" | "agent"; subject: string }> = [
+      // `same_operator: false` on all four, and it is a claim rather than boilerplate: every one of
+      // these is issued by a PORTAL about a subject that is not the portal, which is exactly the
+      // not-the-same-operator case the flag distinguishes. The field is MANDATORY — the envelope
+      // preimage is a closed set of 12 slots (M10-D17) — and it was appended after this test was
+      // written, so the encoder refused outright rather than producing a differently-hashed
+      // envelope that would have failed verification somewhere further downstream.
       {
         kind: "phone", subjectKind: "account", subject: accountId,
         envelope: {
           subject_kind: "account", subject: accountId,
           issuer_kind: "portal", issuer_pubkey: issuerPubkey, type: "phone", schema_version: 1,
           payload: encodeCbor({ claim: "Phone verified via SMS OTP.", country_code: "US" }),
-          issued_at: 1_700_000_000, expires_at: null, supersedes_hash: null,
+          issued_at: 1_700_000_000, same_operator: false, expires_at: null, supersedes_hash: null,
         },
       },
       {
@@ -170,7 +176,7 @@ describe("J-COMBINED-JOURNEY — DOD-T4-JOURNEY-1: all signal classes, v1 close"
           subject_kind: "account", subject: accountId,
           issuer_kind: "portal", issuer_pubkey: issuerPubkey, type: "email", schema_version: 1,
           payload: encodeCbor({ claim: "Email verified via magic link.", domain: "example.com" }),
-          issued_at: 1_700_000_000, expires_at: null, supersedes_hash: null,
+          issued_at: 1_700_000_000, same_operator: false, expires_at: null, supersedes_hash: null,
         },
       },
       {
@@ -179,7 +185,7 @@ describe("J-COMBINED-JOURNEY — DOD-T4-JOURNEY-1: all signal classes, v1 close"
           subject_kind: "account", subject: accountId,
           issuer_kind: "portal", issuer_pubkey: issuerPubkey, type: "github", schema_version: 1,
           payload: encodeCbor({ claim: "GitHub account ownership verified via OAuth.", username: "testuser", account_age_days: 3650, public_repos: 42, followers: 100 }),
-          issued_at: 1_700_000_000, expires_at: null, supersedes_hash: null,
+          issued_at: 1_700_000_000, same_operator: false, expires_at: null, supersedes_hash: null,
         },
       },
       {
@@ -188,7 +194,7 @@ describe("J-COMBINED-JOURNEY — DOD-T4-JOURNEY-1: all signal classes, v1 close"
           subject_kind: "agent", subject: agentSubject,
           issuer_kind: "portal", issuer_pubkey: issuerPubkey, type: "track_record", schema_version: 1,
           payload: encodeCbor({ claim: "Agent track record: 20 sessions, 95% clean-close.", session_count: 20, clean_close_rate: 0.95 }),
-          issued_at: 1_700_000_000, expires_at: null, supersedes_hash: null,
+          issued_at: 1_700_000_000, same_operator: false, expires_at: null, supersedes_hash: null,
         },
       },
     ];
@@ -203,10 +209,13 @@ describe("J-COMBINED-JOURNEY — DOD-T4-JOURNEY-1: all signal classes, v1 close"
 
     // Insert all into signal_records
     const signalRecordsValues = prepared.map((p) =>
-      `('${p.hash}', 'local', '${p.subjectKind}', '${p.subject}', 'portal', '${issuerPubkey}', '${p.kind}', 'active', 'test-v0')`
+      // NO `subject` — the directory dropped that column deliberately. It is federated and possibly
+      // public, so it notarizes the signal HASH and the subject KIND and never retains what the
+      // subject IS. The subject still travels inside the envelope's hashed preimage.
+      `('${p.hash}', 'local', '${p.subjectKind}', 'portal', '${issuerPubkey}', '${p.kind}', 'active', 'test-v0')`
     ).join(", ");
     psqlSpine(
-      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type, status, scanner_version) VALUES ${signalRecordsValues}`,
+      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type, status, scanner_version) VALUES ${signalRecordsValues}`,
     );
 
     // Insert all into pickup_queue (using different signal_kind to avoid unique constraint)
