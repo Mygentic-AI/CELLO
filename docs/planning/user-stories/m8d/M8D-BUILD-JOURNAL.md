@@ -1904,3 +1904,54 @@ That warning is **obsolete on this build.** Delivery is non-destructive now: a s
 takes nothing away, and `cello_receive` returning nothing for that reason can no longer happen. The
 text describes the Tier-0 world and would teach an operator to expect theft that has been fixed —
 mild, but it is exactly the kind of stale instruction that outlives its cause. Raised as its own line.
+
+### 2026-08-02 — Entry 32: the live journey is COMPLETE — three lines to ✅, one honestly left open
+
+Three real `claude --channels` windows, promoted binary (cli 0.0.121 / daemon 0.0.118).
+
+**J1 — both sessions receive the same message.** ✅ Identical `content`, identical
+`sequence_number: 0`, on two separate windows attending one agent, and session 2 confirmed it had
+called `cello_send` **zero** times. Neither read removed it. `DOD-COATTEND-1` **AC7 met**.
+
+**J4 — the catch-up door.** ✅ Session 2's `cello_transcript`:
+
+```
+seq 0  received  "J1 — one question, two sessions should both see this [[OVER]]"
+seq 1  sent      "J1 confirmed from session 1 of 2 …"      ← the OTHER session's reply
+seq 2  sent      "second session replying too [[OVER]]"
+```
+
+Session 2 never received `seq 1` through `cello_receive` — it **cannot**, that path returns only the
+counterparty's messages — and the transcript shows it anyway. That is `DOD-COATTEND-CATCHUP-1`'s
+entire claim (M8D-D3: the door is `cello_get_transcript`), witnessed on real binaries rather than a
+fixture.
+
+**Two sequential replies to one question: DELIBERATE, not the defect.** The counterparty session
+reported *"Two distinct replies to one question — that's the defect J3 exists to catch."* **It is
+not**, and the mis-framing came from my own session-3 prompt. Session 2 had read the question and
+was entitled to answer; two windows of one agent do not gate each other because the principal is the
+agent, not the socket — a decision written into the gate in as many words. What `SENDWINDOW`
+prevents is the **race**: both passing the check concurrently, each before either had written. That
+is unhittable by hand, which is why the unit test stages it by freezing the security gateway
+mid-send. **The correction matters more than the observation** — left alone it would have entered
+the record as a live-confirmed defect that does not exist.
+
+### Tags
+
+| line | now | on what |
+|---|---|---|
+| `DOD-COATTEND-1` | **✅ PROVEN LIVE** | J1 above — AC7 met |
+| `DOD-COATTEND-CATCHUP-1` | **✅ PROVEN LIVE** | J4 above |
+| `DOD-COATTEND-SENDWINDOW-1` | **✅ PROVEN** | ACs met + reviewed twice; the race is unit-proven by construction (see below) |
+| `DOD-COATTEND-VISIBLE-1` | **🟡 stays open** | AC6 not witnessed — see below |
+
+**`SENDWINDOW` is ✅ on its own ACs, not on the journey.** AC5 is a *test* clause ("two connections
+both pass the gate, both proceed through a stalled screening await"), and it is met, reviewed twice,
+and revert-proven. The live run cannot add to it: no human can hit that window. Saying so plainly is
+better than implying the journey confirmed it.
+
+**`VISIBLE-1` AC6 stays 🟡, deliberately.** It asks that the second session *"reports being un-alone
+in its own words."* The attendance count **reached** it — the doorbell carried `attendance="2"` and
+named it in the guidance — but session 2 was following a scripted instruction and never volunteered
+it. The plumbing is proven; the legibility clause is not. Claiming it on adjacent evidence is exactly
+the "DONE means reviewed, not written" failure, so it stays open.

@@ -145,7 +145,7 @@ a visible one.
 
 ## Tier 1 — the redesign
 
-- **DOD-COATTEND-1** 🟡 BUILT/UNVERIFIED-LIVE (2026-08-01) — **per-session delivery.**
+- **DOD-COATTEND-1** ✅ PROVEN LIVE (2026-08-02) — **per-session delivery.**
 
   > ACs 1–6 green on the two-connection fixture (8 clauses, real daemon + IPC; three connections
   > for listener mode). Delivery reads the durable transcript against a **per-connection delivery
@@ -207,7 +207,7 @@ a visible one.
   7. Live: two-session `claude --channels` journey on one agent — both sessions see the counterparty's
      message.
 
-- **DOD-COATTEND-CATCHUP-1** 🟡 BUILT/UNVERIFIED-LIVE (2026-08-02) — **catch-up means everything since my
+- **DOD-COATTEND-CATCHUP-1** ✅ PROVEN LIVE (2026-08-02) — **catch-up means everything since my
   bookmark, whoever wrote it (§3b).** Receiving only ever returns the *counterparty's* messages: the
   `since_seq` branch filters `direction === "received"` (`session-content-handlers.ts:366-394`), so a
   **sibling session's reply is in the record but never delivered through that path**. The second
@@ -236,7 +236,7 @@ a visible one.
   4. Test: session A replies; session B, which never saw A's reply, catches up through the documented
      door and clears the bar. Red before green.
 
-- **DOD-COATTEND-SENDWINDOW-1** 🟡 BUILT/UNVERIFIED-LIVE (2026-08-02) — **the send gate is re-checked in
+- **DOD-COATTEND-SENDWINDOW-1** ✅ PROVEN (2026-08-02) — **the send gate is re-checked in
   the same synchronous window as the append (§4).**
 
   > **Both lines landed together, as AC4 requires.** The race is real and was reproduced
