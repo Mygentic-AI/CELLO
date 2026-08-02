@@ -1778,3 +1778,53 @@ Not nine investigations. **One setup gap and three renames**, layered so each hi
 `j-track-record`, `j-trust-journey`, `j-upgrade`, `j-upgrade-bilateral`, `j-canary`). The pattern is
 now proven on four; applying it is mechanical, and **should be done before anyone budgets diagnosis
 time for them.**
+
+### 2026-08-02 — Entry 29: the spine tally, and the one question left underneath it
+
+Nine files touched. **Six are fully green that were fully red**, and every one is a live
+multi-process journey against real binaries, real Postgres, three real directory nodes and a real
+relay:
+
+| file | before | after | what it proves live |
+|---|---|---|---|
+| `j-unilateral` | 0/3 | **3/3** | unilateral seal → FROST notarization with the counterparty ABSENT |
+| `j-int` | 0/3 | **3/3** | mid-session daemon kill → interrupted + surfaced at login; both parties interrupted → bilateral seal-interrupted agreement; retry queue FIFO + nonce dedup survive restart |
+| `j-sig` | 0/2 | **2/2** | directory gone → bounded degradation with guidance; returns → re-auth with no resume token |
+| `j-persist` | 0/1 | **1/1** | the durable encrypted transcript survives a daemon restart |
+| `j-leg-frontier` | 0/1 | **1/1** | a directory-inflated frontier is re-derived, detected, rejected |
+| `j-upgrade` | 0/1 | **1/1** | B's agent never closes → B's daemon auto-co-signs → BILATERAL seal |
+| `j-spine` | 0/7 | 3/7 | SessionAssignment, send/receive, bilateral seal → byte-identical `sealed_root` |
+| `j-content` | 3/10 | 5/10 | relay store-and-forward + recover |
+| `j-remove` | 0/3 | 1/3 | secondary-agent removal drops its signaling |
+
+**None of it needed a product change.** It was one setup gap (the two-part consortium), three
+MCP/IPC renames, in-band turn signals, and `agent_name` → `agent_id`.
+
+### The one question left, which is FOUR failures with ONE shape
+
+`j-spine` SPINE-4, `j-remove`, `j-suspend` AC-001 and `j-upgrade-bilateral` all register
+**successfully** and then find the directory-side row missing or uncounted:
+
+> *"X must have a directory-assigned agent_id"* → `""` · *"agent_profiles never settled to 2 rows"* ·
+> *"directory must hold exactly one unilateral notarization for R1"*
+
+Every one queries `cluster.directory` — **node 0 of three**. The obvious reading is that the row
+lands on whichever node served the registration while the query looks at node 0, with anti-entropy
+either not yet converged or not replicating that table. **That is a real question about consortium
+behaviour and it is a unit of its own** — guessing at it from a test file is the rabbit hole
+`.claude/CLAUDE.md` names. Grouped here so it gets investigated once rather than four times.
+
+### Two traps in this work worth keeping
+
+**Converting a single-directory test to a consortium can silently destroy its premise.** `j-sig`
+kills the directory and asserts degradation — with three nodes, `cluster.directory.stop()` stops
+node 0 and leaves two serving, so the daemon never degrades and the clause **asserts nothing while
+looking green**. Worse than a red test. It now stops all of `cluster.directories`. The same
+reasoning is why `j-track-record` and `j-trust-journey` were deliberately **not** converted: they
+use the single-node AUTH path on purpose.
+
+**A batch rewrite that misses a call shape produces failures that look like product defects.**
+`j-upgrade*` pass `startDaemon(dir, url, label, { extraEnv })`; the rewrite only matched calls that
+closed after the label, so those daemons silently kept no manifest and registration died with exit
+1 — indistinguishable, from the test output, from a DKG bug. The helper now merges `extraEnv` so
+options travel *through* the wiring rather than bypassing it.
