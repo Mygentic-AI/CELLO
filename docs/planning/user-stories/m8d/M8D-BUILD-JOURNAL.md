@@ -2181,3 +2181,39 @@ own words. I can read the field, but I built it — my mentioning it proves noth
 It needs the one unscripted question into a second window. The difference from the first attempt is
 that the number is now demonstrably sitting in every read response the session could consult, so a
 failure this time would be a genuine legibility finding rather than an absent field.
+
+### 2026-08-02 — Entry 38: ✅ AC6 PASSED LIVE — M8D CLOSES
+
+Same open question as the failing run, on the promoted binary (cli 0.0.122 / daemon 0.0.119 /
+connect 0.0.116). Nothing about co-attendance in the prompt. The second session's answer, quoted
+because it *is* the evidence:
+
+> *"cello_agents reports CELLO_Coder_1 at attendance: 2 — so another session is attending this same
+> agent alongside me, not just me alone. That's the first thing worth flagging before I reply to
+> anyone: whatever I send, a second window on this identity could also be reading and replying
+> independently."*
+
+**It led with it, unprompted, and drew the operational consequence** — not "the field says 2" but
+*another window may also be replying*. That is what "reports being un-alone **in its own words**"
+asks for, and it is the difference between a value being present and a value being legible.
+
+It then volunteered something nobody asked about: three interrupted sessions with `Miss_Chelly`,
+none implicitly "the" session, so a reply requires choosing. A session reciting a field does not do
+that.
+
+### Before → after, same question, same wording
+
+| | first run (Entry 33) | now |
+|---|---|---|
+| answer | *"Co-attendance did not come up on its own… the transcript and the wire protocol are silent on it"* | leads with attendance: 2 and its consequence |
+| cause | attendance rode the **push** only; every read surface silent | attendance on every `cello_receive` exit + `cello_get_transcript` |
+
+**`DOD-COATTEND-VISIBLE-1` → ✅ PROVEN LIVE. M8D is CLOSED — all six lines.**
+
+### What closed the loop, and it was not the code
+
+The first run failed because I front-loaded three prompts of instructions and scripted the sessions.
+Andre's correction — *brief the sessions, never give them the sequence; hand the orchestrator one
+paste at the moment it is needed* — is what produced **every** piece of new information in this
+milestone's live testing: the AC6 failure, its precise shape, and now its pass. The scripted steps
+only re-confirmed what the unit tests already knew.

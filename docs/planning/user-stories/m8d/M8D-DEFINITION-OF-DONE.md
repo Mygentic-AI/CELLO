@@ -107,7 +107,14 @@ a visible one.
 
 ## Tier 0 — LAUNCH GATE: make the theft visible
 
-- **DOD-COATTEND-VISIBLE-1** 🟠 PARTIAL — **AC6 FAILED LIVE (2026-08-02)**, all other ACs green.
+- **DOD-COATTEND-VISIBLE-1** ✅ **PROVEN LIVE (2026-08-02)** — AC6 failed on the first live run,
+  was fixed at the read surfaces, and **passed on re-run**: asked an open question with no mention
+  of co-attendance, the second session led with *"another session is attending this same agent
+  alongside me… whatever I send, a second window on this identity could also be reading and
+  replying independently"* — the number **and** its consequence, unprompted. → Entries 33, 34, 38.
+  Historical detail of the failure kept below.
+
+  <details><summary>The failure this line went through (kept — it is why the fix exists)</summary>
   Co-attendance is carried on the PUSH (doorbell text + `attendance` tag) and on `cello_status`, but
   every READ surface is silent: `cello_receive` and `cello_transcript` carry no attendance field. A
   session that reads without having seen a doorbell cannot learn it is not alone — asked openly, the
