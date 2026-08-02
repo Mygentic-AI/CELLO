@@ -2046,3 +2046,51 @@ Gate: **2461 passed / 11 skipped**, lint, typecheck, build — by exit code.
 **Not yet reviewed** (dispatched) and **not yet published** — `connect` and `daemon` have both moved
 and neither is on npm, so a further promotion is owed once the review lands. Deliberately batching
 those so the promotion happens once rather than twice.
+
+### 2026-08-02 — Entry 35: CORRECTION — Entry 34 overclaimed, and the review proved it
+
+**Entry 34 said "`attendance` now rides EVERY `cello_receive` exit". That was false.** It covered 4
+of 12, and I wrote the same false claim in three places: the code comment, the commit body, and the
+journal. That is the part worth keeping — *a reader trusting any of the three would never have gone
+looking for the gap.* The claim was more damaging than the omission.
+
+Three blocking findings, all correct, all fixed:
+
+**F1 — five exits omitted it, and the worst was `since_seq`.** That branch **is** the
+stateless-client door this unit's own rationale invokes: `cello receive <id> --since-seq -1` is a
+fresh connection every time, so it never saw a doorbell — and the `session_not_live` refusal points
+callers there **by name**. The guidance was sending sessions to the one read exit still silent. Also
+covered now: `session_not_live`, the sealed/terminal answer, and `content_undeliverable`. The last
+two already **logged** attendance while not returning it — the asymmetry sat on the surface the
+operator actually reads.
+
+**F2 — `attendance: 0`, which is affirmatively wrong rather than merely missing.**
+`countAttendance` walks connections that explicitly called `cello_use_agent`, but a connection
+reaches these handlers without that, through `resolveCurrentAgent`'s sole-online fallback — **every**
+`cello` CLI invocation with no persisted selection. Such a reader was not counted *including
+itself*, and was told **zero** sessions attend the agent it is reading. The caller is holding the
+response, so at least one session is on that agent by construction: **a response can never honestly
+say 0.** One helper floors it at 1 for every response; log contexts keep the raw count.
+
+Reproduced before fixing rather than argued: V7 stands an agent up, drops the connection that
+started it (the daemon keeps agents running — the CLI's ordinary state), then reads from a fresh
+connection. Pre-fix it returns `+0`.
+
+**F3 — all five original clauses were HOLLOW on the field's actual meaning.** Replace the predicate
+with "count every connection regardless of agent" and V1–V5 stayed green **and so did the entire
+daemon package**. Nothing in the repo pinned agent-scoping. On the first-wedge setup — one window
+per agent, which is how this product is used daily — that implementation tells **both** windows they
+are co-attended by a session attending something else. V8 goes red on exactly that bypass.
+
+### The pattern, now three units deep
+
+Every blocking finding this milestone has been the same failure with different clothes: **a fix
+verified against the layer it was written at, and then described as broader than it was.** Tier 1
+reused the gate's cursor; the send window guarded the narrower await; this one covered a third of
+the exits and said "every". The tests were real each time — the *claim* was not.
+
+Gate: **2464 passed / 11 skipped**, lint, typecheck, build.
+
+**AC6 does NOT flip on this.** Its text asks for a live journey in which the second session reports
+being un-alone **in its own words**. Five vitest clauses are not that. This is the enabling fix; the
+live re-run closes it, and that needs a publish first.
