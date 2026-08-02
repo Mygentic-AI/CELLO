@@ -184,6 +184,15 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
         proven_at_unix: Math.floor(Date.now() / 1000),
       }),
       issued_at: Math.floor(Date.now() / 1000),
+      // MANDATORY (M10-D17): the envelope preimage is a CLOSED SET of 12 fields, so every slot must
+      // be present or the encoder refuses. `same_operator` was APPENDED to that set after this test
+      // was written, which is why it failed with "missing mandatory field" rather than producing a
+      // wrong hash — the closed set is what makes the omission loud instead of silent.
+      //
+      // FALSE is the correct value here, not a placeholder: the issuer is a PORTAL attesting about
+      // an ACCOUNT, which is precisely the not-the-same-operator case the flag exists to
+      // distinguish. Setting it true would assert a relationship this canary does not have.
+      same_operator: false,
       expires_at: null,
       supersedes_hash: null,
     };
