@@ -205,8 +205,12 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
     // directly — the directory code that processes submissions is the same code that inserted the
     // phone/email rows; what matters is that the schema ACCEPTS the type.
     psqlSpine(
-      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type, status, scanner_version) ` +
-      `VALUES ('${canaryHash}', 'local', 'account', '${accountId}', 'portal', '${"ab".repeat(32)}', 'canary_test', 'active', 'canary-v0')`,
+      // NO `subject` COLUMN — it was dropped from the directory's ledger on purpose. The directory
+      // is federated and possibly public, so it notarizes the signal HASH and the subject KIND but
+      // never what the subject IS. The envelope still carries the subject (it is inside the hashed
+      // preimage); the directory simply does not retain it. This test predates that migration.
+      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type, status, scanner_version) ` +
+      `VALUES ('${canaryHash}', 'local', 'account', 'portal', '${"ab".repeat(32)}', 'canary_test', 'active', 'canary-v0')`,
     );
 
     // Verify the record exists and is active
@@ -273,8 +277,8 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
 
     // ── RETIRE: revoke the canary type in the registry (data operation) ──
     psqlSpine(
-      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, subject, issuer_kind, issuer_pubkey, type, status, scanner_version, is_tombstone) ` +
-      `VALUES ('${canaryHash}', 'revoke:local', 'account', '${accountId}', 'portal', '${"ab".repeat(32)}', 'canary_test', 'revoked', 'canary-v0', true)`,
+      `INSERT INTO signal_records (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type, status, scanner_version, is_tombstone) ` +
+      `VALUES ('${canaryHash}', 'revoke:local', 'account', 'portal', '${"ab".repeat(32)}', 'canary_test', 'revoked', 'canary-v0', true)`,
     );
 
     // Verify revocation is effective
