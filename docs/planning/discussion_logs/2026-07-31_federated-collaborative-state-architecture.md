@@ -14,7 +14,8 @@ description: >
   bilateral quiescence agreement, document epochs, the 0x04 operation leaf, and
   multi-party collaboration via hub-and-spoke re-authoring over pairwise sessions
   (mesh delivery lists deferred), the shadow-document validation stage with
-  sender-rollback rejection, and schema enforcement as an opt-in document flag.
+  sender-rollback rejection, schema enforcement as an opt-in document flag, and the
+  protocol boundary against goal-template and agent-tooling concerns.
 ---
 
 # 2026-07-31 — Federated Collaborative State Architecture
@@ -243,48 +244,61 @@ application.
 - The document merges automatically on arrival. That's what a CRDT is for. No
   accept/reject on the data itself.
 - What is gated is the **LLM's awareness**, not the merge. The client notifies the
-  agent that *something arrived* — **the notification carries no document
-  content**. To see what changed, the agent makes an explicit `get_diff` call,
-  which is an ordinary read subject to ordinary screening.
+  agent that the document has a pending update — nothing more.
 - This closes the prompt-injection concern the "Drafting Buffer" was reaching for,
   without accept/reject semantics: peer-controlled content never enters the LLM's
   context by arriving. It enters only when the LLM deliberately fetches it.
 
-**Why the notification must be content-free.** If the notification quoted changed
-lines, it would itself become the injection channel the design exists to close.
-Notification says *that* something changed (and optionally how much, structurally);
-`get_diff` says *what*.
+### 4.1 Three calls, one notification
+
+The notification is always the same thing and carries no document content:
+**this document has a pending update.** *Pending* refers to the agent's attention,
+not to application state — the update has already merged and been validated (§3.2);
+the agent simply hasn't looked at it.
+
+Everything beyond that is a separate, agent-initiated call:
+
+| Call | Returns |
+|---|---|
+| *(notification)* | This document has a pending update |
+| Diff stats | How much changed, structurally — no content |
+| Diff | The git-like diff itself: line ranges for text, key paths for structured |
+
+Both calls are ordinary reads subject to ordinary screening. If the notification
+itself quoted changed lines it would become the injection channel this design
+exists to close, which is why the split is not cosmetic.
 
 **Diff generation is real work.** Yjs updates are binary structural operations, not
-text patches. Producing "these lines changed" requires materializing before/after
-projections and diffing them. Practical scope: support the common text-based types
-— Markdown, plain text, JSON, XML, common text-based source files — rather than
-attempting arbitrary types. Line diffs for text, key-path diffs for structured
-documents. This shares machinery with §8: the canonical projection needed for
-hashing is the same projection needed for diffing, so the marginal cost of one
-given the other is small.
+text patches, so producing a diff requires materializing before/after projections
+and diffing them. It shares machinery with §8 — the canonical projection needed for
+hashing is the same projection needed for diffing — so the marginal cost of one
+given the other is small. Which document types the diff call supports (Markdown,
+plain text, JSON, XML, common text-based source) is tool-surface scoping for
+implementation, not a protocol decision.
 
 ---
 
-## 5. Publishing: Accumulate Locally, Publish on Intent
+## 5. Publishing: Cadence, Not Mode
 
-**Default mode is batched, not live-sync.** An agent accumulates local edits and
-publishes them as one merged Yjs update when it decides it is ready. Yjs supports
-merging N local updates into a single encoded update natively — this is a
-first-class operation, not something we build.
+**There is no batched-vs-live-sync mode, and framing it as one is a mistake.** Yjs
+tracks local changes in the `Y.Doc` continuously. When an agent publishes, the
+client computes the update relative to the peer's last-known state vector, and that
+single update contains everything accumulated since — whether that is one edit or
+fifty. Same call, same protocol behaviour, different cadence.
 
-What is being borrowed from git is the *gesture* — an explicit "I'm ready to
-share" — not the machinery. What is being rejected is the live-sync default that
-Yjs's usual providers (y-websocket) assume, which is a Google-Docs assumption that
-was never right here: agents aren't typing, and the LLM already reads on its own
-schedule.
+The mode framing is imported from Yjs's stock providers (y-websocket), which
+auto-sync on every transaction. CELLO has no such provider: nothing syncs until the
+agent calls publish. **Cadence is therefore the caller's business, not a protocol
+setting** — there is no flag, and nothing to configure.
 
-**The argument is stronger than bandwidth.** Every update is a signed, chained,
-sealed message. Per-keystroke sync would produce a Merkle chain of thousands of
-leaves recording comma insertions — that makes the audit record *worse*, not just
-bigger. Batching keeps each leaf an **intentional act**: "I made these changes and
-I'm sharing them" is a semantic event worth signing; a whitespace fix isn't.
-Screening also evaluates one coherent change rather than hundreds of fragments.
+**Batching is guidance to the agent, and the argument is stronger than bandwidth.**
+Every published update is a signed, chained, sealed message. Publishing after every
+keystroke would produce a Merkle chain of thousands of leaves recording comma
+insertions — which makes the audit record *worse*, not just bigger. Publishing on
+intent keeps each leaf an **intentional act**: "I made these changes and I'm sharing
+them" is a semantic event worth signing; a whitespace fix isn't. Screening also
+evaluates one coherent change rather than hundreds of fragments. What is borrowed
+from git is the *gesture*, not the machinery.
 
 The publish act is a sender-side quiescence point, which makes it the natural place
 to hang the artifact hash (§7) and the counterparty notification (§4).
@@ -311,9 +325,6 @@ peer's daemon appears. The daemon doesn't sleep when the human does. This requir
 a queued-outbound mechanism — small, but real machinery to be named in
 implementation. The residual case (the machine is off entirely) is the same "you
 can't send to a peer that isn't there" problem CELLO already has everywhere.
-
-**Open (§13.1):** whether live-sync exists at all as an opt-in mode, or whether
-accumulate-and-publish is the only model.
 
 ---
 
@@ -679,19 +690,34 @@ with N-party work regardless.
 
 ---
 
-## 13. Open Items
+## 13. The Protocol Boundary
 
-1. **Live-sync as an opt-in mode** (§5). One-line decision; affects API shape.
+Three questions that looked like open design items turned out to sit outside the
+protocol. Recording why, because each is the same discipline as §1 — CELLO carries
+documents; it does not model what they mean.
 
-2. **Notification granularity by type** (§4). Type-aware (line ranges for text,
-   key paths for structured) is preferred and cheaper than it looks given shared
-   canonicalization machinery, but the supported type list needs fixing.
+**Publish cadence is the caller's business** (§5). There is no mode to configure.
+The client sends whatever has accumulated since the peer's last-known state vector.
+How often an agent chooses to do that is a decision for the agent and its template,
+informed by the audit-quality argument, not by a protocol flag.
 
-3. **Goal spawning semantics** (§15C). "Spawn a new goal" is two different
-   mechanisms — a child node inside the same artifact (shares the delivery list,
-   the seal, the epoch) versus a genuinely new artifact (own handshake, own
-   participants, own attestation chain). Both are legitimate; the goal template
-   must be explicit about which it means.
+**Notification granularity is a tool-surface question** (§4.1). The notification is
+always "this document has a pending update." Everything beyond that is a separate
+call the agent makes deliberately. Which document types the diff call supports is
+implementation scoping, not protocol design.
+
+**Goal decomposition belongs to the agent and template layer, not to CELLO.**
+Whether a workflow spawns a child node, a sibling goal, or an entirely separate
+process between different counterparties is analysis done by the goal-template
+tooling in the `cello-agent` repo. From the protocol's side a goal is a JSON or CBOR
+blob being co-edited by multiple agents, and "create another document" is already
+supported. The **only** primitive the protocol owes this layer is **the ability to
+propose a schema change** (§3.3). CELLO no more models goals, phases and spawning
+than it models what a conversation is about.
+
+**No open design items remain.** What is left is implementation scoping: the
+supported document-type list for the diff call, and the queued-outbound mechanism
+named in §5.1.
 
 ---
 
@@ -754,6 +780,10 @@ makes any out-of-lane write attributable after the fact. So V1 ships the schema 
 **shared convention** — both agents load the same template skill — with
 `schema_enforcement: false`. Enforcement is available later via §3.3 without a
 retrofit.
+
+How a goal is decomposed — child nodes, sibling goals, or a separate process
+between different counterparties — is template and agent-tooling work in the
+`cello-agent` repo, not protocol work (§13).
 
 **Design principle, reaffirmed:** don't over-specify. Any document type can be
 collaborated on; the one property worth making first-class is **append-only**,
