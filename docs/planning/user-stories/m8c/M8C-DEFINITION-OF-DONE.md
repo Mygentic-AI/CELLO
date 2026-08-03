@@ -1600,7 +1600,18 @@ own story) deliberately, never smuggled in as a rider. Source:
   tag) — passed on the SEC-1 tag's own CI run and passes locally (2161 green). Intermittent, not caused by
   SEC-1. Per the debugging discipline this is a real failing assertion in the restart/interrupt path and
   needs a root-cause pass (producer/consumer trace on the SIGTERM → interrupted-state write), not attribution
-  to flakiness without evidence. — ❌ NOT INVESTIGATED (backlog).
+  to flakiness without evidence. — 🟡 **PROBABLE-CAUSE FIX SHIPPED 2026-07-31** (cello-client `365de6f`,
+  found independently of this line — the line itself stayed stale until 2026-08-03). The producer trace
+  landed on the DB, not the signal path: the shutdown UPDATE marking live sessions `interrupted` ran
+  against SQLite's default `busy_timeout` of ZERO, so a second writer (daemon/CLI/identity-migration
+  connections coexist by design) got an instant `SQLITE_BUSY`; `gracefulShutdown` catches the failed
+  write, logs it, and exits 0 — a loaded CI machine reports a clean shutdown while the row stays
+  `active`. Fix: `busy_timeout=5000` in `sqlcipher-db.ts` on every connection (whole write surface, not
+  just this path). **Not proven** — the original run's stderr was discarded, so SQLITE_BUSY is the
+  probable cause, not a confirmed one; the test now KEEPS the daemon's log and asserts the
+  interrupt-write did not fail, so a recurrence names its cause instead of re-surfacing as
+  "expected interrupted, got active". No recurrence since. Flips ✅ on a sustained clean CI streak or a
+  self-naming recurrence that gets fixed for real.
 
 - **DOD-LIBP2P-DUP-1** — ✅ **FIXED 2026-07-13 (`b88ea8b8`). The original diagnosis below was WRONG;
   corrected here rather than deleted, because the wrong diagnosis is the lesson.**
