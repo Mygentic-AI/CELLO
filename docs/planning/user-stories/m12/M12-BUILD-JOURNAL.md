@@ -5096,3 +5096,78 @@ Commits: `69825467` (AE column + migration-replay guard), `a4700cd3` (handleExis
 - **One bad table still kills the entire AE round for every table.** That is what turned a one-word
   typo into a silent multi-day outage. Per-table isolation would make the next one a noisy warning
   instead of an invisible stop. Not done — recorded so it is a decision, not an oversight.
+
+---
+
+## Entry 77 — M12-P9 fixed, and the first fix was for the wrong node
+
+**2026-08-02.** The per-table isolation Entry 76 recorded as deliberately deferred is now on main:
+`bb408f5d` (responder) + `bd21e3d7` (dialer). Not deployed.
+
+### The review earned its keep
+
+The first commit isolated `buildWireState` — what a node ADVERTISES — and read as complete. One
+`cello-unit-reviewer` pass on the diff came back with a blocking finding and a reproduction:
+`localState` in `anti-entropy-engine.ts` builds the dialer's comparison basis with the same
+unisolated loop, over the same query (`tierATableDigest` is literally
+`computeTableDigest(await tierARecordHashes(table))`). `runAntiEntropyRound` awaits it first, the
+throw is not an `AeProtocolError`, so `runAeDialer` rethrows and the round dies whole.
+
+Anti-entropy is PULL-driven — the dialer is the party that converges. On 2026-08-01 all three nodes
+ran the same bad spec, so every node was a broken dialer. **With only the responder fixed, that
+outage recurs at full blast radius.** The verdict was "do not close M12-P9 on this commit", and it
+was right. I verified the claim against the code myself before acting on it rather than taking the
+report on trust, which is how I found the next thing.
+
+### The two halves must degrade DIFFERENTLY — the near-miss
+
+The obvious move is to mirror the responder's fix. It is wrong, and quietly so.
+
+The responder omits the table from its advertisement; the peer's table list comes from
+`Object.keys(state.tierA)`, so the table disappears and is simply not reconciled. Mirroring that on
+the dialer means omitting from `LocalRoundState.tierA` — which hits `local.tierA.get(t) ?? []` in
+`planRound`. That reads as **"we hold zero rows"**: it differs from the peer's non-empty digest, so
+the planner asks for the ENTIRE table this node just proved it cannot read. That is precisely the
+storm the responder fix's OMIT-vs-empty-digest choice exists to avoid, arrived at from the opposite
+direction — and it would have shipped looking like symmetry.
+
+So the dialer names unreadable tables (`unreadableA`/`unreadableB`) and drops them from the PLAN.
+The test asserts `tierAPlanned`, not a pulled-count, because a pulled-count cannot distinguish
+"excluded" from "asked for everything and the peer served nothing".
+
+**Rule earned: when a fix has two sides, do not assume the correct degradation is the same on both.
+Trace what each side's consumer does with the absence.** Here one consumer skips and the other
+substitutes an empty set.
+
+### Two more from the same review
+
+- **The Tier-A branch had no test.** Reverting only the Tier-A `try/catch` left all 18 tests green —
+  every case threw from Tier B, while the parked item names Tier A, the tier carrying
+  `agent_revocations`. A test asserting the fix's own headline clause did not exist. Covered now.
+- **`antientropy.table.skipped` was `warn`.** The commit's stated premise is that the outage was
+  invisible because its only signal was a warn on hosts nobody tails — and it replaced that warn
+  with another warn, one level quieter than `round.table_failed` beside it, which is `error` for a
+  strictly milder single-round fault. Now `error`. Its `detail` also claimed "Every other table did
+  [reconcile]" — asserted, not known. It now says what the callback actually knows.
+
+### Also fixed: main was red on typecheck
+
+Unrelated and found on the way in (`a6a1a5e9`). Four spine journey tests hand-mirror
+`TrustSignalEnvelope` as a local `interface Envelope`; `same_operator` was appended to the preimage
+after they were written, so every call site passed the field correctly while the type it was checked
+against still declared ten slots. The mirror was the defect, not the call sites — a gap there never
+minted a short envelope (the encoder is a closed 12-slot set and refuses), it only moved the failure
+from a red typecheck to a runtime throw.
+
+### Gate
+
+1009 directory tests, lint, typecheck green on the merged tree. Two intermediate runs showed
+failures in `writeapi-001` and `directory-node` AC-009; both were my own doing — three concurrent
+vitest runs against the one local Postgres (the *other* M12-P9, the duplicate ID) — and both pass in
+isolation and in a single clean run.
+
+### Still open
+
+Recorded on the DoD line, not fixed: no detector for a peer advertising FEWER tables than we track
+(the node that stops RECEIVING a table still logs a healthy round); `onTableError` optional rather
+than compiler-required; detail-frame handlers unisolated against a version-skewed peer.

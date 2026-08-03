@@ -831,6 +831,36 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   (`DOD-M12-AE-SCHEMA-1`); the fragility that turned a typo into a fleet-wide outage is NOT.**
   Hardening = per-table try/catch so a bad table degrades to one noisy warning and the other ten
   keep replicating. Deliberately deferred, not overlooked. → Entry 76
+
+  **FIXED IN CODE 2026-08-02 — merged to main (`bb408f5d` + `bd21e3d7`), NOT YET DEPLOYED.**
+  Both loops are isolated: the responder's advertisement (`buildWireState`) and the dialer's
+  comparison basis (`localState`). The first commit did only the responder; review caught, with a
+  reproduction, that this fixes the wrong node — anti-entropy is PULL-driven, `localState` ran the
+  same query with the same missing isolation, and all three nodes ran the same bad spec, so every
+  node was a broken dialer. Responder-only would have left the outage's blast radius untouched.
+
+  **The two halves degrade differently, and that asymmetry is the load-bearing part.** The responder
+  OMITS the table from its advertisement, so it leaves the peer's table list and is simply not
+  reconciled. The dialer cannot do the same: `planRound` reads `local.tierA.get(t) ?? []`, so an
+  omitted table looks like "we hold zero rows", differs from the peer's digest, and plans a pull of
+  the WHOLE table just proved unreadable — the storm the responder fix exists to avoid, reached
+  from the other side. Unreadable tables are named (`unreadableA`/`unreadableB`) and dropped from
+  the PLAN. `tierAPlanned` is the assertion, since a pulled-count cannot tell "excluded" from
+  "asked for everything and got nothing". `antientropy.table.skipped` is `error`, not `warn` — a
+  table whose read FAILS is not a bad round, it fails every round until a human intervenes.
+
+  **Still open, recorded not fixed** (become ACs on whatever unit next touches anti-entropy):
+  - No detector for a peer advertising FEWER tables than we track. The skip is loud only on the
+    host whose store is broken; the node that silently stops RECEIVING that table logs nothing and
+    still reports `antientropy.round.completed` with healthy-looking counts. This is what would
+    make the degradation visible from a healthy host — a set-diff against `store.tierATables()`
+    after `remote.refresh()`.
+  - `onTableError` is optional on `AeResponderInput`, so the isolation degrades to a bare swallow
+    if a future caller omits it. Enforced by a doc comment, not the compiler. One production caller
+    exists and it is wired, so this is structural, not live.
+  - The detail-frame handlers (`ae_buckets_req` / `ae_bucket_hashes_req` / `ae_pull_a`) still call
+    the store unisolated, so a version-skewed or misbehaving peer can ask for an omitted table and
+    kill the responder's stream. Costs one round. Pre-existing.
 - **M12-P4** — **Replica nodes at launch.** The role split ships in P1, but whether any
   replica-role nodes actually deploy at launch (vs the capability lying dormant) is undecided —
   zero replicas is a valid launch shape.
