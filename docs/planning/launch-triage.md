@@ -26,6 +26,11 @@ lose trust. Most things are forgivable.
 **How to use this:** read top to bottom, then tell me the real priority order — the ranking below
 is my first pass, not a decision.
 
+**2026-08-03 sweep addendum:** a pass over the DoD docs and July discussion logs added items 15–17,
+the re-verify note on item 5, and the "left off this list on purpose" section. One item found by the
+sweep was already fixed without its DoD line knowing (`DOD-SIGTERM-FLAKE-1`, busy-timeout fix
+2026-07-31 — line corrected to 🟡, never was a triage item).
+
 ---
 
 ## What changed since the last pass
@@ -173,6 +178,15 @@ grows, which is the wedge.
 **Sequencing note:** the intended fix is to key duplicate detection on the relay-assigned position
 instead of the content. That inherits a broken key until item 1 is fixed, because a drifted
 conversation's two sides don't agree on position. Item 1 first, structurally — not just by priority.
+
+**Re-verify (2026-08-03):** this may be substantially closed already. Item 1 shipped 2026-07-31, and
+the position-keyed dedup landed right behind it (cello-client `a54f548`, drift fix `6e314b7`);
+[[M8D-DEFINITION-OF-DONE]] records FRONTIER-STRAND ACs 1–3 ✅. What is NOT closed and belongs to this
+item's remit: **`DOD-FRONTIER-MISMATCH-DURABLE-1`** (M8D, 🅿️ parked) — the mismatch flag is
+in-memory and dies on every daemon restart, which undercuts this item's own "a week unnoticed"
+concern. Two cheap options are already written in that line (derive on read from the persisted
+seal-rejection record, or write to the existing `sessions` row). Re-rank this item as that remainder,
+not as the original defect.
 
 ---
 
@@ -388,6 +402,74 @@ broken."
 
 ---
 
+## 15. Dead signaling streams go undetected — deliberately not fixed, superseded by the mesh
+
+**Designation:** [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — no
+DoD line. **Recorded 2026-08-03 as a DECISION, so it stops being re-discovered as a miss.**
+
+The 2026-07-31 incident: an agent reported online on every surface — `cello status`, the daemon, the
+directory's own database — while nothing could reach it, silently, for ~25 minutes, recovering only
+on a daemon restart. The re-register-on-reconnect fix shipped (daemon `0.0.105`, `2e734a1`), but the
+incident log's own correction says it closes a different hole: the load-bearing defect is
+**detection** — the client learns a stream is dead only at write time (3,514 write-time discoveries
+vs 42 heartbeat catches), and the ~70-second stream churn and the directory's server-side expiry
+semantics were never traced.
+
+**Why it is here and not fixed:** the M12 anti-entropy mesh cutover on GCP is expected to make this
+entire class moot, so the AWS-side detection work was deliberately skipped (Andre, 2026-08-03).
+
+**Verify at cutover:** the class only dies if the cutover changes the **client-to-node** link (or
+leans on the parked-mailbox drain as the recovery path). [[M12-ANTI-ENTROPY-DESIGN]] as written
+replaces the node-to-node layer — presence replicating perfectly does not revive a dead client
+stream; every node would just agree the agent is owned by a node that can't reach it. If the
+client link is unchanged post-cutover, this reopens as a launch item, and the untraced
+`The operation was aborted due to timeout` reader errors (2,061) are the named thread to pull first.
+
+---
+
+## 16. A node absent during an agent's DKG can never serve that agent
+
+**Designation:** M8B Sprint B "Enrollment (Problem 3)" + absent-node reconcile — owed since
+2026-07-04, flagged "do not lose these" in CLAUDE.md. **Needs Andre's ranking, added here 2026-08-03
+because the list never ruled on it.**
+
+A node that was down or absent during a DKG holds no share and cannot co-sign for that agent until a
+resharing ceremony exists — and none does. The launch-relevant angle is this list's own migration
+trap: at N=3/T=2, an agent whose DKG ran during a node outage has only two shares forever; one more
+node outage strands it permanently, and every agent registered that way is stranded retroactively.
+The triage list already rules on `DOD-FROST-PARALLEL-1` ("M12, not launch") but never on this.
+Plan: [[2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan]].
+
+---
+
+## 17. Endorsements cannot be withdrawn, refused-drained, or quota-limited
+
+**Designations: `DOD-END-WITHDRAW-1`, `DOD-END-INGRESS-1`, `DOD-END-QUOTA-1`** — all ❌ in
+[[M10B-DEFINITION-OF-DONE]]. **Needs Andre's ranking, added 2026-08-03** — this list carries their
+siblings (items 12, 13), so their absence read as oversight rather than decision.
+
+An issuer cannot withdraw an endorsement they issued; nothing consumes the `refuse` op (the portal
+drain); issuance quota is unenforced and invisible. Each is recorded in M10B as one line of work
+once its mechanism exists. Likely forgivable at launch — but that's a call, not a default.
+
+---
+
+# Left off this list on purpose
+
+Recorded so they stop being re-found by every sweep:
+
+- **`DOD-TESTDAEMON-REAP-1`** (M8C, ❌ raised 2026-07-30) — the test harness leaks its subject
+  daemon, which then hammers the dev directory indefinitely. Raised in the same batch as items 3–5;
+  the only one of the four not carried here. Dev tooling, not a customer-facing defect — ship
+  without.
+- **`DOD-SESSION-REAP-1`** (M8C, ❌ backlog) — restart-interrupted sessions accumulate as
+  un-sealable cruft. Its own line says cosmetic, not launch-blocking; the reaper must be
+  evidence-gated, never age-gated, when it is built. Ship without.
+- **`DOD-SPINE-JCONTENT-1`** (M8D, 🅿️) — the live parked-message spine journey is 5/10 green.
+  Test-harness debt; the two product defects it surfaced are fixed.
+
+---
+
 ## Related Documents
 
 - [[M8C-DEFINITION-OF-DONE]] — full technical detail and status for every designation above
@@ -395,4 +477,7 @@ broken."
 - [[2026-07-31_1043_two-sessions-one-agent-co-attendance]] — items 1, 5 and 6; the receipt-integrity
   cluster and the co-attendance decision, with the build order at the top
 - [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — items 7 and 9
+- [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — item 15, with the
+  measurements and the open questions the cutover verification must answer
+- [[M8D-DEFINITION-OF-DONE]] — the parked debts referenced in items 5 and the on-purpose list
 - [[protocol-map]] — where these fit relative to the overall milestone sequence
