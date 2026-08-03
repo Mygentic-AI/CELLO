@@ -172,6 +172,19 @@ export interface ChainWriter {
   ): Promise<string>;
 }
 
+/**
+ * Every Tier-A table paired with the constraint name that classifies its duplicates.
+ *
+ * Exported so the live catalogue check iterates the REGISTRY rather than a list someone typed. That
+ * list had four entries while this registry had eleven — and `naturalKeyConstraint` was inert for the
+ * unlisted tables only while they took the generic `ON CONFLICT DO NOTHING` path. Flagging two of
+ * them `chained` made it load-bearing for both: `insertWithChain` issues a bare INSERT, so every
+ * duplicate now raises 23505 and is classified by exact name match. A wrong name turns ordinary
+ * convergence into a fork alarm on every round, burying the one that means something.
+ */
+export const TIER_A_NATURAL_KEY_CONSTRAINTS: ReadonlyArray<readonly [table: string, constraint: string]> =
+  TIER_A.map((t) => [t.spec.table, t.naturalKeyConstraint] as const);
+
 /** The columns to SELECT for a Tier-A table = natural key ∪ immutable columns (deduped). */
 function tierAColumns(t: TierAPg): string[] {
   return [...new Set<string>([...t.spec.naturalKey, ...t.spec.immutableColumns])];

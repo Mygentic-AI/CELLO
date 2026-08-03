@@ -298,5 +298,29 @@ describe("every hash-chained Tier-A table refuses to be written unchained", () =
         `${table} fell through to the generic INSERT — that writes it outside its own chain`,
       ).toEqual([]);
     });
+
+    it(`${table}: WITH a ChainWriter → routes through it, chain_hash slot placed correctly`, async () => {
+      // The case above is satisfied by an implementation that refuses EVERY table, ignoring the
+      // `chained` flag entirely — refusal alone cannot tell "routed to the chain writer" from
+      // "broken for everyone". This is the positive half, and it is in the loop rather than written
+      // out for one table, because the whole point of the defect being fixed here is that per-table
+      // assertions leave the next table to rediscover the bug.
+      const spec = TIER_A_SPECS.find((s) => s.table === table)!;
+      const body = Object.fromEntries(spec.immutableColumns.map((c) => [c, "00"]));
+      const { hash } = encodeTierARecord(spec, body);
+
+      const { pool, queries, chainCalls, chainWriter } = harness();
+      const store = new PgAeStore(pool, chainWriter);
+
+      expect(await store.applyTierA(table, [{ hash, body }])).toBe(1);
+      expect(chainCalls).toHaveLength(1);
+      expect(chainCalls[0]!.table).toBe(table);
+      // chain_hash is appended as a placeholder the writer overwrites — so it must be LAST, and the
+      // index handed to the writer must point at it. An off-by-one here chain-hashes the wrong slot
+      // and every assertion except this one still passes.
+      expect(chainCalls[0]!.columns.at(-1)).toBe("chain_hash");
+      expect(chainCalls[0]!.chainHashIndex).toBe(chainCalls[0]!.columns.length - 1);
+      expect(queries.filter((q) => new RegExp(`INSERT INTO ${table}`, "i").test(q))).toEqual([]);
+    });
   }
 });

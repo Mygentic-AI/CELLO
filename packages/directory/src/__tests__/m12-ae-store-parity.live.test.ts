@@ -20,7 +20,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import pg from "pg";
-import { PgAeStore } from "../pg-ae-store.js";
+import { PgAeStore, TIER_A_NATURAL_KEY_CONSTRAINTS } from "../pg-ae-store.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC } from "../ae-table-encoders.js";
 import { computeTableDigest } from "../set-reconciliation.js";
 import { SEAL_NOTARIZATIONS_SPEC } from "../ae-table-encoders.js";
@@ -210,13 +210,15 @@ describeLive("DOD-AE-STORE-1: the natural-key constraint names are REAL", () => 
     // logged as an identity fork, and the real fork (user_accounts_phone_stub_hash_key) arrived in the
     // same words. Asserting the names against the live catalogue means a migration that renames one
     // goes red here instead of silently re-classifying every duplicate as an alarm.
-    const expected: Array<[string, string]> = [
-      ["agent_profiles", "agent_profiles_k_local_unique"],
-      ["agent_revocations", "agent_revocations_pkey"],
-      ["user_accounts", "user_accounts_pkey"],
-      ["seal_notarizations", "seal_notarizations_session_seal_type_key"],
-    ];
-    for (const [table, constraint] of expected) {
+    // Driven off the REGISTRY, never a hand-kept copy of it. This list was four entries while the
+    // registry had eleven, and it stayed four through the 2026-07-31 batch that registered seven more
+    // — the same rot that let conversation_seals and relay_registrations be registered without their
+    // `chained` flag. A table added to the registry is now covered here by construction.
+    expect(
+      TIER_A_NATURAL_KEY_CONSTRAINTS.length,
+      "the registry is empty — this loop would pass while asserting nothing",
+    ).toBeGreaterThan(4);
+    for (const [table, constraint] of TIER_A_NATURAL_KEY_CONSTRAINTS) {
       const r = await pool.query<{ n: string }>(
         `SELECT conname AS n FROM pg_constraint
           WHERE conrelid = $1::regclass AND conname = $2 AND contype IN ('p','u')`,

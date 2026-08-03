@@ -244,6 +244,19 @@ export const CONVERSATION_SEALS_SPEC: TierATableSpec = {
  *   directory_checkpoints, checkpoint_node_signatures — parked checkpoint machinery (M12-P5)
  *   registrations, pre_authorization_tokens — per-node Telegram registration state machine
  *   conversation_seal_staging — ephemeral staging rows consumed during the seal ceremony
+ *
+ * NOT included and NOT a decision — unregistered and unassessed (found 2026-08-03):
+ *   conversation_participation, conversation_attestations
+ *
+ * `recordConversationSeal` writes all three of `conversation_seals`, `conversation_participation`
+ * and `conversation_attestations` in ONE transaction. Only the first is registered here, so a node
+ * that receives a seal by anti-entropy gets the seal header and learns neither who took part nor
+ * what was attested — and `analytics-job` derives `pseudonym_stats` and `graph_edges` from exactly
+ * those two tables, so the track-record surface differs per node with nothing reporting it.
+ *
+ * They are listed separately from the block above on purpose. Everything there was weighed and
+ * excluded; these two were never considered. Writing them into the "by design" list would launder
+ * an oversight into a decision — the distinction a reader cannot recover once it is lost.
  */
 export const TIER_A_SPECS: readonly TierATableSpec[] = [
   AGENT_PROFILES_SPEC,
