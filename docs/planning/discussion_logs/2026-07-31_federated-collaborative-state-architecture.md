@@ -137,6 +137,22 @@ Sensible defaults should key off relationship distance, not document type alone:
 - Arm's-length collaborator, different company, cross-border, or a client:
   tighter defaults.
 
+**Pre-implementation investigation owed, one level above this spec.** Everything
+above assumes the existing screening layer will behave reasonably once
+extended with document/counterparty-scoped policy — that assumption hasn't been
+tested. Before the detailed design, the existing layer needs a real audit: what
+it currently checks, what customization already exists versus what §3.1
+presumes needs building, and where this use case is likely to have been
+misjudged in both directions — some things probably harder than assumed here,
+others probably easier. A cheap way to find out fast: generate real updates for
+a handful of high-priority formats using the actual libraries (Yjs producing
+genuine text/JSON diffs, not synthetic examples) and run them through the
+current screening as it exists today, unmodified, to see what actually trips
+it. This is the layer likeliest to make or break the feature in practice — too
+aggressive and false positives make it unusable; too permissive and the one
+thing that should have been caught slips through. Get it right and an operator
+barely notices it; get it wrong in either direction and they will.
+
 ### 3.2 The validation stage and the rejection protocol — V1
 
 Screening implies a staging step: apply an incoming update to a **shadow
