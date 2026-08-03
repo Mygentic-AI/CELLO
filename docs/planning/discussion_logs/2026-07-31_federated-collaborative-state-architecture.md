@@ -15,7 +15,12 @@ description: >
   multi-party collaboration via hub-and-spoke re-authoring over pairwise sessions
   (mesh delivery lists deferred), the shadow-document validation stage with
   sender-rollback rejection, schema enforcement as an opt-in document flag, and the
-  protocol boundary against goal-template and agent-tooling concerns.
+  protocol boundary against goal-template and agent-tooling concerns. Second
+  review pass 2026-08-03: quarantine-and-supersede rejection with a purge level,
+  the document log as a cross-session verifiable container, the 0x05 rejection
+  leaf, the quiescence agreement flow with divergence records, the two-document
+  hub-and-spoke default with pass-through as opt-in, text-only canonicalization
+  for non-JSON types, and document lifecycle verbs.
 ---
 
 # 2026-07-31 — Federated Collaborative State Architecture
@@ -29,7 +34,13 @@ model, canonicalization, epochs, and the multi-party topology decision
 stage and rejection protocol (§3.2) and reshaped field-level write authority into
 the opt-in `schema_enforcement` flag (§3.3), which closes the reconciliation with
 [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol
-Primitive]] in §12.
+Primitive]] in §12. A second review pass on 2026-08-03 re-derived the rejection
+protocol against Yjs's sync mechanics (quarantine and supersede, with a purge
+level — §3.2), gave the document its own verifiable chain across sessions
+(§9.1), specified the quiescence agreement flow and the divergence record
+(§7.1), flipped hub-and-spoke's default to the two-document form with
+pass-through as the declared opt-in (§11.1), scoped the determinism requirement
+to document-carried validation, and added the document lifecycle verbs (§3.5).
 
 ---
 
@@ -133,39 +144,70 @@ document**, run the controls, then admit it to the accepted document. The trap i
 that rejection appears to create permanent divergence — the sender holds the
 change, the receiver doesn't, and a CRDT offers no un-apply.
 
-**Rejection is resolved by the sender, not the receiver.** The mechanism already
-exists in CELLO in another form: endorsement refusal. Applied here:
+**The receive pipeline: arrive → shadow-apply → validate the projected diff →
+admit or quarantine.** Validation judges what the document *comes to say* — the
+projected diff between the accepted state and the shadow state — not which
+operations transit. A quarantined update is held, never admitted, and never
+discarded: the causal repair below re-integrates its operations.
+
+**Rejection is resolved by supersession.** The naive protocol — receiver
+discards, sender undoes locally, both "return to the pre-update state" — leaves
+a permanent causal gap: the rejected operations remain in the sender's doc (Yjs
+undo adds *inverses*; it does not erase), so every subsequent update the sender
+computes against the receiver's state vector re-transmits them, and the
+receiver can never integrate the legitimate operations stacked causally on top
+of ops it refuses to hold. Yjs will not apply operations whose predecessors are
+missing. The protocol is therefore:
 
 1. The receiver validates against the shadow document and **rejects with a
-   reason** — a protocol message, not a silent drop.
-2. The receiver never admits the update to its accepted document and discards the
-   shadow.
-3. The sender receives the rejection and **rolls back locally**. Both parties are
-   now back at the pre-update state. Convergence is restored.
+   reason** — a protocol message and its own leaf (§9), never a silent drop.
+   The update goes to quarantine.
+2. The sender **rolls back locally** — Yjs undo, which emits inverse operations
+   into the sender's own log rather than erasing history. Correct, and it
+   leaves an auditable "wrote X, was rejected, undid X" trail.
+3. The sender publishes a **superseding update**: the ordinary Yjs update
+   computed against the receiver's state vector, which necessarily carries the
+   rejected operations *plus their inverses* plus any new work.
+4. The receiver validates the superseding update's projected diff — now clean,
+   because the rejected content nets to zero — admits it, and clears the
+   quarantine entry. Causality is intact, both parties genuinely converge, and
+   the rejected content survives in the receiver's history only as inert
+   tombstones.
+
+**The purge level.** Supersession leaves rejected bytes as tombstones in both
+CRDTs — unacceptable when the content itself is the harm (a leaked credential,
+PII). For that class the rejection carries severity `purge`, resolved by the
+epoch machinery (§10): both parties mint an epoch from the last agreed
+canonical state, the sender re-creates its document from that snapshot with a
+fresh clientID and re-applies its legitimate work, and no copy of the purged
+content survives in either party's live document. Purge is the fifth
+load-bearing use of the epoch primitive.
 
 **This is not optional for V1.** Without it the screening gate in §3.1 is broken by
 construction: a screened-out update that is silently dropped diverges the two
 copies permanently and invisibly. The shadow document, the validation hook, the
-reject-with-reason message and sender rollback are therefore V1 machinery, driven
-by screening rather than by schemas — and the schema layer in §3.3 later plugs into
-a hook that already exists.
+reject-with-reason message and the supersession repair are therefore V1
+machinery, driven by screening rather than by schemas — and the schema layer in
+§3.3 later plugs into a hook that already exists.
 
 Four mechanics:
 
-- **Rollback must not send inverse operations.** The receiver rejected, so it never
-  admitted the update; the sender rolls back locally and both are at the pre-update
-  state. Sending compensating operations would subtract something the receiver
-  never had. Note that a local rollback in Yjs emits inverse operations into the
-  *sender's own* log rather than erasing history — which is correct, and leaves an
-  auditable "wrote X, was rejected, undid X" trail.
-- **A non-compliant sender is a trust-signal event, not a protocol failure.** If the
-  sender refuses to roll back, the receiver stalls holding later updates whose
-  dependencies never arrive. Surface that rather than letting it stall silently; the
-  signed record shows the sender was told and didn't act.
+- **A non-compliant sender is a trust-signal event, not a protocol failure.** If
+  the sender never supersedes, the receiver stalls holding a quarantined update
+  and later updates whose dependencies never arrive. Surface that rather than
+  letting it stall silently; the signed record shows the sender was told and
+  didn't act.
 - **The shadow document must be rebuildable from the accepted state**, not a
   long-lived parallel copy. Cost is roughly 2× memory per artifact.
-- **Validators must be deterministic** — the same input yields the same verdict on
-  both sides, or rejection becomes asymmetric.
+- **Determinism is required only of document-carried validation.** The
+  `append_only` and `schema_enforcement` rules ride in the document, so both
+  sides hold identical rules and the same input yields the same verdict —
+  symmetric by construction. **Screening is asymmetric by design**: it is
+  receiver-local and receiver-private (§3.1), so the sender cannot predict the
+  verdict and does not need to, because rejection is sender-resolved.
+- **Rejections are operator-visible.** Rejections sent and received land in the
+  policy log with their reasons, so the operator sees "counterparty policy
+  blocked this edit: <reason>" rather than experiencing silently vanished work.
 
 ### 3.3 Schema enforcement as a document flag — deferred
 
@@ -227,6 +269,20 @@ stranding anything.
 | `topology` | Hub-and-spoke or mesh (§11) | Hub-and-spoke only |
 | `schema_enforcement` | Schema-as-first-update validation (§3.3) | Declared; `false` only |
 
+### 3.5 Document lifecycle
+
+Three verbs, all V1:
+
+- **List** — the documents an agent holds: peer, type, tier, epoch, pending
+  status.
+- **Close** — bilateral: a final quiescence agreement (§7.1), then the document
+  log (§9.1) is sealed. The document is complete and verifiable end-to-end.
+- **Kill** — unilateral: stop accepting and publishing updates on the document,
+  notify the peer, retain the local copy and log. Stated plainly: you cannot
+  unpublish what was already delivered — the peer keeps what it holds. Kill is
+  the kill-switch requirement applied to collaborative artifacts, and it ships
+  in V1.
+
 ---
 
 ## 4. Update Flow: Notify, Don't Inject
@@ -241,8 +297,9 @@ application.
 - A CRDT update is a payload carried inside an ordinary CELLO message — signed,
   chained, relayed and sealed exactly as any message is. It is not a new protocol
   pathway. (It does get its own leaf type; see §9.)
-- The document merges automatically on arrival. That's what a CRDT is for. No
-  accept/reject on the data itself.
+- The document merges on admission: arrival, shadow validation (§3.2), then
+  merge. Admission is mechanical — there is no agent-level accept/reject on the
+  data itself.
 - What is gated is the **LLM's awareness**, not the merge. The client notifies the
   agent that the document has a pending update — nothing more.
 - This closes the prompt-injection concern the "Drafting Buffer" was reaching for,
@@ -275,6 +332,14 @@ hashing is the same projection needed for diffing — so the marginal cost of on
 given the other is small. Which document types the diff call supports (Markdown,
 plain text, JSON, XML, common text-based source) is tool-surface scoping for
 implementation, not a protocol decision.
+
+**Diff stats carries an overlap flag.** Yjs converges concurrent edits
+*syntactically*; two agents rewriting the same paragraph converge to
+interleaved text that reads as neither intended. The flag answers one question
+— did this update touch regions where the local side holds unpublished edits? —
+and is the signal to review the merged projection before building on top of it.
+The review behavior itself is template/skill work (§13), named here as an owed
+deliverable alongside the goal-template skill so it does not silently fall off.
 
 ---
 
@@ -452,6 +517,28 @@ Sealing is quiescence by definition, so the seal is the natural agreement point;
 long-running collaborations can add the same agreement at intermediate quiescence
 checkpoints.
 
+### 7.1 The agreement flow and the divergence record
+
+1. **Propose** — either party sends `(state_vector, canonical_hash, signature)`.
+2. **Confirm** — the responder checks the state vectors match; unequal vectors
+   mean this is not quiescence — sync, then retry. On matching vectors it
+   computes its own canonical hash. Match → countersign; both store the
+   bilateral attestation.
+3. **Diverge** — different hashes at matching state vectors: both parties sign
+   a **divergence record** carrying both hashes and both state vectors. This is
+   first-class protocol output, not an error path — it is precisely the
+   evidence a dispute needs.
+
+**Seal policy:** a Tier 2 session seals with either a bilateral attestation or
+a divergence record. The seal proves the exchange either way; the
+artifact-binding claim is present or recorded-absent, never silently missing.
+
+**Recovery is where the per-batch attestations earn their keep: they bisect.**
+Walk back to the last published batch whose post-apply hash both parties derive
+identically; the fork lies after it; epoch-reset (§10) from the last agreed
+state. Without the per-batch hashes, localizing a divergence is a replay from
+genesis.
+
 ---
 
 ## 8. Canonicalization
@@ -474,6 +561,11 @@ Per type:
 - **JSON** — sorted keys, defined number formatting, no insignificant whitespace,
   defined escaping. Solved problem with a spec: **RFC 8785 (JSON Canonicalization
   Scheme)**.
+- **Everything else — XML, HTML, source code** — is never parsed: any non-JSON
+  type is a Y.Text of source bytes and canonicalizes under the text rule above.
+  Structural canonicalization exists for exactly one type, JSON, because Use
+  Case C needs a Y.Map. Two canonicalization rules total; XML C14N is
+  deliberately never entered.
 
 **The governing rule — agreed and non-negotiable:**
 
@@ -510,6 +602,31 @@ collaboration the session is already the routing unit, so the relay needs neithe
 Residual leak: "this was a document operation rather than a chat message," which is
 small and arguably belongs in the audit record.
 
+**The rejection message (§3.2) is its own leaf, `0x05`**, referencing the
+rejected update's envelope hash — the same domain-separation grounds as above.
+This makes the record self-describing for replay: **an update leaf is effective
+iff no rejection leaf references it; replay applies effective leaves in
+document-log order.** The superseding update is an ordinary effective leaf, so
+a verifier derives exactly what both parties hold.
+
+### 9.1 The document log — continuity across sessions
+
+Sessions seal; collaboration doesn't. §5.1's premise is that a document
+outlives any session window, so the document — not the session — must be the
+verifiable container:
+
+- Every `0x04` envelope carries a **per-document chain link**, `doc_prev_hash`
+  — the hash of the sender's previous update envelope for this document (§14).
+- The **document log** is the set of `0x04`/`0x05` envelopes for a
+  `document_id`, extracted from however many sealed sessions they transited,
+  ordered and integrity-checked by the per-document chain.
+- **Replay and verification are defined over the document log**, not over any
+  one session tree. Session seals prove transit, counterparty and time; the
+  document chain proves completeness and order of the document's own history.
+- **Epochs checkpoint the document log** — each epoch attestation names the
+  canonical hash and the chain position it covers. §10's segmentation has a
+  container to segment.
+
 ---
 
 ## 10. Epochs
@@ -524,7 +641,7 @@ both parties attest it, and it chains to the previous epoch — the audit chain 
 segmented, not lost, and verification of epoch N+1 starts from an attested state
 instead of from genesis.
 
-The epoch primitive turns out to be load-bearing in four places, which is why it
+The epoch primitive turns out to be load-bearing in five places, which is why it
 warrants proper design rather than treatment as a compaction detail:
 
 1. **Compaction** — bounding tombstone growth (§10.1).
@@ -532,6 +649,8 @@ warrants proper design rather than treatment as a compaction detail:
 3. **Epoch zero** — the agreed starting state. Both parties agree the document
    begins from canonical template T at hash H0, established in the handshake.
 4. **Participant-set changes** — the delivery list is epoch state (§11).
+5. **Purge rejection** — removing secret-class content from both live documents
+   (§3.2).
 
 ### 10.1 Resource limits and growth
 
@@ -550,6 +669,15 @@ they are security controls, not just capacity planning:
 
 Plus a compaction policy, which per the above mints an epoch.
 
+**Limits are triggers, not licenses.** Hitting a limit *proposes* an epoch,
+queued through the same durable outbound as any update (§5.1, §14); while the
+proposal is unacknowledged, limits are advisory and the full log is retained.
+The backstop at the hard cap is **refusing new local publishes** on the
+document — backpressure, surfaced loudly to the agent — never unilateral
+compaction, which would break the bilateral verification baseline. A peer
+absent past a threshold is a lifecycle event (the document goes dormant,
+surfaced as status), not a license to compact.
+
 ---
 
 ## 11. Multi-Party: Hub-and-Spoke (M14) and Mesh (Deferred)
@@ -560,10 +688,12 @@ different meanings and different costs.
 
 ### 11.1 Hub-and-spoke — the M14 answer
 
-**The model.** A holds a bilateral artifact with B and a separate one with C. When
-C contributes, A merges that work into the document it holds and then publishes
-**its own batch, signed by A**, to B. B receives an A-authored update. A decides
-what crosses.
+**The model.** A holds `doc_AB` with B and a genuinely separate `doc_AC` with C
+— two documents, two logs, two `Y.Doc`s. When C contributes something that
+should reach B, A **ports the content across as its own edits** to `doc_AB` and
+publishes a batch signed by A. B receives an A-authored update on a document
+that C's operations have never touched. A decides what crosses — and in the
+two-document form that phrase is literally true.
 
 **This is re-authoring, not relaying, and the distinction is the whole design.**
 
@@ -587,10 +717,14 @@ what crosses.
   supplies work to A, and A sells the finished product to B. Forcing a B–C
   connection is not merely inconvenient there — it is a disintermediation risk that
   makes the feature unusable for the party who most needs it.
-- **It costs nothing.** An agent participating in two pairwise collaborations is
-  the existing pairwise model. No delivery lists, no participant-set epochs, no
-  N-way quiescence detection, no forced connections. Multi-party in effect,
-  pairwise in mechanism.
+- **Its cost falls on the right party.** A does real merge work — porting
+  content between two documents is A's labor, softened by a daemon-provided
+  cross-document diff ("changed in `doc_AC`, not yet ported to `doc_AB`" — the
+  same projection machinery as §4.1 and §8). That labor is the price of the
+  intermediary position, and A is the party being paid to hold it.
+  Protocol-side it costs nothing: two pairwise collaborations, no delivery
+  lists, no participant-set epochs, no N-way quiescence detection, no forced
+  connections. Multi-party in effect, pairwise in mechanism.
 - **It is the more federated answer.** A single artifact with one shared state that
   every holder sees is a quieter version of the shared-context model §1 argues
   against. Hub-and-spoke is sovereign bilateral relationships, each party sharing
@@ -608,14 +742,18 @@ controlling what B sees is the entire point of the intermediary position.
 is what an intermediary **is**, not a flaw to mitigate. B's protection is that A
 signed what it sent.
 
-**Opacity is partial, not total, in the single-document form.** Yjs operations carry
-`(clientID, clock)`, so a merged update A sends to B contains operations under C's
-random clientID. B learns *a third client contributed* — not who, since clientID is
-a random number with no identity binding. For most commercial cases this is fine:
-"I use subcontractors" is rarely the secret; "which subcontractor" is. **Total
-opacity** requires A to hold two genuinely separate documents and port content
-across as its own edits — no automatic convergence, real work for A, but nothing
-leaks. Offer it as a mode; do not make it the default.
+**Pass-through mode — the single-document form — is the opt-in, not the
+default.** The alternative is A backing both links with one `Y.Doc`. Its true
+properties, stated plainly: propagation is transitive and all-or-nothing in
+both directions — B's operations reach C and C's reach B automatically, because
+every published update is computed against the peer's state vector, and
+selectively withholding a third party's operations creates exactly the causal
+gap §3.2 exists to repair. Third-party clientIDs are visible (random numbers
+with no identity binding — the peer learns *a third client contributed*, not
+who). Pass-through suits a coordinator who wants transparency among parties who
+already know about each other; it is not an intermediary position, and "A
+decides what crosses" is false inside it. It is a declared mode at the document
+handshake; the two-document form is the default, and in it nothing leaks.
 
 ### 11.2 Mesh via delivery lists — deferred
 
@@ -681,8 +819,8 @@ document. This document is unopinionated by default. The flag reconciles them: t
 prescriptive model is available where it earns its place, and absent everywhere
 else. Its enforcement mechanism is also corrected — the May log rejects invalid
 operations at the receiver and never confronts the fact that rejection in a CRDT
-creates permanent divergence. The sender-rollback protocol in §3.2 is what makes
-receiver-side rejection viable at all.
+creates permanent divergence. The quarantine-and-supersede protocol in §3.2 is
+what makes receiver-side rejection viable at all.
 
 Note also that the May log's motivating example is inherently N-party (8 roles
 writing different fields concurrently), so its schema machinery lands naturally
@@ -715,10 +853,10 @@ supported. The **only** primitive the protocol owes this layer is **the ability 
 propose a schema change** (§3.3). CELLO no more models goals, phases and spawning
 than it models what a conversation is about.
 
-**No open design items remain.** What is left is implementation scoping, all of it
-in §14: the supported document-type list for the diff call, the durable
-queued-outbound mechanism, the per-type canonicalization rules, and the two test
-vector suites.
+Remaining work is implementation scoping: the supported document-type list for
+the diff call, the durable queued-outbound mechanism, the two canonicalization
+rules and their test vector suites (§14), and the tool surface for the
+lifecycle verbs (§3.5).
 
 ---
 
@@ -747,9 +885,12 @@ the peer*, which is also how the queue is reconstructed after a restart. Durabil
 falls out of the two-layer model rather than being bolted on.
 
 **Envelope fields.** Beyond the standard CELLO message envelope, a document
-operation carries: `document_id`, `epoch_id`, the sender's Yjs state vector (§7),
-and the update payload. `epoch_id` is not optional — after a compaction, an update
-that does not state its epoch cannot be verified unambiguously.
+operation carries: `document_id`, `epoch_id`, `doc_prev_hash` (the per-document
+chain link, §9.1), the sender's Yjs state vector (§7), and the update payload.
+`epoch_id` is not optional — after a compaction, an update that does not state
+its epoch cannot be verified unambiguously. `doc_prev_hash` is not optional
+either — it is what lets the document log be extracted and verified across
+sealed sessions.
 
 **Mixed tiers are coherent by construction, not a hazard.** Epoch transitions are
 bilateral and signed, so both parties compact together and neither is left unable
@@ -766,9 +907,11 @@ wrong and expensive to detect in production:
   against two implementations drifting — and drift surfaces as a false divergence
   alarm at quiescence, which is the worst possible failure mode for trust in the
   mechanism.
-- **Concurrent update plus rejection.** The interaction of a rejection (§3.2) with
-  an in-flight concurrent update from the other party needs explicit vectors rather
-  than reasoning.
+- **Concurrent update plus rejection.** The interaction of a rejection (§3.2)
+  with an in-flight concurrent update from the other party needs explicit
+  vectors rather than reasoning — covering both the supersession path (the
+  superseding update must net to zero against the quarantined original) and the
+  purge path (epoch reset with concurrent work in flight).
 
 **Yjs clientID — let Yjs mint it.** Yjs identifies every operation by
 `(clientID, clock)`, and that pair is assumed globally unique. Two live `Y.Doc`
@@ -785,7 +928,10 @@ both daemons live, or an orphan daemon alongside a fresh one.
 The rule is therefore a one-line "don't optimize this": **let Yjs generate its own
 random clientID per live `Y.Doc`; never derive it from agent identity, never
 persist and restore one.** That is Yjs's default behaviour — the hazard only
-appears if someone gets clever.
+appears if someone gets clever. One residual accepted risk: clientIDs are
+random 32-bit values, so across a long-lived document's many fresh `Y.Doc`
+instances the birthday collision probability is small but not cryptographic —
+accepted, and recorded here so it is not rediscovered as a surprise.
 
 ---
 
