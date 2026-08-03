@@ -164,7 +164,38 @@ two per-relay secrets, listening `/tcp/4001/ws` (public) and `/tcp/4002` (bound,
 consortium-wide issuer above and dropped from Terraform management rather than destroyed —
 `prevent_destroy` blocked the delete, correctly.
 
-## Live image tags — directory on `dir-8fc23d86` (2026-08-03, ROLL COMPLETE)
+## Live image tags — directory on `dir-d35d0a1d` (2026-08-03, ROLL COMPLETE)
+
+**Directory: `dir-d35d0a1d`** (Cloud Build `d8060aaf`, from `origin/main` @ `d35d0a1d`, clean tree).
+Second roll of the day. Carries the chained-registry fix: `conversation_seals` and
+`relay_registrations` are in `HASH_CHAINED_TABLES` but were registered for anti-entropy on
+2026-07-31 without the `chained` flag, so `applyTierA` took the generic INSERT and supplied no
+`chain_hash`. Verified in the built artifact before deploy — 4 `chained` flags, up from 2.
+
+### The seals converged, and the divergence was worse than the baseline showed
+
+Pre-deploy: `use1=0, usc1=2, euw1=2`. The obvious reading — two nodes hold the same two seals, one
+holds none — was **wrong**. Post-deploy every node holds **4**: `usc1` and `euw1` each held two
+seals *the other lacked*, so all three nodes were diverged from each other and the true set was
+double what the baseline suggested. `use1` converged on the first round after it alone was rolled
+(the fix is on the APPLY side, so serving from not-yet-rolled peers was unaffected).
+
+| Node | Address | `conversation_seals` before → after | Empty `chain_hash` |
+|---|---|---|---|
+| `gcp-use1` | 34.75.172.108 | 0 → **4** | 0 |
+| `gcp-usc1` | 34.136.176.190 | 2 → **4** | 0 |
+| `gcp-euw1` | 34.34.166.245 | 2 → **4** | 0 |
+
+Post-roll, verified against the live databases and logs, not inferred: all three MIGs
+`isStable=True`, all three `bootstrap` 200, `antientropy.round.completed` firing continuously (six
+in fifteen seconds), and **zero** `apply.failed`, **zero** `fork_suspected`, **zero**
+`table.skipped`. The `apply.failed`/`fork_suspected` entries at 19:44–19:48 are the roll window
+itself, when nodes were on mixed images; nothing after 19:49.
+
+`relay_registrations` remains 0 rows on all three — the silent variant never fired, and is now
+closed before it could.
+
+### Superseded — directory on `dir-8fc23d86` (2026-08-03, earlier the same day)
 
 **Directory: `dir-8fc23d86`** (Cloud Build `7b03bf48`, built from `origin/main` @ `8fc23d86`, clean
 tree). Carries the M12-P9 anti-entropy fix — per-table isolation on BOTH the responder's
