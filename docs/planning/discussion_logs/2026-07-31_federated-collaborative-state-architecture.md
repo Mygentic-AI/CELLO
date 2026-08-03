@@ -12,7 +12,8 @@ description: >
   batching and offline collaboration, the two assurance tiers (authenticated vs.
   attested) with canonicalization as the boundary, canonical artifact hashing and
   bilateral quiescence agreement, document epochs, the 0x04 operation leaf, and
-  multi-party collaboration via per-artifact delivery lists over pairwise sessions.
+  multi-party collaboration via hub-and-spoke re-authoring over pairwise sessions
+  (mesh delivery lists deferred).
 ---
 
 # 2026-07-31 — Federated Collaborative State Architecture
@@ -21,8 +22,8 @@ description: >
 2026-08-01 to correct the strategy framing and work the mechanics from first
 principles. Substantially extended 2026-08-03 after an external technical review
 of the design against Yjs's actual limitations, which surfaced the assurance-tier
-model, canonicalization, epochs, and the multi-party delivery-list approach.
-Most of the reconciliation with
+model, canonicalization, epochs, and the multi-party topology decision
+(hub-and-spoke for M14, mesh deferred). Most of the reconciliation with
 [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol
 Primitive]] is now resolved in §12.
 
@@ -443,48 +444,100 @@ Plus a compaction policy, which per the above mints an epoch.
 
 ---
 
-## 11. Multi-Party via Delivery Lists (Not N-Party Sessions)
+## 11. Multi-Party: Hub-and-Spoke (M14) and Mesh (Deferred)
 
-M14 ships **pairwise sessions**. But multi-party *documents* fall out of pairwise
-sessions cheaply, provided the document layer is separated from the session layer.
+M14 ships **pairwise sessions**. Multi-party collaboration is reachable two ways,
+and they are not variants of one mechanism — they are different topologies with
+different meanings and different costs.
 
-**The model.** An artifact carries a **delivery list** of holders. An update is
-published over each of the sender's pairwise sessions to each holder — structurally
-an email with multiple recipients, including the same social semantics (everyone on
-the list sees everyone's contributions). A publishes; B and C receive. C publishes;
-A and B receive. All links are ordinary pairwise CELLO sessions.
+### 11.1 Hub-and-spoke — the M14 answer
 
-**Why this beats N-party sessions:**
+**The model.** A holds a bilateral artifact with B and a separate one with C. When
+C contributes, A merges that work into the document it holds and then publishes
+**its own batch, signed by A**, to B. B receives an A-authored update. A decides
+what crosses.
 
-- No N-way session establishment — sidesteps the FROST-scaling question that the
-  May log left open.
-- Every link is an existing authenticated, sealed pairwise session.
-- Yjs converges regardless of delivery order or duplication, so redundant delivery
-  is free.
-- No new transport topology.
+**This is re-authoring, not relaying, and the distinction is the whole design.**
 
-**Three requirements:**
+- *Relaying* — A forwards C's update with C's signature intact. B learns C exists,
+  cannot evaluate C's trust signals, and cannot verify A forwarded faithfully.
+  Worst of both worlds.
+- *Re-authoring* — A takes responsibility. From B's side it is an A-sanctioned
+  update, full stop; the original author is not part of B's trust decision.
 
-1. **The participant list is document state, not per-sender config.** If A believes
-   the holders are {A,B,C} and B believes {A,B}, B never delivers to C and C
-   diverges silently. It belongs in the epoch attestation (§10).
-2. **Delivery is best-effort, so retry is mandatory.** If the A–C link is down, C
-   misses that batch until A resends — the queued-outbound mechanism from §5.1,
-   which composes for free.
+**Why this is the right default, not a compromise:**
+
+- **The accountability chain mirrors contractual liability.** B holds an A-signed,
+  non-repudiable update; if it is wrong, B's recourse is against A. A holds the
+  sealed A↔C session; if C supplied bad content, A's recourse is against C. Each
+  link is independently provable and each party is accountable to the counterparty
+  it actually chose. You do not audit your supplier's supplier — you hold your
+  counterparty. Full mesh does not add rigour here; it flattens a relationship
+  structure that exists for good reasons.
+- **It serves real commercial structures.** A knows B and C; B and C do not know
+  each other, and frequently A does not *want* them to. The canonical case: C
+  supplies work to A, and A sells the finished product to B. Forcing a B–C
+  connection is not merely inconvenient there — it is a disintermediation risk that
+  makes the feature unusable for the party who most needs it.
+- **It costs nothing.** An agent participating in two pairwise collaborations is
+  the existing pairwise model. No delivery lists, no participant-set epochs, no
+  N-way quiescence detection, no forced connections. Multi-party in effect,
+  pairwise in mechanism.
+- **It is the more federated answer.** A single artifact with one shared state that
+  every holder sees is a quieter version of the shared-context model §1 argues
+  against. Hub-and-spoke is sovereign bilateral relationships, each party sharing
+  exactly what it chooses with each counterparty. The strategy section and the
+  topology agree.
+
+**Two consequences to state plainly rather than discover later:**
+
+*There is no global attested document state.* Tier 2 agreement is **per link** — A
+and B agree on `H_AB`, A and C agree on `H_AC`, and these legitimately differ. "The
+document" stops meaning one globally-agreed artifact. That is not a gap;
+controlling what B sees is the entire point of the intermediary position.
+
+*A can present different states to B and C, or misrepresent C's contribution.* This
+is what an intermediary **is**, not a flaw to mitigate. B's protection is that A
+signed what it sent.
+
+**Opacity is partial, not total, in the single-document form.** Yjs operations carry
+`(clientID, clock)`, so a merged update A sends to B contains operations under C's
+random clientID. B learns *a third client contributed* — not who, since clientID is
+a random number with no identity binding. For most commercial cases this is fine:
+"I use subcontractors" is rarely the secret; "which subcontractor" is. **Total
+opacity** requires A to hold two genuinely separate documents and port content
+across as its own edits — no automatic convergence, real work for A, but nothing
+leaks. Offer it as a mode; do not make it the default.
+
+### 11.2 Mesh via delivery lists — deferred
+
+The peer case is real: three colleagues co-authoring genuinely want one artifact,
+one attested state, everyone seeing everyone. That model is a per-artifact
+**delivery list** of holders, with each update published over the sender's pairwise
+sessions to every holder — structurally an email with multiple recipients,
+including the same social semantics. Yjs converges regardless of delivery order or
+duplication, and no N-way session establishment is needed, which sidesteps the
+FROST-scaling question the May log left open.
+
+It requires real machinery that hub-and-spoke does not:
+
+1. **The participant list becomes document state, not per-sender config.** If A
+   believes the holders are {A,B,C} and B believes {A,B}, B never delivers to C and
+   C diverges silently. It would belong in the epoch attestation (§10).
+2. **Retry becomes mandatory** — best-effort delivery over links that may be down,
+   using the queued-outbound mechanism from §5.1.
 3. **Tier 2 agreement becomes N-way** — every holder signs the same canonical hash
-   at quiescence. Workable over pairwise links, but detecting "everyone has
-   converged" is harder than in the two-party case.
+   at quiescence, and detecting "everyone has converged" is materially harder than
+   in the two-party case.
+4. **It requires full mesh among holders.** If B edits, B must deliver to C, so B
+   needs a B–C session. Adding C to a document A shares with B *forces a connection
+   between B and C*. Where that is wanted it is fine; where it is not, §11.1 is the
+   answer.
 
-**The consequence requiring a deliberate decision (§13.3):** this requires **full
-mesh among holders**. If B edits, B must deliver to C, so B needs a B–C session.
-Adding C to a document A shares with B therefore *forces a connection between B and
-C*, who may not know each other. The alternative — B sends to A, A forwards to C —
-is relay-through-a-third-party, which reintroduces exactly the propagation-trust
-problem this model otherwise avoids (did A forward faithfully, or withhold?). So:
-full mesh, and adding a participant creates a connection obligation among existing
-ones, which must be explicit at add-time rather than a surprise.
+**Deferred, not rejected.** The artifact declares its topology at handshake so no
+participant is confused about which guarantees apply.
 
-### 11.1 Why floor control is not needed — resolved
+### 11.3 Why floor control is not needed — resolved
 
 The May log settles the question this design left open. A chat message is an
 *utterance* that demands a response, which is why group chat needs batching and
@@ -510,7 +563,7 @@ equity purchase, 8 roles, 8 phases). Status of each divergence:
 | Inference cascade | CRDT ops are silent, no floor control | **Adopted** (§11.1) — closes an open item |
 | Seal | FROST-sealed checkpoint of document state at close | **Refined** (§7–8) — same instinct; it never confronts canonicalization |
 | Directory role | Directory tracks which agents hold which documents, for rendezvous | **Rejected for M14** — new directory state, cuts against minimal-directory-state and against artifacts riding existing sessions (§11) |
-| Scope | N-party throughout (8 concurrent roles) | **Pairwise sessions** (§11); multi-party documents via delivery lists |
+| Scope | N-party throughout (8 concurrent roles) | **Pairwise sessions** (§11); multi-party via hub-and-spoke re-authoring, mesh deferred |
 | Milestone | M9 | M14 |
 
 **The one unresolved divergence is philosophical (§13.2).** The May log is
@@ -538,14 +591,9 @@ N-party work rather than M14 regardless of the philosophical call.
    vs. unopinionated tension with the May log. Current lean: not in V1, and
    possibly properly N-party work.
 
-3. **Full mesh among document holders** (§11). Confirm that forcing a connection
-   between existing holders when a participant is added is acceptable, versus
-   supporting relay-through-a-third-party with the propagation-trust cost that
-   implies.
+3. **Live-sync as an opt-in mode** (§5). One-line decision; affects API shape.
 
-4. **Live-sync as an opt-in mode** (§5). One-line decision; affects API shape.
-
-5. **Notification granularity by type** (§4). Type-aware (line ranges for text,
+4. **Notification granularity by type** (§4). Type-aware (line ranges for text,
    key paths for structured) is preferred and cheaper than it looks given shared
    canonicalization machinery, but the supported type list needs fixing.
 
