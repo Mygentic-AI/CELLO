@@ -164,7 +164,7 @@ two per-relay secrets, listening `/tcp/4001/ws` (public) and `/tcp/4002` (bound,
 consortium-wide issuer above and dropped from Terraform management rather than destroyed —
 `prevent_destroy` blocked the delete, correctly.
 
-## Live image tags — directory on `dir-8fc23d86` (2026-08-03, ROLL IN PROGRESS)
+## Live image tags — directory on `dir-8fc23d86` (2026-08-03, ROLL COMPLETE)
 
 **Directory: `dir-8fc23d86`** (Cloud Build `7b03bf48`, built from `origin/main` @ `8fc23d86`, clean
 tree). Carries the M12-P9 anti-entropy fix — per-table isolation on BOTH the responder's
@@ -179,8 +179,36 @@ and `ae-sync-service.js` logs `antientropy.table.skipped` at `error`.
 | Node | Address | On `dir-8fc23d86` | Verified ready |
 |---|---|---|---|
 | `gcp-use1` | 34.75.172.108 | ✅ | 2026-08-03 — `bootstrap` 200, MIG stable, image confirmed from instance metadata |
-| `gcp-usc1` | 34.136.176.190 | 🔄 rolling | — |
-| `gcp-euw1` | 34.34.166.245 | ⬜ not yet | — |
+| `gcp-usc1` | 34.136.176.190 | ✅ | 2026-08-03 — same three checks |
+| `gcp-euw1` | 34.34.166.245 | ✅ | 2026-08-03 — same three checks |
+
+Post-roll: all three MIGs `isStable=True`, all three `bootstrap` 200, all three confirmed on
+`dir-8fc23d86` from their own instance metadata, and `antientropy.round.completed` firing across the
+fleet. **No `antientropy.table.skipped`** — the new containment is present and NOT firing, which is
+the correct healthy state: the spec bug that caused the 2026-08-01 outage is already fixed, and this
+deploy bounds the blast radius of the next one.
+
+### ⚠️ Found during this roll — `conversation_seals` has never replicated
+
+Every anti-entropy round fails to apply that table:
+
+```
+antientropy.apply.failed  conversation_seals
+  null value in column "chain_hash" of relation "conversation_seals" violates not-null constraint
+antientropy.round.fork_suspected
+```
+
+**PRE-EXISTING, not caused by this deploy** — the same errors appear at 12:59 on 2026-08-03, on
+nodes still running `dir-69825467`. Two reasons it matters more than a log line:
+
+1. `fork_suspected` is firing. The engine header states that `pulled > 0 && applied === 0` round
+   after round is the fork signature that must be treated as an alarm and **never as health** — and
+   it is currently firing into a log nobody tails. That is the same shape as the outage this deploy
+   exists to prevent.
+2. Apply-phase containment is doing its job (the round completes, other tables converge), so this is
+   loud-but-ignored rather than silent. It will not fix itself.
+
+Not investigated — outside the scope of this deploy. Needs its own unit.
 
 **Health endpoint is port 9090, not 8080.** `GET :9090/bootstrap` → 200 is the readiness signal.
 8080 is the protocol listener and answers 400 to an HTTP bootstrap probe — a live node looks broken
