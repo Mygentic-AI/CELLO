@@ -164,7 +164,43 @@ two per-relay secrets, listening `/tcp/4001/ws` (public) and `/tcp/4002` (bound,
 consortium-wide issuer above and dropped from Terraform management rather than destroyed —
 `prevent_destroy` blocked the delete, correctly.
 
-## Live image tags (2026-07-30)
+## Live image tags — directory on `dir-8fc23d86` (2026-08-03, ROLL IN PROGRESS)
+
+**Directory: `dir-8fc23d86`** (Cloud Build `7b03bf48`, built from `origin/main` @ `8fc23d86`, clean
+tree). Carries the M12-P9 anti-entropy fix — per-table isolation on BOTH the responder's
+advertisement and the dialer's local read, so one unreadable table costs that table's replication
+for the round instead of every table's, on every node. See DoD M12-P9 and journal Entry 77.
+
+Verified in the BUILT ARTIFACT, not the source, before any node was touched: `ae-channel.js`
+carries `onTableError`, `ae-round.js` carries `unreadableA` (the guard that stops an unreadable
+table being read as empty and pulled whole), `anti-entropy-engine.js` carries the dialer isolation,
+and `ae-sync-service.js` logs `antientropy.table.skipped` at `error`.
+
+| Node | Address | On `dir-8fc23d86` | Verified ready |
+|---|---|---|---|
+| `gcp-use1` | 34.75.172.108 | ✅ | 2026-08-03 — `bootstrap` 200, MIG stable, image confirmed from instance metadata |
+| `gcp-usc1` | 34.136.176.190 | 🔄 rolling | — |
+| `gcp-euw1` | 34.34.166.245 | ⬜ not yet | — |
+
+**Health endpoint is port 9090, not 8080.** `GET :9090/bootstrap` → 200 is the readiness signal.
+8080 is the protocol listener and answers 400 to an HTTP bootstrap probe — a live node looks broken
+if probed there. `cello-directory-allow-http` opens 9090; `cello-directory-allow-protocol` opens
+8080/4000.
+
+**Two triggers do NOT fire, and images arrive by hand.** `cello-directory-image` has not auto-built
+since 2026-07-28 despite a healthy GitHub connection and matching `includedFiles`; every `dir-*` tag
+since then, including this one, came from `gcloud builds submit`. This is part of why
+`DOD-NODE-DIR-GCP-1` is 🟡 rather than ✅. Unresolved.
+
+**`gcloud builds triggers run` is denied for a human account; `builds submit` is not.** The trigger
+lives in `us-east1` and manual regional builds have never been used here, so no principal has
+`cloudbuild.builds.create` there. `builds submit` goes to the **global** endpoint and works. This is
+not a regression — it is a path nobody had used.
+
+### Superseded — both services on `reviewfix-de1ed949` (2026-07-30)
+
+Note this section was already stale before the 2026-08-03 roll: it claimed the directory ran
+`reviewfix-de1ed949` while `terraform.tfvars` pinned `dir-69825467`. tfvars was correct.
 
 Both services on **`reviewfix-de1ed949`** (Cloud Build `a918df99` relay / `a904a60d` directory),
 pinned in `infra/terraform/terraform.tfvars`. Carries the DOD-SEAL-BROKER-1 review fixes: the relay
