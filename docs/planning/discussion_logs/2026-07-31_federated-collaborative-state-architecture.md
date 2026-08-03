@@ -715,9 +715,10 @@ supported. The **only** primitive the protocol owes this layer is **the ability 
 propose a schema change** (§3.3). CELLO no more models goals, phases and spawning
 than it models what a conversation is about.
 
-**No open design items remain.** What is left is implementation scoping: the
-supported document-type list for the diff call, and the queued-outbound mechanism
-named in §5.1.
+**No open design items remain.** What is left is implementation scoping, all of it
+in §14: the supported document-type list for the diff call, the durable
+queued-outbound mechanism, the per-type canonicalization rules, and the two test
+vector suites.
 
 ---
 
@@ -728,9 +729,46 @@ SQLCipher discards the signed envelope chain that makes the seal verifiable. Kee
 both: the **immutable CELLO envelope log** (signatures, provenance, replay
 protection, seal verification) and a **materialized Yjs snapshot** (fast startup
 and access), with the snapshot rebuildable from the log. Both live in SQLCipher
-alongside other CELLO client state. State need not survive a daemon restart —
-CELLO's invariant is daemon-up-is-CELLO-on — but the envelope log makes rebuilding
-straightforward regardless.
+alongside other CELLO client state. Live Yjs state need not survive a daemon
+restart — CELLO's invariant is daemon-up-is-CELLO-on — because the envelope log
+makes rebuilding straightforward.
+
+**Store the state vector and last-applied envelope index with the snapshot.**
+Without them, rebuilding or verifying requires working out from scratch where the
+snapshot sits relative to the log. With them it is a lookup.
+
+**Publish writes to the envelope log immediately; delivery reads from it.** The
+naive implementation of §5.1's queued outbound is an in-memory queue — and that
+contradicts the restart invariant above. An agent publishes, the daemon restarts
+overnight, and the batch silently never arrives while the agent believes the work
+was shared. Writing the envelope at publish time closes this without new
+machinery: "queued outbound" becomes *envelopes in the log not yet acknowledged by
+the peer*, which is also how the queue is reconstructed after a restart. Durability
+falls out of the two-layer model rather than being bolted on.
+
+**Envelope fields.** Beyond the standard CELLO message envelope, a document
+operation carries: `document_id`, `epoch_id`, the sender's Yjs state vector (§7),
+and the update payload. `epoch_id` is not optional — after a compaction, an update
+that does not state its epoch cannot be verified unambiguously.
+
+**Mixed tiers are coherent by construction, not a hazard.** Epoch transitions are
+bilateral and signed, so both parties compact together and neither is left unable
+to verify an earlier epoch. Hub-and-spoke does produce different tiers on different
+links — A↔B attested while A↔C is only authenticated — but those are separate
+documents with separate handshakes (§11.1), so there is no mixed-tier document to
+reconcile.
+
+**Test vectors are required for two paths**, because both are cheap to get subtly
+wrong and expensive to detect in production:
+
+- **Canonicalization conformance.** Both parties must produce byte-identical output
+  from converged state, so a shared vector suite is the only practical guard
+  against two implementations drifting — and drift surfaces as a false divergence
+  alarm at quiescence, which is the worst possible failure mode for trust in the
+  mechanism.
+- **Concurrent update plus rejection.** The interaction of a rejection (§3.2) with
+  an in-flight concurrent update from the other party needs explicit vectors rather
+  than reasoning.
 
 **Yjs clientID — let Yjs mint it.** Yjs identifies every operation by
 `(clientID, clock)`, and that pair is assumed globally unique. Two live `Y.Doc`
