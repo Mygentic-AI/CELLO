@@ -183,6 +183,23 @@ fresh clientID and re-applies its legitimate work, and no copy of the purged
 content survives in either party's live document. Purge is the fifth
 load-bearing use of the epoch primitive.
 
+**Purge's blast radius is one envelope, never the log.** Purged content was, by
+construction, caught and rejected before admission — it never touched the live
+document and could not itself be the cause of downstream harm, so there is no
+forensic reason to preserve the flagged payload. But an epoch boundary that
+*deletes every pre-epoch envelope* is a much bigger operation than purge needs,
+and it hands an attacker a lever: deliberately sacrifice something screening
+will obviously catch, purely to trigger a purge whose side effect erases
+genuine evidence of an earlier, unrelated, already-admitted attack. Purge must
+not have that reach. The live-document reconstruction from snapshot is still
+required — Yjs tombstones retain deleted bytes internally, so supersession
+alone cannot remove them from the working copy — but the immutable envelope
+log is redacted, not truncated: **strip the flagged envelope's payload,
+retain its hash and signature so `doc_prev_hash` chaining stays intact, and
+leave every other envelope untouched.** The evidentiary trail for anything
+unrelated survives exactly because purge cannot reach beyond the one entry it
+was scoped to.
+
 **This is not optional for V1.** Without it the screening gate in §3.1 is broken by
 construction: a screened-out update that is silently dropped diverges the two
 copies permanently and invisibly. The shadow document, the validation hook, the
