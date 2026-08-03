@@ -13,7 +13,8 @@ description: >
   attested) with canonicalization as the boundary, canonical artifact hashing and
   bilateral quiescence agreement, document epochs, the 0x04 operation leaf, and
   multi-party collaboration via hub-and-spoke re-authoring over pairwise sessions
-  (mesh delivery lists deferred).
+  (mesh delivery lists deferred), the shadow-document validation stage with
+  sender-rollback rejection, and schema enforcement as an opt-in document flag.
 ---
 
 # 2026-07-31 — Federated Collaborative State Architecture
@@ -23,9 +24,11 @@ description: >
 principles. Substantially extended 2026-08-03 after an external technical review
 of the design against Yjs's actual limitations, which surfaced the assurance-tier
 model, canonicalization, epochs, and the multi-party topology decision
-(hub-and-spoke for M14, mesh deferred). Most of the reconciliation with
+(hub-and-spoke for M14, mesh deferred). The same session settled the validation
+stage and rejection protocol (§3.2) and reshaped field-level write authority into
+the opt-in `schema_enforcement` flag (§3.3), which closes the reconciliation with
 [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol
-Primitive]] is now resolved in §12.
+Primitive]] in §12.
 
 ---
 
@@ -102,7 +105,9 @@ stands on the grounds above, not on that one.
 
 ---
 
-## 3. Security & Governance: Policy, Not New Machinery
+## 3. Security, Governance and Validation
+
+### 3.1 Screening policy
 
 CELLO's existing screening (gitleaks-style dictionaries, invisible-character
 scrubbers) will false-positive heavily against real document content — code
@@ -120,14 +125,106 @@ Sensible defaults should key off relationship distance, not document type alone:
 - Arm's-length collaborator, different company, cross-border, or a client:
   tighter defaults.
 
-**Open — the three-layer model (§13.1).** Screening implies a staging step: apply
-an incoming update to an interim document, run controls/screening, then admit it
-to the accepted document. This is the shadow-doc pattern and it carries a specific
-trap: if the gate rejects an update, the interim doc holds it and the accepted doc
-doesn't — they have diverged permanently, and a CRDT offers no un-apply. The
-interim document therefore has to be **rebuildable from the accepted state** rather
-than a long-lived parallel copy. Cost is roughly 2× memory per artifact. Not yet
-worked through.
+### 3.2 The validation stage and the rejection protocol — V1
+
+Screening implies a staging step: apply an incoming update to a **shadow
+document**, run the controls, then admit it to the accepted document. The trap is
+that rejection appears to create permanent divergence — the sender holds the
+change, the receiver doesn't, and a CRDT offers no un-apply.
+
+**Rejection is resolved by the sender, not the receiver.** The mechanism already
+exists in CELLO in another form: endorsement refusal. Applied here:
+
+1. The receiver validates against the shadow document and **rejects with a
+   reason** — a protocol message, not a silent drop.
+2. The receiver never admits the update to its accepted document and discards the
+   shadow.
+3. The sender receives the rejection and **rolls back locally**. Both parties are
+   now back at the pre-update state. Convergence is restored.
+
+**This is not optional for V1.** Without it the screening gate in §3.1 is broken by
+construction: a screened-out update that is silently dropped diverges the two
+copies permanently and invisibly. The shadow document, the validation hook, the
+reject-with-reason message and sender rollback are therefore V1 machinery, driven
+by screening rather than by schemas — and the schema layer in §3.3 later plugs into
+a hook that already exists.
+
+Four mechanics:
+
+- **Rollback must not send inverse operations.** The receiver rejected, so it never
+  admitted the update; the sender rolls back locally and both are at the pre-update
+  state. Sending compensating operations would subtract something the receiver
+  never had. Note that a local rollback in Yjs emits inverse operations into the
+  *sender's own* log rather than erasing history — which is correct, and leaves an
+  auditable "wrote X, was rejected, undid X" trail.
+- **A non-compliant sender is a trust-signal event, not a protocol failure.** If the
+  sender refuses to roll back, the receiver stalls holding later updates whose
+  dependencies never arrive. Surface that rather than letting it stall silently; the
+  signed record shows the sender was told and didn't act.
+- **The shadow document must be rebuildable from the accepted state**, not a
+  long-lived parallel copy. Cost is roughly 2× memory per artifact.
+- **Validators must be deterministic** — the same input yields the same verdict on
+  both sides, or rejection becomes asymmetric.
+
+### 3.3 Schema enforcement as a document flag — deferred
+
+Field-level write authority — the May log's schema-as-contract — becomes a
+**per-document feature flag**, `schema_enforcement`, sitting alongside
+`append_only` rather than being a mandatory protocol layer.
+
+**When enabled**, the first update on the document *is* the schema: a JSON blob
+declaring fields, types, who may write what, and the logical rules for updating.
+The parties may negotiate it back and forth as ordinary updates until they agree.
+From then on every incoming update is validated against it at the §3.2 hook, and a
+rejection may optionally carry a **suggested modification** — "your type was wrong,
+here is the corrected form" — which the sender's daemon can roll back to and
+re-publish as its own update.
+
+Why this shape rather than the May log's:
+
+- **It is opt-in, so the unopinionated principle survives.** Documents that don't
+  want enforcement never pay for it.
+- **It reuses the §3.2 hook.** `append_only` is already a validated invariant
+  checked there; the flags simply select which rules are active. Not a new
+  architectural seam.
+- **It carries the schema in the document**, so both parties hold the identical
+  schema by construction — which is what makes deterministic two-sided validation
+  tractable at all.
+- **Schema changes mint an epoch** (§10), bilateral and signed, so "which version
+  validated this update" never becomes its own causality problem.
+
+**Why it is not in V1:**
+
+Identity and authorization are different threat models, and CELLO already covers
+the one that matters. "Am I sure this is the sales trader" is verified identity —
+solved. The ACL answers a different question: the *real* settlement agent wrote a
+field it shouldn't have. That is largely a guard rail against agent error, and
+guard rails belong in the harness — the agent's own template and instructions —
+rather than in the protocol. Pairwise scope shrinks it further (field authority is
+a multi-writer control), and under hub-and-spoke (§11.1) the re-authoring party
+owns everything it signs anyway.
+
+CELLO's model is **accountability, not prevention**. If a party writes out of lane,
+the signed oplog shows exactly who did it and when — detectable and attributable,
+permanently, with no divergence cost. For Use Case C the schema therefore ships as
+**shared convention** in V1: both agents load the same goal-template skill and
+agree on the shape, with no protocol enforcement.
+
+**Declare the flag in V1 and support only `false`.** Documents created now
+explicitly declare themselves unenforced rather than having no opinion, so enabling
+`true` later is a new capability rather than a retrofit. Epoch adoption (§10)
+remains available for flipping an existing document, but is not needed to avoid
+stranding anything.
+
+### 3.4 Properties established at the document handshake
+
+| Property | Meaning | V1 |
+|---|---|---|
+| `document_type` | Markdown, plain text, JSON, XML, common text-based source | Yes |
+| `append_only` | Validated invariant, not a flag the CRDT honours (§15B) | Yes |
+| `assurance_tier` | Authenticated (Tier 1) or attested (Tier 2) (§6) | Yes |
+| `topology` | Hub-and-spoke or mesh (§11) | Hub-and-spoke only |
+| `schema_enforcement` | Schema-as-first-update validation (§3.3) | Declared; `false` only |
 
 ---
 
@@ -215,7 +312,7 @@ a queued-outbound mechanism — small, but real machinery to be named in
 implementation. The residual case (the machine is off entirely) is the same "you
 can't send to a peer that isn't there" problem CELLO already has everywhere.
 
-**Open (§13.4):** whether live-sync exists at all as an opt-in mode, or whether
+**Open (§13.1):** whether live-sync exists at all as an opt-in mode, or whether
 accumulate-and-publish is the only model.
 
 ---
@@ -564,38 +661,37 @@ equity purchase, 8 roles, 8 phases). Status of each divergence:
 | Seal | FROST-sealed checkpoint of document state at close | **Refined** (§7–8) — same instinct; it never confronts canonicalization |
 | Directory role | Directory tracks which agents hold which documents, for rendezvous | **Rejected for M14** — new directory state, cuts against minimal-directory-state and against artifacts riding existing sessions (§11) |
 | Scope | N-party throughout (8 concurrent roles) | **Pairwise sessions** (§11); multi-party via hub-and-spoke re-authoring, mesh deferred |
+| Field-level write authority | Mandatory schema-as-contract, YAML ACL, validated on receipt | **Reshaped and deferred** (§3.3) — becomes the opt-in `schema_enforcement` flag with the schema carried as the document's first update; declared in V1, `false` only |
 | Milestone | M9 | M14 |
 
-**The one unresolved divergence is philosophical (§13.2).** The May log is
-*schema-first and prescriptive*: "the schema is the contract" — a YAML ACL
-declaring per-field write authority, operation types (`append-only`, `set-once`,
-`forward-only`, `bilateral`, `derived`), and valid state transitions, all validated
-on receipt, with invalid operations rejected and logged as trust-signal events.
-This document is deliberately the opposite — unopinionated, any document type,
-don't force structure, with append-only as the single first-class property.
+**The philosophical divergence is now resolved rather than parked.** The May log is
+*schema-first and prescriptive* — "the schema is the contract," mandatory for every
+document. This document is unopinionated by default. The flag reconciles them: the
+prescriptive model is available where it earns its place, and absent everywhere
+else. Its enforcement mechanism is also corrected — the May log rejects invalid
+operations at the receiver and never confronts the fact that rejection in a CRDT
+creates permanent divergence. The sender-rollback protocol in §3.2 is what makes
+receiver-side rejection viable at all.
 
 Note also that the May log's motivating example is inherently N-party (8 roles
-writing different fields concurrently), so its schema machinery may belong with
-N-party work rather than M14 regardless of the philosophical call.
+writing different fields concurrently), so its schema machinery lands naturally
+with N-party work regardless.
 
 ---
 
 ## 13. Open Items
 
-1. **The three-layer model** (§3). Interim document → controls/screening → accepted
-   document. The rejection-divergence trap and the rebuildable-interim requirement
-   are understood; the design is not worked through.
+1. **Live-sync as an opt-in mode** (§5). One-line decision; affects API shape.
 
-2. **Field-level write authority: in V1 or not** (§12). Currently unclear whether
-   V1 provides field-level locks. Resolving this resolves the schema-prescriptive
-   vs. unopinionated tension with the May log. Current lean: not in V1, and
-   possibly properly N-party work.
-
-3. **Live-sync as an opt-in mode** (§5). One-line decision; affects API shape.
-
-4. **Notification granularity by type** (§4). Type-aware (line ranges for text,
+2. **Notification granularity by type** (§4). Type-aware (line ranges for text,
    key paths for structured) is preferred and cheaper than it looks given shared
    canonicalization machinery, but the supported type list needs fixing.
+
+3. **Goal spawning semantics** (§15C). "Spawn a new goal" is two different
+   mechanisms — a child node inside the same artifact (shares the delivery list,
+   the seal, the epoch) versus a genuinely new artifact (own handshake, own
+   participants, own attestation chain). Both are legitimate; the goal template
+   must be explicit about which it means.
 
 ---
 
@@ -647,10 +743,17 @@ headline claim requires artifact binding.
 
 ### C. Track a Shared Goal (Micro-Project Management)
 Structured, multi-actor workflows — technically identical to Use Case A (a JSON
-blob) but structured around phases, current state, and an appended goal journal.
-CELLO provides skills and agent templates for constructing and orchestrating this,
-not a prescribed schema. This is the use case that most tempts toward the May log's
-field-level authority model (§13.2).
+blob) but structured around phases, current state, parent/child relationships,
+spawned subgoals, and an appended goal journal. CELLO provides skills and agent
+templates for constructing and orchestrating this, not a prescribed schema.
+
+The value at launch is being able to hold and track a shared goal at all — not
+strict control over who writes which field. Verified identity already answers the
+question that matters ("is this really the sales trader?"), and the signed oplog
+makes any out-of-lane write attributable after the fact. So V1 ships the schema as
+**shared convention** — both agents load the same template skill — with
+`schema_enforcement: false`. Enforcement is available later via §3.3 without a
+retrofit.
 
 **Design principle, reaffirmed:** don't over-specify. Any document type can be
 collaborated on; the one property worth making first-class is **append-only**,
