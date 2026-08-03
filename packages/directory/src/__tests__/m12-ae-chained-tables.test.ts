@@ -20,8 +20,8 @@
 import { describe, it, expect } from "vitest";
 import type pg from "pg";
 import { PgAeStore } from "../pg-ae-store.js";
-import { encodeTierARecord, SEAL_NOTARIZATIONS_SPEC, USER_ACCOUNTS_SPEC } from "../ae-table-encoders.js";
-import { serializeRecord } from "../hash-chain.js";
+import { encodeTierARecord, SEAL_NOTARIZATIONS_SPEC, USER_ACCOUNTS_SPEC, TIER_A_SPECS } from "../ae-table-encoders.js";
+import { serializeRecord, HASH_CHAINED_TABLES } from "../hash-chain.js";
 
 /** Records what the store did, so the test can tell the chain path from the generic INSERT path. */
 function harness() {
@@ -238,4 +238,65 @@ describe("DOD-AE-CHAINED-TABLES-1: seal_notarizations and user_accounts replicat
     const store = new PgAeStore(pool, chainWriter);
     await expect(store.serveTierA("agent_key_shares", ["x"])).rejects.toThrow(/unknown Tier-A table/);
   });
+});
+
+/**
+ * The registry must agree with `HASH_CHAINED_TABLES` — for EVERY table, not the two someone
+ * remembered.
+ *
+ * Found live on 2026-08-03. `conversation_seals` and `relay_registrations` are both in
+ * `HASH_CHAINED_TABLES` and both were registered for anti-entropy on 2026-07-31 WITHOUT the
+ * `chained` flag, so `applyTierA` took the generic INSERT — the exact path the test above calls
+ * "present, readable, and outside the tamper-evident chain". The specs correctly exclude
+ * `chain_hash` (it is node-local), so the generic INSERT supplies no value for it, and the two DDLs
+ * then diverge:
+ *
+ *   - `conversation_seals.chain_hash` is NOT NULL with no default → every apply RAISED. The table
+ *     never converged: proven on the live fleet, where gcp-usc1 and gcp-euw1 each held 2 seals and
+ *     gcp-use1 held 0 and could never acquire them. For a notary, a seal receipt that exists on
+ *     only some directories is the durability property failing.
+ *   - `relay_registrations.chain_hash` is `NOT NULL DEFAULT ''` (V19) → the apply SUCCEEDS and
+ *     writes a row with an EMPTY chain hash, inside the table but outside its chain, with nothing
+ *     raised anywhere. Latent rather than realised — all three nodes hold 0 rows today — and
+ *     strictly the worse failure of the two, because only the loud one led anyone to look.
+ *
+ * Two one-off assertions would have closed those two tables and left the NEXT registration to
+ * rediscover this. The invariant is what is tested: a hash-chained table that anti-entropy can
+ * apply must refuse to be written unchained. Driving it from `HASH_CHAINED_TABLES` means adding a
+ * table to that list, or to the AE set, is what extends the guard.
+ */
+describe("every hash-chained Tier-A table refuses to be written unchained", () => {
+  const { pool: probePool, chainWriter: probeWriter } = harness();
+  const aeTables = new PgAeStore(probePool, probeWriter).tierATables();
+  const chainedAndReplicated = HASH_CHAINED_TABLES.filter((t) => aeTables.includes(t));
+
+  it("the guard covers a real, non-empty intersection", () => {
+    // Without this, a rename on either side would empty the list below and every case would vacuously
+    // pass — a green suite asserting nothing at all.
+    expect(chainedAndReplicated).toEqual(
+      expect.arrayContaining(["user_accounts", "seal_notarizations", "conversation_seals", "relay_registrations"]),
+    );
+  });
+
+  for (const table of chainedAndReplicated) {
+    it(`${table}: no ChainWriter → refuses, and issues no bare INSERT`, async () => {
+      const spec = TIER_A_SPECS.find((s) => s.table === table);
+      expect(spec, `${table} is advertised by the store but has no exported spec`).toBeDefined();
+
+      // A body carrying exactly the spec's immutable columns. Values are placeholders: the refusal
+      // is reached before any column is interpreted, and the content address is recomputed from this
+      // same body so it matches by construction.
+      const body = Object.fromEntries(spec!.immutableColumns.map((c) => [c, "00"]));
+      const { hash } = encodeTierARecord(spec!, body);
+
+      const { pool, queries } = harness();
+      const store = new PgAeStore(pool); // deliberately no chain writer
+
+      await expect(store.applyTierA(table, [{ hash, body }])).rejects.toThrow(/no ChainWriter/);
+      expect(
+        queries.filter((q) => new RegExp(`INSERT INTO ${table}`, "i").test(q)),
+        `${table} fell through to the generic INSERT — that writes it outside its own chain`,
+      ).toEqual([]);
+    });
+  }
 });

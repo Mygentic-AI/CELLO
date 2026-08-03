@@ -34,12 +34,19 @@
  * **Scope.** Six tables round-trip: Tier-A agent_profiles, agent_revocations, user_accounts and
  * seal_notarizations; Tier-B agent_suspensions and agent_presence.
  *
- * The two hash-chained Tier-A tables apply through the INJECTED `ChainWriter`, never the generic
- * INSERT — that would write them outside the tamper-evident chain that is their reason for existing.
- * Chain columns are node-local: an applying node recomputes them against ITS OWN tip and never copies
- * the origin's (design §2 "Hash chains under anti-entropy"). With no writer injected, those two tables
- * are SKIPPED with an ERROR rather than written unchained — and the rest of the round still runs,
+ * **Hash-chained Tier-A tables apply through the INJECTED `ChainWriter`, never the generic INSERT** —
+ * that would write them outside the tamper-evident chain that is their reason for existing. Chain
+ * columns are node-local: an applying node recomputes them against ITS OWN tip and never copies the
+ * origin's (design §2 "Hash chains under anti-entropy"). With no writer injected, such a table is
+ * SKIPPED with an ERROR rather than written unchained — and the rest of the round still runs,
  * because starving Tier-B would take the kill switch down with them.
+ *
+ * **Which tables those are is `HASH_CHAINED_TABLES`, not a number anyone remembers.** This comment
+ * said "the two" until 2026-08-03, and by then there were four: `conversation_seals` and
+ * `relay_registrations` joined the AE set on 2026-07-31 without the `chained` flag and silently took
+ * the generic path. The count is not a fact about the system, it is a fact about when someone last
+ * looked — so the invariant is enforced by a test that iterates `HASH_CHAINED_TABLES` rather than
+ * naming tables (m12-ae-chained-tables.test.ts).
  */
 
 import type pg from "pg";
@@ -127,9 +134,18 @@ const TIER_A: readonly TierAPg[] = [
   { spec: AUTHORIZED_ISSUERS_SPEC, bytea: [], naturalKeyConstraint: "authorized_issuers_pkey" },
   { spec: SIGNAL_RECORDS_SPEC, bytea: [], naturalKeyConstraint: "signal_records_pkey" },
   { spec: SUBMISSION_RESULTS_SPEC, bytea: ["ciphertext"], naturalKeyConstraint: "submission_results_pkey" },
-  { spec: RELAY_REGISTRATIONS_SPEC, bytea: [], naturalKeyConstraint: "relay_registrations_relay_id_key" },
+  // chained: in HASH_CHAINED_TABLES, and missed here when this table was registered on 2026-07-31.
+  // Its chain_hash is `NOT NULL DEFAULT ''` (V19), so the generic INSERT did not raise — it wrote
+  // rows with an EMPTY chain hash, inside the table and outside its chain, silently. Latent rather
+  // than realised (all three nodes held 0 rows when this was found on 2026-08-03), and the worse of
+  // the two failures precisely because nothing would ever have reported it.
+  { spec: RELAY_REGISTRATIONS_SPEC, bytea: [], chained: true, naturalKeyConstraint: "relay_registrations_relay_id_key" },
   { spec: DIRECTORY_NODES_SPEC, bytea: [], naturalKeyConstraint: "directory_nodes_node_id_key" },
-  { spec: CONVERSATION_SEALS_SPEC, bytea: [], naturalKeyConstraint: "conversation_seals_conversation_id_key" },
+  // chained: same omission, opposite symptom. conversation_seals.chain_hash is NOT NULL with no
+  // default (V3), so every apply RAISED and the table never converged — proven on the live fleet,
+  // where two nodes held 2 seals and gcp-use1 held 0 and could not acquire them. A seal receipt
+  // present on only some directories is the notary's durability property failing.
+  { spec: CONVERSATION_SEALS_SPEC, bytea: [], chained: true, naturalKeyConstraint: "conversation_seals_conversation_id_key" },
   // seal_notarizations last because its chained writer needs conversation_seals and profiles present.
   {
     spec: SEAL_NOTARIZATIONS_SPEC,
