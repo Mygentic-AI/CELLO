@@ -2,30 +2,29 @@
 name: 2026-07-31 Federated Collaborative State Architecture
 type: discussion
 date: 2026-07-31
-topics: [crdt, yjs, collaborative-state, architecture, m14, goals, security, federation, buzz, multi-party]
+topics: [crdt, yjs, collaborative-state, architecture, m14, goals, security, federation, buzz, multi-party, canonicalization, attestation, epochs]
 status: active
 description: >
   Strategic architectural design for CELLO's Federated Collaborative State (M14).
-  Revised 2026-08-01 after an in-depth discussion correcting the original draft's
-  framing, informed by CELLO's origin story and a first-principles read of Block's
-  Buzz. Establishes federated (separate-context) collaboration over Yjs CRDT
-  artifacts as the model, replacing shared-context/merged-brain approaches. Covers
-  the design principle (Yjs over Automerge), security/governance policy, the
-  update-notification flow (git-like, no staging buffer), sealing (inherits
-  existing message/seal infrastructure), and scope (pairwise-only for M14). Two
-  items are carried to the next session: reconciliation with the field-level
-  write-authority design in shared-state-as-protocol-primitive, and
-  multi-conversation document sharing.
+  Establishes federated (separate-context) collaboration over Yjs CRDT artifacts,
+  replacing shared-context/merged-brain approaches. Covers the Yjs-over-Automerge
+  decision on revised grounds, the notify-then-read update flow, publish-on-intent
+  batching and offline collaboration, the two assurance tiers (authenticated vs.
+  attested) with canonicalization as the boundary, canonical artifact hashing and
+  bilateral quiescence agreement, document epochs, the 0x04 operation leaf, and
+  multi-party collaboration via per-artifact delivery lists over pairwise sessions.
 ---
 
 # 2026-07-31 — Federated Collaborative State Architecture
 
-**Revised 2026-08-01.** The original draft (produced with a different model) framed
-this feature mainly as "don't re-invent Git" and treated the collaboration
-mechanics as settled. This revision rewrites the strategy from CELLO's actual
-origin story and a first-principles read of Buzz, and works through the mechanics
-— update flow, security, sealing, scope — from scratch. Two items are carried
-forward, unresolved, to the next session (§8).
+**Revision history.** Original draft 2026-07-31 (different model). Rewritten
+2026-08-01 to correct the strategy framing and work the mechanics from first
+principles. Substantially extended 2026-08-03 after an external technical review
+of the design against Yjs's actual limitations, which surfaced the assurance-tier
+model, canonicalization, epochs, and the multi-party delivery-list approach.
+Most of the reconciliation with
+[[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol
+Primitive]] is now resolved in §12.
 
 ---
 
@@ -66,17 +65,39 @@ makes that opt-in intimacy possible without requiring a merged context.
 
 ---
 
-## 2. High-Level Design Principle: Use Mature Open-Source CRDT Software
+## 2. Design Principle: Use Mature Open-Source CRDT Software
 
-We adopt **Yjs** as the CRDT engine rather than building one, and rather than
-using Automerge:
+We adopt **Yjs** as the CRDT engine rather than building one.
 
-- Yjs is a mature, TypeScript-native implementation, optimized for binary
-  throughput and a low memory footprint — appropriate for a background daemon
-  processing dense, machine-speed structural updates.
-- Unlike Automerge, Yjs doesn't force a preset schema. CELLO doesn't dictate
-  document shape; agents and harnesses decide what a shared artifact means.
-- CRDT is the technique; Yjs is the implementation choice.
+CRDT is the technique; Yjs is the implementation. It is mature, TypeScript-native,
+optimized for binary throughput and low memory footprint — appropriate for a
+background daemon.
+
+**On Automerge.** The earlier design log
+([[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol
+Primitive]]) reached the opposite conclusion and recommended Automerge. That
+recommendation does not survive today's decisions. Its four grounds, revisited:
+
+1. *JSON-native, no translation layer.* Real but bounded — a Y.Map ↔ JSON
+   projection is well-trodden work, not a blocker.
+2. *`getConflicts()` conflict inspection.* The one genuine capability gap; Yjs
+   resolves internally and does not surface contested writes. But it serves a
+   scenario that same log calls a design smell — under field-level authority each
+   field has exactly one authorized writer, so contested writes shouldn't occur.
+3. *Full history by default.* Now irrelevant. CELLO's sealed oplog is strictly
+   better history than either library provides: signed, chained, non-repudiable.
+4. *Performance.* Favoured Yjs to begin with.
+
+Two reasons were added by this session that did not exist in May:
+`encodeStateVector` / `encodeStateAsUpdate` map directly onto the batching and
+state-vector attestation model in §5 and §7, and Yjs's binary-first model fits the
+canonicalization work in §8.
+
+**Correction to an earlier justification.** Yjs was previously justified here on
+the grounds that Automerge "has issues around preset schemas." That is not
+accurate — neither library enforces a schema. The difference is the data model
+only (JSON-like objects vs. Y-types with a `toJSON()` projection). The decision
+stands on the grounds above, not on that one.
 
 ---
 
@@ -90,175 +111,513 @@ aren't.
 The answer is not a new governance system. It's extending the existing
 customizable security layer with **user-settable policy, scoped by document
 and/or by counterparty** — the same customization mechanism the security layer
-already offers elsewhere, applied here.
+already offers elsewhere.
 
 Sensible defaults should key off relationship distance, not document type alone:
 
-- Same-team colleague, same company: default close to fully open — low
-  incremental risk.
+- Same-team colleague, same company: default close to fully open.
 - Arm's-length collaborator, different company, cross-border, or a client:
   tighter defaults.
 
-The precise default policy shape is not finalized — this is a direction, not a
-spec.
+**Open — the three-layer model (§13.1).** Screening implies a staging step: apply
+an incoming update to an interim document, run controls/screening, then admit it
+to the accepted document. This is the shadow-doc pattern and it carries a specific
+trap: if the gate rejects an update, the interim doc holds it and the accepted doc
+doesn't — they have diverged permanently, and a CRDT offers no un-apply. The
+interim document therefore has to be **rebuildable from the accepted state** rather
+than a long-lived parallel copy. Cost is roughly 2× memory per artifact. Not yet
+worked through.
 
 ---
 
 ## 4. Update Flow: Notify, Don't Inject
 
 The original draft proposed a "Drafting Buffer" — incoming updates staged for the
-agent to explicitly accept or reject as a batch before merging. That doesn't hold
-up mechanically: Yjs converges automatically; there is no clean way to "reject" a
-CRDT delta once it exists, and holding one back would require a second shadow
-Y.Doc plus an explicit merge-on-accept step — real complexity for no clear
-benefit.
+agent to explicitly accept or reject as a batch. That doesn't hold up against
+Yjs: updates converge automatically, and there is no clean way to reject one after
+application.
 
 **The resolved model:**
 
-- A CRDT update is a specialized message payload — mechanically the same as any
-  other message CELLO sends between two connected parties (signed, ordered by the
-  relay, chained the same way). It is not a new protocol pathway.
-- The document itself merges automatically in the background the moment the
-  update arrives — that's what a CRDT is for. No staging, no accept/reject step on
-  the data.
-- What's gated is the **LLM's awareness**, not the merge. The receiving client
-  notifies the agent of the change (git-like: "these lines/paths were
-  added/removed") without pushing full content into the LLM's context
-  automatically. The agent decides if and when to read the current document state
-  — the same pattern agents already use before editing a file.
-- This resolves the prompt-injection concern the original "Drafting Buffer" was
-  reaching for, without needing accept/reject semantics: a malicious peer's
-  content never reaches the LLM's context just by landing in the document. It only
-  reaches the LLM when the LLM deliberately reads — an ordinary read, subject to
-  ordinary screening.
+- A CRDT update is a payload carried inside an ordinary CELLO message — signed,
+  chained, relayed and sealed exactly as any message is. It is not a new protocol
+  pathway. (It does get its own leaf type; see §9.)
+- The document merges automatically on arrival. That's what a CRDT is for. No
+  accept/reject on the data itself.
+- What is gated is the **LLM's awareness**, not the merge. The client notifies the
+  agent that *something arrived* — **the notification carries no document
+  content**. To see what changed, the agent makes an explicit `get_diff` call,
+  which is an ordinary read subject to ordinary screening.
+- This closes the prompt-injection concern the "Drafting Buffer" was reaching for,
+  without accept/reject semantics: peer-controlled content never enters the LLM's
+  context by arriving. It enters only when the LLM deliberately fetches it.
 
-**Open, not yet fully resolved:** notification granularity. Line-range diff-stat
-(git-like) is the natural unit for text documents; changed key-paths is the
-analogous unit for structured (JSON/CBOR) documents. Leaning toward type-aware
-notification — worth it at least for the most obvious structured case — but the
-cost of supporting explicit per-type notification logic needs to be weighed
-against a uniform diff-stat summary before committing.
+**Why the notification must be content-free.** If the notification quoted changed
+lines, it would itself become the injection channel the design exists to close.
+Notification says *that* something changed (and optionally how much, structurally);
+`get_diff` says *what*.
 
----
-
-## 5. Sealing: No New Mechanism
-
-Because a CRDT update is just a message, it inherits CELLO's existing seal
-architecture unchanged: every message chains in the hash of everything so far and
-is signed; sealing bookends the exchange at the end. There is no separate sealing
-pathway to design for this feature.
-
-Consequence: proving a document's final state means verifying the sealed sequence
-of CRDT-update messages (the oplog), not a standalone snapshot hash of the end
-state. A snapshot leaf as a verification-cost optimization for long-lived,
-high-churn documents is a possible future addition, not a requirement.
-
-Node-availability-during-sealing (what happens if a directory node needed for
-notarization is down) is a pre-existing, general protocol concern — not something
-this feature introduces. Explicitly out of scope for M14.
+**Diff generation is real work.** Yjs updates are binary structural operations, not
+text patches. Producing "these lines changed" requires materializing before/after
+projections and diffing them. Practical scope: support the common text-based types
+— Markdown, plain text, JSON, XML, common text-based source files — rather than
+attempting arbitrary types. Line diffs for text, key-path diffs for structured
+documents. This shares machinery with §8: the canonical projection needed for
+hashing is the same projection needed for diffing, so the marginal cost of one
+given the other is small.
 
 ---
 
-## 6. Race Conditions: Not an Issue
+## 5. Publishing: Accumulate Locally, Publish on Intent
 
-Two peers updating the same document concurrently is not a race condition in the
-way it would be for ordinary mutable state. Yjs CRDT operations are commutative
-and associative by construction — concurrent updates converge to the same result
-regardless of arrival order. The relay's message ordering still matters for the
-audit trail (same as any message sequence), but not for correctness of the merged
-document.
+**Default mode is batched, not live-sync.** An agent accumulates local edits and
+publishes them as one merged Yjs update when it decides it is ready. Yjs supports
+merging N local updates into a single encoded update natively — this is a
+first-class operation, not something we build.
 
----
+What is being borrowed from git is the *gesture* — an explicit "I'm ready to
+share" — not the machinery. What is being rejected is the live-sync default that
+Yjs's usual providers (y-websocket) assume, which is a Google-Docs assumption that
+was never right here: agents aren't typing, and the LLM already reads on its own
+schedule.
 
-## 7. Persistence and Scope
+**The argument is stronger than bandwidth.** Every update is a signed, chained,
+sealed message. Per-keystroke sync would produce a Merkle chain of thousands of
+leaves recording comma insertions — that makes the audit record *worse*, not just
+bigger. Batching keeps each leaf an **intentional act**: "I made these changes and
+I'm sharing them" is a semantic event worth signing; a whitespace fix isn't.
+Screening also evaluates one coherent change rather than hundreds of fragments.
 
-**Persistence.** Yjs document state lives locally, in SQLCipher alongside all
-other CELLO client state — consistent with the rest of the system. It does not
-need to survive a daemon restart: CELLO's existing invariant is
-daemon-up-is-CELLO-on, daemon-down-is-CELLO-off, and this feature doesn't need a
-special case.
+The publish act is a sender-side quiescence point, which makes it the natural place
+to hang the artifact hash (§7) and the counterparty notification (§4).
 
-**Scope: pairwise only for M14.** CELLO has not yet shipped N-party conversations
-(group rooms) for ordinary messaging. Building N-party artifact collaboration
-before the underlying N-party conversation primitive exists would be building
-ahead of the platform. M14 ships pairwise collaboration; the design should not
-preclude N-party later, but N-party mechanics are explicitly deferred, not
-designed now.
+### 5.1 Offline and asynchronous collaboration
 
-**For when N-party comes (deferred, not designed):** CELLO already has a
-production design for N-party messaging
-([[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation
-Design]], [[2026-04-19_2045_group-room-design|Group Room Design]]) — transport
-tiers (full mesh ≤10 participants, Sender Keys beyond) and floor control
-(turn-taking via cohorts, to prevent LLM-inference-cascade on every batch). The
-transport tiers likely apply directly to N-party artifact collaboration. Floor
-control is designed to solve a chat-specific problem — every batch waking every
-agent's LLM — that may not apply to CRDT sync the same way, since (per §4) a
-document update doesn't necessarily invoke the LLM at all. Current lean: inherit
-the transport tiers, skip floor control — but this needs careful follow-through
-before it's treated as decided.
+The motivating case is two parties in near-opposite timezones (e.g. Dubai and US
+West Coast) whose working days barely overlap. A does updates A–G while B is
+offline; B comes online and does H–L.
 
----
+**Convergence is free.** Yjs exchanges state vectors on reconnect and converges. B
+working on stale state is fine — order-independence is the point. Nothing to
+design.
 
-## 8. Open Items — Next Session
+**What the scenario actually stresses is the session as a container.** CELLO's
+model is two connected parties exchanging and then sealing; async collaboration has
+no reliable window where both are live. The relay will not buffer — it is a dumb
+ordering witness with no store, and offline catch-up is an unresolved item in the
+vault (AC-8).
 
-1. **Reconcile with
-   [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol
-   Primitive]].** That log specifies field-level write authority in schema
-   contracts, three write patterns (unilateral / bilateral-two-signature /
-   append-only), and the CRDT oplog sharing the session Merkle tree under a
-   domain-separated leaf (`0x04`) — materially more mechanism than a single
-   `append_only` flag. Need to determine whether that design supersedes this
-   discussion or vice versa, and fold the result into this document.
+**Deferred publishing resolves it without new infrastructure.** The agent says
+"publish"; the *daemon* holds the batch as queued outbound and delivers it when the
+peer's daemon appears. The daemon doesn't sleep when the human does. This requires
+a queued-outbound mechanism — small, but real machinery to be named in
+implementation. The residual case (the machine is off entirely) is the same "you
+can't send to a peer that isn't there" problem CELLO already has everywhere.
 
-2. **Multi-conversation document sharing.** Whether the same document can be
-   modified across multiple independent *pairwise* sessions simultaneously (e.g.
-   A–B, B–C, A–C each separately connected, all touching the same artifact) rather
-   than requiring a single N-party session. Works cleanly if the document's
-   holders are fully meshed pairwise (Yjs's idempotency handles redundant delivery
-   for free — no new protocol machinery). Breaks down into the same
-   propagation-trust and seal-fragmentation questions the group-room design exists
-   to solve if propagation instead depends on relay-through-a-third-party. Need to
-   decide: is full-mesh-among-holders the only supported shape for M14, or must
-   relay-through-a-third-party also work?
+**Open (§13.4):** whether live-sync exists at all as an opt-in mode, or whether
+accumulate-and-publish is the only model.
 
 ---
 
-## 9. Examples: The Three Use Cases (Unchanged)
+## 6. Two Assurance Tiers
 
-The three first-class use cases from the original draft hold and don't need
-rework:
+Not every document needs the same guarantee, and the cost difference is large.
+
+### Tier 1 — Authenticated collaboration
+
+Updates ride as ordinary CELLO messages, so this tier is nearly free — it is what
+CELLO already does, plus the Yjs plumbing:
+
+- Every update is signed by the sending agent's key, non-repudiable, chained and
+  sealed.
+- It carries that agent's trust signals: you trust an update exactly as much as you
+  trust any message from that identity.
+- The exchange is provable — a verifier holding the sealed log can prove which
+  updates were exchanged, by whom, in what order, and can replay them to derive
+  what the document should be.
+
+**What Tier 1 lacks is narrower than "no attestation":** it is the *binding between
+the history and the artifact on disk*. You cannot cheaply prove your copy is the
+faithful materialization, and you cannot rule out an out-of-band edit. The
+defensible claim is **"we prove the collaboration, not the copy."**
+
+### Tier 2 — Attested collaboration
+
+Adds canonicalization (§8), per-batch artifact hash attestations and bilateral
+agreement at quiescence (§7), and epochs (§10). Proves that the artifact you hold
+is the product of the collaboration.
+
+### The boundary is canonicalization, and it is binary
+
+An intermediate tier — per-batch pre/post artifact hashes without bilateral
+agreement — was considered and rejected. The expensive component of Tier 2 is
+**canonicalization**: deterministic per-type serialization. Everything else is
+cheap once it exists — computing a hash is trivial, exchanging it at quiescence is
+one message, quiescence is definitional at seal, and epochs are needed for
+compaction regardless.
+
+So a "cheap attestation" still pays the full canonicalization cost while delivering
+less. The real decision is **build canonicalization or not**: if not, Tier 1; if
+so, take Tier 2 whole, because the delta is a countersigned message. The per-batch
+pre/post hash then becomes a *component* of Tier 2, not a lesser alternative.
+
+**The tier must be established at the document handshake and be mutually visible.**
+If one party believes the artifact is attested while the other isn't computing
+hashes, they're relying on a guarantee that doesn't exist. Same logic as the room
+manifest being a binding contract rather than a preference. Tier belongs in the
+handshake alongside document type and append-only.
+
+**Upgrade happens at an epoch boundary** (§10) — both parties converge, both sign
+the canonical hash, and that becomes the attested baseline. Attested from that
+point forward, never retroactively.
+
+### Consequence for Use Case B
+
+The auditable-log use case (§11B) claims "the copy you hold can be proven to be the
+authentic, undeniable log of what occurred." That is precisely the artifact-binding
+claim Tier 1 cannot make. **Use Case B is the flagship Tier 2 case** — the claim
+stands, but only at Tier 2. At Tier 1 it must be restated as "the exchange is
+provable; the log you hold is derived from it."
+
+---
+
+## 7. Attestation vs. Agreement: What the Hashes Mean
+
+A hash of the resulting artifact is **not** redundant with the Merkle chain. The
+chain proves what bytes were *sent*; it says nothing about what those bytes
+*materialize to*. (A hash of the update *payload*, by contrast, is fully redundant
+with the signed chain — do not add one.)
+
+### Why a pre-hash precondition cannot work
+
+The intuitive design — sender declares "the document was H0 before my batch and
+will be H1 after; receiver verifies its state is H0 before applying" — fails on the
+ordinary async case:
+
+Both parties are at H0. A works offline producing batch X; B works offline
+producing batch Y.
+
+- A publishes: pre=H0, post=H1.
+- B publishes: pre=H0, post=H2.
+
+A receives B's batch while at H1; the pre-hash check fails. B receives A's batch
+while at H2; same. **Nothing is wrong** — both apply and converge to H3 = H0+X+Y,
+which neither predicted and neither post-hash matches.
+
+A pre-hash *gate* would therefore reject legitimate concurrent work — reimposing
+linear history, which is exactly what a CRDT exists to avoid. The post-hash is a
+prediction that is correct only when there is no concurrent work, i.e. only in the
+case where a CRDT wasn't needed.
+
+### The working model — attestation per batch, agreement at quiescence
+
+**Per published batch (attestation, never a gate):**
+
+- The sender's **Yjs state vector** (`{clientID → clock}`) — the native,
+  partial-order-aware statement of exactly what the sender had seen. This is the
+  correct causal mechanism, not a hash.
+- The sender's **post-apply canonical hash** — "having applied my batch to what I
+  had seen, I now hold H2."
+
+Both are claims about the sender's own observation. A mismatch on the receiving
+side is not an error; it is *information* — there was concurrent work. This is
+structurally what `last_seen_seq` already does for messages: causal attestation,
+not a lock.
+
+These attestations are **unilateral with deferred verification** — a wrong
+post-hash, whether from a bug or a lie, goes undetected until quiescence. They are
+attestations, not proofs. They are still worth carrying: with publish-on-intent
+batching, much async collaboration is genuinely turn-taking, and in that sequential
+case the pre-hashes chain and yield a verifiable incremental history of document
+states.
+
+**At quiescence (agreement):** once both sides have applied everything and
+converged, both independently compute the canonical hash and **both sign it**. That
+bilateral signature is what proves the artifact is the product of the
+collaboration. It is also the only point where a mismatch is meaningful: the same
+update set producing different hashes means divergent canonicalization, an
+out-of-band edit, or a bug — a genuine and valuable alarm, precisely because the
+states *should* be identical there.
+
+Sealing is quiescence by definition, so the seal is the natural agreement point;
+long-running collaborations can add the same agreement at intermediate quiescence
+checkpoints.
+
+---
+
+## 8. Canonicalization
+
+"Canonical artifact hash" bundles two requirements, and the second does the work.
+
+**Artifact = the materialized document** — the state after all in-scope updates are
+applied. What the document *reads as*, not the CRDT that produced it.
+
+**Canonical = a serialization both parties are guaranteed to produce byte-for-byte
+identically.** Two peers can be fully converged and still hold different bytes: the
+Yjs encoding depends on insertion history, tombstones, GC state, clientIDs, and
+local application order. So the Yjs binary cannot be hashed, and for structured
+documents a naive `JSON.stringify` cannot either — key iteration order can differ.
+
+Per type:
+
+- **Text / Markdown** — the string itself, UTF-8, fixed newline convention. Hash
+  the bytes. Nearly free.
+- **JSON** — sorted keys, defined number formatting, no insignificant whitespace,
+  defined escaping. Solved problem with a spec: **RFC 8785 (JSON Canonicalization
+  Scheme)**.
+
+**The governing rule — agreed and non-negotiable:**
+
+> Canonicalization must depend only on the visible converged state, never on the
+> path that produced it.
+
+Anything history-dependent is excluded, or two peers holding an identical document
+compute different hashes and the mechanism becomes a false-alarm generator.
+
+---
+
+## 9. The Operation Leaf (`0x04`)
+
+CRDT operations get their own domain-separated leaf type, `0x04`, distinct from
+`0x00` message leaves, sharing one Merkle tree and one sealed root — as proposed in
+the May design log.
+
+Reasons, beyond low cost:
+
+- A verifier replaying a sealed tree must distinguish document operations (apply to
+  the doc) from conversation (render) without introspecting payloads — otherwise
+  the payload format becomes load-bearing for verification.
+- Domain separation is standard hash hygiene, preventing cross-type substitution.
+  RFC 6962 already does this for leaf vs. internal nodes (`0x00`/`0x01`).
+- It enables selective disclosure in a dispute: reveal document operations without
+  revealing conversation content, or vice versa.
+
+**But field-level metadata stays out of the relay-visible structure.** The May
+design put `operation_type` — literal field paths like `"journal.append"`,
+`"status.stage.advance"` — in the relay-constructed outer leaf, which would let the
+relay learn which field of a document changed. `operation_type` and `document_id`
+belong inside the encrypted payload where the client demuxes them; for pairwise
+collaboration the session is already the routing unit, so the relay needs neither.
+Residual leak: "this was a document operation rather than a chat message," which is
+small and arguably belongs in the audit record.
+
+---
+
+## 10. Epochs
+
+Compaction mints a **new epoch**. Keeping the old log independently verifiable
+would mean keeping the old log, which defeats compaction.
+
+**Epoch transitions must be bilateral and signed, not a local optimization.** If
+one party compacts and the other doesn't, they disagree about the verification
+baseline. Done properly, the boundary carries the canonical artifact hash (§7),
+both parties attest it, and it chains to the previous epoch — the audit chain is
+segmented, not lost, and verification of epoch N+1 starts from an attested state
+instead of from genesis.
+
+The epoch primitive turns out to be load-bearing in four places, which is why it
+warrants proper design rather than treatment as a compaction detail:
+
+1. **Compaction** — bounding tombstone growth (§10.1).
+2. **Tier upgrade** — Tier 1 → Tier 2 baseline (§6).
+3. **Epoch zero** — the agreed starting state. Both parties agree the document
+   begins from canonical template T at hash H0, established in the handshake.
+4. **Participant-set changes** — the delivery list is epoch state (§11).
+
+### 10.1 Resource limits and growth
+
+Yjs retains structure required for CRDT correctness; a long-lived, heavily edited
+document can accumulate tombstones and exceed its visible content. Use Case B
+(auditable log) is by definition long-lived and append-only, so this is not
+hypothetical.
+
+Configurable limits are required — and they are also the hostile-input surface, so
+they are security controls, not just capacity planning:
+
+- Maximum document size
+- Maximum update size
+- Maximum nesting depth
+- Maximum update rate
+
+Plus a compaction policy, which per the above mints an epoch.
+
+---
+
+## 11. Multi-Party via Delivery Lists (Not N-Party Sessions)
+
+M14 ships **pairwise sessions**. But multi-party *documents* fall out of pairwise
+sessions cheaply, provided the document layer is separated from the session layer.
+
+**The model.** An artifact carries a **delivery list** of holders. An update is
+published over each of the sender's pairwise sessions to each holder — structurally
+an email with multiple recipients, including the same social semantics (everyone on
+the list sees everyone's contributions). A publishes; B and C receive. C publishes;
+A and B receive. All links are ordinary pairwise CELLO sessions.
+
+**Why this beats N-party sessions:**
+
+- No N-way session establishment — sidesteps the FROST-scaling question that the
+  May log left open.
+- Every link is an existing authenticated, sealed pairwise session.
+- Yjs converges regardless of delivery order or duplication, so redundant delivery
+  is free.
+- No new transport topology.
+
+**Three requirements:**
+
+1. **The participant list is document state, not per-sender config.** If A believes
+   the holders are {A,B,C} and B believes {A,B}, B never delivers to C and C
+   diverges silently. It belongs in the epoch attestation (§10).
+2. **Delivery is best-effort, so retry is mandatory.** If the A–C link is down, C
+   misses that batch until A resends — the queued-outbound mechanism from §5.1,
+   which composes for free.
+3. **Tier 2 agreement becomes N-way** — every holder signs the same canonical hash
+   at quiescence. Workable over pairwise links, but detecting "everyone has
+   converged" is harder than in the two-party case.
+
+**The consequence requiring a deliberate decision (§13.3):** this requires **full
+mesh among holders**. If B edits, B must deliver to C, so B needs a B–C session.
+Adding C to a document A shares with B therefore *forces a connection between B and
+C*, who may not know each other. The alternative — B sends to A, A forwards to C —
+is relay-through-a-third-party, which reintroduces exactly the propagation-trust
+problem this model otherwise avoids (did A forward faithfully, or withhold?). So:
+full mesh, and adding a participant creates a connection obligation among existing
+ones, which must be explicit at add-time rather than a surprise.
+
+### 11.1 Why floor control is not needed — resolved
+
+The May log settles the question this design left open. A chat message is an
+*utterance* that demands a response, which is why group chat needs batching and
+floor control to prevent an inference cascade. A CRDT operation is *writing to a
+shared spreadsheet cell* — it propagates silently and demands nothing. Agents pull
+state when ready; the "knock on the door" is a separate ordinary chat message.
+
+CRDT operations therefore do not trigger inference by default and carry no cascade
+risk. **Transport tiers apply to multi-party artifacts; floor control does not.**
+
+---
+
+## 12. Reconciliation with `shared-state-as-protocol-primitive`
+
+The May log designs the same feature from a financial-services workflow (retail
+equity purchase, 8 roles, 8 phases). Status of each divergence:
+
+| Topic | May log | Resolution |
+|---|---|---|
+| CRDT library | Automerge | **Yjs** — §2, on revised grounds |
+| Notification | The notification *is* the diff | **Superseded** — content-free notification + explicit `get_diff` (§4), on injection grounds |
+| Leaf identity | `0x04` operation leaf, one tree | **Adopted** (§9) — but `operation_type` moves out of the relay-visible outer structure |
+| Inference cascade | CRDT ops are silent, no floor control | **Adopted** (§11.1) — closes an open item |
+| Seal | FROST-sealed checkpoint of document state at close | **Refined** (§7–8) — same instinct; it never confronts canonicalization |
+| Directory role | Directory tracks which agents hold which documents, for rendezvous | **Rejected for M14** — new directory state, cuts against minimal-directory-state and against artifacts riding existing sessions (§11) |
+| Scope | N-party throughout (8 concurrent roles) | **Pairwise sessions** (§11); multi-party documents via delivery lists |
+| Milestone | M9 | M14 |
+
+**The one unresolved divergence is philosophical (§13.2).** The May log is
+*schema-first and prescriptive*: "the schema is the contract" — a YAML ACL
+declaring per-field write authority, operation types (`append-only`, `set-once`,
+`forward-only`, `bilateral`, `derived`), and valid state transitions, all validated
+on receipt, with invalid operations rejected and logged as trust-signal events.
+This document is deliberately the opposite — unopinionated, any document type,
+don't force structure, with append-only as the single first-class property.
+
+Note also that the May log's motivating example is inherently N-party (8 roles
+writing different fields concurrently), so its schema machinery may belong with
+N-party work rather than M14 regardless of the philosophical call.
+
+---
+
+## 13. Open Items
+
+1. **The three-layer model** (§3). Interim document → controls/screening → accepted
+   document. The rejection-divergence trap and the rebuildable-interim requirement
+   are understood; the design is not worked through.
+
+2. **Field-level write authority: in V1 or not** (§12). Currently unclear whether
+   V1 provides field-level locks. Resolving this resolves the schema-prescriptive
+   vs. unopinionated tension with the May log. Current lean: not in V1, and
+   possibly properly N-party work.
+
+3. **Full mesh among document holders** (§11). Confirm that forcing a connection
+   between existing holders when a participant is added is acceptable, versus
+   supporting relay-through-a-third-party with the propagation-trust cost that
+   implies.
+
+4. **Live-sync as an opt-in mode** (§5). One-line decision; affects API shape.
+
+5. **Notification granularity by type** (§4). Type-aware (line ranges for text,
+   key paths for structured) is preferred and cheaper than it looks given shared
+   canonicalization machinery, but the supported type list needs fixing.
+
+---
+
+## 14. Implementation Notes
+
+**Persistence — two layers, not one.** Storing only a merged Yjs binary in
+SQLCipher discards the signed envelope chain that makes the seal verifiable. Keep
+both: the **immutable CELLO envelope log** (signatures, provenance, replay
+protection, seal verification) and a **materialized Yjs snapshot** (fast startup
+and access), with the snapshot rebuildable from the log. Both live in SQLCipher
+alongside other CELLO client state. State need not survive a daemon restart —
+CELLO's invariant is daemon-up-is-CELLO-on — but the envelope log makes rebuilding
+straightforward regardless.
+
+**Yjs clientID — let Yjs mint it.** Yjs identifies every operation by
+`(clientID, clock)`, and that pair is assumed globally unique. Two live `Y.Doc`
+instances sharing a clientID mint colliding IDs for different operations; state
+vector sync then silently skips them, and the documents diverge permanently with no
+error and no recovery path.
+
+Co-attendance is **not** exposed to this: the daemon owns the document and
+serializes application exactly as it serializes `send`, so there is one clientID
+and one monotonic clock across both attending sessions. The only way to get two
+live instances is two processes — the same agent restored onto a second device with
+both daemons live, or an orphan daemon alongside a fresh one.
+
+The rule is therefore a one-line "don't optimize this": **let Yjs generate its own
+random clientID per live `Y.Doc`; never derive it from agent identity, never
+persist and restore one.** That is Yjs's default behaviour — the hazard only
+appears if someone gets clever.
+
+---
+
+## 15. The Three Use Cases
 
 ### A. Collaborate on a Shared Document (Unstructured)
 Co-authoring Markdown, HTML, or raw JSON. `append_only: false` — any part of the
-document can be updated fluidly by any authorized party.
+document can be updated fluidly by any authorized party. Tier 1 is sufficient.
 
 ### B. Auditable Log of Activities
 A running, cryptographically signed ledger of actions, events, or decisions.
-`append_only: true`, strictly enforced.
+`append_only: true`, strictly enforced — and note that append-only **cannot be a
+document flag**: Yjs is mutable by construction, and a peer can emit a valid
+deletion that converges correctly into a state that is no longer an append-only
+log. Enforcement must happen in CELLO *before* application (reject updates
+containing deletions), or the log must be signed append events with the Yjs
+document as a projection of them. **This is the flagship Tier 2 case** (§6) — its
+headline claim requires artifact binding.
 
 ### C. Track a Shared Goal (Micro-Project Management)
 Structured, multi-actor workflows — technically identical to Use Case A (a JSON
-blob) but highly structured around phases, current state, and an appended goal
-journal. CELLO provides the skills/agent templates for constructing and
-orchestrating this, not a prescribed schema.
+blob) but structured around phases, current state, and an appended goal journal.
+CELLO provides skills and agent templates for constructing and orchestrating this,
+not a prescribed schema. This is the use case that most tempts toward the May log's
+field-level authority model (§13.2).
 
-**Design principle carried from the original draft, reaffirmed:** don't
-over-specify. Any document type can be collaborated on; the one property worth
-making first-class is **append-only**, since that's what the auditable-log case
-actually depends on.
+**Design principle, reaffirmed:** don't over-specify. Any document type can be
+collaborated on; the one property worth making first-class is **append-only**,
+because that is what the auditable-log case depends on — and per §15B it is a
+validated invariant, not a boolean.
 
 ---
 
 ## Related Documents
 
-- [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation
-  Design]] — transport topology and mesh scaling this doc's §7 leans on for a
-  future N-party extension
-- [[2026-04-19_2045_group-room-design|Group Room Design]] — floor control and
-  transport tiers referenced in §7
 - [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol
-  Primitive]] — the earlier, more detailed design this doc must reconcile with
-  (§8, open)
-- [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — possible
-  answer to the seal-fragmentation question in §8's multi-conversation item
+  Primitive]] — the May design of this same feature; reconciled in §12
+- [[2026-04-13_1500_multi-party-conversation-design|Multi-Party Conversation
+  Design]] — transport topology and mesh scaling relevant to §11
+- [[2026-04-19_2045_group-room-design|Group Room Design]] — floor control, resolved
+  as not applicable in §11.1
+- [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — relevant to
+  cross-session artifact provenance (§7, §11)
