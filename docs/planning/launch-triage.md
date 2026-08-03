@@ -427,30 +427,31 @@ client link is unchanged post-cutover, this reopens as a launch item, and the un
 
 ---
 
-## 16. A node absent during an agent's DKG can never serve that agent
+## 16. ~~A node absent during an agent's DKG can never serve that agent~~ — NOT A LAUNCH ITEM
 
-**Designation:** M8B Sprint B "Enrollment (Problem 3)" + absent-node reconcile — owed since
-2026-07-04, flagged "do not lose these" in CLAUDE.md. **Needs Andre's ranking, added here 2026-08-03
-because the list never ruled on it.**
+**Designation:** M8B Sprint B "Enrollment (Problem 3)" + absent-node reconcile. **Ruled 2026-08-03
+(Andre): not a launch item.**
 
-A node that was down or absent during a DKG holds no share and cannot co-sign for that agent until a
-resharing ceremony exists — and none does. The launch-relevant angle is this list's own migration
-trap: at N=3/T=2, an agent whose DKG ran during a node outage has only two shares forever; one more
-node outage strands it permanently, and every agent registered that way is stranded retroactively.
-The triage list already rules on `DOD-FROST-PARALLEL-1` ("M12, not launch") but never on this.
-Plan: [[2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan]].
+The AWS-era instance is superseded outright: the GCP cutover went greenfield by decision — fresh
+agents, fresh DKGs, wiped directories, no identity migration ([[M12-CUTOVER-CHECKLIST]]) — so no
+launch agent carries a DKG that ran during a node outage. What survives is structural and
+cloud-agnostic: shares never replicate (`SHARES-LOCAL`), no resharing ceremony exists, so a node
+added *after* an agent's DKG can never serve that agent. That is a **node-expansion gate**, the same
+category this list already parks `DOD-FROST-PARALLEL-1` under — it belongs to the milestone that
+next adds a node, not to launch. Plan when that day comes:
+[[2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan]].
 
 ---
 
 ## 17. Endorsements cannot be withdrawn, refused-drained, or quota-limited
 
 **Designations: `DOD-END-WITHDRAW-1`, `DOD-END-INGRESS-1`, `DOD-END-QUOTA-1`** — all ❌ in
-[[M10B-DEFINITION-OF-DONE]]. **Needs Andre's ranking, added 2026-08-03** — this list carries their
-siblings (items 12, 13), so their absence read as oversight rather than decision.
+[[M10B-DEFINITION-OF-DONE]]. **Accepted onto the list 2026-08-03 (Andre)** — this list carries their
+siblings (items 12, 13), and these now stand as open items alongside them.
 
 An issuer cannot withdraw an endorsement they issued; nothing consumes the `refuse` op (the portal
 drain); issuance quota is unenforced and invisible. Each is recorded in M10B as one line of work
-once its mechanism exists. Likely forgivable at launch — but that's a call, not a default.
+once its mechanism exists. Ranking within the list is Andre's, like everything above.
 
 ---
 
