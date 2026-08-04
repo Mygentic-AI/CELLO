@@ -66,7 +66,12 @@ write_files:
       CELLO_RELAY_HEALTH_PORT=4000
       CELLO_RELAY_HEALTH_CHECK_URL=http://${public_addr}:4000/health
       WAL_DIR=/mnt/disks/cello-wal
-      RELAY_SESSION_MAX_IDLE_MS=1800000
+      # DOD-GCP-RELAY-DRIFT-1: 24h, matching AWS (cello-ecs-relay.yaml). This was 1800000 (30
+      # min) — a value nothing chose for GCP, it simply differed from the AWS side and no test
+      # compared them. A relay that sweeps an idle session after 30 minutes ends conversations
+      # that are merely quiet: the session goes `interrupted` and the agents must re-establish.
+      # 24h is the deliberate number, and test_gcp_relay_config.py now holds both clouds to it.
+      RELAY_SESSION_MAX_IDLE_MS=86400000
       PORT=4000
       HOME=/tmp
       ENVEOF
