@@ -23,7 +23,16 @@ description: >
   rejection · append-only · write-path. A line naming an enforcer is ✅ only when that enforcer
   RAN as separate OS processes.
 - Tier order is a dependency order, not a calendar. P0 before P1; P1 lines can interleave;
-  P2 needs P1; P3 needs P2; P4 needs everything plus the publish cascade.
+  P2 needs P1; P3 needs P2. **P4 needs P3's TOOLS-1 built LOCALLY in cello-client — not
+  published**: the spine harness spawns the sibling checkout's `dist/` binaries, so the five
+  enforcers can start the moment TOOLS-1 is code-complete, in parallel with SHIP-1's publish
+  cascade (which serves operators and the live-fleet smoke, nothing else).
+- **A 🅿️ line is not the next unit** — when the scan reaches one, move to the next ❌ line or
+  tier (the park-and-move-on authorization is [[M14-PROCEDURE]] §3a; this sentence is here so a
+  reader of this document alone doesn't stall on it).
+- **P1 units consume STORE-1's data shapes, not P2's flows.** P1 is local-provable: its proofs
+  seed and read the P0 store tables directly; the wire types and cross-daemon flows that
+  populate them in production arrive in P2 and are proven end-to-end in P4.
 - **The V2 boundary:** anything Tier-2-shaped (canonicalization, epochs beyond `epoch_id: 0`,
   quiescence agreement, purge, schema enforcement) belongs in [[M14B-DEFINITION-OF-DONE]], not
   here. If a unit is tempted to build it early, park it there instead.
@@ -139,7 +148,11 @@ description: >
   on it, and both sides surface the reason. Rejections land in the policy log with reasons on
   BOTH sides — the routing (gateway record store's `source` discriminator vs a daemon-side
   write) is resolved in-unit and journaled. Mutual concurrent rejections covered by test (each
-  direction independent; state vectors prevent deadlock). — ❌
+  direction independent; state vectors prevent deadlock). **Scope note (ordering):** this P1
+  unit builds and proves the protocol against STORE-1's local envelope-log representation —
+  seed rows, roll back, re-publish against the store; the CBOR wire encoding is ENVELOPE-1's
+  job (P2) and the cross-daemon proof is E2E-REJECT-1's (P4). Do not build ENVELOPE-1's
+  machinery here. — ❌
 - **DOD-DOC-SCREEN-1** [cello-client] — 🅿️ **BLOCKED on the screening audit (Andre calls it —
   [[M14-PROCEDURE]] two-stop reason 1).** When unblocked: incoming projected diffs flow through
   `screenInbound` at the gate hook with document context (`ScreenContext` today carries no
@@ -163,7 +176,9 @@ description: >
   "peer's client doesn't support shared documents — ask them to upgrade", never a timeout or a
   timeout-classifier. **Properties are immutable after accept** — a property change is an epoch
   event and therefore V2 (§16.3); no mutate call exists in V1. — ❌
-- **DOD-DOC-ENVELOPE-1** [cello-client] — the document envelope (§14): beyond the standard
+- **DOD-DOC-ENVELOPE-1** [cello-client] — the document UPDATE envelope (§14) — a distinct wire
+  type from HANDSHAKE-1's PROPOSAL envelope (whose hash mints `document_id`); the two share the
+  word, not the shape: beyond the standard
   message envelope — `document_id`, `epoch_id` (constant 0, NOT omitted), `doc_prev_hash` (the
   per-sender chain link), the sender's Yjs state vector, the update payload. Types in
   `core/protocol-types`, CBOR round-trip tests, chain verification on receive (a broken or
