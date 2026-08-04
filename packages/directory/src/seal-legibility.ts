@@ -66,23 +66,59 @@ function decodeSignedLastSeenSeq(cbor: Uint8Array): number | null {
 }
 
 /**
- * Identify the indices of the trailing SEAL ceremony control leaves, if present.
- * Per verifySealLeaves, a completed seal ends with two ctrl leaves from distinct
- * participants. Those two are the closing ceremony — NOT content replies — and must
- * be excluded from the `answered` determination (otherwise the counterparty's own
- * SEAL acknowledgement would falsely mark a malicious unanswered tail as answered).
+ * Locate the closing bilateral SEAL ceremony: the last two `ctrl` leaves, from distinct
+ * participants, in the trailing region. Returns their indices, initiator first (the party
+ * whose SEAL leaf came earlier), or null if there is no such pair.
+ *
+ * Found BY KIND, never by position, and transparent to EVERY intervening kind (DOD-DOC-LEAF-1).
+ * The relay flips a session out of `active` only once BOTH ctrl leaves exist
+ * (relay-node #maybeProcessSeal), so while the first SEAL is outstanding the session still
+ * accepts any leaf: a mechanically-delivered document update, and — far more commonly — an
+ * ordinary content message the peer had already queued before it saw the first SEAL. Both are
+ * benign crossings, and either one breaks a positional match. A walk that stopped at `msg`
+ * would destroy a valid bilateral seal on the commonest shape of all.
+ *
+ * This answers "which leaves are the ceremony" for seal verification, initiator derivation,
+ * and the `answered` exclusion. It deliberately does NOT answer "who is live" — that question
+ * needs the opposite treatment of a content message (a ctrl leaf sitting behind one is a stale
+ * seal attempt, not a contemporaneous acknowledgement), and lives in trailingSealCtrlAuthors.
+ * Sharing one walk between the two is what produced the seal-destroying bug above.
  */
-function sealCeremonyLeafIndices(leaves: RelaySealLeaf[]): Set<number> {
+export function findSealCeremonyPair(
+  leaves: readonly RelaySealLeaf[],
+): { initiatorIndex: number; responderIndex: number } | null {
+  const ctrlIndices: number[] = [];
+  for (let i = leaves.length - 1; i >= 0 && ctrlIndices.length < 2; i--) {
+    if (leaves[i]!.kind === "ctrl") ctrlIndices.push(i);
+  }
+  if (ctrlIndices.length < 2) return null;
+  const [responderIndex, initiatorIndex] = ctrlIndices as [number, number];
+  const responderSender = Buffer.from(leaves[responderIndex]!.s2.sender_pubkey).toString("hex");
+  const initiatorSender = Buffer.from(leaves[initiatorIndex]!.s2.sender_pubkey).toString("hex");
+  if (responderSender === initiatorSender) return null;
+  return { initiatorIndex, responderIndex };
+}
+
+/**
+ * Every leaf belonging to the closing ceremony — not just the matched pair.
+ *
+ * A ctrl leaf is never a content reply, so if a party retried its SEAL (the relay triggers
+ * adjudication only once senders are DISTINCT, so a duplicate from one party can sit in the log
+ * unremoved), each of those leaves must be excluded from `answered` too. Excluding only the
+ * matched pair lets the extra one satisfy the check and mark a malicious unanswered tail as
+ * answered — a value that is FROST-signed via bindLegibilityToTbs.
+ *
+ * Only applies when a real bilateral pair exists. With a LONE trailing ctrl leaf there is no
+ * ceremony to exclude, and that leaf legitimately counts as a reply (AC-004's contrasting case).
+ */
+function sealCeremonyRegion(leaves: RelaySealLeaf[]): Set<number> {
   const excluded = new Set<number>();
-  if (leaves.length < 2) return excluded;
-  const last = leaves[leaves.length - 1]!;
-  const secondLast = leaves[leaves.length - 2]!;
-  if (last.kind !== "ctrl" || secondLast.kind !== "ctrl") return excluded;
-  const lastSender = Buffer.from(last.s2.sender_pubkey).toString("hex");
-  const secondLastSender = Buffer.from(secondLast.s2.sender_pubkey).toString("hex");
-  if (lastSender === secondLastSender) return excluded;
-  excluded.add(leaves.length - 1);
-  excluded.add(leaves.length - 2);
+  if (!findSealCeremonyPair(leaves)) return excluded;
+  for (let i = leaves.length - 1; i >= 0; i--) {
+    const kind = leaves[i]!.kind;
+    if (kind === "msg") break; // content ends the closing region
+    if (kind === "ctrl") excluded.add(i);
+  }
   return excluded;
 }
 
@@ -99,22 +135,27 @@ function sealCeremonyLeafIndices(leaves: RelaySealLeaf[]): Set<number> {
  * unilateral shape) was mislabelled 'absent'. The contiguous trailing run captures
  * both the bilateral two-ctrl case and the lone-ctrl case.
  *
- * NOTE: this set is distinct from `sealCeremonyLeafIndices` (the matched bilateral
- * pair used for the `answered` determination). A single trailing ctrl leaf is a SEAL
+ * NOTE: this set is distinct from `sealCeremonyRegion` (the ceremony leaves excluded from
+ * the `answered` determination). A single trailing ctrl leaf is a SEAL
  * ack for the live-marker purpose, but for `answered` a lone trailing ctrl authored
  * by the counterparty of the final message must still count as a reply (AC-004
  * contrasting case) — the two questions intentionally use different leaf sets.
  */
 function trailingSealCtrlAuthors(leaves: RelaySealLeaf[]): Set<string> {
-  // INVARIANT (review finding, low): the protocol defines exactly ONE control-leaf kind —
-  // the SEAL ceremony leaf (LEAF_KIND_CTRL = 0x02). There is no other ctrl-leaf type, so every
-  // leaf with kind 'ctrl' in a verified seal IS a SEAL ceremony leaf and its author DID produce a
-  // contemporaneous SEAL acknowledgement ⇒ 'live'. If a future protocol adds a distinct ctrl-leaf
-  // kind, this walk must discriminate on that kind (verifySealLeaves would also need updating);
-  // until then the contiguous trailing ctrl run is exactly the closing ceremony.
+  // The protocol still defines exactly ONE control-leaf kind — the SEAL ceremony leaf
+  // (0x02) — so a 'ctrl' leaf in a verified seal IS a SEAL acknowledgement ⇒ 'live'.
+  // Document leaves (0x04/0x05, DOD-DOC-LEAF-1) are NOT control leaves and carry no
+  // ceremony meaning, but they ride the same tree and are delivered MECHANICALLY by the
+  // peer's daemon — so one can land after both parties have sealed. Treat them as
+  // transparent while walking back, or an unrelated background delivery would downgrade
+  // an ordinary bilateral seal to 'absent'.
+  //
+  // A 'msg' leaf still ENDS the walk: content means the ceremony region is behind us.
   const authors = new Set<string>();
   for (let i = leaves.length - 1; i >= 0; i--) {
-    if (leaves[i]!.kind !== "ctrl") break;
+    const kind = leaves[i]!.kind;
+    if (kind === "doc" || kind === "reject") continue;
+    if (kind !== "ctrl") break;
     authors.add(Buffer.from(leaves[i]!.s2.sender_pubkey).toString("hex"));
   }
   return authors;
@@ -151,7 +192,7 @@ export function buildSealLegibility(
   opts?: { attestationOverrides?: Map<string, AttestationMode> },
 ): SealLegibility {
   const overrides = opts?.attestationOverrides;
-  const sealIndices = sealCeremonyLeafIndices(leaves);
+  const sealIndices = sealCeremonyRegion(leaves);
   // Authors of the contiguous trailing SEAL ceremony ctrl run ⇒ 'live'. Distinct from
   // `sealIndices` (the matched bilateral pair used only for the `answered` check).
   const producedSealCtrl = trailingSealCtrlAuthors(leaves);
@@ -229,6 +270,13 @@ export function buildSealLegibility(
     for (let i = 0; i < leaves.length; i++) {
       if (sealIndices.has(i)) continue; // exclude the closing ceremony leaves
       const leaf = leaves[i]!;
+      // Document leaves never answer (DOD-DOC-LEAF-1). A document update is applied
+      // MECHANICALLY by the peer's daemon with no agent involved, so counting one as a reply
+      // would let a peer's daemon satisfy the unanswered-tail check on its operator's behalf —
+      // the exact property `answered` exists to expose. Note this excludes ONLY 0x04/0x05: a
+      // lone trailing ctrl leaf from the counterparty still counts as a reply, which is
+      // deliberate and covered by AC-004's contrasting case (see the note above).
+      if (leaf.kind === "doc" || leaf.kind === "reject") continue;
       const senderHex = Buffer.from(leaf.s2.sender_pubkey).toString("hex");
       if (senderHex !== finalSenderHex && leaf.s2.sequence_number > finalSeq) {
         answered = true;

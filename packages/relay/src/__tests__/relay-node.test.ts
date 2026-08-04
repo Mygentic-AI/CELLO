@@ -32,12 +32,17 @@ import {
   generateKeypair,
   buildMerkleTree,
   merkleRoot,
+  msgLeafHash,
+  ctrlLeafHash,
+  docLeafHash,
+  rejectLeafHash,
 } from "@cello-protocol/crypto";
 import type { LeafInput } from "@cello-protocol/crypto";
 import { encodeStructure2 } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID, CelloRelayNode } from "../relay-node.js";
+import { RELAY_LEAF_KINDS, RELAY_LEAF_HASHERS } from "../relay-types.js";
 import type { SessionAssignment } from "../relay-types.js";
 
 setupV3Tests();
@@ -522,8 +527,12 @@ describe("AC-007: session_not_found after confirmSeal destroys state", () => {
 
 // ─── AC-008 ───────────────────────────────────────────────────────────────────
 
-describe("AC-008: leaf_kind_invalid for values outside {0x00, 0x02}", () => {
-  it.each([0x01, 0x03, 0xff, 0x10])(
+describe("AC-008 (amended, DOD-DOC-LEAF-1): leaf_kind_invalid outside {0x00, 0x02, 0x04, 0x05}", () => {
+  // 0x04 (document operation) and 0x05 (rejection) moved OUT of this set when documents
+  // shipped — they are accepted below. 0x01 stays refused and is the load-bearing case: it
+  // is the RFC 6962 internal-node prefix, so a leaf hashed under it can alias an internal
+  // node and forge tree shape (§2.1.3).
+  it.each([0x01, 0x03, 0x06, 0xff, 0x10])(
     "leaf_kind=0x%s → leaf_kind_invalid",
     async (badKind) => {
       const fix = await makeFixture();
@@ -550,6 +559,144 @@ describe("AC-008: leaf_kind_invalid for values outside {0x00, 0x02}", () => {
   );
 });
 
+// ─── DOD-DOC-LEAF-1: the relay admits document leaves ────────────────────────
+
+describe("DOD-DOC-LEAF-1: leaf_kind 0x04 and 0x05 are accepted and witnessed", () => {
+  it.each([
+    [0x04, "document operation"],
+    [0x05, "rejection"],
+  ])("leaf_kind=0x%s (%s) → witnessed with a canonical sequence", async (kind) => {
+    const fix = await makeFixture();
+    const cA = await makeClient(fix.relayAddr);
+    const cB = await makeClient(fix.relayAddr);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
+
+    const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
+    await performAuth(rA, sA, cA.kp);
+
+    const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), cA.kp, 0);
+    sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: kind, structure1_cbor, sender_signature }));
+
+    const resp = await rA.readDecoded();
+    expect(resp["type"]).toBe("hash_submit_ack");
+    expect(resp["sequence_number"]).toBe(1);
+
+    sA.close().catch(() => {});
+    await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
+  }, 20_000);
+
+  // H1 (review): the earlier version of this test built a FRESH fixture per kind, so the roots
+  // differed because the SESSIONS differed (genesis_prev_root folds in session_id), not because
+  // the DOMAINS differed — it passed even with every kind mapped to msgLeafHash. These assert the
+  // hash half of the registry directly: the witnessed root IS the leaf hash of that domain.
+  it("a single witnessed leaf roots to ITS OWN domain's leaf hash, not the message domain", async () => {
+    for (const [kind, hasher] of [
+      [0x00, msgLeafHash],
+      [0x04, docLeafHash],
+      [0x05, rejectLeafHash],
+    ] as const) {
+      const fix = await makeFixture();
+      const cA = await makeClient(fix.relayAddr);
+      const cB = await makeClient(fix.relayAddr);
+      const sessionId = new Uint8Array(randomBytes(16));
+      fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
+      const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
+      await performAuth(rA, sA, cA.kp);
+      const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), cA.kp, 0);
+      sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: kind, structure1_cbor, sender_signature }));
+      const resp = await rA.readDecoded();
+      expect(resp["type"]).toBe("hash_submit_ack");
+
+      const seal = fix.relay.getSealLeaves(sessionId);
+      expect(seal.ok).toBe(true);
+      if (seal.ok) {
+        // A one-leaf tree's root IS the leaf hash, so this pins the exact domain the relay used.
+        const s2Cbor = encodeStructure2(seal.data.leaves[0]!.s2);
+        expect(Buffer.from(seal.data.merkle_root).toString("hex")).toBe(
+          Buffer.from(hasher(s2Cbor)).toString("hex"),
+        );
+        // And explicitly NOT the message domain, for the two document kinds.
+        if (kind !== 0x00) {
+          expect(Buffer.from(seal.data.merkle_root).toString("hex")).not.toBe(
+            Buffer.from(msgLeafHash(s2Cbor)).toString("hex"),
+          );
+        }
+      }
+      sA.close().catch(() => {});
+      await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
+    }
+  }, 60_000);
+
+  // The relay computes a root TWICE by different routes: the incremental running_root
+  // (RELAY_LEAF_HASHERS, folded into every Structure2's prev_root and therefore SIGNED), and a
+  // full rebuild in getSealLeaves (buildMerkleTree from the kinds). The test above exercises the
+  // rebuild; this one pins the incremental path, which is the one whose output the parties sign.
+  // If the two ever disagree, the chain breaks in a way only a live session would surface.
+  it("the SIGNED prev_root of the next leaf uses the previous leaf's OWN domain", async () => {
+    const fix = await makeFixture();
+    const cA = await makeClient(fix.relayAddr);
+    const cB = await makeClient(fix.relayAddr);
+    const sessionId = new Uint8Array(randomBytes(16));
+    fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
+    const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
+    await performAuth(rA, sA, cA.kp);
+
+    // Leaf 1: a document operation.
+    // The relay echoes each witnessed leaf back as leaf_deliver, interleaved with the ack, so
+    // read until the ack rather than assuming it arrives first.
+    const readAck = async (): Promise<void> => {
+      for (let i = 0; i < 5; i++) {
+        const frame = await rA.readDecoded();
+        if (frame["type"] === "hash_submit_ack") return;
+        expect(frame["type"], `unexpected frame while awaiting ack: ${JSON.stringify(frame["type"])}`).toBe("leaf_deliver");
+      }
+      throw new Error("no hash_submit_ack within 5 frames");
+    };
+
+    const first = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), cA.kp, 0);
+    sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x04, structure1_cbor: first.structure1_cbor, sender_signature: first.sender_signature }));
+    await readAck();
+
+    // Leaf 2: an ordinary message. Its prev_root is the running root over leaf 1 alone.
+    const second = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), cA.kp, 0);
+    sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x00, structure1_cbor: second.structure1_cbor, sender_signature: second.sender_signature }));
+    await readAck();
+
+    const seal = fix.relay.getSealLeaves(sessionId);
+    expect(seal.ok).toBe(true);
+    if (seal.ok) {
+      const firstS2Cbor = encodeStructure2(seal.data.leaves[0]!.s2);
+      const prevRootOfSecond = Buffer.from(seal.data.leaves[1]!.s2.prev_root).toString("hex");
+      expect(prevRootOfSecond).toBe(Buffer.from(docLeafHash(firstS2Cbor)).toString("hex"));
+      expect(prevRootOfSecond).not.toBe(Buffer.from(msgLeafHash(firstS2Cbor)).toString("hex"));
+    }
+
+    sA.close().catch(() => {});
+    await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
+  }, 30_000);
+
+  it("the registry's hashers are the crypto domain functions — identical bytes, four different digests", () => {
+    const data = new TextEncoder().encode("registry check");
+    const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+    expect(hex(RELAY_LEAF_HASHERS.msg(data))).toBe(hex(msgLeafHash(data)));
+    expect(hex(RELAY_LEAF_HASHERS.ctrl(data))).toBe(hex(ctrlLeafHash(data)));
+    expect(hex(RELAY_LEAF_HASHERS.doc(data))).toBe(hex(docLeafHash(data)));
+    expect(hex(RELAY_LEAF_HASHERS.reject(data))).toBe(hex(rejectLeafHash(data)));
+    expect(new Set([
+      hex(RELAY_LEAF_HASHERS.msg(data)),
+      hex(RELAY_LEAF_HASHERS.ctrl(data)),
+      hex(RELAY_LEAF_HASHERS.doc(data)),
+      hex(RELAY_LEAF_HASHERS.reject(data)),
+    ]).size).toBe(4);
+  });
+
+  it("0x01 — the RFC 6962 internal-node prefix — is absent from the registry", () => {
+    expect(RELAY_LEAF_KINDS[0x01]).toBeUndefined();
+    expect(Object.keys(RELAY_LEAF_KINDS).map(Number).sort((a, b) => a - b)).toEqual([0x00, 0x02, 0x04, 0x05]);
+  });
+});
 // ─── AC-009 ───────────────────────────────────────────────────────────────────
 
 describe("AC-009: 50 rapid submits → strictly monotonic seq 1..50", () => {

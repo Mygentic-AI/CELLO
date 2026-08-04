@@ -117,7 +117,7 @@ import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, CON
 import type { KeyProvider, LeafInput, IThresholdSigner, RefreshContribution } from "@cello-protocol/crypto";
 import { encodeStructure2, computeGenesisPrevRoot, buildSealTbs, buildPrimaryTransferTbs } from "@cello-protocol/protocol-types";
 import { computeDkgTopology } from "./dkg-topology.js";
-import { reconstructCarriedSealLeaves } from "./seal-unilateral-verify.js";
+import { reconstructCarriedSealLeaves, validateSealSubmissionLeaves } from "./seal-unilateral-verify.js";
 import type { AgentProfile } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
@@ -138,7 +138,7 @@ import type {
   SealVerifiedWithLegibility,
   SealLegibility,
 } from "./directory-types.js";
-import { buildSealLegibility, bindLegibilityToTbs } from "./seal-legibility.js";
+import { buildSealLegibility, bindLegibilityToTbs, findSealCeremonyPair } from "./seal-legibility.js";
 import { WALL_CLOCK } from "./directory-types.js";
 import type { DirectoryStore } from "@cello-protocol/interfaces";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
@@ -1137,15 +1137,28 @@ export class CelloDirectoryNode {
       }
 
       const sessionId = req["session_id"] as Uint8Array;
-      const leaves = req["leaves"] as import("./directory-types.js").RelaySealData["leaves"];
       const merkle_root = req["merkle_root"] as Uint8Array;
       const seq_count = req["seq_count"] as number;
 
-      if (!sessionId || !leaves || !merkle_root) {
+      if (!sessionId || !req["leaves"] || !merkle_root) {
         stream.send(lp.encode.single(CBOR_ENC.encode({ type: "error", reason: "missing_fields" })));
         await stream.close();
         return;
       }
+
+      // The leaf `kind` selects the hash domain and is NOT covered by any signature this
+      // handler verifies, so it is validated before it can reach Merkle reconstruction.
+      const leafCheck = validateSealSubmissionLeaves(req["leaves"]);
+      if (!leafCheck.ok) {
+        this.#logger?.warn("directory.relay.seal_submission.rejected", {
+          reason: leafCheck.reason,
+          sessionId: sessionId instanceof Uint8Array ? Buffer.from(sessionId).toString("hex") : undefined,
+        });
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "error", reason: leafCheck.reason })));
+        await stream.close();
+        return;
+      }
+      const leaves = leafCheck.leaves;
 
       const result = await this.processSeal(sessionId instanceof Uint8Array ? sessionId : new Uint8Array(sessionId as unknown as ArrayBuffer), {
         leaves,
@@ -1167,7 +1180,20 @@ export class CelloDirectoryNode {
         )));
       }
       await stream.close();
-    } catch {
+    } catch (err: unknown) {
+      // Never swallow: the relay only sees a closed stream, so without this line a failure
+      // here is invisible on both sides. buildMerkleTree throws on an unrecognized leaf kind
+      // (crypto ≥ 0.0.39), which is exactly the shape that used to vanish here.
+      const detail = err instanceof Error ? err.message : String(err);
+      this.#logger?.error("directory.relay.admin_stream.failed", { error: detail });
+      // Send the cause back before closing. Without this the relay's adapter falls out of its
+      // read loop and reports `no_response` — an exit-point label — and then re-dials another
+      // directory that fails identically, leaving the real reason only in THIS host's log.
+      try {
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "error", reason: "seal_processing_failed", detail })));
+      } catch {
+        // The stream may already be gone; the log above is the durable record either way.
+      }
       stream.close().catch(() => {});
     }
   }
@@ -4952,17 +4978,23 @@ export class CelloDirectoryNode {
     });
 
     // Collect participants and identify the seal initiator.
-    // The seal initiator is the participant who submitted the first SEAL ctrl leaf
-    // (the second-to-last leaf if both are ctrl leaves — per verifySealLeaves, the
-    // last two leaves are both ctrl and from distinct participants).
     const participants = [...new Set(leaves.map((l) => Buffer.from(l.s2.sender_pubkey).toString("hex")))];
     const [pA, pB] = participants.length >= 2
       ? [Buffer.from(participants[0], "hex"), Buffer.from(participants[1], "hex")]
       : [new Uint8Array(32), new Uint8Array(32)];
 
-    // The seal initiator is the sender of the second-to-last leaf (the first SEAL ctrl leaf).
-    const secondLastLeaf = leaves[leaves.length - 2];
-    const initiatorHex = Buffer.from(secondLastLeaf.s2.sender_pubkey).toString("hex");
+    // The seal initiator authored the EARLIER of the two ceremony ctrl leaves. Derived from the
+    // same kind-based helper the verification used — taking leaves[length - 2] positionally names
+    // the wrong party (and resolves the wrong primary_pubkey for the FROST ceremony) as soon as a
+    // document leaf sits inside the ceremony region.
+    const ceremony = findSealCeremonyPair(leaves);
+    if (!ceremony) {
+      // Unreachable: verifySealLeaves already returned on a missing pair. Refusing beats a
+      // positional fallback, which would silently name the wrong initiator — and therefore
+      // resolve the wrong primary_pubkey for the FROST ceremony — if the guards were reordered.
+      throw new Error("processSeal: seal ceremony pair missing after verifySealLeaves");
+    }
+    const initiatorHex = Buffer.from(leaves[ceremony.initiatorIndex]!.s2.sender_pubkey).toString("hex");
 
     const close_timestamp = this.#clock.now();
     const leafCount = leaves.length;
@@ -5902,16 +5934,21 @@ function upgradeConfirmedFromPayload(
 }
 
 function verifySealLeaves(
-  leaves: Array<{ kind: "msg" | "ctrl"; s2: import("@cello-protocol/protocol-types").Structure2; structure1_cbor: Uint8Array }>  // RelaySealLeaf
+  leaves: Array<{ kind: import("./directory-types.js").RelaySealLeafKind; s2: import("@cello-protocol/protocol-types").Structure2; structure1_cbor: Uint8Array }>  // RelaySealLeaf
 ): { ok: true } | { ok: false } {
-  // Final two leaves must be ctrl-kind (0x02) from distinct participants.
+  // The closing ceremony is the last two ctrl leaves from distinct participants, located BY KIND
+  // (findSealCeremonyPair). Positional matching used to be equivalent and no longer is: while the
+  // first SEAL is outstanding the session is still active, so a document update OR an in-flight
+  // content message can land between the two SEAL leaves (DOD-DOC-LEAF-1). Rejecting the seal for
+  // either would destroy it over a benign crossing.
   if (leaves.length < 2) return { ok: false };
-  const last = leaves[leaves.length - 1];
-  const secondLast = leaves[leaves.length - 2];
-  if (last.kind !== "ctrl" || secondLast.kind !== "ctrl") return { ok: false };
-  const lastSender = Buffer.from(last.s2.sender_pubkey).toString("hex");
-  const secondLastSender = Buffer.from(secondLast.s2.sender_pubkey).toString("hex");
-  if (lastSender === secondLastSender) return { ok: false };
+  const ceremony = findSealCeremonyPair(leaves);
+  if (!ceremony) return { ok: false };
+  // The ceremony must CLOSE the log. An honest relay cannot append after the second SEAL leaf —
+  // it is already `sealing` and refuses further submits — so a trailing leaf means a crafted
+  // submission, and every trailing leaf would otherwise be folded into the FROST-notarized root
+  // while being bound to nothing in the ceremony.
+  if (ceremony.responderIndex !== leaves.length - 1) return { ok: false };
   // M1 DEBT (SESSION-003-AC-002): directory should also verify that each SEAL leaf's payload
   // final_root matches the Merkle root at the appropriate stage (before initiator SEAL, after
   // initiator SEAL, after both). This requires the relay to include ctrl leaf content bytes in

@@ -421,3 +421,42 @@ describe("M7-WIRE-001: RelaySessionAssignment type check", () => {
     expect(assignment.transport_mode).toBeUndefined();
   });
 });
+
+// ─── DOD-DOC-LEAF-1: seal_unilateral leaf_kind range check ───────────────────
+//
+// A leaf kind is ONE byte on the wire. This layer validates SHAPE only — an
+// out-of-range or non-integer value is a malformed frame and voids the whole carry
+// (never a silently dropped leaf, which would be an undetected omission). WHICH
+// bytes are meaningful stays in seal-unilateral-verify; duplicating the set here
+// would let the two drift.
+describe("DOD-DOC-LEAF-1: seal_unilateral leaf_kind is shape-checked as one byte", () => {
+  const ENC2 = new Encoder({ tagUint8Array: false });
+  const mkFrame = (leafKind: unknown): Uint8Array =>
+    ENC2.encode({
+      type: "seal_unilateral",
+      session_id: new Uint8Array(16),
+      reported_root: new Uint8Array(32),
+      reported_seq: 1,
+      seal_leaves: [
+        {
+          sequence_number: 1,
+          leaf_kind: leafKind,
+          structure2_cbor: new Uint8Array([1]),
+          structure1_cbor: new Uint8Array([2]),
+        },
+      ],
+    }) as Uint8Array;
+
+  it("accepts every in-range byte, including the document kinds", () => {
+    for (const kind of [0x00, 0x02, 0x04, 0x05, 0xff]) {
+      const decoded = decodeInboundSignalingFrame(mkFrame(kind));
+      expect(decoded, `leaf_kind=${kind} must decode`).not.toBeNull();
+    }
+  });
+
+  it("refuses an out-of-range or non-integer leaf_kind — the whole carry is void", () => {
+    for (const bad of [256, -1, 1.5, 1e9]) {
+      expect(decodeInboundSignalingFrame(mkFrame(bad)), `leaf_kind=${bad}`).toBeNull();
+    }
+  });
+});

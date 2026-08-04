@@ -73,7 +73,7 @@
 import { randomBytes, createHash } from "node:crypto";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { verify, buildMerkleTree, merkleRoot, generateKeypair, msgLeafHash, ctrlLeafHash, nodeHash, buildRelayAckTbs } from "@cello-protocol/crypto";
+import { verify, buildMerkleTree, merkleRoot, generateKeypair, nodeHash, buildRelayAckTbs } from "@cello-protocol/crypto";
 import type { KeyProvider, LeafInput } from "@cello-protocol/crypto";
 import { buildStructure2, encodeStructure2, computeGenesisPrevRoot } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
@@ -82,6 +82,7 @@ import type { Stream } from "@libp2p/interface";
 import type { Logger, SessionWal, ContentStore } from "@cello-protocol/interfaces";
 import { RELAY_SESSION_UNRECOVERABLE } from "@cello-protocol/interfaces";
 import { ContentParkHandler } from "./content-park.js";
+import { RELAY_LEAF_KINDS, RELAY_LEAF_HASHERS } from "./relay-types.js";
 import type {
   SessionAssignment,
   RelaySessionState,
@@ -1132,7 +1133,12 @@ export class CelloRelayNode {
       protocolLog("RELAY", `Client ${truncHex(senderPubkeyHex)} joined session ${truncHex(sessionKey)}`);
     }
 
-    if (frame.leaf_kind !== 0x00 && frame.leaf_kind !== 0x02) {
+    // The accepted leaf domains. 0x01 is absent and must stay absent: it is the RFC 6962
+    // internal-node prefix, so a leaf hashed under it aliases an internal node and forges
+    // tree shape (§2.1.3). Everything outside this set is refused rather than coerced —
+    // a coerced kind would hash under the wrong domain and diverge the two parties' roots.
+    const leafKind = RELAY_LEAF_KINDS[frame.leaf_kind];
+    if (!leafKind) {
       await reply("leaf_kind_invalid"); return;
     }
 
@@ -1172,14 +1178,11 @@ export class CelloRelayNode {
     if (!s2Result.ok) { await reply("signature_invalid"); return; }
 
     const s2Cbor = encodeStructure2(s2Result.structure2);
-    const leafKind: "msg" | "ctrl" = frame.leaf_kind === 0x02 ? "ctrl" : "msg";
 
     // RFC 6962 incremental stack update: O(log n) per append.
     // Push the new leaf hash onto the stack, merging with same-height entries as needed.
     // The running_root is the right-to-left fold of the stack with nodeHash.
-    const newLeafHash = leafKind === "ctrl"
-      ? ctrlLeafHash(s2Cbor)
-      : msgLeafHash(s2Cbor);
+    const newLeafHash = RELAY_LEAF_HASHERS[leafKind](s2Cbor);
 
     const newStack: Array<{ hash: Uint8Array; height: number }> = state.tree_stack.map((e) => ({
       hash: e.hash.slice(),

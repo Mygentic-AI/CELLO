@@ -15,17 +15,18 @@ description: >
 
 ## RESUME STATE (overwrite in place — the only mutable block)
 
-- **Current unit:** DOD-DOC-LEAF-1 — client half DONE + MERGED + PUBLISHED to `beta` and verified
-  against the tarballs (Entry 4). Line stays ❌: the trustless-cello half is unbuilt.
-- **🛑 BLOCKED ON ANDRE — the `latest` promotion.** Seven `npm dist-tag add` lines are prepared in
-  Entry 4. Until it runs, trustless-cello cannot resolve crypto `0.0.39` from `latest`, so
-  T1–T7 cannot compile. This is the ONLY blocked thread; do not re-ask, do not run it.
-- **Working meanwhile:** DOD-DOC-FUZZ-1 on cello-client branch `m14/fuzz-1` (P0, no cross-repo
-  dependency). Yjs facts already measured — Entry 4, bottom.
-- **Published (beta):** crypto 0.0.39 · protocol-types 0.0.41 · transport 0.0.43 · daemon 0.0.120
-  · cli 0.0.123 · connect 0.0.117 · gateway 0.0.23 (unbumped, deliberately). Tag `v0.0.180`.
-- **HEAD:** trustless-cello `main` @ b9bebf25 · cello-client `main` @ 288c8b8
-  (`m14/leaf-1` merged)
+- **Current unit:** DOD-DOC-LEAF-1 — BOTH halves built. Client half done, merged, published,
+  promoted. Server half implemented + pass-one findings fixed (Entry 5). **Review pass TWO is in
+  flight** — the line does not flip until its verdict is quoted here.
+- **Nothing is blocked.** Andre ran the `latest` promotion; all seven packages verified resolving,
+  both installed binaries match (cli 0.0.123, connect 0.0.117).
+- **Next after this unit closes:** merge `m14/leaf-1-server`, flip DOD-DOC-LEAF-1 to ✅, then
+  DOD-DOC-FUZZ-1 (branch `m14/fuzz-1` already created; Yjs facts measured in Entry 4).
+- **Published + promoted to `latest`:** crypto 0.0.39 · protocol-types 0.0.41 · transport 0.0.43 ·
+  daemon 0.0.120 · cli 0.0.123 · connect 0.0.117 · gateway 0.0.23 (unbumped). Tag `v0.0.180`.
+- **Review budget:** pass two is the HARD CAP for this unit. Anything surviving it becomes an AC
+  on a later unit — never a third pass.
+- **HEAD:** trustless-cello `m14/leaf-1-server` @ 2ea07d90 · cello-client `main` @ 288c8b8
 
 ---
 
@@ -386,3 +387,118 @@ three packages, ~4.72 MB unpacked. **No `install`, `preinstall`, or `postinstall
 of the three** — pure JS, no native compile, so it adds no build step to an operator's install
 (heavy-local-node doctrine: the cost is download size, not compile time). Engine floor
 `node >=16`, well under the project's Node 24.
+
+---
+
+## Entry 5 — 2026-08-04 — DOD-DOC-LEAF-1 server half: built, reviewed, three blocking findings fixed
+
+**Unblocked by:** Andre's `latest` promotion. Verified all seven packages resolve and both
+installed binaries match (`cli` 0.0.123, `connect` 0.0.117) before starting.
+
+**Branch:** `m14/leaf-1-server` — 7fb09780 (implementation) → 2ea07d90 (review fixes). Both pushed.
+
+### What the server half does (T1–T6)
+
+- **T1/T2 relay.** `RELAY_LEAF_KINDS` (byte→domain) and `RELAY_LEAF_HASHERS` (domain→hash fn) in
+  `relay-types.ts` are the single registry; `relay-node.ts` reads both. The relay computes leaf
+  hashes ITSELF from the kind byte, so admitting a document leaf needed the allow-list AND the
+  hash map — two copies of that pairing is exactly how a wire byte and a hash domain drift apart.
+  `0x01` is absent by construction and asserted absent by test. AC-008's guard test is AMENDED
+  (0x04/0x05 out of the invalid set, 0x06 added, 0x01 retained).
+- **T3 directory.** `seal-unilateral-verify` mapped every non-`0x02` byte to `"msg"`. It now
+  refuses what it cannot name (`unilateral_leaf_kind_unknown`) — deliberately the OPPOSITE of
+  crypto's tolerant `opaque` kind, because this site AUTHORIZES a seal while that one only
+  recomputes a root. Same byte, two sites, two correct answers; both commits say so out loud.
+- **T4** `directory-frames` gains a shape-level one-byte range check that deliberately does NOT
+  duplicate the meaningful-byte set.
+- **T5/T6** covered by the two defects below plus the `RelaySealLeafKind` widening.
+
+### Two real defects found by the new tests, before review
+
+1. **A peer's document leaf marked a malicious unanswered tail as `answered`.** Document updates
+   arrive mechanically from the peer's daemon with no agent involved, so this let a daemon satisfy
+   the unanswered-tail check on its operator's behalf — the precise property `answered` exists to
+   expose.
+2. **A document leaf broke the trailing-ceremony walk**, downgrading both live sealers to `absent`.
+
+My first fix for (1) excluded everything except `msg` and broke AC-004's deliberate "a lone
+trailing ctrl leaf counts as a reply" property. **The existing test caught it.** Narrowed to
+`doc`/`reject` only. Worth remembering: the falsification step belongs BEFORE the edit, not at
+the test run.
+
+### Review pass one — three blocking findings, all real, all fixed in 2ea07d90
+
+Reviewer's own summary: *"I do not think I am rubber-stamping this one."*
+
+- **F1 — a valid bilateral seal could be destroyed by an unrelated background sync.**
+  `verifySealLeaves` matched the ceremony POSITIONALLY (last two must be ctrl). Reachable, not
+  theoretical: the relay flips a session out of `active` only once BOTH ctrl leaves exist
+  (`relay-node #maybeSubmitBilateralSeal`), so while the first SEAL is outstanding a document
+  submit is still accepted — giving `[msg(A), ctrl(A), doc(B), ctrl(B)]`. Reproduced end-to-end
+  through `processSeal` (`seal_leaves_invalid`) before fixing. The same positional assumption
+  derived the seal INITIATOR as `leaves[length-2]` → wrong party named, wrong `primary_pubkey`
+  resolved for the FROST ceremony. Both now read `findSealCeremonyPair`, which locates the pair
+  BY KIND. Reviewer's note on the error string is the durable lesson: `seal_leaves_invalid` names
+  *where the check fired*, not why, and nothing logged the document leaf — an operator would go
+  hunting for a broken SEAL ceremony or a malicious client.
+- **F2 — the same positional assumption in `sealCeremonyLeafIndices`** would have reopened the
+  malicious-tail hole the moment F1 was fixed (with a doc leaf present it excluded nothing, so the
+  counterparty's own SEAL leaf satisfied `answered`). Latent ONLY because F1 rejected those seals
+  first. Now shares the one helper. Load-bearing beyond display: `answered` is folded into the
+  FROST-signed seal TBS via `bindLegibilityToTbs`, so a wrong value is SIGNED and the client's
+  independent re-derive diverges.
+- **F3 — a silent drop this milestone's own crypto bump created.** `seal_submission`'s leaf `kind`
+  was a raw `as` cast off `/cello/directory-relay/1.0.0`, which authenticates only
+  `relay_register` — and `kind` selects the HASH DOMAIN. Two holes: `LeafInput`'s `kind: "hash"`
+  uses its data AS the leaf hash with no domain prefix (the one ingress that bypasses domain
+  separation entirely), and `buildMerkleTree` now THROWS where crypto 0.0.33 silently coerced —
+  a throw that landed in `catch { stream.close() }` with no log and no error frame. Now validated
+  before Merkle reconstruction (`validateSealSubmissionLeaves`, one bad leaf voids the whole
+  submission) and the catch logs `directory.relay.admin_stream.failed`.
+
+**Also caught by review:** my re-pin claim was FALSE. The commit said protocol-types 0.0.41 /
+transport 0.0.43; the lockfile still resolved 0.0.35 / 0.0.37 because my last surgical update
+named only crypto. All four are now correct. Lesson: verify the lockfile, do not restate intent.
+
+### The `@types/node` incident (self-inflicted, worth keeping)
+
+My first re-pin used `pnpm update --latest`, which dragged `@types/node` 25.6.2 → 26.1.2 while
+25.6.2 remained elsewhere. Two copies produce `IncomingMessage is not assignable to
+IncomingMessage` at every `node:http` call site. I could not tell from a `git stash` whether it
+pre-existed (stashing reverts the lockfile but NOT `node_modules`), so I restored the baseline and
+MEASURED: even a single-package `pnpm update` re-resolves that floating range. Fixed with a
+`pnpm.overrides` pin — the mechanism this repo already uses for `@libp2p/interface` — documented
+under a top-level `"//"` key (pnpm REJECTS non-selector keys inside `overrides`), including the
+warning that it wins silently over four packages' declared `^25.6.2`.
+
+### Hollow tests I wrote, and the one that taught me something
+
+Pass one found four tests that passed on reverted code. The instructive one: my
+"each leaf kind produces a DIFFERENT root" test built a FRESH fixture per kind, so the roots
+differed because the SESSIONS differed (genesis_prev_root folds in session_id) — it passed with
+every kind mapped to `msgLeafHash`.
+
+Rewriting it surfaced a real structural fact: **the relay computes a root by two different
+routes.** The incremental `running_root` uses `RELAY_LEAF_HASHERS` and is folded into every
+Structure2's `prev_root` — the value the parties SIGN. `getSealLeaves` REBUILDS the root with
+`buildMerkleTree` from the kinds. A test asserting the rebuilt root does not exercise the
+incremental path at all. So the new test asserts the **signed `prev_root` of a following leaf**,
+which is the one that catches an all-`msgLeafHash` registry. Verified: the rebuild-based
+assertion passes under that bypass; the `prev_root` one fails.
+
+The three legibility tests each asserted the SAFE half of their property (a party stays `absent`)
+and so passed on reverted code; they now assert the half at risk (a party stays `live`). H6 was
+re-pointed from an unreachable shape (doc AFTER both ctrls — the relay is already sealing) to the
+reachable one (doc BETWEEN). Every rewritten test verified red on revert.
+
+### Gates (committed tree, both repos)
+
+trustless-cello: `test` **1253 passed / 531 skipped / 7 todo, 124 files** · `lint` clean ·
+`typecheck` clean (no `build` script in this repo — `typecheck` IS `tsc --build`).
+cello-client: unchanged since the published 288c8b8.
+
+### Status
+
+Server half is IMPLEMENTED and fixed; **review pass two is in flight** and this line does not flip
+until its verdict is quoted. Pass two is the HARD CAP — anything surviving it becomes an AC on a
+later unit, never a third pass.

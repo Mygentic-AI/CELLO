@@ -8,7 +8,7 @@ import { describe, it, expect } from "vitest";
 import { randomBytes } from "node:crypto";
 import { generateKeypair, buildRelayAckTbs } from "@cello-protocol/crypto";
 import { encodeStructure2, SCAN_RESULT_SENTINEL } from "@cello-protocol/protocol-types";
-import { reconstructCarriedSealLeaves } from "../seal-unilateral-verify.js";
+import { reconstructCarriedSealLeaves, validateSealSubmissionLeaves } from "../seal-unilateral-verify.js";
 import type { SealUnilateralLeaf } from "../directory-types.js";
 
 const hex = (u: Uint8Array): string => Buffer.from(u).toString("hex");
@@ -202,5 +202,155 @@ describe("reconstructCarriedSealLeaves — F2 directory E2E refusal (forged carr
     } finally {
       await stop();
     }
+  });
+});
+
+// ─── DOD-DOC-LEAF-1: leaf-kind mapping is explicit; unknown bytes are REFUSED ──
+//
+// The previous mapping was `w.leaf_kind === LEAF_KIND_CTRL ? "ctrl" : "msg"` — every byte
+// that was not 0x02 became "msg". That is a silent relabel at a trust boundary: the
+// directory would rebuild the tree hashing a document leaf under the MESSAGE domain, get a
+// root the sealing party never computed, and reject the seal with an unrelated reason —
+// or, worse, accept a chain whose kinds it never actually checked.
+//
+// This site AUTHORIZES a seal, so it refuses what it cannot name. That is the opposite of
+// the tolerant `opaque` path in crypto, which merely RECOMPUTES a root — same byte, two
+// sites, deliberately opposite answers.
+describe("reconstructCarriedSealLeaves — leaf-kind mapping (DOD-DOC-LEAF-1)", () => {
+  const mkLeaf = async (
+    relay: ReturnType<typeof generateKeypair>,
+    relayId: string,
+    seq: number,
+    kind: number,
+    senderHex: string,
+  ): Promise<SealUnilateralLeaf> => {
+    const content_hash = new Uint8Array(randomBytes(32));
+    const structure2_cbor = encodeStructure2({
+      sequence_number: seq,
+      sender_pubkey: Uint8Array.from(Buffer.from(senderHex, "hex")),
+      content_hash,
+      sender_signature: new Uint8Array(64),
+      scan_result: SCAN_RESULT_SENTINEL,
+      prev_root: new Uint8Array(32),
+    });
+    const ts = seq * 10;
+    return {
+      sequence_number: seq,
+      leaf_kind: kind,
+      structure2_cbor,
+      structure1_cbor: new Uint8Array([1, 2, 3]),
+      relay_id: relayId,
+      relay_timestamp: ts,
+      relay_signature: await relay.sign(buildRelayAckTbs(content_hash, seq, ts)),
+    };
+  };
+
+  it("maps all four known bytes to their own domain — 0x04 and 0x05 are NOT 'msg'", async () => {
+    const relay = generateKeypair();
+    const relayId = hex(await relay.getPublicKey());
+    const present = generateKeypair();
+    const presentHex = hex(await present.getPublicKey());
+
+    const carry = [
+      await mkLeaf(relay, relayId, 1, 0x00, presentHex),
+      await mkLeaf(relay, relayId, 2, 0x04, presentHex),
+      await mkLeaf(relay, relayId, 3, 0x05, presentHex),
+      await mkLeaf(relay, relayId, 4, 0x02, presentHex),
+    ];
+    const res = reconstructCarriedSealLeaves(carry, presentHex);
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    if (res.ok) expect(res.leaves.map((l) => l.kind)).toEqual(["msg", "doc", "reject", "ctrl"]);
+  });
+
+  it("REFUSES an unrecognized leaf-kind byte instead of coercing it to 'msg'", async () => {
+    const relay = generateKeypair();
+    const relayId = hex(await relay.getPublicKey());
+    const present = generateKeypair();
+    const presentHex = hex(await present.getPublicKey());
+
+    for (const badKind of [0x01, 0x03, 0x06, 0xff]) {
+      const carry = [
+        await mkLeaf(relay, relayId, 1, badKind, presentHex),
+        await mkLeaf(relay, relayId, 2, 0x02, presentHex),
+      ];
+      expect(reconstructCarriedSealLeaves(carry, presentHex)).toMatchObject({
+        ok: false,
+        reason: "unilateral_leaf_kind_unknown",
+      });
+    }
+  });
+
+  it("0x01 specifically — the internal-node prefix must never become a leaf domain", async () => {
+    const relay = generateKeypair();
+    const relayId = hex(await relay.getPublicKey());
+    const present = generateKeypair();
+    const presentHex = hex(await present.getPublicKey());
+    const carry = [await mkLeaf(relay, relayId, 1, 0x01, presentHex)];
+    expect(reconstructCarriedSealLeaves(carry, presentHex)).toMatchObject({
+      ok: false,
+      reason: "unilateral_leaf_kind_unknown",
+    });
+  });
+});
+
+// ─── DOD-DOC-LEAF-1 (review F3): the seal_submission ingress ─────────────────
+//
+// `seal_submission` arrives on /cello/directory-relay/1.0.0, which authenticates only
+// `relay_register` — so this frame is accepted from any dialer, and unlike the unilateral
+// carry there is no relay-receipt check on it. Every other field in a leaf is bound by a
+// signature the directory verifies; `kind` is not, and it selects the HASH DOMAIN fed into
+// buildMerkleTree.
+//
+// Two failures this closes:
+//   1. `kind: "hash"` uses its data as the leaf hash VERBATIM, with no domain prefix — the
+//      one ingress that could bypass domain separation entirely.
+//   2. crypto 0.0.39 THROWS on an unrecognized kind where 0.0.33 silently coerced to msg.
+//      Unvalidated, that throw reaches a bare catch and the relay sees only a closed stream.
+describe("validateSealSubmissionLeaves (DOD-DOC-LEAF-1 F3)", () => {
+  const leaf = (kind: unknown): unknown => ({
+    kind,
+    s2: {
+      sequence_number: 1,
+      sender_pubkey: new Uint8Array(32),
+      content_hash: new Uint8Array(32),
+      sender_signature: new Uint8Array(64),
+      scan_result: SCAN_RESULT_SENTINEL,
+      prev_root: new Uint8Array(32),
+    },
+    structure1_cbor: new Uint8Array([1, 2, 3]),
+  });
+
+  it("accepts the four real leaf domains", () => {
+    for (const kind of ["msg", "ctrl", "doc", "reject"]) {
+      const res = validateSealSubmissionLeaves([leaf(kind)]);
+      expect(res.ok, `kind=${kind} must be accepted`).toBe(true);
+    }
+  });
+
+  it("REFUSES kind 'hash' — it would use wire bytes as the leaf hash with no domain prefix", () => {
+    expect(validateSealSubmissionLeaves([leaf("hash")])).toMatchObject({
+      ok: false,
+      reason: "seal_submission_leaf_kind_unknown",
+    });
+  });
+
+  it("REFUSES 'opaque', unknown strings, and non-strings — never reaching buildMerkleTree", () => {
+    for (const bad of ["opaque", "amend", "", 4, null, undefined, {}]) {
+      expect(validateSealSubmissionLeaves([leaf(bad)]), `kind=${JSON.stringify(bad)}`).toMatchObject({
+        ok: false,
+        reason: "seal_submission_leaf_kind_unknown",
+      });
+    }
+  });
+
+  it("REFUSES a malformed leaves payload rather than passing it through", () => {
+    for (const bad of [undefined, null, "leaves", 42, {}]) {
+      expect(validateSealSubmissionLeaves(bad)).toMatchObject({ ok: false });
+    }
+  });
+
+  it("one bad leaf voids the WHOLE submission — never a silent drop of that leaf", () => {
+    const res = validateSealSubmissionLeaves([leaf("msg"), leaf("hash"), leaf("ctrl")]);
+    expect(res.ok).toBe(false);
   });
 });
