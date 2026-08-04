@@ -101,7 +101,9 @@ document the way the screening audit gates M14's screening line.
   previous epoch, carries the canonical hash at the boundary; `epoch_id` stops being constant 0
   (the V1 seam pays off here — no envelope migration). Epoch attestations checkpoint the
   document log (§9.1); verification of epoch N+1 starts from the attested state, not genesis.
-  In-flight updates across the boundary per the design session, with the §14 test vectors.
+  **Document-property changes (immutable post-accept in V1, §16.3) become possible here as
+  epoch events** — a sixth load-bearing use of the primitive alongside §10's five. In-flight
+  updates across the boundary per the design session, with the §14 test vectors.
 - **DOD-DOC2-COMPACT-1** [cello-client] — compaction + limits-as-triggers (§10.1): hitting a
   limit PROPOSES an epoch through the durable outbound; while unacknowledged, limits are
   advisory and the full log is retained; the hard-cap backstop is refusing new local publishes

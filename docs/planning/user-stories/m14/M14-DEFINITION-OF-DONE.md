@@ -156,17 +156,21 @@ description: >
   content; B's agent sees it as a pending item and accepts or refuses; on accept both sides mint
   the document from the agreed content. `document_id` = hash of the proposal envelope.
   **Seam enforcement:** `assurance_tier` only `authenticated`, `schema_enforcement` only
-  `false`, `topology` only pairwise — any other value refused loudly at proposal AND at accept.
-  Peer-compatibility failure (§16.7-8): a peer that does not speak documents surfaces as a
-  human-readable "peer's client doesn't support shared documents — ask them to upgrade", never a
-  timeout. — ❌
+  `false`, `topology` only `hub-and-spoke` (the pairwise two-document form; §3.4, §11.1 —
+  pass-through declaration refused, M14-P8) — any other value refused loudly at proposal AND at
+  accept. **The proposal carries a document-feature version** (§16.7-8) — incompatibility is
+  DETECTED from it, and a peer that does not speak documents surfaces as a human-readable
+  "peer's client doesn't support shared documents — ask them to upgrade", never a timeout or a
+  timeout-classifier. **Properties are immutable after accept** — a property change is an epoch
+  event and therefore V2 (§16.3); no mutate call exists in V1. — ❌
 - **DOD-DOC-ENVELOPE-1** [cello-client] — the document envelope (§14): beyond the standard
   message envelope — `document_id`, `epoch_id` (constant 0, NOT omitted), `doc_prev_hash` (the
   per-sender chain link), the sender's Yjs state vector, the update payload. Types in
   `core/protocol-types`, CBOR round-trip tests, chain verification on receive (a broken or
-  missing `doc_prev_hash` refuses loudly, naming the gap). Seam fields get serialization tests
-  in lieu of a consumer ([[M14-PROCEDURE]] §5 no-consumer exception). Replay defined set-based
-  per §16.7-5. — ❌
+  missing `doc_prev_hash` refuses loudly, naming the gap). **The Yjs update-encoding version is
+  pinned** in the protocol types (§16.7-8) so two supporting clients can never disagree
+  silently. Seam fields get serialization tests in lieu of a consumer ([[M14-PROCEDURE]] §5
+  no-consumer exception). Replay defined set-based per §16.7-5. — ❌
 - **DOD-DOC-DELIVERY-1** [cello-client] — daemon-autonomous delivery (§16.4): publish writes the
   envelope to the log and returns; the delivery worker derives pending = unacknowledged
   envelopes FROM THE LOG (survives restart — enforcer-pinned), checks the peer via
@@ -179,7 +183,8 @@ description: >
   (`document.delivery.*`). Ack = the peer's daemon confirms admission (or rejection — a `0x05`
   is also an ack for delivery purposes; supersession is DOD-DOC-REJECT-1's job). — ❌
 - **DOD-DOC-LIFECYCLE-1** [cello-client] — the verbs (§3.5 + §16.4): **list** (documents with
-  peer, type, status, pending-delivery state — "1 update pending, peer offline since …");
+  peer, type, tier, epoch, status, pending-delivery state — tier and epoch are constants in V1
+  but they are seam surface and cheap to show — "1 update pending, peer offline since …");
   **close** (bilateral: mutual close acks over the session, document marked complete —
   the V1 shape; the Tier-2 quiescence agreement at close is M14B's addition); **kill**
   (unilateral: stop accepting and publishing, notify the peer, retain local copy and log —
@@ -217,8 +222,8 @@ description: >
   plugin carrying tools + skills verified in the TARBALL, and a **live smoke on the real GCP
   fleet**: two real daemons on two machines (or two CELLO_DIRs), create → consent → edit →
   publish → deliver → converge → seal, with document leaves in the sealed tree and the seal
-  verifying. The milestone-close gate — vitest green ≠ done. Andre runs the `latest`
-  promotion. — ❌
+  verifying. **The publish gate — milestone close is P4 all-green, not this line.** Vitest
+  green ≠ done. Andre runs the `latest` promotion. Close condition per M14-D2. — ❌
 
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
@@ -233,8 +238,10 @@ description: >
   in-memory-queue killer. — ❌
 - **DOD-DOC-E2E-REJECT-1** [trustless-cello] — **rejection enforcer** ran green: gate rejects
   (limit or append rule), quarantine + `0x05` + policy record on both sides, supersession nets
-  to zero, convergence; then the stall path: supersession rejected → one retry → `stalled`
-  visible on both sides. — ❌
+  to zero, convergence; **the session containing the `0x05` leaf seals and the seal VERIFIES on
+  both sides** (the directory-side leaf changes in DOD-DOC-LEAF-1 are exercised by exactly this
+  case); then the stall path: supersession rejected → one retry → `stalled` visible on both
+  sides. — ❌
 - **DOD-DOC-E2E-APPEND-1** [trustless-cello] — **append-only enforcer** ran green: on
   `append_only: true`, a deleting update is rejected and superseded; an appending update
   converges. Use Case B's V1 claim, proven. — ❌
@@ -264,6 +271,19 @@ here — this section holds only decisions made DURING the milestone.
 
 - **M14-D1** (2026-08-04, Andre): V2 is **M14B** — same milestone family, second wave. Its DoD
   is written now, parked, in this directory.
+- **M14-D2** (2026-08-04, review finding B2 — default, Andre may overturn): **DOD-DOC-SCREEN-1
+  must be ✅ before DOD-DOC-SHIP-1 flips.** §3.2 calls the screening-driven gate "not optional
+  for V1", so the conservative reading holds: the audit and the screening wiring happen inside
+  the milestone, before the publish cascade ships document support to operators. The
+  alternative (close with SCREEN-1 parked, screening as a pre-launch fast-follow) is Andre's to
+  choose; until he does, this line is the close condition.
+- **M14-D3** (2026-08-04, review finding S3): **the V1 close shape is mutual close acks** —
+  a forced derivation from §16.1 (the quiescence agreement that §3.5 puts at close is Tier-2
+  machinery). M14B's DOD-DOC2-AGREE-1 adds the agreement as close's final step on activation.
+- **M14-D4** (2026-08-04, review finding S5): **V1 "watching presence" (§16.4) = per-attempt
+  `discovery_lookup` + scheduled capped retry.** The spec's body describes presence-driven
+  push; no presence subscription exists in the client today (verified 2026-08-04), so the
+  push mechanism is the parked upgrade (M14-P4), and §16.4's backstop is V1's mechanism.
 
 ## Parked
 
@@ -283,6 +303,10 @@ here — this section holds only decisions made DURING the milestone.
 - **M14-P7** — **Hub-and-spoke cross-document diff tooling** (§11.1 — "changed in doc_AC, not
   yet ported to doc_AB"). Hub-and-spoke WORKS in V1 by construction (two separate documents,
   re-authoring is just editing); the daemon-provided porting aid is the deferred part.
+- **M14-P8** — **Pass-through mode** (§11.1's single-`Y.Doc` opt-in for a transparent
+  coordinator). The V1 handshake REFUSES the declaration (DOD-DOC-HANDSHAKE-1); two-document
+  form only. Un-parks when a real coordinator case demands it — with §11.1's stated properties
+  (transitive all-or-nothing propagation, visible third-party clientIDs) as the spec.
 
 ---
 

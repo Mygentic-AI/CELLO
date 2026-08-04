@@ -140,7 +140,8 @@ spawns the real published-shape cello-client binaries (`provisionAgent`, `startD
    killed and restarted** (the queue must survive from the envelope log, not memory); B's daemon
    starts; the update arrives and B's file materializes it — with zero agent-level action on
    either side. The pending flag is set on B.
-3. **Rejection enforcer** — B's receive gate rejects an update (screening policy or limit);
+3. **Rejection enforcer** — B's receive gate rejects an update (limit or append rule;
+   screening plugs into the same gate when DOD-DOC-SCREEN-1 unblocks);
    the update quarantines (never admitted, never dropped); a `0x05` leaf is recorded referencing
    the rejected envelope; A's daemon rolls back and publishes the superseding update; B admits it
    and both sides converge; both policy logs show the rejection with its reason. Second half:
