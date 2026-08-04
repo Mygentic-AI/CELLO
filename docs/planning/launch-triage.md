@@ -268,11 +268,25 @@ real open item again rather than a parked decision.
 
 The 2026-07-31 incident: an agent reported online on every surface — `cello status`, the daemon, the
 directory's own database — while nothing could reach it, silently, for ~25 minutes, recovering only
-on a daemon restart. The re-register-on-reconnect fix shipped (daemon `0.0.105`, `2e734a1`), but the
-incident log's own correction says it closes a different hole: the load-bearing defect is
-**detection** — the client learns a stream is dead only at write time (3,514 write-time discoveries
-vs 42 heartbeat catches), and the ~70-second stream churn and the directory's server-side expiry
-semantics were never traced.
+on a daemon restart.
+
+**A fix shipped for this incident and it closes a different hole.** Daemon `0.0.105` (`2e734a1`)
+re-registers the standing receiver on signaling reconnect, and it is still wired (`daemon.ts:614`).
+The incident log's own CORRECTION explains why that is not this defect: `targetStreamFound` reads the
+directory's `#streams` map, which is populated at **auth** time and is not the standing receiver —
+re-registering one does not repopulate the other. The trigger is wrong too: `onConnected` fires on a
+reconnect, and the client's first disconnect came 23 minutes *after* the failure.
+
+**The actual mechanism, and why the heartbeat does not catch it.** The directory's `#streams` entry
+for the agent disappeared server-side. The client observed nothing — no disconnect, therefore no
+reconnect, therefore no re-authentication, therefore nothing repopulated that map. The transport
+stream was genuinely alive, so the 15 s ping / 15 s pong heartbeat had nothing to report. **What is
+missing is a liveness check on the *registration*, not on the socket.** Why the server-side entry
+vanished was never traced.
+
+**Verified 2026-08-04: no code has changed on either side since.** No commits to
+`signaling-manager.ts`, `signaling-connect.ts`, or the directory's `directory-node.ts`; the four
+`#streams` mutation sites are as they were.
 
 **The cutover verification, run 2026-08-04 — it does not clear this.** The skip was conditional: the
 class only dies if the cutover changes the **client-to-node** link. [[M12-ANTI-ENTROPY-DESIGN]] §8
@@ -281,17 +295,20 @@ the **node-to-node** layer. Presence replicating perfectly does not revive a dea
 every node just agrees the agent is owned by a node that cannot reach it. **The detection defect
 survives the cutover verbatim.**
 
-**The one open mitigation, worth ten minutes before ranking this:** the original escape clause also
-allowed the class to die if recovery now leans on the **parked-mailbox drain**. If a caller's message
-parks and drains once the receiver's stream re-establishes, the operator still gets their messages and
-the severity drops from a silent blackout to delayed delivery. That has not been traced. If it does
-NOT hold, this ranks high — a silent 25-minute unreachability with every surface reporting `online` is
-the same shape as the logout item (item 3) and the reachability item (item 12): the visible state and
-the network behaviour disagree, and the operator believes the visible one.
+**The parked-mailbox mitigation does NOT apply — checked 2026-08-04.** The original escape clause
+also allowed the class to die if recovery leaned on the parked-mailbox drain, leaving the operator
+with delayed delivery rather than a blackout. It does not: the failure is a **session request**
+answered `target_offline`, which `outbound-sessions.ts:664` retries a bounded number of times and
+then surfaces as `counterparty_offline`. The session never forms, so no message ever parks. There is
+nothing to drain.
 
-**Named thread to pull first** when the work starts: the untraced `The operation was aborted due to
-timeout` reader errors (2,061), plus the ~70-second stream churn and the directory's server-side
-expiry semantics, none of which were ever traced.
+**So the severity stands as written.** A silent unreachability with every surface reporting `online`
+is the same shape as the logout item (item 3) and the reachability item (item 12): the visible state
+and the network behaviour disagree, and the operator believes the visible one. Andre ranks it.
+
+**Named threads to pull first** when the work starts: why the directory drops a `#streams` entry with
+no client-observable event, and the untraced `The operation was aborted due to timeout` reader errors
+(2,061), which read like an `AbortSignal` on our side but are not raised in `signaling-manager.ts`.
 
 ---
 
