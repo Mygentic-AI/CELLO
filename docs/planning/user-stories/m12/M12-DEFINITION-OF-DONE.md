@@ -642,6 +642,33 @@ description: >
 
 ## Decisions
 
+### M12-D18 (2026-08-04) — the daemon keeps the ping ABORT; only the relay gives it up
+
+DOD-RELAY-KEEPALIVE-1 says `abortConnectionOnPingFailure: false` **for relay links both sides**.
+Built: relay side false, **daemon side keeps the abort** and gets a 30s ping-timeout floor instead
+of libp2p's 5s.
+
+**Why the literal reading is unavailable.** libp2p configures the connection monitor **per node** —
+one AdaptiveTimeout and one abort flag for the whole node, fed by every connection's ping. There is
+no per-connection policy. Nor is there a per-node-role split to fall back on: the standing receiver
+is *handed off and becomes* the session node (`reuseStandingReceiver`), and session nodes dial the
+relay as their Structure-2 witness. Every daemon node that carries a counterparty also carries a
+relay link. The unit reviewer checked this independently and confirmed there is no seam.
+
+So on the daemon, `false` would not mean "relay links" — it would mean *all* links, taking out
+`counterparty_liveness → 'gone'` for a peer that vanishes without a FIN. The same DoD line requires
+that detection be preserved, and the work order authorises the alternative in its own words: "or at
+minimum a generous fixed `pingTimeout` replacing the AdaptiveTimeout for WAN links."
+
+**The cost, stated.** Detection of a silently-dead counterparty moves from ~15s (10s interval + 5s)
+to ~40s (10s + 30s). The unilateral-seal gate reads that verdict, so it must tolerate a ~40s window.
+If it ever cannot, lower the ping INTERVAL rather than the floor — the floor is what a slow WAN
+round trip needs; the interval is how often we ask.
+
+**Reverse if:** the live `DEBUG=libp2p:connection-monitor*` run shows the daemon's own monitor is
+what severs the relay link even at 30s. The daemon would then need a dedicated relay-only node so
+the policy can be split by node after all — a structural change, not a flag.
+
 ### M12-D-V49-V50-ORDER (2026-07-31) — merge is safe with `outOfOrder=true` for ONE AWS deploy
 
 Entry 68b left a question open: why did a directory image run cleanly against a database holding
