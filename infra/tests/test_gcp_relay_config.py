@@ -3,8 +3,11 @@
 DOD-GCP-RELAY-DRIFT-1 infrastructure tests — the GCP relay's timeout/idle configuration, and
 whether it still agrees with AWS.
 
-WHY THIS FILE EXISTS. The AWS relay's config is asserted by test_m6b_007.py. The GCP relay's was
-asserted by nothing, and so it drifted without anyone noticing: cloud-init shipped
+WHY THIS FILE EXISTS. The relay's SESSION idle sweep was asserted on NEITHER cloud before this
+file — a review corrected the premise this unit started from. test_m6b_007.py asserts the AWS
+*ALB* idle timeout (300s), a different knob entirely; a repo-wide grep for
+RELAY_SESSION_MAX_IDLE_MS returned no test at all. With nothing holding either side, the value
+drifted unnoticed: cloud-init shipped
 RELAY_SESSION_MAX_IDLE_MS=1800000 (30 minutes) against AWS's 86400000 (24 hours). No one chose 30
 minutes for GCP — it simply differed, and the consequence is that a quiet-but-live conversation on
 a GCP relay gets swept as idle and the agents have to re-establish, while the identical
@@ -85,13 +88,27 @@ def _aws_relay_env():
 
 
 def _gcp_boot_env():
-    """The relay boot environment written by GCP cloud-init, as a dict of KEY=VALUE lines."""
+    """
+    The relay boot environment written by GCP cloud-init, as a dict of KEY=VALUE lines.
+
+    Scoped to the ENVEOF heredoc — the block that actually becomes /etc/cello/relay.env and is
+    handed to `docker run --env-file`. Scraping the whole YAML instead was a demonstrated bypass:
+    a review moved RELAY_SESSION_MAX_IDLE_MS two lines up, out of the heredoc and into
+    relay-boot.sh as a shell local that never reaches the relay, and all five tests stayed green.
+    The same looseness also swept four shell locals (MD, TOKEN, NODE_KEY, TRANSPORT_KEY) that are
+    not relay env vars at all.
+    """
     text = _read(GCP_CLOUD_INIT)
+    body = re.search(r"cat > /etc/cello/relay\.env <<ENVEOF\n(.*?)\n\s*ENVEOF", text, re.DOTALL)
+    assert body, (
+        "relay-cloud-init.yaml must write /etc/cello/relay.env via an ENVEOF heredoc — if that "
+        "changed, this parser is reading a block the relay no longer consumes"
+    )
     env = {}
-    for match in re.finditer(r"^\s{6}([A-Z][A-Z0-9_]*)=(.*)$", text, re.MULTILINE):
+    for match in re.finditer(r"^\s*([A-Z][A-Z0-9_]*)=(.*)$", body.group(1), re.MULTILINE):
         env[match.group(1)] = match.group(2).strip()
     if not env:
-        raise AssertionError("parsed no KEY=VALUE lines out of relay-cloud-init.yaml")
+        raise AssertionError("parsed no KEY=VALUE lines out of the relay.env heredoc")
     return env
 
 
@@ -114,7 +131,12 @@ def test_gcp_relay_max_idle_is_24h():
 # ── AC-002: THE DRIFT CHECK — the two clouds must agree ─────────────────────
 
 def test_gcp_and_aws_max_idle_agree():
-    gcp = int(_gcp_boot_env()["RELAY_SESSION_MAX_IDLE_MS"])
+    gcp_env = _gcp_boot_env()
+    assert "RELAY_SESSION_MAX_IDLE_MS" in gcp_env, (
+        "GCP cloud-init does not set RELAY_SESSION_MAX_IDLE_MS at all — the relay then falls back "
+        "to its binary default, silently, and no log line says which value is in force"
+    )
+    gcp = int(gcp_env["RELAY_SESSION_MAX_IDLE_MS"])
     aws = int(_aws_relay_env()["RELAY_SESSION_MAX_IDLE_MS"])
     assert gcp == aws, (
         f"relay idle sweep disagrees across clouds: GCP {gcp} vs AWS {aws}. An agent's session "

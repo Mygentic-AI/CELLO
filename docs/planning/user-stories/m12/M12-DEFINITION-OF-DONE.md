@@ -593,7 +593,13 @@ description: >
   `RELAY_SESSION_MAX_IDLE_MS` 1800000→86400000 in `relay-cloud-init.yaml:69` (30 min vs
   AWS's 24 h), plus a GCP-terraform regression test asserting relay idle/timeout config
   (the AWS side has `test_m6b_007.py`; the GCP side has nothing, which is why the drift
-  shipped). [[relay-keepalive-parked-drain-workorder]] §5. — ❌ NOT BUILT
+  shipped). [[relay-keepalive-parked-drain-workorder]] §5. — 🟡 BUILT, NOT LIVE.
+  Value fixed; `infra/tests/test_gcp_relay_config.py` (5 tests) asserts both clouds AND that they
+  agree. **Premise corrected:** `test_m6b_007.py` asserts the AWS *ALB* idle timeout, not the
+  session sweep — the sweep was asserted on NEITHER cloud, which is the real reason it drifted.
+  Reviewer: SPEC FAITHFUL, one hollow test (parser read the whole YAML, not the env-file heredoc —
+  bypass demonstrated and closed). `WAL_DIR` drift found and parked as M12-P10.
+  **Not live:** applying it needs a terraform apply + relay redeploy, not done here. → Entry 80
 
 ## Tier P3 — Wave 2: AWS rejoins + the launch claim
 
@@ -798,6 +804,15 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
 
 ## Parked
 
+- **M12-P10** — **`WAL_DIR` drifts across clouds and nothing asserts it.** AWS puts the relay's
+  write-ahead log at `/tmp/wal` (Fargate task-ephemeral — gone on every task replacement); GCP puts
+  it on `/mnt/disks/cello-wal` (a persistent disk that survives instance replacement). The relay
+  journals in-flight session frames there, and cloud-init's own header states the stake: losing them
+  drops messages agents believe were delivered. Found by the DOD-GCP-RELAY-DRIFT-1 reviewer (F4) as
+  the same failure class that line closed — a per-cloud value with no cross-cloud assertion — but a
+  DURABILITY knob, not an idle/timeout one, so it is deliberately not folded into that unit. Needs
+  its own line: decide whether AWS should have durable WAL storage, then assert the pair the way
+  `test_gcp_relay_config.py` asserts the idle sweep. → Entry 80
 - **M12-P1** — **Demo agent move** (EC2 `i-0ad3e7c22470f266e`, not in IaC). Candidate, not
   decided. Easiest workload to move (systemd units), but every SSM runbook line breaks. Decide at
   P2; write IaC for it whichever cloud it lands on.

@@ -541,6 +541,19 @@ const parsedIdleMs = parseInt(process.env["RELAY_SESSION_MAX_IDLE_MS"] ?? "86400
 // NaN propagates silently through arithmetic — `cutoff = Date.now() - NaN` is NaN,
 // and `lastActivityAt < NaN` is always false (IEEE 754), so no session would ever be swept.
 const maxIdleMs = Number.isFinite(parsedIdleMs) && parsedIdleMs > 0 ? parsedIdleMs : 86_400_000;
+if (maxIdleMs !== parsedIdleMs) {
+  // DOD-GCP-RELAY-DRIFT-1 (review F5): the guard above is right and it was INVISIBLE. An
+  // operator who set `30m` or left the value empty got 24 h and nothing said so — and the whole
+  // point of this unit is that a per-cloud idle value nobody is holding to account drifts.
+  // Substituting a default is acceptable; substituting it silently is not.
+  logger.warn("relay.config.idle_ms_invalid", {
+    supplied: process.env["RELAY_SESSION_MAX_IDLE_MS"] ?? "",
+    using: maxIdleMs,
+  });
+}
+// The value in force, on every boot, on both clouds — so "which idle sweep is this relay
+// running" is answerable from the log instead of from the deploy template.
+logger.info("relay.config.idle_sweep", { maxIdleMs, sweepIntervalMs });
 relayResult.relay.startIdleSweep(sweepIntervalMs, maxIdleMs);
 
 // ─── M7-MSG-001 (AC-017c): store-and-forward content-store TTL sweep ────────────

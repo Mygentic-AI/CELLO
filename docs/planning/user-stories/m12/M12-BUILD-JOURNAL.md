@@ -5267,3 +5267,79 @@ diff — but it is flaky and someone should pin it.
 
 The two-machine live proof. The line is **🟡 BUILT/UNVERIFIED-LIVE**, not ✅, and cannot be ✅
 until it runs on two daemons against a flapping relay.
+
+---
+
+## Entry 80 — 2026-08-04 — DOD-GCP-RELAY-DRIFT-1: the premise was wrong, and the test could be walked around
+
+**Unit:** DOD-GCP-RELAY-DRIFT-1 (trustless-cello, Tier P2). Branch `m12/relay-keepalive-park-drain`.
+(Entry 79 covers DOD-RELAY-KEEPALIVE-1, whose review was still in flight when this was written.)
+
+**Target:** the GCP relay stops sweeping live conversations as idle, and a test stops the value
+drifting again.
+
+### The change
+
+`RELAY_SESSION_MAX_IDLE_MS` 1800000 → 86400000 in `infra/terraform/templates/relay-cloud-init.yaml`,
+plus `infra/tests/test_gcp_relay_config.py` (5 tests, standalone-script style matching
+`test_m6b_007.py` — this repo wires no pytest runner). The consequence of the drift was real and
+quiet: a quiet-but-live conversation brokered by a GCP relay was swept after 30 minutes and the
+agents had to re-establish; the identical conversation on AWS ran for 24 hours.
+
+### Two things the reviewer found that I had wrong
+
+**1. The premise this unit inherited is false.** Both the DoD line and my commit message say the
+AWS side is asserted by `test_m6b_007.py`. It is not. Quoted:
+
+> That is false for this variable. `grep -rn RELAY_SESSION_MAX_IDLE_MS` across the repo returns
+> **zero** hits in any test before this commit; `test_m6b_007.py` asserts the *ALB*
+> `idle_timeout.timeout_seconds=300` (line 168), a different knob. … **`test_aws_relay_max_idle_is_24h`
+> is not duplicate coverage — it is the first assertion of the AWS value anywhere.**
+
+So the drift did not ship because GCP lacked a test AWS had. It shipped because **neither** cloud's
+session idle sweep was asserted by anything. The file's docstring now says that; the commit message
+that says otherwise is corrected here, which is the only place it can be.
+
+**2. My test could be walked around.** The reviewer did not take the revert claim on faith — it ran
+its own mutation matrix and found the parser scraped the whole YAML rather than the `ENVEOF`
+heredoc that actually becomes `/etc/cello/relay.env`:
+
+> I confirmed the bypass empirically: moving `RELAY_SESSION_MAX_IDLE_MS=86400000` two lines up —
+> out of the heredoc, into `relay-boot.sh` as a shell local that never reaches the env file —
+> leaves **all five tests green**. … For `test_gcp_relay_listeners_do_not_collide` it is not
+> [small]: `relay.ts:69` defaults `CELLO_RELAY_LISTEN_ADDR` to `/ip4/0.0.0.0/tcp/4001`, i.e.
+> exactly the WS port. A refactor that drops that line out of the heredoc gives you a fatal
+> EADDRINUSE and a green test.
+
+Fixed: `_gcp_boot_env` now scopes to the heredoc and refuses if that block is missing. I re-ran the
+reviewer's exact bypass — variable moved out of the env file — and it now reds two tests with
+messages that name the consequence, not the key.
+
+The reviewer also walked the config chain end to end and confirmed the value is genuinely consumed
+(`cloud-init` heredoc → `relay-boot.sh` → `docker run --env-file` → `relay.ts:539` →
+`startIdleSweep`), which is what makes this a config test rather than a string test.
+
+### Verdict
+
+> **SPEC: FAITHFUL** · **NO SILENT FALLBACKS** · **ERRORS NAME THEIR CAUSE** · **HOLLOW TESTS
+> FOUND** — one: `_gcp_boot_env` scrapes the whole file rather than the `ENVEOF` heredoc … All five
+> tests otherwise survive the revert test. This is a test-quality gap, not a spec gap.
+> **REMOVALS PROVEN** (n/a)
+
+All five findings closed: F1 (heredoc scoping), F2 (the false premise, corrected in the docstring),
+F3 (a bare `KeyError` replaced with a cause-naming assertion), F5 (`relay.ts` substituted its 24h
+default for a malformed value **silently** — it now warns `relay.config.idle_ms_invalid`, and logs
+`relay.config.idle_sweep` on every boot so "which sweep is this relay running" is answerable from
+the log rather than from the deploy template).
+
+F4 is real and deliberately NOT folded in: `WAL_DIR` is `/tmp/wal` on AWS (task-ephemeral) and a
+persistent disk on GCP, unasserted — the same failure class, but a durability knob rather than a
+timeout one. Parked as **M12-P10** rather than scope-crept into this unit.
+
+### Gate
+
+`python3 infra/tests/test_gcp_relay_config.py` → 5 passed. Repo-wide `npx vitest run` → 1261 passed
+/ 531 skipped / 125 files. `pnpm run lint` clean, `tsc --build` clean. Mutation matrix (the
+reviewer's, re-run after the fix): GCP→1800000 reds 2; AWS dragged down to match reds 2; idle line
+deleted reds 2; `timeout_sec = 30` reds 1; listener port collision reds 1; **the heredoc bypass now
+reds 2 where it previously passed 5**.
