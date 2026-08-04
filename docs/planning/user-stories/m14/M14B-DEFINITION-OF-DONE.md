@@ -188,3 +188,5 @@ document the way the screening audit gates M14's screening line.
 - [[M14-DEFINITION-OF-DONE]] — V1's active yardstick (this document activates when it closes)
 - [[M14-PROCEDURE]] — the operating runbook (M14B inherits it with a new §1c enforcer set)
 - [[2026-07-31_federated-collaborative-state-architecture]] — spec-of-record (§16 + §6–§10, §3.3)
+- [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol Primitive]] —
+  the schema-as-contract origin that Tier Q3 implements in its reshaped, opt-in form

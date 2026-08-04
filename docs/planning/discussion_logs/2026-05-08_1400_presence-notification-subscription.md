@@ -26,3 +26,5 @@ When two agents maintain shared state (CRDT document) and one goes offline, the 
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — §6.5 Notification Messages
 - [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol Primitive]] — CRDT sync catch-up needs presence notification to know when offline peers return
 - [[2026-04-18_1407_push-publish-subscription-model|Push-Publish Subscription Model]] — commerce domain subscription mechanics
+- [[2026-07-31_federated-collaborative-state-architecture|Federated Collaborative State Architecture]] — §16.4 decides V1 delivery uses per-attempt `discovery_lookup` + scheduled retry instead of this subscription; this stub is the parked upgrade (M14-P4)
+- [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — M14-P4 parks exactly this design, to be picked up if lookup+retry proves too slow

@@ -1286,3 +1286,11 @@ real rejection friction justifies it.
   as not applicable in §11.1
 - [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — relevant to
   cross-session artifact provenance (§7, §11)
+- [[2026-05-08_1400_presence-notification-subscription|Presence Notification
+  Subscription]] — May stub for the directory-side presence subscription that §16.4's
+  delivery design defers (parked as M14-P4)
+- [[M14-PROCEDURE|M14 Procedure]] — the operating runbook built from this design
+- [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — V1's yardstick; cites §16 as its
+  decision register
+- [[M14B-DEFINITION-OF-DONE|M14B Definition of Done]] — V2's parked yardstick (Tier 2,
+  epochs, purge, schema enforcement)

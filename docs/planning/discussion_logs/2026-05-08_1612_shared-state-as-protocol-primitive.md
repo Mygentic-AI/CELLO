@@ -537,6 +537,10 @@ Hybrid workflows (agents discussing *and* collaborating on a document) are natur
 
 ## Related Documents
 
+- [[2026-07-31_federated-collaborative-state-architecture|Federated Collaborative State
+  Architecture]] — the 2026-07/08 design of this same feature; §12 there reconciles every
+  divergence with this log (Yjs over Automerge, opt-in schema enforcement, pairwise scope) —
+  use this log for *why*, that one for *what*
 - [[protocol-map|CELLO Protocol Map]] — top-level protocol orientation
 - [[end-to-end-flow|CELLO End-to-End Protocol Flow]] — messaging, identity, Merkle trees, FROST seals
 - [[cello-initial-design|CELLO Design Document]] — original vision and 10-step trust chain

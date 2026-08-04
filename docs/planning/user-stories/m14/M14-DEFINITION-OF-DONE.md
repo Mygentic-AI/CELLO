@@ -291,3 +291,6 @@ here — this section holds only decisions made DURING the milestone.
 - [[M14B-DEFINITION-OF-DONE]] — V2's parked yardstick
 - [[2026-07-31_federated-collaborative-state-architecture]] — spec-of-record (§16 = decisions)
 - [[M12-DEFINITION-OF-DONE]] — the DoD this one is modeled on
+- [[2026-05-08_1400_presence-notification-subscription|Presence Notification Subscription]] —
+  the May stub that M14-P4 parks (directory-side presence subscription as the delivery-latency
+  upgrade)
