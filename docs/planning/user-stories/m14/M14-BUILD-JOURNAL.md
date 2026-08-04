@@ -753,3 +753,97 @@ Fuzz suite alone: 16 tests, 2.3 s (was 36 s).
 
 **IMPLEMENTED, not DONE.** One review pass used; one remains (the cap). The DoD line stays ❌
 until a verdict is quoted.
+
+---
+
+## Entry 9 — 2026-08-04 — DOD-DOC-FUZZ-1 ✅ CLOSED (two review passes, the cap)
+
+**Merged:** cello-client `m14/fuzz-1` → `main` (746fc4f). Review budget SPENT.
+
+### Pass two's verdict, in its own words
+
+> **HOLLOW TESTS FOUND** — F2 and F6 fail the revert test outright; F1 fails it in the opposite
+> direction (it goes red when nothing broke); F4 leaves the file's headline claim unasserted. …
+> I am not rubber-stamping — the two hollow tests are in the two places the unit's entire value
+> sits.
+
+### The finding I would have shipped: a FALSE claim behind a FLAKY test
+
+Entry 8 recorded "random garbage is ALWAYS rejected". **False.** About **1 in 100,000** random
+buffers is ACCEPTED — any buffer starting `00 00` is a valid EMPTY update whose remaining bytes
+are ignored **as trailing bytes**. This file's own trailing-byte finding falsifies its own
+garbage finding, and only the rarity of the prefix hid it.
+
+Worse than wrong: **flaky**. `expect(rejected).toBe(total)` over 120 trials goes red roughly
+**1 CI run in 650** with nothing broken — and it would have been read as noise, not as the
+finding. A flaky assertion guarding a false claim is the worst of both.
+
+The true property is **containment, not rejection**: garbage may be accepted, but it never
+contributes CONTENT. That is now what is asserted (three buckets: rejected / accepted-inert /
+accepted-with-content, the last pinned at zero), and "accepted-but-inert" is recorded rather
+than denied.
+
+### The 23,880 vs 31,880 disagreement: RESOLVED — we were both right
+
+Pass one measured 31,880 bytes for the 2000-deep update; I measured 23,880, twice, and recorded
+the disagreement rather than smoothing it. Pass two found the cause: **the size is a function of
+the document's random clientID.** Every item's parent reference encodes the clientID as a
+varint, so a 1-byte clientID gives 23,880 and a 5-byte one gives 31,880. Yjs mints a random
+uint32, so **production effectively always sees the 5-byte case** (a random uint32 is <128 with
+probability ~3e-8). My figure came from a pinned small clientID — i.e. from a document
+production will never produce.
+
+**This had already propagated into GATE-1's AC (f)**, which said ~12 B/level and ~87k levels per
+MiB. Corrected to **~16 B/level, ~65k levels**, with the reason recorded so nobody re-derives the
+optimistic number. The test now pins the clientID and asserts the exact byte count.
+
+*The lesson: recording a disagreement instead of resolving it is better than smoothing it over,
+and worse than finding out why. Two measurements that differ are a fact about the SYSTEM.*
+
+### An AC that implied completeness it did not have
+
+Pass two found two more accept-class shapes, one of which **falsifies AC (a) as I wrote it**:
+
+- **Colliding clientID.** Yjs identifies authorship by clientID alone. An attacker writing under
+  a client's ID silently wins, and the honest client's real update is then accepted-and-dropped.
+  The result is a **splice of two authors who never collaborated** — measured: the honest update's
+  overlapping clock range is discarded and only its TAIL survives, appending a stray character to
+  the forged text. **`pendingStructs` is `null` throughout**, so AC (a)'s pending-set rule cannot
+  see it at all. AC (a) now says what it does not cover, and AC (h) requires binding the clientID
+  to the peer's identity out of band.
+- **Delete-everything.** A **10-byte** well-formed update wipes a document's entire content.
+  Structural limits are UPPER bounds, so a shrinking update passes all of them. Now AC (i) —
+  `append_only` needed a measurement behind it, not just an intention.
+
+### Three more of my own assertions that could not fire
+
+- The allocation test **never reached the allocation path**: `ff×9 7f` throws in the varint
+  decoder in 0 ms, so no length is produced. A lib0 that dropped its length bounds-check would
+  have kept it green. Now also sends a well-formed update declaring an in-range 1e8 string length
+  — the amplification a hostile peer actually sends — and lib0 does bounds-check it.
+- **Retention — the DoS claim itself — was unasserted.** `pendingStructs.missing` is keyed by
+  client and there is one source client, so `missing.size` is always 1. Now measures that the
+  retained buffer GROWS (61 bytes after 5 updates, 415 after 49).
+- **Idempotence compared the document to itself**, so a first apply that silently did nothing
+  would have passed. Expected values pinned.
+
+### Carried to GATE-1 / ENVELOPE-1 (not a third pass — the cap is on REVIEWS, not on fixing)
+
+Everything above was FIXED, not carried. What remains is genuinely downstream: `docLeafHash` now
+carries a **preimage contract** in its doc comment — `data` must be re-encoded canonical state,
+never received bytes — because the malleability finding means a leaf over received bytes is not a
+canonical commitment. LEAF-1 stays ✅ (pass two agreed: LEAF-1 defines leaf KINDS and the
+domain-separated hash; the preimage is the producer's choice, and the producer has not shipped).
+
+### Final state
+
+`test` **2514 passed / 11 skipped** · `lint` · `typecheck` · `build` clean. Fuzz suite: 18 tests,
+2.6 s. GATE-1 now carries **nine measured ACs** (a)–(i) that it would otherwise have been built
+against as assumptions.
+
+### Next
+
+**DOD-DOC-STORE-1** — the SQLCipher document store (three tables, append-only envelope log,
+snapshot rebuildable from the log). The existing store pattern to follow is
+`core/daemon/src/trust-signal-store.ts` (idempotent `CREATE TABLE IF NOT EXISTS`, `DaemonDatabase`
+injected, no `node:sqlite`).

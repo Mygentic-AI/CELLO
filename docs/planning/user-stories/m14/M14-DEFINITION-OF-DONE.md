@@ -104,7 +104,10 @@ description: >
   under the planned pre-parse size cap; failure modes recorded in the journal (crash? throw?
   hang? memory?); any guard the findings motivate becomes an AC on DOD-DOC-GATE-1. Also records
   the Yjs dependency facts once: pure-JS confirmed, install cost stated (heavy-local-node
-  doctrine). — ❌
+  doctrine). — ✅
+  > Measured, not assumed: the ACCEPT class (not the throw class) is what defeats §16.7-7 —
+  > six accept-class shapes found, all now ACs (a)–(i) on GATE-1. Two review passes.
+  > → Journal Entries 7–9.
 - **DOD-DOC-STORE-1** [cello-client] — the SQLCipher document store (§16.7-12), its own store
   module following the existing idempotent-DDL pattern (no `node:sqlite`, ever): `documents`
   (document_id, peer `agent_id`, properties, status), `document_envelopes` (append-only:
@@ -144,10 +147,14 @@ description: >
   later (DOD-DOC-SCREEN-1) — the hook is built now, the rules are pluggable.
   **ACs measured by DOD-DOC-FUZZ-1 (§16.7-7's residual risk, now quantified) — the ACCEPT class,
   which "cap, catch, contain" does NOT catch because Yjs returns success:**
-  (a) **unresolved dependencies** — after the shadow apply, a non-empty `doc.store.pendingStructs`
-  is a REJECTION (`document_update_unresolved_dependencies`), never an admission. Measured: 49
-  well-formed sub-cap updates all accepted, zero content, all retained — a peer streams these
-  until the daemon dies and every leg of the posture passes them.
+  (a) **unresolved dependencies** — phrase the rule against OBSERVABLE STATE, not the mechanism:
+  a shadow apply must advance the document's state vector by exactly the structs the update
+  declares, and any shortfall is a REJECTION (`document_update_unresolved_dependencies`);
+  `doc.store.pendingStructs` is the mechanism to read it from, not the definition. Measured: 49
+  well-formed sub-cap updates all accepted, zero content, retention GROWING with each — a peer
+  streams these until the daemon dies and every leg of the posture passes them.
+  **This AC does NOT cover clientID collision** (see (h)) — that shape leaves the pending set
+  EMPTY, so a pending-set check alone would imply a completeness it does not have.
   (b) **document binding** — an update carries no document identity, so a valid update for a
   DIFFERENT document merges silently. Binding is out-of-band and the gate must enforce it.
   (c) **encoding version** — V2-format bytes are accepted by the v1 decoder and silently drop all
@@ -159,9 +166,20 @@ description: >
   (e) **a size FLOOR, not just a cap** — an empty or 1-byte update throws a lib0 decoder string;
   the minimum valid update is 2 bytes.
   (f) **an explicit nesting-depth limit** — Yjs does not bound depth at all, and the size cap
-  bounds it poorly (~12 bytes/level, so ~87k levels fit in 1 MiB).
+  bounds it poorly: **~16 bytes/level, so ~65,000 levels fit in 1 MiB.** (Corrected 2026-08-04:
+  the earlier "~12 B/level, ~87k" came from a document with a pinned 1-byte clientID. Update
+  size depends on the clientID's varint width, and Yjs mints a random uint32, so the 5-byte case
+  is what production always sees. Choose the default against 16 B/level.)
   (g) **one typed reason for every Yjs throw**, carrying the decoder string as detail — never
-  surfacing `Unexpected end of array` / `Integer out of Range` as the reason. — ❌
+  surfacing `Unexpected end of array` / `Integer out of Range` as the reason.
+  (h) **clientID binding** — Yjs identifies authorship by clientID alone, so a colliding clientID
+  silently wins and the honest client's real update is then accepted-and-dropped, leaving the
+  document a SPLICE of two authors who never collaborated, with an EMPTY pending set and no
+  error on any path. The clientID observed in an update must be bound to the peer's identity
+  out of band; no property of the update itself can establish it.
+  (i) **`append_only` needs a measurement behind it** — a 10-byte well-formed update deletes a
+  document's entire content. Structural limits are upper bounds, so a shrinking update passes
+  every one of them and the shadow is merely smaller. — ❌
 - **DOD-DOC-REJECT-1** [cello-client] — rejection and supersession (§3.2, §16.7-2): a rejection
   is a protocol message AND a `0x05` leaf referencing the rejected envelope's hash; the sender's
   daemon rolls back (Yjs undo — inverses, not erasure) and publishes the superseding update
