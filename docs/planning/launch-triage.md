@@ -27,8 +27,11 @@ lose trust. Most things are forgivable.
 **How to use this:** read top to bottom, then tell me the real priority order — the ranking below
 is my first pass, not a decision.
 
-**2026-08-03 sweep addendum:** a pass over the DoD docs and July discussion logs added items 13, 14
-and the "dead signaling streams" decision, the re-verify note on the unsealable-conversation item,
+**2026-08-04:** item 13's parked decision was checked against the completed M12 cutover and the
+premise it rested on did not hold — it is an open item again, unranked. See that item.
+
+**2026-08-03 sweep addendum:** a pass over the DoD docs and July discussion logs added items 13, 14,
+the re-verify note on the unsealable-conversation item,
 and the "left off this list on purpose" section. One item found by the sweep was already fixed
 without its DoD line knowing (`DOD-SIGTERM-FLAKE-1`, busy-timeout fix 2026-07-31 — line corrected to
 🟡, never was a triage item).
@@ -256,11 +259,12 @@ broken."
 
 ---
 
-## 13. Dead signaling streams go undetected — deliberately not fixed, superseded by the mesh
+## 13. Dead signaling streams go undetected — the mesh did NOT supersede it
 
 **Designation:** [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — no
-DoD line. **Recorded 2026-08-03 as a DECISION, so it stops being re-discovered as a miss.** It stays
-on the open list because it carries a live verification obligation, not because work is queued.
+DoD line, **needs one opened.** Recorded 2026-08-03 as a decision to skip on the grounds that the M12
+cutover would make the class moot. **That premise was checked 2026-08-04 and is false**, so this is a
+real open item again rather than a parked decision.
 
 The 2026-07-31 incident: an agent reported online on every surface — `cello status`, the daemon, the
 directory's own database — while nothing could reach it, silently, for ~25 minutes, recovering only
@@ -270,15 +274,24 @@ incident log's own correction says it closes a different hole: the load-bearing 
 vs 42 heartbeat catches), and the ~70-second stream churn and the directory's server-side expiry
 semantics were never traced.
 
-**Why it is here and not fixed:** the M12 anti-entropy mesh cutover on GCP is expected to make this
-entire class moot, so the AWS-side detection work was deliberately skipped (Andre, 2026-08-03).
+**The cutover verification, run 2026-08-04 — it does not clear this.** The skip was conditional: the
+class only dies if the cutover changes the **client-to-node** link. [[M12-ANTI-ENTROPY-DESIGN]] §8
+names the client protocol explicitly under *"What this design does NOT change"*, and the mesh replaces
+the **node-to-node** layer. Presence replicating perfectly does not revive a dead client stream —
+every node just agrees the agent is owned by a node that cannot reach it. **The detection defect
+survives the cutover verbatim.**
 
-**Verify at cutover:** the class only dies if the cutover changes the **client-to-node** link (or
-leans on the parked-mailbox drain as the recovery path). [[M12-ANTI-ENTROPY-DESIGN]] as written
-replaces the node-to-node layer — presence replicating perfectly does not revive a dead client
-stream; every node would just agree the agent is owned by a node that can't reach it. If the
-client link is unchanged post-cutover, this reopens as a full launch item, and the untraced
-`The operation was aborted due to timeout` reader errors (2,061) are the named thread to pull first.
+**The one open mitigation, worth ten minutes before ranking this:** the original escape clause also
+allowed the class to die if recovery now leans on the **parked-mailbox drain**. If a caller's message
+parks and drains once the receiver's stream re-establishes, the operator still gets their messages and
+the severity drops from a silent blackout to delayed delivery. That has not been traced. If it does
+NOT hold, this ranks high — a silent 25-minute unreachability with every surface reporting `online` is
+the same shape as the logout item (item 3) and the reachability item (item 12): the visible state and
+the network behaviour disagree, and the operator believes the visible one.
+
+**Named thread to pull first** when the work starts: the untraced `The operation was aborted due to
+timeout` reader errors (2,061), plus the ~70-second stream churn and the directory's server-side
+expiry semantics, none of which were ever traced.
 
 ---
 
