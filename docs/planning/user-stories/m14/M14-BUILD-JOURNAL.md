@@ -1052,3 +1052,84 @@ FUZZ-1 moved it to devDependencies under "no consumer, no ship". This unit is th
 (One lint error caught and fixed on the way: an unused `Y` import in the test after the engine
 absorbed every direct Yjs call — which is the shape the unit wants, the test driving the engine's
 surface rather than Yjs's.)
+
+---
+
+## Entry 13 — 2026-08-04 — ENGINE-1 review: **the acceptance criterion itself was wrong**
+
+**Fix commit:** cello-client `m14/engine-1` @ 85b084b. Review pass one of two.
+
+### The finding, and why it goes deeper than a bug
+
+The reviewer found that excluding a withdrawn envelope from the fold breaks the document. Checking
+the spec before fixing showed something worse: **the AC I wrote was wrong.**
+
+§16.4: withdrawing "rolls the change back locally (**Yjs undo**) and writes a withdrawal record
+into the log **beside** the original envelope — marked withdrawn, **never deleted, so the log
+stays intact**." §3.2 says the same of rejection: supersession is "**inverses, not erasure**."
+
+So the undo is an ordinary update *in* the log, and replay simply applies every payload in order.
+A withdrawal record excludes nothing. I had written AC (ii) from the previous unit's review
+comment instead of from the spec, and then implemented the AC faithfully. **The DoD line is
+corrected in place with the spec citation**, because leaving a wrong AC in the yardstick is worse
+than the bug it produced.
+
+### Two HIGH findings that DISSOLVE with the exclusion logic
+
+Neither needed a guard; both were consequences of doing the wrong thing carefully.
+
+1. **Non-leaf withdrawal made a document permanently unrebuildable.** Yjs operations are causally
+   chained, so excluding any but the LAST envelope strands every later one on structs that never
+   arrive. Measured across three inserts: withdrawing the first or the middle refused to rebuild.
+   And because live Y.Doc state deliberately does not survive a restart, the document would work
+   until the next daemon start and be **permanently unopenable after it**, with no operator path
+   back short of hand-editing SQLCipher.
+   **My test withdrew the leaf — the single case that worked.** A test that exercises only the
+   shape the implementation happens to handle is not coverage; it is a mirror.
+2. **Any sender could erase any other sender's content.** The withdrawn set was built from
+   `kind` + `referencesEnvelopeHash` with no authorship check — and I verified nothing upstream
+   supplies one: `appendEnvelope` writes the reference verbatim, `verifyChainLinkage` never reads
+   it. So a counterparty could append a payload-free row naming my envelope and silently drop my
+   contribution from every rebuild, with a log that still verifies.
+
+Both are now covered by tests that trigger the adversarial condition — a non-leaf withdrawal and a
+cross-sender one — neither of which the original tests could reach.
+
+### Also fixed
+
+- **A purged `update` row was silently skipped.** A withdrawal legitimately carries no payload;
+  an `update` whose bytes are gone (§16.7-12) is an operation that WAS part of the document. The
+  `continue` treated them identically, producing a short document reported as a clean rebuild
+  with a lower applied-count that nothing compares against. It refuses.
+- **`restore()` bypassed every guard in its own file** — the one method that reads bytes off disk,
+  and a corrupt snapshot row surfaced as `Unexpected end of array`, the exact lib0 string the
+  module header says must never be a reason. Typed reason now, decoder string as detail, plus a
+  pending-set check so an incomplete snapshot cannot restore short and silent.
+- **Refusals were returned but never logged.** A return value no caller reads is not observable,
+  and the unit's blocking criterion says a declined update must be.
+- **The shadow document is reused across a fold** — one per envelope made replay quadratic in
+  document size, on every cold start where the snapshot is missing.
+- **`readText`/`insertText` → `readTextRoot`/`insertIntoTextRoot`.** `documentType` admits json
+  and xml, where that root is empty; the old names would have returned `""` indistinguishable
+  from an empty document.
+- **`DocumentUpdateResult` is a discriminated union**, so a refusal that forgets its reason is a
+  type error rather than a `!` assertion.
+- **AC (i) now asserts BYTE identity**, which is what it says — a state vector is only
+  clientID→clock, so structurally different state with equal clocks would have passed.
+
+### Carried forward (reviewer's, and mine)
+
+- The pending-set guard **refuses a legitimate out-of-order update** that Yjs would buffer and
+  resolve on the next state-vector exchange. Correct for replay, where a gap means corruption;
+  a live-receive path wanting buffer-and-re-request needs its own entry point. The precondition
+  is now stated in the method contract — **DOD-DOC-DELIVERY-1 must not route live receives
+  through `applyUpdate` without deciding this.**
+- Trailing-byte malleability stays the gate's job, not the engine's — but it means
+  `envelopeHash` is not a stable identifier for document state, so hash-based dedupe cannot
+  recognise a re-encoded duplicate.
+- `DocumentEngine` still has **zero non-test importers**. The "no consumer, no ship" clock is
+  running on the engine itself now; DOD-DOC-WRITE-1 is the consumer.
+
+### Gates
+
+`test` **2567 passed / 11 skipped, 233 files** · `lint` · `typecheck` · `build` clean.

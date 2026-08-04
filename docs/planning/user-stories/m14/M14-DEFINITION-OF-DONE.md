@@ -128,9 +128,15 @@ description: >
   input using a concatenation stand-in, which is associative and order-only; Yjs merge is
   neither, so the property that can actually fail (that replaying in log order reconstructs the
   same CRDT state) is unproven until here.
-  (ii) the engine's `ReplayFn` receives the WHOLE ordered log, including payload-free withdrawal
-  and rejection rows, and must exclude a withdrawn update from the fold — the store deliberately
-  does not filter, so this is the engine's to get right.
+  (ii) **CORRECTED 2026-08-04 — this AC was wrong as first written.** It said the engine must
+  *exclude* a withdrawn update from the fold. §16.4 says the opposite: withdrawing "rolls the
+  change back locally (Yjs undo) and writes a withdrawal record into the log beside the original
+  envelope — marked withdrawn, never deleted, so the log stays intact", and rejection resolves by
+  supersession, "inverses, not erasure" (§3.2). **A withdrawal record excludes NOTHING** — the
+  undo is an ordinary update in the log and replay applies every payload in order. Exclusion is
+  unsound in a CRDT log (measured: Yjs operations are causally chained, so dropping any but the
+  last envelope makes the document permanently unrebuildable) and it hands any sender an erasure
+  vector against any other's content, since nothing upstream validates authorship of a reference.
   (iii) it must call `verifyChainLinkage` (or `rebuildSnapshot`, which does) before trusting any
   materialized state; linkage verification checks no signature and no content hash.
   Plus the daemon's Y.Doc lifecycle: create from starting
