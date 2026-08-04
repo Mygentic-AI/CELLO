@@ -1133,3 +1133,63 @@ cross-sender one — neither of which the original tests could reach.
 ### Gates
 
 `test` **2567 passed / 11 skipped, 233 files** · `lint` · `typecheck` · `build` clean.
+
+---
+
+## Entry 14 — 2026-08-04 — DOD-DOC-WRITE-1 scoped (opens when ENGINE-1's pass two lands)
+
+Prepared while the engine's second review runs, so the unit can start on the verdict rather than
+after it. **Nothing implemented yet.**
+
+### The design, in the spec's own terms (§16.2)
+
+> "The daemon materializes each document as a real file in a workspace directory. The agent edits
+> it with its ordinary tools; the human can open the same file. On publish, the daemon diffs the
+> file against the last-known projection and converts the diff into Yjs operations."
+
+**No new editing surface exists.** That is the load-bearing sentence: the agent uses Read/Edit on
+an ordinary file, and the CRDT is entirely the daemon's business. It is also why diff coarseness
+is acceptable — publish-on-intent (§5) already makes updates coarse intentional batches, so
+diff-granularity operations are the granularity the design wants.
+
+### The insight to preserve — two mechanisms are one mechanism
+
+§16.2's incoming direction: fold the agent's unpublished file edits into the `Y.Doc` as local
+operations FIRST, then merge the incoming update, then rewrite the file. If the merge touched
+regions the agent had unpublished edits in, **that is precisely §4.1's overlap flag**. The flag is
+not a separate feature to compute — it falls out of the fold order. Getting the order wrong loses
+the flag and silently clobbers the agent's unpublished work.
+
+### Clause checklist
+
+- [ ] W1. Per-agent workspace directory; each document a real file, keyed on
+      `agent_id`/`document_id` (never a name — a filename is display, the id is identity).
+- [ ] W2. **Publish:** diff the file against the last-known projection → Yjs operations.
+      Text diff for text types, key diff for JSON (`documentType` decides, and after ENGINE-1's
+      review the text accessors are explicitly text-root-only, so a JSON document must not be
+      routed through them).
+- [ ] W3. **Admission, in this order:** fold unpublished local edits as local ops → merge the
+      incoming update → rewrite the file. Order is the whole design; a test pins it.
+- [ ] W4. Overlap flag computed from whether the merge touched regions holding unpublished local
+      edits — derived from the fold, not tracked separately.
+- [ ] W5. Round-trip: edit → publish → apply on a second doc → materialize → identical content.
+- [ ] W6. Concurrent edits on both sides → both converge → overlap flag true **exactly when**
+      regions overlap (the DoD says exactly when, so the negative case is as load-bearing as the
+      positive).
+- [ ] W7. Gates green.
+
+### Falsification, before any code
+
+- **Does the engine expose what this needs?** It has create/apply/encode/snapshot/restore and
+  text-root accessors. It does NOT have a diff, and it should not — diffing is the write path's
+  job, and the engine stays the Yjs boundary. WRITE-1 supplies ops TO the engine.
+- **Whose job is the file?** Not the store's (it persists envelopes and snapshots, not files) and
+  not the engine's (it is the Yjs boundary). A third module. This keeps the "no consumer" clock
+  honest: WRITE-1 is the engine's first real importer.
+- **What breaks?** Nothing yet — no production path reaches any of the three modules. The risk is
+  the opposite: three modules and still no caller, so the wiring unit (P2's DELIVERY-1/TOOLS-1)
+  must not be deferred indefinitely or M14 becomes a library nobody calls.
+- **Carried in from ENGINE-1's review:** `applyUpdate` REFUSES an out-of-order update rather than
+  buffering it. The admission path folds local edits before merging, so it must not hand the
+  engine an update whose predecessors are absent — if the write path ever receives out of order,
+  that is DELIVERY-1's contract to fix, not something to paper over here.
