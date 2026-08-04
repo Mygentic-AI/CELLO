@@ -73,17 +73,45 @@ function decodeSignedLastSeenSeq(cbor: Uint8Array): number | null {
  * SEAL acknowledgement would falsely mark a malicious unanswered tail as answered).
  */
 function sealCeremonyLeafIndices(leaves: RelaySealLeaf[]): Set<number> {
-  const excluded = new Set<number>();
-  if (leaves.length < 2) return excluded;
-  const last = leaves[leaves.length - 1]!;
-  const secondLast = leaves[leaves.length - 2]!;
-  if (last.kind !== "ctrl" || secondLast.kind !== "ctrl") return excluded;
-  const lastSender = Buffer.from(last.s2.sender_pubkey).toString("hex");
-  const secondLastSender = Buffer.from(secondLast.s2.sender_pubkey).toString("hex");
-  if (lastSender === secondLastSender) return excluded;
-  excluded.add(leaves.length - 1);
-  excluded.add(leaves.length - 2);
-  return excluded;
+  const pair = findSealCeremonyPair(leaves);
+  return pair ? new Set([pair.initiatorIndex, pair.responderIndex]) : new Set<number>();
+}
+
+/**
+ * Locate the closing bilateral SEAL ceremony: the last two `ctrl` leaves, from distinct
+ * participants, in the trailing region. Returns their indices, initiator first (the party
+ * whose SEAL leaf came earlier), or null if there is no such pair.
+ *
+ * Found BY KIND, never by position (DOD-DOC-LEAF-1). Document leaves (0x04/0x05) ride the
+ * same tree and are delivered MECHANICALLY by a peer's daemon, so one can land between the
+ * two SEAL leaves: the relay flips a session out of `active` only once BOTH ctrl leaves
+ * exist (relay-node #maybeSubmitBilateralSeal), so while the first SEAL is outstanding a
+ * document submit is still accepted. Under the old positional test that shape failed
+ * verification outright — an unrelated background sync destroyed a valid seal.
+ *
+ * A `msg` leaf ENDS the ceremony region: content means the closing run is behind us.
+ *
+ * This is the single definition of "which leaves are the ceremony". Every consumer — seal
+ * verification, initiator derivation, and the `answered` exclusion — reads it from here,
+ * because two copies of this rule drift apart exactly the way the positional one did.
+ */
+export function findSealCeremonyPair(
+  leaves: readonly RelaySealLeaf[],
+): { initiatorIndex: number; responderIndex: number } | null {
+  const ctrlIndices: number[] = [];
+  for (let i = leaves.length - 1; i >= 0; i--) {
+    const kind = leaves[i]!.kind;
+    if (kind === "doc" || kind === "reject") continue;
+    if (kind !== "ctrl") break;
+    ctrlIndices.push(i);
+    if (ctrlIndices.length === 2) break;
+  }
+  if (ctrlIndices.length < 2) return null;
+  const [responderIndex, initiatorIndex] = ctrlIndices as [number, number];
+  const responderSender = Buffer.from(leaves[responderIndex]!.s2.sender_pubkey).toString("hex");
+  const initiatorSender = Buffer.from(leaves[initiatorIndex]!.s2.sender_pubkey).toString("hex");
+  if (responderSender === initiatorSender) return null;
+  return { initiatorIndex, responderIndex };
 }
 
 /**

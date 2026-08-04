@@ -1128,6 +1128,41 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
 
   // ─── AC-010: seal processing → session_sealed to both clients ─────────────────
 
+  // DOD-DOC-LEAF-1 (review F1): a document leaf can land BETWEEN the two SEAL ctrl leaves,
+  // because the relay only flips a session out of "active" once both ctrl leaves exist. The
+  // ceremony pair must be found BY KIND, not by position — otherwise an unrelated background
+  // document sync destroys an otherwise valid bilateral seal.
+  it("DOD-DOC-LEAF-1: a doc leaf between the two SEAL leaves does not break the seal", async () => {
+    const keyA = generateKeypair();
+    const keyB = generateKeypair();
+
+    const { stream: streamA, reader: readerA } = await connectAndAuth(keyA);
+    const { reader: readerB, pubkeyHex: hexB } = await connectAndAuth(keyB);
+
+    sendFrame(streamA, CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+    }));
+
+    const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
+    await readerB.readDecoded();
+    if (frameA?.type !== "session_assignment") throw new Error("no assignment");
+    const sessionId = frameA.assignment.session_id;
+
+    const sealData = await buildValidSealData(sessionId, keyA, keyB, { docLeafBetweenCtrls: true });
+    relay.sealData = sealData;
+
+    const sealResult = await dirNode.directory.processSeal(sessionId, sealData);
+    expect(sealResult.ok, `seal must survive a document leaf in the ceremony region: ${JSON.stringify(sealResult)}`).toBe(true);
+
+    const sealedA = decodeOutboundSignalingFrame(await readerA.readDecoded());
+    const sealedB = decodeOutboundSignalingFrame(await readerB.readDecoded());
+    expect(sealedA?.type).toBe("session_sealed");
+    expect(sealedB?.type).toBe("session_sealed");
+  }, 30_000);
+
   it("AC-010: valid seal submission results in session_sealed on both clients' streams", async () => {
     const keyA = generateKeypair();
     const keyB = generateKeypair();
@@ -1790,7 +1825,12 @@ describe("Regression: relay_register multiaddr updates relay adapter dial target
 async function buildValidSealData(
   sessionId: Uint8Array,
   keyA: ReturnType<typeof generateKeypair>,
-  keyB: ReturnType<typeof generateKeypair>
+  keyB: ReturnType<typeof generateKeypair>,
+  // DOD-DOC-LEAF-1: insert a 0x04 document leaf BETWEEN the two SEAL ctrl leaves. The relay
+  // flips a session to "sealing" only once TWO ctrl leaves from distinct senders exist
+  // (relay-node #maybeSubmitBilateralSeal), so while the first SEAL is outstanding the session
+  // is still "active" and accepts a document submit. This shape is reachable in production.
+  opts: { docLeafBetweenCtrls?: boolean } = {}
 ): Promise<RelaySealData> {
   const pubkeyA = new Uint8Array(await keyA.getPublicKey());
   const pubkeyB = new Uint8Array(await keyB.getPublicKey());
@@ -1841,19 +1881,59 @@ async function buildValidSealData(
   if (!s2ResultA2.ok) throw new Error("buildStructure2 failed A2");
   const s2CborA2 = encodeStructure2(s2ResultA2.structure2);
 
-  const finalRoot = merkleRoot(buildMerkleTree([
+  if (!opts.docLeafBetweenCtrls) {
+    const finalRoot = merkleRoot(buildMerkleTree([
+      { kind: "msg", data: s2CborA },
+      { kind: "ctrl", data: s2CborB },
+      { kind: "ctrl", data: s2CborA2 },
+    ]));
+
+    return {
+      leaves: [
+        { kind: "msg", s2: s2ResultA.structure2, structure1_cbor: s1Tbs },
+        { kind: "ctrl", s2: s2ResultB.structure2, structure1_cbor: s1TbsB },
+        { kind: "ctrl", s2: s2ResultA2.structure2, structure1_cbor: s1TbsA2 },
+      ],
+      seq_count: 3,
+      merkle_root: finalRoot,
+    };
+  }
+
+  // ── Document leaf from B at seq 3, between B's SEAL (seq 2) and A's SEAL (now seq 4) ──
+  const timestamp3 = (tsMs + 3) > 0xffffffff ? BigInt(tsMs + 3) : tsMs + 3;
+  const s1TbsDoc = CBOR_ENC.encode([1, contentHash, pubkeyB, sessionId, 1, timestamp3]);
+  const s1SigDoc = new Uint8Array(await keyB.sign(s1TbsDoc));
+  const s2ResultDoc = buildStructure2(3, pubkeyB, contentHash, s1SigDoc, prevRoot3);
+  if (!s2ResultDoc.ok) throw new Error("buildStructure2 failed doc");
+  const s2CborDoc = encodeStructure2(s2ResultDoc.structure2);
+
+  // A's SEAL ctrl leaf moves to seq 4, chaining after the doc leaf.
+  const prevRoot4 = merkleRoot(buildMerkleTree([
     { kind: "msg", data: s2CborA },
     { kind: "ctrl", data: s2CborB },
-    { kind: "ctrl", data: s2CborA2 },
+    { kind: "doc", data: s2CborDoc },
+  ]));
+  const s1TbsA3 = CBOR_ENC.encode([1, contentHash, pubkeyA, sessionId, 2, timestamp3]);
+  const s1SigA3 = new Uint8Array(await keyA.sign(s1TbsA3));
+  const s2ResultA3 = buildStructure2(4, pubkeyA, contentHash, s1SigA3, prevRoot4);
+  if (!s2ResultA3.ok) throw new Error("buildStructure2 failed A3");
+  const s2CborA3 = encodeStructure2(s2ResultA3.structure2);
+
+  const finalRootDoc = merkleRoot(buildMerkleTree([
+    { kind: "msg", data: s2CborA },
+    { kind: "ctrl", data: s2CborB },
+    { kind: "doc", data: s2CborDoc },
+    { kind: "ctrl", data: s2CborA3 },
   ]));
 
   return {
     leaves: [
       { kind: "msg", s2: s2ResultA.structure2, structure1_cbor: s1Tbs },
       { kind: "ctrl", s2: s2ResultB.structure2, structure1_cbor: s1TbsB },
-      { kind: "ctrl", s2: s2ResultA2.structure2, structure1_cbor: s1TbsA2 },
+      { kind: "doc", s2: s2ResultDoc.structure2, structure1_cbor: s1TbsDoc },
+      { kind: "ctrl", s2: s2ResultA3.structure2, structure1_cbor: s1TbsA3 },
     ],
-    seq_count: 3,
-    merkle_root: finalRoot,
+    seq_count: 4,
+    merkle_root: finalRootDoc,
   };
 }

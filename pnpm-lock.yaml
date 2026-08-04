@@ -19,7 +19,7 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.2
-        version: 3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.0.0
         version: 8.59.1(@typescript-eslint/parser@8.59.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4)(typescript@5.9.3)
@@ -55,10 +55,10 @@ importers:
         version: link:../interfaces
       '@cello-protocol/protocol-types':
         specifier: latest
-        version: 0.0.35
+        version: 0.0.41
       '@cello-protocol/transport':
         specifier: latest
-        version: 0.0.37
+        version: 0.0.43
       '@google-cloud/kms':
         specifier: ^5.7.0
         version: 5.7.0
@@ -86,13 +86,13 @@ importers:
     devDependencies:
       '@cello-protocol/daemon':
         specifier: latest
-        version: 0.0.93
+        version: 0.0.120
       '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.2)
@@ -122,16 +122,16 @@ importers:
         version: link:../interfaces
       '@cello-protocol/protocol-types':
         specifier: latest
-        version: 0.0.35
+        version: 0.0.41
       '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
       '@cello-protocol/transport':
         specifier: latest
-        version: 0.0.37
+        version: 0.0.43
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.2)
@@ -152,7 +152,7 @@ importers:
     dependencies:
       '@cello-protocol/protocol-types':
         specifier: latest
-        version: 0.0.35
+        version: 0.0.41
       '@noble/curves':
         specifier: 2.2.0
         version: 2.2.0
@@ -193,10 +193,10 @@ importers:
         version: link:../interfaces
       '@cello-protocol/protocol-types':
         specifier: latest
-        version: 0.0.35
+        version: 0.0.41
       '@cello-protocol/transport':
         specifier: latest
-        version: 0.0.37
+        version: 0.0.43
       '@chainsafe/libp2p-noise':
         specifier: ^17.0.0
         version: 17.0.0
@@ -236,17 +236,17 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
 
   packages/test-fixtures:
     dependencies:
       '@cello-protocol/protocol-types':
         specifier: latest
-        version: 0.0.35
+        version: 0.0.41
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@types/node':
         specifier: 25.6.2
         version: 25.6.2
@@ -547,13 +547,13 @@ packages:
     resolution: {integrity: sha512-sR127Edmtg8oXxzrK6GSrPColQH4eHFM7KUM6hPH3c3B5o4nwlozH+DuSByEjGGKesAhyxrB9HdNbUKmgqKRjw==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/daemon@0.0.93':
-    resolution: {integrity: sha512-NMUI52QZb0tMT7FOVPSAU5/ZvVlbSkcNisSvXi1YiH6LEZv72omkt6HIW56x4DVZef6kD4lxXtmzWv3FEnsLBA==}
+  '@cello-protocol/daemon@0.0.120':
+    resolution: {integrity: sha512-20jM0WG79W6b1Ho+fMp5BSmx2N9P40onyOQnO/Mhs7XxOMva3drfb9bW2K9eGg0l8XF8ZrD0Fuf/tPOrBIVC9g==}
     engines: {node: '>=24'}
     hasBin: true
 
-  '@cello-protocol/gateway@0.0.18':
-    resolution: {integrity: sha512-9xaEw4Hy7KLQz/9SG8wt3vObAy91V8dqRrxrgl24x/mU8ErlnBgz0Y9E3SCpQfjios2NP52L7JVtOWNRTqbUow==}
+  '@cello-protocol/gateway@0.0.23':
+    resolution: {integrity: sha512-tL2ZmARgnE979MuRtq0Q5/7u5mMmnJp2dRTESDNWzpeoHHwDmbw5LbWRoQkyfN54kKGTBGjY0nEO7KWKlXw3GQ==}
     engines: {node: '>=24'}
     hasBin: true
 
@@ -569,8 +569,16 @@ packages:
     resolution: {integrity: sha512-cGSCw34ktipZq8ExKJlIISWAHBt3fErxYuJNadxopVT+93Cp/O36Klc/KpWkzmW/tXxGWxTkFVWFm2wCu2myEQ==}
     engines: {node: '>=24'}
 
+  '@cello-protocol/protocol-types@0.0.41':
+    resolution: {integrity: sha512-APCLrdocgYrVn5vVUXbKgOv1BPOgIkUAwyTkzdjgqVuAClbACDrPYVKwTNzgnuUPkV3uzXk/eEDrweYltdhjAQ==}
+    engines: {node: '>=24'}
+
   '@cello-protocol/transport@0.0.37':
     resolution: {integrity: sha512-c58acPRiZCff09zR4z2H9WdP3dPEQjxuIebXaEL0ts6aV6WD5bTr6VE2CjFrMK+P3Xba55GfMv6+oXavjOWrkA==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/transport@0.0.43':
+    resolution: {integrity: sha512-kpjMHKHpm/4Lin+JfS1opFvVbkfOuGNDxaLOpBxFqYwo2CP+bZTKIi4kKBjyihU+4br55SHnM7t4cF+gvP9teg==}
     engines: {node: '>=24'}
 
   '@chainsafe/as-chacha20poly1305@0.1.0':
@@ -3731,6 +3739,10 @@ packages:
     resolution: {integrity: sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==}
     engines: {node: '>=12'}
 
+  picomatch@4.0.5:
+    resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
+    engines: {node: '>=12'}
+
   pkce-challenge@5.0.1:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
     engines: {node: '>=16.20.0'}
@@ -3841,8 +3853,8 @@ packages:
     resolution: {integrity: sha512-VXUdgSiUrE/WZXn6gUIVVIsg0+Hp6VPZPOaHCay+OuFKy6u/8ktmeNEf+U5qSA8jzGGFsg8jrDNu1BeHpz2pJA==}
     engines: {node: '>=10'}
 
-  re2@1.26.0:
-    resolution: {integrity: sha512-QTEfFp0nu1eT/HKKZC+2BKM9Lb8uqprGkcHhro9r3giiKS+1SnNZBZ1m7C7Axi/VR1YGXiu3mp35UA53yHAuNw==}
+  re2@1.26.1:
+    resolution: {integrity: sha512-oi79a4h6EO3PAwNsDMWgeCcsRGQEUa52DIgOiFTZGDEZocEXG9h+oXy0qZqndo47huUeJuVWSoOJIEhOupqOcg==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
   readable-stream@3.6.2:
@@ -4121,8 +4133,8 @@ packages:
     resolution: {integrity: sha512-ujeqbceABgwMZxEJnk2HDY2DlnUZ+9oEcb1KzTVfYHio0UE6dG71n60d8D2I4qNvleWrrXpmjpt7vZeF1LnMZQ==}
     engines: {node: '>=6'}
 
-  tar@7.5.20:
-    resolution: {integrity: sha512-9FcyK4PA6+WbzlTM9WhQm6vB5W7cP7dUiPsv1g7YDwEQnQ1CGpK3MGlKk/ITVWMk05kHZuBhmVhiv8LZoy/PFQ==}
+  tar@7.5.22:
+    resolution: {integrity: sha512-MFO/QzvtAOmJbkhOaCTvbGcFN9L9b+JunIsDwaKljSOdcLMea3NJ1k9Usz/rjdfSXTq4dfzfeS7W4p4YOAAHeA==}
     engines: {node: '>=18'}
 
   teeny-request@10.1.4:
@@ -4141,6 +4153,10 @@ packages:
 
   tinyglobby@0.2.16:
     resolution: {integrity: sha512-pn99VhoACYR8nFHhxqix+uvsbXineAasWm5ojXoN8xEwK5Kd3/TrhNn1wByuD52UxWRLy8pu+kRMniEi6Eq9Zg==}
+    engines: {node: '>=12.0.0'}
+
+  tinyglobby@0.2.17:
+    resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
 
   tinypool@1.1.1:
@@ -4221,8 +4237,8 @@ packages:
   undici-types@7.19.2:
     resolution: {integrity: sha512-qYVnV5OEm2AW8cJMCpdV20CDyaN3g0AjDlOGf1OW4iaDEx8MwdtChUp4zu4H0VP3nDRF/8RKWH+IPp9uW0YGZg==}
 
-  undici@8.7.0:
-    resolution: {integrity: sha512-N7iQtfyLhIMOFgQubvmLV26svHpO0bqKnAiWotTQCVKCmWrcGbBotPuW1x+xwYZ2VHdSTVUfPQQnlEt1/LouTQ==}
+  undici@8.10.0:
+    resolution: {integrity: sha512-HvltHd7avK13QIw/oLe4qoOLyoVSoafqJ2jYOrtMRBkbYT31eiBQ8O0ehRKZiEZCMEyLFQNIADpgCWC5fALvYQ==}
     engines: {node: '>=22.19.0'}
 
   unlimited-timeout@0.1.0:
@@ -5070,12 +5086,12 @@ snapshots:
       '@noble/hashes': 2.2.0
       '@oqs/liboqs-js': 0.15.1
 
-  '@cello-protocol/daemon@0.0.93':
+  '@cello-protocol/daemon@0.0.120':
     dependencies:
-      '@cello-protocol/crypto': 0.0.33
-      '@cello-protocol/gateway': 0.0.18
-      '@cello-protocol/protocol-types': 0.0.35
-      '@cello-protocol/transport': 0.0.37
+      '@cello-protocol/crypto': 0.0.39
+      '@cello-protocol/gateway': 0.0.23
+      '@cello-protocol/protocol-types': 0.0.41
+      '@cello-protocol/transport': 0.0.43
       '@libp2p/interface': 3.2.2
       '@signalapp/sqlcipher': 3.3.5
       cbor-x: 1.6.4
@@ -5084,12 +5100,12 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@cello-protocol/gateway@0.0.18':
+  '@cello-protocol/gateway@0.0.23':
     dependencies:
       re2-wasm: 1.0.2
     optionalDependencies:
       '@signalapp/sqlcipher': 3.3.5
-      re2: 1.26.0
+      re2: 1.26.1
 
   '@cello-protocol/interfaces@0.0.3':
     dependencies:
@@ -5105,10 +5121,40 @@ snapshots:
       '@cello-protocol/crypto': 0.0.33
       cbor-x: 1.6.4
 
+  '@cello-protocol/protocol-types@0.0.41':
+    dependencies:
+      '@cello-protocol/crypto': 0.0.39
+      cbor-x: 1.6.4
+
   '@cello-protocol/transport@0.0.37':
     dependencies:
       '@cello-protocol/crypto': 0.0.33
       '@cello-protocol/protocol-types': 0.0.35
+      '@chainsafe/libp2p-noise': 17.0.0
+      '@chainsafe/libp2p-yamux': 8.0.1
+      '@libp2p/autonat': 3.0.20(patch_hash=4204195cc5d8c953020547b5655983198d96374b3eba3b831ca70496a73cf935)
+      '@libp2p/circuit-relay-v2': 4.2.3
+      '@libp2p/crypto': 5.1.21
+      '@libp2p/dcutr': 3.0.18
+      '@libp2p/identify': 4.1.3
+      '@libp2p/interface': 3.2.2
+      '@libp2p/peer-id': 6.0.12
+      '@libp2p/tcp': 11.0.18
+      '@libp2p/websockets': 10.1.11
+      '@multiformats/multiaddr': 13.0.3
+      '@noble/curves': 2.2.0
+      it-length-prefixed: 10.0.1
+      it-pipe: 3.0.1
+      libp2p: 3.2.3
+      uint8arrays: 5.1.1
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
+  '@cello-protocol/transport@0.0.43':
+    dependencies:
+      '@cello-protocol/crypto': 0.0.39
+      '@cello-protocol/protocol-types': 0.0.41
       '@chainsafe/libp2p-noise': 17.0.0
       '@chainsafe/libp2p-yamux': 8.0.1
       '@libp2p/autonat': 3.0.20(patch_hash=4204195cc5d8c953020547b5655983198d96374b3eba3b831ca70496a73cf935)
@@ -5183,14 +5229,14 @@ snapshots:
 
   '@claude-flow/swarm@3.0.0-alpha.1': {}
 
-  '@claude-flow/testing@3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
+  '@claude-flow/testing@3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
     dependencies:
       '@claude-flow/memory': 3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2)
       '@claude-flow/shared': 3.0.0-alpha.1
       '@claude-flow/swarm': 3.0.0-alpha.1
       vitest: 3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0)
 
-  '@claude-flow/testing@3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
+  '@claude-flow/testing@3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
     dependencies:
       '@claude-flow/memory': 3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2)
       '@claude-flow/shared': 3.0.0-alpha.1
@@ -7643,6 +7689,11 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.4
 
+  fdir@6.5.0(picomatch@4.0.5):
+    optionalDependencies:
+      picomatch: 4.0.5
+    optional: true
+
   fetch-blob@3.2.0:
     dependencies:
       node-domexception: 1.0.0
@@ -8417,10 +8468,10 @@ snapshots:
       graceful-fs: 4.2.11
       nopt: 10.0.1
       proc-log: 7.0.0
-      semver: 7.7.4
-      tar: 7.5.20
-      tinyglobby: 0.2.16
-      undici: 8.7.0
+      semver: 7.8.5
+      tar: 7.5.22
+      tinyglobby: 0.2.17
+      undici: 8.10.0
       which: 7.0.0
     optional: true
 
@@ -8585,6 +8636,9 @@ snapshots:
 
   picomatch@4.0.4: {}
 
+  picomatch@4.0.5:
+    optional: true
+
   pkce-challenge@5.0.1: {}
 
   platform@1.3.6:
@@ -8728,7 +8782,7 @@ snapshots:
 
   re2-wasm@1.0.2: {}
 
-  re2@1.26.0:
+  re2@1.26.1:
     dependencies:
       install-artifact-from-github: 1.7.0
       nan: 2.28.0
@@ -9101,7 +9155,7 @@ snapshots:
       inherits: 2.0.4
       readable-stream: 3.6.2
 
-  tar@7.5.20:
+  tar@7.5.22:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0
@@ -9138,6 +9192,12 @@ snapshots:
     dependencies:
       fdir: 6.5.0(picomatch@4.0.4)
       picomatch: 4.0.4
+
+  tinyglobby@0.2.17:
+    dependencies:
+      fdir: 6.5.0(picomatch@4.0.5)
+      picomatch: 4.0.5
+    optional: true
 
   tinypool@1.1.1: {}
 
@@ -9211,7 +9271,7 @@ snapshots:
 
   undici-types@7.19.2: {}
 
-  undici@8.7.0:
+  undici@8.10.0:
     optional: true
 
   unlimited-timeout@0.1.0: {}

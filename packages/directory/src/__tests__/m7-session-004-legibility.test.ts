@@ -393,24 +393,28 @@ describe("M7-SESSION-004 (directory): buildSealLegibility", () => {
 // silently satisfy the malicious-unanswered-tail check on its operator's behalf —
 // the exact property `answered` exists to expose. Only 'msg' leaves answer.
 describe("DOD-DOC-LEAF-1: doc/reject leaves in the legibility derivation", () => {
-  it("a trailing doc leaf does NOT fake a SEAL ceremony acknowledgement", async () => {
+  // The REACHABLE unilateral shape: A seals alone, B never returns, and B's daemon delivers a
+  // document update afterwards. Both halves matter — B must not gain a 'live' marker it never
+  // earned, and A must not LOSE the one it did. The second is the property at risk: a walk that
+  // stops at the doc leaf finds no ceremony at all and downgrades A to 'absent'.
+  it("a trailing doc leaf neither fakes an acknowledgement nor erases the real one", async () => {
     const a = generateKeypair();
     const b = generateKeypair();
-    // A seals; B never returns, but a doc leaf from B trails the ceremony.
     const leaves = [
       await makeLeaf(a, "msg", 1, 0),
       await makeLeaf(a, "ctrl", 2, 0),
       await makeLeaf(b, "doc", 3, 2),
     ];
     const leg = buildSealLegibility(leaves);
+    const aHex = await pkHex(a);
     const bHex = await pkHex(b);
+    const aParty = leg.participants.find((p) => Buffer.from(p.pubkey).toString("hex") === aHex);
     const bParty = leg.participants.find((p) => Buffer.from(p.pubkey).toString("hex") === bHex);
-    expect(bParty).toBeDefined();
-    // B produced no ctrl leaf, so B is 'absent' — a doc leaf is not an acknowledgement.
-    expect(bParty!.attestation_mode).toBe("absent");
+    expect(aParty?.attestation_mode).toBe("live");   // A DID seal — the doc leaf must not hide it
+    expect(bParty?.attestation_mode).toBe("absent"); // a doc leaf is not an acknowledgement
   });
 
-  it("a doc or reject leaf never becomes final_message — only content does", async () => {
+  it("(characterization) a doc or reject leaf never becomes final_message — pre-existing kind !== msg filter", async () => {
     const a = generateKeypair();
     const b = generateKeypair();
     const leaves = [
@@ -457,6 +461,9 @@ describe("DOD-DOC-LEAF-1: doc/reject leaves in the legibility derivation", () =>
     const bHex = await pkHex(b);
     expect(Buffer.from(leg.final_message.sender_pubkey).toString("hex")).toBe(bHex);
     expect(leg.final_message.seq).toBe(3);
+    // A's ctrl leaf at seq 4 is excluded as ceremony, so B's own final message is unanswered —
+    // the point being that the DOC leaf at seq 2 changes nothing either way.
+    expect(leg.final_message.answered).toBe(false);
   });
 });
 
@@ -465,14 +472,18 @@ describe("DOD-DOC-LEAF-1: doc/reject leaves in the legibility derivation", () =>
 // produced a SEAL acknowledgement stays 'live', or an ordinary bilateral seal would be
 // downgraded to 'absent' by an unrelated background delivery.
 describe("DOD-DOC-LEAF-1: a trailing doc leaf must not erase a live attestation", () => {
-  it("both parties stay 'live' when a doc leaf lands after the bilateral ceremony", async () => {
+  // The reachable bilateral shape is a doc leaf BETWEEN the two SEAL leaves: the relay flips a
+  // session out of "active" only once both ctrl leaves exist, so that is the window in which a
+  // document submit is still accepted. (A doc leaf strictly AFTER both ctrl leaves cannot occur —
+  // the relay is already sealing — so it is not the case worth pinning.)
+  it("both parties stay 'live' when a doc leaf sits between the two SEAL leaves", async () => {
     const a = generateKeypair();
     const b = generateKeypair();
     const leaves = [
       await makeLeaf(a, "msg", 1, 0),
       await makeLeaf(a, "ctrl", 2, 0),
-      await makeLeaf(b, "ctrl", 3, 2),
-      await makeLeaf(b, "doc", 4, 3),
+      await makeLeaf(b, "doc", 3, 2),
+      await makeLeaf(b, "ctrl", 4, 3),
     ];
     const leg = buildSealLegibility(leaves);
     expect(leg.participants.map((p) => p.attestation_mode)).toEqual(["live", "live"]);
@@ -481,14 +492,66 @@ describe("DOD-DOC-LEAF-1: a trailing doc leaf must not erase a live attestation"
   it("a content message still ENDS the ceremony region — an earlier ctrl leaf is not the closing run", async () => {
     const a = generateKeypair();
     const b = generateKeypair();
+    // B's ctrl leaf IS part of the closing run; A's, separated from it by a content message, is
+    // not. Under a walk that merely stops at the doc leaf, nobody would be live; under one that
+    // skips doc leaves but ignores the msg boundary, BOTH would be. Only the correct walk gives
+    // exactly {B}.
     const leaves = [
       await makeLeaf(a, "ctrl", 1, 0),
-      await makeLeaf(b, "msg", 2, 1),
+      await makeLeaf(a, "msg", 2, 1),
       await makeLeaf(b, "doc", 3, 2),
+      await makeLeaf(b, "ctrl", 4, 3),
     ];
     const leg = buildSealLegibility(leaves);
-    // A's ctrl leaf is separated from the tail by a CONTENT message, so it is not part of
-    // any closing ceremony — nobody is 'live'.
-    expect(leg.participants.every((p) => p.attestation_mode === "absent")).toBe(true);
+    const aHex = await pkHex(a);
+    const bHex = await pkHex(b);
+    const modeOf = (hex: string) =>
+      leg.participants.find((p) => Buffer.from(p.pubkey).toString("hex") === hex)?.attestation_mode;
+    expect(modeOf(bHex)).toBe("live");
+    expect(modeOf(aHex)).toBe("absent");
+  });
+});
+
+// ─── DOD-DOC-LEAF-1 (review F2): the ceremony exclusion must be doc-transparent too ──
+//
+// `answered` excludes the closing SEAL ctrl leaves, or a bilateral seal would always read
+// answered (the counterparty's own SEAL leaf sits at a higher sequence than the final
+// message). That exclusion used to be positional. With a document leaf trailing the
+// ceremony, a positional lookup finds no pair, excludes nothing, and the counterparty's own
+// SEAL leaf silently satisfies the check — reopening the malicious-tail hole that the
+// exclusion exists to close.
+//
+// This is load-bearing beyond display: `answered` is folded into the FROST-signed seal TBS
+// via bindLegibilityToTbs, so a wrong value is SIGNED and the client's independent re-derive
+// diverges.
+describe("DOD-DOC-LEAF-1: ceremony exclusion survives a trailing document leaf", () => {
+  it("a malicious tail stays answered=false when a doc leaf trails the bilateral ceremony", async () => {
+    const a = generateKeypair();
+    const b = generateKeypair();
+    // A sends the final content message; BOTH seal; then B's daemon delivers a document
+    // update. B never replied with content, so the tail is unanswered.
+    const leaves = [
+      await makeLeaf(a, "msg", 1, 0),
+      await makeLeaf(a, "ctrl", 2, 1),
+      await makeLeaf(b, "ctrl", 3, 2),
+      await makeLeaf(b, "doc", 4, 3),
+    ];
+    const leg = buildSealLegibility(leaves);
+    expect(leg.final_message.answered).toBe(false);
+  });
+
+  it("the exclusion also holds with the doc leaf BETWEEN the two SEAL leaves", async () => {
+    const a = generateKeypair();
+    const b = generateKeypair();
+    const leaves = [
+      await makeLeaf(a, "msg", 1, 0),
+      await makeLeaf(a, "ctrl", 2, 1),
+      await makeLeaf(b, "doc", 3, 2),
+      await makeLeaf(b, "ctrl", 4, 3),
+    ];
+    const leg = buildSealLegibility(leaves);
+    expect(leg.final_message.answered).toBe(false);
+    // And both parties still read 'live' — they both produced a SEAL acknowledgement.
+    expect(leg.participants.map((p) => p.attestation_mode)).toEqual(["live", "live"]);
   });
 });

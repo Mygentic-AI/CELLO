@@ -95,3 +95,41 @@ export function reconstructCarriedSealLeaves(
   }
   return { ok: true, leaves };
 }
+
+/**
+ * Validate the `leaves` array of a `seal_submission` frame before it reaches Merkle
+ * reconstruction (DOD-DOC-LEAF-1).
+ *
+ * `seal_submission` arrives on /cello/directory-relay/1.0.0, which authenticates only
+ * `relay_register` — so the frame is accepted from any dialer, and unlike the unilateral carry
+ * no relay receipt binds it. Every other field of a leaf is covered by a signature the directory
+ * verifies downstream; `kind` is not, and it selects the HASH DOMAIN. Two consequences make
+ * validating it here load-bearing rather than defensive:
+ *
+ *   - `LeafInput` includes `kind: "hash"`, which uses the leaf's data AS the leaf hash with no
+ *     domain prefix. Accepting it off the wire would bypass domain separation entirely.
+ *   - buildMerkleTree THROWS on an unrecognized kind (crypto ≥ 0.0.39; it silently coerced to
+ *     the message domain before). Unvalidated, that throw escapes into the stream handler.
+ *
+ * One bad leaf voids the whole submission — a dropped leaf would be an undetected omission.
+ */
+export function validateSealSubmissionLeaves(
+  raw: unknown,
+): { ok: true; leaves: RelaySealData["leaves"] } | { ok: false; reason: string } {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { ok: false, reason: "seal_submission_leaves_malformed" };
+  }
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) {
+      return { ok: false, reason: "seal_submission_leaves_malformed" };
+    }
+    const kind = (entry as { kind?: unknown }).kind;
+    if (typeof kind !== "string" || !SEAL_SUBMISSION_LEAF_KINDS.includes(kind)) {
+      return { ok: false, reason: "seal_submission_leaf_kind_unknown" };
+    }
+  }
+  return { ok: true, leaves: raw as RelaySealData["leaves"] };
+}
+
+/** The only leaf domains a relay may assert on the wire. Mirrors LEAF_KINDS' value set. */
+const SEAL_SUBMISSION_LEAF_KINDS: readonly string[] = Object.values(LEAF_KINDS);

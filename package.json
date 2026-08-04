@@ -1,4 +1,7 @@
 {
+  "//": {
+    "overrides.@types/node": "Pinned because regenerating the lockfile re-resolves @types/node's floating range, and two copies in the tree produce 'IncomingMessage is not assignable to IncomingMessage' at every node:http call site (DOD-DOC-LEAF-1, 2026-08-04). This override SILENTLY wins over the ^25.6.2 declarations in packages/interfaces, test-fixtures, operations-agent and demo -- bump this line together with those, or the declared ranges become a lie. Removable once every package agrees on one major."
+  },
   "name": "trustless-cello",
   "private": true,
   "engines": {
