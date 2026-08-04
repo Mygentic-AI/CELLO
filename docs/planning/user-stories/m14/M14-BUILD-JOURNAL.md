@@ -654,3 +654,102 @@ protection. Asked explicitly. If confirmed, the hang claims in this entry need w
 ### Gates (cello-client, all four)
 
 `test` **2508 passed / 11 skipped** · `lint` clean · `typecheck` clean · `build` clean.
+
+---
+
+## Entry 8 — 2026-08-04 — DOD-DOC-FUZZ-1 reviewed: Entry 7's conclusion was INCOMPLETE
+
+**Commit:** cello-client `m14/fuzz-1` @ bde087a (pushed). Review pass ONE of two.
+
+### ⚠️ Entry 7 is superseded on its central claim
+
+Entry 7 concluded: *"the posture holds — throws are the failure mode; a try/catch contains
+them."* That is true of the shapes I fuzzed and **materially incomplete**. I measured the THROW
+class and declared the posture sound. The class that actually defeats it is the **ACCEPT class**:
+`Y.applyUpdate` returns *normally* for input it cannot integrate.
+
+Reviewer, verbatim: *"the shapes tested exclude the class that actually defeats cap, catch,
+contain, and the assertions do not pin any of the headline numbers."* Both halves were right.
+
+### The finding that changes the gate's design
+
+An update whose dependencies the receiver lacks **does not throw**. It returns `ok`, contributes
+nothing, and is **retained in `doc.store.pendingStructs`** awaiting predecessors that may never
+arrive. Measured: 49 well-formed, sub-cap updates — every one accepted, zero content, all
+retained. A peer streams these until the daemon dies.
+
+**All three legs of §16.7-7 pass this input.** The size cap sees a small update. The try/catch
+sees success. "Structural limits checked on the shadow" has nothing to check, because the shadow
+is *empty*. This is not a gap in the implementation of the posture; it is a gap in the posture.
+
+Three more accept-class shapes, each measured and each now a GATE-1 AC:
+- **No document identity.** A valid update for a DIFFERENT document merges silently. Binding an
+  update to its document is entirely out-of-band work the gate must do.
+- **Silent format confusion.** V2-format bytes are accepted by the v1 decoder and drop all
+  content, no error either way.
+- **The encoding is MALLEABLE.** Trailing bytes past the decoder's cursor are ignored, so
+  unlimited byte strings map to identical document state. **This touches DOD-DOC-LEAF-1, which
+  I closed earlier today:** a `0x04` leaf over *received bytes* is not a canonical commitment —
+  a peer can pad an update to change its leaf hash without changing the document, and two honest
+  peers holding identical state can produce different leaves. The fix belongs in GATE-1/
+  ENVELOPE-1 (hash the re-encoded shadow state; reject trailing bytes), not in the leaf registry,
+  so LEAF-1 stays ✅ — but the property it was assumed to have is weaker than assumed.
+
+### My assertions were the other half of the problem
+
+`expect(typeof res.ok).toBe("boolean")` is a tautology the type system already guarantees — and
+it was the ONLY containment check in the garbage, all-zero and truncation tests. So **neither
+headline number in Entry 7 was actually asserted**, and a Yjs that silently accepted garbage —
+the single worst reversal for a shadow-apply gate — would have kept the file green. They now
+count outcomes and assert totals, on a fresh document per trial (the old one reused a single doc
+across 120 trials, so contamination was never checked either).
+
+### Three detectors that could not fire, now fixed
+
+- **`classify()` could never report a hang.** `Y.applyUpdate` is synchronous, so a true infinite
+  loop never returns and the function's own clock read is unreachable. My Entry 7 suspicion was
+  right and the file's comment claimed the opposite. Renamed `classifyWithBudget` → `"slow"`, the
+  header states plainly that only the per-test timeout catches a real hang, and timeouts dropped
+  120s → 15s so it fires fast instead of four minutes late and unattributed.
+- **The allocation bound measured the wrong counter.** `heapUsed` EXCLUDES typed-array backing
+  stores — verified: a 200 MiB `Uint8Array` moves it by **0.0 MiB** while `arrayBuffers` moves by
+  200. A decoder doing `new Uint8Array(hugeLength)` — precisely the amplification the test is
+  named for — was invisible to it. Now measures `arrayBuffers + external`.
+- **The depth test asserted "returned or threw"**, so a future Yjs that recursed and blew the
+  stack would throw a catchable `RangeError`, read as "threw", and stay green — swallowing the
+  exact receive-side stack-exhaustion reversal. It now asserts success and **walks all 2000
+  levels** so "applied" means more than "did not error".
+
+### Numbers corrected
+
+- `validUpdate()` is **84 bytes**, not the 35 Entry 7 recorded. That 35 came from a throwaway
+  measurement script using a smaller document than the committed helper — a real discipline
+  failure: I journaled a number from a different artifact than the one I shipped. Now pinned by
+  assertion so drift breaks the build.
+- The reviewer and I disagree on the 2000-deep update: it reports 31,880 bytes, I measure
+  **23,880** directly, twice. Both of us are ~an order of magnitude from mattering — the point is
+  that depth is cheap in bytes (≈12 B/level here, so ~87k levels per MiB) — but the disagreement
+  is recorded rather than smoothed over, and the test now pins `< 40,000` so either way a drift
+  is caught.
+
+### Benign shapes, recorded so the coverage question is closed
+
+500,000-character single string: applies in ~0 ms. 5,000 distinct clientIDs: applies in 3 ms
+(20,000 applies in 12 ms but takes ~31 s to *construct*, which is test cost, not receive cost —
+the fleet size is chosen for construction and only the apply is timed).
+
+### `yjs` moved to devDependencies
+
+Its only importer is this test file. Shipping 4.7 MB to every operator for a gate that does not
+exist yet fails **no consumer, no ship**. It returns to `dependencies` when DOD-DOC-GATE-1
+imports it.
+
+### Gates
+
+cello-client: `test` **2512 passed / 11 skipped** · `lint` · `typecheck` · `build` all clean.
+Fuzz suite alone: 16 tests, 2.3 s (was 36 s).
+
+### Status
+
+**IMPLEMENTED, not DONE.** One review pass used; one remains (the cap). The DoD line stays ❌
+until a verdict is quoted.

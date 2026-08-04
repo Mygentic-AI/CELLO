@@ -141,7 +141,27 @@ description: >
   (per DOD-DOC-FUZZ-1's guards). A quarantined update is held, never admitted, never discarded.
   **Every error path in the gate quarantines + emits** — the no-silent-drop invariant is proven
   by tests that inject failures at each stage. The screening rule plugs into this same hook
-  later (DOD-DOC-SCREEN-1) — the hook is built now, the rules are pluggable. — ❌
+  later (DOD-DOC-SCREEN-1) — the hook is built now, the rules are pluggable.
+  **ACs measured by DOD-DOC-FUZZ-1 (§16.7-7's residual risk, now quantified) — the ACCEPT class,
+  which "cap, catch, contain" does NOT catch because Yjs returns success:**
+  (a) **unresolved dependencies** — after the shadow apply, a non-empty `doc.store.pendingStructs`
+  is a REJECTION (`document_update_unresolved_dependencies`), never an admission. Measured: 49
+  well-formed sub-cap updates all accepted, zero content, all retained — a peer streams these
+  until the daemon dies and every leg of the posture passes them.
+  (b) **document binding** — an update carries no document identity, so a valid update for a
+  DIFFERENT document merges silently. Binding is out-of-band and the gate must enforce it.
+  (c) **encoding version** — V2-format bytes are accepted by the v1 decoder and silently drop all
+  content. Pin the version (§16.7-8) and refuse a mismatch.
+  (d) **trailing bytes** — ignored by the decoder, so the encoding is MALLEABLE: unlimited byte
+  strings map to identical state. Reject bytes after the decoder's cursor, and hash the
+  re-encoded shadow state rather than the received bytes (this is why a 0x04 leaf over raw
+  received bytes is not a canonical commitment).
+  (e) **a size FLOOR, not just a cap** — an empty or 1-byte update throws a lib0 decoder string;
+  the minimum valid update is 2 bytes.
+  (f) **an explicit nesting-depth limit** — Yjs does not bound depth at all, and the size cap
+  bounds it poorly (~12 bytes/level, so ~87k levels fit in 1 MiB).
+  (g) **one typed reason for every Yjs throw**, carrying the decoder string as detail — never
+  surfacing `Unexpected end of array` / `Integer out of Range` as the reason. — ❌
 - **DOD-DOC-REJECT-1** [cello-client] — rejection and supersession (§3.2, §16.7-2): a rejection
   is a protocol message AND a `0x05` leaf referencing the rejected envelope's hash; the sender's
   daemon rolls back (Yjs undo — inverses, not erasure) and publishes the superseding update
