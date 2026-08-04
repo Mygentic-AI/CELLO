@@ -5171,3 +5171,99 @@ isolation and in a single clean run.
 Recorded on the DoD line, not fixed: no detector for a peer advertising FEWER tables than we track
 (the node that stops RECEIVING a table still logs a healthy round); `onTableError` optional rather
 than compiler-required; detail-frame handlers unisolated against a version-skewed peer.
+
+---
+
+## Entry 78 — 2026-08-04 — DOD-PARK-DRAIN-1: the drain was hooked to the wrong connection
+
+**Unit:** DOD-PARK-DRAIN-1 (cello-client, Tier P1). **Branch:** `m12/relay-keepalive-park-drain`
+in both repos (worktrees `cello-client-keepalive`, `trustless-cello-keepalive`). Not merged, not
+published — deployment is explicitly out of scope for this session.
+
+**Target, one sentence:** a message parked on a relay reaches a RUNNING receiver daemon, without
+anyone restarting it.
+
+### The clause checklist
+
+| Clause | State |
+|---|---|
+| drain on every successful standing-receiver (re)build | ✅ single fire point in `#tryCreateStandingReceiver`; all three paths converge there |
+| covers the watchdog rebuild path where parking actually happens | ✅ A2, against a real in-process relay killed mid-life |
+| ensure→drain ordering fixed on signaling reconnect | ✅ `reconnect-drain.ts`, B1 |
+| slow periodic backstop drain | ✅ `#parkedDrainBackstopTick`, 5 min default, A4 |
+| error serialization fixed (`[object Object]`) | ✅ `extractErrorMessage` at four sites, D1 |
+| proven across two daemons on two machines, flapping link | ❌ **NOT CLAIMED** — needs deployment. Local substitute is E1: one daemon, real park protocol |
+
+### What was actually wrong
+
+Store-and-forward worked in every part except its trigger. Content parks when the **relay** link
+drops; the only live drain trigger was hooked to **directory signaling** reconnecting — a
+different connection, which on 2026-08-04 stayed up through the entire failed-session window while
+the relay churned seven times. So the drain never fired, and the one path that reliably drains is
+agent start. That is why a `cello logout && cello login` delivered everything instantly: the
+restart was not fixing anything, it was supplying the missing trigger.
+
+The fix moves the trigger to where the parking is: the manager fires a hook at the single point
+every standing-receiver install converges on. A rebuild after a lost reservation IS the parking
+event, seen from the client side.
+
+### The review earned its keep — again
+
+`cello-unit-reviewer` on 86cfd1f returned five blocking-class verdicts. Quoted:
+
+> **SPEC: DEVIATIONS FOUND** — [blocking] the two un-journaled narrowings in the `onConnected`
+> rewrite (F2, F3). … **SILENT FALLBACKS FOUND** — F4 … F1 is HIGH on a different axis (duplicate
+> leaf under concurrent drains) and **is** [blocking]. **ERROR SUBSTITUTION FOUND** — F6 …
+> **HOLLOW TESTS FOUND** — [blocking] T2 …, T3 …, T4 …. **UNPROVEN REMOVAL** — [blocking] the
+> deleted unconditional drain (F2) has a reachable live consumer via the production per-agent
+> startup connect; its deadness was assumed, not established.
+
+> I am not rubber-stamping this: the diff is well-commented and the ordering fix is genuinely
+> right, but it lands in the drain/persistence path and the concurrency guard (F1) and the deleted
+> branch (F2) are the two things a green-test read would sail past.
+
+All seven closed in 7d3fe8c. The two that mattered most:
+
+- **F1 (HIGH).** I took the trigger count from two to five and assumed dedup made redundant drains
+  free. It does not: `ingestReceivedContent` decides "already present" synchronously from the
+  in-memory tree and then **awaits the security gateway before appending**, so two drains pulling
+  the same parked entry can both pass the check and both append — a duplicate leaf, which is the
+  frontier divergence the recovery path exists to prevent. Under the relay churn this unit exists
+  to survive, rebuilds arrive faster than a drain completes, so I had made that race *expected*
+  rather than theoretical. `autoRecoverForAgent` now runs one drain per agent and coalesces
+  concurrent triggers into exactly one re-run (D3: five simultaneous triggers → 2 passes, max
+  concurrency 1).
+- **F2 (removal integrity).** My `onConnected` rewrite gated the drain on `onlineAgents`, which
+  looked like tidying and was a behaviour deletion: production connects directory signaling for
+  every **loaded** agent at startup, started or not, and each of those connects used to drain that
+  agent's mailbox. I had assumed that path dead without checking. The drain is unconditional
+  again; only the ensure stays gated.
+
+### The test the unit was missing
+
+The reviewer's sharpest finding was T1: **nothing in my suite moved an actual parked message.**
+A1-A5 asserted against a recorder hook, B1-B4 against stubs, and C1's relay was a bare libp2p node
+whose pull is *expected to fail*. An implementation that fired the hook into a no-op would have
+passed every test in the file.
+
+E1 now closes it, with a real `/cello/content-park/1.0.0` relay fixture
+(`__tests__/helpers/park-relay.ts`): the daemon comes up and idles, a message is deposited **while
+it runs**, and it is pulled, unsealed, passed through the SEC-1 signature gate, appended as a leaf
+and confirm-deleted from the mailbox. No restart, no reconnect — the backstop sweep alone
+delivers it. That is the DoD's acceptance sentence minus "two machines".
+
+### Gate
+
+`pnpm run test` 2521 passed / 11 skipped / 233 files; `lint`, `typecheck`, `build` clean.
+Revert-tested: removing the two fire points reds A1-A6, C1, D3, D4 and E1; racing the reconnect
+path reds B1-B2; restoring `String(err)` reds D1.
+
+**Honesty note on the run:** two intermediate full-suite runs showed failures in
+`transport/signaling-manager` AC-005 (a status-timing assertion). It passes 3/3 in isolation and in
+a clean full run; it is load-sensitive under a single-worker full sweep, not a regression from this
+diff — but it is flaky and someone should pin it.
+
+### Still open on the line
+
+The two-machine live proof. The line is **🟡 BUILT/UNVERIFIED-LIVE**, not ✅, and cannot be ✅
+until it runs on two daemons against a flapping relay.
