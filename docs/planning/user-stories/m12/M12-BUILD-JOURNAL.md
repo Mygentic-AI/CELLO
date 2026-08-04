@@ -5343,3 +5343,101 @@ timeout one. Parked as **M12-P10** rather than scope-crept into this unit.
 reviewer's, re-run after the fix): GCP→1800000 reds 2; AWS dragged down to match reds 2; idle line
 deleted reds 2; `timeout_sec = 30` reds 1; listener port collision reds 1; **the heredoc bypass now
 reds 2 where it previously passed 5**.
+
+---
+
+## Entry 79 — 2026-08-04 — DOD-RELAY-KEEPALIVE-1: the fix was fine; what it landed in was not
+
+**Unit:** DOD-RELAY-KEEPALIVE-1 (trustless-cello + cello-client, Tier P2). Branch
+`m12/relay-keepalive-park-drain` in both repos. Written out of order — Entry 80 (GCP drift) closed
+first while this unit's review was running (§1a: an out-of-order number at EOF beats a lost entry).
+
+### The verification the work order demanded, and what I could actually get
+
+The line says *verify first with `DEBUG=libp2p:connection-monitor*`*. That needs a live flapping
+WAN link through the GCP relay, and live infra was out of scope for this session. **Not done.**
+What I could get locally, and did:
+
+- **Static, in `node_modules`, not from memory.** libp2p 3.3.2 constructs `ConnectionMonitor` on
+  every node unless explicitly disabled (`libp2p.js:108`); pings every connection every 10s; the
+  AdaptiveTimeout floor is 5s (`@libp2p/utils` `DEFAULT_MIN_TIMEOUT`); and
+  `abortConnectionOnPingFailure` defaults to **true**, so one missed deadline calls `conn.abort()`
+  on the whole connection. A missing ping *protocol* is tolerated — and no CELLO node registers a
+  responder, so `UnsupportedProtocolError` is the normal outcome and counts as alive. A *slow* ping
+  is fatal.
+- **Behavioural (K1).** Give the monitor a deadline no round trip can meet and a perfectly healthy
+  loopback connection dies. That proves the mechanism, and proves our option reaches libp2p.
+
+**What that does NOT establish, and the reviewer was right to press it.** I had written that the
+incident's error text is "the string behind 2,061 untraced errors" and called K1 "the last link in
+the attribution chain". It is not:
+
+> That is a property of **Node**, shared by every `AbortSignal.timeout` call site. In this
+> dependency tree there are at least ten on the relay path … The test establishes a
+> log-to-**Node-primitive** link, not a log-to-**connection-monitor** link.
+
+And two facts sharpen the doubt rather than settle it: the monitor's cadence is 10s-granular while
+the reported symptom is a consistent 60-90s; and because every ping ends in
+`UnsupportedProtocolError` (fast, counted as alive) the moving average never rises, so the
+effective deadline is always the floor. A healthy WAN negotiation exceeding 5s is plausible and is
+**not demonstrated anywhere**. The code now says "consistent with", names the other candidates, and
+says attribution is unresolved until the live run. The fix is worth having either way — no timeout
+on a healthy link should cost the whole connection.
+
+### The two findings that were bigger than my diff
+
+**F1 (HIGH) — the relay half was a silent no-op.** `packages/relay` resolves
+`@cello-protocol/transport` at `latest` = 0.0.43, and 0.0.43's `createNode` reads
+`keepAliveIntervalMs` and nothing else from the monitor options. My
+`connectionMonitor: { abortConnectionOnPingFailure: false }` was **discarded in silence**, the
+relay kept aborting on one slow ping, and `relay-defaults.test.ts` stayed green throughout because
+it asserted on *source text*. Correct source, correct regex, defective relay, green suite. The same
+file documents that exact failure class 1,800 lines below the change ("a new option that is not
+listed here is dropped in silence… That cost a full deploy-and-test cycle") — I reproduced it one
+layer up. Now: a module-load guard refuses to start a relay on a transport without the policy, and
+the tests ask the running node what policy it enforces.
+
+**F2 (HIGH, pre-existing) — the liveness detector could not tell a dead counterparty from relay
+churn.** `#wireSessionLiveness` acted on every peer event the session node saw, justified by a
+comment saying the gater restricts that node to the counterparty. That stopped being true when
+session nodes started dialing the relay as their Structure-2 witness. So **a relay disconnect
+declared the counterparty dead**, at WARN, into the unilateral-seal gate. For the whole 2026-08-04
+window — relay churning every 60-90s — that fired continuously. It is the same event this unit
+exists to eliminate, one layer over. Now filtered on the counterparty peer id; when that is not yet
+known it excludes the known relay rather than falling silent, because a detector that never fires
+is worse than one that fires too often. Proven with real libp2p nodes both ways.
+
+**F4 (MEDIUM, pre-existing) — why the 2,061 were untraceable.** `session.relay.reader.ended` is the
+only place the cause of a dead relay link survives, and it was at **debug**; the WARN that operators
+do see, `reservation.lost`, carries `relay_connection_gone` — where it was noticed, never why.
+Reader-ended is WARN now and its cause rides across as `upstreamReason`.
+
+F3, F5 (the 30s floor's undeclared cost: silent-death detection goes from ~15s to ~40s, and the
+seal gate reads it), F6 and F7 also closed. Full verdict and per-finding disposition in commit
+`60d01af` (cello-client) and `2bcd266d` (trustless-cello).
+
+### The deviation, recorded because the reviewer called it blocking until it was
+
+The line says `abortConnectionOnPingFailure: false` **both sides**. I did it on the relay only; the
+daemon keeps the abort and gets a 30s floor instead. See **M12-D18** in the DoD Decisions section —
+including the reviewer's independent confirmation that no per-node-role seam exists to do it the
+literal way.
+
+### Gate
+
+cello-client: `pnpm run test` 2574 passed / 11 skipped / 237 files; lint, typecheck, build clean.
+trustless-cello: 1263 passed / 531 skipped / 125 files; lint clean; `tsc --build` clean.
+
+**The trustless-cello typecheck is green only against a LOCALLY BUILT transport.** I copied
+`core/transport/dist` over the worktree's resolved `@cello-protocol/transport` to verify. Against
+the published 0.0.43 this branch does not typecheck, and — before F1's guard — would have run
+degraded. That is the publish ordering the work order names in §6: cello-client publishes first,
+then this repo re-pins. The reviewer confirmed the global pnpm store was not corrupted (link count
+1, distinct inode from the main checkout); the pollution is confined to this worktree and the
+node_modules is restored at session end.
+
+### Still open
+
+Both live clauses: "survives ≥30 min carrying an idle session, zero `relay_connection_gone`" and
+"cross-machine live delivery succeeds without store-and-forward fallback". Neither can be claimed
+without a deploy. The line is **🟡**.
