@@ -77,6 +77,10 @@ import { verify, buildMerkleTree, merkleRoot, generateKeypair, nodeHash, buildRe
 import type { KeyProvider, LeafInput } from "@cello-protocol/crypto";
 import { buildStructure2, encodeStructure2, computeGenesisPrevRoot } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
+// DOD-RELAY-KEEPALIVE-1 (review F1): a NAMESPACE import, deliberately, so the version guard below
+// can SEE a transport that predates the connection-monitor policy instead of dying on an opaque
+// ESM link error that names a symbol rather than a cause.
+import * as transport from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import type { Logger, SessionWal, ContentStore } from "@cello-protocol/interfaces";
@@ -1825,6 +1829,32 @@ export interface CreateRelayNodeOptions {
    * session_interrupted with reason 'timeout'. Default: no timeout (undefined).
    */
   sessionIdleTimeoutMs?: number;
+}
+
+/**
+ * DOD-RELAY-KEEPALIVE-1 (review F1) — REFUSE TO RUN ON A TRANSPORT THAT IGNORES THE KEEPALIVE POLICY.
+ *
+ * `createRelayNode` passes `connectionMonitor: { abortConnectionOnPingFailure: false }`, and
+ * @cello-protocol/transport before 0.0.44 does not READ that option — it builds the libp2p
+ * connectionMonitor config from `keepAliveIntervalMs` alone. Passing it there is discarded in
+ * silence: the relay comes up looking healthy and keeps severing client links on one slow ping,
+ * which is the entire defect this unit exists to remove.
+ *
+ * This file already documents the same failure class 1,800 lines down, about a factory that copies
+ * options field by field: "a new option that is not listed here is dropped in silence… That cost a
+ * full deploy-and-test cycle." A source-text test cannot catch it — the source is correct, the
+ * dependency is old — so the check has to run where the truth is, at module load.
+ *
+ * `WAN_PING_TIMEOUT_FLOOR_MS` is the marker: it ships in the same transport change as the option.
+ */
+if (typeof transport.WAN_PING_TIMEOUT_FLOOR_MS !== "number") {
+  throw new Error(
+    "@cello-protocol/transport is too old for this relay: it does not support the connectionMonitor " +
+      "policy (WAN_PING_TIMEOUT_FLOOR_MS is absent, so createNode ignores " +
+      "connectionMonitor.abortConnectionOnPingFailure). The relay would run libp2p's default and " +
+      "abort a healthy client link on one slow ping — the DOD-RELAY-KEEPALIVE-1 defect. " +
+      "Upgrade @cello-protocol/transport to >=0.0.44.",
+  );
 }
 
 /**
