@@ -996,3 +996,59 @@ updates from the fold, and must verify linkage before trusting materialized stat
 Next: **Tier P1**, starting at **DOD-DOC-ENGINE-1** — the daemon's Y.Doc lifecycle, now carrying
 three inherited ACs. `yjs` returns to `dependencies` there (it went to devDependencies in FUZZ-1
 under "no consumer, no ship"; ENGINE-1 is the consumer).
+
+---
+
+## Entry 12 — 2026-08-04 — DOD-DOC-ENGINE-1 implemented (P1 opened; review in flight)
+
+**Branch:** cello-client `m14/engine-1` @ d90959b. **IMPLEMENTED, not DONE** — the DoD line stays
+❌ until a verdict is quoted.
+
+### The unit in one line
+
+The engine owns HOW to apply; the store owns what to replay and in what order. Every guard in it
+answers a MEASUREMENT from DOD-DOC-FUZZ-1 rather than a guess about Yjs.
+
+### The three inherited ACs, now proven
+
+- **(i) byte-identical rebuild against a real `Y.Doc`.** STORE-1 could only prove the log is
+  sufficient *input*, because its replay stand-in was byte concatenation — associative and
+  order-only, which Yjs merge is neither. Here a document is built through real Yjs updates, each
+  captured as an envelope, and the rebuilt state vector is asserted byte-identical to the live
+  one's. The fold is now proven, not assumed.
+- **(ii) a withdrawn update is excluded from the fold.** Verified red when the filter is removed.
+- **(iii) rebuilding through the store refuses over a chain that does not verify.**
+
+### Guards, and the measurement each answers
+
+| Guard | The measurement it answers |
+|---|---|
+| Pre-parse size cap | bytes never reach Yjs on length alone |
+| **Two-byte floor** | an empty/1-byte update throws `Unexpected end of array` — a DECODER string naming Yjs internals, not a protocol fault |
+| Wrapped apply → one typed reason, decoder string as `detail` | lib0 messages describe where the decoder gave up, never what the peer did wrong |
+| **Pending-set check after every apply** | the ACCEPT class: Yjs returns SUCCESS for an update whose dependencies never arrive, contributes nothing, and retains it forever. A try/catch sees only success |
+| Shadow-apply before the real one | Yjs has no atomic-apply mode; a partially-resolving update would leave the caller's document in a state nobody chose |
+
+### `replay` REFUSES rather than skipping
+
+A payload that will not apply means the log is corrupt. Folding the rest would produce a document
+that reads as complete while missing operations — the silent divergence the whole two-layer design
+exists to prevent. Flagged to the reviewer as a genuine trade: it may mean one bad envelope makes
+a document unopenable, and I asked what the operator's path back should be.
+
+### clientID rule pinned in BOTH directions (§14)
+
+Twenty fresh documents get twenty distinct clientIDs, and `restore` mints a NEW one rather than
+resuming under the snapshot's. FUZZ-1 measured the cost of getting this wrong, which is why it is
+tested rather than merely commented.
+
+### `yjs` returns to `dependencies`
+
+FUZZ-1 moved it to devDependencies under "no consumer, no ship". This unit is the consumer.
+
+### Gates
+
+`test` **2562 passed / 11 skipped, 233 files** · `lint` · `typecheck` · `build` clean.
+(One lint error caught and fixed on the way: an unused `Y` import in the test after the engine
+absorbed every direct Yjs call — which is the shape the unit wants, the test driving the engine's
+surface rather than Yjs's.)
