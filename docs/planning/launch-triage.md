@@ -5,19 +5,20 @@ date: 2026-07-31
 topics: [launch, security, backup, receipt-integrity, kill-switch, daemon-lifecycle, telegram, install, triage]
 status: open
 description: >
-  The launch punch list, refreshed 2026-07-31. Ranked by what actually goes wrong if left alone,
-  not by build status. Plain-language explanation + designation for each, so this doc works as
-  both a punch list and a lookup table into M8C-DEFINITION-OF-DONE. Supersedes the 2026-07-12
-  pass: four of those nine items are closed, two of its claims turned out to be false, and five
-  days of defect-hunting (2026-07-26 → 31) added a receipt-integrity cluster that outranks
-  everything that was on the original list. Ranking is a first pass; Andre sets the real priority.
+  The launch punch list. Ranked by what actually goes wrong if left alone, not by build status.
+  Plain-language explanation + designation for each, so this doc works as both a punch list and a
+  lookup table into the DoD docs. Restructured 2026-08-04: the open items carry contiguous numbers
+  1–14 and everything addressed has been lifted out of the ranking into a single section at the end,
+  so the list reads as work-remaining rather than as a mixed log. Ranking is a first pass; Andre
+  sets the real priority.
 ---
 
 # Launch Triage
 
-**Refreshed 2026-07-31.** The previous pass was written 2026-07-12 and had drifted: four of its
-nine items shipped, one changed shape, and two of its statements were falsified by later work.
-This is a current pass, not an append.
+**Refreshed 2026-07-31, restructured 2026-08-04.** Two items that had been left in the ranking with
+a ✅ next to them (receipt drift, co-attendance) are now in **Addressed — off the open list** at the
+bottom, together with the items closed in earlier passes. Open items renumber contiguously whenever
+something closes; cross-references point at names, not numbers, so they survive it.
 
 **The test, unchanged:** at launch, if this is not done, will it *fundamentally ruin* a prospective
 customer — or is it something they could *forgive*? Ruin = they can't get the core value, or they
@@ -26,68 +27,19 @@ lose trust. Most things are forgivable.
 **How to use this:** read top to bottom, then tell me the real priority order — the ranking below
 is my first pass, not a decision.
 
-**2026-08-03 sweep addendum:** a pass over the DoD docs and July discussion logs added items 15–17,
-the re-verify note on item 5, and the "left off this list on purpose" section. One item found by the
-sweep was already fixed without its DoD line knowing (`DOD-SIGTERM-FLAKE-1`, busy-timeout fix
-2026-07-31 — line corrected to 🟡, never was a triage item).
-
----
-
-## What changed since the last pass
-
-Four items closed: the relay-mailbox forgery hole (`SEC-1`), the double-daemon bug
-(`DOD-SINGLE-DAEMON-1`), the unproven forged-signing-request defense (`SEC-2`), and the
-unencrypted security-screening records (`DOD-CRYPTO-AT-REST-1`, fully closed 2026-07-30 by M9B).
-One changed shape: the parked settings knobs (`DOD-CONFIG-1`) were absorbed into M9B's config
-surface on 2026-07-29 and are no longer waiting on a store that doesn't exist.
-
-**Two claims in the old pass were wrong**, both corrected below: that the read-before-reply guard
-was confirmed working, and that "one agent on one device works completely fine" without the
-multi-device feature. See the last section.
+**2026-08-03 sweep addendum:** a pass over the DoD docs and July discussion logs added items 13, 14
+and the "dead signaling streams" decision, the re-verify note on the unsealable-conversation item,
+and the "left off this list on purpose" section. One item found by the sweep was already fixed
+without its DoD line knowing (`DOD-SIGTERM-FLAKE-1`, busy-timeout fix 2026-07-31 — line corrected to
+🟡, never was a triage item).
 
 ---
 
 # Open — ranked
 
-## 1. ✅ FIXED — Sealed receipts are missing the conversation's opening message
+## 1. There is still no way to back up or recover your identity
 
-**Designation: `DOD-FIRSTMSG-WITNESS-1`** — ✅ **SHIPPED 2026-07-31**, daemon `0.0.106` / cli
-`0.0.109`, verified in the tarball, J-END 10/10. The responder now presents the relay assignment
-itself, so the first message is genuinely witnessed rather than re-ordered. Reviewed twice; the
-blocking finding was that the one line that IS the fix had no test — reverting it left the whole
-suite green. That is closed and revert-tested.
-
-**Carry forward to item 5:** three paths still end unwitnessed (relay down, terminal assignment
-rejection, retry exhaustion), so **relay position is not total** and item 5's dedup rekey cannot
-assume it is.
-
-**Original entry follows.**
-
-When a conversation's very first message is sent before the relay has finished registering the
-session, the relay rejects it and never counts it. The daemon keeps the message anyway — losing
-content is worse than mis-ordering it — so from then on the local record sits exactly one position
-ahead of the relay's, for the life of that conversation.
-
-That was written off as a bookkeeping wrinkle until we established what the certificate is actually
-built from: **only the messages the relay witnessed.** The un-witnessed first message is, by
-definition, the one that never got in. So the sealed receipt for an affected conversation is a
-receipt over the conversation *minus its opening message* — and it is still issued, and still
-verifies, and nothing anywhere reconciles the two records.
-
-It fires 16 times out of 16 whenever the first message beats registration and the conversation
-continues. It only happens when both agents are on the same machine, because local delivery is
-instant while relay registration is a round trip to another region — which means it lands squarely
-on the solo-multi-agent case that is both the daily use and the demo.
-
-A trust product can survive clunky UX. It cannot survive a receipt that quietly isn't over the whole
-conversation. The fix is producer-side and contained: make the first message wait for registration,
-or resubmit once registration lands.
-
----
-
-## 2. There is still no way to back up or recover your identity
-
-**Designation: `DOD-CUSTODY-DAEMON-1`** *(carried unchanged from the last pass — still open)*
+**Designation: `DOD-CUSTODY-DAEMON-1`**
 
 `backup` and `restore` exist as commands, but nothing behind them works — call either one and it
 reports "not implemented." If your machine is lost, stolen, or dies, that agent and everything it
@@ -99,7 +51,7 @@ Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello
 
 ---
 
-## 3. The inbox says sessions are sealed when they are not
+## 2. The inbox says sessions are sealed when they are not
 
 **Designation: `DOD-SEALED-INBOX-2`** — ❌ open, raised 2026-07-30
 
@@ -134,7 +86,7 @@ own pass rather than riding a doc update.
 
 ---
 
-## 4. Logging out says the daemon stopped while it is still on the network
+## 3. Logging out says the daemon stopped while it is still on the network
 
 **Designation: `DOD-LOGOUT-EXIT-1`** — ❌ open, raised 2026-07-30
 
@@ -148,70 +100,37 @@ this is the kill switch silently not working: the visible state says off, the ne
 on. An operator who has logged out reasonably believes nothing of theirs is reachable. It also hides
 itself — because the handles *are* released, every local check agrees with the lie.
 
-Worth noting this is the second appearance of a shape the last pass already celebrated as fixed: the
-review of the double-daemon fix caught that the shutdown command was trusting the same broken logic.
-The class came back through a different door.
+Worth noting this is the second appearance of a shape an earlier pass already celebrated as fixed:
+the review of the double-daemon fix caught that the shutdown command was trusting the same broken
+logic. The class came back through a different door.
 
 ---
 
-## 5. A conversation can become permanently unsealable, silently
+## 4. A mismatch that makes a conversation unsealable leaves no durable trace
 
-**Designation: `DOD-FRONTIER-STRAND-1`** — ❌ open, raised 2026-07-30, root cause corrected 2026-07-31
+**Designation: `DOD-FRONTIER-MISMATCH-DURABLE-1`** (M8D, 🅿️ parked) — **re-scoped 2026-08-03.** The
+original defect under this item (`DOD-FRONTIER-STRAND-1`) is fixed; see Addressed. What is left is
+the detection half.
 
-If two messages in a session happen to be byte-identical, the receiving side treats the second as a
-redelivery of the first and refuses to record it. The sender has it; the receiver doesn't. From that
-point the two sides permanently disagree about how many messages exist, so neither will co-sign a
-close, and the session can never produce a receipt. The only exit is force-abandon, which forfeits
-the notarization.
+The original shape: two byte-identical messages in one session, and the receiving side treats the
+second as a redelivery and refuses to record it. The two sides then permanently disagree about how
+many messages exist, neither will co-sign a close, and the session can never produce a receipt. One
+live session sat in that state **for a week** before anyone noticed, because nothing detects a
+mismatch until someone attempts a close.
 
-One live session sat in this state for a week before anyone noticed — nothing detects a mismatch
-until someone attempts a close, and the refusal message points at the counterparty rather than
-naming the disagreement.
+The dedup is now keyed on relay-assigned position rather than content, so the strand itself is
+closed. But the mismatch flag is held **in memory and dies on every daemon restart** — which
+undercuts precisely the "a week unnoticed" concern that made this item severe. Two cheap options are
+already written into the DoD line: derive it on read from the persisted seal-rejection record, or
+write it to the existing `sessions` row.
 
-The specific producer that caused the observed case (a duplicated away autoresponse) is already
-fixed, so this is latent rather than actively bleeding — which is why it ranks below the items above
-despite being severe. But the *check* is unchanged, it compares content across both parties'
-messages, and two instances of the same model answering the same prompt make an identical reply far
-likelier than the human baseline. It gets likelier precisely as same-model agent-to-agent traffic
-grows, which is the wedge.
-
-**Sequencing note:** the intended fix is to key duplicate detection on the relay-assigned position
-instead of the content. That inherits a broken key until item 1 is fixed, because a drifted
-conversation's two sides don't agree on position. Item 1 first, structurally — not just by priority.
-
-**Re-verify (2026-08-03):** this may be substantially closed already. Item 1 shipped 2026-07-31, and
-the position-keyed dedup landed right behind it (cello-client `a54f548`, drift fix `6e314b7`);
-[[M8D-DEFINITION-OF-DONE]] records FRONTIER-STRAND ACs 1–3 ✅. What is NOT closed and belongs to this
-item's remit: **`DOD-FRONTIER-MISMATCH-DURABLE-1`** (M8D, 🅿️ parked) — the mismatch flag is
-in-memory and dies on every daemon restart, which undercuts this item's own "a week unnoticed"
-concern. Two cheap options are already written in that line (derive on read from the persisted
-seal-rejection record, or write to the existing `sessions` row). Re-rank this item as that remainder,
-not as the original defect.
+**One inherited caveat, carried from the receipt-drift fix:** three paths still end unwitnessed
+(relay down, terminal assignment rejection, retry exhaustion), so **relay position is not total** and
+anything keyed on it must not assume it is.
 
 ---
 
-## 6. Two windows on one agent silently steal each other's messages
-
-**Designation: `DOD-COATTEND-VISIBLE-1`** ([[M8D-DEFINITION-OF-DONE]], Tier 0 — opened 2026-08-01).
-Source: [[2026-07-31_1043_two-sessions-one-agent-co-attendance]] §2. Only the detection half belongs at
-launch and it is that line; the redesign is Tier 1 of the same milestone and opens behind M8C's two
-receipt lines.
-
-Run two Claude sessions against the same agent and a message arrives: one session gets it, the other
-is told nothing arrived, and neither is told the other exists. The wake-up is broadcast to every
-attached session but the message itself sits in a single queue that the first reader empties. The
-loser's answer is word-for-word identical to a quiet counterparty, and the plain receive path writes
-nothing to the log on either outcome, so the theft leaves no trace anywhere.
-
-The full fix changes delivery semantics across several surfaces and earns its own milestone. **What
-belongs at launch is the cheap half:** make "nothing arrived" and "another session took it"
-different answers, carry the attendance count on attach and status, and log the receive on both
-outcomes. That converts a silent, trust-destroying failure into a visible one with an obvious
-workaround, which is the difference between ruin and forgive.
-
----
-
-## 7. Installing the plugin does not give you a working CELLO
+## 5. Installing the plugin does not give you a working CELLO
 
 **Designation:** [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — **needs a DoD
 line opened.**
@@ -224,15 +143,14 @@ today.
 This is a first-impression item rather than a safety one, and it is deliberately unresolved — the
 obvious fix (an install hook) would have a plugin install start a long-running process holding key
 material and a network identity, which is a much bigger claim on a user's machine than a plugin
-install normally makes. But it is the same class as item 8 below, which is already tracked, so it
-should be tracked too rather than living only in a discussion log.
+install normally makes. But it is the same class as the Telegram sign-up item below, which is
+already tracked, so it should be tracked too rather than living only in a discussion log.
 
 ---
 
-## 8. The Telegram sign-up messages give wrong or unclear instructions
+## 6. The Telegram sign-up messages give wrong or unclear instructions
 
-**Designation: `D-ENVVAR`** (+ the rest of Phase 1 in `M8C-ONBOARDING-IMPROVEMENTS`) *(carried
-unchanged — still open)*
+**Designation: `D-ENVVAR`** (+ the rest of Phase 1 in `M8C-ONBOARDING-IMPROVEMENTS`)
 
 The registration bot tells a new user to set something that doesn't exist, among a few other unclear
 or inconsistent messages along that flow. A literal first-time follower gets stuck with no next
@@ -241,7 +159,7 @@ message rewrites plus the tests that check the exact wording, in one repo.
 
 ---
 
-## 9. A daemon shutdown rings the doorbell like an incoming message
+## 7. A daemon shutdown rings the doorbell like an incoming message
 
 **Designation:** [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — **needs a DoD
 line opened.**
@@ -257,10 +175,10 @@ distinguishable metadata so the event says what happened.
 
 ---
 
-## 10. Telegram phone notifications are built and tested, but never proven on a real phone
+## 8. Telegram phone notifications are built and tested, but never proven on a real phone
 
-**Designation: `DOD-TGDOOR-1`** — 🟡 *(carried unchanged — still the only Tier-3 unit that can't be
-smoke-tested without a real bot token)*
+**Designation: `DOD-TGDOOR-1`** — 🟡 *(still the only Tier-3 unit that can't be smoke-tested without
+a real bot token)*
 
 The doorbell-to-Telegram feature is built and passes its test suite, but has never been watched
 working end-to-end on an actual phone. Low risk either way; just unverified. Flips to done on a live
@@ -268,7 +186,7 @@ proof, nothing else.
 
 ---
 
-## 11. Running the same agent from two devices at once is mostly unbuilt
+## 9. Running the same agent from two devices at once is mostly unbuilt
 
 **Designation: `DOD-PRIMARY-1`** (+ `DOD-POLICY-1`, `DOD-PORTAB-1`) — deliberately out of scope
 
@@ -277,10 +195,102 @@ stops two devices fighting over control isn't wired in, the handshake between yo
 doesn't exist, syncing between them doesn't exist, and no failover test has been run. Still
 deliberately out of scope.
 
-**Correction to the previous pass**, which closed this item with "one agent on one device works
-completely fine without any of it." That is not true, and item 6 is why: two *sessions* on one
-device, on one daemon, silently lose messages. That is a different failure from this one and is not
-covered by anything here.
+**Correction to an earlier pass**, which closed this item with "one agent on one device works
+completely fine without any of it." That was false at the time: two *sessions* on one device, on one
+daemon, silently lost each other's messages. That defect is now fixed (M8D — see Addressed), but it
+was never covered by anything in this item, and multi-*device* remains unbuilt.
+
+---
+
+## 10. A failed endorsement submission is not retried
+
+**Designation: `DOD-END-SUBMIT-1`** (one remaining handed-forward AC) + one of `DOD-END-SURFACE-1`'s
+nine clauses.
+
+If the directory node you send an endorsement to is down, the submission fails and you run the
+command again. There is no automatic failover to another node, even though the consortium has three.
+
+**Why it is here and not fixed:** it is a papercut, not a loss — nothing is destroyed and the error
+names the cause. Andre triaged it as ship-without on 2026-07-31.
+
+---
+
+## 11. The trust-signal floor is built and deliberately switched off
+
+**Designation: `DOD-FLOOR-1`**
+
+The floor is the "minimum bar to talk to me" — a counterparty must present N signals, or a particular
+type, before a session is accepted. It is implemented and unit-tested, and NOTHING CALLS IT. That is
+correct for launch: switching it on with any default would start refusing counterparties who have no
+signals yet, which is everybody on day one.
+
+**This is an M10 line, not M10B.** It sat on the M10B list because M10B produces the `same_operator`
+flag the floor's counting rule consumes (`DOD-END-COUNT-1`) — M10B produced it correctly and proved
+it live; the consumer lives here. Recorded 2026-07-31 so it stops being re-discovered as endorsement
+debt.
+
+**When it matters:** the first time an operator wants to be selective about who reaches them. Not
+before there are signals worth demanding.
+
+---
+
+## 12. "Online" does not mean reachable
+
+`cello status` shows an agent as `online` with `standing_receiver_ready: true` whenever its signalling
+connection is up — even when the daemon cannot resolve a single directory endpoint and no session can
+possibly form.
+
+**Found the hard way, 2026-07-31.** After the infra wake, this host held a stale DNS cache (hibernate
+deletes the ALBs; wake recreates them with new IPs). libp2p kept connecting off the bundled manifest,
+so all five agents reported healthy while every cross-node session died. It surfaced in sequence as
+`counterparty_offline`, then `directory_below_threshold`, then `ceremony_exhausted` — three errors
+naming three different subsystems, none of them the cause. `dns_error` was in the daemon log 26 times
+per node from startup and never reached the operator.
+
+The immediate trigger turned out to be the AWS→GCP migration, and the DNS surfacing is being handled
+separately. What stays open is the status word itself: an agent that cannot hold a session should not
+render identically to one that can.
+
+**Cost if unfixed:** roughly an hour, every time, and the first conclusion is always "the protocol is
+broken."
+
+---
+
+## 13. Dead signaling streams go undetected — deliberately not fixed, superseded by the mesh
+
+**Designation:** [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — no
+DoD line. **Recorded 2026-08-03 as a DECISION, so it stops being re-discovered as a miss.** It stays
+on the open list because it carries a live verification obligation, not because work is queued.
+
+The 2026-07-31 incident: an agent reported online on every surface — `cello status`, the daemon, the
+directory's own database — while nothing could reach it, silently, for ~25 minutes, recovering only
+on a daemon restart. The re-register-on-reconnect fix shipped (daemon `0.0.105`, `2e734a1`), but the
+incident log's own correction says it closes a different hole: the load-bearing defect is
+**detection** — the client learns a stream is dead only at write time (3,514 write-time discoveries
+vs 42 heartbeat catches), and the ~70-second stream churn and the directory's server-side expiry
+semantics were never traced.
+
+**Why it is here and not fixed:** the M12 anti-entropy mesh cutover on GCP is expected to make this
+entire class moot, so the AWS-side detection work was deliberately skipped (Andre, 2026-08-03).
+
+**Verify at cutover:** the class only dies if the cutover changes the **client-to-node** link (or
+leans on the parked-mailbox drain as the recovery path). [[M12-ANTI-ENTROPY-DESIGN]] as written
+replaces the node-to-node layer — presence replicating perfectly does not revive a dead client
+stream; every node would just agree the agent is owned by a node that can't reach it. If the
+client link is unchanged post-cutover, this reopens as a full launch item, and the untraced
+`The operation was aborted due to timeout` reader errors (2,061) are the named thread to pull first.
+
+---
+
+## 14. Endorsements cannot be withdrawn, refused-drained, or quota-limited
+
+**Designations: `DOD-END-WITHDRAW-1`, `DOD-END-INGRESS-1`, `DOD-END-QUOTA-1`** — all ❌ in
+[[M10B-DEFINITION-OF-DONE]]. **Accepted onto the list 2026-08-03 (Andre)** — this list carries their
+siblings (items 10, 11), and these now stand as open items alongside them.
+
+An issuer cannot withdraw an endorsement they issued; nothing consumes the `refuse` op (the portal
+drain); issuance quota is unenforced and invisible. Each is recorded in M10B as one line of work
+once its mechanism exists. Ranking within the list is Andre's, like everything above.
 
 ---
 
@@ -308,159 +318,12 @@ while adding GCP nodes. Flagged here so it isn't lost; it belongs to that milest
 
 ---
 
-# Closed since the last pass
-
-- **`SEC-1`** — a stranger could plant a message in your mailbox using only your public key. Fixed,
-  reviewed, published and promoted 2026-07-12. The design pass found the relay itself was the party
-  best placed to exploit it; parked messages are now signed before deposit and pickup verifies.
-- **`DOD-DAEMON-CLEANUP-1` / `DOD-SINGLE-DAEMON-1`** — two daemons could run against one database,
-  and the obvious fix could kill the real one. Fixed 2026-07-13 with a real POSIX lock.
-- **`SEC-2`** — the defense against forged signing requests had never been watched rejecting one.
-  Proven live 2026-07-12 against the real directory, confirmed in the server-side log.
-- **`DOD-CRYPTO-AT-REST-1`** — the security-screening layer kept its records and settings in a
-  plaintext database. Fully closed 2026-07-30 by M9B; both stores now live in one SQLCipher file.
-- **`DOD-CONFIG-1`** — parked settings knobs waiting on a store that didn't exist. Absorbed
-  2026-07-29 into M9B's config surface. What remains is a product decision about merging two
-  config surfaces, not a missing mechanism.
-
----
-
-# On the old "already solid" list
-
-The previous pass ended with a list of eight things marked "confirmed working, no action needed."
-Five days of deliberate defect-hunting found real bugs in four of them:
-
-- **the read-before-reply guard** — the guarantee holds for a single session, but two sessions on
-  one agent do not gate each other, and the scenario had never been run. **M8D built the fix
-  (2026-08-01/02)** and it is published: delivery no longer pops a shared queue, so the second
-  session is not robbed; and the send path re-checks the conversation's frontier immediately before
-  the wire, so two sessions can no longer both answer one question. Note the gate-time behaviour is
-  UNCHANGED and deliberately so — a message this agent sent from another local window does not block
-  its other windows; the principal is the agent, not the socket. **Still open only for live proof**
-  (the two-session `claude --channels` journey); everything else is green on a real daemon over real
-  IPC with a revert probe behind it.
-- **auto-away-replies** — fired before the caller had said anything, and fired a second time on a
-  closing message, injecting a duplicate into the sealed transcript. Fixed 2026-07-23/24.
-- **session-request expiry** — requests whose session had already closed stayed in the pending queue
-  forever. Fixed 2026-07-22.
-- **catching up on what you missed** — a sealed session's final message could show as unread with no
-  way to clear it. Fixed.
-
-That list was a snapshot of confidence rather than a record of verification, and it did not survive
-contact with someone looking. **It has not been reinstated in this pass, and shouldn't be** — a
-claim that something needs no action is worth exactly the enforcer behind it, and these had none.
-
----
-
-## 12. A failed endorsement submission is not retried
-
-If the directory node you send an endorsement to is down, the submission fails and you run the
-command again. There is no automatic failover to another node, even though the consortium has three.
-
-**Why it is here and not fixed:** it is a papercut, not a loss — nothing is destroyed and the error
-names the cause. Andre triaged it as ship-without on 2026-07-31. It is `DOD-END-SUBMIT-1`'s one
-remaining handed-forward AC and one of `DOD-END-SURFACE-1`'s nine clauses.
-
----
-
-## 13. The trust-signal floor is built and deliberately switched off
-
-`DOD-FLOOR-1` is the "minimum bar to talk to me" — a counterparty must present N signals, or a
-particular type, before a session is accepted. It is implemented and unit-tested, and NOTHING CALLS
-IT. That is correct for launch: switching it on with any default would start refusing counterparties
-who have no signals yet, which is everybody on day one.
-
-**This is an M10 line, not M10B.** It sat on the M10B list because M10B produces the `same_operator`
-flag the floor's counting rule consumes (`DOD-END-COUNT-1`) — M10B produced it correctly and proved
-it live; the consumer lives here. Recorded 2026-07-31 so it stops being re-discovered as endorsement
-debt.
-
-**When it matters:** the first time an operator wants to be selective about who reaches them. Not
-before there are signals worth demanding.
-
----
-
-## 14. "Online" does not mean reachable
-
-`cello status` shows an agent as `online` with `standing_receiver_ready: true` whenever its signalling
-connection is up — even when the daemon cannot resolve a single directory endpoint and no session can
-possibly form.
-
-**Found the hard way, 2026-07-31.** After the infra wake, this host held a stale DNS cache (hibernate
-deletes the ALBs; wake recreates them with new IPs). libp2p kept connecting off the bundled manifest,
-so all five agents reported healthy while every cross-node session died. It surfaced in sequence as
-`counterparty_offline`, then `directory_below_threshold`, then `ceremony_exhausted` — three errors
-naming three different subsystems, none of them the cause. `dns_error` was in the daemon log 26 times
-per node from startup and never reached the operator.
-
-The immediate trigger turned out to be the AWS→GCP migration, and the DNS surfacing is being handled
-separately. What stays open is the status word itself: an agent that cannot hold a session should not
-render identically to one that can.
-
-**Cost if unfixed:** roughly an hour, every time, and the first conclusion is always "the protocol is
-broken."
-
----
-
-## 15. Dead signaling streams go undetected — deliberately not fixed, superseded by the mesh
-
-**Designation:** [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — no
-DoD line. **Recorded 2026-08-03 as a DECISION, so it stops being re-discovered as a miss.**
-
-The 2026-07-31 incident: an agent reported online on every surface — `cello status`, the daemon, the
-directory's own database — while nothing could reach it, silently, for ~25 minutes, recovering only
-on a daemon restart. The re-register-on-reconnect fix shipped (daemon `0.0.105`, `2e734a1`), but the
-incident log's own correction says it closes a different hole: the load-bearing defect is
-**detection** — the client learns a stream is dead only at write time (3,514 write-time discoveries
-vs 42 heartbeat catches), and the ~70-second stream churn and the directory's server-side expiry
-semantics were never traced.
-
-**Why it is here and not fixed:** the M12 anti-entropy mesh cutover on GCP is expected to make this
-entire class moot, so the AWS-side detection work was deliberately skipped (Andre, 2026-08-03).
-
-**Verify at cutover:** the class only dies if the cutover changes the **client-to-node** link (or
-leans on the parked-mailbox drain as the recovery path). [[M12-ANTI-ENTROPY-DESIGN]] as written
-replaces the node-to-node layer — presence replicating perfectly does not revive a dead client
-stream; every node would just agree the agent is owned by a node that can't reach it. If the
-client link is unchanged post-cutover, this reopens as a launch item, and the untraced
-`The operation was aborted due to timeout` reader errors (2,061) are the named thread to pull first.
-
----
-
-## 16. ~~A node absent during an agent's DKG can never serve that agent~~ — NOT A LAUNCH ITEM
-
-**Designation:** M8B Sprint B "Enrollment (Problem 3)" + absent-node reconcile. **Ruled 2026-08-03
-(Andre): not a launch item.**
-
-The AWS-era instance is superseded outright: the GCP cutover went greenfield by decision — fresh
-agents, fresh DKGs, wiped directories, no identity migration ([[M12-CUTOVER-CHECKLIST]]) — so no
-launch agent carries a DKG that ran during a node outage. What survives is structural and
-cloud-agnostic: shares never replicate (`SHARES-LOCAL`), no resharing ceremony exists, so a node
-added *after* an agent's DKG can never serve that agent. That is a **node-expansion gate**, the same
-category this list already parks `DOD-FROST-PARALLEL-1` under — it belongs to the milestone that
-next adds a node, not to launch. Plan when that day comes:
-[[2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan]].
-
----
-
-## 17. Endorsements cannot be withdrawn, refused-drained, or quota-limited
-
-**Designations: `DOD-END-WITHDRAW-1`, `DOD-END-INGRESS-1`, `DOD-END-QUOTA-1`** — all ❌ in
-[[M10B-DEFINITION-OF-DONE]]. **Accepted onto the list 2026-08-03 (Andre)** — this list carries their
-siblings (items 12, 13), and these now stand as open items alongside them.
-
-An issuer cannot withdraw an endorsement they issued; nothing consumes the `refuse` op (the portal
-drain); issuance quota is unenforced and invisible. Each is recorded in M10B as one line of work
-once its mechanism exists. Ranking within the list is Andre's, like everything above.
-
----
-
 # Left off this list on purpose
 
 Recorded so they stop being re-found by every sweep:
 
 - **`DOD-TESTDAEMON-REAP-1`** (M8C, ❌ raised 2026-07-30) — the test harness leaks its subject
-  daemon, which then hammers the dev directory indefinitely. Raised in the same batch as items 3–5;
+  daemon, which then hammers the dev directory indefinitely. Raised in the same batch as items 2–4;
   the only one of the four not carried here. Dev tooling, not a customer-facing defect — ship
   without.
 - **`DOD-SESSION-REAP-1`** (M8C, ❌ backlog) — restart-interrupted sessions accumulate as
@@ -471,14 +334,90 @@ Recorded so they stop being re-found by every sweep:
 
 ---
 
+# Addressed — off the open list
+
+Everything below has been dispositioned and is **not** work-remaining. Kept for lookup and so the
+same defect isn't re-discovered as new.
+
+## Fixed and verified
+
+- **Sealed receipts were missing the conversation's opening message** — `DOD-FIRSTMSG-WITNESS-1`.
+  ✅ **Shipped 2026-07-31**, daemon `0.0.106` / cli `0.0.109`, verified in the tarball, J-END 10/10.
+  A first message sent before relay registration completed was rejected and never counted, leaving
+  the local record one position ahead of the relay's for the life of the conversation — and the
+  certificate is built only from what the relay witnessed, so the receipt covered the conversation
+  *minus its opening message* and still verified. Fired 16/16 when the first message beat
+  registration, and only when both agents were on one machine — squarely the solo-multi-agent daily
+  case. The responder now presents the relay assignment itself, so the first message is genuinely
+  witnessed rather than re-ordered. Reviewed twice; the blocking finding was that the one line that
+  IS the fix had no test — reverting it left the whole suite green. Closed and revert-tested.
+  **Residue lives on open item 4:** three paths still end unwitnessed, so relay position is not
+  total.
+- **Two windows on one agent silently stole each other's messages** — `DOD-COATTEND-VISIBLE-1`
+  (detection) plus `DOD-COATTEND-1`, `-CATCHUP-1`, `-SENDWINDOW-1` (the redesign). ✅ **M8D closed
+  2026-08-02, all six lines proven live** on cli `0.0.122` / daemon `0.0.119` / connect `0.0.116`.
+  Both halves shipped, not just the cheap one: delivery no longer pops a shared queue (a sibling
+  reading takes nothing away), the send path re-checks the frontier immediately before the wire, and
+  `cello_transcript` is the documented catch-up door. Attendance rides **every** read surface, not
+  only the doorbell — the first live run failed exactly there, and the review then caught that the
+  first fix covered 4 of 12 exits while the commit, comment and journal all claimed "every". The
+  closing proof was an unscripted question into a second window, which volunteered co-attendance and
+  its operational consequence on its own.
+  **Deliberately unchanged, do not "fix" later:** the counterparty sees one agent with no session
+  ordinal — leaking window structure across the wire buys nothing. And two windows of one agent do
+  not gate each other at send time; the principal is the agent, not the socket.
+- **A conversation could become permanently unsealable, silently** — `DOD-FRONTIER-STRAND-1`, ACs
+  1–3 ✅. Duplicate detection is keyed on relay-assigned position instead of message content
+  (cello-client `a54f548`, drift fix `6e314b7`), landing right behind the receipt-drift fix it
+  depended on. **The detection remainder is still open as item 4.**
+- **`SEC-1`** — a stranger could plant a message in your mailbox using only your public key. Fixed,
+  reviewed, published and promoted 2026-07-12. The design pass found the relay itself was the party
+  best placed to exploit it; parked messages are now signed before deposit and pickup verifies.
+- **`DOD-DAEMON-CLEANUP-1` / `DOD-SINGLE-DAEMON-1`** — two daemons could run against one database,
+  and the obvious fix could kill the real one. Fixed 2026-07-13 with a real POSIX lock.
+- **`SEC-2`** — the defense against forged signing requests had never been watched rejecting one.
+  Proven live 2026-07-12 against the real directory, confirmed in the server-side log.
+- **`DOD-CRYPTO-AT-REST-1`** — the security-screening layer kept its records and settings in a
+  plaintext database. Fully closed 2026-07-30 by M9B; both stores now live in one SQLCipher file.
+- **`DOD-CONFIG-1`** — parked settings knobs waiting on a store that didn't exist. Absorbed
+  2026-07-29 into M9B's config surface. What remains is a product decision about merging two config
+  surfaces, not a missing mechanism.
+
+## Ruled out without a fix
+
+- **A node absent during an agent's DKG can never serve that agent** — M8B Sprint B "Enrollment
+  (Problem 3)" + absent-node reconcile. **Ruled 2026-08-03 (Andre): not a launch item.** The AWS-era
+  instance is superseded outright — the GCP cutover went greenfield by decision (fresh agents, fresh
+  DKGs, wiped directories, no identity migration, [[M12-CUTOVER-CHECKLIST]]), so no launch agent
+  carries a DKG that ran during a node outage. What survives is structural and cloud-agnostic: shares
+  never replicate (`SHARES-LOCAL`) and no resharing ceremony exists, so a node added *after* an
+  agent's DKG can never serve that agent. That is a **node-expansion gate** — the same category this
+  list parks `DOD-FROST-PARALLEL-1` under. Plan for the day it matters:
+  [[2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan]].
+
+## The old "already solid" list — a lesson worth keeping
+
+An earlier pass ended with eight things marked "confirmed working, no action needed." Five days of
+deliberate defect-hunting found real bugs in four of them — the read-before-reply guard (fixed by
+M8D above), auto-away-replies firing before the caller had spoken and again on a closing message
+(fixed 2026-07-23/24), session requests whose session had already closed sitting in the pending queue
+forever (fixed 2026-07-22), and a sealed session's final message showing unread with no way to clear
+it (fixed).
+
+That list was a snapshot of confidence rather than a record of verification, and it did not survive
+contact with someone looking. **It has not been reinstated, and shouldn't be** — a claim that
+something needs no action is worth exactly the enforcer behind it, and these had none.
+
+---
+
 ## Related Documents
 
 - [[M8C-DEFINITION-OF-DONE]] — full technical detail and status for every designation above
-- [[M8C-ONBOARDING-IMPROVEMENTS]] — the Telegram/CLI onboarding checklist (item 8)
-- [[2026-07-31_1043_two-sessions-one-agent-co-attendance]] — items 1, 5 and 6; the receipt-integrity
-  cluster and the co-attendance decision, with the build order at the top
-- [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — items 7 and 9
-- [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — item 15, with the
+- [[M8D-DEFINITION-OF-DONE]] — the co-attendance and frontier lines, and the parked debt on item 4
+- [[M8C-ONBOARDING-IMPROVEMENTS]] — the Telegram/CLI onboarding checklist (item 6)
+- [[2026-07-31_1043_two-sessions-one-agent-co-attendance]] — the receipt-integrity cluster and the
+  co-attendance decision, with the build order at the top
+- [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — items 5 and 7
+- [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — item 13, with the
   measurements and the open questions the cutover verification must answer
-- [[M8D-DEFINITION-OF-DONE]] — the parked debts referenced in items 5 and the on-purpose list
 - [[protocol-map]] — where these fit relative to the overall milestone sequence
