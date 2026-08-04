@@ -27,6 +27,17 @@ description: >
   nine invariants lost their ❌ tags and are lenses in §2b. `DOD-AE-APPEND-1` is SPLIT into
   PRIMITIVES-1 / STORE-1 / CHANNEL-1 / APPEND-1 — your next red line has a different name.
 
+- **🔴 2026-08-04 — RELAY/PARK-DRAIN BRANCH IS BUILT, REVIEWED, AND WAITING ON A PUBLISH.**
+  `m12/relay-keepalive-park-drain` exists in BOTH repos, pushed, unmerged, unpublished.
+  DOD-PARK-DRAIN-1, DOD-RELAY-KEEPALIVE-1 and DOD-GCP-RELAY-DRIFT-1 are all 🟡 — every code clause
+  built and unit-reviewed (19 findings across three reviews, all closed), every LIVE clause open
+  because this session deployed nothing.
+  **Read before touching that branch:** `trustless-cello-keepalive`'s relay does NOT load against
+  the published `@cello-protocol/transport` 0.0.43 — it throws a version guard naming the cause,
+  by design (the option it needs is unpublished; without the guard the fix was a silent no-op).
+  The deploy order is cello-client publish → re-pin here → terraform apply + relay redeploy.
+  Entries 78, 79, 80; decision M12-D18; parked M12-P10 (WAL_DIR drift).
+
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
 - **Next red:** AE-APPEND-1 part 4 — remaining Tier-A specs (DELIBERATE-START unit, see Entry 20's
