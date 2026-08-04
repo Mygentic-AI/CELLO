@@ -1193,3 +1193,77 @@ the flag and silently clobbers the agent's unpublished work.
   buffering it. The admission path folds local edits before merging, so it must not hand the
   engine an update whose predecessors are absent — if the write path ever receives out of order,
   that is DELIVERY-1's contract to fix, not something to paper over here.
+
+---
+
+## Entry 15 — 2026-08-04 — DOD-DOC-ENGINE-1 ✅ CLOSED (two passes; P1's first unit done)
+
+**Merged:** cello-client `m14/engine-1` → `main` (ebfc136).
+
+### I flagged the fix I was least sure of, and it was the one that was wrong
+
+Pass one's correction replaced the exclusion logic; my replacement reused a scratch document
+across a fold for performance. I told the reviewer it was the fix I trusted least and asked them
+to **measure rather than reason**. Both of my claims for it were false:
+
+- **`Y.applyUpdate` MERGES; it does not reset.** A scratch doc re-seeded from an *empty* document
+  still holds the previous trial's operations — measured: a shadow holding `"AAA"`, re-seeded from
+  an empty doc, still reads `"AAA"`. My docstring asserted the opposite as the safety argument.
+- With that residue present, an update whose dependencies the target lacks reports an **EMPTY
+  pending set** — so the one guard that catches the accept class goes green on exactly the input
+  it exists to refuse, and the caller's document is left short while the call returns `ok`.
+  Unreachable today *only* because `replay` aborts on first failure, keeping the two documents in
+  lockstep. **The safety rested on a caller property, not the property I had written down.**
+- The performance justification was also wrong: at 200/400/800 envelopes, reuse buys a *shrinking*
+  constant (2.4× → 1.26×), not the asymptotic fix I claimed. Both folds are O(n·|doc|) because
+  `encodeStateAsUpdate` runs per envelope either way.
+
+**The fix is to remove the trial from `replay` entirely.** Atomicity buys nothing there — a
+failure discards the whole document — so it applies straight to the doc and checks the pending set
+after each apply. The public `applyUpdate` keeps a FRESH trial per call, where the caller's
+document genuinely must survive a refusal. That deletes the hazard instead of documenting around
+it.
+
+*The lesson, and it is the second time this milestone: a comment asserting a safety property is
+not the property. "Safe because X" is a claim to be measured like any other — and the two times I
+have written one without measuring, it was false.*
+
+### Also fixed
+
+- **The refusal logging had ZERO coverage.** Deleting the log calls left all 2 567 tests green —
+  so the fix for "a return value nobody reads is not observable" was *itself* unobservable. Now
+  asserted with a recording logger, verified red on revert.
+- An incomplete snapshot threw `document_update_unresolved_dependencies`. There is no update — it
+  has its own class now.
+- Two comments survived the withdrawal correction still asserting the deleted rule; a reader hits
+  them before the corrected docblock and reintroduces exclusion.
+- A CHECK constraint enforces that only an `update` may carry a payload, making replay's skip of
+  payload-free audit rows provably safe rather than conventionally safe.
+- **Stale `dist` orphans:** the built artifact still exported the old `readText` name. Worth
+  recording the mechanism — `rm -rf dist` alone is NOT enough, because `tsc --build` reads its
+  incremental state and does nothing. It needs `--force`, and deleting dist without it leaves the
+  whole workspace unbuildable until you notice.
+
+### Carried onto later units (not deferred silently)
+
+- **The engine exposes no delete/undo accessor**, so §16.4's withdraw ("a Yjs undo") has nothing
+  that PRODUCES an inverse update — the engine only proves replay applies what it is handed. On
+  DOD-DOC-WRITE-1's line now.
+- **`applyUpdate` refuses an out-of-order update rather than buffering** — right for replay, wrong
+  for a live receive, which Yjs would buffer and resolve on the next state-vector exchange. Also
+  on WRITE-1's line, flagged for DELIVERY-1.
+- **Byte identity is proven single-writer only.** The harder property — byte identity across an
+  interleaved multi-writer log — is untested and belongs to a later unit.
+- **`replay` is not epoch-scoped** (`getEnvelopeLog` reads the whole log; `epoch_id` exists as a
+  column and is never filtered). Harmless in V1 where epoch is constant 0, and the engine failing
+  loud on a purged pre-epoch envelope is exactly what should happen if M14B misses it — recorded
+  as an M14B AC.
+
+### Gates
+
+`test` **2573 passed / 11 skipped, 233 files** · `lint` · `typecheck` · `build` clean (after a
+`--force` rebuild).
+
+### Next
+
+**DOD-DOC-WRITE-1** — scoped and falsified in Entry 14, now carrying two inherited constraints.

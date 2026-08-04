@@ -144,8 +144,16 @@ description: >
   The clientID rule (§14) pinned by a test: Yjs mints its own random clientID per live `Y.Doc`;
   nothing derives it from agent identity, nothing persists and restores one. Malformed-update
   handling per the fuzz findings: pre-parse size cap, wrapped apply, a bad update becomes a
-  typed error, never a crash. — ❌
-- **DOD-DOC-WRITE-1** [cello-client] — the write path (§16.2): each document materialized as a
+  typed error, never a crash. — ✅
+  > Two review passes. AC (ii) corrected mid-unit (a withdrawal excludes nothing); the trial
+  > document is fresh per call, measured. → Journal Entries 12–13, 15.
+- **DOD-DOC-WRITE-1** [cello-client] — **carries from ENGINE-1's reviews:** the engine exposes no
+  delete/undo accessor, so §16.4's withdraw ("a Yjs undo") has nothing that PRODUCES an inverse
+  update — the engine only proves replay applies whatever payload it is handed. Whichever unit
+  ships `withdraw` must produce the inverse. Also: `applyUpdate` REFUSES an out-of-order update
+  rather than buffering it (correct for replay, where a gap means corruption), so a live-receive
+  path wanting buffer-and-re-request semantics needs its own entry point — do not route live
+  receives through it without deciding that. — the write path (§16.2): each document materialized as a
   real file in a per-agent workspace directory; on publish the daemon diffs the file against the
   last-known projection and converts to Yjs operations (text diff for text types, key diff for
   JSON); on admission the daemon folds unpublished local file edits into the doc as local
