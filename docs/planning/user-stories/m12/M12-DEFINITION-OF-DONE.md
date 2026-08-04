@@ -289,6 +289,15 @@ description: >
   hits only `__tests__/`; the sole production reference is `flush()` in the SIGTERM handler, which
   short-circuits on an always-empty buffer). An adapter no production path invokes is not "proven".
   → Entries 16, 18, 22
+- **DOD-PARK-DRAIN-1** [cello-client] — parked store-and-forward content is delivered to a
+  RUNNING receiver daemon, no restart: drain on every successful standing-receiver
+  (re)build (covers the watchdog rebuild path where parking actually happens), ensure→drain
+  ordering fixed on signaling reconnect (today they race, 102 `standing_receiver_unavailable`
+  failures in one log), slow periodic backstop drain, error serialization fixed
+  (`[object Object]`). Proven across two daemons on two machines against a deliberately
+  flapping relay link. Discovered 2026-08-04: every cross-machine message stalled until the
+  receiving daemon was restarted. Full diagnosis + fix spec:
+  [[relay-keepalive-parked-drain-workorder]]. — ❌ NOT BUILT
 
 ## Tier P2 — Wave 1: complete CELLO on GCP, standalone
 
@@ -563,6 +572,22 @@ description: >
   restart and COULD after it, with no code change in between. Root cause NOT established — see
   Entry 44. Until it is, a directory restart is an undocumented precondition for sealing a
   recently-registered agent, which is launch-relevant.
+- **DOD-RELAY-KEEPALIVE-1** [trustless-cello, cello-client] — the daemon↔relay link
+  survives ≥30 min carrying an idle session, zero `relay_connection_gone`. Prime suspect
+  (verify first with `DEBUG=libp2p:connection-monitor*`): libp2p 3.3.2's default
+  ConnectionMonitor — 10s pings, adaptive timeout, `abortConnectionOnPingFailure: true` on
+  BOTH ends — killing healthy WAN links; matches the 2,061 untraced "aborted due to
+  timeout" errors in [[launch-triage]]. Fix: `abortConnectionOnPingFailure: false` for
+  relay links both sides (keep the ping traffic — it doubles as keepalive), preserve
+  session-peer liveness detection, remove the legacy default-limits `startRelay` factory
+  (`packages/relay/src/index.ts:89`). Cross-machine live delivery then succeeds without
+  store-and-forward fallback. Full diagnosis: [[relay-keepalive-parked-drain-workorder]].
+  — ❌ NOT BUILT
+- **DOD-GCP-RELAY-DRIFT-1** [trustless-cello] — GCP relay config drift vs AWS closed:
+  `RELAY_SESSION_MAX_IDLE_MS` 1800000→86400000 in `relay-cloud-init.yaml:69` (30 min vs
+  AWS's 24 h), plus a GCP-terraform regression test asserting relay idle/timeout config
+  (the AWS side has `test_m6b_007.py`; the GCP side has nothing, which is why the drift
+  shipped). [[relay-keepalive-parked-drain-workorder]] §5. — ❌ NOT BUILT
 
 ## Tier P3 — Wave 2: AWS rejoins + the launch claim
 
