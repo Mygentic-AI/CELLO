@@ -522,8 +522,12 @@ describe("AC-007: session_not_found after confirmSeal destroys state", () => {
 
 // ─── AC-008 ───────────────────────────────────────────────────────────────────
 
-describe("AC-008: leaf_kind_invalid for values outside {0x00, 0x02}", () => {
-  it.each([0x01, 0x03, 0xff, 0x10])(
+describe("AC-008 (amended, DOD-DOC-LEAF-1): leaf_kind_invalid outside {0x00, 0x02, 0x04, 0x05}", () => {
+  // 0x04 (document operation) and 0x05 (rejection) moved OUT of this set when documents
+  // shipped — they are accepted below. 0x01 stays refused and is the load-bearing case: it
+  // is the RFC 6962 internal-node prefix, so a leaf hashed under it can alias an internal
+  // node and forge tree shape (§2.1.3).
+  it.each([0x01, 0x03, 0x06, 0xff, 0x10])(
     "leaf_kind=0x%s → leaf_kind_invalid",
     async (badKind) => {
       const fix = await makeFixture();
@@ -548,6 +552,60 @@ describe("AC-008: leaf_kind_invalid for values outside {0x00, 0x02}", () => {
     },
     20_000
   );
+});
+
+// ─── DOD-DOC-LEAF-1: the relay admits document leaves ────────────────────────
+
+describe("DOD-DOC-LEAF-1: leaf_kind 0x04 and 0x05 are accepted and witnessed", () => {
+  it.each([
+    [0x04, "document operation"],
+    [0x05, "rejection"],
+  ])("leaf_kind=0x%s (%s) → witnessed with a canonical sequence", async (kind) => {
+    const fix = await makeFixture();
+    const cA = await makeClient(fix.relayAddr);
+    const cB = await makeClient(fix.relayAddr);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
+
+    const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
+    await performAuth(rA, sA, cA.kp);
+
+    const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), cA.kp, 0);
+    sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: kind, structure1_cbor, sender_signature }));
+
+    const resp = await rA.readDecoded();
+    expect(resp["type"]).toBe("hash_submit_ack");
+    expect(resp["sequence_number"]).toBe(1);
+
+    sA.close().catch(() => {});
+    await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
+  }, 20_000);
+
+  it("each leaf kind produces a DIFFERENT running root for the same content — domain separation on the wire", async () => {
+    const roots: string[] = [];
+    for (const kind of [0x00, 0x04, 0x05]) {
+      const fix = await makeFixture();
+      const cA = await makeClient(fix.relayAddr);
+      const cB = await makeClient(fix.relayAddr);
+      const sessionId = new Uint8Array(randomBytes(16));
+      fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
+      const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
+      await performAuth(rA, sA, cA.kp);
+      // Same content hash every time — only the kind byte differs.
+      const contentHash = new Uint8Array(32).fill(0x7f);
+      const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, contentHash, cA.kp, 0);
+      sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: kind, structure1_cbor, sender_signature }));
+      const resp = await rA.readDecoded();
+      expect(resp["type"]).toBe("hash_submit_ack");
+      const seal = fix.relay.getSealLeaves(sessionId);
+      expect(seal.ok).toBe(true);
+      if (seal.ok) roots.push(Buffer.from(seal.data.merkle_root).toString("hex"));
+      sA.close().catch(() => {});
+      await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
+    }
+    expect(new Set(roots).size).toBe(3);
+  }, 60_000);
 });
 
 // ─── AC-009 ───────────────────────────────────────────────────────────────────

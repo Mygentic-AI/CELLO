@@ -16,6 +16,8 @@
  *   relay → directory:  seal_submission (relay-initiated when bilateral SEAL detected)
  */
 
+import type { RelayLeafKind } from "./relay-types.js";
+
 // ─── Directory → Relay request frames ────────────────────────────────────────
 
 export interface RecordAssignmentFrame {
@@ -69,7 +71,7 @@ export interface SealSubmissionFrame {
 }
 
 export interface SealSubmissionLeaf {
-  kind: "msg" | "ctrl";
+  kind: RelayLeafKind;
   s2: unknown;               // Structure2 — typed as unknown to avoid cross-package import
   structure1_cbor: Uint8Array;
 }

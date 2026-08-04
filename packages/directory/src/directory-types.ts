@@ -645,8 +645,14 @@ export type { SealNotarization } from "@cello-protocol/interfaces";
 
 import type { Structure2 } from "@cello-protocol/protocol-types";
 
+/**
+ * A leaf domain the directory can see in a carried chain (DOD-DOC-LEAF-1). "doc" (0x04) and
+ * "reject" (0x05) are document-collaboration leaves; only "ctrl" (0x02) is a SEAL ceremony leaf.
+ */
+export type RelaySealLeafKind = "msg" | "ctrl" | "doc" | "reject";
+
 export interface RelaySealLeaf {
-  kind: "msg" | "ctrl";
+  kind: RelaySealLeafKind;
   s2: Structure2;
   structure1_cbor: Uint8Array;
 }

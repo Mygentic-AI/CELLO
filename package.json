@@ -25,7 +25,8 @@
       "sharp"
     ],
     "overrides": {
-      "@libp2p/interface": "3.2.2"
+      "@libp2p/interface": "3.2.2",
+      "@types/node": "25.6.2"
     },
     "patchedDependencies": {
       "@libp2p/autonat@3.0.20": "patches/@libp2p__autonat@3.0.20.patch"

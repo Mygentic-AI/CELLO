@@ -747,6 +747,11 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
         const structure2_cbor = toUint8Array(r["structure2_cbor"]);
         const structure1_cbor = toUint8Array(r["structure1_cbor"]);
         if (sequence_number === null || leaf_kind === null) return null;
+        // Shape-level range check only: a leaf kind is ONE byte on the wire, so a
+        // non-integer or out-of-range value is a malformed frame. WHICH bytes are
+        // meaningful is decided in seal-unilateral-verify (an unlisted byte is refused
+        // there) — this layer must not duplicate that set, or the two would drift.
+        if (!Number.isInteger(leaf_kind) || leaf_kind < 0 || leaf_kind > 255) return null;
         if (!structure2_cbor || structure2_cbor.length === 0) return null;
         if (!structure1_cbor || structure1_cbor.length === 0) return null;
         const relay_id = typeof r["relay_id"] === "string" ? r["relay_id"] : undefined;

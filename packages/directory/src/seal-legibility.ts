@@ -106,15 +106,20 @@ function sealCeremonyLeafIndices(leaves: RelaySealLeaf[]): Set<number> {
  * contrasting case) — the two questions intentionally use different leaf sets.
  */
 function trailingSealCtrlAuthors(leaves: RelaySealLeaf[]): Set<string> {
-  // INVARIANT (review finding, low): the protocol defines exactly ONE control-leaf kind —
-  // the SEAL ceremony leaf (LEAF_KIND_CTRL = 0x02). There is no other ctrl-leaf type, so every
-  // leaf with kind 'ctrl' in a verified seal IS a SEAL ceremony leaf and its author DID produce a
-  // contemporaneous SEAL acknowledgement ⇒ 'live'. If a future protocol adds a distinct ctrl-leaf
-  // kind, this walk must discriminate on that kind (verifySealLeaves would also need updating);
-  // until then the contiguous trailing ctrl run is exactly the closing ceremony.
+  // The protocol still defines exactly ONE control-leaf kind — the SEAL ceremony leaf
+  // (0x02) — so a 'ctrl' leaf in a verified seal IS a SEAL acknowledgement ⇒ 'live'.
+  // Document leaves (0x04/0x05, DOD-DOC-LEAF-1) are NOT control leaves and carry no
+  // ceremony meaning, but they ride the same tree and are delivered MECHANICALLY by the
+  // peer's daemon — so one can land after both parties have sealed. Treat them as
+  // transparent while walking back, or an unrelated background delivery would downgrade
+  // an ordinary bilateral seal to 'absent'.
+  //
+  // A 'msg' leaf still ENDS the walk: content means the ceremony region is behind us.
   const authors = new Set<string>();
   for (let i = leaves.length - 1; i >= 0; i--) {
-    if (leaves[i]!.kind !== "ctrl") break;
+    const kind = leaves[i]!.kind;
+    if (kind === "doc" || kind === "reject") continue;
+    if (kind !== "ctrl") break;
     authors.add(Buffer.from(leaves[i]!.s2.sender_pubkey).toString("hex"));
   }
   return authors;
@@ -229,6 +234,13 @@ export function buildSealLegibility(
     for (let i = 0; i < leaves.length; i++) {
       if (sealIndices.has(i)) continue; // exclude the closing ceremony leaves
       const leaf = leaves[i]!;
+      // Document leaves never answer (DOD-DOC-LEAF-1). A document update is applied
+      // MECHANICALLY by the peer's daemon with no agent involved, so counting one as a reply
+      // would let a peer's daemon satisfy the unanswered-tail check on its operator's behalf —
+      // the exact property `answered` exists to expose. Note this excludes ONLY 0x04/0x05: a
+      // lone trailing ctrl leaf from the counterparty still counts as a reply, which is
+      // deliberate and covered by AC-004's contrasting case (see the note above).
+      if (leaf.kind === "doc" || leaf.kind === "reject") continue;
       const senderHex = Buffer.from(leaf.s2.sender_pubkey).toString("hex");
       if (senderHex !== finalSenderHex && leaf.s2.sequence_number > finalSeq) {
         answered = true;

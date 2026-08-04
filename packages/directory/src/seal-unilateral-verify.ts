@@ -25,7 +25,24 @@ import { SCAN_RESULT_SENTINEL } from "@cello-protocol/protocol-types";
 import type { Structure2 } from "@cello-protocol/protocol-types";
 import type { SealUnilateralLeaf, RelaySealData } from "./directory-types.js";
 
-const LEAF_KIND_CTRL = 0x02;
+/**
+ * Wire byte → leaf domain (DOD-DOC-LEAF-1). This site AUTHORIZES a seal, so an unlisted byte
+ * is REFUSED, never coerced. The previous shape — anything-but-0x02 becomes "msg" — silently
+ * relabeled a leaf at a trust boundary: the directory would rebuild the tree hashing that leaf
+ * under the wrong domain and derive a root the sealing party never computed.
+ *
+ * 0x01 is absent by design: it is the RFC 6962 internal-node prefix (§2.1.3 tree-shape forgery).
+ *
+ * Deliberately the OPPOSITE policy from crypto's tolerant `opaque` kind, which exists so a pure
+ * root RECOMPUTATION survives an unknown byte. Same byte, two sites, two correct answers —
+ * authorization refuses what it cannot name; recomputation must not.
+ */
+const LEAF_KINDS: Readonly<Record<number, "msg" | "ctrl" | "doc" | "reject">> = {
+  0x00: "msg",
+  0x02: "ctrl",
+  0x04: "doc",
+  0x05: "reject",
+};
 
 const u8 = (v: unknown): Uint8Array => (v instanceof Uint8Array ? v : Buffer.isBuffer(v) ? new Uint8Array(v) : new Uint8Array());
 
@@ -72,7 +89,9 @@ export function reconstructCarriedSealLeaves(
         return { ok: false, reason: "unilateral_receipt_invalid" };
       }
     }
-    leaves.push({ kind: w.leaf_kind === LEAF_KIND_CTRL ? "ctrl" : "msg", s2, structure1_cbor: w.structure1_cbor });
+    const kind = LEAF_KINDS[w.leaf_kind];
+    if (!kind) return { ok: false, reason: "unilateral_leaf_kind_unknown" };
+    leaves.push({ kind, s2, structure1_cbor: w.structure1_cbor });
   }
   return { ok: true, leaves };
 }

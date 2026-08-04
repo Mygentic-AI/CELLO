@@ -54,7 +54,7 @@ type Kp = ReturnType<typeof generateKeypair>;
  */
 async function makeLeaf(
   key: Kp,
-  kind: "msg" | "ctrl",
+  kind: import("../directory-types.js").RelaySealLeafKind,
   seq: number,
   lastSeenSeq: number,
 ): Promise<RelaySealLeaf> {
@@ -378,5 +378,117 @@ describe("M7-SESSION-004 (directory): buildSealLegibility", () => {
         "to, the contents of any message. Agreement is always a separate, explicit act " +
         "(its own signed reply). A sealed transcript is a receipt, never a record of agreement.",
     );
+  });
+});
+
+// ─── DOD-DOC-LEAF-1: document leaves must not disturb the ceremony derivation ──
+//
+// buildSealLegibility answers two questions by walking leaf kinds: who produced a
+// contemporaneous SEAL acknowledgement ('live'), and was the final content message
+// answered. Before documents, "not ctrl" meant "content", so every non-ceremony leaf
+// was a candidate reply. Now 0x04/0x05 leaves ride the same tree and are neither.
+//
+// A document update is delivered MECHANICALLY by the peer's daemon with no agent
+// involved (M14 §16.4). Letting one count as an answer would let a peer's daemon
+// silently satisfy the malicious-unanswered-tail check on its operator's behalf —
+// the exact property `answered` exists to expose. Only 'msg' leaves answer.
+describe("DOD-DOC-LEAF-1: doc/reject leaves in the legibility derivation", () => {
+  it("a trailing doc leaf does NOT fake a SEAL ceremony acknowledgement", async () => {
+    const a = generateKeypair();
+    const b = generateKeypair();
+    // A seals; B never returns, but a doc leaf from B trails the ceremony.
+    const leaves = [
+      await makeLeaf(a, "msg", 1, 0),
+      await makeLeaf(a, "ctrl", 2, 0),
+      await makeLeaf(b, "doc", 3, 2),
+    ];
+    const leg = buildSealLegibility(leaves);
+    const bHex = await pkHex(b);
+    const bParty = leg.participants.find((p) => Buffer.from(p.pubkey).toString("hex") === bHex);
+    expect(bParty).toBeDefined();
+    // B produced no ctrl leaf, so B is 'absent' — a doc leaf is not an acknowledgement.
+    expect(bParty!.attestation_mode).toBe("absent");
+  });
+
+  it("a doc or reject leaf never becomes final_message — only content does", async () => {
+    const a = generateKeypair();
+    const b = generateKeypair();
+    const leaves = [
+      await makeLeaf(a, "msg", 1, 0),
+      await makeLeaf(b, "doc", 2, 1),
+      await makeLeaf(b, "reject", 3, 1),
+      await makeLeaf(a, "ctrl", 4, 3),
+      await makeLeaf(b, "ctrl", 5, 4),
+    ];
+    const leg = buildSealLegibility(leaves);
+    const aHex = await pkHex(a);
+    // The highest-sequence CONTENT leaf is A's at seq 1, despite two higher doc leaves.
+    expect(Buffer.from(leg.final_message.sender_pubkey).toString("hex")).toBe(aHex);
+    expect(leg.final_message.seq).toBe(1);
+  });
+
+  it("a peer's document leaf does NOT mark the malicious tail answered", async () => {
+    const a = generateKeypair();
+    const b = generateKeypair();
+    // A sends the final content message; B replies with NOTHING but a mechanical
+    // document update, then both seal. The tail is unanswered.
+    const leaves = [
+      await makeLeaf(a, "msg", 1, 0),
+      await makeLeaf(b, "doc", 2, 1),
+      await makeLeaf(a, "ctrl", 3, 2),
+      await makeLeaf(b, "ctrl", 4, 3),
+    ];
+    const leg = buildSealLegibility(leaves);
+    expect(leg.final_message.answered).toBe(false);
+  });
+
+  it("contrast: a real content reply after the final message DOES answer it", async () => {
+    const a = generateKeypair();
+    const b = generateKeypair();
+    const leaves = [
+      await makeLeaf(a, "msg", 1, 0),
+      await makeLeaf(b, "doc", 2, 1),
+      await makeLeaf(b, "msg", 3, 1),
+      await makeLeaf(a, "ctrl", 4, 3),
+      await makeLeaf(b, "ctrl", 5, 4),
+    ];
+    const leg = buildSealLegibility(leaves);
+    // final_message is now B's msg at seq 3 (the highest content leaf), authored by B.
+    const bHex = await pkHex(b);
+    expect(Buffer.from(leg.final_message.sender_pubkey).toString("hex")).toBe(bHex);
+    expect(leg.final_message.seq).toBe(3);
+  });
+});
+
+// A document update is delivered mechanically and can land AFTER both parties' SEAL
+// ctrl leaves. The trailing-ctrl-run walk must see through it: a party who demonstrably
+// produced a SEAL acknowledgement stays 'live', or an ordinary bilateral seal would be
+// downgraded to 'absent' by an unrelated background delivery.
+describe("DOD-DOC-LEAF-1: a trailing doc leaf must not erase a live attestation", () => {
+  it("both parties stay 'live' when a doc leaf lands after the bilateral ceremony", async () => {
+    const a = generateKeypair();
+    const b = generateKeypair();
+    const leaves = [
+      await makeLeaf(a, "msg", 1, 0),
+      await makeLeaf(a, "ctrl", 2, 0),
+      await makeLeaf(b, "ctrl", 3, 2),
+      await makeLeaf(b, "doc", 4, 3),
+    ];
+    const leg = buildSealLegibility(leaves);
+    expect(leg.participants.map((p) => p.attestation_mode)).toEqual(["live", "live"]);
+  });
+
+  it("a content message still ENDS the ceremony region — an earlier ctrl leaf is not the closing run", async () => {
+    const a = generateKeypair();
+    const b = generateKeypair();
+    const leaves = [
+      await makeLeaf(a, "ctrl", 1, 0),
+      await makeLeaf(b, "msg", 2, 1),
+      await makeLeaf(b, "doc", 3, 2),
+    ];
+    const leg = buildSealLegibility(leaves);
+    // A's ctrl leaf is separated from the tail by a CONTENT message, so it is not part of
+    // any closing ceremony — nobody is 'live'.
+    expect(leg.participants.every((p) => p.attestation_mode === "absent")).toBe(true);
   });
 });

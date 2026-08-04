@@ -5902,7 +5902,7 @@ function upgradeConfirmedFromPayload(
 }
 
 function verifySealLeaves(
-  leaves: Array<{ kind: "msg" | "ctrl"; s2: import("@cello-protocol/protocol-types").Structure2; structure1_cbor: Uint8Array }>  // RelaySealLeaf
+  leaves: Array<{ kind: import("./directory-types.js").RelaySealLeafKind; s2: import("@cello-protocol/protocol-types").Structure2; structure1_cbor: Uint8Array }>  // RelaySealLeaf
 ): { ok: true } | { ok: false } {
   // Final two leaves must be ctrl-kind (0x02) from distinct participants.
   if (leaves.length < 2) return { ok: false };

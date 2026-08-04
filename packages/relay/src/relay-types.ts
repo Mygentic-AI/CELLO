@@ -11,6 +11,35 @@
  */
 
 import type { Structure2 } from "@cello-protocol/protocol-types";
+import { msgLeafHash, ctrlLeafHash, docLeafHash, rejectLeafHash } from "@cello-protocol/crypto";
+
+// ─── Leaf kinds (DOD-DOC-LEAF-1) ─────────────────────────────────────────────
+
+/** The leaf domains this relay witnesses. Domain-separated per RFC 6962 §2.1. */
+export type RelayLeafKind = "msg" | "ctrl" | "doc" | "reject";
+
+/**
+ * Wire byte → domain. The ONLY mapping; a second copy is how the byte and the hash drift.
+ *
+ * 0x01 is deliberately absent and must never be added: it is the RFC 6962 internal-node
+ * prefix, so a 64-byte leaf hashed under it is byte-identical to nodeHash(left, right) and
+ * forges tree shape (§2.1.3). An unlisted byte is REFUSED, never coerced — coercion would
+ * hash the leaf under a domain its sender did not use, diverging the two parties' roots.
+ */
+export const RELAY_LEAF_KINDS: Readonly<Record<number, RelayLeafKind>> = {
+  0x00: "msg",
+  0x02: "ctrl",
+  0x04: "doc",
+  0x05: "reject",
+};
+
+/** Domain → leaf-hash function. Must stay consistent with RELAY_LEAF_KINDS. */
+export const RELAY_LEAF_HASHERS: Readonly<Record<RelayLeafKind, (data: Uint8Array) => Uint8Array>> = {
+  msg: msgLeafHash,
+  ctrl: ctrlLeafHash,
+  doc: docLeafHash,
+  reject: rejectLeafHash,
+};
 
 // ─── Auth frame types ─────────────────────────────────────────────────────────
 
@@ -160,7 +189,7 @@ export interface RelaySessionState {
   assignment: SessionAssignment;
   genesis_prev_root: Uint8Array; // SHA-256(sorted(A,B) || session_id || session_timestamp)
   seq_counter: number;           // 0 initially; incremented to 1 on first leaf
-  leaf_log: Array<{ kind: "msg" | "ctrl"; s2: Structure2; structure1_cbor: Uint8Array }>; // ordered
+  leaf_log: Array<{ kind: RelayLeafKind; s2: Structure2; structure1_cbor: Uint8Array }>; // ordered
   status: SessionStatus;
   /**
    * RFC 6962 incremental stack. Each entry is the root of a complete 2^height-leaf subtree.
@@ -185,7 +214,7 @@ export interface RelaySessionState {
 // ─── Seal interface ────────────────────────────────────────────────────────────
 
 export interface SealData {
-  leaves: Array<{ kind: "msg" | "ctrl"; s2: Structure2; structure1_cbor: Uint8Array }>;
+  leaves: Array<{ kind: RelayLeafKind; s2: Structure2; structure1_cbor: Uint8Array }>;
   seq_count: number;
   merkle_root: Uint8Array;
 }
