@@ -15,16 +15,17 @@ description: >
 
 ## RESUME STATE (overwrite in place — the only mutable block)
 
-- **Current unit:** DOD-DOC-LEAF-1 — **client half DONE** (written AND reviewed; all findings
-  applied — Entry 3). The DoD line stays ❌ until the trustless-cello half is green too.
-- **Branches:** cello-client `m14/leaf-1` @ 2f5b8a1 (pushed, unmerged — merges when the whole
-  unit is green). trustless-cello half not started.
-- **Next action:** the publish cascade (`/cello-publish`, loaded for that publish) — the
-  trustless-cello half compiles against the new crypto. Its final `latest` promotion is Andre's.
-- **Next red after this unit:** DOD-DOC-FUZZ-1 (interleavable while the publish waits; Yjs
-  dependency facts already measured — see Entry 3's note in the next entry).
-- **Parked/waiting:** nothing blocked yet.
-- **HEAD:** trustless-cello `main` @ c8c2857f · cello-client `m14/leaf-1` @ 2f5b8a1
+- **Current unit:** DOD-DOC-LEAF-1 — client half DONE + MERGED + PUBLISHED to `beta` and verified
+  against the tarballs (Entry 4). Line stays ❌: the trustless-cello half is unbuilt.
+- **🛑 BLOCKED ON ANDRE — the `latest` promotion.** Seven `npm dist-tag add` lines are prepared in
+  Entry 4. Until it runs, trustless-cello cannot resolve crypto `0.0.39` from `latest`, so
+  T1–T7 cannot compile. This is the ONLY blocked thread; do not re-ask, do not run it.
+- **Working meanwhile:** DOD-DOC-FUZZ-1 on cello-client branch `m14/fuzz-1` (P0, no cross-repo
+  dependency). Yjs facts already measured — Entry 4, bottom.
+- **Published (beta):** crypto 0.0.39 · protocol-types 0.0.41 · transport 0.0.43 · daemon 0.0.120
+  · cli 0.0.123 · connect 0.0.117 · gateway 0.0.23 (unbumped, deliberately). Tag `v0.0.180`.
+- **HEAD:** trustless-cello `main` @ b9bebf25 · cello-client `main` @ 288c8b8
+  (`m14/leaf-1` merged)
 
 ---
 
@@ -303,3 +304,85 @@ Client half is **DONE** (written AND reviewed, findings applied, gates green). T
 DOD-DOC-LEAF-1 stays **❌** because the trustless-cello half has not been built — it is one
 line, not two, and it does not flip until both repos are green. Next: the publish cascade
 (`/cello-publish`, loaded for THAT publish), which the trustless-cello half compiles against.
+
+---
+
+## Entry 4 — 2026-08-04 — Publish cascade STAGED and verified; `latest` promotion awaits Andre
+
+`/cello-publish` loaded for THIS publish (not carried from earlier in the session).
+
+**Merged first:** cello-client `m14/leaf-1` → `main` (`--no-ff`), because the client half is
+reviewed-green and a publish must come from main. The DoD line is still ❌ — merging a reviewed
+unit and closing a DoD line are different acts.
+
+### The cascade, and two corrections to the skill's package list
+
+Computed from the actual `dependencies` of each `core/*/package.json` rather than the skill's
+prose list, which is stale in two ways worth recording:
+
+- **`@cello-protocol/client` no longer exists** as a package — there is no `core/client`
+  directory. `client@0.0.50` sits on npm as an artifact of its last publish. The skill's step-5
+  and step-6 loops still name it.
+- **`gateway` is in CI's publish list but absent from the skill's.** CI publishes seven:
+  crypto, protocol-types, transport, **gateway**, daemon, cli, adapter-claude-code(connect).
+  `.github/workflows/ci.yml:285-291` is the authority.
+
+| package | was | published |
+|---|---|---|
+| crypto | 0.0.38 | **0.0.39** |
+| protocol-types | 0.0.40 | **0.0.41** |
+| transport | 0.0.42 | **0.0.43** |
+| daemon | 0.0.119 | **0.0.120** |
+| cli | 0.0.122 | **0.0.123** |
+| connect | 0.0.116 | **0.0.117** |
+| gateway | 0.0.23 | *unbumped* |
+
+`gateway` was left alone deliberately: it declares **no** CELLO dependency (`re2-wasm` only) and
+had no source change, so a bump would republish byte-identical content and buy nothing. Every
+package that transitively depends on crypto **was** bumped, satisfying the cascade invariant.
+
+### Tag drift, confirmed again
+
+Highest existing tag was **`v0.0.179`** while connect was at **0.0.116** — a 63-version gap. The
+tag is a monotonic CI trigger and nothing more. Took the next free counter, **`v0.0.180`**, and
+verified it was unused before pushing. Deriving the tag from any package version would have
+collided.
+
+### CI (run 30931111833, tag `v0.0.180`) — all green
+
+`Build and Test: success` → `Publish (tag release): success` → `Published-artifact smoke test
+(tag): success`. Both cross-repo E2E gate jobs `skipped` (they are `if: false` — the disabled
+OIDC path, expected).
+
+### Verified against the BINARIES, not the CI status
+
+- `npm pack @cello-protocol/crypto@0.0.39` → `dist/hashing.js` exports `docLeafHash`,
+  `rejectLeafHash`, `opaqueLeafHash`; the **F1 internal-node guard** is present in the shipped
+  file (`grep "internal-node domain"` → 1); `dist/merkle.js` carries the F3 default case
+  (`grep "unrecognized leaf kind"` → 1). The security fix is in the artifact operators get, not
+  just in main.
+- `npm pack @cello-protocol/daemon@0.0.120` → `dist/session-tree.js` and
+  `dist/session-node-manager.js` both carry `sessionTreeLeafKindFromDb`, and the log event
+  `session.tree.leaf_kind.unrecognized` ships in `session-node-manager.js`.
+- **Cross-pins are real versions, no `workspace:*` anywhere:** cli→daemon `0.0.120`,
+  connect→crypto `0.0.39` + transport `0.0.43`, daemon→crypto `0.0.39` + gateway `0.0.23` +
+  transport `0.0.43` + protocol-types `0.0.41`.
+
+### BLOCKED — the one thing that is not mine
+
+The `latest` promotion is operator-run (Andre), always. Until it runs, `trustless-cello` cannot
+resolve the new crypto from the `latest` dist-tag, so **T1–T7 (the relay/directory half of
+DOD-DOC-LEAF-1) stay blocked** and the DoD line stays ❌. Per [[M14-PROCEDURE]] §3a this is a
+park-and-work-another-line, not a stop: DOD-DOC-FUZZ-1 (P0, no cross-repo dependency) is picked
+up meanwhile on branch `m14/fuzz-1`.
+
+The exact command set is prepared and handed over; it is not run here.
+
+### Yjs dependency facts (measured now, consumed by DOD-DOC-FUZZ-1)
+
+From the npm registry, not from memory: `yjs@13.6.32` — 2.31 MB unpacked, 135 files, exactly one
+dependency (`lib0@0.2.117`, 2.41 MB, which depends only on `isomorphic.js@0.2.5`, 4.9 KB). Total
+three packages, ~4.72 MB unpacked. **No `install`, `preinstall`, or `postinstall` script in any
+of the three** — pure JS, no native compile, so it adds no build step to an operator's install
+(heavy-local-node doctrine: the cost is download size, not compile time). Engine floor
+`node >=16`, well under the project's Node 24.
