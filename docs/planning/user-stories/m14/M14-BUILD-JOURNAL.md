@@ -589,3 +589,68 @@ cello-client: `test` 2496 passed · lint · typecheck · build clean (at the pub
 measurement pass written (garbage, every prefix of a valid update, every single-byte corruption,
 a maximal varint, 2000-deep nesting), each case classifying returned/threw/**hung** because a
 hang is the one failure mode `cap, catch, contain` cannot contain. Not yet run.
+
+---
+
+## Entry 7 — 2026-08-04 — DOD-DOC-FUZZ-1: Yjs hostile-input measurement (review in flight)
+
+**Branch:** cello-client `m14/fuzz-1` @ 6a8ba6b (pushed). **Status: IMPLEMENTED, not DONE** —
+the unit reviewer is running; the DoD line stays ❌ until its verdict is quoted.
+
+### Why this unit exists
+
+§16.7-7's posture is **cap, catch, contain**: a pre-parse size cap before Yjs sees the bytes, a
+wrapped apply so a malformed update becomes an ordinary rejection, structural limits on the
+shadow. That posture is sound **only if** `Y.applyUpdate`'s real failure mode is a THROW. A
+crash, a hang, or unbounded allocation are not containable by a try/catch — and the receive path
+is reached by peer-controlled bytes with no agent in the loop. So the DoD made measuring this a
+precondition of designing the gate around it.
+
+### Measured — yjs 13.6.32, not assumed
+
+| Hostile shape | Outcome |
+|---|---|
+| Random garbage, 2000 trials, 1–64 bytes | **2000/2000 threw.** Zero silently accepted |
+| Every prefix of a valid 35-byte update (35 cuts) | **35/35 threw** |
+| Every single-byte corruption of a valid update | contained, no hang |
+| Maximal 10-byte varint claiming a huge length | neither hung nor allocated (heap bounded) |
+| 2000-deep nested maps | **applied successfully in 2ms** |
+| Anything | **nothing hung** |
+
+**Verdict on §16.7-7: the posture holds.** Throws are the failure mode; a try/catch contains
+them. No sandbox process needed for V1, as the spec assumed — now measured rather than hoped.
+
+### Two findings that become DOD-DOC-GATE-1 ACs
+
+1. **The gate needs a FLOOR, not just a cap.** An empty or one-byte update throws
+   `Unexpected end of array` — a *decoder* error naming Yjs internals, not a protocol fault. The
+   minimal valid update is **two bytes** (`[0,0]`, the empty encoded state). Without a floor, a
+   peer sending an empty update gets a quarantine reason that means nothing to its operator, and
+   the no-silent-drop record carries Yjs's wording instead of ours.
+   *My test originally asserted empty was a no-op. The measurement corrected me* — which is the
+   point of measuring rather than reasoning about it.
+2. **Depth is entirely the gate's job.** Yjs does not reject nesting depth at all: 2000 levels
+   applied in 2ms. And the size cap does **not** bound depth usefully — 2000 levels cost 23,880
+   bytes (~12 bytes/level), so a 1 MiB update carries roughly **87,000 levels**. §16.7-6's
+   "nesting depth" limit is therefore load-bearing, not a nicety, and its default must be chosen
+   against this measurement.
+
+### Yjs dependency facts (recorded once, heavy-local-node doctrine)
+
+Three packages total: `yjs@13.6.32` (2.31 MB unpacked, 135 files) → `lib0@0.2.117` (2.41 MB) →
+`isomorphic.js@0.2.5` (4.9 KB). **~4.7 MB unpacked, and NO `install`/`preinstall`/`postinstall`
+script in any of the three** — pure JS, no native compile. The operator cost is download size
+only; it adds no build time to `npm install`, which is the constraint that actually matters for a
+locally-installed node.
+
+### Open question handed to the reviewer
+
+`classify()` measures wall-clock against a budget and reports `"hung"` — but a genuinely hung
+`Y.applyUpdate` would block the event loop and never return, so `classify` may be **incapable**
+of reporting a hang, making those assertions decorative and the vitest timeout the real
+protection. Asked explicitly. If confirmed, the hang claims in this entry need weakening to
+"no case exceeded its budget", and the honest protection is the suite timeout.
+
+### Gates (cello-client, all four)
+
+`test` **2508 passed / 11 skipped** · `lint` clean · `typecheck` clean · `build` clean.
