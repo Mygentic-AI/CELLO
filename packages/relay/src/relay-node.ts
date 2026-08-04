@@ -1872,6 +1872,22 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
         applyDefaultLimit: false,
       },
     },
+    // DOD-RELAY-KEEPALIVE-1 — THE RELAY MUST NEVER SEVER A CLIENT LINK ON ONE SLOW PING.
+    //
+    // libp2p's ConnectionMonitor runs on every node by default: it pings each connection every
+    // 10s under an adaptive timeout floored at 5s, and `abortConnectionOnPingFailure` defaults to
+    // TRUE — so one ping that misses that deadline aborts the whole connection. On 2026-08-04
+    // every client↔relay link died every 60-90 seconds (`reservation.lost`,
+    // `relay_connection_gone`) with "The operation was aborted due to timeout", the same string
+    // behind 2,061 untraced relay reader errors.
+    //
+    // A relay owes its clients no liveness verdict — that is the reservation TTL's job — so it
+    // gives up the authority to abort. The pings KEEP FLOWING: on an otherwise idle relay link
+    // they are the only traffic there is, and that traffic is what stops network-level reapers
+    // (NAT conntrack, enterprise firewalls) from collecting the connection.
+    connectionMonitor: {
+      abortConnectionOnPingFailure: false,
+    },
   });
   await node.start();
 

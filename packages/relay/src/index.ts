@@ -6,12 +6,6 @@ export { FileContentStore } from "./adapters/file-content-store.js";
 export type { FileContentStoreOptions } from "./adapters/file-content-store.js";
 export { CONTENT_PARK_PROTOCOL_ID } from "./content-park.js";
 
-import { createLibp2p } from "libp2p";
-import { tcp } from "@libp2p/tcp";
-import { noise } from "@chainsafe/libp2p-noise";
-import { yamux } from "@chainsafe/libp2p-yamux";
-import { circuitRelayServer } from "@libp2p/circuit-relay-v2";
-import { identify } from "@libp2p/identify";
 import {
   generateKeyPair,
   generateKeyPairFromSeed,
@@ -21,12 +15,6 @@ import {
 import type { PrivateKey } from "@libp2p/interface";
 import { readFile, rename, mkdir, open as fsOpen } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { Libp2p } from "@libp2p/interface";
-
-export interface RelayNode {
-  listenAddresses(): string[];
-  stop(): Promise<void>;
-}
 
 /**
  * Derive the relay's libp2p PeerID (`12D3Koo…`) from a 32-byte Ed25519 transport SEED —
@@ -40,13 +28,6 @@ export interface RelayNode {
 export async function peerIdFromTransportSeed(seed: Uint8Array): Promise<string> {
   const key = await generateKeyPairFromSeed("Ed25519", seed);
   return key.publicKey.toString();
-}
-
-export interface StartRelayOptions {
-  /** Path to persist the relay transport keypair. Default: ~/.cello/relay-key */
-  keyPath: string;
-  /** libp2p listen address. Default: /ip4/0.0.0.0/tcp/4001 */
-  listenAddress: string;
 }
 
 /**
@@ -82,33 +63,16 @@ export async function loadOrGenerateRelayKey(keyPath: string): Promise<PrivateKe
 }
 
 /**
- * Start a circuit-relay-v2-only libp2p node.
- * No CELLO client, no signing key, no message handling.
- * Purely a HOP relay for connecting agents across NATs.
+ * DOD-RELAY-KEEPALIVE-1: `startRelay` was DELETED here (2026-08-04).
+ *
+ * It built a relay straight from `createLibp2p` with libp2p's DEFAULTS — maxReservations 15 and
+ * applyDefaultLimit true, i.e. relayed connections capped at 2 minutes and 128 KiB. Those are the
+ * two settings `createRelayNode` disables on purpose (relay-node.ts), because for a relay whose
+ * whole job is carrying CELLO sessions both defaults are wrong. The production binary
+ * (`bin/relay.ts`) has always used `createRelayNode`, so this factory ran nowhere — it was a
+ * loaded gun for whoever reached for the obvious-sounding name next.
+ *
+ * Deadness proven before deletion: no importer in this repo or in cello-client, and the package
+ * is private (never published), so there is no external consumer to break.
+ * `relay-defaults.test.ts` keeps it gone.
  */
-export async function startRelay(opts: StartRelayOptions): Promise<RelayNode> {
-  const key = await loadOrGenerateRelayKey(opts.keyPath);
-
-  const libp2p: Libp2p = await createLibp2p({
-    privateKey: key,
-    addresses: { listen: [opts.listenAddress] },
-    transports: [tcp()],
-    connectionEncrypters: [noise()],
-    streamMuxers: [yamux()],
-    services: {
-      identify: identify(),
-      relay: circuitRelayServer({ hopTimeout: 30_000 }),
-    },
-  });
-
-  await libp2p.start();
-
-  return {
-    listenAddresses(): string[] {
-      return libp2p.getMultiaddrs().map((ma) => ma.toString());
-    },
-    async stop(): Promise<void> {
-      await libp2p.stop();
-    },
-  };
-}
