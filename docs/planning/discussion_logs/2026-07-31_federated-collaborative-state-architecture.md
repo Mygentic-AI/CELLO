@@ -20,7 +20,12 @@ description: >
   the document log as a cross-session verifiable container, the 0x05 rejection
   leaf, the quiescence agreement flow with divergence records, the two-document
   hub-and-spoke default with pass-through as opt-in, text-only canonicalization
-  for non-JSON types, and document lifecycle verbs.
+  for non-JSON types, and document lifecycle verbs. Third pass 2026-08-04 (§16):
+  the V1/V2 cut (V1 = Tier 1 only; V2 = M14B), the write path (file
+  materialization + diff-on-publish), the document handshake (attestation-consent
+  mirror), daemon-autonomous delivery sessions with presence-driven retry and the
+  withdraw verb, passive notification, sender-side advisory screening, and the
+  full decision register feeding the M14/M14B Definitions of Done.
 ---
 
 # 2026-07-31 — Federated Collaborative State Architecture
@@ -41,6 +46,11 @@ level — §3.2), gave the document its own verifiable chain across sessions
 (§7.1), flipped hub-and-spoke's default to the two-document form with
 pass-through as the declared opt-in (§11.1), scoped the determinism requirement
 to document-carried validation, and added the document lifecycle verbs (§3.5).
+A third pass on 2026-08-04 worked the document backward from a Definition of
+Done: it settled the V1/V2 cut and every previously open decision, and designed
+the four layers the first two passes never touched — the write path, the
+document handshake, delivery, and notification (§16). §16 is the decision
+register the M14 and M14B DoDs cite.
 
 ---
 
@@ -1006,6 +1016,263 @@ between different counterparties — is template and agent-tooling work in the
 collaborated on; the one property worth making first-class is **append-only**,
 because that is what the auditable-log case depends on — and per §15B it is a
 validated invariant, not a boolean.
+
+---
+
+## 16. Decisions Addendum — the V1/V2 Cut and the Missing Layers (2026-08-04)
+
+This section is the product of working the document backward from a Definition
+of Done: for every gap that surfaced, a decision was made with Andre on
+2026-08-04. It is the decision register the [[M14-DEFINITION-OF-DONE]] and
+[[M14B-DEFINITION-OF-DONE]] cite as spec-of-record. Where this section and an
+earlier section disagree, this section wins — it is later and it was decided
+explicitly.
+
+### 16.1 The V1/V2 cut — V1 is Tier 1 only; V2 is M14B
+
+**V1 (M14) ships Tier 1 — authenticated collaboration — only.** The handshake
+declares `assurance_tier` but accepts only `authenticated`, exactly the
+pattern §3.3 chose for `schema_enforcement` ("declare the flag, support only
+false"). This removes canonicalization, the quiescence agreement flow,
+divergence records, epochs, and purge from V1 in one decision — the largest
+de-scoping available anywhere in this design. Tier-2 upgrade at an epoch
+boundary (§6) means nothing is stranded.
+
+**Purge defers with the epochs it rides on.** The V1 answer to "something
+toxic got into the document" is the Kill verb plus starting a fresh document —
+a manual epoch reset in effect. Toxic bytes lingering as invisible tombstones
+inside the encrypted local stores of the two parties who already saw the
+content is a forgivable papercut at launch; the visible content is gone and
+the rejection is on record.
+
+**The seam is protected by explicit V1 requirements**, each cheap now and each
+a retrofit if skipped:
+
+- Handshake declares `assurance_tier` (only `authenticated` accepted) and
+  `schema_enforcement` (only `false` accepted).
+- Every document envelope carries `epoch_id` (constant `0` in V1) and
+  `doc_prev_hash`.
+- Envelope storage keeps the payload column nullable (purge-ready) and
+  supports withdrawal records (§16.4).
+- Verifiers hash unknown leaf types as opaque bytes and skip them for
+  rendering (§16.7 item 10).
+- Replay is defined set-based per epoch (§16.7 item 5), so epochs slot in
+  without redefining verification.
+
+**V2 is milestone M14B** — same feature deepened, not a new domain. Its DoD is
+written now with `status: parked` so the decisions in this section that
+concern V2 (purge is cooperative, tier upgrade never retroactive,
+receiver-local limits) have a durable home rather than living only here.
+**V2's four owed design items**, to be closed in one design session before any
+M14B line goes active:
+
+1. **Quiescence triggering** — §7.1 defines the agreement flow but not when or
+   who initiates outside a seal; intermediate checkpoints have no trigger.
+2. **The epoch wire protocol** — §10 gives principles (bilateral, signed,
+   chained) but not the exchange: proposal/ack shapes, refusal semantics,
+   updates in flight across the boundary.
+3. **The schema language** — §3.3's "the first update is the schema" names a
+   JSON blob declaring fields, types, write authority and update rules; that
+   language has zero specification and is V2's largest single work item.
+4. **Divergence recovery** — detection and bisection are designed (§7.1); the
+   recovery flow (who proposes the epoch reset; what happens to legitimate
+   work stacked after the fork point) is a sentence, not a protocol.
+
+### 16.2 The write path — the document is a file; the daemon diffs at publish
+
+The largest silence in the first two passes: how the agent's own edits become
+CRDT operations. Decided:
+
+**The daemon materializes each document as a real file in a workspace
+directory. The agent edits it with its ordinary tools; the human can open the
+same file.** On publish, the daemon diffs the file against the last-known
+projection and converts the diff into Yjs operations — a text diff for text
+types, a key diff for JSON. No new editing surface exists.
+
+The coarseness of a diff is acceptable *because* of publish-on-intent (§5):
+updates are already coarse, intentional batches, so diff-granularity
+operations are the granularity the design wants anyway.
+
+**Incoming direction:** when a peer's update is admitted (§3.2), the daemon
+first folds the agent's unpublished file edits into the `Y.Doc` as local
+operations, then merges the incoming update, then rewrites the file. If the
+merge touched regions the agent had unpublished edits in, that is precisely
+the overlap flag of §4.1 — the two mechanisms are one mechanism.
+
+### 16.3 The document handshake — mirror the attestation-consent pattern
+
+The handshake that establishes §3.4's properties works exactly like
+attestation consent, which operators already understand:
+
+1. A calls the create tool naming the peer, the document type, and the
+   properties, optionally with starting content (the epoch-zero template).
+2. B's agent receives a proposal in its inbox, reviews the properties, and
+   accepts or refuses.
+3. On accept, both sides mint the document from the agreed starting content.
+
+**`document_id` is the hash of the proposal envelope** — globally unique with
+no minting authority and no coordination. Property changes after acceptance
+are an epoch event and therefore V2.
+
+### 16.4 Delivery — daemon-autonomous sessions, presence-driven, with withdraw
+
+Publish is fire-and-forget; the daemon delivers like email. Four decisions:
+
+**Delivery sessions are daemon-autonomous.** When a pending update needs
+delivering, the daemon opens (or reuses) a session with the peer's daemon,
+delivers, collects the ack, and seals — with no agent attention on either end.
+The session still happens because it carries signing, encryption, and the
+seal; the *ceremony* goes to zero. The receiving side admits mechanically and
+sets the pending flag. Two agents in opposite timezones sync overnight without
+either agent doing anything. The daemon logs every delivery attempt and every
+autonomous session.
+
+**Session choice: daemon-chooses by default, optional hint.** `publish`
+accepts an optional session reference for the one case with audit value — the
+agent is mid-conversation *about* the document and wants the discussion and
+the change in the same sealed record. Omitted, the daemon uses the most recent
+active session with that peer or opens one.
+
+**Rendezvous is presence-driven push — the directory learns nothing new.**
+When a daemon reconnects to the directory, its presence flips; every peer
+holding pending outbound for it is watching that presence and delivers into
+the first window both daemons are up. A pending-update registry at the
+directory was considered and rejected: it hands the directory a mutable table
+of who-collaborates-with-whom and when they work (a metadata leak), needs
+anti-entropy, TTLs and cleanup, and buys nothing presence push does not — and
+§12 already rejected directory document-tracking once. Presence *is* the
+directory-level operation, using state the directory already has. Backstop: a
+slow periodic retry (minutes, capped) for stale-presence windows, and **every
+undelivered update retries on daemon restart** — which falls out of §14's rule
+that queued outbound is "envelopes in the log not yet acknowledged", and is
+pinned by the offline-delivery enforcer.
+
+**The `withdraw` verb.** An update pending toward a peer who never appears can
+be withdrawn: the daemon rolls the change back locally (Yjs undo) and writes a
+withdrawal record into the log beside the original envelope — marked
+withdrawn, never deleted, so the log stays intact. The peer never saw the
+update, so no supersession is needed. For "this collaborator is never coming
+back," Kill (§3.5) already covers the whole document.
+
+**Accepted limit, stated so nobody rediscovers it as a bug:** if two daemons
+are literally never online in the same window, peer-to-peer delivery is
+impossible — the relay does not buffer, by design. Daemon-up-is-CELLO-on makes
+overlap the norm.
+
+### 16.5 Notification — passive pending flag; no doorbell
+
+§11.3 settles this: a CRDT update is writing to a shared cell, not an
+utterance, and must not trigger inference. An admitted update sets pending
+state visible in the inbox and in List; the agent finds it next time it looks.
+When the peer wants attention they send an ordinary chat message, which uses
+the existing doorbell. Doorbell-on-update may become a per-document opt-in
+later; V1 ships zero new notification machinery.
+
+### 16.6 Sender-side screening — advisory, never a boundary
+
+The sender's daemon runs its own screening policy against the outbound diff at
+publish — the same code path the receive side uses, nearly free. Framing rule:
+**this is a courtesy, never a security boundary.** The local daemon is
+editable by any coding agent, so the receiver's gate (§3.2) remains the only
+authoritative check. What the sender-side scan buys is UX: it catches the
+sender's own accidental credential leak before it transits, and saves a
+rejection round-trip for the well-intentioned majority.
+
+The asymmetry problem (my let-throughs are not yours) was considered: a shared
+**screening-profile hint** carried in the document template would let the
+sender predict the receiver's verdict. Deferred — advisory in both directions,
+it cannot be load-bearing (an untrusted daemon's declaration never is), and
+§3.2 already prices misprediction at one supersession round-trip. Revisit when
+real rejection friction justifies it.
+
+### 16.7 Resolved decisions register
+
+1. **Append-only enforcement (Use Case B): reject at the §3.2 gate.** A
+   deletion shows up in the projected diff like any change; `append_only:
+   true` is one more rule the existing gate checks, and the rejection resolves
+   by ordinary supersession. The alternative — signed append events with the
+   Yjs doc as a projection — is a parallel storage and replay model built for
+   one use case; dropped. §15B's either/or is closed.
+2. **Rejection edge cases: one retry, then freeze.** If a superseding update
+   is itself rejected, one more round is allowed; after that the document
+   flips to **stalled** — the receiver stops accepting updates on it and both
+   operators see the reason in their policy logs. Mutual concurrent
+   rejections need nothing special (each direction has its own quarantine and
+   supersession; state vectors prevent deadlock). The §3.2 "trust-signal
+   event" for a non-compliant sender is, in V1, a policy-log entry plus the
+   stalled status — no new trust-signal type.
+3. **Purge is cooperative (V2).** The sender authored the content and
+   possessed it before the protocol saw it; no protocol reaches into their
+   disk. The claim is scoped: purge removes the content from the receiver's
+   side and the shared live document; a compliant sender's daemon also
+   redacts its own log; a non-compliant one is a policy-log fact.
+4. **Two daemons from a restored backup: accepted risk, and not a document
+   problem.** With Yjs minting random clientIDs (§14's rule), two live
+   instances behave like two ordinary peers and merge fine. The real hazard —
+   two daemons both claiming to *be* the same agent — is an identity-layer
+   concern CELLO has independent of documents; solve it there once.
+5. **Replay is set-based, not sequence-based.** `doc_prev_hash` gives one
+   chain per sender; no total order across senders is defined or needed.
+   Verification per epoch: collect the effective `0x04` leaves (effective =
+   no `0x05` references it — a set property), check each sender's chain is
+   complete, apply in any order (Yjs converges regardless), compare the
+   result. The "document-log order" phrase in §9 is superseded by this.
+6. **Limits are receiver-local (§10.1), violations are ordinary rejections.**
+   The protocol spec publishes generous defaults; any receiver may tighten
+   locally; a violation flows through §3.2 with a machine-readable reason
+   ("exceeds their 5 MB update limit"). No bilateral limit negotiation.
+7. **Hostile Yjs input: cap, catch, contain.** Pre-parse size cap before Yjs
+   sees the bytes; shadow-apply wrapped so a malformed update becomes an
+   ordinary rejection ("malformed update") rather than a crash; structural
+   limits checked on the shadow before admission. No sandbox process in V1.
+   Precondition: a short fuzz pass against `applyUpdate` (garbage, truncated,
+   pathological updates) so the residual risk is measured, not assumed.
+8. **Peer compatibility: version the proposal, fail with a human answer.**
+   Alpha — no backward compatibility owed. The create proposal carries a
+   feature version; a peer whose client predates documents gets surfaced as
+   "your peer's client doesn't support shared documents yet — ask them to
+   upgrade." The Yjs update encoding version is pinned in the protocol spec.
+   Full capability negotiation: deferred.
+9. **The returning collaborator (template changed while away).** V1
+   (enforcement off): the template is document content, so its change is a
+   pending update like any other — the goal-template skill instructs "on
+   returning to a document, re-read its conventions before writing"; the
+   overlap flag catches direct collisions. V2 (enforcement on): the epoch
+   machinery answers it with no addition — a publish against a stale epoch is
+   rejected with the current epoch, the daemon syncs, the agent re-applies.
+10. **Verifier tolerance rule (forward compatibility).** Verification is hash
+    recomputation (needs no understanding of a leaf) plus rendering (does).
+    Rule: **unknown leaf types are hashed as opaque bytes and skipped for
+    rendering** — a verifier shows "1 entry of an unrecognized type" instead
+    of calling a valid seal invalid. Folded into the `0x04` work rather than
+    shipped ahead (alpha); stated as a permanent property because it decouples
+    verifier releases from every future leaf-type addition, not just this one.
+11. **Platform kill switch vs. open documents: pause freezes the agent's
+    actions, not the record.** A paused agent: outbound publishes refused
+    loudly; incoming updates still validated and admitted (that path is
+    mechanical — no LLM involved); notifications suppressed. Unpause resumes.
+    Matches what pause means everywhere else in CELLO.
+12. **Storage sketch (client-side SQLCipher), keyed on stable IDs only:**
+    `documents` (document_id, peer `agent_id`, properties, status),
+    `document_envelopes` (the append-only log: hash, signature, payload —
+    payload nullable for V2 purge; withdrawal records live here),
+    `document_snapshots` (Yjs binary + state vector + last-applied envelope
+    index). A payload-stripped envelope proves *an envelope with this hash
+    existed and was rejected* — the `0x05` leaf referencing it is the
+    explanation; recorded now though it only matters when purge ships.
+
+### 16.8 Preconditions and sequencing
+
+- **The screening audit (§3.1) remains owed** — deliberately deferred by
+  Andre, not forgotten; it blocks the validation-stage tier of the M14 DoD,
+  not the writing of the DoD.
+- **The Yjs fuzz pass** (item 7 above) — small, do before the receive-pipeline
+  unit.
+- **The verifier tolerance rule** — folded into the `0x04` unit (item 10).
+- **Milestone identities:** V1 = **M14**, V2 = **M14B** (same milestone
+  family, second wave — decided 2026-08-04). The M14B DoD is written at the
+  same time as the M14 DoD, `status: parked`, activating only when M14 closes
+  and §16.1's four owed design items are resolved.
 
 ---
 
