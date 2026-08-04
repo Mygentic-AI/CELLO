@@ -31,31 +31,17 @@ as future have been corrected in place.
 customer — or is it something they could *forgive*? Ruin = they can't get the core value, or they
 lose trust. Most things are forgivable.
 
-**How to use this:** run the **diagnosis section first** — either of its two unknowns could jump to
-the top of this list, and both are cheap to resolve. Then work the ranked list top to bottom.
-
----
-
-# Run first — cheap diagnoses that could reorder everything
-
-**FROST debug logging in production.** Recorded inside `DOD-FROST-PARALLEL-1` and never triaged on
-its own: the directory is reported to flood production CloudWatch with `frost.debug.*` and raw
-`[DEBUG]` lines "carrying share and nonce internals." Nobody has assessed what is actually in those
-lines. Threshold-signature nonce material in a log store deserves its own look rather than a
-footnote in a performance ticket — if the report is accurate it is a security item near the top of
-this list; if it's over-stated it costs half an hour to say so. (Check where this landed post-cutover
-— the GCP nodes log to Cloud Logging, not CloudWatch; the question is the same either way.)
-
-**`DOD-ACCOUNTS-CHAIN-1` — unknown severity, cheap to resolve.** A hash-chain verification fails on
-the table that binds a human to an agent, but only when the ops-agent test suite has run against the
-same database. Either the ops-agent registration flow writes rows outside the chain mechanism — a
-real tamper-evidence gap in production, which would put this near the top of the list — or the
-test's whole-table scope is too strong for a shared dev database, which makes it nothing. The repro
-is recorded. Do not close it by scoping the test down until the first possibility is ruled out.
+**How to use this:** work the ranked list top to bottom. (The two "run first" diagnoses this
+section used to carry were both resolved 2026-08-04 — one became ranked item 3, one was ruled out;
+see the notes below.)
 
 ---
 
 # Open — ranked (order decided by Andre, 2026-08-04)
+
+**Both "run first" diagnoses were resolved 2026-08-04**, same day: the FROST debug-logging report
+was **overstated** (ruled out — see Addressed), and `DOD-ACCOUNTS-CHAIN-1` was **confirmed as a
+real tamper-evidence gap** — it is now ranked item 3 below (proposed slot; Andre confirms).
 
 ## 1. Logging out says the daemon stopped while it is still on the network
 
@@ -113,7 +99,35 @@ Do the rename, the per-row `status`, and the corrected guidance string together,
 
 ---
 
-## 3. Dead signaling streams go undetected — build the liveness mitigation, timebox the trace
+## 3. Every real registration writes the human-agent binding outside the hash chain
+
+**Designation: `DOD-ACCOUNTS-CHAIN-1`** — ❌ open, raised 2026-07-13, **diagnosed 2026-08-04:
+possibility (a) confirmed — a real tamper-evidence gap, not a test artifact.** Proposed slot; Andre
+confirms the rank.
+
+`user_accounts` — the table that binds a human to an agent — has two writers, and production uses
+the wrong one. The registration path (`directory-node.ts:3170`, step 6 after DKG) calls
+`resolveAccountId` (`pre-auth-token-repository.ts:511`), which does a bare `INSERT` with
+`chain_hash = SHA-256(account_id || phone_stub_hash)` — a standalone hash, not the chain format
+(`SHA-256(serialize(record) || previous_chain_hash)` from the genesis constant, under advisory
+lock). The chained writer that ACCOUNT-001 built for exactly this table —
+`PgDirectoryStore.createAccount` via `insertWithChain` — has **zero production callers**; only
+tests exercise it.
+
+Consequences: `verifyChain("user_accounts")` fails on any database where a real registration has
+ever happened — which is why the ops-agent suite reddened the directory suite. Worse, because
+verification is *always* red on this table, actual tampering would be indistinguishable from the
+baseline: tamper-evidence on the human-agent binding is currently nonfunctional, silently.
+
+Fix shape: route `resolveAccountId`'s insert through the chain writer while preserving the
+lookup-or-create dedup semantics (the advisory lock `insertWithChain` already takes makes
+check-then-insert race-free, replacing the `ON CONFLICT DO NOTHING` + readback dance). Existing
+unchained rows: the GCP directories are greenfield with a handful of post-cutover registrations, so
+rechaining or reseeding the table is cheap now and becomes a migration later — the usual trap.
+
+---
+
+## 4. Dead signaling streams go undetected — build the liveness mitigation, timebox the trace
 
 **Designation:** [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — no
 DoD line, **needs one opened.** Recorded 2026-08-03 as a decision to skip on the grounds that the M12
@@ -163,7 +177,7 @@ the network behaviour disagree, and the operator believes the visible one.
 
 ---
 
-## 4. The Telegram sign-up messages give wrong or unclear instructions
+## 5. The Telegram sign-up messages give wrong or unclear instructions
 
 **Designation: `D-ENVVAR`** (+ the rest of Phase 1 in `M8C-ONBOARDING-IMPROVEMENTS`)
 
@@ -177,7 +191,7 @@ instructions. The two want one pass.
 
 ---
 
-## 5. Installing the plugin strands a new user at `daemon_not_running` with no signpost
+## 6. Installing the plugin strands a new user at `daemon_not_running` with no signpost
 
 **Designation:** [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — **needs a DoD
 line opened.** **Narrowed 2026-08-04:** the launch-sized item is the failure path, not the install.
@@ -196,7 +210,7 @@ a next step. A message change plus a doc line, sharing a pass with the Telegram 
 
 ---
 
-## 6. "Online" does not mean reachable
+## 7. "Online" does not mean reachable
 
 `cello status` shows an agent as `online` with `standing_receiver_ready: true` whenever its signalling
 connection is up — even when the daemon cannot resolve a single directory endpoint and no session can
@@ -218,7 +232,7 @@ broken."
 
 ---
 
-## 7. A mismatch that makes a conversation unsealable leaves no durable trace
+## 8. A mismatch that makes a conversation unsealable leaves no durable trace
 
 **Designation: `DOD-FRONTIER-MISMATCH-DURABLE-1`** (M8D, 🅿️ parked) — **re-scoped 2026-08-03.** The
 original defect under this item (`DOD-FRONTIER-STRAND-1`) is fixed; see Addressed. What is left is
@@ -242,7 +256,7 @@ anything keyed on it must not assume it is.
 
 ---
 
-## 8. A daemon shutdown rings the doorbell like an incoming message
+## 9. A daemon shutdown rings the doorbell like an incoming message
 
 **Designation:** [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — **needs a DoD
 line opened.**
@@ -258,7 +272,7 @@ distinguishable metadata so the event says what happened.
 
 ---
 
-## 9. Telegram phone notifications are built and tested, but never proven on a real phone
+## 10. Telegram phone notifications are built and tested, but never proven on a real phone
 
 **Designation: `DOD-TGDOOR-1`** — 🟡 *(still the only Tier-3 unit that can't be smoke-tested without
 a real bot token)*
@@ -269,9 +283,9 @@ proof, nothing else — minutes with a phone, do it opportunistically whenever A
 
 ---
 
-## 10. There is still no way to back up or recover your identity
+## 11. There is still no way to back up or recover your identity
 
-**Designation: `DOD-CUSTODY-DAEMON-1`** — demoted from #1 on 2026-08-04; scoped the same day.
+**Designation: `DOD-CUSTODY-DAEMON-1`** — demoted from #1 on 2026-08-04; scoped the same day. (Renumbered #10→#11 when the accounts-chain item landed.)
 
 `backup` and `restore` exist as commands, but nothing behind them works — call either one and it
 reports "not implemented." If your machine is lost, stolen, or dies, that agent and everything it
@@ -439,6 +453,22 @@ same defect isn't re-discovered as new.
 - **`DOD-CONFIG-1`** — parked settings knobs waiting on a store that didn't exist. Absorbed
   2026-07-29 into M9B's config surface. What remains is a product decision about merging two config
   surfaces, not a missing mechanism.
+
+## Ruled out without a fix
+
+- **FROST debug logging in production — overstated, ruled out 2026-08-04.** The report (recorded
+  inside `DOD-FROST-PARALLEL-1`) said the directory floods production logs with `frost.debug.*` and
+  raw `[DEBUG]` lines "carrying share and nonce internals." Audited every emit site
+  (`frost-handler.ts`, `persistent-share-store.ts`, `directory-node.ts`, plus a repo-wide hunt for
+  any logger/stdout line touching `share.secret`, `signingShare`, or nonce values): **no secret
+  material is logged anywhere.** Every line emits types, lengths, key *names*, counts, and truncated
+  public identifiers (`agentShort`, epoch IDs, peer-ID prefixes) — the pattern is
+  `shareSecretIsUint8Array: true`, never the bytes. Nonce *commitments* appear only on the wire,
+  where FROST defines them as public. The sites last changed 2026-07-29, before the GCP images were
+  built, so the audit reflects production. What remains is **noise, not security**: ~30 info-level
+  debug events per ceremony plus raw `process.stdout.write` `[DEBUG]` lines that bypass the injected
+  logger (against the M4 logging rule). That is post-launch cleanup — gate or strip them when
+  `DOD-FROST-PARALLEL-1` is picked up at node expansion.
 
 ## The old "already solid" list — a lesson worth keeping
 

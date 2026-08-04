@@ -1702,6 +1702,20 @@ own story) deliberately, never smuggled in as a rider. Source:
   too strong for a shared dev DB — a test defect. **Do not close this by scoping the test down until
   (a) is ruled out.** Reproduce: fresh volume → run ops-agent suite → run directory suite → the two
   `ACCOUNT-001` `verifyChain` cases (AC-005, AC-007) fail.
+  **DIAGNOSED 2026-08-04 — possibility (a) confirmed by code trace; this is a real integrity
+  defect, not a test defect.** Producer chain: the production registration path
+  (`directory-node.ts:3170`, step 6 after DKG) calls `resolveAccountId`
+  (`pre-auth-token-repository.ts:511`), which issues a bare `INSERT` with
+  `chain_hash = SHA-256(account_id || phone_stub_hash)` — a standalone hash, not the chain format
+  (`SHA-256(serialize(record) || previous_chain_hash)` from genesis, under advisory lock). The
+  chained writer ACCOUNT-001 built for this table — `PgDirectoryStore.createAccount` via
+  `insertWithChain` — has **zero production callers**; only tests exercise it. So every real
+  registration writes the human-agent binding outside the chain, `verifyChain("user_accounts")` is
+  permanently red on any DB with a real registration, and tampering is indistinguishable from
+  baseline. The "ops-agent suite" trigger in the repro is incidental — that suite drives real
+  registrations; the directory suite alone only uses the chained test path. Ranked on
+  [[launch-triage]] (item "Every real registration writes the human-agent binding outside the hash
+  chain") with the fix shape recorded there.
 
 - **Directory suite: 3 remaining failures** (2026-07-13, non-blocking, characterised not fixed) — 2 ×
   "exits 1 with `migration.out.of.date` when no migrations have been applied" point at a database
