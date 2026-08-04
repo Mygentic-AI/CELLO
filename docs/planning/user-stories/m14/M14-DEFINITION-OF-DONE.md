@@ -116,11 +116,24 @@ description: >
   vector + last-applied envelope index). Keyed on `agent_id`/`document_id` only — `agent_name`
   appears nowhere. **The snapshot is rebuildable from the log**, proven by a test that deletes
   the snapshot, rebuilds, and gets byte-identical Yjs state + state vector. Per-sender chain
-  verification on read. — ❌
+  verification on read. — ✅
+  > Three tables, append-only log, reachability-verified chain on the read path. Two review
+  > passes; 5 blocking findings fixed. **Scope limit:** proves the log is SUFFICIENT INPUT to
+  > rebuild, not that the fold is correct — see ENGINE-1's added ACs. → Journal Entries 10–11.
 
 ## Tier P1 — The document engine (local-provable, no network)
 
-- **DOD-DOC-ENGINE-1** [cello-client] — the daemon's Y.Doc lifecycle: create from starting
+- **DOD-DOC-ENGINE-1** [cello-client] — **carries three ACs from DOD-DOC-STORE-1's reviews:**
+  (i) **byte-identical rebuild against a REAL `Y.Doc`** — STORE-1 proved the log is sufficient
+  input using a concatenation stand-in, which is associative and order-only; Yjs merge is
+  neither, so the property that can actually fail (that replaying in log order reconstructs the
+  same CRDT state) is unproven until here.
+  (ii) the engine's `ReplayFn` receives the WHOLE ordered log, including payload-free withdrawal
+  and rejection rows, and must exclude a withdrawn update from the fold — the store deliberately
+  does not filter, so this is the engine's to get right.
+  (iii) it must call `verifyChainLinkage` (or `rebuildSnapshot`, which does) before trusting any
+  materialized state; linkage verification checks no signature and no content hash.
+  Plus the daemon's Y.Doc lifecycle: create from starting
   content, apply an update, compute an update against a peer state vector, snapshot/restore.
   The clientID rule (§14) pinned by a test: Yjs mints its own random clientID per live `Y.Doc`;
   nothing derives it from agent identity, nothing persists and restores one. Malformed-update

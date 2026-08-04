@@ -907,3 +907,92 @@ snapshot away and rebuild it byte-identically from the log alone.
   BINARY and the state vector — never a clientID to restore into a live `Y.Doc`.
 - **The state vector is the integration checkpoint**, and `document_snapshots.last_applied_index`
   is what makes "where does this snapshot sit in the log" a lookup rather than a derivation.
+
+---
+
+## Entry 11 — 2026-08-04 — DOD-DOC-STORE-1 ✅ CLOSED. **P0 IS COMPLETE.**
+
+**Merged:** cello-client `m14/store-1` → `main`. Two review passes, the cap. Five blocking
+findings across them, all fixed — including one I introduced *while fixing another*.
+
+### The lesson of this unit: a "backstop" that silently loses data
+
+Pass one told me to make the log index atomic and to add CHECK constraints. I did both, on an
+`INSERT OR IGNORE` statement. **`OR IGNORE` suppresses CHECK, UNIQUE and NOT NULL as well as the
+conflict it is aimed at** — so neither constraint refused anything. A malformed `kind`, or a
+colliding `log_index`, was DROPPED and reported to the caller as an already-seen duplicate.
+
+On an append-only log whose entire premise is completeness, I had traded a non-deterministic
+*ordering* bug for silent *data loss*, and called it a backstop. Pass two proved it by execution
+rather than reading:
+
+```
+appendEnvelope bad kind returned: false     log length: 0
+UNIQUE(log_index) collision, distinct hash: changes = 0
+```
+
+Fixed by scoping the conflict clause to the envelope hash alone (`ON CONFLICT … DO NOTHING`), so
+everything else throws and `false` means exactly one thing. **The generalisable form: a
+conflict-resolution clause is not a local decision. `OR IGNORE` is a blanket amnesty for every
+constraint on the table, and adding a constraint later silently enrols it.**
+
+### The verifier accepted a shape it was wired in to catch
+
+Pass one's F1 wired chain verification into the read path — every rebuild now goes through it, so
+it is the only thing between a crafted log and a persisted snapshot. Pass two then found it still
+accepted **a detached cycle sitting beside a valid genesis chain**: one root, every link
+resolving, no duplicate predecessor. Counting roots and predecessors cannot see that shape, and
+`doc_prev_hash` is peer-controlled.
+
+Replaced the structural heuristics with **reachability** — walk forward from the single genesis
+and require the walk to cover every envelope that sender authored. One check subsumes
+duplicate-genesis, mid-chain fork, and every cycle shape. *Structural invariants checked as a
+list of symptoms will always miss a shape; check the property itself.*
+
+### Also fixed
+
+- **H3** `createDocument` silently discarded an out-of-set status (same `OR IGNORE` mechanism),
+  leaving the caller believing the document existed and the failure surfacing later as a
+  foreign-key error on the first append — pointing at the wrong statement entirely.
+- **M4** I changed `ReplayFn` to take rows *so the engine could exclude a withdrawn update*, then
+  filtered out exactly those rows before calling it (withdrawals carry no payload). The
+  justification and the code disagreed. The engine now receives the whole ordered log.
+- **M6** an envelope for an uncreated document surfaced as `FOREIGN KEY constraint failed` —
+  naming neither the document, the owner, nor the missing row. It names its own cause now.
+- **M5** the empty-log test passed identically under the code it replaced (`[].length - 1` is
+  also `-1`), so it was not coverage of anything. A SPARSE-index test is the shape that tells
+  `log.at(-1).logIndex` apart from `log.length - 1`; verified red on revert.
+
+### A false red, traced rather than attributed
+
+The full suite went red on `ed25519.test.ts` — keygen 453ms against a 200ms AC. I did not touch
+crypto. Rather than call it flaky: it passed 3/3 in isolation, and the **baseline without my
+changes failed it too**, so it was neither mine nor real. Root cause: the AC times the FIRST
+keygen in the process, which also pays one-time noble-curves initialization — so it measures
+module load as much as key generation, and a loaded machine blows the budget. Fixed with a
+warm-up call so it measures the steady-state property the AC means; **the 200ms bound is
+unchanged**. Recorded because this false red will otherwise be re-chased.
+
+### Scope limit — stated, not buried
+
+This unit proves **the log is sufficient input** to rebuild. It does **not** prove the fold is
+correct: the replay stand-in is byte concatenation, which is associative and order-only, while
+Yjs merge is neither. Byte-identical rebuild against a real `Y.Doc` is now an explicit AC on
+DOD-DOC-ENGINE-1, along with two more the reviews surfaced (the engine must exclude withdrawn
+updates from the fold, and must verify linkage before trusting materialized state).
+
+### Gates
+
+`test` **2545 passed / 11 skipped, 232 files** · `lint` · `typecheck` · `build` clean.
+
+### 🎉 TIER P0 IS COMPLETE
+
+| Unit | State |
+|---|---|
+| DOD-DOC-LEAF-1 | ✅ both repos, published + promoted |
+| DOD-DOC-FUZZ-1 | ✅ nine measured ACs handed to GATE-1 |
+| DOD-DOC-STORE-1 | ✅ three ACs handed to ENGINE-1 |
+
+Next: **Tier P1**, starting at **DOD-DOC-ENGINE-1** — the daemon's Y.Doc lifecycle, now carrying
+three inherited ACs. `yjs` returns to `dependencies` there (it went to devDependencies in FUZZ-1
+under "no consumer, no ship"; ENGINE-1 is the consumer).
