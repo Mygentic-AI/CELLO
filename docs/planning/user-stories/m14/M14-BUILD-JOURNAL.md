@@ -502,3 +502,90 @@ cello-client: unchanged since the published 288c8b8.
 Server half is IMPLEMENTED and fixed; **review pass two is in flight** and this line does not flip
 until its verdict is quoted. Pass two is the HARD CAP — anything surviving it becomes an AC on a
 later unit, never a third pass.
+
+---
+
+## Entry 6 — 2026-08-04 — DOD-DOC-LEAF-1 ✅ CLOSED (both repos, two review passes)
+
+**Merged:** `m14/leaf-1-server` → `main` (efcfb117). cello-client half merged earlier (9903731).
+**DoD line flipped to ✅.** Review budget for this unit is SPENT — two passes, the hard cap.
+
+### Pass two's verdict, in its own words
+
+> **Blocking for this unit: F-A only.** It is the same defect class F1 was written to close, on
+> the more common kind byte, and the fix that closes it is a variant of the helper the commit
+> already introduced. … I do not think this is a rubber stamp: the diff touches seal
+> verification, FROST initiator resolution and an unauthenticated crypto ingress, and I found a
+> live seal-destroying condition the fix's own rationale covers but its implementation does not.
+
+### F-A — the lesson of this unit
+
+My fix for pass one's F1 **reintroduced F1 on a different kind byte.** `findSealCeremonyPair`
+broke its backward walk on a `msg` leaf, so `[msg, ctrl, msg, ctrl]` found one ctrl leaf and the
+seal was rejected. And that shape is *commoner* than the document one it fixed: the relay keeps a
+session `active` until BOTH ctrl leaves exist, so a message the peer had already queued before it
+saw the first SEAL lands between them. An ordinary in-flight crossing destroyed a valid seal.
+
+**Root cause: I unified two questions that need opposite answers.** "Which leaves are the
+ceremony" must be transparent to everything in between. "Who is live" must NOT be — a ctrl leaf
+sitting behind a content message is a stale seal attempt, not a contemporaneous acknowledgement.
+One walk cannot serve both, and sharing it is what produced the bug. They are separate now, and
+the comment on each says why it is not the other.
+
+The generalisable form, worth carrying into P1/P2: **when a fix consolidates several call sites
+onto one helper, the helper inherits the semantics of whichever site it was extracted from.**
+Extracting from the liveness walk gave verification the liveness rule. Ask, per consumer, whether
+the shared rule is actually its rule.
+
+### Also fixed in pass two
+
+- **F-C** — `verifySealLeaves` now requires the ceremony to CLOSE the log. An honest relay cannot
+  append after the second SEAL leaf (already `sealing`), so a trailing leaf means a crafted
+  submission — and each one would otherwise be folded into the FROST-notarized root while bound
+  to nothing in the ceremony.
+- **F-D** — the `answered` exclusion covered only the matched pair, so a RETRIED SEAL leaf from
+  one party (the relay adjudicates only once senders are distinct; nothing dedupes the extra)
+  still marked a malicious unanswered tail as answered. Now every ctrl leaf in the closing region
+  is excluded — **but only when a bilateral pair exists**, because AC-004 deliberately counts a
+  LONE trailing ctrl as a reply. Both halves pinned by test.
+- **F-E** — deleted the unreachable positional fallback in the initiator derivation. It silently
+  revived the exact rule this unit removed.
+- **F-F** — the relay-admin catch logged but sent no error frame, so the relay reported
+  `no_response` and re-dialled another directory that failed identically. Half of F3's fix was
+  missing; it now returns `seal_processing_failed` with the detail.
+- **F-B** — deleted two stale comments still asserting "the last two leaves are both ctrl".
+  That sentence is how the positional assumption survived in three places.
+
+### Carried forward as a new parked DoD line — DOD-DOC-SEALAUTH-1
+
+Pre-existing, outside this unit, and NOT a document concern — but it is why F-C had to refuse
+trailing leaves rather than tolerate them:
+1. `seal_submission` on `/cello/directory-relay/1.0.0` is accepted from **any dialer** — only
+   `relay_register` authenticates that stream.
+2. `leaves[0].s2.prev_root` is taken as the genesis anchor **unvalidated**, so a dialer who has
+   observed a session's leaf log can submit a self-consistent **suffix** of it as a seal.
+
+### A test-count scare worth recording
+
+A full-suite run mid-session reported **135 files / 1040 tests** against a baseline of **159 /
+1253** — 24 files apparently uncollected, which would mean my relay changes were never exercised.
+Investigated rather than re-run-and-hope: `vitest list` returned an **identical 124-file set**
+with and without my changes, and two consecutive full runs then reported 159 / 1256 / zero
+failures. So the collected set never changed. The anomalous run took **96s vs 37s**, which points
+at resource contention (a review subagent and a `pnpm install` were running alongside it) — but
+that cause is inference, not proof. What IS established: the file set is identical and the suite
+is green. Recorded because "the count dropped" is exactly the signal that should never be
+waved away.
+
+### Final gates
+
+trustless-cello: `test` **1256 passed / 531 skipped / 7 todo, 124 files** (twice, stable) ·
+`lint` clean · `typecheck` clean.
+cello-client: `test` 2496 passed · lint · typecheck · build clean (at the published 288c8b8).
+
+### Next
+
+**DOD-DOC-FUZZ-1** on cello-client `m14/fuzz-1` — Yjs added to the daemon, the hostile-input
+measurement pass written (garbage, every prefix of a valid update, every single-byte corruption,
+a maximal varint, 2000-deep nesting), each case classifying returned/threw/**hung** because a
+hang is the one failure mode `cap, catch, contain` cannot contain. Not yet run.

@@ -95,7 +95,10 @@ description: >
   tree rebuilds hash unrecognized kinds as opaque bytes rather than erroring. **Wire-batching
   AC:** relay/directory changes deploy BEFORE or WITH the first published client that submits a
   0x04 leaf ([[M14-PROCEDURE]] §2c). Version-bump ACs: crypto/protocol-types/daemon published
-  via `/cello-publish`; trustless-cello re-pinned. — ❌
+  via `/cello-publish`; trustless-cello re-pinned. — ✅
+  > Both repos green; two review passes (the cap), 4 blocking findings fixed. Published +
+  > promoted: crypto 0.0.39 · protocol-types 0.0.41 · transport 0.0.43 · daemon 0.0.120 ·
+  > cli 0.0.123 · connect 0.0.117. → Journal Entries 1–6.
 - **DOD-DOC-FUZZ-1** [cello-client] — the Yjs hostile-input fuzz pass (§16.7-7 precondition):
   garbage bytes, truncated updates, and pathological-structure updates against `Y.applyUpdate`
   under the planned pre-parse size cap; failure modes recorded in the journal (crash? throw?
@@ -176,6 +179,15 @@ description: >
   "peer's client doesn't support shared documents — ask them to upgrade", never a timeout or a
   timeout-classifier. **Properties are immutable after accept** — a property change is an epoch
   event and therefore V2 (§16.3); no mutate call exists in V1. — ❌
+- **DOD-DOC-SEALAUTH-1** [trustless-cello] — 🅿️ **carried from DOD-DOC-LEAF-1's second review
+  pass** (2026-08-04), pre-existing and outside that unit's scope: (a) `seal_submission` on
+  `/cello/directory-relay/1.0.0` is accepted from ANY dialer — only `relay_register`
+  authenticates that stream — so the frame that drives seal notarization is unauthenticated;
+  (b) `leaves[0].s2.prev_root` is taken as the genesis anchor with no validation
+  (`directory-node.ts` ~4893), so a dialer who has observed a session's leaf log can submit a
+  self-consistent SUFFIX of it as a seal. (a) and (b) compose: together they are the reason a
+  trailing-leaf ceremony had to be refused outright rather than tolerated. Not a document
+  concern — it is the seal ingress — so it does not gate M14, but it should not be lost. — 🅿️
 - **DOD-DOC-ENVELOPE-1** [cello-client] — the document UPDATE envelope (§14) — a distinct wire
   type from HANDSHAKE-1's PROPOSAL envelope (whose hash mints `document_id`); the two share the
   word, not the shape: beyond the standard
