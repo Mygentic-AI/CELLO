@@ -15,12 +15,14 @@ description: >
 
 ## RESUME STATE (overwrite in place — the only mutable block)
 
-- **Current unit:** DOD-DOC-LEAF-1 (in progress — Entry 1)
-- **Branches:** `m14/leaf-1` in cello-client (to create); trustless-cello work follows after
-  crypto publish
-- **Next red after this:** DOD-DOC-FUZZ-1
-- **Parked/waiting:** nothing yet
-- **HEAD:** trustless-cello `main` @ 44bff9fc (docs ahead of that as committed)
+- **Current unit:** DOD-DOC-LEAF-1 — client half IMPLEMENTED (Entry 2), unit review in flight.
+  DoD line stays ❌ until the verdict is quoted.
+- **Branches:** cello-client `m14/leaf-1` @ e78ba0e (pushed). trustless-cello half not started —
+  it needs the published crypto.
+- **Next red after this:** DOD-DOC-FUZZ-1 (interleave while the publish waits)
+- **Parked/waiting:** the trustless-cello half is behind the publish cascade; the cascade's
+  `latest` promotion is Andre's alone.
+- **HEAD:** trustless-cello `main` @ f255a92c · cello-client `m14/leaf-1` @ e78ba0e
 
 ---
 
@@ -116,3 +118,72 @@ trustless-cello (compiles against the published crypto — sequenced after C9):
   count as an answer to the final content message — only `msg` leaves do. Rationale: `answered`
   exists for the malicious-unanswered-tail question, a conversational property; a mechanical
   document delivery from the peer's daemon proves nothing about the agent replying. Test pins it.
+
+---
+
+## Entry 2 — 2026-08-04 — DOD-DOC-LEAF-1 client half IMPLEMENTED (review in flight)
+
+**Status: IMPLEMENTED, NOT DONE.** The cello-client clauses are written and gate-green; the
+unit reviewer is running on the diff as this is written, and its verdict is not yet in. The DoD
+line stays ❌ until the verdict is quoted here.
+
+**Commit:** cello-client `m14/leaf-1` @ e78ba0e (pushed). 12 files, +354/−25.
+
+### What landed (C1–C8)
+
+- **C1** `core/crypto/src/hashing.ts` — `DOC_LEAF = 0x04`, `REJECT_LEAF = 0x05`;
+  `docLeafHash` / `rejectLeafHash` = SHA-256(prefix ‖ data), RFC 6962 §2.1 domain separation,
+  beside `msgLeafHash`/`ctrlLeafHash`.
+- **C2/C3** `core/crypto/src/merkle.ts` — `LeafInput` gains `doc`, `reject`, and
+  `opaque{prefix,data}`. `buildMerkleTree`'s kind dispatch is now an **exhaustive switch**. The
+  previous shape was `if ctrl … if hash … return msgLeafHash(data)` — a trailing default that
+  would have silently hashed a new kind under the message domain. That is exactly the
+  cross-type substitution domain separation exists to prevent, so the default had to go.
+  `opaqueLeafHash(prefix, data)` is the §16.7-10 verifier tolerance: a tree walk that meets a
+  kind byte this build does not know hashes it as opaque bytes instead of erroring. Prefix is
+  validated 0–255 — a truncated byte would alias another domain.
+- **C4** `core/daemon/src/session-relay-client.ts` — `LEAF_KIND_DOC` / `LEAF_KIND_REJECT`.
+  No production consumer yet (the submitter arrives in P2), so they ship under the §5 seam
+  exception with a **serialization pin test**: each wire byte reproduces its domain's leaf hash
+  exactly (`opaqueLeafHash(LEAF_KIND_DOC, d) === docLeafHash(d)`), the four bytes are distinct,
+  and neither collides with the RFC 6962 internal-node prefix `0x01`. The wire byte and the hash
+  prefix are one agreement; if they drift, roots diverge silently.
+- **C5/C6** `session-tree.ts` — `SessionTreeLeafKind` gains `"doc" | "reject"`, and
+  `sessionTreeLeafKindFromDb` replaces the reload coercion at session-node-manager.ts:4376. The
+  old line read `r.leaf_kind === "ctrl" ? "ctrl" : "msg"`. A stored `"doc"` would have come back
+  as `"msg"` on the next daemon start — the tree would replay under the wrong domain, diverge
+  from the counterparty's root, and no error would surface anywhere. The new mapper REFUSES an
+  unrecognized value naming it (ABSENT IS NOT FINE).
+- **C7** `session_seal_leaves` INTEGER `leaf_kind` — verified to pass 0x04/0x05 through with no
+  coercion anywhere in the store; pinned by a new round-trip test rather than changed.
+- **C8 Gates (cello-client, all four, in order):** `test` **2491 passed / 11 skipped, 230 files**
+  · `lint` clean · `typecheck` clean · `build` clean. New crypto exports confirmed present in the
+  BUILT artifact (`core/crypto/dist/index.d.ts:5`, `dist/hashing.js:48`), not just source.
+
+### Test evidence (red-first observed)
+
+- Crypto: 17 failures before implementation (missing exports), 126 passed after.
+- Daemon: 2 failures before (`sessionTreeLeafKindFromDb` absent), then green; the
+  `session_seal_leaves` round-trip test passed on first run, which is the correct result — it
+  pins existing behavior (C7 is a claim to verify, not a change to make) and is labeled as such.
+- Fixtures for both new domains are **independently computed** from Node native crypto inside
+  the test (`SHA-256(0x04)` / `SHA-256(0x05)`) and cross-checked against the vector file, so a
+  wrong fixture cannot make them pass. The vector-count guard was extended to cover the two new
+  arrays — deleting a vector silently drops coverage without it.
+
+### The one design call I flagged to the reviewer
+
+`sessionTreeLeafKindFromDb` **throws** inside `#loadTreeFromDb`. Argument for: an unknown stored
+kind means own-DB corruption or a downgrade below the writing build, and both must be loud —
+silently relabeling is the worse failure by a wide margin. Argument against: throwing in a
+reload path could turn one stale row into an unrecoverable daemon start. It is asked as an
+explicit lens in the review dispatch; the verdict lands in Entry 3.
+
+### Sequencing note (why the trustless-cello half is not in this commit)
+
+The relay and directory changes import `docLeafHash`/`rejectLeafHash` from
+`@cello-protocol/crypto`, which trustless-cello consumes from npm at the `latest` dist-tag —
+never `workspace:*`. So the second half is blocked behind the publish cascade, and the publish
+cascade's final step (the `latest` promotion) is Andre's alone. No client submits a `0x04` leaf
+until P2/P3, so the wire-batching AC (relay allow-list ships BEFORE or WITH the first 0x04
+client) is not yet at risk; it is enforced at DOD-DOC-SHIP-1.
