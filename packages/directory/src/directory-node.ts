@@ -1184,9 +1184,16 @@ export class CelloDirectoryNode {
       // Never swallow: the relay only sees a closed stream, so without this line a failure
       // here is invisible on both sides. buildMerkleTree throws on an unrecognized leaf kind
       // (crypto ≥ 0.0.39), which is exactly the shape that used to vanish here.
-      this.#logger?.error("directory.relay.admin_stream.failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      const detail = err instanceof Error ? err.message : String(err);
+      this.#logger?.error("directory.relay.admin_stream.failed", { error: detail });
+      // Send the cause back before closing. Without this the relay's adapter falls out of its
+      // read loop and reports `no_response` — an exit-point label — and then re-dials another
+      // directory that fails identically, leaving the real reason only in THIS host's log.
+      try {
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "error", reason: "seal_processing_failed", detail })));
+      } catch {
+        // The stream may already be gone; the log above is the durable record either way.
+      }
       stream.close().catch(() => {});
     }
   }
@@ -4971,9 +4978,6 @@ export class CelloDirectoryNode {
     });
 
     // Collect participants and identify the seal initiator.
-    // The seal initiator is the participant who submitted the first SEAL ctrl leaf
-    // (the second-to-last leaf if both are ctrl leaves — per verifySealLeaves, the
-    // last two leaves are both ctrl and from distinct participants).
     const participants = [...new Set(leaves.map((l) => Buffer.from(l.s2.sender_pubkey).toString("hex")))];
     const [pA, pB] = participants.length >= 2
       ? [Buffer.from(participants[0], "hex"), Buffer.from(participants[1], "hex")]
@@ -4984,8 +4988,13 @@ export class CelloDirectoryNode {
     // the wrong party (and resolves the wrong primary_pubkey for the FROST ceremony) as soon as a
     // document leaf sits inside the ceremony region.
     const ceremony = findSealCeremonyPair(leaves);
-    const initiatorLeaf = ceremony ? leaves[ceremony.initiatorIndex]! : leaves[leaves.length - 2]!;
-    const initiatorHex = Buffer.from(initiatorLeaf.s2.sender_pubkey).toString("hex");
+    if (!ceremony) {
+      // Unreachable: verifySealLeaves already returned on a missing pair. Refusing beats a
+      // positional fallback, which would silently name the wrong initiator — and therefore
+      // resolve the wrong primary_pubkey for the FROST ceremony — if the guards were reordered.
+      throw new Error("processSeal: seal ceremony pair missing after verifySealLeaves");
+    }
+    const initiatorHex = Buffer.from(leaves[ceremony.initiatorIndex]!.s2.sender_pubkey).toString("hex");
 
     const close_timestamp = this.#clock.now();
     const leafCount = leaves.length;
@@ -5927,12 +5936,19 @@ function upgradeConfirmedFromPayload(
 function verifySealLeaves(
   leaves: Array<{ kind: import("./directory-types.js").RelaySealLeafKind; s2: import("@cello-protocol/protocol-types").Structure2; structure1_cbor: Uint8Array }>  // RelaySealLeaf
 ): { ok: true } | { ok: false } {
-  // The closing ceremony is the last two ctrl leaves from distinct participants, located BY
-  // KIND (findSealCeremonyPair). Positional matching used to be equivalent and no longer is:
-  // a document leaf can land between the two SEAL leaves (DOD-DOC-LEAF-1), and rejecting the
-  // seal for that would let an unrelated background sync destroy it.
+  // The closing ceremony is the last two ctrl leaves from distinct participants, located BY KIND
+  // (findSealCeremonyPair). Positional matching used to be equivalent and no longer is: while the
+  // first SEAL is outstanding the session is still active, so a document update OR an in-flight
+  // content message can land between the two SEAL leaves (DOD-DOC-LEAF-1). Rejecting the seal for
+  // either would destroy it over a benign crossing.
   if (leaves.length < 2) return { ok: false };
-  if (!findSealCeremonyPair(leaves)) return { ok: false };
+  const ceremony = findSealCeremonyPair(leaves);
+  if (!ceremony) return { ok: false };
+  // The ceremony must CLOSE the log. An honest relay cannot append after the second SEAL leaf —
+  // it is already `sealing` and refuses further submits — so a trailing leaf means a crafted
+  // submission, and every trailing leaf would otherwise be folded into the FROST-notarized root
+  // while being bound to nothing in the ceremony.
+  if (ceremony.responderIndex !== leaves.length - 1) return { ok: false };
   // M1 DEBT (SESSION-003-AC-002): directory should also verify that each SEAL leaf's payload
   // final_root matches the Merkle root at the appropriate stage (before initiator SEAL, after
   // initiator SEAL, after both). This requires the relay to include ctrl leaf content bytes in

@@ -1132,6 +1132,36 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
   // because the relay only flips a session out of "active" once both ctrl leaves exist. The
   // ceremony pair must be found BY KIND, not by position — otherwise an unrelated background
   // document sync destroys an otherwise valid bilateral seal.
+  // DOD-DOC-LEAF-1 (review pass 2, F-A): the same crossing with an ordinary CONTENT message.
+  // This is the COMMON case — the session stays "active" until both SEAL leaves exist, so a
+  // message B had already queued before it saw A's SEAL lands in between. A ceremony walk that
+  // stops at a msg leaf finds only one ctrl and destroys a perfectly valid bilateral seal.
+  it("DOD-DOC-LEAF-1: a CONTENT message between the two SEAL leaves does not break the seal", async () => {
+    const keyA = generateKeypair();
+    const keyB = generateKeypair();
+
+    const { stream: streamA, reader: readerA } = await connectAndAuth(keyA);
+    const { reader: readerB, pubkeyHex: hexB } = await connectAndAuth(keyB);
+
+    sendFrame(streamA, CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+    }));
+
+    const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
+    await readerB.readDecoded();
+    if (frameA?.type !== "session_assignment") throw new Error("no assignment");
+    const sessionId = frameA.assignment.session_id;
+
+    const sealData = await buildValidSealData(sessionId, keyA, keyB, { msgLeafBetweenCtrls: true });
+    relay.sealData = sealData;
+
+    const sealResult = await dirNode.directory.processSeal(sessionId, sealData);
+    expect(sealResult.ok, `an in-flight message crossing the first SEAL must not break it: ${JSON.stringify(sealResult)}`).toBe(true);
+  }, 30_000);
+
   it("DOD-DOC-LEAF-1: a doc leaf between the two SEAL leaves does not break the seal", async () => {
     const keyA = generateKeypair();
     const keyB = generateKeypair();
@@ -1830,7 +1860,7 @@ async function buildValidSealData(
   // flips a session to "sealing" only once TWO ctrl leaves from distinct senders exist
   // (relay-node #maybeSubmitBilateralSeal), so while the first SEAL is outstanding the session
   // is still "active" and accepts a document submit. This shape is reachable in production.
-  opts: { docLeafBetweenCtrls?: boolean } = {}
+  opts: { docLeafBetweenCtrls?: boolean; msgLeafBetweenCtrls?: boolean } = {}
 ): Promise<RelaySealData> {
   const pubkeyA = new Uint8Array(await keyA.getPublicKey());
   const pubkeyB = new Uint8Array(await keyB.getPublicKey());
@@ -1881,7 +1911,7 @@ async function buildValidSealData(
   if (!s2ResultA2.ok) throw new Error("buildStructure2 failed A2");
   const s2CborA2 = encodeStructure2(s2ResultA2.structure2);
 
-  if (!opts.docLeafBetweenCtrls) {
+  if (!opts.docLeafBetweenCtrls && !opts.msgLeafBetweenCtrls) {
     const finalRoot = merkleRoot(buildMerkleTree([
       { kind: "msg", data: s2CborA },
       { kind: "ctrl", data: s2CborB },
@@ -1899,7 +1929,10 @@ async function buildValidSealData(
     };
   }
 
-  // ── Document leaf from B at seq 3, between B's SEAL (seq 2) and A's SEAL (now seq 4) ──
+  // ── A leaf from B at seq 3, between B's SEAL (seq 2) and A's SEAL (now seq 4). Either a
+  //    document operation or an ordinary CONTENT message — an in-flight message crossing the
+  //    first SEAL is the commonest form of this, since the session is still "active". ──
+  const betweenKind: "doc" | "msg" = opts.msgLeafBetweenCtrls ? "msg" : "doc";
   const timestamp3 = (tsMs + 3) > 0xffffffff ? BigInt(tsMs + 3) : tsMs + 3;
   const s1TbsDoc = CBOR_ENC.encode([1, contentHash, pubkeyB, sessionId, 1, timestamp3]);
   const s1SigDoc = new Uint8Array(await keyB.sign(s1TbsDoc));
@@ -1911,7 +1944,7 @@ async function buildValidSealData(
   const prevRoot4 = merkleRoot(buildMerkleTree([
     { kind: "msg", data: s2CborA },
     { kind: "ctrl", data: s2CborB },
-    { kind: "doc", data: s2CborDoc },
+    { kind: betweenKind, data: s2CborDoc },
   ]));
   const s1TbsA3 = CBOR_ENC.encode([1, contentHash, pubkeyA, sessionId, 2, timestamp3]);
   const s1SigA3 = new Uint8Array(await keyA.sign(s1TbsA3));
@@ -1922,7 +1955,7 @@ async function buildValidSealData(
   const finalRootDoc = merkleRoot(buildMerkleTree([
     { kind: "msg", data: s2CborA },
     { kind: "ctrl", data: s2CborB },
-    { kind: "doc", data: s2CborDoc },
+    { kind: betweenKind, data: s2CborDoc },
     { kind: "ctrl", data: s2CborA3 },
   ]));
 
@@ -1930,7 +1963,7 @@ async function buildValidSealData(
     leaves: [
       { kind: "msg", s2: s2ResultA.structure2, structure1_cbor: s1Tbs },
       { kind: "ctrl", s2: s2ResultB.structure2, structure1_cbor: s1TbsB },
-      { kind: "doc", s2: s2ResultDoc.structure2, structure1_cbor: s1TbsDoc },
+      { kind: betweenKind, s2: s2ResultDoc.structure2, structure1_cbor: s1TbsDoc },
       { kind: "ctrl", s2: s2ResultA3.structure2, structure1_cbor: s1TbsA3 },
     ],
     seq_count: 4,

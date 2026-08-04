@@ -66,45 +66,30 @@ function decodeSignedLastSeenSeq(cbor: Uint8Array): number | null {
 }
 
 /**
- * Identify the indices of the trailing SEAL ceremony control leaves, if present.
- * Per verifySealLeaves, a completed seal ends with two ctrl leaves from distinct
- * participants. Those two are the closing ceremony — NOT content replies — and must
- * be excluded from the `answered` determination (otherwise the counterparty's own
- * SEAL acknowledgement would falsely mark a malicious unanswered tail as answered).
- */
-function sealCeremonyLeafIndices(leaves: RelaySealLeaf[]): Set<number> {
-  const pair = findSealCeremonyPair(leaves);
-  return pair ? new Set([pair.initiatorIndex, pair.responderIndex]) : new Set<number>();
-}
-
-/**
  * Locate the closing bilateral SEAL ceremony: the last two `ctrl` leaves, from distinct
  * participants, in the trailing region. Returns their indices, initiator first (the party
  * whose SEAL leaf came earlier), or null if there is no such pair.
  *
- * Found BY KIND, never by position (DOD-DOC-LEAF-1). Document leaves (0x04/0x05) ride the
- * same tree and are delivered MECHANICALLY by a peer's daemon, so one can land between the
- * two SEAL leaves: the relay flips a session out of `active` only once BOTH ctrl leaves
- * exist (relay-node #maybeSubmitBilateralSeal), so while the first SEAL is outstanding a
- * document submit is still accepted. Under the old positional test that shape failed
- * verification outright — an unrelated background sync destroyed a valid seal.
+ * Found BY KIND, never by position, and transparent to EVERY intervening kind (DOD-DOC-LEAF-1).
+ * The relay flips a session out of `active` only once BOTH ctrl leaves exist
+ * (relay-node #maybeProcessSeal), so while the first SEAL is outstanding the session still
+ * accepts any leaf: a mechanically-delivered document update, and — far more commonly — an
+ * ordinary content message the peer had already queued before it saw the first SEAL. Both are
+ * benign crossings, and either one breaks a positional match. A walk that stopped at `msg`
+ * would destroy a valid bilateral seal on the commonest shape of all.
  *
- * A `msg` leaf ENDS the ceremony region: content means the closing run is behind us.
- *
- * This is the single definition of "which leaves are the ceremony". Every consumer — seal
- * verification, initiator derivation, and the `answered` exclusion — reads it from here,
- * because two copies of this rule drift apart exactly the way the positional one did.
+ * This answers "which leaves are the ceremony" for seal verification, initiator derivation,
+ * and the `answered` exclusion. It deliberately does NOT answer "who is live" — that question
+ * needs the opposite treatment of a content message (a ctrl leaf sitting behind one is a stale
+ * seal attempt, not a contemporaneous acknowledgement), and lives in trailingSealCtrlAuthors.
+ * Sharing one walk between the two is what produced the seal-destroying bug above.
  */
 export function findSealCeremonyPair(
   leaves: readonly RelaySealLeaf[],
 ): { initiatorIndex: number; responderIndex: number } | null {
   const ctrlIndices: number[] = [];
-  for (let i = leaves.length - 1; i >= 0; i--) {
-    const kind = leaves[i]!.kind;
-    if (kind === "doc" || kind === "reject") continue;
-    if (kind !== "ctrl") break;
-    ctrlIndices.push(i);
-    if (ctrlIndices.length === 2) break;
+  for (let i = leaves.length - 1; i >= 0 && ctrlIndices.length < 2; i--) {
+    if (leaves[i]!.kind === "ctrl") ctrlIndices.push(i);
   }
   if (ctrlIndices.length < 2) return null;
   const [responderIndex, initiatorIndex] = ctrlIndices as [number, number];
@@ -112,6 +97,29 @@ export function findSealCeremonyPair(
   const initiatorSender = Buffer.from(leaves[initiatorIndex]!.s2.sender_pubkey).toString("hex");
   if (responderSender === initiatorSender) return null;
   return { initiatorIndex, responderIndex };
+}
+
+/**
+ * Every leaf belonging to the closing ceremony — not just the matched pair.
+ *
+ * A ctrl leaf is never a content reply, so if a party retried its SEAL (the relay triggers
+ * adjudication only once senders are DISTINCT, so a duplicate from one party can sit in the log
+ * unremoved), each of those leaves must be excluded from `answered` too. Excluding only the
+ * matched pair lets the extra one satisfy the check and mark a malicious unanswered tail as
+ * answered — a value that is FROST-signed via bindLegibilityToTbs.
+ *
+ * Only applies when a real bilateral pair exists. With a LONE trailing ctrl leaf there is no
+ * ceremony to exclude, and that leaf legitimately counts as a reply (AC-004's contrasting case).
+ */
+function sealCeremonyRegion(leaves: RelaySealLeaf[]): Set<number> {
+  const excluded = new Set<number>();
+  if (!findSealCeremonyPair(leaves)) return excluded;
+  for (let i = leaves.length - 1; i >= 0; i--) {
+    const kind = leaves[i]!.kind;
+    if (kind === "msg") break; // content ends the closing region
+    if (kind === "ctrl") excluded.add(i);
+  }
+  return excluded;
 }
 
 /**
@@ -127,8 +135,8 @@ export function findSealCeremonyPair(
  * unilateral shape) was mislabelled 'absent'. The contiguous trailing run captures
  * both the bilateral two-ctrl case and the lone-ctrl case.
  *
- * NOTE: this set is distinct from `sealCeremonyLeafIndices` (the matched bilateral
- * pair used for the `answered` determination). A single trailing ctrl leaf is a SEAL
+ * NOTE: this set is distinct from `sealCeremonyRegion` (the ceremony leaves excluded from
+ * the `answered` determination). A single trailing ctrl leaf is a SEAL
  * ack for the live-marker purpose, but for `answered` a lone trailing ctrl authored
  * by the counterparty of the final message must still count as a reply (AC-004
  * contrasting case) — the two questions intentionally use different leaf sets.
@@ -184,7 +192,7 @@ export function buildSealLegibility(
   opts?: { attestationOverrides?: Map<string, AttestationMode> },
 ): SealLegibility {
   const overrides = opts?.attestationOverrides;
-  const sealIndices = sealCeremonyLeafIndices(leaves);
+  const sealIndices = sealCeremonyRegion(leaves);
   // Authors of the contiguous trailing SEAL ceremony ctrl run ⇒ 'live'. Distinct from
   // `sealIndices` (the matched bilateral pair used only for the `answered` check).
   const producedSealCtrl = trailingSealCtrlAuthors(leaves);
