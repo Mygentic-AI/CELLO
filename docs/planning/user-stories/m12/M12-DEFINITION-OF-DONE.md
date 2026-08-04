@@ -588,7 +588,15 @@ description: >
   session-peer liveness detection, remove the legacy default-limits `startRelay` factory
   (`packages/relay/src/index.ts:89`). Cross-machine live delivery then succeeds without
   store-and-forward fallback. Full diagnosis: [[relay-keepalive-parked-drain-workorder]].
-  — ❌ NOT BUILT
+  — 🟡 BUILT, BOTH LIVE CLAUSES OPEN. Relay: abort off + legacy `startRelay` deleted. Daemon:
+  abort KEPT with a 30s WAN floor — per-node config makes "relay links only" unavailable and
+  liveness must survive; see **M12-D18**. Verification substituted (no live infra): mechanism
+  proven locally, attribution still circumstantial — the incident string is Node's generic
+  AbortSignal text, shared by ~10 timeouts on the relay path. Reviewer: 7 findings, 2 HIGH and
+  both OUTSIDE the diff — the relay fix was a silent no-op against the published transport, and
+  session liveness called the counterparty dead whenever the relay churned. All closed.
+  **Open:** ≥30 min idle survival + cross-machine delivery without fallback — both need a deploy
+  and a publish. → Entry 79
 - **DOD-GCP-RELAY-DRIFT-1** [trustless-cello] — GCP relay config drift vs AWS closed:
   `RELAY_SESSION_MAX_IDLE_MS` 1800000→86400000 in `relay-cloud-init.yaml:69` (30 min vs
   AWS's 24 h), plus a GCP-terraform regression test asserting relay idle/timeout config
