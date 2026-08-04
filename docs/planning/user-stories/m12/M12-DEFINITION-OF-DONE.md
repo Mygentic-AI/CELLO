@@ -297,7 +297,13 @@ description: >
   (`[object Object]`). Proven across two daemons on two machines against a deliberately
   flapping relay link. Discovered 2026-08-04: every cross-machine message stalled until the
   receiving daemon was restarted. Full diagnosis + fix spec:
-  [[relay-keepalive-parked-drain-workorder]]. — ❌ NOT BUILT
+  [[relay-keepalive-parked-drain-workorder]]. — 🟡 BUILT, LIVE CLAUSE OPEN.
+  All four fix clauses land; E1 proves the headline claim locally — a message deposited on a real
+  `/cello/content-park` relay WHILE the daemon runs is unsealed, SEC-1 gated, leafed and
+  confirm-deleted, no restart. **Open:** "two daemons on two machines against a deliberately
+  flapping relay link" needs a deploy this session did not do. Reviewer: 7 findings (1 HIGH —
+  concurrent drains could double-append a leaf; 1 unproven removal), all closed.
+  cello-client `m12/relay-keepalive-park-drain`, unmerged + unpublished. → Entry 78
 
 ## Tier P2 — Wave 1: complete CELLO on GCP, standalone
 
