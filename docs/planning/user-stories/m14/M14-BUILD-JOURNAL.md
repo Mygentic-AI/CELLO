@@ -847,3 +847,63 @@ against as assumptions.
 snapshot rebuildable from the log). The existing store pattern to follow is
 `core/daemon/src/trust-signal-store.ts` (idempotent `CREATE TABLE IF NOT EXISTS`, `DaemonDatabase`
 injected, no `node:sqlite`).
+
+---
+
+## Entry 10 — 2026-08-04 — DOD-DOC-STORE-1 opened: clause checklist + falsification
+
+**Branch:** cello-client `m14/store-1`. **Target (one sentence):** the daemon can durably record
+a document, its append-only envelope log, and a materialized Yjs snapshot — and can throw the
+snapshot away and rebuild it byte-identically from the log alone.
+
+### Clause checklist
+
+- [ ] S1. New module `core/daemon/src/document-store.ts`, following `trust-signal-store.ts`:
+      idempotent `CREATE TABLE IF NOT EXISTS`, injected `DaemonDatabase`, **no `node:sqlite`**.
+- [ ] S2. `documents` — `document_id` (PK), peer `agent_id`, properties, status.
+- [ ] S3. `document_envelopes` — APPEND-ONLY: hash, signature, `doc_prev_hash`, `epoch_id`,
+      state vector, `payload` **NULLABLE** (purge-ready, §16.7-12). Withdrawal and rejection
+      records are ROWS here, never edits to existing rows.
+- [ ] S4. `document_snapshots` — Yjs binary + state vector + **last-applied envelope index**
+      (§14: "with them it is a lookup", without them rebuilding means working out from scratch
+      where the snapshot sits relative to the log).
+- [ ] S5. Keyed on `agent_id`/`document_id` ONLY. `agent_name` appears nowhere — not in a PK,
+      a JOIN, or a WHERE (repo rule; the M7 tables' `agent_name` joins are a known defect,
+      `DOD-AGENT-ID-JOINKEY-1`, not a precedent).
+- [ ] S6. **Snapshot rebuildable from the log** — proven by deleting the snapshot, rebuilding,
+      and getting a BYTE-IDENTICAL Yjs state + state vector.
+- [ ] S7. Per-sender `doc_prev_hash` chain verification on read; a broken or missing link
+      REFUSES loudly, naming the gap (never a silent skip).
+- [ ] S8. Seam fields present and serialization-tested in lieu of a consumer
+      ([[M14-PROCEDURE]] §5): `epoch_id` (constant 0, NOT omitted), `doc_prev_hash`, nullable
+      payload.
+- [ ] S9. Gates green in cello-client (`test` → `lint` → `typecheck` → `build`).
+
+### Falsification pass (procedure §2 step 3) — before any code
+
+- **Does the interface expose what I need?** `DaemonDatabase` gives `exec`/`prepare` only. That
+  is what `trust-signal-store.ts` uses, so the idempotent-DDL pattern applies unchanged. No new
+  interface surface needed. ✔
+- **Does responsibility live here?** The store PERSISTS; it does not apply Yjs updates. So the
+  rebuild function is the open question: rebuilding means replaying payloads through
+  `Y.applyUpdate`, which is the ENGINE's job (DOD-DOC-ENGINE-1, P1). Resolution: the store
+  exposes the log in order and accepts an injected replay function; the store owns
+  *what to replay and in what order*, the engine owns *how to apply*. That keeps `yjs` out of
+  the store's production imports (it is a devDependency again after FUZZ-1) and keeps the P0/P1
+  boundary honest — STORE-1 must not quietly build ENGINE-1.
+- **What breaks elsewhere?** Nothing reads these tables yet; the module is additive. The DB
+  handle is shared, so the DDL must be idempotent and must not collide with existing table
+  names — `documents`, `document_envelopes`, `document_snapshots` are unused today (checked).
+- **Redundancy check:** `session_tree_leaves` already stores leaf hashes per session. The
+  document envelope log is a DIFFERENT axis — per DOCUMENT, spanning sessions (§9.1: "the
+  document log is the set of 0x04/0x05 envelopes for a document_id, extracted from however many
+  sealed sessions they transited"). Not a duplicate; do not try to reuse the session tables.
+
+### Carried in from DOD-DOC-FUZZ-1 (measured, so the store does not re-assume it)
+
+- **Never persist or restore a Yjs clientID** (§14). FUZZ-1 measured what a collision does: the
+  colliding writer silently wins and the honest client's update is accepted-and-dropped, leaving
+  a splice of two authors, with an EMPTY pending set. The store therefore stores the snapshot
+  BINARY and the state vector — never a clientID to restore into a live `Y.Doc`.
+- **The state vector is the integration checkpoint**, and `document_snapshots.last_applied_index`
+  is what makes "where does this snapshot sit in the log" a lookup rather than a derivation.
