@@ -1603,3 +1603,97 @@ peer while the document stops converging. The delete-set basis admits it correct
 ### Milestone state
 
 P0 ✅ (3 units) · P1: ENGINE ✅ WRITE ✅ GATE ✅ · **REJECT-1 next** · SCREEN-1 🅿️ (Andre's call).
+
+---
+
+## Entry 20 — DOD-DOC-REJECT-1: a rejection is an AUTHORED ACT, and I filed it as a genesis
+
+The unit builds the refusal half of §3.2: a refused update is never silently dropped, it produces a
+`0x05` rejection leaf, the sender may supersede once, and a second refusal stalls the document.
+
+### The defect that would have destroyed documents, on the normal path
+
+Every rejection wrote `docPrevHash: null` under **this agent's own sender id**. Two rejections were
+therefore two GENESIS rows for one sender, and `verifyChainLinkage` — correctly — refuses a chain
+with two roots. The retry protocol *guarantees* at least two rejections before a stall, so this was
+not an edge case; it was the ordinary path. And because `rebuildSnapshot` is how a document survives
+a daemon restart, the document worked until the next restart and was **permanently unopenable**
+after it. The log is append-only. There is no repair.
+
+My tests missed it because all three rounds rejected the **same** envelope hash, which collapsed to
+one row. The protocol produces distinct envelopes per round — the original, its supersession, that
+supersession's — so the tests now do too.
+
+*Fourth unit running where the tests picked exactly the input class the code handles.* The pattern is
+stable enough to state as a rule: **when a test constructs its own inputs, ask what the PROTOCOL
+would have produced, not what makes the assertion readable.** A rejection is an act this agent
+authored; it belongs in this agent's chain, like every other act it authors.
+
+### Two states for one fact, and the restart picks the wrong one
+
+The stall flag and the round counter lived in memory while the document's status lived in the store.
+After a restart the row said `stalled` while the daemon accepted updates on it, the held bytes were
+gone, and the counter restarted from zero. A system reporting two contradictory states about itself
+is worse than one reporting the wrong state, because neither reader is obviously wrong. Both now
+derive from the store; there is one fact and one place it lives.
+
+The quarantined bytes were in that same Map — so the persisted `0x05` leaf **referenced something
+that did not survive the process that wrote it**. They needed their own table. `document_envelopes`
+genuinely cannot hold them: its CHECK forbids a payload on a non-`update` row, and storing them AS
+an update row would be worse, because `replay` applies every payload in order and deliberately does
+not honour references — the refused content would come back on every rebuild. A comment of mine
+claimed replay honoured them. It never did. Deleted.
+
+### The rollback that undid the victim's work
+
+`rollback()` discarded `UndoManager.undo()`'s return and reported success in three cases where it
+undid nothing or the wrong thing. The damaging one: a sender that kept editing after a rejection
+arrived had its **legitimate** work undone while the refused content stayed — so the supersession
+re-ships the refused bytes, is refused again, and the document stalls citing the peer while the
+operator's writing is gone. It now refuses with `document_rollback_out_of_order` unless the tracked
+entry is exactly the top of the undo stack.
+
+That guard earned its keep within minutes of existing: my first attempt to scope the UndoManager to
+`doc.share` handed it the **untyped root placeholders**, a different object from the typed getter
+used for edits, so `undo()` silently did nothing. Without the guard that is a green test suite over
+a rollback that never rolls back.
+
+### Decision — the policy record is written DAEMON-side (§3.2 "both sides")
+
+The open routing question was: the gateway record store's `source` discriminator, or a daemon-side
+write? **Daemon-side.** The gateway's record store is for SCREENING verdicts, and most V1 rejection
+reasons are not screening at all — `append_only`, the receiver-local limits, malformed updates,
+unresolved dependencies. Routing them through a screening store files structural protocol events as
+policy verdicts and couples this unit to a schema owned by a component that is not involved. With
+SCREEN-1 parked, that coupling would also be built speculatively. When SCREEN-1 lands, a rejection
+whose reason came from a screening rule can ADDITIONALLY write a gateway record — the discriminator
+exists for exactly that. Adding it later costs nothing; removing a premature coupling costs a
+migration. Both halves now emit: `document.rejection.sent` and `document.rejection.received`, so a
+log reader can tell who refused whom, and the receiving operator sees the reason rather than an
+unexplained failure to converge.
+
+### Decision — a bound peer deleting the owner's content IS rejectable
+
+Carried from GATE-1. A Yjs delete set carries no clientID and advances no clock, so the authorship
+rules cannot see a deletion at all. That is legitimate CRDT behaviour for an authorized writer, but
+it means `append_only` — which defaults OFF — is the only thing between a bound peer and erasing the
+document. Decided: erasure by a bound peer is a rejectable event, not a silently-accepted one. It is
+the delete set that triggers rule (h), which is why (h) is derived from the delete set rather than
+from a projection diff.
+
+### Also fixed
+
+No more fabricated crypto: the signature and state vector are required inputs rather than all-zero
+placeholders, which in an immutable log are indistinguishable from a real signature that fails to
+verify. The gate's `rule` and `limit` reach the quarantine row, so an operator can see which rule
+refused and what number was exceeded. A duplicate rejection no longer advances the round.
+`clearQuarantine` only announces an admission that actually happened.
+
+### Gates
+
+`test` **2703 passed / 11 skipped** · `lint` · `typecheck` clean.
+
+### Milestone state
+
+P0 ✅ (3 units) · P1: ENGINE ✅ WRITE ✅ GATE ✅ REJECT ✅ · SCREEN-1 🅿️ (Andre's call) ·
+**P2 next: HANDSHAKE-1, ENVELOPE-1, DELIVERY-1, LIFECYCLE-1, NOTIFY-1.**
