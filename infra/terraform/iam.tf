@@ -76,9 +76,16 @@ locals {
         "roles/logging.logWriter",
       ]
     }
+    # A trigger that names a user-specified service account creates its builds AS that account,
+    # so the account itself needs builds.create — without it a push event fails at build creation
+    # and leaves NO build record at all. That is how this project shipped no image between
+    # 2026-07-28 and 2026-08-05: the triggers were healthy, the webhook fired, and every
+    # invocation died silently on IAM. builds.builder is Google's documented grant for the case;
+    # the two narrower roles below stay because they state what CI is actually for.
     cloud-build = {
       display_name = "CELLO CI (Cloud Build)"
       roles = [
+        "roles/cloudbuild.builds.builder",
         "roles/artifactregistry.writer",
         "roles/logging.logWriter",
       ]
