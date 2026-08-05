@@ -530,9 +530,42 @@ rather than the peer's state vector; and the working document having to BE the l
   That second catch was not a wording slip — it was the dead end above, surfaced by a test that only
   reads strings.
 
+  **Reviewed 2026-08-05. TWO BLOCKING FINDINGS, both confirmed by measurement, both fixed.**
+
+  - **The seven verbs were not dispatchable.** `renderedHandlers` was a SNAPSHOT copy of the handler
+    map; the document registration landed 245 lines below it and after `ipcServer.start()`. Every
+    `cello_doc_*` verb answered `method_not_found`, whose guidance blames version skew between the
+    shim and the daemon — so an operator would re-pin, reinstall, restart, and find both sides
+    matching. The same class as the defect this line exists to fix, arriving one layer lower.
+    Nothing could catch it: the handler test builds its own `Map`, and the capability guard scans
+    source text for `handlers.set(...)` without knowing which map. Fixed structurally — dispatch
+    resolves from `handlers` when a request arrives, so registration order stops being expressible
+    as a bug. New `document-dispatch-reachability.test.ts` goes through the SOCKET, driven from the
+    vocabulary table, and is the only assertion in the suite that can tell *registered* from
+    *dispatchable*.
+  - **`write` concatenated the two documents.** `delete(0,len); insert(0,content)` deletes only the
+    items THIS side has seen, so a peer's concurrently-inserted items survive and splice into the
+    new text. Measured: both sides replacing `"original"` with `"AAA"`/`"BBB"` converge on
+    **`"AAABBB"` on both sides** — the ordinary case for an API whose contract is "send back the
+    complete text", signed and published by both parties. That is the exact permanent corruption the
+    whole-text contract was chosen to avoid; the mechanism moved and the failure did not. The
+    correct fold already existed in `DocumentWritePath.#foldText`, whose header records the same
+    hazard for the file path. Both now use `lineHunks`.
+
+  Also fixed: `deliver` walked away from a session it had just opened when the send failed (a live
+  node the operator never started, no sealed record — what the seal exists to prevent), and
+  `cello_doc_list` could not tell "they refused" from "they are asleep".
+
+  **⚠️ OWED — there is no proposal ACK on the wire.** The proposer is never told the consent
+  decision. `cello_doc_list` reports `peerHasPublished`, which is an INFERENCE and labelled as one:
+  its absence means refused, unreceived, or simply untouched, and must never be read as a refusal.
+  Needs a signed `document_proposal_ack` alongside the update ack, and a place to record it.
+
   **Not yet shipped on this line:** `status`, `diff`, `diff-stats`, `withdraw`, `close`, `kill`.
   `withdraw`/`kill` are blocked behind the `notifyPeer`/`rollback` stubs in the composition root,
-  which currently REFUSE rather than reporting a rollback that did not happen.
+  which currently REFUSE rather than reporting a rollback that did not happen. `notifyPeer` needs a
+  control wire type that does not exist yet — no `document_close`/`document_kill` envelope is
+  defined in protocol-types.
 - **DOD-DOC-SKILL-1** [cello-client] — the plugin skill/template layer (§4.1's owed
   deliverable + §16.7-9): publish-on-intent guidance (batch like a commit, not a keystroke),
   the overlap-flag review behavior (review the merged projection before building on it), and
