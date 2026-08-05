@@ -28,7 +28,7 @@
  *
  * Run: pnpm --filter @cello-protocol/e2e-tests test:spine
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -81,6 +81,23 @@ async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> 
     extraEnv: { CELLO_DOCUMENT_DELIVERY_TICK_MS: "2000" },
   });
 }
+
+/**
+ * ONE JOURNEY'S DAEMONS DIE WITH THAT JOURNEY.
+ *
+ * They used to live until `afterAll`, so the second test ran against a cluster attended by four
+ * daemons and the third by six — all registered, all holding signaling streams and sessions against
+ * the same three directory nodes. Every test passed alone and the later ones failed together, which
+ * reads exactly like a product defect and is not one: real deployments do not accumulate abandoned
+ * daemons on one directory, so the interference is an artefact of the harness.
+ *
+ * Torn down per test, the file is also faster — nothing idles, and the delivery sweeps of dead
+ * journeys stop competing for the relay.
+ */
+afterEach(async () => {
+  for (const c of mcpConns.splice(0)) await c.close();
+  for (const d of daemons.splice(0)) await d.stop();
+});
 
 afterAll(async () => {
   for (const c of mcpConns) await c.close();
@@ -296,20 +313,26 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
     // ── 4. BOTH CONVERGE ──────────────────────────────────────────────────────────────────────
     // The independent edits both survive; the document is not duplicated, and the untouched heading
     // appears exactly once.
-    const converged = async (conn: McpConn, who: string): Promise<string> => {
-      const t = Date.now() + 120_000;
-      let text = "";
-      while (Date.now() < t) {
-        const res = (await conn.call("cello_doc_read", { document_id: documentId })) as { content?: string };
-        text = res.content ?? "";
-        if (text.includes("alice") && text.includes("friday")) return text;
-        await sleep(1500);
-      }
-      expect(text, `${who} never received both edits`).toContain("alice");
-      return text;
+    // POLLED FOR AGREEMENT, not for substrings. The first version returned as soon as each side
+    // contained both edits and then compared the two — which is a race: one side can hold both
+    // while the other is still applying, and the comparison fires on a snapshot that was never
+    // meant to be final. It reported "the two copies diverged", which is the most alarming thing
+    // this test can say, for a document that converged a second later.
+    const readBoth = async (): Promise<[string, string]> => {
+      const ra = (await a.conn.call("cello_doc_read", { document_id: documentId })) as { content?: string };
+      const rb = (await b.conn.call("cello_doc_read", { document_id: documentId })) as { content?: string };
+      return [ra.content ?? "", rb.content ?? ""];
     };
-    const textA = await converged(a.conn, "A");
-    const textB = await converged(b.conn, "B");
+    const settled = Date.now() + 120_000;
+    let textA = "";
+    let textB = "";
+    while (Date.now() < settled) {
+      [textA, textB] = await readBoth();
+      if (textA === textB && textA.includes("alice") && textA.includes("friday")) break;
+      await sleep(1000);
+    }
+    expect(textA, "A never received both edits").toContain("friday");
+    expect(textB, "B never received both edits").toContain("alice");
 
     // CONVERGENCE IS THE PRODUCT CLAIM. Byte-identical, asserted through the operator surface
     // rather than the live cache.
@@ -416,5 +439,111 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
         `--- A document log ---\n${documentLines(a.daemon)}\n` +
         `--- B document log ---\n${documentLines(b.daemon)}`,
     ).toBe("killed");
+  }, 600_000);
+});
+
+describe("J-DOCUMENTS-OFFLINE — a change survives BOTH daemons restarting (DOD-DOC-E2E-OFFLINE-1)", () => {
+  /**
+   * THE IN-MEMORY-QUEUE KILLER.
+   *
+   * Publish while the peer is down, then kill and restart the SENDER too. Anything the sender held
+   * in memory — a pending list, a retry timer, a live `Y.Doc` — is gone. What must survive is the
+   * envelope log on disk, because pending delivery is DERIVED from it rather than tracked beside
+   * it. If the design is right, nothing needs to be told to resume: the peer comes back and the
+   * next sweep finds the work by reading the log.
+   *
+   * A queue that lived in memory would pass every unit test in this milestone and lose the operator's
+   * edit here, silently, with both sides reporting a healthy document.
+   */
+  it("publish while the peer is down, restart the SENDER, then the peer — the update lands with no agent action", async () => {
+    const { a, b } = await twoPartiesInSession("docoff");
+
+    const proposed = (await a.conn.call("cello_doc_propose", {
+      peer_pubkey: b.pubkey,
+      starting_content: "before the outage\n",
+    })) as { ok?: boolean; documentId?: string };
+    expect(proposed.ok, JSON.stringify(proposed)).toBe(true);
+    const documentId = proposed.documentId!;
+    const inboxDeadline = Date.now() + 60_000;
+    while (Date.now() < inboxDeadline) {
+      const inbox = (await b.conn.call("cello_doc_inbox", {})) as { proposals?: Array<{ documentId?: string }> };
+      if (inbox.proposals?.some((p) => p.documentId === documentId)) break;
+      await sleep(500);
+    }
+    expect(await b.conn.call("cello_doc_accept", { document_id: documentId })).toMatchObject({ ok: true });
+    await waitForText(b.conn, documentId, "before the outage\n", "B's copy after accept", 30_000);
+
+    // ── B GOES DOWN ───────────────────────────────────────────────────────────────────────────
+    await b.daemon.stop();
+
+    // A writes to a peer that is not there. The publish must SUCCEED — a write that depended on the
+    // other party being awake would make a shared document useless for the case it exists for.
+    const wrote = (await a.conn.call("cello_doc_write", {
+      document_id: documentId,
+      content: "before the outage\nwritten while B was down\n",
+    })) as { ok?: boolean; published?: boolean; reason?: string };
+    expect(wrote, `A's offline write did not publish: ${JSON.stringify(wrote)}`).toMatchObject({
+      ok: true,
+      changed: true,
+      published: true,
+    });
+
+    // ── AND NOW THE SENDER GOES DOWN TOO ──────────────────────────────────────────────────────
+    // Everything held in memory is gone on both sides. Only what is on disk can carry this.
+    await a.daemon.stop();
+    await a.conn.close();
+
+    const daemonA2 = await startLocalDaemon(a.celloDir, "docoffA2");
+    daemons.push(daemonA2);
+    const connA2 = await connectMcp(a.celloDir, "docoff-A2");
+    mcpConns.push(connA2);
+    expect(((await connA2.call("cello_start_agent", { name: "agentA" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connA2.call("cello_use_agent", { name: "agentA" })) as { ok?: boolean }).ok).toBe(true);
+
+    // The restarted sender still knows there is work outstanding — read from the log, not restored
+    // from a queue it no longer has.
+    const stillPending = (await connA2.call("cello_doc_list", {})) as {
+      documents?: Array<{ documentId?: string; pendingDeliveries?: number }>;
+    };
+    expect(
+      stillPending.documents?.find((d) => d.documentId === documentId)?.pendingDeliveries,
+      `the restarted sender forgot the undelivered change: ${JSON.stringify(stillPending)}`,
+    ).toBeGreaterThan(0);
+    // And its own copy is intact — rebuilt from the log, not lost with the process.
+    expect(await connA2.call("cello_doc_read", { document_id: documentId })).toMatchObject({
+      content: "before the outage\nwritten while B was down\n",
+    });
+
+    // ── B COMES BACK ──────────────────────────────────────────────────────────────────────────
+    const daemonB2 = await startLocalDaemon(b.celloDir, "docoffB2");
+    daemons.push(daemonB2);
+    const connB2 = await connectMcp(b.celloDir, "docoff-B2");
+    mcpConns.push(connB2);
+    expect(((await connB2.call("cello_start_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB2.call("cello_use_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+
+    // ZERO AGENT ACTION from here. Nobody re-publishes, nobody re-sends, nobody is asked to. The
+    // sweep reads the log, finds the peer reachable, and delivers.
+    await waitForText(
+      connB2,
+      documentId,
+      "before the outage\nwritten while B was down\n",
+      "B's copy after both daemons restarted",
+      120_000,
+    );
+
+    // And the sender's pending count clears, so "delivered" is a fact it can act on rather than an
+    // assumption — otherwise it redelivers forever.
+    const cleared = Date.now() + 60_000;
+    let pending: number | undefined;
+    while (Date.now() < cleared) {
+      const listed = (await connA2.call("cello_doc_list", {})) as {
+        documents?: Array<{ documentId?: string; pendingDeliveries?: number }>;
+      };
+      pending = listed.documents?.find((d) => d.documentId === documentId)?.pendingDeliveries;
+      if (pending === 0) break;
+      await sleep(1000);
+    }
+    expect(pending, "the sender never learned the change had landed").toBe(0);
   }, 600_000);
 });
