@@ -92,6 +92,14 @@ afterAll(async () => {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** Every document-layer line a daemon emitted, for failure messages that name the cause. */
+function documentLines(proc: Proc): string {
+  const lines = proc.output
+    .split("\n")
+    .filter((l) => /document\.|"cello_doc|frame\.|security\.|session\.content|session\.document/.test(l));
+  return lines.length > 0 ? lines.slice(-40).join("\n") : "(no document-layer lines at all)";
+}
+
 /**
  * Poll until `read` returns the expected text, or fail with what it actually said.
  *
@@ -192,7 +200,15 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
       if (inbox.proposals?.some((p) => p.documentId === documentId)) break;
       await sleep(1000);
     }
-    expect(inbox.proposals?.map((p) => p.documentId), "the proposal never reached B's inbox").toContain(documentId);
+    expect(
+      inbox.proposals?.map((p) => p.documentId),
+      // The daemons' OWN account of what happened, in the failure message. A bare "expected [] to
+      // include …" here sends whoever reads it to guess between "A never sent", "B never
+      // classified" and "B refused" — three different bugs with one symptom.
+      "the proposal never reached B's inbox.\n" +
+        `--- A document log ---\n${documentLines(a.daemon)}\n` +
+        `--- B document log ---\n${documentLines(b.daemon)}`,
+    ).toContain(documentId);
 
     expect(await b.conn.call("cello_doc_accept", { document_id: documentId })).toMatchObject({ ok: true });
     // Epoch zero from the SAME bytes on both sides — the reason starting_content travels as a Yjs
@@ -200,11 +216,23 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
     // converge.
     await waitForText(b.conn, documentId, starting, "B's copy after accept");
 
-    // The proposer is TOLD, rather than left to infer it from traffic.
-    const afterAccept = (await a.conn.call("cello_doc_list", {})) as {
-      documents?: Array<{ documentId?: string; peerAccepted?: boolean | null }>;
-    };
-    expect(afterAccept.documents?.find((d) => d.documentId === documentId)?.peerAccepted).toBe(true);
+    // The proposer is TOLD, rather than left to infer it from traffic. POLLED — the ack is its own
+    // frame travelling the same asynchronous road as everything else, so asserting it the
+    // instant accept returns is a race that passes only when the loopback happens to be quick.
+    const ackDeadline = Date.now() + 60_000;
+    let peerAccepted: boolean | null | undefined;
+    while (Date.now() < ackDeadline) {
+      const listed = (await a.conn.call("cello_doc_list", {})) as {
+        documents?: Array<{ documentId?: string; peerAccepted?: boolean | null }>;
+      };
+      peerAccepted = listed.documents?.find((d) => d.documentId === documentId)?.peerAccepted;
+      if (peerAccepted !== null && peerAccepted !== undefined) break;
+      await sleep(1000);
+    }
+    expect(
+      peerAccepted,
+      `A was never told B's decision.\n--- B document log ---\n${documentLines(b.daemon)}`,
+    ).toBe(true);
 
     // ── 3. CONCURRENT EDITS, INCLUDING AN OVERLAPPING REGION ──────────────────────────────────
     // Both sides send back the COMPLETE document, which is the contract, and both edit the SAME
@@ -339,6 +367,11 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
       if (status === "killed") break;
       await sleep(1000);
     }
-    expect(status, "B's copy never went terminal").toBe("killed");
+    expect(
+      status,
+      "B's copy never went terminal.\n" +
+        `--- A document log ---\n${documentLines(a.daemon)}\n` +
+        `--- B document log ---\n${documentLines(b.daemon)}`,
+    ).toBe("killed");
   }, 600_000);
 });
