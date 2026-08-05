@@ -235,8 +235,44 @@ description: >
   machinery here. — ✅ (two review passes; §9's effectiveness rule found unsound as written and
   superseded by measurement — a refusal is realized by never writing the refused payload, not by
   subtracting it at replay; both open decisions journaled in Entry 21)
-- **DOD-DOC-SCREEN-1** [cello-client] — 🅿️ **BLOCKED on the screening audit (Andre calls it —
-  [[M14-PROCEDURE]] two-stop reason 1).** When unblocked: incoming projected diffs flow through
+- **DOD-DOC-SCREEN-1** [cello-client] — **AUDIT RUN, 2026-08-05. The answer changes the design:
+  screening must be DETECT-ONLY for documents, never mutating.**
+
+  The question was whether deterministic screening — built to strip smuggled Unicode from an
+  adversarial agent's MESSAGE — would false-positive on legitimate document content. It does, but
+  the false positives are the smaller half. **It silently REWRITES content**, and for a CRDT that is
+  not a nuisance, it is permanent divergence: the receiver applies different bytes than the sender
+  published, both sides believe they converged, and nothing reports a problem. Convergence is the
+  product claim.
+
+  Measured by running 18 realistic document samples through `sanitizeInbound`. Nine triggered
+  something; **six had their text changed**:
+
+  | Input | Becomes | Why it matters |
+  |---|---|---|
+  | `कर्‍म` (Hindi, ZWJ) | `कर्म` | A different word. ZWJ is orthography in Devanagari, not smuggling. |
+  | `👨‍👩‍👧` | `👨👩👧` | One family emoji becomes three separate people. |
+  | `Ｈｅｌｌｏ，Ｗｏｒｌｄ` | `Hello,World` | Full-width is how CJK users type. NFKC rewrites it. |
+  | `ﬁle is ½` | `file is 1⁄2` | Ligatures and fractions normalised away. |
+  | `it…` | `it...` | Typographic ellipsis. |
+  | `<\|im_start\|>` in prose | ` ` | A document ABOUT model prompt formats loses its subject. |
+
+  Three more flagged without mutating — a fenced code block (`decode` ×5), JSON escapes (`decode`
+  ×4), an SSH key in a runbook (`entropy`) — which are the ordinary false positives, and are
+  harmless as long as they only ever produce a signal.
+
+  **Consequences for the design, decided here:**
+  1. The document path screens the **projected diff** (text) and NEVER the Yjs update bytes, and it
+     **never substitutes** the sanitized output. A mutated update is not the update that was signed.
+  2. A screening hit is a §3.2 rejection with its reason, or a flag on the notice — the existing
+     refuse/supersede machinery. It is never a silent rewrite.
+  3. `stripInvisible` and NFKC confusables are wrong for documents at ANY threshold, so tuning is
+     not the answer. Detection can use the sanitized text; delivery uses the original.
+
+  What remains genuinely open, and is a real judgement call rather than a blocked label: how noisy
+  detect-only is in practice for code- and data-heavy documents (the `decode`/`entropy` hits above),
+  which needs a larger corpus of real documents rather than more reading. — 🅿️ (unblocked in
+  design; scoped to detect-only; noise level still to be measured) When unblocked: incoming projected diffs flow through
   `screenInbound` at the gate hook with document context (`ScreenContext` today carries no
   counterparty and no document scope — the audit decides what scoping §3.1 actually needs vs
   what exists); the sender-side ADVISORY scan runs the sender's own policy against the outbound
