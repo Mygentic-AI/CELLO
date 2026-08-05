@@ -377,7 +377,29 @@ description: >
       sync path, which means knowing the refusal before the gate has run; (c) give the layer a
       SYNCHRONOUS signer — Ed25519 signing is sync underneath and only `KeyProvider` wraps it in a
       Promise — which means the layer holds or reaches key material.
-      Nothing else in P2 is blocked by this; it blocks only the composition-root call. — ❌
+      **RESOLVED, 2026-08-05 (§3a).** The router now splits SYNCHRONOUS classification — which is
+      all the session path needs inline, to pick a leaf kind — from ASYNCHRONOUS handling, dispatched
+      on a per-owner promise queue. Serialized because the chain check is order-dependent even though
+      Yjs is not: an envelope's `doc_prev_hash` must find its predecessor already stored, so two
+      frames handled concurrently can have the second refuse with `document_chain_broken` purely
+      because the first has not finished writing — a self-inflicted fork that reads as a peer fault.
+      `DocumentInbound.receive` and the rejection `crypto()` seam are async now.
+
+      **STILL BLOCKED, on a deeper gap found immediately after — DOD-DOC-REJECT-2 (new, below).**
+      With the async seam open I wrote the composition-root signer and it was FABRICATED CRYPTO
+      wearing a real signature: it signed an empty buffer with whichever key provider happened to be
+      first in a map, because `crypto()` takes no arguments (so it cannot know the OWNER agent) and
+      **nothing anywhere defines what a rejection signature is over**. `RejectionInput.signature` is
+      required — REJECT-1 rightly refuses a placeholder — but there is no rejection TBS. Reverted
+      rather than shipped. — ❌
+  - **DOD-DOC-REJECT-2** — the rejection's signed preimage. A `0x05` leaf carries a signature and
+    no canonical to-be-signed structure exists for it, so the field can only be filled dishonestly.
+    Needs: a `CELLO-DOCUMENT-REJECTION-v1` TBS binding the document, the rejected envelope hash, the
+    reason and the rejecting agent (the same shape the update, proposal and ack envelopes already
+    use, with a frozen vector); `crypto()` taking the owner agent so it signs with the right key;
+    and the wire type so a rejection reaches the peer at all rather than only the local log. Until
+    this lands, the composition root cannot honestly supply a signer and INBOUND-2 cannot be
+    wired. — ❌
 - **DOD-DOC-LIFECYCLE-1** [cello-client] — the verbs (§3.5 + §16.4): **list** (documents with
   peer, type, tier, epoch, status, pending-delivery state — tier and epoch are constants in V1
   but they are seam surface and cheap to show — "1 update pending, peer offline since …");
