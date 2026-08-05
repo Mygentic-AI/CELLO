@@ -880,6 +880,26 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
 
 ## Parked
 
+- **M12-P16** — **`set-agent-offline` does not take an agent offline.** Measured live 2026-08-05 on
+  published `daemon 0.0.124`. I set `Miss_Chelly_H` offline and confirmed it
+  (`state: registered`, `standing_receiver_ready: false`), then sent it a message from another
+  machine. The receiver **accepted the content directly, appended a leaf, ran its away logic and
+  replied** — the whole exchange is in its transcript. The CLI's own help says: *"Take an agent
+  offline. It stops accepting anything until restarted."*
+  Cause: the handler (`agent-handlers.ts`, `cello_set_agent_offline`) removes the agent from
+  `onlineAgents` and awaits `removeStandingReceiverForAgent`, which tears down the STANDING RECEIVER
+  (so no NEW inbound session can be accepted) but leaves every existing per-session node alive and
+  serving. Direct delivery goes to the session node, so an established conversation continues.
+  **Not fixed, deliberately: the resolution is a product decision, not a bug fix.** Either "offline"
+  means *refuse new sessions, existing ones continue* — in which case the help text is the defect and
+  should say so — or it means *stop talking*, in which case the handler must also tear down the
+  agent's active session nodes, which interrupts live conversations and makes them seal-interrupted
+  on close. The second reading is the one that makes it a kill switch, and the launch bar names a
+  kill switch explicitly; but it is a user-facing behaviour change and should be chosen, not
+  defaulted into by whoever touches the file next.
+  → Entry 95
+
+
 - **M12-P14** — **Diverged frontiers have no reconciliation path, so an unsealable session's only
   exit is force-abandon with no receipt.**
   ⚠️ **This entry was filed wrong on 2026-08-05 and is corrected here. The original claim — "a
