@@ -8,6 +8,15 @@
 # to create a build at all — without it push events die at creation and leave NO build record,
 # so the failure looks like "the trigger never fired". Declared in infra/terraform/iam.tf.
 #
+# That grant is restored and both triggers were recreated on 2026-08-05, and a push STILL produced
+# no build and no denied-attempt audit entry — the event does not reach Cloud Build. Tracked as
+# M12-P11. Until it is closed, build a merged revision with:
+#   gcloud builds submit \
+#     "projects/cello-infra/locations/us-east1/connections/cello-github/repositories/CELLO" \
+#     --revision=<SHA> --region=us-east1 --config=infra/cloudbuild/relay.yaml \
+#     --service-account=projects/cello-infra/serviceAccounts/cello-cloud-build@cello-infra.iam.gserviceaccount.com \
+#     --substitutions=_TAG=<SHA>
+#
 # A manual `gcloud builds submit` of a LOCAL tree is a last resort: the tag then names a commit
 # whose contents were never proven to match, which has already cost this milestone a demoted
 # claim. If you must, submit from a clean checkout of the SHA and say so where you claim it.
