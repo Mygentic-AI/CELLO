@@ -880,16 +880,39 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
 
 ## Parked
 
-- **M12-P13** — **The away-response drops on failure with no backstop, and the receiver strands
-  ITSELF.** Measured 2026-08-05: one millisecond after a session opened, the receiving daemon logged
-  `session.away.response.failed kind=request reason=session_stream_unavailable`. That response holds
-  witnessed sequence **0**. It was never parked and never retried, so every later message in that
-  session — including one recovered perfectly from the relay park and cryptographically verified —
-  is held forever at `nextExpected=0`. Same defect class as M12-P12, different code path:
-  `sendContent`'s dial-failure path now enqueues durably on a refusal; the away-response path has no
-  backstop at all. **This is what currently blocks DOD-PARK-DRAIN-1**, whose sender half is proven.
-  Likely the better explanation of the 2026-08-04 incident than the park refusal alone. Reproducible
-  with the fault lever on branch `m12/park-fault`. → Entry 89
+- **M12-P14** — **A local-only teardown declares the session `interrupted`, and the counterparty
+  correctly refuses to seal it.** Measured 2026-08-05 on two sessions (`4c28edcd…`, `dcd0aadc…`).
+  Trace: `session.content.sent` → `session.liveness.changed liveness=gone` →
+  `session.liveness.unrelated_peer_disconnect` → `session.node.destroyed reason=interrupted`, all
+  within one millisecond — and then `content.park.deposited` **21 seconds later**, i.e. the content
+  the counterparty needed landed *after* we had already given up on the session. The counterparty's
+  view was complete, so it answered the seal-interrupted request with `session_not_interrupted`
+  (12:14, again at 12:17). There is no reconciliation path from there: `force:true` abandon is the
+  only exit, and it yields **no notarized receipt**. Both sessions ended that way.
+  The interruption decision reads only LOCAL transport state and never asks whether the
+  counterparty's view is actually incomplete — a laptop lid, a wifi drop, or a daemon restart
+  produces it. Launch-critical class: the sealed receipt is the artifact CELLO exists to produce.
+  → Entry 90
+- **M12-P13** — ✅ **FIXED 2026-08-05** (`1f75937`, branch `m12/p13-durable-leaf`) — **a queued
+  message's leaf was never committed, so the sender stranded its own session.** Originally filed as
+  "the away-response has no backstop"; the backstop was only half of it, and the root cause is
+  sharper. `sendContent` submits the content hash to the relay witness BEFORE attempting direct
+  delivery, so the canonical sequence is committed whether or not the send lands. Both send callers
+  appended the session leaf **only on success**. `nextExpected` is literally
+  `getSessionTree(...).size()` (`session-node-manager.ts:4178`) — so a failed-but-queued message
+  leaves the local tree one short of a sequence the counterparty will receive at, and everything
+  after it is held behind a gap nothing can fill.
+  Measured: one millisecond after a session opened, the receiving daemon logged
+  `session.away.response.failed kind=request reason=session_stream_unavailable`. That reply holds
+  witnessed sequence **0**. No leaf, so the tree stayed at size 0 and a message recovered perfectly
+  from the relay park and cryptographically verified was held at `nextExpected=0` forever. The
+  receiver stranded *itself*.
+  Fix: `sendContent`'s failure result now carries `durable` as a **field** (M12-P12 had shipped that
+  distinction inside the `guidance` English sentence only, so no caller could act on it). Both
+  callers commit the leaf + transcript when durable, and never when lost — a leaf for content that
+  will never arrive is a permanent root mismatch. The away path's lost branch is now an `error`
+  naming the consequence, not the bare `warn` that read as routine churn when it fired live.
+  → Entries 89, 90
 - **M12-P12** — **A failed park deposit drops the message with no retry, and the gap strands the
   session.** `sendContent`'s dial-failure path calls `#untrackAwaitingAck` first (deliberately —
   so a never-delivered frame cannot fire a spurious TTF park), then attempts `#parkContent`. When

@@ -6179,3 +6179,81 @@ and the receiver cannot deliver until M12-P13 is fixed.
 
 **Nothing about this is on the deployed relays or the two ✅ lines.** `DOD-RELAY-KEEPALIVE-1` and
 `DOD-GCP-RELAY-DRIFT-1` are unaffected.
+
+---
+
+### Entry 90 — the hole was never the backstop, it was the leaf
+
+M12-P13 was filed as "the away-response drops on failure with no backstop." That was true and it
+was not the cause. Tracing why the receiver sat at `nextExpected=0` produced a one-line answer:
+
+```
+session-node-manager.ts:4178
+  const nextExpected = this.getSessionTree(agentName, sessionId).size();
+```
+
+`nextExpected` **is** the local tree size. And `sendContent` submits the content hash to the relay
+witness *before* it attempts direct delivery — deliberately, so an offline recipient still gets a
+sequence (the comment at :3413 says so explicitly). So the sequence is committed whether or not the
+send lands, while both send callers appended the leaf **only on success**.
+
+That is the whole defect. A message that fails to send and gets durably queued leaves a hole at a
+sequence the counterparty *will* receive at. The local tree can never reach that number, so every
+later message is held behind the gap — permanently, with no error on either side.
+
+The live capture is exactly this shape, on the EC2 receiver:
+
+```
+09:45:59.397  session.relay.leaf.delivered   sequenceNumber=1
+09:45:59.398  session.away.response.failed   kind=request  reason=session_stream_unavailable
+```
+
+Its own away reply owned sequence 0. No leaf. Tree size 0. A message recovered from the relay park
+and cryptographically verified sat held behind it forever. The receiver stranded itself.
+
+**Why M12-P12's fix did not already cover it.** P12 added the durable enqueue and reported the
+durable-vs-lost distinction *in the `guidance` sentence*. Prose. No caller could branch on it
+without substring-matching English, and none did — so the queued case still took the "give up and
+append nothing" path. The fix here makes `durable` a required field on the failure result, and both
+callers commit the leaf when it is set. Making it required rather than optional is deliberate: a new
+failure branch cannot be added without answering the question every caller now asks.
+
+The mirror case matters as much. A **lost** message must get no leaf — committing a sequence no
+content will ever fill is a permanent root mismatch, which trades a stalled receiver for two trees
+that can never seal. Both directions are pinned by tests.
+
+Six tests written red first, all six failing for the stated reason, then green:
+`durable` reported as a field on refusal / reported `false` when the park is unconfigured / a queued
+`cello_send` commits its leaf and transcript / a lost one commits nothing / a queued away reply
+commits its leaf and logs `session.away.response.deferred` / a lost away reply appends nothing and
+logs at `error` naming the loss. Plus one on the dedup guard: a queued away reply must **not** be
+re-sent on the next arrival, or the recipient gets the same greeting twice with a hole where the
+first one was.
+
+Gate: 2697 passed, 11 skipped, lint/typecheck/build clean. Commit `1f75937`.
+
+### Entry 90b — two sessions, force-abandoned, and a different defect (M12-P14)
+
+Andre force-closed two sessions that could not be sealed, and asked whether it was the same problem.
+It is not, and the traces say so plainly. In `4c28edcd…` the away reply **succeeded**
+(`session.away.response.sent`, 04:19:09). In `dcd0aadc…` the content **was** parked successfully.
+Neither shows the M12-P13 signature.
+
+What both show:
+
+```
+09:38:49  session.content.sent
+09:39:42  session.liveness.changed  liveness=gone
+09:39:42  session.liveness.unrelated_peer_disconnect
+09:39:42  session.node.destroyed    reason=interrupted     ← 1ms later
+09:40:03  content.park.deposited                            ← 21s AFTER we gave up
+```
+
+The counterparty's view was complete. Ours declared `interrupted` from **local transport state
+alone** — here, my own daemon restarts during the fault run. So the seal-interrupted request was
+answered `session_not_interrupted`, twice (12:14, 12:17), correctly. From there the only exit is
+`force:true`, which is terminal and produces **no notarized receipt**.
+
+This is not test-rig damage: a laptop lid, a wifi drop or a daemon restart produces the identical
+trace. Filed as **M12-P14**. The sealed receipt is the artifact this protocol exists to produce, so
+a routine local event that permanently prevents one is launch-critical class.
