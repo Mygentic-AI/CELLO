@@ -5845,3 +5845,69 @@ class, not a papercut.
   put the receiver on the Mac, where nothing autonomous revives it. Anyone repeating this should
   expect the same interference and plan for it rather than fight it.
 - The EC2 daemon must be started with `PATH=/usr/bin:$PATH` or it runs on Hermes' Node 22.
+
+## Entry 85 — 2026-08-05 — M12-P12 built and reviewed; "durable" was not "delivered" (SECOND REVIEW IN FLIGHT)
+
+**Status: IMPLEMENTED + one review pass closed, second pass in flight.** Not done. `DOD-PARK-DRAIN-1`
+stays 🟡 until the second verdict is quoted here, the branch merges, the daemon publishes, and the
+two-machine run is repeated.
+
+Branch `m12/park-retry` in cello-client (`d926cdb` build, `6cea544` review fixes). Built in a fresh
+worktree off `origin/main` — the shared cello-client checkout was sitting on **another session's
+branch (`m14/reject-1`) with their uncommitted work in the tree**, so the change was extracted as a
+patch and their tree restored untouched. Commit by explicit path, never `git add -A`.
+
+### The fix
+
+`sendContent`'s dial-failure path calls `#untrackAwaitingAck` before `#parkContent` — deliberately,
+so a never-delivered frame cannot fire a spurious TTF park. That also cancels the timer whose expiry
+is the **only** thing that writes content to the durable queue. So a park refusal after it left
+nothing at all holding the message. The TTF path is the reference implementation and has no such
+hole: it enqueues durably *and then* parks. The fix enqueues on the refusal, through a distinct
+`onParkFailed` hook rather than by reusing `onTtf` — nothing timed out, the deposit was refused, and
+naming an event for the wrong cause is how this stayed invisible.
+
+### Review pass one — 7 findings, 4 blocking. Verdict quoted:
+
+> "**the fix is right but incomplete.** It makes the message *survivable*; it does not make it
+> *delivered without a restart* — which is the clause it is being landed under."
+
+The one that matters most (F1, HIGH): the durable row had **two** triggers, both requiring a human —
+daemon restart and `cello_start_agent`. The receiver half of this same DoD line has five triggers;
+the sender half was chained to one of them. So the fix turned an unrecoverable loss into a
+restart-recoverable one, under a line whose headline is *"no restart"*. The reviewer traced the exact
+live scenario forward onto the fixed build and showed it still strands.
+
+F2 (HIGH) was the one I would not have found: the re-park dropped the relay's signed ordering record
+that was sitting in a local variable two lines above the call. Without it the recipient falls back to
+`#witnessedSeq` — an **in-memory** map, empty after a receiver restart — and appends the content at
+its *arrival* index instead of its witnessed sequence. That is a divergent session tree, discovered
+only at seal.
+
+All seven closed in `6cea544`:
+
+| # | Finding | Fix |
+|---|---|---|
+| F1 | durable ≠ delivered; no running-daemon trigger | sender flush on the parked-drain hook AND the signaling reconnect, ordered after `ensureStandingReceiver`; its failure costs the flush, never the inbound pull |
+| F2 | ordering record dropped → wrong leaf index → tree divergence | `retry_queue.structure{1,2}_cbor` (idempotent ALTER), rehydrated and passed to `sealParkEnvelope` |
+| F3 | deliberate fail-loud persist throw swallowed into an identical response | split by `guidance`; `content.park.durable_enqueue.failed` names its own cause |
+| F4 | `standing_receiver_unavailable` still an exit-point label | `cause: standingReceiverAbsenceReason()` alongside the unchanged wire reason |
+| F5 | successful enqueue was silent — nothing for the live run to point at | `content.park.deferred`, the sender-side counterpart to `session.content.held` |
+| F6 | a relay-less session queued rows that can never drain (unbounded growth) | `#parkContent` returns `parked`/`refused`/`unconfigured`; only a refusal enqueues |
+| F7 | dedupe on a content-only hash silently drops the second identical message | logged (`message.retry.enqueue.deduped`); keying on the sequence is the real fix, not done here |
+
+### The test was green and bypassable three ways
+
+Worth recording, because the test PASSED its revert test and was still weak. The reviewer wrote three
+implementations that satisfy it while losing messages in production:
+1. **Wrong `agent_id`** — the query had no `agent_id` predicate, and `agent_id` is the single field
+   the entire drain path keys on. Now pinned to `resolveAgentId("alice")`.
+2. **Empty blob** — every other assertion holds while the re-park seals nothing. Now round-tripped
+   through a rehydrated `RetryQueue` and the real `parkFn`.
+3. **Durable but undeliverable** — "and that is what landed." Now covered by two reconnect-drain
+   tests that were red before F1.
+
+Surviving the revert test is necessary and not sufficient: it proves the assertion is load-bearing,
+not that it asserts the right thing.
+
+Gate on the amended branch: **2686 passed / 11 skipped / 241 files**, lint clean, `tsc --build` clean.
