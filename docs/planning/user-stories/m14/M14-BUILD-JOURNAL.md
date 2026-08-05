@@ -2239,3 +2239,88 @@ false claim this milestone keeps correcting.
 P0 ✅ · P1 ✅ (SCREEN-1 🅿️) · P2 ✅ except DELIVERY-2 ⏳ and INBOUND-2 ⏳ — for both, what remains is
 the same thing: the session-channel frame handlers and the composition-root wiring, which go in
 together. P3 next (TOOLS-1 as a whole, SKILL-1, SHIP-1), then the five P4 enforcers.
+
+---
+
+## Entry 27 — three bytes, ten seconds, and a measurement of the wrong thing
+
+### The bug I found by testing my own claim
+
+I set out to verify one thing — that a conversation message cannot decode as a document frame — and
+the fuzz harness hung. Not the classifier being slow: **two bytes** taking five seconds.
+
+`9f b0` is an indefinite-length array header followed by a map header, with no data. Handed to
+cbor-x it took **5.0 s**. The review agent, probing independently, hit `9f 26` at **10 s and 1.6 GB**
+before its own run died on an API error. So it is memory exhaustion as well as CPU.
+
+The blast radius is what makes it serious. `classify()` runs on EVERY inbound frame, so a peer could
+stall or OOM the daemon's whole content path — **the operator's ordinary messages stop being
+delivered**, not just their documents. And the try/catch I had written for exactly this class does
+nothing: the cost is inside the decode, not in the throw.
+
+*A `catch` protects against a throw. It does not protect against the work done before the throw.*
+
+### Then the review broke my fix with three bytes
+
+I added `couldBeDocumentFrame`, a header check, and wrote a commit message asserting it closed the
+hole. Pass one closed it with `a1 9f` — a one-pair map whose first key is an indefinite array. Three
+bytes, passes any header check, **9.6 s and 1.1 GB**. `b9 000a 9f 26` does the same wearing the real
+frames' own header.
+
+The guard inspects the OUTERMOST container. The cost lives in what is nested inside it. No
+header-shaped guard can be sound here, and I asserted one was.
+
+### The part worth keeping: I measured the wrong thing and quoted it as the property
+
+My evidence was "35,671 of 40,000 hostile inputs never reach a decoder, worst remaining decode 1 ms".
+That number is real and it describes **the corpus**, not the guard: my pseudo-random generator never
+produced a two-token prefix, so the class that defeats the guard was absent from the sample. The
+figure was true, reproducible, and about the wrong subject.
+
+*A measurement is only evidence about the thing it varied. Mine varied random bytes and concluded
+something about an adversary.*
+
+### Where the bound actually belongs
+
+On the DECODER, in `cbor.ts`, where no call site can bypass it — which matters because `decodeCbor`
+is public API of that package and the directory's `seal_submission` and the relay decode through the
+same surface. A limit attached to one caller leaves every other caller unguarded.
+
+65,536, chosen against BOTH failure directions and measured in each: above it, the worst hostile
+decode drops to 5 ms from 9,600 ms; below it, a legitimate structure must never be refused, and the
+largest CELLO builds is a long-running session's seal `leaves` array — 60,000 decode in 8 ms and are
+admitted. Byte strings are not counted against these limits, so a 1 MB Yjs update is unaffected.
+
+**Refusing a real seal is the worse failure direction**, which is why the bound is generous rather
+than tight. A slow decode is a nuisance; an unverifiable seal is the product's claim failing.
+
+`setSizeLimits` exists at runtime in cbor-x 1.6.4 and is missing from its shipped `.d.ts` — verified
+with `Object.keys`, not assumed. Declared via module augmentation rather than cast away, and TESTED
+rather than trusted to the import, because a future cbor-x that dropped the function would leave a
+silently compiling no-op.
+
+### The argument I should have had
+
+The header guard stays as a fast path, and the reviewer supplied the reason that actually holds: byte
+0 must be `0xa0`–`0xb9`, and **every one of those is a UTF-8 continuation byte**, which can never
+begin a valid UTF-8 sequence. So no text an operator types, and no text an attacker chooses, can be
+classified as a document frame — a proof about the input space, where I had offered a corpus result.
+
+A hostile PEER can of course put raw non-UTF-8 bytes on the channel and have them classified as
+document traffic. That only suppresses their own message, so it is not an attack.
+
+### A hollow test of mine, again
+
+"refuses a map header claiming an enormous field count" asserted `consumed: false` — which those
+inputs return with or without the guard, because they throw quickly either way. It pinned routing
+and named cost. The wall clock is the assertion with teeth.
+
+### Gates
+
+`test` **2963 passed / 11 skipped** · `lint` · `typecheck` clean.
+
+### Milestone state
+
+P0 ✅ · P1 ✅ (SCREEN-1 🅿️) · P2 ✅ except DELIVERY-2 ⏳ and INBOUND-2 ⏳ — both waiting on the same
+two things: the interception point in the session content path and the composition-root wiring, which
+go in together. P3 next.
