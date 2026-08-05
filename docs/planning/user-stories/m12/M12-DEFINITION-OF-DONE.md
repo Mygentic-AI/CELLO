@@ -325,7 +325,7 @@ description: >
   in the built artifact.** Its failure path could NOT be reproduced on demand: `set-agent-offline`
   does not stop an open session's node (measured — delivery still succeeded), and the CLI refuses a
   send from an offline agent, so the sender-side refusal is a rebuild-window race with no CLI lever.
-  **SENDER HALF PROVEN 2026-08-05** with a purpose-built fault lever (`m12/park-fault`), daemon pid
+  **PROVEN END-TO-END, TWO MACHINES, PUBLISHED BINARIES — 2026-08-05 17:00 UTC.** (was: sender half proven 2026-08-05** with a purpose-built fault lever (`m12/park-fault`), daemon pid
   unchanged throughout: `content.park.deposit.failed cause=standing_receiver_creating` →
   `content.park.deferred selfOrdering=true` → `content.recover.drain.triggered
   reason=standing_receiver_ready` → `content.park.flush.completed parkedCount=1` → receiver pulls and
@@ -1208,3 +1208,43 @@ launch.
 - [[M12-PROCEDURE]] — how to work this milestone (read first)
 - [[M12-BUILD-JOURNAL]] — evidence home
 - [[2026-07-28_0700_gcp-rebuild-decision-record]] — spec-of-record
+
+
+---
+
+## DOD-PARK-DRAIN-1 — live proof (2026-08-05)
+
+Two machines, both on published `daemon 0.0.124`, session `bb09bd6d…`. The fault lever is in the
+SHIPPED artifact (gated by `CELLO_FAULT_INJECTION=1`), so this proves the published code, not a
+worktree build — the distinction that cost this milestone a demoted claim once already.
+
+Sender (Mac, published binary + fault gate):
+```
+16:55:04.202  content.send.fault.injected
+16:55:04.202  content.park.deposit.failed  standing_receiver_unavailable  injected=true
+16:55:04.202  content.park.deferred                      ← M12-P12: durable enqueue on refusal
+16:55:04.203  session.tree.appended                      ← M12-P13: the leaf, for a message that FAILED
+16:55:04.203  session.content.queued.committed  seq=0    ← M12-P13: the hole is gone
+16:56:44.867  content.park.deposited            source=startup_flush
+16:56:44.869  content.park.flush.completed       parked=1
+```
+IPC response carried `queued: true, sequence_number: 0` — the machine-readable half M12-P13 added.
+
+Receiver (EC2 `i-06db70df6b3e32207`, daemon pid **898304, uptime unbroken, NEVER restarted**):
+```
+16:59:54.449  content.recover.drain.triggered   periodic_backstop
+16:59:54.525  content.park.pull.result          count=4
+16:59:54.560  content.recover.verified          bb09bd6d
+16:59:54.564  content.recovered                 bb09bd6d
+```
+And readable, not merely leafed — the receiver's transcript holds the probe at seq 0 and its own
+reply at seq 1 ("Probe message received successfully! … The drain worked exactly as intended.").
+
+**The two sender lines at 16:55:04.203 are the fix.** Before M12-P13 neither existed: the message
+occupied a relay-witnessed sequence with no local leaf, and `nextExpected` (= tree size) could never
+reach it, so every later message was held behind the gap permanently and silently.
+
+**Incidental, and confirmed live on 0.0.124:** the same pull returned **4 items, 3 of them
+undeliverable zombies** — `dcd0aadc` held, `6aa3f24b` `counterparty_unknown`, `34a6edbf`
+`session_committed`. The re-pull loop is real, reproduces on the published binary, and has the two
+entry points CELLO_Coder_1 identified. One real message, three that can never land.

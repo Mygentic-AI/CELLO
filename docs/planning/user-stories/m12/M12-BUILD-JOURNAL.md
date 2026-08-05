@@ -6450,3 +6450,52 @@ with four constraints — theirs, and the first is the one I would have got wron
 Net: the other agent corrected two of my claims and found an entry point I missed; I gave them the
 4c28edcd ordering and the annex-outside-the-tree confirmation. Worth noting for its own sake — this
 is the product being used for the thing it is for, and the exchange is sealed with a receipt.
+
+### Entry 95 — DOD-PARK-DRAIN-1, proven on two machines and on the shipped binary
+
+Both ends upgraded to published `daemon 0.0.124` and verified by grepping the RUNNING binary's dist
+for the new symbols — not by trusting `cello -v`, which reports the CLI and says nothing about the
+long-lived daemon process. That distinction bit us today: after installing 0.0.127 the Mac daemon
+was still executing my worktree build from 11:39, because installing a CLI does not restart a daemon.
+
+The lever that makes this reproducible ships in the artifact (`CELLO_FAULT_INJECTION=1`, hard-gated,
+refused without the env var), so the run exercises published code. That was deliberate: a hand-built
+tree already cost this milestone a demoted claim.
+
+Sender (Mac, pid 30948, published path + fault gate):
+```
+16:55:04.202  content.send.fault.injected
+16:55:04.202  content.park.deposit.failed  standing_receiver_unavailable  injected=true
+16:55:04.202  content.park.deferred                     ← M12-P12
+16:55:04.203  session.tree.appended                     ← M12-P13
+16:55:04.203  session.content.queued.committed seq=0    ← M12-P13
+16:56:44.869  content.park.flush.completed  parked=1
+```
+Receiver (EC2, pid 898304, **uptime unbroken throughout**):
+```
+16:59:54.449  content.recover.drain.triggered  periodic_backstop
+16:59:54.525  content.park.pull.result  count=4
+16:59:54.564  content.recovered  bb09bd6d
+```
+Transcript seq 0 received, seq 1 its own reply. Delivered and readable, not merely leafed.
+
+**What the two 16:55:04.203 lines mean.** They are the entire M12-P13 fix. The relay witnesses the
+content hash BEFORE direct delivery is attempted, so the sequence is committed whether or not the
+send lands. Pre-fix the leaf was appended only on success, so a failed-but-queued message left a hole
+at a sequence the counterparty would receive at — and `nextExpected` IS the local tree size, so
+nothing behind that hole could ever be delivered. Silently, on both sides.
+
+**Three things this run surfaced that were not the target.**
+
+1. `cello set-agent-offline` does not take an agent offline for EXISTING sessions. I set
+   `Miss_Chelly_H` offline (confirmed `state: registered`, `standing_receiver_ready: false`), then
+   sent — the message was **delivered directly**, appended, and answered with an away reply. The
+   CLI's own help says "It stops accepting anything until restarted." It tears down the standing
+   receiver and leaves per-session nodes serving. An operator going dark is not dark.
+2. The re-pull loop, reproducing on the published binary in the same trace: the pull returned **4
+   items and 3 were undeliverable** (`held`, `counterparty_unknown`, `session_committed`). One real
+   message, three zombies, on every backstop tick forever.
+3. The receiver's drain is on a periodic backstop, so recovery took **~3 minutes** after the deposit.
+   I checked at 16:59:05 and reported "not recovered"; the drain fired at 16:59:54. Nothing was
+   wrong — but the reporting was wrong for fifty seconds, and a slower reader would have filed a
+   defect. Worth a faster trigger on deposit, or at minimum knowing the latency is backstop-bounded.
