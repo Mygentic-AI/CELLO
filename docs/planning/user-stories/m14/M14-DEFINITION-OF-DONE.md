@@ -328,7 +328,18 @@ description: >
     hint honoured-or-refused, and the `discovery_lookup` mapping where only a RESULT is an answer
     about the peer — every other outcome throws rather than being called "offline"). Remaining: the
     composition-root instantiation and the tick scheduler.
-    **BLOCKED, 2026-08-05, on one missing capability: AUTONOMOUS SESSION OPENING.** §16.4's whole
+    **UNBLOCKED AND WIRED, 2026-08-05.** `openSessionAs` was extracted from the
+    `cello_initiate_session` handler — the split is at the connection boundary, so one
+    implementation serves both callers rather than a second copy drifting on the transport mode,
+    the signed assignment and the counterparty binding. The transport is built PER AGENT (every
+    capability underneath is: the signaling stream, the sessions, the signing), reuses
+    `runDiscoveryLookup` rather than reimplementing the 3-state answer, and seals only sessions it
+    opened. The sweep is a slow 60s interval — the event actually being waited for, the peer coming
+    back, is not one this daemon observes — with no-overlap and whole-sweep containment guards, an
+    unref'd timer, and teardown before the rest of `stop`.
+    **Remaining: nothing on this line but a live smoke.** What follows was the blocker, kept for the
+    record:
+    ~~BLOCKED, 2026-08-05, on one missing capability: AUTONOMOUS SESSION OPENING.~~ §16.4's whole
     premise is that the daemon opens a session with no agent attention on either end — but the
     initiate path exists only as an IPC handler (`initiate-session-handler.ts`), driven by
     `cello_initiate_session`. There is no function a worker can call. `runDiscoveryLookup` is now
