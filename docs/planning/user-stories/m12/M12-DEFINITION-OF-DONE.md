@@ -880,7 +880,11 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   `roles/cloudbuild.builds.builder` is now declared in `infra/terraform/iam.tf`. Still open: a push
   touching an `includedFiles` path produces no build AND no denied-attempt audit entry, so the event
   never reaches Cloud Build. Ruled out: App installation, connection state, `includedFiles`, and
-  trigger state (both recreated via `terraform -replace`). Meanwhile CI builds run from a revision:
+  trigger state (both recreated via `terraform -replace`). **Also falsified 2026-08-05: the connection's
+  stored OAuth token is NOT expired** — the `ghu_` secret answers `200` on both `/user` and
+  `/repos/Mygentic-AI/CELLO`, so re-running the browser OAuth flow (the obvious next move, and the one
+  thing here that would need Andre) would achieve nothing. Do not spend that gate.
+  Meanwhile CI builds run from a revision:
   `gcloud builds submit <repository-resource> --revision=<SHA>` — source from GitHub, never a local
   tree. → Entries 82, 83
 - **M12-P10** — **`WAL_DIR` drifts across clouds and nothing asserts it.** AWS puts the relay's
