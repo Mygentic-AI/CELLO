@@ -2,7 +2,7 @@
 name: Launch Triage
 type: triage
 date: 2026-07-31
-topics: [launch, security, backup, receipt-integrity, kill-switch, daemon-lifecycle, telegram, install, triage]
+topics: [launch, security, backup, receipt-integrity, kill-switch, daemon-lifecycle, telegram, install, triage, sealed-sessions, wake]
 status: open
 description: >
   The launch punch list. Ranked by what actually goes wrong if left alone, not by build status.
@@ -11,6 +11,9 @@ description: >
   priority, not a first pass. Four items moved to a new "Post-launch" section — needed eventually,
   not for launch. Open items carry contiguous numbers and renumber when something closes;
   cross-references use names, not numbers, so they survive it.
+  2026-08-05: added DOD-TERMINAL-WAKE-1 (item 12) as unranked — a sealed session's unread messages
+  ring the doorbell as live work and an agent acted on an expired directive. Slot proposed beside
+  DOD-SEALED-INBOX-2 (shared consumers); ranking not yet decided.
 ---
 
 # Launch Triage
@@ -305,6 +308,61 @@ kill-switch and false-claim items above fire for every user immediately.
 
 Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello_backup` and
 `cello_restore` remain stubs, and that a round-trip proof is owed to whoever builds them.
+
+---
+
+## 12. A sealed session's unread messages ring the doorbell as live work, and agents act on them
+
+**Designation: `DOD-TERMINAL-WAKE-1`** — ❌ open, raised 2026-08-05. **Unranked — slot proposed, not
+decided.** Proposed to sit beside `DOD-SEALED-INBOX-2`: same code surface, different defect.
+
+Messages that were still unread when a session sealed stay unread forever — correctly. The seal
+attests what each side actually consumed (`content_frontier_seq` per participant,
+`final_message.answered`), so advancing the watermark at seal would falsify the receipt. **That
+behaviour is right and is not what this item asks to change.** The messages are also still in the
+notarized transcript; they are leaves in the tree. Nothing is missing from the record.
+
+The defect is downstream and purely presentational: those messages are surfaced as **pending,
+actionable work** with no signal that the session is terminal. Nothing can be appended to a sealed
+session, so there is no action any agent can take — but the wake is indistinguishable from a live
+inbound message, and an agent reading one has no way to tell it is answering a conversation that
+ended hours ago.
+
+**Observed live 2026-08-05** on the Hermes-bridged agent `Miss_Chelly_H`. Three sessions sealed in
+the morning all re-fired as wakes six to eight hours later:
+
+| Session | Sealed | Re-fired |
+|---|---|---|
+| `9014d071…` | 07:37:45 (`seal.autoacknowledged`) | 13:44:45 |
+| `82c2d10c…` | 05:53:19 (`node.destroyed reason:"sealed"`) | 14:19:27 |
+| `b9fed6e5…` | 06:19:16 (seal verified) | 14:19:27 |
+
+**Why this is more than noise.** The `9014d071` message carried a directive — *"I am about to take
+my receiver down deliberately; when I ask, send one message even though I look unreachable. Do not
+seal. `[[STANDBY EST:15m]]`"*. The agent read it as live, announced it was standing by, and waited
+on a counterparty whose daemon held no record of the session at all. Its 15-minute standby had
+expired roughly six hours earlier. **An agent obeying an expired instruction from a terminal session
+is a correctness failure, not a cosmetic one** — and it is self-concealing, because the agent
+reports a perfectly coherent status ("standing by as asked") that happens to be about a dead
+conversation.
+
+**Diagnosis signature:** `message.watermark.advanced` firing with a *fresh* timestamp for an old
+`sequence`, on a session whose last real event was a seal. Confirm terminality with
+`grep <sessionId> ~/.cello/daemon.log | grep -E "seal|node.destroyed|liveness"`.
+
+**Shape of the fix — not "advance the watermark at seal."** A terminal session must not generate an
+actionable wake or count as pending work. The message stays honestly unread on the record; it just
+stops ringing the bell. This shares consumers with `DOD-SEALED-INBOX-2` (`notification-handlers.ts`,
+`session-read-handlers.ts`, `session-node-manager.ts`, and the shipped
+`plugins/cello/skills/receptionist/SKILL.md`), so the two are worth doing in one pass — that item's
+per-row `status` is a precondition for this one, since a consumer cannot suppress what it cannot
+distinguish.
+
+**Triage note, stated plainly:** this needs a daemon restart plus unread-at-seal to trigger, and the
+blast radius is a confused agent rather than lost or corrupted data — so it does not obviously fail
+the ruin test on its own. What argues for it is the pairing: it lands on the same files as a ranked
+item, and "agent confidently acts on an expired instruction" is the kind of thing a technical
+evaluator reads as unsound in a trust product. Ranking is Andre's call.
 
 ---
 
