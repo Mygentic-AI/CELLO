@@ -325,8 +325,13 @@ description: >
   in the built artifact.** Its failure path could NOT be reproduced on demand: `set-agent-offline`
   does not stop an open session's node (measured — delivery still succeeded), and the CLI refuses a
   send from an offline agent, so the sender-side refusal is a rebuild-window race with no CLI lever.
-  Closes on `content.park.deposit.failed cause=standing_receiver_creating` → `content.park.deferred`
-  → `content.park.flush.completed parkedCount>0` → recovery on a running receiver — Entry 88.
+  **SENDER HALF PROVEN 2026-08-05** with a purpose-built fault lever (`m12/park-fault`), daemon pid
+  unchanged throughout: `content.park.deposit.failed cause=standing_receiver_creating` →
+  `content.park.deferred selfOrdering=true` → `content.recover.drain.triggered
+  reason=standing_receiver_ready` → `content.park.flush.completed parkedCount=1` → receiver pulls and
+  `content.recover.verified`. **Blocked from ✅ by M12-P13**, not by anything in this line: the
+  receiver holds it at `nextExpected=0` because its OWN away-response failed to send and was never
+  retried. → Entries 88, 89.
   → Entries 78, 81, 82, 83, 84, 85, 86
 
 ## Tier P2 — Wave 1: complete CELLO on GCP, standalone
@@ -875,6 +880,16 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
 
 ## Parked
 
+- **M12-P13** — **The away-response drops on failure with no backstop, and the receiver strands
+  ITSELF.** Measured 2026-08-05: one millisecond after a session opened, the receiving daemon logged
+  `session.away.response.failed kind=request reason=session_stream_unavailable`. That response holds
+  witnessed sequence **0**. It was never parked and never retried, so every later message in that
+  session — including one recovered perfectly from the relay park and cryptographically verified —
+  is held forever at `nextExpected=0`. Same defect class as M12-P12, different code path:
+  `sendContent`'s dial-failure path now enqueues durably on a refusal; the away-response path has no
+  backstop at all. **This is what currently blocks DOD-PARK-DRAIN-1**, whose sender half is proven.
+  Likely the better explanation of the 2026-08-04 incident than the park refusal alone. Reproducible
+  with the fault lever on branch `m12/park-fault`. → Entry 89
 - **M12-P12** — **A failed park deposit drops the message with no retry, and the gap strands the
   session.** `sendContent`'s dial-failure path calls `#untrackAwaitingAck` first (deliberately —
   so a never-delivered frame cannot fire a spurious TTF park), then attempts `#parkContent`. When

@@ -6108,3 +6108,74 @@ content.recovered / session.content.received      ← on a RUNNING receiver, pid
 The `cause=` field is new this unit and exists precisely so the transient case
 (`standing_receiver_creating`) is distinguishable from the permanent one (`agent_offline`) when it
 does happen.
+
+## Entry 89 — 2026-08-05 — M12-P12 PROVEN on the sender; the receiver blocks itself, and that is M12-P13
+
+The fix could not be watched working because the failure is a race with no CLI lever. So the lever
+was built: `injectParkFault` + `injectSendFault`, behind `CELLO_FAULT_INJECTION=1`, exposed as a
+`debug_inject_park_fault` IPC handler that **refuses by name** when the env var is absent (branch
+`m12/park-fault`, `54b31b3` + `fe85cb0`). Both faults are needed — the park fault alone reproduces
+nothing, because the counterparty's session node accepts the frame and returns `delivered: true`
+even with its agent away. Measured, not assumed.
+
+### M12-P12 — PROVEN end to end on the sender half
+
+Mac (`CELLO_Coder_1`, fault build) → EC2 (`Miss_Chelly_H`, published 0.0.123), through the GCP relay.
+Daemon **pid 18176 before and after**, no restart at any point:
+
+```
+09:41:21  content.send.fault.injected
+09:41:22  content.park.deposit.failed   reason=standing_receiver_unavailable
+                                        cause=standing_receiver_creating  injected=true
+09:41:22  content.park.deferred         selfOrdering=TRUE
+09:41:55  content.recover.drain.triggered   reason=standing_receiver_ready
+09:41:56  content.park.deposited            source=startup_flush
+09:41:56  content.park.flush.completed      parkedCount=1
+```
+
+Every review finding is visible in that trace: `cause` (F4), `content.park.deferred` (F5),
+`selfOrdering: true` — the ordering record survived the durable round-trip (F2) — and the flush
+firing on `standing_receiver_ready` rather than on a restart (F1). The operator-facing response was
+the durable branch, not the lost branch (F3):
+
+> "Direct delivery failed and the relay refused the hand-off, so the message is queued and will be
+> re-sent automatically when the relay link is back. No action needed."
+
+The receiver then **pulled it and cryptographically verified it** (`content.recover.verified`). The
+sender-side hole is closed and measured.
+
+### The message still does not reach the operator — and the cause is a NEW defect
+
+`content.recover.held  canonicalSeq=1  nextExpected=0  gap=1`. The receiver holds it behind sequence
+**0**, and sequence 0 is this, on the RECEIVER, one millisecond after the session opened:
+
+```
+09:45:59.397  session.relay.leaf.delivered   sequenceNumber=1
+09:45:59.398  session.away.response.failed   kind=request  reason=session_stream_unavailable
+```
+
+**The receiver's own away-response failed to send, was never parked, and was never retried.** It
+holds the witnessed sequence 0 forever, so every later message in that session — including one
+recovered perfectly from the park — is stranded behind a gap the receiver created itself.
+
+This is **the same defect class M12-P12 just fixed, on a different code path.** `sendContent`'s
+dial-failure path now enqueues durably on a refusal; the away-response path drops on failure with no
+backstop at all. Filed as **M12-P13**.
+
+It is also the better explanation of the 2026-08-04 incident than anything so far: the gap that
+stranded the original conversation was very likely an away-response that never landed, not only the
+park deposit that failed.
+
+**Also seen, separately:** parked content for a session the receiver never completed is refused
+`content.recover.unauthenticated / counterparty_unknown` and re-pulled on every drain forever. The
+refusal is correct (SEC-1 — never ingest content whose counterparty you cannot authenticate), but
+nothing ages the entry out, and the sender was told it is queued.
+
+### Status
+
+`DOD-PARK-DRAIN-1` stays 🟡, and now for a NAMED reason with a reproducible lever rather than "could
+not reproduce". Its clause is "delivered to a RUNNING receiver daemon" — the sender half is proven,
+and the receiver cannot deliver until M12-P13 is fixed.
+
+**Nothing about this is on the deployed relays or the two ✅ lines.** `DOD-RELAY-KEEPALIVE-1` and
+`DOD-GCP-RELAY-DRIFT-1` are unaffected.
