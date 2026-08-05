@@ -1267,3 +1267,59 @@ have written one without measuring, it was false.*
 ### Next
 
 **DOD-DOC-WRITE-1** — scoped and falsified in Entry 14, now carrying two inherited constraints.
+
+---
+
+## Entry 16 — 2026-08-05 — DOD-DOC-WRITE-1 implemented (review in flight)
+
+**Branch:** cello-client `m14/write-1` @ 5b563c2. **IMPLEMENTED, not DONE.**
+
+### A flaky test that was a real bug
+
+The overlap assertion passed roughly **three runs in four**. The temptation is to call that test
+noise; it was a defect in my code, and finding it took a trace rather than a re-run.
+
+I measured the local edit in **PRE-fold coordinates** and compared it against merge deltas
+reported in **POST-fold coordinates**. Two different coordinate systems. And the reason it was
+*intermittent* rather than always-wrong: **Yjs breaks ties between concurrent inserts by
+clientID, which is random.** When the local fold deletes the characters an incoming insert was
+anchored to, Yjs re-homes that insert to the boundary of the local edit — and *which side* of the
+boundary depends on the draw.
+
+Traced concretely: local edit occupied `[4,9)`, the incoming insert landed at `[9,14)`. Adjacent,
+so strict inequality said "no overlap" — for the case where both sides rewrote the same word.
+
+Fix: the fold reports where the local edit **ended up**, and the endpoint comparison is
+**inclusive**. Verified across eight consecutive runs. *This is the third time this milestone that
+Yjs's random clientID produced a nondeterministic result that read as something else — the deep-
+nesting byte count, the collision splice, and now this. It is worth treating "random clientID" as
+a standing suspect whenever a Yjs-adjacent result is intermittent.*
+
+### The design, and what is easy to lose
+
+§16.2's fold order — local edits in as operations, THEN merge, THEN rewrite the file — is the
+whole unit. Reverse the first two and the agent's unpublished work is destroyed silently, because
+the file gets rewritten from a document that never saw it. And the overlap flag is not a separate
+feature to compute: it *is* whether the merge touched what the fold had just written. Two
+mechanisms, one mechanism.
+
+### Refusals
+
+Publishing an unmaterialized document names the missing file; malformed JSON on disk refuses
+rather than half-applying (a broken file must not corrupt the CRDT); an unsupported document type
+refuses rather than silently doing nothing.
+
+### Flagged to the reviewer, unresolved by me
+
+- Is **inclusive** overlap right, or does it now fire for genuinely adjacent-but-disjoint edits?
+  The DoD says "true EXACTLY when regions overlap", so a false positive is a real failure — it
+  trains agents to ignore the flag.
+- **`#typeOf` infers the type from the document's shape** because the caller does not thread the
+  store's authoritative `documentType` through yet. An empty JSON document infers as text.
+- **`#projection` is in-memory** and dies with the daemon — asked what breaks after a restart.
+- Whether a **single-range diff** is actively harmful to merge quality versus a minimal edit
+  script.
+
+### Gates
+
+`test` **2588 passed / 11 skipped, 234 files** · `lint` · `typecheck` clean.
