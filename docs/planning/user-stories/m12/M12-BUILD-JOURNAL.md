@@ -6381,3 +6381,72 @@ reported a success as a fault to investigate.
 Four tests, red first: two on the responder's chosen reason (driven through the real handler with the
 row's status set), two on the rendered guidance. Gate: 2704 passed, lint/typecheck/build clean.
 Commit `e3da3b4` on `m12/p14-honest-seal-rejection`. NOT reviewed, NOT merged, NOT published.
+
+### Entry 94 — two agents, two corrections, both running the same direction
+
+Andre pointed out that another agent had reached this problem from a different end and asked me to
+compare notes over CELLO itself. Miss_Chelly → CELLO_Coder_1, session `e377e84b…`, sealed. The
+exchange corrected me twice and produced two findings neither side had alone.
+
+**Correction 1 — my "no leaf-repair mechanism" claim was falsifiable in one grep.**
+`ContentResendRequest` exists (`core/protocol-types/src/content-delivery.ts:135`). I verified rather
+than take it on trust, and found something the other agent did not have: it is also **never wired** —
+zero producers or consumers outside the type definition. So the corrected claim is stronger than
+either original: the only recovery channel is scoped BY DESIGN to content behind a leaf you already
+hold ("Recovery, not desync (AC-009)") and is unimplemented. A divergent frontier is unrepairable by
+design *and* in fact. The lesson is the one the reviewer keeps making: a claim stated absolutely
+("there is no X anywhere") invites a one-command refutation that then discredits everything near it.
+
+**Correction 2 — I closed a defect that was real.** I told them `dcd0aadc…` was the same case as
+`4c28edcd…`, an artifact of our own force-abandon. They pushed back with the ordering, and the EC2
+log settles it against me:
+
+```
+dcd0aadc  09:45:59.336  session.node.destroyed  reason="sealing"     ← not "interrupted"
+dcd0aadc  12:14:52.190  rejected  session_not_interrupted            ← FIRST refusal
+earliest force_abandoned anywhere:  12:16:56.995 (4c28edcd)          ← two minutes LATER
+```
+
+I had one session's timeline and generalised it onto a session I never separately traced. **That is
+the same error as Entry 93's correction, one level up** — Entry 93 was "reasoned from the first error
+string"; this is "reasoned from a verified explanation of a different case". Both directions of the
+same failure: an explanation travelling past the evidence that produced it.
+
+Filed as **M12-P15**: state divergence. The peer considered the session *sealing*; we considered it
+*interrupted*. The leaves AGREE — so M12-P14's pre-seal gate does not fire and cannot help — but
+neither side can finish: we cannot seal-interrupted a session the peer thinks is sealing, and the
+peer cannot finish sealing without us. `e3da3b4`'s rename makes it legible, not completable.
+
+**Their finding, which doubles the disposition problem.** The `session_committed` re-pull loop
+(Entry 93) has a second entry point: `counterparty_unknown`, 78 occurrences on a different machine
+against 43 for `session_committed`. Same pathology — verified, refused, never confirm-deleted,
+re-pulled forever. Fixing one branch leaves the larger half looping. It is one defect with two
+entry points and the fix belongs at the disposition layer, not per-guard.
+
+**Their defect, which is mine at the other end.** `DOD-TERMINAL-WAKE-1`: content unread when a
+session sealed is re-presented as live, actionable work. An agent **obeyed a directive out of a
+sealed conversation** and announced standby to a counterparty holding no record of the session. Same
+question as the re-pull loop — what happens to content for a session that has already sealed — with
+two different wrong answers: mine loops invisibly where no operator sees it, theirs surfaces as a
+doorbell an agent acts on.
+
+**Agreed policy, so the two symptoms do not drift into two patches.** A post-seal *annex*, outside
+the sealed tree (any post-seal append would change `sealed_root` and invalidate the notarization),
+with four constraints — theirs, and the first is the one I would have got wrong:
+
+1. **Inertness must be STRUCTURAL, not advisory.** Not in any wake path, not in any inbox or pending
+   total, never auto-injected into agent context; reachable only by an explicit operator read. If it
+   is a convention rather than a property of where the data lives, the next agent reads the field
+   name and not the doc comment — which is how a non-notarized state got labelled "sealed" before.
+2. **It must not inherit the seal's vocabulary.** Annex content is verified but NOT covered by
+   `sealed_root` — a weaker evidentiary tier, and it needs its own word at the field name.
+3. **Durable annex write STRICTLY BEFORE confirm-delete.** A crash between them turns a noisy loop
+   into permanent silent loss — the exact outcome the work exists to prevent.
+4. **Key on (recipient pubkey, content hash), session attribution optional.** `counterparty_unknown`
+   content cannot be attributed to a session, but the park envelope is signed (SEC-1) so the SIGNER
+   is still verifiable. That is what the relay mailbox is already keyed on, so the 78 unattributable
+   entries get a terminal disposition on the same path as the 43 attributable ones.
+
+Net: the other agent corrected two of my claims and found an entry point I missed; I gave them the
+4c28edcd ordering and the annex-outside-the-tree confirmation. Worth noting for its own sake — this
+is the product being used for the thing it is for, and the exchange is sealed with a receipt.

@@ -912,7 +912,23 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   exists to produce.
   **Sub-defect, contained and separable:** a seal request against an `abandoned` session is rejected
   as `session_not_interrupted`, which names neither the status nor the cause and sent this very
-  investigation down the wrong path for an hour.
+  investigation down the wrong path for an hour. FIXED (`e3da3b4`).
+  ⚠️ **Second correction, 2026-08-05.** I then claimed `dcd0aadc…` was the same defect as
+  `4c28edcd…` — an artifact of our own force-abandon. **Also false.** CELLO_Coder_1 pushed back and
+  the log confirms it: `dcd0aadc`'s FIRST refusal is 12:14:52.190, and the earliest `force_abandoned`
+  anywhere is 12:16:56.995 — two minutes later, on a different session. I had 4c28edcd's timeline and
+  generalised it onto a session I never separately traced. Same error as the first correction, one
+  level up: a verified explanation travelling to a case nobody checked.
+- **M12-P15** — **State divergence: the two sides disagree about which TERMINAL path a session is
+  on, and neither can finish.** `dcd0aadc…`, measured 2026-08-05. The peer destroyed its node with
+  `reason="sealing"` at 09:45:59; our side still listed the session `interrupted` with
+  `messageCount: 2`. At 12:14 the seal-interrupted request was refused `session_not_interrupted` —
+  literally accurate, since from the peer's view it was not interrupted. Deadlock: we cannot
+  seal-interrupted a session the peer considers sealing, and the peer cannot finish sealing without
+  us. **Distinct from M12-P14 — the leaves AGREE; the statuses do not**, so the pre-seal readiness
+  gate does not fire and cannot help. The `e3da3b4` rename makes it legible (`session_already_sealed`
+  would have named it immediately) but does not make it completable. Needs its own resolution path.
+  → Entry 94
   → Entries 90, 93
 - **M12-P13** — ✅ **FIXED 2026-08-05** (`1f75937`, branch `m12/p13-durable-leaf`) — **a queued
   message's leaf was never committed, so the sender stranded its own session.** Originally filed as
