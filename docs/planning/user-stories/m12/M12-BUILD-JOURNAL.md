@@ -6257,3 +6257,55 @@ answered `session_not_interrupted`, twice (12:14, 12:17), correctly. From there 
 This is not test-rig damage: a laptop lid, a wifi drop or a daemon restart produces the identical
 trace. Filed as **M12-P14**. The sealed receipt is the artifact this protocol exists to produce, so
 a routine local event that permanently prevents one is launch-critical class.
+
+### Entry 91 — the review found the same bug one level up
+
+The unit reviewer's blocking finding on M12-P13 was that the fix repeated the defect it was fixing.
+
+```ts
+this.#onParkFailed?.(agentName, sessionId, hashHex, content, orderingS1, orderingS2);
+durable = true;
+```
+
+`durable` was **asserted**, not observed, and it lied two ways. The `?.` no-ops entirely when the
+composition root never wired the hook. And `enqueueAwaitingContent` keys its dedupe on
+`SHA-256(0x00 ‖ content)` — content-derived, no sequence, no nonce — so two identical messages in one
+session collide and the second is **dropped**, logged at warn, `return` with no signal. Both cases
+set `durable = true`.
+
+Before this unit that bought a misleading English sentence. After it, `durable` authorises a
+hash-chain leaf — so sending "ok" twice during one relay outage would commit a leaf for content that
+is in no queue anywhere. That is precisely the permanent root mismatch the durable gate exists to
+prevent. The fix built the gate and then walked around it.
+
+`enqueueAwaitingContent` now returns whether it queued, the hook returns that, and `sendContent`
+reads it. An absent hook is an error with an impact line, not a silent `true`.
+
+**The hollow test, which is the part worth remembering.** The reviewer's bypass: delete the
+`#onParkFailed?.()` call, keep `durable = true`. All 38 tests stayed green. The tests asserted the
+*flag* and the *response shape* — they pinned "the park was refused", never "the content is queued".
+No test anywhere connected `sendContent` → the hook → an actual row; `retry-queue.test.ts` calls the
+queue directly, and the flush tests enter through IPC, so that seam had no coverage at all. It now
+asserts the durable row, and the bypass fails five tests.
+
+Two more from the same report, both fixed here rather than parked:
+
+- The `!ok` branch also wrote to the **nonce** queue, whose only consumer `drainSession` has no
+  production caller. Every failed send left a permanent row holding a second copy of the plaintext,
+  and after the durable branch landed, a durable failure stored the same content twice and drained
+  neither. Skipped on the durable path.
+- `#parkContent`'s `cause` — the four-way standing-receiver state M12-P12 added *because*
+  `standing_receiver_unavailable` had misnamed this very incident — was logged inside and then
+  discarded at the mapping site. An operator keying on `reason` was sent to the transport when the
+  blocker was the receiver. It now rides on the result and into every failure log.
+
+Accepted, not fixed, and recorded as deliberate: a queued message's leaf is committed while the
+content is still in the queue, so the one-shot rejection path can seal a root containing content the
+counterparty has not received yet. The alternative — leaving the hole — is strictly worse: it stalls
+the session immediately and permanently, where this only diverges if the queue never drains. Also,
+keeping the away dedup guard set means the counterparty's next message trips the one-shot rejection
+rather than re-sending the greeting, so they can read *"one message per visit"* citing an instruction
+still sitting in the queue. Both are journaled trades, not oversights.
+
+Gate: 2700 passed, 11 skipped, lint + typecheck + build clean. Commits `1f75937`, `edd5dc5`,
+`291a80c` on `m12/p13-durable-leaf`. One review pass, findings fixed, not re-reviewed (the cap).

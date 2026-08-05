@@ -912,7 +912,15 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   callers commit the leaf + transcript when durable, and never when lost — a leaf for content that
   will never arrive is a permanent root mismatch. The away path's lost branch is now an `error`
   naming the consequence, not the bare `warn` that read as routine churn when it fired live.
-  → Entries 89, 90
+  **Three callers, not two** — the away-inbox one-shot rejection was the one missed on the first
+  pass, and the sharpest, because `submitSealLeaf` runs immediately after it.
+  **Review pass (one, findings fixed, not re-reviewed):** the blocking finding was that the fix
+  repeated the defect — `durable` was *asserted* on the line after an optional call, so an unwired
+  hook or a deduped enqueue both claimed durability and would have committed a leaf for content in
+  no queue. Durability is now observed from the enqueue's own return. Also fixed: the undrained
+  nonce-queue double-write, and `cause` being discarded at the mapping site.
+  **Merged + published: NOT YET. Live re-run on two machines: NOT YET.**
+  → Entries 89, 90, 91
 - **M12-P12** — **A failed park deposit drops the message with no retry, and the gap strands the
   session.** `sendContent`'s dial-failure path calls `#untrackAwaitingAck` first (deliberately —
   so a never-delivered frame cannot fire a spurious TTF park), then attempts `#parkContent`. When
