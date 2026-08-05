@@ -27,16 +27,19 @@ description: >
   nine invariants lost their ❌ tags and are lenses in §2b. `DOD-AE-APPEND-1` is SPLIT into
   PRIMITIVES-1 / STORE-1 / CHANNEL-1 / APPEND-1 — your next red line has a different name.
 
-- **🔴 2026-08-04 — RELAY/PARK-DRAIN BRANCH IS BUILT, REVIEWED, AND WAITING ON A PUBLISH.**
-  `m12/relay-keepalive-park-drain` exists in BOTH repos, pushed, unmerged, unpublished.
-  DOD-PARK-DRAIN-1, DOD-RELAY-KEEPALIVE-1 and DOD-GCP-RELAY-DRIFT-1 are all 🟡 — every code clause
-  built and unit-reviewed (19 findings across three reviews, all closed), every LIVE clause open
-  because this session deployed nothing.
-  **Read before touching that branch:** `trustless-cello-keepalive`'s relay does NOT load against
-  the published `@cello-protocol/transport` 0.0.43 — it throws a version guard naming the cause,
-  by design (the option it needs is unpublished; without the guard the fix was a silent no-op).
-  The deploy order is cello-client publish → re-pin here → terraform apply + relay redeploy.
-  Entries 78, 79, 80; decision M12-D18; parked M12-P10 (WAL_DIR drift).
+- **🔴 2026-08-05 — RELAY/PARK-DRAIN: PUBLISHED AND MERGED, NOT DEPLOYED. START HERE.**
+  All three lines (DOD-PARK-DRAIN-1, DOD-RELAY-KEEPALIVE-1, DOD-GCP-RELAY-DRIFT-1) are 🟡 — built,
+  unit-reviewed (19 findings, all closed), merged to `main` in BOTH repos, and published:
+  transport **0.0.44**, daemon **0.0.121**, cli **0.0.124** on `latest`, operator install confirmed
+  (`cello -v` 0.0.124).
+  **Nothing is deployed. No GCP resource was mutated** — both relays still run the old image and
+  the old 30-minute idle sweep. The remaining sequence, and the two-machine run that is the only
+  thing that can flip these to ✅, are spelled out in **Entry 82**.
+  **Read Entry 82 before touching the deploy** — in particular: the `cello-relay-image` Cloud Build
+  trigger (region **us-east1**, not global) has not fired since 2026-08-01, so "merged to main"
+  has NOT been producing images. Also: `DEBUG=libp2p:connection-monitor*` — the verification the
+  work order demanded and this session could not run — is still owed, and M12-D18 depends on it.
+  Entries 78-82; decision M12-D18; parked M12-P10 (WAL_DIR drift).
 
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
@@ -5505,3 +5508,110 @@ Per the standing rule that the truth is the artifact on npm:
 `latest` promotion (operator-gated), trustless-cello's re-pin off `latest`/0.0.44 + merge, then the
 GCP terraform apply and relay redeploy for DOD-GCP-RELAY-DRIFT-1. The live clauses on all three DoD
 lines stay open until a two-machine run happens on the deployed fleet.
+
+---
+
+## Entry 82 — 2026-08-05 — publish CLOSED, deploy NOT STARTED, and the trigger that has not fired since 1 August
+
+**Handoff entry.** Written to make the next session self-sufficient; it should be started with cwd
+= `/Users/andrep/Documents/code/trustless-cello` (this one ran from an unrelated directory, so the
+repo's own hooks — the publish guard among them — were never loaded, and both the
+`cello-unit-reviewer` agent and the `/cello-publish` command had to be made resolvable by hand).
+
+### CLOSED — the npm publish, end to end
+
+`latest` promoted on all seven (operator-run, needs an authenticator OTP — this is the reason-1
+gate the procedure names, and it held):
+
+| package | latest |
+|---|---|
+| crypto | 0.0.40 |
+| protocol-types | 0.0.42 |
+| transport | **0.0.44** |
+| gateway | 0.0.24 |
+| daemon | **0.0.121** |
+| cli | 0.0.124 |
+| connect | 0.0.118 |
+
+Verified from the registry (`npm view @…@latest version`, all seven) and on the operator's disk:
+`cello -v` → **0.0.124** after `npm i -g --prefer-online`. The `--prefer-online` caveat mattered
+here for the reason the procedure gives; the install took the new versions first time.
+
+### CLOSED — trustless-cello re-pinned and merged
+
+`packages/relay` now pins `@cello-protocol/transport: "0.0.44"` exactly, not `latest`. That was not
+cosmetic: at the moment of the merge `latest` still resolved to 0.0.43, so an install would have
+fetched a transport that silently ignores the connection-monitor policy and the relay would have
+refused to start — correctly, and confusingly. Twelve other `latest` specifiers across
+directory / e2e-tests / interfaces / test-fixtures are the same pattern and were deliberately left
+alone; that is a repo-wide unit, not this one.
+
+Gate on the REAL published 0.0.44, with no locally-built transport in `node_modules`:
+`tsc --build` clean, lint clean, **1263 passed / 531 skipped / 125 files**, and
+`python3 infra/tests/test_gcp_relay_config.py` → 5 passed. Both repos' branches merged
+fast-forward to `main` (rebased, linear, zero conflicts) and pushed.
+
+### NOT STARTED — the deploy, and what it needs
+
+**Nothing has been deployed. No GCP resource was mutated in this session** — every `gcloud` call
+was read-only (`auth list`, `config get-value`, `instances list`, `builds list`,
+`builds triggers list`). `infra/GCP-STATE.md` therefore needs no update, which is itself the
+evidence that nothing changed.
+
+Live now, still running the OLD relay code and the OLD 30-minute idle sweep:
+
+```
+cello-gcp-relay-use1-c27q  us-east1-b      RUNNING  34.139.119.165
+cello-gcp-relay-euw1-psqp  europe-west1-b  RUNNING  34.77.112.231
+```
+
+`infra/terraform/terraform.tfvars` still pins `relay_image_tag = "reviewfix-de1ed949"`.
+
+**🚨 FINDING — the relay image trigger has not fired since 2026-08-01.** `cello-relay-image` and
+`cello-directory-image` exist as triggers (region **us-east1**, not global — `gcloud builds list`
+without `--region` shows a different, stale list and will mislead you). But the push of this
+merge to `main` produced **no build**, and the newest build in us-east1 is
+`8e48d4b7…` from **2026-08-01T05:37Z**. So either the triggers are not wired to push events or they
+are disabled. This is not specific to this unit: it means merges since 1 August have not been
+producing images, and anyone who assumed "merged to main" implied "image built" was wrong.
+**Diagnose this before hand-rolling a build** — `relay.yaml`'s header documents a manual
+`gcloud builds submit`, and a previous journal entry (line ~1218) already had to demote a claim
+because the running image came from a hand-run local build rather than a committed SHA. Do not
+repeat that; fix the trigger, or build from a clean checkout of the merged SHA and say so.
+
+### The deploy sequence that remains
+
+1. **Diagnose/fire `cello-relay-image`** (region us-east1) for the merged main SHA. Verify the
+   built image resolves `@cello-protocol/transport@0.0.44` — below that the new relay REFUSES to
+   start by design, so a stale resolution means a relay that will not come up.
+2. **Bump `relay_image_tag`** in `infra/terraform/terraform.tfvars` to the new immutable tag.
+3. **`terraform plan`** — expect the relay MIG template to change for two reasons (image tag AND
+   the cloud-init `RELAY_SESSION_MAX_IDLE_MS` 1800000 → 86400000).
+4. **Apply and roll ONE REGION AT A TIME** (§2c: never simultaneously). us-east1 first — it is the
+   relay both machines in the 2026-08-04 incident used — verify, then europe-west1.
+5. **Update `infra/GCP-STATE.md` immediately after**, not batched.
+6. Only then are the live clauses on the three DoD lines provable.
+
+### What proving them actually requires
+
+All three lines are 🟡 and none can go ✅ from a deploy alone. They need the two-machine run that
+found the defect in the first place: `CELLO_Coder_1` on the Mac and `Miss_Chelly_H` on EC2
+`i-06db70df6b3e32207`, both NAT'd, conversing through the GCP relay.
+
+- **DOD-PARK-DRAIN-1** — a message parked mid-conversation must reach the RUNNING receiver daemon
+  with no restart. Watch for `content.recover.drain.triggered` followed by `content.recovered`.
+- **DOD-RELAY-KEEPALIVE-1** — ≥30 min carrying an idle session with **zero**
+  `session.standing_receiver.reservation.lost / relay_connection_gone`, and live delivery that does
+  not fall back to store-and-forward. **Run the verification the work order asked for and this
+  session could not:** `DEBUG=libp2p:connection-monitor*` on the daemon alongside the relay's logs,
+  correlating "aborting connection due to ping failure" against `relay.reader.ended`. Attribution
+  is still circumstantial — see Entry 79 — and this is the run that settles it. If the monitor is
+  NOT the killer, M12-D18's "reverse if" clause applies.
+- **DOD-GCP-RELAY-DRIFT-1** — confirm the deployed relay's environment actually carries
+  `RELAY_SESSION_MAX_IDLE_MS=86400000`, and that `relay.config.idle_sweep` (new this unit) reports
+  it at boot. That log line exists precisely so this is answerable from the log rather than from
+  the deploy template.
+
+Both daemons also need `npm i -g --prefer-online @cello-protocol/cli@latest
+@cello-protocol/connect@latest` + `cello logout && cello login` to pick up daemon 0.0.121 — the Mac
+is already there (`cello -v` 0.0.124); **the EC2 instance is not**.

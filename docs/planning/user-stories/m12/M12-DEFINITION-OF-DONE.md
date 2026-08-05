@@ -303,7 +303,8 @@ description: >
   confirm-deleted, no restart. **Open:** "two daemons on two machines against a deliberately
   flapping relay link" needs a deploy this session did not do. Reviewer: 7 findings (1 HIGH —
   concurrent drains could double-append a leaf; 1 unproven removal), all closed.
-  cello-client `m12/relay-keepalive-park-drain`, unmerged + unpublished. → Entry 78
+  **Shipped 2026-08-05:** daemon **0.0.121** on `latest`, merged to `main`. NOT deployed to the
+  EC2 daemon. → Entries 78, 81, 82
 
 ## Tier P2 — Wave 1: complete CELLO on GCP, standalone
 
@@ -595,8 +596,11 @@ description: >
   AbortSignal text, shared by ~10 timeouts on the relay path. Reviewer: 7 findings, 2 HIGH and
   both OUTSIDE the diff — the relay fix was a silent no-op against the published transport, and
   session liveness called the counterparty dead whenever the relay churned. All closed.
-  **Open:** ≥30 min idle survival + cross-machine delivery without fallback — both need a deploy
-  and a publish. → Entry 79
+  **Shipped 2026-08-05:** transport **0.0.44** + daemon 0.0.121 on `latest`; relay pinned to
+  0.0.44 and merged. **Open:** the relay is NOT deployed (old image, no Cloud Build since 08-01 —
+  Entry 82), ≥30 min idle survival and cross-machine delivery unproven, and the
+  `DEBUG=libp2p:connection-monitor*` verification is still owed — M12-D18 turns on it.
+  → Entries 79, 81, 82
 - **DOD-GCP-RELAY-DRIFT-1** [trustless-cello] — GCP relay config drift vs AWS closed:
   `RELAY_SESSION_MAX_IDLE_MS` 1800000→86400000 in `relay-cloud-init.yaml:69` (30 min vs
   AWS's 24 h), plus a GCP-terraform regression test asserting relay idle/timeout config
@@ -607,7 +611,9 @@ description: >
   session sweep — the sweep was asserted on NEITHER cloud, which is the real reason it drifted.
   Reviewer: SPEC FAITHFUL, one hollow test (parser read the whole YAML, not the env-file heredoc —
   bypass demonstrated and closed). `WAL_DIR` drift found and parked as M12-P10.
-  **Not live:** applying it needs a terraform apply + relay redeploy, not done here. → Entry 80
+  **Not live:** merged to `main`, but the terraform apply + relay redeploy have NOT run — both
+  relays still boot the 30-minute value. Verify via the new `relay.config.idle_sweep` boot log.
+  → Entries 80, 82
 
 ## Tier P3 — Wave 2: AWS rejoins + the launch claim
 
@@ -839,6 +845,15 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
 
 ## Parked
 
+- **M12-P11** — **The `cello-relay-image` / `cello-directory-image` Cloud Build triggers have not
+  fired since 2026-08-01.** Found 2026-08-05 while deploying the relay fix: a merge to `main` that
+  touched `packages/relay/**` produced no build, and the newest build in region **us-east1** (the
+  triggers are regional — a `gcloud builds list` without `--region` returns a different, stale set
+  and will mislead you) predates it. Either they are not wired to push events or they are disabled.
+  Scope beyond this unit: every merge since then has shipped no image, so "merged to main" has not
+  meant "image built" for anyone. Diagnose before hand-rolling a build — a hand-run
+  `gcloud builds submit` of a local tree already cost one demoted claim in this milestone.
+  → Entry 82
 - **M12-P10** — **`WAL_DIR` drifts across clouds and nothing asserts it.** AWS puts the relay's
   write-ahead log at `/tmp/wal` (Fargate task-ephemeral — gone on every task replacement); GCP puts
   it on `/mnt/disks/cello-wal` (a persistent disk that survives instance replacement). The relay
