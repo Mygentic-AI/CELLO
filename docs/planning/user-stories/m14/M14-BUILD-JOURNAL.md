@@ -1323,3 +1323,71 @@ refuses rather than silently doing nothing.
 ### Gates
 
 `test` **2588 passed / 11 skipped, 234 files** · `lint` · `typecheck` clean.
+
+---
+
+## Entry 17 — 2026-08-05 — WRITE-1 pass-one findings applied; the unreproducible failure, caught
+
+**Commits:** cello-client `m14/write-1` @ 17c8095 (fixes) and 1d89571 (the flake). Pass two in
+flight.
+
+### The intermittent failure — found by capturing, not by re-running
+
+Earlier I recorded a single test failure I could not reproduce in four full runs and could not
+name. Rather than let that stand, I ran the suite three more times **redirecting full output to
+files** instead of grepping a live stream. Run 3 caught it:
+
+```
+× DOD-DOC-FUZZ-1 … EVERY prefix of a valid update is rejected — counted, and the size is pinned
+  AssertionError: expected 83 to be 84
+```
+
+**Root cause: a random clientID — and I had already diagnosed this exact mechanism in the exact
+same file.** `validUpdate()` built its document with Yjs's random clientID, and every item
+reference encodes that clientID as a varint, so a draw below 2²⁸ encodes in four bytes rather than
+five and the update is 83 bytes instead of 84. That is ~1 run in 16, matching the observed rate.
+
+The deep-nesting measurement in this same file hit the identical problem, was diagnosed, and was
+pinned. **This one was missed because nothing connected the two.** The fix now states the reason
+at the helper rather than at the assertion, so the next size expectation added to this file sees
+why the clientID is fixed. Eight consecutive runs green.
+
+**This is the FOURTH time in M14 that Yjs's random clientID produced a nondeterministic result
+that read as something else**: the deep-nesting byte count, the collision splice, the write-path
+overlap coin flip, and now this. The standing rule, earned four times: *if a Yjs-adjacent result
+is intermittent or two measurements disagree, suspect the clientID before anything else.*
+
+### WRITE-1's pass one — three measured routes to losing the agent's work
+
+Every finding was measured against the built artifact by the reviewer, not argued.
+
+1. **JSON overlap was hardcoded `false`.** Local regions were recorded only on the text branch and
+   the observer watched only the text root, so a map merge produced nothing to compare. Measured:
+   with `{"k":"MINE"}` unpublished on disk and the peer sending `k="THEIRS"`, Y.Map's clientID
+   tie-break destroyed the agent's edit **12 runs in 20** — and the flag said nothing. The JSON
+   path now has its own region model: the fold reports the keys it wrote, the merge observes the
+   map, overlap is the intersection.
+2. **The projection was write-only.** §16.2 says publish diffs "the last-known projection"; mine
+   was written three times and never read, so the real baseline was the doc's own text. Those
+   diverge precisely where it matters — `admit` merges into the doc and rewrites the file as two
+   steps, so a crash between them leaves a stale file beside an advanced doc, and diffing that
+   reads the peer's admitted paragraph as an agent deletion **and publishes the deletion as
+   deliberate intent**. Persisted now, and a stale file REFUSES rather than diffing.
+3. **The document type was inferred from the doc's shape**, so an EMPTY JSON document inferred as
+   text: publish looked for a `.md` that does not exist and reported `document_file_missing` —
+   wrong path, wrong advice, for a fault four frames up. Admit skipped the fold, wrote a phantom
+   `.md`, and set up the next publish to delete the peer's keys. `documentType` is a required
+   parameter now and the inference is gone.
+
+Also: the single-range diff **resurrected text a peer deliberately deleted** whenever a publish
+batch held two separated edits — which publish-on-intent makes the normal case, not the exception.
+§16.2's licence for coarseness covers granularity of intent, not rewriting spans the agent never
+touched. Replaced with line-level hunks. And the overlap flag was sensitive to the peer's insert
+LENGTH rather than its position, because local regions were never shifted into the merge's
+coordinate system.
+
+### Test quality
+
+The overlap assertion survived the BROKEN comparison **17 runs in 40** — the same coin flip,
+merely landing on the lucky face more often. Every concurrent case now pins both clientIDs and
+runs both orderings. JSON admission went from zero tests to five.
