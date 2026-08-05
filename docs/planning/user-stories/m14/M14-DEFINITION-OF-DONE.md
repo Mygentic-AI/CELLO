@@ -594,9 +594,29 @@ rather than the peer's state vector; and the working document having to BE the l
   daemon and the test alike; the test substitutes only the TRANSPORT. Reverted to
   report-success-send-nothing, all three go red.
 
-  **Still not shipped:** `status` (largely subsumed by `list`'s new fields — `proposedByUs`,
-  `peerAccepted`, `peerHasPublished`) and `withdraw`, still blocked behind the `rollback` stub,
-  which REFUSES rather than reporting a rollback that did not happen.
+  **`withdraw` is DELIBERATELY NOT SHIPPED in V1 — a triage call, not an oversight.**
+
+  `withdraw` only ever applied to an UNDELIVERED envelope; a delivered one already refuses with
+  "your peer holds it, publish a superseding update instead". For an undelivered one,
+  `cello_doc_write` with the corrected full text produces the identical net effect in the identical
+  number of calls — the operator's next publish carries the correction and the peer never saw
+  either version.
+
+  What it would cost to do properly is not small. A correct rollback cannot drop the withdrawn
+  payload from the log — REJECT-1 measured that: everything causally after it stays pending forever
+  and the document silently loses legitimate work. Nor can it rebuild-without-it, for the same
+  reason one envelope down. It needs the write path to transact under a per-write ORIGIN, recorded
+  on the envelope row, so a `Y.UndoManager` can invert exactly that transaction — a real change to
+  how every write is applied, in service of a verb whose whole use case `write` already covers.
+
+  The stub stays and stays refusing. `document_rollback_not_wired` is truthful, nothing in the four
+  surfaces reaches it (there is no `cello_doc_withdraw` verb anywhere), and `DocumentLifecycle`
+  refuses the whole withdrawal rather than recording one it did not perform — which was the point of
+  making rollback a required callback in the first place.
+
+  **`status` is subsumed** by `cello_doc_list`'s fields — `proposedByUs`, `peerAccepted`,
+  `peerHasPublished`, `pendingSent`/`pendingUnsent`, `status`, `closePending`. A second verb
+  returning the same row for one document is a second place for those fields to drift.
 - **DOD-DOC-SKILL-1** [cello-client] — the plugin skill/template layer (§4.1's owed
   deliverable + §16.7-9): publish-on-intent guidance (batch like a commit, not a keystroke),
   the overlap-flag review behavior (review the merged projection before building on it), and
