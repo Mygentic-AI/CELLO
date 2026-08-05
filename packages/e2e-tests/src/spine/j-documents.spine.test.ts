@@ -182,6 +182,22 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
     // anything.
     expect(await a.conn.call("cello_doc_list", {})).toMatchObject({ ok: true });
 
+    // ── 1b. THE SESSION CARRIES B→A TRAFFIC AT ALL ────────────────────────────────────────────
+    // A PRECONDITION, asserted rather than assumed, and it exists because the first red run could
+    // not distinguish two very different faults: B's document frames reporting a successful send
+    // and never arriving at A might be a defect in the document path, or the responder's outbound
+    // direction might simply not carry content. Those belong to different subsystems and different
+    // owners. One ordinary message settles it before any document is involved.
+    expect(((await b.conn.call("cello_send", {
+      cello_session_id: b.sessionId,
+      content: "B can reach A",
+      signal: "over",
+    })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await a.conn.call("cello_receive", {
+      cello_session_id: a.sessionId,
+      timeout_ms: 20_000,
+    })) as { content?: string | null }).content).toBe("B can reach A [[OVER]]");
+
     // ── 2. PROPOSE AND CONSENT ────────────────────────────────────────────────────────────────
     const starting = "# Release plan\n\nowner: unassigned\ndate: unassigned\n";
     const proposed = (await a.conn.call("cello_doc_propose", {
