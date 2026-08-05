@@ -1391,3 +1391,86 @@ coordinate system.
 The overlap assertion survived the BROKEN comparison **17 runs in 40** — the same coin flip,
 merely landing on the lucky face more often. Every concurrent case now pins both clientIDs and
 runs both orderings. JSON admission went from zero tests to five.
+
+---
+
+## Entry 18 — 2026-08-05 — DOD-DOC-WRITE-1 ✅ CLOSED. P1 is complete.
+
+**Merged** to cello-client `main` @ 30f6e99, rebased onto five commits another session had landed
+there (relay-keepalive and park-drain). No file overlap; combined tree green at **2640 tests**.
+
+### Pass two: my fix for pass one CORRUPTED CONTENT
+
+Pass one's F4 said a single-range diff resurrects text a peer deleted. I replaced it with a
+hand-rolled line diff — prefix/suffix trim over lines. Pass two measured it publishing text that
+was **not what the file said** in four of six ordinary markdown edits:
+
+```
+append-line   : want "para one.\npara two.\npara three."  got "para one.\npara two.para three."
+insert-middle : want "a\nNEW\nb\nc"                        got "a\nNEWb\nc"
+delete-last   : want "a\nb"                                got "a\nb\n"
+delete-middle : want "a\nc"                                got "a\n\nc"
+```
+
+The separator between the head run and the changed run was never accounted for, so the newline
+was dropped and the offset overshot by one. Worse, every line-count change fell into a fallback
+branch that emitted ONE hunk for the whole changed span — reproducing F4 exactly, the harm the
+rewrite existed to remove. Adding a single line to the agent's edit was enough to trigger it.
+
+**Replaced with a real LCS over line CHUNKS** — each line carrying its own trailing newline,
+except the last. That representation is why newline handling now falls out instead of being
+special-cased: appending to `"a\nb"` turns the chunk `"b"` into `"b\n"` + `"c"`, so the LCS sees
+the last line as changed and the hunk replaces `"b"` with `"b\nc"`. Seven edit shapes round-trip,
+each asserted `want === got`.
+
+*The lesson: I hand-rolled a diff because a real one felt like scope. A diff is a solved problem
+with a known-correct algorithm, and "coarse but correct" turned out to be neither.*
+
+### The guards pass two found missing
+
+- **The stale-baseline check refused only when the file was ALSO untouched**, which let through
+  the one state that matters: the doc advanced past the projection AND the agent edited the file.
+  Hunks are offsets into the projection applied to the doc's text, so that publishes
+  projection-offset hunks into a longer document and mutilates the peer's admitted paragraph.
+  The condition is now the invariant itself — the baseline must equal the document.
+- **`admit` substituted `""` for a missing projection.** Deleting the sidecar diffed the whole
+  file in as an insert at offset 0 of a document that already held it — the body DUPLICATED into
+  the CRDT and out to the peer, permanently. It refuses. And the sidecar moved into a
+  dot-directory: it had been sitting in the agent's own workspace, which §16.2's "no new editing
+  surface" premise forbids.
+- **Any read error was read as "never materialized, nothing to lose"**, and the file was then
+  overwritten with the merged projection. Only ENOENT means that.
+- **The mtime guard is now a content re-read** — second-granularity filesystems hide a save inside
+  the merge window, and a failing `stat` read as "unchanged".
+- **The overlap flag treated a peer deletion as a range in OLD coordinates** while the local
+  region had already shifted into new ones, so any edit within N characters after a deletion read
+  as overlapping. Inserts and deletes are compared differently now, and **the asymmetry is the
+  point**: a re-homed insert landing on the local edit's boundary IS overlap (Yjs put it there
+  when the fold deleted its anchor); a deletion landing there is not, it merely shifted the region.
+
+### The clientID rule, now enforced (Andre asked)
+
+**Production: no.** §14 forbids deriving or persisting one; FUZZ-1 measured the splice.
+**Tests: yes, and it must be** — everything asserted about a Yjs result is a SIZE (varint width)
+or an ORDER (tie-break). Four M14 incidents were this one mechanism. `yjs-determinism.test.ts`
+states both answers and **fails if a document test asserts an exact length over an encoded update
+without pinning**.
+
+Two things measured writing it:
+- **Yjs RE-MINTS a clientID when it applies an update authored under that same id** ("Changed the
+  client-id because another client seems to be using it") — a real built-in defence, and a trap:
+  pinning a test doc to its base's id silently defeats the pinning. My first demo did exactly that
+  and produced identical results both ways.
+- My first guard flagged two innocent files because its regex matched any multi-digit number
+  rather than a byte length. **A guard with false positives gets disabled**, so it now asks the
+  narrow question.
+
+### 🎉 TIER P1 IS COMPLETE
+
+| Unit | State |
+|---|---|
+| DOD-DOC-ENGINE-1 | ✅ |
+| DOD-DOC-WRITE-1 | ✅ |
+| DOD-DOC-GATE-1 | next — nine measured ACs (a)–(i) |
+| DOD-DOC-REJECT-1 | after the gate |
+| DOD-DOC-SCREEN-1 | 🅿️ blocked on the screening audit (Andre's call) |

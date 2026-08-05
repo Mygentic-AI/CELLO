@@ -161,7 +161,10 @@ description: >
   (§4.1) from whether the merge touched regions holding unpublished local edits. Round-trip
   proven at unit level: edit → publish → apply on a second doc → materialize → identical
   content; concurrent edits on both docs → both converge → overlap flag true exactly when
-  regions overlap. — ❌
+  regions overlap. — ✅
+  > Two review passes. Pass one: three measured routes to destroying the agent's unpublished
+  > work. Pass two: my replacement diff CORRUPTED CONTENT on 4 of 6 ordinary edits — replaced
+  > with a real line LCS. → Journal Entries 14, 16–18.
 - **DOD-DOC-GATE-1** [cello-client] — the validation gate (§3.2, V1 rules): arrive →
   shadow-apply (the shadow document rebuilt from accepted state, never long-lived) → validate
   the PROJECTED DIFF → admit or quarantine. V1 rules at the hook: `append_only` (an update whose
