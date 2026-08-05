@@ -900,8 +900,14 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   leaf. Same family as M12-P13, surfacing at seal time rather than at delivery. Why leaf 2 never
   arrived is NOT proven from the initiator's log (no `content.recover.held` for that session), so it
   is not attributed to the P13 stall.
-  Once frontiers diverge there is no repair: the short side cannot pull the leaf it is missing,
-  `leaf_count_mismatch` is terminal, and `force:true` — no notarized receipt — is the only exit.
+  Once frontiers diverge there is no repair. ⚠️ **Corrected claim:** an earlier version of this entry
+  said "there is no leaf-repair request anywhere in the wire protocol". That is falsifiable in one
+  grep — `ContentResendRequest` exists (`core/protocol-types/src/content-delivery.ts:135`). The
+  accurate statement is stronger: the only recovery channel is scoped BY DESIGN to content behind a
+  leaf you already hold (its doc comment reads "Recovery, not desync (AC-009)"), and it is **never
+  wired** — zero producers or consumers outside the type definition. So a divergent frontier is
+  unrepairable both by design and in fact, `leaf_count_mismatch` is terminal, and `force:true` — no
+  notarized receipt — is the only exit. (Found by CELLO_Coder_1, verified independently.)
   Both sessions ended that way. Launch-critical class: the sealed receipt is the artifact CELLO
   exists to produce.
   **Sub-defect, contained and separable:** a seal request against an `abandoned` session is rejected
