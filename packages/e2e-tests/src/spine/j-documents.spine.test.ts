@@ -74,6 +74,11 @@ async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> 
   const nodes = [0, 1, 2].map((i) => spineDirectoryNode(i, cluster.directoryUrls[i]));
   return startDaemon(celloDir, cluster.directoryUrls[0], label, {
     manifestEnv: writeConsortiumManifest(celloDir, label, nodes),
+    // The delivery sweep is 60s in production — deliberately slow, because the event it waits for
+    // (a peer coming back) is not one the daemon observes. A live test that sits out two of those
+    // spends four minutes waiting, and the window has to be so wide that adding a second test to
+    // the file made the first one time out. Same knob shape as CELLO_SEAL_BILATERAL_TIMEOUT_MS.
+    extraEnv: { CELLO_DOCUMENT_DELIVERY_TICK_MS: "2000" },
   });
 }
 
@@ -96,8 +101,14 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 function documentLines(proc: Proc): string {
   const lines = proc.output
     .split("\n")
-    .filter((l) => /document\.|"cello_doc|frame\.|security\.|session\.content|session\.document/.test(l));
-  return lines.length > 0 ? lines.slice(-40).join("\n") : "(no document-layer lines at all)";
+    .filter((l) =>
+      // The events the ordering question is actually decided by — the tree, the relay's assigned
+      // sequence, and the HOLD path. A frame held for a gap only this daemon could fill logs at
+      // INFO, not warn, so a filter that only looked for failures saw nothing and I concluded the
+      // frame had never arrived.
+      /document\.|"cello_doc|frame\.|security\.|session\.content|session\.document|session\.tree|relay\.hash|session\.relay/.test(l),
+    );
+  return lines.length > 0 ? lines.slice(-60).join("\n") : "(no document-layer lines at all)";
 }
 
 /**
@@ -350,20 +361,17 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
     // BOTH SIDES INDEPENDENTLY RECOMPUTE THE SAME ROOT. Fetched from each daemon's own sealed
     // receipt — never compared against one side's reported value, which is the check the whole
     // tamper-evidence claim rests on.
-    const receiptA = (await a.conn.call("cello_sealed_receipt", { cello_session_id: a.sessionId })) as {
-      ok?: boolean;
-      merkleRoot?: string;
-      root?: string;
-    };
-    const receiptB = (await b.conn.call("cello_sealed_receipt", { cello_session_id: b.sessionId })) as {
-      ok?: boolean;
-      merkleRoot?: string;
-      root?: string;
-    };
-    const rootA = receiptA.merkleRoot ?? receiptA.root;
-    const rootB = receiptB.merkleRoot ?? receiptB.root;
-    expect(rootA, `A has no sealed root: ${JSON.stringify(receiptA)}`).toBeTruthy();
-    expect(rootB, "the two sides sealed different trees").toBe(rootA);
+    type Receipt = { ok?: boolean; sealed_root?: string; leaf_count?: number; content_leaf_count?: number };
+    const receiptA = (await a.conn.call("cello_sealed_receipt", { cello_session_id: a.sessionId })) as Receipt;
+    const receiptB = (await b.conn.call("cello_sealed_receipt", { cello_session_id: b.sessionId })) as Receipt;
+    expect(receiptA.sealed_root, `A has no sealed root: ${JSON.stringify(receiptA)}`).toBeTruthy();
+    // THE PROPERTY THE WHOLE MILESTONE RESTS ON. Two independent daemons, each rebuilding from its
+    // own leaves, arriving at the same root over a tree that contains document traffic as well as
+    // messages. Compared side to side — never one side's reported value against itself.
+    expect(receiptB.sealed_root, "the two sides sealed different trees").toBe(receiptA.sealed_root);
+    // MIXED, which is the case the doc leaf kind exists for: this session carried an ordinary
+    // message AND document frames, and the seal covers both.
+    expect(receiptA.leaf_count, `too few leaves to be a mixed tree: ${JSON.stringify(receiptA)}`).toBeGreaterThan(2);
   }, 600_000);
 
   it("a KILL reaches the peer over the real session and stops their document too", async () => {
