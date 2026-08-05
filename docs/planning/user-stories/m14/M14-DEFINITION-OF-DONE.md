@@ -324,6 +324,16 @@ description: >
     hint honoured-or-refused, and the `discovery_lookup` mapping where only a RESULT is an answer
     about the peer — every other outcome throws rather than being called "offline"). Remaining: the
     composition-root instantiation and the tick scheduler.
+    **BLOCKED, 2026-08-05, on one missing capability: AUTONOMOUS SESSION OPENING.** §16.4's whole
+    premise is that the daemon opens a session with no agent attention on either end — but the
+    initiate path exists only as an IPC handler (`initiate-session-handler.ts`), driven by
+    `cello_initiate_session`. There is no function a worker can call. `runDiscoveryLookup` is now
+    exported for the reachability half, and `sendContent` and the session lookup are already
+    reachable, so what is missing is precisely the open.
+    I wired the transport with `openSession` stubbed to a refusal and a worker that was constructed
+    and never ticked, looked at it, and reverted it: a delivery layer that cannot open a session and
+    is never run is theater. Extracting the initiate path into a callable — separate from its
+    handler, the way `runDiscoveryLookup` now is — is the next piece of work on this line.
     **ORDERING CONSTRAINT — read this before wiring.** Do not wire the delivery worker into the
     composition root before DOD-DOC-INBOUND-1 is wired on BOTH sides. Until a peer can ack, every
     published envelope is sent, never answered, re-sent on the ack timeout, and stalls its document
