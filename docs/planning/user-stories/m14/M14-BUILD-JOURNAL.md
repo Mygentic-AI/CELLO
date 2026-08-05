@@ -2051,3 +2051,79 @@ P0 ✅ · P1: ENGINE ✅ WRITE ✅ GATE ✅ REJECT ✅ · SCREEN-1 🅿️ ·
 P2: ENVELOPE ✅ HANDSHAKE ✅ DELIVERY-1 ✅ LIFECYCLE ✅ NOTIFY ✅ · **DELIVERY-2 in progress**
 (the reachability mapping landed with tests; the SessionNegotiator adapter, the seal, and the
 composition-root wiring remain). Then P3.
+
+---
+
+## Entry 25 — I wrote a comment describing behaviour the code did not have
+
+### One second, forever, into the sealed record
+
+The three-valued `admitted` was right. The retry policy hung off it was not, and the way I got it
+wrong is the most instructive thing in this entry: I wrote *"on the capped backoff the claim above
+already scheduled"* and it was **not** the capped backoff. The pre-dial claim is
+`backoffFor(attempts)`, which for a first send is **1000 ms**. So a successfully delivered envelope
+was re-sent a second later.
+
+A resend is not cheap or invisible either. `sendContent` witnesses a message-leaf hash to the relay
+and appends a leaf to the session chain, so **every redelivery appends a leaf to the peer's sealed
+conversation record**. An envelope that never gets acked pollutes the seal forever.
+
+And there was no terminal state at all: nothing read `attempts`, so a peer whose client cannot ack —
+which is *every* peer until the inbound handler ships on both sides — produced an envelope re-sent
+forever, indistinguishable in the log and in `list` from one about to land.
+
+*"How long do I wait after a failure" and "how long do I wait for an answer" are different
+questions.* Reusing one constant for both is what made the comment and the code disagree without
+either looking wrong. There is a distinct ack timeout now, and a ceiling that stalls the document
+with a reason an operator can act on.
+
+**The lesson is narrower and worse than "test your comments":** the comment was my own reasoning,
+written at the moment I believed it, about a value set forty lines earlier in a different branch. I
+never re-read the branch. The test I wrote to cover it asserted "not due 1ms later, due at the cap",
+which any backoff of 2ms satisfies — so the hollow test and the false comment had the same author
+and the same blind spot.
+
+### A claim in a commit message that was simply untrue
+
+I wrote "(opening or reusing a session, and SEALING normally)". The adapter opened a session and
+returned. No close, no seal — a live node the operator never started, and the sealed record the
+whole autonomous-delivery design exists to produce was never produced. It seals what it opens now,
+and deliberately does not seal a session it merely *reused*: its owner decides when that
+conversation ends.
+
+*A commit message is not a plan. Writing the DoD clause into it as though done is how a line gets
+ticked on the strength of prose.*
+
+### The hint that broke every other document
+
+`sessionHint` was a per-TICK option applied to every envelope in the pass. Give a hint for document
+A and every *other* document delivered that pass is refused — their peer's active sessions cannot
+contain A's session — so an unrelated update fails and backs off, citing a session the operator
+never associated with it. Per-document map now.
+
+### Three in one family
+
+All three are about a signal reaching the place it means something. `isPeerReachable` fabricated its
+correlation id from the peer id, so every discovery lookup this worker ever emitted carried the same
+string and none joined to the pass — the thread broken at exactly the hop an operator needs when
+nothing is syncing. The unknown-agent bit was logged *inside* the transport, in a line carrying no
+document, while the worker simultaneously logged "peer unreachable" *with* the document: the
+operator saw the wrong one. And an `online` result naming no owning node mapped to reachable, when
+`classifyOnlineResult` calls exactly that shape malformed and refuses to dial a fabricated node.
+
+### `delivered_at`, restored properly this time
+
+Pass one had me delete it (no writer, always equal to `acked_at`). I restored it with a real writer
+and justified it operator-facing — and then did not give it a reader, so the earlier removal's
+actual argument was still true. `list` splits pending into **sent** and **unsent** now. *A
+restoration is not complete at the writer.*
+
+### Gates
+
+`test` **2902 passed / 11 skipped** · `lint` · `typecheck` clean.
+
+### Milestone state
+
+P0 ✅ · P1 ✅ (SCREEN-1 🅿️) · P2: ENVELOPE ✅ HANDSHAKE ✅ DELIVERY-1 ✅ LIFECYCLE ✅ NOTIFY ✅ ·
+DELIVERY-2 ⏳ (adapter + seal + discovery binding done; composition-root wiring and the tick
+scheduler remain) · **INBOUND-1 built, awaiting review.**
