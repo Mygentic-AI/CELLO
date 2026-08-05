@@ -991,7 +991,41 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
     CEREMONY, not just the status.
   - `responder_seal_already_submitted` is treated as success by the active path and as failure here.
 
-  **FIXED 2026-08-05, second attempt** — branch `m12/p15-detached-seal`, two commits, review pending.
+  **⚠️ SECOND ATTEMPT REVIEWED — BLOCKING FINDINGS, DO NOT MERGE.** Branch `m12/p15-detached-seal`
+  (`3ca87d8` + `00bcd48`). The crypto is sound (verified: the detached leaf binds the right session
+  bytes and the right root — `Buffer.from(sessionId,"hex")` is byte-identical to the live path's
+  `relaySessionIdBytes` on both initiator and responder). **The bookkeeping around the leaf is not.**
+  Four blocking findings, all confirmed:
+  1. **HIGH-3, a REGRESSION OF SHIPPED BEHAVIOUR (verified by grep).** `submitSealLeaf` can no longer
+     emit `session_node_unavailable` — the only remaining producers are `sendContent` at
+     `session-node-manager.ts:3400/3470`. But `close-session-handler.ts:395` gates M12's
+     close-after-own-seal recovery on exactly that value from `submit.reason`. The branch is now
+     dead, so the ordinary double-close case dials the relay, submits a SECOND ctrl leaf to a session
+     the relay destroyed on seal, and tells the operator the close failed — the M12 bug back under a
+     new error string. `m12-close-after-own-seal.test.ts` still passes because it stubs the
+     now-impossible value: the same hollow-test shape as the first P15 attempt, one file over.
+  2. **HIGH-1.** The detached client is built without `receiptStore`/`sealLeafStore`, so
+     `#captureReceipt` silently `return false`s and our own 0x02 ctrl leaf is NEVER written to
+     `session_seal_leaves` — while the submit still reports ok, with no log line. That **defeats this
+     diff's own fix**: the responder's `relay_bilateral` discriminator reads that table, so a
+     detached seal makes the ceremony read as absent and the initiator declines to sign. Also leaves
+     a hole in the unilateral-escalation carry chain. NOTE: do not cache such a client into
+     `#relayClients` — it would poison the live path for that agent/relay.
+  3. **HIGH-2.** No `registerSession`, so `recordedBefore` is false and the
+     `recordedBefore && session_not_found → relay_session_gone` discrimination — which exists to tell
+     "relay never had it" from "relay swept/sealed it" — is unreachable. The operator gets a bare
+     `session_not_found`, documented in that same file as the first-message race, which cannot occur
+     here.
+  4. **HOLLOW TEST.** The responder-side test asserts `pending_ceremony` is `undefined`, which is
+     also true on the reverted code — it fails the revert test and never observes a NAMED ceremony.
+     It must seed a real 0x02 own leaf and assert `relay_bilateral`, and a `seal_interrupted_artifacts`
+     row and assert `seal_interrupted`.
+  Also: MEDIUM — a relay client is built per call and never cached or closed (leaked stream);
+  `ok:true, status:"seal_interrupted_pending"` while the row stays `interrupted`; and the in-memory
+  `#responderSealSubmitted` mark is now the only thing preventing a second own ctrl leaf after a
+  restart, which this diff makes reachable for the first time (`getSealCarry` is the durable
+  replacement, once HIGH-1 is fixed).
+  **Earlier note (superseded):** FIXED 2026-08-05, second attempt.
   - `3ca87d8` **the blocker.** `submitSealLeaf` no longer requires an in-memory node. It never needed
     one: `submitLeaf(node, sessionId, contentHash, leafKind)` takes everything explicitly, and the
     daemon already solves this exact shape for content in `startupParkFn` — persisted relay endpoint
