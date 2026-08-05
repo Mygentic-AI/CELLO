@@ -303,8 +303,14 @@ description: >
   confirm-deleted, no restart. **Open:** "two daemons on two machines against a deliberately
   flapping relay link" needs a deploy this session did not do. Reviewer: 7 findings (1 HIGH —
   concurrent drains could double-append a leaf; 1 unproven removal), all closed.
-  **Shipped 2026-08-05:** daemon **0.0.121** on `latest`, merged to `main`. NOT deployed to the
-  EC2 daemon. → Entries 78, 81, 82
+  **Shipped 2026-08-05:** daemon **0.0.121** on `latest`, merged to `main`, and now running on
+  BOTH machines. **Live run 2026-08-05 — the drain half PASSES, the claim does not.** Parked
+  content was deposited, pulled, verified and correctly HELD on an ordering gap, all against a
+  daemon that never restarted (same pid throughout). It never reached the operator: the previous
+  message's park deposit had failed with `standing_receiver_unavailable` and was never retried, so
+  `nextExpected` can never be satisfied and every later message in that session is stranded. A
+  SENDER-side durability hole, distinct from this line's four receiver-side clauses — **M12-P12**.
+  → Entries 78, 81, 82, 83, 84
 
 ## Tier P2 — Wave 1: complete CELLO on GCP, standalone
 
@@ -589,7 +595,7 @@ description: >
   session-peer liveness detection, remove the legacy default-limits `startRelay` factory
   (`packages/relay/src/index.ts:89`). Cross-machine live delivery then succeeds without
   store-and-forward fallback. Full diagnosis: [[relay-keepalive-parked-drain-workorder]].
-  — 🟡 BUILT, BOTH LIVE CLAUSES OPEN. Relay: abort off + legacy `startRelay` deleted. Daemon:
+  — ✅ Relay: abort off + legacy `startRelay` deleted. Daemon:
   abort KEPT with a 30s WAN floor — per-node config makes "relay links only" unavailable and
   liveness must survive; see **M12-D18**. Verification substituted (no live infra): mechanism
   proven locally, attribution still circumstantial — the incident string is Node's generic
@@ -597,23 +603,25 @@ description: >
   both OUTSIDE the diff — the relay fix was a silent no-op against the published transport, and
   session liveness called the counterparty dead whenever the relay churned. All closed.
   **Shipped 2026-08-05:** transport **0.0.44** + daemon 0.0.121 on `latest`; relay pinned to
-  0.0.44 and merged. **Open:** the relay is NOT deployed (old image, no Cloud Build since 08-01 —
-  Entry 82), ≥30 min idle survival and cross-machine delivery unproven, and the
-  `DEBUG=libp2p:connection-monitor*` verification is still owed — M12-D18 turns on it.
-  → Entries 79, 81, 82
+  0.0.44 and merged. **DEPLOYED + PROVEN 2026-08-05** (both relays on `a84659eb…`): Mac↔EC2, both
+  NAT'd, `transportMode: relay` — 30 min 10 s idle with **zero** `reservation.lost` /
+  `relay_connection_gone` on either daemon, then live delivery (`content.delivery.acked`, no park
+  event). `DEBUG=libp2p:connection-monitor*` ran: **zero output**, and the monitor logs before every
+  abort — so M12-D18's "reverse if" does NOT fire. Attribution of the original incident stays
+  circumstantial; what is measured is the behaviour under the fix. → Entries 79, 81, 82, 83, 84
 - **DOD-GCP-RELAY-DRIFT-1** [trustless-cello] — GCP relay config drift vs AWS closed:
   `RELAY_SESSION_MAX_IDLE_MS` 1800000→86400000 in `relay-cloud-init.yaml:69` (30 min vs
   AWS's 24 h), plus a GCP-terraform regression test asserting relay idle/timeout config
   (the AWS side has `test_m6b_007.py`; the GCP side has nothing, which is why the drift
-  shipped). [[relay-keepalive-parked-drain-workorder]] §5. — 🟡 BUILT, NOT LIVE.
+  shipped). [[relay-keepalive-parked-drain-workorder]] §5. — ✅
   Value fixed; `infra/tests/test_gcp_relay_config.py` (5 tests) asserts both clouds AND that they
   agree. **Premise corrected:** `test_m6b_007.py` asserts the AWS *ALB* idle timeout, not the
   session sweep — the sweep was asserted on NEITHER cloud, which is the real reason it drifted.
   Reviewer: SPEC FAITHFUL, one hollow test (parser read the whole YAML, not the env-file heredoc —
   bypass demonstrated and closed). `WAL_DIR` drift found and parked as M12-P10.
-  **Not live:** merged to `main`, but the terraform apply + relay redeploy have NOT run — both
-  relays still boot the 30-minute value. Verify via the new `relay.config.idle_sweep` boot log.
-  → Entries 80, 82
+  **LIVE 2026-08-05** — both relays rolled one region at a time onto `a84659eb…`, each reporting
+  it itself at boot: `relay.config.idle_sweep maxIdleMs=86400000` (us-east1 05:00:53Z,
+  europe-west1 05:04:55Z). → Entries 80, 82, 83, 84
 
 ## Tier P3 — Wave 2: AWS rejoins + the launch claim
 
@@ -845,6 +853,18 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
 
 ## Parked
 
+- **M12-P12** — **A failed park deposit drops the message with no retry, and the gap strands the
+  session.** `sendContent`'s dial-failure path calls `#untrackAwaitingAck` first (deliberately —
+  so a never-delivered frame cannot fire a spurious TTF park), then attempts `#parkContent`. When
+  that attempt fails, the durable awaiting entry is already gone and nothing holds the message:
+  `#parkContent` logs and returns `false` with no enqueue, no backoff, no retry — even though a
+  working `startup_flush` re-park path exists and the sender's own standing receiver came up
+  seconds later. The recipient then holds every subsequent message behind the missing sequence,
+  permanently, and neither side is told. Also: the hook's `standing_receiver_unavailable` names the
+  SENDER's receiver (`daemon.ts:1358`, no agent argument — unlike the crash backstop at `:1441`),
+  which an operator reads as "the recipient is away" — the exact condition parking exists for.
+  Found by the cross-machine run that DOD-PARK-DRAIN-1 requires; it is why that line stays 🟡.
+  Launch-critical class: two agents stop communicating silently. → Entry 84
 - **M12-P11** — **The `cello-relay-image` / `cello-directory-image` Cloud Build triggers have not
   fired since 2026-08-01.** Found 2026-08-05 while deploying the relay fix: a merge to `main` that
   touched `packages/relay/**` produced no build, and the newest build in region **us-east1** (the
@@ -853,7 +873,14 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   Scope beyond this unit: every merge since then has shipped no image, so "merged to main" has not
   meant "image built" for anyone. Diagnose before hand-rolling a build — a hand-run
   `gcloud builds submit` of a local tree already cost one demoted claim in this milestone.
-  → Entry 82
+  **NARROWED 2026-08-05 to event delivery.** The silent half is FIXED: `cello-cloud-build@` held no
+  permission to create builds, so every push-triggered build died at creation leaving no record;
+  `roles/cloudbuild.builds.builder` is now declared in `infra/terraform/iam.tf`. Still open: a push
+  touching an `includedFiles` path produces no build AND no denied-attempt audit entry, so the event
+  never reaches Cloud Build. Ruled out: App installation, connection state, `includedFiles`, and
+  trigger state (both recreated via `terraform -replace`). Meanwhile CI builds run from a revision:
+  `gcloud builds submit <repository-resource> --revision=<SHA>` — source from GitHub, never a local
+  tree. → Entries 82, 83
 - **M12-P10** — **`WAL_DIR` drifts across clouds and nothing asserts it.** AWS puts the relay's
   write-ahead log at `/tmp/wal` (Fargate task-ephemeral — gone on every task replacement); GCP puts
   it on `/mnt/disks/cello-wal` (a persistent disk that survives instance replacement). The relay

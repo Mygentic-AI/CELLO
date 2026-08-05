@@ -5718,3 +5718,130 @@ Worktrees `trustless-cello-keepalive` and `cello-client-keepalive` removed; bran
 hand-copied `~/.claude/agents/cello-unit-reviewer.md` and `~/.claude/commands/cello-publish.md` from
 the previous session are deleted — this session runs from the repo root, so both resolve
 project-scoped again (`.claude/agents/sparc/`, `.claude/commands/`).
+
+## Entry 84 — 2026-08-05 — the two-machine live proof: keepalive and drift EARNED, park/drain found a new defect
+
+`CELLO_Coder_1` (Mac, NAT'd) ↔ `Miss_Chelly_H` (EC2 `i-06db70df6b3e32207`, NAT'd) through the GCP
+us-east1 relay, both daemons on 0.0.121 / cli 0.0.124, relays on `a84659eb…`. Every session opened
+`transportMode: "relay"`.
+
+### The connection-monitor verification the work order demanded — RUN
+
+`DEBUG=libp2p:connection-monitor*` did **not** survive `cello login`: the CLI spawns the daemon with
+`{...process.env, CELLO_DIR}` (`connect-or-start.js:117`), yet the spawned process had no `DEBUG`.
+The daemon was therefore launched directly with the variable and verified present in `ps eww` before
+any measurement. Worth knowing for anyone who tries to instrument this daemon again.
+
+**Found while doing it: THREE `cello-daemon.js` processes were running, all on
+`CELLO_DIR=/Users/andrep/.cello`** (from 06:24 and from 21:13 the previous day, plus the live one).
+Same `CELLO_DIR` means the same libp2p private key, so all three presented the **same peer id** to
+the relay. Killed by captured PID after confirming from `daemon.lock` which one held the socket —
+never `pkill -f`. This is the orphan-process hazard CLAUDE.md names, observed live.
+
+**Result: zero `libp2p:connection-monitor` output for the entire session.** The monitor logs
+`this.log.error('aborting connection due to ping failure')` **before** every `conn.abort(err)`
+(`libp2p/dist/src/connection-monitor.js:84-86`), so silence is not ambiguous — it means the daemon's
+own monitor aborted nothing.
+
+**M12-D18's "reverse if" does NOT fire.** But be precise about what this run does and does not
+establish: it shows the monitor severed nothing during a clean window. It does **not** retroactively
+confirm the original attribution, because the only two reservation losses seen today both have
+simpler explanations, and both also had zero monitor output:
+
+| time | event | explanation |
+|---|---|---|
+| 04:59:46 | `reservation.lost` on both Mac agents | the us-east1 MIG was mid-roll — the relay instance was being replaced |
+| 05:18:29 | `reservation.lost`, `CELLO_Coder_1` | the two orphan daemons sharing a peer id were being killed |
+
+Attribution of the original incident stays circumstantial. What is now measured is the behaviour
+under the fix, which is what the DoD line actually asks for.
+
+### DOD-RELAY-KEEPALIVE-1 — EARNED
+
+Session `82c2d10c…` opened 05:21:28Z, held idle, one send at each end.
+
+- **05:21:28 → 05:51:38 — 30 min 10 s idle.** `session.standing_receiver.reservation.lost` /
+  `relay_connection_gone`: **0 on the Mac, 0 on EC2.** (EC2's most recent such event is 00:4xZ,
+  before the deploy.)
+- **Live delivery after the idle window**, 05:51:50Z: `session.relay.leaf.delivered` →
+  `content.delivery.acked`, with **no park event of any kind** — not store-and-forward.
+- Zero connection-monitor output throughout.
+
+### DOD-GCP-RELAY-DRIFT-1 — EARNED
+
+Both relays report it themselves at boot, which is exactly why that log line was added:
+
+```
+05:00:53Z  us-east1      relay.config.idle_sweep  maxIdleMs=86400000
+05:04:55Z  europe-west1  relay.config.idle_sweep  maxIdleMs=86400000
+```
+
+### DOD-PARK-DRAIN-1 — the drain works; a NEW SENDER-SIDE defect strands the message
+
+The receiver half does exactly what the unit built. With `CELLO_Coder_1` offline (daemon `44803`
+running throughout, **same pid before and after** — no restart), EC2 sent, and on
+`cello start-agent`:
+
+```
+05:55:47  EC2  content.park.signed → content.park.deposit.result ok:true → content.park.deposited
+05:56:32  Mac  content.recover.drain.triggered   reason=standing_receiver_ready
+05:56:33  Mac  content.park.pull.result count=1
+05:56:33  Mac  content.recover.verified          (signature/unseal OK)
+05:56:33  Mac  session.content.held  canonicalSeq=2 nextExpected=1 gap=1 screenedOut=false
+05:56:33  Mac  content.recover.held
+05:56:33  Mac  content.recover.auto.completed    recovered=0
+```
+
+Deposited, pulled, verified, and then **correctly** held — the hold is right, because sequence 1 was
+missing. `cello inbox` still reports `total_unread: 0`. **The message never reaches the operator, and
+it never will.**
+
+**Why sequence 1 is missing.** Fifty-two seconds earlier, on EC2:
+
+```
+05:54:55.409  relay.receipt.stored  seq=1  hashShort=e8d7234856b82f08
+05:54:55.410  content.park.deposit.failed  reason=standing_receiver_unavailable   (logged twice, 0 ms apart)
+```
+
+Never retried. Two logs, one event — `daemon.ts:1362` (the hook) and `session-node-manager.ts:614`
+(the caller re-checking `result.ok`).
+
+**Producer/consumer.**
+1. *Consume:* the drain pulls seq 2, verifies it, holds it on `nextExpected=1`. Nothing will ever
+   supply seq 1, so the hold is permanent and every later message in that session is stranded behind it.
+2. *Produce:* `sendContent`'s dial-failure path (`session-node-manager.ts:3421`) calls
+   `#untrackAwaitingAck` **first** — deliberately, so a never-delivered frame cannot fire a spurious
+   TTF park — and only then attempts `#parkContent`.
+3. *The gap:* when that park attempt fails, the durable awaiting entry has already been dropped and
+   the deposit did not happen. **Nothing holds the message.** `#parkContent` logs and returns
+   `false`; no enqueue, no backoff, no retry — even though the sender's own standing receiver came
+   up seconds later and a `startup_flush` re-park path exists and demonstrably works (it fired for a
+   different hash at 05:56:32).
+4. *The reason string is the sender's, not the recipient's.* The hook checks
+   `sessionNodeManager.getStandingReceiverNode()` (`daemon.ts:1358`) — **the SENDER's own** standing
+   receiver. An operator reads `standing_receiver_unavailable` on a park deposit as "the recipient is
+   away", which is the whole point of parking. Note the crash backstop at `daemon.ts:1441` passes
+   `record.agent_name` and the hook passes nothing, though with one agent on that box it makes no
+   difference to this failure.
+
+**What cannot be proven from the logs alone:** whether `Miss_Chelly_H`'s standing receiver was
+genuinely still rebuilding at 05:54:55 (it had been restarted seconds earlier) or was present and
+resolved wrongly. One agent on that host makes the former far more likely.
+
+**This is not a regression in the four clauses this unit shipped** — those are all receiver-side and
+all hold. It is a sender-side durability hole the cross-machine run exposed, and it is the reason
+`DOD-PARK-DRAIN-1` stays 🟡. Filed as **M12-P12**.
+
+**Severity, stated plainly:** a message the sender's protocol layer has already witnessed at a
+sequence is dropped with no retry, and the gap it leaves permanently strands every later message in
+that session. Two agents stop communicating and neither side is told. That is the launch-critical
+class, not a papercut.
+
+### Test-conduct notes
+
+- `Miss_Chelly_H` is Hermes' agent and had **4 attending sessions**. The first probe session was
+  sealed at seq 8 by one of them mid-test, and a second park attempt failed because the agent was
+  revived between my `set-agent-offline` and the send. The park/drain run was therefore reversed to
+  put the receiver on the Mac, where nothing autonomous revives it. Anyone repeating this should
+  expect the same interference and plan for it rather than fight it.
+- The EC2 daemon must be started with `PATH=/usr/bin:$PATH` or it runs on Hermes' Node 22.
