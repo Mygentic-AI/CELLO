@@ -341,7 +341,18 @@ description: >
     (GATE-1), admits or rejects (REJECT-1), and returns the ACK that closes DELIVERY-2's loop. Every
     P2 unit has been building the pieces this assembles, and no line owned assembling them. Named
     rather than folded into DELIVERY-2, because that is the same mistake the original DELIVERY line
-    made — bundling a second risk into a line whose name describes the first. — ❌
+    made — bundling a second risk into a line whose name describes the first.
+    **SPLIT, 2026-08-05 (review pass one), for the same reason DELIVERY was split.**
+    - **DOD-DOC-INBOUND-1** — the assembly: decode, document-known, sender-is-peer, verify, chain,
+      gate, admit-or-reject, with the ordering as the security property. — ✅ (one review pass;
+      three of the seven steps were wired to inputs nobody produced — `append_only` came from a
+      caller option defaulting OFF over the agreed property, the clientID binding was a seam with no
+      implementation, and a redelivered REJECTION advanced the retry round, so a peer whose acks
+      were being lost stalled the shared document in three attempts)
+    - **DOD-DOC-INBOUND-2** — the frame handler on the session channel, the ACK wire type that
+      closes DELIVERY-2's loop, and the composition-root wiring. `DocumentInbound.receive` returns a
+      JS object to a caller that does not exist yet, so DELIVERY-2's `admitted: null` stays null
+      forever until this lands. — ❌
 - **DOD-DOC-LIFECYCLE-1** [cello-client] — the verbs (§3.5 + §16.4): **list** (documents with
   peer, type, tier, epoch, status, pending-delivery state — tier and epoch are constants in V1
   but they are seam surface and cheap to show — "1 update pending, peer offline since …");
