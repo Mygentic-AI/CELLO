@@ -185,7 +185,16 @@ relay.config.idle_sweep   maxIdleMs=86400000
 relay.service.started · relay.registered · relay.health.check.passed
 ```
 
-**europe-west1 — not yet rolled.** Deployed one region at a time per procedure §2c.
+**europe-west1 — rolled 2026-08-05T05:04Z**, after us-east1 was verified stable, never
+simultaneously (§2c). Instance `cello-gcp-relay-euw1-ls9t` replaced `-psqp`; pinned IP
+`34.77.112.231` unchanged; MIG stable. Same `relay.config.idle_sweep maxIdleMs=86400000`.
+
+Both relays now report the 24-hour sweep from their own boot log:
+
+```
+05:00:53Z  instance 5317009583785344416 (us-east1)      maxIdleMs=86400000
+05:04:55Z  instance 5475719577539148496 (europe-west1)  maxIdleMs=86400000
+```
 
 **Applied with `-target` on the two relay resources deliberately.** A full `terraform apply` also
 wants to update `ops_agent`, `ops_dashboard`, `portal`, `waitlist` (Cloud Run) and the portal Cloud
