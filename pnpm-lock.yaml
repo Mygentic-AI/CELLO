@@ -195,8 +195,8 @@ importers:
         specifier: latest
         version: 0.0.41
       '@cello-protocol/transport':
-        specifier: 0.0.44
-        version: 0.0.44
+        specifier: latest
+        version: 0.0.46
       '@chainsafe/libp2p-noise':
         specifier: ^17.0.0
         version: 17.0.0
@@ -577,8 +577,8 @@ packages:
     resolution: {integrity: sha512-APCLrdocgYrVn5vVUXbKgOv1BPOgIkUAwyTkzdjgqVuAClbACDrPYVKwTNzgnuUPkV3uzXk/eEDrweYltdhjAQ==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/protocol-types@0.0.42':
-    resolution: {integrity: sha512-8Z6VvFj4fkRZpMx6ykmsHxEJ90B24Le57/hwja614B5EWNc75y+6hiz/KFFku70aWFeSIpBK4l+pRMFwx8BItg==}
+  '@cello-protocol/protocol-types@0.0.44':
+    resolution: {integrity: sha512-8iZH9k7un0yOOWml0nqpzsrfj1ENIU2aDJRTAOnQAVb9JcY+zm6qkuRJ0WTrJxvif8re+SoE/eQFh2aTQNzlZQ==}
     engines: {node: '>=24'}
 
   '@cello-protocol/transport@0.0.37':
@@ -589,8 +589,8 @@ packages:
     resolution: {integrity: sha512-kpjMHKHpm/4Lin+JfS1opFvVbkfOuGNDxaLOpBxFqYwo2CP+bZTKIi4kKBjyihU+4br55SHnM7t4cF+gvP9teg==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/transport@0.0.44':
-    resolution: {integrity: sha512-varYFDeEtRtHOO+ETLvTA85YUeu1unJ9tL/dW+uYzi3N6P24HrVmWbRZrjeZczFFraKpfvPo4Epw/fJOCvxV7w==}
+  '@cello-protocol/transport@0.0.46':
+    resolution: {integrity: sha512-wFuaJ6Dw9D3+lf7R0B8E/lHoGRqz1nVvg1GKXq+uct2IBxHjU1boCqre6bmubPvbMLoeA0Xjktgav6hRgG2/vA==}
     engines: {node: '>=24'}
 
   '@chainsafe/as-chacha20poly1305@0.1.0':
@@ -5144,7 +5144,7 @@ snapshots:
       '@cello-protocol/crypto': 0.0.39
       cbor-x: 1.6.4
 
-  '@cello-protocol/protocol-types@0.0.42':
+  '@cello-protocol/protocol-types@0.0.44':
     dependencies:
       '@cello-protocol/crypto': 0.0.40
       cbor-x: 1.6.4
@@ -5199,10 +5199,10 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@cello-protocol/transport@0.0.44':
+  '@cello-protocol/transport@0.0.46':
     dependencies:
       '@cello-protocol/crypto': 0.0.40
-      '@cello-protocol/protocol-types': 0.0.42
+      '@cello-protocol/protocol-types': 0.0.44
       '@chainsafe/libp2p-noise': 17.0.0
       '@chainsafe/libp2p-yamux': 8.0.1
       '@libp2p/autonat': 3.0.20(patch_hash=4204195cc5d8c953020547b5655983198d96374b3eba3b831ca70496a73cf935)
