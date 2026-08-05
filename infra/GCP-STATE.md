@@ -164,6 +164,33 @@ two per-relay secrets, listening `/tcp/4001/ws` (public) and `/tcp/4002` (bound,
 consortium-wide issuer above and dropped from Terraform management rather than destroyed —
 `prevent_destroy` blocked the delete, correctly.
 
+## Relay on `a84659eb…` — us-east1 rolled 2026-08-05, europe-west1 pending
+
+**Relay: `a84659eb46eaa1b9f51f7afeff90c71df36671ee`** (Cloud Build `8eaddd07`, source fetched by
+Cloud Build from the GitHub repository resource at that revision — not a local tree). Verified
+before deploy: `@cello-protocol/transport@0.0.44` inside the image
+(`/app/node_modules/.pnpm/@cello-protocol+transport@0.0.44/…`), which the new relay requires and
+below which it refuses to start.
+
+Carries DOD-RELAY-KEEPALIVE-1 (relay stops severing healthy client links —
+`abortConnectionOnPingFailure: false`, legacy `startRelay` factory deleted) and
+DOD-GCP-RELAY-DRIFT-1 (`RELAY_SESSION_MAX_IDLE_MS` 1800000 → 86400000).
+
+**us-east1 — rolled 2026-08-05T05:00Z.** Instance `cello-gcp-relay-use1-5sv2` replaced `-c27q`;
+pinned IP `34.139.119.165` unchanged. MIG `isStable`/`versionTarget.isReached` both true. Boot log
+confirms the drift is closed from the relay's own mouth, not from the template:
+
+```
+relay.config.idle_sweep   maxIdleMs=86400000
+relay.service.started · relay.registered · relay.health.check.passed
+```
+
+**europe-west1 — not yet rolled.** Deployed one region at a time per procedure §2c.
+
+**Applied with `-target` on the two relay resources deliberately.** A full `terraform apply` also
+wants to update `ops_agent`, `ops_dashboard`, `portal`, `waitlist` (Cloud Run) and the portal Cloud
+SQL instance in place — unrelated drift that belongs to whoever owns those, not to a relay roll.
+
 ## Live image tags — directory on `dir-d35d0a1d` (2026-08-03, ROLL COMPLETE)
 
 **Directory: `dir-d35d0a1d`** (Cloud Build `d8060aaf`, from `origin/main` @ `d35d0a1d`, clean tree).

@@ -80,7 +80,10 @@ directory_node_peer_ids = {
 # dependency for the thing that makes sessions brokerable at all.
 relay_primary_directory = "gcp-use1"
 
-relay_image_tag = "reviewfix-de1ed949"
+# DOD-RELAY-KEEPALIVE-1 / DOD-GCP-RELAY-DRIFT-1. Built by Cloud Build 8eaddd07 from the GitHub
+# repository resource at this exact revision — not from a local tree — and verified to resolve
+# @cello-protocol/transport@0.0.44, the version below which this relay refuses to start.
+relay_image_tag = "a84659eb46eaa1b9f51f7afeff90c71df36671ee"
 
 relay_nodes = {
   us-east1 = {
