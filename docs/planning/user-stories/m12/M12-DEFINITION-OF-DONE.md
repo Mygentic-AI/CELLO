@@ -971,9 +971,26 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
     CEREMONY, not just the status.
   - `responder_seal_already_submitted` is treated as success by the active path and as failure here.
 
-  **Fix direction (revised):** the node must be re-established before any seal leaf can be submitted
-  for an interrupted session — that is the missing piece, not the routing. Then: stop inferring the
-  counterparty's state from local facts. The refusal already
+  **FIXED 2026-08-05, second attempt** — branch `m12/p15-detached-seal`, two commits, review pending.
+  - `3ca87d8` **the blocker.** `submitSealLeaf` no longer requires an in-memory node. It never needed
+    one: `submitLeaf(node, sessionId, contentHash, leafKind)` takes everything explicitly, and the
+    daemon already solves this exact shape for content in `startupParkFn` — persisted relay endpoint
+    (`relay_peer_id`/`relay_addrs`, columns that exist for this reason) plus the owning agent's
+    standing receiver. `#resolveSealTransport` does that, live node first so active sessions are
+    untouched; the composition root supplies the client builder because the manager holds no K_local,
+    and that builder is what makes it work after a RESTART — the case that caused the incident.
+    Failures are named individually instead of collapsing into "no node".
+  - `00bcd48` **the routing**, plus the two review findings that would have made a working version
+    wrong. `session_seal_already_pending` is reached by TWO ceremonies needing opposite actions: if
+    the peer ran the relay bilateral seal our leaf completes it; if it ran the seal-interrupted
+    ceremony there is no relay ctrl leaf and never will be, so our leaf would be one leaf into a log
+    that can never hold a second distinct sender — the seal never completes and we would report
+    `ok: true`. A permanent false success is worse than the dead end. The responder now NAMES the
+    ceremony from two DURABLE discriminators (its own 0x02 ctrl leaf in the relay log; the
+    `seal_interrupted_artifacts` row), the initiator routes ONLY on `relay_bilateral`, and an absent
+    field means DO NOT SIGN. `responder_seal_already_submitted` is treated as success, matching the
+    active seal path. `leaf_count_mismatch` still dead-ends by test — that is M12-P14's case, where
+    there is no ceremony to complete because the two sides do not hold the same conversation. The refusal already
   carries the answer once `e3da3b4` names it, so the initiator must ROUTE on it instead of
   dead-ending: `session_seal_already_pending` → the peer holds its half and waits for ours, so submit
   our own seal leaf and complete the bilateral; `session_already_sealed` → a receipt exists, adopt it
