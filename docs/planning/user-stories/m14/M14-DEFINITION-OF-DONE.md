@@ -232,7 +232,9 @@ description: >
   unit builds and proves the protocol against STORE-1's local envelope-log representation —
   seed rows, roll back, re-publish against the store; the CBOR wire encoding is ENVELOPE-1's
   job (P2) and the cross-daemon proof is E2E-REJECT-1's (P4). Do not build ENVELOPE-1's
-  machinery here. — ❌
+  machinery here. — ✅ (two review passes; §9's effectiveness rule found unsound as written and
+  superseded by measurement — a refusal is realized by never writing the refused payload, not by
+  subtracting it at replay; both open decisions journaled in Entry 21)
 - **DOD-DOC-SCREEN-1** [cello-client] — 🅿️ **BLOCKED on the screening audit (Andre calls it —
   [[M14-PROCEDURE]] two-stop reason 1).** When unblocked: incoming projected diffs flow through
   `screenInbound` at the gate hook with document context (`ScreenContext` today carries no
@@ -287,7 +289,9 @@ description: >
   missing `doc_prev_hash` refuses loudly, naming the gap). **The Yjs update-encoding version is
   pinned** in the protocol types (§16.7-8) so two supporting clients can never disagree
   silently. Seam fields get serialization tests in lieu of a consumer ([[M14-PROCEDURE]] §5
-  no-consumer exception). Replay defined set-based per §16.7-5. — ❌
+  no-consumer exception). Replay defined set-based per §16.7-5. — ⏳ (pass one's findings applied;
+  all three inherited blocking ACs verified inside the signed TBS by revert and a frozen
+  conformance vector pins field order — pass two in flight, not yet ✅)
 - **DOD-DOC-DELIVERY-1** [cello-client] — daemon-autonomous delivery (§16.4): publish writes the
   envelope to the log and returns; the delivery worker derives pending = unacknowledged
   envelopes FROM THE LOG (survives restart — enforcer-pinned), checks the peer via
