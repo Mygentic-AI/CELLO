@@ -120,8 +120,17 @@ async function nextFrame(wire: AeWire, expectType: string, timeoutMs: number): P
   let frame: Record<string, unknown>;
   try {
     frame = decodeFrame(bytes);
-  } catch {
-    throw new AeProtocolError(`malformed CBOR frame while waiting for ${expectType}`);
+  } catch (err: unknown) {
+    // CARRY THE CAUSE. A bare catch here names the PEER for every decode failure, including our own
+    // decoder refusing our own valid data: `@cello-protocol/protocol-types` sets process-global
+    // cbor-x size limits, and if one is ever tightened below MAX_WIRE_ITEMS a legitimate
+    // replication batch fails with "malformed CBOR frame" — wrong subsystem, wrong party, and the
+    // real diagnosis ("Array length exceeds N") discarded at the one place it would have named the
+    // right one. This repo has already eaten a replication failure that surfaced a layer away.
+    throw new AeProtocolError(
+      `malformed CBOR frame while waiting for ${expectType}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
   }
   if (frame === null || typeof frame !== "object") {
     throw new AeProtocolError(`non-map CBOR frame while waiting for ${expectType}`);
