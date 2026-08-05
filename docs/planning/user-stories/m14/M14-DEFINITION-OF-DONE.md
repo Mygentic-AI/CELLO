@@ -720,7 +720,34 @@ rather than the peer's state vector; and the working document having to BE the l
 - **DOD-DOC-E2E-OFFLINE-1** [trustless-cello] — **offline-delivery enforcer** ran green: publish
   while the peer daemon is down; kill and restart the SENDER's daemon; start the peer; the
   update arrives and materializes with zero agent-level action; pending flag set. The
-  in-memory-queue killer. — ❌
+  in-memory-queue killer. — ⏳ **PASSES IN ISOLATION** (5.8s, `b5d34819`); the file's three cases
+  interfere when run together.
+
+  **It found two defects the convergence enforcer could not:**
+
+  1. **Nothing ever sent an ack.** `encodeDocumentAck` had no production caller at all — the frame
+     type, its signed preimage and the whole receiving half existed, and no path produced one. The
+     sender therefore redelivers until the document stalls at the unacked ceiling, re-triggering the
+     peer's gate every time. Now produced on every admitted OR refused envelope (a rejection is an
+     ack) and on duplicates, which is the case that matters most: a redelivery is usually evidence
+     the first ack was lost.
+     **Not awaited**, and that is load-bearing — the per-owner queue serializes the CHAIN CHECK, not
+     network I/O, so awaiting a dial there stalls every subsequent inbound frame for that agent.
+     Measured: it turned a 7-second live run into a 124-second timeout, and the symptom was
+     "documents fail to converge", nothing about acks.
+  2. **A restarted document came back EMPTY.** Epoch zero is agreed in the PROPOSAL — both sides
+     apply the same bytes, so neither authors it and no envelope carries it. Correct on the wire,
+     and it left the content living only in whichever `Y.Doc` the handler happened to hold. After a
+     restart an operator would open a document they had been working in, find nothing, write into
+     it, and publish the deletion of everything the peer still held. Rebuilt from the stored
+     proposal, which is deterministic on both sides because `document_id` is its hash.
+
+  **Open: the three cases interfere.** Each passes alone; together they fail differently every run.
+  Per-test daemon teardown is in — they used to live until `afterAll`, so the third journey ran
+  against a cluster attended by six daemons — and it did NOT resolve it, so the shared spine cluster
+  carries journey-to-journey state beyond the daemons. Registration and directory-side agent state
+  are the candidates; not yet proven. Next step is to prove it rather than tune it: run two journeys
+  with a fresh cluster each and see whether the interference survives.
 - **DOD-DOC-E2E-REJECT-1** [trustless-cello] — **rejection enforcer** ran green: gate rejects
   (limit or append rule), quarantine + `0x05` + policy record on both sides, supersession nets
   to zero, convergence; **the session containing the `0x05` leaf seals and the seal VERIFIES on
