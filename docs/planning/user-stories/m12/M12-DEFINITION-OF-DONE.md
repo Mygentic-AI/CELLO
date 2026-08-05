@@ -919,8 +919,46 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   anywhere is 12:16:56.995 — two minutes later, on a different session. I had 4c28edcd's timeline and
   generalised it onto a session I never separately traced. Same error as the first correction, one
   level up: a verified explanation travelling to a case nobody checked.
-- **M12-P15** — **State divergence: the two sides disagree about which TERMINAL path a session is
-  on, and neither can finish.** `dcd0aadc…`, measured 2026-08-05. The peer destroyed its node with
+- **M12-P15** — **A picks its closing ceremony from a flag that only records ITS OWN crash.**
+
+  **The flow, end to end** (`dcd0aadc…`, measured 2026-08-05):
+  1. Session active, two messages. Both sides hold the same leaves and agree completely.
+  2. **09:39:42 — A's daemon goes down.** On shutdown the daemon runs one blanket statement,
+     `UPDATE sessions SET status='interrupted' WHERE status='active'` (`session-node-manager.ts:2733`).
+     Every open session, unconditionally. `interrupted` therefore means exactly one thing: *my own
+     process stopped while this was open*. It says **nothing** about the counterparty.
+  3. **09:45:59 — B closes**, six minutes later, with no idea A is gone. B picks the NORMAL bilateral
+     seal (`session.node.destroyed reason="sealing"`) and waits for A's co-signature.
+  4. A is down; the co-signature never comes. B sits waiting. It never escalates to a unilateral
+     root either — `reason="sealing"` is the ONLY seal event in B's entire log for this session, so
+     there is no R1 and the existing returning-absent-party upgrade path has nothing to ratify.
+  5. **Hours later A returns**, reads its own record — `interrupted` — and infers *"the counterparty
+     must be gone"*, so it sends `seal_interrupted_request`.
+  6. **B refuses** (`12:14:52.190`). Correct: from B's view nothing was interrupted, it is mid-seal.
+  7. **Deadlock.** A cannot seal-interrupted, because B does not agree it is interrupted. B cannot
+     finish its seal, because that needs A's co-signature and A is asking for a different ceremony.
+     `force:true` — no notarized receipt — is the only exit.
+
+  **The defect is step 5, and it is a conflation.** A chooses which closing ceremony to run from a
+  flag that records only its own lifecycle, reasoning "I was interrupted, therefore the counterparty
+  is gone." That inference is invalid — here the counterparty was healthy and had been waiting the
+  whole time. Both sides picked a reasonable ceremony from what they could see locally; neither
+  checked what the other was doing.
+
+  Note this refines an earlier claim in this document: marking sessions `interrupted` on shutdown is
+  correct **as a record**. Using it to **choose a ceremony** is the defect.
+
+  **Distinct from M12-P14 — the leaves AGREE; the statuses do not**, so the pre-seal readiness gate
+  finds nothing short, reports ready, and walks straight into the refusal.
+
+  **Fix direction:** stop inferring the counterparty's state from local facts. The refusal already
+  carries the answer once `e3da3b4` names it, so the initiator must ROUTE on it instead of
+  dead-ending: `session_seal_already_pending` → the peer holds its half and waits for ours, so submit
+  our own seal leaf and complete the bilateral; `session_already_sealed` → a receipt exists, adopt it
+  rather than re-requesting. Same shape as the P14 gate: go and look instead of inferring.
+
+  *(superseded framing below, kept for the trail)* **State divergence: the two sides disagree about
+  which TERMINAL path a session is on, and neither can finish.** `dcd0aadc…`, measured 2026-08-05. The peer destroyed its node with
   `reason="sealing"` at 09:45:59; our side still listed the session `interrupted` with
   `messageCount: 2`. At 12:14 the seal-interrupted request was refused `session_not_interrupted` —
   literally accurate, since from the peer's view it was not interrupted. Deadlock: we cannot
