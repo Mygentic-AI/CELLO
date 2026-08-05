@@ -1880,3 +1880,99 @@ and the reachability check — and confirmed each has a test that goes red witho
 
 P0 ✅ · P1: ENGINE ✅ WRITE ✅ GATE ✅ REJECT ✅ · SCREEN-1 🅿️ (Andre's call) ·
 P2: ENVELOPE ✅ HANDSHAKE ✅ · **DELIVERY-1 awaiting review**, then LIFECYCLE-1, NOTIFY-1.
+
+---
+
+## Entry 23 — LIFECYCLE-1, and DELIVERY splits in two
+
+### The line claimed a consumer that does not exist
+
+DELIVERY-1's DoD names the worker as **the first non-handler consumer of `SessionNegotiator`**. I
+built it behind an injected `DocumentDeliveryTransport` seam — the right *shape*, since dial
+concerns do not belong in a scheduler — but nothing implements that interface, so the worker is a
+class the daemon never instantiates, driven by an interface nothing satisfies, ticked by a scheduler
+that does not exist. The review was direct that [[M14-PROCEDURE]] §5's no-consumer exception does
+not cover it: that exception is scoped to the five seam fields whose consumer is M14B by design, not
+to a whole unit.
+
+So the line is **split**. DELIVERY-1 is the scheduling and bookkeeping and closes now; DELIVERY-2 is
+the `SessionNegotiator`-backed adapter, the `discovery_lookup` binding, the seal, and the
+composition-root wiring, and stays ❌. The alternative was to flip ✅ against a clause I had not met,
+which is the tag-inflation this process exists to prevent.
+
+### The one exit that never self-corrects
+
+Every path in the tick scheduled a next attempt except the no-peer branch, which logged an error and
+continued. That is worse than a busy loop. The pending window is **ordered and bounded**, and
+`log_index` is per-document — so one document's unschedulable backlog could fill the window
+permanently and the operator's work on an **unrelated** document would silently never leave the
+machine, the only signal being an error naming a different document. A missing document row is not
+transient, so it goes straight to the cap; the window has deterministic tiebreaks.
+
+*The generalisation: when every branch but one maintains an invariant, the exception is the bug — and
+the branch that "cannot happen" is where it hides, because nothing exercises it.*
+
+### A rejection was not an ack
+
+The transport outcome was two-valued, so an adapter meeting a `0x05` had to pick a lie: `ok: true`
+makes the delivery record say the peer admitted content it refused, and `ok: false` redelivers an
+envelope the peer has already ruled on — forever, re-triggering their gate and their retry counter
+until the document stalls for reasons the operator cannot see. Ack means **the peer answered**,
+admitted or not. Three-valued now, both marking the envelope acked, with distinct events so nobody
+is told their update was accepted when it was refused.
+
+### Two more of the recurring shapes
+
+**A column that can only equal its neighbour.** `delivered_at`'s only writer was
+`COALESCE(delivered_at, ?)` inside the ack, guarded by `acked_at IS NULL` — so it was always NULL at
+that point, always took the new value, and equalled `acked_at` on every row, always. Nothing read
+it. Its existence invites a reader to infer "sent, awaiting confirmation", a distinction the schema
+cannot express. Removed.
+
+**A documented limit the code cannot reach.** `DELIVERY_BACKOFF_CAP_MS` was 900s while the index
+clamp meant the schedule never emitted above 600s — and the tests were using the unreachable
+constant as a synonym for "much later".
+
+### Tests that named a property they did not check
+
+The restart test restarted nothing: same store, same worker, same in-memory database. It asserted "a
+deferred envelope is due again later", which an in-memory `Map` satisfies just as well — the exact
+claim its name disproves. And **no test asserted the scheduled value**, only that it was later, so
+shifting the entire backoff schedule by one kept everything green. Both fixed; three exact intervals
+are pinned.
+
+The no-peer test asserted the envelope was due IMMEDIATELY, which pinned the hot loop above. It was
+documenting "never dropped" — right — while over-specifying "and always instantly due", which was
+the defect. *A test can be correct about its intent and still lock in a bug through an incidental
+assertion.*
+
+### LIFECYCLE-1 — three endings that are not interchangeable
+
+Close is bilateral, and one side's close is a **request**: marking the document closed on it would
+tell this operator the collaboration ended while the peer is still writing into it. The table records
+WHO closed rather than how many closes arrived, because counting lets one party close unilaterally
+by asking twice.
+
+Kill is unilateral and says out loud what it cannot do — the peer keeps what it holds. That is the
+one thing an operator is most likely to assume a kill undoes. It also does not depend on the peer
+being reachable: a decision to stop that requires the other party online is not a decision to stop.
+
+Withdraw touches one UNDELIVERED update and refuses everything else rather than producing a record
+that claims something untrue. Withdrawing an acknowledged update is refused *with the reason*,
+because telling an operator their content was retracted while the peer holds it is the promise this
+module exists not to make.
+
+The kill switch is asymmetric on purpose: outbound refused **loudly** (a silent drop leaves the
+operator writing into a document going nowhere), inbound still admitted mechanically (refusing would
+surface the pause to the peer as a protocol fault and force a rejection round for something that is
+not their doing).
+
+### Gates
+
+`test` **2829 passed / 11 skipped** · `lint` · `typecheck` clean.
+
+### Milestone state
+
+P0 ✅ · P1: ENGINE ✅ WRITE ✅ GATE ✅ REJECT ✅ · SCREEN-1 🅿️ (Andre's call) ·
+P2: ENVELOPE ✅ HANDSHAKE ✅ DELIVERY-1 ✅ LIFECYCLE ✅ · DELIVERY-2 ❌ (split out) ·
+**NOTIFY-1 in progress.**

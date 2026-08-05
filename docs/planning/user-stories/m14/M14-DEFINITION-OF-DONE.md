@@ -303,7 +303,23 @@ description: >
   `publish` accepts an optional session hint (§16.4); omitted, the daemon uses the most recent
   active session or opens one. Every attempt and every autonomous session is logged
   (`document.delivery.*`). Ack = the peer's daemon confirms admission (or rejection — a `0x05`
-  is also an ack for delivery purposes; supersession is DOD-DOC-REJECT-1's job). — ❌
+  is also an ack for delivery purposes; supersession is DOD-DOC-REJECT-1's job).
+
+  **SPLIT, 2026-08-05 (review pass one).** The line as written bundles two risks: the scheduling and
+  bookkeeping, and the first non-handler consumer of `SessionNegotiator`. They were built behind an
+  injected transport seam, which is the right SHAPE but leaves the second risk entirely undone —
+  nothing implements the interface, so the worker is a class the daemon never instantiates. Flipping
+  this line ✅ would claim a `SessionNegotiator` consumer that does not exist, and
+  [[M14-PROCEDURE]] §5's no-consumer exception does not cover it (that exception is scoped to the
+  five seam fields whose consumer is M14B by design, not to a whole unit).
+  - **DOD-DOC-DELIVERY-1** — the worker: pending derived from the log, restart-survival, the
+    reachability check, the capped backoff, ack-including-rejection, the re-entry guard, correlation
+    IDs, and `document.delivery.*`. — ✅ (one review pass; the no-peer branch was a hot loop that
+    could starve every other document, and a rejection was not treated as an ack)
+  - **DOD-DOC-DELIVERY-2** — the transport adapter and the wiring: a `DocumentDeliveryTransport`
+    backed by `SessionNegotiator` (opening or reusing a session, and SEALING normally), the
+    `discovery_lookup` binding for `isPeerReachable`, the composition-root instantiation, the tick
+    scheduler, and `publish`'s own optional session hint. — ❌
 - **DOD-DOC-LIFECYCLE-1** [cello-client] — the verbs (§3.5 + §16.4): **list** (documents with
   peer, type, tier, epoch, status, pending-delivery state — tier and epoch are constants in V1
   but they are seam surface and cheap to show — "1 update pending, peer offline since …");
