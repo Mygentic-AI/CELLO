@@ -6499,3 +6499,56 @@ nothing behind that hole could ever be delivered. Silently, on both sides.
    I checked at 16:59:05 and reported "not recovered"; the drain fired at 16:59:54. Nothing was
    wrong — but the reporting was wrong for fifty seconds, and a slower reader would have filed a
    defect. Worth a faster trigger on deposit, or at minimum knowing the latency is backstop-bounded.
+
+### Entry 96 — M12-P15, second attempt: fix the blocker first, then the thing you meant to fix
+
+The first attempt routed a rejection into `submitSealLeaf` and was INERT. The reviewer found it, and
+the finding generalises: **I built on a method without checking it could run on the path I was
+adding it to.** `submitSealLeaf` hard-required an `#activeNodes` entry; `handleSealInterruptedFlow`
+is only reachable when the status is `interrupted`; and every producer of that status deletes the
+entry. 100% of reachable calls returned `session_node_unavailable`. My test passed only because I
+hand-stubbed the manager to return a value the real object cannot produce there — which is the
+purest form of the hollow test this process exists to catch.
+
+I also told Andre it "unwedges the deadlock". It did not. Reverted rather than patched.
+
+**The blocker was smaller than I made it sound**, which is the second lesson: I recorded "needs node
+re-establishment" as though it were a project, and Andre pushed back that nothing was stopping me.
+He was right. `submitLeaf(node, sessionId, contentHash, leafKind)` takes everything explicitly —
+nothing about it needs a per-session node — and `startupParkFn` already acts on a node-less session
+using the persisted relay endpoint plus the owning agent's standing receiver. The columns
+`relay_peer_id`/`relay_addrs` exist for exactly that. So the guard was the defect, not the
+architecture. `#resolveSealTransport` resolves the transport instead of demanding it, live node
+first so an active session is untouched, and the composition root supplies the client builder because
+the manager deliberately holds no K_local — that builder is what makes the path work after a
+RESTART, which is the situation that marked the session interrupted in the first place.
+
+**Then the routing, with the two findings that would have made a working version wrong.**
+
+`session_seal_already_pending` is ONE wire string for TWO ceremonies that need OPPOSITE actions.
+Relay bilateral: the peer submitted a SEAL ctrl leaf and our half completes it. Seal-interrupted: the
+peer persisted a commitment, there is NO relay ctrl leaf and never will be, so our leaf would be one
+leaf into a log that can never hold a second distinct sender — `#maybeProcessSeal` never fires and we
+would have reported `ok: true` for a session that can never seal. **A permanent false success is
+worse than the dead end it replaced.** So the responder names the ceremony from two DURABLE
+discriminators (its own 0x02 ctrl leaf in the relay log, and the `seal_interrupted_artifacts` row),
+both of which survive the restart that caused the situation. The initiator routes ONLY on
+`relay_bilateral`; absent means DO NOT SIGN, because guessing wrong either strands the session or
+mints an unjoinable leaf.
+
+`responder_seal_already_submitted` is now success: our half IS in the relay log, which is exactly how
+the active seal path reads it. Reporting failure told the operator to retry forever — every retry
+re-hits the synchronous idempotency mark — while forbidding `force:true`, the only real exit.
+
+`leaf_count_mismatch` still dead-ends, deliberately and by test. That is M12-P14's case: no ceremony
+to complete, because the two sides do not hold the same conversation. Routing it would attest a
+transcript we know disagrees — the easy mistake is to make "route on the refusal" a general rule.
+
+Verified one of my own dispatch questions rather than waiting to be told: `getCarry` returns ALL
+leaves from BOTH parties, so the discriminator's store key (our pubkey) and its filter
+(`senderPubkeyHex === ours`) genuinely mean "a ctrl leaf I authored" and cannot false-positive on the
+counterparty's.
+
+Seven tests. Revert test: disabling the routing fails 3 of 6; the responder-side test keeps the two
+halves connected, because without the wire field the routing is unreachable. Gate: 2724 passed,
+lint/typecheck/build clean. `3ca87d8` + `00bcd48`. Review dispatched, NOT merged, NOT published.
