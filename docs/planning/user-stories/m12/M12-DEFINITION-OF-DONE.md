@@ -951,7 +951,26 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   **Distinct from M12-P14 — the leaves AGREE; the statuses do not**, so the pre-seal readiness gate
   finds nothing short, reports ready, and walks straight into the refusal.
 
-  **Fix direction:** stop inferring the counterparty's state from local facts. The refusal already
+  **⚠️ First fix attempt REVERTED (`787187f`, reverting `49b67d5`) — it was INERT.** The routing
+  called `submitSealLeaf`, which requires an `#activeNodes` entry with a live relay client. But
+  `handleSealInterruptedFlow` is only reachable when the status is `interrupted`, and **every**
+  producer of that status removes the entry (`markInterruptedWithDetails` and
+  `destroySessionNode(...,"interrupted")` both `#activeNodes.delete(...)`; the shutdown/boot blanket
+  UPDATEs run when no node exists at all). So the submit returned `session_node_unavailable` on
+  100% of reachable calls and the branch never completed a seal. Worse, its guidance told the
+  operator to retry forever and explicitly forbade `force:true` — the only actual exit — making it
+  strictly worse for the operator than the dead end it replaced. The unit test passed only because
+  the hand-stubbed manager returned a value the real object cannot return on that path.
+  Two further findings from the same review, both to carry into the next attempt:
+  - `session_seal_already_pending` names ONE wire string for TWO peer ceremonies needing opposite
+    actions (relay-bilateral half submitted vs. seal-interrupted commitment persisted). Routing on
+    it blindly returns `ok:true` for a session that can never seal. The responder must name the
+    CEREMONY, not just the status.
+  - `responder_seal_already_submitted` is treated as success by the active path and as failure here.
+
+  **Fix direction (revised):** the node must be re-established before any seal leaf can be submitted
+  for an interrupted session — that is the missing piece, not the routing. Then: stop inferring the
+  counterparty's state from local facts. The refusal already
   carries the answer once `e3da3b4` names it, so the initiator must ROUTE on it instead of
   dead-ending: `session_seal_already_pending` → the peer holds its half and waits for ours, so submit
   our own seal leaf and complete the bilateral; `session_already_sealed` → a receipt exists, adopt it
