@@ -682,7 +682,35 @@ rather than the peer's state vector; and the working document having to BE the l
   daemons, create/consent, concurrent file edits including an overlapping region, both publish,
   both files converge, overlap flag fires, session seals with mixed `0x00`/`0x02`/`0x04` leaves
   and BOTH sides independently recompute the same root. New `j-*.spine.test.ts` on
-  `live-harness.ts`, modeled on `j-unilateral.spine.test.ts` — never a from-scratch fixture. — ❌
+  `live-harness.ts`, modeled on `j-unilateral.spine.test.ts` — never a from-scratch fixture.
+  — ⏳ **WRITTEN AND RUNNING, RED** (`1e477e44`). It has already paid for itself twice.
+
+  **Defect 1 — FOUND AND FIXED** (cello-client `cc08c37`). Both document senders put a bare
+  `sha256(content)` on the wire where every peer recomputes `sha256(0x00 || content)`. The send
+  reported success with `parked: false`; the receiver discarded it at the cross-check, before
+  screening and before the router, so the receiving daemon logged nothing about documents at all.
+  The evidence pointed at classification, the router and the gateway — everywhere but the sender's
+  hash. **No in-process test could find it**: both sides of those compute the hash with the same
+  function, so they agree with each other whether or not either agrees with the wire. Now one
+  module, `wire-content-hash.ts`, which records the trap — the `0x00` is NOT the leaf kind.
+
+  **Defect 2 — FOUND, ISOLATED, NOT FIXED.** With the hash right the chain runs four hops further:
+  A proposes → B records pending → B accepts → B's copy converges from the same epoch-zero bytes.
+  Then it stops. B sends the proposal ACK (`document.frame.sent`, 327 bytes, `parked: false`, on the
+  reused session) and A records NO content arriving at all — across the whole run exactly two
+  `session.content.ordering.recorded` events, both the A→B proposals, and zero warns or errors on
+  any path.
+
+  What is known: the B→A direction produced a successful send and no arrival. What is NOT known:
+  whether that is specific to the document path — which calls `sessionNodeManager.sendContent`
+  directly, bypassing what `cello_send` does around it — or to the responder's outbound stream
+  generally. **Next step: a plain `cello_send` from B in the same setup.** If that also fails to
+  arrive, the defect is in the session layer, not in documents. The kill case very likely shares the
+  cause: same path, same direction, and B's copy never goes terminal.
+
+  Diagnostics are permanent, not scaffolding: a failure prints both daemons' own account, because
+  "expected [] to include …" makes the reader guess between never-sent, never-classified and
+  refused — three bugs with one symptom, and I guessed wrong once already.
 - **DOD-DOC-E2E-OFFLINE-1** [trustless-cello] — **offline-delivery enforcer** ran green: publish
   while the peer daemon is down; kill and restart the SENDER's daemon; start the peer; the
   update arrives and materializes with zero agent-level action; pending flag set. The
