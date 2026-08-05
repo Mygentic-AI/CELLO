@@ -1,8 +1,16 @@
 # Cloud Build — CELLO relay image → Artifact Registry.
-# Run by trigger (COMMIT_SHA set) or manually:
-#   gcloud builds submit --config infra/cloudbuild/relay.yaml \
-#     --service-account projects/cello-infra/serviceAccounts/cello-cloud-build@cello-infra.iam.gserviceaccount.com \
-#     --substitutions _TAG=manual-$(git rev-parse --short HEAD) .
+#
+# Built by the `cello-relay-image` trigger (region us-east1 — a `gcloud builds list` with no
+# --region returns a different, stale set) on push to main touching this file's includedFiles.
+# COMMIT_SHA is set by the trigger and becomes the immutable tag consumers pin.
+#
+# The trigger runs as cello-cloud-build@, and that account needs roles/cloudbuild.builds.builder
+# to create a build at all — without it push events die at creation and leave NO build record,
+# so the failure looks like "the trigger never fired". Declared in infra/terraform/iam.tf.
+#
+# A manual `gcloud builds submit` of a LOCAL tree is a last resort: the tag then names a commit
+# whose contents were never proven to match, which has already cost this milestone a demoted
+# claim. If you must, submit from a clean checkout of the SHA and say so where you claim it.
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
