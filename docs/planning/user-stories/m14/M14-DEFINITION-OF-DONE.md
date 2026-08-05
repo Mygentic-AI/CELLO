@@ -648,6 +648,34 @@ rather than the peer's state vector; and the working document having to BE the l
   verifying. **The publish gate — milestone close is P4 all-green, not this line.** Vitest
   green ≠ done. Andre runs the `latest` promotion. Close condition per M14-D2. — ❌
 
+  **State surveyed 2026-08-05, no action taken (publishing needs `/cello-publish` and Andre's go):**
+
+  All M14 work is on branch `m14/reject-1` — **50 commits ahead of `origin/main`, 10 behind**. The
+  merge comes first; the cascade is computed from MAIN's numbers, not this branch's.
+
+  Local versions trail published for that reason, and this is expected on a branch, not a defect —
+  recorded so nobody reads it as one and "fixes" it by bumping from the wrong base:
+
+  | package | branch | published (beta = latest) |
+  |---|---|---|
+  | crypto | 0.0.40 | 0.0.40 |
+  | protocol-types | 0.0.43 | 0.0.44 |
+  | transport | 0.0.45 | 0.0.46 |
+  | daemon | 0.0.122 | 0.0.124 |
+  | cli | 0.0.125 | 0.0.127 |
+  | connect | 0.0.119 | 0.0.121 |
+
+  Highest existing tag is `v0.0.184`, so the next trigger tag is `v0.0.185` — and per the skill the
+  tag counter is NOT the connect version; they have drifted before.
+
+  **Changed on this branch and therefore in the cascade:** `protocol-types` (three new wire types —
+  proposal ack, control, rejection envelope) and `daemon` (everything else). `cli` and `connect` are
+  pulled in by the dependency rule whether or not their own source moved.
+
+  **`@cello-protocol/client@0.0.50` is published and the package no longer exists in the tree** — it
+  was deleted by the M6-era dead-code purge (`567b856`). It is not in the cascade and must not be
+  resurrected into one; flagged because `/cello-publish` still lists seven packages including it.
+
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
 - **DOD-DOC-E2E-CONV-1** [trustless-cello] — **convergence enforcer** ran green: two real
