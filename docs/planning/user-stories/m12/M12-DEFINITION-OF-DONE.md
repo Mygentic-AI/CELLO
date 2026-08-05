@@ -315,7 +315,14 @@ description: >
   message's park deposit had failed with `standing_receiver_unavailable` and was never retried, so
   `nextExpected` can never be satisfied and every later message in that session is stranded. A
   SENDER-side durability hole, distinct from this line's four receiver-side clauses — **M12-P12**.
-  → Entries 78, 81, 82, 83, 84
+  **M12-P12 BUILT + 2 review passes (the cap) + MERGED 2026-08-05** (`af1473b`): the refusal now
+  enqueues durably WITH the relay's ordering record, on both park triggers; the sender re-park rides
+  the standing-receiver rebuild and the reconnect, not just a restart; and `cello_send` stops telling
+  the operator "queued, will be retried" about a message that is gone. Two gaps recorded, not closed:
+  the `daemon.ts` drain-hook line has no unit test (needs a live relay — the two-machine run covers
+  it), and the awaiting queue's content-only dedupe key can still drop a duplicate message (logged).
+  **Still open:** publish → upgrade both machines → repeat the two-machine run.
+  → Entries 78, 81, 82, 83, 84, 85, 86
 
 ## Tier P2 — Wave 1: complete CELLO on GCP, standalone
 

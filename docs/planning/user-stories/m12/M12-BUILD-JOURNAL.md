@@ -5911,3 +5911,67 @@ Surviving the revert test is necessary and not sufficient: it proves the asserti
 not that it asserts the right thing.
 
 Gate on the amended branch: **2686 passed / 11 skipped / 241 files**, lint clean, `tsc --build` clean.
+
+## Entry 86 — 2026-08-05 — M12-P12 review pass two, merged; two gaps recorded rather than papered over
+
+Two passes is the hard cap (§1b), both spent. `af1473b` merged fast-forward to `cello-client` `main`;
+worktree and branch removed; the shared checkout (another session's `m14/reject-1`, uncommitted work
+in the tree throughout) verified untouched.
+
+### Pass two's verdict, quoted
+
+> "**SPEC: DEVIATIONS FOUND** — F2 unmet on the `onTtf` path; F3's operator-facing half unmet
+> (`guidance` unconsumed). Both [blocking] against pass one's stated asks."
+> "**SILENT FALLBACKS FOUND** — reports 'queued and will be retried' for a message that was neither
+> queued nor is retriable … and names a direct retry queue that has no production drain. HIGH."
+
+The HIGH is the one worth remembering. Pass one's fix added a `guidance` field distinguishing
+"queued, we will retry" from "lost, send it again" — and `session-content-handlers.ts` **discarded it**
+and returned one hardcoded sentence on every failure:
+
+> "It has been queued in the durable retry queue and will be retried when the counterparty reconnects."
+
+Said to an operator whose persist just threw and whose message is gone. **The fix for a message-loss
+lie was itself surfaced as the same lie**, with the truth sitting in a log line. Worse, the sentence
+names a fallback that does not exist: the direct nonce queue it points at has no production drain
+(`drain_session` returns metadata; the comment says delivery "is triggered separately when a real
+sendFn is available", and there is no such caller). Two review passes to find, because both the
+implementation and pass one stopped at the function boundary. **NO CONSUMER, NO SHIP applies to a
+field you ADD as much as to one you consume.**
+
+F2 was half-closed and I had not noticed: the ordering record reached the durable row on the refusal
+path and not on the TTF path, where `#handleTtfExpiry` had it in hand and passed it to `#parkContent`
+one statement later. Two arguments. Every TTF-originated row would have re-parked in arrival order —
+the same divergent-leaf-index failure, on the other of the two park triggers.
+
+Also fixed: `flushAwaitingContent` now coalesces (it gained four triggers, two of which fire
+deterministically together on agent start, while its receiver twin already had exactly this guard —
+the asymmetry was an oversight, not a decision), and `reconnect-drain` wraps `flushSender` so a
+synchronous throw cannot take the inbound pull with it.
+
+### Two gaps recorded, NOT closed
+
+Honesty over a green board — both are written at the point of absence, not only here:
+
+1. **The `daemon.ts` drain-hook line has no unit test.** It is the load-bearing half of F1, and
+   deleting it leaves the whole suite green. Reaching it needs a standing receiver that actually
+   builds, which needs a live relay: `ensureStandingReceiverForAgent` no-ops for an agent that was
+   never started (measured — the composed daemon emitted only `directory.signaling.reconnecting`),
+   and starting the agent fires the long-standing agent-start flush, which would mask a missing hook
+   and pass for the wrong reason. **Covered by the two-machine live run DOD-PARK-DRAIN-1 requires
+   anyway** — watch for `content.park.flush.completed` under a `standing_receiver_ready` trigger.
+2. **The awaiting queue dedupes on a content-only hash** (`SHA-256(0x00 ‖ content)` — no sequence,
+   no nonce), so two identical messages in one session silently drop the second and reproduce this
+   exact symptom. Now logged (`message.retry.enqueue.deduped`); keying on the sequence is the real
+   fix and is not done.
+
+### Gate
+
+**2689 passed / 11 skipped / 241 files**, lint clean, `tsc --build` clean, on the merged tree.
+
+### What DOD-PARK-DRAIN-1 still needs
+
+Publish the daemon (the `latest` promotion is Andre's — the one real gate here), upgrade both
+machines, and repeat the two-machine run. The line closes on
+`content.park.deferred` → `content.park.flush.completed` → `content.recovered` reaching a RUNNING
+receiver, with the daemon pid unchanged across the whole sequence.
