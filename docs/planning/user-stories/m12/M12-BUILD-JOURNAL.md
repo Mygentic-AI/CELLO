@@ -5452,3 +5452,56 @@ node_modules is restored at session end.
 Both live clauses: "survives ≥30 min carrying an idle session, zero `relay_connection_gone`" and
 "cross-machine live delivery succeeds without store-and-forward fallback". Neither can be claimed
 without a deploy. The line is **🟡**.
+
+---
+
+## Entry 81 — 2026-08-05 — the publish: transport 0.0.44 exists, so the relay can enforce its own policy
+
+**What shipped.** cello-client `main` fast-forwarded to the reviewed-green
+`m12/relay-keepalive-park-drain` (rebased, linear, zero conflicts — main had only touched M14's
+document-engine files), then the version cascade and tag `v0.0.181`.
+
+| package | was | now |
+|---|---|---|
+| crypto | 0.0.39 | **0.0.40** |
+| protocol-types | 0.0.41 | **0.0.42** |
+| transport | 0.0.43 | **0.0.44** |
+| gateway | 0.0.23 | **0.0.24** |
+| daemon | 0.0.120 | **0.0.121** |
+| cli | 0.0.123 | **0.0.124** |
+| connect | 0.0.117 | **0.0.118** |
+
+Only transport and daemon changed; the rest are bumped so every cross-pin resolves to the fresh
+build instead of keeping a stale one (publishing invariant 2). **transport 0.0.44 is the number
+the other repo's relay refuses to start below** — the guard added for review finding F1 tests for
+`WAN_PING_TIMEOUT_FLOOR_MS`, which first exists here.
+
+**Tag counter, not version.** Highest existing tag was `v0.0.180`, so the next free counter is
+`v0.0.181` — deliberately not derived from the connect version (0.0.118), which is the drift the
+publish procedure warns about.
+
+**CI:** Build → Publish to npm → Verify → **Published-artifact smoke test (tag) ✓** — the last one
+is the real success signal (it clean-installs the published packages and loads their module
+graphs). The `m12/relay-keepalive-park-drain` branch run had already gone green before the merge.
+
+### Verified against the tarballs, not against CI
+
+Per the standing rule that the truth is the artifact on npm:
+
+- `npm view … @beta version` — all seven match the table above.
+- **transport 0.0.44** `dist/`: `WAN_PING_TIMEOUT_FLOOR_MS = 30_000` present in both `index.js` and
+  `node.js`, and `abortConnectionOnPingFailure: override?.abortConnectionOnPingFailure ?? true` —
+  the policy resolver actually shipped, which is exactly what was silently missing from 0.0.43 and
+  what made the relay-side fix a no-op.
+- **daemon 0.0.121** `dist/`: `setParkedDrainHook` (daemon.js), `parkedDrainBackstop` +
+  `content.recover.drain.triggered` (session-node-manager.js), `standingReceiverAbsenceReason`
+  (content-park.js), `reconnect-drain.js` present as its own module, and `unrelated_peer_disconnect`
+  — the F2 liveness filter. Every clause of both DoD lines is in the binary.
+- **Cross-pins are real versions:** `cli@0.0.124 → daemon@0.0.121, protocol-types@0.0.42`;
+  `connect@0.0.118 → crypto@0.0.40, transport@0.0.44`. No `workspace:*` anywhere.
+
+### Still to do in this deploy
+
+`latest` promotion (operator-gated), trustless-cello's re-pin off `latest`/0.0.44 + merge, then the
+GCP terraform apply and relay redeploy for DOD-GCP-RELAY-DRIFT-1. The live clauses on all three DoD
+lines stay open until a two-machine run happens on the deployed fleet.
