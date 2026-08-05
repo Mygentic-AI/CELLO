@@ -2324,3 +2324,13 @@ and named cost. The wall clock is the assertion with teeth.
 P0 ✅ · P1 ✅ (SCREEN-1 🅿️) · P2 ✅ except DELIVERY-2 ⏳ and INBOUND-2 ⏳ — both waiting on the same
 two things: the interception point in the session content path and the composition-root wiring, which
 go in together. P3 next.
+
+---
+
+## Related Documents
+
+- [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits
+- [[M14-PROCEDURE|M14 Procedure]] — the unit loop these entries are written from
+- [[2026-07-31_federated-collaborative-state-architecture|Federated Collaborative State Architecture]] —
+  the spec-of-record; entries cite its §16 decision register and Entry 21 supersedes part of §9
+- [[2026-08-05_1230_document-screening-convergence-and-content-profiles|Document Screening, Convergence and Content Profiles]] — the screening audit recorded in Entry 27's neighbourhood, and the design it settled

@@ -589,6 +589,9 @@ here — this section holds only decisions made DURING the milestone.
 
 ## Related Documents
 - [[M14-PROCEDURE]] — how to work this milestone (read first)
+
+- [[2026-08-05_1230_document-screening-convergence-and-content-profiles|Document Screening, Convergence and Content Profiles]] — the design behind `DOD-DOC-PROFILE-1`, `DOD-DOC-SCREEN-1` and
+  `DOD-DOC-REBUTTAL-1`, including the measurement that settled them
 - [[M14B-DEFINITION-OF-DONE]] — V2's parked yardstick
 - [[2026-07-31_federated-collaborative-state-architecture]] — spec-of-record (§16 = decisions)
 - [[M12-DEFINITION-OF-DONE]] — the DoD this one is modeled on

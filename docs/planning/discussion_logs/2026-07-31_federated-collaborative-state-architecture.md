@@ -1378,6 +1378,8 @@ real rejection friction justifies it.
 - [[2026-05-08_1400_presence-notification-subscription|Presence Notification
   Subscription]] — May stub for the directory-side presence subscription that §16.4's
   delivery design defers (parked as M14-P4)
+- [[2026-08-05_1230_document-screening-convergence-and-content-profiles|Document Screening, Convergence and Content Profiles]] — settles §3.1's screening question and supplies §16.7 items 13–18: screening refuses
+  rather than mutates, and a content profile agreed at the handshake
 - [[M14-PROCEDURE|M14 Procedure]] — the operating runbook built from this design
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — V1's yardstick; cites §16 as its
   decision register
