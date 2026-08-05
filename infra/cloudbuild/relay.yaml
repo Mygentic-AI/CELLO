@@ -8,9 +8,17 @@
 # to create a build at all — without it push events die at creation and leave NO build record,
 # so the failure looks like "the trigger never fired". Declared in infra/terraform/iam.tf.
 #
-# That grant is restored and both triggers were recreated on 2026-08-05, and a push STILL produced
-# no build and no denied-attempt audit entry — the event does not reach Cloud Build. Tracked as
-# M12-P11. Until it is closed, build a merged revision with:
+# That grant is restored and both triggers were recreated on 2026-08-05. A push then STILL produced
+# no build and no denied-attempt audit entry — the event was not reaching Cloud Build at all (the
+# SA half was fixed; the delivery half was not). Tracked as M12-P11.
+#
+# 2026-08-05, later: the GitHub App OAuth was re-authorized by the operator; the connection reports
+# installationState COMPLETE and the CELLO repo is linked. THIS EDIT IS THE TEST — this file is in
+# the relay trigger's includedFiles, so a push carrying it must produce a trigger-fired build (one
+# with TRIGGER_NAME set, unlike a manual `builds submit`). If it does, M12-P11 is closed; if it does
+# not, the event delivery is still broken and the connection state is not evidence of it.
+#
+# While M12-P11 is open, build a merged revision with:
 #   gcloud builds submit \
 #     "projects/cello-infra/locations/us-east1/connections/cello-github/repositories/CELLO" \
 #     --revision=<SHA> --region=us-east1 --config=infra/cloudbuild/relay.yaml \
