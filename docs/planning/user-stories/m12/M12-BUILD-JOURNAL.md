@@ -6309,3 +6309,33 @@ still sitting in the queue. Both are journaled trades, not oversights.
 
 Gate: 2700 passed, 11 skipped, lint + typecheck + build clean. Commits `1f75937`, `edd5dc5`,
 `291a80c` on `m12/p13-durable-leaf`. One review pass, findings fixed, not re-reviewed (the cap).
+
+### Entry 92 — published, and verified against the tarball
+
+Merged `m12/p13-durable-leaf` to main as a fast-forward (`cf239b5..291a80c`) — which also carried the
+two fault-lever commits that made the M12-P12 live proof possible. The lever is hard-gated behind
+`CELLO_FAULT_INJECTION=1` and refuses without it, and that gate is pinned by a test, but it does ship
+in the published binary. Flagged rather than shipped quietly.
+
+Cascade computed from what actually changed, not by reflex: only `core/daemon` was touched in the
+merged range, so daemon plus its two dependents. daemon `0.0.123 → 0.0.124`, cli `0.0.126 → 0.0.127`,
+connect `0.0.120 → 0.0.121`. Tag `v0.0.184` on `51c527a` (the version-bump commit is last, as it must
+be — CI builds the tagged tree). `smoke-tag` green, which is the real signal.
+
+Published from a worktree pinned to `origin/main`, never the shared checkout — the mistake that burned
+five versions on 2026-08-05 was bumping in a checkout sitting on another session's branch, where
+`git push origin main` succeeds and pushes nothing of yours.
+
+Verified against the BINARY:
+
+```
+content.park.durable_enqueue.unwired   package/dist/session-node-manager.js
+content.park.durable_enqueue.dropped   package/dist/session-node-manager.js
+session.away.response.deferred         package/dist/daemon.js
+session.content.queued.committed       package/dist/session-content-handlers.js
+cli@0.0.127 → { "@cello-protocol/daemon": "0.0.124" }   (a real version, not workspace:*)
+```
+
+`latest` promotion is the operator's to run. What remains for DOD-PARK-DRAIN-1 is the live
+two-machine re-run — the line's clause is "delivered to a RUNNING receiver daemon", and only real
+hardware can say that.

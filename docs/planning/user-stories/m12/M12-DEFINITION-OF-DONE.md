@@ -919,7 +919,13 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   hook or a deduped enqueue both claimed durability and would have committed a leaf for content in
   no queue. Durability is now observed from the enqueue's own return. Also fixed: the undrained
   nonce-queue double-write, and `cause` being discarded at the mapping site.
-  **Merged + published: NOT YET. Live re-run on two machines: NOT YET.**
+  **Merged to main 2026-08-05** (`291a80c`, fast-forward). **Published to beta:** daemon `0.0.124`,
+  cli `0.0.127`, connect `0.0.121` (tag `v0.0.184`, commit `51c527a`, `smoke-tag` green). Verified
+  against the TARBALL, not CI status — `content.park.durable_enqueue.unwired` / `.dropped`,
+  `session.away.response.deferred` and `session.content.queued.committed` are all present in
+  `package/dist/`, and cli@0.0.127 cross-pins daemon@0.0.124 as a real version.
+  **`latest` promotion: Andre's to run.** **Live re-run on two machines: NOT YET** — that is the
+  only thing still standing between this and DOD-PARK-DRAIN-1 going ✅.
   → Entries 89, 90, 91
 - **M12-P12** — **A failed park deposit drops the message with no retry, and the gap strands the
   session.** `sendContent`'s dial-failure path calls `#untrackAwaitingAck` first (deliberately —
