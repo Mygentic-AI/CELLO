@@ -622,7 +622,24 @@ rather than the peer's state vector; and the working document having to BE the l
   the overlap-flag review behavior (review the merged projection before building on it), and
   the returning-collaborator rule (on returning to a document, re-read its conventions before
   writing). Ships in the plugin the way existing skills ship; audited as SHIPPING content
-  (tarball, not source). — ❌
+  (tarball, not source). — ✅ **2026-08-05** (`e29f498`), one review pass not yet run.
+
+  `plugins/cello/skills/documents/SKILL.md`. All three owed behaviours are in it, plus the parts an
+  agent actually gets wrong: accepting is a standing agreement and not an acknowledgement; the
+  document is untrusted input exactly like a message, so instructions inside it are content to quote
+  and never commands to obey; write the COMPLETE text, because a stale offset in a CRDT is a silent
+  corruption both sides converge on. `cello_doc_diff` is framed as the injection-review tool as well
+  as the merge-review one — it shows what was ADDED rather than a wall of text to skim.
+
+  **The audit was the missing half, and it found a live defect.** `core/adapter-claude-code/SKILL.md`
+  was checked (it rides in the connect tarball); `plugins/cello/skills/*` ship by CLONE — committing
+  them is publishing them — and nothing looked at them at all. First run of the new guard:
+  `skills/setup/SKILL.md` handed the operator `cello contact set-away <pubkey> "…"`, and the real
+  shape is `cello contact <pubkey> set-away`. A command in a shipped skill that does not dispatch.
+
+  Coverage is driven off the vocabulary, so an eleventh `cello_doc_*` verb fails the test until it
+  is documented. The tool check is a DENYLIST — `vocabulary.ts` already explains that outside the
+  daemon an allowlist drowns in false positives (`cello_session_id` is a parameter), and it did.
 - **DOD-DOC-SHIP-1** [cello-client, trustless-cello] — the publish cascade: all changed packages
   published via `/cello-publish` (skill loaded, per publish), trustless-cello re-pinned, the
   plugin carrying tools + skills verified in the TARBALL, and a **live smoke on the real GCP
