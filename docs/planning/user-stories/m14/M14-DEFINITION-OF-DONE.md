@@ -575,26 +575,28 @@ rather than the peer's state vector; and the working document having to BE the l
   against `""`, which would render a first look at a long document as an enormous change an agent
   then treats as what-just-arrived.
 
-  **IN FLIGHT, UNCOMMITTED as of 2026-08-05 evening — `close` / `kill` and the control frame.**
-  `notifyPeer` had nothing to send: no `document_close`/`document_kill` envelope existed, so
-  `withdraw`/`close`/`kill` all refused with `document_peer_notify_not_wired` and a peer never told
-  kept publishing into a document that would never answer.
+  **`close` / `kill` and the control frame shipped 2026-08-05** (`421c86e`). `notifyPeer` had
+  nothing to send — no close/kill envelope existed, so `withdraw`/`close`/`kill` refused with
+  `document_peer_notify_not_wired` and a peer never told kept publishing into a document that would
+  never answer. `document_control` is one frame with a signed VERB rather than two types (identical
+  routing, verification and settle-once rules on the receiving side; two decoders for one shape is
+  how rules drift), refused by value on decode, and the receiving half checks the sender against the
+  document's peer — there is a test where a third party signs a real kill for a document she is not
+  part of and delivers it straight to the victim's inbound path.
 
-  Written and green in isolation: `document-control.ts` (one frame with a signed VERB rather than
-  two types — the receiving side's routing, verification and settle-once rules are identical, and
-  two decoders for one shape is how rules drift; the verb is refused by value on decode, because a
-  `kill` silently read as a `close` leaves a killed document waiting for a reciprocal close that is
-  never coming), its 12 tests, router classification, `DocumentLifecycle.recordPeerKill` with the
-  same not-your-peer check `recordPeerClose` has, and `notifyPeer` wired in the composition root.
+  **CORRECTION to the note this line carried overnight.** It said three tests were failing because
+  the bilateral CLOSE path did not settle. That was wrong, and the way it was wrong is the finding:
+  the two-party fixture wired the injected `notifyPeer` seam to `async () => ({ ok: true })` — which
+  reports success, sends nothing, and agrees with whatever the near side does. Kill "worked" on both
+  sides of the assertion and on neither side of the wire, and I recorded a defect in a path that had
+  none. Same shape as both DELIVERY-2 review findings: **a stub on the far side cannot disagree with
+  you.** The construction moved into `document-control-notifier.ts`, built from one function by the
+  daemon and the test alike; the test substitutes only the TRANSPORT. Reverted to
+  report-success-send-nothing, all three go red.
 
-  **3 of 18 surface tests failing** — the bilateral CLOSE path does not settle on the far side. The
-  KILL path works end to end (peer's copy goes terminal, and an unreachable peer still gets a local
-  kill reporting `peerNotified: false`). Not committed; resume by running
-  `pnpm vitest run src/__tests__/document-surface-e2e.test.ts` in `core/daemon`.
-
-  **Still not shipped:** `status` (largely subsumed by `list`'s new fields) and `withdraw` — the
-  latter still blocked behind the `rollback` stub, which REFUSES rather than reporting a rollback
-  that did not happen.
+  **Still not shipped:** `status` (largely subsumed by `list`'s new fields — `proposedByUs`,
+  `peerAccepted`, `peerHasPublished`) and `withdraw`, still blocked behind the `rollback` stub,
+  which REFUSES rather than reporting a rollback that did not happen.
 - **DOD-DOC-SKILL-1** [cello-client] — the plugin skill/template layer (§4.1's owed
   deliverable + §16.7-9): publish-on-intent guidance (batch like a commit, not a keystroke),
   the overlap-flag review behavior (review the merged projection before building on it), and
