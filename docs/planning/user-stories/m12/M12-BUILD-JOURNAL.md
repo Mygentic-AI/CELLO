@@ -5615,3 +5615,106 @@ found the defect in the first place: `CELLO_Coder_1` on the Mac and `Miss_Chelly
 Both daemons also need `npm i -g --prefer-online @cello-protocol/cli@latest
 @cello-protocol/connect@latest` + `cello logout && cello login` to pick up daemon 0.0.121 — the Mac
 is already there (`cello -v` 0.0.124); **the EC2 instance is not**.
+
+## Entry 83 — 2026-08-05 — M12-P11 root cause: the CI account could not create builds, and both relays are deployed
+
+**Live proof still in flight** — the ≥30-minute idle window and the park/drain run are Entry 84.
+This entry closes the trigger diagnosis and the deploy.
+
+### M12-P11 — the silent half, found
+
+The `cello-relay-image` trigger was healthy the whole time. `cello-cloud-build@` held exactly two
+roles — `artifactregistry.writer` and `logging.logWriter` — and **a trigger that names a
+user-specified service account creates its builds AS that account**. Every push event therefore died
+at build creation and left **no build record at all**, which is why `gcloud builds list` showed a gap
+rather than a failure and nobody saw it for six days.
+
+The last trigger-attributed builds are `ce24c926` (07:23Z) and `e8842f3` (07:32Z) on **2026-07-28** —
+minutes after `DOD-GCP-IAM-1`'s done-audit flagged an out-of-band `builds.builder` grant that Google
+adds automatically when a trigger is created with a custom SA. Removing it as drift is almost
+certainly what broke CI. It is now DECLARED in `infra/terraform/iam.tf`, so the next apply cannot
+strip it again (`cbd55cd2`).
+
+**Proof the grant was the blocker:** a regional build that runs as that SA could not be created
+before, and `87d84a1f` created and ran after.
+
+**The recorded explanation in GCP-STATE was false and is now struck.** It claimed no principal held
+`cloudbuild.builds.create` in us-east1. A regional `builds submit` by `andre@` succeeds (`f29c4162`),
+and the audit log for the denied `RunBuildTrigger` shows `andre@`'s own check on
+`projects/cello-infra` returning `granted: true`. The account was never the problem.
+
+### M12-P11 — the half that is still open
+
+A push to `main` touching `infra/cloudbuild/relay.yaml` at 04:48Z produced no build **and no
+denied-attempt audit entry**, so the event never reached Cloud Build at all. Ruled out along the way:
+the GitHub App installation (149532787, all repos, `push` in its event list), the connection
+(`installationState: COMPLETE`), `includedFiles` (the push touched one), and trigger state — both
+triggers were recreated via `terraform -replace` with no change. `RunBuildTrigger` still returns
+`PERMISSION_DENIED` on `projects/000000de8652d04e` (zero-padded hex of project number 955736313934)
+for an identity that can create the identical build directly and holds `actAs` on the SA. That is
+Google-side and not an IAM gap visible from here. **M12-P11 stays parked, narrowed to event
+delivery.**
+
+### The image, built by CI from a revision — not from a local tree
+
+```
+gcloud builds submit \
+  "projects/cello-infra/locations/us-east1/connections/cello-github/repositories/CELLO" \
+  --revision=a84659eb… --region=us-east1 --config=infra/cloudbuild/relay.yaml \
+  --service-account=…/cello-cloud-build@… --substitutions=_TAG=a84659eb…
+```
+
+Cloud Build fetches the source from GitHub at that revision through the connection, so the tag names
+a commit whose contents were actually built. This is the distinction Entry 82 warned about: the
+demoted claim came from `builds submit .`, which uploads whatever is on local disk.
+
+Build `8eaddd07` SUCCESS. **Verified in the image before deploying**, not inferred from the lockfile:
+
+```
+/app/node_modules/.pnpm/@cello-protocol+transport@0.0.44/node_modules/@cello-protocol/transport/package.json
+  "version": "0.0.44"
+```
+
+Below 0.0.44 the new relay refuses to start by design, so a stale resolution would have been a relay
+that never came up.
+
+### The deploy — one region at a time
+
+`terraform plan` showed exactly what Entry 82 predicted: both relay instance templates **replaced**,
+for the image tag AND the cloud-init `RELAY_SESSION_MAX_IDLE_MS` 1800000 → 86400000. It also wanted
+to touch `ops_agent`, `ops_dashboard`, `portal`, `waitlist` and the portal Cloud SQL instance —
+unrelated drift, so the apply was `-target`ed at the two relay resources and that drift is recorded
+in GCP-STATE rather than silently swept into a relay roll.
+
+| region | applied | instance | MIG stable | idle sweep from the relay's own boot log |
+|---|---|---|---|---|
+| us-east1 | 05:00Z | `cello-gcp-relay-use1-5sv2` (was `-c27q`) | ✅ | `relay.config.idle_sweep maxIdleMs=86400000` |
+| europe-west1 | 05:04Z | `cello-gcp-relay-euw1-ls9t` (was `-psqp`) | ✅ | `relay.config.idle_sweep maxIdleMs=86400000` |
+
+Never simultaneously (§2c); europe-west1 went only after us-east1 was stable. Both pinned IPs
+unchanged (`34.139.119.165`, `34.77.112.231`), and the relay peer id
+`12D3KooWJXHpnWQhGk3jXBJYdXMmeLxEhRqzwZCYd1bxSUh4pg83` survived instance replacement — the key comes
+from Secret Manager, so a MIG roll is not an identity change.
+
+`relay.config.idle_sweep` is what makes DOD-GCP-RELAY-DRIFT-1 answerable from the running process
+instead of from the deploy template. It reports 86400000 on both.
+
+### EC2 daemon upgraded — and the Node 22 hijack is live on that box too
+
+`i-06db70df6b3e32207` was on cli **0.0.123**, now **0.0.124** / daemon 0.0.121, `Miss_Chelly_H`
+online with `standing_receiver_ready: true`.
+
+`/home/ubuntu/.local/bin/node` symlinks to `/home/ubuntu/.hermes/node/bin/node` (**v22.22.2**) and
+shadows `/usr/bin/node` (**v24.19.0**) — the same Hermes PATH hijack already recorded for the Mac.
+The old daemon was running on v22 despite cello requiring >=24. The install and the restart were run
+with `PATH=/usr/bin:$PATH`, so the daemon is now on v24; that override is **per-invocation and does
+not persist**. Anyone restarting that daemon without it puts it back on Node 22.
+
+### Housekeeping
+
+Worktrees `trustless-cello-keepalive` and `cello-client-keepalive` removed; branch
+`m12/relay-keepalive-park-drain` deleted locally and on origin after confirming it is an ancestor of
+`main`. `trustless-cello-ae` (`m12/ae-table-isolation`) is another unit's and was left alone. The
+hand-copied `~/.claude/agents/cello-unit-reviewer.md` and `~/.claude/commands/cello-publish.md` from
+the previous session are deleted — this session runs from the repo root, so both resolve
+project-scoped again (`.claude/agents/sparc/`, `.claude/commands/`).
