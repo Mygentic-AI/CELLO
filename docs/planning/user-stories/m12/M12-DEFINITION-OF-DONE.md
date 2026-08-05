@@ -910,6 +910,8 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   notarized receipt — is the only exit. (Found by CELLO_Coder_1, verified independently.)
   Both sessions ended that way. Launch-critical class: the sealed receipt is the artifact CELLO
   exists to produce.
+  **M12-P14's gate + the rename are MERGED to main 2026-08-05 (`787187f`), reviewed with all three
+  blocking findings fixed. NOT published — batched pending the next cascade.**
   **Sub-defect, contained and separable:** a seal request against an `abandoned` session is rejected
   as `session_not_interrupted`, which names neither the status nor the cause and sent this very
   investigation down the wrong path for an hour. FIXED (`e3da3b4`).
@@ -961,6 +963,7 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   operator to retry forever and explicitly forbade `force:true` — the only actual exit — making it
   strictly worse for the operator than the dead end it replaced. The unit test passed only because
   the hand-stubbed manager returned a value the real object cannot return on that path.
+  **Merged to main 2026-08-05** (`787187f`) — the attempt AND its revert, so the trail survives.
   Two further findings from the same review, both to carry into the next attempt:
   - `session_seal_already_pending` names ONE wire string for TWO peer ceremonies needing opposite
     actions (relay-bilateral half submitted vs. seal-interrupted commitment persisted). Routing on
