@@ -321,7 +321,12 @@ description: >
   the operator "queued, will be retried" about a message that is gone. Two gaps recorded, not closed:
   the `daemon.ts` drain-hook line has no unit test (needs a live relay — the two-machine run covers
   it), and the awaiting queue's content-only dedupe key can still drop a duplicate message (logged).
-  **Still open:** publish → upgrade both machines → repeat the two-machine run.
+  **Published 0.0.123 + both machines upgraded (from `@beta`) 2026-08-05; the fix is verified present
+  in the built artifact.** Its failure path could NOT be reproduced on demand: `set-agent-offline`
+  does not stop an open session's node (measured — delivery still succeeded), and the CLI refuses a
+  send from an offline agent, so the sender-side refusal is a rebuild-window race with no CLI lever.
+  Closes on `content.park.deposit.failed cause=standing_receiver_creating` → `content.park.deferred`
+  → `content.park.flush.completed parkedCount>0` → recovery on a running receiver — Entry 88.
   → Entries 78, 81, 82, 83, 84, 85, 86
 
 ## Tier P2 — Wave 1: complete CELLO on GCP, standalone
@@ -621,8 +626,11 @@ description: >
   event). Still zero **80 minutes on**, and zero reservation/reader-ended churn on the relay side
   too — the requirement is ≥30 min; the measured window is longer and one-sided in the right
   direction. `DEBUG=libp2p:connection-monitor*` ran: **zero output**, and the monitor logs before every
-  abort — so M12-D18's "reverse if" does NOT fire. Attribution of the original incident stays
-  circumstantial; what is measured is the behaviour under the fix. → Entries 79, 81, 82, 83, 84
+  abort — so M12-D18's "reverse if" does NOT fire. On the 0.0.123 build the monitor DID fire: 7
+  aborts, ALL `UnexpectedEOFError`/`ConnectionClosedError` (connections already dead), **zero
+  timeout-shaped**, and zero reservation lost alongside them. The original attribution is therefore
+  positively unsupported, and this line rests on the measured zero-loss window, not on it.
+  → Entries 79, 81, 82, 83, 84, 88
 - **DOD-GCP-RELAY-DRIFT-1** [trustless-cello] — GCP relay config drift vs AWS closed:
   `RELAY_SESSION_MAX_IDLE_MS` 1800000→86400000 in `relay-cloud-init.yaml:69` (30 min vs
   AWS's 24 h), plus a GCP-terraform regression test asserting relay idle/timeout config
