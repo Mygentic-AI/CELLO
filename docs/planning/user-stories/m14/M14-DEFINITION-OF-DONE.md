@@ -361,7 +361,23 @@ description: >
       deliberately NOT unit-tested.** It is about what lands in the tree, the transcript and the
       doorbell for a real frame on a real session, and [[DOD-DOC-E2E-CONV-1]] already specifies it:
       "session seals with mixed `0x00`/`0x02`/`0x04` leaves and BOTH sides independently recompute
-      the same root". Proven there, stated here so it is a dependency rather than a gap. — ❌
+      the same root". Proven there, stated here so it is a dependency rather than a gap.
+      **BLOCKED ON A DESIGN SEAM, found while wiring (2026-08-05) — this is the next thing to
+      decide.** `DocumentInbound.receive` is SYNCHRONOUS, and a gate refusal calls
+      `DocumentRejections.reject`, which requires a real signature (REJECT-1 refuses to fabricate
+      one — an all-zero placeholder in an immutable log is indistinguishable from a real signature
+      that fails to verify). But signing goes through `KeyProvider.sign`, which is **async**.
+      I wrote the composition-root call with a `crypto()` that throws, saw that it makes a gate
+      refusal fail to record and leaves the peer with no answer, and REVERTED it rather than ship
+      it — that is exactly the half-wiring `document-layer.ts` says it forbids, arriving through the
+      error path.
+      Three ways out, none obviously right, and picking one is a design decision rather than
+      plumbing: (a) make the inbound path async — everything calling it already is, but it changes
+      the router, both inbound units and their tests; (b) pre-sign the rejection before entering the
+      sync path, which means knowing the refusal before the gate has run; (c) give the layer a
+      SYNCHRONOUS signer — Ed25519 signing is sync underneath and only `KeyProvider` wraps it in a
+      Promise — which means the layer holds or reaches key material.
+      Nothing else in P2 is blocked by this; it blocks only the composition-root call. — ❌
 - **DOD-DOC-LIFECYCLE-1** [cello-client] — the verbs (§3.5 + §16.4): **list** (documents with
   peer, type, tier, epoch, status, pending-delivery state — tier and epoch are constants in V1
   but they are seam surface and cheap to show — "1 update pending, peer offline since …");
