@@ -606,7 +606,9 @@ description: >
   0.0.44 and merged. **DEPLOYED + PROVEN 2026-08-05** (both relays on `a84659eb…`): Mac↔EC2, both
   NAT'd, `transportMode: relay` — 30 min 10 s idle with **zero** `reservation.lost` /
   `relay_connection_gone` on either daemon, then live delivery (`content.delivery.acked`, no park
-  event). `DEBUG=libp2p:connection-monitor*` ran: **zero output**, and the monitor logs before every
+  event). Still zero **80 minutes on**, and zero reservation/reader-ended churn on the relay side
+  too — the requirement is ≥30 min; the measured window is longer and one-sided in the right
+  direction. `DEBUG=libp2p:connection-monitor*` ran: **zero output**, and the monitor logs before every
   abort — so M12-D18's "reverse if" does NOT fire. Attribution of the original incident stays
   circumstantial; what is measured is the behaviour under the fix. → Entries 79, 81, 82, 83, 84
 - **DOD-GCP-RELAY-DRIFT-1** [trustless-cello] — GCP relay config drift vs AWS closed:
