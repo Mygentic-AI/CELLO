@@ -1799,3 +1799,84 @@ misses the other.
 
 P0 ✅ · P1: ENGINE ✅ WRITE ✅ GATE ✅ REJECT ✅ · SCREEN-1 🅿️ (Andre's call) ·
 P2: ENVELOPE ✅ · **HANDSHAKE-1 next**, then DELIVERY-1, LIFECYCLE-1, NOTIFY-1.
+
+---
+
+## Entry 22 — HANDSHAKE-1 and DELIVERY-1: the holes were at the edges the unit did not claim
+
+### Two exploitable gaps, neither of them in the logic I was thinking about
+
+The handshake's own machinery — the consent state machine, the seam checks, the id construction —
+came through review intact. Both real findings were in what the unit **failed to claim**.
+
+**The proposal signature was decoded, stored, and never checked.** The operator's entire consent
+decision rests on the proposal having come from the agent it names, and nothing established that.
+It composes badly with `ON CONFLICT DO NOTHING`: the FIRST arrival's bytes are the permanent record
+for a `document_id`, and since the id excludes the signature, anyone who observed the honest
+proposal — and therefore knows the nonce — could race a byte-variant carrying junk, win the primary
+key, and permanently poison the id while the honest proposal was silently discarded. The proposer
+would have to re-propose under a fresh nonce with no signal why.
+
+Verification is a **required** injected seam now, not an optional one. This class cannot resolve an
+agent id to a public key, and a default implementation would be a default answer to "is this
+authentic".
+
+**Nothing checked that `peer_agent_id` was the accepting agent.** `ownerAgentId` comes from the
+caller, `peer_agent_id` comes from the wire, and they were never compared — so on a multi-agent
+daemon (the reason `owner_agent_id` is in the key at all) a proposal addressed to agent Z could be
+recorded under agent Y and accepted by Y. Consent taken from a party the proposal never named, while
+`document_id` — which *does* commit to `peer_agent_id` — says otherwise. No error anywhere.
+
+Every fixture set the two equal, which is why nothing covered it. *A fixture that always satisfies a
+relation is a fixture that cannot test it.*
+
+### A test that could not tell the design from its opposite
+
+The compare-and-set tests called `accept()` twice in sequence. Both compare-and-set and
+read-then-write return an error on the second call, so deleting `AND consent_state = 'pending'`
+changed nothing observable — the suite was green against the exact implementation the file's own
+header argues against. The real test refuses the proposal from OUTSIDE, after `accept()` has read
+the row and before it writes. Read-then-write accepts a proposal the operator declined; the CAS
+refuses it.
+
+Two more of the same shape: the round-trip test compared two decodes of the same bytes, so a
+*consistently* lossy decode kept it green (it compares against the original in-memory envelope now),
+and the immutability test was a denylist of two guessed method names — the method nobody thinks of
+is exactly the one a denylist misses. It is an allowlist over the prototype now, so any new public
+method fails until someone justifies it.
+
+### The function that was written, tested, and never called
+
+`documentFeatureIncompatibility` had a full test block and zero production callers; `recordProposal`
+hand-rolled a machine label that did not say *which side* to upgrade — the exact discrimination the
+function existed to make. Four green tests over a clause that was unmet in the daemon.
+
+*That is how it stayed invisible: the tests were genuinely green, they were just green about a function
+nobody ran.*
+
+### DELIVERY-1 — pending is a WHERE clause
+
+Publish writes the envelope and returns. "Unacknowledged envelopes I authored" is the whole
+definition of pending, so it is derived from the log rather than held: a queue in memory does not
+survive a restart, and a queue in its own table is a second source of truth that can disagree with
+the log about what was sent. The attempt counter and next-attempt time live on the envelope row for
+the same reason — a backoff that resets on restart is not a backoff, and a daemon in a reconnect
+loop would hammer an unreachable peer at full rate forever.
+
+One reachability lookup serves a peer's whole backlog, which is largest exactly when the peer has
+been away longest. And a **failed lookup is never recorded as an offline peer** — that would report
+a directory outage to the operator as their collaborator being absent, sending them to ask the wrong
+person.
+
+I wrote this unit implementation-first rather than red-first, so rather than trust a suite that was
+green on its first run I reverted three rules by hand — the sender scoping, throw-is-not-success,
+and the reachability check — and confirmed each has a test that goes red without it.
+
+### Gates
+
+`test` **2803 passed / 11 skipped** · `lint` · `typecheck` clean.
+
+### Milestone state
+
+P0 ✅ · P1: ENGINE ✅ WRITE ✅ GATE ✅ REJECT ✅ · SCREEN-1 🅿️ (Andre's call) ·
+P2: ENVELOPE ✅ HANDSHAKE ✅ · **DELIVERY-1 awaiting review**, then LIFECYCLE-1, NOTIFY-1.
