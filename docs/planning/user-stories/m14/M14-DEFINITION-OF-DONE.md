@@ -567,11 +567,34 @@ rather than the peer's state vector; and the working document having to BE the l
   `peerAccepted` — a fact — alongside `peerHasPublished`, which answers the different question of
   whether anything has come back yet.
 
-  **Not yet shipped on this line:** `status`, `diff`, `diff-stats`, `withdraw`, `close`, `kill`.
-  `withdraw`/`kill` are blocked behind the `notifyPeer`/`rollback` stubs in the composition root,
-  which currently REFUSE rather than reporting a rollback that did not happen. `notifyPeer` needs a
-  control wire type that does not exist yet — no `document_close`/`document_kill` envelope is
-  defined in protocol-types.
+  **`cello_doc_diff` shipped 2026-08-05** (`6a1f6df`) — what changed since THIS agent last read it,
+  which is also §16.7's review-before-you-build-on-it. Compares against a read mark stored as TEXT
+  (a state vector answers a question about the CRDT; an agent about to build is asking one about the
+  words), moved by `read` and never by an arriving update — marking on arrival would erase the very
+  change the diff exists to show, at the moment it arrived. Never-read REFUSES rather than diffing
+  against `""`, which would render a first look at a long document as an enormous change an agent
+  then treats as what-just-arrived.
+
+  **IN FLIGHT, UNCOMMITTED as of 2026-08-05 evening — `close` / `kill` and the control frame.**
+  `notifyPeer` had nothing to send: no `document_close`/`document_kill` envelope existed, so
+  `withdraw`/`close`/`kill` all refused with `document_peer_notify_not_wired` and a peer never told
+  kept publishing into a document that would never answer.
+
+  Written and green in isolation: `document-control.ts` (one frame with a signed VERB rather than
+  two types — the receiving side's routing, verification and settle-once rules are identical, and
+  two decoders for one shape is how rules drift; the verb is refused by value on decode, because a
+  `kill` silently read as a `close` leaves a killed document waiting for a reciprocal close that is
+  never coming), its 12 tests, router classification, `DocumentLifecycle.recordPeerKill` with the
+  same not-your-peer check `recordPeerClose` has, and `notifyPeer` wired in the composition root.
+
+  **3 of 18 surface tests failing** — the bilateral CLOSE path does not settle on the far side. The
+  KILL path works end to end (peer's copy goes terminal, and an unreachable peer still gets a local
+  kill reporting `peerNotified: false`). Not committed; resume by running
+  `pnpm vitest run src/__tests__/document-surface-e2e.test.ts` in `core/daemon`.
+
+  **Still not shipped:** `status` (largely subsumed by `list`'s new fields) and `withdraw` — the
+  latter still blocked behind the `rollback` stub, which REFUSES rather than reporting a rollback
+  that did not happen.
 - **DOD-DOC-SKILL-1** [cello-client] — the plugin skill/template layer (§4.1's owed
   deliverable + §16.7-9): publish-on-intent guidance (batch like a commit, not a keystroke),
   the overlap-flag review behavior (review the merged projection before building on it), and
