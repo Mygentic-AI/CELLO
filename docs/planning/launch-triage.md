@@ -13,7 +13,10 @@ description: >
   cross-references use names, not numbers, so they survive it.
   2026-08-05: added DOD-TERMINAL-WAKE-1 (item 12) as unranked — a sealed session's unread messages
   ring the doorbell as live work and an agent acted on an expired directive. Slot proposed beside
-  DOD-SEALED-INBOX-2 (shared consumers); ranking not yet decided.
+  DOD-SEALED-INBOX-2 (shared consumers); ranking not yet decided. Same day, after a cross-check with
+  Miss_Chelly (daemon side, M12-P13/P14): item 12 gained a second entry point (counterparty_unknown,
+  78 of 121 loops) and an agreed disposition policy; added DOD-TERMINAL-STATE-DIVERGENCE-1 (item 13),
+  also unranked — sessions that strand on incompatible terminal STATE rather than divergent leaves.
 ---
 
 # Launch Triage
@@ -363,6 +366,80 @@ blast radius is a confused agent rather than lost or corrupted data — so it do
 the ruin test on its own. What argues for it is the pairing: it lands on the same files as a ranked
 item, and "agent confidently acts on an expired instruction" is the kind of thing a technical
 evaluator reads as unsound in a trust product. Ranking is Andre's call.
+
+**Second entry point, found 2026-08-05 — the disposition problem is twice the size it looks.** The
+same never-terminal pathology reaches the mailbox by a second route. On the Hermes EC2 daemon,
+`content.recover.ingest_failed` fired 121 times on two sessions, each looping one content hash
+forever because verified-but-refused content is deliberately never confirm-deleted:
+
+| reason | count | session |
+|---|---|---|
+| `counterparty_unknown` | 78 | `6aa3f24b…` |
+| `session_committed` | 43 | `34a6edbf…` |
+
+One defect, two guards. **Fixing only the `session_committed` branch leaves the larger half looping.**
+The fix belongs at the disposition layer, not per-guard.
+
+**Disposition policy — agreed with Miss_Chelly (daemon side, M12-P14) on 2026-08-05: confirm-delete
+AND surface as inert history, in a post-seal annex outside the sealed tree.** Never discard silently
+(that makes the loss quiet instead of noisy); never present as actionable. Four constraints, settled
+in the same exchange:
+
+1. **Inertness must be structural, not advisory** — the load-bearing one. The observed failure was an
+   agent *obeying* a directive out of a sealed session. If the annex sits anywhere a wake path or an
+   inbox count can reach, the bug relocates rather than dies. Not in any wake path, not in any
+   pending total, never auto-injected into agent context; reachable only by explicit operator read.
+   If "history is not a work queue" is a convention rather than a property of where the data lives,
+   the next agent reads the field name and not the doc comment — which is exactly how
+   `DOD-SEALED-INBOX-2` produced a false "it's sealed" claim relayed to an operator as fact.
+2. **It must not borrow the seal's vocabulary.** Annex content is verified but not covered by
+   `sealed_root` — a weaker evidentiary tier, needing its own word at the field name.
+3. **Durable annex write strictly before confirm-delete.** A crash between them converts a noisy loop
+   into permanent silent loss.
+4. **Key on (recipient pubkey, content hash), session attribution optional.** `counterparty_unknown`
+   cannot resolve a session, but the park envelope is signed (SEC-1) so the signer is still
+   verifiable — and that key is what the relay mailbox already uses. This is what gives the 78
+   unattributable entries a terminal disposition on the same path as the 43 attributable ones.
+
+The annex must live outside the sealed tree: any post-seal append changes `sealed_root` and
+invalidates the notarization. Confirmed on both sides.
+
+---
+
+## 13. Two sides can hold incompatible beliefs about which terminal path a session is on
+
+**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — ❌ open, raised 2026-08-05. **Unranked.**
+Distinct from `DOD-FRONTIER-MISMATCH-DURABLE-1`, which covers *leaf* divergence. Here **the leaves
+agree and the statuses do not.**
+
+Session `dcd0aadc…` could never produce a receipt and had to be force-abandoned with no notarized
+record. It has no `frontier.mismatch` and no `leaf_count_mismatch` anywhere in its log. What it has:
+
+```
+09:45:59.336  node.destroyed  reason="sealing"          ← peer believes it is sealing
+12:14:52.190  rejected  session_not_interrupted         ← first refusal, 2.5h later
+12:17:53.946  rejected  session_not_interrupted         ← retry
+12:33:46      request.reaped_terminal  status="abandoned"
+```
+
+The peer considered it *sealing*; the initiator still listed it as *interrupted*. **Neither side could
+complete:** you cannot seal-interrupted a session the peer considers sealing, and the peer cannot
+finish sealing without a counterparty that is gone. The refusal string was literally accurate and
+still useless.
+
+**Why it needs its own item.** Miss_Chelly's M12-P14 pre-seal gate reads local frontier state to
+refuse signing a chain that is provably short — it would not fire here, because nothing is short.
+The `DOD-SEALED-INBOX-2` rename helps (`session_already_sealed` at 12:14 would have saved an
+afternoon) but only makes the state *legible*, not *completable*. A resolution path is genuinely
+owed and was deliberately not guessed at.
+
+**Provenance worth keeping.** This was initially closed as "not a second root cause — an artifact of
+our own force-abandon two minutes earlier." That explanation is correct for `4c28edcd` and was
+generalised onto `dcd0aadc`, which nobody had separately traced. The log refutes it in one line:
+`dcd0aadc`'s first refusal is 12:14:52.190, and the earliest `force_abandoned` *anywhere* in the log
+is 12:16:56.995 — two minutes later, on a different session. **Both corrections in that exchange ran
+the same direction: a verified explanation travelling to a case nobody had traced.** Worth reading
+before trusting any single-case diagnosis in this area.
 
 ---
 
