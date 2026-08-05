@@ -6552,3 +6552,51 @@ counterparty's.
 Seven tests. Revert test: disabling the routing fails 3 of 6; the responder-side test keeps the two
 halves connected, because without the wire field the routing is unreachable. Gate: 2724 passed,
 lint/typecheck/build clean. `3ca87d8` + `00bcd48`. Review dispatched, NOT merged, NOT published.
+
+### Entry 97 — M12-P15 closed, and the finding I most needed to hear
+
+Second review of the second attempt. The crypto was sound — the detached leaf binds the right session
+bytes and the right root, verified byte-for-byte against the live path. **The bookkeeping around the
+leaf was where it broke**, in four ways, all fixed in `f586ff8` before merge.
+
+**The one that matters most: I regressed shipped behaviour.** Teaching `submitSealLeaf` to fall back
+to a detached transport meant it can no longer emit `session_node_unavailable` — and
+`close-session-handler.ts` gated M12's close-after-own-seal recovery on exactly that string. That
+branch went dead, so the ordinary double-close would dial the relay, submit a SECOND ctrl leaf to a
+session the relay had already destroyed on seal, and tell the operator the close failed. The M12
+defect back under a new label, shipped by the fix for a different defect.
+
+And its test kept passing, because it stubbed a value the real object can no longer produce. **A
+hollow test by DRIFT** — it was honest when written; the contract moved out from under it. That is a
+new failure mode to watch for: it is not enough to check that a stub returns something plausible, it
+has to still be *producible*. The reviewer's suggested guard is right: export the reason strings as a
+union and type the harnesses against it, so deleting a reason breaks every stub asserting it.
+
+The predicate now keys on the SET of reasons meaning "we could not submit; the seal may already be
+durable", which is the question that branch was always actually asking.
+
+**HIGH-1, the fix that would have broken the fix.** The detached client was built without
+`receiptStore`/`sealLeafStore`, so `#captureReceipt` silently `return false`d: submit reports ok while
+the relay's signed receipt and our own 0x02 ctrl leaf are never persisted. That drops the
+unilateral-escalation carry chain — and defeats *this unit's own* ceremony discriminator, which reads
+`session_seal_leaves`. A seal sent through the new path would later read as "ceremony unknown" and the
+peer would decline to sign: exactly the dead end M12-P15 exists to remove.
+
+**HIGH-2:** no `registerSession`, so `recordedBefore` was false and the
+`recordedBefore && session_not_found → relay_session_gone` discrimination could never fire — handing
+the operator a first-message-race label for a swept session.
+
+**MEDIUM-4:** a client built per call and never cached or closed — one leaked authenticated relay
+stream per attempt. Now cached, which is safe ONLY because it carries the stores; a store-less client
+under that key would have poisoned the live path for the process lifetime.
+
+**And my responder test was hollow**: it asserted `pending_ceremony` was `undefined`, which is also
+true on the reverted code. It passed the revert test vacuously and never observed a NAMED ceremony.
+It now seeds the real store and asserts each name; reverting the wire field fails 2 of 3.
+
+Andre pushed twice on this: first that nothing was stopping me from doing P15 at all (right — I had
+recorded a one-line blocker as though it were a project), and then that I should merge and publish
+(right in intent, though the answer was to fix the findings first rather than ship a known
+regression). Both pushes were correct and both improved the outcome.
+
+Gate: 2726 passed, lint/typecheck/build clean. Merged `f586ff8`, published daemon `0.0.126`.

@@ -991,7 +991,12 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
     CEREMONY, not just the status.
   - `responder_seal_already_submitted` is treated as success by the active path and as failure here.
 
-  **⚠️ SECOND ATTEMPT REVIEWED — BLOCKING FINDINGS, DO NOT MERGE.** Branch `m12/p15-detached-seal`
+  ✅ **FIXED, REVIEWED, MERGED + PUBLISHED 2026-08-05** — daemon `0.0.126` / cli `0.0.129` /
+  connect `0.0.123`, tag `v0.0.186`, `smoke-tag` green, symbols verified in the tarball
+  (`resolveSealTransport`, `session.seal.ceremony.realigned`, `pending_ceremony`, `relay_bilateral`,
+  `SEAL_MAY_ALREADY_BE_DURABLE`, `setDetachedRelayClientBuilder`). All four blocking findings below
+  were fixed in `f586ff8` before merge.
+  **The review record, kept because it is the useful part:** Branch `m12/p15-detached-seal`
   (`3ca87d8` + `00bcd48`). The crypto is sound (verified: the detached leaf binds the right session
   bytes and the right root — `Buffer.from(sessionId,"hex")` is byte-identical to the live path's
   `relaySessionIdBytes` on both initiator and responder). **The bookkeeping around the leaf is not.**
