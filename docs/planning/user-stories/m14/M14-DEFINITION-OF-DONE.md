@@ -330,7 +330,11 @@ description: >
   local rollback + a withdrawal record beside the original envelope — marked, never deleted;
   the sender's file reverts). Kill-switch interplay (§16.7-11): a platform-paused agent refuses
   outbound publishes loudly, still admits incoming mechanically, suppresses notifications;
-  unpause resumes — pinned by test. — ❌
+  unpause resumes — pinned by test. — ✅ (one review pass; withdraw performed NO local rollback and
+  its record broke the peer's chain — the record now lives in its own table and the rollback is a
+  required injected callback that refuses rather than reporting success. Carried to a later unit:
+  `list` shows a pending COUNT but no "peer offline since" surface, and that count is capped by
+  `pendingDeliveries`' row limit across all documents — it needs a dedicated GROUP BY.)
 - **DOD-DOC-NOTIFY-1** [cello-client] — passive notification (§16.5): a new derived section in
   the inbox aggregation backed by its own table + getter (the `contact_rename_notices`
   precedent — there is no inbox store, the inbox is computed per call), carrying `document_id`
@@ -338,7 +342,11 @@ description: >
   document update** (§11.3 — doorbell-on-update is parked, M14-P3). The two read calls (§4.1):
   **diff stats** (structural counts + line/key ranges + the overlap flag — no content) and
   **diff** (the git-like diff itself, an ordinary screened read). Supported document types for
-  the diff call decided and recorded in-unit (Markdown, plain text, JSON at minimum). — ❌
+  the diff call decided and recorded in-unit (Markdown, plain text, JSON at minimum). — ✅ (one
+  review pass; both diff surfaces moved onto ONE shared line LCS after the positional walk was
+  measured wrong for every insertion and deletion. Carried to DOD-DOC-TOOLS-1: the notice section
+  is not yet wired into the inbox aggregation — the table and getter exist and nothing calls them,
+  the same shape as the DELIVERY split.)
 
 ## Tier P3 — Tool surface, templates, ship
 

@@ -1976,3 +1976,78 @@ not their doing).
 P0 ✅ · P1: ENGINE ✅ WRITE ✅ GATE ✅ REJECT ✅ · SCREEN-1 🅿️ (Andre's call) ·
 P2: ENVELOPE ✅ HANDSHAKE ✅ DELIVERY-1 ✅ LIFECYCLE ✅ · DELIVERY-2 ❌ (split out) ·
 **NOTIFY-1 in progress.**
+
+---
+
+## Entry 24 — the review found the verb that did not do its verb
+
+### `withdraw` withdrew nothing
+
+It wrote the withdrawal record and returned `{ ok: true }`, while the original stayed in the log
+**with its payload** — and replay applies every update payload in order. So the withdrawn text was
+still in the operator's own materialized document and came back on every rebuild, forever. The
+operator was told their update was withdrawn while their file still contained it.
+
+The clause was "local rollback **+** a withdrawal record". Only the record shipped, and my test
+asserted exactly the half that shipped: that the original was still there with its payload. It read
+as proving "marked, never deleted". It was also proving the bug.
+
+The rollback is a required injected callback now, undoing as INVERSES through the same path a
+rejection uses — never by dropping the payload, because our own later work may be causally stacked
+on those operations and REJECT-1 measured what removing them costs. And if the rollback does not
+happen, `withdraw` **refuses**. Reporting success having reverted nothing is the defect, not a
+smaller version of it.
+
+### The record itself broke the peer's chain
+
+A withdrawal is local-only by design — never delivered, because the update it concerns never was.
+But as an *envelope* it still advanced our per-sender chain, so our next update chained onto a node
+the peer will never hold and they refused it with `document_chain_broken`. An operator sent to the
+chain layer for a withdrawal-scoping bug, and a document unopenable after their next restart.
+
+Chaining it to the last *deliverable* envelope instead would fork our chain — the next update claims
+the same predecessor. So it cannot be a node in that chain at all: withdrawals get their own table,
+the same shape as `document_quarantine`, for the same reason. **Audit that must survive, must not be
+replayed, and must not be chained.** That is now twice this milestone that the answer to "where does
+this record live" was *not in the envelope log*.
+
+It removes fabricated crypto for free. As an envelope the record needed a signature and state vector
+it did not have, and my first version copied the **original's** — a real Ed25519 signature made over
+a different record, on a permanent append-only row. `document-rejection.ts` states that rule in
+writing, four units earlier, and I violated it anyway.
+
+### A bilateral guarantee that checked nothing
+
+`recordPeerClose` took the closer's id from the caller, wrote it as `closed_by`, and settled against
+**itself**. So any second distinct string — a stale contact id, a pubkey-vs-name mismatch, a hostile
+session — plus our own close flipped the document to `closed`. Recording WHO closed is pointless if
+who is never checked, and every one of my tests passed the correct peer id.
+
+*Same shape as HANDSHAKE-1's missing `peer_agent_id` check, one unit later. When a value arrives
+from the caller and a matching value exists on a row, compare them — the test that would catch it is
+the one where they differ, and that is never the test you naturally write.*
+
+Settling is also guarded to `active` now: a peer close arriving after a unilateral kill overwrote
+`killed` with `closed` — a different fact, and the one the operator did not choose.
+
+### The half-replaced diff
+
+I fixed `diffStats`'s positional walk and left the same walk in the **renderer** — the worse half to
+leave behind, since one inserted line into a ten-line file rendered eighteen `+`/`-` lines,
+reporting the whole remainder as rewritten. Both are on the shared LCS now.
+
+And `overlap` defaulted `myEdits` to `[]`, so a caller that simply forgot got `overlap: false` — the
+reassuring answer, indistinguishable from "checked, no conflict". It is required, and nullable, and
+`null` means not computed. Same for `keyPaths`, which was always empty and reads as "nothing
+changed".
+
+### Gates
+
+`test` **2864 passed / 11 skipped** · `lint` · `typecheck` clean.
+
+### Milestone state
+
+P0 ✅ · P1: ENGINE ✅ WRITE ✅ GATE ✅ REJECT ✅ · SCREEN-1 🅿️ ·
+P2: ENVELOPE ✅ HANDSHAKE ✅ DELIVERY-1 ✅ LIFECYCLE ✅ NOTIFY ✅ · **DELIVERY-2 in progress**
+(the reachability mapping landed with tests; the SessionNegotiator adapter, the seal, and the
+composition-root wiring remain). Then P3.
