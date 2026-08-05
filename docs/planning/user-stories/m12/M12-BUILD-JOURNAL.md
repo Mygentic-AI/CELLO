@@ -27,19 +27,31 @@ description: >
   nine invariants lost their ❌ tags and are lenses in §2b. `DOD-AE-APPEND-1` is SPLIT into
   PRIMITIVES-1 / STORE-1 / CHANNEL-1 / APPEND-1 — your next red line has a different name.
 
-- **🟢 2026-08-05 — RELAY/PARK-DRAIN: DEPLOYED AND PROVEN, except one new defect. START HERE.**
-  `DOD-RELAY-KEEPALIVE-1` ✅ and `DOD-GCP-RELAY-DRIFT-1` ✅ — both relays run `a84659eb…`, rolled
-  one region at a time; 30 min 10 s idle across two NAT'd machines with **zero** `reservation.lost`;
-  `DEBUG=libp2p:connection-monitor*` ran and produced **zero output**, so M12-D18's "reverse if"
-  does not fire. `DOD-PARK-DRAIN-1` stays 🟡: the drain deposits/pulls/verifies/holds correctly,
-  but an earlier park deposit failed with **no retry**, so the ordering gap strands the session and
-  the message never reaches the operator. **That defect is `M12-P12` and it is the next red** —
-  sender-side, `session-node-manager.ts:3421` untracks before a park that can fail with nothing
-  left holding the message. Launch-critical class. Entries 83, 84.
-  **CI is half-fixed (`M12-P11`):** the CI service account could not create builds at all — grant
-  now in `iam.tf` — but push events still never reach Cloud Build. Until that is solved, build with
-  `gcloud builds submit <repository-resource> --revision=<SHA>`, which fetches source from GitHub
-  rather than uploading a local tree.
+- **🟢 2026-08-05 — RELAY DEPLOYED + PROVEN. Two ✅. One gate for Andre. START HERE.**
+  `DOD-RELAY-KEEPALIVE-1` ✅ and `DOD-GCP-RELAY-DRIFT-1` ✅ — both GCP relays on `a84659eb…`, rolled
+  one region at a time; 80+ minutes across two NAT'd machines with **zero** `reservation.lost`;
+  `relay.config.idle_sweep maxIdleMs=86400000` from both relays' own boot logs. The
+  `DEBUG=libp2p:connection-monitor*` verification RAN and settled M12-D18: 7 aborts, all on
+  already-dead connections, **zero timeout-shaped**, no reservation lost with any — reverse-if stays
+  shut and the original attribution is positively unsupported (Entry 88).
+- **🔴 ONE GATE FOR ANDRE — the `latest` promotion.** `daemon@0.0.123` / `cli@0.0.126` /
+  `connect@0.0.120` / `protocol-types@0.0.44` / `transport@0.0.46` are on **beta**, verified against
+  the tarball. **Both machines are running `@beta` right now and must be moved to `latest` after
+  promotion.** **`daemon@0.0.122` and its cascade (`protocol-types@0.0.43`, `transport@0.0.45`,
+  `cli@0.0.125`, `connect@0.0.119`) are BURNED — never promote them**; they were built from the wrong
+  branch and do not contain M12-P12 (Entry 87).
+- **🟡 `DOD-PARK-DRAIN-1` — fix built, 2 review passes, merged, published, live on both machines.**
+  Not closable: its failure path is a standing-receiver rebuild race that the CLI cannot force
+  (`set-agent-offline` does not stop an open session's node; a send from an offline agent is
+  refused). Watch for `content.park.deferred` → `content.park.flush.completed parkedCount>0`.
+  Entries 85–88.
+- **🟡 `DOD-CI-REGISTRY-1` DEMOTED** — its trigger clause has been false since the day it was earned.
+  Half of `M12-P11` is fixed (the CI service account could not create builds; grant now in
+  `iam.tf`); event delivery is still dead, and the OAuth token is NOT the cause (tested, 200). Build
+  with `gcloud builds submit <repository-resource> --revision=<SHA>`.
+- **🚨 RULE EARNED (Entry 87): never bump a version or cut a tag from the shared checkout.** Use a
+  worktree pinned to `origin/main`, and `git push origin HEAD:main` — plain `git push origin main`
+  succeeds silently from a foreign HEAD.
 
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
