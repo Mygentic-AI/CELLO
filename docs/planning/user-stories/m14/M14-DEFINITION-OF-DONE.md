@@ -438,6 +438,30 @@ description: >
   is not yet wired into the inbox aggregation — the table and getter exist and nothing calls them,
   the same shape as the DELIVERY split.)
 
+## The stubbed round trip — what is proven without a live transport
+
+`core/daemon/src/__tests__/document-roundtrip.test.ts` (2026-08-05). Two parties, two databases, two
+real Ed25519 keys, nothing shared but the wire. Not the live enforcer — no transport, no session, no
+seal ([[DOD-DOC-E2E-CONV-1]] owns those with two real daemons) — but everything between a proposal
+and a materialized edit, through the composed layer and the real delivery worker:
+
+- **handshake** — A signs a proposal, B accepts, both mint the same `document_id` computed
+  independently and never transmitted; a proposal signed by someone other than its named proposer is
+  refused;
+- **publish → deliver → admit** — through `DocumentDelivery` and the real transport adapter, with the
+  peer's actual inbound verdict coming back as the ack;
+- **convergence** — concurrent edits from both sides end as the SAME text on both;
+- **refusals** — a tampered payload and a perfectly-signed envelope from a third party;
+- **an unreachable peer** costs a lookup and not a dial, and the envelope is still there when they
+  return;
+- **a lost ack** re-sends on the ack timeout and the peer holds the envelope once;
+- **restart** — the receiving side survives losing its live document.
+
+It found three bugs no per-unit test could, because each of those stubs whatever it does not own:
+`pendingDeliveries` scoped by the owner key while envelopes are authored under the wire sender id
+(so every published update sat in the log undelivered); publish diffing against our own snapshot
+rather than the peer's state vector; and the working document having to BE the live document.
+
 ## Tier P3 — Tool surface, templates, ship
 
 - **DOD-DOC-TOOLS-1** [cello-client] — the `cello_doc_*` tool surface, registered in ALL FOUR
