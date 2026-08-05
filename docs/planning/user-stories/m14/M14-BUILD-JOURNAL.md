@@ -1474,3 +1474,66 @@ Two things measured writing it:
 | DOD-DOC-GATE-1 | next — nine measured ACs (a)–(i) |
 | DOD-DOC-REJECT-1 | after the gate |
 | DOD-DOC-SCREEN-1 | 🅿️ blocked on the screening audit (Andre's call) |
+
+---
+
+## Entry 19 — 2026-08-05 — DOD-DOC-GATE-1: a working forgery against the rule written to stop it
+
+**Commits:** cello-client `m14/gate-1` @ b0031cd (implementation) → 080e47b (pass-one fixes).
+Pass two in flight. **IMPLEMENTED, not DONE.**
+
+### The finding
+
+Pass one built a **working forgery** against AC (h). My rule asked whether a clientID was NEW,
+which exempted every client already in the accepted state — **including the document owner's own**.
+Integrate the accepted state, then take the owner's clientID, and the update was ADMITTED and
+attributed to the owner ("FORGED honest content"), with an EMPTY pending set so rule (a) could not
+see it either. Setting the clientID after integration sidesteps Yjs's own "Changed the client-id"
+guard; a hand-rolled encoder needs no trick at all.
+
+My test passed because it used `999_999` — novel AND unbound, the one class the rule caught.
+
+**The right question is authorship, not novelty:** every client whose CLOCK ADVANCED must be bound
+to the sender. A peer never legitimately advances another client's clock — that is what authorship
+MEANS in Yjs. *Generalisable: a rule phrased as "is this thing new?" is a proxy; the property was
+"did this party do this?" A proxy passes its own test and fails the attack.*
+
+### Four more, all measured
+
+- **`append_only` was a COMPLETE NO-OP for json documents.** It diffed only the text root, while a
+  json document's content is exactly the map the write path projects from. An 8-byte update
+  emptied the map with `deletedChars` 0 and was admitted.
+- **The trailing-byte detector refused HONEST peers.** It compared against the canonical DELTA, and
+  legitimate updates are larger: a peer batching several transactions (the normal shape for an
+  append-only log under publish-on-intent) and a full-state update (what a sync with no state
+  vector sends) were both refused as `document_update_trailing_bytes` — an ATTACK LABEL on a benign
+  encoding, sending an operator to hunt a malicious peer while the document quietly stops
+  converging. `Y.diffUpdate` strips slack and is a real detector; `Y.mergeUpdates` PRESERVES
+  padding and is not.
+- **Only one of Yjs's two pending sets was read.** An update carrying a delete set for structs
+  never seen leaves `pendingStructs` null, fills `pendingDs`, and retains forever — the same
+  unbounded growth (a) exists to stop. The engine had the identical gap.
+- **Depth was measured on one root.** And `doc.toJSON()` is not sufficient: it returns each root's
+  key but does NOT recurse into a root never instantiated as a concrete type — measured, 30 levels
+  reported as 1. Each root is instantiated and walked now.
+
+Plus: the rate limit counted ADMISSIONS, so a peer sending only invalid updates was never limited
+while each attempt cost a full encode+apply of the whole document; and "held, never discarded" was
+a comment while the bytes died with the caller's stack frame — the verdict now carries them, which
+DOD-DOC-REJECT-1 needs to reference from a `0x05` leaf.
+
+### The test-quality lesson, stated plainly
+
+Every test in the original suite **survived the revert test** — and five bugs shipped green anyway,
+because each rule's test picked the input class that rule got RIGHT. Surviving a revert proves a
+test is connected to its code; it does not prove the test chose the adversarial case. *The revert
+test is necessary and not sufficient: ask separately which input class this rule gets WRONG.*
+
+### Carried to DOD-DOC-ENVELOPE-1 as BLOCKING ACs
+
+The gate enforces three bindings no property of the bytes can establish, so each is only as
+trustworthy as the signature covering it. All three must be inside the signed TBS: `document_id`,
+the update encoding, and **the sender's clientID**. The third is load-bearing beyond security:
+§14 requires that nothing persists a clientID, so a restarted peer mints a fresh one and the gate
+would refuse it forever. **The rule is correct only if the binding is LEARNABLE**, and the envelope
+is where it is learned. Recorded on ENVELOPE-1's DoD line.

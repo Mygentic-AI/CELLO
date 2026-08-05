@@ -256,7 +256,20 @@ description: >
   self-consistent SUFFIX of it as a seal. (a) and (b) compose: together they are the reason a
   trailing-leaf ceremony had to be refused outright rather than tolerated. Not a document
   concern — it is the seal ingress — so it does not gate M14, but it should not be lost. — 🅿️
-- **DOD-DOC-ENVELOPE-1** [cello-client] — the document UPDATE envelope (§14) — a distinct wire
+- **DOD-DOC-ENVELOPE-1** [cello-client] — **carries BLOCKING ACs from DOD-DOC-GATE-1's reviews.**
+  The gate enforces three bindings that no property of an update's bytes can establish, so each is
+  only as trustworthy as the signature covering it. **All three MUST be inside the signed TBS:**
+  (1) `document_id` — an update carries no document identity, so a well-formed update built on
+  another document merges silently;
+  (2) the **update encoding** — v2 bytes are accepted by the v1 decoder and silently drop all
+  content, and it cannot be sniffed (a v2 update begins `[0,0,…]`, a legitimate pure-delete v1
+  delta begins `[0,1,…]`, so a first-byte heuristic refuses real deletions);
+  (3) the **sender's clientID** — authorship in Yjs IS the clientID, and the gate refuses any
+  client whose clock advances without being bound to the sender. **Without (3) in the envelope the
+  binding cannot survive an honest peer restart**, because §14 requires that nothing persists a
+  clientID — a restarted peer mints a fresh one and would be refused forever. The gate's rule is
+  correct only if the binding is LEARNABLE, and the envelope is where it is learned.
+  — the document UPDATE envelope (§14) — a distinct wire
   type from HANDSHAKE-1's PROPOSAL envelope (whose hash mints `document_id`); the two share the
   word, not the shape: beyond the standard
   message envelope — `document_id`, `epoch_id` (constant 0, NOT omitted), `doc_prev_hash` (the
