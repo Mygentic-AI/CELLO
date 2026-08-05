@@ -94,11 +94,16 @@ description: >
 - **DOD-CI-REGISTRY-1** [trustless-cello] — Artifact Registry repo exists; Cloud Build builds the
   directory and relay images from the GitHub repo (path-filtered triggers per package) and pushes
   to Artifact Registry. No local docker push is possible or needed. AWS CodePipeline remains
-  untouched and functional for the AWS node until P4. — ✅ full trigger-path evidence: push
-  `e8842f33` (touching both cloudbuild YAMLs) fired BOTH triggers via real push events →
-  both SUCCESS, images tagged with the commit SHA; infra-only push `540fc175` fired neither
-  (negative filter proof); review findings fixed (no `:latest`; gcloudignore inherits
-  gitignore; TF-owned `_REGISTRY`) → Entries 3, 6
+  untouched and functional for the AWS node until P4. — 🟡 **REGRESSED, demoted 2026-08-05.**
+  The ✅ was earned: push `e8842f33` fired BOTH triggers via real push events → both SUCCESS,
+  SHA-tagged; infra-only push `540fc175` fired neither (negative filter proof); review findings
+  fixed (no `:latest`; gcloudignore inherits gitignore; TF-owned `_REGISTRY`). **Those builds are
+  also the LAST the triggers ever produced** — 2026-07-28T07:32Z. The clause "Cloud Build builds
+  the images from the GitHub repo (path-filtered triggers)" has been false since that day, so the
+  line cannot hold a ✅ describing a capability nobody has. Half the cause is fixed (the CI service
+  account could not create builds — Entry 83); event delivery is still dead. Registry, images and
+  the no-local-push clause are unaffected and still true. Re-earns its ✅ when a push produces a
+  trigger-attributed build — tracked as **M12-P11**. → Entries 3, 6, 83
 - **DOD-IAC-BASE-1** [trustless-cello] — the IaC skeleton (tool per M12-D2) stands up and tears
   down one disposable COS VM in a MIG(size 1) with a static IP, firewall rule, and attached
   service account, entirely from code. IaC enforcer green on this skeleton. — ✅ enforcer green
