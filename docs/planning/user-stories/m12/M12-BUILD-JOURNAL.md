@@ -6339,3 +6339,45 @@ cli@0.0.127 → { "@cello-protocol/daemon": "0.0.124" }   (a real version, not w
 `latest` promotion is the operator's to run. What remains for DOD-PARK-DRAIN-1 is the live
 two-machine re-run — the line's clause is "delivered to a RUNNING receiver daemon", and only real
 hardware can say that.
+
+### Entry 93 — I filed M12-P14 on the wrong error, and the counterparty's log said so
+
+M12-P14 was filed as "a local-only teardown declares the session `interrupted` and the counterparty
+refuses to seal it." That is **false**, and the correction matters more than the fix.
+
+I built it from `session_not_interrupted`, which was the rejection I read first. Pulling the
+counterparty's log ordered the events properly:
+
+```
+12:14:51  session.frontier.mismatch  responderLeafCount=3 initiatorLeafCount=2 divergingLeafIndex=2
+12:14:51  session.interrupted.request.rejected  reason=leaf_count_mismatch
+12:16:56  session.force_abandoned               priorStatus=interrupted      ← our own force-close
+12:17:53  session.interrupted.request.rejected  reason=session_not_interrupted
+```
+
+The refusal I built a defect out of arrived **two minutes after we abandoned the session ourselves**,
+and was caused by that abandon. The real refusal was `leaf_count_mismatch`. Marking sessions
+`interrupted` on shutdown — the thing I called the defect — is correct behaviour.
+
+This is the exact failure the debugging discipline names: *an error message describes where the
+failure surfaced, not why it happened*, and *the first log line that looks suspicious is rarely the
+cause*. I had both traces available the whole time and reasoned from one.
+
+**What is actually broken.** The sessions died of tree divergence: initiator 2 leaves, responder 3,
+diverging at index 2 — the initiator never appended the responder's third leaf. Same family as
+M12-P13, surfacing at seal time rather than at delivery. Why leaf 2 never arrived is **not proven**
+from the initiator's log (no `content.recover.held` on that session), so I am not attributing it to
+the P13 stall. Once frontiers diverge there is no repair path at all: the short side cannot pull the
+leaf it lacks, `leaf_count_mismatch` is terminal, and force-abandon — no receipt — is the only exit.
+That reconciliation gap is what M12-P14 now tracks, and it is NOT fixed.
+
+**What is fixed here** is the contained sub-defect the misdiagnosis exposed: the refusal did not name
+the state it found. A terminal session is now refused as `session_abandoned`,
+`session_already_sealed` or `session_seal_already_pending`, and the operator-facing renderer stops
+sending people to "check the counterparty's daemon for that condition" for all three. For a SEALED
+session the old wording was actively wrong — nothing is broken, the receipt already exists, and it
+reported a success as a fault to investigate.
+
+Four tests, red first: two on the responder's chosen reason (driven through the real handler with the
+row's status set), two on the rendered guidance. Gate: 2704 passed, lint/typecheck/build clean.
+Commit `e3da3b4` on `m12/p14-honest-seal-rejection`. NOT reviewed, NOT merged, NOT published.

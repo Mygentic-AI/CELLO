@@ -880,19 +880,34 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
 
 ## Parked
 
-- **M12-P14** — **A local-only teardown declares the session `interrupted`, and the counterparty
-  correctly refuses to seal it.** Measured 2026-08-05 on two sessions (`4c28edcd…`, `dcd0aadc…`).
-  Trace: `session.content.sent` → `session.liveness.changed liveness=gone` →
-  `session.liveness.unrelated_peer_disconnect` → `session.node.destroyed reason=interrupted`, all
-  within one millisecond — and then `content.park.deposited` **21 seconds later**, i.e. the content
-  the counterparty needed landed *after* we had already given up on the session. The counterparty's
-  view was complete, so it answered the seal-interrupted request with `session_not_interrupted`
-  (12:14, again at 12:17). There is no reconciliation path from there: `force:true` abandon is the
-  only exit, and it yields **no notarized receipt**. Both sessions ended that way.
-  The interruption decision reads only LOCAL transport state and never asks whether the
-  counterparty's view is actually incomplete — a laptop lid, a wifi drop, or a daemon restart
-  produces it. Launch-critical class: the sealed receipt is the artifact CELLO exists to produce.
-  → Entry 90
+- **M12-P14** — **Diverged frontiers have no reconciliation path, so an unsealable session's only
+  exit is force-abandon with no receipt.**
+  ⚠️ **This entry was filed wrong on 2026-08-05 and is corrected here. The original claim — "a
+  local-only teardown declares the session `interrupted` and the counterparty refuses" — is FALSE.**
+  It was built from the `session_not_interrupted` rejection, which was the *second* one. The
+  counterparty's log settles it:
+  ```
+  12:14:51  session.frontier.mismatch  responderLeafCount=3 initiatorLeafCount=2 divergingLeafIndex=2
+  12:14:51  session.interrupted.request.rejected  reason=leaf_count_mismatch
+  12:16:56  session.force_abandoned               priorStatus=interrupted      ← our own force-close
+  12:17:53  session.interrupted.request.rejected  reason=session_not_interrupted
+  ```
+  `session_not_interrupted` was a **consequence of the force-abandon**, not the blocker. Marking
+  sessions `interrupted` on shutdown is correct behaviour and is NOT a defect. Treating the first
+  error string I read as the cause is exactly what the debugging discipline forbids.
+  **What is actually broken:** the sessions died of **tree divergence** — the initiator holds 2
+  leaves, the responder 3, diverging at index 2; the initiator never appended the responder's third
+  leaf. Same family as M12-P13, surfacing at seal time rather than at delivery. Why leaf 2 never
+  arrived is NOT proven from the initiator's log (no `content.recover.held` for that session), so it
+  is not attributed to the P13 stall.
+  Once frontiers diverge there is no repair: the short side cannot pull the leaf it is missing,
+  `leaf_count_mismatch` is terminal, and `force:true` — no notarized receipt — is the only exit.
+  Both sessions ended that way. Launch-critical class: the sealed receipt is the artifact CELLO
+  exists to produce.
+  **Sub-defect, contained and separable:** a seal request against an `abandoned` session is rejected
+  as `session_not_interrupted`, which names neither the status nor the cause and sent this very
+  investigation down the wrong path for an hour.
+  → Entries 90, 93
 - **M12-P13** — ✅ **FIXED 2026-08-05** (`1f75937`, branch `m12/p13-durable-leaf`) — **a queued
   message's leaf was never committed, so the sender stranded its own session.** Originally filed as
   "the away-response has no backstop"; the backstop was only half of it, and the root cause is
