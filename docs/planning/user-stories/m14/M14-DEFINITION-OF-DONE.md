@@ -705,7 +705,40 @@ rather than the peer's state vector; and the working document having to BE the l
   reaches A, on the same session, in the same run, immediately before the document exchange — now a
   permanent precondition in the enforcer. So the defect is in the document send path specifically.
 
-  Where to look next, narrowed to one difference: `cello_send` computes the hash, calls
+  **DEFECT 3 — FOUND AND FIXED** (cello-client `f75ea09`). A document sender never appended its own
+  session leaf, which `cello_send` does after every successful send. That is not a missing audit
+  record: the receive path HOLDS any frame whose canonical sequence is ahead of its own tree size,
+  so a party that transmits without taking its leaf position leaves its tree one behind per frame —
+  the gap is its own missing leaf, nothing ever fills it, and every later inbound frame is held
+  forever. Sender sees success and `parked: false`; receiver never surfaces it.
+
+  Hidden by an ordering accident: with no prior traffic every tree is at zero, so the FIRST document
+  frame in a fresh session lands and everything after does not. Adding one ordinary message before
+  the exchange moved the failure earlier — that is what named the cause. With it fixed the enforcer
+  runs three times further, and the proposal ACK reaches the proposer for the first time.
+
+  A dedicated review confirmed the append is a correct mirror, not a double-count: each party's tree
+  holds one leaf per frame in BOTH directions, the root is built from leaf hashes only, and the
+  append is also what keeps `sessions.message_count` — the value the bilateral seal signs over — in
+  step. It corrected the mechanism in my original hypothesis: the receiver never drops on sequence
+  (dedup is keyed on content hash and logs); it HOLDS, at info level.
+
+  **STILL RED, and now intermittent** — a later identical run regressed to the proposal not
+  arriving, so ordering sensitivity remains. Leads the review named, in order: per-frame relay
+  submit failures (`session.relay.hash.submit.failed`); doc frames riding a DIFFERENT session, since
+  `activeSessionsWith` picks most-recent-active and a leftover session between the two daemons would
+  silently reroute them; and the genuinely silent wire exits — empty stream, unknown frame type,
+  malformed content fields — plus an unawaited `stream.send()` whose close error is swallowed, so
+  `delivered: true` means "handed to the wire", not "peer read it". Settle it by grepping BOTH
+  daemons for `session.tree.appended` / `session.content.ordering.recorded` / `session.content.held`
+  / `session.relay.hash.submitted` filtered by session id, and comparing `message_count` on each
+  side mid-run.
+
+  Also newly asserted: `cello_doc_write`'s result. Those were fire-and-forget calls, so a write that
+  applied locally and published nothing — a documented, legitimate return shape — was
+  indistinguishable from success, and surfaced 120 seconds later as "never converged".
+
+  Earlier note, superseded in part by defect 3: `cello_send` computes the hash, calls
   `sendContent`, **and then appends an outbound session leaf**; the document path calls `sendContent`
   and stops. Both now pass an identical domain-separated hash, and both resolve the same session —
   B's log shows the ack leaving on the session the proposal arrived on, `sessionOpened: false`,

@@ -247,20 +247,39 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
     }
     expect(
       peerAccepted,
-      `A was never told B's decision.\n--- B document log ---\n${documentLines(b.daemon)}`,
+      // BOTH sides. The first version printed only B's — the SENDER — which is the half that
+      // already reported success. The receiving side is where the answer is, and not printing it
+      // cost a whole round of guessing.
+      `A was never told B's decision.\n` +
+        `--- A (receiver) document log ---\n${documentLines(a.daemon)}\n` +
+        `--- B (sender) document log ---\n${documentLines(b.daemon)}`,
     ).toBe(true);
 
     // ── 3. CONCURRENT EDITS, INCLUDING AN OVERLAPPING REGION ──────────────────────────────────
     // Both sides send back the COMPLETE document, which is the contract, and both edit the SAME
     // line — `owner:` — as well as one line only they touch. Under the whole-text replace this
     // shipped with, this converged on both documents concatenated.
-    await a.conn.call("cello_doc_write", {
+    // ASSERTED, both of them. These were fire-and-forget calls, so a write that applied locally and
+    // published NOTHING — which is a documented, legitimate return shape — looked identical to a
+    // successful one, and the failure surfaced 120 seconds later as "never converged". A test that
+    // does not check the call it makes cannot tell you which half broke.
+    const wroteA = (await a.conn.call("cello_doc_write", {
       document_id: documentId,
       content: "# Release plan\n\nowner: alice\ndate: unassigned\n",
+    })) as { ok?: boolean; published?: boolean; reason?: string };
+    expect(wroteA, `A's write did not publish: ${JSON.stringify(wroteA)}`).toMatchObject({
+      ok: true,
+      changed: true,
+      published: true,
     });
-    await b.conn.call("cello_doc_write", {
+    const wroteB = (await b.conn.call("cello_doc_write", {
       document_id: documentId,
       content: "# Release plan\n\nowner: unassigned\ndate: friday\n",
+    })) as { ok?: boolean; published?: boolean; reason?: string };
+    expect(wroteB, `B's write did not publish: ${JSON.stringify(wroteB)}`).toMatchObject({
+      ok: true,
+      changed: true,
+      published: true,
     });
 
     // ── 4. BOTH CONVERGE ──────────────────────────────────────────────────────────────────────
