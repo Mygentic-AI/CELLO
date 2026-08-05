@@ -2437,6 +2437,122 @@ than reporting a rollback that did not happen). SKILL-1 ❌, SHIP-1 ❌. P4 unto
 
 ---
 
+## Entry 29 — A stub on the far side cannot disagree with you
+
+Entry 28 ended with seven verbs shipped. The review found they did not work, and then the same shape
+appeared twice more in one day. It is worth naming as a single lesson rather than three incidents.
+
+### Three times, one shape
+
+**The verbs were registered into a map nothing dispatched from.** `renderedHandlers` was a snapshot
+copy of the handler map; the document registration landed 245 lines below it and after
+`ipcServer.start()`. Every `cello_doc_*` verb answered `method_not_found` — whose guidance blames
+version skew between the shim and the daemon, so an operator would re-pin, reinstall, restart, and
+find both sides matching.
+
+Nothing could catch it. `document-handlers.test.ts` builds its own `Map` and calls `handlers.get(verb)`
+on it: it proves the FUNCTION works when you hold a reference, which is not the claim. The capability
+guard scans source text for `handlers.set("cello_doc_list"` and cannot know which map that is. Both
+stay green with the wiring deleted outright.
+
+Fixed structurally rather than by moving the block. Ordering was load-bearing in a 3,500-line file,
+and "register above this line" is one more rule to remember. Dispatch now resolves from `handlers`
+when a request arrives, so the bug is no longer expressible.
+
+**`write` concatenated the two documents.** `delete(0,len); insert(0,content)` can only delete items
+this side has SEEN, so a peer's concurrently-inserted items survive the delete and splice into the
+new text. Measured against the repo's yjs:
+
+| | converged text, BOTH sides |
+|---|---|
+| both replace `"original"` with `"AAA"` / `"BBB"` | **`"AAABBB"`** |
+| `"Hello world"`, peer inserts `" dear"`, we write `"Goodbye"` | **`" dearGoodbye"`** |
+
+The first is the ORDINARY case for an API whose contract is "send back the complete text" — two
+whole documents concatenated, signed and published by both parties. That is exactly the permanent,
+silently-converged corruption the whole-text contract was chosen to AVOID; the mechanism moved and
+the failure did not. My comment said the damage was bounded to the overlapping region. It was not
+bounded at all.
+
+The correct fold already existed in `DocumentWritePath.#foldText`, whose header records this same
+hazard for the file path. I had written a second, worse one twenty files away.
+
+**And then `notifyPeer`.** Building close/kill, three tests went red and I wrote in the DoD that the
+bilateral close path did not settle. It settled fine. The two-party fixture had wired the injected
+`notifyPeer` seam to `async () => ({ ok: true })` — which reports success, sends nothing, and agrees
+with whatever the near side does. Kill passed on both sides of the assertion and reached nobody, and
+I recorded a defect in a path that had none.
+
+### The lesson
+
+**A stub on the far side cannot disagree with you.** All three defects were invisible to
+single-unit tests for the same reason: the thing that would have objected was replaced by something
+that agrees by construction. Green tests measured that each unit is correct and said nothing about
+whether anything calls it, or whether what it sends arrives.
+
+Two structural answers, both now in the tree:
+
+- `document-dispatch-reachability.test.ts` goes through the SOCKET, driven from the vocabulary
+  table. It is the only assertion in the suite that can tell *registered* from *dispatchable*, and
+  all three of its cases go red against the snapshot copy.
+- `document-control-notifier.ts` exists so the daemon and the two-party test build the notifier from
+  ONE function. The test still substitutes the transport — the part that genuinely must be — without
+  also substituting the logic under test.
+
+### What else shipped
+
+**The proposal ACK.** A protocol that asks for consent and never reports the answer is not asking,
+it is announcing. `cello_doc_list` had been inferring acceptance from "the peer has published into
+it", which folds refused, unreceived, and accepted-but-untouched into one absent flag — two of which
+want the operator to act. Its own frame rather than an overload of `document_ack`: that one settles
+an ENVELOPE by its hash in the log, and a proposal is not in the log, so the frame would carry a hash
+of nothing and its consumer looks the envelope up.
+
+**`cello_doc_diff`.** What changed since THIS agent last read — which is §16.7's
+review-before-you-build-on-it, and also where injected text is most visible, because you see what was
+added rather than a wall of text you skim. The bookmark moves on READ and never on an arriving
+update; marking on arrival would erase the very change the diff exists to show, at the moment it
+arrived. Never-read REFUSES rather than diffing against `""`, which would render a first look at a
+long document as an enormous change an agent then treats as what-just-arrived.
+
+**Close and kill**, with the control frame `notifyPeer` had never had. One frame with a signed VERB
+rather than two types, refused by value on decode — a `kill` read as a `close` leaves a killed
+document waiting for a reciprocal close that is never coming.
+
+**The documents skill, and the audit that was missing under it.** `plugins/cello/skills/*` ship by
+CLONE, so committing them is publishing them, and nothing was checking them. The new guard's first
+run found `skills/setup/SKILL.md` handing operators `cello contact set-away <pubkey>` when the real
+shape is `cello contact <pubkey> set-away` — a command in shipped guidance that does not dispatch.
+
+### Two bugs of my own in the guard itself
+
+`deadCliVerbPattern()` takes no argument; I called it per-verb, so one match was reported against all
+seven verbs and none was named correctly. And I wrote the tool check as an ALLOWLIST first, which
+flagged `cello_session_id` (a parameter) and my own prose `cello_doc_*` — `vocabulary.ts` already
+explains that outside the daemon the denylist is the right instrument, and predicts that exact
+failure. Both worth recording: a guard that reports seven findings for one line trains you to ignore
+it.
+
+### One deliberate cut
+
+**`withdraw` is not shipped, and that is a decision.** It only ever applied to an UNDELIVERED
+envelope, and `cello_doc_write` with the corrected text gives the identical net effect in the
+identical number of calls. Doing it properly needs the write path to transact under a per-write
+ORIGIN so an `UndoManager` can invert exactly one transaction — a real change to how every write is
+applied, for a verb `write` already covers. The stub stays, refusing; no surface reaches it.
+
+### Gates
+
+`test` **3096 passed / 11 skipped** · `lint` · `typecheck` · `build` clean.
+
+### Milestone state
+
+P0 ✅ · P1 ✅ (SCREEN-1 🅿️) · P2 ✅. P3: TOOLS-1 ⏳ (ten verbs, `withdraw` cut by decision,
+`status` subsumed by `list`), SKILL-1 ✅, SHIP-1 ❌. P4 untouched — the five live enforcers are what
+remains, and they are what turns "green" into "done".
+
+---
+
 ## Related Documents
 
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits
