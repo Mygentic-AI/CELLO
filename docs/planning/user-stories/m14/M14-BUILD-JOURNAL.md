@@ -2127,3 +2127,115 @@ restoration is not complete at the writer.*
 P0 ✅ · P1 ✅ (SCREEN-1 🅿️) · P2: ENVELOPE ✅ HANDSHAKE ✅ DELIVERY-1 ✅ LIFECYCLE ✅ NOTIFY ✅ ·
 DELIVERY-2 ⏳ (adapter + seal + discovery binding done; composition-root wiring and the tick
 scheduler remain) · **INBOUND-1 built, awaiting review.**
+
+---
+
+## Entry 26 — the receive half, and three ways to be wrong about a signed preimage
+
+### INBOUND-1: the order was right, the inputs were not
+
+I built the receive assembly and staked the unit on one claim — *the order of the steps is the
+security property*. The review confirmed the order, including both of the orderings I singled out.
+Then it found that **three of the seven steps were wired to inputs nobody produced.**
+
+- `append_only` came from a **caller option defaulting to OFF**, while the agreed value sat on the
+  document row already in hand two lines above. So a document configured append-only was unprotected
+  unless every future call site remembered a flag — and the gate's own header says `append_only` is
+  the only thing standing between a bound peer and erasure, because rule (h) provably cannot see a
+  deletion.
+- The clientID binding was a **seam with no implementation**. ENVELOPE-1 puts `sender_client_id`
+  inside the signed TBS precisely because "this envelope is where it is learned", and my assembler
+  decoded it, verified the signature over it, and threw it away. Left as a seam it would default to
+  wrong in whichever direction its implementer guessed: empty refuses every peer update,
+  everything-observed admits anything.
+- A **stalled document still admitted.** `acceptsUpdates` exists for exactly this and carries a
+  comment describing the bug it was written to fix. The only inbound path in the codebase was
+  reintroducing it.
+
+And the worst, which required no hostility: a rejected envelope's hash is deliberately never written
+to the log, so a **redelivery is not a duplicate**. It re-ran the gate, was rejected again, and
+minted a fresh nonce — advancing the retry round. With the stall at three rounds, *a peer whose acks
+were being lost — delivery's ordinary retry behaviour — permanently stalled the shared document in
+three attempts.*
+
+**And my ordering test was hollow.** `order` was only ever pushed to by the verify callback, so
+`["verify"]` passed for any implementation calling verify once — including one that ran the gate
+first. My commit message said it "pins the ordering by asserting the gate is never reached." It
+asserted nothing of the kind. The gate is instrumented now and both halves are asserted.
+
+*Second time this session a commit message of mine claimed more than the code did.*
+
+### The ACK: three ways to be wrong about a signed preimage
+
+**Wrong bytes.** The timestamp encoded as IEEE float64 — measured, `fb4278bcfe56800000` rather than
+`1b0000018bcfe56800`. A millisecond timestamp is always past `0xffffffff`, so any implementation
+encoding RFC 8949-canonically computes different TBS bytes and rejects a **genuine** ack, which
+reads as forgery. Three sibling builders already carry the coercion and `primary-transfer.ts` names
+this as a defect it shipped without. I had read those files.
+
+The same gap sat in the PROPOSAL envelope, where it is worse: there the id **is** the hash, so two
+implementations would compute different `document_id`s from the same proposal and be on two
+documents while each believed they shared one. Fixed, vector deliberately reissued — free now,
+because nothing is wired and no proposal has ever been signed. *That is the migration-trap call made
+in the cheap direction, deliberately, while it is still cheap.*
+
+**Wrong tests.** No frozen vector, where both siblings have one. Every TBS test was DIFFERENTIAL —
+"these two differ" — which structurally cannot catch a reordering: swap two slots and the suite
+stays green while every ack any peer ever signed becomes unverifiable. A differential suite proves
+the fields are *distinguished*; only a frozen vector proves they are *where they were*.
+
+**A wrong reason for a right decision.** I justified encoding an absent field as explicit `null` by
+claiming omission "shortens the array, which the next field silently absorbs". False for this
+encoder — a 6-element array begins `0x86`, a 7-element one `0x87`, so the shortening is loud, in
+byte 0, and `cbor.ts` says arrays are minimal and order-fixed. The decision was right; the reason
+was invented.
+
+I corrected the comment rather than deleting it. **A wrong fact about the wire is what the next
+structure's justification gets built on** — and a reader who trusts it will one day omit a field on
+purpose.
+
+### Two availability bugs hiding inside strictness
+
+Strict validation refused honest peers twice, and both would have surfaced as the exact failure the
+frame exists to end.
+
+The empty string meant *absent* on one branch and *present* on the other, so a peer written in Go or
+Rust — where a non-nullable string defaults to `""` — had its **admission** refused as a
+contradiction it never expressed. The sender never settles, retries to the ceiling, document stalls.
+Normalised once now, before both rules.
+
+And the frame had no wire version — only `-v1` inside the domain string, which never travels. A V2
+acker's frame decodes cleanly and fails **signature verification**, sending an operator to key
+management for a version problem.
+
+*Refusing an honest peer is not the safe direction. It is a different failure with the same cost.*
+
+### One I caught myself
+
+Settle-once: nothing binds an ack to the acker's chain, so one acker can produce a valid admission
+AND a valid rejection for the same envelope, and applying the later one lets a peer that admitted an
+envelope later claim it refused it — the sender rolls back work the peer already holds. My first
+contradiction check was **document-scoped**, so a rejection of any *other* envelope would have made
+an honest redelivered admission read as a contradiction. Envelope-scoped now, with a test that fails
+on the wrong version.
+
+### TOOLS-1: written, then pulled back out
+
+I wrote the daemon half and reverted it. Registering ten `cello_doc_*` handlers made three guards
+fail at once — the source audit, "every declared tool has a handler behind it", and "every capability
+is reachable from BOTH surfaces". They are right: the lockstep is four places and one of them is not
+a partial delivery. Those guards offer an exemption list, but it is for capabilities that are
+DELIBERATELY single-surface; these are merely unfinished, and taking it would have been the same
+false claim this milestone keeps correcting.
+
+*A guard that offers an escape hatch is testing whether you will use it honestly.*
+
+### Gates
+
+`test` **2949 passed / 11 skipped** · `lint` · `typecheck` clean.
+
+### Milestone state
+
+P0 ✅ · P1 ✅ (SCREEN-1 🅿️) · P2 ✅ except DELIVERY-2 ⏳ and INBOUND-2 ⏳ — for both, what remains is
+the same thing: the session-channel frame handlers and the composition-root wiring, which go in
+together. P3 next (TOOLS-1 as a whole, SKILL-1, SHIP-1), then the five P4 enforcers.
