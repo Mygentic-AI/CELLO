@@ -1261,11 +1261,100 @@ real rejection friction justifies it.
     existed and was rejected* — the `0x05` leaf referencing it is the
     explanation; recorded now though it only matters when purge ships.
 
+13. **Screening NEVER mutates an inbound document update; it refuses.** The
+    screening audit (§16.8, previously owed) was run on 2026-08-05 by putting
+    18 realistic document samples through `sanitizeInbound`. Nine triggered
+    something and **six had their text silently rewritten** — Hindi ZWJ
+    stripped into a different word, a family emoji split into three people,
+    full-width CJK input normalised to ASCII, ligatures and fractions
+    rewritten, a document *about* model prompt formats losing its subject.
+    For a CRDT that is not a false positive, it is permanent divergence: the
+    receiver applies different bytes than the sender signed, both believe they
+    converged, and nothing reports it. Tuning does not help — invisible-strip
+    and NFKC are wrong for a replica at any threshold.
+
+    A rejected middle: screening the *projection* (file, agent-facing diff)
+    while converging the replica raw. It breaks on WRITE-BACK. B's file is a
+    screened rendering; B's agent edits it; the write path diffs the file
+    against the replica and produces "delete A's text, insert the redaction,
+    plus the real edit". B publishes a valid, signed operation that
+    **propagates B's local screening policy into A's document and deletes A's
+    content**. Any lossy projection breaks bidirectional sync, because
+    write-back cannot distinguish "the user changed this" from "the projection
+    changed this". Also rejected on grounds of promise: an enterprise told
+    "we screen inbound content" cannot also be handed the raw version on disk
+    where any agent's own file tools read it.
+
+14. **The receiver is the trust boundary; sender-side enforcement is
+    ergonomics.** A sender's client can be compromised while the sender is
+    honest, so pre-send screening exists to reduce friction among good actors
+    and nothing more. The receiver validates every update as though none of it
+    happened, and **nothing in the sender-side path may ever be a reason to
+    skip a receiver-side check.**
+
+15. **A CONTENT PROFILE, agreed at the handshake — an allowlist, not a
+    denylist.** Named and closed (`ascii-text`, `ascii-markdown`, `json`,
+    `unicode-markdown`, `unicode-text`), each defined as an explicit
+    **codepoint set, not an adjective**, so enforcement is total and cheap —
+    a profile enforced by a heuristic is a promise not kept. It rides in the
+    signed proposal `properties`, so it is bound into `document_id` (neither
+    side can drift) and is immutable after accept (an upgrade is a new
+    document, or a V2 epoch event — so the create flow must make the choice
+    legible rather than defaulting silently).
+
+    This converts an open-ended denylist argument into a closed check, and
+    moves the decision to CONSENT time, where a human is already engaged and
+    the question is "do I want a Devanagari document with this person" rather
+    than "what is U+200D doing at offset 412". Distinct from
+    `schema_enforcement`, which is about structure; a profile is about the
+    character space. Enforced at authoring (friction) AND at receipt
+    (security), per item 14.
+
+16. **A refusal carries a machine-readable reason, and the default resolution
+    is that the SENDER ADOPTS the receiver's rule.** Rule id, codepoints,
+    count, offsets — enough to act on without a human reading prose. Rules
+    compose toward STRICT: nobody is ever asked to accept less protection, and
+    the document ends up governed by the union of both parties' rules, which
+    is the only composition that cannot be exploited. Adopting also fixes the
+    model-keeps-emitting-it problem, because the character is stripped at
+    authoring rather than argued about at the boundary.
+
+17. **The rebuttal is DATA, never argument — and it is the tail, not the
+    default.** For the residual case where a character is load-bearing for
+    meaning (Devanagari joiners, kanji), the sender may rebut. A rebuttal is
+    counterparty-authored content arriving at the receiver's agent arguing it
+    should lower its defences — the most attacker-favourable surface in the
+    protocol — so it carries structured evidence (rule id, codepoints,
+    positions, the marked diff) and any free text is presented as quoted
+    untrusted content, never as instruction. Adjudicated mainly by SCRIPT
+    COHERENCE, which is computable from the document rather than assertable by
+    the sender: U+200D in an otherwise-Devanagari document is orthography, in
+    an ASCII English one it is smuggling. Escalation ladder: coherent and
+    low-volume → auto-allow; incoherent → auto-refuse with no rebuttal
+    entertained; genuinely ambiguous → the agent under the operator's standing
+    policy → the human.
+
+    Exceptions are scoped to `(document, rule, codepoint set)` and NEVER widen
+    a rule; are signed, logged, listed in document status, and revocable; and
+    **granting is not admitting** — the sender republishes through the gate,
+    which kills the bait-and-switch where a benign document earns an exception
+    and then uses it. A rebuttal must NOT count against REJECT-1's
+    three-round stall ceiling, or a document freezes for engaging with the
+    process correctly.
+
+18. **The ambiguous band defaults to REFUSE, not ASK.** Interrupting the
+    receiving operator lets the peer choose when you are disturbed — an
+    attention denial-of-service an adversary drives. Auto-refuse is tolerable
+    only because item 16 makes the refusal non-silent to the SENDER; the
+    receiving operator learns of it from document status when they wonder why
+    the document stopped.
+
 ### 16.8 Preconditions and sequencing
 
-- **The screening audit (§3.1) remains owed** — deliberately deferred by
-  Andre, not forgotten; it blocks the validation-stage tier of the M14 DoD,
-  not the writing of the DoD.
+- **The screening audit (§3.1) — RUN, 2026-08-05.** Result and consequences in
+  §16.7 items 13–18. It was deferred as a reading exercise and turned out not
+  to be one: what answered it was running real document content through the
+  screener and measuring what changed.
 - **The Yjs fuzz pass** (item 7 above) — small, do before the receive-pipeline
   unit.
 - **The verifier tolerance rule** — folded into the `0x04` unit (item 10).

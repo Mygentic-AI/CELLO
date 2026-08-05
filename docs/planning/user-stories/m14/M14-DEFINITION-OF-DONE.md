@@ -235,74 +235,42 @@ description: >
   machinery here. — ✅ (two review passes; §9's effectiveness rule found unsound as written and
   superseded by measurement — a refusal is realized by never writing the refused payload, not by
   subtracting it at replay; both open decisions journaled in Entry 21)
-- **DOD-DOC-SCREEN-1** [cello-client] — **AUDIT RUN, 2026-08-05. The answer changes the design:
-  screening must be DETECT-ONLY for documents, never mutating.**
-
-  The question was whether deterministic screening — built to strip smuggled Unicode from an
-  adversarial agent's MESSAGE — would false-positive on legitimate document content. It does, but
-  the false positives are the smaller half. **It silently REWRITES content**, and for a CRDT that is
-  not a nuisance, it is permanent divergence: the receiver applies different bytes than the sender
-  published, both sides believe they converged, and nothing reports a problem. Convergence is the
-  product claim.
-
-  Measured by running 18 realistic document samples through `sanitizeInbound`. Nine triggered
-  something; **six had their text changed**:
-
-  | Input | Becomes | Why it matters |
-  |---|---|---|
-  | `कर्‍म` (Hindi, ZWJ) | `कर्म` | A different word. ZWJ is orthography in Devanagari, not smuggling. |
-  | `👨‍👩‍👧` | `👨👩👧` | One family emoji becomes three separate people. |
-  | `Ｈｅｌｌｏ，Ｗｏｒｌｄ` | `Hello,World` | Full-width is how CJK users type. NFKC rewrites it. |
-  | `ﬁle is ½` | `file is 1⁄2` | Ligatures and fractions normalised away. |
-  | `it…` | `it...` | Typographic ellipsis. |
-  | `<\|im_start\|>` in prose | ` ` | A document ABOUT model prompt formats loses its subject. |
-
-  Three more flagged without mutating — a fenced code block (`decode` ×5), JSON escapes (`decode`
-  ×4), an SSH key in a runbook (`entropy`) — which are the ordinary false positives, and are
-  harmless as long as they only ever produce a signal.
-
-  **Consequences for the design, decided here:**
-  1. The document path screens the **projected diff** (text) and NEVER the Yjs update bytes, and it
-     **never substitutes** the sanitized output. A mutated update is not the update that was signed.
-  2. A screening hit is a §3.2 rejection with its reason, or a flag on the notice — the existing
-     refuse/supersede machinery. It is never a silent rewrite.
-  3. `stripInvisible` and NFKC confusables are wrong for documents at ANY threshold, so tuning is
-     not the answer. Detection can use the sanitized text; delivery uses the original.
-
-  What remains genuinely open, and is a real judgement call rather than a blocked label: how noisy
-  detect-only is in practice for code- and data-heavy documents (the `decode`/`entropy` hits above),
-  which needs a larger corpus of real documents rather than more reading. — 🅿️ (unblocked in
-  design; scoped to detect-only; noise level still to be measured) When unblocked: incoming projected diffs flow through
-  `screenInbound` at the gate hook with document context (`ScreenContext` today carries no
-  counterparty and no document scope — the audit decides what scoping §3.1 actually needs vs
-  what exists); the sender-side ADVISORY scan runs the sender's own policy against the outbound
-  diff at publish (§16.6 — a courtesy, never a boundary; the receiver's gate stays
-  authoritative). False-positive posture per the audit's findings. — 🅿️
-
-## Tier P2 — Protocol surface (handshake, envelopes, delivery, lifecycle, notification)
-
-- **DOD-DOC-HANDSHAKE-1** [cello-client] — the document handshake (§16.3), mirroring the
-  attestation-consent pattern (consent state machine `pending|accepted|refused`, compare-and-set
-  acceptance): A's create call sends a proposal naming type, properties, and optional starting
-  content; B's agent sees it as a pending item and accepts or refuses; on accept both sides mint
-  the document from the agreed content. `document_id` = hash of the proposal envelope.
-  **Seam enforcement:** `assurance_tier` only `authenticated`, `schema_enforcement` only
-  `false`, `topology` only `hub-and-spoke` (the pairwise two-document form; §3.4, §11.1 —
-  pass-through declaration refused, M14-P8) — any other value refused loudly at proposal AND at
-  accept. **The proposal carries a document-feature version** (§16.7-8) — incompatibility is
-  DETECTED from it, and a peer that does not speak documents surfaces as a human-readable
-  "peer's client doesn't support shared documents — ask them to upgrade", never a timeout or a
-  timeout-classifier. **Properties are immutable after accept** — a property change is an epoch
-  event and therefore V2 (§16.3); no mutate call exists in V1. — ❌
-- **DOD-DOC-SEALAUTH-1** [trustless-cello] — 🅿️ **carried from DOD-DOC-LEAF-1's second review
-  pass** (2026-08-04), pre-existing and outside that unit's scope: (a) `seal_submission` on
-  `/cello/directory-relay/1.0.0` is accepted from ANY dialer — only `relay_register`
-  authenticates that stream — so the frame that drives seal notarization is unauthenticated;
-  (b) `leaves[0].s2.prev_root` is taken as the genesis anchor with no validation
-  (`directory-node.ts` ~4893), so a dialer who has observed a session's leaf log can submit a
-  self-consistent SUFFIX of it as a seal. (a) and (b) compose: together they are the reason a
-  trailing-leaf ceremony had to be refused outright rather than tolerated. Not a document
-  concern — it is the seal ingress — so it does not gate M14, but it should not be lost. — 🅿️
+- **DOD-DOC-PROFILE-1** [cello-client] — **the content profile: an allowlist, agreed at the
+  handshake** (§16.7-15). Named and closed — `ascii-text`, `ascii-markdown`, `json`,
+  `unicode-markdown`, `unicode-text` — each defined as an explicit **codepoint set, not an
+  adjective**, because a profile enforced by a heuristic is a promise we do not keep. Rides in the
+  signed proposal `properties`, so it is bound into `document_id` and immutable after accept; the
+  create flow must make the choice legible rather than defaulting silently, since an upgrade is a
+  new document. Enforced in BOTH places for different reasons (§16.7-14): at authoring, so a stray
+  character is caught where it was written and never becomes a rejection round — ergonomics; and at
+  receipt, because the sender's enforcement is unverifiable — security. Distinct from
+  `schema_enforcement` (structure); this is the character space. Also makes the `json` diff correct
+  by declaration instead of by inference. — ❌
+- **DOD-DOC-SCREEN-1** [cello-client] — **screening REFUSES, never mutates** (§16.7-13). Inbound
+  document updates converge byte-identically or are refused; the receiver never rewrites. The audit
+  that settled this ran on 2026-08-05: six of eighteen realistic document samples had their text
+  silently rewritten, which for a CRDT is permanent divergence rather than a false positive — and
+  the projection-screening alternative breaks on write-back, propagating the receiver's local policy
+  into the sender's document as a real edit that deletes their content.
+  A refusal carries a **machine-readable reason** (rule id, codepoints, count, offsets) and the
+  default resolution is that the **sender adopts the receiver's rule for this document** (§16.7-16)
+  — rules compose toward strict, nobody is asked to accept less protection, and the character stops
+  being emitted at the source. The ambiguous band defaults to **refuse, not ask** (§16.7-18).
+  The sender-side ADVISORY scan (§16.6) runs the sender's own policy against the outbound diff at
+  publish — friction reduction among good actors, never a boundary; the receiver's gate stays
+  authoritative. — ❌
+- **DOD-DOC-REBUTTAL-1** [cello-client] — **the tail: a rebuttal is DATA, never argument**
+  (§16.7-17). For the residual case where a character is load-bearing for meaning. Structured
+  evidence only (rule id, codepoints, positions, the marked diff); any free text is presented to the
+  agent as quoted untrusted content, never as instruction — this is counterparty content arguing
+  that the receiver should lower its defences, the most attacker-favourable surface in the protocol.
+  Adjudicated mainly by **script coherence**, which is computable from the document rather than
+  assertable by the sender. Exceptions scoped to `(document, rule, codepoint set)`, never widening a
+  rule; signed, logged, listed in status, revocable; **granting is not admitting** — the sender
+  republishes through the gate. A rebuttal must NOT count against REJECT-1's stall ceiling.
+  **CAN SLIP PAST V1** (Andre, 2026-08-05): without it a genuinely multilingual document fails
+  closed and the operator resolves it by hand — worse ergonomics, identical security. PROFILE-1 and
+  SCREEN-1 cannot slip; without them there is no screening. — ❌
 - **DOD-DOC-ENVELOPE-1** [cello-client] — **carries BLOCKING ACs from DOD-DOC-GATE-1's reviews.**
   The gate enforces three bindings that no property of an update's bytes can establish, so each is
   only as trustworthy as the signature covering it. **All three MUST be inside the signed TBS:**
