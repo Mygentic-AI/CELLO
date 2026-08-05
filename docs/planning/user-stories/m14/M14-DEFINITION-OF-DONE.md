@@ -556,10 +556,16 @@ rather than the peer's state vector; and the working document having to BE the l
   node the operator never started, no sealed record — what the seal exists to prevent), and
   `cello_doc_list` could not tell "they refused" from "they are asleep".
 
-  **⚠️ OWED — there is no proposal ACK on the wire.** The proposer is never told the consent
-  decision. `cello_doc_list` reports `peerHasPublished`, which is an INFERENCE and labelled as one:
-  its absence means refused, unreceived, or simply untouched, and must never be read as a refusal.
-  Needs a signed `document_proposal_ack` alongside the update ack, and a place to record it.
+  **CLOSED 2026-08-05 — the proposal ACK shipped.** A protocol that asks for consent and never
+  reports the answer is not asking, it is announcing. `document_proposal_ack` is its own signed
+  frame (not an overload of `document_ack`, which settles an ENVELOPE by its hash in the log — a
+  proposal is not in the log, so that frame would carry a hash of nothing and its consumer looks the
+  envelope up). Verified against the agent it names before anything is written; settle-once, so a
+  contradicting second answer is an error with both signatures retained. Sending is best-effort and
+  the surface says so: consent is local and final the moment the operator makes it, and an
+  unreachable counterparty must not get a veto over their choice. `cello_doc_list` now reports
+  `peerAccepted` — a fact — alongside `peerHasPublished`, which answers the different question of
+  whether anything has come back yet.
 
   **Not yet shipped on this line:** `status`, `diff`, `diff-stats`, `withdraw`, `close`, `kill`.
   `withdraw`/`kill` are blocked behind the `notifyPeer`/`rollback` stubs in the composition root,
