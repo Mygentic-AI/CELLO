@@ -5975,3 +5975,51 @@ Publish the daemon (the `latest` promotion is Andre's — the one real gate here
 machines, and repeat the two-machine run. The line closes on
 `content.park.deferred` → `content.park.flush.completed` → `content.recovered` reaching a RUNNING
 receiver, with the daemon pid unchanged across the whole sequence.
+
+## Entry 87 — 2026-08-05 — the publish went out from the wrong branch, and the tarball is what caught it
+
+**My error, recorded in full because the failure mode is reusable.**
+
+`af1473b` (M12-P12) was merged to `main` **in a worktree**. The publish steps were then run in the
+**shared `cello-client` checkout**, which was sitting on another session's branch (`m14/reject-1`).
+So:
+
+- the version cascade committed onto **their branch**, not `main`;
+- `git push origin main` **succeeded and did nothing** — it pushes the local `main` ref, which was
+  already correct, while `HEAD` was their branch. A green push is not evidence you are on the branch
+  you think you are;
+- `git tag v0.0.182` tagged **their branch tip**, and CI published from it.
+
+CI was **fully green** — Build, Publish, and `smoke-tag` all success — because everything it builds
+and smoke-installs is internally consistent. It has no way to know the tree is the wrong tree.
+
+**The tarball caught it.** Step 5 of `/cello-publish` says verify against the binary, never against
+CI status or memory:
+
+```
+npm pack @cello-protocol/daemon@0.0.122
+grep -o "content\.park\.[a-z_.]*" package/dist/session-node-manager.js
+  → content.park.backstop.failed
+  → content.park.deposit.failed          # the OLD names
+  → content.park.deferred  ABSENT        # M12-P12 never shipped
+```
+
+**Burned on npm, never to be promoted:** `protocol-types@0.0.43`, `transport@0.0.45`,
+`daemon@0.0.122`, `cli@0.0.125`, `connect@0.0.119`. All `beta` only — `latest` was untouched, so no
+operator was ever exposed. They contain another milestone's in-flight work and not this one's fix.
+
+**Not remediated: the cascade commit `1b74122` is inside `m14/reject-1`, which its own session has
+since built on and pushed.** Removing it would mean rewriting another session's pushed branch, which
+is not mine to do. It carries version numbers only; when that branch merges, the numbers it brings
+are already superseded.
+
+**Republished correctly** as `protocol-types@0.0.44`, `transport@0.0.46`, `daemon@0.0.123`,
+`cli@0.0.126`, `connect@0.0.120` from tag `v0.0.183` on `cf239b5`, cut in a worktree pinned to
+`origin/main`.
+
+### The rule this earns
+
+**Never bump a version or cut a tag from the shared checkout.** Publishing runs in a worktree created
+from `origin/main` for that purpose, and the first command after creating it is `git log --oneline -1`
+to see the commit you are about to ship. `git push origin main` from a detached or foreign HEAD is
+silent — use `git push origin HEAD:main`, which fails loudly when HEAD is not what you meant.
