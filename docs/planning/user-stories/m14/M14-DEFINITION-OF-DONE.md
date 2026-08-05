@@ -701,12 +701,17 @@ rather than the peer's state vector; and the working document having to BE the l
   `session.content.ordering.recorded` events, both the A→B proposals, and zero warns or errors on
   any path.
 
-  What is known: the B→A direction produced a successful send and no arrival. What is NOT known:
-  whether that is specific to the document path — which calls `sessionNodeManager.sendContent`
-  directly, bypassing what `cello_send` does around it — or to the responder's outbound stream
-  generally. **Next step: a plain `cello_send` from B in the same setup.** If that also fails to
-  arrive, the defect is in the session layer, not in documents. The kill case very likely shares the
-  cause: same path, same direction, and B's copy never goes terminal.
+  **SETTLED, same session (`fd4707b8`): the session layer is FINE.** A plain `cello_send` from B
+  reaches A, on the same session, in the same run, immediately before the document exchange — now a
+  permanent precondition in the enforcer. So the defect is in the document send path specifically.
+
+  Where to look next, narrowed to one difference: `cello_send` computes the hash, calls
+  `sendContent`, **and then appends an outbound session leaf**; the document path calls `sendContent`
+  and stops. Both now pass an identical domain-separated hash, and both resolve the same session —
+  B's log shows the ack leaving on the session the proposal arrived on, `sessionOpened: false`,
+  `parked: false`. Worth testing first: whether the missing outbound leaf leaves the frame with a
+  sequence the receiver silently drops as out-of-order or duplicate (A logs nothing at all, and
+  dedupe drops are quiet). The kill case very likely shares the cause — same path, same direction.
 
   Diagnostics are permanent, not scaffolding: a failure prints both daemons' own account, because
   "expected [] to include …" makes the reader guess between never-sent, never-classified and
