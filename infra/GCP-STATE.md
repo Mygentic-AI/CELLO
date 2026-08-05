@@ -200,6 +200,11 @@ Both relays now report the 24-hour sweep from their own boot log:
 wants to update `ops_agent`, `ops_dashboard`, `portal`, `waitlist` (Cloud Run) and the portal Cloud
 SQL instance in place — unrelated drift that belongs to whoever owns those, not to a relay roll.
 
+Post-roll `terraform plan` is **`0 to add, 5 to change, 0 to destroy`**, and all five are that same
+unrelated set — **no relay resource appears**. Since `terraform plan` is this project's GCP inventory
+(procedure §5), that is the authoritative confirmation the relay deploy is fully applied, not a claim
+from this document.
+
 ## Live image tags — directory on `dir-d35d0a1d` (2026-08-03, ROLL COMPLETE)
 
 **Directory: `dir-d35d0a1d`** (Cloud Build `d8060aaf`, from `origin/main` @ `d35d0a1d`, clean tree).
