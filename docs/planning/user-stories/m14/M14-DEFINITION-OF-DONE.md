@@ -337,6 +337,16 @@ description: >
     opened. The sweep is a slow 60s interval — the event actually being waited for, the peer coming
     back, is not one this daemon observes — with no-overlap and whole-sweep containment guards, an
     unref'd timer, and teardown before the rest of `stop`.
+    **Reviewed 2026-08-05 (`f7c1577`), and the wiring did not work.** Three blocking findings, two
+    of which made the sweep a guaranteed no-op: the inbound router was scoped by the daemon's agent
+    NAME while the sweep queried by pubkey hex, so nothing either wrote was visible to the other and
+    every query returned empty with no error on any path; and the sweep called the session opener
+    with `{ pubkey }` when the negotiator reads only `target_pubkey`, so the REUSE path worked and
+    the OPEN path never did — delivery appearing to work in exactly the case a developer tests by
+    hand. The third finding is why the first two were silent: a sweep delivering nothing was
+    byte-for-byte identical to a healthy idle one. All three fixed; there is now ONE owner-key
+    resolver used by both halves, an `openSessionFor` that makes the wrong field name
+    unrepresentable, and one log line per tick with the counts.
     **Remaining: nothing on this line but a live smoke.** What follows was the blocker, kept for the
     record:
     ~~BLOCKED, 2026-08-05, on one missing capability: AUTONOMOUS SESSION OPENING.~~ §16.4's whole
@@ -485,7 +495,44 @@ rather than the peer's state vector; and the working document having to BE the l
   publish (with optional session hint), diff-stats, diff, read, withdraw, close, kill, and the
   consent accept/refuse pair. Tool descriptions carry the injection-boundary guidance (fetch is
   deliberate; notification is content-free). CLI parity proven the way the existing parity
-  tests prove it. — ❌
+  tests prove it.
+  — ⏳ **SEVEN VERBS SHIPPED, 2026-08-05** (`567a6c6`), unreviewed as of writing:
+  `propose`, `inbox`, `accept`, `refuse`, `list`, `read`, `write` — across all four surfaces, with
+  `document-handlers.test.ts` as the reachability proof.
+
+  **This line was the reason nothing worked.** Nothing in production called `store.createDocument`,
+  so no document existed, so the delivery sweep swept nothing and the inbound path never had
+  anything addressed to it. Every unit under this was built, tested, and unreachable — which reads
+  exactly like a working layer. Found by grep, not by a failing test, because there is no test that
+  can fail for "the only caller is a fixture".
+
+  **Three decisions taken while building it, all of which change the spec:**
+
+  - **`propose`/`accept` are separate verbs, and consent is never inferred.** A document is a
+    STANDING agreement to apply a counterparty's signed operations to local state — a larger grant
+    than receiving a message. Accepting creates the document row in the same act, because the
+    alternative leaves the operator having consented to something that does not exist and the
+    peer's first update refused as `document_unknown`.
+  - **`write` takes the COMPLETE text, never a patch.** An agent emitting a patch must be right
+    about offsets in a document its peer is concurrently editing, and a wrong offset in a CRDT is
+    not a rejected patch — it is a permanent corruption both sides converge on. A non-string is
+    refused rather than coerced (`content: 42` would otherwise replace the document with `"42"` and
+    publish that as a legitimate signed edit).
+  - **A failed proposal is recoverable.** The proposer kept no copy of the envelope it sent, so an
+    offline peer left a real local document with no way to reach them: re-proposing mints a new
+    nonce, hence a new `document_id`, hence a SECOND document, orphaning the first. The proposer now
+    stores its own proposal (`DocumentHandshake.recordOutgoing`) and `cello_doc_propose` with a
+    `document_id` re-sends those exact bytes.
+
+  **The vocabulary guard earned its keep twice** and is worth keeping in mind for every future
+  surface: it refused the names until handlers existed behind them on all four surfaces, and it
+  caught guidance naming `cello_doc_propose_retry` and `cello_doc_kill`, neither of which existed.
+  That second catch was not a wording slip — it was the dead end above, surfaced by a test that only
+  reads strings.
+
+  **Not yet shipped on this line:** `status`, `diff`, `diff-stats`, `withdraw`, `close`, `kill`.
+  `withdraw`/`kill` are blocked behind the `notifyPeer`/`rollback` stubs in the composition root,
+  which currently REFUSE rather than reporting a rollback that did not happen.
 - **DOD-DOC-SKILL-1** [cello-client] — the plugin skill/template layer (§4.1's owed
   deliverable + §16.7-9): publish-on-intent guidance (batch like a commit, not a keystroke),
   the overlap-flag review behavior (review the merged projection before building on it), and
