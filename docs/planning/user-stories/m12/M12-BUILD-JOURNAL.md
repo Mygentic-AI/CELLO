@@ -27,19 +27,19 @@ description: >
   nine invariants lost their ❌ tags and are lenses in §2b. `DOD-AE-APPEND-1` is SPLIT into
   PRIMITIVES-1 / STORE-1 / CHANNEL-1 / APPEND-1 — your next red line has a different name.
 
-- **🔴 2026-08-05 — RELAY/PARK-DRAIN: PUBLISHED AND MERGED, NOT DEPLOYED. START HERE.**
-  All three lines (DOD-PARK-DRAIN-1, DOD-RELAY-KEEPALIVE-1, DOD-GCP-RELAY-DRIFT-1) are 🟡 — built,
-  unit-reviewed (19 findings, all closed), merged to `main` in BOTH repos, and published:
-  transport **0.0.44**, daemon **0.0.121**, cli **0.0.124** on `latest`, operator install confirmed
-  (`cello -v` 0.0.124).
-  **Nothing is deployed. No GCP resource was mutated** — both relays still run the old image and
-  the old 30-minute idle sweep. The remaining sequence, and the two-machine run that is the only
-  thing that can flip these to ✅, are spelled out in **Entry 82**.
-  **Read Entry 82 before touching the deploy** — in particular: the `cello-relay-image` Cloud Build
-  trigger (region **us-east1**, not global) has not fired since 2026-08-01, so "merged to main"
-  has NOT been producing images. Also: `DEBUG=libp2p:connection-monitor*` — the verification the
-  work order demanded and this session could not run — is still owed, and M12-D18 depends on it.
-  Entries 78-82; decision M12-D18; parked M12-P10 (WAL_DIR drift).
+- **🟢 2026-08-05 — RELAY/PARK-DRAIN: DEPLOYED AND PROVEN, except one new defect. START HERE.**
+  `DOD-RELAY-KEEPALIVE-1` ✅ and `DOD-GCP-RELAY-DRIFT-1` ✅ — both relays run `a84659eb…`, rolled
+  one region at a time; 30 min 10 s idle across two NAT'd machines with **zero** `reservation.lost`;
+  `DEBUG=libp2p:connection-monitor*` ran and produced **zero output**, so M12-D18's "reverse if"
+  does not fire. `DOD-PARK-DRAIN-1` stays 🟡: the drain deposits/pulls/verifies/holds correctly,
+  but an earlier park deposit failed with **no retry**, so the ordering gap strands the session and
+  the message never reaches the operator. **That defect is `M12-P12` and it is the next red** —
+  sender-side, `session-node-manager.ts:3421` untracks before a park that can fail with nothing
+  left holding the message. Launch-critical class. Entries 83, 84.
+  **CI is half-fixed (`M12-P11`):** the CI service account could not create builds at all — grant
+  now in `iam.tf` — but push events still never reach Cloud Build. Until that is solved, build with
+  `gcloud builds submit <repository-resource> --revision=<SHA>`, which fetches source from GitHub
+  rather than uploading a local tree.
 
 - **Tier:** P0 COMPLETE + AUDITED — 4/4 ✅ (done-audit: 2 earned, 2 overstated→corrected;
   Entry 7).
