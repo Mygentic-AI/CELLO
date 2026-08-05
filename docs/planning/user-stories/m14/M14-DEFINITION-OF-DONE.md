@@ -457,6 +457,19 @@ Decisions 1–22 and the four flows are recorded in the spec-of-record
 ([[2026-07-31_federated-collaborative-state-architecture]] §16) and are restated there, not
 here — this section holds only decisions made DURING the milestone.
 
+- **M14-D5** (2026-08-05, §3a — REDO > BLOCK): a document envelope's `sender_agent_id` /
+  `peer_agent_id` is the peer's **K_local Ed25519 public key, hex-encoded**, not an opaque id.
+  Forced by the composition: signature verification needs an id → key mapping, and `agent_id` in
+  this daemon is a LOCAL primary key on the `agents` table — it identifies rows in *our* database
+  and cannot name a remote peer at all. Of the identifiers that can, the pubkey is the only
+  SELF-VERIFYING one: the signature checks against it directly, with no lookup that could be stale,
+  missing, or poisoned sitting on the critical path of every authentication. It is also what CELLO
+  already keys counterparties by everywhere else (`contacts` PK, `sessions.counterparty_pubkey`),
+  and it is stable where a name is not — the join-on-the-stable-key rule.
+  The field NAME is unchanged: for a remote agent, its identifier *is* its public key. Renaming
+  would churn two frozen conformance vectors for no gain. What changed is that the decoders now say
+  what the field holds and validate it, so an opaque string cannot silently arrive where a key is
+  required and fail later as a signature error.
 - **M14-D1** (2026-08-04, Andre): V2 is **M14B** — same milestone family, second wave. Its DoD
   is written now, parked, in this directory.
 - **M14-D2** (2026-08-04, review finding B2 — default, Andre may overturn): **DOD-DOC-SCREEN-1
