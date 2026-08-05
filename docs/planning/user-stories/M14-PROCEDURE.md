@@ -336,3 +336,32 @@ current journal file up to date.
 - [[2026-07-31_federated-collaborative-state-architecture]] — spec-of-record (§16 = decisions)
 - [[2026-05-08_1612_shared-state-as-protocol-primitive]] — superseded May design (the why)
 - [[M12-PROCEDURE]] — the procedure this one is modeled on
+
+## Gate discipline — run it so it can FAIL
+
+Found 2026-08-05, after a commit landed on a tree with 62 failing tests.
+
+The gate was being run as:
+
+```
+pnpm run test 2>&1 | grep -E "Tests |FAIL" && pnpm run lint && git commit ...
+```
+
+`grep` exits 0 whenever it matches a line — and it matches on failure output too. So the pipeline's
+exit status is grep's, the `&&` chain proceeds regardless, and **the gate cannot fail**. Every
+"green gate" reported that way was the grep succeeding, not the tests passing. It went unnoticed
+because the tests genuinely were green nearly every time; the one run that was not is the only
+reason it surfaced.
+
+Run gates so a failure stops the chain:
+
+```
+set -o pipefail        # or: capture to a file and check $?
+pnpm run test > /tmp/gate.log 2>&1; echo "exit=$?"
+```
+
+and read the exit code, not the tail of the output. The same applies to any `cmd | grep` used to
+decide something — piping through a filter discards the exit status of the thing being filtered.
+
+*A check whose failure mode is "still reports success" is worse than no check: it is a check that
+launders a red tree into a green claim.*
