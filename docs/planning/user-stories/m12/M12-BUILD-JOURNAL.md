@@ -6023,3 +6023,76 @@ are already superseded.
 from `origin/main` for that purpose, and the first command after creating it is `git log --oneline -1`
 to see the commit you are about to ship. `git push origin main` from a detached or foreign HEAD is
 silent — use `git push origin HEAD:main`, which fails loudly when HEAD is not what you meant.
+
+## Entry 88 — 2026-08-05 — the connection monitor DOES abort, and every abort is a consequence
+
+Earlier today (Entry 84) the `DEBUG=libp2p:connection-monitor*` run produced **zero** output, which
+established only that nothing fired in a quiet window. On the 0.0.123 build, across daemon restarts
+and a session teardown, it has now produced output — and the output settles the question better than
+silence did.
+
+**Seven aborts, classified by cause:**
+
+```
+5 × error during heartbeat - UnexpectedEOFError: stream closed while reading 0/1 bytes
+2 × error during heartbeat - ConnectionClosedError: the connection muxer is "closed" and not "open"
+7 × aborting connection due to ping failure
+0 × anything timeout-shaped
+```
+
+**Every abort is downstream of a connection that was ALREADY dead** — an EOF on a closed stream, or a
+muxer already in `closed`. Not one is a ping that ran out of time on a live link. The mechanism the
+original hypothesis blamed — the monitor's AdaptiveTimeout severing a *healthy* WAN link — did not
+fire once, at the 30s floor `M12-D18` gave it.
+
+**And no reservation was lost with any of them:** zero
+`session.standing_receiver.reservation.lost` in the same window, on either machine, while seven
+aborts happened. The relay reservation survives an abort of an already-dead connection.
+
+So:
+- **`M12-D18`'s "reverse if" does NOT fire.** The daemon does not need a dedicated relay-only node;
+  its monitor is not what severs the relay link.
+- **The original attribution is now positively unsupported, not merely unproven.** Entry 79 called it
+  circumstantial because the incident string is Node's generic AbortSignal text shared by ~10
+  timeouts on the relay path. The observable aborts on the fixed build are all `UnexpectedEOFError` /
+  `ConnectionClosedError` — consequences of a link that already went away. If the 2,061 untraced
+  "aborted due to timeout" errors in [[launch-triage]] have a cause, this run says it is upstream of
+  the monitor. **The relay-side fix (`abortConnectionOnPingFailure: false`, legacy `startRelay`
+  deleted) is what is carrying `DOD-RELAY-KEEPALIVE-1`, and that line's evidence stands on the
+  measured 80-minute zero-loss window, not on the attribution.**
+
+### DOD-PARK-DRAIN-1 — still 🟡, and the reason is worth stating precisely
+
+Both machines run daemon **0.0.123** (`cli@0.0.126`, installed from `@beta` — the publish skill's
+explicit exception for testing an unpromoted build; **both machines are on `beta` and must be moved
+to `latest` once promoted**). The M12-P12 fix is live on both ends and its new events are present in
+the built artifact (`content.park.deferred`, `content.park.durable_enqueue.failed`,
+`message.retry.enqueue.deduped`, `onParkFailed`, `structure1Cbor`).
+
+**The specific failure it fixes could not be reproduced on demand**, and no amount of retrying will
+change that with the levers the CLI exposes:
+
+- `cello set-agent-offline <receiver>` does **not** stop delivery — the open session's node keeps
+  serving, so the send succeeds directly and the park path is never entered. Measured: with
+  `CELLO_Coder_1` at `standing_receiver_ready: false`, the EC2 send still produced
+  `session.content.received` on the Mac.
+- `cello send` from an offline agent is refused at the CLI (`no_current_agent`), so the *sender's*
+  standing receiver cannot be taken down and then used — which is the exact state that produced the
+  original `content.park.deposit.failed`.
+
+The original occurrence was a **race**: the deposit was refused in the seconds-long window while the
+sender's standing receiver was rebuilding after a restart. That window is not addressable from the
+CLI.
+
+**What closes the line**, whenever the race next occurs naturally or a test lever is built for it:
+
+```
+content.park.deposit.failed  reason=standing_receiver_unavailable  cause=standing_receiver_creating
+content.park.deferred        selfOrdering=true
+content.park.flush.completed parkedCount>0        ← under a standing_receiver_ready trigger
+content.recovered / session.content.received      ← on a RUNNING receiver, pid unchanged
+```
+
+The `cause=` field is new this unit and exists precisely so the transient case
+(`standing_receiver_creating`) is distinguishable from the permanent one (`agent_offline`) when it
+does happen.
