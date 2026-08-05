@@ -289,9 +289,10 @@ description: >
   missing `doc_prev_hash` refuses loudly, naming the gap). **The Yjs update-encoding version is
   pinned** in the protocol types (§16.7-8) so two supporting clients can never disagree
   silently. Seam fields get serialization tests in lieu of a consumer ([[M14-PROCEDURE]] §5
-  no-consumer exception). Replay defined set-based per §16.7-5. — ⏳ (pass one's findings applied;
-  all three inherited blocking ACs verified inside the signed TBS by revert and a frozen
-  conformance vector pins field order — pass two in flight, not yet ✅)
+  no-consumer exception). Replay defined set-based per §16.7-5. — ✅ (two review passes; all three
+  inherited blocking ACs verified inside the signed TBS by revert, with a frozen conformance vector
+  pinning field order and the receive-time chain check taken set-based so a redelivery is not a
+  fork alarm and a BRANCH is distinguishable from a GAP)
 - **DOD-DOC-DELIVERY-1** [cello-client] — daemon-autonomous delivery (§16.4): publish writes the
   envelope to the log and returns; the delivery worker derives pending = unacknowledged
   envelopes FROM THE LOG (survives restart — enforcer-pinned), checks the peer via
