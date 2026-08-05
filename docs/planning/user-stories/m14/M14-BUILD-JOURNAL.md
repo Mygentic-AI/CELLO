@@ -1537,3 +1537,69 @@ the update encoding, and **the sender's clientID**. The third is load-bearing be
 §14 requires that nothing persists a clientID, so a restarted peer mints a fresh one and the gate
 would refuse it forever. **The rule is correct only if the binding is LEARNABLE**, and the envelope
 is where it is learned. Recorded on ENVELOPE-1's DoD line.
+
+---
+
+## Entry 20 — 2026-08-05 — DOD-DOC-GATE-1 ✅ CLOSED. The depth rule was INVERTED.
+
+**Merged** to cello-client `main` @ a523fe4. Two review passes, the cap. **Nine measured ACs
+enforced.**
+
+### Pass two: my own guard defeated the rule it guarded
+
+A recursive depth walk throws `RangeError` past roughly a thousand levels, and the bare `catch`
+around it returned **0**. So 30 levels were refused and **5,000 were admitted** — the deeper the
+attack, the more certain it passed.
+
+Worse: it converted the gate's own fail-safe into an admission. Nesting placed under a root the
+gate names threw where `validate()`'s catch-all could quarantine it — safe. The attacker simply
+picks a different root name, and the inner `catch` turns that same fail-safe into an ADMIT.
+
+*The generalisable form: a `catch` that returns a benign default inside a security check does not
+degrade the check, it INVERTS it. The failure it swallows is exactly the signal that the input was
+extreme.*
+
+### The same pattern, three times in one unit
+
+Pass one named it and I reproduced it twice more while fixing:
+
+1. (h) was tested with a clientID that was novel AND unbound — the one class the rule caught.
+   Pass one's forgery used the owner's own.
+2. My (f) fix instantiated roots via `doc.getMap(name)`, which **MIGRATES** an uninstantiated root
+   to a map in place — so an Array-shaped root became an empty map and reported depth 0. The
+   identical bypass, reached with a different type.
+3. My (i) fix moved from ONE hardcoded root to TWO. A peer chooses its own root names — that is
+   the whole threat model — so an append-only document was still unprotected everywhere else.
+
+**Both (f) and (i) are now solved by asking a better question rather than by widening a list.**
+`append_only` reads the UPDATE'S OWN DELETE SET: root-agnostic, type-agnostic, and a map-key
+rewrite deletes the old item so §16.7-1's "deletes OR EDITS" falls out for free. Depth walks Yjs's
+item graph structurally, iteratively, bailing at the limit.
+
+*When a fix is "add the other case to the list", the list is the bug.*
+
+### A false accusation I had not noticed
+
+The projection-diff `append_only` compared top-level keys with `JSON.stringify`, so **growth inside
+a nested entry read as a REWRITE** — refusing the very append the feature is named for, and telling
+the operator content was *removed* when nothing was. Same class as the trailing-byte label on a
+batched update: an attack message for a benign shape, which sends an operator hunting a hostile
+peer while the document stops converging. The delete-set basis admits it correctly.
+
+### Carried to DOD-DOC-REJECT-1
+
+- The gate returns the quarantined BYTES on every refusal, **copied not aliased** (a caller reusing
+  a pooled read buffer would otherwise leave REJECT-1 hashing bytes that are no longer the ones
+  refused, into a `0x05` leaf, silently). REJECT-1 persists them.
+- **Rule (h) binds INSERTIONS only.** A Yjs delete set carries no clientID and advances no clock,
+  so a BOUND peer can delete the owner's content and the gate sees nothing. Legitimate CRDT
+  behaviour for an authorized writer — but `append_only` is then the only thing between a bound
+  peer and erasure, and it defaults off. REJECT-1 decides whether that is a rejectable event.
+
+### Gates
+
+`test` **2683 passed / 11 skipped** · `lint` · `typecheck` clean.
+
+### Milestone state
+
+P0 ✅ (3 units) · P1: ENGINE ✅ WRITE ✅ GATE ✅ · **REJECT-1 next** · SCREEN-1 🅿️ (Andre's call).

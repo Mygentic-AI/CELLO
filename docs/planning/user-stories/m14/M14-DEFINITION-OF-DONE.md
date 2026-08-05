@@ -209,8 +209,17 @@ description: >
   out of band; no property of the update itself can establish it.
   (i) **`append_only` needs a measurement behind it** — a 10-byte well-formed update deletes a
   document's entire content. Structural limits are upper bounds, so a shrinking update passes
-  every one of them and the shadow is merely smaller. — ❌
-- **DOD-DOC-REJECT-1** [cello-client] — rejection and supersession (§3.2, §16.7-2): a rejection
+  every one of them and the shadow is merely smaller. — ✅
+  > Two review passes, nine ACs enforced. Pass one built a WORKING FORGERY against (h); pass two
+  > found (f) INVERTED — deeper meant safer. → Journal Entries 19–20.
+- **DOD-DOC-REJECT-1** [cello-client] — **carries from GATE-1's reviews:** (1) the gate returns the
+  quarantined BYTES on every refusal (`GateQuarantine.quarantined`, copied not aliased) — this unit
+  is what persists them and references them from the `0x05` leaf; (2) rule (h) binds INSERTIONS
+  only, because a Yjs delete set carries no clientID and advances no clock, so a BOUND peer can
+  delete the owner's content and the gate sees nothing. That is legitimate CRDT behaviour for an
+  authorized writer, not a forgery — but it means `append_only` is the only thing between a bound
+  peer and erasure, and it DEFAULTS OFF. Decide explicitly whether erasure by a bound peer is a
+  rejectable event, and journal it. — rejection and supersession (§3.2, §16.7-2): a rejection
   is a protocol message AND a `0x05` leaf referencing the rejected envelope's hash; the sender's
   daemon rolls back (Yjs undo — inverses, not erasure) and publishes the superseding update
   computed against the receiver's state vector; the receiver validates the now-clean projected
