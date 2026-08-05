@@ -1697,3 +1697,105 @@ refused and what number was exceeded. A duplicate rejection no longer advances t
 
 P0 ✅ (3 units) · P1: ENGINE ✅ WRITE ✅ GATE ✅ REJECT ✅ · SCREEN-1 🅿️ (Andre's call) ·
 **P2 next: HANDSHAKE-1, ENVELOPE-1, DELIVERY-1, LIFECYCLE-1, NOTIFY-1.**
+
+---
+
+## Entry 21 — REJECT-1 pass two, and a spec clause that is wrong
+
+Two review passes are the cap, and pass two earned it: it proved a two-way fork by *running both
+branches* rather than reasoning about them, and both were broken.
+
+### §9's effectiveness rule is unsound as written
+
+§9 says an update leaf is effective iff no rejection leaf references it, and replay applies the
+effective ones. Implemented literally that loses data. Measured — sender publishes a base, a refused
+update, then rolls back and supersedes; replay skipping the refused leaf gives
+
+    text "agreed base. "        pendingStructs PRESENT    pendingDs PRESENT
+
+The supersession is causally stacked on the refused operations: the rollback is a *deletion* of
+those structs and the new work is positioned after them. Drop them and everything later is pending
+forever, so the document reads as complete and is silently missing the legitimate work — with no
+error on any path. §16.7-5 had already retired §9's "document-log order" phrasing; this retires its
+effectiveness phrasing on the same kind of evidence.
+
+**What is sound: the receiver never writes the refused payload.** Nothing to subtract at replay
+because nothing was added. The peer's supersession, computed against the RECEIVER's state vector per
+§3.2 step 3, is self-contained — same fixture:
+
+    text "agreed base. clean text. "   pendingStructs null   pendingDs null   converged true
+
+The refused bytes *do* travel again inside that supersession, carrying their own inverses — which is
+precisely "inverses, not erasure". They net to zero and survive as tombstones.
+
+I had the code right in Entry 20 and the reasoning wrong: I wrote that replay "deliberately does not
+honour references", as if the choice were indifference. The reason is causality, and stating it
+wrongly is how the next person un-fixes it.
+
+### The other branch: a chain that could not be walked
+
+Not logging the refused envelope leaves the peer chaining its supersession onto a hash our log never
+holds — `document_chain_broken`, document refuses to rebuild, and an operator sent to debug the chain
+layer for a rejection-protocol event. The quarantine now carries the refused envelope's own author
+and chain link and the verifier bridges across it. `rejectedDocPrevHash` is **required**: optional, it
+would default every refused envelope to a genesis stub and manufacture the exact fork the bridge
+exists to prevent. It caught two bad fixtures on its first run.
+
+### One key, three rounds, two rounds lost
+
+The quarantine was keyed on the REFUSED envelope. Re-refusing one envelope for a new reason appended
+a new leaf, advanced the round, and dropped the new bytes, rule and limit with **no log line at
+all** — three leaves, one row. The stall message then told the operator "the most recent reason was"
+and printed the OLDEST. Keyed on the rejection leaf now, one leaf one row, with `holdQuarantined`
+returning a boolean so a no-op is visible rather than assumed impossible.
+
+*A silent `DO NOTHING` on a composite key is only correct if the key really is the identity of the
+thing. It was the identity of the thing being rejected, not of the rejection.*
+
+### The retry bound existed only on the side that never loops
+
+`recordIncomingRejection` wrote nothing and counted nothing: its round came from rejections this
+agent AUTHORED, which on a pure publisher is zero forever. So the publisher — the only side that
+*can* loop — had no counter and no stop, and could supersede into a frozen document indefinitely.
+Now a durable table, the round derived from it, and the publisher stalls on the same threshold the
+receiver stops accepting on. `countRejections` is also scoped per rejecting agent: a mutual exchange
+puts both directions' leaves in one log, and the unscoped count stalled a document at half its
+rounds the moment the peer also rejected something.
+
+### Tests that asserted nothing
+
+- **Mutual rejection** used two *documents* owned by one agent — so it asserted that a composite
+  primary key distinguishes two different keys. Any implementation passes. Now two stores, as two
+  daemons, each reaching its own stall without advancing the other's.
+- **The leaf test** built the exact state the §9 defect breaks and stopped one line short of
+  `rebuildSnapshot`. It now asserts the rebuild carries no refused content.
+- **The erasure test** asserted that `reject()` accepts a string. No detection exists anywhere, so
+  it was green against nothing; renamed to say it records a decision.
+- `expect(REJECTION_RETRY_LIMIT).toBe(1)` asserted a constant against its own literal. Deleted —
+  and the constant is now `MAX_REJECTED_ROUNDS = 3`, because a "retry limit" of 1 compared as
+  `round > LIMIT + 1` permitted two retries under a name that said one.
+
+### ENVELOPE-1, pass one
+
+`epoch_id` was in the TBS with **no test**: deleting it from the array left all 27 green, under a
+test whose name claimed to cover it. The concatenation-forgery test compared two values of one
+non-adjacent field — a naive unframed concatenation passes it unchanged. And there was no frozen
+vector, so the field ORDER was entirely unpinned: swapping two slots keeps the suite green while
+changing every signature the module will ever produce. There is a golden vector now; it is the
+artifact a second implementation conforms against.
+
+A redelivered envelope reported a chain gap. Delivery derives pending from the log and retries
+across restarts, so redelivery is *designed* behaviour — its `doc_prev_hash` is the predecessor while
+the head is its own hash. `{ duplicate: true }` now, which agrees with §16.7-5's set-based replay and
+with the store's own `ON CONFLICT DO NOTHING`. The two chain verifiers also share one vocabulary;
+a second set of strings for the same two failures means a policy-log query keyed on one silently
+misses the other.
+
+### Gates
+
+`test` **2744 passed / 11 skipped** · `lint` · `typecheck` clean.
+
+### Milestone state
+
+P0 ✅ · P1: ENGINE ✅ WRITE ✅ GATE ✅ REJECT ✅ · SCREEN-1 🅿️ (Andre's call) ·
+P2: ENVELOPE ✅ · **HANDSHAKE-1 next**, then DELIVERY-1, LIFECYCLE-1, NOTIFY-1.
