@@ -319,7 +319,23 @@ description: >
   - **DOD-DOC-DELIVERY-2** — the transport adapter and the wiring: a `DocumentDeliveryTransport`
     backed by `SessionNegotiator` (opening or reusing a session, and SEALING normally), the
     `discovery_lookup` binding for `isPeerReachable`, the composition-root instantiation, the tick
-    scheduler, and `publish`'s own optional session hint. — ❌
+    scheduler, and `publish`'s own optional session hint.
+    — ⏳ **the adapter and the discovery binding are built and tested** (session reuse-before-open,
+    hint honoured-or-refused, and the `discovery_lookup` mapping where only a RESULT is an answer
+    about the peer — every other outcome throws rather than being called "offline"). Remaining: the
+    composition-root instantiation and the tick scheduler.
+    **Discovered dependency — DOD-DOC-INBOUND-1 (new, below):** this line's ack is "the peer's
+    daemon confirms admission (or rejection)", and no inbound document handler exists, so no send
+    can honestly produce one. Rather than synthesise an ack (marking an envelope acknowledged while
+    the peer may never have applied it) or report a successful send as a failure (re-sending content
+    already in flight), the transport outcome is three-valued: `admitted: null` means SENT, not
+    acked, and the worker records it delivered, leaves it unacked, and asks again on the backoff.
+  - **DOD-DOC-INBOUND-1** — the receiving half: a document frame handler on the session channel that
+    decodes the envelope (ENVELOPE-1), verifies the signature and the chain link, runs the §3.2 gate
+    (GATE-1), admits or rejects (REJECT-1), and returns the ACK that closes DELIVERY-2's loop. Every
+    P2 unit has been building the pieces this assembles, and no line owned assembling them. Named
+    rather than folded into DELIVERY-2, because that is the same mistake the original DELIVERY line
+    made — bundling a second risk into a line whose name describes the first. — ❌
 - **DOD-DOC-LIFECYCLE-1** [cello-client] — the verbs (§3.5 + §16.4): **list** (documents with
   peer, type, tier, epoch, status, pending-delivery state — tier and epoch are constants in V1
   but they are seam surface and cheap to show — "1 update pending, peer offline since …");
