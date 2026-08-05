@@ -678,77 +678,45 @@ rather than the peer's state vector; and the working document having to BE the l
 
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
-- **DOD-DOC-E2E-CONV-1** [trustless-cello] — **convergence enforcer** ran green: two real
-  daemons, create/consent, concurrent file edits including an overlapping region, both publish,
-  both files converge, overlap flag fires, session seals with mixed `0x00`/`0x02`/`0x04` leaves
-  and BOTH sides independently recompute the same root. New `j-*.spine.test.ts` on
-  `live-harness.ts`, modeled on `j-unilateral.spine.test.ts` — never a from-scratch fixture.
-  — ⏳ **WRITTEN AND RUNNING, RED** (`1e477e44`). It has already paid for itself twice.
+- **DOD-DOC-E2E-CONV-1** [trustless-cello] — **convergence enforcer ran GREEN, 2026-08-05**
+  (`aa6dea04`). Both cases, 7.3s and 4.1s. Two real daemons, a real three-node consortium, a real
+  registration DKG: propose → consent → concurrent edits on the SAME line from both sides → both
+  converge → an ordinary message → bilateral close → and both daemons, each rebuilding from its own
+  leaves, arrive at the same `sealed_root` over a tree carrying document frames alongside messages.
+  Plus the kill case: the control frame reaches the peer over the real session and their copy goes
+  terminal.
 
-  **Defect 1 — FOUND AND FIXED** (cello-client `cc08c37`). Both document senders put a bare
-  `sha256(content)` on the wire where every peer recomputes `sha256(0x00 || content)`. The send
-  reported success with `parked: false`; the receiver discarded it at the cross-check, before
-  screening and before the router, so the receiving daemon logged nothing about documents at all.
-  The evidence pointed at classification, the router and the gateway — everywhere but the sender's
-  hash. **No in-process test could find it**: both sides of those compute the hash with the same
-  function, so they agree with each other whether or not either agrees with the wire. Now one
-  module, `wire-content-hash.ts`, which records the trap — the `0x00` is NOT the leaf kind.
+  **It took four defects, and not one was visible to a unit test:**
 
-  **Defect 2 — FOUND, ISOLATED, NOT FIXED.** With the hash right the chain runs four hops further:
-  A proposes → B records pending → B accepts → B's copy converges from the same epoch-zero bytes.
-  Then it stops. B sends the proposal ACK (`document.frame.sent`, 327 bytes, `parked: false`, on the
-  reused session) and A records NO content arriving at all — across the whole run exactly two
-  `session.content.ordering.recorded` events, both the A→B proposals, and zero warns or errors on
-  any path.
+  1. **Undomained content hash.** Both document senders wrote `sha256(content)` where every peer
+     recomputes `sha256(0x00 || content)`. The send reported success with `parked: false`; the peer
+     discarded it at the authenticity check, before screening and before the router, so the
+     receiving daemon logged nothing about documents at all. Now one module, `wire-content-hash.ts`.
+  2. **The sender never took its own leaf.** `cello_send` appends one after every successful send;
+     the document path did not. The receive path HOLDS any frame whose sequence is ahead of its own
+     tree size — so a sender that skips its leaf falls one behind per frame, the gap is its own, and
+     every later inbound frame is held forever. Hidden by an ordering accident: with no prior
+     traffic every tree is at zero, so the FIRST frame in a fresh session lands and everything after
+     does not.
+  3. **`merkleRoot` vs `sealed_root`** — my own test bug, which masqueraded as "A has no sealed
+     root" for two runs while the receipt plainly contained the value.
+  4. **The 60s production delivery tick**, which made the convergence window so tight that adding a
+     SECOND test to the file made the first one fail. That read as flakiness in the product and was
+     a timer. The daemon now takes `CELLO_DOCUMENT_DELIVERY_TICK_MS` (floored at 250ms); the
+     enforcer turns it down to 2s, which is why the run went from 121 seconds to 7.
 
-  **SETTLED, same session (`fd4707b8`): the session layer is FINE.** A plain `cello_send` from B
-  reaches A, on the same session, in the same run, immediately before the document exchange — now a
-  permanent precondition in the enforcer. So the defect is in the document send path specifically.
+  **The lesson, stated once for the remaining enforcers:** every one of these was a disagreement
+  between two processes about what the other would do, and a single-process test cannot have that
+  disagreement — both halves compute with the same function, so they agree with each other whether
+  or not either agrees with the wire.
 
-  **DEFECT 3 — FOUND AND FIXED** (cello-client `f75ea09`). A document sender never appended its own
-  session leaf, which `cello_send` does after every successful send. That is not a missing audit
-  record: the receive path HOLDS any frame whose canonical sequence is ahead of its own tree size,
-  so a party that transmits without taking its leaf position leaves its tree one behind per frame —
-  the gap is its own missing leaf, nothing ever fills it, and every later inbound frame is held
-  forever. Sender sees success and `parked: false`; receiver never surfaces it.
+  Diagnostics are permanent, not scaffolding: the failure message prints BOTH daemons' account (I
+  printed only the sender's for a whole round and concluded the frame had never arrived when it
+  had); a B→A precondition settles session-vs-document before any document exists; `cello_doc_write`'s
+  result is asserted, because a legitimate `published: false` otherwise surfaced two minutes later
+  as "never converged"; and the router now warns on a frame that passes the header guard and decodes
+  as nothing, which was deliberately silent and is exactly the anomaly the guard exists to notice.
 
-  Hidden by an ordering accident: with no prior traffic every tree is at zero, so the FIRST document
-  frame in a fresh session lands and everything after does not. Adding one ordinary message before
-  the exchange moved the failure earlier — that is what named the cause. With it fixed the enforcer
-  runs three times further, and the proposal ACK reaches the proposer for the first time.
-
-  A dedicated review confirmed the append is a correct mirror, not a double-count: each party's tree
-  holds one leaf per frame in BOTH directions, the root is built from leaf hashes only, and the
-  append is also what keeps `sessions.message_count` — the value the bilateral seal signs over — in
-  step. It corrected the mechanism in my original hypothesis: the receiver never drops on sequence
-  (dedup is keyed on content hash and logs); it HOLDS, at info level.
-
-  **STILL RED, and now intermittent** — a later identical run regressed to the proposal not
-  arriving, so ordering sensitivity remains. Leads the review named, in order: per-frame relay
-  submit failures (`session.relay.hash.submit.failed`); doc frames riding a DIFFERENT session, since
-  `activeSessionsWith` picks most-recent-active and a leftover session between the two daemons would
-  silently reroute them; and the genuinely silent wire exits — empty stream, unknown frame type,
-  malformed content fields — plus an unawaited `stream.send()` whose close error is swallowed, so
-  `delivered: true` means "handed to the wire", not "peer read it". Settle it by grepping BOTH
-  daemons for `session.tree.appended` / `session.content.ordering.recorded` / `session.content.held`
-  / `session.relay.hash.submitted` filtered by session id, and comparing `message_count` on each
-  side mid-run.
-
-  Also newly asserted: `cello_doc_write`'s result. Those were fire-and-forget calls, so a write that
-  applied locally and published nothing — a documented, legitimate return shape — was
-  indistinguishable from success, and surfaced 120 seconds later as "never converged".
-
-  Earlier note, superseded in part by defect 3: `cello_send` computes the hash, calls
-  `sendContent`, **and then appends an outbound session leaf**; the document path calls `sendContent`
-  and stops. Both now pass an identical domain-separated hash, and both resolve the same session —
-  B's log shows the ack leaving on the session the proposal arrived on, `sessionOpened: false`,
-  `parked: false`. Worth testing first: whether the missing outbound leaf leaves the frame with a
-  sequence the receiver silently drops as out-of-order or duplicate (A logs nothing at all, and
-  dedupe drops are quiet). The kill case very likely shares the cause — same path, same direction.
-
-  Diagnostics are permanent, not scaffolding: a failure prints both daemons' own account, because
-  "expected [] to include …" makes the reader guess between never-sent, never-classified and
-  refused — three bugs with one symptom, and I guessed wrong once already.
 - **DOD-DOC-E2E-OFFLINE-1** [trustless-cello] — **offline-delivery enforcer** ran green: publish
   while the peer daemon is down; kill and restart the SENDER's daemon; start the peer; the
   update arrives and materializes with zero agent-level action; pending flag set. The
