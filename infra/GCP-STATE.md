@@ -249,12 +249,42 @@ if probed there. `cello-directory-allow-http` opens 9090; `cello-directory-allow
 **Two triggers do NOT fire, and images arrive by hand.** `cello-directory-image` has not auto-built
 since 2026-07-28 despite a healthy GitHub connection and matching `includedFiles`; every `dir-*` tag
 since then, including this one, came from `gcloud builds submit`. This is part of why
-`DOD-NODE-DIR-GCP-1` is 🟡 rather than ✅. Unresolved.
+`DOD-NODE-DIR-GCP-1` is 🟡 rather than ✅. Partly resolved 2026-08-05 — see below.
 
-**`gcloud builds triggers run` is denied for a human account; `builds submit` is not.** The trigger
+**~~`gcloud builds triggers run` is denied for a human account; `builds submit` is not.~~ The trigger
 lives in `us-east1` and manual regional builds have never been used here, so no principal has
-`cloudbuild.builds.create` there. `builds submit` goes to the **global** endpoint and works. This is
-not a regression — it is a path nobody had used.
+`cloudbuild.builds.create` there. `builds submit` goes to the global endpoint and works.**
+**FALSIFIED 2026-08-05.** A regional `builds submit` in `us-east1` by `andre@` succeeds (build
+`f29c4162`), and the audit log for the denied `RunBuildTrigger` shows `andre@`'s
+`cloudbuild.builds.create` check on `projects/cello-infra` returning `granted: true`. The account
+was never the problem.
+
+**2026-08-05 — the silent half of M12-P11, found and fixed.** `cello-cloud-build@` held only
+`artifactregistry.writer` + `logging.logWriter`. A trigger that names a user-specified service
+account creates its builds AS that account, so every push-triggered build died at creation and left
+**no build record at all** — invisible from `gcloud builds list`, which is why "merged to main"
+silently stopped meaning "image built" for six days. `roles/cloudbuild.builds.builder` is now
+declared in `infra/terraform/iam.tf` (applied; verified by build `87d84a1f`, a regional build that
+runs as that SA and previously could not be created).
+
+**Still open:** a push to `main` touching `infra/cloudbuild/relay.yaml` at 04:48Z produced no build
+and no denied-attempt audit entry, so the event never reached Cloud Build. Both triggers were
+recreated via Terraform (`-replace`) with no change; `RunBuildTrigger` still returns
+`PERMISSION_DENIED` on `projects/000000de8652d04e` (the zero-padded hex of project number
+955736313934) even though the same identity can create the same build directly, and `actAs` on the
+SA tests granted. Google-side; not an IAM gap we can see.
+
+**The CI build path that works, and does not hand-roll a local tree:**
+```
+gcloud builds submit \
+  "projects/cello-infra/locations/us-east1/connections/cello-github/repositories/CELLO" \
+  --revision=<SHA> --region=us-east1 --config=infra/cloudbuild/relay.yaml \
+  --service-account=projects/cello-infra/serviceAccounts/cello-cloud-build@cello-infra.iam.gserviceaccount.com \
+  --substitutions=_TAG=<SHA>
+```
+Cloud Build fetches the source from GitHub at that revision through the connection, so the tag names
+a commit whose contents were actually built — unlike `builds submit .`, which uploads whatever is on
+the local disk and has already cost this milestone a demoted claim.
 
 ### Superseded — both services on `reviewfix-de1ed949` (2026-07-30)
 
