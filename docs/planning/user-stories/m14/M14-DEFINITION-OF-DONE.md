@@ -352,7 +352,16 @@ description: >
     - **DOD-DOC-INBOUND-2** — the frame handler on the session channel, the ACK wire type that
       closes DELIVERY-2's loop, and the composition-root wiring. `DocumentInbound.receive` returns a
       JS object to a caller that does not exist yet, so DELIVERY-2's `admitted: null` stays null
-      forever until this lands. — ❌
+      forever until this lands.
+      **Built so far:** the ACK wire type and its consumer (both reviewed), the frame router (two
+      passes — a 2-byte frame could stall or OOM the daemon; bound at the decoder plus an input-length
+      cap), and the interception point in the session content path. **Remaining: the
+      composition-root wiring**, which goes in with DELIVERY-2's.
+      **The interception's three-way contract — `doc` leaf yes, transcript no, doorbell no — is
+      deliberately NOT unit-tested.** It is about what lands in the tree, the transcript and the
+      doorbell for a real frame on a real session, and [[DOD-DOC-E2E-CONV-1]] already specifies it:
+      "session seals with mixed `0x00`/`0x02`/`0x04` leaves and BOTH sides independently recompute
+      the same root". Proven there, stated here so it is a dependency rather than a gap. — ❌
 - **DOD-DOC-LIFECYCLE-1** [cello-client] — the verbs (§3.5 + §16.4): **list** (documents with
   peer, type, tier, epoch, status, pending-delivery state — tier and epoch are constants in V1
   but they are seam surface and cheap to show — "1 update pending, peer offline since …");
