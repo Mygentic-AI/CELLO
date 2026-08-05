@@ -55,7 +55,7 @@ tier boundary.
 | Cloud Build P4SA grants | `cloudbuild.serviceAgent` + `secretmanager.admin` (org policy strips ALL automatic service-agent grants — both had to be granted explicitly for the GitHub connection). ~~Legacy SA's auto-granted `cloudbuild.builds.builder` REMOVED 2026-07-28 (unrecorded, unused — done-audit catch)~~ **IT WAS NOT UNUSED.** That grant is what lets a trigger running as a user-specified SA create a build; removing it broke CI the same day (last trigger-attributed build 2026-07-28T07:32Z) and every push since produced no image and NO build record. Restored 2026-08-05 and now DECLARED in `terraform/iam.tf` on `cello-cloud-build@` so an apply cannot strip it again. Read this as the cost of removing an out-of-band grant without first establishing what depends on it | 2026-07-28 | Terraform |
 | Artifact Registry `cello` | `us-east1-docker.pkg.dev/cello-infra/cello` — docker; images pushed by Cloud Build ONLY. Tags: `directory:{manual-dedc55ac, e8842f33…}`, `relay:{manual-dedc55ac, 4333c70e…, e8842f33…}` — all Cloud Build. **No `:latest` exists** (stale ones deleted per done-audit; consumers pin commit-SHA tags) | 2026-07-28 | Terraform |
 | Bucket `cello-infra_cloudbuild` | Cloud Build staging (auto-created by first submit) | 2026-07-28 | service-created |
-| Cloud Build connection `cello-github` | us-east1, **COMPLETE** (OAuth by Andre 2026-07-28; GitHub App installation 149532787 on Mygentic-AI, repo CELLO only; token secret P4SA-managed) | 2026-07-28 | gcloud bootstrap, imported into TF |
+| Cloud Build connection `cello-github` | us-east1, **COMPLETE** (OAuth by Andre 2026-07-28; GitHub App installation 149532787 on Mygentic-AI, repo CELLO only; token secret P4SA-managed). **Re-authorized by Andre 2026-08-05** to test M12-P11 — connection still reports COMPLETE, repo still linked, and `terraform plan` shows **ZERO drift** (installation id unchanged at 149532787, so the App was NOT reinstalled). **It did NOT fix event delivery** — see the M12-P11 note below | 2026-08-05 | gcloud bootstrap, imported into TF |
 | Cloud Build repo link `CELLO` | → https://github.com/Mygentic-AI/CELLO.git | 2026-07-28 | Terraform |
 | Triggers `cello-directory-image` / `cello-relay-image` | branch `^main$`, path-filtered per package (+ shared root files), run as `cello-cloud-build` SA | 2026-07-28 | Terraform |
 
@@ -614,3 +614,30 @@ previous version would have said only `failed`.
 pre-V57 schema, and once the grant landed, `terraform apply` was a no-op — same spec, same revision,
 still dead. The template now carries an `expected-schema` label tied to the migration version, so a
 schema bump always mints a FRESH revision instead of reusing a failed one.
+
+
+---
+
+## M12-P11 — push events do not reach Cloud Build (OPEN, narrowed 2026-08-05)
+
+Everything on the GOOGLE side now checks out, and a controlled probe still produced nothing:
+
+| Check | Result |
+|---|---|
+| Connection `cello-github` | `installationState: COMPLETE`, repo `CELLO` linked |
+| Triggers `cello-relay-image` / `cello-directory-image` | both exist (us-east1), enabled, correct `includedFiles` + config path |
+| Build SA `cello-cloud-build@` | has `roles/cloudbuild.builds.builder` (restored 2026-08-05, declared in `terraform/iam.tf`) |
+| `terraform plan` (connection + both triggers) | **No changes** — zero drift; App installation id still 149532787 |
+| Probe push `8f814456` (touches `infra/cloudbuild/relay.yaml`, IN the relay trigger's `includedFiles`) | landed on `origin/main` |
+| Resulting build | **NONE.** No build record, no denied-attempt audit entry |
+
+Manual `gcloud builds submit <repo-resource> --revision=<SHA>` works and is the current path.
+Distinguishing test for any future claim that this is fixed: a trigger-fired build has
+`substitutions.TRIGGER_NAME` set; a manual submit leaves it EMPTY. Every build in the project as of
+2026-08-05 has it empty, which is why "a build succeeded" was never evidence the trigger fired.
+
+**Remaining suspect is GitHub-side and needs a browser** (the CLI token gets 403 on
+`/user/installations` by design): github.com/organizations/Mygentic-AI/settings/installations →
+Google Cloud Build → confirm `CELLO` is in its repository access list. A connection can report
+COMPLETE while the App no longer watches that repo — the connection is authorized, but no event is
+ever generated to deliver, which fits the total absence of denied-attempt entries.
