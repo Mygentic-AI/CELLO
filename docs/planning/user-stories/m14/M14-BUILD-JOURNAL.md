@@ -2327,6 +2327,116 @@ go in together. P3 next.
 
 ---
 
+## Entry 28 — The layer was finished and nobody could reach it
+
+Two commits closed INBOUND-2 and DELIVERY-2. The suite was green, every unit reviewed, and none of
+it did anything. Three separate reasons, each of which produced silence rather than an error.
+
+### The reviewer found two; the third was why nobody noticed
+
+**Two identifiers for one thing.** The inbound router was handed the daemon's agent NAME. The
+delivery sweep queried by pubkey hex. So every received envelope was written to
+`owner_agent_id = "<name>"` and every delivery query read `owner_agent_id = "<64-hex>"`.
+`pendingDeliveries` returned `[]`. The tick reported nothing attempted. A fully synced document was
+invisible to both halves, and no query errored — an empty result is a valid answer.
+
+The store's own comment described the distinction and the sweep's comment restated it, and the code
+under both collapsed them anyway. A comment is not a constraint.
+
+**A field name nothing reads.** The sweep called the session opener with `{ pubkey }`. The
+negotiator reads `target_pubkey`, falling back to `counterparty_pubkey`, and nothing else. So the
+REUSE path — a session already open with that peer — worked, and the OPEN path never did. Delivery
+appeared to work in exactly the case a developer tests by hand and never in the case the feature
+exists for: a peer who came back online with no session up.
+
+The error it produced was worse than useless. `invalid_target_pubkey`, with guidance reading *"the
+counterparty's 32-byte hex K_local public key"* — accurate for a human calling the MCP tool, and it
+sends whoever reads it to inspect the peer's key when the bug is the caller's own field name. This
+was the second instance of the class; the close handler carries a comment about `session_id` vs
+`sessionId` one seam over. The fix is not better wording: `openSessionFor(agent, { targetPubkey })`
+makes the wrong shape unrepresentable.
+
+**And the third: a sweep delivering nothing looked exactly like a healthy idle one.** No log line
+distinguished them. That is what made the other two silent for as long as they were.
+
+### The real reason: nothing in production created a document
+
+Found by grep while the review ran. `store.createDocument` had no production caller — only
+`document-engine.ts`'s own factory and the test fixtures. So no document existed, so the sweep had
+nothing to sweep and the inbound path had nothing addressed to it. TOOLS-1 was not "the tool surface
+on top of the working layer". It was the reason the layer could not run at all.
+
+**A complete unreachable layer reads exactly like a working one.** Green tests, reviewed units,
+clean gates — and there is no test that fails for "the only caller is a fixture". This is worth
+holding onto: unit tests measure whether a unit is correct, never whether anything calls it.
+
+### Seven verbs, and what building them decided
+
+`propose`, `inbox`, `accept`, `refuse`, `list`, `read`, `write` — across the four lockstep places.
+
+**Consent is a separate act and is never inferred.** A document is a standing agreement to apply a
+counterparty's signed operations to local state; that is a larger grant than receiving a message.
+Accepting creates the document row in the same act, because the alternative leaves an operator who
+has agreed to something that does not exist, and the peer's first update refused as
+`document_unknown` — a refusal that names a real condition and explains nothing.
+
+**`write` takes the complete text, never a patch.** An agent emitting a patch must be right about
+offsets in a document its peer is concurrently editing, and a wrong offset in a CRDT is not a
+rejected patch — it is a permanent corruption both sides converge on. A non-string is refused rather
+than coerced: `content: 42` would otherwise replace the document with `"42"` and publish that as a
+legitimate signed edit.
+
+### The vocabulary guard earned its keep twice
+
+It refused the seven names until handlers existed behind them on every surface. Then it caught
+guidance naming `cello_doc_propose_retry` and `cello_doc_kill`, neither of which existed.
+
+That second catch was not a wording slip. A proposal whose send failed left a real local document
+and no way to reach the peer, because the proposer kept no copy of the envelope it sent —
+re-proposing mints a fresh nonce, hence a fresh `document_id`, hence a SECOND document, orphaning
+the first with no way to explain or clear it. A test that only reads strings surfaced a dead end in
+the recovery path. The proposer now stores its own proposal and `cello_doc_propose` with a
+`document_id` re-sends those exact bytes.
+
+### The test that would have caught all of it
+
+Every document test until now exercised one unit with the other side stubbed, and **a stub agrees
+with whatever the near side does**. That is the whole explanation for how both wiring defects
+survived a green suite.
+
+`document-surface-e2e.test.ts` wires two complete layers to each other: two databases, two real
+keypairs, two frame routers, nothing shared but bytes, each party's send handed to the other's
+`onDocumentFrame`. Propose → accept → write → deliver → converge, both directions, asserted through
+`cello_doc_read` rather than the live cache.
+
+Two things it measured rather than assumed. The tick reports `sent`, not `delivered` — the envelope
+left and no ack has come back, and counting a send as an ack is the exact lie `admitted: null`
+exists to refuse. And `LiveDocuments.get` does not throw for an id this daemon has never heard of:
+there is no log to fail on, so it returns a legitimately empty document. Its header claimed
+otherwise. Harmless because every caller checks `documents` first — but that is part of the
+contract, not a habit of the current callers, and it now says so.
+
+### One duplicated type, quietly
+
+`DocumentProperties` was declared twice — in the store and in protocol-types. `properties` is inside
+the proposal's signed preimage and `seamViolation` reads it, so two definitions meant two answers
+about what is admissible: one enforced at the signature, one at the store. They agreed by
+coincidence, and the first field added to either would have ended that silently. The store now
+re-exports the protocol type.
+
+### Gates
+
+`test` **3043 passed / 11 skipped** · `lint` · `typecheck` · `build` clean.
+
+### Milestone state
+
+P0 ✅ · P1 ✅ (SCREEN-1 🅿️) · P2 ✅ — INBOUND-2 and DELIVERY-2 both wired, reviewed, and fixed.
+P3: TOOLS-1 ⏳ (seven verbs shipped and under review; `status`, `diff`, `withdraw`, `close`, `kill`
+outstanding — the last two blocked behind the `notifyPeer`/`rollback` stubs, which refuse rather
+than reporting a rollback that did not happen). SKILL-1 ❌, SHIP-1 ❌. P4 untouched.
+
+---
+
 ## Related Documents
 
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits
