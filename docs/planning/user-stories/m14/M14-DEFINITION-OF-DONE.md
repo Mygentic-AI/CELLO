@@ -324,6 +324,12 @@ description: >
     hint honoured-or-refused, and the `discovery_lookup` mapping where only a RESULT is an answer
     about the peer — every other outcome throws rather than being called "offline"). Remaining: the
     composition-root instantiation and the tick scheduler.
+    **ORDERING CONSTRAINT — read this before wiring.** Do not wire the delivery worker into the
+    composition root before DOD-DOC-INBOUND-1 is wired on BOTH sides. Until a peer can ack, every
+    published envelope is sent, never answered, re-sent on the ack timeout, and stalls its document
+    at the unacked ceiling — so wiring delivery alone ships a feature that fails by construction,
+    and each resend appends a leaf to the peer's sealed conversation record. The two go in
+    together.
     **Discovered dependency — DOD-DOC-INBOUND-1 (new, below):** this line's ack is "the peer's
     daemon confirms admission (or rejection)", and no inbound document handler exists, so no send
     can honestly produce one. Rather than synthesise an ack (marking an envelope acknowledged while
