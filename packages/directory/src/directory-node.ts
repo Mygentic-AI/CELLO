@@ -619,6 +619,31 @@ export class CelloDirectoryNode {
 
   // pubkey_hex → authenticated signaling stream
   readonly #streams = new Map<string, Stream>();
+  /**
+   * DOD-SIGNALING-LIVENESS-1: every CURRENTLY-OPEN authenticated stream per agent.
+   *
+   * `#streams` holds one stream per agent — whichever authenticated most recently — and that is
+   * what `targetStreamFound` reads. It is not enough on its own: an agent can legitimately hold
+   * more than one authenticated stream at a time (an additive reconnect, a visiting connection, a
+   * second process on the same identity), and when ONE of them closes the single-valued map cannot
+   * tell "the agent is gone" from "one of the agent's connections is gone". Before this set it
+   * assumed the former and deregistered the agent outright, while a perfectly healthy stream stayed
+   * open — the 2026-07-31 incident, where every surface said online for 25 minutes and nothing
+   * could reach the agent.
+   */
+  readonly #agentStreams = new Map<string, Set<Stream>>();
+
+  /**
+   * DOD-SIGNALING-LIVENESS-1: is there a registered signaling stream for this agent?
+   *
+   * READ-ONLY. This is the exact predicate `targetStreamFound` uses to decide `target_offline`, so
+   * it is the only honest way to assert "the agent is reachable" — a test that checked a socket, a
+   * presence row, or a heartbeat would agree with the defect rather than catch it (all three did,
+   * for 25 minutes, during the 2026-07-31 incident).
+   */
+  hasRegisteredStream(pubkeyHex: string): boolean {
+    return this.#streams.has(pubkeyHex);
+  }
 
   // SESSION-004: initiator_pubkey_hex → IThresholdSigner (registered per-agent)
   readonly #thresholdSigners = new Map<string, IThresholdSigner>();
@@ -1888,6 +1913,13 @@ export class CelloDirectoryNode {
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
           visiting = resp.visiting === true;
           this.#streams.set(authedPubkeyHex, stream);
+          // DOD-SIGNALING-LIVENESS-1: track EVERY open stream, not just the newest, so a close can
+          // tell "this agent has no connections left" from "this agent has one fewer connection".
+          {
+            let live = this.#agentStreams.get(authedPubkeyHex);
+            if (!live) { live = new Set<Stream>(); this.#agentStreams.set(authedPubkeyHex, live); }
+            live.add(stream);
+          }
           // PRESENCE-001 + cross-node item 3: a VISITING connection (a client reaching into a node
           // that is NOT its home to broker a cross-node session) gets the #streams entry so the
           // same-node session flow sees it, but writes NO presence. Writing here would reassign
@@ -2531,18 +2563,48 @@ export class CelloDirectoryNode {
         pendingSessionsCount: this.#pendingSessions.size,
         pendingSessionKeys: [...this.#pendingSessions.keys()].map(k => truncHex(k)),
       });
-      if (authedPubkeyHex && this.#streams.get(authedPubkeyHex) === stream) {
-        this.#streams.delete(authedPubkeyHex);
-        // PRESENCE-001 + cross-node item 3: the agent's stream closed → offline + last-seen (only if
-        // this node still owns the row; a stale stream already replaced no-ops in SQL). A VISITING
-        // connection writes NOTHING: eu1 does not own Alice's row, so an offline write here would
-        // either no-op (harmless) OR — if the visiting auth had wrongly claimed ownership — mark her
-        // offline consortium-wide while her real home connection is alive. Suppressing both writes is
-        // the invariant that keeps presence honest.
-        if (!visiting) {
-          this.#recordPresence("offline", authedPubkeyHex);
+      if (authedPubkeyHex) {
+        // DOD-SIGNALING-LIVENESS-1: drop THIS stream, then decide from what is left.
+        //
+        // The old guard was `#streams.get(pubkey) === stream`, which protects the NEWEST stream and
+        // not the one the client is actually using. Two streams for one agent (A then B) put B in
+        // the map; when B closed, the guard passed and the entry was deleted — taking A's
+        // registration with it. A stayed open and kept answering pings, so the client saw a healthy
+        // connection while the directory answered `target_offline` to everyone. Recovery required a
+        // daemon restart. That is the 2026-07-31 incident, reproduced in
+        // persist-reconnect-protocol.test.ts.
+        const live = this.#agentStreams.get(authedPubkeyHex);
+        live?.delete(stream);
+        const survivor = live && live.size > 0 ? [...live][live.size - 1]! : undefined;
+
+        if (survivor) {
+          // Another connection for this agent is still open. Re-point the map at it rather than
+          // deregistering, and write NO presence change — the agent never went offline.
+          if (this.#streams.get(authedPubkeyHex) === stream) {
+            this.#streams.set(authedPubkeyHex, survivor);
+          }
+          this.#logger?.info("signaling.stream.closed.survivor_retained", {
+            authedShort: authedPubkeyHex.slice(0, 16),
+            remainingStreams: live!.size,
+          });
+          protocolLog("AUTH", `Stream closed but ${live!.size} remain — peer ${truncHex(authedPubkeyHex)} stays registered`);
+        } else {
+          if (live) this.#agentStreams.delete(authedPubkeyHex);
+          if (this.#streams.get(authedPubkeyHex) === stream) {
+            this.#streams.delete(authedPubkeyHex);
+            // PRESENCE-001 + cross-node item 3: the agent's LAST stream closed → offline +
+            // last-seen (only if this node still owns the row; a stale stream already replaced
+            // no-ops in SQL). A VISITING connection writes NOTHING: eu1 does not own Alice's row,
+            // so an offline write here would either no-op (harmless) OR — if the visiting auth had
+            // wrongly claimed ownership — mark her offline consortium-wide while her real home
+            // connection is alive. Suppressing both writes is the invariant that keeps presence
+            // honest.
+            if (!visiting) {
+              this.#recordPresence("offline", authedPubkeyHex);
+            }
+            protocolLog("AUTH", `Removed stream from map — peer ${truncHex(authedPubkeyHex)}${visiting ? " (visiting — no presence write)" : ""}`);
+          }
         }
-        protocolLog("AUTH", `Removed stream from map — peer ${truncHex(authedPubkeyHex)}${visiting ? " (visiting — no presence write)" : ""}`);
       }
 
       // AC-011: clean up any provisional sessions where this client was a participant

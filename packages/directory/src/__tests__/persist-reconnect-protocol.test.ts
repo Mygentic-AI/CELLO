@@ -309,3 +309,124 @@ describe("TEST-RECONNECT-003: already_connected frame includes connection_id", (
     await sA2.close();
   });
 });
+
+/**
+ * DOD-SIGNALING-LIVENESS-1 — an agent can be silently DEREGISTERED by its own second stream.
+ *
+ * THE INCIDENT (2026-07-31): an agent read `online` on every surface — `cello status`, the daemon,
+ * the directory's own database — while nothing could reach it, for ~25 minutes, recovering only on
+ * a daemon restart. Session requests answered `target_offline`; the directory logged
+ * `targetStreamFound: false`. The client observed NO disconnect, so no reconnect, so no
+ * re-authentication, so nothing repopulated the map. The 15 s/15 s heartbeat had nothing to report
+ * because the transport stream was genuinely alive — it accounted for only 42 of 3,556 stream deaths.
+ *
+ * THE MECHANISM THIS TEST PINS. `#streams` has exactly ONE writer (auth) and ONE deleter (the
+ * `finally` when a stream handler exits), and the deleter is guarded by
+ * `this.#streams.get(pubkey) === stream`. That guard protects the NEWEST stream, not the one the
+ * client is actually using. So:
+ *
+ *   1. stream A authenticates    → map[agent] = A          (the client's live signaling stream)
+ *   2. stream B authenticates    → map[agent] = B          (a second connection, same agent)
+ *   3. stream B closes           → guard sees map[agent] === B, deletes the entry
+ *   4. stream A is still open, still answers pings, and the agent is now UNREACHABLE
+ *
+ * The client cannot detect this: its stream is alive and the ping handler never consults `#streams`,
+ * so the heartbeat is structurally blind to the registration. A deregistered-but-connected agent is
+ * exactly the "every surface says online, nothing can reach it" state.
+ *
+ * The invariant: while ANY authenticated stream for an agent is still open, the agent stays
+ * registered. Closing one connection may never deregister another.
+ */
+describe("DOD-SIGNALING-LIVENESS-1: a closing stream must not deregister a still-open one", () => {
+  let scope: ReturnType<typeof createTestScope>;
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  it("stream A stays REGISTERED after a second stream B for the same agent opens and closes", async () => {
+    const dirKeyProvider = generateKeypair();
+    const { node: dirNode, directory, stop } = await createDirectoryNode({
+      keyProvider: dirKeyProvider,
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: [] },
+      store: new InMemoryDirectoryStore(),
+    });
+    scope.addCleanup(async () => { try { await stop(); } catch {} });
+
+    const agentKp = generateKeypair();
+    const dirAddrs = dirNode.listenAddresses();
+
+    // Stream A — the agent's real, long-lived signaling connection.
+    const nodeA = await createNode({ keyProvider: agentKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeA.start();
+    scope.addCleanup(async () => { try { await nodeA.stop(); } catch {} });
+    const a = await doAuth(nodeA, dirNode.getPeerId(), agentKp, dirAddrs);
+
+    expect(directory.hasRegisteredStream(a.pubkeyHex), "A must be registered after auth").toBe(true);
+
+    // Stream B — a second connection for the SAME agent. This is not exotic: a reconnect the client
+    // considers additive, a visiting connection, or a second process on the same identity.
+    const nodeB = await createNode({ keyProvider: agentKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeB.start();
+    scope.addCleanup(async () => { try { await nodeB.stop(); } catch {} });
+    const b = await doAuth(nodeB, dirNode.getPeerId(), agentKp, dirAddrs);
+    expect(directory.hasRegisteredStream(b.pubkeyHex)).toBe(true);
+
+    // B goes away. A is untouched and, from the client's side, perfectly healthy.
+    await b.stream.close();
+    await nodeB.stop();
+
+    // THE ASSERTION. Before the fix the map is now EMPTY: B's `finally` saw map[agent] === B and
+    // deleted it, taking A's registration with it. A is still open — the agent believes it is
+    // online, every surface agrees, and every session request to it answers target_offline.
+    // Settle: the close is asynchronous on the directory side.
+    await new Promise((r) => setTimeout(r, 500));
+    expect(
+      directory.hasRegisteredStream(a.pubkeyHex),
+      "closing B must not deregister the still-open A",
+    ).toBe(true);
+  }, 30_000);
+
+  // The necessary complement. Without this, "never deregister anyone" passes the test above — and
+  // that is a WORSE defect than the one being fixed: every agent would read as reachable forever,
+  // so `target_offline` would never be answered and every session request to a genuinely absent
+  // agent would hang instead of failing fast.
+  it("the LAST stream closing DOES deregister — the agent is genuinely gone", async () => {
+    const dirKeyProvider = generateKeypair();
+    const { node: dirNode, directory, stop } = await createDirectoryNode({
+      keyProvider: dirKeyProvider,
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: [] },
+      store: new InMemoryDirectoryStore(),
+    });
+    scope.addCleanup(async () => { try { await stop(); } catch {} });
+
+    const agentKp = generateKeypair();
+    const dirAddrs = dirNode.listenAddresses();
+
+    const nodeA = await createNode({ keyProvider: agentKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeA.start();
+    scope.addCleanup(async () => { try { await nodeA.stop(); } catch {} });
+    const a = await doAuth(nodeA, dirNode.getPeerId(), agentKp, dirAddrs);
+
+    const nodeB = await createNode({ keyProvider: agentKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeB.start();
+    scope.addCleanup(async () => { try { await nodeB.stop(); } catch {} });
+    const b = await doAuth(nodeB, dirNode.getPeerId(), agentKp, dirAddrs);
+
+    expect(directory.hasRegisteredStream(a.pubkeyHex)).toBe(true);
+
+    // Close BOTH. After the second, nothing is left and the agent must be deregistered.
+    await b.stream.close();
+    await nodeB.stop();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(directory.hasRegisteredStream(a.pubkeyHex), "one survivor remains").toBe(true);
+
+    await a.stream.close();
+    await nodeA.stop();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(
+      directory.hasRegisteredStream(a.pubkeyHex),
+      "with no streams left the agent must be deregistered",
+    ).toBe(false);
+  }, 30_000);
+});
