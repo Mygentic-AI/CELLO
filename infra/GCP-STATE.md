@@ -293,11 +293,36 @@ the third node rather than sit at threshold. Fine at pre-launch load. **Revert t
 once us-central1 has capacity**; re-probe with the command above to check. The revert marker is in
 `terraform.tfvars` beside the value.
 
-**⚠️ STILL OWED — the `DOD-ACCOUNTS-CHAIN-1` acceptance check has NOT been run.**
-`verifyChain("user_accounts")` on each node's database. There is no health/API surface exposing it
-(that gap is itself a recorded follow-on), so it needs DB access via IAP SSH to a node. Until it is
-run, "the chain is now valid in production" is unverified — the code fix is deployed, the assertion
-is not.
+**✅ ACCEPTANCE CHECK RUN 2026-08-06 (IAP SSH + Secret Manager + psql) — and it FAILED on one node.**
+There is no health/API surface exposing `verifyChain` (that gap is a recorded follow-on), so this was
+done by hand: IAP SSH to each node → access token from the metadata server → DB credentials from
+Secret Manager → `docker run postgres:18 psql` over the PSC address → recompute the chain in Python.
+
+| Node | `user_accounts` | `verifyChain` |
+|---|---|---|
+| `gcp-use1` | 1 row, `CHAINED_OK` | ✅ **VALID** |
+| `gcp-usc1` | 1 row, **`UNCHAINED_LEGACY`** (stored hash == `SHA-256(account_id ‖ phone_stub_hash)`) | ❌ **INVALID** |
+
+**"Greenfield, nothing to migrate" was WRONG** — there is one pre-fix account row, and it behaves
+exactly as the unit review predicted: `pg-ae-store` applies replicated `user_accounts` rows through
+`insertWithChain`, which RECOMPUTES `chain_hash` locally, so the row landed **chained on the
+receiver** and stayed **unchained on the node that originally wrote it**. Receivers converge clean;
+the origin does not. `gcp-usc1` was the origin.
+
+**⚠️ OPEN — one row on `gcp-usc1` needs repair, and it is deliberately NOT done unilaterally.**
+Until it is, `verifyChain("user_accounts")` stays red on that node, and a red verification cannot be
+told from a tamper — which is the precise defect `DOD-ACCOUNTS-CHAIN-1` exists to remove. The row's
+DATA is fine; only its `chain_hash` was computed with the wrong algorithm. Options:
+1. **Recompute the one hash** — `UPDATE ... SET chain_hash = SHA-256(serialize(record) ‖ GENESIS)`
+   for the single row at position 1. Surgical; account_id and phone_stub_hash untouched.
+2. **Delete it and let anti-entropy re-replicate it chained** — note it may be an FK target of
+   `agent_profiles.account_id`, so this is `SET NULL` + re-link, never a bare `DELETE`.
+
+**Why this needs an explicit decision rather than an agent's judgement:** rewriting a `chain_hash` in
+an append-only tamper-evidence table, using admin credentials to bypass the RLS that deliberately
+denies the app user `UPDATE`, is *the exact operation the chain exists to detect*. It is a legitimate
+repair of a known-bad write, but it must be a recorded decision, not a side effect. Andre's call.
+The verification recipe above is repeatable — re-run it after any repair.
 
 ## Live image tags — directory on `dir-d35d0a1d` (2026-08-03, ROLL COMPLETE)
 
