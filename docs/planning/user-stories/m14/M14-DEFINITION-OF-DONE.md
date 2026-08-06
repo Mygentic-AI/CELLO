@@ -814,10 +814,45 @@ belong to. One is fixed; the rest are open and none is document-specific — the
   to zero, convergence; **the session containing the `0x05` leaf seals and the seal VERIFIES on
   both sides** (the directory-side leaf changes in DOD-DOC-LEAF-1 are exercised by exactly this
   case); then the stall path: supersession rejected → one retry → `stalled` visible on both
-  sides. — ❌
+  sides. — ⏳ **CORE CASE GREEN** (`d4a1ccde`); the stall sub-case is SKIPPED and open.
+
+  Green: a deletion into an append-only document is quarantined, the refusal puts a `0x05` leaf in
+  the refuser's tree, an ordinary message rides the same session so the tree is genuinely mixed, and
+  the session SEALS to one root both parties compute independently. That is the case the
+  directory-side leaf work exists for and it had never been exercised — a rejection that quietly
+  broke the seal would be worse than no rejection, because the refusal is a security decision and
+  the record of it is what an operator would later need to prove.
+
+  **Two findings from the stall sub-case:**
+
+  - **FIXED (`62edeed`) — the signed rejection was never transmitted.** `reject()` built it, signed
+    it over the canonical preimage, derived its leaf hash from those bytes, appended the leaf, and
+    returned `{stalled, round}` — dropping the envelope. Nothing in production called
+    `encodeDocumentRejection`. The SENDER's retry round is advanced by receiving that frame, so the
+    counter never left zero and the whole supersede-then-stall protocol in `document-rejection.ts`,
+    ceiling and duplicate-check included, was unreachable code guarding an unreachable state.
+  - **OPEN — there is no stall for a peer that refuses.** The only `stalled` transition fires on
+    UNACKED sends: a peer that never answers. A peer that answers "refused" every time is not
+    covered, and that is the case an operator is most likely to hit, because a rule mismatch
+    produces exactly it. Related: once one envelope is refused, everything the sender chains after
+    it comes back `document_chain_refused` — a different refusal from the rule that started it, and
+    one the gate's rejection machinery never sees. The supersede protocol is what closes both.
+
+  **Pattern worth naming: three protocol frames in this milestone existed as types, preimages and
+  receivers with no producer** — the document ack, the proposal ack, and now the rejection. A wire
+  type with no caller looks finished in every review and does nothing. Worth a guard.
+
 - **DOD-DOC-E2E-APPEND-1** [trustless-cello] — **append-only enforcer** ran green: on
   `append_only: true`, a deleting update is rejected and superseded; an appending update
-  converges. Use Case B's V1 claim, proven. — ❌
+  converges. Use Case B's V1 claim, proven. — ✅ **GREEN, 2026-08-06** (`21053112`).
+
+  Enforced on the RECEIVER, which is the only place the claim is worth anything: a peer running a
+  patched client that does not enforce it locally still cannot make the deletion land. The test
+  asserts the GATE FIRED — waiting on the receiver's own `document.update.quarantined` — not merely
+  that the deletion is absent, because "the rule refused it" and "it never arrived" look identical
+  from outside and only one is the claim. The first version had exactly that hole. It also asserts
+  the inbox DISCLOSES `append_only` before consent: a rule the operator discovers by having a
+  deletion refused is not a rule they agreed to.
 - **DOD-DOC-E2E-WRITE-1** [trustless-cello] — **write-path enforcer** ran green: the full file
   round-trip at the tool surface (edit file → publish → peer file rewritten → pending → diff
   stats → diff → content identical), then withdraw on an undelivered update reverts the
