@@ -194,10 +194,29 @@ async function twoPartiesInSession(label: string): Promise<{ a: Party; b: Party 
   const inbound = (await awaitP) as { type?: string; session_id?: string };
   expect(inbound.type).toBe("new_session");
 
-  return {
-    a: { conn: connA, daemon: daemonA, celloDir: celloDirA, pubkey: pubA, sessionId: init.sessionId! },
-    b: { conn: connB, daemon: daemonB, celloDir: celloDirB, pubkey: pubB, sessionId: inbound.session_id! },
-  };
+  const a: Party = { conn: connA, daemon: daemonA, celloDir: celloDirA, pubkey: pubA, sessionId: init.sessionId! };
+  const b: Party = { conn: connB, daemon: daemonB, celloDir: celloDirB, pubkey: pubB, sessionId: inbound.session_id! };
+
+  // ONE ROUND TRIP BEFORE ANY DOCUMENT, in BOTH directions.
+  //
+  // Under investigation, not decoration. A document frame sent immediately after
+  // `cello_initiate_session` returns is sometimes lost — no error on either side, the sender logs a
+  // successful send, the receiver logs nothing — and the case that has always carried a message
+  // exchange first is the case that has always been reliable. Establishing that correlation is the
+  // point: if the journeys become reliable with this and unreliable without it, the race is in the
+  // window between a session being reported open and it actually carrying content, which is a
+  // product defect and not a harness one.
+  expect(((await b.conn.call("cello_send", {
+    cello_session_id: b.sessionId,
+    content: "B can reach A",
+    signal: "over",
+  })) as { ok?: boolean }).ok).toBe(true);
+  expect(((await a.conn.call("cello_receive", {
+    cello_session_id: a.sessionId,
+    timeout_ms: 20_000,
+  })) as { content?: string | null }).content).toBe("B can reach A [[OVER]]");
+
+  return { a, b };
 }
 
 describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E-CONV-1)", () => {
@@ -209,22 +228,6 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
     // over the socket while every unit test stayed green. If this fails, nothing below means
     // anything.
     expect(await a.conn.call("cello_doc_list", {})).toMatchObject({ ok: true });
-
-    // ── 1b. THE SESSION CARRIES B→A TRAFFIC AT ALL ────────────────────────────────────────────
-    // A PRECONDITION, asserted rather than assumed, and it exists because the first red run could
-    // not distinguish two very different faults: B's document frames reporting a successful send
-    // and never arriving at A might be a defect in the document path, or the responder's outbound
-    // direction might simply not carry content. Those belong to different subsystems and different
-    // owners. One ordinary message settles it before any document is involved.
-    expect(((await b.conn.call("cello_send", {
-      cello_session_id: b.sessionId,
-      content: "B can reach A",
-      signal: "over",
-    })) as { ok?: boolean }).ok).toBe(true);
-    expect(((await a.conn.call("cello_receive", {
-      cello_session_id: a.sessionId,
-      timeout_ms: 20_000,
-    })) as { content?: string | null }).content).toBe("B can reach A [[OVER]]");
 
     // ── 2. PROPOSE AND CONSENT ────────────────────────────────────────────────────────────────
     const starting = "# Release plan\n\nowner: unassigned\ndate: unassigned\n";
