@@ -880,6 +880,39 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
 
 ## Parked
 
+- **M12-P17** — **content belonging to an ENDED session has no correct disposition.** One root, two
+  wrong answers (see Entries 93–95 and the CELLO_Coder_1 exchange in Entry 94):
+  - **A, the loop:** parked content for a sealed session is pulled, verified, refused
+    (`session_committed` / `counterparty_unknown`), and deliberately NOT confirm-deleted — so it is
+    re-pulled on every drain forever. Measured 3 distinct messages × ~120 pulls on one machine, 43 +
+    78 on another. Real messages, provably sent, that no operator will ever read.
+  - **B, the wake:** messages unread when a session sealed are re-presented as live, actionable work.
+    An agent OBEYED a directive out of a sealed conversation and announced standby to a counterparty
+    holding no record of the session (CELLO_Coder_1's `DOD-TERMINAL-WAKE-1`).
+  **Agreed fix — a post-seal annex outside the sealed tree** (any post-seal append would change
+  `sealed_root`), with four constraints, the first load-bearing:
+  1. **Inertness must be STRUCTURAL** — not in any wake path, not in any inbox/pending total, never
+     auto-injected into agent context; reachable only by an explicit operator read. A convention
+     relocates the bug; the next agent reads the field name, not the doc comment.
+  2. It must NOT inherit the seal's vocabulary — annex content is verified but not covered by
+     `sealed_root`, a weaker tier, and needs its own word at the field name.
+  3. **Durable annex write STRICTLY BEFORE confirm-delete.** A crash between them turns a noisy loop
+     into permanent silent loss — the exact outcome this exists to prevent.
+  4. **Key on (recipient pubkey, content hash)**, session attribution optional — `counterparty_unknown`
+     content cannot be attributed to a session, and that is the larger half (78 of 121).
+
+  **Narrowing done 2026-08-06, so the next session does not redo it:**
+  - `getUnreadSummary` (`session-node-manager.ts:1315`) ALREADY excludes `#TERMINAL_STATUSES`. Sealed
+    content is not in the normal unread path.
+  - `getSealedUnread` (`:1342`, DOD-SEALED-INBOX-1) is surfaced at exactly ONE call site —
+    `notification-handlers.ts:100`, inside the `cello_inbox` PULL, with read/dismiss guidance. A pull
+    is inert by construction.
+  - **Therefore the measured wake comes from NEITHER.** Find the third path before changing anything:
+    the notification dispatcher / `cello_event` push and whatever the receptionist agent blocks on are
+    the places to look. Do not "fix" the two paths above — they are already correct.
+  → Entries 93, 94, 95
+
+
 - **M12-P16** — **`set-agent-offline` does not take an agent offline.** Measured live 2026-08-05 on
   published `daemon 0.0.124`. I set `Miss_Chelly_H` offline and confirmed it
   (`state: registered`, `standing_receiver_ready: false`), then sent it a message from another
