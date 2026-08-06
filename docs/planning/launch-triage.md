@@ -560,6 +560,14 @@ Recorded so they stop being re-found by every sweep:
 - **`DOD-SESSION-REAP-1`** (M8C, ❌ backlog) — restart-interrupted sessions accumulate as
   un-sealable cruft. Its own line says cosmetic, not launch-blocking; the reaper must be
   evidence-gated, never age-gated, when it is built. Ship without.
+- **`DOD-RETRYQ-STRAND-1`** (M8C, ❌ raised 2026-08-06 from a live daemon — `retryQueueDepth` had
+  been stuck at 1). A direct-resend row whose session went terminal, permanent because the queue's
+  only consumer (`drainSession`) has no production caller. **Ship without.** The operator IS told
+  the send failed (`ok:false` + a WARN), so nothing is lost silently and no trust claim is broken —
+  that was the only reading that could have made it blocking. What remains is a pinned health
+  metric and an accumulating second copy of message plaintext at rest (inside SQLCipher). Real, but
+  forgivable; watch the growth rate, not the single row. The relay parked-content TTL does NOT cover
+  it — different store, different side of the wire.
 - **`DOD-SPINE-JCONTENT-1`** (M8D, 🅿️) — the live parked-message spine journey is 5/10 green.
   Test-harness debt; the two product defects it surfaced are fixed.
 

@@ -2606,9 +2606,19 @@ own story) deliberately, never smuggled in as a rider. Source:
      backlog from this corpse. That is the same defect shape as `verifyChain` being permanently red
      (`DOD-ACCOUNTS-CHAIN-1`) and `online` meaning nothing (item 12): **a signal that is always on
      cannot report anything.**
-  2. **Undelivered content, unsurfaced.** 99 bytes were never delivered and never appear in any
-     transcript (`message_count: 0`). Whether the operator was told the send failed is NOT
-     established — do not assume either way without checking the send path's return.
+  2. **The operator WAS told — silent non-delivery is RULED OUT** (checked 2026-08-06, correcting the
+     first version of this line, which left it open). `session-content-handlers.ts:393` enters this
+     branch only when `!sendResult.ok`, logs `session.content.send.failed` at WARN, and returns
+     `ok:false` with a named reason. The sender is not misled, which removes the only reading that
+     could have made this launch-blocking.
+  3. **A permanent second copy of message plaintext at rest — the sharper issue, and already known.**
+     The code comment at `:398-402` (M12-P13, review MEDIUM-4) says it outright: `drainSession` —
+     this nonce queue's ONLY consumer — **has no production caller**, so every row it writes is
+     permanent. So "nothing reaps it" understates it: the rows are permanent BY CONSTRUCTION because
+     the consumer is dead code, not because a sweep was forgotten. It is inside SQLCipher, so
+     encrypted at rest, but it accumulates one decrypted-content copy per non-durable send failure
+     and nothing will ever read them. That is a data-minimisation concern for a trust product, and
+     the growth rate is whatever the non-durable-failure rate is.
 
   **ACs (draft):**
   1. When a session reaches a terminal status, its retry-queue entries are removed — or explicitly
@@ -2634,8 +2644,12 @@ own story) deliberately, never smuggled in as a rider. Source:
   commit message). This is the mirror image: a client-side row no relay sweep can touch. Same class
   of gap at the other end, which is why one does not imply the other.
 
-  **Not launch-blocking** on current evidence (one row, no user-visible breakage proven), but it
-  disables a health metric, so it should not sit indefinitely. Andre ranks it.
+  **NOT launch-blocking — assessed 2026-08-06 and recorded on [[launch-triage]]'s "left off on
+  purpose" list** so it stops being re-discovered. It fails the ruin test: the core value is
+  untouched, no message is lost silently, and no false trust claim is made. The two live concerns —
+  a pinned diagnostic and accumulating unread plaintext copies — are real but forgivable at launch.
+  The fix is small when it comes: either give `drainSession` a caller or stop writing rows for a
+  queue that has none. Do NOT age-gate the cleanup (see AC2).
 
 - **DOD-TESTDAEMON-REAP-1** ❌ OPEN (raised 2026-07-30) — the test harness leaks its subject daemon;
   one had been running for 1h50m past its test.
