@@ -12,6 +12,10 @@
 # no build and no denied-attempt audit entry — the event was not reaching Cloud Build at all (the
 # SA half was fixed; the delivery half was not). Tracked as M12-P11.
 #
+# PROBE 3 — 2026-08-06, after the Cloud Build REPOSITORY LINK was recreated (terraform -replace).
+# The GitHub App reports 'All repositories', so App-level access was never the blocker; the link
+# resource carried no webhookId and had not been touched since it was created on 2026-07-28.
+#
 # PROBE 2 — 2026-08-06. The first re-authorization (2026-08-05) did NOT restore event delivery: the
 # probe push landed on origin/main touching this file and produced no build and no denied-attempt
 # audit entry. The operator re-completed the OAuth again; this edit is the second probe. Same
