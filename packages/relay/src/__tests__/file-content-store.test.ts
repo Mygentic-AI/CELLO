@@ -14,7 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import type { Logger, LogContext, ContentStoreEntry } from "@cello-protocol/interfaces";
-import { FileContentStore } from "../adapters/file-content-store.js";
+import { FileContentStore, resolveContentTtlMs } from "../adapters/file-content-store.js";
+import { CONTENT_STORE_TTL_MS } from "@cello-protocol/interfaces";
 
 function captureLogger(): { logger: Logger; events: Array<{ name: string; ctx?: LogContext | Error }> } {
   const events: Array<{ name: string; ctx?: LogContext | Error }> = [];
@@ -170,5 +171,35 @@ describe("FileContentStore (MSG-001)", () => {
     expect(await store.pull(rHex)).toHaveLength(0);
     const swept = await store.sweepExpired(Date.now());
     expect(swept).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("M12-P18: resolveContentTtlMs — the env-configurable retention", () => {
+  const DEFAULT = 30 * 24 * 60 * 60 * 1000;
+
+  it("absent or blank → default, not invalid (the common case)", () => {
+    expect(resolveContentTtlMs(undefined, DEFAULT)).toEqual({ ttlMs: DEFAULT, invalid: false });
+    expect(resolveContentTtlMs("", DEFAULT)).toEqual({ ttlMs: DEFAULT, invalid: false });
+    expect(resolveContentTtlMs("   ", DEFAULT)).toEqual({ ttlMs: DEFAULT, invalid: false });
+  });
+
+  it("a valid positive day count is honored", () => {
+    expect(resolveContentTtlMs("7", DEFAULT)).toEqual({ ttlMs: 7 * 24 * 60 * 60 * 1000, invalid: false });
+    expect(resolveContentTtlMs("90", DEFAULT)).toEqual({ ttlMs: 90 * 24 * 60 * 60 * 1000, invalid: false });
+  });
+
+  it("a SUPPLIED-but-unusable value falls back AND flags invalid — never silent, never NaN", () => {
+    // NaN is the specific hazard: a NaN cutoff sweeps nothing (or everything). Each of these must
+    // resolve to the default with invalid:true so the boot log warns.
+    for (const bad of ["abc", "0", "-5", "NaN", "1e999"]) {
+      const r = resolveContentTtlMs(bad, DEFAULT);
+      expect(Number.isFinite(r.ttlMs), `"${bad}" must not yield NaN`).toBe(true);
+      expect(r.ttlMs).toBe(DEFAULT);
+      expect(r.invalid, `"${bad}" must be flagged invalid`).toBe(true);
+    }
+  });
+
+  it("the DEFAULT constant is 30 days", () => {
+    expect(CONTENT_STORE_TTL_MS).toBe(30 * 24 * 60 * 60 * 1000);
   });
 });

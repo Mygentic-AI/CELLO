@@ -36,6 +36,9 @@
  *   AWS_REGION                        — AWS region for observability events (default: us-east-1)
  *   WAL_DIR                           — directory for per-session WAL files (required for CELLO_ENV=dev/production)
  *                                        PERSIST-013: FileSessionWal writes one {sessionId}.wal per active session.
+ *   RELAY_CONTENT_TTL_DAYS            — parked-content retention in days (default 30). Store-and-forward
+ *                                        mail is swept after this; a bad/empty value falls back to 30 and
+ *                                        logs relay.config.content_ttl_invalid.
  *
  * SI-001: the relay private key MUST NEVER be logged, written to disk (after initial load),
  * or included in any error message. logRelayServiceStartFailed does not accept a relayId
@@ -50,8 +53,9 @@ import { StdoutLogger } from "@cello-protocol/interfaces/stubs";
 import { createRelayNode } from "../index.js";
 import { NetworkDirectoryAdapter } from "../network-directory-adapter.js";
 import { FileSessionWal, InMemorySessionWal } from "../adapters/file-session-wal.js";
-import { FileContentStore } from "../adapters/file-content-store.js";
+import { FileContentStore, resolveContentTtlMs } from "../adapters/file-content-store.js";
 import { InMemoryContentStore } from "@cello-protocol/interfaces/stubs";
+import { CONTENT_STORE_TTL_MS } from "@cello-protocol/interfaces";
 import {
   logRelayServiceStarted,
   logRelayServiceStopped,
@@ -122,9 +126,24 @@ if (!FileContentStore.validateConfig(celloEnv, walDir)) {
 // M7-MSG-001: select the store-and-forward content store based on CELLO_ENV.
 // CELLO_ENV=local → InMemoryContentStore (no file I/O).
 // CELLO_ENV=dev/staging/production → FileContentStore rooted under WAL_DIR.
+//
+// M12-P18: parked-content retention is per-relay configurable via RELAY_CONTENT_TTL_DAYS, defaulting
+// to CONTENT_STORE_TTL_MS (30 days). Same NaN-guarded, log-what-is-in-force discipline as the idle
+// sweep (RELAY_SESSION_MAX_IDLE_MS): a bad or empty value falls back to the default AND says so, so a
+// per-cloud retention nobody is holding to account cannot drift silently.
+const { ttlMs: contentTtlMs, invalid: contentTtlInvalid } = resolveContentTtlMs(
+  process.env["RELAY_CONTENT_TTL_DAYS"], CONTENT_STORE_TTL_MS,
+);
+if (contentTtlInvalid) {
+  logger.warn("relay.config.content_ttl_invalid", {
+    supplied: process.env["RELAY_CONTENT_TTL_DAYS"] ?? "", usingMs: contentTtlMs,
+  });
+}
+// Answerable from the boot log, like the idle sweep — "what retention is this relay running".
+logger.info("relay.config.content_ttl", { contentTtlMs, contentTtlDays: contentTtlMs / (24 * 60 * 60 * 1000) });
 const contentStore = celloEnv === "local"
-  ? new InMemoryContentStore({ logger })
-  : new FileContentStore({ walDir, logger });
+  ? new InMemoryContentStore({ logger, ttlMs: contentTtlMs })
+  : new FileContentStore({ walDir, logger, ttlMs: contentTtlMs });
 
 // ─── Directory pubkey validation ───────────────────────────────────────────────
 
@@ -557,7 +576,7 @@ logger.info("relay.config.idle_sweep", { maxIdleMs, sweepIntervalMs });
 relayResult.relay.startIdleSweep(sweepIntervalMs, maxIdleMs);
 
 // ─── M7-MSG-001 (AC-017c): store-and-forward content-store TTL sweep ────────────
-// Proactively reclaims TTL-expired parked entries (CONTENT_STORE_TTL_MS, 7 days) even
+// Proactively reclaims TTL-expired parked entries (contentTtlMs, default 30 days) even
 // when the recipient never reconnects — on-access reclamation alone would leave such
 // entries on disk bounded only by cap eviction. No-op when the store is not configured.
 const contentSweepIntervalMs = 3_600_000; // 1 hour, mirroring the idle sweep cadence

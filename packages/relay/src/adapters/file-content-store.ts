@@ -47,6 +47,21 @@ import { CONTENT_STORE_TTL_MS, CONTENT_STORE_MAX_BYTES, CONTENT_STORE_MAX_ENTRIE
 
 export type { ContentStore, ContentStoreEntry };
 
+/**
+ * M12-P18: resolve the parked-content retention (ms) from an operator-supplied RELAY_CONTENT_TTL_DAYS
+ * value, falling back to `defaultMs` on absent/blank/invalid input. Pure and exported so the boot
+ * glue that reads the env var is unit-tested rather than trusted — a NaN here would make the sweep
+ * cutoff NaN and silently sweep nothing (or everything). Returns `invalid: true` only when a value
+ * was SUPPLIED but unusable, so the caller can warn (a substituted default is fine; a silent one is
+ * not — same rule as the idle sweep).
+ */
+export function resolveContentTtlMs(rawDays: string | undefined, defaultMs: number): { ttlMs: number; invalid: boolean } {
+  if (rawDays === undefined || rawDays.trim() === "") return { ttlMs: defaultMs, invalid: false };
+  const days = Number(rawDays);
+  if (!Number.isFinite(days) || days <= 0) return { ttlMs: defaultMs, invalid: true };
+  return { ttlMs: days * 24 * 60 * 60 * 1000, invalid: false };
+}
+
 interface EntryJson {
   rpk: string; // recipientPubkey base64
   ch: string;  // contentHash base64

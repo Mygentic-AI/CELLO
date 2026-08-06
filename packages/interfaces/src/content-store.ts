@@ -16,8 +16,19 @@
  * The relay never holds a decryption key — only the recipient can open a blob.
  */
 
-/** TTL for parked content (proposed 7 days). Equal to the bilateral-upgrade window. */
-export const CONTENT_STORE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * TTL for parked content — the DEFAULT retention for store-and-forward mail, overridable per relay
+ * via RELAY_CONTENT_TTL_DAYS (see bin/relay.ts).
+ *
+ * 30 days, chosen deliberately. This is real mail waiting for an offline recipient, so the floor is
+ * "longer than any legitimate recipient is plausibly offline" — a laptop shut over a holiday, someone
+ * away for two weeks. The asymmetry is stark: deleting too early loses a genuine message (the product's
+ * core promise), while holding E2E-encrypted ciphertext the relay cannot even read (SI-001) a while
+ * longer costs only disk. So err long. Beyond ~30 days store-and-forward is the wrong model — the
+ * sender should re-send — which makes it a defensible "we hold your mail for a month" ceiling.
+ * (Was 7 days, the bilateral-upgrade window; that coupling was incidental, not a reason for the number.)
+ */
+export const CONTENT_STORE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Store-wide byte cap. On overflow the oldest entry for the affected recipient is evicted. */
 export const CONTENT_STORE_MAX_BYTES = 256 * 1024 * 1024;
