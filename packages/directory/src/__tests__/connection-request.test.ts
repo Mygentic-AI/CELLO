@@ -878,3 +878,89 @@ describe("CONNREQ-002-AC-016: 256 simultaneous connection requests to agent B �
     await scope.run(async () => {});
   }, 120_000);
 });
+
+/**
+ * DOD-SIGNALING-LIVENESS-1 (review F4) — the DELIVERY assertion.
+ *
+ * The two tests in persist-reconnect-protocol.test.ts assert `hasRegisteredStream(...)`, i.e. that
+ * SOME entry exists — never WHICH stream it is. That leaves a cheap wrong fix passing both: a
+ * refcount that decrements on close and only deletes the map entry at zero keeps the entry alive
+ * while it still points at the CLOSED stream B. Registered, selected, and undeliverable — the
+ * original incident, unfixed, with a green suite.
+ *
+ * Only delivery distinguishes them. Here a third party sends a connection_request for the agent
+ * AFTER the agent's second stream has closed, and the inbound frame must arrive on the stream the
+ * agent is actually holding.
+ */
+describe("DOD-SIGNALING-LIVENESS-1: delivery lands on the surviving stream, not the closed one", () => {
+  it("after a second stream for the agent closes, an inbound connection_request still reaches the FIRST stream", async () => {
+    const scope = createTestScope();
+    const store = new InMemoryDirectoryStore();
+    const { node: dirNode, stop } = await createDirectoryNode({
+      keyProvider: generateKeypair(),
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "relay-peer-id", multiaddrs: [] },
+      store,
+      requireRegistration: true,
+    });
+    scope.addCleanup(async () => { try { await stop(); } catch {} });
+
+    const kpTarget = generateKeypair();
+    const kpSender = generateKeypair();
+    const targetHex = Buffer.from(await kpTarget.getPublicKey()).toString("hex");
+    const senderHex = Buffer.from(await kpSender.getPublicKey()).toString("hex");
+
+    for (const [hex, id] of [[targetHex, "agent-target"], [senderHex, "agent-sender"]] as const) {
+      store.setProfile({
+        k_local_pubkey: hex,
+        primary_pubkey: Buffer.from(randomBytes(32)).toString("hex"),
+        ml_dsa_pubkey: Buffer.from(randomBytes(1312)).toString("hex"),
+        phone_stub_hash: `hash-${id}`,
+        profile: {},
+        registered_at: Date.now(),
+        status: "active",
+        agent_id: id,
+      });
+    }
+
+    // Stream A — the target's real, long-lived signaling stream.
+    const nodeA = await createNode({ keyProvider: kpTarget, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeA.start();
+    scope.addCleanup(() => nodeA.stop());
+    const a = await doAuth(nodeA, dirNode.getPeerId(), kpTarget, dirNode.listenAddresses());
+    sendFrame(a.stream, CBOR_ENC.encode({
+      type: "peer_info_announce", peer_id: nodeA.getPeerId(), multiaddrs: nodeA.listenAddresses(),
+    }));
+
+    // Stream B — a SECOND stream for the same agent (in production: the roster sweep's visiting
+    // connection to the agent's own home node), which then goes away.
+    const nodeB = await createNode({ keyProvider: kpTarget, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeB.start();
+    scope.addCleanup(() => nodeB.stop());
+    const b = await doAuth(nodeB, dirNode.getPeerId(), kpTarget, dirNode.listenAddresses());
+    await b.stream.close();
+    await nodeB.stop();
+    await new Promise((r) => setTimeout(r, 500));
+
+    // A third party now tries to reach the target.
+    const senderTransport = await createNode({ keyProvider: kpSender, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await senderTransport.start();
+    scope.addCleanup(() => senderTransport.stop());
+    const s = await doAuth(senderTransport, dirNode.getPeerId(), kpSender, dirNode.listenAddresses());
+    sendFrame(s.stream, CBOR_ENC.encode({
+      type: "connection_request",
+      target_pubkey: targetHex,
+      package_cbor: new Uint8Array(10),
+    }));
+
+    // THE assertion: it arrives on A. A refcount fix leaves the map pointing at the closed B, so
+    // nothing is delivered and this times out; a `.has()`-only assertion would have called that
+    // implementation correct.
+    const inbound = await a.reader.readFrameWithTimeout(10_000);
+    expect(inbound["type"], "the inbound request must land on the agent's surviving stream").toBe(
+      "connection_request_inbound",
+    );
+
+    await scope.run(async () => {});
+  }, 60_000);
+});

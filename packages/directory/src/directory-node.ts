@@ -631,7 +631,15 @@ export class CelloDirectoryNode {
    * open — the 2026-07-31 incident, where every surface said online for 25 minutes and nothing
    * could reach the agent.
    */
-  readonly #agentStreams = new Map<string, Set<Stream>>();
+  readonly #agentStreams = new Map<string, Set<{ stream: Stream; visiting: boolean }>>();
+  /**
+   * DOD-SIGNALING-LIVENESS-1 (review F3): agents for which THIS node has registered a HOME
+   * (non-visiting) stream, and therefore wrote `presence = online`. The offline write must be
+   * decided by this, not by the `visiting` flag of whichever stream happens to close last —
+   * otherwise a home stream closing first and a transient visiting stream closing last leaves the
+   * presence row reading `online` with no streams at all.
+   */
+  readonly #agentHomeSeen = new Set<string>();
 
   /**
    * DOD-SIGNALING-LIVENESS-1: is there a registered signaling stream for this agent?
@@ -1912,13 +1920,28 @@ export class CelloDirectoryNode {
 
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
           visiting = resp.visiting === true;
-          this.#streams.set(authedPubkeyHex, stream);
+          // DOD-SIGNALING-LIVENESS-1 (review F2): a VISITING stream may not displace a live HOME
+          // stream as the delivery target. The daemon opens a visiting connection to every node in
+          // the roster — including, today, its own home node — so without this guard every such
+          // sweep re-points `#streams` at a stream that exists for a few hundred milliseconds, and
+          // any session_request arriving in that window is delivered to the wrong SignalingManager.
+          // A visiting stream still REGISTERS the agent when nothing else has (that is what makes
+          // cross-node brokering work); it just never demotes a home stream.
+          {
+            const existingLive = this.#agentStreams.get(authedPubkeyHex);
+            const homeStreamLive = existingLive !== undefined
+              && [...existingLive].some((e) => !e.visiting && e.stream !== stream);
+            if (!visiting || !homeStreamLive) {
+              this.#streams.set(authedPubkeyHex, stream);
+            }
+          }
           // DOD-SIGNALING-LIVENESS-1: track EVERY open stream, not just the newest, so a close can
           // tell "this agent has no connections left" from "this agent has one fewer connection".
           {
             let live = this.#agentStreams.get(authedPubkeyHex);
-            if (!live) { live = new Set<Stream>(); this.#agentStreams.set(authedPubkeyHex, live); }
-            live.add(stream);
+            if (!live) { live = new Set<{ stream: Stream; visiting: boolean }>(); this.#agentStreams.set(authedPubkeyHex, live); }
+            live.add({ stream, visiting });
+            if (!visiting) this.#agentHomeSeen.add(authedPubkeyHex);
           }
           // PRESENCE-001 + cross-node item 3: a VISITING connection (a client reaching into a node
           // that is NOT its home to broker a cross-node session) gets the #streams entry so the
@@ -2574,22 +2597,33 @@ export class CelloDirectoryNode {
         // daemon restart. That is the 2026-07-31 incident, reproduced in
         // persist-reconnect-protocol.test.ts.
         const live = this.#agentStreams.get(authedPubkeyHex);
-        live?.delete(stream);
-        const survivor = live && live.size > 0 ? [...live][live.size - 1]! : undefined;
+        if (live) {
+          for (const entry of live) { if (entry.stream === stream) { live.delete(entry); break; } }
+        }
+        // Prefer the most recently authenticated NON-VISITING survivor (review F2). A visiting
+        // stream is a transient cross-node broker; promoting one over a live home stream would
+        // point delivery at the wrong manager. Fall back to a visiting survivor only when that is
+        // genuinely all that remains — it still beats deregistering a reachable agent.
+        const remaining = live ? [...live] : [];
+        const survivor = remaining.filter((e) => !e.visiting).at(-1) ?? remaining.at(-1);
 
         if (survivor) {
           // Another connection for this agent is still open. Re-point the map at it rather than
           // deregistering, and write NO presence change — the agent never went offline.
           if (this.#streams.get(authedPubkeyHex) === stream) {
-            this.#streams.set(authedPubkeyHex, survivor);
+            this.#streams.set(authedPubkeyHex, survivor.stream);
           }
           this.#logger?.info("signaling.stream.closed.survivor_retained", {
             authedShort: authedPubkeyHex.slice(0, 16),
             remainingStreams: live!.size,
+            survivorVisiting: survivor.visiting,
           });
           protocolLog("AUTH", `Stream closed but ${live!.size} remain — peer ${truncHex(authedPubkeyHex)} stays registered`);
         } else {
           if (live) this.#agentStreams.delete(authedPubkeyHex);
+          // `delete` returns true iff this node had registered a home stream for the agent — i.e.
+          // iff it ever wrote `online` and therefore owes an `offline`.
+          const sawHomeStream = this.#agentHomeSeen.delete(authedPubkeyHex);
           if (this.#streams.get(authedPubkeyHex) === stream) {
             this.#streams.delete(authedPubkeyHex);
             // PRESENCE-001 + cross-node item 3: the agent's LAST stream closed → offline +
@@ -2599,7 +2633,13 @@ export class CelloDirectoryNode {
             // wrongly claimed ownership — mark her offline consortium-wide while her real home
             // connection is alive. Suppressing both writes is the invariant that keeps presence
             // honest.
-            if (!visiting) {
+            // Review F3: decided by whether this node ever held a HOME stream for the agent, NOT
+            // by the closing stream's own flag. The old form asked `if (!visiting)` — so when a
+            // home stream closed first and a transient VISITING stream closed last, the last close
+            // suppressed the offline write and the presence row stayed `online` consortium-wide
+            // with zero streams left. That is this same defect relocated from the map into the
+            // database, and it fails in the direction that does not fail fast.
+            if (!visiting || sawHomeStream) {
               this.#recordPresence("offline", authedPubkeyHex);
             }
             protocolLog("AUTH", `Removed stream from map — peer ${truncHex(authedPubkeyHex)}${visiting ? " (visiting — no presence write)" : ""}`);
