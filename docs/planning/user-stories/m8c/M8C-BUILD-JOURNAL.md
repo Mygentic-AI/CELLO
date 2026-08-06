@@ -4682,6 +4682,115 @@ in-flight checkout of the original branch was never touched.
 
 ---
 
+## 2026-08-06 — `DOD-RETRYQ-STRAND-1` ✅ — the reap that would have shipped green while the metric stayed pinned
+
+cello-client `4a796e2` (build) + `a9f2573` (review fixes). Gate: 1903 daemon tests, typecheck, lint,
+build.
+
+`retryQueueDepth` had been sitting at 1 on the live daemon for 25.6 hours. The row was a direct
+resend entry (`awaiting_ack = 0`) whose session had gone `abandoned`. Every `DELETE FROM retry_queue`
+in the module keys on a successful delivery or ACK, and `drainSession` — the only thing that could
+ever remove it — has no production caller. The `drain_session` IPC handler *sounds* like the
+consumer and is not: it reads `getSessionDepth`/`getSessionEntries` and returns metadata, with its
+own comment conceding "the actual drain+delivery is triggered separately when a real sendFn is
+available." Nothing does that. The queue is write-only by construction.
+
+### The finding that mattered was the reviewer's, not mine
+
+My first version wired the reap to the terminal **transition** and passed its own AC4 test end to
+end on a real daemon. It would still have left the live strand exactly where it was. The row's
+session was *already* `abandoned` before the daemon booted, and `close-session` returns
+`already_abandoned` (`close-session-handler.ts:197`) without ever reaching `abandonSession` — so no
+transition would ever fire for it again. A green gate, a passing AC, and the symptom untouched.
+
+`reapAlreadyTerminalSessions()` at startup is the half that actually clears it: it joins
+`retry_queue` against `sessions.status IN ('sealed','abandoned')` after `loadFromDb` and before the
+IPC socket opens. **The lesson is the one this milestone keeps re-learning in new clothing: a fix
+wired to an event only covers the future. Anything already in the bad state needs its own path, and
+the AC that proves the event-path works will not tell you.**
+
+### Two defects the review found beyond the line
+
+- **A zero-row `UPDATE` was treated as a landed write.** `#updateSessionStatus` returned `true` on
+  "did not throw". An `UPDATE` whose `WHERE` matched nothing — wrong `agent_id`, absent row —
+  changed nothing, fired the disposition hook, and reported success. Once a hook on that path
+  *deletes content*, that stops being a reporting defect and becomes a data-loss one. Now gated on
+  `changes > 0`. It also falsified `abandonSession`'s existing docblock, which claimed it "resolves
+  true iff the status flip was actually written."
+- **The drop notice read memory while the DELETE read disk.** AC3 exists so discarded content is
+  never silent; announcing from `#queues` while deleting by SQL meant any row the map did not hold
+  was destroyed with no per-entry notice — the exact failure AC3 names as the worse one. Both halves
+  now come from one `SELECT`.
+
+### A hollow test, and why the honest version is structural
+
+The age-guard test enqueued a 90-day-old row and asserted it survived `loadFromDb`. It called **no
+code from this unit**, stayed green with the fix fully reverted, and its own comment claimed adding
+an age sweep would turn it red — which held only if the sweep landed inside `loadFromDb`. The
+obvious way anyone would add one (a new method called from `daemon.ts`) sails past it.
+
+The property is structural, so it is now asserted structurally: no `DELETE` or `SELECT` in the
+module may carry a `queued_at` predicate, read off the module's own source. Plus a behavioural test
+driving the real reconcile against an old row on an ACTIVE session. **When a test's subject is "no
+code anywhere does X", a scenario test can only ever sample; reading the source is the form that
+cannot be sidestepped by moving X.**
+
+### Scope boundary, stated so it is inherited rather than rediscovered
+
+Awaiting-ACK rows (`awaiting_ack = 1`) are deliberately untouched: `drainAwaitingToPark` really is
+called by the startup flush, and they do not contribute to `getTotalDepth()` at all, so they cannot
+pin the metric. Their terminal disposition belongs to `DOD-TERMINAL-WAKE-1`. **But the reviewer
+found the same strand shape one layer over:** `drainAwaitingToPark` does not evict on a
+*permanently* failing park (retired relay, revoked deposit capability), so such a row is retried at
+every boot forever — no metric symptom, same never-terminal pathology. Handed forward explicitly.
+
+`drainSession` still has no production caller. This unit reaps the corpses rather than taking either
+option the DoD line proposed ("give `drainSession` a caller, or stop writing rows for a queue that
+has none") — recorded as a third option so it is not mistaken for one of the two.
+
+---
+
+## 2026-08-06 — `DOD-TERMINAL-WAKE-1` 🟡 — a cache read as an authority, and the restart was the trigger all along
+
+cello-client `2bc0764`. Gate: 1916 daemon tests, typecheck, lint, build. 🟡 pending unit review at
+time of writing.
+
+Three sessions sealed on the morning of 2026-08-05 re-fired as wakes six to eight hours later on
+`Miss_Chelly_H`. One carried `[[STANDBY EST:15m]]` and the agent obeyed it — announcing it was
+standing by on a conversation that had ended, against a counterparty whose daemon held no record of
+the session, with the standby window six hours expired.
+
+**`cello_receive` was already correct.** It checks TERMINAL FIRST, deliberately, with a comment
+explaining that the durable record would otherwise keep delivering on a session that has ended. The
+bug is one level down: that check calls `peekTerminalMarker`, which reads `#sessionTerminal` — an
+in-memory `Map` written only by `destroySessionNode` and **never loaded from the database**. The
+`sealed` row on disk survives a restart; the marker does not. After a restart the marker answers
+`null`, the guard falls through, and the durable-record read immediately below hands back the old
+message as though it had just arrived.
+
+That is why the defect needed "a daemon restart plus unread-at-seal" to reproduce. **The restart was
+never incidental to the repro — it IS the mechanism.** A repro precondition that looks like
+environmental noise is worth reading as a clue about which state is volatile.
+
+This is §5a ABSENT IS NOT FINE sitting inside a guard that was written specifically to prevent this
+class of thing: a missing input read as a negative answer, with the authoritative record one call
+away. The marker only ever cached what the row already knew.
+
+Only `'sealed'` answers on the fallback. `abandoned` forfeited its receipt; `interrupted` and
+`seal_interrupted_pending` can still complete. None of them may claim a seal — the
+`DOD-SEALED-INBOX-2` lesson, which is why this reads a *status* and not a generic "is it over" flag.
+The watermark is untouched: the seal attests what each side actually consumed, so advancing it would
+falsify the receipt. The message stays honestly unread and in the notarized transcript; it just
+stops ringing the bell.
+
+**Scope, stated plainly: this is the FIRST entry point only.** The second — `content.recover.ingest_failed`
+looping 121 times across `counterparty_unknown` (78) and `session_committed` (43), and the agreed
+four-constraint annex disposition — is **not built**. The DoD's own text warns that "fixing only the
+`session_committed` branch leaves the larger half looping," so this line does not go ✅ on the
+delivery-path fix alone.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
