@@ -12,7 +12,14 @@
 # no build and no denied-attempt audit entry — the event was not reaching Cloud Build at all (the
 # SA half was fixed; the delivery half was not). Tracked as M12-P11.
 #
-# 2026-08-05, later: the GitHub App OAuth was re-authorized by the operator; the connection reports
+# PROBE 2 — 2026-08-06. The first re-authorization (2026-08-05) did NOT restore event delivery: the
+# probe push landed on origin/main touching this file and produced no build and no denied-attempt
+# audit entry. The operator re-completed the OAuth again; this edit is the second probe. Same
+# distinguishing test: a trigger-fired build has substitutions.TRIGGER_NAME SET, a manual
+# `builds submit` leaves it EMPTY — every build in this project is currently empty, which is why
+# "a build succeeded" has never been evidence the trigger fired.
+#
+# 2026-08-05, earlier: the GitHub App OAuth was re-authorized by the operator; the connection reports
 # installationState COMPLETE and the CELLO repo is linked. THIS EDIT IS THE TEST — this file is in
 # the relay trigger's includedFiles, so a push carrying it must produce a trigger-fired build (one
 # with TRIGGER_NAME set, unlike a manual `builds submit`). If it does, M12-P11 is closed; if it does
