@@ -884,6 +884,11 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   A (the annex) merged as `58924b8` + `64fdb81`, review in flight, not yet published.
   - **B — inertness.** `sealed_unread` entries now carry `session_state:"sealed"` and
     `actionable:false`, with `sealed_unread_actionable` on the group, and the guidance states the
+    <!-- SUPERSEDED 2026-08-06 by DOD-SEALED-INBOX-2 (M8C): the group is now `ended_unread`,
+         `session_state` is REMOVED (it was hardcoded "sealed" on all four terminal statuses — a
+         false notarization claim), and each row carries its real `status` + `notarized`.
+         `actionable` / `ended_unread_actionable` and this line's inertness property are RETAINED
+         and still asserted. Read the field names below as their renamed equivalents. -->
     consequence (cannot reply, counterparty not waiting, instructions inside are STALE) instead of
     pointing at `cello_transcript`. The cause was SHAPE: they arrived in the same envelope as
     `unread` and `pending_session_requests`, so a reader treated them as a to-do list.

@@ -1989,6 +1989,49 @@ own story) deliberately, never smuggled in as a rider. Source:
 
   Full write-up, including the live probe table: [[2026-07-30_1330_inbox-calls-unsealed-sessions-sealed]].
 
+  **🟡 BUILT + REVIEWED 2026-08-06 — cello-client `40028de` + `5e1dc66`, branch `dod/sealed-inbox-2`,
+  plus trustless-cello `5a3704fc`. Gate green (2736 tests, lint/typecheck/build clean). NOT ✅: this
+  is a breaking wire change and it is not published — see the publish order below.**
+
+  **AC3 deviates DELIBERATELY, twice, on Andre's 2026-08-04 decision** ([[launch-triage]] item 2):
+  the field is **`ended_unread`**, not `terminal_unread`, and there is **no alias**. An alias would
+  keep the false name alive in the surface an agent actually reads, which is the whole defect;
+  pre-launch is the only time the wire change is free. AC1/AC2/AC4/AC5/AC6 met as written.
+
+  **The lie was told THREE times, not one.** Besides the field name and the guidance,
+  `notification-handlers.ts` **hardcoded `session_state: "sealed"` on every row** — a per-row false
+  assertion, not merely a badly-named container. `getEndedUnread` now SELECTs `s.status`, each row
+  carries `notarized` computed from the row, and `session_state` is gone (deadness proven: no reader
+  in either repo).
+
+  **The consumer that nearly got missed, and the one that did.** The shipped receptionist AGENT
+  wakes on a jq expression keyed on `.sealed_unread` — renaming the field without it would have made
+  the receptionist sleep through ended sessions **silently and forever**, worse than the bug being
+  fixed. Two tests now read the shipped plugin files and assert the dead key is absent. But those
+  tests **cannot reach across repos**, and the reviewer found `trustless-cello`'s own
+  `.claude/commands/cello-receptionist.md` still on the dead key — fixed in `5a3704fc`. **Nothing
+  automated guards that file; a future rename must check it by hand.**
+
+  **Two self-inflicted defects the review caught, both worth remembering:**
+  - The anchoring regex `/(?<!_)\bsealed_unread\b/` was worse than useless: `\b` cannot match before
+    `_`, so `sealed_unread_guidance` / `_actionable` passed it green. Match the bare stem. (This is
+    the inverse of the usual lesson — over-anchoring hid the dead name instead of catching it.)
+  - The first guidance rewrite made the **mirror-image false claim**, lumping
+    `seal_interrupted_pending` into "there is no receipt for them". That status is *awaiting*
+    notarization; asserting no receipt will ever exist is the same error in the other direction. It
+    now says "no receipt YET — check `cello_sealed_receipt` before telling the operator either way."
+
+  **⚠️ PUBLISH ORDER IS LOAD-BEARING — the two artifacts do not move together on their own.** The
+  daemon auto-updates (`npx @latest` on session start); the plugin markdown only moves when the
+  operator runs `/plugin update`. So the DEFAULT outcome of publishing carelessly is a new daemon
+  with an old receptionist whose jq matches nothing — a silent sleep with no error on any stream.
+  `plugins/cello/.claude-plugin/plugin.json` is bumped `0.3.0 → 0.4.0` (the only marketplace-visible
+  signal). Required order: **(1) push the plugin/marketplace commit, (2) THEN promote the daemon to
+  `latest`** — the daemon is the side that arrives by itself, so it must arrive last — (3) then
+  `/plugin update cello@cello-protocol` on each machine and confirm the installed
+  `cello-receptionist.md` contains `ended_unread`. Residual risk: an operator who never runs
+  `/plugin update`. Acceptable pre-launch at one operator; recorded rather than assumed.
+
 - **DOD-FIRSTMSG-WITNESS-1** ✅ **SHIPPED 2026-07-31** (raised the same day) — daemon `0.0.106`,
   cli `0.0.109`, verified in the tarball. The responder now carries `relay_directory_signature`
   through the wire boundary and presents `client_record_assignment` itself, so the first message is
