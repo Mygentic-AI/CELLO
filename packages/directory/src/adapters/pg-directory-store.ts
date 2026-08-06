@@ -1044,7 +1044,14 @@ export class PgDirectoryStore implements DirectoryStore {
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
+      // Unlike the old bare-query path, we now hold a POOL CONNECTION while blocked on the lock.
+      // The hold is two SELECTs and an INSERT, and registration is already serialized by DKG, so
+      // this is not a throughput concern — but a wedged holder must surface as an error rather
+      // than park a connection indefinitely and quietly shrink the pool.
+      await client.query("SET LOCAL lock_timeout = '5s'");
       // Same key as insertWithChain's — hashtext('user_accounts'). Held for the transaction.
+      // insertWithChain re-acquires it on this same client below; pg advisory xact locks are
+      // re-entrant within a transaction (counted, released together at COMMIT), so that is a no-op.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", ["user_accounts"]);
 
       const existing = await client.query<{ account_id: string }>(

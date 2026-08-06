@@ -42,7 +42,7 @@ import type { RelayAdapter } from "../directory-node.js";
 import type { RelaySessionAssignment } from "../directory-types.js";
 import { NetworkDirectoryNode, runNetworkDkg } from "@cello-protocol/daemon";
 import { createHealthServer } from "../health-server.js";
-import { DevTokenValidator } from "@cello-protocol/interfaces/stubs";
+import { DevTokenValidator, InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
 
 // ─── Integration guard ────────────────────────────────────────────────────────
 
@@ -442,6 +442,84 @@ describe("AC-006 (directory): empty phone_stub succeeds when pre_auth_token cons
       expect(result["type"]).toBe("register_success");
       expect(typeof result["agent_id"]).toBe("string");
       expect((result["agent_id"] as string).length).toBe(32);
+    } finally {
+      await stopDir();
+      await clientNode.stop();
+    }
+  });
+
+  // ─── DOD-ACCOUNTS-CHAIN-1: the WIRING, which is where the defect actually lived ────────────
+  //
+  // The store always HAD a correctly-chained account writer (`createAccount` → `insertWithChain`).
+  // The defect was that REGISTRATION did not call it: step 6 called `resolveAccountId`, a bare
+  // INSERT stamping a standalone SHA-256(account_id || phone_stub_hash) into chain_hash. So every
+  // real account landed outside the hash chain and `verifyChain("user_accounts")` was permanently
+  // red — meaning a genuine tamper on the human↔agent binding could not be told from the baseline.
+  //
+  // A test that calls the store directly cannot catch that: it passes just as well when step 6 is
+  // pointed back at any unchained helper. This one drives a REAL registration through the node and
+  // asserts the store's chained writer is what got called, with the pre-auth token's phone stub —
+  // so it goes red if the wiring is reverted, which is the only thing that makes it worth having.
+  it("DOD-ACCOUNTS-CHAIN-1: registration resolves the account THROUGH THE STORE (the chained writer)", async () => {
+    const PHONE_HASH = createHash("sha256").update("wiring-test-phone").digest("hex");
+    const EMAIL_HASH = createHash("sha256").update("wiring-test-email").digest("hex");
+    const tokenValidator = {
+      async validateToken(token: string) {
+        if (!token.startsWith("WIRING-")) {
+          return { valid: false as const, reason: "only WIRING- tokens accepted", tokenId: null };
+        }
+        return { valid: true as const, phoneStubHash: PHONE_HASH, emailStubHash: EMAIL_HASH, tokenId: `id-${token}` };
+      },
+    };
+
+    // A spy over the real in-memory store: records the call rather than faking the result, so the
+    // registration still completes exactly as it would otherwise.
+    const calls: Array<{ phoneStubHash: string; emailStubHash?: string | null }> = [];
+    // Shadow the method ON THE INSTANCE, keeping a bound reference to the original. A prototype
+    // wrapper (Object.create) does NOT work here: InMemoryDirectoryStore uses #private fields,
+    // which exist per-instance, so the delegated call throws before the registration completes.
+    const spyStore = new InMemoryDirectoryStore();
+    const realResolve = spyStore.resolveOrCreateAccount.bind(spyStore);
+    spyStore.resolveOrCreateAccount = async (params) => {
+      calls.push({ phoneStubHash: params.phoneStubHash, emailStubHash: params.emailStubHash });
+      return realResolve(params);
+    };
+
+    const dirKey = generateKeypair();
+    const { node: dirNode, stop: stopDir } = await createDirectoryNode({
+      keyProvider: dirKey,
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "12D3KooWFakeRelay", multiaddrs: ["/ip4/127.0.0.1/tcp/19999"] },
+      tokenValidator,
+      store: spyStore,
+    });
+
+    const clientKey = generateKeypair();
+    const clientNode = await createNode({ keyProvider: clientKey, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await clientNode.start();
+
+    try {
+      await clientNode.dial(dirNode.listenAddresses()[0]!);
+      const { stream, reader } = await doAuth(clientNode, dirNode.getPeerId(), clientKey);
+
+      const mlDsaProvider = await mlDsaKeygen();
+      const mlDsaPubkey = await mlDsaProvider.getPublicKey();
+      const clientPubkey = await clientKey.getPublicKey();
+
+      const result = await doRegister(
+        stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
+        Buffer.from(clientPubkey).toString("hex"),
+        Buffer.from(mlDsaPubkey).toString("hex"),
+        "",                 // empty phone_stub — the pre-auth token supplies the real hash
+        "WIRING-token-1",
+      );
+      expect(result["type"]).toBe("register_success");
+
+      // THE assertion: the chained writer was called, once, with the token's stub — not a bare
+      // INSERT somewhere else. Reverting directory-node.ts to the old helper leaves `calls` empty.
+      expect(calls, "registration must resolve the account through the store").toHaveLength(1);
+      expect(calls[0]!.phoneStubHash).toBe(PHONE_HASH);
+      expect(calls[0]!.emailStubHash).toBe(EMAIL_HASH);
     } finally {
       await stopDir();
       await clientNode.stop();

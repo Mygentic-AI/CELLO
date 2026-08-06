@@ -3195,7 +3195,14 @@ export class CelloDirectoryNode {
     // `account.created` and this handler's `preauth.account.link.failed` join up. The enclosing
     // register handler mints none of its own.
     const accountCorrelationId = randomUUID();
-    if (this.#pgPool && preAuthDataForHash) {
+    // Guarded on the pre-auth data ALONE. It used to also require `this.#pgPool`, which was the
+    // dependency the OLD call needed — but the call now goes through `#store`, and a predicate that
+    // names a different dependency than the one it protects fails in both directions: a node with a
+    // Pg store but no pool would skip account creation ENTIRELY and silently (not even
+    // `preauth.account.link.failed` fires, because the branch is never entered), while an in-memory
+    // store with a pool set would mint an account_id backed by no row. Let the store decide whether
+    // it can do this, and let the catch below report it if it cannot.
+    if (preAuthDataForHash) {
       try {
         // DOD-ACCOUNTS-CHAIN-1: goes through the STORE, which writes the row into the hash chain.
         // This used to call `resolveAccountId(this.#pgPool, …)` — a bare INSERT stamping a

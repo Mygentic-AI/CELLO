@@ -164,6 +164,12 @@ describeIntegration("DOD-ACCOUNTS-CHAIN-1: registration must write user_accounts
     expect((await store.verifyChain("user_accounts")).valid).toBe(true);
 
     // Mutate a CHAINED field as superuser (cello_service has no UPDATE — that is the point).
+    //
+    // IF THIS TEST DIES BETWEEN THE UPDATE AND THE `finally`, the shared dev database is left
+    // tampered and EVERY later verifyChain test goes red for a reason nobody will connect to this
+    // file. To undo by hand:
+    //   UPDATE user_accounts SET phone_stub_hash = replace(phone_stub_hash, '-TAMPERED', '')
+    //   WHERE phone_stub_hash LIKE '%-TAMPERED';
     await superPool.query("UPDATE user_accounts SET phone_stub_hash = $1 WHERE phone_stub_hash = $2", [
       `${phone}-TAMPERED`,
       phone,

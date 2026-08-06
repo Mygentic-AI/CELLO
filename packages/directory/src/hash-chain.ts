@@ -82,9 +82,18 @@ const TABLE_EXTRA_EXCLUDED: Record<string, ReadonlySet<string>> = {
   // the stored chain_hash was computed without deregistered_at, but SELECT * includes it as NULL.
   // This is the same M4 bug #7 pattern that broke seal_notarizations in M4 live testing.
   relay_registrations: new Set(["deregistered_at"]),
-  // ACCOUNT-001: email_stub_hash is nullable and absent from initial INSERT.
-  // If not excluded, verifyChain fails: SELECT returns email_stub_hash: null
-  // while chain_hash was computed without it (lesson from M4 bug #7).
+  // ACCOUNT-001: email_stub_hash is excluded so rows written WITHOUT it (or that acquire one
+  // later) still verify — SELECT would return null where chain_hash was computed without the
+  // column at all (the M4 bug #7 family).
+  //
+  // DOD-ACCOUNTS-CHAIN-1 — CORRECTING THE OLD JUSTIFICATION, which said "absent from initial
+  // INSERT". That is NOT true of the path that matters: the production registration path always
+  // supplies email_stub_hash at creation. The exclusion is kept for backward compatibility with
+  // rows that have no email, but the CONSEQUENCE must be stated rather than implied: the email
+  // half of the human↔agent binding is stored and NOT tamper-evident — it can be swapped by
+  // anyone with UPDATE and verifyChain stays green. Chaining it now would break every row that
+  // lacks an email, so it needs its own unit with a rechain step, not a one-line flip here.
+  // Tracked as DOD-ACCOUNTS-EMAIL-CHAIN-1.
   user_accounts: new Set(["email_stub_hash"]),
   // M6B-010: initiator_pubkey_hex and target_pubkey_hex were added to the sessions table
   // by V29 with DEFAULT ''. Rows written by writeSession() (called by FEDERATION-001) do not
