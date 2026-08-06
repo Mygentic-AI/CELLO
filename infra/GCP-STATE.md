@@ -675,3 +675,35 @@ gcloud builds submit "projects/cello-infra/locations/us-east1/connections/cello-
   --service-account=projects/cello-infra/serviceAccounts/cello-cloud-build@cello-infra.iam.gserviceaccount.com \
   --substitutions=_TAG=<SHA>
 ```
+
+
+### M12-P11 — PROBE 3 (2026-08-06): repository link RECREATED, still no events
+
+**Infra change made:** `terraform apply -replace=google_cloudbuildv2_repository.cello` (targeted).
+The link was destroyed and recreated (1 added, 1 destroyed); both triggers updated IN PLACE, not
+recreated. `app_installation_id` untouched at 149532787. Rationale: the resource carried no
+`webhookId` and had not been touched since `createTime` 2026-07-28.
+
+**Result: no build.** Probe `c42b9583` touched `infra/cloudbuild/relay.yaml` (in the relay trigger's
+`includedFiles`) on `main`. Nothing. Latest build in the project is still the manual `8eaddd07`
+from 2026-08-05.
+
+**What is now RULED OUT** — do not re-test these:
+| Suspect | Status |
+|---|---|
+| Build SA missing `cloudbuild.builds.builder` | fixed 2026-08-05, declared in `terraform/iam.tf` |
+| Connection not authorized | `installationState: COMPLETE`; OAuth re-completed TWICE (08-05, 08-06) |
+| GitHub App lacks repo access | **operator confirmed "All repositories"** |
+| Terraform drift | `plan` clean, zero drift |
+| Trigger misconfigured | points at the right repo resource, `^main$`, correct `includedFiles`/`filename` |
+| Repo renamed / archived / wrong default branch | `gh api`: name=CELLO, default_branch=main, archived=false |
+| Stale repository link | **recreated 2026-08-06 — did not help** |
+
+**The one remaining lever:** delete and recreate the `cello-github` CONNECTION itself (needs browser
+OAuth). That changes `app_installation_id` and the `oauth_token_secret_version` — both are pinned in
+`terraform/cloudbuild.tf` and `plan` will show loud drift, which is intended; update them there
+afterwards. If that also fails, the fault is inside Google's event-delivery pipeline and the case is
+a support ticket, not a config change.
+
+**This is a CI papercut, not a launch blocker.** The manual `builds submit --revision=<SHA>` path
+works and relay images are rare. Recommend leaving it unless a relay change is imminent.
