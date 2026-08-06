@@ -29,7 +29,7 @@
  * Run: pnpm --filter @cello-protocol/e2e-tests test:spine
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -812,5 +812,114 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
     // whether A also considers the document stalled is a separate design question from whether B
     // knows to stop. Captured so a change in it is visible.
     expect(["active", "stalled"], `unexpected receiver status ${String(receiver)}`).toContain(receiver);
+  }, 600_000);
+});
+
+describe("J-DOCUMENTS-WRITE — the FILE round trip (DOD-DOC-E2E-WRITE-1)", () => {
+  /**
+   * §4.1's premise: a human collaborates on a document by editing a file in their editor, and an
+   * agent with file tools reaches for those before any MCP verb. The whole write path — materialize,
+   * diff-the-file, admit-and-rewrite — existed, was tested, and was instantiated NOWHERE, which is
+   * the same defect the tool surface had: a complete unit with no production caller reads exactly
+   * like a working feature.
+   *
+   * This drives it the way an operator would: touch the file, publish, and check the peer's file on
+   * disk — not the peer's in-memory document.
+   */
+  it("edit the file → publish → the PEER'S FILE is rewritten, and both files match", async () => {
+    const { a, b } = await twoPartiesInSession("docfile");
+
+    const proposed = (await a.conn.call("cello_doc_propose", {
+      peer_pubkey: b.pubkey,
+      starting_content: "# Shared notes\n\n- first point\n",
+    })) as { ok?: boolean; documentId?: string; filePath?: string };
+    expect(proposed.ok, JSON.stringify(proposed)).toBe(true);
+    const documentId = proposed.documentId!;
+    // THE PATH IS RETURNED. An operator cannot edit a file whose location they are never told, and
+    // an agent cannot either.
+    expect(proposed.filePath, `propose did not return a file path: ${JSON.stringify(proposed)}`).toBeTruthy();
+    const fileA = proposed.filePath!;
+    expect(readFileSync(fileA, "utf-8")).toBe("# Shared notes\n\n- first point\n");
+
+    const inboxBy = Date.now() + 60_000;
+    while (Date.now() < inboxBy) {
+      const inbox = (await b.conn.call("cello_doc_inbox", {})) as { proposals?: Array<{ documentId?: string }> };
+      if (inbox.proposals?.some((p) => p.documentId === documentId)) break;
+      await sleep(500);
+    }
+    const accepted = (await b.conn.call("cello_doc_accept", { document_id: documentId })) as {
+      ok?: boolean;
+      filePath?: string;
+    };
+    expect(accepted.ok).toBe(true);
+    const fileB = accepted.filePath!;
+    expect(fileB, "accept did not return a file path").toBeTruthy();
+    // B's file exists from the moment of consent, not lazily on first use — otherwise B's first
+    // publish has no recorded projection to diff against and refuses, for something B never asked
+    // for.
+    expect(readFileSync(fileB, "utf-8")).toBe("# Shared notes\n\n- first point\n");
+
+    // ── A EDITS THE FILE, the way a person or a file-tool agent does ───────────────────────────
+    writeFileSync(fileA, "# Shared notes\n\n- first point\n- second point from A\n");
+    const published = (await a.conn.call("cello_doc_publish", { document_id: documentId })) as {
+      ok?: boolean;
+      changed?: boolean;
+      published?: boolean;
+      reason?: string;
+    };
+    expect(published, `publishing A's file edit failed: ${JSON.stringify(published)}`).toMatchObject({
+      ok: true,
+      changed: true,
+      published: true,
+    });
+
+    // ── B'S FILE IS REWRITTEN, with no action by B ─────────────────────────────────────────────
+    const rewrittenBy = Date.now() + 120_000;
+    let onDiskB = "";
+    while (Date.now() < rewrittenBy) {
+      onDiskB = readFileSync(fileB, "utf-8");
+      if (onDiskB.includes("second point from A")) break;
+      await sleep(1000);
+    }
+    expect(
+      onDiskB,
+      "A published a file edit and B's file on disk never changed — the file surface is write-only, " +
+        "which is worse than not having one: the stale file reads as the document and gets " +
+        "published back over the peer's work.",
+    ).toContain("second point from A");
+
+    // ── AND BACK, so it is a round trip rather than one-way replication ────────────────────────
+    writeFileSync(fileB, `${onDiskB}- third point from B\n`);
+    expect((await b.conn.call("cello_doc_publish", { document_id: documentId })) as { published?: boolean })
+      .toMatchObject({ ok: true, published: true });
+
+    const backBy = Date.now() + 120_000;
+    while (Date.now() < backBy) {
+      if (readFileSync(fileA, "utf-8").includes("third point from B")) break;
+      await sleep(1000);
+    }
+    // BOTH FILES IDENTICAL — asserted on disk, which is the only place this claim can be checked.
+    // The in-memory documents agreeing while the files differ is precisely the failure that would
+    // make the feature useless to the person editing one.
+    expect(readFileSync(fileA, "utf-8")).toBe(readFileSync(fileB, "utf-8"));
+    expect(readFileSync(fileA, "utf-8")).toContain("second point from A");
+    expect(readFileSync(fileA, "utf-8")).toContain("third point from B");
+  }, 600_000);
+
+  it("an UNCHANGED file publishes nothing", async () => {
+    const { a, b } = await twoPartiesInSession("docnochange");
+    const proposed = (await a.conn.call("cello_doc_propose", {
+      peer_pubkey: b.pubkey,
+      starting_content: "steady\n",
+    })) as { documentId?: string };
+    const documentId = proposed.documentId!;
+
+    // A publish is an INTENT, and nothing changed on disk. Publishing anyway costs a leaf, a
+    // delivery and a wake for the counterparty, and converges nothing.
+    expect(await a.conn.call("cello_doc_publish", { document_id: documentId })).toMatchObject({
+      ok: true,
+      changed: false,
+      published: false,
+    });
   }, 600_000);
 });
