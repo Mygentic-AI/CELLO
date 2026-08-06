@@ -1717,6 +1717,63 @@ own story) deliberately, never smuggled in as a rider. Source:
   [[launch-triage]] (item "Every real registration writes the human-agent binding outside the hash
   chain") with the fix shape recorded there.
 
+  **🟡 BUILT + REVIEWED 2026-08-06 — `493609dc` + `1aa25164`, branch `dod/accounts-chain-1`. NOT ✅:
+  existing unchained rows are untouched and the deploy step below is owed.**
+
+  **Confirmed on LIVE DATA before any code changed** (`cello_spine_0`): the real row's stored
+  `chain_hash` equals `SHA-256(account_id ‖ phone_stub_hash)` byte-for-byte, and not
+  `SHA-256(serialize(record) ‖ CHAIN_GENESIS)`. Possibility **(a)**, proven — so the "scope the test
+  down" escape this line warned against was correctly never available.
+
+  **Fix:** one writer. `DirectoryStore.resolveOrCreateAccount` on the store that owns
+  `insertWithChain`, taking the advisory lock **before** the existence check so lookup-or-create is
+  atomic rather than merely conflict-tolerant — once the write is chained, the old
+  `ON CONFLICT DO NOTHING` + readback race would FORK the chain between "read previous hash" and
+  "insert", and a fork is indistinguishable from a tamper. `resolveAccountId` is **deleted**, not
+  left unused (deadness proven across both repos, the `exports` map, and symbol/file/subpath);
+  `linkAgentToAccount` now takes an `accountId` and only sets the FK, which is what its name always
+  claimed. **The recorded repro is GREEN**: ops-agent suite → directory suite on one database.
+
+  **The blocking review finding, worth keeping as a lesson.** The first six tests all called the
+  store directly, so every one survived a revert of `directory-node.ts` — *the file where the defect
+  actually lived*. The store had a correct chained writer (`createAccount`) the whole time; the bug
+  was that registration never called it, so testing the store tested the half that was never broken.
+  Closed with a wiring test that drives a real registration through `CelloDirectoryNode` with a spy
+  store; revert-verified as the only test that catches it. **General shape: when the defect is a
+  MISSING CALL, a test of the callee proves nothing.**
+
+  **⚠️ DEPLOY IS OWED — the fix appends correct rows on top of a broken prefix.** `verifyChain`
+  walks the whole table, so any database holding a legacy unchained row stays **red forever**, which
+  is the exact condition this unit exists to remove. Required steps:
+  1. **GCP directories — nothing to migrate** (greenfield post-cutover), but add a post-deploy
+     `verifyChain("user_accounts")` assertion as the acceptance check. This is a deploy decision,
+     not a code fact, which is why it is written here.
+  2. **`cello_spine_0` (and any AWS-era DB retained):** either decommission, or clear the legacy
+     rows — note they are FK targets of `agent_profiles.account_id`, so this is `SET NULL` + re-link,
+     never a bare `DELETE`.
+  3. **Surface `verifyChain("user_accounts")` on the ops-agent health output**, or "still red on the
+     origin node" gets closed and forgotten.
+  Mitigating fact worth verifying at deploy time: `pg-ae-store.ts` applies replicated `user_accounts`
+  rows through `insertWithChain`, which **recomputes** `chain_hash` locally — so a legacy row
+  replicated to a greenfield node lands chained on the receiver. The receivers converge clean; the
+  origin does not.
+
+  **`email_stub_hash` is stored but NOT chained** (`hash-chain.ts` `TABLE_EXTRA_EXCLUDED`), so the
+  email half of the human↔agent binding has no tamper-evidence — it can be swapped by anyone with
+  UPDATE and `verifyChain` stays green. Kept as-is deliberately (chaining it now breaks every row
+  without an email; it needs a rechain step), but the in-code justification said "absent from initial
+  INSERT", which is FALSE of the production path — corrected, and tracked as
+  **`DOD-ACCOUNTS-EMAIL-CHAIN-1`** rather than left implied.
+
+  **A separate defect found while gating, NOT fixed here.** Several test files `DELETE FROM
+  user_accounts` — an append-only hash-chained table — which correctly breaks every later link. That
+  makes the whole `CELLO_ENV=local` suite order- and shared-state dependent: **two runs of the
+  identical tree produced 36 then 30 failures with different files each time**, so it is not a usable
+  regression baseline and no such claim was made from it. Deterministic evidence used instead:
+  default gate 1264 passed / 0 failed (baseline 1263 + the new wiring test), the two touched files
+  isolated 21/21, the recorded repro green, and revert tests that bite. Production cannot hit the
+  delete case — `cello_service` is insert-only under RLS.
+
 - **Directory suite: 3 remaining failures** (2026-07-13, non-blocking, characterised not fixed) — 2 ×
   "exits 1 with `migration.out.of.date` when no migrations have been applied" point at a database
   `cello_nonexistent_test_db` that `docker-compose.yml` **never creates**, so they get a connection
@@ -2435,6 +2492,66 @@ own story) deliberately, never smuggled in as a rider. Source:
 
   **Not disturbed:** the live production daemon (pid 69837, default `~/.cello`) was never touched;
   both test daemons ran in their own `CELLO_DIR` and were confirmed gone by pid afterwards.
+
+- **DOD-SIGNALING-LIVENESS-1** 🟡 **ROOT CAUSE FOUND AND FIXED 2026-08-06** (opened the same day —
+  [[launch-triage]] item 4 said this item "needs a DoD line opened"; this is it) — an agent's own
+  SECOND signaling stream silently deregistered it.
+
+  **The incident (2026-07-31):** an agent read `online` on every surface — `cello status`, the
+  daemon, the directory's own database — while nothing could reach it, for ~25 minutes, recovering
+  only on a daemon restart. Session requests answered `target_offline` / `targetStreamFound: false`.
+  Full write-up: [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]].
+
+  **Scoped as a mitigation, closed as a cause.** The triage split this into "build a liveness check
+  on the REGISTRATION, not the socket" plus a timeboxed trace. The trace landed first, so the
+  client-side probe was NOT built — recorded here as a deliberate deviation from the scoped line,
+  because a probe would have been a mitigation for a cause now removed, and building it first would
+  have masked the trigger rather than surfacing it.
+
+  **Mechanism.** `#streams` has one writer (auth) and one deleter (the `finally` when a stream
+  handler exits), guarded by `#streams.get(pubkey) === stream`. **That guard protects the NEWEST
+  stream, not the one the client is using:**
+  1. stream A authenticates → `map[agent] = A` (the client's live signaling stream)
+  2. stream B authenticates → `map[agent] = B` (a second connection, same agent)
+  3. B closes → the guard sees `map[agent] === B` and deletes the entry
+  4. **A is still open, still answering pings, and the agent is unreachable**
+
+  It explains every observation the incident could not: no client disconnect (A never closed), a
+  healthy heartbeat (the ping handler never consults `#streams`, so it is *structurally blind* to
+  the registration — it caught 42 of 3,556 stream deaths), an empty `#streams` server-side, and
+  recovery only on restart, because a fresh auth is the only thing that rewrites the map.
+
+  **The producer of stream B, found by the reviewer — it is routine, not exotic.** cello-client's
+  `resolveConsortiumRoster()` returns every node with **no home-node exclusion**, and `daemon.ts`
+  loops it opening a visiting connection per node — including to the agent's **own home directory**,
+  as the same pubkey, torn down moments later. Every roster sweep was a chance to deregister the
+  agent.
+
+  **Fixed** (`9910ff12`, `259b4b59`): `#agentStreams` tracks every open authenticated stream per
+  agent; on close, re-point at a survivor or deregister only when the last one goes. Review fixes:
+  the survivor and the auth writer are now `visiting`-aware (a transient visiting stream must never
+  displace or impersonate a live home stream as the delivery target), and the offline presence write
+  is decided by whether this node ever held a HOME stream (`#agentHomeSeen`) rather than by the flag
+  of whichever stream closed last — which otherwise left the presence row reading `online`
+  consortium-wide with zero streams, this same defect relocated into the database.
+
+  **Test lesson worth keeping.** The first two tests asserted `hasRegisteredStream()` — that SOME
+  entry exists, never WHICH stream. A refcount implementation passes both while the map still points
+  at the CLOSED stream: registered, selected, undeliverable — the original incident with a green
+  suite. Only a DELIVERY assertion distinguishes them, so one was added (a third party's
+  `connection_request` must arrive on the surviving stream) and verified by simulating the bypass:
+  the `.has()` tests tolerate it, the delivery test times out.
+
+  **Carried forward, not fixed here:**
+  - **The trigger** — exclude the home node from the roster loop in cello-client
+    (`consortium-bootstrap.ts` / `daemon.ts`). Removes the redundant stream *and* a double-fetch of
+    the home node's results. Cheap; do it when next in that repo.
+  - **`#sendFrame` discards send failures** — the only true liveness signal the directory has. A
+    half-open stream can therefore be chosen as a survivor: registered but undeliverable. On a
+    failed send, the stream should be evicted through the same survivor/deregister path.
+  - **`target_offline` is an exit-point label** collapsing at least three causes (never connected /
+    deregistered by another stream's close / registered but unwritable). It is what sent the original
+    investigation at the *target's* connectivity for 25 minutes while the target was fine.
 
 - **DOD-TESTDAEMON-REAP-1** ❌ OPEN (raised 2026-07-30) — the test harness leaks its subject daemon;
   one had been running for 1h50m past its test.

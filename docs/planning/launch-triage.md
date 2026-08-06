@@ -131,9 +131,34 @@ check-then-insert race-free, replacing the `ON CONFLICT DO NOTHING` + readback d
 unchained rows: the GCP directories are greenfield with a handful of post-cutover registrations, so
 rechaining or reseeding the table is cheap now and becomes a migration later — the usual trap.
 
+**🟡 BUILT + REVIEWED 2026-08-06** — `493609dc` + `1aa25164`, branch `dod/accounts-chain-1`.
+Confirmed on live data first (the real row's hash IS the standalone digest). One writer now:
+`resolveOrCreateAccount` on the store, locking before the existence check so the chain cannot fork;
+`resolveAccountId` deleted. The recorded repro is green. **Not ✅ — a deploy step is owed**: the fix
+appends correct rows onto a broken prefix, so any database holding a legacy row stays red forever.
+Steps (GCP greenfield + acceptance check, `cello_spine_0` cleared or decommissioned, `verifyChain`
+on the ops-agent health surface) are in [[M8C-DEFINITION-OF-DONE]]. Two spin-offs recorded there:
+`DOD-ACCOUNTS-EMAIL-CHAIN-1` (the email half of the binding is stored but not chained), and a
+test-isolation defect — several suites `DELETE` from this append-only chained table, which makes the
+`CELLO_ENV=local` suite non-deterministic (36 vs 30 failures across two runs of the same tree).
+
 ---
 
 ## 4. Dead signaling streams go undetected — build the liveness mitigation, timebox the trace
+
+**🟡 ROOT CAUSE FOUND AND FIXED 2026-08-06** — `9910ff12` + `259b4b59`, branch
+`dod/accounts-chain-1`, DoD line opened as **`DOD-SIGNALING-LIVENESS-1`** in
+[[M8C-DEFINITION-OF-DONE]]. The trace half landed first, so **the client-side liveness probe was
+deliberately NOT built** — it would have been a mitigation for a cause now removed.
+The mechanism: the directory's `#streams` delete guard (`get(pubkey) === stream`) protects the
+NEWEST stream, not the one the client is using — so an agent's own second stream, on closing,
+deregistered it while the first stayed open and kept answering pings. The heartbeat is
+*structurally* blind to this (the ping handler never reads `#streams`), which is why it caught 42 of
+3,556 stream deaths. The reviewer found the production trigger: the daemon's roster loop opens a
+visiting connection to the agent's **own home node** and tears it down, so every sweep was a chance
+to deregister. Three follow-ons carried forward on the DoD line (remove the trigger client-side;
+evict on send failure — the only real liveness signal, currently discarded; and split the
+`target_offline` label, which sent the original investigation at the wrong subsystem for 25 minutes).
 
 **Designation:** [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — no
 DoD line, **needs one opened.** Recorded 2026-08-03 as a decision to skip on the grounds that the M12
