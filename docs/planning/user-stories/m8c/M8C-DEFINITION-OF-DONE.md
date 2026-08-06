@@ -2493,6 +2493,66 @@ own story) deliberately, never smuggled in as a rider. Source:
   **Not disturbed:** the live production daemon (pid 69837, default `~/.cello`) was never touched;
   both test daemons ran in their own `CELLO_DIR` and were confirmed gone by pid afterwards.
 
+- **DOD-SIGNALING-LIVENESS-1** 🟡 **ROOT CAUSE FOUND AND FIXED 2026-08-06** (opened the same day —
+  [[launch-triage]] item 4 said this item "needs a DoD line opened"; this is it) — an agent's own
+  SECOND signaling stream silently deregistered it.
+
+  **The incident (2026-07-31):** an agent read `online` on every surface — `cello status`, the
+  daemon, the directory's own database — while nothing could reach it, for ~25 minutes, recovering
+  only on a daemon restart. Session requests answered `target_offline` / `targetStreamFound: false`.
+  Full write-up: [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]].
+
+  **Scoped as a mitigation, closed as a cause.** The triage split this into "build a liveness check
+  on the REGISTRATION, not the socket" plus a timeboxed trace. The trace landed first, so the
+  client-side probe was NOT built — recorded here as a deliberate deviation from the scoped line,
+  because a probe would have been a mitigation for a cause now removed, and building it first would
+  have masked the trigger rather than surfacing it.
+
+  **Mechanism.** `#streams` has one writer (auth) and one deleter (the `finally` when a stream
+  handler exits), guarded by `#streams.get(pubkey) === stream`. **That guard protects the NEWEST
+  stream, not the one the client is using:**
+  1. stream A authenticates → `map[agent] = A` (the client's live signaling stream)
+  2. stream B authenticates → `map[agent] = B` (a second connection, same agent)
+  3. B closes → the guard sees `map[agent] === B` and deletes the entry
+  4. **A is still open, still answering pings, and the agent is unreachable**
+
+  It explains every observation the incident could not: no client disconnect (A never closed), a
+  healthy heartbeat (the ping handler never consults `#streams`, so it is *structurally blind* to
+  the registration — it caught 42 of 3,556 stream deaths), an empty `#streams` server-side, and
+  recovery only on restart, because a fresh auth is the only thing that rewrites the map.
+
+  **The producer of stream B, found by the reviewer — it is routine, not exotic.** cello-client's
+  `resolveConsortiumRoster()` returns every node with **no home-node exclusion**, and `daemon.ts`
+  loops it opening a visiting connection per node — including to the agent's **own home directory**,
+  as the same pubkey, torn down moments later. Every roster sweep was a chance to deregister the
+  agent.
+
+  **Fixed** (`9910ff12`, `259b4b59`): `#agentStreams` tracks every open authenticated stream per
+  agent; on close, re-point at a survivor or deregister only when the last one goes. Review fixes:
+  the survivor and the auth writer are now `visiting`-aware (a transient visiting stream must never
+  displace or impersonate a live home stream as the delivery target), and the offline presence write
+  is decided by whether this node ever held a HOME stream (`#agentHomeSeen`) rather than by the flag
+  of whichever stream closed last — which otherwise left the presence row reading `online`
+  consortium-wide with zero streams, this same defect relocated into the database.
+
+  **Test lesson worth keeping.** The first two tests asserted `hasRegisteredStream()` — that SOME
+  entry exists, never WHICH stream. A refcount implementation passes both while the map still points
+  at the CLOSED stream: registered, selected, undeliverable — the original incident with a green
+  suite. Only a DELIVERY assertion distinguishes them, so one was added (a third party's
+  `connection_request` must arrive on the surviving stream) and verified by simulating the bypass:
+  the `.has()` tests tolerate it, the delivery test times out.
+
+  **Carried forward, not fixed here:**
+  - **The trigger** — exclude the home node from the roster loop in cello-client
+    (`consortium-bootstrap.ts` / `daemon.ts`). Removes the redundant stream *and* a double-fetch of
+    the home node's results. Cheap; do it when next in that repo.
+  - **`#sendFrame` discards send failures** — the only true liveness signal the directory has. A
+    half-open stream can therefore be chosen as a survivor: registered but undeliverable. On a
+    failed send, the stream should be evicted through the same survivor/deregister path.
+  - **`target_offline` is an exit-point label** collapsing at least three causes (never connected /
+    deregistered by another stream's close / registered but unwritable). It is what sent the original
+    investigation at the *target's* connectivity for 25 minutes while the target was fine.
+
 - **DOD-TESTDAEMON-REAP-1** ❌ OPEN (raised 2026-07-30) — the test harness leaks its subject daemon;
   one had been running for 1h50m past its test.
 
