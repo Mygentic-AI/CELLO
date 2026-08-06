@@ -467,7 +467,15 @@ invalidates the notarization. Confirmed on both sides.
 
 ## 13. Two sides can hold incompatible beliefs about which terminal path a session is on
 
-**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — ❌ open, raised 2026-08-05, **ROOT-CAUSED
+**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — 🟡 **PARTIALLY ADDRESSED 2026-08-06.**
+**Mitigation SHIPPED** (cello-client `3e59b53` + `5e1a9af`, unit-reviewed): the guidance deadlock is
+broken, so an agent is no longer walked from two individually-true answers into a force-abandon that
+destroys its own half of the receipt. That was the mechanism by which a *recoverable* divergence
+became a *permanent* one on 2026-08-06 — the loss was caused by the escape, not by the missed frame.
+**The CURE — the `seal_certificate_request` pull twin — is designed but NOT built** (see the design
+and its corrected cost below: it needs V58, the SSM bump, and a directory deploy, and it cannot
+repair sessions sealed before that migration). Divergences will still OCCUR until the pull twin
+ships; they will simply stop being self-inflicted-permanent. Still ❌ as a defect, raised 2026-08-05, **ROOT-CAUSED
 2026-08-06 on the live Hermes daemon (see below) — no longer "a resolution path is owed"; the fix
 shape is now known and is a push/pull-twin gap, not a protocol redesign.** **Proposed rank:
 slot #2, right after item 1 (`DOD-LOGOUT-EXIT-1`), pending Andre confirmation — added 2026-08-06.**
