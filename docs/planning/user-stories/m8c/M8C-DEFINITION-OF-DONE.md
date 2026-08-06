@@ -2601,6 +2601,19 @@ own story) deliberately, never smuggled in as a rider. Source:
   4. Test: enqueue a retry entry, take its session terminal, assert the queue drains to 0 and
      `retryQueueDepth` returns to 0.
 
+  **The relay parked-content TTL does NOT cover this — checked 2026-08-06, first thing Andre asked.**
+  `6889b244` (parked-content TTL, default 30 days, `RELAY_CONTENT_TTL_DAYS`) reaps
+  `FileContentStore` — store-and-forward mail on the RELAY's disk, swept hourly by relay-node. This
+  row is in the OPERATOR's `~/.cello/sessions.db`, table `retry_queue`, and it is `awaiting_ack: 0`
+  — a DIRECT-resend entry that never involves the relay at all (only `awaiting_ack: 1` rows drain
+  toward the park path). Disjoint stores, opposite sides of the wire. Independently confirmed:
+  outside `retry-queue.ts`, `retry_queue` is referenced only by `agent-id-migration.ts`, a schema
+  migration, not a sweep.
+
+  Note the symmetry — the relay TTL exists because "the client-side sweep cannot touch it" (its own
+  commit message). This is the mirror image: a client-side row no relay sweep can touch. Same class
+  of gap at the other end, which is why one does not imply the other.
+
   **Not launch-blocking** on current evidence (one row, no user-visible breakage proven), but it
   disables a health metric, so it should not sit indefinitely. Andre ranks it.
 
