@@ -550,3 +550,108 @@ describe("J-DOCUMENTS-OFFLINE — a change survives BOTH daemons restarting (DOD
     expect(pending, "the sender never learned the change had landed").toBe(0);
   }, 600_000);
 });
+
+describe("J-DOCUMENTS-APPEND — append_only is enforced on the RECEIVER (DOD-DOC-E2E-APPEND-1)", () => {
+  /**
+   * Use Case B's V1 claim: a document neither party can quietly shorten.
+   *
+   * The claim is only worth anything if it is enforced where it cannot be bypassed. `append_only`
+   * is agreed in the proposal and bound into `document_id`, and it is checked by the RECEIVER's
+   * gate — so a peer running a patched client that simply does not enforce it locally still cannot
+   * make the deletion land, because the other side refuses the envelope. Enforcing it only on the
+   * sender would be a promise kept by whoever is not attacking you.
+   */
+  async function appendOnlyDocument(label: string) {
+    const { a, b } = await twoPartiesInSession(label);
+    const proposed = (await a.conn.call("cello_doc_propose", {
+      peer_pubkey: b.pubkey,
+      starting_content: "line one\nline two\n",
+      append_only: true,
+    })) as { ok?: boolean; documentId?: string };
+    expect(proposed.ok, JSON.stringify(proposed)).toBe(true);
+    const documentId = proposed.documentId!;
+
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const inbox = (await b.conn.call("cello_doc_inbox", {})) as {
+        proposals?: Array<{ documentId?: string; appendOnly?: boolean }>;
+      };
+      const entry = inbox.proposals?.find((p) => p.documentId === documentId);
+      if (entry) {
+        // The operator is TOLD what they are consenting to. An append-only document that does not
+        // announce itself is a rule someone discovers by having a deletion refused.
+        expect(entry.appendOnly, "the inbox did not disclose append_only").toBe(true);
+        break;
+      }
+      await sleep(500);
+    }
+    expect(await b.conn.call("cello_doc_accept", { document_id: documentId })).toMatchObject({ ok: true });
+    await waitForText(b.conn, documentId, "line one\nline two\n", `${label} B after accept`, 30_000);
+    return { a, b, documentId };
+  }
+
+  it("an APPENDING update converges", async () => {
+    const { a, b, documentId } = await appendOnlyDocument("docappend");
+
+    const wrote = (await b.conn.call("cello_doc_write", {
+      document_id: documentId,
+      content: "line one\nline two\nline three from B\n",
+    })) as { ok?: boolean; published?: boolean; reason?: string };
+    expect(wrote, `B's append did not publish: ${JSON.stringify(wrote)}`).toMatchObject({
+      ok: true,
+      published: true,
+    });
+
+    // The permitted case has to work, or "append-only" is indistinguishable from "read-only" and
+    // the rule looks like a bug.
+    await waitForText(
+      a.conn,
+      documentId,
+      "line one\nline two\nline three from B\n",
+      "A after B's append",
+      120_000,
+    );
+  }, 600_000);
+
+  it("a DELETING update is refused by the peer's gate and never lands", async () => {
+    const { a, b, documentId } = await appendOnlyDocument("docdelete");
+
+    // B removes a line. B's own copy may show it — the gate that matters is A's.
+    const wrote = (await b.conn.call("cello_doc_write", {
+      document_id: documentId,
+      content: "line one\n",
+    })) as { ok?: boolean; published?: boolean };
+    expect(wrote.ok).toBe(true);
+
+    // THE GATE MUST HAVE FIRED. Asserted before the absence-of-deletion check below, because those
+    // two are not the same claim and they look identical from the outside: "the rule refused it"
+    // and "it never arrived" both leave A holding both lines. Only one of them is Use Case B.
+    //
+    // Waiting on A's own quarantine event is what distinguishes them — it can only be emitted by
+    // the gate having examined the envelope and said no.
+    const gateFired = Date.now() + 60_000;
+    let quarantined = false;
+    while (Date.now() < gateFired && !quarantined) {
+      quarantined = /"event":"document\.update\.quarantined"/.test(a.daemon.output);
+      if (!quarantined) await sleep(1000);
+    }
+    expect(
+      quarantined,
+      "A never quarantined anything — so this test would pass just as well if the update had " +
+        "simply not been delivered, which is not the claim.\n" +
+        `--- A document log ---\n${documentLines(a.daemon)}`,
+    ).toBe(true);
+
+    // AND the deletion never lands. Held over a window rather than read once: a refusal that is
+    // later undone by a redelivery would pass a single read.
+    const until = Date.now() + 30_000;
+    while (Date.now() < until) {
+      const read = (await a.conn.call("cello_doc_read", { document_id: documentId })) as { content?: string };
+      expect(
+        read.content,
+        "A's gate admitted a deletion into an append-only document — Use Case B's whole claim",
+      ).toContain("line two");
+      await sleep(3000);
+    }
+  }, 600_000);
+});
