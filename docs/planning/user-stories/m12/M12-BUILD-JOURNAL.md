@@ -6600,3 +6600,82 @@ recorded a one-line blocker as though it were a project), and then that I should
 regression). Both pushes were correct and both improved the outcome.
 
 Gate: 2726 passed, lint/typecheck/build clean. Merged `f586ff8`, published daemon `0.0.126`.
+
+### Entry 98 — M12-P16: offline means stop talking (both doors)
+
+Live 2026-08-05: an agent set offline (`state: registered`, `standing_receiver_ready: false`) still
+ACCEPTED a message from the other machine, appended a leaf, ran its away logic and REPLIED. The whole
+exchange was in the counterparty's transcript. Tearing down the standing receiver only stops NEW
+inbound sessions; direct delivery goes to the per-session node, which was left serving.
+
+Andre's decision: offline means STOP TALKING — the local kill switch. Both halves were needed and the
+first attempt had one:
+- Outbound: going offline now interrupts this agent's active session nodes (status `interrupted` —
+  honest, not terminal, still sealable thanks to M12-P15). Scoped per-agent, pinned by its own test.
+- Inbound (review F1, missed first): nothing on the inbound path consulted agent state, and
+  `acceptInboundAssignment` re-armed the receiver the offline handler had just torn down. Gated on a
+  dedicated `explicitlyOfflineAgents` set. **Do NOT gate on `onlineAgents`** — that answers "was this
+  started", not "may this receive", and gating on it broke 27 tests across 7 suites.
+
+The new test then caught a hole in my own fix: `set-agent-offline` early-returned "idempotent" when
+the agent was not in `onlineAgents`, so pressing the switch on an agent serving traffic without that
+membership did NOTHING and returned `ok: true`. Intent is now recorded BEFORE the short-circuit.
+Published daemon `0.0.127`.
+
+### Entry 99 — M12-P17: content for a sealed session, in three shipped pieces
+
+One root — content that arrives for a session which has already ended — with two measured symptoms:
+the re-pull loop (43 `session_committed` entries, ~120 pulls each) and the wake (an agent OBEYED an
+instruction out of a sealed conversation and announced standby to a counterparty with no record of
+it). Fixed across three publishes, each with a review finding fixed before merge:
+
+- `0.0.128` **inertness (B).** `sealed_unread` entries now carry `session_state`/`actionable`, and
+  the guidance states the consequence. The cause was SHAPE — they arrived in the same envelope as
+  live work, so a reader treated them as a to-do list. Review F2 (caught after publish): the flag was
+  being stamped `sealed` over `interrupted` sessions, which suppresses REAL work — fixed in `0.0.129`.
+- `0.0.129` **the annex (A).** Verified content for an ended session is stored durably, then the
+  relay copy is confirm-deleted. Order is load-bearing: annex first, delete only on a committed write,
+  or a crash turns a noisy loop into permanent silent loss. Review HIGH-1, mine: I annexed the CBOR
+  ENVELOPE, not `env.content` — the operator would have gotten an unreadable blob as the only surviving
+  copy. The tests missed it because they fed the method hand-made bytes; now they round-trip a real
+  `sealParkEnvelope`. Also added the hash cross-check the branch was skipping.
+- `0.0.130` **read surface.** `cello_get_transcript` returns `post_seal_annex` under its own key —
+  without a reader the annex was write-only and the loss was merely made quiet.
+- `0.0.131` **screening.** Annexed content bypassed the inbound screen, so a stale instruction could
+  reach an agent unscreened. The drain now screens before storing, same terminal-vs-transient split as
+  the live funnel. The dangerous confusion — treating "screen is DOWN" as "content is BAD", which
+  deletes a good message during an outage — was INJECTED as a bug and the test goes red on it.
+- Deliberately NOT annexed: `counterparty_unknown` (SEC-1 unverified — see P18).
+
+### Entry 100 — M12-P18: the cap was invisible, and the loop it caused was the real defect
+
+Andre asked why we were hitting caps in light testing. Tracing it: `session.inbound.accept.failed
+reason=abuse_bound_sessions_per_sender`. The cap is max CONCURRENT sessions from one sender (unknown
+3, known 5, whitelisted 20, vip 50, blocked 0 — already per-agent SETTINGS, blocked fixed). It fired
+because `interrupted` sessions count, and every daemon restart stamps open sessions `interrupted`, so
+completed-but-unsealed conversations occupy slots.
+
+Two things came out of it:
+- **Visibility (`0.0.132`).** A refusal was silent both ways. Andre's call, reasoned through: silence
+  is weak oracle-protection (the states diverge over time, a patient adversary separates them by
+  retrying) and the cost fell entirely on legitimate peers. So: reason-by-tier. KNOWN+ contacts are
+  told the reason and their EFFECTIVE cap (their own state, near-zero leak); UNKNOWN/BLOCKED stay
+  silent. Plus a local `refused_session_requests` inbox entry regardless of tier.
+- **CAP-COUNTS-INTERRUPTED: decided OPTION 1, leave the count.** Removing `interrupted` reopens the
+  disconnect-and-reopen evasion the reviewer closed deliberately; the reaper already clears zero-message
+  ghosts; M12-P15 makes the rest sealable and the new guidance points at it. Visibility + the working
+  seal path, not an anti-abuse change.
+
+**Then Andre stopped me — the actual loop was still not fixed** (`0.0.133`). The 78 stranded
+`counterparty_unknown` entries: cap refuses the session → no session row → parked content can never
+authenticate → re-pulled forever. My first proposal (client-side delete) was unsafe as stated, and
+inspecting the code proved it: at drain, `counterparty_unknown` can't tell "content for a session I
+declined" from "content I might still want". The safe version acts on OUR OWN refusal — a durable
+`refused_sessions` table, written on refuse, checked at drain — so deleting a match judges nothing
+about the content. Content we did NOT refuse is left alone, held by a test whose revert makes it red.
+Residual: a stranger's stranded content still wants relay-side TTL (other repo).
+
+The lesson that repeated all session, most sharply here: I kept declaring done at the first place the
+symptom stopped, not the last place the cause could occur. Every wrong "done" was caught by someone
+else — the counterparty's log, CELLO_Coder_1, the reviewer, Andre. The tests that mattered were the
+ones driven through real paths; every stub I reached for hid something.

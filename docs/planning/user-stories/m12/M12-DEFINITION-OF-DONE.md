@@ -901,6 +901,19 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   points at `cello_close_session` — which seals it. So the fix is visibility + the now-working seal
   path, not an anti-abuse semantic change. Settled 2026-08-06.
 
+  **THE ACTUAL LOOP FIX — `de7199e`, published daemon `0.0.133`.** Everything above surfaced the cap
+  but did NOT stop the loop we started from: 78 of 121 stranded entries on the EC2 box, one session
+  re-pulled and re-refused with `counterparty_unknown` on every drain forever. Root cause: the abuse
+  cap refuses the session → no session row is ever created → parked content has no counterparty to
+  authenticate against → refused every drain, never confirm-deleted. Fix: a DURABLE `refused_sessions`
+  table (written when the cap refuses, checked at drain). Content matched there is confirm-deleted —
+  which acts on OUR OWN refusal decision, never on the content, so it stays inside the SEC-1 rule that
+  a forgery must not evict itself. Content for a session we did NOT refuse is left untouched, pinned
+  by a test whose revert (sweep everything) makes it red. Safe against session-id collision — ids are
+  directory-assigned and unique. **Residual, genuinely open:** a STRANGER's content parked for a
+  session we never refused still needs relay-side TTL (different repo) — the only part of the original
+  loop this does not cover, and nothing measured was in that bucket.
+
 
 - **M12-P17** — ✅ **BOTH HALVES FIXED 2026-08-06.** B (the wake) published as daemon `0.0.128`;
   A (the annex) merged as `58924b8` + `64fdb81`, review in flight, not yet published.
