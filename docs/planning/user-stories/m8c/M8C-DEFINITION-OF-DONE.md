@@ -2259,6 +2259,72 @@ own story) deliberately, never smuggled in as a rider. Source:
   4. Test: after logout returns, no process holds the daemon binary for that CELLO_DIR, asserted on
      the process, not on the lock file.
 
+  **DIAGNOSED 2026-08-06 — root cause located, NO CODE WRITTEN YET.** Traced in `cello-client` at
+  commit `2d6d579`; every line reference below verified by reading, not inferred.
+
+  **The defect is an asymmetry between the two shutdown paths.**
+  - Signal path — `bin/cello-daemon.ts:203-209`: `await handle.stop(signal)` then **`process.exit(0)`**.
+  - IPC path (`cello logout`) — `daemon.ts:3068-3078`: the `shutdown` handler kicks off
+    `stop("logout_requested")` (deliberately un-awaited, so the ack flushes first) and returns
+    `{ acknowledged: true }`. **There is no `process.exit`.** It relies entirely on the event loop
+    draining on its own.
+
+  **Producer/consumer gap.** The CONSUMER, `logout`'s `daemonGone()` (`cli/src/commands.ts:140-169`),
+  judges death by two facts: nothing answers the socket, and the singleton lock is free. Both are
+  *handles*. The PRODUCER, `stop()` (`daemon.ts:3196-3260`), releases exactly those handles —
+  `ipcServer.stop()` at `:3219`, `removeLockIfOwned` at `:3255`, `singletonLock.release()` at `:3258`
+  — and then returns without exiting. So the daemon becomes handle-free while still alive, every
+  local check agrees it is gone, and `logout` prints "Daemon stopped." That is the lie, and the
+  handles being correctly released is *why* it hides.
+
+  **AC2 is closer to done than the AC text implies.** `stop()` already cancels the Telegram poller
+  (`:3199`), the HTTP manifest poll + scheduler (`:3203-3206`), the registry poll + scheduler
+  (`:3207-3210`), and calls `stopAllSignaling()` (`:3216`), which closes each signaling stream. Note
+  also that in the **default production posture** there is no manifest timer at all —
+  `manifest-deps.ts:112-116` returns no poll scheduler for the bundled roster. What survives `stop()`
+  and can hold the event loop, ranked:
+  1. **Telegram `getUpdates` long poll** — `stopTelegramPoller()` (`telegram-doorbell.ts:159-161`)
+     only bumps a generation counter. It does not abort the in-flight 25 s long-poll request
+     (`:127`) nor clear the 2 s backoff timer (`:136`). Armed only when a bot token is configured.
+  2. **Unawaited libp2p node teardown** — `signaling-connect.ts:394` does `void safeStop(node)`, so
+     `SignalingManager.stop()` resolves before the node is actually down.
+  3. **In-flight `attemptConnect()`** — `signaling-manager.ts:701-713`; `stop()` sets `_stopped` and
+     cancels the backoff, but nothing aborts a dial already in `node.start()` / `dial()` (no dial
+     timeout).
+  4. **In-flight registry/manifest fetch** and its 10 s abort timer (`registry-poll.ts:95`) — the
+     stop functions cancel the *scheduler*, not a dispatched fetch.
+  5. `ipc-server.ts:329` — the "foreign socket" branch `unref()`s and leaks the fd expecting a
+     process exit that never comes on this path.
+
+  Item 2/3 match the live observation exactly (an ESTABLISHED outbound connection to a directory
+  node 20+ seconds after logout).
+
+  **Why the existing test is green while production fails — a test-teeth gap.** `commands.test.ts:145-169`
+  (AC4) *does* spawn the real binary and assert `isProcessAlive(daemonPid)` goes false after an IPC
+  logout. It passes because that daemon has **no registered agents**, so there is no per-agent
+  signaling and nothing holds its event loop. The production daemon has five. Any replacement test
+  must make the event loop non-empty or it re-inherits this hole.
+
+  **AC3 is a second instance of the same lie, and it is worse than the AC text suggests.** `status`
+  (`commands.ts:568-577`) returns `{"daemon":"stopped"}` on **lock-file absence alone** — a single
+  file stat, no socket probe, no singleton probe. That is precisely the reasoning `logout` refuses by
+  name at `commands.ts:188-198`. The same pattern repeats at `commands.ts:608` (`sessions`) and
+  `commands.ts:992`.
+
+  **Fix shape (designed, not yet built).** `process.exit()` must not go in `daemon.ts` — in-process
+  callers (vitest, embedders) would be killed. Add an `onStopped` config hook fired at the very end
+  of `stop()`, after `singletonLock.release()`; the bin wires it to `process.exit(0)`, in-process
+  callers pass nothing and are unaffected. That makes the IPC path symmetric with the signal path.
+  Then fix the holders above on their own merits (at minimum the Telegram abort and a bounded await
+  on the libp2p node stop), so shutdown is genuinely graceful rather than merely terminated. And fix
+  `status` to probe the singleton lock before reporting `stopped`.
+
+  **Useful test seam found:** `CELLO_CONSORTIUM_MANIFEST` + `CELLO_MANIFEST_POLL_MIN_MS` /
+  `_MAX_MS` (`manifest-deps.ts:129-147`) are env-injectable specifically so a live binary test can
+  poll sub-second; `bundled-consortium-manifest.test.ts:40-44` already uses them. Pointing the poll
+  at a server that accepts and never responds is a supported, production-config way to leave real
+  in-flight work on the event loop at shutdown.
+
 - **DOD-TESTDAEMON-REAP-1** ❌ OPEN (raised 2026-07-30) — the test harness leaks its subject daemon;
   one had been running for 1h50m past its test.
 
