@@ -131,6 +131,17 @@ check-then-insert race-free, replacing the `ON CONFLICT DO NOTHING` + readback d
 unchained rows: the GCP directories are greenfield with a handful of post-cutover registrations, so
 rechaining or reseeding the table is cheap now and becomes a migration later — the usual trap.
 
+**🟡 BUILT + REVIEWED 2026-08-06** — `493609dc` + `1aa25164`, branch `dod/accounts-chain-1`.
+Confirmed on live data first (the real row's hash IS the standalone digest). One writer now:
+`resolveOrCreateAccount` on the store, locking before the existence check so the chain cannot fork;
+`resolveAccountId` deleted. The recorded repro is green. **Not ✅ — a deploy step is owed**: the fix
+appends correct rows onto a broken prefix, so any database holding a legacy row stays red forever.
+Steps (GCP greenfield + acceptance check, `cello_spine_0` cleared or decommissioned, `verifyChain`
+on the ops-agent health surface) are in [[M8C-DEFINITION-OF-DONE]]. Two spin-offs recorded there:
+`DOD-ACCOUNTS-EMAIL-CHAIN-1` (the email half of the binding is stored but not chained), and a
+test-isolation defect — several suites `DELETE` from this append-only chained table, which makes the
+`CELLO_ENV=local` suite non-deterministic (36 vs 30 failures across two runs of the same tree).
+
 ---
 
 ## 4. Dead signaling streams go undetected — build the liveness mitigation, timebox the trace

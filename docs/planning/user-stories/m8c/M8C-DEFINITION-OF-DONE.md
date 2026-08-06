@@ -1717,6 +1717,63 @@ own story) deliberately, never smuggled in as a rider. Source:
   [[launch-triage]] (item "Every real registration writes the human-agent binding outside the hash
   chain") with the fix shape recorded there.
 
+  **🟡 BUILT + REVIEWED 2026-08-06 — `493609dc` + `1aa25164`, branch `dod/accounts-chain-1`. NOT ✅:
+  existing unchained rows are untouched and the deploy step below is owed.**
+
+  **Confirmed on LIVE DATA before any code changed** (`cello_spine_0`): the real row's stored
+  `chain_hash` equals `SHA-256(account_id ‖ phone_stub_hash)` byte-for-byte, and not
+  `SHA-256(serialize(record) ‖ CHAIN_GENESIS)`. Possibility **(a)**, proven — so the "scope the test
+  down" escape this line warned against was correctly never available.
+
+  **Fix:** one writer. `DirectoryStore.resolveOrCreateAccount` on the store that owns
+  `insertWithChain`, taking the advisory lock **before** the existence check so lookup-or-create is
+  atomic rather than merely conflict-tolerant — once the write is chained, the old
+  `ON CONFLICT DO NOTHING` + readback race would FORK the chain between "read previous hash" and
+  "insert", and a fork is indistinguishable from a tamper. `resolveAccountId` is **deleted**, not
+  left unused (deadness proven across both repos, the `exports` map, and symbol/file/subpath);
+  `linkAgentToAccount` now takes an `accountId` and only sets the FK, which is what its name always
+  claimed. **The recorded repro is GREEN**: ops-agent suite → directory suite on one database.
+
+  **The blocking review finding, worth keeping as a lesson.** The first six tests all called the
+  store directly, so every one survived a revert of `directory-node.ts` — *the file where the defect
+  actually lived*. The store had a correct chained writer (`createAccount`) the whole time; the bug
+  was that registration never called it, so testing the store tested the half that was never broken.
+  Closed with a wiring test that drives a real registration through `CelloDirectoryNode` with a spy
+  store; revert-verified as the only test that catches it. **General shape: when the defect is a
+  MISSING CALL, a test of the callee proves nothing.**
+
+  **⚠️ DEPLOY IS OWED — the fix appends correct rows on top of a broken prefix.** `verifyChain`
+  walks the whole table, so any database holding a legacy unchained row stays **red forever**, which
+  is the exact condition this unit exists to remove. Required steps:
+  1. **GCP directories — nothing to migrate** (greenfield post-cutover), but add a post-deploy
+     `verifyChain("user_accounts")` assertion as the acceptance check. This is a deploy decision,
+     not a code fact, which is why it is written here.
+  2. **`cello_spine_0` (and any AWS-era DB retained):** either decommission, or clear the legacy
+     rows — note they are FK targets of `agent_profiles.account_id`, so this is `SET NULL` + re-link,
+     never a bare `DELETE`.
+  3. **Surface `verifyChain("user_accounts")` on the ops-agent health output**, or "still red on the
+     origin node" gets closed and forgotten.
+  Mitigating fact worth verifying at deploy time: `pg-ae-store.ts` applies replicated `user_accounts`
+  rows through `insertWithChain`, which **recomputes** `chain_hash` locally — so a legacy row
+  replicated to a greenfield node lands chained on the receiver. The receivers converge clean; the
+  origin does not.
+
+  **`email_stub_hash` is stored but NOT chained** (`hash-chain.ts` `TABLE_EXTRA_EXCLUDED`), so the
+  email half of the human↔agent binding has no tamper-evidence — it can be swapped by anyone with
+  UPDATE and `verifyChain` stays green. Kept as-is deliberately (chaining it now breaks every row
+  without an email; it needs a rechain step), but the in-code justification said "absent from initial
+  INSERT", which is FALSE of the production path — corrected, and tracked as
+  **`DOD-ACCOUNTS-EMAIL-CHAIN-1`** rather than left implied.
+
+  **A separate defect found while gating, NOT fixed here.** Several test files `DELETE FROM
+  user_accounts` — an append-only hash-chained table — which correctly breaks every later link. That
+  makes the whole `CELLO_ENV=local` suite order- and shared-state dependent: **two runs of the
+  identical tree produced 36 then 30 failures with different files each time**, so it is not a usable
+  regression baseline and no such claim was made from it. Deterministic evidence used instead:
+  default gate 1264 passed / 0 failed (baseline 1263 + the new wiring test), the two touched files
+  isolated 21/21, the recorded repro green, and revert tests that bite. Production cannot hit the
+  delete case — `cello_service` is insert-only under RLS.
+
 - **Directory suite: 3 remaining failures** (2026-07-13, non-blocking, characterised not fixed) — 2 ×
   "exits 1 with `migration.out.of.date` when no migrations have been applied" point at a database
   `cello_nonexistent_test_db` that `docker-compose.yml` **never creates**, so they get a connection
