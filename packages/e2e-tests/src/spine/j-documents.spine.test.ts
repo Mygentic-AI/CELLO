@@ -655,3 +655,162 @@ describe("J-DOCUMENTS-APPEND — append_only is enforced on the RECEIVER (DOD-DO
     }
   }, 600_000);
 });
+
+describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify it (DOD-DOC-E2E-REJECT-1)", () => {
+  /**
+   * The `0x05` leaf is the part of the tamper-evident record that says "this arrived and was
+   * refused". It is the case the directory-side leaf work in DOD-DOC-LEAF-1 exists for, and it is
+   * the one that has never been exercised end to end: a session whose tree contains a rejection has
+   * to seal, and the seal has to VERIFY on both sides — which it only can if both parties agree on
+   * what a refusal contributes to the root.
+   *
+   * A rejection that quietly broke the seal would be worse than no rejection at all: the refusal is
+   * a security decision, and the record of it is the thing an operator would later need to prove.
+   */
+  it("a quarantined update leaves a 0x05 leaf, and the session still seals to the same root on both sides", async () => {
+    const { a, b } = await twoPartiesInSession("docreject");
+
+    const proposed = (await a.conn.call("cello_doc_propose", {
+      peer_pubkey: b.pubkey,
+      starting_content: "keep this line\nand this one\n",
+      append_only: true,
+    })) as { ok?: boolean; documentId?: string };
+    const documentId = proposed.documentId!;
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const inbox = (await b.conn.call("cello_doc_inbox", {})) as { proposals?: Array<{ documentId?: string }> };
+      if (inbox.proposals?.some((p) => p.documentId === documentId)) break;
+      await sleep(500);
+    }
+    expect(await b.conn.call("cello_doc_accept", { document_id: documentId })).toMatchObject({ ok: true });
+    await waitForText(b.conn, documentId, "keep this line\nand this one\n", "B after accept", 30_000);
+
+    // B publishes a deletion into an append-only document. A's gate refuses it — that refusal is
+    // what puts a 0x05 leaf in A's tree.
+    expect(((await b.conn.call("cello_doc_write", {
+      document_id: documentId,
+      content: "keep this line\n",
+    })) as { ok?: boolean }).ok).toBe(true);
+
+    const quarantinedBy = Date.now() + 60_000;
+    let quarantined = false;
+    while (Date.now() < quarantinedBy && !quarantined) {
+      quarantined = /"event":"document\.update\.quarantined"/.test(a.daemon.output);
+      if (!quarantined) await sleep(1000);
+    }
+    expect(
+      quarantined,
+      `A never quarantined the deletion.\n--- A document log ---\n${documentLines(a.daemon)}`,
+    ).toBe(true);
+
+    // An ordinary message too, so the sealed tree is genuinely MIXED — 0x00 alongside the 0x05 and
+    // the 0x04s. A tree containing only one kind cannot show that the kinds coexist in one root.
+    expect(((await a.conn.call("cello_send", {
+      cello_session_id: a.sessionId,
+      content: "I could not take that change",
+      signal: "over",
+    })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await b.conn.call("cello_receive", {
+      cello_session_id: b.sessionId,
+      timeout_ms: 20_000,
+    })) as { content?: string | null }).content).toBe("I could not take that change [[OVER]]");
+
+    // ── THE SEAL ──────────────────────────────────────────────────────────────────────────────
+    const closeB = b.conn.call("cello_close_session", { cello_session_id: b.sessionId });
+    const closeA = (await a.conn.call("cello_close_session", { cello_session_id: a.sessionId })) as {
+      ok?: boolean;
+      reason?: string;
+    };
+    await closeB;
+    expect(closeA.ok, `A's close failed with a rejection in the tree: ${JSON.stringify(closeA)}`).toBe(true);
+
+    type Receipt = { ok?: boolean; sealed_root?: string; leaf_count?: number };
+    const receiptA = (await a.conn.call("cello_sealed_receipt", { cello_session_id: a.sessionId })) as Receipt;
+    const receiptB = (await b.conn.call("cello_sealed_receipt", { cello_session_id: b.sessionId })) as Receipt;
+    expect(receiptA.sealed_root, `A has no sealed root: ${JSON.stringify(receiptA)}`).toBeTruthy();
+    // THE ASSERTION THIS FILE EXISTS FOR. A tree containing a refusal must still produce one root
+    // both parties compute independently. If a rejection leaf were counted by one side and not the
+    // other, this is where it shows — and nowhere else, because every other test's tree has no
+    // rejection in it.
+    expect(
+      receiptB.sealed_root,
+      "the two sides sealed different trees once a rejection was in one of them",
+    ).toBe(receiptA.sealed_root);
+  }, 600_000);
+
+  /**
+   * OPEN, and skipped deliberately rather than deleted or left red.
+   *
+   * The DoD's stall path is "supersession rejected → one retry → stalled", and it needs the SUPERSEDE
+   * protocol, which this build does not run end to end yet. What a sender actually does today is
+   * keep publishing new work, and once the peer has refused one envelope, everything chained after
+   * it is refused as `document_chain_refused` — a different refusal from the rule that started it,
+   * and one the gate's rejection machinery never sees.
+   *
+   * Two real findings came out of writing it, both recorded on the DoD line:
+   *   - the signed rejection was BUILT, SIGNED, LEAFED and never transmitted (nothing in production
+   *     called `encodeDocumentRejection`), so the sender's round counter — which is what the whole
+   *     supersede-then-stall protocol is driven by — could never leave zero. Fixed; the frame is now
+   *     returned from `reject()` and put on the wire.
+   *   - the only `stalled` transition that exists fires on UNACKED sends: a peer that never answers.
+   *     A peer that answers "refused" every time is not covered, and that is the case an operator is
+   *     most likely to hit, because it is the one a rule mismatch produces.
+   *
+   * Left as `skip` so it is visible and so the next person starts from the evidence rather than
+   * rediscovering it. It is not a passing claim and must not be counted as one.
+   */
+  it.skip("repeated refusals STALL the document rather than retrying forever", async () => {
+    const { a, b } = await twoPartiesInSession("docstall");
+    const proposed = (await a.conn.call("cello_doc_propose", {
+      peer_pubkey: b.pubkey,
+      starting_content: "one\ntwo\nthree\nfour\n",
+      append_only: true,
+    })) as { documentId?: string };
+    const documentId = proposed.documentId!;
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const inbox = (await b.conn.call("cello_doc_inbox", {})) as { proposals?: Array<{ documentId?: string }> };
+      if (inbox.proposals?.some((p) => p.documentId === documentId)) break;
+      await sleep(500);
+    }
+    await b.conn.call("cello_doc_accept", { document_id: documentId });
+    await waitForText(b.conn, documentId, "one\ntwo\nthree\nfour\n", "B after accept", 30_000);
+
+    // B keeps trying to delete. Each attempt is refused by A's gate, and the point of the retry
+    // ceiling is that this TERMINATES: a sender that redelivers a refused envelope forever
+    // re-triggers the peer's gate forever, and neither operator is ever told the collaboration has
+    // stopped working.
+    for (let i = 0; i < 4; i++) {
+      await b.conn.call("cello_doc_write", { document_id: documentId, content: `one\nsupersede ${i}\n` });
+      await sleep(2500);
+    }
+
+    const statusOf = async (conn: McpConn): Promise<string | undefined> => {
+      const listed = (await conn.call("cello_doc_list", {})) as {
+        documents?: Array<{ documentId?: string; status?: string }>;
+      };
+      return listed.documents?.find((d) => d.documentId === documentId)?.status;
+    };
+
+    // VISIBLE ON THE SENDER at minimum — they are the one whose work is not landing, and a document
+    // that silently stops converging is the failure this milestone most needs to not have.
+    const until = Date.now() + 90_000;
+    let sender: string | undefined;
+    let receiver: string | undefined;
+    while (Date.now() < until) {
+      sender = await statusOf(b.conn);
+      receiver = await statusOf(a.conn);
+      if (sender === "stalled") break;
+      await sleep(2000);
+    }
+    expect(
+      sender,
+      "B kept publishing into a document nothing would ever accept, and its own surface never said " +
+        `so.\n--- A document log ---\n${documentLines(a.daemon)}`,
+    ).toBe("stalled");
+    // The receiver's view is recorded rather than asserted equal: A refused every envelope, so
+    // whether A also considers the document stalled is a separate design question from whether B
+    // knows to stop. Captured so a change in it is visible.
+    expect(["active", "stalled"], `unexpected receiver status ${String(receiver)}`).toContain(receiver);
+  }, 600_000);
+});
