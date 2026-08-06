@@ -341,8 +341,10 @@ Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello
 
 ## 12. A sealed session's unread messages ring the doorbell as live work, and agents act on them
 
-**Designation: `DOD-TERMINAL-WAKE-1`** — ❌ open, raised 2026-08-05. **Unranked — slot proposed, not
-decided.** Proposed to sit beside `DOD-SEALED-INBOX-2`: same code surface, different defect.
+**Designation: `DOD-TERMINAL-WAKE-1`** — ❌ open, raised 2026-08-05. **Proposed rank: slot beside
+item 2 (`DOD-SEALED-INBOX-2`), pending Andre confirmation — added 2026-08-06.** Same code surface,
+different defect, meant to land in one pass. Ranked below `DOD-TERMINAL-STATE-DIVERGENCE-1`: this one
+confuses (self-concealing false confidence) but the sealed transcript stays valid; nothing is lost.
 
 Messages that were still unread when a session sealed stay unread forever — correctly. The seal
 attests what each side actually consumed (`content_frontier_seq` per participant,
@@ -433,7 +435,13 @@ invalidates the notarization. Confirmed on both sides.
 
 ## 13. Two sides can hold incompatible beliefs about which terminal path a session is on
 
-**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — ❌ open, raised 2026-08-05. **Unranked.**
+**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — ❌ open, raised 2026-08-05. **Proposed rank:
+slot #2, right after item 1 (`DOD-LOGOUT-EXIT-1`), pending Andre confirmation — added 2026-08-06.**
+Reasoning: this is the one item in this pair that attacks the notarization guarantee itself — a real
+conversation can end up permanently unsealable, forcing a receipt-forfeiting force-abandon. Rare
+trigger, but the failure shape is ruin-class: a receipt that was promised never exists, silently. No
+resolution path is known yet (stated below), so ranking it high commits to open-ended discovery work,
+not a scoped fix — flagging that trade explicitly rather than deciding it here.
 Distinct from `DOD-FRONTIER-MISMATCH-DURABLE-1`, which covers *leaf* divergence. Here **the leaves
 agree and the statuses do not.**
 
