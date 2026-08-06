@@ -229,22 +229,69 @@ present** — the authoritative confirmation the directory roll is fully applied
 |---|---|
 | `gcp-use1` 34.75.172.108 | ✅ rolled, `/health` + `/manifest` → 200 |
 | `gcp-euw1` 34.34.166.245 | ✅ rolled, `/health` + `/manifest` → 200 |
-| `gcp-usc1` 34.136.176.190 | ❌ **DOWN** — MIG `IS_STABLE=False`, instance `cello-gcp-usc1-jcpt` stuck `CREATING` |
+| `gcp-usc1` 34.136.176.190 | ✅ RECOVERED on `e2-medium` — see the capacity playbook below |
 
-**Why usc1 is down, and it is not the image.** `ZONE_RESOURCE_POOL_EXHAUSTED` — `us-central1-a` has
-no capacity for the machine type. The MIG (`PROACTIVE` / `REPLACE` / `max_unavailable_fixed = 1`)
-deleted the old instance before it could create the replacement, so the node is gone until GCP has
-capacity. The MIG retries on its own.
+**Why usc1 went down, and it was not the image.** `ZONE_RESOURCE_POOL_EXHAUSTED` — Google had no
+capacity. The MIG (`PROACTIVE` / `REPLACE` / `max_unavailable_fixed = 1`, `max_surge_fixed = 0`)
+**deletes before it creates**, so the healthy old instance was destroyed and could not be replaced.
+All three nodes were back and serving 200 within the hour; the consortium ran at exactly threshold
+(T = majority(3) = 2) in between — functional, zero spare.
 
-**Consequence to understand: the consortium is at EXACTLY threshold.** `T = majority(3) = 2`, and 2
-nodes are up — sessions still form, which is the redundancy working as designed. But there is now
-**zero spare**: one more node loss and no ceremony can complete. This should not be left sitting.
+---
 
-**Options (Andre's call):** wait for `us-central1-a` capacity; or move the usc1 node to another zone
-(a `terraform` change — the zone is pinned per region); or accept 2 nodes short-term. Note
-`max_surge_fixed = 0` is what makes a replacement destructive-first; raising it to 1 would let a
-future roll create-before-destroy and avoid this class entirely — worth considering, at the cost of
-briefly running two instances per region.
+## 📕 PLAYBOOK — `ZONE_RESOURCE_POOL_EXHAUSTED` on a node roll (written 2026-08-06 from a live one)
+
+**Read this before chasing zones. The intuitive fix is the wrong one.**
+
+**First: is it us or Google?** These are different errors and only one is ours.
+- `QUOTA_EXCEEDED` → **our** limit. Usage will be AT the limit. Ask for a quota bump.
+- `ZONE_RESOURCE_POOL_EXHAUSTED` → **Google** physically has no free machines of that type in that
+  zone. Nothing to do with our quota.
+
+Check with:
+```
+gcloud compute regions describe us-central1 --project cello-infra --format=json \
+  | python3 -c "import json,sys; [print(q['metric'], q['usage'], q['limit']) for q in json.load(sys.stdin)['quotas'] if q['metric'] in ('CPUS','E2_CPUS','N2_CPUS','INSTANCES')]"
+```
+On 2026-08-06 this read **usage 0.0 against limit 200.0** — zero, because the MIG had already
+deleted our instance. Definitively Google's capacity, not ours.
+
+**Second: the ZONE is usually NOT the variable — the MACHINE TYPE is.** This cost two failed rolls.
+`us-central1-a`, `-b` and `-c` were ALL exhausted for `e2-standard-2`, and `n2-standard-2` and
+`t2d-standard-2` were exhausted too — the whole region was short of 2-vCPU **standard** capacity.
+`e2-medium` had capacity in `-a` all along. Moving zone while holding the type constant just
+rediscovers the shortage in a new place.
+
+**Probe capacity directly — do not guess, and do not trial-and-error through terraform** (each
+attempt costs a full apply cycle). Create one throwaway instance and delete it. Note `--subnet`:
+the default network is deleted in this project, so a probe without it fails on the NETWORK, which
+looks nothing like a capacity error and will send you down the wrong path:
+```
+gcloud compute instances create cap-probe --zone=us-central1-a \
+  --machine-type=e2-medium --image-family=debian-12 --image-project=debian-cloud \
+  --subnet=cello-us-central1 --no-address --project cello-infra
+gcloud compute instances delete cap-probe --zone=us-central1-a --project cello-infra --quiet
+```
+**Probe the (zone, machine type) PAIR.** They are chosen together. Verifying `e2-medium` in `-a` and
+then applying it in `-b` — which is exactly what happened here — fails again for a third time.
+
+**Zone changes are safe for the manifest; region changes are NOT.** The node's external IP is a
+**regional** `google_compute_address`, so moving between zones inside a region keeps the same IP and
+the published consortium manifest stays valid. Moving to a different REGION changes the IP, and the
+roster is **bundled into the published client** — that is a client release, not an infra tweak.
+Never reach for a region change to solve a capacity problem.
+
+**The structural fix, not yet applied — `max_surge_fixed = 0` is what turns a shortage into an
+outage.** With surge 0 the MIG destroys the running instance first, so a capacity failure leaves
+NOTHING. With `max_surge_fixed = 1` it would create the replacement first, fail harmlessly, and
+leave the healthy node serving. The cost is briefly running two instances per region during a roll.
+**Strongly recommended before the next roll** — it converts this class from an outage into a no-op.
+
+**Current state of usc1 after the incident:** `zone = us-central1-a`, `machine_type = "e2-medium"`
+— a **TEMPORARY DOWNSIZE** (2 shared/burstable vCPU + 4 GB, vs 8 GB on standard) taken to restore
+the third node rather than sit at threshold. Fine at pre-launch load. **Revert to `e2-standard-2`
+once us-central1 has capacity**; re-probe with the command above to check. The revert marker is in
+`terraform.tfvars` beside the value.
 
 **⚠️ STILL OWED — the `DOD-ACCOUNTS-CHAIN-1` acceptance check has NOT been run.**
 `verifyChain("user_accounts")` on each node's database. There is no health/API surface exposing it
