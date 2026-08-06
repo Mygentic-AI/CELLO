@@ -51,8 +51,8 @@ real tamper-evidence gap** — it is now ranked item 3 below (proposed slot; And
 
 ## 1. Logging out says the daemon stopped while it is still on the network
 
-**Designation: `DOD-LOGOUT-EXIT-1`** — ✅ FIXED 2026-08-06 (Andre, cello-client `4dfc3cd`). Story:
-[[CELLO-M8C-DAEMON-001]]. `onStopped({ok,error})` fires as `stop()`'s last act and the binary wires
+**Designation: `DOD-LOGOUT-EXIT-1`** — ✅ FIXED 2026-08-06 (cello-client `4dfc3cd`).
+`onStopped({ok,error})` fires as `stop()`'s last act and the binary wires
 it to `process.exit`; `daemonGone()` additionally requires the pid to be gone, not just handles;
 `cello status` names `broken_shutdown`. Individual event-loop holders (Telegram poll, libp2p
 teardown, untimed dials) remain follow-on work — the process-level kill switch is fixed, the
@@ -346,8 +346,7 @@ Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello
 
 ## 12. A sealed session's unread messages ring the doorbell as live work, and agents act on them
 
-**Designation: `DOD-TERMINAL-WAKE-1`** — story: [[CELLO-M8C-SESSION-001]] (combines this with
-`DOD-SEALED-INBOX-2`). ❌ open, raised 2026-08-05. **Proposed rank: slot beside
+**Designation: `DOD-TERMINAL-WAKE-1`** — ❌ open, raised 2026-08-05. **Proposed rank: slot beside
 item 2 (`DOD-SEALED-INBOX-2`), pending Andre confirmation — added 2026-08-06.** Same code surface,
 different defect, meant to land in one pass. Ranked below `DOD-TERMINAL-STATE-DIVERGENCE-1`: this one
 confuses (self-concealing false confidence) but the sealed transcript stays valid; nothing is lost.

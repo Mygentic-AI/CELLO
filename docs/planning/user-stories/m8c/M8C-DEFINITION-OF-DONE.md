@@ -2333,8 +2333,8 @@ own story) deliberately, never smuggled in as a rider. Source:
   cannot catch a regression here, because in a temp daemon with no sessions the daemon-wide handler
   answers `ok` too. The wire name is therefore asserted directly, verified by mutation.
 
-- **DOD-LOGOUT-EXIT-1** ✅ FIXED (raised 2026-07-30, fixed 2026-08-06 by Andre, cello-client commit
-  `4dfc3cd`) — story: [[CELLO-M8C-DAEMON-001]] (superseded by the live fix, kept for the AC record).
+- **DOD-LOGOUT-EXIT-1** ✅ FIXED (raised 2026-07-30, fixed 2026-08-06, cello-client commit
+  `4dfc3cd`) —
   `stop()` now fires an `onStopped({ok, error})` hook as its last act; the binary wires it to
   `process.exit`. `daemonGone()` additionally requires the pid alive at shutdown-send to be gone.
   `cello status` names `broken_shutdown` when a process holds the lock but won't answer. AC2 is met
@@ -2579,8 +2579,7 @@ own story) deliberately, never smuggled in as a rider. Source:
     deregistered by another stream's close / registered but unwritable). It is what sent the original
     investigation at the *target's* connectivity for 25 minutes while the target was fine.
 
-- **DOD-RETRYQ-STRAND-1** ❌ OPEN (raised 2026-08-06, found on Andre's LIVE daemon) — story:
-  [[CELLO-M8C-DAEMON-002]]. A retry-queue
+- **DOD-RETRYQ-STRAND-1** ❌ OPEN (raised 2026-08-06, found on Andre's LIVE daemon) — a retry-queue
   entry whose session goes TERMINAL is never reaped, so it strands forever and permanently pins the
   health metric.
 
