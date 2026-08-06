@@ -641,3 +641,37 @@ Distinguishing test for any future claim that this is fixed: a trigger-fired bui
 Google Cloud Build → confirm `CELLO` is in its repository access list. A connection can report
 COMPLETE while the App no longer watches that repo — the connection is authorized, but no event is
 ever generated to deliver, which fits the total absence of denied-attempt entries.
+
+
+### M12-P11 — PROBE 2 (2026-08-06): a SECOND OAuth did not fix it either
+
+| Probe | Push | Result |
+|---|---|---|
+| 1 (2026-08-05) | `8f814456` — touches `infra/cloudbuild/relay.yaml`, in the relay trigger's `includedFiles` | no build, no denied-attempt audit entry |
+| 2 (2026-08-06) | `32d4dad8` — same file, after the operator re-completed the OAuth again | **no build**, same silence |
+
+Latest build in the project remains `8eaddd07` (2026-08-05 04:51), a MANUAL `builds submit`. Every
+build in this project has `substitutions.TRIGGER_NAME` **empty**, which is the distinguishing test:
+a trigger-fired build sets it. No trigger has fired here since 2026-07-28.
+
+**Conclusion — stop re-doing the gcloud OAuth. It cannot fix this.** The Google-side OAuth
+re-authorizes the CONNECTION (hence the persistent `installationState: COMPLETE`); it does not change
+which repositories the **Google Cloud Build GitHub App** is permitted to see. If `CELLO` is not in
+that App's repository-access list, GitHub never generates the push event, Cloud Build never receives
+one, and there is nothing to deny — which is exactly the observed shape, including the absence of
+denied-attempt audit entries.
+
+**The one remaining check, browser-only** (the CLI gets 403 on `/user/installations` by design):
+`github.com/organizations/Mygentic-AI/settings/installations` → Google Cloud Build → Configure →
+Repository access. If it is "Only select repositories" and `CELLO` is absent, adding it IS the fix.
+If `CELLO` is present, the App is healthy and the next lever is deleting and recreating the
+`cello-github` connection (which changes `app_installation_id` in `terraform/cloudbuild.tf` — plan
+will show loud drift, which is intended).
+
+Workaround while open, unchanged and working:
+```
+gcloud builds submit "projects/cello-infra/locations/us-east1/connections/cello-github/repositories/CELLO" \
+  --revision=<SHA> --region=us-east1 --config=infra/cloudbuild/relay.yaml \
+  --service-account=projects/cello-infra/serviceAccounts/cello-cloud-build@cello-infra.iam.gserviceaccount.com \
+  --substitutions=_TAG=<SHA>
+```
