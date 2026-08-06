@@ -856,7 +856,31 @@ belong to. One is fixed; the rest are open and none is document-specific — the
 - **DOD-DOC-E2E-WRITE-1** [trustless-cello] — **write-path enforcer** ran green: the full file
   round-trip at the tool surface (edit file → publish → peer file rewritten → pending → diff
   stats → diff → content identical), then withdraw on an undelivered update reverts the
-  sender's file and records the withdrawal. — ❌
+  sender's file and records the withdrawal. — ⏳ **FILE ROUND TRIP GREEN** (`6a1223fa`); the
+  withdraw half is out of V1 by decision.
+
+  **The file surface did not exist in production.** `DocumentWritePath` — materialize,
+  diff-the-file, admit-and-rewrite, 500 lines with its own test file — had no production caller.
+  Same defect as the tool surface before TOOLS-1, same disguise: a complete unit with no caller
+  reads exactly like a working feature. Wired at three points (`c531379`), and the third is what
+  makes it a surface rather than an export:
+
+  - materialized at propose AND accept, with the path returned — lazily would leave the first
+    publish with no projection to diff against, and a path nobody is told is a file nobody can edit;
+  - `cello_doc_publish` diffs the FILE against what the daemon last wrote there, refusing on a stale
+    baseline rather than reading the peer's admitted content as a deliberate deletion;
+  - **rewritten on every admitted inbound update** — without it the surface is write-only, and a
+    stale file that reads as the document and gets published back over the peer's work is worse than
+    no file at all.
+
+  The enforcer asserts on DISK, both directions, both files identical at the end. The two documents
+  agreeing while the files differ is exactly the failure that would make this useless to the person
+  editing one.
+
+  **Withdraw is not covered, by the earlier decision to cut it from V1** (see DOD-DOC-TOOLS-1): it
+  only ever applied to an undelivered envelope, and `cello_doc_write` with corrected text gives the
+  identical net effect in the identical number of calls. Recorded here rather than quietly scoped
+  away.
 
 ---
 
