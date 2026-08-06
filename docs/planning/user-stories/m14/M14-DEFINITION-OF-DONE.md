@@ -676,6 +676,31 @@ rather than the peer's state vector; and the working document having to BE the l
   was deleted by the M6-era dead-code purge (`567b856`). It is not in the cascade and must not be
   resurrected into one; flagged because `/cello-publish` still lists seven packages including it.
 
+## Merge with main — and the defect it created (2026-08-06)
+
+`m14/reject-1` merged `origin/main` (33 commits). Five conflicts, all package.json VERSIONS — the
+branch trails published because main moved ahead, exactly as the SHIP-1 survey predicted. Resolved
+to MAIN's numbers, which is what the cascade must be computed from. Gate green, 3157 tests.
+
+**Then the live enforcers found a defect neither branch had alone.** Two of the eight went red, and
+they were precisely the two that assert a SEAL.
+
+`#appendVerifiedContent` drops a content hash from `#witnessedSeq` once its leaf is appended. That
+cleanup lives in the CONVERSATION branch; the document branch appends its `doc` leaf and returns
+early, so every inbound document frame left a permanent entry behind. Harmless — until main's
+`sealReadiness` (M12-P14) began deriving `missingLeaves` from the size of that map. From then on any
+session that had carried document traffic refused to close with `session_incomplete`, whose only
+escape is a force-abandon with no notarized receipt. Exactly the false positive that check's own
+comment names as worse than the bug it guards.
+
+Neither side was wrong alone: the document branch legitimately diverges from the conversation path,
+and the readiness gate legitimately counts outstanding witnesses. The divergence carried one line
+too far. Fixed in `d562b94`.
+
+**All 3157 unit tests passed on the broken tree**, because none of them seals a session that carried
+a document. The rule this hands forward: run the live enforcers immediately after any merge that
+touches the session layer — a green unit suite says nothing about two features meeting.
+
 ## Open findings from the send-path analysis (2026-08-06)
 
 A dedicated analysis of the session send path, run while chasing the sanitization bug, found several
