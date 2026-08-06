@@ -16,7 +16,7 @@
  */
 
 import pg from "pg";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { configurePgTypes } from "../pg-type-config.js";
 import { stringify as jsonStringify, parse as jsonParse } from "../json-typed.js";
 import type {
@@ -1008,6 +1008,88 @@ export class PgDirectoryStore implements DirectoryStore {
         throw err;
       }
       throw err;
+    }
+  }
+
+  /**
+   * DOD-ACCOUNTS-CHAIN-1: lookup-or-create the account for a phone stub, writing any NEW row
+   * INTO the hash chain. This is what the registration path calls.
+   *
+   * THE DEFECT THIS REPLACES. `user_accounts` had two writers and production used the wrong one.
+   * `createAccount` above chains correctly and had ZERO production callers; every real
+   * registration went through `resolveAccountId`, which issued a bare INSERT with
+   * `chain_hash = SHA-256(account_id || phone_stub_hash)` — a standalone digest, not a link.
+   * So `verifyChain("user_accounts")` was red on any database where anyone had ever registered,
+   * and a verification that is ALWAYS red cannot distinguish a tamper from its own baseline: the
+   * table binding a human to an agent had no working tamper-evidence at all.
+   *
+   * WHY THE LOCK MOVES OUT HERE, and why this is not just `createAccount` with a SELECT in front:
+   * the advisory lock is taken BEFORE the existence check, on the same key `insertWithChain` uses,
+   * inside the same transaction. That makes check-then-insert ATOMIC. The old path was merely
+   * race-TOLERANT (`ON CONFLICT DO NOTHING` + readback); tolerating the race is not enough once
+   * the write is chained, because two concurrent inserts racing between "read previous hash" and
+   * "insert" fork the chain — and a forked chain is indistinguishable from a tamper. `insertWithChain`
+   * re-acquires the same lock with the client we pass it, which is a no-op: pg advisory xact locks
+   * are re-entrant within a transaction and released together at COMMIT.
+   *
+   * Returns the account_id — existing or newly created. Dedup semantics are unchanged: same phone
+   * stub always resolves to the same account.
+   */
+  async resolveOrCreateAccount(params: {
+    phoneStubHash: string;
+    emailStubHash?: string | null;
+    correlationId?: string;
+  }): Promise<string> {
+    const { phoneStubHash, emailStubHash, correlationId } = params;
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Same key as insertWithChain's — hashtext('user_accounts'). Held for the transaction.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", ["user_accounts"]);
+
+      const existing = await client.query<{ account_id: string }>(
+        "SELECT account_id FROM user_accounts WHERE phone_stub_hash = $1",
+        [phoneStubHash],
+      );
+      if (existing.rows.length > 0) {
+        await client.query("COMMIT");
+        return existing.rows[0]!.account_id;
+      }
+
+      const accountId = randomUUID();
+      const hasEmail = emailStubHash !== undefined && emailStubHash !== null;
+
+      // The record is what gets SERIALIZED for the chain; columns/values are what get INSERTed.
+      // insertWithChain cross-checks them, so they must stay in step. Note email_stub_hash is in
+      // TABLE_EXTRA_EXCLUDED for this table, so it is stored but not chained — it is nullable at
+      // creation and would otherwise break verification for rows that acquire one later.
+      const record: Record<string, unknown> = { account_id: accountId, phone_stub_hash: phoneStubHash };
+      if (hasEmail) record["email_stub_hash"] = emailStubHash;
+
+      const columns = hasEmail
+        ? ["account_id", "phone_stub_hash", "email_stub_hash", "chain_hash"]
+        : ["account_id", "phone_stub_hash", "chain_hash"];
+      const values: unknown[] = hasEmail
+        ? [accountId, phoneStubHash, emailStubHash, ""]
+        : [accountId, phoneStubHash, ""];
+
+      await this.insertWithChain(
+        "user_accounts",
+        record,
+        columns,
+        values,
+        columns.length - 1,
+        client,
+        correlationId,
+      );
+      await client.query("COMMIT");
+      this.#logger.info("account.created", { accountId, correlationId });
+      return accountId;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => { /* connection already unusable */ });
+      throw err;
+    } finally {
+      client.release();
     }
   }
 

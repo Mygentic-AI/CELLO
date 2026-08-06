@@ -201,7 +201,7 @@ import {
   encodeFrostDkgRound3Response,
 } from "./frost-dkg-frames.js";
 import { protocolLog, truncId, truncHex } from "./protocol-log.js";
-import { resolveAccountId, redeemClaimCode } from "./pre-auth-token-repository.js";
+import { redeemClaimCode } from "./pre-auth-token-repository.js";
 import type { MmrStore } from "./mmr-store.js";
 import type { RelayPoolManager } from "./relay-pool-manager.js";
 import { checkPresentedSignals } from "./signal-present.js";
@@ -3191,16 +3191,27 @@ export class CelloDirectoryNode {
     // null account_id (the profile is still created; the link is repairable later).
     this.#pendingPreAuthData.delete(frame.k_local_pubkey);
     let accountId: string | null = null;
+    // D2 observability: one correlationId for the account-resolution flow, so the store's
+    // `account.created` and this handler's `preauth.account.link.failed` join up. The enclosing
+    // register handler mints none of its own.
+    const accountCorrelationId = randomUUID();
     if (this.#pgPool && preAuthDataForHash) {
       try {
-        accountId = await resolveAccountId(
-          this.#pgPool,
-          preAuthDataForHash.phoneStubHash,
-          preAuthDataForHash.emailStubHash,
-        );
+        // DOD-ACCOUNTS-CHAIN-1: goes through the STORE, which writes the row into the hash chain.
+        // This used to call `resolveAccountId(this.#pgPool, …)` — a bare INSERT stamping a
+        // standalone SHA-256(account_id || phone_stub_hash) into chain_hash. Because this is the
+        // only account writer registration ever reaches, EVERY real account was outside the chain,
+        // `verifyChain("user_accounts")` was permanently red, and a genuine tamper on the table
+        // binding a human to an agent could not be told from that baseline. The chained writer
+        // existed the whole time (`createAccount`) with no production caller.
+        accountId = await this.#store.resolveOrCreateAccount({
+          phoneStubHash: preAuthDataForHash.phoneStubHash,
+          emailStubHash: preAuthDataForHash.emailStubHash,
+          correlationId: accountCorrelationId,
+        });
       } catch (err: unknown) {
         const reason = err instanceof Error ? err.message : String(err);
-        this.#logger?.error("preauth.account.link.failed", { agentId, reason });
+        this.#logger?.error("preauth.account.link.failed", { agentId, reason, correlationId: accountCorrelationId });
       }
     }
 

@@ -8,6 +8,7 @@
  * Migrated from packages/directory/src/directory-store.ts.
  */
 
+import { randomUUID } from "node:crypto";
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
 import type { DirectoryStore, DirectoryNotification, SealNotarization, ConversationSealRecord, AccountRow, CreateAccountParams, AgentRevocationRecord, PickupItem, AgentPresenceLookup } from "../directory-store.js";
 
@@ -125,6 +126,32 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     this.#accounts.set(accountId, row);
     this.#accountPhoneHashIndex.set(phoneStubHash, accountId);
     return row;
+  }
+
+  /**
+   * DOD-ACCOUNTS-CHAIN-1: lookup-or-create, mirroring the Pg adapter's dedup contract.
+   *
+   * There is no chain here and there should not be one: this stub exists so unit tests can run
+   * without Postgres, and a fake chain would let a test claim chain integrity that only the real
+   * adapter can provide. The hash-chain behaviour is covered exclusively by the live Postgres test
+   * (dod-accounts-chain-1.test.ts), because — per the M4+ rule — a mock database cannot catch a
+   * broken chain any more than it can catch a broken RLS policy.
+   */
+  async resolveOrCreateAccount(params: {
+    phoneStubHash: string;
+    emailStubHash?: string | null;
+    correlationId?: string;
+  }): Promise<string> {
+    const existing = this.#accountPhoneHashIndex.get(params.phoneStubHash);
+    if (existing !== undefined) return existing;
+    const accountId = randomUUID();
+    await this.createAccount({
+      accountId,
+      phoneStubHash: params.phoneStubHash,
+      emailStubHash: params.emailStubHash ?? undefined,
+      correlationId: params.correlationId,
+    });
+    return accountId;
   }
 
   async getAgentsByAccount(accountId: string): Promise<AgentProfile[]> {

@@ -661,17 +661,28 @@ describeIntegration("OPS-AGENT-001 integration: AC-005b account deduplication", 
     expect(r1.ok).toBe(true);
     expect(r2.ok).toBe(true);
 
-    // linkAgentToAccount for both — now with kLocalPubkey so account_id is set on agent_profiles
+    // DOD-ACCOUNTS-CHAIN-1: account CREATION moved to the store, which writes through the hash
+    // chain; `linkAgentToAccount` now only sets the FK. The two properties this test has always
+    // asserted are unchanged and both still asserted below — same phone resolves to one account,
+    // and the FK actually lands on agent_profiles — but the dedup half is now exercised through
+    // the chained writer rather than the deleted bare-INSERT helper.
+    const { PgDirectoryStore } = await import("../adapters/pg-directory-store.js");
     const { linkAgentToAccount } = await import("../pre-auth-token-repository.js");
+    const silentLogger = { debug() {}, info() {}, warn() {}, error() {} };
+    const accountStore = new PgDirectoryStore(pool, silentLogger as unknown as ConstructorParameters<typeof PgDirectoryStore>[1]);
+
+    const resolved1 = await accountStore.resolveOrCreateAccount({ phoneStubHash: SHARED_PHONE_STUB_HASH });
+    const resolved2 = await accountStore.resolveOrCreateAccount({ phoneStubHash: SHARED_PHONE_STUB_HASH });
+
     const accountId1 = await linkAgentToAccount(pool, {
       agentProfileId: "agent-prof-id-1-" + Buffer.from(randomBytes(4)).toString("hex"),
       kLocalPubkey: kLocalPubkey1,
-      phoneStubHash: SHARED_PHONE_STUB_HASH,
+      accountId: resolved1,
     });
     const accountId2 = await linkAgentToAccount(pool, {
       agentProfileId: "agent-prof-id-2-" + Buffer.from(randomBytes(4)).toString("hex"),
       kLocalPubkey: kLocalPubkey2,
-      phoneStubHash: SHARED_PHONE_STUB_HASH,
+      accountId: resolved2,
     });
 
     // Both must link to the same account

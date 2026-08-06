@@ -24,7 +24,7 @@
  *   NIST SP 800-90A (CSPRNG — crypto.randomBytes)
  */
 
-import { randomBytes, createHash, randomUUID } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import type pg from "pg";
 import type { Logger } from "@cello-protocol/interfaces";
 import { signCapability, encodeCapability } from "@cello-protocol/crypto";
@@ -444,107 +444,48 @@ export async function validatePreAuthTokenForDkg(
   };
 }
 
-// ─── Account deduplication ────────────────────────────────────────────────────
+// ─── Account linking ──────────────────────────────────────────────────────────
 
 export interface LinkAgentToAccountParams {
   /** The UUID of the agent_profiles row (from the profile just created) */
   agentProfileId: string;
   /** The agent's k_local_pubkey hex — used to UPDATE agent_profiles.account_id */
   kLocalPubkey: string;
-  /** phone_stub_hash from the consumed pre-authorization token */
-  phoneStubHash: string;
-  /** Optional email stub hash */
-  emailStubHash?: string;
+  /** The account to link to. RESOLVE IT FIRST via `DirectoryStore.resolveOrCreateAccount`. */
+  accountId: string;
 }
 
 /**
- * Look up or create an account for the given phone_stub_hash, link the agent_profile
- * to it by setting account_id, then return the account_id.
+ * Link an already-persisted agent_profiles row to an account by setting account_id.
  *
- * Pseudocode (AC-005b):
- *   1. SELECT account_id FROM user_accounts WHERE phone_stub_hash = $1
- *   2. If found: use that account_id (same phone → same account)
- *   3. If not found:
- *      a. Generate a new UUID for account_id
- *      b. Compute chain_hash = SHA-256(account_id || phone_stub_hash)
- *      c. INSERT INTO user_accounts (account_id, phone_stub_hash, chain_hash, ...)
- *         ON CONFLICT (phone_stub_hash) DO NOTHING
- *      d. SELECT again (handles race where two parallel inserts both get NOT_FOUND)
- *   4. UPDATE agent_profiles SET account_id = $account_id WHERE k_local_pubkey = $kLocalPubkey
- *   5. Return account_id
+ * DOD-ACCOUNTS-CHAIN-1 — WHAT THIS NO LONGER DOES, AND WHY. It used to lookup-or-CREATE the
+ * account itself, via a `resolveAccountId` helper that issued a bare INSERT stamping
+ * `chain_hash = SHA-256(account_id || phone_stub_hash)` — a standalone digest, not a chain link.
+ * That helper was the one the registration path called, so every real account was written OUTSIDE
+ * the hash chain, `verifyChain("user_accounts")` was permanently red, and a genuine tamper on the
+ * human↔agent binding was indistinguishable from that baseline.
  *
- * This implements the INSERT OR IGNORE pattern for account deduplication.
- * The UPDATE in step 4 closes the gap where agent_profiles.account_id would stay NULL.
+ * Account CREATION now lives in exactly one place — `DirectoryStore.resolveOrCreateAccount`, which
+ * writes through `insertWithChain`. `resolveAccountId` is deleted rather than left unused: a
+ * function whose whole body writes an unchained account row is how this defect comes back, and a
+ * dead one is indistinguishable from a live one to the next person who needs "the account helper".
+ *
+ * So this function does only what its name says: it sets the FK. Callers resolve the account first.
+ *
+ * NOTE the registration path does not use this at all — it INSERTs the profile with account_id
+ * already set, because "insert then UPDATE" raced the fire-and-forget profile INSERT and could
+ * leave account_id permanently NULL. This remains for callers linking a profile that is already
+ * committed.
  */
-/**
- * Look up or create the account for a given phone_stub_hash and return its account_id.
- * Steps 1–3 of AC-005b (the deduplication half), WITHOUT touching agent_profiles.
- *
- * Extracted so the registration path can resolve account_id BEFORE it inserts the
- * agent_profiles row, and insert the row WITH account_id atomically. The prior design
- * (insert profile without account_id, then UPDATE it) raced the fire-and-forget profile
- * INSERT: the UPDATE could run on a separate pool connection before the INSERT committed,
- * match 0 rows, and leave account_id permanently NULL. Resolving first removes the race.
- */
-export async function resolveAccountId(
-  pool: pg.Pool,
-  phoneStubHash: string,
-  emailStubHash?: string,
-): Promise<string> {
-  // Step 1: Try to find existing account (same phone → same account).
-  const existing = await pool.query<{ account_id: string }>(
-    "SELECT account_id FROM user_accounts WHERE phone_stub_hash = $1",
-    [phoneStubHash],
-  );
-  if (existing.rows.length > 0) {
-    return existing.rows[0]!.account_id;
-  }
-
-  // Step 2: No account — create one (INSERT-OR-IGNORE on the UNIQUE phone_stub_hash).
-  const accountId = randomUUID();
-  const chainHash = createHash("sha256")
-    .update(accountId)
-    .update(phoneStubHash)
-    .digest("hex");
-  try {
-    await pool.query(
-      `INSERT INTO user_accounts (account_id, phone_stub_hash, email_stub_hash, chain_hash)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (phone_stub_hash) DO NOTHING`,
-      [accountId, phoneStubHash, emailStubHash ?? null, chainHash],
-    );
-  } catch {
-    // Swallow — the readback resolves any concurrent-insert race to the winner's id.
-  }
-
-  // Step 3: Read back the canonical account_id (handles two parallel inserts).
-  const readback = await pool.query<{ account_id: string }>(
-    "SELECT account_id FROM user_accounts WHERE phone_stub_hash = $1",
-    [phoneStubHash],
-  );
-  if (readback.rows.length === 0) {
-    throw new Error(`[pre-auth-token-repository] Failed to create or find account for phone_stub_hash ${phoneStubHash.slice(0, 8)}...`);
-  }
-  return readback.rows[0]!.account_id;
-}
-
 export async function linkAgentToAccount(
   pool: pg.Pool,
   params: LinkAgentToAccountParams,
 ): Promise<string> {
-  const accountId = await resolveAccountId(pool, params.phoneStubHash, params.emailStubHash);
-
-  // Link the agent_profile to the account by setting account_id. Uses k_local_pubkey
-  // (the agent's unique identifier in agent_profiles) as the WHERE clause. NOTE: this
-  // UPDATE requires the agent_profiles row to already be committed — the registration
-  // path now inserts WITH account_id via resolveAccountId instead (race-free). This
-  // function remains for callers that link an already-persisted profile.
   await pool.query(
     "UPDATE agent_profiles SET account_id = $1 WHERE k_local_pubkey = $2",
-    [accountId, params.kLocalPubkey],
+    [params.accountId, params.kLocalPubkey],
   );
-
-  return accountId;
+  return params.accountId;
 }
 
 /** #2b: outcome of a claim-code redeem — distinguishes "unknown code" from "expired" (review finding 2:

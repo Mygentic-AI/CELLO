@@ -373,6 +373,32 @@ export interface DirectoryStore {
   createAccount(params: CreateAccountParams): Promise<AccountRow>;
 
   /**
+   * DOD-ACCOUNTS-CHAIN-1: lookup-or-create the account for a phone stub, returning its account_id.
+   * This is what the REGISTRATION path calls, and the only account writer reachable from it.
+   *
+   * It exists because `createAccount` — which chains correctly — had zero production callers:
+   * registration used a repository helper that issued a bare INSERT with a standalone
+   * `SHA-256(account_id || phone_stub_hash)` digest instead of a chain link, leaving
+   * `verifyChain("user_accounts")` permanently red and tamper-evidence on the human↔agent binding
+   * nonfunctional. Implementations MUST write new rows into the hash chain, and MUST make the
+   * lookup-or-create atomic (not merely conflict-tolerant): two concurrent creates that interleave
+   * between reading the previous hash and inserting would FORK the chain, which is
+   * indistinguishable from a tamper.
+   *
+   * Dedup contract: the same phone stub always resolves to the same account_id, and a second call
+   * writes no new row.
+   *
+   * @param params.phoneStubHash - SHA-256(phone_stub); the dedup key
+   * @param params.emailStubHash - Optional SHA-256(email_stub); stored, not chained (nullable at creation)
+   * @param params.correlationId - For observability threading
+   */
+  resolveOrCreateAccount(params: {
+    phoneStubHash: string;
+    emailStubHash?: string | null;
+    correlationId?: string;
+  }): Promise<string>;
+
+  /**
    * Return all agent_profiles rows with account_id = accountId,
    * ordered by registered_at ASC.
    *
