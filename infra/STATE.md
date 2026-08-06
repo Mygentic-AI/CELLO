@@ -33,13 +33,53 @@ section that follows it, or in `infra/CLAUDE.md`.
 
 ---
 
-## ⚡ POWER STATE — HIBERNATED (all 3 regions, as of 2026-07-31 15:12 UTC)
+## ⚡ POWER STATE — DIRECTORY/RELAY INFRA PERMANENTLY DECOMMISSIONED (2026-08-06)
 
-Down since ~15:08–15:12 UTC. Previous uptime ~4.5 h (woken 10:36–10:54 UTC).
+**This supersedes hibernation — the directory/relay stack is not "asleep," it is deleted.**
+GCP has been the live protocol infra since M12 (2026-07-31); this session tore down the AWS
+side to cut idle cost now that nothing depends on it (`docs/planning/aws-to-gcp-migration.md`
+§8, step 1: "bring the AWS protocol stack down — nothing a current client uses depends on it").
 
-Torn down: 7 ALBs, 3 NAT Gateways (EIPs retained), 3 ssmmessages endpoints. ECS→0 across all
-services, 4 RDS stopped, demo EC2 stopped. All 8 hostnames blackholed to `198.51.100.1` TTL 60.
-Portal capture: **2 listener rules + 1 SNI cert** — ops dashboard restores itself on wake.
+**CFN stacks DELETED, all 3 regions unless noted:**
+`cello-ecs-directory-dev` · `cello-ecs-relay-dev` · `cello-route53-relay-dev` · `cello-rds-dev`
+(the `cello-dev` directory Postgres — final snapshot `cello-dev-final-teardown-20260806` taken
+in each region before delete) · `cello-rotation-dev` · `cello-cloudwatch-dev` · `cello-waf-dev` ·
+`cello-cicd-dev` (us-east-1 only — all 5 CodePipelines + CodeBuild projects + the GitHub webhook
+Lambda + the pipeline-filter Lambda) · `cello-ecs-operations-agent-dev` (us-east-1 only — the
+Telegram bot; GCP's Cloud Run ops-agent is the live one) · `cello-ops-dashboard-dev` (us-east-1
+only — needed `--retain-resources ListenerCertificate`, its listener was already gone from the
+2026-07-31 hibernate) · `cello-portal-dev` (us-east-1 only — the AWS ECS/ALB portal app; **NOT**
+`cello-portal-data-dev`, which holds the portal RDS and is KEPT, see below).
+
+**Also removed, not CFN-managed:** `ironclaw-agent` + `openclaw-agent` EC2 instances (stopped,
+terminated) and their EBS volumes · 3 idle/unattached Elastic IPs (the NAT-gateway holdovers) ·
+2 RDS final snapshots exist per region for `cello-dev` if a restore is ever needed.
+
+**Explicitly KEPT — do not delete without a separate decision:**
+- `cello-portal-data-dev` (portal RDS) + `cello-portal-build-dev` (portal ECR) — the waitlist has
+  **not** been ported off this database yet (`aws-to-gcp-migration.md` §7). Deleting it takes the
+  waitlist with it.
+- `cello-waitlist-dev` (13 Lambdas) — same reason.
+- `cello-secrets-dev`, `cello-ssm-parameters-dev`, `cello-kms-dev`, `cello-iam-dev`,
+  `cello-ecr-dev`, `cello-s3-dev`, `cello-vpc-dev`, `cello-route53-dev`, the 6 VPC peering
+  stacks, `cello-github-oidc-dev` — cheap/foundational, untouched per Andre's explicit
+  instruction (SES and Secrets Manager especially — never touch).
+- `cello-hermes-agent` EC2 (us-east-1, running) — Andre's daily-use counterparty agent, not CELLO
+  protocol infra. Explicitly kept live.
+- `cello-demo-agent` EC2 (us-east-1, stopped) — confirmed live identity match to the documented
+  demo-agent instance ID; kept stopped, not terminated.
+
+**Separate repo, same session:** `cello-agent` (eu-west-1 demo/staging stack) was also fully
+hibernated by hand — RDS + WhatsApp-bridge EC2 stopped, both ALB/NLB deleted, and an unidentified
+live cross-account PrivateLink connection (`631144002099`, connected since 2026-03-09) rejected
+and its endpoint service deleted at Andre's explicit instruction. That repo's `hibernate.sh` /
+`wake.sh` were fixed to blackhole **every** Route53 alias record across **every** hosted zone
+before deleting the ALB (the old code captured only one record in one zone and silently dropped
+2 of 3 — see `cello-agent` commit `bff6ebf8`), mirroring this repo's pattern.
+
+**What this means for `wake.sh` in THIS repo:** it can no longer restore the directory/relay/RDS
+resources deleted here — they are gone, not captured in a hibernation-state file. A future
+directory/relay revival in AWS is a fresh `deploy.sh` build, not a wake.
 
 **First run with the reordered teardown (`914ee8a3`).** The blackhole UPSERT now precedes
 `delete-load-balancer`, closing the window in which the alias pointed at a deleted ALB and Route53
