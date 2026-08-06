@@ -890,13 +890,27 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   `onlineAgents` and awaits `removeStandingReceiverForAgent`, which tears down the STANDING RECEIVER
   (so no NEW inbound session can be accepted) but leaves every existing per-session node alive and
   serving. Direct delivery goes to the session node, so an established conversation continues.
-  **Not fixed, deliberately: the resolution is a product decision, not a bug fix.** Either "offline"
-  means *refuse new sessions, existing ones continue* — in which case the help text is the defect and
-  should say so — or it means *stop talking*, in which case the handler must also tear down the
-  agent's active session nodes, which interrupts live conversations and makes them seal-interrupted
-  on close. The second reading is the one that makes it a kill switch, and the launch bar names a
-  kill switch explicitly; but it is a user-facing behaviour change and should be chosen, not
-  defaulted into by whoever touches the file next.
+  ✅ **DECIDED, FIXED, MERGED + PUBLISHED 2026-08-05/06** — daemon `0.0.127` / cli `0.0.130` /
+  connect `0.0.124`, tag `v0.0.187`, verified in the tarball, live on both machines.
+  Andre's decision: **offline means STOP TALKING** — it is the local kill switch.
+  Both halves were needed, and the first attempt only had one:
+  - **Outbound:** going offline now tears down that agent's active session nodes (status
+    `interrupted` — honest, not terminal, and still sealable thanks to M12-P15). Scoped per-agent, so
+    another agent on the same daemon keeps its conversations; pinned by its own test, because the
+    easy way to pass the first test is a global stop.
+  - **Inbound (review F1, missed on the first pass):** nothing on the inbound path consulted agent
+    state, and `acceptInboundAssignment` called `ensureStandingReceiverForAgent`, whose first line
+    re-added the want-flag the offline handler had just cleared — so a NEW session landed, the
+    receiver came back from the dead, and the away reply fired. Gated now on a dedicated
+    `explicitlyOfflineAgents` set. **Do NOT gate this on `onlineAgents`** — that set answers "was
+    this started via `cello_start_agent`", not "may this receive", and gating on it broke 27 tests
+    across 7 suites because several legitimate paths serve inbound without membership in it.
+  - **A hole the new test found in the fix itself:** `cello_set_agent_offline` early-returns
+    "idempotent" when the agent is not in `onlineAgents`, so pressing the switch on an agent serving
+    traffic without that membership did NOTHING and returned `ok: true`. Intent is now recorded
+    BEFORE that short-circuit — it must not be conditional on internal bookkeeping.
+  - The test that caught it is driven through the REAL signaling path; a stubbed assignment would
+    have passed and proven nothing, which is the mistake that shipped M12-P15's inert first attempt.
   → Entry 95
 
 
