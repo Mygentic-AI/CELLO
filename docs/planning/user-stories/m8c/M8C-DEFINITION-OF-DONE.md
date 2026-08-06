@@ -2553,6 +2553,57 @@ own story) deliberately, never smuggled in as a rider. Source:
     deregistered by another stream's close / registered but unwritable). It is what sent the original
     investigation at the *target's* connectivity for 25 minutes while the target was fine.
 
+- **DOD-RETRYQ-STRAND-1** ❌ OPEN (raised 2026-08-06, found on Andre's LIVE daemon) — a retry-queue
+  entry whose session goes TERMINAL is never reaped, so it strands forever and permanently pins the
+  health metric.
+
+  **Found by asking what `retryQueueDepth: 1` in `cello status` actually was** — it had been sitting
+  at 1. Read out of the live SQLCipher DB:
+
+  | field | value |
+  |---|---|
+  | `id` | 5 |
+  | `session_id` | `6aa3f24b46b70147a4052c6b80376c90` |
+  | `agent_id` | `null` (an agent-less DIRECT-retry row) |
+  | `awaiting_ack` | `0` → direct-resend, not awaiting-ACK |
+  | `attempts` | **1** |
+  | `queued_at` | 2026-08-05T09:41:22Z — **25.6 hours before it was noticed** |
+  | `content_blob` | 99 bytes, undelivered |
+
+  And its session: **`status: "abandoned"`**, `message_count: 0`, **zero transcript rows**. So the
+  content was queued for resend, the session then went terminal, and the entry has sat there since.
+
+  **Root cause — producer/consumer.** `retryQueue.enqueue(...)` writes on a failed direct send. EVERY
+  `DELETE FROM retry_queue` in `retry-queue.ts` (`:248`, `:347`, `:480`, `:539`) is keyed on a
+  SUCCESSFUL delivery or ACK. There is no reaper for entries whose session became `abandoned`,
+  `sealed`, or otherwise terminal — and for such a session no drain can ever succeed, because there
+  is no live transport to resend over. The entry is therefore unreachable by every removal path that
+  exists. Confirmed: no abandon/seal-triggered cleanup touches the retry queue.
+
+  **Why it matters more than one stale row.**
+  1. **It permanently pins a health signal.** `retryQueueDepth` is surfaced in `cello status`. Once a
+     strand exists the metric never returns to 0, so it can no longer distinguish a genuine delivery
+     backlog from this corpse. That is the same defect shape as `verifyChain` being permanently red
+     (`DOD-ACCOUNTS-CHAIN-1`) and `online` meaning nothing (item 12): **a signal that is always on
+     cannot report anything.**
+  2. **Undelivered content, unsurfaced.** 99 bytes were never delivered and never appear in any
+     transcript (`message_count: 0`). Whether the operator was told the send failed is NOT
+     established — do not assume either way without checking the send path's return.
+
+  **ACs (draft):**
+  1. When a session reaches a terminal status, its retry-queue entries are removed — or explicitly
+     re-targeted at the relay park path if the content is still deliverable. Whichever, they do not
+     remain queued against a session that can never drain.
+  2. Removal is EVIDENCE-gated, never age-gated (same rule as `DOD-SESSION-REAP-1`): "old" is not the
+     same as "undeliverable", and an age sweep would discard live content on a slow link.
+  3. If content is dropped rather than delivered, the operator is told — silently discarding a
+     message the sender believes was sent is the worse failure.
+  4. Test: enqueue a retry entry, take its session terminal, assert the queue drains to 0 and
+     `retryQueueDepth` returns to 0.
+
+  **Not launch-blocking** on current evidence (one row, no user-visible breakage proven), but it
+  disables a health metric, so it should not sit indefinitely. Andre ranks it.
+
 - **DOD-TESTDAEMON-REAP-1** ❌ OPEN (raised 2026-07-30) — the test harness leaks its subject daemon;
   one had been running for 1h50m past its test.
 
