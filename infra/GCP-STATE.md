@@ -205,6 +205,53 @@ unrelated set — **no relay resource appears**. Since `terraform plan` is this 
 (procedure §5), that is the authoritative confirmation the relay deploy is fully applied, not a claim
 from this document.
 
+## 🟡 Directory on `dir-22b9a522` — 2/3 ROLLED, us-central1 BLOCKED ON GCP CAPACITY (2026-08-06)
+
+**Image:** `dir-22b9a522`, Cloud Build `b9ae40fc`, built from the GitHub connection at revision
+`22b9a5220cb97936ecc8e599f92d5b4d8312611b` — NOT `builds submit .`, so the tag names a commit whose
+contents were actually built. Push-triggered builds still do not fire (unchanged, Google-side), so
+this was an explicit regional `builds submit` per the recorded working path.
+
+**Carries two fixes:** `DOD-ACCOUNTS-CHAIN-1` (registration wrote `user_accounts` outside the hash
+chain — every real account, so `verifyChain` was permanently red and tamper-evidence nonfunctional)
+and `DOD-SIGNALING-LIVENESS-1` (an agent's own second signaling stream deregistered it on close,
+leaving it `online` on every surface and unreachable — the 2026-07-31 incident's root cause).
+
+**Applied with `-target` on the 3 instance templates + 3 instance group managers, deliberately** —
+a full apply also wants the same unrelated `ops_agent` / `ops_dashboard` / `portal` / `waitlist`
+Cloud Run + portal Cloud SQL drift documented above (and would DESTROY a hand-added
+`105.234.180.85/32` authorized network on the portal SQL instance — left untouched).
+
+**Post-roll `terraform plan` = `0 to add, 5 to change, 0 to destroy`, no directory resource
+present** — the authoritative confirmation the directory roll is fully applied.
+
+| Node | State |
+|---|---|
+| `gcp-use1` 34.75.172.108 | ✅ rolled, `/health` + `/manifest` → 200 |
+| `gcp-euw1` 34.34.166.245 | ✅ rolled, `/health` + `/manifest` → 200 |
+| `gcp-usc1` 34.136.176.190 | ❌ **DOWN** — MIG `IS_STABLE=False`, instance `cello-gcp-usc1-jcpt` stuck `CREATING` |
+
+**Why usc1 is down, and it is not the image.** `ZONE_RESOURCE_POOL_EXHAUSTED` — `us-central1-a` has
+no capacity for the machine type. The MIG (`PROACTIVE` / `REPLACE` / `max_unavailable_fixed = 1`)
+deleted the old instance before it could create the replacement, so the node is gone until GCP has
+capacity. The MIG retries on its own.
+
+**Consequence to understand: the consortium is at EXACTLY threshold.** `T = majority(3) = 2`, and 2
+nodes are up — sessions still form, which is the redundancy working as designed. But there is now
+**zero spare**: one more node loss and no ceremony can complete. This should not be left sitting.
+
+**Options (Andre's call):** wait for `us-central1-a` capacity; or move the usc1 node to another zone
+(a `terraform` change — the zone is pinned per region); or accept 2 nodes short-term. Note
+`max_surge_fixed = 0` is what makes a replacement destructive-first; raising it to 1 would let a
+future roll create-before-destroy and avoid this class entirely — worth considering, at the cost of
+briefly running two instances per region.
+
+**⚠️ STILL OWED — the `DOD-ACCOUNTS-CHAIN-1` acceptance check has NOT been run.**
+`verifyChain("user_accounts")` on each node's database. There is no health/API surface exposing it
+(that gap is itself a recorded follow-on), so it needs DB access via IAP SSH to a node. Until it is
+run, "the chain is now valid in production" is unverified — the code fix is deployed, the assertion
+is not.
+
 ## Live image tags — directory on `dir-d35d0a1d` (2026-08-03, ROLL COMPLETE)
 
 **Directory: `dir-d35d0a1d`** (Cloud Build `d8060aaf`, from `origin/main` @ `d35d0a1d`, clean tree).
