@@ -977,6 +977,39 @@ describe("J-DOCUMENTS-WRITE — the FILE round trip (DOD-DOC-E2E-WRITE-1)", () =
     expect(readFileSync(fileA, "utf-8")).toContain("third point from B");
   }, 600_000);
 
+  it("a CONTENT write keeps the author's own file in step", async () => {
+    const { a, b } = await twoPartiesInSession("docwriteback");
+    const proposed = (await a.conn.call("cello_doc_propose", {
+      peer_pubkey: b.pubkey,
+      starting_content: "line one\n",
+    })) as { documentId?: string; filePath?: string };
+    const documentId = proposed.documentId!;
+    const fileA = proposed.filePath!;
+
+    // `cello_doc_write` changes the DOCUMENT. Without a re-materialize the author's own projection
+    // is stale the instant they use it, and the two surfaces disagree about the document they both
+    // claim to show. Worse than cosmetic: `cello_doc_publish` diffs the FILE against the recorded
+    // projection, so a stale file either refuses as `document_file_stale` or republishes text the
+    // document has already moved past.
+    //
+    // Found on the first live two-agent smoke — the author's own file was missing the line she had
+    // just written — and only there, because every test until now wrote via the FILE and read back
+    // the file, so the two were never allowed to disagree.
+    expect(await a.conn.call("cello_doc_write", {
+      document_id: documentId,
+      content: "line one\nline two written through the tool\n",
+    })).toMatchObject({ ok: true, published: true });
+
+    expect(readFileSync(fileA, "utf-8")).toBe("line one\nline two written through the tool\n");
+
+    // AND the file is still a usable baseline afterwards: publishing from it must not refuse as
+    // stale, which is the failure the re-materialize actually prevents.
+    expect(await a.conn.call("cello_doc_publish", { document_id: documentId })).toMatchObject({
+      ok: true,
+      changed: false,
+    });
+  }, 600_000);
+
   it("an UNCHANGED file publishes nothing", async () => {
     const { a, b } = await twoPartiesInSession("docnochange");
     const proposed = (await a.conn.call("cello_doc_propose", {
