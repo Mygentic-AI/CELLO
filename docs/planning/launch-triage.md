@@ -440,7 +440,9 @@ invalidates the notarization. Confirmed on both sides.
 
 ## 13. Two sides can hold incompatible beliefs about which terminal path a session is on
 
-**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — ❌ open, raised 2026-08-05. **Proposed rank:
+**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — ❌ open, raised 2026-08-05, **ROOT-CAUSED
+2026-08-06 on the live Hermes daemon (see below) — no longer "a resolution path is owed"; the fix
+shape is now known and is a push/pull-twin gap, not a protocol redesign.** **Proposed rank:
 slot #2, right after item 1 (`DOD-LOGOUT-EXIT-1`), pending Andre confirmation — added 2026-08-06.**
 Reasoning: this is the one item in this pair that attacks the notarization guarantee itself — a real
 conversation can end up permanently unsealable, forcing a receipt-forfeiting force-abandon. Rare
@@ -468,8 +470,83 @@ still useless.
 **Why it needs its own item.** Miss_Chelly's M12-P14 pre-seal gate reads local frontier state to
 refuse signing a chain that is provably short — it would not fire here, because nothing is short.
 The `DOD-SEALED-INBOX-2` rename helps (`session_already_sealed` at 12:14 would have saved an
-afternoon) but only makes the state *legible*, not *completable*. A resolution path is genuinely
-owed and was deliberately not guessed at.
+afternoon) but only makes the state *legible*, not *completable*.
+
+## ROOT CAUSE FOUND 2026-08-06 — the seal is announced on a channel that can be down, and the announcement has no pull twin
+
+Traced on the live Hermes EC2 daemon against a second, independent instance of this defect: session
+`9014d071…`, `Miss_Chelly_H` (responder) ↔ `CELLO_Coder_1` (initiator). Every fact below is from
+`~/.cello/daemon.log` on that box, not inferred.
+
+**The ceremony completed. The announcement did not arrive.**
+
+```
+07:37:45.833  session.seal.leaf.submitted        seq 5     ← Miss_Chelly_H signs its half
+07:37:45.833  session.relay.leaf.delivered       seq 5     ← and it is delivered
+07:37:45.834  session.seal.autoacknowledged      responderPubkey=698bf453…
+07:37:49.321  session.liveness.changed           gone
+              …nothing further for this session for 6 hours…
+```
+
+`CELLO_Coder_1` holds a valid bilateral receipt for it (`sealed_root 85bcc15f…80d22bb`) listing
+**both** participants as `attestation_mode: "live"` — so the seal really is bilateral and really is
+notarized. Miss_Chelly_H's own row, meanwhile, never left `interrupted`.
+
+**Why.** `session.sealed.received` appears **14 times** in that daemon's log and **zero** times for
+this session. The completion frame never arrived. It could not have: 90 seconds before the seal,
+
+```
+07:36:01.616  transport.autonat.unavailable  directorySignalingStatus="reconnecting"
+```
+
+and no `directory.signaling.connected` follows before 07:40. **The seal CEREMONY runs over the
+session/relay channel — which was healthy, hence the delivered leaf. The seal COMPLETION is pushed
+over the agent's authenticated DIRECTORY SIGNALING stream — which was down.** Two different
+channels; only one of them has to be up for the directory to consider the seal complete and for the
+counterparty to get a valid receipt.
+
+`registerSessionSealedListener` (`core/daemon/src/seal-coordinator.ts`) consumes `session_sealed`
+via `signaling.registerInboundHandler` — a **push, with no re-delivery and no reconciliation**. A
+frame that arrives while the stream is down is simply never seen. Nothing ever asks again.
+
+**The deadlock is a closed loop of individually-correct answers.** Both sides of it are working as
+designed, which is why it survived inspection:
+
+| call | answer | its guidance |
+|---|---|---|
+| `cello_close_session` | `session_already_sealed` (true — the counterparty *is* sealed) | "fetch it with `cello_sealed_receipt`" |
+| `cello_sealed_receipt` | `not_sealed_yet` (also true — no *local* certificate) | "Close it with `cello_close_session`" |
+
+`cello_sealed_receipt` reads the LOCAL certificate store only (`session-read-handlers.ts:113`), and
+the local certificate is written only by the push that was missed. So the two commands point at each
+other forever. The operator's only exit is `--force`, which **forfeits a receipt that provably
+exists** — which is exactly what happened on 2026-08-06, converting a recoverable divergence into a
+permanent one.
+
+**This violates an invariant M8C already carries.** `M8C-PROCEDURE` §5d: *"Every push needs its pull
+twin in the same unit (DOD-INV-PUSHPULL)."* `session_sealed` is a push with no pull twin. It also
+fails §5a **ABSENT IS NOT FINE**: the absence of the frame is read as "nothing happened" rather than
+"I do not know — go ask."
+
+**The fix shape, and why it is smaller than it looks.** Give `session_sealed` its pull twin: when a
+session is locally non-terminal but the counterparty or directory reports it sealed — and on startup
+reconciliation of `interrupted` sessions — **fetch the seal certificate and verify it locally**
+rather than waiting to have been told. This does not require trusting the directory:
+`verifyBilateralSealCertificate` already exists and already validates the FROST signature over the
+legibility-bound TBS, and the same function the push path uses can validate a pulled certificate
+unchanged. The missing piece is the request, not the cryptography.
+
+Two constraints on that fix:
+1. **Never let a pull mark a session sealed on the directory's say-so alone.** The certificate must
+   verify locally, exactly as on the push path — otherwise a lying directory could retire a session
+   that never sealed.
+2. **`--force` must stop being the escape hatch for this state.** While a counterparty reports
+   `session_already_sealed`, force-abandon should refuse (or at minimum warn hard): it destroys the
+   local half of a receipt that exists and is fetchable.
+
+Remaining unknown, stated rather than guessed: whether the directory currently exposes a
+certificate-fetch verb for an already-sealed session, or whether one must be added server-side. That
+determines whether this is a client-only change.
 
 **Provenance worth keeping.** This was initially closed as "not a second root cause — an artifact of
 our own force-abandon two minutes earlier." That explanation is correct for `4c28edcd` and was
