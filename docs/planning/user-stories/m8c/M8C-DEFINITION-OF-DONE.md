@@ -2579,9 +2579,42 @@ own story) deliberately, never smuggled in as a rider. Source:
     deregistered by another stream's close / registered but unwritable). It is what sent the original
     investigation at the *target's* connectivity for 25 minutes while the target was fine.
 
-- **DOD-RETRYQ-STRAND-1** ❌ OPEN (raised 2026-08-06, found on Andre's LIVE daemon) — a retry-queue
-  entry whose session goes TERMINAL is never reaped, so it strands forever and permanently pins the
-  health metric.
+- **DOD-RETRYQ-STRAND-1** ✅ FIXED (raised 2026-08-06, fixed same day — cello-client `4a796e2` +
+  `a9f2573`) — a retry-queue
+
+  **What shipped.** `reapTerminalSession` removes a session's DIRECT rows (`awaiting_ack = 0`) when
+  it reaches `sealed`/`abandoned`, wired at the terminal transition in `#updateSessionStatus`, PLUS
+  `reapAlreadyTerminalSessions()` at startup for sessions that went terminal in an earlier process.
+  The startup pass is the half that actually clears the live strand: its session was *already*
+  `abandoned`, and `close-session` returns `already_abandoned` without reaching `abandonSession`, so
+  no transition would ever have fired for it. The unit review caught that the transition-only
+  version would have shipped while leaving `retryQueueDepth: 1` pinned on the live daemon.
+
+  Evidence-gated, never age-gated: a structural test asserts no `DELETE`/`SELECT` in the module
+  carries a `queued_at` predicate, so an age sweep added anywhere in the file turns it red.
+  Awaiting-ACK rows (`awaiting_ack = 1`) are deliberately untouched — they drain via
+  `drainAwaitingToPark`, which the startup flush really calls, and they do not contribute to
+  `retryQueueDepth` at all, so they cannot pin the metric. Their terminal disposition belongs to
+  `DOD-TERMINAL-WAKE-1`.
+
+  **Two defects the review found beyond the line.** (1) `#updateSessionStatus` treated "the
+  statement did not throw" as "the write landed" — an `UPDATE` matching no row fired the disposition
+  hook and returned `true`, which would have authorised deleting a live session's content; now gated
+  on `changes > 0`. This also falsified `abandonSession`'s existing docblock claim. (2) AC3's drop
+  notice read the in-memory map while the `DELETE` read disk, so a row absent from the map was
+  destroyed with no per-entry notice — the silent discard AC3 names as the worse failure.
+
+  **Still open, inherited by `DOD-TERMINAL-WAKE-1`:** `drainAwaitingToPark` does not evict on a
+  permanently-failing park (a retired relay, a revoked deposit capability), so such a row is retried
+  at every boot forever — the same strand shape one layer over, minus the metric symptom.
+
+  **`drainSession` still has no production caller.** This unit reaps the corpses rather than taking
+  either option the line proposed ("give `drainSession` a caller or stop writing rows for a queue
+  that has none"). Legal under AC1, but recorded as a third option so it is not mistaken for one of
+  the two.
+
+  **The original finding, kept for the record:** a retry-queue entry whose session goes TERMINAL is
+  never reaped, so it strands forever and permanently pins the health metric.
 
   **Found by asking what `retryQueueDepth: 1` in `cello status` actually was** — it had been sitting
   at 1. Read out of the live SQLCipher DB:

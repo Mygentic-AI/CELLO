@@ -650,9 +650,11 @@ Recorded so they stop being re-found by every sweep:
 - **`DOD-SESSION-REAP-1`** (M8C, ❌ backlog) — restart-interrupted sessions accumulate as
   un-sealable cruft. Its own line says cosmetic, not launch-blocking; the reaper must be
   evidence-gated, never age-gated, when it is built. Ship without.
-- **`DOD-RETRYQ-STRAND-1`** (M8C, ❌ raised 2026-08-06 from a live daemon — `retryQueueDepth` had
-  been stuck at 1). A direct-resend row whose session went terminal, permanent because the queue's
-  only consumer (`drainSession`) has no production caller. **Ship without.** The operator IS told
+- **`DOD-RETRYQ-STRAND-1`** (M8C, ✅ FIXED 2026-08-06, cello-client `4a796e2` + `a9f2573` — it was
+  cheap once diagnosed, so it was done rather than deferred; the ship-without ruling below stands as
+  the reasoning, not as a description of current state). A direct-resend row whose session went
+  terminal, permanent because the queue's
+  only consumer (`drainSession`) has no production caller. **Was ruled ship-without.** The operator IS told
   the send failed (`ok:false` + a WARN), so nothing is lost silently and no trust claim is broken —
   that was the only reading that could have made it blocking. What remains is a pinned health
   metric and an accumulating second copy of message plaintext at rest (inside SQLCipher). Real, but
