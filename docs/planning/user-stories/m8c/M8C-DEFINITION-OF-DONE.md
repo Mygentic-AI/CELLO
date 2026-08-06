@@ -621,13 +621,33 @@ no metadata layer, so the wake prose IS the frame. Injecting raw counterparty co
 untrusted text where instructions live. That boundary must be *solved*, never simply removed —
 the inbound-content half stays out of scope until it is.
 
-- **DOD-HERMES-4 (the adapter owns outbound)** — `chat_id` becomes the bound agent name, not
-  `"default"`: session identity == agent identity, so calling the same agent twice continues one
-  Hermes conversation and a different agent is a different mind that was not in the room. The
-  CELLO session id is stamped into `MessageEvent.message_id` (today spent on a throwaway
+- **DOD-HERMES-4 (the adapter owns outbound)** — `chat_id` stops being the constant `"default"`.
+  The CELLO session id is stamped into `MessageEvent.message_id` (today spent on a throwaway
   `"cello-wake-" + uuid`), and `send()` recovers it from `metadata["reply_to_message_id"]` and
   calls `cello_send` over the adapter's own socket. Delivery stops being discretionary and real
-  traffic lands in the Hermes transcript. With one bound agent, observable behavior is unchanged.
+  traffic lands in the Hermes transcript.
+  **`session_scope` is a PER-AGENT setting, and both values ship in this line.** It is a property
+  of what the agent *is*, not of the install, so it lives in that agent's platform entry:
+  ```
+  session_scope: agent   # chat_id = <agent>              — one continuous mind (DEFAULT)
+                 peer    # chat_id = <agent>/<pubkey>     — one context per counterparty
+  ```
+  - **`agent`** — calling the same agent twice continues one Hermes conversation; a different
+    agent is a different mind that was not in the room. Right for a personal agent
+    (`Miss_Chelly`). Matches the Telegram/desktop-app model: one shared context, replies routed
+    to whichever surface the turn arrived on.
+  - **`peer`** — each counterparty gets its own Hermes session. Right for a support desk
+    (`cello-support`), where a cold start per customer is CORRECT behavior and mixing two
+    customers' problems is the failure mode. Also fixes busy-collapse: under `agent`,
+    `handle_message` merges a second peer's arrival into the first peer's in-flight turn via
+    `merge_pending_message_event`; under `peer` the session key differs, so the new peer opens
+    its own turn and the running one is untouched.
+    Key on the counterparty **pubkey**, never the moniker (CLAUDE.md stable-key rule,
+    `DOD-AGENT-ID-JOINKEY-1`).
+
+  Same machinery either way — only the `build_source(chat_id=…)` argument differs. This is not a
+  second implementation and must not become one. With one bound agent at `session_scope: agent`,
+  observable behavior is unchanged.
   **Route on `metadata`, never the `reply_to` positional** — verified on the running EC2 checkout
   (`~/.hermes/hermes-agent` @ `69bedb7be`; the local clone is a different lineage and does not
   contain that commit): of seven `adapter.send()` sites in `gateway/stream_consumer.py`, only two
@@ -636,10 +656,20 @@ the inbound-content half stays out of scope until it is.
   metadata via `_metadata_for_send()`, which stamps `reply_to_message_id` unconditionally from
   `initial_reply_to_id` ← `ctx.event_message_id` ← `_reply_anchor_for_event()`'s default branch
   (`gateway/platforms/base.py:137`, `return event.message_id` — CELLO takes it, no gating).
-  ⚠️ **A missing anchor MUST fail the send loudly.** Synthetic sends, cron deliveries and goal
-  continuations arrive with none (`gateway/delivery.py:606` never passes `reply_to` at all).
-  Routing to "the most recent session" is exactly the silent-fallback class that makes a broken
-  system look healthy — and it would mis-deliver across counterparties. cello-client, CLI package
+  ⚠️ **Two different no-anchor cases — do not collapse them.**
+  - **No anchor at all → deliver nothing, and that is CORRECT, not an error.** A turn that did not
+    originate from CELLO must not deliver to CELLO. Telegram already behaves this way: continue a
+    Telegram-started session from the Hermes desktop app and the reply stays local — the context
+    is shared, the delivery follows the turn's origin. Synthetic sends, cron deliveries and goal
+    continuations arrive with no anchor (`gateway/delivery.py:606` never passes `reply_to`) and
+    are exactly this case. *(Supersedes the first draft of this line, which said a missing anchor
+    must fail loudly — that would have errored on every legitimate local turn.)*
+  - **Anchor present but unresolvable → fail the send LOUDLY.** A stale, malformed, or
+    dead-session anchor is a real fault. Routing it to "the most recent session" is the
+    silent-fallback class that makes a broken system look healthy — and under
+    `session_scope: agent` it would mis-deliver across counterparties.
+
+  cello-client, CLI package
   only, no deploy; needs a `cli` publish + `cello bridge hermes` re-run per host (the plugin is a
   COPY in `~/.hermes`, never a live import — same per-host step DOD-HERMES-3 carries). — ❌ NOT BUILT
 - **DOD-HERMES-5 (multi-agent binding — GATED ON HERMES-4)** — one Hermes gateway binds more than
@@ -662,12 +692,15 @@ the inbound-content half stays out of scope until it is.
 > **Deferred, deliberately** (recorded so they are not rediscovered as new): (a) **inbound content
 > injection** — needs the framing boundary above; (b) **reply to a sealed session** — the anchor
 > points at a dead session; fail loudly, since auto-opening one is a protocol action, not a
-> delivery detail; (c) **seal visibility** — with history continuous across CELLO sessions the
-> agent may not notice a seal happened, so it likely needs an in-band transcript marker;
-> (d) **cross-peer bleed** — keying on the local agent means two peers talking to one agent share
-> a Hermes history. Fine for a personal agent, not for anything customer-facing, and additive to
-> fix: append the counterparty to the key when the isolation is needed, without redoing HERMES-4.
-> Key on `agent_id`/pubkey, **never** the moniker (CLAUDE.md stable-key rule, `DOD-AGENT-ID-JOINKEY-1`).
+> delivery detail; (c) **seal visibility** — under `session_scope: agent`, history is continuous
+> across CELLO sessions so the agent may not notice a seal happened; likely needs an in-band
+> transcript marker. (`peer` scope narrows this but does not remove it — the same peer's second
+> session still continues the first's context.)
+>
+> **No longer deferred:** cross-peer bleed was recorded here on 2026-08-06 as an additive
+> later-fix. It is now `session_scope: peer` and ships inside HERMES-4. The support-desk case made
+> it a mode, not a follow-up — an operator running a customer-facing agent cannot be asked to wait
+> for a second milestone before two customers stop sharing a context.
 
 ## 🔴 Phantom session — the first-connect race (D1–D4)
 
