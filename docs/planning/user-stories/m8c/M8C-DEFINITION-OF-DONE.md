@@ -2471,6 +2471,26 @@ own story) deliberately, never smuggled in as a rider. Source:
   the 20 s bound (the real defect, reproduced); without it, the daemon drains and only the
   `daemon.exit` marker fails.
 
+  **✅ CONFIRMED IN THE WILD, AND THEN FIXED IN THE WILD — 2026-08-06, on Andre's production
+  daemon, hours AFTER the fix was written.** While verifying something unrelated, `ps` showed TWO
+  daemons on `CELLO_DIR=/Users/andrep/.cello`:
+
+  | pid | age | lock | connections | build |
+  |---|---|---|---|---|
+  | **8781** | **2h38m** | released | **2 ESTABLISHED** | 0.0.133 (PRE-fix) |
+  | 40731 | 4m | holds it | 4 | 0.0.135 (post-fix) |
+
+  The daemon log has `daemon.stopped pid:8781 reason:"logout_requested"` at **10:36:16** — exactly
+  2h38m before it was spotted. So: told to stop, reported stopped, released the lock, **and kept
+  running with two live connections for two and a half hours**. That is this defect verbatim,
+  observed on a real machine rather than in a harness, and it could never self-correct because the
+  orphan is a pre-fix binary with no exit path. Terminated by pid (never `pkill` — the lock holder
+  was verified first and left alone).
+
+  The counterfactual this closes: the [live proof below] could not reproduce the lingering with one
+  fresh agent and concluded the fix "removes the dependence rather than one cause". This orphan is
+  the cause, caught in the act — a real daemon that genuinely never exited.
+
   **LIVE MULTI-PROCESS PROOF — run 2026-08-06, isolated `CELLO_DIR`, real spawned daemon, real GCP
   directory connections.** Setup: `login` → `create-agent` → `logout`/`login` so the agent is
   LOADED at boot (`Started 1 agent(s)`). Before logout the daemon held **2 ESTABLISHED outbound
