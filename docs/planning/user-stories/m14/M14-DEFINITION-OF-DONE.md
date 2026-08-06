@@ -856,12 +856,31 @@ belong to. One is fixed; the rest are open and none is document-specific — the
     `encodeDocumentRejection`. The SENDER's retry round is advanced by receiving that frame, so the
     counter never left zero and the whole supersede-then-stall protocol in `document-rejection.ts`,
     ceiling and duplicate-check included, was unreachable code guarding an unreachable state.
+  - **FIXED (`50f5bdb`) — one gate refusal permanently broke the document.** A refused envelope is
+    never written to `document_envelopes`, but the sender's chain does not rewind: their next
+    envelope links to the one we refused, and the inbound check built its known-hash set from the
+    log alone, so that link resolved to nothing. The supersede-then-converge protocol could never
+    run, because its first move is exactly the link that was impossible. The bridge was already
+    designed — the quarantine records the refused envelope's author and prev-hash for this purpose —
+    and had only ever been wired to `verifyChainLinkage`, the LOCAL replay check, never to inbound
+    admission, which is the path a peer's supersession actually arrives on.
   - **OPEN — there is no stall for a peer that refuses.** The only `stalled` transition fires on
     UNACKED sends: a peer that never answers. A peer that answers "refused" every time is not
     covered, and that is the case an operator is most likely to hit, because a rule mismatch
-    produces exactly it. Related: once one envelope is refused, everything the sender chains after
-    it comes back `document_chain_refused` — a different refusal from the rule that started it, and
-    one the gate's rejection machinery never sees. The supersede protocol is what closes both.
+    produces exactly it.
+
+    **Narrowed 2026-08-06.** With the rejection transmitted and the chain bridged, the remaining
+    question is sharp: **A's gate never fires at all in the stall scenario — zero
+    `document.update.quarantined` — while it fires reliably in the append-only DELETE case, which is
+    the same rule, the same deletion shape and the same two-party setup.** Every envelope comes back
+    `document_chain_refused` from the first attempt onward. So the question is not "why no stall"
+    but "why is the chain refused before the gate is ever consulted, HERE and not THERE" — one
+    comparison between two tests that differ in very little. That is where to start.
+
+    Two of my attempts on this went wrong the same way, worth recording: I theorised about the
+    protocol instead of comparing the two tests. The first fired four writes without waiting for a
+    ruling, producing chain refusals that were purely an artefact of the test's own pacing — a
+    transport-ordering artefact wearing the name of a protocol state.
 
   **Pattern worth naming: three protocol frames in this milestone existed as types, preimages and
   receivers with no producer** — the document ack, the proposal ack, and now the rejection. A wire

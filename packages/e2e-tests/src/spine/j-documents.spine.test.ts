@@ -758,6 +758,22 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
    *
    * Left as `skip` so it is visible and so the next person starts from the evidence rather than
    * rediscovering it. It is not a passing claim and must not be counted as one.
+   *
+   * SHARPENED 2026-08-06 after two more fixes and two more runs. Both fixes were real and are in:
+   * the rejection is now transmitted, and the quarantine now bridges the chain so a supersession
+   * can link across a refused envelope. Neither made this pass, and the reason is narrower than it
+   * was:
+   *
+   *   **A's gate NEVER FIRES in this scenario — zero `document.update.quarantined` — while it fires
+   *   reliably in the append-only DELETE case one describe block up, which is the same rule, the
+   *   same deletion shape and the same two-party setup.** Every one of B's envelopes comes back
+   *   `document_chain_refused` instead, from the first attempt onward.
+   *
+   * So the question is not "why no stall" but "why is the chain refused before the gate is ever
+   * consulted, HERE and not THERE" — one comparison between two tests that differ in very little.
+   * That is where the next session should start. My last two attempts both went wrong by theorising
+   * about the protocol instead: the first fired four writes without waiting for a ruling, which
+   * produced chain refusals that were purely an artefact of the test's own pacing.
    */
   it.skip("repeated refusals STALL the document rather than retrying forever", async () => {
     const { a, b } = await twoPartiesInSession("docstall");
@@ -780,9 +796,22 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
     // ceiling is that this TERMINATES: a sender that redelivers a refused envelope forever
     // re-triggers the peer's gate forever, and neither operator is ever told the collaboration has
     // stopped working.
+    // ONE ATTEMPT AT A TIME, each waiting for the peer to actually rule on it.
+    //
+    // The first version fired four writes 2.5s apart, which is not how supersession works and is
+    // not what it was testing: write 2 left before write 1 had been refused, so it chained onto an
+    // envelope the peer had not ruled on, and every one after came back `document_chain_refused` —
+    // a transport-ordering artefact of the test, wearing the name of a protocol state.
+    //
+    // Waiting on the refusal count means each attempt is a real supersession attempt against a peer
+    // that has already said no to the last one.
+    const refusals = (): number =>
+      (a.daemon.output.match(/"event":"document\.update\.quarantined"/g) ?? []).length;
     for (let i = 0; i < 4; i++) {
+      const before = refusals();
       await b.conn.call("cello_doc_write", { document_id: documentId, content: `one\nsupersede ${i}\n` });
-      await sleep(2500);
+      const ruled = Date.now() + 30_000;
+      while (Date.now() < ruled && refusals() === before) await sleep(500);
     }
 
     const statusOf = async (conn: McpConn): Promise<string | undefined> => {
