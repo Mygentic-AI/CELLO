@@ -4836,6 +4836,91 @@ not re-derive it. No test pins it.
 
 ---
 
+## 2026-08-06 — `DOD-TERMINAL-STATE-DIVERGENCE-1` (mitigation half) ✅ — and the fix that committed the defect it was fixing
+
+cello-client `3e59b53` (build) + `5e1a9af` (review fixes). Gate: 1922 daemon tests, typecheck, lint,
+build. Unit-reviewed. **Mitigation only — the cure is the pull twin, designed but not built.**
+
+The seal completion is a push over the directory signaling stream with no pull twin, and the
+re-delivery queue is per-node while clients roam. When the frame is missed, two commands answer
+truthfully and point at each other:
+
+```
+cello_close_session   → session_already_sealed → "fetch it with cello_sealed_receipt"
+cello_sealed_receipt  → not_sealed_yet         → "close it with cello_close_session"
+```
+
+Both correct. The counterparty IS sealed; there IS no local certificate, because it is written only
+by the push that was missed. An agent walked that loop on 2026-08-06, reached for `{ force: true }`
+to escape, and permanently forfeited this side's half of a receipt that exists on the counterparty's.
+
+**Guidance is not cosmetics here, and the reviewer was asked to rule on that explicitly.** It ruled
+it a real defect: the actor is an LLM, `guidance` is its only input, and the pre-change strings were
+not a bad description of a working system — they were **a cycle in the agent's control flow whose
+only exit destroyed data**. Removing a non-terminating cycle that terminates in data loss is a
+behaviour change in the only engine that consumes these fields.
+
+### The finding that matters: the warning against force was itself a false claim of notarization
+
+My guidance said force "destroys your half of a notarization that **provably exists** on theirs" and
+told the reader it "can be compared by `sealed_root`".
+
+Neither is true. The only evidence is the counterparty's rejection reason — off the wire, relayed
+verbatim, and the very function that renders it already carries a comment about "a hostile or merely
+buggy counterparty". This side verified no signature, holds no `sealed_root`, and validated no
+notarization. **That is a positive claim of cryptographic proof asserted on hearsay** — the
+`DOD-SEALED-INBOX-2` defect class, the one error [[launch-triage]] says the product cannot afford.
+
+The second half was worse than inaccurate: *compare by `sealed_root`* **cannot be executed**, because
+the whole premise of the branch is that no local certificate exists. An instruction the reader cannot
+follow sends them hunting for a fault in themselves.
+
+> **The lesson, and it is the sharpest one of the day: I committed the exact defect I was fixing.**
+> The divergence exists because unverified state was trusted; the fix for it trusted unverified state
+> and told the operator it was proof. Writing a warning is not exempt from the rules the warning is
+> about. **Every factual claim in operator-facing text is a claim the daemon must actually be able to
+> make** — and "we are only writing prose" is precisely when that check gets skipped.
+
+The advice survives without the proof claim, resting on the asymmetry instead: *a receipt you cannot
+yet verify is still recoverable; a forfeited one never is.* That argument holds whether or not the
+counterparty is honest, which is why it is the correct one.
+
+### Four more findings, all fixed
+
+- **`session_abandoned` still recommends `{ force: true }`** — and that reason is also
+  counterparty-chosen. A bug or version skew reporting "abandoned" for a session that actually sealed
+  walks this side into the destructive action the neighbouring branch was just hardened against, with
+  the daemon's encouragement. Caveated, with a check to run first.
+- **The forfeit warning fired on EVERY force-abandon**, including the common legitimate ghost where
+  nothing is lost. §5a again: a signal that fires on the normal case is not a signal. Now gated on a
+  prior status that could plausibly have sealed, and it names that status as its evidence.
+- **The forfeit was invisible in the log.** `session.force_abandoned` now carries
+  `mayHaveForfeitedSeal`, so the destructive case is findable instead of reconstructable by hand —
+  which is how the 2026-08-06 incident had to be traced.
+- **"Report the divergence" named no destination and no cause**, leaving an LLM to invent one and the
+  operator to assume the loss was theirs.
+
+### A test-claim I should not have made
+
+I wrote that the unit had a test for "the new guidance". It had a test for **one of three strings**.
+The other two could be reverted with the whole suite green — including the half the incident agent
+hit *second*, which is arguably the more important one. Added real-daemon coverage for both, an
+explicit anti-overclaim assertion, and a `/Do NOT/` polarity guard, because every other assertion is
+keyword-presence and a string that INVERTED the advice ("force is the permanent fix, use it") would
+have passed all of them.
+
+### Force stays ungated — better reasoning than the one I recorded
+
+I first justified not gating force as "do not silently override a recorded decision". The reviewer
+supplied the argument that actually survives re-litigation: **the daemon cannot distinguish a
+divergence from a genuine ghost locally.** Both look like an `interrupted` row with no certificate
+and an unverifiable counterparty claim. A gate would therefore key on the same unverified wire string
+as the F1 finding — letting an unauthenticated counterparty make sessions permanently unclosable.
+That is a denial of service on the close path and it collides with the redundancy invariant. The
+non-destructive middle (make the loss observable) is what shipped instead.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
