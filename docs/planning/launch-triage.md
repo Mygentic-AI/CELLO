@@ -641,8 +641,8 @@ or an unbounded "every sealed session for this agent" scan on every connect.
    row with no local certificate; and startup reconcile of `interrupted` sessions.
 3. **Verify locally, always.** `verifyBilateralSealCertificate` already validates the FROST signature
    over the legibility-bound TBS and is what the push path uses — a pulled certificate goes through
-   the identical check. **No new cryptography is required**, which is what makes this smaller than it
-   looks.
+   the identical check. No new cryptography is required. (But see the CORRECTION below: the fields
+   that TBS covers are not all persisted today, so this is not as cheap as this line first implied.)
 4. **`--force` must stop being the escape hatch.** While a counterparty or directory reports the
    session sealed, force-abandon should refuse (or warn hard): it destroys the local half of a
    receipt that exists and is fetchable. This is what turned a recoverable divergence into a
@@ -656,9 +656,49 @@ or an unbounded "every sealed session for this agent" scan on every connect.
   same answer as a session that does not exist, so the verb cannot be used to probe which session
   ids exist.
 
-**Cost.** One new frame pair, one participant-scoped read, three client call sites, and a directory
-deploy (~25–30 min, all three regions). No migration: `seal_notarizations` already holds everything
-the response needs.
+### CORRECTION (same session, before any code): a migration IS required, and the fix is NOT retroactive
+
+The paragraph that stood here said *"No migration: `seal_notarizations` already holds everything the
+response needs."* **That was asserted without reading the schema, and it is false.** Checked:
+
+| Field the certificate needs | Stored? |
+|---|---|
+| `session_id`, `sealed_root`, `close_timestamp`, `frost_signature` | ✅ `seal_notarizations` (V12) |
+| `participant_a/b_pubkey`, `seal_type` | ✅ `seal_notarizations` (V12/V31) |
+| **`leaf_count`** | ❌ nowhere |
+| **`signer_pubkey`** (the initiator's group public key) | ❌ nowhere |
+| **`legibility`** | ❌ nowhere |
+
+`conversation_seals` (V2) does not hold them either — it has `merkle_root`, `close_type`,
+`participant_count`, `seal_date`, and no leaf count or legibility. All three missing fields are
+**bound into the TBS** that `verifyBilateralSealCertificate` hashes (that binding is the whole point
+of M7 legibility-TBS-binding: tampered legibility must break the signature). A response missing them
+cannot be verified, and an unverifiable certificate is exactly what must never be accepted.
+
+**So the design gains a migration and loses its retroactivity:**
+
+- **V58** adds `leaf_count`, `signer_pubkey`, `legibility` to `seal_notarizations`, and the seal
+  write path populates them — the values all exist in memory at `processSeal` time (`pending.leafCount`,
+  `primaryPubkey`, `pending.legibility`); they are simply discarded today.
+- **`OpsAgentExpectedMigrationVersion` must move to 58** in `cello-ssm-parameters.yaml` in the same
+  change — omitting it crash-loops the ops-agent on a fresh deploy (repo CLAUDE.md, non-negotiable).
+- **Sessions sealed BEFORE V58 can never be served by the pull.** Their `leaf_count`/`legibility`
+  were never recorded, so no verifiable certificate can be reconstructed for them. `9014d071…` and
+  every existing stranded session stay stranded. **This fix prevents future divergence; it does not
+  repair past divergence, and it must not be described as if it does.**
+
+That last point changes what to do about the sessions already in this state: the honest handling is
+to surface them accurately (a session the counterparty reports sealed, for which no local receipt
+can ever be produced) rather than to keep force-abandoning them — and to stop `--force` presenting
+itself as the fix.
+
+**Cost, corrected.** One new frame pair, a schema migration + the SSM parameter bump, the seal write
+path, one participant-scoped read, three client call sites, a publish cascade, and a directory
+deploy (~25–30 min, all three regions).
+
+**Triage note.** This is no longer a small unit, and it buys protection against *future* occurrences
+only. Whether that clears the launch bar is Andre's call — recorded here rather than assumed, and
+the "smaller than it looks" framing from the paragraph above is withdrawn.
 
 **Provenance worth keeping.** This was initially closed as "not a second root cause — an artifact of
 our own force-abandon two minutes earlier." That explanation is correct for `4c28edcd` and was
