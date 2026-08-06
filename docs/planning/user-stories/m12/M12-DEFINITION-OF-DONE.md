@@ -880,6 +880,28 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
 
 ## Parked
 
+- **M12-P18** — ✅ **A refused session now surfaces its reason.** Published daemon `0.0.132`.
+  A cap firing was invisible both ways: the sender got silence (defended as oracle-protection), and
+  the refusing operator got one warn line. That is what hid a stranded message being re-pulled and
+  re-refused 297 times.
+  **Reason-by-tier (Andre's decision):** a KNOWN+ contact is told the reason and their EFFECTIVE cap
+  (`resolveTierBound`, so it reflects any per-agent override, not the grid default) — that is the
+  sender's own state, near-zero leak, and it lets a legitimate peer self-diagnose. UNKNOWN/BLOCKED
+  stay silent, so a stranger cannot tell blocking from throttling. The initiator receives a new
+  `session_refused` frame and surfaces its guidance. Regardless of tier, the operator gets a local
+  `refused_session_requests` inbox entry.
+  **CAP-COUNTS-INTERRUPTED — DECIDED, do not re-open: OPTION 1, leave the count.** The question was
+  whether a stale `interrupted` session should count toward the per-sender cap. It stays counting.
+  Reasoning: (a) `reapDeadHalfOpenSessions` already clears interrupted sessions with ZERO received
+  messages (the restart ghosts), so the only thing counting forever is a COMPLETED conversation left
+  unsealed; (b) removing `interrupted` from the count reopens the disconnect-and-reopen evasion the
+  reviewer closed deliberately (aeffb82f); (c) aging weakens that same defense and is hard to
+  explain. M12-P15 now makes those unsealed conversations sealable, and M12-P18's refusal guidance
+  already names it ("a session that was interrupted still counts until it is sealed or abandoned") and
+  points at `cello_close_session` — which seals it. So the fix is visibility + the now-working seal
+  path, not an anti-abuse semantic change. Settled 2026-08-06.
+
+
 - **M12-P17** — ✅ **BOTH HALVES FIXED 2026-08-06.** B (the wake) published as daemon `0.0.128`;
   A (the annex) merged as `58924b8` + `64fdb81`, review in flight, not yet published.
   - **B — inertness.** `sealed_unread` entries now carry `session_state:"sealed"` and
