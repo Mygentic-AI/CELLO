@@ -51,7 +51,12 @@ real tamper-evidence gap** — it is now ranked item 3 below (proposed slot; And
 
 ## 1. Logging out says the daemon stopped while it is still on the network
 
-**Designation: `DOD-LOGOUT-EXIT-1`** — ❌ open, raised 2026-07-30
+**Designation: `DOD-LOGOUT-EXIT-1`** — ✅ FIXED 2026-08-06 (Andre, cello-client `4dfc3cd`). Story:
+[[CELLO-M8C-DAEMON-001]]. `onStopped({ok,error})` fires as `stop()`'s last act and the binary wires
+it to `process.exit`; `daemonGone()` additionally requires the pid to be gone, not just handles;
+`cello status` names `broken_shutdown`. Individual event-loop holders (Telegram poll, libp2p
+teardown, untimed dials) remain follow-on work — the process-level kill switch is fixed, the
+survivor list below is not yet exhaustively closed.
 
 After `cello logout`, `cello status` reports `stopped` and every local handle is correctly released
 — but the process is still alive, still holding an established connection to a directory node, and

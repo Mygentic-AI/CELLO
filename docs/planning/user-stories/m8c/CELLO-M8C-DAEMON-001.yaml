@@ -3,13 +3,23 @@ name: CELLO-M8C-DAEMON-001
 type: user-story
 date: 2026-08-06
 topics: [daemon, logout, ipc, shutdown, kill-switch, process-lifecycle]
-status: draft
+status: superseded-by-live-fix
 description: >
   cello logout reports the daemon stopped while the process is still alive and still
   reaching a directory node. Root-caused to an asymmetry between the two shutdown
   paths: the signal path calls process.exit(0) after stop(); the IPC path (logout)
   does not, and relies on the event loop draining on its own. Diagnosed 2026-08-06,
   DOD-LOGOUT-EXIT-1 in M8C-DEFINITION-OF-DONE.md line 2336.
+
+  SUPERSEDED 2026-08-06: Andre fixed this directly on cello-client main (commit
+  4dfc3cd) before this story's implementation was picked up. AC-001, AC-003, AC-004
+  match the shipped fix (onStopped hook wired to process.exit, non-zero exit + logged
+  cause on a dirty stop, cello status names broken_shutdown). AC-002 (abort in-flight
+  libp2p dial / registry fetch / Telegram long-poll) and AC-005 (five-agent daemon
+  test) are NOT covered by the shipped commit — its own message says AC2 is met "at
+  the process level only" and journals the individual event-loop holders as follow-on
+  work. This story stays open for AC-002/AC-005 only; kept as the AC record for what
+  was and wasn't verified.
 ---
 # ─── Identity ───────────────────────────────────────────────
 id: CELLO-M8C-DAEMON-001

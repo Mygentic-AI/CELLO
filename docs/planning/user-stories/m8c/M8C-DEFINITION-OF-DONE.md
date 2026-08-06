@@ -2333,7 +2333,13 @@ own story) deliberately, never smuggled in as a rider. Source:
   cannot catch a regression here, because in a temp daemon with no sessions the daemon-wide handler
   answers `ok` too. The wire name is therefore asserted directly, verified by mutation.
 
-- **DOD-LOGOUT-EXIT-1** ❌ OPEN (raised 2026-07-30) — story: [[CELLO-M8C-DAEMON-001]]. `cello logout` reports the daemon stopped while
+- **DOD-LOGOUT-EXIT-1** ✅ FIXED (raised 2026-07-30, fixed 2026-08-06 by Andre, cello-client commit
+  `4dfc3cd`) — story: [[CELLO-M8C-DAEMON-001]] (superseded by the live fix, kept for the AC record).
+  `stop()` now fires an `onStopped({ok, error})` hook as its last act; the binary wires it to
+  `process.exit`. `daemonGone()` additionally requires the pid alive at shutdown-send to be gone.
+  `cello status` names `broken_shutdown` when a process holds the lock but won't answer. AC2 is met
+  at the process level only — the individual event-loop holders (Telegram poll, unawaited libp2p
+  teardown, untimed dials) are journaled as follow-on work, not fixed in this commit. `cello logout` reports the daemon stopped while
   the process is still alive and still talking to a directory node.
 
   **Observed live (2026-07-30).** After `cello logout`, `cello status` returned `{"daemon":
