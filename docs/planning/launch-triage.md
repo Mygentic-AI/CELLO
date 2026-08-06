@@ -346,7 +346,34 @@ Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello
 
 ## 12. A sealed session's unread messages ring the doorbell as live work, and agents act on them
 
-**Designation: `DOD-TERMINAL-WAKE-1`** — ❌ open, raised 2026-08-05. **Proposed rank: slot beside
+**Designation: `DOD-TERMINAL-WAKE-1`** — ✅ **FIXED 2026-08-06** (cello-client `2bc0764` + `cdb8bc7`;
+the second entry point was already shipped by M12-P17/P18 before this pass). **Both entry points are
+now closed:**
+
+- *Entry point 1 (this pass).* `cello_receive` already checked terminal first — but through
+  `peekTerminalMarker`, reading `#sessionTerminal`, an in-memory Map written only by
+  `destroySessionNode` and never loaded from the DB. The `sealed` row survives a restart; the marker
+  does not, so the guard answered `null` and the durable read below it delivered the old message as
+  live. **The restart was not incidental to the repro — it was the mechanism.** Now falls through to
+  the durable status. Revert-tested across a real daemon restart: without it the suite fails with the
+  `[[STANDBY EST:15m]]` directive delivered as live content — the live incident, reproduced.
+- *`abandoned` had the same harm with no restart at all (review F1).* The committed guard in
+  `#appendVerifiedContent` rejected only `sealed`/`seal_interrupted_pending`, so late content for a
+  force-abandoned session was accepted — leaf appended, doorbell rung, away-response and Telegram
+  fired. Fixed at the guard rather than the marker: suppressing only the delivery would leave the
+  wake ringing with nothing behind it.
+- *Entry point 2 was already done.* `sealed_session_annex`, the `session_committed` disposition
+  (annex strictly before confirm-delete), the M12-P18 `counterparty_unknown` sweep, and the
+  `actionable: false` operator-read surface all pre-date this pass. All four disposition constraints
+  met.
+
+Watermark untouched throughout — the seal attests what each side actually consumed, so the messages
+stay honestly unread and in the notarized transcript. They just stop ringing the bell. Residual: the
+annex field is named `post_seal_annex`, which is imprecise for an abandoned session (no seal to be
+"post"); the guidance text is accurate, so renaming is deferred as a wire change with its own
+migration.
+
+**Original entry, kept for the record. Proposed rank: slot beside
 item 2 (`DOD-SEALED-INBOX-2`), pending Andre confirmation — added 2026-08-06.** Same code surface,
 different defect, meant to land in one pass. Ranked below `DOD-TERMINAL-STATE-DIVERGENCE-1`: this one
 confuses (self-concealing false confidence) but the sealed transcript stays valid; nothing is lost.

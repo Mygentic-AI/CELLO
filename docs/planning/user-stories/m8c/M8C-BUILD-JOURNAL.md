@@ -4750,10 +4750,10 @@ has none") — recorded as a third option so it is not mistaken for one of the t
 
 ---
 
-## 2026-08-06 — `DOD-TERMINAL-WAKE-1` 🟡 — a cache read as an authority, and the restart was the trigger all along
+## 2026-08-06 — `DOD-TERMINAL-WAKE-1` ✅ — a cache read as an authority, and the restart was the trigger all along
 
-cello-client `2bc0764`. Gate: 1916 daemon tests, typecheck, lint, build. 🟡 pending unit review at
-time of writing.
+cello-client `2bc0764` (build) + `cdb8bc7` (review F1). Gate: 1917 daemon tests, typecheck, lint,
+build. Unit-reviewed; every finding fixed or journaled below.
 
 Three sessions sealed on the morning of 2026-08-05 re-fired as wakes six to eight hours later on
 `Miss_Chelly_H`. One carried `[[STANDBY EST:15m]]` and the agent obeyed it — announcing it was
@@ -4783,11 +4783,56 @@ The watermark is untouched: the seal attests what each side actually consumed, s
 falsify the receipt. The message stays honestly unread and in the notarized transcript; it just
 stops ringing the bell.
 
-**Scope, stated plainly: this is the FIRST entry point only.** The second — `content.recover.ingest_failed`
-looping 121 times across `counterparty_unknown` (78) and `session_committed` (43), and the agreed
-four-constraint annex disposition — is **not built**. The DoD's own text warns that "fixing only the
-`session_committed` branch leaves the larger half looping," so this line does not go ✅ on the
-delivery-path fix alone.
+### Correction: the second entry point was already built, and I claimed otherwise
+
+I dispatched the reviewer asserting the second entry point — the
+`content.recover.ingest_failed` loop and the four-constraint annex — was unimplemented, and asked it
+to rule on whether shipping half the defect was legitimate. **It ruled the question void: all of it
+is already on main**, in code this unit does not touch. `sealed_session_annex`
+(`session-node-manager.ts:941`) is a separate table whose inertness is argued structurally; the
+`session_committed` branch (`content-park.ts:154`) does annex-then-confirm-delete in that order and
+only if the annex committed; M12-P18 sweeps the `counterparty_unknown` half — the 78-of-121 "larger
+half" — via `wasSessionRefused`; and `session-read-handlers.ts:195` exposes it `actionable: false`,
+operator-read only. All four disposition constraints met.
+
+**The lesson is about the dispatch, not the code.** I asked a reviewer to adjudicate a scope split
+that did not exist, on the strength of a launch-triage entry written before the work landed. A DoD
+or triage document describes the world at the time it was written; it is not evidence about the
+tree. The reviewer checked and I had not. **Read the code before telling a reviewer what is missing
+from it** — an under-claim wastes a review the same way an over-claim does, and this one nearly
+opened a follow-on unit for work already done.
+
+### The review's real find: `abandoned` had the same harm, with no restart needed — `cdb8bc7`
+
+My exclusion of `abandoned` from the terminal answer rested on "it can still complete." That is true
+of `interrupted` and `seal_interrupted_pending`. It is **false** of `abandoned`, which can never
+complete, never be appended to, and has no seal to join. Lumping the three together was unexamined
+rather than conservative, and the commit message stated the bad reasoning as if it were a decision.
+
+`#appendVerifiedContent`'s committed guard rejected only `sealed` and `seal_interrupted_pending`, so
+content arriving for a force-abandoned session through the relay park/recover path was **accepted**:
+leaf appended, `cello_message` doorbell rung, away-response and Telegram doorbell fired, and
+`cello_receive` handed it over as live work. The same harm the line exists to stop, on the
+live-arrival path.
+
+Fixed at the **guard**, not at `peekTerminalMarker` — and that distinction is the point. Widening
+the marker would have suppressed the *delivery* while leaving the doorbell, the away response and
+the Telegram ring firing: a wake that arrives with nothing behind it, which is a worse shape than
+the bug. **When a defect has several consumers, fix it at the producer or you convert one visible
+failure into several quiet ones.**
+
+Known imprecision, deliberately not fixed: the annex field is `post_seal_annex`, and an abandoned
+session has no seal for content to be "post". The guidance text is already accurate ("arrived
+AFTER it ended… STALE and must NOT be acted on"), so nobody is misled; renaming is a wire change
+with its own migration and does not belong inside a correctness fix.
+
+### Also true, and not mentioned in the commit: the closer's path is now covered in-process
+
+`retireSessionNode` sets `status = 'sealed'` without writing the marker — the marker is written on
+the *receiver's* teardown. So the durable fallback also answers `sealed` for the **closer**, same
+process, no restart. Correct and wanted, but the commit message's "the restart IS the trigger"
+framing reads as though restart were the only newly-covered case. Recorded so the next reader does
+not re-derive it. No test pins it.
 
 ---
 
