@@ -2325,6 +2325,52 @@ own story) deliberately, never smuggled in as a rider. Source:
   at a server that accepts and never responds is a supported, production-config way to leave real
   in-flight work on the event loop at shutdown.
 
+  **🟡 BUILT + REVIEWED 2026-08-06 — cello-client `4dfc3cd`, branch `dod/logout-exit-1`. Vitest
+  green; the live multi-process proof is still owed, so this is NOT ✅.**
+
+  Shipped: a new `onStopped` hook on `DaemonConfig`, fired as the last act of `stop()` after
+  `singletonLock.release()` and guarded to fire at most once; the binary wires it to
+  `process.exit()`. That makes the IPC path symmetric with the signal path. `process.exit` may not
+  live in `daemon.ts` — in-process callers (vitest, embedders) would be killed.
+
+  **AC verdicts.** AC1 ✅, AC3 ✅, AC4 ✅. **AC2 is met at the PROCESS level only — recorded here as
+  a deliberate deviation, at the reviewer's insistence, rather than claimed as done.** `stop()`
+  already cancelled every poller before this unit; what it does *not* do is close the outbound
+  connections deterministically — `signaling-connect.ts:394` is still `void safeStop(node)`, and
+  the Telegram long-poll still only bumps a generation counter. The process exit makes the
+  observable behaviour correct **for the shipped binary**, and deliberately does not for an
+  in-process embedder, where the stragglers are exactly as alive as before. The straggler set is
+  open-ended and the next addition would reintroduce the lie silently, so the kill switch was made
+  not to depend on having found them all. **Follow-on units owed** (none launch-blocking): await
+  the libp2p node teardown with a bound; abort the Telegram in-flight `getUpdates` and clear its
+  2 s backoff; give `attemptConnect` a dial timeout.
+
+  **Four review findings, all fixed before commit** — three were defects in the new code:
+  - The hook's own throw was caught and logged **to stdout**, i.e. a silent fallback on the kill
+    switch itself, diagnosed into a stream nobody reads. It now propagates: `stop()` rejects and
+    logout times out honestly instead of printing "Daemon stopped."
+  - A shutdown that threw halfway exited `0` and reported a clean stop — this unit's own defect one
+    level up. `onStopped` now carries `{ok, error}`; the binary exits non-zero and logs the cause.
+  - `logout` still proved success from the two handle facts, both released *before* the process
+    ends. It now additionally requires the pid that was alive when it sent `shutdown` to be gone —
+    an **additional** check, never a substitute for the kernel lock, failing safe (a reused pid
+    yields "did not complete", not a false success). Skipped when `lock.pid === process.pid`,
+    because an in-process daemon cannot be required to outlive its own caller — that guard is what
+    three pre-existing logout tests caught when it was missing.
+  - `status`'s "free ⇒ no daemon" claim was too strong (a pre-singleton-lock daemon holds no lock);
+    the comment now states the narrower truth.
+
+  **The test-teeth finding worth keeping.** The AC4 test asserted it ran against a daemon with a
+  loaded agent — and did not. The daemon loads agents from the **encrypted `agents` table**
+  (`agent-loader.ts` → `DbIdentityStore.listAgents`), never from `agents/<name>/key`; writing a key
+  file inserts no row. So both the old CLI test and my first version measured a daemon with an
+  EMPTY event loop, which is precisely why the pre-existing AC4 test stayed green for the whole
+  life of this defect. The test now creates the agent through the daemon's own verb, restarts so it
+  is loaded at boot, and **asserts `agentCount >= 1` so the premise cannot rot silently**. Revert-
+  verified both ways: with the agent loaded, deleting the bin wiring leaves the daemon alive past
+  the 20 s bound (the real defect, reproduced); without it, the daemon drains and only the
+  `daemon.exit` marker fails.
+
 - **DOD-TESTDAEMON-REAP-1** ❌ OPEN (raised 2026-07-30) — the test harness leaks its subject daemon;
   one had been running for 1h50m past its test.
 
