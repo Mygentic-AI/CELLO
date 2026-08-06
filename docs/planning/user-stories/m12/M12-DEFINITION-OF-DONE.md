@@ -880,7 +880,24 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
 
 ## Parked
 
-- **M12-P17** — **content belonging to an ENDED session has no correct disposition.** One root, two
+- **M12-P17** — ✅ **BOTH HALVES FIXED 2026-08-06.** B (the wake) published as daemon `0.0.128`;
+  A (the annex) merged as `58924b8` + `64fdb81`, review in flight, not yet published.
+  - **B — inertness.** `sealed_unread` entries now carry `session_state:"sealed"` and
+    `actionable:false`, with `sealed_unread_actionable` on the group, and the guidance states the
+    consequence (cannot reply, counterparty not waiting, instructions inside are STALE) instead of
+    pointing at `cello_transcript`. The cause was SHAPE: they arrived in the same envelope as
+    `unread` and `pending_session_requests`, so a reader treated them as a to-do list.
+  - **A — the annex.** New `sealed_session_annex` table; the drain annexes verified content on
+    `session_committed` and confirm-deletes the relay copy ONLY if the write committed. The separate
+    table IS the inertness guarantee — no unread query, inbox count or wake path joins it.
+  - **Scope decision, deliberate:** `counterparty_unknown` is NOT annexed even though it is the
+    larger half (78 of 121 on one box). That reason comes from the SEC-1 auth step — the content is
+    UNVERIFIED — so deleting it would destroy exactly what the existing "a forgery must not evict
+    itself" rule protects. **That backlog needs relay-side expiry, not client-side deletion**, and is
+    the remaining piece.
+  → Entries 93, 94, 95
+
+- **M12-P17/orig** — **content belonging to an ENDED session has no correct disposition.** One root, two
   wrong answers (see Entries 93–95 and the CELLO_Coder_1 exchange in Entry 94):
   - **A, the loop:** parked content for a sealed session is pulled, verified, refused
     (`session_committed` / `counterparty_unknown`), and deliberately NOT confirm-deleted — so it is
