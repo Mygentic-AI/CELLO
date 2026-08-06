@@ -245,7 +245,21 @@ description: >
   character is caught where it was written and never becomes a rejection round — ergonomics; and at
   receipt, because the sender's enforcement is unverifiable — security. Distinct from
   `schema_enforcement` (structure); this is the character space. Also makes the `json` diff correct
-  by declaration instead of by inference. — ❌
+  by declaration instead of by inference. — ⏳ **THE WIRE SLOT SHIPPED 2026-08-06** (`834079f`),
+  inert; the named codepoint sets and enforcement are not built.
+
+  `content_profile` now occupies a slot in the SIGNED proposal preimage, so it is bound into
+  `document_id` and immutable after accept — which is what makes "agreed at the handshake" mean
+  anything. Landed now because the only moment that rebinding is free is before anyone holds a
+  document they care about: M14 shipped today, to one operator, with no documents in existence.
+
+  **The split was deliberate and the ordering argued:** enforcing a profile the wire cannot carry is
+  unimplementable, while a slot with no enforcement is inert and clearly marked. The failure mode
+  being steered around is a profile field that sits unenforced and reads as done in every review —
+  the same shape as the three frames this milestone shipped with no producer.
+
+  The frozen-vector test fired on the id change, which was the correct outcome. Reissued with a note
+  that a third failure, after real documents exist, is a MIGRATION rather than a reissue.
 - **DOD-DOC-SCREEN-1** [cello-client] — **screening REFUSES, never mutates** (§16.7-13). Inbound
   document updates converge byte-identically or are refused; the receiver never rewrites. The audit
   that settled this ran on 2026-08-05: six of eighteen realistic document samples had their text
@@ -258,7 +272,29 @@ description: >
   being emitted at the source. The ambiguous band defaults to **refuse, not ask** (§16.7-18).
   The sender-side ADVISORY scan (§16.6) runs the sender's own policy against the outbound diff at
   publish — friction reduction among good actors, never a boundary; the receiver's gate stays
-  authoritative. — ❌
+  authoritative. — ⏳ **THE RECEIVER-SIDE GATE SHIPPED 2026-08-06** (`834079f`); the sender-side
+  advisory scan and sender-adopts-rule are not built.
+
+  `document-screen.ts`, registered on `DocumentGate` at construction. Refuses bidi overrides and
+  isolates (what an operator READS differs from what the document SAYS — a signature on content the
+  signer did not see), chat-template control markers (they address the reader's MODEL, not the
+  reader), and zero-width space (it joins nothing; it can only hide a boundary).
+
+  **What it does NOT refuse is as much the claim:** zero-width joiners, full-width forms, ligatures,
+  typographic punctuation, combining marks. Every one is legitimate text in some language, and the
+  audit is what happens when that goes unasked. The e2e test asserts the samples that were silently
+  rewritten now converge BYTE-IDENTICALLY between two real daemons.
+
+  Refusals carry rule id, every distinct codepoint, a count and code-point offsets — every offender,
+  not just the first, because one round trip per character would be a rejection round each and the
+  protocol stalls at three.
+
+  Registered at construction rather than left to a caller, for the reason this milestone learned
+  four times: a unit with no caller reads exactly like a working one. Proven end to end by a real
+  peer's override being refused with the operator's copy untouched.
+
+  **Still owed:** the sender-side advisory scan at publish (§16.6 — friction reduction among good
+  actors, never a boundary), and sender-adopts-the-receiver's-rule (§16.7-16).
 - **DOD-DOC-REBUTTAL-1** [cello-client] — **the tail: a rebuttal is DATA, never argument**
   (§16.7-17). For the residual case where a character is load-bearing for meaning. Structured
   evidence only (rule id, codepoints, positions, the marked diff); any free text is presented to the
