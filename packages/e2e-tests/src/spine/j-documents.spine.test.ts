@@ -769,11 +769,29 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
    *   same deletion shape and the same two-party setup.** Every one of B's envelopes comes back
    *   `document_chain_refused` instead, from the first attempt onward.
    *
-   * So the question is not "why no stall" but "why is the chain refused before the gate is ever
-   * consulted, HERE and not THERE" — one comparison between two tests that differ in very little.
-   * That is where the next session should start. My last two attempts both went wrong by theorising
-   * about the protocol instead: the first fired four writes without waiting for a ruling, which
-   * produced chain refusals that were purely an artefact of the test's own pacing.
+   * MEASURED 2026-08-06, and this is now exact — the counts are in the failure message:
+   *
+   *   **A quarantines exactly ONE envelope and refuses the next THREE as `document_chain_broken`.**
+   *
+   * So the gate DOES fire, once. The first supersession attempt is refused properly, advances the
+   * round to 1, and produces a rejection. Every attempt after it never reaches the gate at all —
+   * refused on the chain — so the round stays at 1 and the ceiling of 3 is unreachable. The stall
+   * is not missing; it is starved.
+   *
+   * THREE FIXES WERE MADE FOR THIS AND NONE CLOSED IT. Each was independently right and is in:
+   *   - the signed rejection was never transmitted (so the round could not advance at all);
+   *   - the quarantine was not in the KNOWN-hash set;
+   *   - the quarantine did not advance the chain HEAD.
+   *
+   * The last one should have been decisive: with no admitted envelopes from B, the head resolves to
+   * the refused envelope's hash, which is exactly what B's next envelope links to. It did not change
+   * the counts.
+   *
+   * SO THE NEXT STEP IS ONE CALL, NOT ANOTHER THEORY: instrument `verifyDocumentChainLink` for
+   * envelope 2 and print what it actually compared — the envelope's `doc_prev_hash`, the `head` it
+   * was given, and whether `known` contained it. Every wrong turn on this test came from reasoning
+   * about the protocol instead of reading one comparison; do not add a fourth fix before that line
+   * of output exists.
    */
   it.skip("repeated refusals STALL the document rather than retrying forever", async () => {
     const { a, b } = await twoPartiesInSession("docstall");
@@ -809,7 +827,18 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
       (a.daemon.output.match(/"event":"document\.update\.quarantined"/g) ?? []).length;
     for (let i = 0; i < 4; i++) {
       const before = refusals();
-      await b.conn.call("cello_doc_write", { document_id: documentId, content: `one\nsupersede ${i}\n` });
+      // ASSERTED. The previous version ignored this result, and the run then showed zero
+      // `document.published` — B never published anything at all, so of course nothing was ever
+      // refused and nothing ever stalled. A test that does not check the call it makes cannot tell
+      // "the protocol did not stall" from "the protocol was never exercised".
+      const w = (await b.conn.call("cello_doc_write", {
+        document_id: documentId,
+        content: `one\nsupersede ${i}\n`,
+      })) as { ok?: boolean; changed?: boolean; published?: boolean; reason?: string };
+      expect(w, `B's supersession attempt ${i} did not publish: ${JSON.stringify(w)}`).toMatchObject({
+        ok: true,
+        published: true,
+      });
       const ruled = Date.now() + 30_000;
       while (Date.now() < ruled && refusals() === before) await sleep(500);
     }
@@ -832,10 +861,18 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
       if (sender === "stalled") break;
       await sleep(2000);
     }
+    // THE COUNTS, in the message. A 60-line tail of a 3-minute run cannot answer "did the gate ever
+    // fire", and I read that tail three times as though it could. These two numbers decide it:
+    // quarantines are gate refusals (the path that produces a rejection and advances the round);
+    // chain-broken refusals are the OTHER path, which produces neither.
+    const quarantined = (a.daemon.output.match(/"event":"document\.update\.quarantined"/g) ?? []).length;
+    const chainBroken = (a.daemon.output.match(/"reason":"document_chain_broken"/g) ?? []).length;
     expect(
       sender,
-      "B kept publishing into a document nothing would ever accept, and its own surface never said " +
-        `so.\n--- A document log ---\n${documentLines(a.daemon)}`,
+      `B kept publishing into a document nothing would ever accept, and its own surface never said so.\n` +
+        `A quarantined ${quarantined} envelope(s) (gate refusals — these advance the round) and refused ` +
+        `${chainBroken} as chain-broken (these do not).\n` +
+        `--- A document log (tail) ---\n${documentLines(a.daemon)}`,
     ).toBe("stalled");
     // The receiver's view is recorded rather than asserted equal: A refused every envelope, so
     // whether A also considers the document stalled is a separate design question from whether B
