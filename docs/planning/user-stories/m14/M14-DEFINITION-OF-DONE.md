@@ -676,6 +676,44 @@ rather than the peer's state vector; and the working document having to BE the l
   was deleted by the M6-era dead-code purge (`567b856`). It is not in the cascade and must not be
   resurrected into one; flagged because `/cello-publish` still lists seven packages including it.
 
+## Open findings from the send-path analysis (2026-08-06)
+
+A dedicated analysis of the session send path, run while chasing the sanitization bug, found several
+defects that were NOT that bug. They are recorded here rather than folded into a story they do not
+belong to. One is fixed; the rest are open and none is document-specific — they are on the ordinary
+`cello_send` path.
+
+- **FIXED (`f3387fc`)** — `delivered: true` was reported for a frame whose flush failed.
+  `stream.close()` waits for the write buffer to drain, so a reset mid-flush throws there, and the
+  error was swallowed. The park/relay backstop in the catch below exists for exactly a failed direct
+  send, and swallowing routed around it.
+
+- **OPEN — the content handler is registered only at `acceptSession`.** The standing receiver is
+  created with no content protocol and an open gater, so an initiator's dial succeeds at the
+  connection level before the responder can carry content. `cello_initiate_session` returning
+  `ok: true` guarantees nothing about the responder; the directory pushes the assignment to the
+  initiator FIRST and the responder's accept chain then runs asynchronously. A first frame sent in
+  that window gets `protocol_not_supported` from multistream-select. `cello_await_session` returning
+  IS a real guarantee, but only the responder has it. **Fix candidates:** a bounded retry on that
+  distinct reason (which `sendContent` currently collapses into `session_stream_unavailable`,
+  losing the actionable part), or registering the handler on the standing receiver at creation and
+  dispatching by frame `session_id`.
+
+- **OPEN — `#handleContentStream` never validates the frame's `session_id`** against the session the
+  handler is bound to. Both a misdelivery gap and a diagnostic one: a frame reaching the wrong
+  handler ingests under the wrong session id, and every log line about it names a session nobody is
+  looking at. Note the per-session closure binding is doing less than it appears to.
+
+- **OPEN — silent returns worth a line each:** `#parkContent`'s missing-relay guard (a park that
+  cannot happen, reported as a boolean nobody logs), and `#handleContentStream`'s
+  stream-opened-no-frame / wrong-type / malformed-field returns.
+
+- **OPEN — no end-to-end confirmation is exposed.** `sendContent` already arms a persisted-ack
+  tracker and the receiver sends the ack only after durable ingest, but `sendContent` resolves
+  before it and no caller can await it. That tracker is the only honest "the peer has it" signal
+  that exists without a protocol change, and the document delivery worker is exactly the caller that
+  wants it.
+
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
 - **DOD-DOC-E2E-CONV-1** [trustless-cello] — **convergence enforcer GREEN** (`aa6dea04`, re-confirmed
