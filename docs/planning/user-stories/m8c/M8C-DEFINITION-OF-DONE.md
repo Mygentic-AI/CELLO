@@ -600,6 +600,75 @@ description: >
 > [[M8C-MONIKER-SPEC]] §11: **the pubkey must always ride on the notification**; every simplification in
 > the moniker design depends on it.
 
+## Tier 1½ addendum — the bridge is not yet a real channel (2026-08-06)
+
+**Found by using the bridge, not by testing it.** The Hermes CELLO adapter works but does not
+*behave* like Telegram: replies do not always happen, and nothing that crosses the wire is
+visible — we rely on the LLM's own account of what was said. Both follow from the design, not
+from a defect. Full trace, rejected alternatives, and the verified Hermes-side evidence:
+[[2026-08-06_1659_hermes-cello-channel-should-be-a-real-channel]]. Do not re-derive the keying
+question — session-id keying (cold start every conversation) and counterparty keying (wrong axis)
+were both examined and rejected there.
+
+Three facts, all in `cello-client core/cli/src/hermes/assets.ts`:
+`send()` is a deliberate no-op (delivery is discretionary — the model must remember to call
+`cello_send`); the daemon's content-free wake means real text never enters a transcript; and
+`chat_id` is the constant `"default"`, which collapses every CELLO session into one Hermes chat.
+The third causes the first — you cannot implement `send()` when `chat_id` names no destination.
+
+⚠️ **`content-free` is not the defect.** `_render_who`'s comment names the constraint: Hermes has
+no metadata layer, so the wake prose IS the frame. Injecting raw counterparty content puts
+untrusted text where instructions live. That boundary must be *solved*, never simply removed —
+the inbound-content half stays out of scope until it is.
+
+- **DOD-HERMES-4 (the adapter owns outbound)** — `chat_id` becomes the bound agent name, not
+  `"default"`: session identity == agent identity, so calling the same agent twice continues one
+  Hermes conversation and a different agent is a different mind that was not in the room. The
+  CELLO session id is stamped into `MessageEvent.message_id` (today spent on a throwaway
+  `"cello-wake-" + uuid`), and `send()` recovers it from `metadata["reply_to_message_id"]` and
+  calls `cello_send` over the adapter's own socket. Delivery stops being discretionary and real
+  traffic lands in the Hermes transcript. With one bound agent, observable behavior is unchanged.
+  **Route on `metadata`, never the `reply_to` positional** — verified on the running EC2 checkout
+  (`~/.hermes/hermes-agent` @ `69bedb7be`; the local clone is a different lineage and does not
+  contain that commit): of seven `adapter.send()` sites in `gateway/stream_consumer.py`, only two
+  pass `reply_to` (2305, 1223), while the chunked fallback (1432), empty fallback (1531) and
+  fresh-final (1908) pass metadata only — and all three are final-reply paths. Every one builds
+  metadata via `_metadata_for_send()`, which stamps `reply_to_message_id` unconditionally from
+  `initial_reply_to_id` ← `ctx.event_message_id` ← `_reply_anchor_for_event()`'s default branch
+  (`gateway/platforms/base.py:137`, `return event.message_id` — CELLO takes it, no gating).
+  ⚠️ **A missing anchor MUST fail the send loudly.** Synthetic sends, cron deliveries and goal
+  continuations arrive with none (`gateway/delivery.py:606` never passes `reply_to` at all).
+  Routing to "the most recent session" is exactly the silent-fallback class that makes a broken
+  system look healthy — and it would mis-deliver across counterparties. cello-client, CLI package
+  only, no deploy; needs a `cli` publish + `cello bridge hermes` re-run per host (the plugin is a
+  COPY in `~/.hermes`, never a live import — same per-host step DOD-HERMES-3 carries). — ❌ NOT BUILT
+- **DOD-HERMES-5 (multi-agent binding — GATED ON HERMES-4)** — one Hermes gateway binds more than
+  one CELLO agent: agent list from `config.extra` with one platform entry per agent
+  (`CELLO_AGENT_NAME` survives as the one-agent shorthand), `cello bridge hermes --agent a --agent b`.
+  The daemon already supports it — `cello_use_agent` binds notification routing **per IPC
+  connection** (`NotificationDispatcher`), so two adapters are two sockets and two clean streams
+  with no Hermes-side filtering. Unlocks a genuine loopback: agent A opens a real CELLO session to
+  agent B on the same machine — separate gateway sessions, separate contexts, real protocol
+  between them, sealed transcript at the end. The solo-multi-agent wedge, demonstrable with no
+  counterparty.
+  🔒 **The gate is not sequencing preference — it is the launch-triage argument.** The `cello` MCP
+  server holds ONE daemon connection with ONE current agent. Binding a second agent while replies
+  still go out through that path means the model must call `cello_use_agent` correctly before
+  *every* reply, and one forgotten call sends Bob's answer under Alice's identity. Wrong-identity
+  delivery is not a papercut in a product whose value proposition is verifiable identity. Under
+  HERMES-4, `send()` routes over the socket already bound to that agent and misrouting is
+  impossible by construction. **Do not start this line while HERMES-4 is not ✅.** — ❌ NOT BUILT
+
+> **Deferred, deliberately** (recorded so they are not rediscovered as new): (a) **inbound content
+> injection** — needs the framing boundary above; (b) **reply to a sealed session** — the anchor
+> points at a dead session; fail loudly, since auto-opening one is a protocol action, not a
+> delivery detail; (c) **seal visibility** — with history continuous across CELLO sessions the
+> agent may not notice a seal happened, so it likely needs an in-band transcript marker;
+> (d) **cross-peer bleed** — keying on the local agent means two peers talking to one agent share
+> a Hermes history. Fine for a personal agent, not for anything customer-facing, and additive to
+> fix: append the counterparty to the key when the isolation is needed, without redoing HERMES-4.
+> Key on `agent_id`/pubkey, **never** the moniker (CLAUDE.md stable-key rule, `DOD-AGENT-ID-JOINKEY-1`).
+
 ## 🔴 Phantom session — the first-connect race (D1–D4)
 
 **Found 2026-07-10 by chasing "2 unread messages I can never read."** Full evidence, anchors, ACs,
