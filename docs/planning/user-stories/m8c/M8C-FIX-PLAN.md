@@ -141,10 +141,23 @@ crisp handoff for the live checks.
   `workspace:*`). All 7 promoted to `latest` w/ Andre's go (daemon/cli needed OTP browser-auth; the other 5
   were already `latest`). *(Prior beta ship of CC-1…CC-9 = daemon 0.0.35/cli 0.0.32, tag `v0.0.81` —
   superseded by v0.0.82.)*
-  **↳ Follow-up (post-launch, not blocking):** the binary SIGTERM test (session-node-manager AC-009) has a
+  **↳ Follow-up — ✅ FIXED 2026-08-06, cello-client `08d1cbf`.** the binary SIGTERM test
+  (session-node-manager AC-009) has a
   cross-connection visibility race — INSERTs synthetic rows on a separate SQLCipher connection then SIGTERMs,
   so the daemon's shutdown query can run before the INSERT is durable/visible. Harden (confirm the daemon
   observed the rows before SIGTERM, or WAL-checkpoint before kill).
+
+  Took the second remedy: `PRAGMA wal_checkpoint(TRUNCATE)` before closing the seeding connection.
+  **It stopped being "post-launch, not blocking" the moment it failed a TAG run** — it blocked the
+  v0.0.200 publish outright, and the same commit (`f2bc4e4`) passing on `main` and failing on the
+  tag is what ruled out any code change as the cause. Re-tagged as v0.0.201. Ran 3/3 green locally.
+
+  Worth noting for the next flake triage: the captured daemon log showed only startup events, which
+  looks like "shutdown never ran" — but `process.exit` truncates pending async pipe writes (the
+  hazard `cello-daemon.ts`'s own `setImmediate` comment exists for), so a missing shutdown log is
+  NOT evidence the shutdown did not happen. The test's "the write did not fail quietly" assertion
+  staying green while the status assertion failed is the real discriminator: it says the UPDATE ran
+  and matched zero rows.
 - **ops-agent (OA-1+OA-2)** — us-east-1 pipeline ran to ProductionDeploy **Succeeded** at source `7cb8cf60`
   → **deployed**.
 **✅ BOTH legitimate stops CLEARED (2026-07-08):**
