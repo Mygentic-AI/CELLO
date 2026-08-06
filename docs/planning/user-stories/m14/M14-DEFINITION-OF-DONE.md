@@ -678,8 +678,8 @@ rather than the peer's state vector; and the working document having to BE the l
 
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
-- **DOD-DOC-E2E-CONV-1** [trustless-cello] — **convergence enforcer ran GREEN, 2026-08-05**
-  (`aa6dea04`). Both cases, 7.3s and 4.1s. Two real daemons, a real three-node consortium, a real
+- **DOD-DOC-E2E-CONV-1** [trustless-cello] — **convergence enforcer GREEN** (`aa6dea04`, re-confirmed
+  2026-08-06 across three consecutive full runs). Both cases, 7.3s and 4.1s. Two real daemons, a real three-node consortium, a real
   registration DKG: propose → consent → concurrent edits on the SAME line from both sides → both
   converge → an ordinary message → bilateral close → and both daemons, each rebuilding from its own
   leaves, arrive at the same `sealed_root` over a tree carrying document frames alongside messages.
@@ -720,8 +720,7 @@ rather than the peer's state vector; and the working document having to BE the l
 - **DOD-DOC-E2E-OFFLINE-1** [trustless-cello] — **offline-delivery enforcer** ran green: publish
   while the peer daemon is down; kill and restart the SENDER's daemon; start the peer; the
   update arrives and materializes with zero agent-level action; pending flag set. The
-  in-memory-queue killer. — ⏳ **PASSES IN ISOLATION** (5.8s, `b5d34819`); the file's three cases
-  interfere when run together.
+  in-memory-queue killer. — ✅ **GREEN, 2026-08-06** (`7a8c9e1f`), three consecutive full runs.
 
   **It found two defects the convergence enforcer could not:**
 
@@ -742,12 +741,36 @@ rather than the peer's state vector; and the working document having to BE the l
      it, and publish the deletion of everything the peer still held. Rebuilt from the stored
      proposal, which is deterministic on both sides because `document_id` is its hash.
 
-  **Open: the three cases interfere.** Each passes alone; together they fail differently every run.
-  Per-test daemon teardown is in — they used to live until `afterAll`, so the third journey ran
-  against a cluster attended by six daemons — and it did NOT resolve it, so the shared spine cluster
-  carries journey-to-journey state beyond the daemons. Registration and directory-side agent state
-  are the candidates; not yet proven. Next step is to prove it rather than tune it: run two journeys
-  with a fresh cluster each and see whether the interference survives.
+  **RESOLVED — it was never interference, and it was never flakiness. It was a rule firing.**
+
+  `ingestReceivedContent` passed the SANITIZED bytes into the path that classifies document traffic.
+  A `redact` verdict rewrites content for the agent's benefit — right for conversation, where the
+  operator sees the sanitized form while the leaf still binds the original. Wrong for a document
+  frame, and not marginally: rewriting bytes inside a signed CBOR envelope does not sanitize it, it
+  destroys it. The frame stops decoding, stops being recognised as document traffic at all, and
+  falls through to the CONVERSATION path — recorded as something a person said and handed to the
+  agent by `cello_receive`. Roughly half of all document frames, because a proposal carries a random
+  16-byte nonce, so whether its bytes tripped a rule varied per run.
+
+  **Both enforcers are GREEN across three consecutive full runs.** Before the fix, no two runs
+  agreed.
+
+  **How it was found, because the method is the transferable part.** Counting, not reading: 12
+  frames sent, 12 relay hash submissions, 12 ordering records — every frame ARRIVED — but only 4 of
+  8 document frames were classified as documents, and the other 4 were sitting in the ordinary
+  content tally. Nothing was lost on the wire; the bytes changed under it. That single comparison
+  killed two hypotheses at once, including my own "the session is not ready yet" — which the warm-up
+  round trip disproves outright, since it succeeds immediately before the frame that is then lost.
+
+  I had stopped on this once, saying I was flipping outcomes faster than I could get a stable read.
+  That was the wrong call: an unstable read is the reason to start measuring, not to stop. Three
+  runs and one table of counts settled what three rounds of plausible reasoning could not.
+
+  **Documents are not unscreened as a result.** They are screened by `DocumentGate`, which is built
+  for them and REFUSES rather than mutates (§16.7) — mutating one party's replica of a CRDT is not a
+  false positive, it is permanent divergence both sides converge on and neither can see. That is the
+  whole reason the document path has its own gate, and this is the first live proof of why the
+  message sanitizer must never touch it.
 - **DOD-DOC-E2E-REJECT-1** [trustless-cello] — **rejection enforcer** ran green: gate rejects
   (limit or append rule), quarantine + `0x05` + policy record on both sides, supersession nets
   to zero, convergence; **the session containing the `0x05` leaf seals and the seal VERIFIES on
