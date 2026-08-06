@@ -872,7 +872,12 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
       `B kept publishing into a document nothing would ever accept, and its own surface never said so.\n` +
         `A quarantined ${quarantined} envelope(s) (gate refusals — these advance the round) and refused ` +
         `${chainBroken} as chain-broken (these do not).\n` +
-        `--- A document log (tail) ---\n${documentLines(a.daemon)}`,
+        `--- every chain refusal, with its INPUTS ---\n` +
+        (a.daemon.output
+          .split("\n")
+          .filter((l) => /document[.]inbound[.]chain_refused|document[.]rejection|document[.]update[.]quarantined/.test(l))
+          .join("\n") || "(none)") +
+        `\n--- A document log (tail) ---\n${documentLines(a.daemon)}`,
     ).toBe("stalled");
     // The receiver's view is recorded rather than asserted equal: A refused every envelope, so
     // whether A also considers the document stalled is a separate design question from whether B
