@@ -895,6 +895,14 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   - **A — the annex.** New `sealed_session_annex` table; the drain annexes verified content on
     `session_committed` and confirm-deletes the relay copy ONLY if the write committed. The separate
     table IS the inertness guarantee — no unread query, inbox count or wake path joins it.
+  - **Read surface (review F3):** `cello_get_transcript` returns `post_seal_annex` under its own key,
+    never merged into `messages` (which holds screened, sealed-chain content), and the keys are
+    omitted entirely when empty. Published daemon `0.0.130`.
+  - **⚠️ REMAINING, and the next unit: annexed content is NOT SECURITY-SCREENED.** It is refused
+    before `ingestReceivedContent` reaches the screening seam, and the drain has no gateway to screen
+    with. Today only the guidance wording stands between a stale instruction and an agent that acts
+    on it — which is the failure this whole defect began with. Screen at write (wire the gateway into
+    the content-park drain) or on read.
   - **Scope decision, deliberate:** `counterparty_unknown` is NOT annexed even though it is the
     larger half (78 of 121 on one box). That reason comes from the SEC-1 auth step — the content is
     UNVERIFIED — so deleting it would destroy exactly what the existing "a forgery must not evict
