@@ -2333,7 +2333,7 @@ own story) deliberately, never smuggled in as a rider. Source:
   cannot catch a regression here, because in a temp daemon with no sessions the daemon-wide handler
   answers `ok` too. The wire name is therefore asserted directly, verified by mutation.
 
-- **DOD-LOGOUT-EXIT-1** ❌ OPEN (raised 2026-07-30) — `cello logout` reports the daemon stopped while
+- **DOD-LOGOUT-EXIT-1** ❌ OPEN (raised 2026-07-30) — story: [[CELLO-M8C-DAEMON-001]]. `cello logout` reports the daemon stopped while
   the process is still alive and still talking to a directory node.
 
   **Observed live (2026-07-30).** After `cello logout`, `cello status` returned `{"daemon":
@@ -2573,7 +2573,8 @@ own story) deliberately, never smuggled in as a rider. Source:
     deregistered by another stream's close / registered but unwritable). It is what sent the original
     investigation at the *target's* connectivity for 25 minutes while the target was fine.
 
-- **DOD-RETRYQ-STRAND-1** ❌ OPEN (raised 2026-08-06, found on Andre's LIVE daemon) — a retry-queue
+- **DOD-RETRYQ-STRAND-1** ❌ OPEN (raised 2026-08-06, found on Andre's LIVE daemon) — story:
+  [[CELLO-M8C-DAEMON-002]]. A retry-queue
   entry whose session goes TERMINAL is never reaped, so it strands forever and permanently pins the
   health metric.
 

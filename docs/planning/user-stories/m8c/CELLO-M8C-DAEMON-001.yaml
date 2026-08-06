@@ -1,0 +1,111 @@
+---
+name: CELLO-M8C-DAEMON-001
+type: user-story
+date: 2026-08-06
+topics: [daemon, logout, ipc, shutdown, kill-switch, process-lifecycle]
+status: draft
+description: >
+  cello logout reports the daemon stopped while the process is still alive and still
+  reaching a directory node. Root-caused to an asymmetry between the two shutdown
+  paths: the signal path calls process.exit(0) after stop(); the IPC path (logout)
+  does not, and relies on the event loop draining on its own. Diagnosed 2026-08-06,
+  DOD-LOGOUT-EXIT-1 in M8C-DEFINITION-OF-DONE.md line 2336.
+---
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-M8C-DAEMON-001
+domain: Session Lifecycle
+milestone: M8C
+actor: CLIENT
+priority: P0
+components:
+  - daemon
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the CELLO Client (the daemon, operated via `cello logout`),
+  I want logout to not report success until the process has actually exited,
+  so that an operator's kill-switch belief matches reality — no live process is
+  ever left reaching the directory after the operator was told it stopped.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the IPC `shutdown` handler receives a logout request"
+    action: "the daemon shall await its own teardown (`stop('logout_requested')`) and only ack the IPC caller after the process is ready to exit, then call `process.exit(0)` — mirroring the signal path (`bin/cello-daemon.ts:203-209`)"
+  - trigger: "When `stop()` runs on any shutdown path"
+    action: "the daemon shall abort the in-flight libp2p dial/`attemptConnect()`, abort the in-flight registry/manifest fetch (its existing 10s abort timer), and abort the in-flight Telegram `getUpdates` long-poll and its backoff timer — not merely cancel their schedulers"
+  - trigger: "If the daemon process does not exit within a bounded wait after logout is requested"
+    action: "the `cello logout` CLI command shall report failure and exit non-zero, rather than printing 'Daemon stopped.'"
+  - trigger: "When `cello status` is queried"
+    action: "the client shall distinguish 'no daemon' from 'a daemon process exists but has released its socket/lock' — the second case is a broken shutdown and must not read as `stopped`"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  - id: AC-001
+    given: "A daemon process with at least one registered agent (live signaling, at least one open outbound connection to a directory node)"
+    when: "`cello logout` is run"
+    then: "`cello logout` does not return/print success until the daemon process (the actual pid) has exited; polling `isProcessAlive(daemonPid)` confirms it is false before the command returns"
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-002
+    given: "A daemon mid-shutdown with an in-flight libp2p dial, an in-flight registry/manifest fetch, and (if a Telegram bot token is configured) an in-flight `getUpdates` long-poll"
+    when: "`stop()` runs"
+    then: "each in-flight operation is observably aborted (dial's AbortController fires, fetch's existing abort timer is invoked, long-poll request is aborted rather than left to its 25s timeout) — asserted by a spy/mock on each abort path, not by absence of a log line"
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-003
+    given: "A daemon that fails to exit within the bounded wait after logout is requested (simulated: an abort hook that does not resolve)"
+    when: "`cello logout` is run"
+    then: "the CLI reports the daemon did not exit and exits non-zero; it does not print 'Daemon stopped.'"
+    test_type: unit
+    component_under_test: daemon
+
+  - id: AC-004
+    given: "A daemon process alive but with its socket/lock already released (the exact state the current bug produces)"
+    when: "`cello status` is queried"
+    then: "the response distinguishes this state from a clean stop (e.g. a distinct status value or explicit flag), not the same `{daemon: 'stopped'}` shape returned when no process exists at all"
+    test_type: integration
+    component_under_test: daemon
+
+  - id: AC-005
+    given: "A production-shaped daemon with five registered agents, each holding live per-agent signaling (matching the state that made the existing `commands.test.ts:145-169` test pass while production failed)"
+    when: "`cello logout` is run"
+    then: "`isProcessAlive(daemonPid)` is false after logout returns — closing the test-teeth gap where the existing AC4 test only exercised a zero-agent daemon"
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: "The daemon shall never report itself as stopped to an operator while a process still holds a live outbound connection to a directory node"
+    adversarial_condition: "even when all local handles (socket, singleton lock, SQLCipher handle) have already been released, which is exactly the state that makes every existing local check agree the daemon is gone"
+    test_type: integration
+    component_under_test: daemon
+
+# ─── Observability ─────────────────────────────────────────
+observability:
+  events:
+    - name: "daemon.logout.exit.confirmed"
+      level: info
+      trigger: "the daemon process exits in response to an IPC logout request, before the CLI command returns"
+      context_fields: [pid, waitedMs]
+      correlationId: false
+  error_events:
+    - name: "daemon.logout.exit.timeout"
+      level: error
+      trigger: "the daemon process does not exit within the bounded wait after logout was requested"
+      context_fields: [pid, waitedMs, reason]
+  alarms:
+    - condition: "daemon.logout.exit.timeout fires more than once in 24h on any single operator daemon"
+      fires_to: "ops-agent Telegram channel"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Directory Infrastructure"
+  discussion_logs: []
+  # Root-cause trace already complete — see M8C-DEFINITION-OF-DONE.md line 2362 ("DIAGNOSED
+  # 2026-08-06 — root cause located, NO CODE WRITTEN YET"), with exact file:line references for
+  # every survivor of stop(): bin/cello-daemon.ts:203-209, daemon.ts:3068-3078/3196-3260,
+  # telegram-doorbell.ts:127/136/159-161, signaling-connect.ts:394, signaling-manager.ts:701-713,
+  # registry-poll.ts:95, ipc-server.ts:329.

@@ -341,7 +341,8 @@ Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello
 
 ## 12. A sealed session's unread messages ring the doorbell as live work, and agents act on them
 
-**Designation: `DOD-TERMINAL-WAKE-1`** — ❌ open, raised 2026-08-05. **Proposed rank: slot beside
+**Designation: `DOD-TERMINAL-WAKE-1`** — story: [[CELLO-M8C-SESSION-001]] (combines this with
+`DOD-SEALED-INBOX-2`). ❌ open, raised 2026-08-05. **Proposed rank: slot beside
 item 2 (`DOD-SEALED-INBOX-2`), pending Andre confirmation — added 2026-08-06.** Same code surface,
 different defect, meant to land in one pass. Ranked below `DOD-TERMINAL-STATE-DIVERGENCE-1`: this one
 confuses (self-concealing false confidence) but the sealed transcript stays valid; nothing is lost.
