@@ -1,10 +1,25 @@
-# CELLO Infrastructure State
+# CELLO Infrastructure State — AWS (⚠️ SUPERSEDED — CELLO NO LONGER RUNS ON AWS)
 
-> **⚠️ READ FIRST: [`docs/planning/aws-to-gcp-migration.md`](../docs/planning/aws-to-gcp-migration.md)**
-> — what is running where across BOTH clouds, and what breaks if you stop what. This file
-> describes one cloud in isolation; it cannot tell you which one is authoritative.
+> # 🛑 READ THIS FIRST — THIS IS NOT WHERE CELLO RUNS.
+> **CELLO runs on GCP. The authoritative infrastructure record is
+> [`infra/GCP-STATE.md`](GCP-STATE.md).** The M12 migration and cutover are COMPLETE: the
+> directory nodes, the relays, the portal and the ops-agent all run in GCP project
+> `cello-infra`, and the published client's bundled roster points at the GCP directories.
+>
+> **Do not deploy from this file, and do not treat anything below as live.** If you are here
+> because you were looking for "the infrastructure doc", you want `GCP-STATE.md`.
+>
+> **Why this file still exists.** It is the historical record of the AWS estate — useful for
+> archaeology (why a resource exists, what a stack was named, what a past incident touched) and
+> for the small number of things that were still AWS-resident at cutover. Before assuming ANY
+> AWS resource is still needed, check
+> [`docs/planning/aws-to-gcp-migration.md`](../docs/planning/aws-to-gcp-migration.md), which is
+> the only document that describes both clouds together and says what breaks if you stop what.
+> At last writing the notable AWS-resident survivors were **SES** (OTP email for GCP
+> registration — a live cross-cloud runtime dependency) and the **waitlist email path**. Verify
+> against the migration doc rather than trusting this sentence.
 
-This file is the authoritative record of what actually exists in AWS.
+Everything below describes the AWS estate as it stood, and is the authoritative record of what exists **in AWS only**.
 It is updated automatically by `infra/deploy.sh` after every successful deployment.
 
 **Do not edit manually unless correcting an error.** Run `./infra/deploy.sh` to deploy and update.
