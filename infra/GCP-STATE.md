@@ -7,6 +7,20 @@
 > **Rule (same as STATE.md):** update IMMEDIATELY after every GCP change, never batched.
 > A session that changes GCP without updating this file is incomplete.
 
+> ### ⚠️ STANDING DEVIATIONS — things that are deliberately NOT in their intended state
+> - **`gcp-usc1` is TEMPORARILY DOWNSIZED to `e2-medium`** (2 shared/burstable vCPU + 4 GB, vs
+>   `e2-standard-2`'s 8 GB), zone `us-central1-a`. Taken 2026-08-06 to restore the third node after a
+>   region-wide `ZONE_RESOURCE_POOL_EXHAUSTED` outage left the consortium at exactly threshold.
+>   **REVERT to `e2-standard-2` when us-central1 has capacity** — re-probe with the recipe in the
+>   capacity playbook below. The revert marker is in `terraform.tfvars` beside the value.
+> - **`max_surge_fixed = 1` was CONSIDERED AND REJECTED for the directory MIG** (2026-08-06). It
+>   would not work: the instance template pins BOTH single-holder addresses — `network_ip`
+>   (static internal) and `nat_ip` (static external) — so two instances from it can never coexist
+>   and a surge fails on IP conflict. It would plan cleanly and break the NEXT roll, which is worse
+>   than leaving it. The create-before-destroy intent needs either a **regional MIG** (GCP picks any
+>   zone with capacity; works at surge 0 because only one instance exists at a time, and both pinned
+>   addresses are regional) or a **capacity reservation** (zero exist today). Neither is applied.
+
 **Project:** `cello-infra` (number 955736313934) · **Org:** mygentic.ai (376185218056)
 **Billing:** `012EFA-590A2E-2A82B4` — linked, enabled. **Milestone:** M12.
 
