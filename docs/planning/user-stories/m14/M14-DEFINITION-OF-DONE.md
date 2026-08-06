@@ -648,7 +648,37 @@ rather than the peer's state vector; and the working document having to BE the l
   verifying. **The publish gate — milestone close is P4 all-green, not this line.** Vitest
   green ≠ done. Andre runs the `latest` promotion. Close condition per M14-D2. — ❌
 
-  **State surveyed 2026-08-05, no action taken (publishing needs `/cello-publish` and Andre's go):**
+  **PUBLISHED 2026-08-06.** Branch merged to main, full cascade published on tag `v0.0.197`,
+  `smoke-tag` green. Verified against the TARBALLS, not CI status: `daemon@0.0.133`'s dist carries
+  `document-handlers.js` and `wire-content-hash.js`, `protocol-types@0.0.45` carries all three new
+  frames, and the cross-pins are real versions (`cli` → `daemon@0.0.133`), never `workspace:*`.
+
+  **Live on the operator's own daemon**: installed via `@latest`, `cello login` brought up both
+  agents, and `cello doc list` / `cello doc inbox` return real answers — dispatch proven on the
+  shipped binary, which is the one thing no test in either repo can prove.
+
+  **`latest` promotion is PARTIAL and needs Andre's OTP.** connect 0.0.130, cli 0.0.136 and daemon
+  0.0.133 — the three an operator installs by name — are on `latest`. crypto 0.0.41, transport
+  0.0.47, protocol-types 0.0.45 and gateway 0.0.25 returned `EOTP`. They are transitive and `cli`
+  pins `daemon` at an exact version which pins these exactly, so the operator install is correct
+  today; promoting them keeps the `latest` graph consistent.
+
+  **Two CI failures on the way, both mine, and the second is the lesson.** A bare
+  `await documentDeliveryInFlight` in `stop()` blocked shutdown on the network; "fixing" it with
+  `Promise.race([..., setTimeout(...).unref()])` was WORSE — an unref'd timer does not hold the event
+  loop open, so during shutdown it may never fire and `stop()` hangs forever. The daemon's log ended
+  at `daemon.started` with no shutdown events at all, and I read past that twice: **the diagnostic
+  that mattered was the ABSENCE of a log line, not any line that was present.** Shutdown may not
+  await anything that can block on I/O, and a timeout that can outlive the event loop is not a bound.
+
+  Also found by the same builds: `classify` tried six decoders in sequence, so hostile bytes paid for
+  all of them — 292ms → 60-81ms by decoding once and dispatching on the discriminator. That growth
+  was invisible per-change and only surfaced when the DoS budget failed on a slower machine.
+
+  **Remaining on this line:** the four OTP promotions, and the two-machine live smoke on the real
+  fleet (the enforcers prove two real daemons, but on one host).
+
+  **State surveyed 2026-08-05 (superseded by the above, kept for the version-cascade reasoning):**
 
   All M14 work is on branch `m14/reject-1` — **50 commits ahead of `origin/main`, 10 behind**. The
   merge comes first; the cascade is computed from MAIN's numbers, not this branch's.
