@@ -898,11 +898,15 @@ so the set cannot grow. What remains is the existing rows, which fork and cannot
   - **Read surface (review F3):** `cello_get_transcript` returns `post_seal_annex` under its own key,
     never merged into `messages` (which holds screened, sealed-chain content), and the keys are
     omitted entirely when empty. Published daemon `0.0.130`.
-  - **⚠️ REMAINING, and the next unit: annexed content is NOT SECURITY-SCREENED.** It is refused
-    before `ingestReceivedContent` reaches the screening seam, and the drain has no gateway to screen
-    with. Today only the guidance wording stands between a stale instruction and an agent that acts
-    on it — which is the failure this whole defect began with. Screen at write (wire the gateway into
-    the content-park drain) or on read.
+  - **Screening (review F4): DONE, published `0.0.131`.** The drain screens before storing, using the
+    same terminal-vs-transient split as the live inbound funnel. TRANSIENT (gateway down) keeps the
+    relay copy and stores nothing — fail-closed, never store unscreened content because the screener
+    was unreachable. TERMINAL discards without storing and confirm-deletes, because identical bytes
+    would be rejected identically forever and keeping it would restore the re-pull loop. REDACT
+    stores the altered bytes. **The dangerous confusion — treating "screen is DOWN" as "content is
+    BAD", which would delete a good message during an outage — was injected as a bug and the test
+    goes red on it.** `ContentParkClient` is injectable through deps so those branches are reachable
+    with real sealed envelopes.
   - **Scope decision, deliberate:** `counterparty_unknown` is NOT annexed even though it is the
     larger half (78 of 121 on one box). That reason comes from the SEC-1 auth step — the content is
     UNVERIFIED — so deleting it would destroy exactly what the existing "a forgery must not evict
