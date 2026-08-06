@@ -2371,6 +2371,28 @@ own story) deliberately, never smuggled in as a rider. Source:
   the 20 s bound (the real defect, reproduced); without it, the daemon drains and only the
   `daemon.exit` marker fails.
 
+  **LIVE MULTI-PROCESS PROOF — run 2026-08-06, isolated `CELLO_DIR`, real spawned daemon, real GCP
+  directory connections.** Setup: `login` → `create-agent` → `logout`/`login` so the agent is
+  LOADED at boot (`Started 1 agent(s)`). Before logout the daemon held **2 ESTABLISHED outbound
+  connections** to GCP directory nodes (`34.139.119.165:4001`, `34.75.172.108:8080`) — the exact
+  condition that survived logout in the original report. Then `cello logout`:
+
+  > `Shutting down the daemon…` / `Daemon stopped.` — exit 0, **0.43 s**, process GONE, **0
+  > ESTABLISHED connections remaining**.
+
+  **The counterfactual did NOT reproduce, and that is worth recording rather than burying.** The
+  same scenario against the SHIPPED binary (global cli `0.0.130` / daemon `0.0.127`) also exited,
+  within 3 s. So the pre-fix code did not linger *in this configuration*. What is confirmed by
+  inspection is the structural defect itself: `0.0.127`'s `dist/daemon.js` contains no `onStopped`
+  and its bin's only `process.exit(0)` is on the signal path, so the IPC path still depends
+  entirely on the loop draining. With one fresh agent it drained; Andre's live case (five agents,
+  long uptime) did not, for 20+ seconds. **Conclusion: the lingering is condition-dependent, and
+  the fix removes the dependence rather than removing one cause.** Anyone re-testing this should
+  not expect a one-agent daemon to reproduce the hang.
+
+  **Not disturbed:** the live production daemon (pid 69837, default `~/.cello`) was never touched;
+  both test daemons ran in their own `CELLO_DIR` and were confirmed gone by pid afterwards.
+
 - **DOD-TESTDAEMON-REAP-1** ❌ OPEN (raised 2026-07-30) — the test harness leaks its subject daemon;
   one had been running for 1h50m past its test.
 
