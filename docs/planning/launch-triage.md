@@ -571,9 +571,94 @@ Two constraints on that fix:
    `session_already_sealed`, force-abandon should refuse (or at minimum warn hard): it destroys the
    local half of a receipt that exists and is fetchable.
 
-Remaining unknown, stated rather than guessed: whether the directory currently exposes a
-certificate-fetch verb for an already-sealed session, or whether one must be added server-side. That
-determines whether this is a client-only change.
+## The open question is now ANSWERED, and the directory half is worse than the client half
+
+**No certificate-fetch verb exists.** The complete set of frames the directory accepts from a client
+(`decodeInboundSignalingFrame`, `directory-frames.ts:511`) is: `signaling_auth_response`,
+`register_request`, `revoke_agent`, `dkg_complete`, `primary_transfer_request`, `connection_request`,
+`connection_response`, `disclosure_request`, `disclosure_response`, `discovery_lookup`,
+`peer_info_announce`, `manifest_poll_request`, `ping`, `session_request`, `session_offer_accept`,
+`session_offer_reject`, `seal_attempt`, `seal_frost_signature`, `seal_unilateral`,
+`seal_upgrade_request`, `seal_interrupted_request`, `seal_interrupted_ack`,
+`seal_interrupted_rejection`, `submission_write`, `submission_results_request`, `trust_signal_ack`.
+Nothing reads a seal certificate. **So this spans BOTH repos and needs a directory deploy.**
+
+**The directory already knows about this defect and logs it at ERROR.** `#deliverOrEnqueue`
+(`directory-node.ts:5537-5558`) carries the diagnosis in its own comment:
+
+> "`notification_queue` is per-node and is NOT in the anti-entropy set, and `drainNotifications` only
+> fires for a peer authenticating on THIS node — so a participant homed elsewhere never receives
+> this. … by this point the seal IS notarized and durable, so there is nothing to retry. The agent
+> holds a session it believes failed, against a receipt that exists."
+
+It emits `seal.result.undelivered` at ERROR with `consequence: "the seal is durable but this
+participant was not told"`. **A re-delivery mechanism does exist** — `drainNotifications` fires on
+signaling auth and re-sends `session_sealed` (`directory-node.ts:2049-2065`). It just cannot work,
+for a reason the live log makes concrete.
+
+**Clients ROAM across nodes, and the queue does not.** Miss_Chelly_H's signaling connections on
+2026-08-05:
+
+```
+05:13:26 → gcp-euw1
+07:28:27 → gcp-usc1     ← connected here, dropped before the 07:37:45 seal
+16:44:55 → gcp-euw1     ← reconnected HERE, nine hours later
+18:48:23 → gcp-use1
+```
+
+Three connections, three different nodes. The seal's notification was enqueued on whichever node
+adjudicated it; the client next authenticated somewhere else and drained an empty queue. **With N
+nodes this misses roughly (N-1)/N of the time and never self-corrects** — it is the normal case, not
+an edge case. Per-node delivery state is simply the wrong shape for a client that is free to pick a
+node, which is the sovereign-node design working as intended.
+
+## Design — the pull twin (`DOD-INV-PUSHPULL`, M8C-PROCEDURE §5d)
+
+**The data is already everywhere it needs to be.** `seal_notarizations` is a **Tier-A anti-entropy
+table** (`pg-ae-store.ts:149-154`, `hash-chain.ts:264`), so every node already replicates every
+notarization. The certificate the stranded client needs is sitting on the very node it just
+authenticated to. Only the *request* is missing. The directory's own comment reaches the same
+conclusion: *"the receipt can be LEARNED locally and does not need this cross-node push at all."*
+
+**Rejected alternative — put `notification_queue` into anti-entropy.** AE is append-only/LWW; a
+delivery queue is defined by its deletes. Replicating it invites double-delivery and needs per-node
+drain dedup, to solve a problem the already-replicated `seal_notarizations` solves with no new
+state.
+
+**Rejected alternative — push all unseen notarizations on auth.** Requires the directory to track
+what each client has seen, which is per-node delivery state again — the same shape that failed —
+or an unbounded "every sealed session for this agent" scan on every connect.
+
+**The design.**
+
+1. **Directory — new inbound verb `seal_certificate_request { session_id }`**, answered by
+   `seal_certificate_response` carrying the stored notarization, or a named `not_found`. Served from
+   `seal_notarizations`, so ANY node can answer regardless of which one adjudicated. The requester
+   must be a participant in that session — a certificate names both parties and must not be a public
+   lookup by session id.
+2. **Client — call it at the three moments the deadlock is discovered**, never on a timer:
+   `cello_close_session` receiving `session_already_sealed`; `cello_sealed_receipt` finding a session
+   row with no local certificate; and startup reconcile of `interrupted` sessions.
+3. **Verify locally, always.** `verifyBilateralSealCertificate` already validates the FROST signature
+   over the legibility-bound TBS and is what the push path uses — a pulled certificate goes through
+   the identical check. **No new cryptography is required**, which is what makes this smaller than it
+   looks.
+4. **`--force` must stop being the escape hatch.** While a counterparty or directory reports the
+   session sealed, force-abandon should refuse (or warn hard): it destroys the local half of a
+   receipt that exists and is fetchable. This is what turned a recoverable divergence into a
+   permanent one on 2026-08-06.
+
+**Security invariants this must satisfy.**
+- *A pulled certificate is never trusted on the directory's say-so.* It is recorded only if
+  `verifyBilateralSealCertificate` passes; otherwise the session stays as it is and the failure is
+  named. A lying directory must not be able to retire a session that never sealed.
+- *The lookup is participant-scoped.* A non-participant asking for a session id learns nothing —
+  same answer as a session that does not exist, so the verb cannot be used to probe which session
+  ids exist.
+
+**Cost.** One new frame pair, one participant-scoped read, three client call sites, and a directory
+deploy (~25–30 min, all three regions). No migration: `seal_notarizations` already holds everything
+the response needs.
 
 **Provenance worth keeping.** This was initially closed as "not a second root cause — an artifact of
 our own force-abandon two minutes earlier." That explanation is correct for `4c28edcd` and was
