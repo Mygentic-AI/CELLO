@@ -557,7 +557,7 @@ running. On the default pool the same build takes 38 seconds.
 
 | Resource | Value |
 |---|---|
-| Cloud Run service | `cello-portal`, us-east1, image **`portal-abf1cb4`** (rev `cello-portal-00007-9wc`; was `portal-317ffba` → `bcb959c` → `89fb371`) |
+| Cloud Run service | `cello-portal`, us-east1, image **`portal-c713746`** (rev `cello-portal-00009-w77`; was `portal-317ffba` → `bcb959c` → `89fb371` → `abf1cb4` → `6807d4e`) |
 | Hostname | **https://portal.cello.mygentic.ai** — the same name it had on AWS |
 | Load balancer | global external ALB, IP `34.111.250.93`, serverless NEG `cello-portal-neg`, managed cert `cello-portal-cert`; :80 redirects to :443 |
 | DNS | Route 53 zone `Z02692523DOH7NW521CL8`, A record → `34.111.250.93` (was `198.51.100.1`, the hibernate placeholder) |
@@ -607,6 +607,40 @@ was stale (it allowed `…85`; the operator's address was `…55`), so it grante
 handed a path to the portal database to whoever the ISP gave `…85` to next. Direct psql from a
 laptop now goes through the Cloud SQL Auth Proxy, which needs no allowlist entry —
 `infra/scripts/gcp-portal-db-query.sh`.
+
+### 2026-08-07 (cont.) — trust signals produced NOTHING, for two more reasons
+
+Reported as "no trust signal works — passkey, authenticator, history refresh, GitHub, none of
+them". Correctly diagnosed by Andre as something shared rather than per-signal. `minted_signals`
+held ZERO rows.
+
+4. **`authorized_issuers` was EMPTY on all three nodes** — an OPS fault, no code involved. The
+   portal's KMS submission key (`6f0203b8…80e5`, verified against KMS itself, not against this
+   file) was trusted nowhere, so every submission came back `422 unknown_issuer`. The table is
+   created empty by V46 and seeded by an operator; `cello_service` holds SELECT only, deliberately,
+   so a directory process cannot authorize itself. This file previously claimed the key was
+   "enrolled `submitter` in all 3 node DBs" — it was not, and no migration has run since
+   2026-07-31, so nothing wiped it. Enrolled on all three with `--admin`, role `submitter`.
+5. **Track-record refresh used the single-key gate the client outgrew in M12.** It read the
+   SINGULAR `DIRECTORY_API_KEY`, which is never set on a per-node deployment, so it bailed on every
+   run with `no_directory_config` and returned an empty result — a refresh button that does
+   nothing. Its tests inject `baseUrl`/`apiKey`, so the configured path was the one path never
+   exercised. Fixed in `6807d4e` (`directoryApiPairs()`), which also tries each node, because seal
+   history is not replicated either.
+6. **Account facts were read from one node**, so `email` was skipped while `phone` minted — the
+   email hash lives only on `gcp-usc1`. Fixed in `c713746`: facts are read from every node and
+   merged, a fact being verified if ANY node has it with its stub.
+
+**Verified live:** a remint returns `webauthn: {credentials: 1, handedOffTo: 3}`, and
+`minted_signals` now holds all four types — email, phone, webauthn, and one track_record per agent
+— against 5 rows in `signal_records` on the directory side.
+
+**The through-line for all six.** Five of the six are ONE defect wearing different clothes: the
+portal asked a single directory and treated its answer as the consortium's. That is safe with one
+node and wrong with three, and it is invisible every time, because the thing a node returns for
+"I don't have it" is indistinguishable from "it does not exist". Anything else that reads
+non-replicated per-node state through a single URL is the next instance — `activeAmong` still
+routes through `#tryEach` and is the known remaining one.
 
 **Why the hostname was kept.** The GitHub OAuth callback is registered against
 `portal.cello.mygentic.ai`, and `WEBAUTHN_RP_ID` is part of what every passkey is bound to. Serving

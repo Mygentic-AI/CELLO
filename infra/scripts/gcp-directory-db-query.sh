@@ -15,7 +15,18 @@ set -uo pipefail
 
 PROJECT=${PROJECT:-cello-infra}
 ONLY_NODE=""
-if [[ "${1:-}" == "--node" ]]; then ONLY_NODE=$2; shift 2; fi
+# Which credential to connect with. The default `db-app` is the node's own `cello_service` role,
+# which is SELECT-only on the tables that authorize the request path — `authorized_issuers` most of
+# all, because a directory process that could add to the key set it is checked against could
+# authorize itself. Operator writes to those tables need `--admin`.
+CRED=db-app
+while [[ "${1:-}" == --* ]]; do
+  case $1 in
+    --node)  ONLY_NODE=$2; shift 2 ;;
+    --admin) CRED=db; shift ;;
+    *) echo "unknown flag $1" >&2; exit 2 ;;
+  esac
+done
 SQL=${1:-}
 [[ -z "$SQL" ]] && { echo "usage: $0 [--node gcp-use1|gcp-usc1|gcp-euw1] \"SELECT ...\"" >&2; exit 2; }
 
@@ -56,6 +67,6 @@ for ENTRY in $NODES; do
   B64=$(printf '%s' "$REMOTE" | base64 | tr -d '\n')
   timeout 300 gcloud compute ssh "$INSTANCE" --zone "$ZONE" --project "$PROJECT" \
     --tunnel-through-iap \
-    --command "echo $B64 | base64 -d | bash -s cello-${NAME}-db-app-credentials $(printf '%q' "$SQL")" 2>&1 \
+    --command "echo $B64 | base64 -d | bash -s cello-${NAME}-${CRED}-credentials $(printf '%q' "$SQL")" 2>&1 \
     | grep -vE "^WARNING|NumPy|^please see|Pulling|Waiting|^[0-9a-f]{12}: |Download complete|Verifying Checksum|Pull complete|^Digest:|^Status:|Unable to find image|fs layer"
 done
