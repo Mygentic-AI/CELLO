@@ -671,7 +671,30 @@ the inbound-content half stays out of scope until it is.
 
   cello-client, CLI package
   only, no deploy; needs a `cli` publish + `cello bridge hermes` re-run per host (the plugin is a
-  COPY in `~/.hermes`, never a live import — same per-host step DOD-HERMES-3 carries). — ❌ NOT BUILT
+  COPY in `~/.hermes`, never a live import — same per-host step DOD-HERMES-3 carries).
+  — 🟡 **BUILT + REVIEWED, UNVERIFIED-LIVE** (cello-client `d24db18`, 2026-08-07. Both modes and
+  both scopes ship; `cello bridge hermes --delivery-mode --session-scope`, validated before any
+  file is written and rewritten on every run so an omitted flag resets rather than lingering.
+  Gate on `core/cli`: 257 tests, lint clean, `tsc -p core/cli --noEmit` exit 0. The repo-wide
+  suite had one unrelated red — `DOD-RETRYQ-STRAND-1` in `core/daemon`, another agent's revert
+  in flight at the time, untouched by this commit.
+  **The first review pass found the feature 100% dead and it was fixed before commit:** handling
+  a wake inline in `_read_loop` made the adapter's own `cello_receive` await a reply that only
+  that loop could deliver, so every message timed out into the fallback wake — a degradation path
+  so well built it hid a primary path that had never once worked. Wakes now run on a serialized
+  worker off the reader; `AC6` drives the REAL read loop and was confirmed to fail on a revert of
+  the fix. Four more went with it: a busy chat's message was consumed by `cello_receive` and then
+  discarded by the pending slot's replace-without-`merge_text`; `_safe_scalar`'s `"unknown"`
+  default could become a routing key AND a send destination; state notices were dropped under
+  `peer` scope when `counterpartyPubkey` was null, which would have hidden seals from a support
+  desk; and the fetch-failure log named no cause, because `asyncio.TimeoutError` stringifies to
+  the empty string.
+  ⚠️ **Not ✅ — no live journey yet.** Vitest green ≠ done (CLAUDE.md milestone-close rule). What
+  is owed: a Hermes host running this build, `cello bridge hermes` re-run, gateway restarted, and
+  a real two-way session where the peer's words appear in the Hermes transcript and the reply
+  reaches the peer without the agent calling `cello_send`. Also unproven live: `session_scope:
+  peer` with two concurrent counterparties, and the desktop-turn case (typing into a shared
+  session must deliver NOTHING to the peer).)
 - **DOD-HERMES-5 (multi-agent binding — GATED ON HERMES-4)** — one Hermes gateway binds more than
   one CELLO agent: agent list from `config.extra` with one platform entry per agent
   (`CELLO_AGENT_NAME` survives as the one-agent shorthand), `cello bridge hermes --agent a --agent b`.
@@ -701,6 +724,20 @@ the inbound-content half stays out of scope until it is.
 > later-fix. It is now `session_scope: peer` and ships inside HERMES-4. The support-desk case made
 > it a mode, not a follow-up — an operator running a customer-facing agent cannot be asked to wait
 > for a second milestone before two customers stop sharing a context.
+>
+> **Also no longer deferred: inbound content injection (item (a), dropped 2026-08-07).** It was
+> parked on the grounds that peer text entering the agent's context needed a framing boundary
+> first. That reasoning was wrong, and the flow says so plainly: the peer's screened words already
+> reach the agent's context on every session via `cello_receive`, through the same security
+> gateway, screened at ingest. Moving the call from the model to the adapter changes which door
+> the same bytes come through and nothing else. Sophisticated attacks that survive the screener
+> are security-layer work and have nothing to do with this line. Shipped in HERMES-4.
+>
+> **Still deferred, deliberately, and now with a home:** `delivery_mode: wake` is the escape hatch
+> for anyone who wants the agent to drive the exchange itself, so nobody is forced onto the
+> channel path. What remains genuinely unowned is (b) reply-to-a-sealed-session and (c) seal
+> visibility. Both are session-lifecycle concerns rather than delivery ones; if either bites in
+> the live journey, it becomes an AC on the follow-up, not a rediscovered finding.
 
 ## 🔴 Phantom session — the first-connect race (D1–D4)
 
