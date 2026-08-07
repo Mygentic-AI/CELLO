@@ -1027,3 +1027,84 @@ describe("J-DOCUMENTS-WRITE — the FILE round trip (DOD-DOC-E2E-WRITE-1)", () =
     });
   }, 600_000);
 });
+
+/**
+ * DOD-DOC-INBOUND-TERMINAL-1 — an envelope the peer can never accept must SETTLE, not retry forever.
+ *
+ * Found on the operator's live daemon, not by any test here. Document `662743b1…` sat at
+ * `pendingSent: 1` indefinitely: the peer had refused the proposal, so they hold no such document,
+ * answer `document_unknown`, and the router only ever acked `ok: true` results — so nothing settled
+ * the delivery and the worker re-sent on every tick.
+ *
+ * The window is real and is NOT closed by the refused-document write guard, which is the trap here.
+ * That guard refuses a write AFTER a refusal is known. This envelope is published BEFORE the answer
+ * arrives — which is legitimate and load-bearing, because publishing to a peer who has not yet
+ * decided is what makes proposing to an offline peer work at all. The refusal then lands on an
+ * envelope already in the delivery queue.
+ *
+ * Two surfaces, and no single-surface test crosses them: the sender's delivery worker and the
+ * receiver's inbound refusal path. Unit tests on either half pass with the bug present.
+ */
+describe("J-DOCUMENTS-TERMINAL — a REFUSED proposal settles its in-flight update (DOD-DOC-INBOUND-TERMINAL-1)", () => {
+  it("an update published before the refusal stops retrying once the peer says they have no such document", async () => {
+    const { a, b } = await twoPartiesInSession("terminal");
+
+    const proposed = (await a.conn.call("cello_doc_propose", {
+      peer_pubkey: b.pubkey,
+      starting_content: "# Draft\n",
+    })) as { ok?: boolean; documentId?: string; proposalSent?: boolean };
+    expect(proposed.ok, `propose failed: ${JSON.stringify(proposed)}`).toBe(true);
+    const documentId = proposed.documentId!;
+
+    // PUBLISH WHILE UNANSWERED. This must succeed — it is the offline-peer case — and it is what
+    // puts an envelope into the delivery queue that the refusal will orphan.
+    const wrote = (await a.conn.call("cello_doc_write", {
+      document_id: documentId,
+      content: "# Draft\n\nfirst thoughts\n",
+    })) as { ok?: boolean; published?: boolean; reason?: string };
+    expect(wrote, `the pre-answer write should be allowed: ${JSON.stringify(wrote)}`).toMatchObject({
+      ok: true,
+      published: true,
+    });
+
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const inbox = (await b.conn.call("cello_doc_inbox", {})) as { proposals?: Array<{ documentId?: string }> };
+      if (inbox.proposals?.some((p) => p.documentId === documentId)) break;
+      await sleep(1000);
+    }
+
+    // B REFUSES. B never creates a document row, so every redelivery of A's envelope now meets
+    // `document_unknown`.
+    expect(
+      await b.conn.call("cello_doc_refuse", { document_id: documentId, reason: "wrong document" }),
+    ).toMatchObject({ ok: true });
+
+    // THE ASSERTION: A's pending delivery drains. Before the fix this stayed at 1 forever, and the
+    // surface reported the document as having work outstanding with no way to ever clear it.
+    //
+    // `pendingDeliveries` — the TOTAL — and not `pendingSent`. That distinction is the whole test:
+    // `pendingSent` counts only the envelopes that have LEFT this machine, so it reads 0 for one
+    // that has not been dialled yet and the assertion passes with the defect fully present. It did
+    // — this enforcer was written against `pendingSent` first, passed against a build with the fix
+    // reverted, and only the revert run exposed it as hollow.
+    let pendingDeliveries: number | undefined;
+    const settleBy = Date.now() + 90_000;
+    while (Date.now() < settleBy) {
+      const listed = (await a.conn.call("cello_doc_list", {})) as {
+        documents?: Array<{ documentId?: string; pendingDeliveries?: number }>;
+      };
+      pendingDeliveries = listed.documents?.find((d) => d.documentId === documentId)?.pendingDeliveries;
+      if (pendingDeliveries === 0) break;
+      await sleep(2000);
+    }
+    expect(
+      pendingDeliveries,
+      // BOTH daemons' own account. The sender reports the symptom; the answer is on the receiver,
+      // and printing only the sender is what cost a round of guessing on an earlier defect.
+      `A's update never settled — it is still queued for a peer that will never accept it.\n` +
+        `--- A (sender) document log ---\n${documentLines(a.daemon)}\n` +
+        `--- B (receiver) document log ---\n${documentLines(b.daemon)}`,
+    ).toBe(0);
+  }, 240_000);
+});
