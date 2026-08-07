@@ -805,6 +805,45 @@ belong to. One is fixed; the rest are open and none is document-specific — the
   that exists without a protocol change, and the document delivery worker is exactly the caller that
   wants it.
 
+## Open findings from the live document surface (2026-08-07)
+
+Entry 31 in [[M14-BUILD-JOURNAL]] carries the full trace for each.
+
+- **DOD-DOC-INBOUND-TERMINAL-1** ✅ [cello-client] — **a refusal the sender can never fix SETTLES
+  their delivery.** The router acked only `ok: true` results, so a refusal left the envelope in
+  `pendingDeliveries` and the worker re-sent on every tick. Terminal = redelivery cannot change the
+  answer AND the sender was authenticated; that second condition moved signature verification ahead
+  of the document lookup. Terminal: `document_unknown`, `document_killed`, `document_closed`,
+  `document_chain_forked`. Not terminal: `document_stalled`, `document_chain_broken`,
+  `document_sender_not_peer` (silence — an ack would hand back the existence answer the refusal
+  withholds). Unit tests + `J-DOCUMENTS-TERMINAL` live enforcer, both revert-verified.
+
+- **FIXED — the unacked ceiling stopped nothing.** `DELIVERY_MAX_UNACKED_SENDS` is 5; the operator's
+  daemon sent one envelope **74 times**. The branch set the document `stalled` and logged "the
+  document has stopped publishing", while `pendingDeliveries` filters on `acked_at IS NULL` and
+  reads no status at all. Its test asserted the status and the log line, never that delivery
+  stopped.
+
+- **FIXED — the ack-round key did not dedup.** `ackRecordHash` mixed in `acked_at_ms`, but acks are
+  re-minted on every send rather than stored and redelivered, so two acks for one envelope advanced
+  the round twice. Ordinary in-flight overlap on a 1s backoff could stall a document at
+  `MAX_REJECTED_ROUNDS` with no hostility involved.
+
+- **🔴 OPEN — document acks are lost on delivery-opened sessions.** 4 ack frames sent across the
+  whole daemon log, **2 admitted**. The successful ones arrive 4ms after send; the lost ones never
+  arrive, and `document.frame.sent` reports success for both. Document frames flow in both
+  directions, so the channel is not dead. **This is the upstream cause of the 74 sends** — if acks
+  are lost whenever the delivery worker opens the session, deliveries settle only when an
+  independent conversation session happens to be open.
+
+  Two explanations fit every data point and **the evidence cannot distinguish them**: session origin
+  (a delivery-opened session seals ~1.4s after the push) versus direction (both losses run
+  Miss_Chelly → CELLO_Coder_1). Every delivery-opened case in the log is also B→A, so the two are
+  confounded. **Do not pick one and start fixing.** Resolve it with one delivery-opened session in
+  the A→B direction. Related: the last bullet of the send-path findings above — `sendContent`'s
+  persisted-ack tracker is the honest "the peer has it" signal, and the delivery worker is exactly
+  the caller that wants it.
+
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
 - **DOD-DOC-E2E-CONV-1** [trustless-cello] — **convergence enforcer GREEN** (`aa6dea04`, re-confirmed

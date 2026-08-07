@@ -2670,6 +2670,160 @@ materialize, and the refused-document guard. The last is the one worth shipping 
 
 ---
 
+## Entry 31 — The ack that never came back, and three comments that described code they did not have
+
+*2026-08-07*
+
+Entry 30 said the live surface finds what nothing else can. This entry is that claim collecting.
+Everything below started from one `cello doc write` against the operator's two live agents.
+
+### DOD-DOC-INBOUND-TERMINAL-1 — a refusal the sender can never fix
+
+`DocumentFrameRouter` produced an ack only for `res.ok` results. Every refusal settled nothing, so
+the sender's `acked_at` stayed NULL, the envelope stayed in `pendingDeliveries`, and the worker
+re-sent on every tick. The router's own comment already named this failure — "an inbound path with
+no ack producer leaves the peer retrying until their document stalls at the unacked ceiling" — and
+then covered only the admitted path. **Writing the rule down is not implementing it**, and that is
+the third time in this milestone the comment was right and the code below it was not.
+
+Found on document `662743b1…`: the peer refused the proposal, so they hold no document, answer
+`document_unknown`, and nobody answered back.
+
+**Not closed by the refused-document write guard** (Entry 30), and that is the trap. The guard
+refuses a write *after* a refusal is known. This envelope is published *before* the answer arrives,
+which is legitimate and load-bearing — publishing to a peer who has not yet decided is what makes
+proposing to an offline peer work at all. The refusal then lands on an envelope already queued.
+
+`terminal` requires two things: redelivery cannot change the answer, AND the sender was
+authenticated. The second forced signature verification from step 4 to step 2, ahead of the
+document lookup — an ack is a signed statement to a named party, so authentication must precede the
+first refusal we are willing to answer. It needs nothing but the envelope (the agent id IS the
+Ed25519 key, M14-D5), so verifying earlier strictly preserves the old verify-before-the-gate
+rationale.
+
+Terminal: `document_unknown`, `document_killed`, `document_closed`, `document_chain_forked`.
+Not terminal: `document_stalled` (clearing a stall makes the same redelivery land — the retry IS
+the recovery), `document_chain_broken` (the predecessor may still arrive),
+`document_sender_not_peer` (silence; see below).
+
+### The enforcer that passed against the broken build
+
+The first version of the live enforcer asserted `pendingSent === 0`. That field counts only the
+envelopes that have **left the machine**, so an envelope not yet dialled satisfies it — and the
+test passed against a build with the fix reverted. `pendingDeliveries`, the total, fails without
+the fix and passes with it.
+
+The lesson is the procedure, not the field name. **A green enforcer written alongside its fix
+proves nothing until it has been run against the code without the fix.** Every enforcer in this
+milestone should be assumed hollow until that run exists.
+
+### What the review found, and the one thing it got wrong
+
+One review pass, five findings, all fixed:
+
+- **The peer check ran too late.** It sat below the killed/closed branch, so once that branch became
+  terminal a non-party who signed an envelope naming an existing document got back a *signed ack*
+  confirming the document exists and its lifecycle state — `sendAck` addresses the envelope's
+  sender, so it really reached them. Exactly the disclosure the silent refusal exists to withhold.
+  Order is now verify → know → peer → lifecycle. A one-bit oracle by complement remains (an unknown
+  document answers, a known one does not) and is accepted in writing: closing it means acking
+  non-parties, which discloses strictly more, and `document_id` is an unguessable 32-byte hash.
+- **A chain fork was left retrying.** A fork chained onto something that never was our head, and an
+  append-only log has no repair — it meets both terminal conditions. Left non-terminal it walked to
+  the ceiling and surfaced as *"Their client may not support shared documents yet"*, naming the
+  wrong subsystem entirely for a condition the receiver had diagnosed precisely.
+- **The ack-round key did not dedup.** `ackRecordHash` mixed in `acked_at_ms` on the reasoning that
+  a redelivered ack collapses onto one row. False premise: acks are never stored and redelivered —
+  `sendAck` mints a fresh `Date.now()` each time. Two acks for one envelope became two rows and
+  advanced the round twice, so ordinary in-flight overlap on a 1s backoff could stall a document at
+  `MAX_REJECTED_ROUNDS` with no hostility involved.
+- **`terminal` and `envelopeHash` were independent optionals.** The router acts only with both, so
+  setting one and forgetting the other produced no ack, no log line, and silently reinstated the
+  defect. They are one union variant now — a type that can express the broken state eventually will.
+- **The killed/closed test asserted only the flag,** so dropping the hash passed every gate while
+  reinstating the defect for those two reasons.
+
+**And the one it got wrong, which mattered more than the five it got right.** The review reported as
+a LOW note that "forever" was overstated, because `DELIVERY_MAX_UNACKED_SENDS` is 5 and bounds the
+loop. The live log says **74 sends against that cap of 5**. Checked before accepting — which is the
+only reason it was found rather than closed as a wording nit.
+
+### The ceiling that was never a ceiling
+
+The branch set the document `stalled` and logged *"the document has stopped publishing"*.
+`pendingDeliveries` filters on `acked_at IS NULL` and **reads no status at all**. So the status
+changed what the surface SAID and nothing about what the worker DID: every tick re-entered the
+branch, re-set the same status, and sent again.
+
+Its own test is why it shipped. It asserted the status and the log line — both of which the old
+code set correctly — and never that delivery stopped. **A test that asserts the announcement of an
+effect instead of the effect will pass forever.** It now asserts the queue drains and that a
+further tick sends nothing; reverted, it fails.
+
+### STILL OPEN — document acks are lost on delivery-opened sessions
+
+The 74 sends have a cause upstream of everything above, and it is not fixed. Measured, not inferred:
+
+| | working (2026-08-06 16:17, session `fa65cf60`) | broken (2026-08-07 06:13, session `defdee37`) |
+|---|---|---|
+| envelope arrives | `.866` | `.007` |
+| ack sent | `+0.350s` | `+1.522s` |
+| **ack arrives** | **`+0.004s` after send** | **never** |
+| `document.ack.admitted` | yes | no |
+| seal | `+1.4s` | `+1.4s` |
+
+Across the whole log: **4 ack frames sent, 2 admitted.** Document frames flow in both directions
+(8 from Miss_Chelly, 6 from CELLO_Coder_1), so the channel is not dead — these two acks specifically
+never arrive, and `document.frame.sent` reports success for both.
+
+Two candidate explanations, and **the evidence cannot distinguish them**:
+
+- **Session origin** — both lost acks travel back over a session opened by the *peer's* delivery
+  worker (`document.delivery.session_opened`), and both successful ones travel over an interactive
+  session. A delivery session seals ~1.4s after the push; an ack written into one that is sealing
+  may be dropped with the write still reporting ok.
+- **Direction** — both lost acks go Miss_Chelly → CELLO_Coder_1; both successful ones go the other
+  way.
+
+Every data point is consistent with both, because every delivery-opened case in this log also runs
+B→A. **Do not pick one and start fixing.** What resolves it: one delivery-opened session in the
+A→B direction. Force it by having CELLO_Coder_1 refuse nothing and Miss_Chelly publish while A is
+idle, then read whether the ack arrives.
+
+This matters more than it looks. If acks are lost whenever the delivery worker opens the session,
+then **deliveries essentially never settle in ordinary operation** — they settle only when an
+independent conversation session happens to be open. That is the actual reason one envelope was
+sent 74 times, and the terminal-refusal fix does not touch it.
+
+### Method
+
+Three things earned their keep and one cost time:
+
+- **Counting beat reading.** "4 sent, 2 admitted" decided in one command what staring at a log tail
+  had not.
+- **The revert run is the only evidence a test has teeth.** It caught a hollow enforcer that had
+  already been written, run, and believed.
+- **Do not take a review's numbers at face value.** The one finding checked against the live log was
+  the one that turned out to be a real defect the review had downgraded.
+- **`tail` masks exit codes.** `pnpm run build 2>&1 | tail -2` reports success for a failed build,
+  and a gate summary was briefly wrong because of it. Capture to a file and read `$?`.
+
+### Shared worktree
+
+Another session held uncommitted work in `retry-queue.ts`, `daemon.ts`, `session-node-manager.ts`,
+`core/cli/src/hermes/*` and an untracked `hermes-channel-mode.test.ts` throughout. Whole-repo lint
+and build failed on *their* mid-edit syntax error, not on this work. Everything here was committed
+by explicit path and gated scope-locally: **1937 daemon tests, `eslint core/daemon/src` clean,
+`tsc --build core/daemon` clean.** A whole-repo green gate was not available and is not claimed.
+
+### Milestone state
+
+Unchanged from Entry 30 except: DOD-DOC-INBOUND-TERMINAL-1 ✅ (unit + live enforcer, both
+revert-verified). **Four fixes are now on main and UNPUBLISHED** — the three from Entry 30 plus
+this one. The ack-loss finding above is **open and unassigned**.
+
+---
+
 ## Related Documents
 
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits
