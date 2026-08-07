@@ -1183,7 +1183,17 @@ describe("J-DOCUMENTS-NOCHAT — co-editing with NO conversation open (DOD-DOC-E
 
     // The content still arrives — the frame is sent before the seal, so convergence was never the
     // broken half. Asserted anyway, so a failure below cannot be confused for a delivery failure.
-    await waitForText(b.conn, documentId, updated, "B's copy with no conversation open");
+    // BOTH LOGS on a convergence failure. `waitForText` prints only the text, and the answer to
+    // "why did it not arrive" is never in the text — it is in the sender's delivery attempts.
+    try {
+      await waitForText(b.conn, documentId, updated, "B's copy with no conversation open");
+    } catch (err: unknown) {
+      throw new Error(
+        `${err instanceof Error ? err.message : String(err)}\n` +
+          `--- A (sender) document log ---\n${documentLines(a.daemon)}\n` +
+          `--- B (receiver) document log ---\n${documentLines(b.daemon)}`,
+      );
+    }
 
     // THE ASSERTION. The peer applied it and answered; the answer has to reach us. Unacknowledged,
     // the worker re-sends every tick until the unacked ceiling retires it — which reads to the
