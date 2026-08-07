@@ -905,6 +905,45 @@ Entry 31 in [[M14-BUILD-JOURNAL]] carries the full trace for each.
   and do not split the fix across M8C and M14 — it surfaces through an M8C tool but belongs in the
   document layer.
 
+- **🔴 OPEN — `J-DOCUMENTS` CANNOT FAIL ON THE ACK PATH, BY CONSTRUCTION.** Every case in the spine
+  enforcer runs `twoPartiesInSession`, which does a message round trip before touching a document.
+  That leaves an interactive session open for the rest of the test — so document acks always have a
+  live session to return over, and **the delivery-session seal defect above is invisible to all ten
+  cases**. They pass with the defect fully present, on Andre's daemon, at 88 sends and climbing.
+
+  State it that way and not as a footnote: **an enforcer that cannot fail on the thing it appears to
+  cover is worse than no enforcer, because it manufactures confidence.** A green `J-DOCUMENTS` is
+  evidence that documents converge when a conversation is already open. It is NOT evidence the ack
+  path works in the field, and it was read that way for most of a day.
+
+  Fix when the seal defect is fixed: one case that publishes with NO prior message exchange, so the
+  delivery worker must open the session itself. That is the ordinary case for two agents who
+  co-edit without chatting first, and nothing covers it.
+
+- **🟠 OPEN — the `abandoned_at` migration's guard converts a real failure into silence.** The
+  column-birth `ALTER` is wrapped in a bare `catch {}` because "already present" is the expected
+  throw. That catch **cannot distinguish "already there" from a corrupt schema**, it logs nothing
+  either way, and the only proof of success is a side effect in a different subsystem — a
+  `document.delivery.sweep` that keeps appearing, because a missing column would throw on every
+  `pendingDeliveries` query.
+
+  Same shape as the degradation paths this milestone keeps finding: a fallback built well enough to
+  hide whether the primary path ever worked. Raised from "if it bites" to its own line at
+  CELLO_Coder_1's insistence, and they were right. Fix: catch, inspect the message for the
+  already-exists case, and `logger.error` anything else. It inherits from
+  `document-handshake.ts`, so that one wants the same treatment.
+
+- **🟡 OPEN, NOT ROOT-CAUSED — `cello_inbox` and `cello_receive` disagree about what is unread after
+  a daemon restart.** On session `66e2215a…` after the 2026-08-07 restart, `cello_inbox` reported
+  `unread_count: 1, last_seq: 13` while `cello_receive` on that same session returned
+  **`sequence_number: 0`** — the first message of the conversation, read hours earlier. The
+  transcript holds 0,1,2,5,6,7,10,11,12,13 with `undecryptable: 0`.
+
+  Recorded as an observation with its evidence, not a diagnosis: it is one sighting, the read
+  watermark's persistence across restart has not been traced, and it may share the walk that the
+  document-frame hole above breaks. Worth confirming before anyone builds on either surface's
+  answer.
+
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
 - **DOD-DOC-E2E-CONV-1** [trustless-cello] — **convergence enforcer GREEN** (`aa6dea04`, re-confirmed
