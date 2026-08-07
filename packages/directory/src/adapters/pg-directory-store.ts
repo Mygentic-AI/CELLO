@@ -34,6 +34,33 @@ import type {
 import { drainPickupForAgent, ackPickupDelete, sweepUndeliverablePickups } from "../pickup-repository.js";
 import { enqueueSubmission } from "../submission-queue-repository.js";
 import { readPresenceForDiscovery } from "../agent-presence-repository.js";
+
+/**
+ * DOD-TERMINAL-STATE-DIVERGENCE-1: decode the `legibility` stored as TEXT (V58) back to the object
+ * shape the push frame carries.
+ *
+ * Stored as TEXT and not JSONB on purpose — the value is bound into the signed TBS, and JSONB
+ * normalises whitespace and REORDERS keys, so a round trip would hand back bytes that differ from
+ * the bytes that were signed and every pulled certificate would fail verification for a reason no
+ * log would name.
+ *
+ * A row that will not parse yields null rather than throwing: the certificate is still servable
+ * without legibility (the client treats it as absent), whereas throwing here would take out the
+ * whole pull and report "no certificate" for a seal that exists. The failure is logged so a
+ * corrupt row is visible rather than silently degrading every receipt for that session.
+ */
+function parseLegibility(raw: string | null, logger: Logger): unknown {
+  if (raw === null || raw === undefined) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    logger.error("seal.certificate.legibility.unparseable", {
+      reason: err instanceof Error ? err.message : String(err),
+      impact: "the certificate is served without legibility; the receipt will lack per-party frontiers",
+    });
+    return null;
+  }
+}
 import type { AgentProfile, ConnectionRecord, PendingConnectionRequest } from "@cello-protocol/protocol-types";
 import {
   computeChainHash,
@@ -782,7 +809,9 @@ export class PgDirectoryStore implements DirectoryStore {
       seal_type: "unilateral" | "bilateral";
       leaf_count: number;
       signer_pubkey: Buffer;
-      legibility: unknown;
+      // TEXT in the DB (V58), parsed below — not `unknown`, so a future reader cannot mistake it
+      // for an already-decoded object and hand a JSON string to the frame encoder.
+      legibility: string | null;
     }>("seal_notarizations", result.rows[0]!);
     return {
       session_id: new Uint8Array(row.session_id),
@@ -792,7 +821,12 @@ export class PgDirectoryStore implements DirectoryStore {
       close_timestamp: row.close_timestamp,
       leaf_count: row.leaf_count,
       seal_type: row.seal_type,
-      legibility: row.legibility ?? null,
+      // Stored as TEXT holding the JSON verbatim (V58) — see that migration for why it is not
+      // JSONB: the value is bound into the signed TBS and JSONB reorders keys, so a round trip
+      // would return bytes that differ from the bytes that were signed. Parsed back to an object
+      // here so the pull frame carries the SAME shape the push frame does; a client running one
+      // verifier over two shapes is how a "verification failed" appears with nothing wrong.
+      legibility: parseLegibility(row.legibility, this.#logger),
       participant_a_pubkey: new Uint8Array(row.participant_a_pubkey),
       participant_b_pubkey: new Uint8Array(row.participant_b_pubkey),
     };

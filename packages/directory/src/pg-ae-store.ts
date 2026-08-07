@@ -55,6 +55,7 @@ import type { Logger } from "@cello-protocol/interfaces";
 import {
   encodeTierARecord, type TierATableSpec, type TableRow,
   AGENT_PROFILES_SPEC, AGENT_REVOCATIONS_SPEC, USER_ACCOUNTS_SPEC, SEAL_NOTARIZATIONS_SPEC,
+  SEAL_CERTIFICATE_FIELDS_SPEC,
   CAPABILITY_CLAIM_CODES_SPEC, AUTHORIZED_ISSUERS_SPEC, SIGNAL_RECORDS_SPEC,
   SUBMISSION_RESULTS_SPEC, RELAY_REGISTRATIONS_SPEC, DIRECTORY_NODES_SPEC,
   CONVERSATION_SEALS_SPEC,
@@ -152,6 +153,25 @@ const TIER_A: readonly TierAPg[] = [
     bytea: ["session_id", "sealed_root", "participant_a_pubkey", "participant_b_pubkey", "frost_signature"],
     chained: true,
     naturalKeyConstraint: "seal_notarizations_session_seal_type_key",
+  },
+  // V58 — the certificate fields, AFTER seal_notarizations: the pull reads the two together and a
+  // fields row without its notarization is not servable, so converging the notarization first means
+  // the intermediate state is "not yet pullable" rather than "half a certificate".
+  //
+  // NOT chained: this table has no chain_hash column. That is deliberate — its integrity target is
+  // the FROST signature the CLIENT re-verifies over these very fields, and `conversation_seals`
+  // already showed what a chained table with a NOT NULL chain_hash does to the AE apply (every
+  // apply RAISED and the table never converged).
+  {
+    spec: SEAL_CERTIFICATE_FIELDS_SPEC,
+    bytea: ["session_id", "signer_pubkey"],
+    naturalKeyConstraint: "seal_certificate_fields_pkey",
+    // Both are NOT NULL in V58 and both are inside the signed TBS. Tier-A apply is
+    // insert-if-absent, so a row that lands with either missing is kept FOREVER by the next
+    // round's ON CONFLICT DO NOTHING — and a certificate served from it would fail verification
+    // at the client with nothing naming why. Refuse it at the door. `legibility` is deliberately
+    // absent from this list: it is genuinely nullable (a seal may carry none).
+    requiredColumns: ["leaf_count", "signer_pubkey"],
   },
 ];
 

@@ -73,6 +73,30 @@ describe("DOD-INV-SHARES-LOCAL: the share table is unreachable through anti-entr
       "directory_nodes",
       "conversation_seals",
       "seal_notarizations",
+      // ── V58 `seal_certificate_fields` — ADDED 2026-08-07, DOD-TERMINAL-STATE-DIVERGENCE-1 ──
+      //
+      // MAY IT LEAVE THE NODE? Yes, and it must, or the feature does not exist. A client that
+      // missed the `session_sealed` push reconnects to whichever node it picks and asks THAT one;
+      // if these rows lived only on the node that adjudicated the seal, the pull would answer
+      // "not found" from the other two — the same per-node-state failure as the notification queue
+      // this line exists to route around.
+      //
+      // AUDIT OF THE COLUMNS, which is what this assertion is for:
+      //   session_id, seal_type — already replicated verbatim in seal_notarizations.
+      //   leaf_count            — the sealed tree's size; already on the session_sealed frame sent
+      //                           to BOTH participants.
+      //   signer_pubkey         — the initiator's PRIMARY (group) public key. Public by
+      //                           construction: it is in agent_profiles (replicated) and on the
+      //                           wire in every session assignment.
+      //   legibility            — receipt-not-assent, per-party frontiers, attestation modes.
+      //                           Already pushed to both parties and readable from the sealed
+      //                           receipt.
+      //
+      // NO key material, NO share, NO message content, NO PII. Every value is already published to
+      // both participants and is covered by a signature the recipient re-verifies, so replicating
+      // it grants a node nothing it could not already obtain — and grants a client the ability to
+      // verify a seal it was never told about.
+      "seal_certificate_fields",
     ]);
     expect(store.tierBTables()).toEqual(["agent_suspensions", "agent_presence"]);
 

@@ -114,6 +114,38 @@ export const SEAL_NOTARIZATIONS_SPEC: TierATableSpec = {
   ],
 };
 
+/**
+ * seal_certificate_fields (V58). Natural key `(session_id, seal_type)`, mirroring
+ * `seal_notarizations` — the two are read together as one certificate.
+ *
+ * THIS TABLE MUST REPLICATE OR THE FEATURE DOES NOT WORK. A client that missed the `session_sealed`
+ * push reconnects to WHICHEVER node it happens to pick, and asks that one. If these rows lived only
+ * on the node that adjudicated the seal, the pull would answer `not_found` from the other two — the
+ * same per-node-state failure as the notification queue this whole line exists to route around.
+ *
+ * Every column is in `immutableColumns` deliberately: the AE body carries EXACTLY this set
+ * (`pg-ae-store` builds both the SELECT and the INSERT from it), so a column omitted here is a
+ * column that never reaches another node. There is nothing local or mutable to exclude — the row
+ * describes a signature that has already been made.
+ *
+ * The types are chosen for `recordHash`, which refuses a JS `number`: `leaf_count` is BIGINT (pg
+ * yields a string) and `legibility` is TEXT holding the JSON verbatim. `legibility` must NOT be
+ * JSONB — it is bound into the signed TBS, and JSONB reorders keys, so a round trip would return
+ * bytes that differ from the bytes that were signed and every pulled certificate would fail
+ * verification. `signer_pubkey` is BYTEA and is hex-encoded at the SELECT via the `bytea` list.
+ */
+export const SEAL_CERTIFICATE_FIELDS_SPEC: TierATableSpec = {
+  table: "seal_certificate_fields",
+  naturalKey: ["session_id", "seal_type"],
+  immutableColumns: [
+    "session_id",
+    "seal_type",
+    "leaf_count",
+    "signer_pubkey",
+    "legibility",
+  ],
+};
+
 // ─── THE TABLES THAT WERE REPLICATED ON AWS BUT MISSING HERE ───────────────────────────────────
 // The AWS Postgres mesh replicated 21 tables. Only 4 were ported to AE. The remaining 15 were
 // noticed on 2026-07-31 when registration broke because capability_claim_codes was one of them.
@@ -263,6 +295,7 @@ export const TIER_A_SPECS: readonly TierATableSpec[] = [
   AGENT_REVOCATIONS_SPEC,
   USER_ACCOUNTS_SPEC,
   SEAL_NOTARIZATIONS_SPEC,
+  SEAL_CERTIFICATE_FIELDS_SPEC,
   CAPABILITY_CLAIM_CODES_SPEC,
   AUTHORIZED_ISSUERS_SPEC,
   SIGNAL_RECORDS_SPEC,

@@ -87,6 +87,11 @@ describe("DOD-AE-CHAINED-TABLES-1: seal_notarizations and user_accounts replicat
       "directory_nodes",
       "conversation_seals",
       "seal_notarizations",
+      // V58 — LAST, and the position is load-bearing like the rest of this list. The pull reads
+      // seal_certificate_fields together with its seal_notarizations row and serves nothing unless
+      // BOTH are present, so converging the notarization first means the intermediate state is
+      // "not yet pullable" rather than "half a certificate".
+      "seal_certificate_fields",
     ]);
   });
 

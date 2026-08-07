@@ -57,12 +57,25 @@ CREATE TABLE IF NOT EXISTS seal_certificate_fields (
   -- The three fields the client needs and the directory currently throws away. All three are inside
   -- the signed TBS, which is why their absence makes a pulled certificate unverifiable rather than
   -- merely incomplete.
-  leaf_count      INTEGER     NOT NULL,
+  --
+  -- BIGINT, not INTEGER, and that is an anti-entropy requirement rather than a range one. This table
+  -- replicates Tier-A, and `recordHash` REFUSES a JS `number` (2^53 aliasing) — it takes only
+  -- string|boolean|null. `pg` returns INTEGER as a number and BIGINT as a string, so INTEGER here
+  -- would fail the record hash the moment the row tried to replicate.
+  leaf_count      BIGINT      NOT NULL,
   -- The initiator's primary (group) public key — the key the FROST signature verifies against.
+  -- Hex-encoded at the AE SELECT like every other BYTEA (see the `bytea` list on the table spec).
   signer_pubkey   BYTEA       NOT NULL,
-  -- The legibility object, verbatim as it was bound into the TBS hash. JSONB rather than TEXT so a
-  -- reader cannot silently reorder keys; the ENCODER is what must be canonical, and it already is.
-  legibility      JSONB,
+  -- TEXT, holding the JSON verbatim — NOT JSONB, and this one is a correctness requirement.
+  --
+  -- `legibility` is BOUND INTO THE SIGNED TBS: the client re-derives the hash over it and checks the
+  -- FROST signature. JSONB does not preserve what it was given — it normalises whitespace, drops
+  -- duplicate keys and REORDERS them. A round-trip through JSONB therefore returns bytes that differ
+  -- from the bytes that were signed, and every pulled certificate would fail verification for a
+  -- reason no log would name. TEXT stores exactly what the seal path serialised.
+  --
+  -- It also has to be a string for the AE record hash, for the same reason as leaf_count.
+  legibility      TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (session_id, seal_type)
 );
