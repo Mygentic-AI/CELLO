@@ -2553,6 +2553,123 @@ remains, and they are what turns "green" into "done".
 
 ---
 
+## Entry 30 — Shipped, and then the live surface found what nothing else could
+
+M14 shipped. Then driving it by hand found three defects in about eight commands, which is a better
+hit rate than any other activity in this milestone.
+
+### What shipped
+
+**The operator surface (TOOLS-1).** Ten `cello_doc_*` verbs across the four lockstep places:
+`propose`, `inbox`, `accept`, `refuse`, `list`, `read`, `diff`, `write`, `publish`, `close`, `kill`.
+`withdraw` is CUT from V1 by decision — it only ever applied to an undelivered envelope and
+`cello_doc_write` gives the identical net effect in the identical number of calls; doing it properly
+needs per-write ORIGIN tracking so an `UndoManager` can invert one transaction, which is a change to
+how every write is applied for a verb `write` already covers. `status` is subsumed by `list`.
+
+**The file surface (WRITE-1).** `DocumentWritePath` — 500 lines, its own test file — had no
+production caller. Materialize at propose and accept with the path returned; `cello_doc_publish`
+diffs the FILE against the last recorded projection; and the file is REWRITTEN on every admitted
+inbound update. That third one is what makes it a surface rather than an export: without it an
+operator publishes their edits and never sees the peer's, and the stale file then reads as the
+document and gets published back over their work.
+
+**SCREEN-1's receiver gate and PROFILE-1's enforcement.** Documents do not get the message
+sanitizer — it REWRITES, and rewriting a replica is permanent divergence — so they get a rule that
+refuses. The refused list is deliberately short: bidi overrides and isolates, chat-template control
+markers, zero-width space. What it does NOT refuse is as much the claim, and there is a test that
+the six samples the audit caught being silently rewritten now converge byte-identically between two
+real daemons. On top of it, five closed profile names as explicit codepoint predicates, enforced at
+authoring (ergonomics — a stray character never becomes a rejection round, and three of those stall
+a document) and at receipt (security — the sender's enforcement is unverifiable). A profile may only
+NARROW: the widest still refuses what the denylist refuses, so it cannot become an opt-out.
+
+**Published.** `v0.0.197`, then `v0.0.199` to correct a divergence: `v0.0.198` was tagged on the
+version-cascade commit at 12:46 and the chain-head fix landed at 13:00, so npm's `daemon@0.0.134`
+and main's were different content at the same version. Caught by packing the tarball and reading
+`lastEnvelopeHashBySender`'s actual body — the first grep matched `rejected_envelope_hash` from a
+DIFFERENT method changed earlier the same day and looked reassuring. **Verify the symbol you
+changed, inside the function you changed, not a string that happens to appear nearby.**
+
+### The live smoke, and why it is worth more than another unit test
+
+Two real agents on the production directory, driven from the CLI. It found:
+
+1. **The `doc` command's flags were never declared.** `run` reads `--type`, `--content`,
+   `--append-only`; the help advertises all three; `checkArgs` validates against the spec's `flags`
+   list, which was empty. Every one was rejected as an unknown flag before the handler ran. Help
+   promising a flag the parser refuses is worse than no help. Invisible to the parity tests, which
+   call the exported functions directly and never parse arguments.
+
+2. **A content write left the author's own file stale.** `cello_doc_write` changed the document and
+   never re-materialized. Every test until then wrote through the FILE and read back the FILE, so
+   the two surfaces were never allowed to disagree. The smoke wrote through the tool and read the
+   disk, and the author's own file was missing the line she had just written.
+
+3. **A document the peer REFUSED kept publishing forever.** `cello_doc_write` still returned
+   `published: true` after a refusal — signing and logging envelopes redelivered to a peer with no
+   such document, answering `document_unknown` every time, while the surface reported `active` with
+   a pending count that never cleared. The surface already KNEW: `list` reports `peerAccepted:
+   false` with the peer's own words. Nothing acted on it. No test caught it because **every test
+   that refuses a proposal stops there.**
+
+The pattern across all three: each lives in the gap between two surfaces that no single-surface test
+crosses. That is the same family as the four "complete unit with no caller" defects in Entry 28-29,
+and it is now the milestone's signature failure.
+
+### The stall path — narrowed, still open, and do not guess again
+
+`DOD-DOC-E2E-REJECT-1`'s stall sub-case is skipped, not passing. Exact state, measured:
+
+**A quarantines exactly ONE envelope and refuses the next THREE as `document_chain_broken`.** The
+gate fires once, the round advances to 1, and nothing after reaches the gate — so the ceiling of 3
+is unreachable. The stall is STARVED, not missing.
+
+Three fixes came out of chasing it, each independently correct and all shipped: the rejection was
+never transmitted; the quarantine was not in the KNOWN set; the quarantine did not advance the chain
+HEAD. **None closed it.**
+
+Then instrumenting the comparison — printing `claimedPrev`, `ourHead`, `prevIsKnown`, `knownCount`
+rather than the verdict — gave `ourHead: null, knownCount: 0` on every refusal. And the in-process
+harness proves the bridge CORRECT: quarantine row present with the right author, `known` contains
+it, head advances to it. All three asserted as a regression test.
+
+So the open question is no longer "is the bridge right" but **"why does identical code find nothing
+against real daemons"** — data or ordering in the live path. The next step is NOT a fourth fix:
+reproduce it in the in-process harness, which reads the same store directly and costs seconds
+instead of the three minutes per hypothesis that produced three wrong turns.
+
+### Method lessons, because they cost the most time today
+
+- **Read where the evidence is.** I read a 60-line log tail three times as though it could answer
+  "did the gate ever fire", and grepped vitest stdout for events that passing tests never print.
+- **The absence of a log line is evidence.** Shutdown hung and the daemon's log ended at
+  `daemon.started` with no shutdown events; I read past that twice while examining the lines that
+  were present.
+- **An unref'd timeout is not a bound.** `Promise.race([..., setTimeout(...).unref()])` can never
+  fire while the loop drains, so shutdown hung forever — a worse bug than the blocking await it
+  replaced. Shutdown may not await anything that can block on I/O.
+- **Move the investigation before the fourth hypothesis, not after**, when a live run costs three
+  minutes and an in-process harness can read the same state.
+
+### Gates
+
+`test` **3230 passed / 11 skipped** · `lint` · `typecheck` · `build` clean. Live enforcers: **9
+passed, 1 skipped** (the stall).
+
+### Milestone state
+
+P0–P2 ✅. P3: TOOLS-1 ⏳ (`withdraw` cut, `status` subsumed), SKILL-1 ✅, SHIP-1 ⏳ (published and
+live; two-machine smoke on a second HOST not run — the demo agent EC2 is stopped and left that way).
+P4: CONV-1 ✅, OFFLINE-1 ✅, APPEND-1 ✅, WRITE-1 ✅, REJECT-1 ⏳ (core green, stall skipped).
+SCREEN-1 ⏳ (receiver gate shipped; sender-side advisory scan and sender-adopts-rule owed).
+PROFILE-1 ⏳ (slot + enforcement shipped; nothing owed but review). REBUTTAL-1 ❌ (may slip).
+
+**Three fixes are on main and UNPUBLISHED** — the CLI flag declarations, the write-back
+materialize, and the refused-document guard. The last is the one worth shipping soonest.
+
+---
+
 ## Related Documents
 
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits
