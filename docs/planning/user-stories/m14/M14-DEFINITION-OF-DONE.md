@@ -886,11 +886,24 @@ Entry 31 in [[M14-BUILD-JOURNAL]] carries the full trace for each.
   in whatever conversation session already exists between the two agents. Any pair that both talks
   and co-edits hits this — which is the entire M14 use case.
 
-  **Fix direction, not yet decided:** the walk needs to distinguish "no row because it was never
-  readable" from "no row because it was never a transcript message". The leaf kind already carries
-  that (`0x04`/`0x05` are document leaves), so the contiguous walk could treat a document leaf as
-  present-and-not-unread rather than as a hole. Wants its own unit loop; do not patch it inside a
-  cascade.
+  **NOT SELF-HEALING.** The hole is permanent: a pair that has ever exchanged a document frame has
+  `since_seq` broken for that session forever, not until the next message.
+
+  **AND IT ACCUMULATES, because the two open findings compound.** Deliveries never settle (the
+  delivery-session seal above), so the worker keeps re-sending; each retry rides the conversation
+  session and punches ANOTHER hole. Measured on session `66e2215a…` over roughly twenty minutes:
+  document frames at 07:17:23 ×2, then again at 07:28:22 ×2 — four frames, four consumed sequence
+  numbers, on a session whose participants never once mentioned a document to each other. Fixing
+  the ack loss reduces the rate; it does not fix this, and this does not fix that.
+
+  **Fix direction, not yet decided:** the walk must distinguish "no row because it was never
+  READABLE" from "no row because it was never a TRANSCRIPT MESSAGE". Key it on the LEAF KIND
+  (`0x04`/`0x05` are document leaves) — **never on row-absence**. Absent-and-unreadable and
+  absent-because-not-a-message are identical from the transcript side, and that identity IS the
+  bug, so a fix keying on row-absence only relocates it (CELLO_Coder_1's sharpening, and it is the
+  constraint that matters most here). Wants its own unit loop; do not patch it inside a cascade,
+  and do not split the fix across M8C and M14 — it surfaces through an M8C tool but belongs in the
+  document layer.
 
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
