@@ -3067,6 +3067,117 @@ cannot fail on the ack path.
 
 ---
 
+## Entry 33 — Two machines: the documents converge, the seal does not
+
+*2026-08-07*
+
+The first time two CELLO agents on **two machines, two directory nodes and two NATs** edited a shared
+document. Andre chose the Hermes EC2 for a stated reason, before any of this was measured: *"it
+forces you to use a relay because you can't use NAT hole punching and may uncover relay related
+issues."* That prediction found everything below.
+
+### What only two machines could show
+
+Every prior test — eleven live enforcers, a day of hand smoke — put both agents on ONE host: one
+directory node, no NAT. Three classes of defect are invisible there.
+
+| Only visible with two machines | Why |
+|---|---|
+| everything parks | no hole punching between two NATs, so every frame goes to the relay |
+| the session cap binds | one host shares a session budget differently |
+| cross-node signaling gaps | both agents share a home node, so every local-stream lookup succeeds |
+
+### Run 1 — blocked, and not by anything a document test would look for
+
+Neither side's edit reached the other. The chain, measured on both daemons:
+
+1. Four ordinary bridge conversations earlier that day, 07:49–11:37. **All four succeeded.** Nobody
+   called close — socially the conversation was over.
+2. Four daemon restarts during the day's upgrades turned each still-open session into
+   **`interrupted`** — cut off rather than ended, so not terminal, so still counted as live.
+3. `Miss_Chelly_H` was tier KNOWN on the laptop: cap **5**.
+4. The EC2 offered a document; the laptop accepted. That was the **fifth**. Budget full.
+5. A minute later the EC2's worker needed a session for the edit — it seals and destroys the one it
+   opens — and the laptop refused it: `abuse_bound_sessions_per_sender`.
+6. The EC2 parked the edit into the refused session. **Its send reported success.**
+7. The laptop pulled the parked content, could not name a counterparty (no session row exists for a
+   refused session), saw the session was refused, and **deleted the edit from the relay**.
+
+A legitimate edit from a known contact, destroyed by the anti-abuse path, with both surfaces
+reporting success.
+
+**Three things collided and none is wrong alone:** interrupted sessions are never reaped (four in
+eight hours of ordinary use — residue, consuming a budget sized for concurrent pressure); the
+delivery worker needs a fresh session per edit; and sweeping a refused session's parked content is
+right for abuse and wrong for a peer whose previous session was accepted seconds earlier.
+
+**`abandonedDeliveries` is the only reason this was legible** — added the same day from the
+command-surface review. Without it the laptop read `pendingDeliveries: 0`, which looks like
+*delivered*.
+
+### The unblock was a trust correction, not code
+
+The two sides disagreed about each other: the EC2 had us at WHITELISTED (cap 20), the laptop had her
+at KNOWN (cap 5). Raising her to WHITELISTED made them symmetric and freed the budget. The four
+interrupted sessions were deliberately left in place — they are the only live reproduction of the
+cross-node seal failure. **A workaround, not a fix:** four more accumulate on the next restart, with
+nothing warning anyone until a document silently stops syncing.
+
+### Run 2 — the result
+
+```
+propose        proposalSent: true      (first attempt; --retry was exercised for real in run 1)
+accept  (EC2)  peerAccepted: true      crossed both ways
+EC2 edits   → laptop converged 17:43:58
+laptop edits → EC2    converged 17:44:41
+
+both copies: '# Two-machine smoke, run 2\n\nline one from the laptop\nline two from Miss_Chelly_H on EC2\nline three from the laptop — round trip\n'
+status: active · peerAccepted: true · peerHasPublished: true · pendingDeliveries: 0 · abandonedDeliveries: 0
+```
+
+**Byte-identical, both directions, entirely over the relay, across two directory nodes.** The hard
+half of `DOD-DOC-SHIP-1`, never previously demonstrated.
+
+### The seal — measured, and blocked
+
+| attempt | result |
+|---|---|
+| laptop close (active session) | hung ~15 min → **`seal_unilateral_timeout`** |
+| EC2 close ×2 | **`seal_interrupted_in_progress`** — refused by an in-memory guard |
+| EC2 close ×3, after the laptop's released | **hung, no output at all** |
+
+Neither daemon logged a single seal event. Two observability defects fall out, the same shape as the
+rest of the day: the guard names nothing that holds it and tells the operator to wait for
+`session.interrupted.sealed`, which never fires; and an active close can hang for fifteen minutes
+with nothing between `session.name.set` and the timeout — from the operator's chair, the command
+simply does not return.
+
+**The session was left untouched on purpose.** Restarting either daemon clears the stuck guard but
+flips it to `interrupted`, putting it on the path already proven broken across nodes — turning a
+recoverable state into an unrecoverable one. It is the cleanest reproduction available: healthy in
+every respect except the seal.
+
+### Corrections, because the wrong turns are the reusable part
+
+- *"Both agents are online, so the peer is reachable."* Wrong — the branch keys on
+  `record.status === "interrupted"`, not on peer liveness. Agent online ≠ session reachable.
+- *"Unknown sender, cap 3."* Wrong three times running: she is a contact, tier KNOWN, cap 5, and the
+  binding count was 5 including the session just accepted. The measurements were right each time;
+  my reading of them was not, and Andre caught each one.
+- *"M14's close is blocked on the replication programme."* Wrong, and the correction matters:
+  replication is eventual row convergence on a sweep, this needs a live frame routed now. Perfect
+  instant replication would not have delivered it. The error was reaching for the nearest available
+  explanation because a replication document had just been put in front of me.
+
+### Milestone state
+
+`DOD-DOC-SHIP-1`'s convergence half is **met and demonstrated**. The seal half is **blocked on
+cross-node signaling** — not a document defect; the document layer did everything asked of it. See
+[[2026-08-07_2015_cross-node-signaling-audit|the cross-node signaling audit]], which this run caused
+to be written.
+
+---
+
 ## Related Documents
 
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits

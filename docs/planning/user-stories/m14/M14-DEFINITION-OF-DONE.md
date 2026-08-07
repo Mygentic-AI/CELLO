@@ -682,7 +682,30 @@ rather than the peer's state vector; and the working document having to BE the l
   fleet**: two real daemons on two machines (or two CELLO_DIRs), create → consent → edit →
   publish → deliver → converge → seal, with document leaves in the sealed tree and the seal
   verifying. **The publish gate — milestone close is P4 all-green, not this line.** Vitest
-  green ≠ done. Andre runs the `latest` promotion. Close condition per M14-D2. — ❌
+  green ≠ done. Andre runs the `latest` promotion. Close condition per M14-D2. — 🟠 **CONVERGENCE
+  HALF MET 2026-08-07; SEAL HALF BLOCKED ON A DEPENDENCY.**
+
+  **RAN, on two real machines** — laptop (`CELLO_Coder_1`, home node `gcp-euw1`) and the Hermes EC2
+  (`Miss_Chelly_H`, home node `gcp-usc1`), daemon 0.0.139 both sides. Propose → consent → edits from
+  BOTH sides → converged **byte-identical**, `pendingDeliveries: 0`, `abandonedDeliveries: 0`. Every
+  frame went over the relay: two NATs cannot hole-punch, which is why Andre chose that host.
+
+  **The seal did not complete, and it is NOT a document defect.** Close hung ~15 minutes then
+  returned `seal_unilateral_timeout` on one side; the other was refused by an in-memory guard
+  (`seal_interrupted_in_progress`, naming nothing that holds it) and then hung silently. Neither
+  daemon logged a seal event. The cause is that the two agents have different home directory nodes
+  and the directory routes signaling frames by looking up a stream it holds ITSELF — see
+  [[2026-08-07_2015_cross-node-signaling-audit]]. The document layer did everything asked of it.
+
+  **Blocked by, not blocking:** this line waits on the cross-node signaling work. Recorded that way
+  so nobody closing the milestone mistakes it for owed document work.
+
+  **The session was left ACTIVE and untouched** as the cleanest reproduction — healthy in every
+  respect except the seal. Restarting either daemon would flip it to `interrupted` and push it onto
+  the path already proven broken cross-node.
+
+  Full narrative, including the session-cap collision that blocked the first run and three
+  corrections made along the way: [[M14-BUILD-JOURNAL]] Entry 33.
 
   **PUBLISHED 2026-08-06.** Branch merged to main, full cascade published on tag `v0.0.197`,
   `smoke-tag` green. Verified against the TARBALLS, not CI status: `daemon@0.0.133`'s dist carries
