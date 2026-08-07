@@ -125,6 +125,19 @@ function documentLines(proc: Proc): string {
       // frame had never arrived.
       /document\.|"cello_doc|frame\.|security\.|session\.content|session\.document|session\.tree|relay\.hash|session\.relay/.test(l),
     );
+  // THE WHOLE FILTERED LOG TO DISK, and only the tail inline. `slice(-60)` is right for a failure
+  // message a human reads, and wrong for diagnosis: a run with a hundred delivery sweeps pushes the
+  // event that explains the failure off the top, and reading the tail then "proves" a unit never
+  // ran. That is exactly the trap this milestone keeps setting — reading a truncated view for
+  // something emitted earlier.
+  try {
+    const path = `/tmp/cello-spine-${process.pid}-${Date.now()}.log`;
+    writeFileSync(path, lines.join("\n"));
+    // eslint-disable-next-line no-console
+    console.log(`[documentLines] full filtered log (${lines.length} lines) → ${path}`);
+  } catch {
+    /* diagnostics must never fail a test */
+  }
   return lines.length > 0 ? lines.slice(-60).join("\n") : "(no document-layer lines at all)";
 }
 
@@ -802,7 +815,7 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
   // NEXT STEP IS UNCHANGED and still costs one run: capture `document.inbound.chain_refused` for
   // envelope 2 and read `claimedPrev` / `ourHead` / `prevIsKnown` / `knownCount`, which the refusal
   // now prints. Do not add a fourth fix before that output exists.
-  it.skip("repeated refusals STALL the document rather than retrying forever", async () => {
+  it("repeated refusals STALL the document rather than retrying forever", async () => {
     const { a, b } = await twoPartiesInSession("docstall");
     const proposed = (await a.conn.call("cello_doc_propose", {
       peer_pubkey: b.pubkey,
@@ -834,7 +847,12 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
     // that has already said no to the last one.
     const refusals = (): number =>
       (a.daemon.output.match(/"event":"document\.update\.quarantined"/g) ?? []).length;
-    for (let i = 0; i < 4; i++) {
+    // THREE attempts, not four. `MAX_REJECTED_ROUNDS` is 3, so the third refusal is what stalls the
+    // document — and a stalled document refuses the next publish, which is the whole point of the
+    // ceiling. Asserting four successful publishes AND a stall asked for two things that cannot both
+    // be true, and it was written before the path could reach the ceiling at all, so nobody found
+    // out. The fourth attempt is asserted below, as a REFUSAL.
+    for (let i = 0; i < 3; i++) {
       const before = refusals();
       // ASSERTED. The previous version ignored this result, and the run then showed zero
       // `document.published` — B never published anything at all, so of course nothing was ever
@@ -844,13 +862,25 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
         document_id: documentId,
         content: `one\nsupersede ${i}\n`,
       })) as { ok?: boolean; changed?: boolean; published?: boolean; reason?: string };
-      expect(w, `B's supersession attempt ${i} did not publish: ${JSON.stringify(w)}`).toMatchObject({
-        ok: true,
-        published: true,
-      });
+      expect(
+        w,
+        `B's supersession attempt ${i} did not publish: ${JSON.stringify(w)}\n` +
+          `--- B (sender) ---\n${documentLines(b.daemon)}\n--- A (receiver) ---\n${documentLines(a.daemon)}`,
+      ).toMatchObject({ ok: true, published: true });
       const ruled = Date.now() + 30_000;
       while (Date.now() < ruled && refusals() === before) await sleep(500);
     }
+
+    // THE CEILING BINDS. A fourth supersession must be refused rather than published — that is what
+    // "stops retrying forever" means from the operator's chair, and the reason names the state.
+    const overCeiling = (await b.conn.call("cello_doc_write", {
+      document_id: documentId,
+      content: "one\nsupersede 3\n",
+    })) as { ok?: boolean; published?: boolean; reason?: string };
+    expect(
+      overCeiling,
+      `the 4th supersession published even though the ceiling is ${3} rounds: ${JSON.stringify(overCeiling)}`,
+    ).toMatchObject({ ok: true, published: false, reason: "document_stalled" });
 
     const statusOf = async (conn: McpConn): Promise<string | undefined> => {
       const listed = (await conn.call("cello_doc_list", {})) as {
