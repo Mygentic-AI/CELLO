@@ -698,48 +698,113 @@ the inbound-content half stays out of scope until it is.
   a second session merged into a busy turn lost its anchor and one reply — written in view of
   both peers' words — would have been delivered entirely to whichever arrived first. Both fixes
   are revert-tested.
-  ⚠️ **Not ✅ — no live journey yet.** Vitest green ≠ done (CLAUDE.md milestone-close rule). What
-  is owed: a Hermes host running this build, `cello bridge hermes` re-run, gateway restarted, and
-  a real two-way session where the peer's words appear in the Hermes transcript and the reply
-  reaches the peer without the agent calling `cello_send`. Also unproven live: `session_scope:
-  peer` with two concurrent counterparties, and the desktop-turn case (typing into a shared
-  session must deliver NOTHING to the peer).)
-- **DOD-HERMES-4b (the review's non-blocking remainder)** — carried here rather than left in a
-  reviewer's output, so none of it returns as a "new finding". None blocks the live journey; each
-  is a real defect with a known shape.
-  - **`internal=True` now carries counterparty content** (`assets.ts`, the MessageEvent). The flag
-    means "system-generated, bypass user authorization" and excludes the event from the
-    scale-to-zero inbound clock. That was accurate when the text was adapter-authored prose; in
-    channel mode it is a peer's words. Two consequences to confirm against the Hermes side before
-    changing it: whether peer content should be bypassing authorization at all, and whether a live
-    CELLO conversation can now fail to count as traffic and let the gateway scale to zero
-    mid-conversation. **Do not flip it blind** — `internal=False` may require the CELLO pseudo-user
-    to pass an authorization path it was never enrolled in, which would reject messages outright.
-  - **Unbounded wake queue + head-of-line blocking.** `asyncio.Queue()` has no `maxsize` and the
-    worker is serialized, so each channel-mode wake can hold it for up to `RECEIVE_TIMEOUT_MS + 5s`.
-    Add a bound with a loud drop. `disconnect()` also clears `_wake_task` but leaves the queue
-    populated, so frames from a dead connection replay after the next `connect()` — drain it.
-  - **A dead wake worker is only resurrected by a socket drop.** `_start_wake_worker` is called
-    only from `_establish`. The worker's per-frame `except Exception` makes death unlikely, not
-    impossible; if it dies on a healthy socket the reader keeps enqueueing into a queue nobody
-    drains and the adapter is silently deaf until the daemon restarts. Add a `add_done_callback`
-    that logs at ERROR and restarts.
-  - **`_pending` is shared across sockets.** On reconnect the OLD reader's `finally:
+  ✅ **LIVE-PROVEN 2026-08-07** — `cli@0.0.145`, Hermes host `i-06db70df6b3e32207`
+  (`Miss_Chelly_H`) ↔ this Mac (`CELLO_Coder_1`, `Miss_Chelly`): two machines, two model families.
+  **Every claim below is corroborated by `clientType` on the daemon's own connection record** —
+  `hermes` is the adapter acting, `mcp` is the agent compensating by hand. That single field is
+  what separates "the bridge worked" from "the agent covered for it", and it is why the first
+  three rounds of this line were wrong.
+  1. **Peer's words arrive natively** — agent, unprompted: *"straight into the conversational
+     stream with no state notices, no wake alerts, and zero tool calls."*
+  2. **The adapter delivers the reply** — `[cello] Delivered N chars to session …`, no `cello_send`
+     from the agent.
+  3. **A backlog drains in order as ONE turn** — `Delivered 3 queued messages … as one turn`;
+     connection `1dc21afe` read seq 0, 1 and 3 in the same instant.
+  4. **First contact on a NEW conversation** — the case that had never once worked.
+  5. **Non-CELLO turns never reach a peer** — `Suppressed an outbound with no CELLO reply anchor`,
+     observed repeatedly including twice inside the concurrency test.
+  6. **`session_scope: peer` isolates concurrent callers** — two simultaneous conversations on ONE
+     agent, one about a sourdough starter and one about the Oberth effect, each carrying a codeword
+     the other must never see. Neither leaked; the gateway used `Miss_Chelly_H/6988436e…` and
+     `Miss_Chelly_H/ce0fa3d0…`; the agent independently reported *"no other parallel conversations
+     in my current context."*
+  Regression check after the `4b` batch: clean first-contact session on `cli@0.0.145`, sealed
+  `6bffce2e…`.
+
+  🚨 **FOUR defects, ALL found by conversation, NONE by a test — and the suite was green for every
+  one of them, while the feature had never once worked end to end.** In order:
+  (a) `d24db18` shipped with replies that were never sent;
+  (b) the fallback notice told the agent to `cello_send` while the adapter also delivered, so the
+      peer received the agent's own internal note-to-self (`cli@0.0.141`);
+  (c) `cello_receive` serves the CONNECTION's oldest unread, not the announced message — so on a
+      conversation with history the adapter handed the agent a stale message and the
+      read-before-send gate then DISCARDED the reply: agent believed it answered, peer heard
+      nothing, one error line in a log the only trace (`cli@0.0.143`);
+  (d) the `created` state notice woke the agent at exactly the moment the message needed it free,
+      so first contact ALWAYS fell back to the manual path — and the one time it appeared to work,
+      the agent had answered that notice `[SILENT]` fast enough to free itself. A race being won
+      by luck and reported as success (`cli@0.0.144`).
+
+  **The rule this milestone should carry forward.** Each of these needed a real turn already in
+  flight, a real second connection, or real history behind the message — conditions no fixture
+  reproduced, and three of them were invisible on a fresh session, which is exactly what a test
+  creates. When a line's enforcer is "a live journey", a green suite is not partial evidence
+  toward it; it is no evidence at all. Same shape as the spine enforcer that cannot fail on the
+  seal defect because it opens a session first (M14 journal) — an enforcer that cannot fail on the
+  thing it appears to cover manufactures confidence.)
+- **DOD-HERMES-4b (the review's non-blocking remainder)** — 🟡 **MOSTLY CLOSED** (`93feba5` +
+  `f9ac306`, `cli@0.0.145` / `connect@0.0.133`, live-smoked 2026-08-07). Batched deliberately so
+  it cost ONE publish rather than five. Per item:
+  - ✅ **Wake queue bounded** at 256. Overflow drops the newest wake at ERROR rather than growing
+    without limit inside the gateway process — the message stays unread in the daemon, so a drop
+    costs latency, not content.
+  - ✅ **A dead wake worker is restarted** via `add_done_callback`. Previously only a socket drop
+    revived it, so a worker that died on a healthy connection left the reader filling a queue
+    nobody drained: an adapter silently deaf until the daemon restarted.
+  - ✅ **A mode/hint disagreement now REFUSES to start.** Logging and proceeding was not enough —
+    one direction is silent (adapter `wake` + hint `channel` tells the agent not to call
+    `cello_send` while `send()` is a no-op returning success, so every reply is lost with success
+    reported at every layer). A bridge that will not start beats one that cannot deliver, because
+    only one of them says so.
+  - ✅ **A reply held by the security gateway is surfaced INTO the agent's conversation**, with
+    the daemon's own reason and the `governance_decisions` resolution. It was a dead end: only the
+    agent can decide redact-vs-allow per flag, but in channel mode it never called `cello_send`,
+    so it had no idea its reply was swallowed and the peer still waiting. The notice deliberately
+    carries NO anchor, so the agent's answer to it is not itself delivered to the peer — and
+    resolving it goes through `cello_send` directly, which bypasses `send()` and cannot loop.
+  - 🔒 **`internal=True` — INVESTIGATED, DELIBERATELY UNCHANGED. Do not "fix" this.** Traced
+    through `gateway/run.py`: the flag does three things and only ONE is unwanted. It suppresses
+    interrupting a running turn (wanted), it bypasses Hermes pairing/authorization at `run.py:14318`
+    (wanted — CELLO authorizes in the daemon, and to Hermes a counterparty pubkey is an unpaired
+    stranger), and it excludes the event from the scale-to-zero inbound clock at `run.py:14274`
+    (unwanted — a live conversation may not keep the gateway awake). **Flipping it would push every
+    peer message into Hermes' pairing flow and block CELLO outright.** Mitigation instead: do not
+    run scale-to-zero on a bridge host. Only a Hermes-side change could separate the three.
+  - ❌ **`_pending` is shared across sockets.** On reconnect the OLD reader's `finally:
     _fail_pending()` can kill the NEW connection's in-flight `ipc.connect`. Self-healing via the
     retry loop, but it produces spurious "Reconnect failed" cycles that read as a daemon fault.
-    Needs a connection generation counter or a per-socket `_pending`. Shape is pre-existing; it
-    matters more now that the wake worker depends on the socket.
-  - **`delivery_mode: wake` + hint `channel` loses every reply silently.** `connect()` logs the
-    mismatch loudly but proceeds; in that direction the agent is told not to call `cello_send`
-    while `send()` is a no-op returning success at every layer. Either refuse to connect on that
-    combination or coerce the mode. (The reverse direction is merely noisy — duplicate sends.)
-  - **Untested surfaces:** `connect()`'s mismatch branch, `_invalid_settings()`, the whole
-    `registry.ts` flag parser (`valueOf`/`missingValue`/`valueIndexes`), and the wake worker's
-    reconnect/cancel lifecycle (AC6 drives one clean pass only).
-  - **`hermes-install.test.ts` re-implements the bridge arg parser inside the test** instead of
+    Needs a connection generation counter or a per-socket `_pending`. Pre-existing shape; it
+    matters more now that the wake worker depends on the socket. NOT DONE.
+  - 🟠 **Untested surfaces — partly closed.** `connect()`'s mismatch branch now has both cases
+    (AC13). Still untested: `_invalid_settings()`, the `registry.ts` flag parser
+    (`valueOf`/`missingValue`/`valueIndexes`), and the wake worker's reconnect/cancel lifecycle
+    (AC6 drives one clean pass only).
+  - ❌ **`hermes-install.test.ts` re-implements the bridge arg parser inside the test** instead of
     importing it, so it always passes — and it now mirrors the OLD two-flag logic while production
     handles four. Pre-existing, now stale and actively misleading: export the parser and test the
-    real one, or delete the test. — ❌ NOT BUILT
+    real one, or delete the test. NOT DONE.
+
+  **Found in passing, and fixed (`f9ac306`) — worth its own line because it was security-facing
+  and shipped.** Every agent-facing surface still said content screening was *"planned, not yet
+  active — the daemon currently passes messages through unscreened"*, including the
+  `cello_contact_set_tier` tool description the MCP shim hands the model at runtime. Five places:
+  `core/adapter-claude-code/SKILL.md` (ships in `connect`), `src/bin/cello-mcp.ts`,
+  `core/cli/src/registry.ts`, and both marketplace plugin skills. That is the wrong direction to
+  be wrong in — it tells an agent the safety boundary does not exist. It is stale:
+  `PassthroughGatewayClient` is documented TEST-ONLY and its own comment records that it was once
+  the silent default (leaving the layer inert "in every released build for weeks");
+  `DaemonConfig.securityGateway` is now required; `screenInbound` runs in `session-node-manager`
+  and `screenOutbound` in `session-content-handlers` and the away path; and a live
+  `governance_warn` hold was observed during this testing. All five now say the same thing: a tier
+  is a LIMITS setting, screening is the boundary, active both directions at every tier, and a
+  flagged outbound is HELD rather than dropped.
+
+  **Also corrected, same batch:** `cello bridge -h` and the repo README both described the
+  pre-HERMES-4 bridge — no mention of either setting, no mention that the agent stops calling
+  `cello_receive`/`cello_send`, and "idempotent, safe to re-run" where the actual rule is
+  **re-run after every upgrade or the host silently keeps the old adapter** (the plugin is a COPY
+  in the Hermes home, never a live import). That cost a wasted round on all four upgrades during
+  this testing, each time looking exactly like a fix that had not worked. `c605a1b`, `cea3500`.
 - **DOD-HERMES-5 (multi-agent binding — GATED ON HERMES-4)** — one Hermes gateway binds more than
   one CELLO agent: agent list from `config.extra` with one platform entry per agent
   (`CELLO_AGENT_NAME` survives as the one-agent shorthand), `cello bridge hermes --agent a --agent b`.
