@@ -54,7 +54,8 @@ import type { HashChainedTable } from "./hash-chain.js";
 import type { Logger } from "@cello-protocol/interfaces";
 import {
   encodeTierARecord, type TierATableSpec, type TableRow,
-  AGENT_PROFILES_SPEC, AGENT_ACCOUNT_LINKS_SPEC, ACCOUNT_EMAIL_STUBS_SPEC, AGENT_REVOCATIONS_SPEC, USER_ACCOUNTS_SPEC, SEAL_NOTARIZATIONS_SPEC,
+  AGENT_PROFILES_SPEC, AGENT_ACCOUNT_LINKS_SPEC, ACCOUNT_EMAIL_STUBS_SPEC,
+  CONVERSATION_PARTICIPATION_SPEC, CONVERSATION_ATTESTATIONS_SPEC, AGENT_REVOCATIONS_SPEC, USER_ACCOUNTS_SPEC, SEAL_NOTARIZATIONS_SPEC,
   SEAL_CERTIFICATE_FIELDS_SPEC,
   CAPABILITY_CLAIM_CODES_SPEC, AUTHORIZED_ISSUERS_SPEC, SIGNAL_RECORDS_SPEC,
   SUBMISSION_RESULTS_SPEC, RELAY_REGISTRATIONS_SPEC, DIRECTORY_NODES_SPEC,
@@ -167,6 +168,29 @@ const TIER_A: readonly TierAPg[] = [
   // where two nodes held 2 seals and gcp-use1 held 0 and could not acquire them. A seal receipt
   // present on only some directories is the notary's durability property failing.
   { spec: CONVERSATION_SEALS_SPEC, bytea: [], chained: true, naturalKeyConstraint: "conversation_seals_conversation_id_key" },
+  {
+    // V61. AFTER conversation_seals — both children carry an FK to it, so a child applied before its
+    // header fails the FK. This is the ordering the comment at the top of TIER_A is about.
+    spec: CONVERSATION_PARTICIPATION_SPEC,
+    bytea: [],
+    // CHAINED. Both children carry chain_hash and are in HASH_CHAINED_TABLES, so the generic INSERT
+    // would write them OUTSIDE the tamper-evident chain — present and readable and unverifiable,
+    // which is the exact failure DOD-AE-CHAINED-TABLES-1 exists to prevent. The applying node
+    // recomputes the chain against its OWN tip; it never copies the origin's.
+    chained: true,
+    naturalKeyConstraint: "conversation_participation_natural_key",
+    requiredColumns: ["conversation_id", "party_pseudonym"],
+  },
+  {
+    spec: CONVERSATION_ATTESTATIONS_SPEC,
+    bytea: [],
+    chained: true,
+    naturalKeyConstraint: "conversation_attestations_natural_key",
+    // The attestation and the signature over it ARE the fact. A row arriving without either is one
+    // analytics would count as a participation with no verdict, and Tier-A apply is insert-if-absent
+    // so it could never be corrected.
+    requiredColumns: ["conversation_id", "participant_pseudonym", "attestation", "seal_signature"],
+  },
   // seal_notarizations last because its chained writer needs conversation_seals and profiles present.
   {
     spec: SEAL_NOTARIZATIONS_SPEC,

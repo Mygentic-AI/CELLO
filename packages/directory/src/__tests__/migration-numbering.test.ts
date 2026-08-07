@@ -130,8 +130,13 @@ describe("directory migration numbering", () => {
     // populated after INSERT, so it is excluded from that table's set and had never replicated.
     // Sign-in resolved only against the node that registered the operator.
     //
+    // V61 was consumed the same night — natural keys for conversation_participation and
+    // conversation_attestations, so the seal's CHILDREN can replicate. They were never weighed and
+    // excluded; they were never considered, and a node receiving a seal learned neither who took
+    // part nor what was attested. Live: 22 rows on one node, 38 on another.
+    //
     // This tripwire found the collision it exists for, in both directions, on the same day. Whoever
-    // takes 61 updates this line.
-    expect(nextFree, "coordination agreement says V61 is the next free number").toBe(61);
+    // takes 62 updates this line.
+    expect(nextFree, "coordination agreement says V62 is the next free number").toBe(62);
   });
 });

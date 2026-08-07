@@ -95,6 +95,11 @@ describe("DOD-AE-CHAINED-TABLES-1: seal_notarizations and user_accounts replicat
       "relay_registrations",
       "directory_nodes",
       "conversation_seals",
+      // V61. The seal's CHILDREN, which were never considered rather than weighed and excluded:
+      // a node receiving a seal learned neither who took part nor what was attested, and analytics
+      // derives the track record from exactly these. Live: 22 rows on one node, 38 on another.
+      "conversation_participation",
+      "conversation_attestations",
       "seal_notarizations",
       // V58 — LAST, and the position is load-bearing like the rest of this list. The pull reads
       // seal_certificate_fields together with its seal_notarizations row and serves nothing unless

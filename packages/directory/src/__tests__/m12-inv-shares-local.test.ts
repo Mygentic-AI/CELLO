@@ -83,6 +83,11 @@ describe("DOD-INV-SHARES-LOCAL: the share table is unreachable through anti-entr
       "relay_registrations",
       "directory_nodes",
       "conversation_seals",
+      // V61. The seal's CHILDREN, which were never considered rather than weighed and excluded:
+      // a node receiving a seal learned neither who took part nor what was attested, and analytics
+      // derives the track record from exactly these. Live: 22 rows on one node, 38 on another.
+      "conversation_participation",
+      "conversation_attestations",
       "seal_notarizations",
       // ── V58 `seal_certificate_fields` — ADDED 2026-08-07, DOD-TERMINAL-STATE-DIVERGENCE-1 ──
       //

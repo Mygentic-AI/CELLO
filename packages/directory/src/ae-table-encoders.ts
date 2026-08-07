@@ -306,6 +306,36 @@ export const ACCOUNT_EMAIL_STUBS_SPEC: TierATableSpec = {
 };
 
 /**
+ * conversation_participation + conversation_attestations (V2, natural keys added V61).
+ *
+ * THE SEAL'S CHILDREN. `recordConversationSeal` writes the header and both of these in ONE
+ * transaction, but only the header was registered — so a node receiving a seal by anti-entropy
+ * learned neither who took part nor what was attested, and `analytics-job` derives `pseudonym_stats`
+ * and `graph_edges` from exactly these two. The track-record surface therefore differed per node
+ * with nothing reporting it. Live 2026-08-07: 22 rows on gcp-use1, 38 on gcp-usc1.
+ *
+ * These were never weighed and excluded — they were never considered, which the file above says
+ * plainly rather than laundering into the "by design" list.
+ *
+ * Keyed by (conversation_id, party) because the PRIMARY KEY is a BIGSERIAL that differs per node for
+ * the same fact. `id` and `chain_hash` are local. `attested_at` is excluded for the reason every
+ * other per-node timestamp is: it defaults to now() at the writing node, and a TIMESTAMPTZ rendered
+ * under a different session TZ corrupts the instant and forks the hash. What identifies the fact is
+ * the attestation and the signature over it, both of which are here.
+ */
+export const CONVERSATION_PARTICIPATION_SPEC: TierATableSpec = {
+  table: "conversation_participation",
+  naturalKey: ["conversation_id", "party_pseudonym"],
+  immutableColumns: ["conversation_id", "party_pseudonym"],
+};
+
+export const CONVERSATION_ATTESTATIONS_SPEC: TierATableSpec = {
+  table: "conversation_attestations",
+  naturalKey: ["conversation_id", "participant_pseudonym"],
+  immutableColumns: ["conversation_id", "participant_pseudonym", "attestation", "seal_signature"],
+};
+
+/**
  * The registered Tier-A specs — all tables that must converge to the same value across nodes.
  * Previously four; expanded 2026-07-31 to cover the tables that were in the AWS Postgres mesh
  * but were never registered for AE.
@@ -344,6 +374,8 @@ export const TIER_A_SPECS: readonly TierATableSpec[] = [
   RELAY_REGISTRATIONS_SPEC,
   DIRECTORY_NODES_SPEC,
   CONVERSATION_SEALS_SPEC,
+  CONVERSATION_PARTICIPATION_SPEC,
+  CONVERSATION_ATTESTATIONS_SPEC,
 ];
 
 /**
