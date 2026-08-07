@@ -829,20 +829,33 @@ Entry 31 in [[M14-BUILD-JOURNAL]] carries the full trace for each.
   the round twice. Ordinary in-flight overlap on a 1s backoff could stall a document at
   `MAX_REJECTED_ROUNDS` with no hostility involved.
 
-- **🔴 OPEN — document acks are lost on delivery-opened sessions.** 4 ack frames sent across the
-  whole daemon log, **2 admitted**. The successful ones arrive 4ms after send; the lost ones never
-  arrive, and `document.frame.sent` reports success for both. Document frames flow in both
-  directions, so the channel is not dead. **This is the upstream cause of the 74 sends** — if acks
-  are lost whenever the delivery worker opens the session, deliveries settle only when an
-  independent conversation session happens to be open.
+- **🔴 OPEN, ROOT CAUSE ESTABLISHED — a delivery-opened session seals before the ack can return, so
+  document acks are lost by construction.** This is the upstream cause of the 74 sends, and it means
+  **deliveries settle only when an independent conversation session happens to be open**.
 
-  Two explanations fit every data point and **the evidence cannot distinguish them**: session origin
-  (a delivery-opened session seals ~1.4s after the push) versus direction (both losses run
-  Miss_Chelly → CELLO_Coder_1). Every delivery-opened case in the log is also B→A, so the two are
-  confounded. **Do not pick one and start fixing.** Resolve it with one delivery-opened session in
-  the A→B direction. Related: the last bullet of the send-path findings above — `sendContent`'s
-  persisted-ack tracker is the honest "the peer has it" signal, and the delivery worker is exactly
-  the caller that wants it.
+  The measurement: 4 ack frames sent across the whole daemon log, **2 admitted**. Successful acks
+  arrive 4ms after send; lost ones never arrive, and `document.frame.sent` reports success for both.
+
+  Two explanations fit the first four data points — session origin versus direction (every
+  delivery-opened case was also Miss_Chelly → CELLO_Coder_1, so they were confounded). **The
+  experiment named here resolved it**: session `347ecda6` on 2026-08-07 06:29 was opened by
+  Miss_Chelly's delivery worker in the *opposite* ack direction (A→B), and the ack was lost too.
+  Direction is falsified; session origin is confirmed.
+
+  The mechanism is visible in the timing of that session. `session.seal.leaf.submitted` fires at
+  `.102`, **90ms before the ack is sent at `.192`**, `autoacknowledged` at `.533`, sealed by
+  `:14.203`. The delivery path's own contract is "open-or-reuse-**then-seal**"
+  (`document-delivery.ts` `sendBytes`), and the ack rides that same path — so it is written into a
+  session already sealing. Nothing is dropped noisily; the write reports ok.
+
+  **Not fixed, deliberately** — it is a change to the delivery/seal contract, not a patch. The seal
+  is intentional (`document-delivery.ts:135`: "a never-acked envelope would pollute the peer's
+  sealed conversation record forever"), so the fix has to keep that property while giving the ack a
+  path home. Recommended direction, already identified in the send-path findings above: use
+  `sendContent`'s persisted-ack tracker — the receiver sends it only after durable ingest, it is the
+  only honest "the peer has it" signal that exists without a protocol change, and the delivery
+  worker is precisely the caller that wants it. That would let delivery settle without needing the
+  document-layer ack to survive the seal at all.
 
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
