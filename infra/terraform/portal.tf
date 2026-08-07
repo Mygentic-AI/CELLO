@@ -102,6 +102,21 @@ resource "google_secret_manager_secret_iam_member" "portal_database_url" {
   member    = "serviceAccount:${google_service_account.workload["portal"].email}"
 }
 
+// SES, for the magic-link sign-in mail. Same static credentials as everything else that sends mail
+// from GCP (ops-agent, waitlist, ops-dashboard).
+//
+// The portal was moved to Cloud Run WITHOUT this, and the failure was silent: `email.ts` built its
+// SES client with no credentials because on ECS the task role supplied them at call time. Cloud Run
+// has no ambient AWS identity, so every send died in the SDK credential chain, was recorded as
+// `delivery_failed`, and never changed the HTTP response — which is identical for known and unknown
+// emails by design. Sign-in appeared to work and no mail existed.
+resource "google_secret_manager_secret_iam_member" "portal_ses" {
+  project   = var.project_id
+  secret_id = "cello-ops-agent-ses-credentials"
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workload["portal"].email}"
+}
+
 resource "google_cloud_run_v2_service" "portal" {
   name     = "cello-portal"
   project  = var.project_id
@@ -283,6 +298,18 @@ resource "google_cloud_run_v2_service" "portal" {
         value_source {
           secret_key_ref {
             secret  = "cello-portal-ingress-trigger-secret"
+            version = "latest"
+          }
+        }
+      }
+
+      // Static AWS keys for SES. SES stays on AWS because Google has no email-sending service, so
+      // this is the one live cross-cloud runtime dependency the portal has.
+      env {
+        name = "SES_CREDENTIALS"
+        value_source {
+          secret_key_ref {
+            secret  = "cello-ops-agent-ses-credentials"
             version = "latest"
           }
         }

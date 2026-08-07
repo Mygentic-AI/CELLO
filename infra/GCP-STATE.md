@@ -557,7 +557,7 @@ running. On the default pool the same build takes 38 seconds.
 
 | Resource | Value |
 |---|---|
-| Cloud Run service | `cello-portal`, us-east1, image `portal-317ffba` |
+| Cloud Run service | `cello-portal`, us-east1, image **`portal-abf1cb4`** (rev `cello-portal-00007-9wc`; was `portal-317ffba` → `bcb959c` → `89fb371`) |
 | Hostname | **https://portal.cello.mygentic.ai** — the same name it had on AWS |
 | Load balancer | global external ALB, IP `34.111.250.93`, serverless NEG `cello-portal-neg`, managed cert `cello-portal-cert`; :80 redirects to :443 |
 | DNS | Route 53 zone `Z02692523DOH7NW521CL8`, A record → `34.111.250.93` (was `198.51.100.1`, the hibernate placeholder) |
@@ -565,8 +565,48 @@ running. On the default pool the same build takes 38 seconds.
 | Cloud SQL | `cello-portal`, us-east1, POSTGRES_17, `db-g1-small`, deletion_protection ON |
 | Signing key | Cloud KMS `cello-portal/portal-submission` v1, `EC_SIGN_ED25519`, us-east1. Pubkey `6f0203b8…80e5`, enrolled `submitter` in all 3 node DBs |
 | Directory path | `DIRECTORY_API_URLS` → the three PINNED internal IPs on **8081**, over Direct VPC egress; one key per node in `cello-portal-directory-api-keys`, positionally paired |
-| Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`), `cello-portal-directory-api-keys`, and copied from AWS: `-github-client-id`, `-github-client-secret`, `-intake-key-0`, `-ingress-trigger-secret`, `-submission-seed` |
+| Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`), `cello-portal-directory-api-keys`, **`cello-ops-agent-ses-credentials` (added 2026-08-07 — see below)**, and copied from AWS: `-github-client-id`, `-github-client-secret`, `-intake-key-0`, `-ingress-trigger-secret`, `-submission-seed` |
 | Verified | 307 → `/sign-in` over https on the real hostname; **portal→directory proven through the app** — POST `/api/internal/ingress/drain` returns `ok:true` with `nodeErrors: []` (refuses 401 without the trigger secret); issuer enrolled on usc1/euw1/use1 |
+
+### 2026-08-07 — sign-in was impossible since the cutover, in three independent ways
+
+Reported as "the magic link email never arrives". All three had to be fixed to sign in once, and
+each was invisible on its own because the sign-in response is byte-identical for a known and an
+unknown email (DOD-INV-1, no enumeration). 3 requests, 0 tokens, 0 mail, no error anywhere.
+
+1. **The account lookup stopped at the first node.** `email_stub_hash` is excluded from
+   anti-entropy, so it exists only on the node that ran the registration — here `gcp-usc1`, while
+   `DIRECTORY_API_URLS` asks `gcp-euw1` first. A 404 does not throw, so the failover client treated
+   it as a successful "no such account" and never asked the other two. Fixed in cello-portal
+   `89fb371`: the lookup now advances past a null and only a null from every REACHABLE node is a
+   negative. Zero answers still throws.
+2. **The agent list had the same shape.** The `account_id` link on `agent_profiles` does not
+   replicate either — usc1 had 2 of the operator's 3 agents linked, euw1 1, use1 0 — so one node's
+   list is a fragment that looks whole. Now collected from every node and unioned on
+   `kLocalPubkey`. Same commit.
+3. **The portal had no AWS credentials for SES.** `email.ts` built its SES client with none by
+   design: on ECS the task role supplied them at call time. Cloud Run has no ambient AWS identity,
+   so every send died in the SDK credential chain and was logged `delivery_failed` — never
+   surfacing, because the send is fire-and-forget so as not to widen the enumeration timing
+   channel. Fixed in `abf1cb4` + the Terraform below: `SES_CREDENTIALS` from
+   `cello-ops-agent-ses-credentials`, the same blob the ops-agent, waitlist and ops-dashboard take.
+   Absent still falls back to the ambient chain; malformed now throws rather than failing silently
+   at send time.
+
+**Verified live, not inferred:** `accountResolved: True`, a row in `magic_link_tokens` where there
+had never been one, and `portal.auth.magic_link.email_sent` carrying a real SES message id.
+
+**Terraform:** `google_secret_manager_secret_iam_member.portal_ses` (new) + the `SES_CREDENTIALS`
+env block in `portal.tf`. Applied with `-target` on the Cloud Run service and that member.
+
+**The hand-added `105.234.180.85/32` authorized network on `cello-portal` Cloud SQL is GONE.** A
+`-target` on the portal Cloud Run service pulls the SQL instance in as a dependency, so the apply
+removed it — there is no way to exclude it from a targeted plan, and the note elsewhere in this file
+that a `-target` avoids that drift is wrong. Removed deliberately, with Andre's decision: the entry
+was stale (it allowed `…85`; the operator's address was `…55`), so it granted nothing and would have
+handed a path to the portal database to whoever the ISP gave `…85` to next. Direct psql from a
+laptop now goes through the Cloud SQL Auth Proxy, which needs no allowlist entry —
+`infra/scripts/gcp-portal-db-query.sh`.
 
 **Why the hostname was kept.** The GitHub OAuth callback is registered against
 `portal.cello.mygentic.ai`, and `WEBAUTHN_RP_ID` is part of what every passkey is bound to. Serving
