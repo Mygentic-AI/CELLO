@@ -557,7 +557,7 @@ running. On the default pool the same build takes 38 seconds.
 
 | Resource | Value |
 |---|---|
-| Cloud Run service | `cello-portal`, us-east1, image **`portal-c713746`** (rev `cello-portal-00009-w77`; was `portal-317ffba` → `bcb959c` → `89fb371` → `abf1cb4` → `6807d4e`) |
+| Cloud Run service | `cello-portal`, us-east1, image **`portal-9aeaf30`** (rev `cello-portal-00010-brg`; was `portal-317ffba` → `bcb959c` → `89fb371` → `abf1cb4` → `6807d4e` → `c713746`) |
 | Hostname | **https://portal.cello.mygentic.ai** — the same name it had on AWS |
 | Load balancer | global external ALB, IP `34.111.250.93`, serverless NEG `cello-portal-neg`, managed cert `cello-portal-cert`; :80 redirects to :443 |
 | DNS | Route 53 zone `Z02692523DOH7NW521CL8`, A record → `34.111.250.93` (was `198.51.100.1`, the hibernate placeholder) |
@@ -634,6 +634,16 @@ held ZERO rows.
 **Verified live:** a remint returns `webauthn: {credentials: 1, handedOffTo: 3}`, and
 `minted_signals` now holds all four types — email, phone, webauthn, and one track_record per agent
 — against 5 rows in `signal_records` on the directory side.
+
+7. **GitHub signals were notarized and delivered but never RECORDED** (`9aeaf30`). The OAuth
+   callback submitted both, delivered them to every agent, and skipped `recordMintedSignal` — the
+   only mint path that does. The page reads `minted_signals`, so signals sitting on all three of
+   the operator's agents did not appear in the portal; and the supersedes map reads the same table,
+   so every re-connect minted a NEW pair rather than superseding, accumulating duplicates in the
+   ledger. Caught by counting: 17 notarized at the directory against 15 recorded. The loop was
+   inline in the route handler, which is why nothing tested it — now extracted to
+   `submitAndDeliverGitHubSignals`, teeth-checked by deleting the record call and confirming two
+   tests fail.
 
 **The through-line for all six.** Five of the six are ONE defect wearing different clothes: the
 portal asked a single directory and treated its answer as the consortium's. That is safe with one
