@@ -857,6 +857,41 @@ Entry 31 in [[M14-BUILD-JOURNAL]] carries the full trace for each.
   worker is precisely the caller that wants it. That would let delivery settle without needing the
   document-layer ack to survive the seal at all.
 
+- **🔴 OPEN, ROOT CAUSE ESTABLISHED — a document frame permanently breaks `since_seq` catch-up for
+  the session it rides.** Cross-milestone: M8C owns `since_seq`, M14 owns document frames, and the
+  defect exists only where they meet — which is why neither milestone's tests see it.
+
+  A document frame **consumes a sequence number and writes no transcript row** — deliberately, per
+  `document-frame-router.ts`: "A document frame is NOT a transcript message." But
+  `cello_receive { since_seq }` advances its watermark by walking a CONTIGUOUS run of present
+  sequence numbers, and an absent index stops the walk. `session-content-handlers.ts` states this
+  as intended ("a genuinely absent index … ARE unread") without noticing that a document frame
+  produces exactly that shape. So the walk stops at the document frame **forever**, and every later
+  message stays unread no matter how many times the caller reads it.
+
+  Both send-gate authorities then refuse: `connectionCursor` never advances past the gap, and
+  `unreadReceived` never reaches 0. The operator sees `session_not_current`, and the guidance points
+  at `cello_receive` — which they have already run. A plain `cello_receive` DOES clear it, so the
+  fix is reachable but not the one the error names. That is the "rule satisfiable only through a
+  door the caller is not pointed at" shape CATCHUP §3b forbids, reintroduced through a third
+  milestone's frame type.
+
+  **Observed live**, not reasoned about. Session `66e2215a…` on 2026-08-07: transcript holds
+  sequences 0, 1, 2, 5, 6 with `undecryptable: 0`; the daemon log shows two
+  `session.document.received {kind: update}` at 07:17:23 that took 3 and 4. `cello_send` was blocked
+  twice, `since_seq: 2` returned the message in full and advanced nothing
+  (`last_read_seq: 2, unread_received: 1`), and a plain `cello_receive` cleared it immediately.
+
+  **Not a rare interaction.** The delivery worker REUSES an open session, so document traffic lands
+  in whatever conversation session already exists between the two agents. Any pair that both talks
+  and co-edits hits this — which is the entire M14 use case.
+
+  **Fix direction, not yet decided:** the walk needs to distinguish "no row because it was never
+  readable" from "no row because it was never a transcript message". The leaf kind already carries
+  that (`0x04`/`0x05` are document leaves), so the contiguous walk could treat a document leaf as
+  present-and-not-unread rather than as a hole. Wants its own unit loop; do not patch it inside a
+  cascade.
+
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
 - **DOD-DOC-E2E-CONV-1** [trustless-cello] — **convergence enforcer GREEN** (`aa6dea04`, re-confirmed
