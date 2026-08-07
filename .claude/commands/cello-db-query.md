@@ -5,6 +5,22 @@ description: Run SQL queries against the CELLO directory PostgreSQL database via
 
 # Query the Directory Database
 
+> ## ⚠️ The live directories are on GCP. This ECS technique is AWS-only and AWS is torn down.
+>
+> Use **`./infra/scripts/gcp-directory-db-query.sh "SELECT ..."`**. It reaches all three live nodes
+> (us-east1, us-central1, europe-west1) over IAP + each node's own workload identity.
+>
+> **It queries ALL THREE NODES by default, and that default is load-bearing.** Directory nodes are
+> sovereign and **only some columns replicate**. `user_accounts` replicates as
+> `(account_id, phone_stub_hash)` ONLY — `email_stub_hash` never crosses, and neither does the
+> agent→account link. On 2026-08-07 an operator's email hash was present on `gcp-usc1` and NULL on
+> the other two; querying either of those alone "proved" the account did not exist when it did, and
+> the portal's sign-in was failing for exactly that reason. **A one-node answer about a partially
+> replicated column is confidently wrong.** Always compare across nodes before concluding a row is
+> missing.
+>
+> Everything below applies only to the retired AWS ECS deployment.
+
 > **This is the DIRECTORY database — `agent_profiles`, registrations, sessions.** The M11
 > waitlist tables (`waitlist_users`, `auth_tokens`, `email_jobs`, …) live in the PORTAL database,
 > and this technique **does not reach it**: TCP 5432 from the directory task to `cello-portal-dev`
