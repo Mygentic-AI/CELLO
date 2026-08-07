@@ -54,7 +54,7 @@ import type { HashChainedTable } from "./hash-chain.js";
 import type { Logger } from "@cello-protocol/interfaces";
 import {
   encodeTierARecord, type TierATableSpec, type TableRow,
-  AGENT_PROFILES_SPEC, AGENT_REVOCATIONS_SPEC, USER_ACCOUNTS_SPEC, SEAL_NOTARIZATIONS_SPEC,
+  AGENT_PROFILES_SPEC, AGENT_ACCOUNT_LINKS_SPEC, AGENT_REVOCATIONS_SPEC, USER_ACCOUNTS_SPEC, SEAL_NOTARIZATIONS_SPEC,
   SEAL_CERTIFICATE_FIELDS_SPEC,
   CAPABILITY_CLAIM_CODES_SPEC, AUTHORIZED_ISSUERS_SPEC, SIGNAL_RECORDS_SPEC,
   SUBMISSION_RESULTS_SPEC, RELAY_REGISTRATIONS_SPEC, DIRECTORY_NODES_SPEC,
@@ -124,6 +124,17 @@ const TIER_A: readonly TierAPg[] = [
     // and because agent_id is also in the content address, a NULL copy and a populated copy hash
     // differently and can never converge. Refusing it keeps that state from spreading further.
     requiredColumns: ["agent_id"],
+  },
+  {
+    // V59. AFTER user_accounts, because its account_id is an FK to that table — the order comment
+    // above is not decorative here: applying a link before the account it points at fails the FK.
+    spec: AGENT_ACCOUNT_LINKS_SPEC,
+    bytea: [],
+    naturalKeyConstraint: "agent_account_links_pkey",
+    // BOTH columns are the authorization decision. A link row arriving with either missing is one
+    // the kill switch cannot evaluate, and Tier-A apply is insert-if-absent — so a row accepted with
+    // a null could never be repaired by a later round. Refuse it rather than let it settle.
+    requiredColumns: ["agent_id", "account_id"],
   },
   { spec: AGENT_REVOCATIONS_SPEC, bytea: ["signature"], naturalKeyConstraint: "agent_revocations_pkey" },
   // ── The tables that were in the AWS Postgres mesh but never ported to AE ──────────────────────

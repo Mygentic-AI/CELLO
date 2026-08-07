@@ -267,6 +267,26 @@ export const CONVERSATION_SEALS_SPEC: TierATableSpec = {
 };
 
 /**
+ * agent_account_links (V59). The agent↔account binding, as an append-only FACT.
+ *
+ * Replaces the replication of `agent_profiles.account_id`, which never happened: that column is
+ * mutable, Tier A carries only immutable columns by construction, and the Tier B rule the M12 design
+ * assigned it was never built. Live on 2026-08-07 one operator's three agents were linked on three
+ * different nodes — 0, 2 and 1 — so the KILL SWITCH refused two of them as `not_owner`, and the
+ * account leg of the self-endorsement check was silently dead wherever the link was absent.
+ *
+ * Both columns are immutable, so there is nothing to merge and no clock-skew hazard — the same
+ * reason `agent_revocations` has always replicated correctly while the column form did not.
+ * `linked_at` is a per-node wall clock and is excluded: it differs between nodes for the same fact
+ * and would fork the content hash.
+ */
+export const AGENT_ACCOUNT_LINKS_SPEC: TierATableSpec = {
+  table: "agent_account_links",
+  naturalKey: ["agent_id"],
+  immutableColumns: ["agent_id", "account_id"],
+};
+
+/**
  * The registered Tier-A specs — all tables that must converge to the same value across nodes.
  * Previously four; expanded 2026-07-31 to cover the tables that were in the AWS Postgres mesh
  * but were never registered for AE.
@@ -292,6 +312,7 @@ export const CONVERSATION_SEALS_SPEC: TierATableSpec = {
  */
 export const TIER_A_SPECS: readonly TierATableSpec[] = [
   AGENT_PROFILES_SPEC,
+  AGENT_ACCOUNT_LINKS_SPEC,
   AGENT_REVOCATIONS_SPEC,
   USER_ACCOUNTS_SPEC,
   SEAL_NOTARIZATIONS_SPEC,

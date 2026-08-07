@@ -1055,7 +1055,33 @@ export class PgDirectoryStore implements DirectoryStore {
           accountId,
           profile.agent_id,
         ],
-      ).then(() => {
+      ).then(async () => {
+        // V59: record the binding as an APPEND-ONLY FACT as well, because that is the form that
+        // replicates. `agent_profiles.account_id` above is mutable, and Tier A carries only
+        // immutable columns — so the column alone leaves the link on this node only, which is what
+        // made the kill switch refuse an operator's own agents on the other two (2026-08-07).
+        //
+        // AFTER the profile insert and never instead of it: the link's FK is to user_accounts, but
+        // an authorization row for an agent whose profile failed to persist would be a binding to
+        // nothing. Failure here is logged, not thrown — the registration has already succeeded and
+        // a missing link is repaired by re-running the backfill, whereas rejecting the registration
+        // is not repairable at all.
+        if (profile.agent_id) {
+          try {
+            await this.#pool.query(
+              `INSERT INTO agent_account_links (agent_id, account_id) VALUES ($1,$2)
+               ON CONFLICT (agent_id) DO NOTHING`,
+              [profile.agent_id, accountId],
+            );
+          } catch (err: unknown) {
+            this.#logger.error("account.agent.link.fact_failed", {
+              accountId,
+              agentId: profile.agent_id,
+              reason: err instanceof Error ? err.message : String(err),
+              note: "the agent IS registered and the legacy column is set; the REPLICATED link is missing, so authorization will refuse this agent on every node until backfilled",
+            });
+          }
+        }
         // ACCOUNT-001: log account.agent.linked only after INSERT confirms success.
         // correlationId is threaded from M6 callers; undefined for pre-M6 usage.
         this.#logger.info("account.agent.linked", {

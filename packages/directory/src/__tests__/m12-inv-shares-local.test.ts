@@ -64,6 +64,12 @@ describe("DOD-INV-SHARES-LOCAL: the share table is unreachable through anti-entr
     expect(store.tierATables()).toEqual([
       "user_accounts",
       "agent_profiles",
+      // V59. The agent↔account binding as an append-only fact, because the mutable column form
+      // (`agent_profiles.account_id`) is excluded from Tier A by construction and so never
+      // replicated — which is why the kill switch refused an operator's own agents on the two nodes
+      // that did not register them. Both columns are already published facts about a binding the
+      // operator created; neither is key material.
+      "agent_account_links",
       "agent_revocations",
       "capability_claim_codes",
       "authorized_issuers",

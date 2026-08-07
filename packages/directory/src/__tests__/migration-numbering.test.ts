@@ -113,6 +113,20 @@ describe("directory migration numbering", () => {
     // NOT YET APPLIED to any node at the time of writing — but it is committed and pushed, so treat
     // it as taken. This assertion firing is the tripwire working: whoever takes 59 updates this line
     // and thereby tells the other branch.
-    expect(nextFree, "coordination agreement says V59 is the next free number").toBe(59);
+    //
+    // V59 was consumed on 2026-08-07 by the Tier-B replication work — `agent_account_links`, the
+    // agent↔account binding as an APPEND-ONLY FACT. The binding lived in `agent_profiles.account_id`,
+    // a mutable column, and Tier A carries only immutable columns, so it had never replicated: on the
+    // live fleet one operator's three agents were linked on three different nodes (0, 2 and 1), and
+    // the KILL SWITCH — which authorizes from that column — refused two of their own agents as
+    // `not_owner`. A refusal is deliberate, so the client does not fail over, which made it terminal.
+    //
+    // A table rather than a Tier-B merge rule on the column, per Andre 2026-08-07: a wrong merge rule
+    // is worse than no replication, and `agent_revocations` already proves the shape — express the
+    // mutation as an append-only fact and Tier A carries it for free.
+    //
+    // This tripwire found the collision it exists for, in both directions, on the same day. Whoever
+    // takes 60 updates this line.
+    expect(nextFree, "coordination agreement says V60 is the next free number").toBe(60);
   });
 });

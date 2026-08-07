@@ -14,9 +14,22 @@ import type pg from "pg";
 type Queryable = Pick<pg.Pool, "query">;
 
 /**
- * Account-scoping: returns true iff `agentId` belongs to `accountId` (agent_profiles.account_id).
+ * Account-scoping: returns true iff `agentId` belongs to `accountId`.
+ *
  * Scoping is derived from this ownership check — NOT from a request field — so a caller asserting
  * account A cannot write to account B's agent (the row simply does not exist, → false → reject).
+ *
+ * READS `agent_account_links` (V59), NOT `agent_profiles.account_id`. That column is mutable, Tier A
+ * replicates only immutable columns by construction, and the Tier B rule the M12 design assigned it
+ * was never built — so the binding has never crossed between nodes. Live on 2026-08-07 one
+ * operator's three agents were linked on three different nodes (0, 2 and 1), so this check answered
+ * `not_owner` on the nodes without the row and the KILL SWITCH refused two of that operator's own
+ * agents. The refusal is deliberate, so the client does not fail over — correctly, which is what
+ * made it terminal rather than merely slow.
+ *
+ * No fallback to the old column, on purpose. Falling back would put the un-replicated answer back
+ * into the authorization path — the entire defect — and would do it invisibly, since on the node
+ * that happens to hold the row both sources agree.
  */
 export async function isAgentOwnedByAccount(
   pool: Queryable,
@@ -24,7 +37,7 @@ export async function isAgentOwnedByAccount(
   accountId: string,
 ): Promise<boolean> {
   const result = await pool.query(
-    "SELECT agent_id FROM agent_profiles WHERE agent_id = $1 AND account_id = $2",
+    "SELECT agent_id FROM agent_account_links WHERE agent_id = $1 AND account_id = $2",
     [agentId, accountId],
   );
   return (result.rowCount ?? 0) > 0;

@@ -19,14 +19,22 @@ const AGENT_A = "agent-owned-by-A";
 const AGENT_B = "agent-owned-by-B";
 const noopLogger = { info() {}, warn() {}, error() {} };
 
-// A recording stub pool: answers the ownership probe (agent_profiles WHERE agent_id AND account_id)
-// — AGENT_A is owned by ACCOUNT_A only — and records every INSERT/UPDATE so a test can assert that a
-// REJECTED write persisted nothing. Reads are classified by the SQL text.
+// A recording stub pool: answers the ownership probe (agent_account_links WHERE agent_id AND
+// account_id) — AGENT_A is owned by ACCOUNT_A only — and records every INSERT/UPDATE so a test can
+// assert that a REJECTED write persisted nothing. Reads are classified by the SQL text.
+//
+// V59 moved the probe off `agent_profiles.account_id`, which is mutable and therefore never
+// replicated, onto the append-only `agent_account_links`. Because this stub classifies BY SQL TEXT,
+// the old matcher stopped recognising the probe and fell through to the write branch — which
+// answers rowCount 1, i.e. "owned". Every caller became an owner: the cross-account test got 200
+// where it demanded 403, and rejected writes were recorded as persisted. A stub that fails OPEN on
+// an unrecognised query is worth noting — it turned a table rename into a silent authorization
+// bypass in the tests rather than a missing-table error.
 function makePool() {
   const writes: { text: string; values: unknown[] }[] = [];
   const pool = {
     async query(text: string, values: unknown[]) {
-      if (/from\s+agent_profiles/i.test(text)) {
+      if (/from\s+agent_account_links/i.test(text)) {
         const [agentId, accountId] = values as [string, string];
         const owned = agentId === AGENT_A && accountId === ACCOUNT_A;
         return { rows: owned ? [{ agent_id: agentId }] : [], rowCount: owned ? 1 : 0 };
