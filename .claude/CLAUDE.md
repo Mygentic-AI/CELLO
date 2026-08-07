@@ -180,15 +180,27 @@ Full process: `docs/planning/day-0-agent-driven-development-plan.md`
 
 ## Infrastructure State — Mandatory
 
-**`infra/STATE.md` is the authoritative record of what exists in AWS.** It lists every deployed stack, its status, last deployed date, and all key resource identifiers.
+**CELLO RUNS ON GCP.** M12 cut over on 2026-07-31 and the AWS protocol stack was **deleted** on
+2026-08-06 — directory, relay, database, all five CodePipelines, ops-agent, ops dashboard. It is not
+hibernated; it is gone.
 
-**You must read `infra/STATE.md`** before any session involving deployment, AWS resources, IaC changes, or anything that depends on knowing what infrastructure exists.
+**`infra/GCP-STATE.md` is the authoritative record.** Read it before any session involving
+deployment, infrastructure, or anything that depends on knowing what exists. Read
+`docs/planning/aws-to-gcp-migration.md` alongside it for what runs where across both clouds and what
+breaks if you stop what.
 
-**You must update `infra/STATE.md`** if your session deploys, modifies, or tears down any AWS infrastructure:
-- If you ran `./infra/deploy.sh` — STATE.md is updated automatically.
-- If you made any direct AWS change (console, CLI, manual stack operation) — update STATE.md by hand and commit it before closing the session.
+**You must update `infra/GCP-STATE.md` IMMEDIATELY after every GCP change — never batched.** A
+session that changes GCP without updating it is incomplete.
 
-A session that changes AWS infrastructure without updating STATE.md is incomplete. Any agent that skips this is creating exactly the kind of undocumented manual state that IaC exists to prevent.
+**`infra/STATE.md` is AWS and is SUPERSEDED.** It is retained only for the services still on AWS —
+the waitlist, portal RDS, SES (which still sends the OTP email for GCP registration), Route 53, NAT.
+Update it if you change one of those, and never treat it as current for anything protocol-related.
+
+> ⚠️ **`infra/deploy.sh`, `infra/cloudformation/` and `infra/buildspecs/` are STALE for the
+> protocol** — they deploy CloudFormation stacks that no longer exist. Seeing a deploy script does
+> not mean it is the deploy path. The GCP path is Terraform (`infra/terraform/`) + Cloud Build + a
+> node-by-node MIG roll; `infra/CLAUDE.md` has the rules, including the ones that have already cost
+> outages. **Read `infra/CLAUDE.md` before any infrastructure work.**
 
 ---
 
