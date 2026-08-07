@@ -4623,11 +4623,18 @@ export class CelloDirectoryNode {
     // attached to the present party's confirm frame ONLY (SI-002 client re-derivation). Derived in
     // #processSealUnilateral and threaded through both the single-key and FROST completion paths.
     frontierLeaves?: import("./directory-types.js").SealFrontierLeaf[];
+    // DOD-TERMINAL-STATE-DIVERGENCE-1 (V58): the group key this seal's FROST signature verifies
+    // against, carried so the certificate can be PULLED later. The unilateral case is where this
+    // matters most — the party that was absent at seal time is by definition the one that did not
+    // receive the push, and is therefore the one that will need to ask. Optional because the
+    // single-key fallback path is signed by the directory's own key, not a group key.
+    signerPubkey?: Uint8Array;
     correlationId: string;
   }): Promise<void> {
     const {
       sessionId, sessionIdHex, sealedRoot, presentPubkey, absentPubkey, presentHex, absentHex,
-      closeTimestamp, leafCount, frostSignature, signatureType, attestation, legibility, frontierLeaves, correlationId,
+      closeTimestamp, leafCount, frostSignature, signatureType, attestation, legibility, frontierLeaves,
+      signerPubkey, correlationId,
     } = args;
 
     // Persist the notarization (participant_a = present, participant_b = ABSENT). The
@@ -4642,6 +4649,12 @@ export class CelloDirectoryNode {
       close_timestamp: closeTimestamp,
       frost_signature: frostSignature,
       seal_type: "unilateral",
+      // V58 — see the args note: the absent party is the one that missed the push, so a unilateral
+      // seal is the case most likely to be pulled. Absent on the single-key path, where
+      // #recordCertificateFields reports it rather than inventing a signer.
+      leaf_count: leafCount,
+      signer_pubkey: signerPubkey,
+      legibility,
     };
     await this.#store.recordNotarization(notarization, { correlationId }).catch(() => { /* logged inside */ });
 
@@ -4905,6 +4918,13 @@ export class CelloDirectoryNode {
       frost_signature: frame.ack_signature,
       seal_type: "bilateral",
       supersedes_notarization_id: uniId ?? null,
+      // V58: NO certificate fields here, deliberately. This row's `frost_signature` is B's UPGRADE
+      // ACK over [SEAL_UPGRADE_ACK_DOMAIN, session_id, sealed_root] — a different TBS from the seal
+      // certificate, verified against B's own key rather than the group key. Fields copied from the
+      // seal cert would describe a signature this row does not carry, and a certificate built from
+      // them would fail verification at the client. The UNILATERAL row for this session holds the
+      // real certificate fields (written when it was created), and that is the row a pull must
+      // serve. #recordCertificateFields reports the absence rather than inventing values.
     };
     await this.#store.recordNotarization(bilateralNotarization, { correlationId }).catch(() => { /* logged inside */ });
 
@@ -5412,6 +5432,7 @@ export class CelloDirectoryNode {
         attestation: pending.attestation ?? "ABSENT",
         legibility: pending.legibility,
         frontierLeaves: pending.frontierLeaves,
+        signerPubkey: primaryPubkey,
         correlationId: pending.correlationId,
       });
       return;
@@ -5428,6 +5449,13 @@ export class CelloDirectoryNode {
       close_timestamp: pending.timestamp,
       frost_signature: new Uint8Array(frame.frost_signature),
       seal_type: "bilateral", // DOD-UP-1: both parties co-signed (FROST notarization path)
+      // DOD-TERMINAL-STATE-DIVERGENCE-1 (V58): the three TBS fields a client needs to VERIFY this
+      // certificate if it has to PULL it. They are the SAME values shipped on the session_sealed
+      // frame built a few lines below — that frame is the push, this is what makes the pull
+      // possible, and if they ever diverge the pulled certificate fails verification.
+      leaf_count: pending.leafCount,
+      signer_pubkey: primaryPubkey,
+      legibility: pending.legibility,
     };
     void this.#store.recordNotarization(notarization, { correlationId: pending.correlationId }).catch(() => { /* logged inside */ });
     // SEAL-2: relationship-graph rows (best-effort) — bilateral FROST, both parties DELIVERED.

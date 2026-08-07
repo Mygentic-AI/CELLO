@@ -561,6 +561,7 @@ export class PgDirectoryStore implements DirectoryStore {
     // Attempt 1
     try {
       await this.insertWithChain("seal_notarizations", record, columns, values, chainHashIndex, externalClient, correlationId);
+      await this.#recordCertificateFields(notarization, sessionIdBuf, sealType, sessionIdHex, correlationId, externalClient);
       this.#logger.info("notarization.recorded", {
         sessionId: sessionIdHex,
         sealedRoot: sealedRootHex,
@@ -580,6 +581,7 @@ export class PgDirectoryStore implements DirectoryStore {
     // Attempt 2 (retry)
     try {
       await this.insertWithChain("seal_notarizations", record, columns, values, chainHashIndex, externalClient, correlationId);
+      await this.#recordCertificateFields(notarization, sessionIdBuf, sealType, sessionIdHex, correlationId, externalClient);
       this.#logger.info("notarization.recorded", {
         sessionId: sessionIdHex,
         sealedRoot: sealedRootHex,
@@ -589,6 +591,75 @@ export class PgDirectoryStore implements DirectoryStore {
       const reason = err instanceof Error ? err.message : String(err);
       this.#logger.error("notarization.write.failed", { sessionId: sessionIdHex, reason, attempt: 2 });
       throw err;
+    }
+  }
+
+  /**
+   * DOD-TERMINAL-STATE-DIVERGENCE-1 (V58) — persist the three fields a client needs to VERIFY this
+   * seal when it pulls the certificate rather than being pushed one: `leaf_count`, `signer_pubkey`
+   * and `legibility`, all of which sit inside the signed TBS.
+   *
+   * Written HERE rather than at the call sites on purpose. There are four places that record a
+   * notarization, none of them transactional, and a notarization whose fields were written by only
+   * three of them produces a certificate that fails verification — the exact condition this whole
+   * unit exists to remove. Putting it inside the one method makes it impossible to record a
+   * notarization and forget the fields.
+   *
+   * ABSENCE IS REPORTED, NEVER DEFAULTED. The anti-entropy apply path reconstructs a notarization
+   * from replicated Tier-A columns and legitimately has none of these, so absence is not an error —
+   * but it IS the condition under which a later pull cannot be answered, and it must be visible now
+   * rather than inferred from a failing pull weeks later. No placeholder is invented: a fabricated
+   * leaf_count or legibility would produce a certificate that verifies as tampered.
+   */
+  async #recordCertificateFields(
+    notarization: SealNotarization,
+    sessionIdBuf: Buffer,
+    sealType: "unilateral" | "bilateral",
+    sessionIdHex: string,
+    correlationId: string | undefined,
+    externalClient?: pg.PoolClient,
+  ): Promise<void> {
+    const { leaf_count: leafCount, signer_pubkey: signerPubkey, legibility } = notarization;
+    if (leafCount === undefined || signerPubkey === undefined) {
+      this.#logger.warn("notarization.certificate_fields.absent", {
+        sessionId: sessionIdHex,
+        sealType,
+        hasLeafCount: leafCount !== undefined,
+        hasSignerPubkey: signerPubkey !== undefined,
+        correlationId,
+        impact: "no certificate fields stored for this seal; a client that missed the session_sealed push cannot pull a verifiable certificate for it",
+      });
+      return;
+    }
+
+    // ON CONFLICT DO NOTHING, not DO UPDATE: the row describes a notarization that has already been
+    // signed, and the table carries no UPDATE grant. A re-delivered or retried write is a no-op.
+    const sql = `INSERT INTO seal_certificate_fields
+                   (session_id, seal_type, leaf_count, signer_pubkey, legibility)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (session_id, seal_type) DO NOTHING`;
+    const params = [
+      sessionIdBuf,
+      sealType,
+      leafCount,
+      Buffer.from(signerPubkey),
+      legibility === undefined || legibility === null ? null : JSON.stringify(legibility),
+    ];
+
+    // Best-effort, and deliberately NOT allowed to fail the notarization. The notarization is the
+    // durable record of the seal; these fields only make it PULLABLE. Losing the seal because its
+    // convenience index failed would trade a recoverable gap for an unrecoverable one.
+    try {
+      if (externalClient) await externalClient.query(sql, params);
+      else await this.#pool.query(sql, params);
+    } catch (err) {
+      this.#logger.error("notarization.certificate_fields.write.failed", {
+        sessionId: sessionIdHex,
+        sealType,
+        reason: err instanceof Error ? err.message : String(err),
+        correlationId,
+        impact: "the seal is recorded but not pullable; a client that missed the push cannot recover a receipt for it",
+      });
     }
   }
 

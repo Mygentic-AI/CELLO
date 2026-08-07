@@ -78,6 +78,24 @@ export interface SealNotarization {
    */
   seal_type?: "unilateral" | "bilateral";
   /**
+   * DOD-TERMINAL-STATE-DIVERGENCE-1 — the three fields a client needs to VERIFY this seal when it
+   * has to PULL the certificate instead of being pushed one. All three are inside the signed TBS,
+   * so a certificate served without them cannot be verified at all; they are stored in
+   * `seal_certificate_fields` (V58), NOT in `seal_notarizations`, because that table is hash-chained
+   * and anti-entropy replicated and a new column there breaks verifyChain on every historical row.
+   *
+   * Optional on the TYPE so the anti-entropy apply path — which reconstructs a notarization from the
+   * replicated Tier-A columns and legitimately has none of these — still typechecks. On the LIVE
+   * seal path they are always available and their absence is reported, never defaulted: a
+   * notarization recorded without them yields an unverifiable certificate later, and the operator
+   * must be able to see that happen rather than discover it when a pull fails.
+   */
+  leaf_count?: number;
+  /** The initiator's primary (group) public key — what the FROST signature verifies against. */
+  signer_pubkey?: Uint8Array;
+  /** The legibility object exactly as bound into the TBS hash. */
+  legibility?: unknown;
+  /**
    * DOD-UP-1: when the previously-ABSENT party returns, recovers + verifies the content, and
    * co-signs its OWN ack leaf, the directory writes a NEW bilateral row that SUPERSEDES the
    * unilateral one via this FK to the unilateral row's id. The unilateral row is never mutated

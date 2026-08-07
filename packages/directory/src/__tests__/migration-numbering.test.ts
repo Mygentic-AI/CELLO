@@ -95,14 +95,24 @@ describe("directory migration numbering", () => {
     const highWaterMark = Math.max(...all, ...OWNED_BY_ANOTHER_BRANCH);
     const nextFree = highWaterMark + 1;
     expect(all).not.toContain(nextFree);
-    // Sanity: the agreement says V58 is next. If this drifts, the comment above is stale and the
+    // Sanity: the agreement says V59 is next. If this drifts, the comment above is stale and the
     // other branch has not been told.
     //
     // V57 was consumed on 2026-07-31 by m12/node-dir-gcp — GRANT SELECT ON flyway_schema_history TO
     // cello_ops_agent, so the ops agent can read the history its startup guard checks (V50 did the
     // same for cello_service). It is APPLIED on all three GCP nodes, so it cannot be renumbered.
-    // This assertion firing is the tripwire working: whoever takes 58 updates this line and thereby
-    // tells the other branch.
-    expect(nextFree, "coordination agreement says V58 is the next free number").toBe(58);
+    //
+    // V58 was consumed on 2026-08-07 by DOD-TERMINAL-STATE-DIVERGENCE-1 —
+    // `seal_certificate_fields`, the leaf_count / signer_pubkey / legibility a client needs to
+    // VERIFY a seal certificate it has to PULL rather than being pushed. A NEW table rather than
+    // columns on `seal_notarizations`, because that table is hash-chained AND anti-entropy
+    // replicated: a new column breaks verifyChain on every historical row, and adding the fields to
+    // the Tier-A hashed set changes the record hash of every historical row, so all three nodes
+    // would report divergence on data that never changed.
+    //
+    // NOT YET APPLIED to any node at the time of writing — but it is committed and pushed, so treat
+    // it as taken. This assertion firing is the tripwire working: whoever takes 59 updates this line
+    // and thereby tells the other branch.
+    expect(nextFree, "coordination agreement says V59 is the next free number").toBe(59);
   });
 });
