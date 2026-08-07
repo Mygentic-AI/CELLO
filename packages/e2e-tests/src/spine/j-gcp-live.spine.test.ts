@@ -277,11 +277,31 @@ describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fle
       await new Promise((r) => setTimeout(r, 8_000));
       cli(b.dir, ["receive", sid]);
       cli(a.dir, ["receive", sid]);
-      const sent = cli(a.dir, ["send", sid, "j-gcp-live", "--wrap"]) as { ok?: boolean; delivered?: boolean; reason?: string; guidance?: string };
+      // Retry, bounded — the same allowance the session step above already makes, one step later in
+      // the SAME eventually-consistent path. A session is brokered the moment discovery converges,
+      // but the relay assignment behind it settles slightly after; a single attempt asserts that
+      // both are instantaneous, which the design never promised.
+      //
+      // Measured 2026-08-07: three consecutive runs of this file, and TWO died here — 130s and 108s
+      // in, before reaching either seal. A guard that fails two times in three for a transient
+      // reason cannot tell you whether a fix works; it tells you the fleet was busy. That is worse
+      // than no guard, because a red run gets attributed to whatever was changed most recently.
+      //
+      // Bounded on purpose, and deliberately shorter than the session step's 60s: if the relay path
+      // has not settled within ~30s of an established session, that IS the finding and must fail.
+      let sent: { ok?: boolean; delivered?: boolean; reason?: string; guidance?: string } = {};
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        sent = cli(a.dir, ["send", sid, "j-gcp-live", "--wrap"]) as typeof sent;
+        if (sent.ok) break;
+        if (attempt < 4) await new Promise((r) => setTimeout(r, 10_000));
+      }
       // Carry the REASON into the failure. "send failed: expected false to be true" names the
       // assertion and not the fault, and a live test whose failure message omits the one field the
       // daemon filled in costs a whole re-run to learn what it already knew.
-      expect(sent.ok, `send failed: reason=${sent.reason ?? "(none)"} guidance=${sent.guidance ?? "(none)"}`).toBe(true);
+      expect(
+        sent.ok,
+        `send failed after 4 attempts over ~30s: reason=${sent.reason ?? "(none)"} guidance=${sent.guidance ?? "(none)"}`,
+      ).toBe(true);
       await new Promise((r) => setTimeout(r, 12_000));
       cli(b.dir, ["receive", sid]);
 
