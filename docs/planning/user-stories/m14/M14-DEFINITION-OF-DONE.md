@@ -829,120 +829,99 @@ Entry 31 in [[M14-BUILD-JOURNAL]] carries the full trace for each.
   the round twice. Ordinary in-flight overlap on a 1s backoff could stall a document at
   `MAX_REJECTED_ROUNDS` with no hostility involved.
 
-- **🔴 OPEN, ROOT CAUSE ESTABLISHED — a delivery-opened session seals before the ack can return, so
-  document acks are lost by construction.** This is the upstream cause of the 74 sends, and it means
-  **deliveries settle only when an independent conversation session happens to be open**.
+- **DOD-DOC-SEAL-ACK-1** ✅ [cello-client] — **a session is not torn down while an answer is still
+  owed on it.** Shipped in daemon 0.0.138, confirmed on operator traffic 2026-08-07
+  (`document.ack.admitted, firstAck: true`, settled in ~19s by the answer arriving rather than by
+  giving up).
 
-  The measurement: 4 ack frames sent across the whole daemon log, **2 admitted**. Successful acks
-  arrive 4ms after send; lost ones never arrive, and `document.frame.sent` reports success for both.
+  **THE ROOT CAUSE RECORDED HERE EARLIER WAS WRONG, and the correction matters more than the fix.**
+  It said the ack was "written into a session already sealing". It is not. The ack ARRIVES and is
+  VERIFIED, is HELD for ordering (`session.content.held`, canonical sequence ahead of the tree), and
+  is then DELETED by `#evictSessionCaches` when the seal destroys the session. Sent correctly,
+  received correctly, thrown away.
 
-  Two explanations fit the first four data points — session origin versus direction (every
-  delivery-opened case was also Miss_Chelly → CELLO_Coder_1, so they were confounded). **The
-  experiment named here resolved it**: session `347ecda6` on 2026-08-07 06:29 was opened by
-  Miss_Chelly's delivery worker in the *opposite* ack direction (A→B), and the ack was lost too.
-  Direction is falsified; session origin is confirmed.
+  That is not a document defect. ANY content held for ordering when a session is destroyed is lost
+  the same way, silently, and the sender goes on believing it was delivered.
 
-  The mechanism is visible in the timing of that session. `session.seal.leaf.submitted` fires at
-  `.102`, **90ms before the ack is sent at `.192`**, `autoacknowledged` at `.533`, sealed by
-  `:14.203`. The delivery path's own contract is "open-or-reuse-**then-seal**"
-  (`document-delivery.ts` `sendBytes`), and the ack rides that same path — so it is written into a
-  session already sealing. Nothing is dropped noisily; the write reports ok.
+  The DoD's recommended direction (hand delivery `sendContent`'s persisted-ack tracker) was NOT
+  taken. What shipped instead: a session the delivery worker opened is not sealed until the peer has
+  answered or a grace expires, the grace first attempts a DRAIN (held content is never routed to the
+  document layer, so waiting beside it achieves nothing), and teardown now logs
+  `session.content.held.discarded` — a loss report, not a cure, because by then the content is gone.
 
-  **Not fixed, deliberately** — it is a change to the delivery/seal contract, not a patch. The seal
-  is intentional (`document-delivery.ts:135`: "a never-acked envelope would pollute the peer's
-  sealed conversation record forever"), so the fix has to keep that property while giving the ack a
-  path home. Recommended direction, already identified in the send-path findings above: use
-  `sendContent`'s persisted-ack tracker — the receiver sends it only after durable ingest, it is the
-  only honest "the peer has it" signal that exists without a protocol change, and the delivery
-  worker is precisely the caller that wants it. That would let delivery settle without needing the
-  document-layer ack to survive the seal at all.
+  Three review findings shaped the final shape and are worth keeping: the grace is a 30s budget
+  spent across the whole sweep pass, not 10s per envelope inside three nested sequential loops (a
+  backlog of 100 to one silent peer would have frozen every other agent's syncing for ~15 minutes);
+  parked content never waits, because an offline peer cannot answer within any grace; and the seal is
+  unconditional for an opened session, since trading it for the wait would leave an autonomous
+  session running — the exact thing the seal exists to prevent.
 
-- **🔴 OPEN, ROOT CAUSE ESTABLISHED — a document frame permanently breaks `since_seq` catch-up for
-  the session it rides.** Cross-milestone: M8C owns `since_seq`, M14 owns document frames, and the
-  defect exists only where they meet — which is why neither milestone's tests see it.
+- **DOD-DOC-SINCESEQ-1** ✅ [cello-client] — **a document frame is not a hole in the catch-up walk.**
+  Shipped in daemon 0.0.138; verified BY HAND on the real stuck case (session `6be3c8bd…`, blocked at
+  `last_read_seq: -1` with two document frames at sequences 0 and 2 — caught up and the send gate
+  opened).
 
-  A document frame **consumes a sequence number and writes no transcript row** — deliberately, per
-  `document-frame-router.ts`: "A document frame is NOT a transcript message." But
-  `cello_receive { since_seq }` advances its watermark by walking a CONTIGUOUS run of present
-  sequence numbers, and an absent index stops the walk. `session-content-handlers.ts` states this
-  as intended ("a genuinely absent index … ARE unread") without noticing that a document frame
-  produces exactly that shape. So the walk stops at the document frame **forever**, and every later
-  message stays unread no matter how many times the caller reads it.
+  Both authorities the gate consults now key on the LEAF KIND (`doc`/`reject`), never on row-absence.
+  CELLO_Coder_1's constraint held up under review: the first negative control was HOLLOW — it seeded
+  no leaves, so `seq < leafKinds.length` ("any index the tree has is not a hole") passed it and the
+  positive case while jumping straight over an undecryptable message. The control now uses a DENSE
+  tree whose index 1 is a `msg` leaf with no readable row, and was verified by applying that bypass
+  and watching it fail.
 
-  Both send-gate authorities then refuse: `connectionCursor` never advances past the gap, and
-  `unreadReceived` never reaches 0. The operator sees `session_not_current`, and the guidance points
-  at `cello_receive` — which they have already run. A plain `cello_receive` DOES clear it, so the
-  fix is reachable but not the one the error names. That is the "rule satisfiable only through a
-  door the caller is not pointed at" shape CATCHUP §3b forbids, reintroduced through a third
-  milestone's frame type.
+- **DOD-DOC-E2E-NOCHAT-1** ✅ [trustless-cello] — **co-editing with no conversation open.** Two agents
+  that share a document without ever chatting, which is the ordinary case for the feature and which
+  nothing covered: every other case in `j-documents.spine.test.ts` opens a session and exchanges a
+  message first, so the delivery worker always REUSES one, and a reused session is never sealed.
 
-  **Observed live**, not reasoned about. Session `66e2215a…` on 2026-08-07: transcript holds
-  sequences 0, 1, 2, 5, 6 with `undecryptable: 0`; the daemon log shows two
-  `session.document.received {kind: update}` at 07:17:23 that took 3 and 4. `cello_send` was blocked
-  twice, `since_seq: 2` returned the message in full and advanced nothing
-  (`last_read_seq: 2, unread_received: 1`), and a plain `cello_receive` cleared it immediately.
+  **THE CLAIM RECORDED HERE EARLIER — that the enforcer "cannot fail by construction" — WAS WRONG.**
+  The new case passed on its FIRST run against the unfixed build, because locally the ack wins the
+  race it loses on a real network. A timing race, not a structural blind spot. It is a genuine
+  round-trip guard and it still cannot fail deterministically on the seal race; both halves of that
+  are true and the second one is the reason it is not evidence on its own.
 
-  **Not a rare interaction.** The delivery worker REUSES an open session, so document traffic lands
-  in whatever conversation session already exists between the two agents. Any pair that both talks
-  and co-edits hits this — which is the entire M14 use case.
+  Kept as the standing caution, restated accurately: **a green enforcer whose setup hides the failure
+  proves less than it looks like.** That part was right.
 
-  **NOT SELF-HEALING.** The hole is permanent: a pair that has ever exchanged a document frame has
-  `since_seq` broken for that session forever, not until the next message.
+- **✅ FIXED — the migration guard reports its own failure.** Both birth-gated `ADD COLUMN` sites
+  were `try { … } catch { }`, which cannot tell "already present" (every start after the first) from
+  a broken schema. One helper now matches the benign case on its message, logs anything else under
+  `db.column_birth.failed` with the table, column and driver message, and RETHROWS — because if the
+  column cannot be added every query reading it fails anyway, and the choice is between failing at
+  startup with the cause named and failing later elsewhere with it lost.
 
-  **AND IT ACCUMULATES, because the two open findings compound.** Deliveries never settle (the
-  delivery-session seal above), so the worker keeps re-sending; each retry rides the conversation
-  session and punches ANOTHER hole. Measured on session `66e2215a…` over roughly twenty minutes:
-  document frames at 07:17:23 ×2, then again at 07:28:22 ×2 — four frames, four consumed sequence
-  numbers, on a session whose participants never once mentioned a document to each other. Fixing
-  the ack loss reduces the rate; it does not fix this, and this does not fix that.
+  Fixed ahead of the two-machine test deliberately: a migration only really executes on a FRESH
+  database, which is exactly where the silence was guaranteed.
 
-  **Fix direction, not yet decided:** the walk must distinguish "no row because it was never
-  READABLE" from "no row because it was never a TRANSCRIPT MESSAGE". Key it on the LEAF KIND
-  (`0x04`/`0x05` are document leaves) — **never on row-absence**. Absent-and-unreadable and
-  absent-because-not-a-message are identical from the transcript side, and that identity IS the
-  bug, so a fix keying on row-absence only relocates it (CELLO_Coder_1's sharpening, and it is the
-  constraint that matters most here). Wants its own unit loop; do not patch it inside a cascade,
-  and do not split the fix across M8C and M14 — it surfaces through an M8C tool but belongs in the
-  document layer.
+- **✅ INVESTIGATED — NOT A DEFECT: `cello_inbox` and `cello_receive` answer different questions,
+  deliberately.** Recorded here because the observation was real and the conclusion is not obvious.
 
-- **🔴 OPEN — `J-DOCUMENTS` CANNOT FAIL ON THE ACK PATH, BY CONSTRUCTION.** Every case in the spine
-  enforcer runs `twoPartiesInSession`, which does a message round trip before touching a document.
-  That leaves an interactive session open for the rest of the test — so document acks always have a
-  live session to return over, and **the delivery-session seal defect above is invisible to all ten
-  cases**. They pass with the defect fully present, on Andre's daemon, at 88 sends and climbing.
+  After the 2026-08-07 restart `cello_inbox` reported 1 unread at `last_seq 13` while `cello_receive`
+  handed back sequence 0. Both correct for their own scope: inbox counts against the AGENT'S durable
+  watermark; receive serves against a PER-CONNECTION delivery bookmark held in memory and defaulting
+  to -1, so a reconnect is a new connection replaying from the start.
 
-  State it that way and not as a footnote: **an enforcer that cannot fail on the thing it appears to
-  cover is worse than no enforcer, because it manufactures confidence.** A green `J-DOCUMENTS` is
-  evidence that documents converge when a conversation is already open. It is NOT evidence the ack
-  path works in the field, and it was read that way for most of a day.
+  Seeding a new connection's bookmark from the durable watermark was tried and **reverted** — it
+  broke six `DOD-COATTEND-1` cases. That design is explicit: `T4 (AC6)` requires a connection
+  attaching mid-conversation to catch up from its own bookmark, and `T1` requires two attached
+  connections to BOTH receive a message. Per-connection independence is the property; inheriting the
+  agent's position destroys it.
 
-  Fix when the seal defect is fixed: one case that publishes with NO prior message exchange, so the
-  delivery worker must open the session itself. That is the ordinary case for two agents who
-  co-edit without chatting first, and nothing covers it.
+  So the surfaces disagree by design and the design is right. What is left is a wording problem, not
+  a behaviour one — the inbox count and the receive stream measure different things and neither says
+  so. Folded into the reporting-honesty items below rather than carried as a defect.
 
-- **🟠 OPEN — the `abandoned_at` migration's guard converts a real failure into silence.** The
-  column-birth `ALTER` is wrapped in a bare `catch {}` because "already present" is the expected
-  throw. That catch **cannot distinguish "already there" from a corrupt schema**, it logs nothing
-  either way, and the only proof of success is a side effect in a different subsystem — a
-  `document.delivery.sweep` that keeps appearing, because a missing column would throw on every
-  `pendingDeliveries` query.
-
-  Same shape as the degradation paths this milestone keeps finding: a fallback built well enough to
-  hide whether the primary path ever worked. Raised from "if it bites" to its own line at
-  CELLO_Coder_1's insistence, and they were right. Fix: catch, inspect the message for the
-  already-exists case, and `logger.error` anything else. It inherits from
-  `document-handshake.ts`, so that one wants the same treatment.
-
-- **🟡 OPEN, NOT ROOT-CAUSED — `cello_inbox` and `cello_receive` disagree about what is unread after
-  a daemon restart.** On session `66e2215a…` after the 2026-08-07 restart, `cello_inbox` reported
-  `unread_count: 1, last_seq: 13` while `cello_receive` on that same session returned
-  **`sequence_number: 0`** — the first message of the conversation, read hours earlier. The
-  transcript holds 0,1,2,5,6,7,10,11,12,13 with `undecryptable: 0`.
-
-  Recorded as an observation with its evidence, not a diagnosis: it is one sighting, the read
-  watermark's persistence across restart has not been traced, and it may share the walk that the
-  document-frame hole above breaks. Worth confirming before anyone builds on either surface's
-  answer.
+- **🟠 OPEN — two reporting-honesty findings from the 2026-08-07 review, both PRE-EXISTING.**
+  Neither breaks behaviour; both make a broken system look healthy, which is this milestone's
+  signature failure.
+  - `deliver` returns `admitted: null` even when the ack landed inside the grace, so
+    `document.delivery.sweep { delivered: N }` is **always 0 in production** and the
+    `document.delivery.acked` / `.rejected` branches are dead. A sweep that delivers nothing is
+    byte-identical to a healthy idle one — the exact defect H3 was raised to fix, alive on a
+    different field. Fix: have `awaitAck` resolve the outcome rather than a boolean.
+  - `document.delivery.unacked_limit` still says *"Their client may not support shared documents
+    yet"* — an assertion about the peer's software for a failure whose measured cause was our own
+    teardown. Fix: carry what was observed, and point at `ack_grace_expired` and
+    `session.content.held.discarded`.
 
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
