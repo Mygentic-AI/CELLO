@@ -689,12 +689,57 @@ the inbound-content half stays out of scope until it is.
   `peer` scope when `counterpartyPubkey` was null, which would have hidden seals from a support
   desk; and the fetch-failure log named no cause, because `asyncio.TimeoutError` stringifies to
   the empty string.
+  **The second (final) pass found two more, both fixed in `a895fd8`:** the busy guard compared
+  `chat_id` against `_active_sessions`, which the gateway keys by the full namespaced session key
+  — so it never fired once and the consume-then-lose window it was written to close stayed wide
+  open, and the test that covered it was green only because the stub returned `chat_id` from
+  `build_session_key`, asserting the very identity under test. And a regression this feature
+  introduced: `merge_pending_message_event` keeps the existing event and mutates only `.text`, so
+  a second session merged into a busy turn lost its anchor and one reply — written in view of
+  both peers' words — would have been delivered entirely to whichever arrived first. Both fixes
+  are revert-tested.
   ⚠️ **Not ✅ — no live journey yet.** Vitest green ≠ done (CLAUDE.md milestone-close rule). What
   is owed: a Hermes host running this build, `cello bridge hermes` re-run, gateway restarted, and
   a real two-way session where the peer's words appear in the Hermes transcript and the reply
   reaches the peer without the agent calling `cello_send`. Also unproven live: `session_scope:
   peer` with two concurrent counterparties, and the desktop-turn case (typing into a shared
   session must deliver NOTHING to the peer).)
+- **DOD-HERMES-4b (the review's non-blocking remainder)** — carried here rather than left in a
+  reviewer's output, so none of it returns as a "new finding". None blocks the live journey; each
+  is a real defect with a known shape.
+  - **`internal=True` now carries counterparty content** (`assets.ts`, the MessageEvent). The flag
+    means "system-generated, bypass user authorization" and excludes the event from the
+    scale-to-zero inbound clock. That was accurate when the text was adapter-authored prose; in
+    channel mode it is a peer's words. Two consequences to confirm against the Hermes side before
+    changing it: whether peer content should be bypassing authorization at all, and whether a live
+    CELLO conversation can now fail to count as traffic and let the gateway scale to zero
+    mid-conversation. **Do not flip it blind** — `internal=False` may require the CELLO pseudo-user
+    to pass an authorization path it was never enrolled in, which would reject messages outright.
+  - **Unbounded wake queue + head-of-line blocking.** `asyncio.Queue()` has no `maxsize` and the
+    worker is serialized, so each channel-mode wake can hold it for up to `RECEIVE_TIMEOUT_MS + 5s`.
+    Add a bound with a loud drop. `disconnect()` also clears `_wake_task` but leaves the queue
+    populated, so frames from a dead connection replay after the next `connect()` — drain it.
+  - **A dead wake worker is only resurrected by a socket drop.** `_start_wake_worker` is called
+    only from `_establish`. The worker's per-frame `except Exception` makes death unlikely, not
+    impossible; if it dies on a healthy socket the reader keeps enqueueing into a queue nobody
+    drains and the adapter is silently deaf until the daemon restarts. Add a `add_done_callback`
+    that logs at ERROR and restarts.
+  - **`_pending` is shared across sockets.** On reconnect the OLD reader's `finally:
+    _fail_pending()` can kill the NEW connection's in-flight `ipc.connect`. Self-healing via the
+    retry loop, but it produces spurious "Reconnect failed" cycles that read as a daemon fault.
+    Needs a connection generation counter or a per-socket `_pending`. Shape is pre-existing; it
+    matters more now that the wake worker depends on the socket.
+  - **`delivery_mode: wake` + hint `channel` loses every reply silently.** `connect()` logs the
+    mismatch loudly but proceeds; in that direction the agent is told not to call `cello_send`
+    while `send()` is a no-op returning success at every layer. Either refuse to connect on that
+    combination or coerce the mode. (The reverse direction is merely noisy — duplicate sends.)
+  - **Untested surfaces:** `connect()`'s mismatch branch, `_invalid_settings()`, the whole
+    `registry.ts` flag parser (`valueOf`/`missingValue`/`valueIndexes`), and the wake worker's
+    reconnect/cancel lifecycle (AC6 drives one clean pass only).
+  - **`hermes-install.test.ts` re-implements the bridge arg parser inside the test** instead of
+    importing it, so it always passes — and it now mirrors the OLD two-flag logic while production
+    handles four. Pre-existing, now stale and actively misleading: export the parser and test the
+    real one, or delete the test. — ❌ NOT BUILT
 - **DOD-HERMES-5 (multi-agent binding — GATED ON HERMES-4)** — one Hermes gateway binds more than
   one CELLO agent: agent list from `config.extra` with one platform entry per agent
   (`CELLO_AGENT_NAME` survives as the one-agent shorthand), `cello bridge hermes --agent a --agent b`.
@@ -2743,7 +2788,52 @@ own story) deliberately, never smuggled in as a rider. Source:
   notice read the in-memory map while the `DELETE` read disk, so a row absent from the map was
   destroyed with no per-entry notice — the silent discard AC3 names as the worse failure.
 
-  **Still open, inherited by `DOD-TERMINAL-WAKE-1`:** `drainAwaitingToPark` does not evict on a
+  **⚠️ STILL OPEN — and the 2026-08-07 attempt closed the wrong half. Read before touching this.**
+
+  `drainAwaitingToPark` keeps the row on EVERY park failure, so a park that can never succeed is
+  re-attempted at every boot forever. Five reasons; they are NOT equivalent:
+
+  | reason | loops forever? | why |
+  |---|---|---|
+  | `no_counterparty` | **YES** | if the sessions row never gains one, nothing changes it |
+  | `no_persisted_relay_endpoint` | **YES** | learned on session reconnect; a long-dead session never reconnects |
+  | `standing_receiver_unavailable` | no | rebuilt on the next agent start |
+  | `signing_key_unavailable` | no | the provider is simply not loaded yet |
+  | `owning_agent_not_found` | yes, but **rare** | needs `remove-agent` on an agent that still held un-acked content |
+
+  **What shipped (`b5d340d`) evicts ONLY `owning_agent_not_found`** — the one case provable from
+  local state (no `agents` row; `remove-agent` is permanent). **That is the rarest of the three, and
+  it is not the case that was reported.** The review's example was "a retired relay, a revoked
+  deposit capability", which maps to the two `YES` rows above. So the reported defect still loops.
+  Recorded plainly because the commit initially read as if the residual were handled — it is not.
+
+  **Why the two real cases were left.** Catching them means declaring a failure permanent without
+  being able to prove it, and if that judgement is wrong the daemon deletes a message the sender
+  believes was delivered. Age-gating is banned here for exactly that reason (AC2). A correct fix
+  needs a real permanent-vs-transient signal — e.g. the relay reporting the deposit capability as
+  revoked rather than the client inferring it — which is its own unit with its own design.
+
+  **Ruled SHIP-WITHOUT (Andre, 2026-08-07).** The cost of the remaining loop is one WARN per daemon
+  restart per stranded row: no data loss, nothing user-visible, no false trust claim. It fails the
+  ruin test comfortably, and building a permanent/transient distinction is not worth launch runway
+  for a log line. Do not re-discover this and do not "tidy" it with an age sweep.
+
+  **Also on 2026-08-07: a fix for this was written, reviewed, and REVERTED (`3b23337` → `026705b`),
+  and the reason is worth keeping.** It disposed of awaiting rows when the SENDER's session went
+  terminal, on the premise that a sealed/abandoned session can never accept the content. False on
+  both counts: the receiver's guard checks the RECEIVER's own status (`active`/`interrupted` both
+  pass, and `interrupted` is documented as "recovering that parked content COMPLETES the local
+  view"), and the sender-side park chain never consults session status at all. Worse, the two states
+  where an awaiting row realistically coexists with a terminal status — a unilateral `abandoned`, or
+  the UNILATERAL seal — are exactly where the content is still needed; in the unilateral-seal case
+  the parked copy is what lets the returning counterparty converge on the root it is being asked to
+  ratify. **Terminal-on-my-side is an exit-point condition dressed as a fact about the peer**, the
+  same shape as `directory_unreachable` standing in for a payload bug. Caught by review before
+  publish; nothing shipped.
+
+  ---
+
+  Original note, superseded by the table above: `drainAwaitingToPark` does not evict on a
   permanently-failing park (a retired relay, a revoked deposit capability), so such a row is retried
   at every boot forever — the same strand shape one layer over, minus the metric symptom.
 
