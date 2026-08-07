@@ -78,6 +78,11 @@ describe("DOD-AE-CHAINED-TABLES-1: seal_notarizations and user_accounts replicat
     expect(store.tierATables()).toEqual([
       "user_accounts",
       "agent_profiles",
+      // V59 (other branch, merged 2026-08-07). Position is FK-safe: its account_id references
+      // user_accounts, so applying a link before the account it points at fails the FK. Added here
+      // because the merge updated the allowlist in m12-inv-shares-local but not this list — the two
+      // guards keep separate copies, so a merge can satisfy one and leave the other red.
+      "agent_account_links",
       "agent_revocations",
       "capability_claim_codes",
       "authorized_issuers",
