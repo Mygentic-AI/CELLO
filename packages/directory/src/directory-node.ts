@@ -182,6 +182,8 @@ import {
   encodeSubmissionWriteResult,
   encodeSubmissionResults,
   encodeSubmissionResultsError,
+  encodeSealCertificate,
+  encodeSealCertificateError,
   encodeSubmissionWriteError,
   encodeManifestPollResponse,
   encodePong,
@@ -2342,6 +2344,14 @@ export class CelloDirectoryNode {
           // agent that can dial this node collect every other agent's outcomes, including refusal
           // messages sealed to somebody else. Unopenable by them, but never theirs to hold.
           void this.#processSubmissionResultsRequest(stream, authedPubkeyHex!);
+        } else if (parsed.type === "seal_certificate_request") {
+          // DOD-TERMINAL-STATE-DIVERGENCE-1 — the PULL twin of the session_sealed push.
+          //
+          // SCOPED BY `authedPubkeyHex`, exactly as the results request above: the requester is the
+          // identity the stream's challenge-response established, never a field on the frame. A
+          // request-supplied pubkey would let anyone who can dial this node fetch any session's
+          // certificate — and a certificate names both parties and the shape of their conversation.
+          void this.#processSealCertificateRequest(stream, parsed.session_id, authedPubkeyHex!);
         } else if (parsed.type === "session_request") {
           // REG-001 AC-009: refuse session_request if registration is required and the agent
           // has not completed it. requireRegistration defaults to false for backward compat.
@@ -2826,6 +2836,72 @@ export class CelloDirectoryNode {
    * hands back a refusal message it cannot itself read — the mirror of accepting a submission it
    * cannot read on the way in.
    */
+  /**
+   * DOD-TERMINAL-STATE-DIVERGENCE-1 — serve a seal certificate to a participant who never received
+   * the `session_sealed` push.
+   *
+   * ANY node can answer this. `seal_notarizations` and `seal_certificate_fields` are both Tier-A
+   * anti-entropy tables, so the certificate is already on the node the stranded client happens to
+   * have authenticated to — which is the entire point, because the re-delivery queue that was
+   * supposed to cover this is per-node while clients roam.
+   *
+   * The directory is not trusted for the contents: every field is inside the FROST-signed TBS and
+   * the client re-verifies the signature before recording anything.
+   */
+  async #processSealCertificateRequest(stream: Stream, sessionId: Uint8Array, authedPubkeyHex: string): Promise<void> {
+    const sessionIdHex = Buffer.from(sessionId).toString("hex");
+    try {
+      const cert = await this.#store.getSealCertificate(sessionIdHex);
+
+      // NOT FOUND and NOT A PARTICIPANT give the SAME answer, deliberately. Distinguishing them
+      // turns this verb into an oracle for which session ids exist. A participant learns nothing
+      // from `not_found` that they did not already know; a stranger learns nothing at all.
+      const requesterIsParticipant =
+        cert !== undefined &&
+        (Buffer.from(cert.participant_a_pubkey).toString("hex") === authedPubkeyHex ||
+          Buffer.from(cert.participant_b_pubkey).toString("hex") === authedPubkeyHex);
+
+      if (!cert || !requesterIsParticipant) {
+        // Logged at DEBUG with the requester truncated: a miss is the ordinary answer for a stranger
+        // probing, and logging it at INFO would make the ordinary case noisy enough to bury a real one.
+        this.#logger?.debug("seal.certificate.pull.refused", {
+          sessionId: truncHex(sessionIdHex),
+          requester: truncHex(authedPubkeyHex),
+          // Distinguishes the two internally WITHOUT putting the distinction on the wire.
+          cause: cert ? "not_a_participant" : "no_verifiable_certificate",
+        });
+        this.#sendFrame(stream, encodeSealCertificateError({ session_id: sessionId, reason: "not_found" }));
+        return;
+      }
+
+      this.#logger?.info("seal.certificate.pull.served", {
+        sessionId: truncHex(sessionIdHex),
+        requester: truncHex(authedPubkeyHex),
+        sealType: cert.seal_type,
+      });
+      this.#sendFrame(stream, encodeSealCertificate({
+        session_id: cert.session_id,
+        sealed_root: cert.sealed_root,
+        frost_signature: cert.frost_signature,
+        signer_pubkey: cert.signer_pubkey,
+        close_timestamp: cert.close_timestamp,
+        leaf_count: cert.leaf_count,
+        seal_type: cert.seal_type,
+        legibility: cert.legibility,
+      }));
+    } catch (err) {
+      // NAME the cause rather than letting the client time out. A silent failure here is
+      // indistinguishable from "no certificate exists", which is the false answer that would send an
+      // operator to force-abandon a session whose receipt is intact.
+      this.#logger?.error("seal.certificate.pull.failed", {
+        sessionId: truncHex(sessionIdHex),
+        requester: truncHex(authedPubkeyHex),
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      this.#sendFrame(stream, encodeSealCertificateError({ session_id: sessionId, reason: "lookup_failed" }));
+    }
+  }
+
   async #processSubmissionResultsRequest(stream: Stream, authedPubkeyHex: string): Promise<void> {
     try {
       const results = await listSubmissionResults(this.#pgPool!, authedPubkeyHex);

@@ -197,6 +197,26 @@ export interface DirectoryStore {
   getNotarizationId(sessionIdHex: string, sealType: "unilateral" | "bilateral"): Promise<number | undefined>;
 
   /**
+   * DOD-TERMINAL-STATE-DIVERGENCE-1: the VERIFIABLE certificate for a session — the notarization
+   * joined to the V58 certificate fields. Returns undefined when either half is missing, because a
+   * notarization without those fields cannot be verified by the client and must not be served as
+   * though it could. Carries the participant pubkeys so the caller can enforce that the requester
+   * is one of them.
+   */
+  getSealCertificate(sessionIdHex: string): Promise<{
+    session_id: Uint8Array;
+    sealed_root: Uint8Array;
+    frost_signature: Uint8Array;
+    signer_pubkey: Uint8Array;
+    close_timestamp: number;
+    leaf_count: number;
+    seal_type: "unilateral" | "bilateral";
+    legibility: unknown;
+    participant_a_pubkey: Uint8Array;
+    participant_b_pubkey: Uint8Array;
+  } | undefined>;
+
+  /**
    * SEAL-2 (Sybil/relationship-farming defense): record the RELATIONSHIP-GRAPH rows for a completed
    * seal — conversation_seals (close_type + the sealed root HASH) + one conversation_participation
    * row per party + one conversation_attestations row per party. These feed the analytics graph

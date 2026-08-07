@@ -410,7 +410,22 @@ export type SealInterruptedRejectionFrame = { type: "seal_interrupted_rejection"
  */
 export type SubmissionResultsRequest = { type: "submission_results_request" };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SessionOfferReject | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest | SubmissionWrite | SubmissionResultsRequest;
+/**
+ * DOD-TERMINAL-STATE-DIVERGENCE-1 — the PULL twin of the `session_sealed` push.
+ *
+ * `session_sealed` is pushed once, over the requester's authenticated signaling stream. A stream
+ * that is down at that instant loses the frame permanently: the re-delivery queue is per-node while
+ * clients roam across nodes, so a client reconnecting elsewhere drains an empty queue. The session
+ * IS notarized and the counterparty holds a receipt; the party that missed the push holds an
+ * `interrupted` row and can never produce one.
+ *
+ * Carries ONLY the session id. The requester is established by the authenticated stream, never by a
+ * field — reading it from a field is the INV-ATTRIBUTION defect that lets one agent fetch another's
+ * certificate.
+ */
+export type SealCertificateRequest = { type: "seal_certificate_request"; session_id: Uint8Array };
+
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SessionOfferReject | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest | SubmissionWrite | SubmissionResultsRequest | SealCertificateRequest;
 
 /**
  * M10B / DOD-END-SUBMIT-1: acknowledge a sealed submission (OUTBOUND).
@@ -478,6 +493,62 @@ export function encodeSubmissionResults(frame: {
 /** M10B: refuse a results fetch, NAMING the cause. Silence would be indistinguishable from "none". */
 export function encodeSubmissionResultsError(frame: { reason: string }): Uint8Array {
   return ENC.encode({ type: "submission_results_error", reason: frame.reason });
+}
+
+/**
+ * DOD-TERMINAL-STATE-DIVERGENCE-1: the pulled seal certificate (OUTBOUND).
+ *
+ * Byte-for-byte the same certificate content the `session_sealed` push carries, because the client
+ * runs the SAME verifier over it (`verifyBilateralSealCertificate`) and that verifier hashes a TBS
+ * built from these exact fields. A field shaped differently here than on the push is a certificate
+ * that fails verification — so this encoder must not "improve" anything.
+ *
+ * The directory is NOT trusted for any of it. Every field is inside the FROST-signed TBS and the
+ * client re-derives and re-checks the signature before recording a thing; a tampered `legibility`
+ * or `leaf_count` changes the hash and the signature fails. That is what makes serving this from
+ * ANY node safe, rather than only from the one that adjudicated the seal.
+ */
+export function encodeSealCertificate(frame: {
+  session_id: Uint8Array;
+  sealed_root: Uint8Array;
+  frost_signature: Uint8Array;
+  signer_pubkey: Uint8Array;
+  close_timestamp: number;
+  leaf_count: number;
+  seal_type: "unilateral" | "bilateral";
+  legibility: unknown;
+}): Uint8Array {
+  return ENC.encode({
+    type: "seal_certificate",
+    session_id: frame.session_id,
+    sealed_root: frame.sealed_root,
+    // Mirrors the push frame's discriminator. The pull only ever serves a row that carries a real
+    // group signature, so this is never "single".
+    signature_type: "frost",
+    frost_signature: frame.frost_signature,
+    signer_pubkey: frame.signer_pubkey,
+    close_timestamp: frame.close_timestamp,
+    leaf_count: frame.leaf_count,
+    seal_type: frame.seal_type,
+    legibility: frame.legibility,
+  });
+}
+
+/**
+ * DOD-TERMINAL-STATE-DIVERGENCE-1: refuse a certificate pull, NAMING the cause.
+ *
+ * `not_found` is deliberately the answer for BOTH "no such session" and "you are not a participant".
+ * Distinguishing them would turn this verb into an oracle for which session ids exist, and a session
+ * id is the one identifier a non-participant might plausibly guess at. The requester learns nothing
+ * they did not already know.
+ *
+ * `fields_unavailable` is a DIFFERENT answer and must stay separate: the seal exists and the caller
+ * IS a participant, but it was notarized before V58 and its verifiable fields were never recorded.
+ * Collapsing that into `not_found` would tell an operator their conversation was never sealed, which
+ * is false and is the exact class of lie this whole line exists to remove.
+ */
+export function encodeSealCertificateError(frame: { session_id: Uint8Array; reason: string }): Uint8Array {
+  return ENC.encode({ type: "seal_certificate_error", session_id: frame.session_id, reason: frame.reason });
 }
 
 /**
@@ -711,6 +782,14 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
   if (o["type"] === "submission_results_request") {
     // No fields to validate — see the type's comment for why it carries none.
     return { type: "submission_results_request" };
+  }
+
+  if (o["type"] === "seal_certificate_request") {
+    const sessionId = toUint8Array(o["session_id"]);
+    // 16 bytes, same as every other session id on this surface. A wrong-length id is a malformed
+    // frame, not a lookup that happens to miss — refuse it here rather than let it reach the store.
+    if (!sessionId || sessionId.length !== 16) return null;
+    return { type: "seal_certificate_request", session_id: sessionId };
   }
 
   if (o["type"] === "seal_attempt") {

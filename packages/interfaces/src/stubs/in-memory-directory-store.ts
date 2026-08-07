@@ -72,6 +72,50 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     return this.#notarizationIds.get(`${sessionIdHex}:${sealType}`);
   }
 
+  /**
+   * DOD-TERMINAL-STATE-DIVERGENCE-1: mirror the pg INNER JOIN against `seal_certificate_fields`.
+   *
+   * The join is the load-bearing part, so the stub must reproduce it rather than return whatever it
+   * holds: a notarization WITHOUT leaf_count/signer_pubkey is not a servable certificate (the client
+   * cannot verify it), and a stub that served one anyway would let a test pass against behaviour
+   * production does not have. The seal-UPGRADE row is exactly that case — it carries no certificate
+   * fields — so filtering here is what keeps the stub honest about it.
+   *
+   * Ordering matches pg: prefer a bilateral row, but only among rows that actually have fields.
+   */
+  async getSealCertificate(sessionIdHex: string): Promise<{
+    session_id: Uint8Array;
+    sealed_root: Uint8Array;
+    frost_signature: Uint8Array;
+    signer_pubkey: Uint8Array;
+    close_timestamp: number;
+    leaf_count: number;
+    seal_type: "unilateral" | "bilateral";
+    legibility: unknown;
+    participant_a_pubkey: Uint8Array;
+    participant_b_pubkey: Uint8Array;
+  } | undefined> {
+    const candidates = (["bilateral", "unilateral"] as const)
+      .map((t) => this.#notarizations.get(`${sessionIdHex}:${t}`))
+      .filter((n): n is SealNotarization => n !== undefined)
+      // The INNER JOIN: no fields, no certificate.
+      .filter((n) => n.leaf_count !== undefined && n.signer_pubkey !== undefined);
+    const n = candidates[0];
+    if (!n) return undefined;
+    return {
+      session_id: n.session_id,
+      sealed_root: n.sealed_root,
+      frost_signature: n.frost_signature,
+      signer_pubkey: n.signer_pubkey!,
+      close_timestamp: n.close_timestamp,
+      leaf_count: n.leaf_count!,
+      seal_type: n.seal_type ?? "bilateral",
+      legibility: n.legibility ?? null,
+      participant_a_pubkey: n.participant_a_pubkey,
+      participant_b_pubkey: n.participant_b_pubkey,
+    };
+  }
+
   // SEAL-2: relationship-graph rows, keyed by conversationId (UNIQUE, mirrors the pg constraint).
   readonly #conversationSeals = new Map<string, ConversationSealRecord>();
 

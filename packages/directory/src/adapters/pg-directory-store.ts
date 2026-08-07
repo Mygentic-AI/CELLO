@@ -732,6 +732,72 @@ export class PgDirectoryStore implements DirectoryStore {
    * ceremony calls this to set supersedes_notarization_id on the new bilateral row. Returns
    * undefined when no such row exists.
    */
+  /**
+   * DOD-TERMINAL-STATE-DIVERGENCE-1: the certificate a client can VERIFY, for a session it was
+   * never told had sealed. Joins `seal_notarizations` to `seal_certificate_fields` (V58) and
+   * returns a row only when BOTH halves are present — the fields are what make it verifiable, so a
+   * notarization without them is not a servable certificate and must not be dressed up as one.
+   *
+   * ORDERED BY THE FIELDS, NOT BY seal_type. `getNotarization` puts the bilateral row first because
+   * that is the authoritative seal — but the bilateral row written by the seal UPGRADE path carries
+   * no certificate fields (its signature is B's ack over a different TBS, against B's own key), so
+   * bilateral-first ordering would return the one row that cannot be served. The INNER JOIN already
+   * excludes it; the ordering below then prefers a bilateral row when one genuinely has fields.
+   *
+   * Returns the participant pubkeys too, so the caller can enforce that the requester is one of
+   * them without a second query.
+   */
+  async getSealCertificate(sessionIdHex: string): Promise<{
+    session_id: Uint8Array;
+    sealed_root: Uint8Array;
+    frost_signature: Uint8Array;
+    signer_pubkey: Uint8Array;
+    close_timestamp: number;
+    leaf_count: number;
+    seal_type: "unilateral" | "bilateral";
+    legibility: unknown;
+    participant_a_pubkey: Uint8Array;
+    participant_b_pubkey: Uint8Array;
+  } | undefined> {
+    const result = await this.#pool.query<Record<string, unknown>>(
+      `SELECT n.session_id, n.sealed_root, n.frost_signature, n.close_timestamp,
+              n.participant_a_pubkey, n.participant_b_pubkey, n.seal_type,
+              f.leaf_count, f.signer_pubkey, f.legibility
+         FROM seal_notarizations n
+         JOIN seal_certificate_fields f
+           ON f.session_id = n.session_id AND f.seal_type = n.seal_type
+        WHERE n.session_id = decode($1, 'hex')
+        ORDER BY (n.seal_type = 'bilateral') DESC, n.id DESC
+        LIMIT 1`,
+      [sessionIdHex],
+    );
+    if (result.rows.length === 0) return undefined;
+    const row = deserializeRow<{
+      session_id: Buffer;
+      sealed_root: Buffer;
+      frost_signature: Buffer;
+      close_timestamp: number;
+      participant_a_pubkey: Buffer;
+      participant_b_pubkey: Buffer;
+      seal_type: "unilateral" | "bilateral";
+      leaf_count: number;
+      signer_pubkey: Buffer;
+      legibility: unknown;
+    }>("seal_notarizations", result.rows[0]!);
+    return {
+      session_id: new Uint8Array(row.session_id),
+      sealed_root: new Uint8Array(row.sealed_root),
+      frost_signature: new Uint8Array(row.frost_signature),
+      signer_pubkey: new Uint8Array(row.signer_pubkey),
+      close_timestamp: row.close_timestamp,
+      leaf_count: row.leaf_count,
+      seal_type: row.seal_type,
+      legibility: row.legibility ?? null,
+      participant_a_pubkey: new Uint8Array(row.participant_a_pubkey),
+      participant_b_pubkey: new Uint8Array(row.participant_b_pubkey),
+    };
+  }
+
   async getNotarizationId(
     sessionIdHex: string,
     sealType: "unilateral" | "bilateral",
