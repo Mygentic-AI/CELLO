@@ -923,6 +923,43 @@ Entry 31 in [[M14-BUILD-JOURNAL]] carries the full trace for each.
     teardown. Fix: carry what was observed, and point at `ack_grace_expired` and
     `session.content.held.discarded`.
 
+- **🔴 OPEN, BLOCKING M14 CLOSE — DOCUMENTS DO NOT CONVERGE BETWEEN TWO MACHINES.** The two-machine
+  smoke (SHIP-1's close condition) ran on 2026-08-07 between the laptop (`CELLO_Coder_1`) and the
+  Hermes EC2 (`Miss_Chelly_H`), both on daemon 0.0.139. **Neither side's update ever reached the
+  other.** Andre predicted this class of failure when choosing the host: two machines behind
+  different NATs cannot hole-punch, so every frame takes the relay — a path no enforcer exercises,
+  because the spine harness runs both daemons on one host against a local Docker relay.
+
+  What DID work, end to end and across machines: propose (`counterparty_offline` on the first
+  attempt, presence not yet propagated), **`--retry` re-sending the SAME offer** — the path that was
+  unreachable from every surface this morning — inbox, accept, `proposerNotified: true`, and both
+  sides publishing their own edit with `fileUpdated: true`.
+
+  What failed, measured on both daemons:
+
+  | | laptop | Hermes EC2 |
+  |---|---|---|
+  | published its edit | 15:47:51 | 15:47:51 |
+  | delivery attempts | 5 (15:48:06 → 15:50:06, ~60s apart) | 1 (15:48:55) |
+  | `unacked_limit` | 15:50:06, gave up | never fired |
+  | inbound from the peer | **none** | **none** |
+
+  Neither log carries a single `session.document.received` for the other's frame. The sends report
+  success; nothing arrives. The laptop's surface reads `status: stalled`,
+  `abandonedDeliveries: 1`, `peerHasPublished: false`.
+
+  **`abandonedDeliveries` is why this is legible at all** — added the same day. Without it the
+  laptop would have shown `pendingDeliveries: 0` and read as *delivered*.
+
+  Note the asymmetry: the laptop retried five times and the EC2 exactly once, which is itself
+  unexplained and worth resolving before theorising about the relay.
+
+  **DO NOT FIX BY THEORY.** Nothing here identifies WHERE the frame is lost — sender, relay, or
+  receiver. The next step is one measurement, not a hypothesis: instrument or read the relay's own
+  record for these two sessions and establish whether the frame reached it, and whether the peer
+  ever fetched it. Every wrong turn in this milestone came from reasoning about the protocol instead
+  of reading one comparison.
+
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
 - **DOD-DOC-E2E-CONV-1** [trustless-cello] — **convergence enforcer GREEN** (`aa6dea04`, re-confirmed
