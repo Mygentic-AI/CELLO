@@ -70,6 +70,11 @@ describe("DOD-INV-SHARES-LOCAL: the share table is unreachable through anti-entr
       // that did not register them. Both columns are already published facts about a binding the
       // operator created; neither is key material.
       "agent_account_links",
+      // V60. The email↔account binding, for the same reason: the column form on `user_accounts` is
+      // nullable and set after INSERT, so it is excluded from that hash-chained table's set and had
+      // never replicated — which is why sign-in worked only against the node that registered the
+      // operator. A SHA-256 stub, never an address; the directory holds no PII.
+      "account_email_stubs",
       "agent_revocations",
       "capability_claim_codes",
       "authorized_issuers",

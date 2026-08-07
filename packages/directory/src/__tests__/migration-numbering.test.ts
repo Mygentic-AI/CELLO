@@ -125,8 +125,13 @@ describe("directory migration numbering", () => {
     // is worse than no replication, and `agent_revocations` already proves the shape — express the
     // mutation as an append-only fact and Tier A carries it for free.
     //
+    // V60 was consumed the same night by the same work — `account_email_stubs`, the email↔account
+    // binding, for the same reason one table along: the column lives on a hash-chained table and is
+    // populated after INSERT, so it is excluded from that table's set and had never replicated.
+    // Sign-in resolved only against the node that registered the operator.
+    //
     // This tripwire found the collision it exists for, in both directions, on the same day. Whoever
-    // takes 60 updates this line.
-    expect(nextFree, "coordination agreement says V60 is the next free number").toBe(60);
+    // takes 61 updates this line.
+    expect(nextFree, "coordination agreement says V61 is the next free number").toBe(61);
   });
 });

@@ -287,6 +287,25 @@ export const AGENT_ACCOUNT_LINKS_SPEC: TierATableSpec = {
 };
 
 /**
+ * account_email_stubs (V60). The email↔account binding as an append-only FACT.
+ *
+ * `user_accounts.email_stub_hash` is nullable and set after the row exists, so it is excluded from
+ * that table's hashed set — correctly, because `user_accounts` is hash-chained and a
+ * populated-later column would fork the chain. The consequence was that the email hash lived only
+ * on the node that registered the operator: the portal asked a different node first, was told "no
+ * such account", and sign-in was impossible (2026-08-07).
+ *
+ * Both columns are immutable, so there is nothing to merge. Keyed by the STUB because that is the
+ * direction sign-in asks in, and because it leaves one account with several verified addresses
+ * representable rather than forbidden by accident.
+ */
+export const ACCOUNT_EMAIL_STUBS_SPEC: TierATableSpec = {
+  table: "account_email_stubs",
+  naturalKey: ["email_stub_hash"],
+  immutableColumns: ["email_stub_hash", "account_id"],
+};
+
+/**
  * The registered Tier-A specs — all tables that must converge to the same value across nodes.
  * Previously four; expanded 2026-07-31 to cover the tables that were in the AWS Postgres mesh
  * but were never registered for AE.
@@ -313,6 +332,7 @@ export const AGENT_ACCOUNT_LINKS_SPEC: TierATableSpec = {
 export const TIER_A_SPECS: readonly TierATableSpec[] = [
   AGENT_PROFILES_SPEC,
   AGENT_ACCOUNT_LINKS_SPEC,
+  ACCOUNT_EMAIL_STUBS_SPEC,
   AGENT_REVOCATIONS_SPEC,
   USER_ACCOUNTS_SPEC,
   SEAL_NOTARIZATIONS_SPEC,

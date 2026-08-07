@@ -83,6 +83,10 @@ describe("DOD-AE-CHAINED-TABLES-1: seal_notarizations and user_accounts replicat
       // because the merge updated the allowlist in m12-inv-shares-local but not this list — the two
       // guards keep separate copies, so a merge can satisfy one and leave the other red.
       "agent_account_links",
+      // V60. Same FK-safe position and the same reason — account_id references user_accounts.
+      // Added to BOTH this list and the one in m12-inv-shares-local, because the note above is
+      // right: they keep separate copies and satisfying one leaves the other red.
+      "account_email_stubs",
       "agent_revocations",
       "capability_claim_codes",
       "authorized_issuers",

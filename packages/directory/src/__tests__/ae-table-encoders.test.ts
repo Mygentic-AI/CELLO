@@ -177,6 +177,19 @@ describe("DOD-AE-APPEND-1: Tier-A table encoders", () => {
     ]);
     for (const spec of TIER_A_SPECS) {
       for (const col of spec.immutableColumns) {
+        // EXEMPT WHEN IT IS THE NATURAL KEY. The ban is on columns that are absent at INSERT and
+        // populated later — those fork the hash when the backfill lands. A natural-key column
+        // cannot be one of those: the row does not exist without it.
+        //
+        // This came up with V60. `email_stub_hash` is banned because on `user_accounts` it is
+        // nullable and set after the account exists — exactly the forking case. On
+        // `account_email_stubs` the same NAME is the primary key, NOT NULL, written once. Banning
+        // it there would ban the table whose entire purpose is to replicate that fact, so the rule
+        // is scoped to the property it is actually about rather than to the spelling.
+        //
+        // Every existing ban is unchanged: `id`, `chain_hash`, `created_at`,
+        // `supersedes_notarization_id` and `correlation_id` are natural keys nowhere.
+        if (spec.naturalKey.includes(col)) continue;
         expect(FORBIDDEN.has(col), `${spec.table}.${col} is a local column and must not be hashed`).toBe(false);
       }
       // natural key columns must themselves be immutable (stable identity)

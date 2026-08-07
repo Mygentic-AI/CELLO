@@ -1174,6 +1174,31 @@ export class PgDirectoryStore implements DirectoryStore {
       );
       this.#logger.info("account.created", { accountId, correlationId });
 
+      // V60: record the email binding as an APPEND-ONLY FACT as well, because that is the form that
+      // replicates. The column above sits on a hash-chained table and is populated later, so it is
+      // excluded from the Tier-A set by construction — which is why the stub lived only on the node
+      // that registered the operator, and why sign-in against any other node returned "no such
+      // account" for a verified address (2026-08-07).
+      //
+      // Best-effort: the account IS created and chained at this point. A missing stub fact costs a
+      // sign-in lookup on nodes that never saw it — repairable by re-running the backfill — whereas
+      // failing the account creation is not repairable at all.
+      if (emailStubHash) {
+        try {
+          await this.#pool.query(
+            `INSERT INTO account_email_stubs (email_stub_hash, account_id) VALUES ($1,$2)
+             ON CONFLICT (email_stub_hash) DO NOTHING`,
+            [emailStubHash, accountId],
+          );
+        } catch (err: unknown) {
+          this.#logger.error("account.email_stub.fact_failed", {
+            accountId,
+            reason: err instanceof Error ? err.message : String(err),
+            note: "the account exists and the legacy column is set; the REPLICATED stub is missing, so sign-in will resolve only against nodes that hold the column",
+          });
+        }
+      }
+
       // Read back the inserted row to return AccountRow
       const result = await this.#pool.query<Record<string, unknown>>(
         `SELECT id, account_id, phone_stub_hash, email_stub_hash, created_at, chain_hash

@@ -54,7 +54,7 @@ import type { HashChainedTable } from "./hash-chain.js";
 import type { Logger } from "@cello-protocol/interfaces";
 import {
   encodeTierARecord, type TierATableSpec, type TableRow,
-  AGENT_PROFILES_SPEC, AGENT_ACCOUNT_LINKS_SPEC, AGENT_REVOCATIONS_SPEC, USER_ACCOUNTS_SPEC, SEAL_NOTARIZATIONS_SPEC,
+  AGENT_PROFILES_SPEC, AGENT_ACCOUNT_LINKS_SPEC, ACCOUNT_EMAIL_STUBS_SPEC, AGENT_REVOCATIONS_SPEC, USER_ACCOUNTS_SPEC, SEAL_NOTARIZATIONS_SPEC,
   SEAL_CERTIFICATE_FIELDS_SPEC,
   CAPABILITY_CLAIM_CODES_SPEC, AUTHORIZED_ISSUERS_SPEC, SIGNAL_RECORDS_SPEC,
   SUBMISSION_RESULTS_SPEC, RELAY_REGISTRATIONS_SPEC, DIRECTORY_NODES_SPEC,
@@ -135,6 +135,15 @@ const TIER_A: readonly TierAPg[] = [
     // the kill switch cannot evaluate, and Tier-A apply is insert-if-absent — so a row accepted with
     // a null could never be repaired by a later round. Refuse it rather than let it settle.
     requiredColumns: ["agent_id", "account_id"],
+  },
+  {
+    // V60. Also after user_accounts — same FK ordering reason as the link above.
+    spec: ACCOUNT_EMAIL_STUBS_SPEC,
+    bytea: [],
+    naturalKeyConstraint: "account_email_stubs_pkey",
+    // A stub with no account resolves sign-in to nobody, and an account with no stub is a row that
+    // answers no question. Tier-A apply is insert-if-absent, so neither could be repaired later.
+    requiredColumns: ["email_stub_hash", "account_id"],
   },
   { spec: AGENT_REVOCATIONS_SPEC, bytea: ["signature"], naturalKeyConstraint: "agent_revocations_pkey" },
   // ── The tables that were in the AWS Postgres mesh but never ported to AE ──────────────────────
