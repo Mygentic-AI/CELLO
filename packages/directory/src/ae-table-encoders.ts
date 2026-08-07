@@ -346,7 +346,28 @@ export const CONVERSATION_ATTESTATIONS_SPEC: TierATableSpec = {
  *   registrations, pre_authorization_tokens — per-node Telegram registration state machine
  *   conversation_seal_staging — ephemeral staging rows consumed during the seal ceremony
  *
- * NOT included and NOT a decision — unregistered and unassessed (found 2026-08-03):
+ * ⚠️ THAT LIST CONTRADICTS `M12-ANTI-ENTROPY-DESIGN.md`, AND THE CONTRADICTION IS UNRESOLVED.
+ *
+ * The design doc's Tier-B table gives EXPLICIT MERGE RULES to five of the tables called "node-local
+ * by design" above: `sessions` (owner-wins), `pre_authorization_tokens` and `capability_claim_codes`
+ * (monotonic single-flip on consumed_at/redeemed_at), and `pickup_queue` + `pending_notifications`
+ * (insert-plus-ack-tombstones with a bounded GC window, designed specifically so a lagging peer
+ * cannot resurrect deleted ciphertext). A table with a written merge rule is not a table someone
+ * decided was node-local.
+ *
+ * Neither document records which decision superseded which, and the evidence points at drift rather
+ * than a reversal: `capability_claim_codes` and `directory_nodes` were on this "node-local" list
+ * until they moved to Tier A — capability_claim_codes only after it broke Telegram registration in
+ * production on 2026-07-31. So the list has already been wrong, twice, in the direction of
+ * under-replicating.
+ *
+ * TREAT NEITHER AS AUTHORITATIVE ON ITS OWN. Before adding or excluding a table, read both, and if
+ * they disagree resolve it in writing rather than picking the one that agrees with you. This exact
+ * ambiguity is how the AWS mesh's 21 replicated tables became 4 with nobody noticing for three
+ * months. Full account: `docs/planning/discussion_logs/2026-08-07_1912_replication-gap-what-m12-left-unfinished.md`.
+ *
+ * NOT included and NOT a decision — unregistered and unassessed (found 2026-08-03, RESOLVED 2026-08-07
+ * by V61, which added their natural keys and registered them):
  *   conversation_participation, conversation_attestations
  *
  * `recordConversationSeal` writes all three of `conversation_seals`, `conversation_participation`

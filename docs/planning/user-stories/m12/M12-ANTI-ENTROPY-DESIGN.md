@@ -128,6 +128,22 @@ Apply rule: insert by natural key, `ON CONFLICT DO NOTHING`. Divergence detectio
 set-reconciliation problem (§3). RLS already makes these physically append-only for
 `cello_service` — the sync writer needs no new privileges beyond INSERT it already has.
 
+> ⚠️ **STATUS 2026-08-07 — this table is a DESIGN, not a description of what exists.** Two of these
+> eight are built (`agent_suspensions`, `agent_presence`). The other six are not, and
+> `ae-table-encoders.ts` describes five of them as "node-local by design" — which contradicts this
+> section. Neither document records which decision superseded which. `capability_claim_codes` and
+> `directory_nodes` were on that node-local list until they moved to Tier A, the former only after it
+> broke Telegram registration in production, so the drift has already run in the
+> under-replicating direction twice.
+>
+> The consequence of the unbuilt six, and the mutable columns that were told to "ride Tier B rules"
+> and had nowhere to ride: the kill switch authorized from a link that never left its node, sign-in
+> resolved only against the node that registered the operator, and revocation state stayed local.
+> Fixed for the links by V59–V61 as append-only FACTS rather than Tier-B columns — a wrong merge rule
+> is worse than no replication, and `agent_revocations` already proves the shape.
+>
+> Full account: `docs/planning/discussion_logs/2026-08-07_1912_replication-gap-what-m12-left-unfinished.md`
+
 ### Tier B — mutable, explicit merge rule per table
 
 | Set | Key | Merge rule |
