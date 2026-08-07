@@ -8,7 +8,17 @@ description: How to publish the cello-client npm packages. Use when bumping vers
 ## What ships, and what an operator installs
 
 cello-client publishes **seven** packages (plus `interfaces`, which originates in trustless-cello):
-`crypto`, `protocol-types`, `transport`, `client`, `daemon`, `cli`, `connect`.
+`crypto`, `protocol-types`, `transport`, `gateway`, `daemon`, `cli`, `connect`.
+
+> **Two names do not match their directories, and guessing costs a round each.**
+> - **`connect` lives in `core/adapter-claude-code/`** — there is no `core/connect`. Its
+>   `package.json` says `@cello-protocol/connect`; the directory does not.
+> - **`client` is RETIRED from this repo.** `@cello-protocol/client` still exists on npm at its
+>   last version and is still a dependency of published packages, but nothing here builds it, so it
+>   is NOT in the cascade and must NOT be bumped. `gateway` took its slot in the seven.
+>
+> **The authoritative list is `ci.yml`, not this file** — the publish-completeness loop and the
+> `pnpm publish --filter` lines. Read it before computing a cascade; this section drifts.
 
 The architecture matters for publishing:
 - **`connect`** (`@cello-protocol/connect`) is a thin **MCP shim**. It creates no libp2p node; it proxies
@@ -139,7 +149,7 @@ Promote every package to `latest` at its exact published version — the canonic
 npm dist-tag add @cello-protocol/connect@0.0.61 latest
 npm dist-tag add @cello-protocol/cli@0.0.32 latest
 npm dist-tag add @cello-protocol/daemon@0.0.35 latest
-npm dist-tag add @cello-protocol/client@0.0.46 latest
+npm dist-tag add @cello-protocol/gateway@0.0.28 latest
 npm dist-tag add @cello-protocol/crypto@0.0.18 latest
 npm dist-tag add @cello-protocol/transport@0.0.16 latest
 npm dist-tag add @cello-protocol/protocol-types@0.0.18 latest
