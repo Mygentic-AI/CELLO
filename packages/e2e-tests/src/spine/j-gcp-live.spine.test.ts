@@ -298,6 +298,75 @@ describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fle
       // than no seal — it is two receipts that cannot both be true.
       expect(ra.sealed_root).toMatch(/^[0-9a-f]{64}$/);
       expect(ra.sealed_root).toBe(rb.sealed_root);
+
+      // ── PHASE 2: the INTERRUPTED cross-node seal ─────────────────────────────────────────────
+      //
+      // Phase 1 proves an ACTIVE cross-node seal. The interrupted variant takes a DIFFERENT branch
+      // of the close handler, and that branch did not dial the brokering node — so between two
+      // agents homed on different directories it timed out in BOTH directions while each
+      // counterparty was online and waiting. Measured 2026-08-07 (CELLO_Coder_1 on gcp-euw1,
+      // Miss_Chelly_H on gcp-usc1); the code had been that way, untouched, since 2026-06-15.
+      //
+      // It survived because every other test puts both agents on ONE machine, hence one directory —
+      // the single arrangement in which the bug cannot occur. This phase exists to make that
+      // configuration impossible to ship green again.
+      //
+      // A daemon SIGKILL + restart is how a real session becomes 'interrupted' (daemon.ts: "a daemon
+      // restart flips dead half-opens to 'interrupted'"), so this drives the real path rather than
+      // forcing a status.
+      const sess2 = cli(a.dir, ["initiate-session", bPub]) as { sessionId?: string; reason?: string };
+      expect(sess2.sessionId, `second session failed: ${sess2.reason}`).toBeTruthy();
+      const sid2 = sess2.sessionId!;
+
+      await new Promise((r) => setTimeout(r, 8_000));
+      cli(b.dir, ["receive", sid2]);
+      cli(a.dir, ["receive", sid2]);
+      expect((cli(a.dir, ["send", sid2, "j-gcp-live-interrupted", "--wrap"]) as { ok?: boolean }).ok).toBe(true);
+      await new Promise((r) => setTimeout(r, 12_000));
+      cli(b.dir, ["receive", sid2]);
+
+      // Kill A's daemon outright — no graceful close, which is what makes the session interrupted
+      // rather than sealed — and bring it back on the SAME directory and store.
+      const aIndex = sides.findIndex((s) => s.dir === a.dir);
+      daemons[aIndex]?.kill("SIGKILL");
+      await new Promise((r) => setTimeout(r, 5_000));
+      const revived = spawn("node", [DAEMON], {
+        env: {
+          ...process.env,
+          CELLO_DIR: a.dir,
+          CELLO_DIRECTORY_URL: a.url,
+          CELLO_CONSORTIUM_MANIFEST: manifestPath,
+          CELLO_CONSORTIUM_ROOT_KEYS: rootKeys,
+          CELLO_CONSORTIUM_THRESHOLD: "1",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: false,
+      });
+      let revivedOut = "";
+      revived.stderr?.on("data", (d: Buffer) => { revivedOut += d.toString(); });
+      revived.stdout?.on("data", (d: Buffer) => { revivedOut += d.toString(); });
+      daemons[aIndex] = revived;
+      await new Promise((r) => setTimeout(r, 30_000));
+      expect(/"event":"daemon\.started"/.test(revivedOut), `revived daemon never started:\n${revivedOut.slice(-1200)}`).toBe(true);
+
+      // The session must now be INTERRUPTED on A's side — if it is not, this phase is asserting
+      // nothing and would pass while the interrupted branch stayed broken.
+      const listed = cli(a.dir, ["sessions"]) as { sessions?: { session_id?: string; status?: string }[] };
+      const row = (listed.sessions ?? []).find((r2) => r2.session_id === sid2);
+      expect(row?.status, `expected sid2 to be interrupted after restart, got ${row?.status}`).toBe("interrupted");
+
+      // THE ASSERTION. Closing from the interrupted side must reach the counterparty THROUGH the
+      // brokering node and seal. Before the fix this returned counterparty_unavailable after a full
+      // timeout, for a counterparty that was online the whole time.
+      const rInt = (await cliAsync(a.dir, ["close-session", sid2])) as {
+        ok?: boolean; sealed_root?: string; reason?: string;
+      };
+      expect(
+        rInt.ok,
+        `interrupted cross-node close failed: ${rInt.reason} — this is the two-node seal defect, ` +
+          `not a flake. A same-node run cannot reproduce it.`,
+      ).toBe(true);
+      expect(rInt.sealed_root).toMatch(/^[0-9a-f]{64}$/);
     },
     1_800_000,
   );
