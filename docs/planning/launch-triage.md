@@ -820,6 +820,17 @@ Recorded so they stop being re-found by every sweep:
   metric and an accumulating second copy of message plaintext at rest (inside SQLCipher). Real, but
   forgivable; watch the growth rate, not the single row. The relay parked-content TTL does NOT cover
   it — different store, different side of the wire.
+- **Awaiting-ACK park loop** (part of `DOD-RETRYQ-STRAND-1`, ❌ open) — `drainAwaitingToPark` keeps
+  the row on every park failure, so two of the five reasons (`no_counterparty`,
+  `no_persisted_relay_endpoint`) re-attempt at every boot forever. **Ship without** (Andre,
+  2026-08-07): the cost is one WARN per restart per stranded row — no data loss, nothing
+  user-visible, no false trust claim. `owning_agent_not_found` was fixed (`b5d340d`) because it is
+  the one case provable locally; it is also the rarest, and it is **not** the reported case, so the
+  reported defect still loops. Catching the other two means declaring a failure permanent without
+  proof, and being wrong deletes a message the sender believes was delivered — which is why AC2
+  bans age-gating. **Do not "tidy" this with an age sweep.** A real fix needs a permanent/transient
+  signal from the relay, and that is its own unit. An earlier attempt keyed on the SENDER's terminal
+  session status was reverted before publish for destroying deliverable content — see the DoD line.
 - **`DOD-SPINE-JCONTENT-1`** (M8D, 🅿️) — the live parked-message spine journey is 5/10 green.
   Test-harness debt; the two product defects it surfaced are fixed.
 
