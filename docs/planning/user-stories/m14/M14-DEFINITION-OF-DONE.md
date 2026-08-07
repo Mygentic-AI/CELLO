@@ -1084,8 +1084,12 @@ Entry 31 in [[M14-BUILD-JOURNAL]] carries the full trace for each.
 - **DOD-DOC-E2E-WRITE-1** [trustless-cello] — **write-path enforcer** ran green: the full file
   round-trip at the tool surface (edit file → publish → peer file rewritten → pending → diff
   stats → diff → content identical), then withdraw on an undelivered update reverts the
-  sender's file and records the withdrawal. — ⏳ **FILE ROUND TRIP GREEN** (`6a1223fa`); the
-  withdraw half is out of V1 by decision.
+  sender's file and records the withdrawal. — ✅ **FILE ROUND TRIP GREEN** (`6a1223fa`), three cases
+  in `J-DOCUMENTS-WRITE`.
+
+  Marked ✅ rather than ⏳: the only clause not covered is withdraw, and withdraw is CUT FROM V1 BY
+  DECISION — scope removed, not work owed. A ⏳ here reads as an outstanding task on every scan of
+  this document and would keep the milestone open on a line nobody intends to build.
 
   **The file surface did not exist in production.** `DocumentWritePath` — materialize,
   diff-the-file, admit-and-rewrite, 500 lines with its own test file — had no production caller.
