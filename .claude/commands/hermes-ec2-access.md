@@ -72,6 +72,39 @@ systemctl --user restart hermes-serve hermes-gateway
    from git instead.
 5. **Never terminate or delete AWS resources without explicit user confirmation.**
 
+## The `cello` CLI on this host — MIND THE PATH
+
+`cello` is installed globally under **`~/.npm-global/bin`**, which is NOT on the PATH of a
+non-interactive SSH command. So this looks like cello is not installed at all:
+
+```bash
+ssh … "cello -v"        # → "command not found" — WRONG CONCLUSION
+```
+
+Export the path first. Every cello command over SSH needs this prefix:
+
+```bash
+ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@54.234.44.162 \
+  'export PATH=$HOME/.npm-global/bin:$PATH; cello -v'
+```
+
+Upgrading to a freshly promoted `latest` — `--prefer-online` is not optional, because `@latest`
+resolves from this host's own npm cache and will otherwise install the previous version while
+reporting success:
+
+```bash
+ssh … 'export PATH=$HOME/.npm-global/bin:$PATH;
+       npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest'
+```
+
+Verify ON DISK rather than from the install output, and check the daemon too — the cli pins it at an
+exact version, so the daemon is the one that actually carries protocol changes:
+
+```bash
+ssh … 'node -p "require(process.env.HOME+\"/.npm-global/lib/node_modules/@cello-protocol/cli/package.json\").version";
+       node -p "require(process.env.HOME+\"/.npm-global/lib/node_modules/@cello-protocol/cli/node_modules/@cello-protocol/daemon/package.json\").version"'
+```
+
 ## Smoke test
 
 ```bash
