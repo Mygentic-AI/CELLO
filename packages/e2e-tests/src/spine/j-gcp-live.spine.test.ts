@@ -277,8 +277,11 @@ describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fle
       await new Promise((r) => setTimeout(r, 8_000));
       cli(b.dir, ["receive", sid]);
       cli(a.dir, ["receive", sid]);
-      const sent = cli(a.dir, ["send", sid, "j-gcp-live", "--wrap"]) as { ok?: boolean; delivered?: boolean };
-      expect(sent.ok, "send failed").toBe(true);
+      const sent = cli(a.dir, ["send", sid, "j-gcp-live", "--wrap"]) as { ok?: boolean; delivered?: boolean; reason?: string; guidance?: string };
+      // Carry the REASON into the failure. "send failed: expected false to be true" names the
+      // assertion and not the fault, and a live test whose failure message omits the one field the
+      // daemon filled in costs a whole re-run to learn what it already knew.
+      expect(sent.ok, `send failed: reason=${sent.reason ?? "(none)"} guidance=${sent.guidance ?? "(none)"}`).toBe(true);
       await new Promise((r) => setTimeout(r, 12_000));
       cli(b.dir, ["receive", sid]);
 
@@ -292,12 +295,13 @@ describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fle
       });
       const [rb, ra] = await Promise.all(closes);
 
-      expect(ra.ok, `initiator close failed: ${ra.reason}`).toBe(true);
-      expect(rb.ok, `responder close failed: ${rb.reason}`).toBe(true);
-      // Both parties must agree on the root. A seal where each side holds a different root is worse
-      // than no seal — it is two receipts that cannot both be true.
-      expect(ra.sealed_root).toMatch(/^[0-9a-f]{64}$/);
-      expect(ra.sealed_root).toBe(rb.sealed_root);
+      // ASSERTED AT THE END, not here. The active-seal phase is a KNOWN-RED regression guard for a
+      // different defect (`seal_unilateral_timeout` — the notarization is durable but the closing
+      // side is never told, fixed by having the client fetch the certificate). Asserting inline
+      // aborted the run before the interrupted-seal phase below ever executed, so one red guard
+      // masked an entirely unrelated one and the second could never report at all.
+      //
+      // Both are still asserted, and neither is weakened — only the ORDER moves.
 
       // ── PHASE 2: the INTERRUPTED cross-node seal ─────────────────────────────────────────────
       //
@@ -367,6 +371,14 @@ describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fle
           `not a flake. A same-node run cannot reproduce it.`,
       ).toBe(true);
       expect(rInt.sealed_root).toMatch(/^[0-9a-f]{64}$/);
+
+      // ── the ACTIVE-seal assertions, deferred from above ──────────────────────────────────────
+      expect(ra.ok, `initiator close failed: ${ra.reason}`).toBe(true);
+      expect(rb.ok, `responder close failed: ${rb.reason}`).toBe(true);
+      // Both parties must agree on the root. A seal where each side holds a different root is worse
+      // than no seal — it is two receipts that cannot both be true.
+      expect(ra.sealed_root).toMatch(/^[0-9a-f]{64}$/);
+      expect(ra.sealed_root).toBe(rb.sealed_root);
     },
     1_800_000,
   );
