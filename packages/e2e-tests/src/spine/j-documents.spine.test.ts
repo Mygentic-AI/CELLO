@@ -793,6 +793,15 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
    * about the protocol instead of reading one comparison; do not add a fourth fix before that line
    * of output exists.
    */
+  // RUN AGAIN 2026-08-07 with the instrumentation the header demands, and it STILL FAILS. Left
+  // skipped rather than opened for a fourth fix, and the reason has changed since it was written:
+  // the runaway it guards against is now stopped by the unacked ceiling, which was repaired the
+  // same day (it logged "the document has stopped publishing" and kept sending — 90 times against a
+  // cap of 5). This stall is a second net behind one that now holds.
+  //
+  // NEXT STEP IS UNCHANGED and still costs one run: capture `document.inbound.chain_refused` for
+  // envelope 2 and read `claimedPrev` / `ourHead` / `prevIsKnown` / `knownCount`, which the refusal
+  // now prints. Do not add a fourth fix before that output exists.
   it.skip("repeated refusals STALL the document rather than retrying forever", async () => {
     const { a, b } = await twoPartiesInSession("docstall");
     const proposed = (await a.conn.call("cello_doc_propose", {
@@ -1107,4 +1116,93 @@ describe("J-DOCUMENTS-TERMINAL — a REFUSED proposal settles its in-flight upda
         `--- B (receiver) document log ---\n${documentLines(b.daemon)}`,
     ).toBe(0);
   }, 240_000);
+});
+
+/**
+ * Two registered agents on two daemons with NO SESSION BETWEEN THEM — the case every other
+ * enforcer in this file skips, and the reason none of them can fail on the ack path.
+ *
+ * `twoPartiesInSession` opens a session and exchanges a message before touching a document. That
+ * leaves an interactive session open for the rest of the test, so the delivery worker REUSES it
+ * rather than opening its own — and a reused session is not sealed, so the peer's ack always has a
+ * live channel to come home on. Every ack in this file arrives for that reason.
+ *
+ * Two agents who co-edit without chatting first have no such session. The worker opens one, and
+ * the open-or-reuse-THEN-SEAL contract seals it — so the ack is written into a session that is
+ * already sealing. That is the ordinary case for the feature, and nothing covered it.
+ */
+async function twoPartiesNoSession(label: string): Promise<{ a: Party; b: Party }> {
+  const celloDirA = mkdtempSync(join(tmpdir(), `cello-${label}A-`));
+  const celloDirB = mkdtempSync(join(tmpdir(), `cello-${label}B-`));
+  dirs.push(celloDirA, celloDirB);
+  const pubA = await provisionAgent(celloDirA, "agentA");
+  const pubB = await provisionAgent(celloDirB, "agentB");
+  const daemonA = await startLocalDaemon(celloDirA, `${label}A`);
+  const daemonB = await startLocalDaemon(celloDirB, `${label}B`);
+  daemons.push(daemonA, daemonB);
+  expect(registerAgent("agentA", `DEV-${label}-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirA }).status).toBe(0);
+  expect(registerAgent("agentB", `DEV-${label}-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: celloDirB }).status).toBe(0);
+
+  const connA = await connectMcp(celloDirA, `${label}-A`);
+  const connB = await connectMcp(celloDirB, `${label}-B`);
+  mcpConns.push(connA, connB);
+  for (const [conn, name] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+    expect(((await conn.call("cello_start_agent", { name })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await conn.call("cello_use_agent", { name })) as { ok?: boolean }).ok).toBe(true);
+  }
+
+  // NO cello_initiate_session, and NO cello_send. That absence IS the test fixture.
+  const a: Party = { conn: connA, daemon: daemonA, celloDir: celloDirA, pubkey: pubA, sessionId: "" };
+  const b: Party = { conn: connB, daemon: daemonB, celloDir: celloDirB, pubkey: pubB, sessionId: "" };
+  return { a, b };
+}
+
+describe("J-DOCUMENTS-NOCHAT — co-editing with NO conversation open (DOD-DOC-E2E-NOCHAT-1)", () => {
+  it("a published update is ACKNOWLEDGED when the delivery worker had to open the session itself", async () => {
+    const { a, b } = await twoPartiesNoSession("nochat");
+
+    const proposed = (await a.conn.call("cello_doc_propose", {
+      peer_pubkey: b.pubkey,
+      starting_content: "# Shared\n\nline one\n",
+    })) as { ok?: boolean; documentId?: string };
+    expect(proposed.ok, `propose failed: ${JSON.stringify(proposed)}`).toBe(true);
+    const documentId = proposed.documentId!;
+
+    const inboxBy = Date.now() + 90_000;
+    while (Date.now() < inboxBy) {
+      const inbox = (await b.conn.call("cello_doc_inbox", {})) as { proposals?: Array<{ documentId?: string }> };
+      if (inbox.proposals?.some((p) => p.documentId === documentId)) break;
+      await sleep(1000);
+    }
+    expect(await b.conn.call("cello_doc_accept", { document_id: documentId })).toMatchObject({ ok: true });
+
+    const updated = "# Shared\n\nline one\nline two from A\n";
+    expect(
+      await a.conn.call("cello_doc_write", { document_id: documentId, content: updated }),
+    ).toMatchObject({ ok: true, published: true });
+
+    // The content still arrives — the frame is sent before the seal, so convergence was never the
+    // broken half. Asserted anyway, so a failure below cannot be confused for a delivery failure.
+    await waitForText(b.conn, documentId, updated, "B's copy with no conversation open");
+
+    // THE ASSERTION. The peer applied it and answered; the answer has to reach us. Unacknowledged,
+    // the worker re-sends every tick until the unacked ceiling retires it — which reads to the
+    // operator as a document that silently stopped publishing.
+    let pendingDeliveries: number | undefined;
+    const settleBy = Date.now() + 120_000;
+    while (Date.now() < settleBy) {
+      const listed = (await a.conn.call("cello_doc_list", {})) as {
+        documents?: Array<{ documentId?: string; pendingDeliveries?: number }>;
+      };
+      pendingDeliveries = listed.documents?.find((d) => d.documentId === documentId)?.pendingDeliveries;
+      if (pendingDeliveries === 0) break;
+      await sleep(2000);
+    }
+    expect(
+      pendingDeliveries,
+      `A's update was applied by B but never acknowledged — the ack had no session to come home on.\n` +
+        `--- A (sender) document log ---\n${documentLines(a.daemon)}\n` +
+        `--- B (receiver) document log ---\n${documentLines(b.daemon)}`,
+    ).toBe(0);
+  }, 300_000);
 });
