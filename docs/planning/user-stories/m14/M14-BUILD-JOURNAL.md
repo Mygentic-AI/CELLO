@@ -2995,6 +2995,78 @@ this one. The ack-loss root cause above is **established and unfixed** — it is
 
 ---
 
+## Entry 32 — Both fixes confirmed on live traffic, and the seal defect swallowed one of them exactly as predicted
+
+*2026-08-07, daemon 0.0.137 / cli 0.0.140, promoted to `latest`*
+
+Entry 31 ended with a falsifiable prediction. The operator upgraded, the ten-minute backoff expired,
+and the log answered it. Both branches landed — the fix works, AND the open root cause defeats half
+of it, which is the strongest evidence for both claims that could be obtained.
+
+### What the log shows, at 07:50:18–07:50:40
+
+```
+07:50:19.410  document.delivery.sent          662743b1
+07:50:19.423  document.frame.refused          document_unknown     ← terminal refusal
+07:50:19.785  document.frame.sent  ack                              ← THE ACK, which did not exist before
+07:50:22.889  document.delivery.unacked_limit ee16a47f  sends=90
+07:50:36.686  document.frame.refused          document_stalled     ← NOT terminal
+              (no ack — correct)
+07:50:40.157  document.delivery.unacked_limit 7dafdfe5  sends=13
+07:51:09      document.delivery.sweep  attempted: 0
+07:52:09      document.delivery.sweep  attempted: 0
+```
+
+### Four things confirmed, none of them by a test
+
+**1. The terminal ack is produced on real traffic.** `document.frame.refused document_unknown`
+immediately followed by `document.frame.sent ack`. Before this build the router acked only `ok: true`
+results, so that frame did not exist. DOD-DOC-INBOUND-TERMINAL-1, working.
+
+**2. `document_stalled` correctly produced NO ack** — and this is the negative control that matters.
+The whole design turns on stalled being recoverable, so the retry IS the recovery path and settling
+it would throw away an update the operator is about to unblock. The absence of an ack after that
+refusal is the rule holding.
+
+**3. The ceiling now actually stops.** `unacked_limit` fired once at `sends=90`, and the next two
+sweeps report `attempted: 0`. The same envelope had gone 74 → 88 → 90 across two daemon restarts
+under the old build, because setting the document `stalled` changed what the surface said and
+nothing about what the worker did. `markAbandoned` retires the row and `pendingDeliveries` honours
+it.
+
+**4. The `abandoned_at` migration ran.** Not from a log line — the ALTER never logs, and its bare
+catch cannot distinguish "already present" from a corrupt schema. The proof is behavioural, as
+predicted: sweeps keep running (a missing column throws on every `pendingDeliveries`), and the
+abandon path succeeded, which requires the column to exist.
+
+### And the prediction's second branch: my own fix's ack was swallowed
+
+**There is no `document.ack.admitted` anywhere in the window.** The terminal ack was SENT and never
+arrived — because it rode a session the delivery worker had just opened, and that session seals.
+
+So the envelope stopped by ABANDON, not by ACK. The local giving-up path caught it; the protocol
+answer never landed. Which is exactly the prediction in Entry 31: *"it would mean the seal defect
+defeats it, which is the strongest confirmation of that root cause I could get — my own fix being
+swallowed by it."*
+
+Both fixes are correct and both were needed. Neither closes the seal defect, and the seal defect is
+now demonstrated to defeat the protocol-level settle on live traffic while the local backstop
+carries it. That is a system working by its fallback — the shape this milestone keeps finding, and
+this time we can see it happening rather than infer it.
+
+`abandoned_at` is why the record stays honest about it: the row says WE STOPPED TRYING, not "the
+peer confirmed". Had the ceiling still used `markAcked`, `withdraw` would now tell the operator
+their peer holds an envelope whose ack demonstrably never arrived.
+
+### Milestone state
+
+DOD-DOC-INBOUND-TERMINAL-1 ✅ — unit, live enforcer (revert-verified), and now confirmed on operator
+traffic. Published in daemon 0.0.137, `latest`. The three open findings from Entry 31 are unchanged
+and unfixed: the delivery-session seal, the document-frame `since_seq` hole, and the enforcer that
+cannot fail on the ack path.
+
+---
+
 ## Related Documents
 
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits
