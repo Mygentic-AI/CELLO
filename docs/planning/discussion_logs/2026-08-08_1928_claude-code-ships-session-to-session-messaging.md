@@ -115,6 +115,27 @@ timing. The payload can be arbitrarily rich; a three-part question arrived intac
 delivery, no return path, and no read receipt mean it functions as a notification whatever you put
 in it. You can write a request. You cannot run a request/response.
 
+**Finding 3 — the request/response test failed outright, and silently.** The receiving session's
+long run ended. Andre then sent it a message himself and it answered him. It never acted on mine.
+
+So the message was **accepted for delivery and never arrived** — or arrived and was disregarded.
+From the sender's side those two are indistinguishable, which is the actual defect. `SendMessage`
+returned `{"success": true, "msg_id": "56e7a4f4-..."}`. That is a receipt for handing it over, not
+for delivering it, and nothing downstream ever corrects the record.
+
+Both prior findings are now downstream of this one. The addressing churn and the turn-boundary
+latency would be tolerable if a send were reliable; they are not tolerable when a send can be lost
+with a success response and no way to find out.
+
+**Fairness, and Andre's point: this is an early feature and will almost certainly improve.** None of
+the three findings is architectural. Stable addresses, real delivery acknowledgement, and mid-turn
+delivery are all ordinary engineering, and a vendor with Anthropic's resources will close them if
+the feature matters to them. The record above should be read as "what it does today," not "what it
+can ever do."
+
+What does NOT get closed by that work is in the next section: the boundary is the addressing space,
+not the delivery mechanics.
+
 ## Where the boundary actually sits
 
 Not "same machine" — that framing was wrong on first pass. Per the tool description it also reaches
