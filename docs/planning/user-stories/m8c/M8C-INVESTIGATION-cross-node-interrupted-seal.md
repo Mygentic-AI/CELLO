@@ -273,10 +273,15 @@ All in `cello-client` unless noted.
 
 ## Environment at time of writing
 
-- Daemon **0.0.143** on both machines (laptop and Hermes EC2), carrying all three fixes above.
-- The root cause above was read against a **newer** tree than that — daemon 0.0.145 (unpublished;
-  published latest is 0.0.144), CLI 0.0.152. The last three commits touching any file on this path
-  are the three fixes themselves, so the finding holds identically on 0.0.143, 0.0.144 and 0.0.145.
-  Nothing shipped since changes it.
+- Daemon **0.0.143** on both machines when this note was first written, carrying all three fixes.
+- **The laptop moved to daemon 0.0.145 / CLI 0.0.152 at 07:37Z on 2026-08-08**, which is exactly the
+  tree the root cause above was read against — so the finding is no longer an inference across a
+  version gap on this machine. The Hermes EC2 side has not been checked since.
+- The last three commits touching any file on this path are the three fixes themselves, so the
+  finding holds identically on 0.0.143, 0.0.144 and 0.0.145 regardless. Nothing shipped since
+  changes it.
+- That upgrade is what restarted the daemon. All three stranded sessions came through it unchanged
+  — same status, same message counts, same timestamps. `seal_interrupted_pending` is deliberately
+  protected from the status flip a restart applies, and it held.
 - Directories at **schema 62** (V58–V62 deployed 2026-08-08), all three `status: ok`.
 - Agents: `CELLO_Coder_1` homed `gcp-euw1`; `Miss_Chelly_H` homed `gcp-usc1`.
