@@ -1130,3 +1130,22 @@ only as a fallback for an AWS-hosted relay and must never be set as a custom var
 at a time → **restart the relays again** so they re-announce to directories running the new code →
 confirm both relays appear in all three manifests. A relay only announces at boot, so a directory
 rolled *after* a relay registered will not have heard it.
+
+### Relay health-check URL is INTERNAL — applied 2026-08-08
+
+`CELLO_RELAY_HEALTH_CHECK_URL` was built from the relay's **public** address. Port 4000 is
+firewalled to the VPC and Google's probers, so no directory could ever reach it: every health check
+failed, the pool emptied, and sessions were refused with `relay_unavailable` while both relays were
+healthy and listening on :4001. Verified from a directory VM — internal 200, public unreachable.
+
+Now built from `internal_addr`, a new template variable fed by
+`google_compute_address.relay_internal`. **Live on both templates:**
+
+```
+cello-gcp-relay-use1-20260808193630…   http://10.10.0.28:4000/health
+cello-gcp-relay-euw1-20260808194022…   http://10.10.2.25:4000/health
+```
+
+**The public address is not wrong, it is for a different job.** It stays on
+`CELLO_RELAY_PUBLIC_MULTIADDR`, which is what *agents* dial. Health is an internal concern between
+directory and relay; client reachability is not the same property and must not share a value.
