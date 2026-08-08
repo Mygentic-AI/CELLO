@@ -51,31 +51,31 @@ Two consequences, both bad:
    descriptive fields pollute `subject_kind` / `issuer_kind` / `type` for that signal — the exact
    thing `is_tombstone` exists to prevent, per the comment above the query that sets it.
 
-### Why it was not fixed tonight
+### How it was fixed — V62
 
-The obvious fix — add those columns to `SIGNAL_RECORDS_SPEC.immutableColumns` — is wrong. It changes
-the content address of **every existing row**, so all three nodes would report divergence on data
-that never changed. That is the trap V58 documents and sidesteps by creating a new table.
+Adding those columns to `SIGNAL_RECORDS_SPEC` would rehash every existing row and make all three
+nodes report divergence on data that never changed (the trap V58 documents). So the fact moved to
+its own append-only table, `signal_revocations`, and `signal_records` was left untouched. The view
+now reads "is there a tombstone" and "who revoked" from the UNION of the local tombstone and the
+replicated fact.
 
-So the real fix is a new append-only table for revocation facts plus a change to
-`signal_records_effective`. That view decides whether a trust signal reads as revoked, and its own
-comments record two prior fail-open regressions in that expression:
+Every branch is the V54/V55 logic unchanged in meaning. That mattered more than usual: a missed
+revocation leaves a withdrawn signal reading as live, and two earlier versions of this expression
+failed open. The COALESCE guarding `ARRAY_AGG` over zero rows is preserved verbatim, and there is
+still deliberately no "NULL revoker ⇒ revoked" branch.
 
-> "an earlier version of this expression failed OPEN"
-> "I re-introduced it while writing this migration and the regression test caught it"
+**Validated against a real Postgres, which is why it shipped rather than stayed a proposal.** All 18
+`DOD-REVOKE-1` tests pass, including both exact-pubkey authority cases — the ones separating "a
+submitter key cannot tombstone an agent's record it does not own" from "the issuer's own withdrawal
+still revokes". Every unit test here stubs the pool and cannot tell those apart.
 
-A fail-open here means a revoked trust signal reads as live. That is not a thing to improvise
-unsupervised at midnight, and the standing rule — a wrong replication rule is worse than none —
-applies most sharply where the rule decides authority.
+Running it that way also caught a bug in the migration itself: `revoker_signature` declared TEXT when
+the source column is BYTEA. It compiled, it migrated, and it failed at the first real revocation
+with `invalid byte sequence for encoding UTF8: 0x00`.
 
-### The shape it should take
-
-- New Tier-A table, natural key `(signal_hash, revoker_pubkey)`, all columns immutable.
-- `signal_records_effective` consults it instead of the tombstone columns.
-- The existing `signal_records` hashed set is left alone, so no historical row rehashes.
-- `authorized_issuers.status` needs the same treatment: enrolment replicates today, **withdrawal
-  does not**, so revoking a compromised issuer key leaves it active on every node that did not
-  process the revocation.
+**Still outstanding, and deliberately separate:** `authorized_issuers.status`. Enrolment replicates;
+withdrawal does not, so revoking a compromised issuer key leaves it active on every node that did
+not process the revocation. Same shape of fix, not yet done.
 
 ## Item 6 — smaller than it looked, and one piece is not really item 6
 
@@ -87,34 +87,36 @@ The design named eight Tier-B tables. The accurate tally:
 | `agent_presence` | Built |
 | `directory_nodes` | **Solved differently** — moved to Tier A |
 | `capability_claim_codes` | **Solved differently** — moved to Tier A, after it broke Telegram registration in production |
-| `pre_authorization_tokens` | Not built — low value, see below |
-| `sessions` | Not built — owner-wins, needs judgement |
-| `pickup_queue` | Not built — see below |
-| `pending_notifications` | Not built — see below |
+| `pre_authorization_tokens` | **Will not be built** — no security property gained |
+| `sessions` | **Will not be built** — delivery state |
+| `pickup_queue` | **Will not be built** — see below |
+| `pending_notifications` | **Will not be built** — see below |
 
 **`pre_authorization_tokens` is low value.** The design's own note says the cross-node double-spend
 window is unchanged by replicating it, because the nonce binder is the real gate. Replicating it
 buys tidiness, not a security property.
 
-**`sessions` needs a judgement call.** Owner-wins means the row's `owning_node_id` is authoritative
-and non-owners insert-if-absent only. Reasonable, but it interacts with re-homing, and getting it
-wrong means two nodes disagreeing about who owns a live session.
+**The question was whether a queued message strands cross-node. It does — and replicating the queue
+is still the wrong fix.**
 
-**`pickup_queue` and `pending_notifications` are the same question as the signaling audit's biggest
-unknown**, and that connection is the most useful thing in this section. The cross-node signaling
-audit flagged `#deliverOrEnqueue` as its highest-priority unclassified site: it degrades to a QUEUE
-when no stream is present, which is the right shape — but the queue is node-local and an agent polls
-its own home node, so a frame enqueued on the sender's node for a recipient homed elsewhere may
-never be collected.
+`#deliverOrEnqueue` calls `enqueueNotification` on the ADJUDICATING node, and `pending_notifications`
+is node-local, so a seal result for a participant homed elsewhere is never collected. Confirmed by
+reading the path, not inferred.
 
-That is message delivery, and it cannot be fixed by the visiting-connection pattern that fixed the
-seal — a queued item is collected later, when no transient connection exists. It needs either the
-replicated queue this item describes (with the bounded-GC tombstone scheme, designed precisely so a
-lagging peer cannot resurrect deleted ciphertext) or delivery routed to the recipient's home node at
-enqueue time.
+But the repair is written two lines above that call, by whoever hit it first:
 
-**Verify whether it actually strands before building either.** If it does, it outranks everything
-else in both programmes.
+> `seal_notarizations` IS a Tier-A anti-entropy table, so the stranded participant's OWN home node
+> already receives the notarization — the receipt can be LEARNED locally and does not need this
+> cross-node push at all.
+
+So the pattern that supersedes the design's Tier-B rules is **replicate the FACT, let the client
+learn it**. Replicating delivery state would invite double-delivery to solve something that needs no
+push. That is what V58 builds, and it is why `pickup_queue`, `pending_notifications` and `sessions`
+stay node-local. `pre_authorization_tokens` stays local on the design's own admission — the nonce
+binder is the real double-spend gate.
+
+**Tier B is finished, not abandoned.** What would reopen it: a fact a client cannot learn from
+replicated state and must therefore be pushed. Every case so far has turned out to be learnable.
 
 ## The seal fix, since it ran alongside this
 
@@ -149,9 +151,9 @@ One session of the four was closed (`3672a625…`, 2 messages). The other three 
 3. **Then re-test the kill switch** — pausing an agent from a node that did not register it is the
    thing that was broken.
 
-## Open decisions
+## Open
 
-- **Item 2's fix shape** — new table + view change, as above. Security-relevant; wants review.
-- **Whether `#deliverOrEnqueue` strands cross-node** — determines whether item 6's queue work is
-  urgent or cosmetic.
-- **`sessions` owner-wins** — needs a decision about re-homing before it is built.
+- **`authorized_issuers.status`** — withdrawal of a compromised issuer key still does not propagate.
+  Same shape as V62; not done.
+- **The seal ceremony past the routing fix** — both sides commit and no notarization follows.
+  Belongs to the terminal-state work on the other branch, not here.
