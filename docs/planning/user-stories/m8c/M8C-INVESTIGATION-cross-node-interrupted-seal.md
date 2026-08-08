@@ -210,8 +210,31 @@ already drives it this way. What is unproven is whether the relay still holds th
 later, or whether it has been swept — if it has, this needs a new directory-side route that
 notarizes from the two stored signed leaves, which is new protocol surface.
 
-The recommendation is to find out which, since it decides between a small change and a real one:
-take one of the three stranded sessions and check whether its relay session still exists.
+### Checked 2026-08-08 07:30Z — the relay still holds all three
+
+Expected to be gone; they are not.
+
+- **The relay never saw this flow at all.** Every log line these three sessions produced in the last
+  two days is the directory forwarding frames between the two daemons. Not one relay event. That is
+  the root cause above, confirmed from the running system rather than from the source.
+- **All three still have a live relay session.** The relay holding them has not restarted since
+  2026-08-05 (its session store is in memory, so a restart would have emptied it), it currently
+  holds 14 sessions, and none of our three appear in its swept list. It was still sending frames
+  about two of them at 06:57Z today.
+- **Each one still has its relay address stored locally**, pointing at the same relay that sealed
+  three other cross-node sessions with the same counterparty that morning without trouble.
+
+So the cheap version of Option B is available — the machinery is all still connected — but not for
+long. The relay drops a session after 24 hours idle, checked on the hour. Best estimate: the
+4-message session goes at about **09:01Z**, the other two at about **12:01Z**. That is inferred from
+when each was interrupted; the one session available to calibrate against was dropped three minutes
+after its own 24-hour mark, so the estimate is close but not exact.
+
+### The control that makes this unambiguous
+
+Three cross-node sessions with the SAME counterparty over the SAME relay **sealed normally** that
+same morning — 06:43Z, 06:44Z and 06:57Z — with notarized roots stored. Cross-node sealing works.
+The variable is not which node each agent is on; it is whether the session was interrupted.
 
 ## Reproduction
 
