@@ -71,6 +71,50 @@ It also took me three tool calls to send one message: the schema was deferred an
 then the bare name was rejected and the send retried with the ref. Minor, but it is friction on the
 thing the feature is entirely about.
 
+## Two findings from trying to run a request/response over it
+
+Andre pushed back on "notification bus" — reasonably, because it did deliver a real message,
+correctly, to the right session, first time. So we tested the harder case: send the other session an
+actual question ("what are you working on, are you blocked") and see whether an answer comes back.
+
+**Finding 1 — the address is not stable.** Sending one message took four attempts:
+
+```
+bare name   -> rejected, "re-send with the ref"
+ref 55bcf6  -> rejected, "no agent named that, did you mean <bare name>?"
+ListAgents  -> the SAME session now lists as ref e7624f
+bare name   -> rejected, "re-send with the ref"
+ref e7624f  -> accepted
+```
+
+The ref changed between listings, and the errors alternate between demanding the ref and demanding
+the bare name. In practice you must call `ListAgents` immediately before every send, because what
+resolved last time may not resolve now.
+
+This is the sharpest contrast with CELLO so far and it is not about features. A pubkey IS the
+identity, permanently: storable, pasteable, still valid tomorrow. Here the name is ambiguous and the
+ref is ephemeral, so there is no durable way to refer to a peer at all — you cannot persist it, hand
+it to someone else, or reuse it later.
+
+**Finding 2 — delivery is at turn boundaries, not "the next tool round".** The tool documentation
+states that messages "enqueue and drain at the receiver's next tool round." Observed behaviour
+contradicts it: Andre watched the receiving session make many tool calls after the send without ever
+picking the message up. It appears to arrive only once that session finishes what it is doing.
+
+The consequence is the one that matters for coordination: **you cannot redirect a working agent.**
+The primitive is "leave a note on their desk," not "tap them on the shoulder."
+
+Contrast, first-hand in the same session: CELLO channel messages arrived **mid-turn**, repeatedly,
+interleaved with tool results during long deploys — `A message arrived from plugin:cello:cello while
+you were working`. That is the shoulder tap, and it is why an agent can be corrected while it is
+still going the wrong way. For the project-manager pattern Andre wants — noticing an agent is off
+course and steering it — mid-turn delivery is the whole feature.
+
+**Where the label landed.** "Notification bus" is wrong about the payload and right about the
+timing. The payload can be arbitrarily rich; a three-part question arrived intact. But turn-boundary
+delivery, no return path, and no read receipt mean it functions as a notification whatever you put
+in it. You can write a request. You cannot run a request/response.
+
 ## Where the boundary actually sits
 
 Not "same machine" — that framing was wrong on first pass. Per the tool description it also reaches
