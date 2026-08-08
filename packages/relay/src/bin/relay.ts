@@ -67,7 +67,13 @@ import {
 } from "../relay-service-lifecycle.js";
 
 const celloEnv = process.env["CELLO_ENV"] ?? "local";
-const awsRegion = process.env["AWS_REGION"] ?? "us-east-1";
+// The region this relay reports when it registers, which is what region-aware relay selection picks
+// on. CELLO_RELAY_REGION first: AWS_REGION does not exist on GCP, so the old fallback made EVERY
+// relay register as "us-east-1" — europe-west1 included. Both relays then looked co-located and the
+// selection had nothing real to choose between (live 2026-08-08, visible the moment registration
+// started writing region into the manifest). AWS_REGION is kept only so an AWS-hosted relay keeps
+// working; it is a reserved name and must never be set as a custom variable.
+const awsRegion = process.env["CELLO_RELAY_REGION"] ?? process.env["AWS_REGION"] ?? "us-east-1";
 const walDir = process.env["WAL_DIR"] ?? "";
 const keyPath = process.env["CELLO_RELAY_KEY_FILE"] ?? join(homedir(), ".cello", "relay-key");
 const directoryMultiaddr = process.env["CELLO_DIRECTORY_MULTIADDR"];

@@ -45,6 +45,12 @@ write_files:
       cat > /etc/cello/relay.env <<ENVEOF
       CELLO_ENV=${environment}
       NODE_ID=${node_id}
+      # The region this relay actually runs in. WITHOUT THIS the relay falls back to
+      # AWS_REGION, which does not exist on GCP, and every relay registers itself as
+      # "us-east-1" — so europe-west1 advertised a US region and region-aware relay
+      # selection had nothing real to select on. AWS_REGION is a reserved name and must
+      # never be reused as a custom variable, hence a CELLO_-prefixed one.
+      CELLO_RELAY_REGION=${region}
       NODE_PRIVATE_KEY=$NODE_KEY
       CELLO_RELAY_TRANSPORT_KEY_HEX=$TRANSPORT_KEY
       # SINGULAR is the registration target; PLURAL is the set the relay accepts instructions from.

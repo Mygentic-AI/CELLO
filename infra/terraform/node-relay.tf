@@ -319,6 +319,7 @@ resource "google_compute_instance_template" "relay" {
       registry_host     = "${google_artifact_registry_repository.cello.location}-docker.pkg.dev"
       node_id           = each.value.node_id
       environment       = var.environment
+      region            = each.key
       public_addr       = google_compute_address.relay[each.key].address
       peer_id_hint      = each.value.node_id
       gsm_node_key      = "${google_secret_manager_secret.relay["${each.value.node_id}--node-key"].id}/versions/latest"
