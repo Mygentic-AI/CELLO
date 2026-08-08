@@ -3273,6 +3273,75 @@ tarball.
 
 ---
 
+## Entry 35 — The cross-node seal was already fixed, and the receipt was lying about documents
+
+*2026-08-08*
+
+Two findings, and the second only surfaced because the first went looking for evidence instead of
+retrying the failure.
+
+### The seal is not blocked
+
+`DOD-DOC-SHIP-1` had sat at 🟠 since the 7th, attributed to cross-node signaling. Re-run today on
+the same two machines and the same two home nodes, every frame over the relay: **a session carrying
+a document update closed with a FROST-notarized receipt**, frontier verified, `sealed_root`
+`4d22e719…`. Two more cross-node sessions notarized the same way minutes earlier. V58–V62 on the
+directories plus the client-side broker dial (daemon 0.0.142) closed it.
+
+**The `interrupted` seal path is a different question and was never the same blocker.** It reaches
+`seal_interrupted_pending` and stops — by design, stated in the flow's own header: the daemon holds
+no FROST threshold signer there, so it persists the verified bilateral commitment rather than claim
+a seal it did not produce. The request DOES cross nodes and the far side DOES ack it
+(`session.interrupted.responder.acked`, read off the other machine's daemon today). Both sides
+sitting at pending is that design working.
+
+**The method error worth keeping:** two sessions I first tried to seal timed out because *the
+counterparty no longer held them* — visible in one command against the far daemon, which I ran only
+after reading the timeouts as a protocol failure. A timeout says the answer did not come, never why.
+
+### The receipt called a document update "the final message"
+
+Chasing what the sealed tree actually contained turned up something worse than the thing I was
+checking.
+
+**`LEAF_KIND_DOC` had no production caller.** The only reference to it in the entire repository was
+a test asserting its numeric value and uniqueness — which reads exactly like a wired feature.
+
+The daemon tags its OWN copy of a document leaf `doc`. The copy the RELAY witnesses went out through
+`submitMessageHash`, which hardcodes `LEAF_KIND_MSG`. And the seal certificate is built by the
+**directory, from the leaves the relay saw** — never from the sender's local tree.
+
+`seal-legibility.ts` excludes `doc`/`reject` leaves from two computations and explains why:
+
+> A document update is applied MECHANICALLY by the peer's daemon with no agent involved, so counting
+> one as a reply would let a peer's daemon satisfy the unanswered-tail check on its operator's
+> behalf — the exact property `answered` exists to expose.
+
+Both guards test `leaf.kind === "doc" || leaf.kind === "reject"`. **Neither could ever fire.** Every
+document leaf arrived as a message.
+
+Measured, not reasoned: a session with **zero** messages and two document leaves sealed with a
+receipt naming a document update as `final_message`, unanswered — a notarized claim about something
+said, in a conversation where nothing was said.
+
+The server half has been ready since 2026-08-04 (the relay admits 0x04/0x05 and hashes each in its
+own domain) and the **deployed** relay build carries it. The client simply never said the word.
+Refusals now go as 0x05; only the caller knows which frame it is holding.
+
+**The revert test fails on the assertion, not on a missing symbol** — checked, because the first red
+in this unit was a wrong import name, which proves nothing.
+
+### Why this is the shape to watch for
+
+A constant, exported and asserted by a test, consumed by nobody. The test is not wrong about
+anything; it just never claimed the one thing that mattered. Both this and Entry 34's SQLCipher
+defect are the same lesson from opposite ends: **a test can be green about the wrong subject** —
+there, the wrong database driver; here, the wrong question entirely.
+
+Published daemon 0.0.145 / cli 0.0.152, verified against the tarball.
+
+---
+
 ## Related Documents
 
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits
