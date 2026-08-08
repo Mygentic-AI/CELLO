@@ -95,6 +95,72 @@ the script has changed since the last one).
 
 ---
 
+## 💰 IDLE-COST SWEEP — ECR emptied, 45 secrets + 2 KMS keys scheduled (2026-08-08)
+
+Triggered by a cost review of 2026-08-07 ($5.4340 for the day, 100% credit-covered). The 2026-08-06
+teardown removed the *services* but left their storage behind, still billing. This sweep removed the
+residue. **Supersedes the "Secrets Manager — never touch" line in the POWER STATE section above**,
+per Andre's explicit instruction this session ("everything in Frankfurt and Tokyo can be removed",
+plus the rule that us-east-1 secrets *mirroring* a Frankfurt/Tokyo name go too).
+
+**ECR — all images deleted, repos left in place** (repos are `DeletionPolicy: Retain` under
+`cello-ecr-dev`; deleting images creates no stack drift). **363.0 GB reclaimed, ~$27.5/mo:**
+
+| Region | Repos emptied | Was |
+|---|---|---|
+| eu-central-1 | all 5 (`cello-directory` 189, `cello-relay` 64, `cello-operations-agent` 57, `cello-portal` 37, `cello-ops-dashboard` 9) | 107.5 GB |
+| ap-northeast-1 | all 5 (same repos) | 108.0 GB |
+| us-east-1 | `cello-directory` (215) + `cello-relay` (80) **only** | 125.6 GB |
+
+**us-east-1 `cello-portal` (10), `cello-ops-dashboard` (9) and `cello-operations-agent` (58) were
+deliberately NOT emptied** — `cello-portal-build-dev` is a live stack and the portal/waitlist still
+run on AWS (§7 of `infra/CLAUDE.md`).
+
+> **Root cause of the 363 GB:** the `LifecyclePolicy` in `cello-ecr.yaml` expires **untagged** images
+> after 14 days, but CI pushes **commit-SHA-tagged** images — so nothing ever expired, for the life of
+> the pipelines. If AWS ECR is ever used for builds again, add an `imageCountMoreThan` rule or this
+> recurs exactly as before.
+
+**Secrets Manager — 45 secrets scheduled for deletion, 30-day recovery window, recoverable until
+2026-09-07** (~$17.4/mo). Restore any with
+`aws secretsmanager restore-secret --region <R> --secret-id <name>`.
+- eu-central-1: all 15 → **0 active**
+- ap-northeast-1: all 15 → **0 active**
+- us-east-1: the 15 names that mirror the above (`cello/dev/directory/*` ×7,
+  `cello/dev/ops-agent/*` ×4, `cello/dev/relay/*` ×2, `cello/dev/pipeline/github-hmac-secret`,
+  `cello/dev/preauth/issuer-key`) → **14 kept**: `cello/dev/portal/*` ×6,
+  `cello/dev/consortium/officer-key-0`, `cello/dev/registry/signer-key`,
+  `cello/dev/demo-agent/identity-key`, `cello/dev/ops/allowed-emails`, `cello/gcp-wif-config-ec2`
+  (the hermes EC2 reads this one), `cello/ops-agent/telegram-bot-token{,-staging}`, and the
+  RDS-managed `rds!db-1292ef13…`.
+
+**KMS — 2 keys scheduled for deletion 2026-09-07**, cancellable with `kms cancel-key-deletion`
+(~$1.9/mo): `708cea66…` (eu-central-1) and `08735b67…` (ap-northeast-1), both
+"CELLO dev master key — encrypts K_server_X shares at rest".
+
+> **⚠️ COUPLING — the snapshots die with the keys.** The `cello-dev-final-teardown-20260806` RDS
+> snapshots hold **envelope-encrypted** K_server_X shares. Once the regional master key is destroyed
+> on **2026-09-07**, that region's snapshot can still be restored but its share column is
+> permanently unreadable. Keeping the Frankfurt/Tokyo snapshots past that date buys nothing —
+> either cancel the key deletion or drop the snapshots.
+
+**Frankfurt/Tokyo now hold:** empty ECR repos, 0 active secrets, 1 key each pending deletion, one
+20 GB `cello-dev-final-teardown-20260806` snapshot each, and the foundational CFN stacks
+(`cello-secrets-dev`, `cello-kms-dev`, `cello-ecr-dev`, `cello-vpc-dev`, `cello-s3-dev`,
+`cello-iam-dev`, `cello-route53-dev`, `cello-ssm-parameters-dev`, 2 peering stacks each).
+**No EC2, no ALB, no ECS, no RDS instance, no Elastic IP in either region.**
+
+**Left standing, needs a decision (~$11/mo):** the 3 teardown snapshots (~$2/mo, deletion is
+irreversible) · the us-east-1 "CELLO dev master key" (~$1/mo, pairs with the us-east-1 snapshot) ·
+2 idle public IPv4 addresses at $0.12/day each (`eipalloc-01a2b0686e3bf04cc` us-east-1, attached to
+the **stopped** demo agent; `eipalloc-06c21fcb72c2c7f11` eu-west-1, attached to nothing) ·
+`cello-agent-zitadel-db` eu-west-1 storage, billing 20 GB while the instance is stopped.
+
+**Not verified yet:** whether Secrets Manager and KMS bill during their pending-deletion windows.
+Confirm against the CUR for 2026-08-09 before claiming the full ~$47/mo.
+
+---
+
 
 ## 🟢 GALLERY IS LIVE — gallery.cello.mygentic.ai + portal schema/seed (2026-07-29, ~09:00–10:30 UTC)
 
