@@ -964,6 +964,44 @@ works and relay images are rare. Recommend leaving it unless a relay change is i
 
 ---
 
+## Relay roll 2026-08-08 — `relay:0cf04b0c` on both relays (DOD-RELAY-DIRECTORY-RECONNECT-1)
+
+Both relays now carry the fix for the four-hour fleet-wide sealing outage earlier the same day
+([[relay-stops-notarizing-fleet-wide]], launch-triage item 14). Before this roll the fix existed only
+in source and the running relays still had the old behaviour, so the outage could have recurred at
+any time with a manual restart as the only cure.
+
+| | |
+|---|---|
+| Image | `us-east1-docker.pkg.dev/cello-infra/cello/relay:0cf04b0c8a2334d37ff81eb5c663487241e1b464` |
+| Built | `gcloud builds submit <repo-resource> --revision=0cf04b0c…` — build `94969471`, 3m04s, SUCCESS |
+| `gcp-relay-use1` | rolled first, instance `cello-gcp-relay-use1-h73m`, up 19:37 UTC |
+| `gcp-relay-euw1` | rolled second, instance `cello-gcp-relay-euw1-z5d9`, up 19:41 UTC |
+| tfvars | `relay_image_tag` `8b195c90…` → `0cf04b0c…` |
+
+**What shipped in it, all three parts:**
+1. **Reconnect** — a stale libp2p handle to the directory is redialled instead of failing the seal
+   outright, and the dial errors are logged instead of being discarded by an empty `catch {}`.
+2. **A 30s directory probe** — the relay finds out its link is dead before a user does. It runs the
+   SAME transport a seal runs, so it repairs the connection on the way.
+3. **A health check that reports directory reachability** — `status: "degraded"` plus a `directory`
+   block in the body, and `relay.directory.connection.lost` at ERROR.
+
+**`/health` STILL ALWAYS RETURNS 200, and must continue to.** It is what the directories poll for
+relay POOL MEMBERSHIP (`defaultPingFn` counts any non-2xx as a failed check), not an alerting
+channel. A 503 on "cannot reach a directory" would withdraw relays for a fault that does not stop
+them carrying sessions, and since the cause is shared every relay fails at once — turning "cannot
+seal" into "cannot start a session", fleet-wide. An earlier version of this fix did return 503 and
+was reworked before deploy.
+
+**Verified, not assumed:** both relays registered with all three directories
+(`relay.already.registered` at 19:37 and 19:41 UTC), and a real cross-machine session sealed on each
+— roots `3b416b7b…` after the first roll and `cd3ae082…` with both on the new build. Port 4000 is
+unreachable from outside by design; the health URL the directories use is the internal address.
+
+**Method note:** rolled one relay at a time with `-target`, per §2. An untargeted apply replaces
+everything at once.
+
 ## Relay roll 2026-08-08 — the seal outage fix (both regions)
 
 **Image `relay:0d9568a52c1be8a2a33eb6fdf3974b1eedbe389f`**, built manually via
