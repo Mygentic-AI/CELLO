@@ -790,6 +790,43 @@ and `signal_records` anti-entropy fails every round on a `scanner_version` NOT N
 Neither causes this item — both were disproved as the cause by measurement — but both are live
 faults. Miss_Chelly owns them.
 
+
+## 15. The daemon logs every connection opening and never one closing
+
+**Designation: `DOD-IPC-DISCONNECT-VISIBLE-1`** — ❌ **OPEN, and deliberately filed as a SMALL one.**
+Unranked. **Proposed slot: low — nobody is ruined by this. It is here because it taxes every
+investigation that touches attendance, sessions or doorbells, and the tax is invisible until you are
+already lost.**
+
+**What it costs.** Not a customer — an operator, and whoever is debugging on their behalf. The
+question "is that connection still alive?" cannot be answered from the log at all, because
+`daemon.ipc.connected` is emitted on every open and nothing whatsoever is emitted on close. So a
+live client and a dead one that was never cleaned up look identical in the record.
+
+**Measured 2026-08-08.** `cello agents` reported `attendance: 3` on an agent Andre believed one
+session was using. Answering "are those three real?" took: reading the connect events, correlating
+them against `ps` twice, discovering Hermes runs TWO bridges (`gateway` and `serve`, each spawning
+its own `cello-mcp` watchdog + shim), and finally killing the gateway to watch the number move. It
+dropped 3 → 1 immediately, so the count was correct all along **and the disconnect cleanup works
+fine** — none of which could be established from the log.
+
+Two wrong theories were entertained along the way purely because the log could not rule them out: a
+miscount in `countAttendance`, and connections outliving their processes.
+
+**The fix is one log line** in the `ipcServer.onDisconnect` handler in `daemon.ts` — `connectionId`,
+`clientType`, and the agent it was attending, if any. That last field is what makes it useful:
+attendance dropping is currently a silent event, so an agent losing its last attendee — which
+changes whether away-messages fire and who receives doorbells — leaves no trace.
+
+**Also worth doing while in there**, same investigation: `cello agents` reports `selected` from the
+CALLING connection, so a client asking about its own state through a fresh connection always sees
+`false`. Both Andre and the Hermes agent read that as "nothing is selected" during this
+investigation, on an agent that had three attendees. The field is correct and the name invites the
+misreading; `selected_by_this_connection`, or a note in the payload, would stop it.
+
+**Not a defect in co-attendance itself.** Several sessions attending one agent is deliberate and
+permanent (spec §3). What is missing is only the record of it changing.
+
 ---
 
 # Post-launch — needed eventually, not for launch
