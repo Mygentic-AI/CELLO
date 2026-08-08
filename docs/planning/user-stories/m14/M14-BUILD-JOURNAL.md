@@ -3366,6 +3366,16 @@ it is what hid this in the first place.
 Published daemon 0.0.146 / cli 0.0.153, verified against the tarball. 0.0.145 is on npm and claims a
 fix it does not have.
 
+**CONFIRMED ON THE WIRE, 2026-08-08 09:23.** A document update sent from the upgraded laptop was
+witnessed as `leafKind: 4`. The peer's ack in the same session came back as `leafKind: 0` — the
+Hermes host still runs daemon 0.0.143, so its acks are still labelled as messages. **The label is
+set by whoever SENDS the leaf**, so this is per-machine and resolves as each side upgrades; nothing
+further is owed on our side.
+
+Worth stating plainly because it is the shape of the whole finding: the wire is the only place this
+was ever visible. Three greens — types, lint, 1992 tests — and one published tarball all agreed the
+fix was in, and it was not.
+
 ---
 
 ## Related Documents
