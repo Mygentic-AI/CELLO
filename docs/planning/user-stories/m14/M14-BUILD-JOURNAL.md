@@ -3178,6 +3178,101 @@ to be written.
 
 ---
 
+## Entry 34 — The stall path had two defects and a wrong test; SCREEN-1 closes; rebuttal slips
+
+*2026-08-07 → 08*
+
+The last skipped enforcer in the milestone. It had been skipped through **four** attempted fixes, all
+of which reasoned about chain-bridging logic. The chain logic was correct throughout.
+
+### The defect nobody could see, because no test runs the driver production runs
+
+**SQLCipher binds a zero-length blob as NULL. `node:sqlite` binds it as an empty blob.** Measured
+directly on both:
+
+| | node:sqlite (every unit test) | @signalapp/sqlcipher (production) |
+|---|---|---|
+| empty `Uint8Array` | OK | **NOT NULL constraint failed** |
+| 1-byte blob | OK | OK |
+
+`reject()` wrote its audit row with `stateVector: new Uint8Array(0)` — deliberately empty, because a
+rejection asserts nothing about document state, and the comment said exactly that. On the test driver
+it inserts cleanly. On the real one it violates `state_vector BLOB NOT NULL` and **throws inside
+`reject()`** — before the quarantine is written, before the refusal is signed, before the peer is
+answered.
+
+So the receiver held nothing from that sender: `knownCount: 0`, `ourHead: null`, and every later
+envelope refused `document_chain_broken` **forever**. One gate refusal permanently broke the
+document, and §3.2's supersede-then-converge could never run at all.
+
+**The whole diagnosis was one log line the enforcer's own header had been demanding for days** —
+`document.frame.handler_threw`, one millisecond after the gate's verdict.
+
+### I nearly missed it twice, the same way both times
+
+`documentLines()` prints the LAST SIXTY lines, and the run emits ~120 delivery sweeps — so the event
+that explains the failure had been pushed off the top. Reading that window, I concluded the rejection
+unit never ran. Then, from the full log, I concluded the same thing again, because `reject()` logs
+nothing on the throw path.
+
+Both wrong, and both the same error: **reading a truncated or partial view for something emitted
+elsewhere.** The test now writes the complete filtered log to disk for exactly this.
+
+### The second defect, which the first had been hiding
+
+A refusal arrives **twice** by design — the signed `document_rejection` frame, and the ack that
+settles the delivery. Both are recorded, correctly; they are two real events. But the table is keyed
+on the ANNOUNCEMENT's hash, so they land as two rows, and the round counter counted rows.
+
+Every refusal advanced the round by two against a ceiling of three, so a document stalled after TWO
+refusals instead of three — **a third of the operator's supersede-and-retry budget, gone silently.**
+
+Fixed by counting DISTINCT refused envelopes rather than deduplicating on write: both announcements
+genuinely happened and the audit record should say so; the arithmetic on top was what was wrong. Same
+principle as `ackRecordHash` one layer down, which collapsed repeated ACKS of one envelope; this
+collapses the two KINDS of announcement of one refusal.
+
+### And the last thing wrong with it was the test
+
+It looped four supersessions asserting each published, then asserted the document had stalled — two
+things that cannot both be true when the ceiling is three rounds. It was written before the path
+could reach the ceiling at all, so nobody ever found out. Now: three publishes, then the fourth
+asserted as a REFUSAL naming `document_stalled`, which is what "stops retrying forever" means from
+the operator's chair.
+
+**Twelve of twelve live enforcers now pass with none skipped.**
+
+### SCREEN-1 complete
+
+Sender-adopts-the-receiver's-rule (§16.7-16) shipped, the last owed half. Once a peer refuses a
+character in a document, we stop emitting it there — learned from their own signed, machine-readable
+refusals, scoped to that document, adopting nothing from a prose-only refusal.
+
+**This is what the machine-readable detail was FOR.** A refusal carrying only prose can be read by an
+operator and adopted by nobody; guessing a rule out of English is how a sender ends up refusing text
+nobody objected to.
+
+All three halves now ship: the receiver's gate (the only security boundary), the authoring scan
+(friction reduction, sharing ONE implementation with the gate so they cannot drift), and adoption.
+
+### REBUTTAL-1 slipped to M14B
+
+Acting on the decision Andre recorded on 2026-08-05 and which was written into the DoD line at the
+time — I was about to re-open it. Nothing produces a rebuttal today so no operator can reach it, and
+the fallback is identical security with worse ergonomics.
+
+### Milestone state
+
+**One open line: `DOD-DOC-SHIP-1`'s seal half**, and it is a dependency on cross-node signaling, not
+owed document work. The other agent has since proven the request now crosses nodes (their daemon logs
+`session.interrupted.responder.acked`), and the seal still does not complete — both sides sit at
+`seal_interrupted_pending`, with V58 undeployed and expected to resolve exactly that limbo.
+
+Everything else in P0–P4 is done. Published: daemon 0.0.144 / cli 0.0.151, verified against the
+tarball.
+
+---
+
 ## Related Documents
 
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits
