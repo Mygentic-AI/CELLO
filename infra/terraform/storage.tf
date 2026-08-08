@@ -113,6 +113,30 @@ resource "google_storage_bucket_iam_member" "node_backups_writer" {
   member   = "serviceAccount:${google_service_account.directory_node[each.key].email}"
 }
 
+# The node PUBLISHES the manifest as well as polling it, so it needs write on its OWN bucket.
+#
+# The grant below this one is commented "read — and only read", and that was true when the manifest
+# was written by something else. It is not true now: the directory writes it, and without this the
+# node logs `relay.manifest.update.failed` 403 `storage.objects.create` every cycle while the
+# manifest goes stale and peers fall back to `relay.pool.unavailable`. Live 2026-08-08 on all three
+# nodes — a permission gap that presents as a relay-availability problem, several layers away.
+#
+# objectAdmin rather than objectCreator: the manifest is a SINGLE object rewritten in place, and
+# overwriting an existing GCS object requires storage.objects.delete alongside create. objectCreator
+# alone fails on the second write, which is the worst shape — it works once, at bootstrap, and then
+# silently stops. Versioning on this bucket keeps every superseded manifest, so "delete" archives
+# rather than destroys.
+#
+# The audit and backup buckets keep objectCreator deliberately (see above): those are append-only
+# evidence and a node must never be able to rewrite its own trail. The manifest is operational state,
+# not evidence — the asymmetry is the point, do not "tidy" the three grants into one.
+resource "google_storage_bucket_iam_member" "relay_manifest_writer" {
+  for_each = var.directory_nodes
+  bucket   = google_storage_bucket.relay_manifest[each.key].name
+  role     = "roles/storage.objectAdmin"
+  member   = "serviceAccount:${google_service_account.directory_node[each.key].email}"
+}
+
 # The manifest is polled every 120s, so the node needs read — and only read.
 resource "google_storage_bucket_iam_member" "relay_manifest_reader" {
   for_each = var.directory_nodes
