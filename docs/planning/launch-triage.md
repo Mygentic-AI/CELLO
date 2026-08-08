@@ -733,8 +733,18 @@ this list that silently stops EVERY seal on the fleet at once.**
   relay can reach a directory rather than a constant built at startup, and a 30s probe asks while
   nobody is watching. The probe runs the SAME transport a seal runs, so it repairs the connection on
   the way; a probe over any other route can be green while the route that matters is dead.
-  Unhealthy requires three consecutive failures (failing on the first would cycle the whole fleet on
-  any transient directory blip); a relay that has not yet probed is healthy.
+
+  **It ALWAYS answers 200, and that is deliberate — the first version did not, and it was
+  dangerous.** `/health` is what the directories poll to decide relay POOL MEMBERSHIP, and
+  `defaultPingFn` counts any non-2xx as a failed check. A 503 on "cannot reach a directory" would
+  have withdrawn relays for a fault that does not stop them carrying sessions — and since the cause
+  is shared, all relays fail together and the pool empties. That converts *conversations cannot be
+  sealed* into *conversations cannot be started*, fleet-wide: strictly worse than the incident this
+  item exists to fix, and the same shape as the pool-emptying outage found the same day (relays
+  publishing a public health URL behind a VPC-only port). Degradation is reported as
+  `status: "degraded"` plus the directory block in the body, and as
+  `relay.directory.connection.lost` at ERROR. **If an autohealer should ever act on this it needs
+  its own signal that pool membership does not read — never this status code.**
 - **Still owed: the deploy.** The running relays carry the old behaviour until a relay image is
   built and rolled. Until then this item's failure mode is live, and the only mitigation is the
   manual restart that ended the 2026-08-08 outage.
