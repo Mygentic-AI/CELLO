@@ -87,6 +87,36 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
   }
 
   /**
+   * DOD-RELAY-DIRECTORY-RECONNECT-1 — can this relay reach a directory RIGHT NOW?
+   *
+   * The reconnect above repairs the connection when a seal asks for it. This is the other half: the
+   * relay must find out BEFORE a user does. On 2026-08-08 the connection died inside a 2.5-hour
+   * window in which nobody closed a session, and the first thing that noticed was an operator's
+   * close hanging for seven minutes — because nothing in the process touches that connection
+   * between seals.
+   *
+   * DELIBERATELY THE SAME TRANSPORT A SEAL USES (`#openDirectoryStream`). A probe that dials by some
+   * other route can be green while the route that matters is dead, which is precisely the failure it
+   * exists to catch. It opens the stream and closes it: no frame is sent, so it cannot mutate
+   * consortium state and cannot be mistaken for a seal submission.
+   *
+   * Returns a NAMED reason rather than throwing — the caller is a timer loop, and a throw there is
+   * an unhandled rejection rather than a health signal. `directory_not_connected` (our own wiring)
+   * stays distinct from a transport failure (the network); those are opposite bugs.
+   */
+  async checkDirectoryReachable(): Promise<{ ok: true } | { ok: false; reason: string; detail?: string }> {
+    const node = this.#node;
+    if (!node) return { ok: false, reason: "directory_not_connected" };
+    try {
+      const stream = await this.#openDirectoryStream(node, this.#directoryMultiaddrs, this.#directoryPeerId);
+      await stream.close();
+      return { ok: true };
+    } catch (err: unknown) {
+      return { ok: false, reason: "directory_unreachable", detail: describeThrown(err) };
+    }
+  }
+
+  /**
    * Open a directory stream, repairing a stale connection rather than failing on it.
    *
    * WHY THIS EXISTS. `connect()` is called once at relay boot and the handle is then trusted for the

@@ -62,6 +62,8 @@ import {
   logRelayServiceStartFailed,
   logRelayServiceCrashed,
   createRelayHealthServer,
+  createDirectoryHealthState,
+  startDirectoryProbe,
 } from "../relay-service-lifecycle.js";
 
 const celloEnv = process.env["CELLO_ENV"] ?? "local";
@@ -475,10 +477,37 @@ if (directoryAdapter) {
 // Port 4000 is VPC-internal only — not exposed via ALB.
 // The directory's relay pool health checks (INFRA-009) use this endpoint.
 
-const healthServer = createRelayHealthServer({ relayId, logger });
+// DOD-RELAY-DIRECTORY-RECONNECT-1: the endpoint now reports whether this relay can actually reach a
+// directory. It used to answer a constant `{ relayId, status: 'ok' }` computed at startup, so on
+// 2026-08-08 a relay that could not notarize a single session for four hours passed every probe —
+// nothing alerted, and the autohealer never replaced it. `directoryHealth` is omitted when no
+// directory is configured (local dev), and the endpoint then behaves exactly as before.
+const directoryHealth = directoryAdapter ? createDirectoryHealthState() : undefined;
+
+const healthServer = createRelayHealthServer({
+  relayId,
+  logger,
+  ...(directoryHealth ? { directoryHealth: () => directoryHealth.snapshot() } : {}),
+});
 healthServer.listen(healthPort, () => {
   logger.info("adapter.initialised", { adapterName: "RelayHealthServer", port: healthPort, env: celloEnv });
 });
+
+// AND SOMETHING HAS TO ASK WHILE NOBODY IS WATCHING. The connection died inside a 2.5-hour window
+// with no seals in it; the first thing that noticed was a user's close hanging for seven minutes.
+// The probe runs the same transport a seal runs, so it repairs the connection on the way (the
+// redial lives in `#openDirectoryStream`) and reports what it found.
+//
+// 30s: fast enough that a dead connection is caught and repaired long before the ~7 minute wait a
+// user would otherwise pay, slow enough to be invisible next to seal traffic.
+const stopDirectoryProbe = directoryAdapter && directoryHealth
+  ? startDirectoryProbe({
+      probe: () => directoryAdapter!.checkDirectoryReachable(),
+      state: directoryHealth,
+      intervalMs: parseInt(process.env["CELLO_RELAY_DIRECTORY_PROBE_MS"] ?? "30000", 10),
+      logger,
+    })
+  : () => {};
 
 // ─── FEDERATION-003: Relay registration with directory (AC-002, DB-001) ─────────
 // The relay MUST register before accepting sessions — an unregistered relay cannot
@@ -588,6 +617,7 @@ const shutdown = () => {
   const uptimeMs = Date.now() - startedAt;
   logRelayServiceStopped(logger, { relayId, region: awsRegion, environment: celloEnv, uptimeMs });
 
+  stopDirectoryProbe();
   healthServer.close();
   relayResult.stop()
     .catch((err: unknown) => {
