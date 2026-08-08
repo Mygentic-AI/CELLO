@@ -696,8 +696,23 @@ rather than the peer's state vector; and the working document having to BE the l
   fleet**: two real daemons on two machines (or two CELLO_DIRs), create → consent → edit →
   publish → deliver → converge → seal, with document leaves in the sealed tree and the seal
   verifying. **The publish gate — milestone close is P4 all-green, not this line.** Vitest
-  green ≠ done. Andre runs the `latest` promotion. Close condition per M14-D2. — 🟠 **CONVERGENCE
-  HALF MET 2026-08-07; SEAL HALF BLOCKED ON A DEPENDENCY.**
+  green ≠ done. Andre runs the `latest` promotion. Close condition per M14-D2. — ✅ **COMPLETE 2026-08-08 — run end to end against the DEPLOYED fleet, not against source.**
+
+  Both relays now carry the fix (`relay:0cf04b0c`, rolled node-by-node 19:37 and 19:41 UTC) and the
+  operator runs daemon 0.0.147 / cli 0.0.154. On that stack: a document edit on the laptop crossed to
+  the Hermes EC2 box entirely over the relay (two NATs, no hole punch), was acknowledged
+  (`pendingDeliveries: 0`, none abandoned), went on the wire as a DOCUMENT leaf (`leafKind 4`), and
+  the session SEALED — `sealed_root 662a81c7…`, document leaves in the sealed tree. Propose → edit →
+  deliver → converge → seal, cross-machine, with the receipt to show for it.
+
+  (`content_leaf_count: 0` on that receipt is correct and not a miss: it counts CHAT messages, and
+  there were none. The document leaves are in `leaf_count`.)
+
+  The earlier 🟠 recorded the seal half as blocked on cross-node signaling. That was resolved: the
+  cross-node seal completes (proven 2026-08-08, three notarizations), and the separate fleet-wide
+  outage that made it look otherwise was the relay losing its directory connection — now fixed and
+  deployed, `DOD-RELAY-DIRECTORY-RECONNECT-1` / launch-triage item 14. Detail below is kept for the
+  trail.
 
   **RAN, on two real machines** — laptop (`CELLO_Coder_1`, home node `gcp-euw1`) and the Hermes EC2
   (`Miss_Chelly_H`, home node `gcp-usc1`), daemon 0.0.139 both sides. Propose → consent → edits from
@@ -1122,7 +1137,15 @@ Entry 31 in [[M14-BUILD-JOURNAL]] carries the full trace for each.
   to zero, convergence; **the session containing the `0x05` leaf seals and the seal VERIFIES on
   both sides** (the directory-side leaf changes in DOD-DOC-LEAF-1 are exercised by exactly this
   case); then the stall path: supersession rejected → one retry → `stalled` visible on both
-  sides. — ⏳ **CORE CASE GREEN** (`d4a1ccde`); the stall sub-case is SKIPPED and open.
+  sides. — ✅ **COMPLETE 2026-08-08 — the stall sub-case is green and NOTHING in this milestone is skipped.**
+  Core case green earlier (`d4a1ccde`); the stall sub-case had been skipped through FOUR attempted
+  fixes that all reasoned about chain-bridging logic, which was correct throughout. The actual causes
+  were three: SQLCipher binds a zero-length blob as NULL where `node:sqlite` binds an empty blob, so
+  `reject()`'s audit row threw on the driver operators run and on no driver any test ran — one
+  refusal permanently broke a document; a refusal announced twice (the signed frame and the
+  settling ack) was counted twice, costing a third of the supersede budget; and the test itself asked
+  for four successful publishes AND a stall, which cannot both hold at a ceiling of three. Twelve of
+  twelve live enforcers now pass with none skipped. See [[M14-BUILD-JOURNAL]] Entry 34.
 
   Green: a deletion into an append-only document is quarantined, the refusal puts a `0x05` leaf in
   the refuser's tree, an ordinary message rides the same session so the tree is genuinely mixed, and
