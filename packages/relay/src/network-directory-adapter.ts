@@ -197,10 +197,20 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
     healthCheckUrl: string;
     multiaddr: string;
     keyProvider: KeyProvider;
+    /**
+     * Which directory to register with. Defaults to the configured one.
+     *
+     * EVERY sovereign node needs to hear this independently. Each directory keeps its OWN relay
+     * manifest, in its own regional bucket, and reads only that copy — so a relay that registers
+     * with one node is invisible to the other two forever. Live on 2026-08-08: us-east1's manifest
+     * was at v6 and current, while us-central1 and europe-west1 were both frozen on a v5 written ten
+     * days earlier, because nothing had ever registered with them.
+     */
+    target?: { peerId: string; multiaddr: string };
   }): Promise<{ ok: true; alreadyRegistered?: boolean } | { ok: false; reason: string }> {
     if (!this.#node) return { ok: false, reason: "directory_unavailable" };
 
-    const { relayId, publicKeyHex, region, healthCheckUrl, multiaddr, keyProvider } = params;
+    const { relayId, publicKeyHex, region, healthCheckUrl, multiaddr, keyProvider, target } = params;
     const timestamp = Date.now();
 
     // SI-003: sign the TBS with the relay's own private key.
@@ -227,8 +237,8 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
     try {
       const stream = await this.#openDirectoryStream(
         this.#node,
-        this.#directoryMultiaddrs,
-        this.#directoryPeerId,
+        target ? [target.multiaddr] : this.#directoryMultiaddrs,
+        target ? target.peerId : this.#directoryPeerId,
       );
       stream.send(lp.encode.single(frame));
       await stream.close();

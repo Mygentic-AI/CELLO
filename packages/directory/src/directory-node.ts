@@ -1126,7 +1126,14 @@ export class CelloDirectoryNode {
           void this.#relayPoolManager.reSignManifestForRelay({
             relayId,
             healthCheckUrl,
-            // multiaddr intentionally omitted: relay_register must only update healthCheckUrl.
+            // region + multiaddr are used ONLY to ADD a relay that is not in the manifest yet, and
+            // are ignored for one already listed — the SI-001 protection above still holds, because
+            // the manager keeps those two cases apart. Passing them is what lets a relay REJOIN the
+            // pool after health checks dropped it: before this, the pool could only shrink, and a
+            // relay roll left the directory refusing every session with `relay_unavailable` until
+            // someone restarted it.
+            ...(region ? { region } : {}),
+            ...(multiaddr ? { multiaddr } : {}),
             keyProvider: this.#keyProvider,
           }).catch((err: unknown) => {
             const reason = err instanceof Error ? err.message : String(err);

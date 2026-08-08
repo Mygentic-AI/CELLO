@@ -6679,3 +6679,77 @@ The lesson that repeated all session, most sharply here: I kept declaring done a
 symptom stopped, not the last place the cause could occur. Every wrong "done" was caught by someone
 else — the counterparty's log, CELLO_Coder_1, the reviewer, Andre. The tests that mattered were the
 ones driven through real paths; every stub I reached for hid something.
+
+---
+
+## Entry — 2026-08-08 · The relay pool only ever shrinks (found while fixing the seal outage)
+
+**Operator symptom:** after any relay roll, agents cannot start conversations. Every session request
+is refused with `relay_unavailable` while the relays are up, listening on :4001, and passing their
+own health checks. Restarting the directory container is the only cure. Hit three times today; use1
+needed it twice.
+
+**Second symptom, invisible until now:** we run two relays and the pool has only ever known about
+one. `gcp-relay-euw1` has never carried a single session — it was not in the manifest, so it could
+never be selected, and nothing anywhere reported that.
+
+### Why — two mechanisms exist, neither can add a relay
+
+| Direction | What it does | What it cannot do |
+|---|---|---|
+| Relay → directory, `relay_register` ("I am here"), authenticated with an Ed25519 self-signature (SI-003) and written to `relay_registrations` | Updates the `healthCheckUrl` of a relay **already listed** in the manifest | **Add a relay.** If absent it threw `RELAY_NOT_IN_MANIFEST` and the registration was dropped on the floor |
+| Directory → relay, health check every 30s | Marks a relay failed past the threshold and **removes** it from the pool | **Restore one.** Removal is the only edit it makes |
+
+So the pool is monotonically decreasing. The only thing that could grow it was the signed manifest,
+authored by `sign-manifest.sh` in the AWS `deploy.sh` path — **which has not run since the GCP
+cutover.** That is an M12 loose end: the cutover moved the deployment and left the artefact that
+seeds relay membership behind in the cloud we deleted.
+
+`applyManifest` also refuses any manifest whose `version` does not strictly increase (SI-003
+monotonicity, correct in itself), so a frozen file can never refresh a drained pool. The failure is
+**silent by construction**: the signal is the *absence* of `relay.health.check.passed` for a node,
+not an error line.
+
+**And each node reads only its own regional bucket.** Relays register with their single configured
+directory, so only that node's manifest is ever rewritten. Measured today:
+
+```
+gcp-use1   v6  2026-08-08T12:16Z   1 relay      <- current
+gcp-usc1   v5  2026-07-29T13:51Z   1 relay      <- frozen 10 days
+gcp-euw1   v5  2026-07-29T13:51Z   1 relay      <- frozen 10 days
+```
+
+A third defect sat underneath and is fixed separately: the directory service account had
+`objectViewer` on its own manifest bucket ("read — and only read"), so every publish attempt
+returned 403 `storage.objects.create`. Now `objectAdmin` — an in-place GCS overwrite needs
+`objects.delete` too, so `objectCreator` would have worked once at bootstrap and failed silently
+forever after.
+
+### Fix
+
+1. **Registration may now ADD an absent relay to the manifest**, not merely patch one. It is
+   entitled to: the handler has already verified the self-signature and persisted the row, so
+   refusing to pool a relay we just authenticated was the inconsistency. Requires an address —
+   an entry the pool cannot dial is worse than a refusal, because `listAvailable()` would then
+   advertise a relay every session fails on.
+2. **The add and the update stay asymmetric, deliberately.** SI-001 still forbids registration from
+   rewriting the address of a relay already listed (a container-local address once overwrote a
+   stable one and broke every client reading the manifest). Adding is safe because there is nothing
+   to overwrite. The tests assert both halves; do not collapse them.
+3. **The relay now announces itself to every consortium directory**, not just its configured one —
+   best-effort and never fatal, because a peer node being down must not stop this relay serving
+   (sovereign-node redundancy). The configured directory still gates startup.
+4. New event `relay.manifest.relay_added`, distinct from `relay.manifest.updated`: a relay joining
+   the pool is what an operator wants to see after a roll, and burying it in the update stream is
+   how "europe has never carried a session" stayed invisible for ten days.
+
+### Rule
+
+**A pool that only removes is not a pool, it is a countdown.** Any in-memory set derived from an
+external source needs a path back in from the participant that knows it is alive — not only a path
+out driven by the thing that notices it is dead. Same shape as the relay's own stale directory
+handle fixed the same day: long-lived state derived from something that changed underneath it, with
+no route to recovery except a restart.
+
+**Roll order until this is deployed:** roll relays → restart each directory one at a time (quorum is
+2 of 3) → confirm `relay.health.check.passed` appears for all three node ids before calling it done.

@@ -176,6 +176,20 @@ async function defaultPingFn(url: string): Promise<PingResult> {
  * Exported so that infra/sign-manifest.sh and tests can use the exact same
  * construction and verify round-trip compatibility (AC-007b).
  */
+/**
+ * `/ip4/1.2.3.4/tcp/4001/ws/p2p/12D3Koo…` → `ws://1.2.3.4:4001`.
+ *
+ * Used only when registration ADDS a relay to the manifest, so the entry's `endpoint` and its
+ * `multiaddrs` cannot disagree — they are one fact written twice, and hand-supplying both is how
+ * they drift. Falls back to an empty string rather than throwing: `endpoint` is descriptive, while
+ * the multiaddr is what the pool actually dials, and a missing description must not block a relay
+ * from rejoining.
+ */
+export function multiaddrToWsEndpoint(multiaddr: string): string {
+  const m = multiaddr.match(/^\/ip4\/([^/]+)\/tcp\/(\d+)/);
+  return m ? `ws://${m[1]}:${m[2]}` : "";
+}
+
 export function buildCanonicalPayload(manifest: RelayPoolManifest): Uint8Array {
   const body: Record<string, unknown> = {
     version: manifest.version,
@@ -770,6 +784,8 @@ export class RelayPoolManager {
   async reSignManifestForRelay(params: {
     relayId: string;
     healthCheckUrl: string;
+    /** Only used when ADDING an absent relay — never to update one already listed (SI-001). */
+    region?: string;
     multiaddr?: string;
     keyProvider: import("@cello-protocol/crypto").KeyProvider;
   }): Promise<{ updated: true; version: number } | { updated: false; reason: string }> {
@@ -792,10 +808,11 @@ export class RelayPoolManager {
   async #reSignManifestForRelayInner(params: {
     relayId: string;
     healthCheckUrl: string;
+    region?: string;
     multiaddr?: string;
     keyProvider: import("@cello-protocol/crypto").KeyProvider;
   }): Promise<{ updated: true; version: number } | { updated: false; reason: string }> {
-    const { relayId, healthCheckUrl, multiaddr, keyProvider } = params;
+    const { relayId, healthCheckUrl, region, multiaddr, keyProvider } = params;
 
     // 1. Check if anything changed
     const previousUrl = this.#relayHealthCheckUrls.get(relayId);
@@ -819,22 +836,54 @@ export class RelayPoolManager {
 
     const manifest: RelayPoolManifest = JSON.parse(new TextDecoder().decode(manifestBytes));
 
-    // 3. Update relay entry
+    // 3. Update the relay entry — or ADD it, if this relay is not in the pool yet.
+    //
+    // ADDING IS THE POINT. Before this, an absent relay was refused here and the pool could only
+    // ever shrink: health checks remove a relay that fails the threshold, and NOTHING put one back.
+    // After any relay roll the directory then refused every session with `relay_unavailable` while
+    // the relays were up and listening, and restarting the directory was the only cure — needed
+    // three times on 2026-08-08. A relay deployed to europe-west1 was never in the manifest at all,
+    // so it had never carried a single session.
+    //
+    // Registration is entitled to do this: the handler verifies an Ed25519 self-signature over the
+    // relay's own key before calling here (SI-003) and has already written the row to
+    // `relay_registrations`. Refusing to pool a relay we just authenticated and persisted was the
+    // inconsistency, not the add.
+    //
+    // The two cases stay ASYMMETRIC on purpose — see the multiaddr note below.
     const relayEntry = manifest.relays.find(r => r.relayId === relayId);
+    let addedEntry: (typeof manifest.relays)[number] | undefined;
+
     if (!relayEntry) {
-      // Distinct error prefix for config/sync issues vs operational S3 failures
-      throw new Error(`RELAY_NOT_IN_MANIFEST:${relayId}`);
-    }
+      // An entry with no address is one the pool can never dial, and a silently-added dud is worse
+      // than a refusal: `listAvailable()` would report a relay that every session then fails on.
+      // So the add REQUIRES an address, and keeps the old error when there is none.
+      if (!multiaddr) throw new Error(`RELAY_NOT_IN_MANIFEST:${relayId}`);
+      const peerId = multiaddr.match(/\/p2p\/(.+)$/)?.[1];
+      if (!peerId) throw new Error(`RELAY_MULTIADDR_MISSING_PEER_ID:${relayId}:${multiaddr}`);
 
-    relayEntry.healthCheckUrl = healthCheckUrl;
+      addedEntry = {
+        relayId,
+        // Derived rather than carried: the endpoint is the same address the multiaddr already
+        // names, and two independently-supplied copies of one fact drift apart.
+        endpoint: multiaddrToWsEndpoint(multiaddr),
+        region: region ?? "unknown",
+        status: "active",
+        healthCheckUrl,
+        peerId,
+        multiaddrs: [multiaddr],
+      } as (typeof manifest.relays)[number];
+      manifest.relays.push(addedEntry);
+    } else {
+      relayEntry.healthCheckUrl = healthCheckUrl;
 
-    if (multiaddr) {
-      const p2pSuffix = multiaddr.match(/\/p2p\/(.+)$/);
-      if (!p2pSuffix) {
-        throw new Error(`RELAY_MULTIADDR_MISSING_PEER_ID:${relayId}:${multiaddr}`);
-      }
-      relayEntry.multiaddrs = [multiaddr];
-      relayEntry.peerId = p2pSuffix[1];
+      // SI-001: registration MUST NOT rewrite the address of a relay already in the manifest. The
+      // multiaddr in a relay_register frame is the relay's own view of itself and has historically
+      // been a container-local address; writing it over an established entry replaced a stable
+      // address with an ephemeral one and broke every client that read the manifest afterwards.
+      //
+      // Adding an absent relay is safe because there is nothing to overwrite. Updating one is not.
+      // Do not "tidy" these two branches into a single assignment — the asymmetry IS the control.
     }
 
     // 4. Increment version
@@ -863,10 +912,22 @@ export class RelayPoolManager {
       this.#relayMultiaddrs.set(relayId, multiaddr);
     }
 
-    // 9. Log relay.manifest.updated with required context fields
+    // 9. Log relay.manifest.updated with required context fields.
+    //    `relay.manifest.relay_added` is deliberately a DIFFERENT event from an update: a relay
+    //    joining the pool is the thing an operator wants to see after a roll, and burying it in the
+    //    update stream is how "europe has never carried a session" stayed invisible for ten days.
+    const entry = relayEntry ?? addedEntry!;
+    if (addedEntry) {
+      this.#logger.info("relay.manifest.relay_added", {
+        relayId,
+        region: entry.region,
+        manifestVersion: manifest.version,
+        peerId: entry.peerId,
+      });
+    }
     this.#logger.info("relay.manifest.updated", {
       relayId,
-      region: relayEntry.region,
+      region: entry.region,
       manifestVersion: manifest.version,
       healthCheckUrl,
     });

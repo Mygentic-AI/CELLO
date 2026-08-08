@@ -567,6 +567,54 @@ if (directoryAdapter) {
     });
     process.exit(1);
   }
+
+  // ─── ANNOUNCE TO EVERY SOVEREIGN NODE, not just the configured one ────────────────────────────
+  //
+  // Each directory keeps its OWN relay manifest, in its own regional bucket, and reads only that
+  // copy. Registering with one node therefore leaves this relay invisible to the others FOREVER —
+  // they have no way to learn it exists, because directories never forward to each other by design.
+  //
+  // Live on 2026-08-08: us-east1's manifest was current at v6 while us-central1 and europe-west1
+  // were both frozen on a v5 written ten days earlier, and the europe relay had never carried a
+  // single session. Two relays deployed, one ever usable.
+  //
+  // BEST-EFFORT, DELIBERATELY. The configured directory above is the one that gates startup — if
+  // that fails the relay exits. A peer node being down must NOT stop this relay from serving, which
+  // is the sovereign-node redundancy invariant: the fleet tolerates a node being unreachable. So
+  // each extra announcement is attempted once and its failure is logged, never fatal, and the node
+  // picks the relay up on its own next registration or restart.
+  const peerDirectories = Object.entries(dirEndpointsByPubkey).filter(
+    ([pubkey]) => pubkey !== dirPubkeyHex,
+  );
+  for (const [pubkey, addr] of peerDirectories) {
+    const peerId = addr.split("/p2p/")[1]?.split("/")[0];
+    if (!peerId) {
+      logger.warn("relay.registration.peer.skipped", {
+        directoryPubkey: pubkey.slice(0, 16),
+        reason: "consortium multiaddr carries no /p2p/ peer id",
+      });
+      continue;
+    }
+    const relayPeerId = relayResult.node.getPeerId();
+    const relayMultiaddr = `${publicMultiaddrBase || listenAddr}/p2p/${relayPeerId}`;
+    const peerResult = await directoryAdapter.registerWithDirectory({
+      relayId,
+      publicKeyHex: relayId,
+      region: awsRegion,
+      healthCheckUrl,
+      multiaddr: relayMultiaddr,
+      keyProvider: kp,
+      target: { peerId, multiaddr: addr },
+    });
+    if (peerResult.ok) {
+      logger.info("relay.registration.peer.ok", { directoryPubkey: pubkey.slice(0, 16), region: awsRegion });
+    } else {
+      logger.warn("relay.registration.peer.failed", {
+        directoryPubkey: pubkey.slice(0, 16),
+        reason: peerResult.reason,
+      });
+    }
+  }
 }
 
 for (const addr of relayResult.node.listenAddresses()) {
