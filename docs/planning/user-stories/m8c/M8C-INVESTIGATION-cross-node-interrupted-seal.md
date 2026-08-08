@@ -251,5 +251,9 @@ All in `cello-client` unless noted.
 ## Environment at time of writing
 
 - Daemon **0.0.143** on both machines (laptop and Hermes EC2), carrying all three fixes above.
+- The root cause above was read against a **newer** tree than that — daemon 0.0.145 (unpublished;
+  published latest is 0.0.144), CLI 0.0.152. The last three commits touching any file on this path
+  are the three fixes themselves, so the finding holds identically on 0.0.143, 0.0.144 and 0.0.145.
+  Nothing shipped since changes it.
 - Directories at **schema 62** (V58–V62 deployed 2026-08-08), all three `status: ok`.
 - Agents: `CELLO_Coder_1` homed `gcp-euw1`; `Miss_Chelly_H` homed `gcp-usc1`.
