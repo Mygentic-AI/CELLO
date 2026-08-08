@@ -293,8 +293,14 @@ description: >
   four times: a unit with no caller reads exactly like a working one. Proven end to end by a real
   peer's override being refused with the operator's copy untouched.
 
-  **Still owed:** the sender-side advisory scan at publish (§16.6 — friction reduction among good
-  actors, never a boundary), and sender-adopts-the-receiver's-rule (§16.7-16).
+  **COMPLETE 2026-08-07.** All three halves ship:
+  - the receiver's gate (`834079f`) — authoritative, and the only security boundary;
+  - the sender-side scan at publish (§16.6) — friction reduction among good actors, sharing ONE
+    implementation with the gate (`screenText`) so the two cannot drift;
+  - **sender-adopts-the-receiver's-rule (§16.7-16)** — once a peer refuses a character in a
+    document, we stop emitting it there. Learned from their own signed, machine-readable refusals,
+    scoped to that document, and adopting nothing from a prose-only refusal. This is what the
+    machine-readable detail was for: prose can be read by an operator and adopted by nobody.
 - **DOD-DOC-REBUTTAL-1** [cello-client] — **the tail: a rebuttal is DATA, never argument**
   (§16.7-17). For the residual case where a character is load-bearing for meaning. Structured
   evidence only (rule id, codepoints, positions, the marked diff); any free text is presented to the
@@ -306,7 +312,14 @@ description: >
   republishes through the gate. A rebuttal must NOT count against REJECT-1's stall ceiling.
   **CAN SLIP PAST V1** (Andre, 2026-08-05): without it a genuinely multilingual document fails
   closed and the operator resolves it by hand — worse ergonomics, identical security. PROFILE-1 and
-  SCREEN-1 cannot slip; without them there is no screening. — ❌
+  SCREEN-1 cannot slip; without them there is no screening.
+
+  — 🅿️ **SLIPPED TO M14B, on that decision, 2026-08-07.** Acting on the call already recorded above
+  rather than re-opening it. It is the tail case: nothing produces a rebuttal today, so no operator
+  can reach it, and the fallback (fail closed, resolve by hand) is the same security with worse
+  ergonomics. M14B is where V2's deepening work already lives, and this belongs with it.
+
+  **It does NOT block M14.** SCREEN-1 and PROFILE-1, the two that cannot slip, are both complete.
 - **DOD-DOC-ENVELOPE-1** [cello-client] — **carries BLOCKING ACs from DOD-DOC-GATE-1's reviews.**
   The gate enforces three bindings that no property of an update's bytes can establish, so each is
   only as trustworthy as the signature covering it. **All three MUST be inside the signed TBS:**
