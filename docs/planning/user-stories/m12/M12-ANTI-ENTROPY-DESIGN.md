@@ -128,7 +128,23 @@ Apply rule: insert by natural key, `ON CONFLICT DO NOTHING`. Divergence detectio
 set-reconciliation problem (§3). RLS already makes these physically append-only for
 `cello_service` — the sync writer needs no new privileges beyond INSERT it already has.
 
-> ⚠️ **STATUS 2026-08-07 — this table is a DESIGN, not a description of what exists.** Two of these
+> ⚠️ **STATUS 2026-08-08 — SIX OF THESE EIGHT ARE SETTLED AND WILL NOT BE BUILT AS WRITTEN.**
+>
+> Two are built (`agent_suspensions`, `agent_presence`). Two were solved better by becoming Tier A
+> (`directory_nodes`, `capability_claim_codes`). The remaining four — `sessions`, `pickup_queue`,
+> `pending_notifications`, `pre_authorization_tokens` — are deliberately NOT being built, and the
+> reasoning lives beside the code in `ae-table-encoders.ts`: replicate the FACT and let the client
+> learn it, rather than replicate delivery state. Replicating a queue invites double-delivery, and
+> the receipt a stranded participant needs is already derivable from `seal_notarizations`, which is
+> Tier A. `pre_authorization_tokens` is unnecessary on this document's own admission — the nonce
+> binder is the real double-spend gate.
+>
+> Tier B is therefore FINISHED, not half-done. What would reopen it: a fact a client cannot learn
+> from replicated state and must be pushed. Every case so far has turned out to be learnable.
+>
+> **Original status note follows.**
+>
+> ⚠️ **2026-08-07 — this table is a DESIGN, not a description of what exists.** Two of these
 > eight are built (`agent_suspensions`, `agent_presence`). The other six are not, and
 > `ae-table-encoders.ts` describes five of them as "node-local by design" — which contradicts this
 > section. Neither document records which decision superseded which. `capability_claim_codes` and

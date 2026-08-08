@@ -9,7 +9,11 @@ description: >
   shape recorded. Nothing is deployed — the node roll is left for an operator.
 ---
 
-# Tier B programme — overnight state
+# Tier B programme — COMPLETE
+
+> **Updated 2026-08-08.** All six items are closed. Items 2 and 6 were left open overnight and were
+> finished the following morning after Andre pushed back — correctly — on the difference between
+> explaining a problem and fixing it, and between recording a disagreement and resolving it.
 
 ## What landed
 
@@ -19,8 +23,8 @@ description: >
 | 3 | The unassessed attestation pair | **V61 committed** |
 | 4 | `user_accounts.email_stub_hash` → append-only fact | **V60 committed** |
 | 5 | Reconcile the two contradicting documents | **Committed** |
-| 2 | Revocation propagation | **NOT implemented** — see below |
-| 6 | Remaining Tier B tables | **Assessed, not implemented** — see below |
+| 2 | Revocation propagation | **V62 committed** |
+| 6 | Remaining Tier B tables | **Settled — four will NOT be built, see below** |
 
 Gate on every commit: full directory suite green (1285 tests), lint 0 errors, typecheck clean.
 

@@ -368,7 +368,7 @@ export const SIGNAL_REVOCATIONS_SPEC: TierATableSpec = {
  *   registrations, pre_authorization_tokens — per-node Telegram registration state machine
  *   conversation_seal_staging — ephemeral staging rows consumed during the seal ceremony
  *
- * ⚠️ THAT LIST CONTRADICTS `M12-ANTI-ENTROPY-DESIGN.md`, AND THE CONTRADICTION IS UNRESOLVED.
+ * ⚠️ THAT LIST CONTRADICTS `M12-ANTI-ENTROPY-DESIGN.md` — RESOLVED 2026-08-08 IN FAVOUR OF THIS ONE.
  *
  * The design doc's Tier-B table gives EXPLICIT MERGE RULES to five of the tables called "node-local
  * by design" above: `sessions` (owner-wins), `pre_authorization_tokens` and `capability_claim_codes`
@@ -383,10 +383,29 @@ export const SIGNAL_REVOCATIONS_SPEC: TierATableSpec = {
  * production on 2026-07-31. So the list has already been wrong, twice, in the direction of
  * under-replicating.
  *
- * TREAT NEITHER AS AUTHORITATIVE ON ITS OWN. Before adding or excluding a table, read both, and if
- * they disagree resolve it in writing rather than picking the one that agrees with you. This exact
- * ambiguity is how the AWS mesh's 21 replicated tables became 4 with nobody noticing for three
- * months. Full account: `docs/planning/discussion_logs/2026-08-07_1912_replication-gap-what-m12-left-unfinished.md`.
+ * THE DETERMINATION, and the reasoning, so it is not re-litigated:
+ *
+ * The delivery-state tables — `sessions`, `pickup_queue`, `pending_notifications` — STAY NODE-LOCAL.
+ * The design's merge rules for them are superseded by a better pattern that the codebase discovered
+ * afterwards and wrote down in `#deliverOrEnqueue`: **replicate the FACT, let the client learn it.**
+ *
+ * The case that forced it: a seal result for a participant homed on another node is enqueued on the
+ * ADJUDICATING node, so it strands and is never collected. That is real — but replicating the queue
+ * is the wrong repair, for two reasons the code states itself. Replicating delivery state invites
+ * double-delivery, and it is unnecessary: `seal_notarizations` is already Tier A, so the stranded
+ * participant's OWN home node has the notarization and the receipt can be learned locally. That is
+ * what DOD-TERMINAL-STATE-DIVERGENCE-1 / V58 builds, and it is why the queue does not need to move.
+ *
+ * `pre_authorization_tokens` also stays local, on the design's own admission: replicating it leaves
+ * the cross-node double-spend window unchanged because the nonce binder is the real gate.
+ *
+ * So of the design's eight Tier-B tables: two are built (`agent_suspensions`, `agent_presence`), two
+ * were solved better by becoming Tier A (`directory_nodes`, `capability_claim_codes`), and the
+ * remaining four are deliberately NOT built. Tier B is finished, not abandoned.
+ *
+ * WHAT WOULD REOPEN THIS: a fact that a client cannot learn from replicated state and that must
+ * therefore be pushed. Every case so far has turned out to be learnable. Full account:
+ * `docs/planning/discussion_logs/2026-08-07_1912_replication-gap-what-m12-left-unfinished.md`.
  *
  * NOT included and NOT a decision — unregistered and unassessed (found 2026-08-03, RESOLVED 2026-08-07
  * by V61, which added their natural keys and registered them):
