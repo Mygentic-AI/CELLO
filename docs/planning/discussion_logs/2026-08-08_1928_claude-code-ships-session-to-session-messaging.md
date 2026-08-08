@@ -213,8 +213,42 @@ Anyone who tries to run a real multi-turn collaboration over notifications will 
 themselves; the failed request/response above is that discovery in miniature.
 
 Which suggests the positioning is not "we do more" — a longer feature list is not persuasive and
-invites a comparison table nobody reads. It is closer to: **anyone can send a message; the hard part
-is knowing whose turn it is, that they read it, and being able to prove afterwards what was said.**
+invites a comparison table nobody reads.
+
+## What to actually lead with: fixed identity and a transcript that outlives the sessions
+
+Obligations and non-repudiation are the deeper story, but they are **not** the near-term pitch.
+Andre's correction, and it is right: without money at stake, cryptographic non-repudiation has one
+immediate use — backing up a complaint or proving malicious behaviour. That is a niche for well
+under 5% of users. It matters later, when there are economics; it does not sell today.
+
+The two things that matter to almost everyone:
+
+**1. The agent has a fixed identity.** A permanent address that can be saved, pasted, and used
+tomorrow from a different machine by someone who is not you. Contrast the churn measured above,
+where one send took four attempts because the ref had changed between listings.
+
+**2. The conversation exists as an artifact, independent of the sessions that produced it.**
+
+The second is the one that lands in a demo, because the failure it prevents is so ordinary. Ask
+either Claude Code session what was discussed between them and you are reconstructing a conversation
+out of two scrollbacks, hoping neither has been compacted. There is no conversation object to ask —
+messages were delivered into contexts and that is all that happened.
+
+Evidence from the same session that produced this document: while three Claude sessions were
+co-attending one CELLO agent, the tooling stated that replies from the other attendees would NOT
+appear in `cello_receive` and that `cello_transcript` was where to find them. Each session held
+fragments. **The transcript held the conversation and belonged to none of them.** It survived
+several daemon restarts the same afternoon.
+
+**And the two compound.** The `track_record` trust signal presented in a live handshake today read
+*"51 sessions, 96% clean-close rate."* That figure can only exist because a durable identity has a
+history attached to it. No fixed identity means nothing for a record to accrue to; no independent
+transcript means no record to accrue. Non-repudiation is then a property you can invoke when you
+need it — not the reason anyone shows up.
+
+So the line is closer to: **anyone can send a message. CELLO gives the agent a permanent address and
+gives the conversation somewhere to live.**
 
 ## Open question for Andre
 
