@@ -1054,3 +1054,41 @@ external thing that changed underneath it, with no path back.
 **Roll order that avoids this:** roll relays, then restart each directory one at a time (quorum is
 2 of 3), then confirm `relay.health.check.passed` appears for all three node ids before declaring
 the roll done.
+
+### Relay-pool fix deployed and verified — 2026-08-08T15:33Z
+
+Directory `8e6b0f79`, relay `8b195c90`. All five instances replaced; directories rolled one at a
+time (quorum 2 of 3 held throughout).
+
+**Before** — the pool could only shrink, and two of three nodes read a file nobody had written since
+the GCP cutover:
+
+```
+gcp-use1   v6  2026-08-08T12:16Z   1 relay
+gcp-usc1   v5  2026-07-29T13:51Z   1 relay     <- frozen 10 days
+gcp-euw1   v5  2026-07-29T13:51Z   1 relay     <- frozen 10 days
+```
+
+**After** — every node current, BOTH relays present, correct regions:
+
+```
+gcp-use1   v11  relays=[8492fffe:us-east1, e3cd54a4:europe-west1]
+gcp-usc1   v10  relays=[8492fffe:us-east1, e3cd54a4:europe-west1]
+gcp-euw1   v10  relays=[8492fffe:us-east1, e3cd54a4:europe-west1]
+```
+
+`gcp-relay-euw1` is in the pool for the first time — it had never carried a session.
+
+Live trace of the whole path, one relay restart: `relay.registration.peer.ok` from the relay →
+`relay.already.registered` on all three directories → `relay.manifest.updated region=europe-west1`
+on all three → `relay.manifest.refreshed` as each picks its own new version up.
+
+**Region was wrong on every relay** until this roll: the value came from `AWS_REGION`, which does
+not exist on GCP, so both relays registered as `us-east-1` and region-aware selection had nothing
+real to select on. Now `CELLO_RELAY_REGION`, passed from the Terraform template. `AWS_REGION` stays
+only as a fallback for an AWS-hosted relay and must never be set as a custom variable.
+
+**The roll order still matters and is now the documented one:** roll relays → roll directories one
+at a time → **restart the relays again** so they re-announce to directories running the new code →
+confirm both relays appear in all three manifests. A relay only announces at boot, so a directory
+rolled *after* a relay registered will not have heard it.
