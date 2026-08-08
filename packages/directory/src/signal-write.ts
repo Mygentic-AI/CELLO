@@ -771,6 +771,22 @@ export async function revokeSignal(args: {
        ON CONFLICT (signal_hash, accepting_node) DO NOTHING`,
       [signalHash, revokeNode, revokerPubkey, revokerSignature],
     );
+
+    // V62: record the same fact in the REPLICATED table. The tombstone above is what this node
+    // reads; this is how the other two ever learn of it. Without it the tombstone still crosses —
+    // stripped of is_tombstone and the revoker — and lands looking like an ACTIVE record, which is
+    // worse than not crossing at all.
+    //
+    // Only when we actually have the revoker identity: a NULL-revoker row is the case V54 removed as
+    // an attacker escape, and replicating one would spread it.
+    if (revokerPubkey && revokerSignature) {
+      await pool.query(
+        `INSERT INTO signal_revocations (signal_hash, revoker_pubkey, revoker_signature)
+         VALUES ($1,$2,$3) ON CONFLICT (signal_hash, revoker_pubkey) DO NOTHING`,
+        [signalHash, revokerPubkey, revokerSignature],
+      );
+    }
+
     const revokedRows = ins.rowCount ?? 0; // 1 = newly revoked at this node; 0 = this node already had
 
     logger.info("signal.revocation.accepted", {

@@ -55,7 +55,7 @@ import type { Logger } from "@cello-protocol/interfaces";
 import {
   encodeTierARecord, type TierATableSpec, type TableRow,
   AGENT_PROFILES_SPEC, AGENT_ACCOUNT_LINKS_SPEC, ACCOUNT_EMAIL_STUBS_SPEC,
-  CONVERSATION_PARTICIPATION_SPEC, CONVERSATION_ATTESTATIONS_SPEC, AGENT_REVOCATIONS_SPEC, USER_ACCOUNTS_SPEC, SEAL_NOTARIZATIONS_SPEC,
+  CONVERSATION_PARTICIPATION_SPEC, CONVERSATION_ATTESTATIONS_SPEC, SIGNAL_REVOCATIONS_SPEC, AGENT_REVOCATIONS_SPEC, USER_ACCOUNTS_SPEC, SEAL_NOTARIZATIONS_SPEC,
   SEAL_CERTIFICATE_FIELDS_SPEC,
   CAPABILITY_CLAIM_CODES_SPEC, AUTHORIZED_ISSUERS_SPEC, SIGNAL_RECORDS_SPEC,
   SUBMISSION_RESULTS_SPEC, RELAY_REGISTRATIONS_SPEC, DIRECTORY_NODES_SPEC,
@@ -155,6 +155,19 @@ const TIER_A: readonly TierAPg[] = [
   { spec: CAPABILITY_CLAIM_CODES_SPEC, bytea: [], naturalKeyConstraint: "capability_claim_codes_pkey" },
   { spec: AUTHORIZED_ISSUERS_SPEC, bytea: [], naturalKeyConstraint: "authorized_issuers_pkey" },
   { spec: SIGNAL_RECORDS_SPEC, bytea: [], naturalKeyConstraint: "signal_records_pkey" },
+  {
+    // V62. No FK to signal_records on purpose: a revocation can legitimately arrive before the
+    // record it revokes (revoke-before-submit under replication), and branch 1 of the effective view
+    // treats that as revoked — fail-closed, converging deny → allow when the record lands.
+    spec: SIGNAL_REVOCATIONS_SPEC,
+    // revoker_signature is BYTEA: the consumer hex-encodes it for the wire and this decodes it back.
+    bytea: ["revoker_signature"],
+    naturalKeyConstraint: "signal_revocations_pkey",
+    // BOTH identify the authority. A revocation with no revoker is exactly the NULL-revoker case
+    // V54 removed as an attacker escape, and Tier-A apply is insert-if-absent, so one accepted here
+    // could never be corrected.
+    requiredColumns: ["signal_hash", "revoker_pubkey", "revoker_signature"],
+  },
   { spec: SUBMISSION_RESULTS_SPEC, bytea: ["ciphertext"], naturalKeyConstraint: "submission_results_pkey" },
   // chained: in HASH_CHAINED_TABLES, and missed here when this table was registered on 2026-07-31.
   // Its chain_hash is `NOT NULL DEFAULT ''` (V19), so the generic INSERT did not raise — it wrote

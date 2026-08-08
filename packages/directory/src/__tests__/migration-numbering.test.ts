@@ -135,8 +135,12 @@ describe("directory migration numbering", () => {
     // excluded; they were never considered, and a node receiving a seal learned neither who took
     // part nor what was attested. Live: 22 rows on one node, 38 on another.
     //
+    // V62 was consumed the same night — signal_revocations, the revocation fact in a form that
+    // replicates, plus the effective-status view rewritten to consult it. The tombstone was already
+    // crossing and landing as an ACTIVE record.
+    //
     // This tripwire found the collision it exists for, in both directions, on the same day. Whoever
-    // takes 62 updates this line.
-    expect(nextFree, "coordination agreement says V62 is the next free number").toBe(62);
+    // takes 63 updates this line.
+    expect(nextFree, "coordination agreement says V63 is the next free number").toBe(63);
   });
 });

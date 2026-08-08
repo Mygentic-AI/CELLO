@@ -336,6 +336,28 @@ export const CONVERSATION_ATTESTATIONS_SPEC: TierATableSpec = {
 };
 
 /**
+ * signal_revocations (V62). The revocation fact, in a form that replicates.
+ *
+ * The tombstone in `signal_records` already has its own natural key, so it DOES replicate — but
+ * `applyTierA` copies only the hashed columns, and `is_tombstone` / `revoker_pubkey` are not among
+ * them. So on every peer the tombstone landed with `is_tombstone` false and `status` 'active': the
+ * revocation had no effect AND the row then counted as a real one in the effective-status view's
+ * aggregation, polluting the descriptive fields with its '(tombstone)' placeholders.
+ *
+ * Adding those columns to SIGNAL_RECORDS_SPEC would rehash every historical row and make all three
+ * nodes report divergence on data that never changed (the trap V58 documents), so the fact moves to
+ * its own table instead. `signal_records` is untouched.
+ *
+ * `recorded_at` is excluded: it is a per-node wall clock, and the moment a node learned of a
+ * revocation is not part of the revocation.
+ */
+export const SIGNAL_REVOCATIONS_SPEC: TierATableSpec = {
+  table: "signal_revocations",
+  naturalKey: ["signal_hash", "revoker_pubkey"],
+  immutableColumns: ["signal_hash", "revoker_pubkey", "revoker_signature"],
+};
+
+/**
  * The registered Tier-A specs — all tables that must converge to the same value across nodes.
  * Previously four; expanded 2026-07-31 to cover the tables that were in the AWS Postgres mesh
  * but were never registered for AE.
@@ -391,6 +413,7 @@ export const TIER_A_SPECS: readonly TierATableSpec[] = [
   CAPABILITY_CLAIM_CODES_SPEC,
   AUTHORIZED_ISSUERS_SPEC,
   SIGNAL_RECORDS_SPEC,
+  SIGNAL_REVOCATIONS_SPEC,
   SUBMISSION_RESULTS_SPEC,
   RELAY_REGISTRATIONS_SPEC,
   DIRECTORY_NODES_SPEC,

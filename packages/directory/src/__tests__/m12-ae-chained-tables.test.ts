@@ -91,6 +91,11 @@ describe("DOD-AE-CHAINED-TABLES-1: seal_notarizations and user_accounts replicat
       "capability_claim_codes",
       "authorized_issuers",
       "signal_records",
+      // V62. The revocation FACT. The tombstone in signal_records already crossed — stripped of
+      // is_tombstone and the revoker, so it landed looking ACTIVE and polluted the effective view's
+      // aggregation. Carries a hash, a revoker pubkey and a signature over the revocation: all three
+      // are public by construction and re-verifiable by the receiving node.
+      "signal_revocations",
       "submission_results",
       "relay_registrations",
       "directory_nodes",
