@@ -23,6 +23,45 @@ import type { SealData } from "./relay-types.js";
 const CBOR_ENC = new Encoder({ useRecords: false, mapsAsObjects: false });
 const DIRECTORY_RELAY_PROTOCOL_ID = "/cello/directory-relay/1.0.0";
 
+/**
+ * Render whatever was thrown into a reason an operator can act on.
+ *
+ * `CelloNode` does NOT throw Errors — it throws structured plain objects:
+ *
+ *     throw { reason: "connection_lost", peerId, message: `No open connection to peer ${id}` };
+ *
+ * The previous `err instanceof Error ? err.message : "directory_unavailable"` therefore collapsed
+ * EVERY transport failure into the single string `directory_unavailable`, which names a condition
+ * (the directory is not reachable) that was not the one occurring. On 2026-08-08 that cost a day:
+ * seals were refused with "directory unavailable" while all three directories were healthy, on the
+ * right schema, with matching peer IDs and an open port — the actual fault being a dead local
+ * connection. Distinct causes must produce distinct reasons.
+ */
+function describeThrown(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "object" && err !== null) {
+    const structured = err as { reason?: unknown; message?: unknown };
+    const reason = typeof structured.reason === "string" ? structured.reason : undefined;
+    const message = typeof structured.message === "string" ? structured.message : undefined;
+    if (reason && message) return `${reason}: ${message}`;
+    if (reason) return reason;
+    if (message) return message;
+  }
+  if (typeof err === "string" && err.length > 0) return err;
+  // Genuinely nothing to report. Kept as the last resort ONLY — never as a stand-in for a cause
+  // that was available and discarded.
+  return "directory_unavailable";
+}
+
+/** The stale-handle signal: a connection that libp2p no longer holds open. Repairable by redialling. */
+function isConnectionLost(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { reason?: unknown }).reason === "connection_lost"
+  );
+}
+
 export interface NetworkDirectoryAdapterOptions {
   directoryPeerId: string;
   directoryMultiaddrs: string[];
@@ -45,6 +84,59 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
 
   connect(node: CelloNode): void {
     this.#node = node;
+  }
+
+  /**
+   * Open a directory stream, repairing a stale connection rather than failing on it.
+   *
+   * WHY THIS EXISTS. `connect()` is called once at relay boot and the handle is then trusted for the
+   * life of the process — relays run for days. libp2p connections do not. When the connection to a
+   * directory dropped, `newStream` found nothing open and threw, and the seal was refused outright
+   * with no attempt to reconnect. Live on 2026-08-08: a relay 3 days into its life stopped sealing
+   * entirely and stayed that way; every seal failed in UNDER A MILLISECOND because `getConnections()`
+   * is an in-memory lookup that never touches the network. The last working seal had taken 79ms — a
+   * real round trip. Restarting the relay "fixed" it, which is the tell that the fault was in state
+   * held across the process's life, not in the fleet.
+   *
+   * The dial loop no longer swallows. Its empty `catch {}` meant a total dial failure produced no log
+   * line at all, so the window in which the connection died contained zero evidence.
+   *
+   * Exactly one redial. A stale handle is repaired by the retry; a directory that is genuinely down
+   * fails both attempts and must surface as such rather than spinning.
+   */
+  async #openDirectoryStream(node: CelloNode, addrs: string[], peerId: string) {
+    const dial = async (): Promise<void> => {
+      let lastError: unknown;
+      for (const addr of addrs) {
+        try {
+          await node.dial(addr);
+          return;
+        } catch (err: unknown) {
+          lastError = err;
+        }
+      }
+      if (lastError !== undefined) {
+        this.#logger?.warn("relay.directory.dial.failed", {
+          peerId,
+          addressesTried: addrs.length,
+          reason: describeThrown(lastError),
+        });
+      }
+    };
+
+    await dial();
+    try {
+      return await node.newStream(peerId, DIRECTORY_RELAY_PROTOCOL_ID);
+    } catch (err: unknown) {
+      if (!isConnectionLost(err)) throw err;
+      this.#logger?.warn("relay.directory.connection.stale", {
+        peerId,
+        reason: describeThrown(err),
+        action: "redialling and retrying once",
+      });
+      await dial();
+      return await node.newStream(peerId, DIRECTORY_RELAY_PROTOCOL_ID);
+    }
   }
 
   /**
@@ -103,12 +195,11 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
     }) as Uint8Array;
 
     try {
-      // Ensure we are connected to the directory before opening a stream
-      for (const addr of this.#directoryMultiaddrs) {
-        try { await this.#node.dial(addr); break; } catch { /* try next */ }
-      }
-
-      const stream = await this.#node.newStream(this.#directoryPeerId, DIRECTORY_RELAY_PROTOCOL_ID);
+      const stream = await this.#openDirectoryStream(
+        this.#node,
+        this.#directoryMultiaddrs,
+        this.#directoryPeerId,
+      );
       stream.send(lp.encode.single(frame));
       await stream.close();
 
@@ -136,7 +227,7 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
       }
       return { ok: false, reason: "no_response" };
     } catch (err: unknown) {
-      return { ok: false, reason: err instanceof Error ? err.message : "directory_unavailable" };
+      return { ok: false, reason: describeThrown(err) };
     }
   }
 
@@ -156,11 +247,11 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
     }) as Uint8Array;
 
     try {
-      for (const addr of this.#directoryMultiaddrs) {
-        try { await this.#node.dial(addr); break; } catch { /* try next */ }
-      }
-
-      const stream = await this.#node.newStream(this.#directoryPeerId, DIRECTORY_RELAY_PROTOCOL_ID);
+      const stream = await this.#openDirectoryStream(
+        this.#node,
+        this.#directoryMultiaddrs,
+        this.#directoryPeerId,
+      );
       stream.send(lp.encode.single(frame));
       await stream.close();
 
@@ -205,17 +296,19 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
       // Ensure connected — to the redirect target when one was supplied, else the configured node.
       const addrs = target ? [target.multiaddr] : this.#directoryMultiaddrs;
       const peerId = target ? target.peerId : this.#directoryPeerId;
-      for (const addr of addrs) {
-        try { await this.#node.dial(addr); break; } catch { /* try next */ }
-      }
 
-      const stream = await this.#node.newStream(peerId, DIRECTORY_RELAY_PROTOCOL_ID);
+      const stream = await this.#openDirectoryStream(this.#node, addrs, peerId);
       stream.send(lp.encode.single(frame));
       await stream.close();
 
       for await (const chunk of lp.decode(stream)) {
         const raw = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
-        const resp = CBOR_ENC.decode(raw) as Record<string, unknown>;
+        // `cborDecode`, matching registerWithDirectory and getRelayPublicKey. This call site used the
+        // CBOR_ENC INSTANCE, which is constructed with `mapsAsObjects: false` — so it decodes a CBOR
+        // map into a JS `Map`, and `resp["type"]` on a Map is always undefined. Every response then
+        // fell through to the `?? "directory_error"` branch regardless of what the directory said.
+        // Three call sites, two of them already correct; this was the odd one out.
+        const resp = cborDecode(raw) as Record<string, unknown>;
         if (resp["type"] === "seal_received") return { ok: true };
         const redirect = resp["redirect"] as { nodeId: string; peerId: string; multiaddr: string } | undefined;
         return {
@@ -226,7 +319,7 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
       }
       return { ok: false, reason: "no_response" };
     } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : "directory_unavailable" };
+      return { ok: false, reason: describeThrown(err) };
     }
   }
 }
