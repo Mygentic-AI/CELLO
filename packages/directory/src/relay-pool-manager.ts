@@ -877,6 +877,14 @@ export class RelayPoolManager {
     } else {
       relayEntry.healthCheckUrl = healthCheckUrl;
 
+      // Region IS refreshed from registration, unlike the address. It is descriptive metadata the
+      // relay reports about itself, not something anyone dials, so a stale value cannot break a
+      // connection — but it CAN break region-aware relay selection silently, which is exactly what
+      // happened: every relay defaulted to "us-east-1" and europe-west1 advertised a US region.
+      // Correcting that needed a path in, and without this one an entry already in the manifest
+      // keeps a wrong region forever.
+      if (region) relayEntry.region = region;
+
       // SI-001: registration MUST NOT rewrite the address of a relay already in the manifest. The
       // multiaddr in a relay_register frame is the relay's own view of itself and has historically
       // been a container-local address; writing it over an established entry replaced a stable

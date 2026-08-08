@@ -156,6 +156,29 @@ describe("a registering relay can join the pool it is not yet in", () => {
     expect(entry.peerId).toBe("12D3KooWaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   });
 
+  it("DOES correct the region of a relay already listed", async () => {
+    // Region is descriptive, not dialable, so refreshing it cannot break a connection — and leaving
+    // it stale breaks region-aware selection silently. Every relay defaulted to "us-east-1" until
+    // 2026-08-08, europe included, and without this path an existing entry keeps the wrong region
+    // forever. Deliberately the opposite decision from the multiaddr immediately above.
+    const storage = makeStorage(baseManifest());
+    const mgr = new RelayPoolManager({
+      storage: storage as never,
+      signerPublicKeyHex: signerHex,
+      logger: noopLogger as never,
+    });
+
+    await mgr.reSignManifestForRelay({
+      relayId: RELAY_A,
+      healthCheckUrl: "http://34.139.119.165:4000/health-v2",
+      region: "europe-west1",
+      keyProvider: kp,
+    });
+
+    const entry = storage.current().relays.find((r: { relayId: string }) => r.relayId === RELAY_A);
+    expect(entry.region).toBe("europe-west1");
+  });
+
   it("refuses to add a relay whose multiaddr carries no peer id", async () => {
     // Without a peer id the entry is undialable, and a silently-added dud is worse than a refusal:
     // the pool reports a relay it can never reach.
