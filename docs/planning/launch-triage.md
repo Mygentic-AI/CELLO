@@ -722,9 +722,25 @@ before trusting any single-case diagnosis in this area.
 
 ## 14. The relay stops being able to notarize, never recovers, and reports itself perfectly healthy
 
-**Designation: `DOD-RELAY-DIRECTORY-RECONNECT-1`** — ❌ **OPEN. Service restored by a manual restart
-2026-08-08; the defect is untouched.** Unranked pending Andre. **Proposed slot: high — this is the
-only item on this list that silently stops EVERY seal on the fleet at once.**
+**Designation: `DOD-RELAY-DIRECTORY-RECONNECT-1`** — 🟠 **BOTH HALVES FIXED IN SOURCE 2026-08-08,
+NOT YET ON THE FLEET.** Unranked pending Andre. **Proposed slot: high — this is the only item on
+this list that silently stops EVERY seal on the fleet at once.**
+
+- **The reconnect** — `0d9568a5` (Miss_Chelly). `#openDirectoryStream` redials a stale connection
+  and retries once instead of refusing the seal, and the dial errors are logged instead of being
+  discarded by an empty `catch {}`.
+- **The noticing** — `relay-service-lifecycle.ts` + `bin/relay.ts`. `/health` reports whether this
+  relay can reach a directory rather than a constant built at startup, and a 30s probe asks while
+  nobody is watching. The probe runs the SAME transport a seal runs, so it repairs the connection on
+  the way; a probe over any other route can be green while the route that matters is dead.
+  Unhealthy requires three consecutive failures (failing on the first would cycle the whole fleet on
+  any transient directory blip); a relay that has not yet probed is healthy.
+- **Still owed: the deploy.** The running relays carry the old behaviour until a relay image is
+  built and rolled. Until then this item's failure mode is live, and the only mitigation is the
+  manual restart that ended the 2026-08-08 outage.
+- **Not addressed:** splitting `directory_unavailable` into distinct reasons at every call site
+  (partially done — `directory_not_connected` now separates our own wiring from the network), and
+  `relay.seal.broker.unreachable` still logs a WARNING on the success path.
 
 **What a customer experiences.** They finish a conversation and close it. Nothing comes back. No
 error, no receipt, no explanation — the close simply hangs for about seven minutes and then reports
