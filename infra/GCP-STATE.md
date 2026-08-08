@@ -961,3 +961,52 @@ a support ticket, not a config change.
 
 **This is a CI papercut, not a launch blocker.** The manual `builds submit --revision=<SHA>` path
 works and relay images are rare. Recommend leaving it unless a relay change is imminent.
+
+---
+
+## Relay roll 2026-08-08 — the seal outage fix (both regions)
+
+**Image `relay:0d9568a52c1be8a2a33eb6fdf3974b1eedbe389f`**, built manually via
+`gcloud builds submit --revision=<SHA>` (build `e8d90053`, us-east1, 2M50S) because the trigger
+delivery fault above is still open. `relay_image_tag` in `terraform/terraform.tfvars` moved off
+`a84659eb…`; applied with `-target` on the relay template + MIG only, per §2c.
+
+Instances replaced: `cello-gcp-relay-use1-hk39` (was `-5sv2`) and `cello-gcp-relay-euw1-qfgs`
+(was `-ls9t`). Pinned IPs `34.139.119.165` / `34.77.112.231` unchanged. Both report
+`relay.service.started` + `relay.already.registered` + `relay.health.check.passed` from their own
+boot logs.
+
+### What this shipped, and why a restart alone was not enough
+
+Sealing stopped fleet-wide for ~2.5 hours. The relay refused every seal with `directory_unavailable`
+while all three directories were healthy on schema 62, ports open, peer IDs and IPs matching the
+relay's configured `CELLO_DIRECTORY_ENDPOINTS` exactly.
+
+**The relay had been up 3 days and its libp2p handle to the directories had died mid-life.**
+`connect()` assigns that handle once at boot and it was trusted for the process's whole life — no
+liveness check, no redial. `newStream` then found no open connection and the seal was refused
+outright.
+
+Diagnosis came from TIMING, not error text, and that is the durable lesson: the failing path
+returned in **under 1ms** (an in-memory `getConnections()` lookup) where the last working seal took
+**79ms** — a real round trip. Any future "unreachable" that fails too fast to be a network call is
+this shape.
+
+Three defects, each hiding the next — see commit `0d9568a5`:
+1. no reconnect on a stale handle (the outage);
+2. `CelloNode` throws structured plain objects, not `Error`s, so `err instanceof Error` discarded
+   the real `connection_lost` reason and substituted `directory_unavailable`; the dial loop's empty
+   `catch {}` erased the remaining evidence;
+3. `processSeal` decoded with the `mapsAsObjects:false` encoder instance, yielding a JS `Map` where
+   `resp["type"]` is always undefined.
+
+**Restarting a relay masks (1) and tells you nothing.** If seals fail again, check the reason string
+first — it now names the cause instead of `directory_unavailable`.
+
+### Known-open, found while investigating (NOT fixed here)
+
+| Defect | Effect |
+|---|---|
+| `directory_nodes.last_heartbeat_at` does not replicate | every node sees peers as NULL → `availableNodes:1` vs `requiredThreshold:2`; federation checkpoints have never succeeded. Tier A carries identity, not liveness. |
+| `signal_records` anti-entropy has never applied | `null value in column "scanner_version"` — NOT NULL and absent from the replicated set; ~1 failure per 30ms, continuously, on every node. Pre-dates this work. |
+| Directory SA cannot WRITE its relay manifest | `relay.manifest.update.failed` 403 `storage.objects.create` on `cello-relay-manifest-gcp-*`. `terraform/storage.tf` grants `objectViewer` + `bucketViewer` only, commented "read — and only read", but the node now publishes the manifest. Needs a writer grant. |
