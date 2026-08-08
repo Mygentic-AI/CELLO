@@ -321,6 +321,7 @@ resource "google_compute_instance_template" "relay" {
       environment       = var.environment
       region            = each.key
       public_addr       = google_compute_address.relay[each.key].address
+      internal_addr     = google_compute_address.relay_internal[each.key].address
       peer_id_hint      = each.value.node_id
       gsm_node_key      = "${google_secret_manager_secret.relay["${each.value.node_id}--node-key"].id}/versions/latest"
       gsm_transport     = "${google_secret_manager_secret.relay["${each.value.node_id}--transport-key"].id}/versions/latest"

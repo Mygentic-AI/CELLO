@@ -70,7 +70,14 @@ write_files:
       CELLO_RELAY_WS_LISTEN_ADDR=/ip4/0.0.0.0/tcp/4001/ws
       CELLO_RELAY_PUBLIC_MULTIADDR=/ip4/${public_addr}/tcp/4001/ws
       CELLO_RELAY_HEALTH_PORT=4000
-      CELLO_RELAY_HEALTH_CHECK_URL=http://${public_addr}:4000/health
+      # INTERNAL, not public. This is the URL the relay publishes into the manifest and the one
+      # every directory health-checks it on. Port 4000 is firewalled to the VPC and Google's
+      # probers, so a PUBLIC address here can never be reached by a directory: every health check
+      # fails, the relay pool empties, and every session is refused with `relay_unavailable`.
+      # Live 2026-08-08 — verified from a directory VM, internal 200 / public unreachable.
+      # The public address stays where it belongs, on CELLO_RELAY_PUBLIC_MULTIADDR above, which
+      # is what AGENTS dial. Health is an internal concern; reachability for clients is not.
+      CELLO_RELAY_HEALTH_CHECK_URL=http://${internal_addr}:4000/health
       WAL_DIR=/mnt/disks/cello-wal
       # DOD-GCP-RELAY-DRIFT-1: 24h, matching AWS (cello-ecs-relay.yaml). This was 1800000 (30
       # min) — a value nothing chose for GCP, it simply differed from the AWS side and no test
