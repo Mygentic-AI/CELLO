@@ -704,7 +704,26 @@ rather than the peer's state vector; and the working document having to BE the l
   BOTH sides → converged **byte-identical**, `pendingDeliveries: 0`, `abandonedDeliveries: 0`. Every
   frame went over the relay: two NATs cannot hole-punch, which is why Andre chose that host.
 
-  **The seal did not complete, and it is NOT a document defect.** Close hung ~15 minutes then
+  **CLOSED 2026-08-08 — the cross-node seal completes, measured.** Same two machines, same two
+  home nodes (`gcp-euw1` / `gcp-usc1`), every frame over the relay. A session was opened, a document
+  update was published into it, the peer acknowledged it, and the close produced a
+  **FROST-notarized receipt**: `session.seal.leaf.submitted` → `frost.directory.sign.start` →
+  `session.seal.ceremony.participated` → `session.sealed.signature.checked` →
+  `seal.certificate.frontier.verified` → `session.seal.completed {role: "bilateral"}`, with
+  `sealed_root 4d22e719…` and two document leaves in the tree (`leaf_count: 2`;
+  `content_leaf_count` is 0 because it counts CHAT messages only, and document leaves are their own
+  kind). Two further cross-node sessions notarized the same way minutes earlier. The V58–V62
+  directory roll plus the client-side broker dial (daemon 0.0.142) is what closed it.
+
+  **The `interrupted` seal path is a DIFFERENT thing and is not blocked either.** It reaches
+  `seal_interrupted_pending` and stops there BY DESIGN, and the flow says so in its own header: the
+  daemon holds no FROST threshold signer for that path, so it persists the verified bilateral
+  commitment and refuses to claim a seal it did not produce. Wiring it means injecting a
+  SealManager adapter. Two sides both sitting at `seal_interrupted_pending` is that design working,
+  not a cross-node symptom — the request crosses, the responder acks
+  (`session.interrupted.responder.acked`, measured on the far machine today), and both sides persist.
+
+  **What the earlier 2026-08-07 entry got wrong, kept for the trail.** Close hung ~15 minutes then
   returned `seal_unilateral_timeout` on one side; the other was refused by an in-memory guard
   (`seal_interrupted_in_progress`, naming nothing that holds it) and then hung silently. Neither
   daemon logged a seal event. The cause is that the two agents have different home directory nodes
