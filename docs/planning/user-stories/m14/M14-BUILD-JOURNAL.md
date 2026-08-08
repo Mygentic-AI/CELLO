@@ -3338,7 +3338,33 @@ anything; it just never claimed the one thing that mattered. Both this and Entry
 defect are the same lesson from opposite ends: **a test can be green about the wrong subject** —
 there, the wrong database driver; here, the wrong question entirely.
 
-Published daemon 0.0.145 / cli 0.0.152, verified against the tarball.
+### The fix shipped and the wire did not change
+
+0.0.145 went out, verified against the tarball, and live traffic still witnessed every document leaf
+as a **message**. The argument was threaded through the transport and through `SessionNodeManager`
+and then **dropped by the composition root**, whose adapter reads
+
+```ts
+sendContent: (agent, sessionId, content, contentHash, correlationId) => …   // five, against a six-parameter dep
+```
+
+TypeScript accepts that without a word — a function of LOWER arity is assignable to one of higher
+arity, and the parameter is optional. So there is no type error, no lint, no failing test.
+
+**And my own test could not see it, because it stubbed that exact seam.** A mock of the hop that
+drops the value is structurally incapable of catching the value being dropped. The unit test was
+green about the boundary one level above the defect.
+
+Caught only by reading the leaf kind off a live session instead of trusting the suite — the same
+discipline that found the SQLCipher defect in Entry 34, applied one more time to my own fix.
+
+The new assertion reads the composition root's SOURCE and fails if either adapter stops accepting or
+stops forwarding the argument; reverting the fix makes it fail by name. Structural rather than
+behavioural on purpose: exercising it behaviourally means standing up the whole daemon, and mocking
+it is what hid this in the first place.
+
+Published daemon 0.0.146 / cli 0.0.153, verified against the tarball. 0.0.145 is on npm and claims a
+fix it does not have.
 
 ---
 
