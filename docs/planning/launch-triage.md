@@ -827,6 +827,56 @@ misreading; `selected_by_this_connection`, or a note in the payload, would stop 
 **Not a defect in co-attendance itself.** Several sessions attending one agent is deliberate and
 permanent (spec §3). What is missing is only the record of it changing.
 
+
+## 16. A session was silently bound to an agent it never selected — and it was someone else's identity
+
+**Designation: `DOD-AGENT-SELECTION-UNWARRANTED-1`** — ❌ **OPEN, cause NOT established.** Unranked.
+**Proposed slot: high, on the security argument below — but it needs the diagnosis before it can be
+ranked honestly, because the fix depends on which of two paths did it.**
+
+**What happened, measured 2026-08-08.** A session released its agent with
+`cello_stop_using_agent` (`released: CELLO_Coder_1`, confirmed, attendance dropped to 0). The daemon
+was then restarted. On reconnect that same session was **acting as `Miss_Chelly`** — a different
+agent, belonging to a different session — with no `cello_use_agent` call from it. The daemon
+announced it as `agent_current_changed toAgent="Miss_Chelly"` and the connection's own
+`cello_agents` reported `selected: true` for that agent.
+
+**Why this is not a bookkeeping bug.** An agent is a cryptographic identity. Anything the session
+had sent in that window would have been signed with `Miss_Chelly`'s key and been indistinguishable,
+to the counterparty, from the session that legitimately holds it. A release that silently becomes
+"you are now someone else" is worse than a release that fails loudly: the operator has been told the
+opposite of what is true.
+
+Two properties are missing, and they are separable:
+1. **A release must survive a reconnect.** After `cello_stop_using_agent`, a reconnect must attend
+   NOTHING until something asks again. Today a daemon restart defeats it.
+2. **A connection must never be auto-attached to an agent it did not select.** Resolving to "the
+   only agent online" is defensible for a CLI invocation that needs a subject; silently binding a
+   live MCP session to an identity it never asked for is not. If a fallback is wanted at all it must
+   be explicit in the response, not announced as an accomplished fact.
+
+**The two candidate causes, neither confirmed:**
+- **The shim's reconnect replay.** `ipc-proxy.ts` invariant 1 replays `cello_use_agent` after a
+  reconnect so routing survives a daemon bounce. If the release does not clear the proxy's stored
+  agent — or if it stores one it should not — the replay reinstates a selection the operator ended.
+- **A daemon-side fallback.** `cello_stop_using_agent`'s own guidance says that after a release,
+  agent-scoped calls without an explicit agent "still resolve to it" when it is the only agent
+  online. Something in that family may be binding the connection rather than merely resolving a
+  single call.
+
+The persisted `~/.cello/current-agent` file is NOT the cause — it read `CELLO_Coder_1` throughout,
+while the connection was bound to `Miss_Chelly`.
+
+**Why it could not be diagnosed from the log, which is its own finding.** The daemon emits
+`agent.current.switched` with **no agent name and no reason** — so the record shows that a
+connection changed identity and not what it changed to, or why. Two such events fired at 18:22:51,
+one second after the reconnect, and neither can be attributed. Fixing that field is a precondition
+for diagnosing this, and it is the same blind spot as item 15 one layer up.
+
+**First diagnostic step:** add the agent name and the trigger (`explicit` | `replay` | `fallback`)
+to `agent.current.switched`, then reproduce with a daemon restart after a release. That distinguishes
+the two candidates in one run.
+
 ---
 
 # Post-launch — needed eventually, not for launch
