@@ -31,6 +31,10 @@ describeLive("READ-001 live — /internal/account-by-email-stub (real Postgres +
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DB_URL });
     // Idempotent seed: clear any prior row sharing our id/phone/email, then insert.
+    // Links first: account_email_stubs carries an FK to user_accounts, so deleting the account
+    // while a stub row survives is refused.
+    await pool.query(`DELETE FROM account_email_stubs WHERE account_id = $1 OR email_stub_hash = $2`,
+      [ACCOUNT_ID, emailStub]);
     await pool.query(
       `DELETE FROM user_accounts WHERE account_id = $1 OR phone_stub_hash = $2 OR email_stub_hash = $3`,
       [ACCOUNT_ID, phoneStub, emailStub],
@@ -46,7 +50,7 @@ describeLive("READ-001 live — /internal/account-by-email-stub (real Postgres +
     await pool.query(
       `INSERT INTO account_email_stubs (email_stub_hash, account_id) VALUES ($1, $2)
        ON CONFLICT (email_stub_hash) DO NOTHING`,
-      [EMAIL_STUB, ACCOUNT_ID],
+      [emailStub, ACCOUNT_ID],
     );
     server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger: noopLogger, owningNodeId: "test-node" });
     await new Promise<void>((r) => server.listen(0, () => r()));
