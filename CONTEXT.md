@@ -29,11 +29,15 @@ Agent_A           Agent_B  Agent_N  ← each is a unique K_local + FROST ceremon
 
 Stored in `user_accounts`. The `phone_stub_hash` uniqueness constraint enforces one Account per phone number at the database layer.
 
+**The verified-email binding lives in `account_email_stubs` (V60), not in `user_accounts.email_stub_hash`.** That column still exists and is still written, but it is NOT the authoritative form: it is nullable and set after the row is created, so it is excluded from the hash-chained table's replicated column set and therefore never crosses between nodes. Sign-in resolves an operator by asking a directory for the account matching `SHA-256(lower(trim(email)))`, and against the column that answered only on the node that registered them. The stub table is append-only and replicates; read it, not the column.
+
 **Agent** — a cryptographic entity owned by an Account. Defined by a unique `K_local` (Ed25519 operational signing key), a unique FROST DKG ceremony producing a unique `primary_pubkey`, and a unique `agent_profiles` row. Multiple agents per Account is supported from day one — a single human operator can run Agent_A on one machine and Agent_B on another. Each agent:
 - Is cryptographically independent — compromising Agent_A does not leak Agent_B's keys
 - Inherits the parent Account's verified trust signals (phone, email, social proofs) at the time of registration; those signals propagate to counterparties as an aggregate Account trust view
 - Accumulates its own conversation history and endorsements
 - Retains its Account link across K_local rotation — K_local rotation changes the operational key, not the Account membership
+
+**The Account link lives in `agent_account_links` (V59), not in `agent_profiles.account_id`.** Same reason and same shape as the email stub above: the column is mutable, Tier A replicates only immutable columns by construction, so the binding existed only on the node that ran the registration. Anything that AUTHORIZES on ownership must read the link table — the kill switch asks "does this agent belong to this account?" and, reading the column, refused an operator's own agents on the two nodes that had not registered them. The column is retained for code not yet migrated off it and will be dropped in its own migration.
 
 When a second Agent is added to an existing Account, re-verification of phone or email is not required — the Account identity is already proven. The directory issues a new pre-authorization token via the portal or bot's "add agent" flow and the new agent runs its own FROST DKG ceremony independently.
 
