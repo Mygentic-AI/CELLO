@@ -739,6 +739,34 @@ completely fine without any of it." That was false at the time: two *sessions* o
 daemon, silently lost each other's messages. That defect is now fixed (M8D — see Addressed), but it
 was never covered by anything in this item, and multi-*device* remains unbuilt.
 
+## Sign-in and your agent list still read the column that only one node has
+
+**Designation:** `CELLO-REPL-001` (`docs/planning/user-stories/m14/CELLO-REPL-001.yaml`)
+
+**What goes wrong.** Which agents you own, and whether your email is recognised at sign-in, are
+answered from a column that lives only on the directory node that registered you. Ask a different
+node and it says you have no agents, or that your address is unknown — not an error, just an
+authoritative-sounding "no". There are three nodes and a client may reach any of them.
+
+**Why it is NOT ranked for launch.** Because the portal was changed on 2026-08-07 to ask every node
+and merge the answers, so an operator sees the right thing today. This item retires that workaround;
+it does not create the fix. Nobody is currently ruined by it.
+
+**Why it is not merely tidying.** The replicated tables exist, are backfilled, and are converged
+across all three nodes (V59/V60, deployed 2026-08-08) — and exactly ONE caller reads them: the kill
+switch, which is why pausing your own agent works again. Four readers were never moved. So the
+system now holds two sources of truth for the same binding, one of which is silently node-local, and
+the obvious column is the wrong one. That is precisely how this defect arrived: a reader picks the
+column, and is correct on the node they happen to test against.
+
+**The ordering matters and is in the story.** Move the four readers, confirm on a converged fleet,
+then drop the columns in a SEPARATE release. Dropping with a reader left behind turns a wrong answer
+into a crash; dropping before convergence removes the only copy some node holds.
+
+**Related:** the kill-switch half of this is DONE and verified live in both directions — an agent
+registered on one node can now be paused from another, and a caller asserting someone else's account
+is still refused.
+
 ## A failed endorsement submission is not retried
 
 **Designation: `DOD-END-SUBMIT-1`** (one remaining handed-forward AC) + one of `DOD-END-SURFACE-1`'s

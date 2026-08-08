@@ -1,0 +1,222 @@
+---
+name: CELLO-REPL-001
+type: story
+date: 2026-08-08
+topics: [replication, anti-entropy, directory, schema, migration, kill-switch, sign-in]
+status: ready
+description: >
+  Finish the V59/V60 migration. Four readers still resolve identity through the two columns that do
+  not replicate, so the append-only tables built to replace them are populated, replicating, and
+  read by exactly one caller. Move the remaining readers, then drop the columns — a duplicated
+  source of truth where one half is silently node-local is how the original defect returns.
+---
+
+# ─── Identity ───────────────────────────────────────────────
+id: CELLO-REPL-001
+domain: Directory Persistence
+actor: DIR
+priority: P1
+components:
+  - directory
+
+# ─── Intent ─────────────────────────────────────────────────
+story: >
+  As the DIRECTORY,
+  I want every identity lookup to resolve through the replicated append-only tables
+  and the superseded columns to no longer exist,
+  so that an answer does not depend on which node happens to be asked,
+  and so that no future reader can reach for the column that only ever holds
+  what its own node registered.
+
+# ─── Context that shaped this (restated inline, per DoR) ────
+# CELLO is federated with SOVEREIGN nodes: one node = one region = one independent deployment, and a
+# client may reach ANY of them. A fact that lives on one node is therefore not a fact the system
+# knows. That is not a performance concern — it is the correctness property the whole directory tier
+# exists to provide, and every AC below is a restatement of it.
+#
+# Tier A anti-entropy replicates a table's IMMUTABLE columns only; that is what makes it safe (no
+# merge rule, no clock-skew hazard). Mutable columns are excluded BY CONSTRUCTION, which is why
+# `agent_profiles.account_id` and `user_accounts.email_stub_hash` have never crossed between nodes.
+# V59/V60 moved both bindings into append-only tables that do replicate. This story finishes the job.
+
+# ─── Behavior (EARS) ───────────────────────────────────────
+behavior:
+  - trigger: "When the directory is asked which agents belong to an account"
+    action: "the directory shall resolve them through `agent_account_links`, not `agent_profiles.account_id`"
+
+  - trigger: "When the directory is asked which account owns an email stub hash"
+    action: "the directory shall resolve it through `account_email_stubs`, not `user_accounts.email_stub_hash`"
+
+  - trigger: "When the directory answers an account-facts query used to mint phone/email trust signals"
+    action: "the directory shall read the email stub from `account_email_stubs`"
+
+  - trigger: "When an agent is linked to an account after its profile already exists"
+    action: "the directory shall record the binding as a row in `agent_account_links`"
+
+  - trigger: "Where every reader has been migrated"
+    action: "the migration shall DROP `agent_profiles.account_id` and `user_accounts.email_stub_hash`, so no future reader can reach for a node-local answer"
+
+# ─── Acceptance Criteria ────────────────────────────────────
+acceptance_criteria:
+  # ONE AC PER CONSUMER of the shared interface (§4). These are the four found by enumeration;
+  # `isAgentOwnedByAccount` is already migrated (V59) and is covered by AC-005's regression clause.
+  - id: AC-001
+    given: >
+      Three directory nodes with anti-entropy converged, and an account whose agents were registered
+      on node B only — so node A and node C hold the link ONLY in `agent_account_links`, never in
+      `agent_profiles.account_id` (verified live 2026-08-08: 0 / 2 / 1 across the fleet).
+    when: "`getAgentsByAccount` is called on node A"
+    then: >
+      It returns ALL of the account's agents, and the same set node B returns. Asserted against a
+      node that never wrote the link — a reader still on the column returns an empty set here while
+      passing on node B, which is exactly how this defect hid.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-002
+    given: "The same converged fleet, and an operator whose email stub was recorded on node B only"
+    when: "`POST /internal/account-by-email-stub` is issued to node A"
+    then: >
+      It answers 200 with the account_id. A reader still on `user_accounts.email_stub_hash` answers
+      404 here — indistinguishable from 'no such account', which is why sign-in failed silently.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-003
+    given: "The same converged fleet, and an account with a verified email recorded on node B only"
+    when: "the signed account-facts query is issued to node A"
+    then: >
+      The response reports the email as verified and carries its stub. The `email` trust signal is
+      minted from this answer, so a reader still on the column silently skips it while `phone`
+      mints beside it.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-004
+    given: "An agent profile that already exists, and an account to link it to"
+    when: "`linkAgentToAccount` is called"
+    then: >
+      A row appears in `agent_account_links`, and the agent is subsequently resolvable from a
+      DIFFERENT directory node than the one that linked it, after an anti-entropy round.
+    test_type: integration
+    component_under_test: directory
+
+  # THE DROP, and the migration-integrity trap (§5, FEDERATION-001/002).
+  - id: AC-005
+    given: >
+      A database with ALL prior migrations already applied — not a fresh one, because a fresh
+      database cannot catch a modification to an applied migration
+    when: "the drop migration is applied"
+    then: >
+      Both columns are gone from `information_schema.columns`; Flyway reports ZERO checksum errors
+      across V1..V{N-1}; and the full directory suite passes, including the V59 kill-switch
+      ownership tests, which must not regress.
+    test_type: integration
+    component_under_test: directory
+
+  - id: AC-006
+    given: "The dropped columns"
+    when: "the repository is searched for `agent_profiles.account_id` and `user_accounts.email_stub_hash` outside migration files and historical comments"
+    then: >
+      There are no matches in executable code. This is the AC that makes the drop meaningful — the
+      column is the thing that made the wrong answer REACHABLE, and a rename that leaves a reader
+      behind produces a runtime error on a node nobody tested.
+    test_type: unit
+    component_under_test: directory
+
+# ─── Security Invariants ───────────────────────────────────
+security_invariants:
+  - id: SI-001
+    statement: >
+      The directory shall never authorize an agent write from a link that has not replicated —
+      it resolves ownership ONLY through `agent_account_links`.
+    adversarial_condition: >
+      Even when a caller targets the node LEAST likely to hold the binding. Attack: an operator's
+      agent is registered on node B; an attacker asserts that operator's account_id against node A
+      hoping the ownership check falls back to `agent_profiles.account_id` and, finding NULL,
+      fails open. Success would look like a 200 on a node holding no link for that agent. It must
+      answer 403 `not_owner` when no link row exists, and 200 only when one does.
+    test_type: integration
+    component_under_test: directory
+
+  - id: SI-002
+    statement: >
+      The directory shall never expose a raw email address; `account_email_stubs` holds a SHA-256
+      stub and nothing else.
+    adversarial_condition: >
+      Even when the drop migration is written by someone treating the two columns as interchangeable
+      and tempted to preserve the plaintext 'for convenience' during the move. Assert the column
+      type and that no query in the package selects an address alongside the stub.
+    test_type: unit
+    component_under_test: directory
+
+# ─── Degraded Behavior ─────────────────────────────────────
+degraded_behavior:
+  - id: DB-001
+    condition: "While a node has applied the drop but anti-entropy has NOT yet converged its links"
+    fallback: >
+      The directory shall answer 'not found' for an unconverged binding rather than fall back to any
+      other source — there is none once the column is gone. Fail-closed and self-healing: the answer
+      becomes correct when the round lands. This is why the drop must ship in a SEPARATE release
+      from V59/V60 and not before the fleet has converged.
+    test_type: integration
+    component_under_test: directory
+
+# ─── Observability ─────────────────────────────────────────
+observability:
+  events:
+    - name: "account.agent.link.resolved"
+      level: info
+      trigger: "an ownership or agent-list lookup resolves through agent_account_links"
+      context_fields: [accountId, agentId, correlationId]
+      correlationId: true
+  error_events:
+    - name: "account.agent.link.missing"
+      level: warn
+      trigger: >
+        A lookup finds no link row for an agent whose profile exists on this node — the signature of
+        a binding that has not replicated yet, distinct from an agent that genuinely has no account.
+      context_fields: [agentId, correlationId, reason]
+    - name: "account.email_stub.missing"
+      level: warn
+      trigger: "an email-stub lookup finds no row for a stub the caller expected to resolve"
+      context_fields: [correlationId, reason]
+  alarms:
+    - condition: "account.agent.link.missing sustained over 15 min after a node roll"
+      fires_to: "ops — indicates anti-entropy is not converging, not that operators lack accounts"
+
+# ─── References ─────────────────────────────────────────────
+references:
+  protocol_map: "Directory Persistence"
+  discussion_logs:
+    - "2026-08-07_1912_replication-gap-what-m12-left-unfinished"
+    - "2026-08-07_2340_tier-b-programme-state"
+  migrations:
+    - "V59__agent_account_links.sql"
+    - "V60__account_email_stubs.sql"
+
+# ─── Implementation notes ──────────────────────────────────
+implementation_notes: >
+  SCOPE CORRECTION, and the reason this story is not simply "drop two columns". V59 and V60 created
+  the tables, backfilled them per node, and registered them for anti-entropy — all deployed and
+  converged (13/13 links, 2/2 stubs across the fleet, 2026-08-08). But only ONE caller was moved
+  onto them: `isAgentOwnedByAccount`, the kill switch. Enumeration found four readers still on the
+  old columns:
+
+    1. `pg-directory-store.getAgentsByAccount`      — SELECT ... FROM agent_profiles WHERE account_id
+    2. `internal-api-server` /internal/account-by-email-stub — the SIGN-IN lookup
+    3. `signal-write` account-facts query           — mints the email trust signal
+    4. `pre-auth-token-repository.linkAgentToAccount` — UPDATE agent_profiles SET account_id
+
+  So the tables are populated, replicating, and read by one caller. The kill switch is genuinely
+  fixed and verified live in both directions; sign-in and the agent list are NOT — they still work
+  only because the PORTAL was changed to query every node and merge, which is a workaround that this
+  story is what actually retires.
+
+  ORDERING IS LOAD-BEARING. Migrate readers first, confirm on a converged fleet, THEN drop in a
+  separate release. Dropping while a reader remains turns a wrong answer into a crash on whichever
+  node is asked; dropping before convergence removes the only copy some node has.
+
+  The columns are what make the wrong answer reachable. Two sources of truth where one is silently
+  node-local is precisely how this defect arrived — a reader picks the obvious column and is correct
+  on the node they test against.
