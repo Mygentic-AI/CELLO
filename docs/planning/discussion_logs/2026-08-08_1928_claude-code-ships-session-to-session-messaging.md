@@ -231,9 +231,21 @@ where one send took four attempts because the ref had changed between listings.
 **2. The conversation exists as an artifact, independent of the sessions that produced it.**
 
 The second is the one that lands in a demo, because the failure it prevents is so ordinary. Ask
-either Claude Code session what was discussed between them and you are reconstructing a conversation
-out of two scrollbacks, hoping neither has been compacted. There is no conversation object to ask —
-messages were delivered into contexts and that is all that happened.
+either Claude Code session what was discussed between them and you are RECONSTRUCTING it. There is
+no conversation object to ask — messages were delivered into two contexts and that is all that
+happened.
+
+Not a context-window argument. Contexts are large now and compaction is rare; the problem is
+present even when both sessions remember everything perfectly:
+
+- **No boundary.** The exchange is interleaved with everything else each session did — deploys, file
+  edits, unrelated work. Nothing marks where the conversation starts and stops.
+- **You must stitch.** The record is in two places and neither is complete. Each side holds what it
+  sent and what arrived, and you have to merge them by hand.
+- **No authoritative order.** Neither side can say what the true interleaving was, because there are
+  no sequence numbers and no shared clock — only two local views.
+- **Nothing to hand over.** There is no artifact to point a third party at, or to re-read next
+  month, or to attach to anything.
 
 Evidence from the same session that produced this document: while three Claude sessions were
 co-attending one CELLO agent, the tooling stated that replies from the other attendees would NOT
