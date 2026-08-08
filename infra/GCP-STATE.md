@@ -553,6 +553,43 @@ running. On the default pool the same build takes 38 seconds.
 
 ---
 
+## 🟢 SCHEMA V58→V62 DEPLOYED — all three directories rolled (2026-08-08)
+
+**Image `dir-51eda2fb`** (was `dir-d35d0a1d`). Rolled node-by-node, `europe-west1` →
+`us-central1` → `us-east1`, each targeted at its own template + MIG, each verified on
+`GET :9090/health` before the next was touched. No capacity trouble — `gcp-usc1` is still on the
+`e2-medium` from the 2026-08-06 incident, which is the type that had capacity. Return to schema 62:
+euw1 105s, usc1 60s, use1 90s.
+
+**`/health` reports `schemaVersion`**, which is what makes this roll verifiable rather than timed —
+Flyway runs at container start, so a migration failure shows up as a node that never returns.
+
+| Migration | What it fixes |
+|---|---|
+| V58 | `seal_certificate_fields` — a client can FETCH a certificate it was never pushed (other branch) |
+| V59 | `agent_account_links` — the kill switch stops refusing an operator's own agents |
+| V60 | `account_email_stubs` — sign-in no longer depends on which node answers first |
+| V61 | natural keys on the seal's children — track record stops differing per node |
+| V62 | `signal_revocations` — revocation propagates instead of landing as a fake ACTIVE record |
+
+**Verified after the roll, and the contrast is the point.** One query, both forms side by side:
+
+| | use1 | usc1 |
+|---|---|---|
+| `agent_account_links` (replicated) | 13 | 13 |
+| `account_email_stubs` (replicated) | 2 | 2 |
+| `conversation_participation` (now replicated) | 110 | 110 |
+| `agent_profiles.account_id` (NOT replicated) | 0 | 7 |
+
+The replicated forms converged; the mutable column is still split, exactly as it has been all along.
+Andre's three agents are linked on all three nodes — they were 0 / 2 / 1 before.
+
+**The old columns are deliberately NOT dropped.** Code this work did not touch still reads them, and
+dropping a column in the same step that introduces its replacement leaves no way back. Retiring them
+is its own migration, later.
+
+---
+
 ## Portal (DOD-MOVE-PORTAL-1) — LIVE 2026-07-31
 
 | Resource | Value |
