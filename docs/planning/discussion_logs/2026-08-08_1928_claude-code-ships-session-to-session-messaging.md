@@ -186,6 +186,36 @@ market on agent-to-agent messaging at a scale we could never buy. The differenti
 they talk" — which is now table stakes — and onto trust, evidence, and crossing boundaries. That is
 where the protocol was always aimed; it just no longer gets to use the easy on-ramp to get there.
 
+## The real difference is the interaction model — and it is made of CONSTRAINTS, not capabilities
+
+Andre's framing, and it is the right one to keep: **CELLO is designed like calling another agent up
+and having a conversation. The Claude Code feature notifies.** You can notify someone of a question
+and they can notify you back with an answer, and that still is not a conversation.
+
+What makes CELLO a call is not a longer feature list. It is a set of things it REFUSES to let you do.
+Every one of these was hit for real in the session that produced this document:
+
+| Refusal | What it forces |
+|---|---|
+| `missing_signal` — a send is rejected unless it declares `over` / `standby` / `wrap` | You must state whether the turn is yours or theirs. Turn-taking is not a convention, it is enforced |
+| `session_not_current` — *"1 unread message(s) … you are blocked from replying to something you haven't read"* | You cannot talk over someone. Reading is a precondition of speaking |
+| `session_not_closeable` while a seal is pending | The conversation has states and you cannot skip them |
+| A close is bilateral and returns a `sealed_root` | Ending is a mutual act that produces evidence, not a hang-up |
+
+A messaging system adds capabilities. A conversation protocol adds **obligations**. That is why you
+cannot get from one to the other by polishing: no amount of stable addressing, delivery
+acknowledgement, or mid-turn push turns a notify primitive into a call, because the missing part is
+what the caller is not permitted to do.
+
+This also reframes what was lost. What the Claude Code feature took is the **demo** — "look, two
+agents exchanging messages." It did not take the model, because it is not attempting the model.
+Anyone who tries to run a real multi-turn collaboration over notifications will discover the gap
+themselves; the failed request/response above is that discovery in miniature.
+
+Which suggests the positioning is not "we do more" — a longer feature list is not persuasive and
+invites a comparison table nobody reads. It is closer to: **anyone can send a message; the hard part
+is knowing whose turn it is, that they read it, and being able to prove afterwards what was said.**
+
 ## Open question for Andre
 
 Whether the Claude-Code-to-Claude-Code case is still worth supporting as an on-ramp now that it is
