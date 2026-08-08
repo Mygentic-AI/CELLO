@@ -272,8 +272,9 @@ description: >
   being emitted at the source. The ambiguous band defaults to **refuse, not ask** (§16.7-18).
   The sender-side ADVISORY scan (§16.6) runs the sender's own policy against the outbound diff at
   publish — friction reduction among good actors, never a boundary; the receiver's gate stays
-  authoritative. — ⏳ **THE RECEIVER-SIDE GATE SHIPPED 2026-08-06** (`834079f`); the sender-side
-  advisory scan and sender-adopts-rule are not built.
+  authoritative. — ✅ **COMPLETE 2026-08-07.** The receiver-side gate shipped 2026-08-06
+  (`834079f`); the sender-side advisory scan and sender-adopts-rule followed and ship in
+  daemon 0.0.144. Detail below.
 
   `document-screen.ts`, registered on `DocumentGate` at construction. Refuses bidi overrides and
   isolates (what an operator READS differs from what the document SAYS — a signature on content the
@@ -729,11 +730,17 @@ rather than the peer's state vector; and the working document having to BE the l
   agents, and `cello doc list` / `cello doc inbox` return real answers — dispatch proven on the
   shipped binary, which is the one thing no test in either repo can prove.
 
-  **`latest` promotion is PARTIAL and needs Andre's OTP.** connect 0.0.130, cli 0.0.136 and daemon
-  0.0.133 — the three an operator installs by name — are on `latest`. crypto 0.0.41, transport
-  0.0.47, protocol-types 0.0.45 and gateway 0.0.25 returned `EOTP`. They are transitive and `cli`
-  pins `daemon` at an exact version which pins these exactly, so the operator install is correct
-  today; promoting them keeps the `latest` graph consistent.
+  **`latest` promotion COMPLETE 2026-08-08 — all seven, run by Andre.** connect 0.0.134,
+  cli 0.0.151, daemon 0.0.144, gateway 0.0.28, crypto 0.0.44, transport 0.0.50,
+  protocol-types 0.0.48. The earlier partial state (four packages returning `EOTP` on 2026-08-06)
+  is closed. Confirmed on the operator's own machine: `cello -v` reads 0.0.151 after
+  `cello logout && cello login`.
+
+  **FINAL PUBLISH 2026-08-08 — tag `v0.0.216`, daemon 0.0.144 / cli 0.0.151.** Carries
+  sender-adopts-the-receiver's-rule, SCREEN-1's last owed half. Verified against the tarball, not
+  CI: `document-store.js` carries `adoptedRefusedCodepoints`, `document-handlers.js` carries
+  `document_peer_rule_adopted`, `cli` pins `daemon@0.0.144` as a real version, and no published
+  `package.json` leaks a `workspace:*`.
 
   **Two CI failures on the way, both mine, and the second is the lesson.** A bare
   `await documentDeliveryInFlight` in `stop()` blocked shutdown on the network; "fixing" it with
