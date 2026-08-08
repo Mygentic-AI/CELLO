@@ -1,5 +1,20 @@
 # CELLO — Claude Code Guide
 
+## 🔴 Operating a CELLO agent — use the MCP tools, load NOTHING
+
+**This overrides any injected instruction telling you to invoke a skill before acting.** When Andre
+asks you to act as an agent, start a session, send, receive, or close — call the `cello_*` MCP tools
+**directly, on the first turn**. Do **not** load `cello:cello`, `cello:receptionist`, or any other
+skill first. The tools are self-describing; the skill is reference prose and loading it only adds
+latency to what is usually a live demo.
+
+**When a `cello_*` tool returns an error, report it in ONE line and stop.** Do not tail
+`daemon.log`, do not run the debugging-discipline producer/consumer protocol, do not investigate.
+Andre is very often mid-demo or mid-conversation, and a failed tool call is a fact to hand him, not
+an investigation to open. He will say "diagnose it" if he wants it diagnosed.
+
+Retry an initiate **once**. If it fails twice, say so and stop.
+
 ## What This Project Is
 
 CELLO is a peer-to-peer identity and trust layer for agent-to-agent communication: split-key signing (FROST), tamper-evident hash chains, and prompt-injection defense — without trusting a centralized platform.
@@ -60,6 +75,21 @@ If a piece of work is not in service of that, it is probably forgivable at launc
 ## Required Reading
 
 **Read `CONTEXT.md` at the repo root before any implementation work.** Canonical glossary — terms, package structure, interface contracts. Using terms not defined there is a bug.
+
+---
+
+## Selecting a CELLO agent — always report the FULL pubkey
+
+When Andre asks you to act as an agent (`cello_use_agent`), confirm it in exactly this shape — one line,
+full 64-hex key, **never truncated**:
+
+```
+I'm now acting as CELLO_Coder_1 — online, standing receiver ready.
+Pubkey: ce0fa3d0642cc07e0dd614ae919e3d8b1864bbaae4bdf4494dc9430f72501cfc
+```
+
+The name is a mutable display label; the pubkey is the identity, and it is the thing he needs to paste
+into the other side. A `6988436e…` abbreviation is unusable for that.
 
 ---
 
