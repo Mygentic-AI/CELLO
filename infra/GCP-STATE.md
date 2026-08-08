@@ -1010,3 +1010,47 @@ first — it now names the cause instead of `directory_unavailable`.
 | `directory_nodes.last_heartbeat_at` does not replicate | every node sees peers as NULL → `availableNodes:1` vs `requiredThreshold:2`; federation checkpoints have never succeeded. Tier A carries identity, not liveness. |
 | `signal_records` anti-entropy has never applied | `null value in column "scanner_version"` — NOT NULL and absent from the replicated set; ~1 failure per 30ms, continuously, on every node. Pre-dates this work. |
 | ~~Directory SA cannot WRITE its relay manifest~~ | **FIXED 2026-08-08** — `relay_manifest_writer` (`roles/storage.objectAdmin`) added in `terraform/storage.tf` and applied. The 403s stopped immediately. objectAdmin not objectCreator: the manifest is one object rewritten in place, and a GCS overwrite needs `objects.delete` too — objectCreator would have worked once at bootstrap and then failed silently forever. |
+
+### Verified 2026-08-08T13:58Z — sealing works, on relay `615fa156`
+
+A live bilateral seal, both participants `attestation_mode: live`, sealed root
+`922eb04f8bf3d17cd1744dce29373ef632661da7640da57278146c9b769e3733`. The fleet trace is clean and
+first-attempt:
+
+```
+relay.seal.broker.resolved
+seal.certificate.legibility.built
+seal.certificate.delivered
+notarization.recorded
+conversation.seal.recorded
+```
+
+No `broker.unreachable`, no `directory_unavailable`, no `relay.seal.rejected`. Compare the outage
+signature, which was those three lines and nothing else.
+
+Both relays run `relay:615fa156269ecf922f2170dfa40b12da4cee7ed8` (the reconnect + real-reason +
+decode fixes, plus `DOD-RELAY-DIRECTORY-RECONNECT-1`, the periodic reachability probe).
+
+### ⚠️ The directories have the SAME stale-state bug the relay had — OPEN
+
+Replacing the relays left every directory refusing sessions with `relay_unavailable` while all three
+were healthy and both relays were listening on :4001. The directory's relay pool is in-memory, and:
+
+- it is filled from the **manifest**, and refreshed **only by a manifest whose version strictly
+  increases** (`applyManifest` rejects `version <= currentVersion` → `relay.manifest.version.stale`);
+- a relay that fails health checks is dropped from the pool;
+- so once the pool empties, **nothing refills it** — the manifest object is still dated 2026-07-29
+  and the publisher writes only on change. `relay.health.check.passed` simply stops appearing for
+  that node, which is a silence, not an error.
+
+**Restarting the directory container is the only known recovery** (it reloads the manifest at boot).
+That was needed on all three today, and use1 needed it twice. This will recur on every relay roll.
+
+The real fix is a pool that recovers from registration as well as from a monotonic manifest — the
+`relay_registrations` rows are already correct in the database while the in-memory pool is empty.
+Same shape as the relay defect fixed in `0d9568a5`: long-lived in-memory state derived from an
+external thing that changed underneath it, with no path back.
+
+**Roll order that avoids this:** roll relays, then restart each directory one at a time (quorum is
+2 of 3), then confirm `relay.health.check.passed` appears for all three node ids before declaring
+the roll done.
