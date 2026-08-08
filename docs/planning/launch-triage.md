@@ -17,6 +17,9 @@ description: >
   Miss_Chelly (daemon side, M12-P13/P14): item 12 gained a second entry point (counterparty_unknown,
   78 of 121 loops) and an agreed disposition policy; added DOD-TERMINAL-STATE-DIVERGENCE-1 (item 13),
   also unranked — sessions that strand on incompatible terminal STATE rather than divergent leaves.
+  2026-08-08: added DOD-RELAY-DIRECTORY-RECONNECT-1 (item 14), also unranked — the relay silently
+  loses its directory connection, never reconnects, and passes its health check while sealing nothing
+  fleet-wide. Restored by a manual restart; the defect is untouched.
 ---
 
 # Launch Triage
@@ -715,6 +718,61 @@ generalised onto `dcd0aadc`, which nobody had separately traced. The log refutes
 is 12:16:56.995 — two minutes later, on a different session. **Both corrections in that exchange ran
 the same direction: a verified explanation travelling to a case nobody had traced.** Worth reading
 before trusting any single-case diagnosis in this area.
+
+
+## 14. The relay stops being able to notarize, never recovers, and reports itself perfectly healthy
+
+**Designation: `DOD-RELAY-DIRECTORY-RECONNECT-1`** — ❌ **OPEN. Service restored by a manual restart
+2026-08-08; the defect is untouched.** Unranked pending Andre. **Proposed slot: high — this is the
+only item on this list that silently stops EVERY seal on the fleet at once.**
+
+**What a customer experiences.** They finish a conversation and close it. Nothing comes back. No
+error, no receipt, no explanation — the close simply hangs for about seven minutes and then reports
+a timeout. Every subsequent conversation does the same, for every user, on every machine, until an
+operator notices and restarts a server by hand. The receipt is the product; this makes the product
+produce nothing while claiming to be fine.
+
+**Measured 2026-08-08.** Three conversations sealed normally between 06:43 and 06:57 UTC. From 09:23
+onward, nothing sealed at all — five attempts across two machines, cross-node and same-machine,
+documents and plain chat, on two different client builds. A relay restart at 11:07:45 fixed it
+immediately: the next close returned a notarized receipt (`ff534c48…`). Between those points nobody
+deployed anything and nothing on the network changed.
+
+**Why it took a morning to find, which is itself part of the defect.**
+
+- The relay logs `relay.seal.broker.unreachable` as a WARNING on **every seal, including successful
+  ones** — it fired 4 seconds before the seal that worked. Both agents chased it as the cause.
+- `directory_unavailable` is one string covering opposite failures: the relay's own node reference
+  being absent, a dial timeout, and a non-Error throw. One of those is a bug and one is the network,
+  and they want opposite fixes.
+- **The health check cannot see it.** It returns `{status:'ok', relayId}` statically. A relay that
+  cannot notarize a single session passes every probe, so nothing alerts and no autohealer acts.
+- Three plausible causes were proposed and each was disproved by measurement: the schema migration
+  (three seals succeeded on it an hour after it deployed), the replication threshold
+  (`availableNodes:1` was already true *during* the working seals), and a dial backoff window (one
+  attempt came 67 minutes after the previous one and still failed in 1ms).
+
+**What the evidence says it is.** The failure is instantaneous — 1 millisecond from
+`broker.resolved` to `unreachable`, and 1 more to `rejected`. Nothing goes on the wire. Meanwhile
+the same relay keeps serving client traffic normally throughout, so it is not globally out of
+capacity. It is one connection — relay to its configured directory — that is established at boot
+(`connect(relayResult.node)` in `bin/relay.ts`, right after node startup), works, dies silently, and
+is never re-established. There is no reconnect, no keepalive, and no health check on it.
+
+**The fix has three parts, and the first two are the ones that matter:**
+1. **Re-establish the connection instead of failing forever.** Whatever drops it will drop it again;
+   the missing recovery is the actual defect.
+2. **Make the health check test what the relay is for.** A relay that cannot reach a directory must
+   fail its probe, so the autohealer replaces it instead of leaving it up and mute.
+3. Split `directory_unavailable` into distinct reasons, and stop logging a warning on the success
+   path.
+
+**Related but separate, both found the same day and both still open:** directory nodes do not
+replicate `last_heartbeat_at`, so every node counts itself as the only live one
+(`availableNodes:1` against `requiredThreshold:2`) and federation checkpoints have never succeeded;
+and `signal_records` anti-entropy fails every round on a `scanner_version` NOT NULL violation.
+Neither causes this item — both were disproved as the cause by measurement — but both are live
+faults. Miss_Chelly owns them.
 
 ---
 
