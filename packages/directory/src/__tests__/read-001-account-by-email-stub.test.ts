@@ -91,8 +91,12 @@ describe("READ-001 — /internal/account-by-email-stub", () => {
     const res = await post(base, { emailStubHash: KNOWN_HASH }, API_KEY);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ account_id: KNOWN_ACCOUNT });
-    // Lookup is parameterized by the email stub against user_accounts.
-    expect(calls[0].text).toMatch(/user_accounts/i);
+    // REPL-001: parameterized by the email stub against the REPLICATED table. Asserting the SQL and
+    // not just the answer is the point — both tables answer identically on the node that registered
+    // the operator, so only the query distinguishes a migrated reader from one still on the column
+    // that never crosses between nodes.
+    expect(calls[0].text).toMatch(/account_email_stubs/i);
+    expect(calls[0].text).not.toMatch(/user_accounts/i);
     expect(calls[0].values).toEqual([KNOWN_HASH]);
   });
 });

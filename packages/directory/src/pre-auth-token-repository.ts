@@ -481,9 +481,22 @@ export async function linkAgentToAccount(
   pool: pg.Pool,
   params: LinkAgentToAccountParams,
 ): Promise<string> {
+  // V59/REPL-001: the binding is a FACT in agent_account_links, which replicates. The old column is
+  // gone, so there is nothing to UPDATE — and nothing that can hold a link only this node knows.
+  const { rows } = await pool.query<{ agent_id: string | null }>(
+    "SELECT agent_id FROM agent_profiles WHERE k_local_pubkey = $1",
+    [params.kLocalPubkey],
+  );
+  const agentId = rows[0]?.agent_id ?? null;
+  if (!agentId) {
+    // An agent with no agent_id cannot be linked, and inventing one binds an account to nothing.
+    // Loud, because the caller believes it linked.
+    throw new Error(`linkAgentToAccount: no agent_id for k_local_pubkey ${params.kLocalPubkey.slice(0, 16)}… — cannot record the binding`);
+  }
   await pool.query(
-    "UPDATE agent_profiles SET account_id = $1 WHERE k_local_pubkey = $2",
-    [params.accountId, params.kLocalPubkey],
+    `INSERT INTO agent_account_links (agent_id, account_id) VALUES ($1,$2)
+     ON CONFLICT (agent_id) DO NOTHING`,
+    [agentId, params.accountId],
   );
   return params.accountId;
 }

@@ -38,6 +38,7 @@ import type { KeyProvider } from "@cello-protocol/crypto";
 import { issuePreAuthToken, issuePreAuthCapability } from "./pre-auth-token-repository.js";
 import { listAccountAgentsWithPresence, PRESENCE_NODE_FRESHNESS_MS } from "./agent-presence-repository.js";
 import { validateWritePayload } from "./agent-write-validation.js";
+import { getAccountByEmailStub } from "./account-lookup.js";
 import { submitSignal, deliverSignal, revokeSignal, publishRegistry, getRegistryDocument, queryAccountFacts, SubmitRejected } from "./signal-write.js";
 import {
   isAgentOwnedByAccount,
@@ -238,11 +239,10 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
 
       let accountId: string | null;
       try {
-        const result = await pool.query<{ account_id: string }>(
-          "SELECT account_id FROM user_accounts WHERE email_stub_hash = $1",
-          [emailStubHash],
-        );
-        accountId = result.rows[0]?.account_id ?? null;
+        // V60/REPL-001: the REPLICATED stub table, never user_accounts.email_stub_hash — that column
+        // never crosses between nodes, so sign-in resolved only against the node that registered
+        // the operator and answered 404 everywhere else.
+        accountId = await getAccountByEmailStub(pool, emailStubHash);
       } catch (err: unknown) {
         const pgErr = err as { code?: string };
         const isDbError = typeof pgErr.code === "string" && /^\d{5}$/.test(pgErr.code);

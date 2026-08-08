@@ -40,6 +40,14 @@ describeLive("READ-001 live — /internal/account-by-email-stub (real Postgres +
        VALUES ($1, $2, $3, $4)`,
       [ACCOUNT_ID, phoneStub, emailStub, "read-001-seed-chain"],
     );
+    // REPL-001: the lookup now resolves through the REPLICATED stub table, so the seed has to write
+    // it. Seeding only the column reproduced the defect exactly — correct on the node that wrote it,
+    // unknown everywhere else.
+    await pool.query(
+      `INSERT INTO account_email_stubs (email_stub_hash, account_id) VALUES ($1, $2)
+       ON CONFLICT (email_stub_hash) DO NOTHING`,
+      [EMAIL_STUB, ACCOUNT_ID],
+    );
     server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger: noopLogger, owningNodeId: "test-node" });
     await new Promise<void>((r) => server.listen(0, () => r()));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

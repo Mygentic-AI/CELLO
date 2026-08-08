@@ -105,10 +105,16 @@ async function insertAgentProfileWithAccount(
   const primaryPubkey = randomBytes(32).toString("hex");
   const phoneStubHash = makePhoneStubHash();
 
+  // REPL-001: agent_id + a row in agent_account_links, because getAgentsByAccount now JOINs the
+  // REPLICATED link rather than filtering on agent_profiles.account_id. The column is still written
+  // here so the FK/RLS assertions below (SI-002) keep testing what they were written to test — it is
+  // simply no longer what decides membership. Seeding only the column reproduced the live defect:
+  // one operator's three agents were linked 0 / 2 / 1 across the fleet.
+  const agentId = `aid-${kLocalPubkey.slice(0, 24)}`;
   await superPool.query(
     `INSERT INTO agent_profiles
-       (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, chain_hash, account_id)
-     VALUES ($1, $2, '', $3, $4, 'active', $5, $6)`,
+       (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, chain_hash, account_id, agent_id)
+     VALUES ($1, $2, '', $3, $4, 'active', $5, $6, $7)`,
     [
       kLocalPubkey,
       primaryPubkey,
@@ -116,8 +122,18 @@ async function insertAgentProfileWithAccount(
       registeredAt,
       CHAIN_GENESIS, // minimal valid chain_hash
       accountId,
+      agentId,
     ],
   );
+  // The REPLICATED binding. Only when this fixture is actually linking an account — the NULL case
+  // (AC-004) must produce no link row, which is now what "not a member" means.
+  if (accountId !== null) {
+    await superPool.query(
+      `INSERT INTO agent_account_links (agent_id, account_id) VALUES ($1, $2)
+       ON CONFLICT (agent_id) DO NOTHING`,
+      [agentId, accountId],
+    );
+  }
   return kLocalPubkey;
 }
 
@@ -127,6 +143,13 @@ async function insertAgentProfileWithAccount(
 async function cleanupAccounts(accountIds: string[]): Promise<void> {
   if (accountIds.length === 0) return;
   const placeholders = accountIds.map((_, i) => `$${i + 1}`).join(", ");
+  // REPL-001: links FIRST. agent_account_links carries an FK to user_accounts, so deleting the
+  // account while a link survives is refused — and the refusal surfaces two tests later as an
+  // unrelated-looking chain failure, because the rows never got cleaned up.
+  await superPool.query(
+    `DELETE FROM agent_account_links WHERE account_id IN (${placeholders})`,
+    accountIds,
+  );
   await superPool.query(
     `DELETE FROM agent_profiles WHERE account_id IN (${placeholders})`,
     accountIds,

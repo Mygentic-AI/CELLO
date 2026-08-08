@@ -610,10 +610,13 @@ describeIntegration("OPS-AGENT-001 integration: validatePreAuthTokenForDkg", () 
 async function insertAgentProfileRow(pool: pg.Pool, kLocalPubkey: string): Promise<void> {
   const primaryPubkey = "primary-" + kLocalPubkey;
   await pool.query(
-    `INSERT INTO agent_profiles (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status)
-     VALUES ($1, $2, '', '', 0, 'active')
+    // agent_id is REQUIRED now: REPL-001 keys the account binding by agent_id, and
+    // linkAgentToAccount refuses an agent that has none rather than binding an account to nothing.
+    // Derived from the pubkey so it is stable across the two inserts this suite makes.
+    `INSERT INTO agent_profiles (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id)
+     VALUES ($1, $2, '', '', 0, 'active', $3)
      ON CONFLICT (k_local_pubkey) DO NOTHING`,
-    [kLocalPubkey, primaryPubkey],
+    [kLocalPubkey, primaryPubkey, `aid-${kLocalPubkey}`],
   );
 }
 
@@ -633,7 +636,8 @@ describeIntegration("OPS-AGENT-001 integration: AC-005b account deduplication", 
     pool = new pg.Pool({ connectionString: DATABASE_URL });
     regId1 = await insertRegistrationRow(pool, SHARED_PHONE_STUB_HASH);
     regId2 = await insertRegistrationRow(pool, SHARED_PHONE_STUB_HASH + "-2");
-    // Insert agent_profiles rows so linkAgentToAccount has rows to UPDATE account_id on
+    // Insert agent_profiles rows so linkAgentToAccount has an agent_id to bind (REPL-001: it now
+    // INSERTs a row into agent_account_links rather than UPDATEing a column that never replicated)
     await insertAgentProfileRow(pool, kLocalPubkey1);
     await insertAgentProfileRow(pool, kLocalPubkey2);
   });
@@ -642,7 +646,7 @@ describeIntegration("OPS-AGENT-001 integration: AC-005b account deduplication", 
     await pool?.end();
   });
 
-  it("AC-005b: two tokens with same phone_stub_hash link to same account, agent_profiles.account_id set", async () => {
+  it("AC-005b: two tokens with same phone_stub_hash link to same account, agent_account_links row written", async () => {
     // Issue two tokens with same phone_stub_hash
     const token1 = await issuePreAuthToken(pool, {
       phoneStubHash: SHARED_PHONE_STUB_HASH,
@@ -695,16 +699,21 @@ describeIntegration("OPS-AGENT-001 integration: AC-005b account deduplication", 
     );
     expect(parseInt(String(acctRows.rows[0]!.count), 10)).toBe(1);
 
-    // AC-005b core assertion: agent_profiles.account_id must be set for both agents.
+    // AC-005b core assertion: a REPLICATED link row must exist for both agents. Asserting the old
+    // column would pass while the binding stayed on one node — which is what it did.
     // This proves linkAgentToAccount actually writes the FK, not just returns an ID.
     const profile1 = await pool.query<{ account_id: string | null }>(
-      "SELECT account_id FROM agent_profiles WHERE k_local_pubkey = $1",
+      `SELECT l.account_id FROM agent_account_links l
+       JOIN agent_profiles p ON p.agent_id = l.agent_id
+      WHERE p.k_local_pubkey = $1`,
       [kLocalPubkey1],
     );
     expect(profile1.rows[0]!.account_id).toBe(accountId1);
 
     const profile2 = await pool.query<{ account_id: string | null }>(
-      "SELECT account_id FROM agent_profiles WHERE k_local_pubkey = $1",
+      `SELECT l.account_id FROM agent_account_links l
+       JOIN agent_profiles p ON p.agent_id = l.agent_id
+      WHERE p.k_local_pubkey = $1`,
       [kLocalPubkey2],
     );
     expect(profile2.rows[0]!.account_id).toBe(accountId2);

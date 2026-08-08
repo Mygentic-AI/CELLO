@@ -45,11 +45,20 @@ describeIntegration("DOD-MINT-INTERNAL-1 dep — verified-account-facts query (a
       "INSERT INTO authorized_issuers (pubkey, role, status, label) VALUES ($1,'submitter','active',$3),($2,'registry','active',$3)",
       [subPub, regPub, tag]);
     const stub = (s: string): string => createHash("sha256").update(tag + s).digest("hex");
+    // REPL-001: phone stays on the account row — phone_stub_hash IS in that table's replicated set.
+    // The EMAIL stub moved to account_email_stubs, because the column of the same name is populated
+    // after the row exists and therefore never crossed between nodes. Seeding the column alone
+    // reproduces the live defect precisely: `phone` mints and `email` is silently skipped.
     await pool.query(
-      "INSERT INTO user_accounts (account_id, phone_stub_hash, email_stub_hash, chain_hash) VALUES ($1,$2,$3,'seed')",
-      [acctBoth, stub("both-phone"), stub("both-email")]);
+      "INSERT INTO user_accounts (account_id, phone_stub_hash, chain_hash) VALUES ($1,$2,'seed')",
+      [acctBoth, stub("both-phone")]);
     await pool.query(
-      "INSERT INTO user_accounts (account_id, phone_stub_hash, email_stub_hash, chain_hash) VALUES ($1,$2,NULL,'seed')",
+      "INSERT INTO account_email_stubs (email_stub_hash, account_id) VALUES ($1,$2)",
+      [stub("both-email"), acctBoth]);
+    // The phone-only account gets NO stub row at all — which is what "email unverified" now looks
+    // like, rather than a NULL column.
+    await pool.query(
+      "INSERT INTO user_accounts (account_id, phone_stub_hash, chain_hash) VALUES ($1,$2,'seed')",
       [acctPhoneOnly, stub("phoneonly-phone")]);
   });
 

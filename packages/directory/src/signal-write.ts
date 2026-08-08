@@ -41,6 +41,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { readAccountFacts } from "./account-facts.js";
 import { verify } from "@cello-protocol/crypto";
 import { encodeCbor, decodeCbor, decodeTrustSignalEnvelope, hashTrustSignalEnvelope, type TrustSignalEnvelope } from "@cello-protocol/protocol-types";
 import type { Pool } from "pg";
@@ -1007,10 +1008,11 @@ export async function queryAccountFacts(args: {
       throw new SubmitRejected("stale_request", `issued_at ${r.issued_at} is more than ${CLOCK_SKEW_SECONDS}s from this node's clock (${nowSec})`);
     }
 
-    const { rows } = await pool.query(
-      "SELECT phone_stub_hash, email_stub_hash FROM user_accounts WHERE account_id = $1",
-      [r.account_id],
-    );
+    // V60/REPL-001: the email stub comes from the REPLICATED table; phone stays on the account row
+    // because phone_stub_hash IS in that table's replicated set. Reading both from user_accounts is
+    // what minted `phone` and silently skipped `email` for a verified address.
+    const facts = await readAccountFacts(pool, r.account_id);
+    const rows = facts.found ? [{ phone_stub_hash: facts.phone?.stub ?? null, email_stub_hash: facts.email?.stub ?? null }] : [];
     if (rows.length === 0) {
       logger.info("signal.account_facts.read", { accountId: r.account_id, found: false, correlationId });
       return { found: false };

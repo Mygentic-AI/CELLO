@@ -1335,11 +1335,16 @@ export class PgDirectoryStore implements DirectoryStore {
    */
   async getAgentsByAccount(accountId: string): Promise<AgentProfile[]> {
     const result = await this.#pool.query<Record<string, unknown>>(
-      `SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash,
-              registered_at, status, account_id, agent_id
-       FROM agent_profiles
-       WHERE account_id = $1
-       ORDER BY registered_at ASC`,
+      // V59/REPL-001: JOIN the REPLICATED link rather than filter on agent_profiles.account_id.
+      // That column holds only what THIS node registered — live 2026-08-08 one operator's three
+      // agents were linked 0 / 2 / 1 across the fleet, so this returned a plausible short list on
+      // two nodes out of three.
+      `SELECT p.k_local_pubkey, p.primary_pubkey, p.ml_dsa_pubkey, p.phone_stub_hash,
+              p.registered_at, p.status, l.account_id AS account_id, p.agent_id
+       FROM agent_profiles p
+       JOIN agent_account_links l ON l.agent_id = p.agent_id
+       WHERE l.account_id = $1
+       ORDER BY p.registered_at ASC`,
       [accountId],
     );
 
