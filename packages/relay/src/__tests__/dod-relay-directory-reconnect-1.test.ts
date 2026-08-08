@@ -22,15 +22,26 @@
  *      startup. A relay that cannot reach any directory — and therefore cannot complete a single
  *      seal — passed every probe, so nothing alerted and the autohealer never replaced it.
  *
- * ── THE HEALTH-CHECK JUDGEMENT, STATED SO IT IS NOT QUIETLY UNDONE ───────────────────────────────
+ * ── THE HEALTH ENDPOINT MUST NEVER FAIL FOR THIS, AND THAT IS THE WHOLE POINT ────────────────────
  *
- * A probe that fails the instant one directory call fails would cycle the whole relay fleet during
- * any transient directory blip — every relay unhealthy at once, all replaced at once, none of which
- * helps. So the probe reports unhealthy only after SUSTAINED failure, and a relay that has not yet
- * probed is healthy rather than unhealthy: absence of evidence is not failure.
+ * The first version of this fix returned 503 once the relay could not reach a directory. That was
+ * WRONG, and dangerously so. `/health` on port 4000 is not an alerting channel — it is what the
+ * DIRECTORIES poll to decide relay POOL MEMBERSHIP, and `defaultPingFn` in relay-pool-manager.ts
+ * treats any non-2xx as a failure (`res.ok` false → `HTTP ${status}`). Enough consecutive failures
+ * and the relay is dropped from the signed manifest.
  *
- * The directory state is in the body on EVERY response, including 200s, so an operator can see a
- * degrading relay before it crosses the threshold.
+ * That inverts the blast radius of the very incident this item exists for. On 2026-08-08 the relay
+ * could not reach a directory, so conversations could not be SEALED. Had a 503 shipped, the
+ * directories would have dropped every relay from the pool at once — because the cause is shared,
+ * so all relays fail together — and then no session could be STARTED at all. A degraded relay would
+ * have been converted into no relay. It is the same shape as the outage found the same day, where
+ * relays published a public health URL behind a VPC-only port, every check failed, the pool emptied,
+ * and every session request was refused with `relay_unavailable`.
+ *
+ * So: a relay that can still carry sessions stays IN the pool and keeps answering 200, even when it
+ * cannot notarize. Being unable to seal must raise an alarm, not withdraw capacity. The directory
+ * state rides in the BODY of every response, and the transition is logged at ERROR
+ * (`relay.directory.connection.lost`) — those are the alerting surface, not the status code.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -174,9 +185,23 @@ describe("the health check reflects whether this relay can actually notarize", (
     expect(out.body["status"]).toBe("ok");
   });
 
-  it("SUSTAINED failure to reach any directory fails the probe, so the autohealer replaces it", async () => {
-    // The defect in one assertion. For four hours this returned 200 while not a single session
-    // could be sealed anywhere on the fleet.
+  it("NEVER returns a non-2xx, no matter how broken the directory link is", async () => {
+    // THE REGRESSION GUARD, and the reason this file exists in its current form. Any non-2xx here
+    // is read by relay-pool-manager's defaultPingFn as a failed health check, and enough of those
+    // drop this relay from the signed pool manifest. A relay that cannot SEAL can still CARRY
+    // sessions; withdrawing it turns "conversations cannot be sealed" into "conversations cannot be
+    // started", fleet-wide, because every relay fails on the same shared cause at the same moment.
+    const { logger } = spyLogger();
+    const state = createDirectoryHealthState();
+    for (let i = 0; i < DIRECTORY_UNHEALTHY_AFTER_CONSECUTIVE_FAILURES * 10; i++) {
+      state.recordFailure("dial_failed", "connection refused");
+    }
+    const out = await get(createRelayHealthServer({ relayId: "abc", logger, directoryHealth: () => state.snapshot() }));
+
+    expect(out.status, "a degraded relay was dropped from the pool instead of merely reported").toBe(200);
+  });
+
+  it("SAYS it is degraded in the body, so the condition is visible without withdrawing capacity", async () => {
     const { logger } = spyLogger();
     const state = createDirectoryHealthState();
     for (let i = 0; i < DIRECTORY_UNHEALTHY_AFTER_CONSECUTIVE_FAILURES; i++) {
@@ -184,8 +209,11 @@ describe("the health check reflects whether this relay can actually notarize", (
     }
     const out = await get(createRelayHealthServer({ relayId: "abc", logger, directoryHealth: () => state.snapshot() }));
 
-    expect(out.status, "a relay that cannot reach any directory still reports itself healthy").toBe(503);
-    expect(String(JSON.stringify(out.body))).toContain("dial_failed");
+    // The status code is for the pool. The body is for the operator.
+    expect(out.body["status"]).toBe("degraded");
+    const dir = out.body["directory"] as Record<string, unknown>;
+    expect(dir["reachable"]).toBe(false);
+    expect(String(JSON.stringify(dir))).toContain("dial_failed");
   });
 
   it("ONE failure does not fail the probe — a blip must not cycle the whole relay fleet", async () => {

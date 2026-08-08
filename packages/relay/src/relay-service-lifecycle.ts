@@ -104,10 +104,14 @@ export function logRelayServiceCrashed(logger: Logger, ctx: RelayServiceCrashedC
 // reach any directory and therefore could not notarize a single session, and it passed every probe
 // — so nothing alerted and the autohealer never replaced it.
 //
-// WHY THE THRESHOLD IS NOT ONE. A probe that fails on the first failed call would mark EVERY relay
-// unhealthy during any transient directory blip, and the autohealer would cycle the entire fleet at
-// once — which fixes nothing and removes the capacity that was still working. Sustained failure is
-// the signal; a single miss is weather.
+// WHY THE THRESHOLD IS NOT ONE. `reachable` drives an operator-facing alarm, and one failed call is
+// weather: a relay that reports itself broken on every blip trains whoever reads it to ignore the
+// signal. Sustained failure is the signal.
+//
+// Note what this threshold is NOT protecting against. It does not stop the fleet being withdrawn
+// from the pool, because the endpoint no longer answers non-2xx at all — see the note on the 200 in
+// `createRelayHealthServer`. Relying on a threshold for that would have been fragile anyway: the
+// cause is shared, so every relay crosses any threshold at the same moment.
 //
 // WHY "NOT YET PROBED" IS HEALTHY. A relay that has just booted, or one with no directory
 // configured at all, has no evidence either way. Reporting unhealthy there would fail every relay
@@ -254,14 +258,30 @@ export function createRelayHealthServer(opts: RelayHealthServerOptions): Server 
       // could not notarize anything for four hours passed every probe.
       const directory = directoryHealth?.();
       const healthy = directory === undefined || directory.reachable;
-      // The directory block rides EVERY response, including 200s, so a relay can be watched
-      // degrading rather than discovered at the moment it crosses the threshold.
+      // The directory block rides EVERY response so a relay can be watched degrading, and the
+      // status word names the condition.
       const body = JSON.stringify({
         relayId,
         status: healthy ? "ok" : "degraded",
         ...(directory === undefined ? {} : { directory }),
       });
-      res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json" });
+      // ALWAYS 200 — even when degraded. THIS IS NOT AN ALERTING CHANNEL.
+      //
+      // The directories poll this endpoint to decide relay POOL MEMBERSHIP, and
+      // `defaultPingFn` in relay-pool-manager.ts counts ANY non-2xx as a failed check; enough of
+      // them drop this relay from the signed manifest. Returning 503 when the directory link is
+      // down would therefore withdraw the relay from service for a fault that does not stop it
+      // carrying sessions — and because the cause is shared, EVERY relay would fail at the same
+      // moment and the pool would empty. That converts "conversations cannot be sealed" into
+      // "conversations cannot be started", which is strictly worse than the incident this whole
+      // item exists to fix. The same shape emptied the pool on 2026-08-08 when relays published a
+      // public health URL behind a VPC-only port.
+      //
+      // Unable-to-notarize must RAISE AN ALARM, not remove capacity. The alarm is
+      // `relay.directory.connection.lost` at ERROR, plus `status: "degraded"` and the directory
+      // block below. If an autohealer should ever act on this, it needs its own signal that pool
+      // membership does not read — not this status code.
+      res.writeHead(200, { "Content-Type": "application/json" });
       res.end(body);
       return;
     }
