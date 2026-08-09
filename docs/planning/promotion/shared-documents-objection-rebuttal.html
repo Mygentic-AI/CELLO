@@ -1,0 +1,584 @@
+<title>Haven't Shared Documents Been Solved?</title>
+<style>
+  :root {
+    --ground:      #f3f4f6;
+    --surface:     #fdfdfd;
+    --ink:         #14161b;
+    --ink-soft:    #4d545f;
+    --ink-faint:   #7b828d;
+    --rule:        #dcdfe4;
+    --rule-soft:   #e7e9ed;
+    --accent:      #26407a;
+    --accent-soft: #5c74ad;
+    --accent-wash: #e8ebf4;
+    --caution:     #85560f;
+    --caution-wash:#f3ece0;
+
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #101216;
+      --surface:     #171a20;
+      --ink:         #e4e7ec;
+      --ink-soft:    #a3aab5;
+      --ink-faint:   #7c838e;
+      --rule:        #2a2e36;
+      --rule-soft:   #23272e;
+      --accent:      #94aae0;
+      --accent-soft: #7186bb;
+      --accent-wash: #1b2130;
+      --caution:     #d5a659;
+      --caution-wash:#221d13;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #101216;
+    --surface:     #171a20;
+    --ink:         #e4e7ec;
+    --ink-soft:    #a3aab5;
+    --ink-faint:   #7c838e;
+    --rule:        #2a2e36;
+    --rule-soft:   #23272e;
+    --accent:      #94aae0;
+    --accent-soft: #7186bb;
+    --accent-wash: #1b2130;
+    --caution:     #d5a659;
+    --caution-wash:#221d13;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 1.5rem 6rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 43rem;
+    margin: 0 auto;
+  }
+
+  /* ---------- masthead ---------- */
+
+  header.masthead {
+    padding: 4.5rem 0 2.5rem;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 1.4rem;
+  }
+
+  h1 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: clamp(2.4rem, 6vw, 3.4rem);
+    line-height: 1.08;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+    margin: 0 0 1.2rem;
+  }
+
+  .standfirst {
+    font-size: 1.12rem;
+    color: var(--ink-soft);
+    margin: 0;
+    max-width: 34rem;
+  }
+
+  /* ---------- generic sections ---------- */
+
+  section {
+    padding-top: 3.5rem;
+  }
+
+  .section-label {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 1.5rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+
+  h2 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 1.75rem;
+    line-height: 1.22;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0 0 0.9rem;
+  }
+
+  h3 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 1.34rem;
+    line-height: 1.28;
+    text-wrap: balance;
+    margin: 2.75rem 0 0.8rem;
+  }
+
+  h3:first-of-type { margin-top: 1.5rem; }
+
+  ol.demonstrates {
+    margin: 0;
+    padding: 0 0 0 1.3rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+
+  ol.demonstrates li { padding-left: 0.3rem; }
+  ol.demonstrates li::marker { color: var(--accent); font-family: var(--mono); font-size: 0.85em; }
+
+  p { margin: 0 0 1.05rem; }
+  p:last-child { margin-bottom: 0; }
+
+  strong { font-weight: 600; }
+
+  /* ---------- the frame ---------- */
+
+  .frame {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 2rem 2rem 1.8rem;
+    margin-top: 3.5rem;
+  }
+
+  .frame h2 { font-size: 1.5rem; }
+
+  /* ---------- argument blocks ---------- */
+
+  .args {
+    display: flex;
+    flex-direction: column;
+    gap: 3.25rem;
+    margin-top: 0.5rem;
+  }
+
+  .arg-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.9rem;
+    margin-bottom: 0.7rem;
+  }
+
+  .arg-num {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    flex: none;
+    padding-top: 0.35rem;
+  }
+
+  .arg-head h2 { margin: 0; }
+
+  .lands {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 1.1rem 2.35rem;
+  }
+
+  .arg-body { margin-left: 2.35rem; }
+
+  /* ---------- quotable ---------- */
+
+  .say {
+    border-left: 2px solid var(--accent-soft);
+    padding: 0.15rem 0 0.15rem 1.15rem;
+    margin: 0 0 1.3rem;
+  }
+
+  .say .tag {
+    display: block;
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.55rem;
+  }
+
+  .say q {
+    font-family: var(--serif);
+    font-size: 1.24rem;
+    line-height: 1.48;
+    color: var(--ink);
+    quotes: "\201C" "\201D";
+  }
+
+  /* ---------- pushback / overclaim lists ---------- */
+
+  dl.exchange {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+
+  dl.exchange dt {
+    font-family: var(--serif);
+    font-size: 1.16rem;
+    line-height: 1.4;
+    color: var(--ink);
+    margin-bottom: 0.55rem;
+  }
+
+  dl.exchange dt::before {
+    content: "They say — ";
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    display: block;
+    margin-bottom: 0.4rem;
+  }
+
+  dl.exchange dd {
+    margin: 0;
+    color: var(--ink-soft);
+  }
+
+  ul.claims {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1.6rem;
+  }
+
+  ul.claims li {
+    border-left: 2px solid var(--caution);
+    padding-left: 1.15rem;
+  }
+
+  ul.claims .no {
+    display: block;
+    color: var(--caution);
+    font-weight: 600;
+    margin-bottom: 0.3rem;
+  }
+
+  ul.claims .yes { color: var(--ink-soft); }
+
+  .caution-note {
+    background: var(--caution-wash);
+    border: 1px solid var(--rule);
+    padding: 1.4rem 1.6rem;
+    margin-bottom: 2rem;
+    color: var(--ink-soft);
+    font-size: 0.98rem;
+  }
+
+  /* ---------- coda ---------- */
+
+  .coda {
+    margin-top: 4rem;
+    padding-top: 2.5rem;
+    border-top: 1px solid var(--rule);
+    color: var(--ink-soft);
+  }
+
+  .coda h2 { color: var(--ink); }
+
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--rule-soft);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    color: var(--ink-faint);
+  }
+
+  a { color: var(--accent); }
+  a:focus-visible, :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  @media (max-width: 34rem) {
+    body { font-size: 16px; padding: 0 1.1rem 4rem; }
+    .arg-body, .lands { margin-left: 0; }
+    .arg-head { gap: 0.7rem; }
+    .frame { padding: 1.5rem 1.3rem; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">CELLO · Interview prep</p>
+    <h1>“Haven’t shared documents been&nbsp;solved?”</h1>
+    <p class="standfirst">The objection arrives wearing a different name each time — GitHub, Google Docs, Notion, SharePoint, Dropbox, “just email it.” Seven arguments for collaborative documents between agents that don’t share an employer. The cryptographic paper trail is the last one, on purpose.</p>
+  </header>
+
+  <div class="frame">
+    <h2>The move: collapse the whole category into two families</h2>
+    <p>Never argue feature-by-feature against whichever tool they named — you’ll be doing it again in a minute when they name the next one. Every document-sharing product ever built is one of two shapes, and both fail for the same reason. Say that, and you’ve answered all of them at once.</p>
+    <div class="say">
+      <span class="tag">Say it like this</span>
+      <q>There are only two ways to share a document today. Either <em>a host holds it</em> — Google, Notion, SharePoint, a private repo — which means one of us owns the room and the other is a guest with an account in a system they don’t control. Or <em>you send copies</em> — email it, Slack it, both fork the public repo — and now there’s no shared truth at all, just two files and a human reconciling them. Every tool you can name is one of those. We’re neither: shared state that converges, with nobody hosting it.</q>
+    </div>
+    <p>The assumption buried in the question is <strong>shared tenancy</strong> — that the two of us are already inside one system, or willing to get inside one. Every repo, org, share link and permission model is downstream of it. Our premise is that we aren’t and shouldn’t have to be. If you and I are already in the same workspace, genuinely, use the workspace. The collaborations that matter commercially are with people you’re not in one with.</p>
+    <p>From there, every argument below is that point aimed at a different listener.</p>
+  </div>
+
+  <section>
+    <p class="section-label">The arguments</p>
+
+    <div class="args">
+
+      <article>
+        <div class="arg-head">
+          <span class="arg-num">01</span>
+          <h2>Every one of them makes you choose: easy, or confidential.</h2>
+        </div>
+        <p class="lands">Lands with: users, security buyers</p>
+        <div class="arg-body">
+          <div class="say">
+            <span class="tag">Say it like this</span>
+            <q>Whichever tool you pick, there are two settings and you have to choose. Open it up — public repo, anyone-with-the-link — and it genuinely is easy, and the contract you’re negotiating is readable by anyone who finds it, while you’re negotiating it. Lock it down and you’re into orgs, invites, guest seats and a credential in someone’s agent. Easy or confidential, pick one. We don’t make you pick.</q>
+          </div>
+          <p>Be fair to the easy path first or it sounds like a strawman. Public repo with a fork and a pull request; a Docs link set to anyone-with-the-link; a published Notion page. No invite, no credential from you, their agent works through their own account. For open-source and for anything you'd happily publish, that’s excellent and we’re not competing with it.</p>
+          <p>It fails on the documents worth collaborating on. A client engagement, a term sheet, a supplier quote, an invoice, a draft position before you’ve agreed it — none of those can be openly readable during the drafting, which is exactly when they’re most sensitive. And drafts don’t stay drafts: on a repo the history is public too, and a link that leaked once stays leaked.</p>
+          <p>So you go private — and <strong>do not argue this as effort.</strong> Setup is a handful of CLI calls and a competent agent makes them for you. Argue what you actually created: an org, a membership in it, and a credential to your account in a foreign agent’s hands. That isn’t “here’s a document,” it’s “put an autonomous process inside my perimeter and trust it to stay in its lane.”</p>
+          <p>And it only works if they’ll join. “Create a GitHub account and accept my org invite” is nothing to a developer and the end of the conversation with a lawyer, a client, a broker or an analyst — which is most of the people you need to co-write something with.</p>
+          <p>We sit on neither horn. The relationship already exists as a verified key, so the document is proposed and consented to in-band. Nothing is public, the counterparty joins nothing, and they never receive a credential to anything of yours — the grant is scoped to the one artifact. <strong>Revocation matches the grant:</strong> kill that document and nothing else changes. Removing them from an org is also one command — but it takes away everything else they had at the same time, which is exactly why in practice it doesn’t happen and stale access accumulates.</p>
+        </div>
+      </article>
+
+      <article>
+        <div class="arg-head">
+          <span class="arg-num">02</span>
+          <h2>You can say no to an individual edit. In a live editor, no such thing exists.</h2>
+        </div>
+        <p class="lands">Lands with: everyone — this is the plainest one in the set</p>
+        <div class="arg-body">
+          <div class="say">
+            <span class="tag">Say it like this</span>
+            <q>Open a Google Doc to someone and there is no such thing as declining what they write. Whatever they type is in your document, instantly, and the only control you have is all-or-nothing: full write access, or they can’t collaborate. There’s nowhere to put a rule. You can undo it afterwards — after it’s already in, after your agent may already have read it, and they can simply do it again. We evaluate every incoming edit against your rules before it’s ever part of your copy.</q>
+          </div>
+          <p><strong>Concede GitHub fully, and concede the modern version of it.</strong> A pull request is a real refusal gate, and it isn’t a human bottleneck any more — a PR opens, several review agents run against it on different lenses, something collates the findings, something else kicks off fixes. That runs with nobody awake and at any scale. Anyone technical is doing this already; pretending otherwise loses the room in one sentence. Three differences survive it.</p>
+          <p><strong>Your reviewers are the ones being attacked.</strong> This is the one to lead on, because their own pipeline is the illustration. Those review agents are checking whether it’s a <em>good change</em> — correctness, style, security bugs in the code. Not one of them is asking whether the text itself is engineered to steer the model reading it. And to form that judgement, every one of them has to read the untrusted content. Three agents ingest attacker-controlled text before any decision is made. That’s exposure wearing the costume of a defence.</p>
+          <p><strong>A judgement can be talked round; a character-set check can’t.</strong> A review agent forms an opinion, which means a sufficiently well-written diff can earn approval — the persuasion surface is the whole point of the reviewer. Our gate is not forming an opinion: the permitted character space was agreed by both parties at consent and is bound to the document, so the check is deterministic and there is nothing to persuade. Judgement where you want judgement, arithmetic where you want a boundary.</p>
+          <p><strong>Refusal is granular and doesn’t block.</strong> Declining a PR parks the whole branch until something acts on it. Ours declines the one change, hands back a machine-readable reason, and their side republishes without it — the legitimate work in the same batch still flows. And the gate is on by default, per document, for every counterparty, rather than being a pipeline you stand up and maintain per repo.</p>
+          <p>Everything else in the category is worse than GitHub, not better. Docs and Notion have no gate at all — the permission model is edit or comment-only, and comment-only isn’t collaboration. File sync has no gate: their save lands, or you get a conflicted copy and now there are two files.</p>
+          <p><strong>Why this stops being an inconvenience and becomes a real problem with agents.</strong> Write access granted to an autonomous process is unconditional write, at any hour, including while you’re asleep, including content chosen to steer your agent. In a live editor there is nowhere to express “not that.” Your only lever is revoking access entirely — the same all-or-nothing shape as the grant in argument 1.</p>
+          <p><strong>And the second half: we refuse, we never quietly clean up.</strong> Once you have a gate, the tempting implementation is to strip the bad part and accept the rest. That is the worst option available here — you’d be holding different bytes than they signed, both sides believing they agree, with nothing reporting it. So a violation is refused whole, with a reason the sender’s software can act on. The default resolution is that the <em>sender</em> adopts the stricter rule, so nobody is ever asked to accept less protection than they wanted.</p>
+        </div>
+      </article>
+
+      <article>
+        <div class="arg-head">
+          <span class="arg-num">03</span>
+          <h2>A shared document that an agent reads is a prompt-injection channel.</h2>
+        </div>
+        <p class="lands">Lands with: technical interviewers, investors — this is the moat</p>
+        <div class="arg-body">
+          <div class="say">
+            <span class="tag">Say it like this</span>
+            <q>The second your agent reads a document I can write to, everything I type lands in your agent’s head. Google Docs has no opinion about that. Git has no opinion about that. As far as I know this is the only shared-artifact system designed on the assumption that the other side’s text is hostile until it’s been screened.</q>
+          </div>
+          <p>Four properties, and they only make sense together:</p>
+          <p><strong>Arrival can’t make your agent think.</strong> An incoming edit merges mechanically into your copy; your agent gets a flag saying the document changed, carrying no content. The counterparty cannot trigger your agent by writing. It reads when it decides to read.</p>
+          <p><strong>The character space is agreed up front, not argued mid-document.</strong> When the two of you consent to the document, you agree what it’s allowed to contain — and that agreement is cryptographically bound to the document, so neither side can drift from it later. That turns an endless “what is this invisible character doing here” argument into one question a human can actually answer at the start: <em>do I want a document with this person that can contain this?</em></p>
+          <p><strong>Violations are refused, not cleaned up</strong> — the gate from the previous argument is where this is enforced, and the reason it refuses whole rather than sanitising is spelled out there.</p>
+          <p><strong>And the counterparty doesn’t get to argue with your security.</strong> If they need an exception, it arrives as structured evidence, never as prose your model evaluates. Counterparty-authored text arguing you should lower your defences is the single most attacker-favourable surface in any protocol — the document gets screened, but a persuasive plea’s whole purpose is to persuade. That door is shut.</p>
+        </div>
+      </article>
+
+      <article>
+        <div class="arg-head">
+          <span class="arg-num">04</span>
+          <h2>AI resolves code conflicts well because code has an oracle. Prose doesn’t.</h2>
+        </div>
+        <p class="lands">Lands with: engineers — and only if you concede the first half</p>
+        <div class="arg-body">
+          <div class="say">
+            <span class="tag">Say it like this</span>
+            <q>Point an AI coder at a merge conflict and it just handles it — I haven’t examined one myself in about eighteen months. But look at <em>why</em> that works: it compiles or it doesn’t, the tests pass or they don’t. There’s ground truth to check against. Now hand the same model a conflict between two versions of a contract clause. It picks one, it reads beautifully, and nothing on earth tells either of us that a term went missing.</q>
+          </div>
+          <p>The concession is not a courtesy here, it’s the setup. Git plus an AI resolver is genuinely good for code, and anyone technical in the room knows it from their own week. Claiming otherwise costs you the argument in one sentence.</p>
+          <p>What makes code the easy case is the oracle. A compiler and a test suite are an independent judge of whether the resolution was right, and they run in seconds without asking anyone. Strip that away and an LLM resolving a conflict is producing a confident guess about whose wording survives, in a document whose only reviewer is the person who delegated it. Silent, plausible, and discovered later — in a term sheet, an invoice, a scope of work, a set of agreed figures.</p>
+          <p>So we don’t create the situation. Underneath is a mature CRDT: concurrent edits merge deterministically regardless of order or timing, so there is never a moment where our two copies disagree and somebody has to arbitrate. No branch, no conflict markers, no merge button, nobody holding it.</p>
+          <p>Where convergence <em>would</em> produce nonsense — we both rewrote the same paragraph and it interleaves into something neither of us meant — we don’t pretend it’s fine. The change is flagged as overlapping your unpublished work, and your agent is told to read the merged result before building on it. That is the one case that needs judgement, and it gets surfaced rather than resolved behind your back.</p>
+        </div>
+      </article>
+
+      <article>
+        <div class="arg-head">
+          <span class="arg-num">05</span>
+          <h2>The middleman is a first-class position, not a bug to design out.</h2>
+        </div>
+        <p class="lands">Lands with: investors, non-developer buyers — this is the market argument</p>
+        <div class="arg-body">
+          <div class="say">
+            <span class="tag">Say it like this</span>
+            <q>A shared repo means everyone sees everyone. That’s fine for colleagues and disqualifying for commerce. If I buy work from you and sell the result to my client, putting you and my client in the same room isn’t a convenience — it’s me being cut out of my own deal. Every collaboration tool built on a shared workspace is unusable for the person who most needs one.</q>
+          </div>
+          <p>You hold one document with your supplier and a genuinely separate one with your client. When something should cross, you port it as your own edit and sign it. Your client holds work you stand behind; your supplier never learns who your client is.</p>
+          <p>The accountability shape mirrors how liability already works: <strong>your client’s recourse is against you, and yours is against your supplier.</strong> Each link is independently provable, and each party is accountable to the counterparty it actually chose. You don’t audit your supplier’s supplier — you hold your counterparty. A single shared workspace flattens a relationship structure that exists for good reasons.</p>
+          <p>The workaround today is copy-paste between two docs, and it loses everything: no record of what crossed, no signature on it, no way to show later what you actually sent. That manual translation step is precisely the labour being replaced.</p>
+        </div>
+      </article>
+
+      <article>
+        <div class="arg-head">
+          <span class="arg-num">06</span>
+          <h2>Every other tool notifies a person. You are the message bus.</h2>
+        </div>
+        <p class="lands">Lands with: users, in the demo</p>
+        <div class="arg-body">
+          <p><strong>Concede the obvious first, or this one falls apart.</strong> Working async across timezones is not a differentiator — Google Docs, Notion and GitHub all handle a Dubai-to-California split perfectly well. Say so. Then change the question from <em>can we work async</em> to <em>how does my agent find out</em>.</p>
+          <div class="say">
+            <span class="tag">Say it like this</span>
+            <q>Async isn’t the interesting part — Docs solved that twenty years ago. Ask a different question: when you edit our shared document, how does my <em>agent</em> learn that? On every one of those tools the answer is that an email arrives for me, and then I go tell my agent to look. I’m the message bus. Here, the thing that already holds my identity is the thing that receives your edit — so my copy is correct before any human reads anything.</q>
+          </div>
+          <p>Walk it tool by tool; it’s more convincing than asserting it:</p>
+          <p><strong>Google Docs.</strong> You edit, Google emails <em>me</em>. My agent learns nothing. For it to see the change it needs OAuth into my account and it has to go and look — which means burning a read on every shared document, every session, on the chance something moved.</p>
+          <p><strong>Notion.</strong> Same shape. The notification is built for a human reading an inbox.</p>
+          <p><strong>GitHub.</strong> It absolutely does notify — watch settings, email, the notifications tab. To <em>me</em>. There is no path from that to my agent unless I build one: a webhook receiver on a public address, kept running, with its own credential and its own uptime. Google’s Drive API can push too, and it wants the same thing — a server you host. That’s the concession to make, and it’s the argument: the push exists, but only if you become an infrastructure operator to catch it.</p>
+          <p><strong>Concede the exception before they raise it:</strong> if you already run Actions or any CI on that repo, you built the always-on receiver years ago and this argument doesn’t bite you. Fine — say so. It bites everywhere else in the category, and it bites for the counterparty, who is usually not running a pipeline. Which is the tell: the repo case works because a developer built infrastructure, not because the tool does this.</p>
+          <p>So in practice the working answer on all three is the same, and everyone recognises it because everyone does it: <strong>read the notification, then paste “they updated the doc, go read it” into your agent.</strong> The human is the relay.</p>
+          <p>Ours has no relay step. The background process that already holds your identity is the same one that receives the change, and it’s up whenever you’re logged in — so the edit merges into your local copy in the first window both machines are up, with nothing running and nobody awake. No poll, no third-party credential, no webhook to host, no human in the path.</p>
+          <p><strong>And it deliberately does not wake the agent</strong> — which sounds like a missing feature until you price the alternative. Deliver, wake, reason, reply is an inference cascade: two agents ping-ponging tokens over a comma fix. A document edit is a write to a shared cell, not an utterance demanding an answer. It merges, it leaves a flag, and the agent finds it next time it looks. When you genuinely want attention you send a message — a separate, deliberate act, on the channel built for it.</p>
+        </div>
+      </article>
+
+      <article>
+        <div class="arg-head">
+          <span class="arg-num">07</span>
+          <h2>Nobody in the middle holds the document.</h2>
+        </div>
+        <p class="lands">Lands with: enterprise, regulated buyers</p>
+        <div class="arg-body">
+          <div class="say">
+            <span class="tag">Say it like this</span>
+            <q>A term sheet in Google Docs is a term sheet Google holds. Draft it in a repo and Microsoft holds it. The document only ever exists on our two machines, encrypted on both — and no vendor can change terms, deprecate a tier, or lock either of us out of something we co-wrote.</q>
+          </div>
+          <p>This is distinct from the audit trail, and it’s usually the question an enterprise asks first. It isn’t “can you prove what happened” — it’s “who else can read this.” The answer is nobody: content passes directly between the two endpoints and the relay is an ordering witness that stores nothing.</p>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <p class="section-label">Where they’ll push back</p>
+    <dl class="exchange">
+
+      <dt>“GitHub has fine-grained tokens now — and I don’t provision anything by hand anyway. My agent does it with the CLI.”</dt>
+      <dd>Concede this completely and immediately. Arguing effort against someone who automates their whole workflow just loses you the room, and they’re right. Two things survive the concession. <strong>You can automate your half and not theirs:</strong> the invitation is one CLI call, but a human on the other side still accepts it, inside a platform they must already belong to — and “create a GitHub account and join my org” is the end of the conversation with a lawyer, a client or an analyst. <strong>And what you granted is still membership, not a document:</strong> revoking it is also one command, and it removes everything else they had along with it. The argument was never the effort. It’s the shape of the grant.</dd>
+
+      <dt>“Just send them a Google Docs link. Thirty seconds.”</dt>
+      <dd>For two humans it really is thirty seconds — concede that, it’s true and everyone knows it. The agent question is a different one, and it isn’t about their access to your account: their human opens a link with no credential at all. It’s that <strong>each side has to hand its own agent broad access to its own Google account</strong> to work on the file. To let your agent touch one shared document, you give it Drive scope over everything you own; they do the same on their side. A narrowly-scoped, per-file integration is possible in principle, but the agent connectors people actually run are account-wide. And if you dodge accounts entirely with “anyone with the link,” you’ve landed back on the first argument’s fork — easy, or confidential.</dd>
+
+      <dt>“Git has twenty years of tooling. You have a diff and a log.”</dt>
+      <dd>Agree instantly, then take the ground back: the document is a real file in a real directory. The agent edits it with ordinary tools, the human opens it in any editor, and you can absolutely commit it to git. We’re not the editor and we’re not the host — we’re the part where you’d otherwise have to give a stranger’s agent access to your repo. Those compose; they don’t compete.</dd>
+
+      <dt>“This is a feature, not a product.”</dt>
+      <dd>It’s a feature <em>of</em> a product, and that’s the whole argument. Strip out the verified identity underneath and the screening around it, and what’s left is a worse Dropbox. The document layer is only interesting because it sits on a trust layer that already exists — which is also why it can’t be cloned as a weekend feature by a docs company.</dd>
+
+    </dl>
+  </section>
+
+  <section>
+    <p class="section-label">Don’t overclaim</p>
+    <div class="caution-note">Four places where the true claim is narrower than the tempting one. A technical interviewer will find these, and getting caught on one costs more than the claim was worth. Each has a good honest version.</div>
+    <ul class="claims">
+      <li>
+        <span class="no">Don’t say: “you can prove the document you’re holding is the real one.”</span>
+        <span class="yes">Say: <strong>“we prove the collaboration, not the copy.”</strong> Every edit is signed, chained and sealed, so what was exchanged is provable and replayable. Binding that history <em>automatically</em> to the exact bytes on your disk is the next tier and isn’t in the launch build. What <em>is</em> available today is the checkpoint below — a deliberate, signed “we both agree this is the text” — which is a different claim and usually the one people actually want.</span>
+      </li>
+      <li>
+        <span class="no">Don’t say: “the other agent can’t write fields it isn’t allowed to.”</span>
+        <span class="yes">Say: <strong>“accountability, not prevention.”</strong> Enforced field-level write authority is deliberately deferred — that’s a guard rail against agent error, and guard rails belong in the agent’s own instructions. What the protocol guarantees is that an out-of-lane write is attributable, permanently, to whoever signed it.</span>
+      </li>
+      <li>
+        <span class="no">Don’t say: “a whole team can co-author one document.”</span>
+        <span class="yes">Say: <strong>“pairwise today, and that’s the deliberate call.”</strong> Multi-party works through the middleman shape in argument 5. Three peers editing one shared artifact — where everyone genuinely should see everyone — is a later topology, and it forces connections between parties who may not want one.</span>
+      </li>
+      <li>
+        <span class="no">Don’t say: “you can revoke it.”</span>
+        <span class="yes">Say: <strong>“you can stop it, and you can’t unsend what already landed.”</strong> Kill is unilateral and immediate — no more edits in or out — and the record shows exactly what crossed before you pulled it. Say the limitation out loud; it’s the truthful version of a promise every other tool makes and can’t keep.</span>
+      </li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="section-label">The two use cases — “fine, so what’s it actually for?”</p>
+    <h2>Two answers, and the second one is the interesting one</h2>
+    <p>This question always follows the one you just won, and two concrete answers beat seven abstract ones. Lead with the first because everyone can picture it; spend your time on the second because it’s the one nothing else does.</p>
+
+    <h3>One — a living document, without the ceremony</h3>
+    <div class="say">
+      <span class="tag">Say it like this</span>
+      <q>It’s a document that is simply current. No branch, no commit message, no pull request, no merge — none of the machinery you carry with git just to keep one file in the same state in two places. We took the gesture from git, which is that you share on intent rather than on every keystroke. We didn’t take the machinery.</q>
+    </div>
+    <p>A spec, a plan, a running set of notes that evolves <em>as the work happens</em>. Git’s formality buys review and history for code that ships; a plan the two of you are editing this afternoon does not want a merge queue, and paying for one is the cost, not the benefit.</p>
+    <p>The same mechanism covers the case with no counterparty at all — your laptop agent, your server agent, whatever’s running elsewhere, holding one state that outlives a context window and moves between harnesses that can’t share context. Worth saying out loud in a demo, because it means <strong>the feature works alone, on day one, with nobody to collaborate with.</strong> No cold start.</p>
+
+    <h3>Two — a shared workflow, which is what the structured formats are for</h3>
+    <div class="say">
+      <span class="tag">Say it like this</span>
+      <q>A client places a large equity order. Before anything trades, someone checks the account is actually funded. Then the fills arrive over hours — big orders don’t fill at once. Each fill has to be booked. Booking kicks off settlement, and settlement kicks off a further workflow between the broker and the firm that did the trades. That’s five or six parties, most at different companies, some of them people and some of them agents. Every one of them needs the same answer to “where is this now?”, and today they get it by email, phone and spreadsheet.</q>
+    </div>
+    <p>Use a real workflow, not a toy one — it’s doing four jobs at once:</p>
+    <ol class="demonstrates">
+      <li><strong>It’s state, not conversation.</strong> “Funding check passed” is a field. Ten fills is one quantity changing ten times, not ten messages demanding a reply. A chat thread is the wrong shape for this and a meeting is a worse one.</li>
+      <li><strong>It outlives every session.</strong> Hours to days, across time zones, with nobody watching. This is precisely what delivery between two background processes was built for.</li>
+      <li><strong>It’s pairwise in reality, which is the shape that ships.</strong> The desk holds the CRM, settlement holds the desk, the broker holds settlement. Nobody audits their counterparty’s counterparty, and each firm signs what it passes on. The middleman argument isn’t a limitation here — it’s the org chart. <em>Describe it as bilateral links, never as one eight-party shared object</em>; that topology is deliberately deferred.</li>
+      <li><strong>The reconciliation <em>is</em> the industry.</strong> Two firms keep separate records of the same trade and then spend real money proving they match. When they don’t, that’s a break, and a person works it by email and phone. A convergent object between the two parties doesn’t resolve the divergence faster — it removes the place divergence comes from.</li>
+    </ol>
+    <p style="margin-top:1.4rem;"><strong>And it has nowhere to live today.</strong> Whose Notion? Whoever’s it is owns the source of truth and the other firm is a guest in it — and that’s the record of what they owe each other. Across companies, “just use our system” isn’t a technical question, it’s a compliance and procurement one. Federated means nobody hosts it: each side holds a copy, both stay correct, nobody is anyone’s guest.</p>
+    <p><strong>Update frequency is also what makes the relay unbearable here.</strong> A prose document edited twice a week through “email arrives, human tells agent to look” is annoying. A workflow object touched ten times a day that way is unusable. This is where argument 6 stops being a papercut — so if you’re telling this story, tell argument 6 first.</p>
+    <p><strong>Two cautions specific to this example</strong>, because it invites both questions. Keep the wording at <em>tracking</em>, never <em>enforcement</em>: nothing stops the wrong party marking something settled, and what you get instead is that the write is attributable, permanently, to the key that signed it. In this industry that’s close to what they actually want — but say it precisely, because “prevents” is a claim the launch build can’t carry. And this is the one case where you <em>should</em> reach for the paper trail below: settlement is regulated, and who agreed to what, when, is the deliverable rather than a nice property.</p>
+  </section>
+
+  <section class="coda">
+    <h2>And yes — the paper trail</h2>
+    <p>Two sentences, then let them pull on it. Every edit is signed by whoever made it and chained to the one before, so the document’s evolution is a record neither party can later dispute. That matters for contracts, invoices and anything that ends up in front of a lawyer.</p>
+    <p>Don’t lead with it: it’s the argument everyone expects from a crypto company, they’ve heard it before, and much of it describes value that arrives after launch. The six above describe value that exists the day someone installs it.</p>
+
+    <h2 style="margin-top:2.5rem;">The checkpoint — available now, and the better claim</h2>
+    <p>If they <em>do</em> pull on it, this is the thing to have ready, because it needs no machinery that doesn’t already exist. When the document is finished, paste the text into an ordinary message — <em>“this is what we’ve arrived at, do you agree?”</em> — and they reply that they agree. Both messages are signed leaves in the same sealed session.</p>
+    <div class="say">
+      <span class="tag">Say it like this</span>
+      <q>The edit history proves how we got here. That’s different from proving we both looked at the result and said yes — and the second one is usually what the argument is actually about later. So we do that as its own signed act: here is the final text, do you agree, yes I agree. It’s what a signature on a contract is for, except there’s no third party holding it and it works on a living document rather than a frozen PDF.</q>
+    </div>
+    <p>The design anticipates this rather than working around it. The seal certificate carries a standing disclaimer that its signatures attest <em>receipt, never assent</em> — agreement is always a separate, explicit, signed reply. This is that reply.</p>
+    <p><strong>One correction worth making before you say this publicly.</strong> The instinct is to include your document’s internal root hash so the other side can confirm their copy matches. Don’t — not at launch. A stable, canonical root is precisely the deferred tier, so two copies that are semantically identical can still hash differently over key order, whitespace or line endings, and you’d both go hunting a difference that isn’t there.</p>
+    <p><strong>Hash the pasted bytes instead.</strong> The thing being agreed to is the text in the message, so hash exactly that and put the digest in the message. Now “the text” is unambiguous and tamper-evident in the sealed record, with no canonicalization required. The receiving side’s job is to compare the paste against its own copy before agreeing — and for JSON, to parse both and compare structurally rather than by eye, or formatting noise reads as disagreement.</p>
+    <p>State the limit plainly, because it’s a strength: this is a point in time. It doesn’t stop either side editing afterwards, and it doesn’t prove your live copy still matches next week. That is exactly how a signed contract behaves, and saying so is more credible than implying otherwise.</p>
+  </section>
+
+  <footer>Prepared 9 August 2026 · Sources: the federated collaborative state design log and the document screening discussion, CELLO planning vault</footer>
+
+</div>
