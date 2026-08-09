@@ -3582,6 +3582,76 @@ Adding to a list is where you find out what the list was hiding.
 
 ---
 
+## Entry 39 — Two content-destroying defects, neither found by a test, both found by using it
+
+Both shipped in `daemon 0.0.154`. Neither was found by the suite, and the suite is not thin — 3486
+tests, all green, throughout.
+
+### The one the two-machine test found by accident
+
+Running the JSON and HTML convergence tests, a peer's paragraph disappeared. Not a merge fault: the
+peer's update was admitted into this copy at `12:35:41.807` and a write published at `12:35:42.033`
+carried the complete text as it had been READ a minute earlier, without their paragraph. The daemon
+did as instructed and published the deletion. **226 milliseconds, hit on the first HTML test anyone
+ran.**
+
+The lost text was the smaller harm. The documented way to REJECT a peer's change is to publish a
+change reversing it — the same operation, byte for byte. So the signed record attributed an accident
+as a deliberate rejection of a counterparty's work, in the system whose claim is that the trail
+cannot be disputed later.
+
+Andre asked for the options and chose the one keyed on the read mark: refuse a removal of something
+never seen, allow a removal of something read and record it as **deliberate**. That second branch is
+the "second refusal" the objection-rebuttal names as missing, obtained without a held-pending state —
+the peer's change is already admitted, and the decision point is on the author's own publish.
+
+**The first implementation was wrong and two existing tests caught it.** Editing a line REMOVES the
+old line's text, so consulting only the read mark refused ordinary edits. The tests were right, and
+the lesson generalises past this fix: a guard that fires during normal work does not get tightened,
+it gets switched off. The rule now gates on whether a peer update actually arrived since the author
+last looked — if none did, their view is current by construction and nothing is checked.
+
+### The one a reviewer found by asking what the feature was FOR
+
+Miss_Chelly assessed whether a JSON document could carry a real multi-actor workflow — 8 phases, 8
+people, a record with flags and handoffs. Nested fields did not merge: a nested object was stored as
+one opaque value, so two people editing two fields inside it were editing one thing and one edit
+vanished from both machines.
+
+Confirmed in two lines of plain Yjs before touching anything, which is the only reason it took
+minutes rather than an afternoon of argument.
+
+**The asymmetry was the danger, not the depth.** `jsonDiff` walks the full depth and reports dotted
+paths, so every surface said the structure was understood at field granularity — which invites a
+schema author to nest exactly where several people write, and then names the field that vanished.
+*A limitation you can see is survivable; one that advertises its opposite is not.*
+
+The answer to "was this a scope call?" was no, and the specifics do not flatter: `jsonKeyOperations`
+had been refactored the day before and nesting WAS reasoned about in that sitting — the comparison
+was made recursive so a re-ordered nested block would not count as a change. The thought reached
+change detection and not storage, three lines away. Then the claim "two agents setting different
+fields produce disjoint operations" went into the code header, the DoD and the triage with no depth
+caveat.
+
+### What both have in common
+
+Neither is a CRDT fault. Both are the layer above deciding what to tell the CRDT, and in both cases
+the instruction was faithfully carried out. Convergence guarantees that two replicas agree; it
+guarantees nothing about whether they agree on what anyone meant.
+
+And both were found by USING the feature — one by running it across two machines, one by asking what
+it was for. Neither was reachable from a unit test, because both require a second party doing
+something at the same time.
+
+### Still owed, and it is a claim rather than code
+
+`append_only` is whole-document, so a record with a mutable status cannot be append-only. The map
+shape buys ordering and merge; it does not buy tamper-evidence. Nobody should be told a workflow
+record keeps a tamper-evident audit trail until field authorization or a linked append-only journal
+document ships.
+
+---
+
 ## Related Documents
 
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits
