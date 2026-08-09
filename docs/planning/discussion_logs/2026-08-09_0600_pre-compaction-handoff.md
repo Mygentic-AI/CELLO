@@ -16,22 +16,19 @@ lives in the documents it points to; do not re-derive it.
 
 ---
 
-## 1. The one thing that needs doing before anything else
+## 1. The one thing that needs doing before anything else — DONE, awaiting promotion
 
-**The close-time seal pull is committed and NOT published.** `cello-client` commit **`f6af6b5`**,
-`DOD-TERMINAL-STATE-DIVERGENCE-1`.
+**The close-time seal pull is published and NOT yet promoted.** `DOD-TERMINAL-STATE-DIVERGENCE-1`,
+cello-client `f6af6b5`, shipped as **`daemon 0.0.151` / `cli 0.0.158`** on tag `v0.0.223`.
 
-`daemon 0.0.150` is on npm and promoted, and it **predates that commit**. So the local tree at
-version 0.0.150 no longer matches the published 0.0.150 — which is the exact condition the publish
-skill's first invariant exists to prevent. The next publish MUST bump before shipping anything else.
+Gate was green before the bump (3403 tests, lint, typecheck, build). `smoke-tag` green. Verified
+against the tarball rather than the commit log: `recovered_on_close`, `asked_none_exists`,
+`pull.none_on_close` and `MAY_ALREADY_BE_SEALED` are all present in `0.0.151`'s
+`dist/close-session-handler.js`, and **absent** from `0.0.150` — which is the control that proves the
+change is new rather than assumed. `cli@0.0.158` cross-pins `daemon@0.0.151` as a real version.
 
-- Next free git tag: **`v0.0.223`** (`v0.0.222` is the highest that exists).
-- Cascade: bump `daemon` → 0.0.151 and `cli` → 0.0.158 at minimum. Bump all seven if in doubt;
-  version churn is free.
-- **Load `/cello-publish` first, for that publish.** Loading it earlier in a session does not count,
-  and a hook hard-blocks the publish commands until it is loaded.
-- **Andre runs the `latest` promotion. Always.** Prepare all seven `npm dist-tag add` lines and hand
-  them over — never a subset, never run them.
+**What is left: Andre promotes.** Until he runs the seven `dist-tag` lines, `latest` still resolves to
+`daemon 0.0.150` and no operator has this fix.
 
 ## 2. Exact state, 2026-08-09
 

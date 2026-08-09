@@ -89,10 +89,11 @@ see the notes below.)
 > | A send that can never be recorded now fails | published `daemon 0.0.149`, promoted |
 > | Relay reconnect + probe + health check | **deployed** to both relays, verified |
 > | Document verb review — all nine findings | published `daemon 0.0.148`, promoted |
-> | **A failed close asks for the seal certificate** (item 12) | **COMMITTED ONLY — NOT PUBLISHED** |
+> | **A failed close asks for the seal certificate** (item 12) | published `daemon 0.0.151` / `cli 0.0.158`, **awaiting promotion** |
 >
-> The last row is the one to act on. It is the recovery half of the witnessing failure and it is
-> sitting in `main` with nothing shipping it.
+> The last row is the one to act on: it is published to `beta` and verified against the tarball, and
+> **Andre has not promoted it to `latest` yet**, so no operator is running it. Promotion is his to
+> run, always.
 
 ### How to actually ship something off this list — for an agent arriving cold
 
