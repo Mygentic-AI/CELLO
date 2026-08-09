@@ -1045,7 +1045,29 @@ Entry 31 in [[M14-BUILD-JOURNAL]] carries the full trace for each.
     teardown. Fix: carry what was observed, and point at `ack_grace_expired` and
     `session.content.held.discarded`.
 
-- **🔴 OPEN, BLOCKING M14 CLOSE — DOCUMENTS DO NOT CONVERGE BETWEEN TWO MACHINES.** The two-machine
+- **✅ RESOLVED 2026-08-09 — DOCUMENTS CONVERGE BETWEEN TWO MACHINES. Re-measured on daemon 0.0.152
+  and the hypothesis below is CONFIRMED: the cause was above the transport.** Laptop
+  (`CELLO_Coder_1`) ↔ Hermes EC2 (`Miss_Chelly_H`, `i-06db70df6b3e32207`), two NATs, every frame over
+  the relay. Both directions, both new types:
+
+  - **JSON, genuinely concurrent** — both sides wrote a different key without having seen the other's.
+    Both keys survived on both machines and the two files are **byte-identical**, converged in **15s**.
+    That is the per-key merge and the deterministic serialiser working across hosts, which is the pair
+    of properties `DOD-DOC-TYPES-1` was built for.
+  - **HTML** — proposed, accepted, edited on the EC2, converged to the laptop. The `.html` extension
+    and the executable-file notice both appear on both sides.
+
+  Nothing was fixed to make this pass. The two defects named below shipped in 0.0.149/0.0.150 for
+  unrelated reasons, and this measurement is what closed the question.
+
+  **A separate hazard was found while measuring it, and it is NOT this defect** — see
+  [[launch-triage]] `DOD-DOC-STALE-WRITE-1`. A peer edit that lands between your READ and your WRITE
+  is deleted by your write, because `cello_doc_write` takes the complete text. Measured to 226ms on
+  the laptop's own log.
+
+  ---
+
+  **THE ORIGINAL MEASUREMENT, KEPT — DOCUMENTS DID NOT CONVERGE BETWEEN TWO MACHINES.** The two-machine
   smoke (SHIP-1's close condition) ran on 2026-08-07 between the laptop (`CELLO_Coder_1`) and the
   Hermes EC2 (`Miss_Chelly_H`), both on daemon 0.0.139. **Neither side's update ever reached the
   other.** Andre predicted this class of failure when choosing the host: two machines behind
