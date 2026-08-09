@@ -115,17 +115,38 @@ Andre, mid-session:
 
 > This will need directory work. Session records in the DB must now include share permissions.
 
-Correct, and the directory side has more shape to it than the client side — the schema history here
-has already drawn blood twice, and the scars tell us exactly how to build it.
+Correct. And the first draft of this section got its reasoning wrong in a way worth recording,
+because the same trap is sitting there for anyone who reads the migration history.
 
-**A new table. Never columns on the existing seal records.** The seal notarization table is
-hash-chained, and it replicates. Adding a column to it means (a) every historical row's chain hash
-was computed without that column, so chain verification breaks for all of them, and (b) if the
-column replicates — and share permissions *must* replicate — the anti-entropy record hash of every
-historical row changes, so all three nodes report divergence on data that never changed, and old
-and new code disagree with each other for the entire duration of a node-by-node roll. This has been
-hit twice before and both times was resolved by not really adding the column. A new table has no
-historical rows: no chain to break, no record hash to change, nothing to disagree about mid-roll.
+**Ignore the backward-compatibility argument entirely.** The existing migration notes make a strong
+case for never adding columns to the seal records: the table is hash-chained, so a new column breaks
+chain verification on every historical row, and it replicates, so the anti-entropy record hash of
+every historical row changes and all three nodes report divergence on data that never changed. Every
+word of that is about protecting rows that already exist. **We have no users and we are in alpha.
+There is no mandate to keep old sealed sessions working.** We can drop the database. So that argument
+buys us nothing here, and building around it would be pure waste.
+
+**A separate table is still right — on a completely empty database, for reasons of its own:**
+
+- **The seal record is an immutable event; a share permission is mutable state.** The seal row says
+  *this session sealed, at this root, at this time*. Written once, never changed — which is the only
+  reason it can be hash-chained at all. A sharing grant changes: granted, revoked, granted again.
+  Put a mutable column in a hash-chained table and you pick between two bad outcomes. Exclude it from
+  the chain and it sits inside a protected table with no protection, which is worse than being
+  outside one because it looks safe. Include it in the chain and every change rewrites history, which
+  means there was never a chain.
+- **It is one-to-many over time, not one value.** A permission is a sequence of signed facts, not a
+  current setting. A column can only hold the latest, which means `UPDATE`, which means three
+  sovereign nodes racing with no ordering authority and last-writer-wins deciding consent. A child
+  table of append-only facts has no race to resolve.
+- **Different signer.** The seal is attested by the nodes' threshold ceremony. The grant is signed by
+  B. One row carrying two independently-signed claims has no coherent story about who vouched for
+  what.
+- **Different writer, different moment, different authority.** The directory writes the seal at seal
+  time on its own authority. The grant is written later — possibly much later — on B's, through a
+  different authorization check.
+
+Those hold whether the table has ten million rows or zero. That is the test that matters.
 
 **Append-only, with the effective state as a view.** Grant and revoke are both just signed facts
 that get inserted; nothing is ever updated in place. There is already a table doing exactly this for
@@ -157,11 +178,12 @@ Either the signed payload carries a monotonic counter per session-and-granter, o
 defined as terminal for that session and a fresh grant needs a fresh act. **Open — and it should be
 decided before anything is written, not discovered during anti-entropy.**
 
-**Not retroactive, and that is fine here.** Conversations sealed before this migration have no
-recorded disposition and none can be reconstructed. That is normally the painful part of a schema
-change like this — but the consent design already covers it. No disposition simply means you take
-the ask-B-later path, which is the path most shares would take anyway. The migration's inherent
-limitation and the product's fallback are the same thing.
+**Old sessions are a non-issue, twice over.** Conversations sealed before this ships have no
+recorded disposition and none can be reconstructed. Normally that is the painful part of a change
+like this. Here it costs nothing: we are in alpha with no users, so the honest answer is that we can
+wipe the database — and even if we didn't want to, no disposition just means you take the
+ask-B-later path, which is where most shares would land anyway. Do not spend a single design
+decision on preserving pre-existing seals.
 
 Housekeeping: next free migration number is V63, and the expected-migration-version knob the
 ops-agent checks on boot has to move with it or fresh deployments crash-loop. Confirm where that
