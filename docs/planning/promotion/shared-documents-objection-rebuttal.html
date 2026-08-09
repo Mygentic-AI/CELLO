@@ -348,6 +348,7 @@
     </div>
     <p>The assumption buried in the question is <strong>shared tenancy</strong> — that the two of us are already inside one system, or willing to get inside one. Every repo, org, share link and permission model is downstream of it. Our premise is that we aren’t and shouldn’t have to be. If you and I are already in the same workspace, genuinely, use the workspace. The collaborations that matter commercially are with people you’re not in one with.</p>
     <p>From there, every argument below is that point aimed at a different listener.</p>
+    <p>And one line to keep in your pocket for the whole conversation: <strong>GitHub was built for collaborative coding. This was built for anything an agent produces.</strong> Most of the objection dissolves the moment the comparison is made on purpose rather than on features.</p>
   </div>
 
   <section>
@@ -369,7 +370,7 @@
           <p>Be fair to the easy path first or it sounds like a strawman. Public repo with a fork and a pull request; a Docs link set to anyone-with-the-link; a published Notion page. No invite, no credential from you, their agent works through their own account. For open-source and for anything you'd happily publish, that’s excellent and we’re not competing with it.</p>
           <p>It fails on the documents worth collaborating on. A client engagement, a term sheet, a supplier quote, an invoice, a draft position before you’ve agreed it — none of those can be openly readable during the drafting, which is exactly when they’re most sensitive. And drafts don’t stay drafts: on a repo the history is public too, and a link that leaked once stays leaked.</p>
           <p>So you go private — and <strong>do not argue this as effort.</strong> Setup is a handful of CLI calls and a competent agent makes them for you. Argue what you actually created: an org, a membership in it, and a credential to your account in a foreign agent’s hands. That isn’t “here’s a document,” it’s “put an autonomous process inside my perimeter and trust it to stay in its lane.”</p>
-          <p>And it only works if they’ll join. “Create a GitHub account and accept my org invite” is nothing to a developer and the end of the conversation with a lawyer, a client, a broker or an analyst — which is most of the people you need to co-write something with.</p>
+          <p><strong>Do not answer this with a persona.</strong> “A lawyer won’t create a GitHub account” is a claim about a person, and it invites the counter-punch you deserve — <em>your</em> thing needs installing too. Answer with the constraint. Three questions decide it and none of them is about who the counterparty is: <strong>does the content have to stay off third-party infrastructure? Do both sides need an attested record that they agreed, rather than a copy of a file? Is the counterparty outside your organisation?</strong> Where those are yes, a repo was never a candidate — not because it’s hard to join, because it’s the wrong instrument.</p>
           <p>We sit on neither horn. The relationship already exists as a verified key, so the document is proposed and consented to in-band. Nothing is public, the counterparty joins nothing, and they never receive a credential to anything of yours — the grant is scoped to the one artifact. <strong>Revocation matches the grant:</strong> kill that document and nothing else changes. Removing them from an org is also one command — but it takes away everything else they had at the same time, which is exactly why in practice it doesn’t happen and stale access accumulates.</p>
         </div>
       </article>
@@ -477,13 +478,15 @@
           <span class="arg-num">07</span>
           <h2>Nobody in the middle holds the document.</h2>
         </div>
-        <p class="lands">Lands with: enterprise, regulated buyers</p>
+        <p class="lands">Lands with: enterprise, health, government, regulated buyers</p>
         <div class="arg-body">
           <div class="say">
             <span class="tag">Say it like this</span>
-            <q>A term sheet in Google Docs is a term sheet Google holds. Draft it in a repo and Microsoft holds it. The document only ever exists on our two machines, encrypted on both — and no vendor can change terms, deprecate a tier, or lock either of us out of something we co-wrote.</q>
+            <q>Put it as a choice rather than a feature. A hospital wants a patient’s AI assistant to send test results to the doctor’s AI. Are you going to do that in a GitHub repo? A shared Google Doc? Nobody would even suggest it. GitHub was built for collaborative coding. This was built for anything an agent produces — and specifically for the things that must never sit anywhere but the two local drives.</q>
           </div>
-          <p>This is distinct from the audit trail, and it’s usually the question an enterprise asks first. It isn’t “can you prove what happened” — it’s “who else can read this.” The answer is nobody: content passes directly between the two endpoints and the relay is an ordering witness that stores nothing.</p>
+          <p>This is a different question from the audit trail, and for a regulated buyer it’s the first one asked. Not “can you prove what happened,” but <strong>“who else can read this, and where does it physically rest?”</strong> Health records, benefits determinations, legal drafts, deal-stage commercial terms — the moment the answer is “a vendor holds it, encrypted at rest,” you’re into a data processing agreement, a residency question and a procurement cycle before anyone writes a word. Here the content passes directly between the two endpoints and no third party holds it, so the question doesn’t get answered so much as deleted.</p>
+          <p>The second half is lock-out, and it’s the part people feel personally: no vendor can rewrite the terms of the room, deprecate the tier it lives in, or suspend an account and take a document you co-wrote with it. There is no room.</p>
+          <p><strong>One precision that keeps you out of trouble.</strong> Claim it about the <em>content</em>, not about metadata. A sophisticated buyer will ask what the infrastructure sees, and directory presence and routing exist — saying a flat “nobody in the middle” invites a correction you can’t win, when the accurate claim is already strong enough.</p>
         </div>
       </article>
 
@@ -502,6 +505,9 @@
 
       <dt>“Git has twenty years of tooling. You have a diff and a log.”</dt>
       <dd>Agree instantly, then take the ground back: the document is a real file in a real directory. The agent edits it with ordinary tools, the human opens it in any editor, and you can absolutely commit it to git. We’re not the editor and we’re not the host — we’re the part where you’d otherwise have to give a stranger’s agent access to your repo. Those compose; they don’t compete.</dd>
+
+      <dt>“Your side has to install a daemon and get it through a corporate firewall. That’s heavier than a GitHub signup.”</dt>
+      <dd>Half wrong, half right — give them both halves and give the right half first-class treatment. <strong>Wrong:</strong> the install is well under a minute, getting an agent connected is a couple of minutes, and firewall and NAT traversal is handled by hole punching with relay fallback, so “ask IT to open a port” is not a thing that happens. <strong>Right, and concede it properly:</strong> GitHub is twenty years old and we are new. If a security team has to approve a new binary on an endpoint, age wins that on its own, and no install-time number changes it. So don’t argue the friction — you’ll be arguing a point where the other side is correct. Go to argument 1’s three questions instead: for the work in question, the repo was never a candidate.</dd>
 
       <dt>“This is a feature, not a product.”</dt>
       <dd>It’s a feature <em>of</em> a product, and that’s the whole argument. Strip out the verified identity underneath and the screening around it, and what’s left is a worse Dropbox. The document layer is only interesting because it sits on a trust layer that already exists — which is also why it can’t be cloned as a weekend feature by a docs company.</dd>
@@ -565,13 +571,13 @@
   <section class="coda">
     <h2>And yes — the paper trail</h2>
     <p>Two sentences, then let them pull on it. Every edit is signed by whoever made it and chained to the one before, so the document’s evolution is a record neither party can later dispute. That matters for contracts, invoices and anything that ends up in front of a lawyer.</p>
-    <p>Don’t lead with it: it’s the argument everyone expects from a crypto company, they’ve heard it before, and much of it describes value that arrives after launch. The six above describe value that exists the day someone installs it.</p>
+    <p>Don’t lead with it: it’s the argument everyone expects from a crypto company, they’ve heard it before, and much of it describes value that arrives after launch. The seven above describe value that exists the day someone installs it.</p>
 
     <h2 style="margin-top:2.5rem;">The checkpoint — available now, and the better claim</h2>
     <p>If they <em>do</em> pull on it, this is the thing to have ready, because it needs no machinery that doesn’t already exist. When the document is finished, paste the text into an ordinary message — <em>“this is what we’ve arrived at, do you agree?”</em> — and they reply that they agree. Both messages are signed leaves in the same sealed session.</p>
     <div class="say">
       <span class="tag">Say it like this</span>
-      <q>The edit history proves how we got here. That’s different from proving we both looked at the result and said yes — and the second one is usually what the argument is actually about later. So we do that as its own signed act: here is the final text, do you agree, yes I agree. It’s what a signature on a contract is for, except there’s no third party holding it and it works on a living document rather than a frozen PDF.</q>
+      <q>The edit history proves how we got here. That’s different from proving we both looked at the result and said yes — and the second one is usually what the argument is actually about later. So we do that as its own signed act: here is the final text, do you agree, yes I agree. Think of it as the general case of what DocuSign does. DocuSign affixes signatures to a document that already exists — somebody else wrote it, it’s finished, and the signing is a separate ceremony bolted on at the end. Here the same two parties arrive at the text and attest it in one continuous record, on anything an agent can produce rather than on a PDF.</q>
     </div>
     <p>The design anticipates this rather than working around it. The seal certificate carries a standing disclaimer that its signatures attest <em>receipt, never assent</em> — agreement is always a separate, explicit, signed reply. This is that reply.</p>
     <p><strong>One correction worth making before you say this publicly.</strong> The instinct is to include your document’s internal root hash so the other side can confirm their copy matches. Don’t — not at launch. A stable, canonical root is precisely the deferred tier, so two copies that are semantically identical can still hash differently over key order, whitespace or line endings, and you’d both go hunting a difference that isn’t there.</p>
