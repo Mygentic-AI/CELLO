@@ -245,7 +245,9 @@ description: >
   character is caught where it was written and never becomes a rejection round — ergonomics; and at
   receipt, because the sender's enforcement is unverifiable — security. Distinct from
   `schema_enforcement` (structure); this is the character space. Also makes the `json` diff correct
-  by declaration instead of by inference. — ⏳ **THE WIRE SLOT SHIPPED 2026-08-06** (`834079f`),
+  by declaration instead of by inference. — ⏳ **THE WIRE SLOT SHIPPED 2026-08-06** — and the enforcement half is now also on the launch
+  list as item 20, so the gap is visible from the list that gets worked rather than only from here.
+  **THE WIRE SLOT SHIPPED 2026-08-06** (`834079f`),
   inert; the named codepoint sets and enforcement are not built.
 
   `content_profile` now occupies a slot in the SIGNED proposal preimage, so it is bound into
@@ -737,6 +739,19 @@ rather than the peer's state vector; and the working document having to BE the l
 
   (`content_leaf_count: 0` on that receipt is correct and not a miss: it counts CHAT messages, and
   there were none. The document leaves are in `leaf_count`.)
+
+  **TWO VERIFICATION GAPS FOUND AFTER THIS LINE CLOSED, 2026-08-09.** Neither reopens it — the close
+  condition was propose → edit → deliver → converge → seal cross-machine, and that ran — but both
+  narrow what "sealing works" is evidence FOR, and both are now on the launch list.
+
+  - **Every seal proving this line was SHORT.** Leaf counts on the receipts: 0, 0, 2, 2, 2. The
+    largest carried one document update and its acknowledgement. A later control run reached 13
+    leaves and sealed clean, so long sessions do seal — but at the time this line closed, the long
+    case had not been tested. `DOD-WITNESS-STALL-1` (launch triage 17) is a live session where the
+    relay stopped witnessing at 6 while delivery kept succeeding, which is exactly the failure a
+    short seal cannot detect.
+  - **Interrupted-session sealing is shipped and unproven** — see launch triage 21. Not M14 work,
+    but it is the other half of "a conversation can always produce a receipt" and it has never run.
 
   The earlier 🟠 recorded the seal half as blocked on cross-node signaling. That was resolved: the
   cross-node seal completes (proven 2026-08-08, three notarizations), and the separate fleet-wide
