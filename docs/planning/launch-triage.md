@@ -99,9 +99,23 @@ later; wrong for a seal, where there is no later. Terminal refusals (`session_se
 `session_not_found`) are now enumerated, not pattern-matched, and FAIL the send with guidance naming
 the cause. An operator now learns at their next send rather than at close, hours of work later.
 
-**WHAT IS STILL OWED:** the pull twin. Until a daemon can ASK whether its session was sealed, sessions
-will keep dying without their owners knowing — the fix above only ensures they are told promptly
-afterwards.
+**THE CAUSE IS ALSO FIXED NOW (daemon 0.0.150, tag v0.0.222), as `DOD-AWAY-MUTUAL-SEAL-1`.** The
+trigger needs BOTH sides unattended at once — isolated by the counterparty session. Each away
+responder answers the other's, and the second arrival looks exactly like "a caller who ignored the
+leave-a-message instruction", so the one-shot rule fires on BOTH sides and each initiates a seal. The
+one-shot is right about a human who keeps typing and wrong about another away responder. An away
+auto-reply is now recognised and ends the exchange quietly instead of minting a seal.
+
+Matched on EXACT text, never a substring — silencing a real message would be a worse failure than the
+one being fixed — and the texts live in one place the sender and detector both read, because a second
+copy is how a reworded away message stops being recognised and the loop returns. A wire marker is the
+better long-term answer but is a wire change, and this fires precisely when talking to a peer we do
+not control.
+
+**WHAT IS STILL OWED:** the pull twin (`DOD-TERMINAL-STATE-DIVERGENCE-1`, item 12). The two fixes
+above stop THIS route to a silently-dead session and catch the symptom promptly whatever the route —
+but until a daemon can ASK whether its session was sealed, any other path to the same divergence
+stays silent until the next send.
 
 **TWO HYPOTHESES KILLED, recorded so nobody re-runs them.** *A ceiling at six* — a control run on the
 same relay build tracked exactly through 1, 2, 4, 6, 8, 10, 12 and sealed with `leaf_count: 13`.
