@@ -997,6 +997,23 @@ about to be built on it.
 Nothing that depends on a quorum view can be trusted while every node believes it is alone, and the
 failure is invisible — nodes do not report that they cannot see each other.
 
+**⚠️ RE-SCOPED 2026-08-09 — NOT launch-blocking, and the reason should stop this being built in a
+hurry.** Both surfaces a user can actually see already ignore the heartbeat, deliberately and since
+2026-07-05: discovery reports an agent online on the replicated presence flag alone (`staleHeartbeat`
+is recorded for observability and does not change the wire answer), and the portal's agent list had
+the same conjunct dropped after it showed a user's working agent as OFFLINE. So a customer sees
+nothing from this. The only live consumer is the federation checkpoint, and that machinery is
+**parked** (M12-P5) — its tables are deliberately excluded from replication.
+
+What the fix costs is also worth stating before someone starts: `last_heartbeat_at` is mutable, so it
+cannot join the Tier-A immutable set. Making it replicate means giving `directory_nodes` a Tier-B
+mutable merge with a version column — a new merge table, not a one-line spec edit.
+
+**One stale fact corrected the same day:** a code comment blamed a "BIGSERIAL `id` collision" for the
+heartbeat not replicating. That is wrong — `id` is simply not in the spec either. The cause is only
+that `last_heartbeat_at` is mutable and Tier A carries immutable columns. Left uncorrected it would
+have sent whoever picks this up at the wrong repair.
+
 ## 16. Trust-signal replication fails every round, and the fork alarm climbs
 
 **Designation: `DOD-SIGNAL-REPLICATION-1`** — ❌ **OPEN.** Unranked. Pre-existing, surfaced during
