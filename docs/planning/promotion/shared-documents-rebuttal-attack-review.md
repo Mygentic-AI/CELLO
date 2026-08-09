@@ -16,10 +16,63 @@ description: >
 Agent output, verbatim. Reviewed target: [[shared-documents-objection-rebuttal]].
 Ranked by how much damage the attack does live. Failure types are the agent's own labels.
 
-> **Read with judgement.** Several hits are correct and checkable. Some are overreach —
-> notes on which are which are in the conversation that commissioned this, not in the agent's
-> text below. The capital-markets claims in §5 are specific and plausible but were not
-> independently verified; verify before repeating either version.
+> **Read with judgement — four of these were adjudicated and rejected.** The verdicts below are
+> Andre's, recorded 2026-08-09, and they override the agent's text. The agent's full argument is
+> left intact underneath so the reasoning can be checked, not because it stands.
+
+## Verdicts on the disputed items
+
+**§3 (the injection moat is a Unicode filter) — REJECTED, but it exposed a real defect in the
+document.** The attack is aimed at a claim the product does not make. The defence is a stack: a
+DeBERTa prompt-injection classifier running in-process on the sanitized text, with block and flag
+thresholds, alongside language screening, secrets, PII, exfiltration, entropy and rate limiting,
+outbound as well as inbound — over a deterministic trust floor that reads envelope fields only and
+that policy may tighten and never relax. The ASCII instruction-override the agent proposes is the
+canonical positive class such a classifier is trained on. **The defect was the document's**: it
+named the content profile as the defence and called it the moat, which is what made the attack
+possible. Argument 3 has been rewritten from the source.
+
+**§5 and §6 (the capital-markets example, and post-trade as a beachhead) — REJECTED, and this is
+the agent losing the plot.** It invented a product nobody described: a distributed replacement for
+booking, matching, clearing or settlement infrastructure. The use case is the internal coordination
+layer between the *individual participants' own AI assistants* — the settlement person's assistant,
+the sales trader's, the CRM's — tracking the running state of one piece of work. No system of
+record is being replaced. The regulatory apparatus it reaches for (US market-access rules, T+1
+affirmation rates, DTCC central matching, the CCP-in-the-middle argument, the ASX ledger write-off)
+is answering a question that was never asked, and anchors to one market's rulebook when the
+coordination gap is sharpest precisely where no central utility exists.
+
+**Its compliance conclusion is inverted.** A shared object that encodes the standard operating
+procedure, attributes every step to a named signing party, cannot be quietly revised by either
+side, and carries policy about what may and may not be done, is *better* suited to a regulated
+process than a shared page under somebody's admin account — and field-level write authority and
+value constraints are the next milestone, so the procedure becomes enforceable rather than merely
+recorded. Notion, Google Docs and a repo do not compete in this area at all.
+
+**§7 (a CRDT is worse than a merge conflict) — PARTIALLY UPHELD.** The document did overstate:
+"there is never a moment where our two copies disagree" is wrong, and it has been corrected to the
+accurate claim — the copies converge without anyone adjudicating. The attack misses what sits
+underneath: because each side accepts the other's signed updates as the work proceeds, you
+accumulate a running record of agreement rather than a single act of agreement at the end. That is
+added to argument 4.
+
+**§8 (presence-driven delivery is a downgrade from an always-up server) — REJECTED; it misreads
+the system.** The daemon is a background service, not a laptop lid, and undelivered updates are
+durable in the local envelope log and retry on presence and on restart, so nothing is lost while a
+peer is away. The comparison also flatters the hosted case: a server being up buys nothing unless
+*your own agent* is running and fetches, whereas here the local copy is already correct with no
+fetch at all. The polling-economics corrections in that section (Drive delta tokens, conditional
+GETs, webhook forwarding) are fair and are worth keeping.
+
+**Everything else stands until disputed.** In particular §4 (Google Docs Suggesting mode, and
+GitHub secret-scanning push protection already implementing refuse-with-reason-and-resend) is
+correct and checkable, and §1's inversion — that the counterparty must adopt CELLO too — is fair.
+The install-friction half of §1 is wrong (install is under a minute; NAT and firewall traversal is
+hole punching with relay fallback), but the maturity half is right and has been conceded in the
+document: GitHub is twenty years old and CELLO is new, and a security team approving an endpoint
+binary will weigh that.
+
+---
 
 ---
 
