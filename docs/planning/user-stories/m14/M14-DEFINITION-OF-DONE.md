@@ -1082,54 +1082,58 @@ Entry 31 in [[M14-BUILD-JOURNAL]] carries the full trace for each.
   ever fetched it. Every wrong turn in this milestone came from reasoning about the protocol instead
   of reading one comparison.
 
-## Next unit — DOD-DOC-TYPES-1 (2026-08-09, NOT started)
+## DOD-DOC-TYPES-1 ✅ [cello-client] — document types (2026-08-09)
 
-Full plain-language statement and the reasoning trail: [[launch-triage]] item 19. The design
-questions were settled with Andre on 2026-08-09; this section is the buildable form of that
-conversation so the next context does not re-open any of it.
+Shipped as four units in `daemon 0.0.152` / `connect 0.0.136`. Design conversation and its settled
+points: [[launch-triage]] item 19. Entry 38 in [[M14-BUILD-JOURNAL]] carries the trail.
 
-**The state today.** `document_type` accepts exactly three names — `markdown`, `text`, `plaintext` —
-and they are **identical in code**: all three land in `TEXT_TYPES`, take the same line-based merge,
-and produce a `.md` file. `json` and `html` are REFUSED at both propose and accept
-(`document_type_unsupported`), which Entry 36 did deliberately: `json` was advertised, half-built on
-the map root only, and losing content in silence.
+**1. The extension follows the type.** It was `JSON_TYPES.has(type) ? "json" : "md"`, written out
+twice, so a `text` document — the type that exists precisely because it is not markdown — reached the
+agent as `.md`. The file IS the editing surface and the extension is what every editor and agent uses
+to decide how to treat the bytes; markdown autoformatting on non-markdown content gets diffed at
+publish and sent to the peer as deliberate edits. Existing `.md` documents are migrated with their
+projection, because anything typed and not yet published exists only in those bytes.
 
-**Build in this order. Each is its own unit with its own review.**
+**2. One registry — and it found a LIVE defect.** There were two type lists in two files with no link:
+the write path admitted `markdown/text/plaintext`, notify diffed `markdown/text/json`. They had
+already drifted, so **`plaintext` was admitted and its diff was dead** — proposed, accepted, co-edited,
+and `cello_doc_diff` answered *"this build renders diffs for markdown, text, json"*. Properties are now
+columns on one row and every list is derived. `plaintext` and `text` share one row BY IDENTITY, so the
+alias has nothing to drift from.
 
-1. **The extension follows the type.** `document-write-path.ts` decides the extension with
-   `JSON_TYPES.has(documentType) ? "json" : "md"`, so a `text` document is handed to an agent as
-   `.md`. One line, and it must land before anything below adds a fourth type to the same ternary.
+**3. `html`.** A text-root type; no new engine, no new screening (the screen is character-level). It
+carries `executableWhenOpened`, because an `.html` file a peer co-authored RUNS their script against
+local files when double-clicked. Not grounds to refuse the type or strip tags — `<script>` is
+legitimate content in an HTML document, and refusing it is the "a document about prompt formats loses
+its subject" mistake from the screening audit. The operator is told at the moment they are handed the
+path, generated from the flag rather than an `if (type === "html")`.
 
-2. **`html`.** A text-root type like the others — it merges by line, it just is not markdown. The
-   work is the type table and the screening profile, not the engine.
+**4. `json` — finished, not re-enabled.** The refusal was right when written: the write path served
+the map root while read/write/diff read the text root. All three now project through the document's
+ROOT, the fold is per key, and `starting_content` seeds the root the type uses.
 
-3. **`plaintext` → a documented alias of `text`.** Do NOT remove it; documents exist that were
-   created under it. Make the aliasing explicit in one place so three names cannot drift into three
-   behaviours later.
+- **The per-key merge is the point.** Two agents setting different fields produce disjoint operations
+  and both survive. Untouched keys are not rewritten at all — writing a key back with an identical
+  value is still a CRDT operation and would clobber a peer's concurrent edit to a field this agent
+  never looked at.
+- **The deterministic serialiser fixed two live defects.** `Y.Map.toJSON()` is in INSERTION order, so
+  two peers holding the same document rendered different files; publish diffs the FILE against the
+  recorded projection, so that reordering published as a rewrite of every line and the document would
+  flip-flop forever, each side publishing the other's rendering back. The same order-sensitivity in
+  the change comparison made a re-ordered nested block count as a changed value and beat the peer's
+  real edit to that key. Keys sort recursively; **arrays never sort** — an array's order is content.
+- An unparseable write is refused before anything is touched.
 
-4. **`json` — the real unit.** Map root, **per-key merge**, not line merge. Two agents editing
-   different keys must both survive; line merge on a serialised object is what made the earlier
-   attempt lossy. `read`, `write` and `diff` all currently assume a text root and all three need the
-   map path. Ships with a **deterministic serialiser** — see below, it is not optional.
+**Settled with Andre, do not re-open:** schema-free for V1; CBOR considered and declined (it buys
+canonical bytes the serialiser already gives, and costs the property that a human can read the file);
+the serialiser is a present need, not insurance; paste-and-agree is a documented pattern needing no
+code.
 
-**Settled, do not re-litigate:**
-
-- **Schema-free for V1** (Andre, explicit). No validation, no declared shape. A document is a map;
-  what is in it is the agents' business.
-- **CBOR was considered and is NOT recommended.** It buys canonical bytes we can already get from a
-  deterministic serialiser, and it costs the one property that makes these documents useful — a human
-  or an agent can open the file and read it. Recorded on triage item 19 with the full argument.
-- **The deterministic serialiser is a present-tense requirement, not future insurance.** The CRDT
-  determines the MAP STATE; it does not determine the STRING that map is printed as. Two faithful
-  implementations could emit `{"a":1,"b":2}` and `{"b": 2, "a": 1}`. The moment anyone quotes the
-  document — an email, a human-facing diff, two machines comparing files, or the paste-and-agree
-  pattern below — everyone must produce the same bytes.
-
-**Related pattern, no code required: paste-and-agree.** A seal attests that messages were exchanged,
-deliberately not that anyone agreed with them — the certificate says so itself. Pasting the rendered
-document into a message and getting an explicit "yes, I agree" back puts both statements in the
-sealed tree and attests the VALUES. Carry the document root beside the text so the peer verifies they
-are agreeing about the same document and not merely about a paragraph. Full note on triage item 19.
+**Also fixed on the way:** the MCP tool description is now AUDITED against the registry in both
+directions — every admitted type must be advertised, and every advertised type must be admitted. The
+shim cannot import the registry (`connect` does not depend on `daemon`), so the audit reads the source
+instead. The second direction is the `json` case that already shipped, where the tool said yes and the
+daemon said no.
 
 ---
 

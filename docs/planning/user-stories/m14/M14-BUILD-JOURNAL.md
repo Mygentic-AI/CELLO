@@ -3528,6 +3528,60 @@ certificate turns the failed close into a receipt. Committed at `f6af6b5`, **not
 
 ---
 
+## Entry 38 — Adding a type found the bug; the bug was that there were two lists
+
+The unit was "support JSON and HTML". Three of the four defects fixed had nothing to do with either.
+
+**The extension was decided by a ternary, written out twice.** `JSON_TYPES.has(type) ? "json" : "md"`
+— so everything that was not JSON became markdown, including `text`, the type that exists precisely
+because it is not markdown. It reads cosmetic. It is not: the file IS the editing surface, the
+extension is what every editor and every agent uses to decide how to treat the bytes, and markdown
+autoformatting applied to non-markdown content gets diffed at publish and published to the peer as
+deliberate edits.
+
+**Then adding `html` to two lists surfaced that the two lists had already drifted.** The write path
+admitted `markdown/text/plaintext`; notify diffed `markdown/text/json`. Read together: **`plaintext`
+was admitted and could not be diffed.** An operator could propose one, have it accepted, co-edit it,
+and be told *"this build renders diffs for markdown, text, json"*. The verb that says what changed was
+dead on a type the product offered them — live, in a shipped build, found by writing a four-line
+consistency check rather than by any test failing.
+
+Neither list was wrong alone. The defect was that there were two, so adding a type meant remembering a
+second file — which is exactly the step that gets forgotten. One table now, every list derived,
+`plaintext` and `text` sharing one row BY IDENTITY so the alias has nothing to drift from.
+
+**And the same shape one layer up.** The MCP tool description is the only place an operator learns
+which types exist, and the shim cannot import the registry — `connect` does not depend on `daemon`.
+So the description is READ by a test and checked against the registry in both directions. The second
+direction is not hypothetical: it is the `json` case that already shipped, where the tool said yes and
+the daemon said no.
+
+### The JSON unit, where the ordering bug was the real one
+
+The per-key merge is the reason a JSON document uses the map root, and it worked. What did not was the
+rendering. `Y.Map.toJSON()` returns keys in **insertion order**, so two peers holding the same document
+render different files — and publish diffs the FILE against the recorded projection. A peer's key
+arriving could reorder the whole file, which then published as a rewrite of every line. Two agents
+would flip-flop forever, each publishing the other's rendering back at them, every round a real signed
+edit.
+
+The same order-sensitivity sat in the change comparison: `JSON.stringify(old) !== JSON.stringify(new)`
+counts a re-ordered nested block as a changed value, so a formatter's tidy-up published a change nobody
+made and beat the peer's real edit to that key.
+
+Both were found by tests written before the code, and both are the same root cause: **the CRDT
+determines the map STATE, not the STRING it is printed as.** Keys sort recursively; arrays never sort,
+because an array's order is content and reordering a list of steps is a lie about what was agreed.
+
+### What this says about "add a type"
+
+Four units, and the type-shaped part of the work — `html` — was the smallest of them. The other three
+were a wrong extension, two registries that had silently disagreed for some time, and a serialiser
+that made concurrent editing of a structured document impossible in a way nothing would have reported.
+Adding to a list is where you find out what the list was hiding.
+
+---
+
 ## Related Documents
 
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits
