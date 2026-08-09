@@ -8,9 +8,10 @@ description: >
   A missing feature: showing a third agent a conversation you already had, with proof it is
   the real thing. Rides on the existing request/trust/accept session gate and the seal
   certificate. Four decisions taken; the consent answer also settles what the directory is
-  for. Consent is counted (once / N / unlimited) and scoped (anyone / a named pubkey list),
-  which makes it a double-spend problem that a majority threshold solves. Needs a new
-  append-only grant-and-consumption table on the directory. Not launch-blocking.
+  for. Consent is counted (once / N / unlimited), scoped (anyone / a named pubkey list) and
+  expiring, which makes it a double-spend problem that a majority threshold solves. Needs a new
+  append-only grant-and-consumption table on the directory, collected on expiry down to a
+  hash-only tombstone. Not launch-blocking.
 ---
 
 # Sharing a sealed conversation
@@ -120,10 +121,16 @@ Andre's spec, this session:
 >    with the request. Requester can provide a short bio (max 100 chars) with each to convince
 >    counterparty B. All request text goes through screening as usual.
 
-Two independent axes, so a grant is a point in a small grid: **how many times** (once / N / unlimited)
-crossed with **to whom** (anyone / a named list). Unlimited-plus-anyone is not really a share
-permission at all — it is a decision to publish, and it should be worded that way when B is asked
-for it.
+Plus expiry, added in the same conversation. So a grant is a point in a small grid: **how many
+times** (once / N / unlimited) × **to whom** (anyone / a named list) × **until when**.
+Unlimited-plus-anyone-forever is not really a share permission at all — it is a decision to publish,
+and it should be worded that way when B is asked for it.
+
+**Expiry should be mandatory, with a long default rather than an optional field.** Two reasons.
+Consent that never lapses is the kind B forgets they gave, and a grant B has forgotten is not
+meaningfully consent. And — see the retention section below — an immortal grant is an immortal
+directory record. Optional expiry means the one permission most worth forgetting, unlimited to
+anyone, is the one that never can be.
 
 ### Counting is a double-spend problem, and it only works because the threshold is a majority
 
@@ -187,8 +194,48 @@ Flagging these as mine rather than settled, so they are easy to overturn:
   them into "denied." The codebase is emphatic about this and it is right: a collapsed reason sends
   the operator to the wrong place.
 
-Open: should expiry be a third axis? Time-boxed consent is the obvious companion to counted consent
-and nobody asked for it. Not inventing it here.
+## Should the directory forget? Yes — but "once dead", not "once used"
+
+Andre's question:
+
+> Should the records of share request be expunged from the DB once used, to limit info in the dir?
+
+**While a grant is alive, nothing under it can be deleted, because the records *are* the
+enforcement.** The count is not stored as a number; it is the number of consumption facts. Delete
+them and "share three times" silently becomes unlimited. So "once used" cannot be the rule in
+general — for a counted grant, used is precisely when the record starts mattering.
+
+**But for share-once it is exactly right, and that generalises.** A grant with one slot is dead the
+instant it is spent, and a dead grant's records enforce nothing. The rule is *once dead*: exhausted,
+revoked, or expired. Share-once is just the case where used and dead coincide.
+
+**And this is why expiry earns its place beyond consent hygiene.** Without it, a grant can sit alive
+forever, and so can everything under it. Expiry is what guarantees every grant eventually dies, which
+is what makes the directory's memory finite. The two decisions in this message are one mechanism.
+
+**Deletion has to be a pure function of the signed grant, or replication will resurrect it.** These
+tables replicate. If one node deletes a row and its peers have not, anti-entropy sees divergence and
+repairs it the wrong way — the peer that still holds the row hands it back. Exhausted and revoked
+are both derived from replicated facts, so nodes reach them at *different times*, and a node that
+has not yet learned of a revocation will happily restore what another just collected. **The expiry
+timestamp is different: it is inside the grant B signed, so every node holding the grant computes
+the same deletion date without needing to have converged on anything else.** Collect on expiry plus
+a grace window for clock skew, and all three nodes independently arrive at the same answer.
+Exhausted and revoked grants stay put until their expiry catches up with them. Slower, and correct.
+
+**Leave a hash, not nothing.** A shared conversation is evidence-adjacent: if B later says "I never
+allowed that", the grant is what proves they did. Deleting it outright destroys the record that
+protects A. A tombstone carrying only the grant's hash keeps dispute resolution alive at close to
+zero standing information — the directory can confirm a grant with that hash existed and say nothing
+about its contents. That is the hash-custodian pattern this project already runs on, and it means the
+real archive lives where it should: both A and B hold B's signed grant themselves.
+
+**Be honest about what this buys.** Deleting later does not unlearn. The directory saw the allowlist
+at grant time and saw each recipient at share time; expunging shrinks what a future compromise or
+subpoena can extract, not what was observed. And it is cosmetic unless the retention rule covers
+**logs too** — the observability rules require named events with context fields on every flow, so
+deleting rows while leaving a year of correlated pubkeys in log storage is theatre. Whatever TTL the
+table gets, the log events for the share flow need the same one.
 
 ## This is directory work, not just client work
 
@@ -252,11 +299,15 @@ gave. It is the same reasoning that puts the revoker's signature in the revocati
   why it gets typed wrong.
 - Key on the session id and the granting pubkey. Not on any display name.
 
-**Two kinds of fact, not one.** B's *grant* carries the scope and the count and B's signature. Each
-*consumption* is a separate appended fact naming the grant it spends and the recipient it went to.
-The effective state is a fold: take the latest grant, subtract the consumptions that reference it,
-and you have how many shares remain and to whom. The per-recipient bio rides on the grant, since
-that is what B was shown.
+**Two kinds of fact, not one.** B's *grant* carries the scope, the count, the expiry and B's
+signature. Each *consumption* is a separate appended fact naming the grant it spends and the
+recipient it went to. The effective state is a fold: take the latest grant, check it has not
+expired, subtract the consumptions that reference it, and you have how many shares remain and to
+whom. The per-recipient bio rides on the grant, since that is what B was shown.
+
+**Append-only does not mean immortal.** The one thing that removes rows is the expiry-driven
+collection described above, and it is safe precisely because it is computed identically on every
+node from a signed field rather than from convergence state. Everything else only ever inserts.
 
 **Ordering is the one genuinely new problem.** Signal revocation is terminal — one-way, so a replayed
 old fact is harmless. Share permission is not: B may grant, revoke, and grant again. Across three
@@ -295,8 +346,9 @@ containment a reader will assume.
 
 ## Open questions
 
-- **Should expiry be a third axis** alongside count and scope? Time-boxed consent is the obvious
-  companion to counted consent, and it is the one axis nobody has asked for.
+- **What is the default expiry, and is there a maximum?** Decided that it is mandatory; the actual
+  numbers are unset. The maximum is the more interesting one, since it caps how long the directory
+  can be made to remember.
 - **Does the carrier session have to be open at the moment of sending**, or is an established
   contact enough?
 - **Is this a new verb, or does it belong under the attestation umbrella?** There is already
