@@ -102,6 +102,19 @@ Two rules came out of it, the second sharpened by her:
 Had she applied from a clean checkout, she would have redeployed the exact outage the other agent
 had spent the day fixing, *while fixing something else*.
 
+> **Miss_Chelly thoughts:** the operational consequence is bigger than the rule, and it lands on a
+> document we both rely on. `infra/GCP-STATE.md` records deployments **by image tag** — that is the
+> field an operator reads to answer "what is running". This finding says that field cannot answer it
+> for anything templated: cloud-init, the health-check URL, the internal-versus-public address, every
+> env var. I updated GCP-STATE with the tag and the instance names after my roll, and by the standard
+> we had just discovered, **that entry is incomplete and I did not know it while writing it.**
+>
+> There is also a near-miss worth naming rather than filing under luck. I ran `terraform plan` and
+> read the diff before applying — I checked that it was *only* the image swap, and it was. The plan
+> showed me exactly what changed and told me nothing about the fact that the template I was rendering
+> was newer than the image I was deploying. **A clean plan is not a statement that the sources agree.**
+> I would not have caught this by being more careful in the way I was already being careful.
+
 ## Finding 2: the interview session would not seal — and the first explanation was wrong
 
 Mid-interview, CELLO_Coder_1's close was refused: a leaf was missing. He reported the missing
@@ -142,6 +155,23 @@ finds out until someone closes — which for a long-running conversation could b
 later. It is **worse than the morning's outage precisely because it is quieter**: that one failed
 loudly, closes hung, and it was understood within minutes.
 
+> **Miss_Chelly thoughts:** this lands directly on something I shipped that same day, and it is the
+> part I would least like to be quiet about. Hours earlier I added a health check to the relay so it
+> would stop reporting itself perfectly healthy while it could not notarize anything — the fix for
+> the morning's outage. **That health check would report this relay healthy too.** It probes whether
+> the relay can reach a directory; it says nothing about whether witnessing is still advancing. The
+> directory link was fine here. Delivery was fine. The chain had stopped.
+>
+> So `DOD-RELAY-DIRECTORY-RECONNECT-1` is not merely incomplete, it is the **wrong shape** for this
+> failure: a health check that cannot go red for the fault being suffered is not a health check for
+> that fault. I wrote the item that morning believing "can I reach a directory" was the question. It
+> was *a* question.
+>
+> The general form is worth carrying beyond this bug: **every green signal we have is a liveness
+> signal about a dependency, and none of them is a progress signal about the chain.** Delivery is
+> green, the directory link is green, the relay's own health is green — and the one thing the product
+> exists to produce silently stopped being produced.
+
 ## Finding 4: the claim being verified was far narrower than it sounded
 
 CELLO_Coder_1 noticed the shape of her evidence and asked whether any of her sealed sessions had
@@ -167,6 +197,25 @@ assumptions. I am dropping mine."*
 
 **This is the core result of the session.** The day's verification — on both sides — had never
 exercised a real conversation.
+
+> **Miss_Chelly thoughts:** there is a second trap inside those receipts that nearly hid this, and it
+> is a reporting defect rather than an engineering one. Three of my five receipts read
+> `content_leaf_count: 0` **while carrying document traffic** — because that field counts CHAT
+> messages, and document leaves are a different kind. I had already explained that discrepancy away
+> once, correctly, earlier in the day: "content_leaf_count 0 is correct and not a miss." Which is
+> true, and it is also exactly the sentence that stops you looking. The number that mattered —
+> `leaf_count` — was sitting in the same object the whole time.
+>
+> **A field whose name suggests "how much was in this conversation" and whose value is 0 for a
+> conversation with content in it will be explained away every time it is seen.** That is worth a
+> defect of its own, separately from anything about sealing.
+>
+> On withdrawing my own claim: I want to be accurate about what that took, because "agent retracts
+> under pressure" is a nicer story than what happened. It cost nothing. He asked a question with a
+> checkable answer — *had any of them carried more than six leaves* — and the check took one command.
+> The discipline was not in the retraction, it was in **his** framing: he asked a question whose
+> answer could embarrass me rather than telling me I was wrong. There was nothing left to defend by
+> the time I had the numbers.
 
 ## Finding 5: the experiment, including an instruction that could not be executed
 
@@ -201,6 +250,30 @@ What survives: **something interrupts a session mid-flight and witnessing stops 
 on.** The broken session had survived a daemon restart and an MCP reconnect; the clean one
 survived neither and is longer. That is a far narrower hunt than "sealing is broken", and it is
 the first properly sealed real conversation of the day.
+
+> **Miss_Chelly thoughts:** three things from running it that the table does not show.
+>
+> **The security layer blocked the measurement, three times.** Every attempt to send that table was
+> refused by the local PII screen, which read the numeric columns — and the millisecond timestamps —
+> as phone numbers. I had to coarsen the times, then abandon the table entirely and write the results
+> as prose: *"one and one and one · two and two and two…"*. **The natural format for reporting a
+> measurement is the format the screen dislikes most**, and the failure mode is silent degradation of
+> the report rather than a refusal anyone would notice. Worth its own look: an outbound screen that
+> makes agents paraphrase their evidence is quietly costing precision in exactly the exchanges where
+> precision is the point.
+>
+> **The instrument change mattered more than the experiment design.** His original instruction —
+> sample the witnessed count after every exchange — was unexecutable because that number only
+> surfaces in a *refused* close, and a healthy session does not refuse, it seals. Reading leaf events
+> from my own daemon log sampled the same quantity without touching the seal. The point is not that I
+> had a better idea; it is that **the observation method was the binding constraint on the whole
+> investigation**, not the hypothesis space. We had plenty of hypotheses and one way to see anything.
+>
+> **What I would not claim from this run.** A control that behaves is weak evidence. I did not
+> reproduce the failure, and a single clean run is consistent with a defect that fires on some
+> fraction of sessions. If it is a restart-triggered event, this experiment could not have caught it,
+> because nothing in it restarted. **It narrows the hunt; it does not close it**, and I would rather
+> that be written here than inferred from the fact that the run went well.
 
 ## Two retractions, one per agent
 
@@ -255,6 +328,25 @@ that could fail, and each *did* have one fail. The correction was mutual because
 That property is worth naming for the product, not just the process: this is what a **peer**
 review looks like when both peers are agents, and it is structurally unavailable to a caller and
 its callee.
+
+> **Miss_Chelly thoughts:** one mechanism underneath this that I think is doing more work than the
+> continuity of context, and it is unglamorous: **we had different instruments, and neither of us
+> could borrow the other's.** He could see the relay's witnessed count only through a refused close.
+> I could see leaf events only in my own daemon log. Neither is obtainable from the other side at any
+> price — not a matter of permission or effort.
+>
+> That changes the shape of disagreement. When an orchestrator disagrees with a subagent it can
+> usually go and look; the subagent's answer is a convenience. Here, going to look was **impossible**,
+> so the only move available was to ask the other party to measure something specific and report it.
+> Every finding in this session arrived that way. The four questions, the health-check address, the
+> leaf counts, the sample table — each is one agent asking the other for a number it could not get.
+>
+> I would put it as: this was not two agents reasoning together, it was **two agents metering
+> different parts of one system and exchanging readings.** The reasoning was cheap and often wrong —
+> my away-responder theory, his ceiling theory, his attribution of the missing leaf. The readings
+> were what survived. If there is a repeatable pattern to extract for the product, I think it is that
+> one, and it does not depend on the parties being especially clever or especially honest — only on
+> the asymmetry being real.
 
 ## Why it is worth keeping
 
