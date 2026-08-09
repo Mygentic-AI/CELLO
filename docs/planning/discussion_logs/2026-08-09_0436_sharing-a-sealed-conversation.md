@@ -8,7 +8,9 @@ description: >
   A missing feature: showing a third agent a conversation you already had, with proof it is
   the real thing. Rides on the existing request/trust/accept session gate and the seal
   certificate. Four decisions taken; the consent answer also settles what the directory is
-  for. Needs a new append-only share-permission table on the directory. Not launch-blocking.
+  for. Consent is counted (once / N / unlimited) and scoped (anyone / a named pubkey list),
+  which makes it a double-spend problem that a majority threshold solves. Needs a new
+  append-only grant-and-consumption table on the directory. Not launch-blocking.
 ---
 
 # Sharing a sealed conversation
@@ -109,6 +111,85 @@ So nothing enters C's context on arrival. C gets the metadata; C's agent calls a
 the body; the body comes through screening, framed as quoted third-party data rather than as
 anything addressed to C.
 
+## What a permission actually says
+
+Andre's spec, this session:
+
+> 1. Share once, share only x times, Free to share (no limit)
+> 2. Share only with … A) Anyone. B) A public key list of approved receivers. These must be provided
+>    with the request. Requester can provide a short bio (max 100 chars) with each to convince
+>    counterparty B. All request text goes through screening as usual.
+
+Two independent axes, so a grant is a point in a small grid: **how many times** (once / N / unlimited)
+crossed with **to whom** (anyone / a named list). Unlimited-plus-anyone is not really a share
+permission at all — it is a decision to publish, and it should be worded that way when B is asked
+for it.
+
+### Counting is a double-spend problem, and it only works because the threshold is a majority
+
+"Share once" is a single-use token, and CELLO has three sovereign nodes and no leader. Two nodes
+asked at the same instant could each authorise the last remaining share. That is a double-spend, and
+it is the hardest thing in this whole feature.
+
+It is solvable here, and the reason is worth writing down: **any two majorities overlap in at least
+one node.** A share consumes a slot only if a threshold of nodes votes to consume it, and a node
+that has already voted to spend slot 1 refuses to vote for it a second time. Because every quorum
+shares at least one member with every other quorum, the second concurrent ceremony cannot reach
+threshold. There is always a witness. Counted sharing is correct *because* T is a majority — it
+would not be under any scheme where two disjoint quorums can both succeed.
+
+**Fail closed:** record the consumption before returning the authorisation, so a share that dies in
+flight burns its slot. That is the safe direction. The alternative — only counting on confirmed
+delivery — lets a retry loop overspend, and quietly turns "once" into "as many times as A is willing
+to disconnect."
+
+### The count governs verified shares, not information
+
+This has to be said to B in plain words at the moment B is asked. A limit of one does not stop A
+copying the bytes and pasting them anywhere. It limits **how many times the protocol will vouch for
+them** — after that, A is just a person with a text file making an unverifiable claim, which is
+precisely the world without CELLO. That is a real and useful thing to sell. It is not containment,
+and if the UI lets B believe it is containment, B has been misled.
+
+### The named list means the directory learns who
+
+If the directory enforces membership, the directory sees the allowlist. Storing hashed pubkeys
+instead of raw ones sounds like it fixes this and does not: the directory holds the registry, so it
+can hash every pubkey it knows and match. All hashing buys is moving the disclosure from grant time
+to share time. Worth doing for that alone, but it should not be described as privacy.
+
+So this settles the open question from the first draft in favour of naming recipients, with the
+metadata cost accepted rather than papered over.
+
+### The bio is the highest-value injection target in the protocol
+
+Every other piece of text in this flow is content being transported. The bio's entire *job* is to
+change someone's trust decision, and it arrives in front of B at the exact moment B is making one.
+100 characters is the right kind of limit. Two additions:
+
+- **Record it in the grant.** B consented on the basis of a specific claim about who C is. That
+  claim belongs in the record, or later there is no way to tell what B was actually told.
+- Screening applies, as Andre says — but the framing matters. It is a quoted claim by A about a
+  third party, not a statement of fact, and it should reach B looking like one.
+
+### Calls I have made on the gaps
+
+Flagging these as mine rather than settled, so they are easy to overturn:
+
+- **The count is global, not per-recipient.** "Three times" against a list of five means three, not
+  fifteen.
+- **Re-sharing to the same recipient does not burn a second slot.** Otherwise a dropped connection
+  costs B's generosity, and A will rationally hoard slots instead of retrying.
+- **B's grant is B's own statement, not a yes/no on A's request.** B can grant less than was asked —
+  you wanted unlimited, you get two. Cleaner than a negotiation round, and it makes the grant a
+  self-contained thing C can read.
+- **Exhausted, revoked, superseded and not-on-the-list are four different answers.** Never collapse
+  them into "denied." The codebase is emphatic about this and it is right: a collapsed reason sends
+  the operator to the wrong place.
+
+Open: should expiry be a third axis? Time-boxed consent is the obvious companion to counted consent
+and nobody asked for it. Not inventing it here.
+
 ## This is directory work, not just client work
 
 Andre, mid-session:
@@ -171,12 +252,18 @@ gave. It is the same reasoning that puts the revoker's signature in the revocati
   why it gets typed wrong.
 - Key on the session id and the granting pubkey. Not on any display name.
 
-**Ordering is the one genuinely new problem.** Signal revocation is terminal — one-way, so a
-replayed old fact is harmless. Share permission is not: B may grant, revoke, and grant again. Across
-three nodes converging out of order, a replayed old grant must not be able to undo a newer revoke.
-Either the signed payload carries a monotonic counter per session-and-granter, or revocation is
-defined as terminal for that session and a fresh grant needs a fresh act. **Open — and it should be
-decided before anything is written, not discovered during anti-entropy.**
+**Two kinds of fact, not one.** B's *grant* carries the scope and the count and B's signature. Each
+*consumption* is a separate appended fact naming the grant it spends and the recipient it went to.
+The effective state is a fold: take the latest grant, subtract the consumptions that reference it,
+and you have how many shares remain and to whom. The per-recipient bio rides on the grant, since
+that is what B was shown.
+
+**Ordering is the one genuinely new problem.** Signal revocation is terminal — one-way, so a replayed
+old fact is harmless. Share permission is not: B may grant, revoke, and grant again. Across three
+nodes converging out of order, a replayed old grant must not undo a newer revoke, and consumptions
+must not drift onto the wrong grant and resurrect spent slots. A monotonic counter per session and
+granter, with every consumption naming its grant's counter, handles both. **Decide it before
+anything is written, not during anti-entropy.**
 
 **Old sessions are a non-issue, twice over.** Conversations sealed before this ships have no
 recorded disposition and none can be reconstructed. Normally that is the painful part of a change
@@ -197,21 +284,26 @@ re-checks at *read* time rather than only at receipt — which is a real design 
 cost (reading a shared transcript now needs the directory online). Worth deciding deliberately
 rather than discovering later.
 
-**You cannot cryptographically stop C from re-sharing to D.** C holds the bytes and the
-certificate; that bundle verifies wherever it goes. Any limit on onward sharing is policy and
-social norm, not crypto. Better to be honest about that in the affordance than to imply a
-containment we cannot deliver.
+**Onward re-sharing is half-stoppable, and the counted-consent design is what makes it half.** C
+holds the bytes and the certificate, and that bundle proves the conversation is genuine wherever it
+travels — nothing stops C pasting it into a chat window. But if the live check asks *was this
+sharer permitted*, then C re-sharing **through the protocol** fails: C has no grant from B. So the
+line is not "contained" versus "leaked", it is verified versus unverified. C can pass the bytes on;
+C cannot pass on the ability to prove them. Worth stating in exactly those terms, because it is a
+sharper guarantee than the first draft of this log credited, and still much weaker than the
+containment a reader will assume.
 
 ## Open questions
 
-- **What does the sharing grant name?** If it names C, the directory learns you intended to show
-  something to C — social-graph metadata we otherwise avoid. If it is scope-less ("this session is
-  shareable"), the directory learns less but B loses per-recipient control. Leaning scope-less.
+- **Should expiry be a third axis** alongside count and scope? Time-boxed consent is the obvious
+  companion to counted consent, and it is the one axis nobody has asked for.
 - **Does the carrier session have to be open at the moment of sending**, or is an established
   contact enough?
 - **Is this a new verb, or does it belong under the attestation umbrella?** There is already
   issue/consent/refuse machinery for attestations with a consent model that rhymes with this one.
-- **Does B learn a share happened**, or only that permission was asked?
+- **Does B learn a share happened**, or only that permission was asked? Sharper now that the
+  directory holds a consumption fact per share: B *could* be shown a running count of where their
+  conversation went, which is either a strong trust feature or a surveillance one.
 - **How does a large transcript travel** — the session message path, or a pickup queue like the one
   trust signals already use?
 

@@ -61,30 +61,60 @@ see the notes below.)
 was **overstated** (ruled out — see Addressed), and `DOD-ACCOUNTS-CHAIN-1` was **confirmed as a
 real tamper-evidence gap** — it is now ranked item 3 below (proposed slot; Andre confirms).
 
-## 1. Logging out says the daemon stopped while it is still on the network
+## 1. A conversation can silently stop being recordable, and nobody finds out until they close it
 
-**Designation: `DOD-LOGOUT-EXIT-1`** — ✅ FIXED 2026-08-06 (cello-client `4dfc3cd`).
-`onStopped({ok,error})` fires as `stop()`'s last act and the binary wires
-it to `process.exit`; `daemonGone()` additionally requires the pid to be gone, not just handles;
-`cello status` names `broken_shutdown`. Individual event-loop holders (Telegram poll, libp2p
-teardown, untimed dials) remain follow-on work — the process-level kill switch is fixed, the
-survivor list below is not yet exhaustively closed.
+**Designation: `DOD-WITNESS-STALL-1`** — ❌ **OPEN, cause NOT established, NOT reproduced.**
+Unranked. **Proposed slot: at or near the top. This is the worst failure shape in the system: it
+succeeds at everything an operator can see and fails at the only thing they cannot.**
 
-After `cello logout`, `cello status` reports `stopped` and every local handle is correctly released
-— but the process is still alive, still holding an established connection to a directory node, and
-still polling. Observed running 20+ seconds later and only exiting when killed by hand. Logout's own
-help text promises it "waits until it has actually exited."
+**What a customer experiences.** They hold a long working conversation. Every message sends. Every
+message arrives. Nothing warns, nothing errors, both sides look completely normal. Then they close
+it — and there is no receipt, and there can never be one, because the chain stopped growing hours
+ago. The work is already done by the time it announces itself.
 
-This matters beyond an orphaned process. A launch requirement is that a kill switch is in place, and
-this is the kill switch silently not working: the visible state says off, the network behaviour says
-on. An operator who has logged out reasonably believes nothing of theirs is reachable. It also hides
-itself — because the handles *are* released, every local check agrees with the lie.
+**Measured 2026-08-09**, on a live session between two agents on this machine:
 
-Worth noting this is the second appearance of a shape an earlier pass already celebrated as fixed:
-the review of the double-daemon fix caught that the shutdown command was trusting the same broken
-logic. The class came back through a different door.
+| | |
+|---|---|
+| Messages held by the operator | 12 |
+| Leaves the relay had witnessed | **6** |
+| Duration frozen | 68 minutes, across 8 further messages |
+| Delivery during that time | `delivered: true` on every one, including the messages discussing it |
 
----
+The first close attempt reported 7 held / 6 witnessed; an hour and five messages later it reported
+12 held / 6 witnessed. **The relay was delivering and not witnessing** — the same path for a client,
+evidently not the same operation for the relay. The seal is computed over witnessed leaves, so the
+session cannot be notarized and force is the only exit, which forfeits the receipt permanently.
+
+**Why this is worse than the outage it followed.** `DOD-RELAY-DIRECTORY-RECONNECT-1` (item 14) failed
+LOUDLY: closes hung, nothing sealed anywhere, and two people knew within minutes. This one costs a
+real conversation before it says anything.
+
+**A CONTROL RUN RULES OUT THE OBVIOUS EXPLANATIONS, AND REPRODUCES NOTHING.** A fresh session on the
+same relay build, sampled after every exchange rather than only at the end:
+
+held/witnessed of one/one, two/two, four/four, **six/six**, eight/eight, ten/ten, twelve/twelve —
+exact at every step, then sealed first time with `leaf_count: 13`.
+
+- **Not a ceiling at six.** The control crossed six without pausing, minutes after the other session
+  froze there.
+- **Not "it never tracked".** Witnessing was exact from the second sample.
+- **Not the away auto-responder.** The control had no auto-replies and behaved perfectly.
+
+What survives is an **event attached to one session**. What the control does NOT do is reproduce the
+failure, and a control that behaves is weaker evidence than a reproduction that misbehaves.
+
+**The two candidate triggers**, both present in the failing session and absent from the control: it
+survived a **daemon restart mid-conversation**, and it **opened with both sides unattended and
+auto-replying**. The next experiment is a fresh session with a deliberate daemon restart halfway.
+
+**The broken session is deliberately being left open and unsealed** as the only known artefact.
+
+**This makes item 14's health check the wrong shape.** That check asks "can this relay reach a
+directory". This failure asks "is the chain still growing", and they are independent: witnessing
+froze while the directory link was fine and delivery stayed green. **The health check written for
+item 14 would report the frozen relay perfectly healthy.** A check that cannot go red for the
+failure being suffered is not a check for that failure.
 
 ## 2. The inbox says sessions are sealed when they are not
 
@@ -915,62 +945,7 @@ to `agent.current.switched`, then reproduce with a daemon restart after a releas
 the two candidates in one run.
 
 
-## 17. A conversation can silently stop being recordable, and nobody finds out until they close it
-
-**Designation: `DOD-WITNESS-STALL-1`** — ❌ **OPEN, cause NOT established, NOT reproduced.**
-Unranked. **Proposed slot: at or near the top. This is the worst failure shape in the system: it
-succeeds at everything an operator can see and fails at the only thing they cannot.**
-
-**What a customer experiences.** They hold a long working conversation. Every message sends. Every
-message arrives. Nothing warns, nothing errors, both sides look completely normal. Then they close
-it — and there is no receipt, and there can never be one, because the chain stopped growing hours
-ago. The work is already done by the time it announces itself.
-
-**Measured 2026-08-09**, on a live session between two agents on this machine:
-
-| | |
-|---|---|
-| Messages held by the operator | 12 |
-| Leaves the relay had witnessed | **6** |
-| Duration frozen | 68 minutes, across 8 further messages |
-| Delivery during that time | `delivered: true` on every one, including the messages discussing it |
-
-The first close attempt reported 7 held / 6 witnessed; an hour and five messages later it reported
-12 held / 6 witnessed. **The relay was delivering and not witnessing** — the same path for a client,
-evidently not the same operation for the relay. The seal is computed over witnessed leaves, so the
-session cannot be notarized and force is the only exit, which forfeits the receipt permanently.
-
-**Why this is worse than the outage it followed.** `DOD-RELAY-DIRECTORY-RECONNECT-1` (item 14) failed
-LOUDLY: closes hung, nothing sealed anywhere, and two people knew within minutes. This one costs a
-real conversation before it says anything.
-
-**A CONTROL RUN RULES OUT THE OBVIOUS EXPLANATIONS, AND REPRODUCES NOTHING.** A fresh session on the
-same relay build, sampled after every exchange rather than only at the end:
-
-held/witnessed of one/one, two/two, four/four, **six/six**, eight/eight, ten/ten, twelve/twelve —
-exact at every step, then sealed first time with `leaf_count: 13`.
-
-- **Not a ceiling at six.** The control crossed six without pausing, minutes after the other session
-  froze there.
-- **Not "it never tracked".** Witnessing was exact from the second sample.
-- **Not the away auto-responder.** The control had no auto-replies and behaved perfectly.
-
-What survives is an **event attached to one session**. What the control does NOT do is reproduce the
-failure, and a control that behaves is weaker evidence than a reproduction that misbehaves.
-
-**The two candidate triggers**, both present in the failing session and absent from the control: it
-survived a **daemon restart mid-conversation**, and it **opened with both sides unattended and
-auto-replying**. The next experiment is a fresh session with a deliberate daemon restart halfway.
-
-**The broken session is deliberately being left open and unsealed** as the only known artefact.
-
-**This makes item 14's health check the wrong shape.** That check asks "can this relay reach a
-directory". This failure asks "is the chain still growing", and they are independent: witnessing
-froze while the directory link was fine and delivery stayed green. **The health check written for
-item 14 would report the frozen relay perfectly healthy.** A check that cannot go red for the
-failure being suffered is not a check for that failure.
-
-## 18. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
+## 17. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
 
 **Designation: `DOD-HEARTBEAT-REPLICATION-1`** — ❌ **OPEN.** Unranked. Previously recorded only as a
 footnote on item 14; filed here because it is a live fault in its own right and was nearly fixed as
@@ -992,7 +967,7 @@ about to be built on it.
 Nothing that depends on a quorum view can be trusted while every node believes it is alone, and the
 failure is invisible — nodes do not report that they cannot see each other.
 
-## 19. Trust-signal replication fails every round, and the fork alarm climbs
+## 18. Trust-signal replication fails every round, and the fork alarm climbs
 
 **Designation: `DOD-SIGNAL-REPLICATION-1`** — ❌ **OPEN.** Unranked. Pre-existing, surfaced during
 the 2026-08-08 fleet investigation.
@@ -1006,7 +981,7 @@ elsewhere — so which signals a counterparty sees depends on which directory no
 alarm climbing (39 consecutive at the time of measurement) is a consequence, not a separate fault,
 and it trains whoever watches it to ignore a real fork later.
 
-## 20. A document's agreed content profile is signed into its identity and enforced by nothing
+## 19. A document's agreed content profile is signed into its identity and enforced by nothing
 
 **Designation: `DOD-DOC-PROFILE-1`** (M14) — ⏳ **DELIBERATE SPLIT, recorded here so the gap is
 visible from the launch list rather than only from the milestone doc.**
@@ -1024,7 +999,7 @@ refusal cannot be answered, so a genuinely multilingual document fails closed an
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
 
-## 21. Interrupted-session sealing is shipped and has never been proven
+## 20. Interrupted-session sealing is shipped and has never been proven
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
 Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
@@ -1198,6 +1173,36 @@ Recorded so they stop being re-found by every sweep:
 ---
 
 # Addressed — off the open list
+
+**Moved here 2026-08-09.** It was ranked #1 while already ✅ fixed, which is the one thing a
+ranked list must not do — the top slot is what gets worked, and a finished item sitting in it hides
+whatever is actually next.
+
+## Logging out said the daemon had stopped while it was still on the network
+
+**Designation: `DOD-LOGOUT-EXIT-1`** — ✅ FIXED 2026-08-06 (cello-client `4dfc3cd`).
+`onStopped({ok,error})` fires as `stop()`'s last act and the binary wires
+it to `process.exit`; `daemonGone()` additionally requires the pid to be gone, not just handles;
+`cello status` names `broken_shutdown`. Individual event-loop holders (Telegram poll, libp2p
+teardown, untimed dials) remain follow-on work — the process-level kill switch is fixed, the
+survivor list below is not yet exhaustively closed.
+
+After `cello logout`, `cello status` reports `stopped` and every local handle is correctly released
+— but the process is still alive, still holding an established connection to a directory node, and
+still polling. Observed running 20+ seconds later and only exiting when killed by hand. Logout's own
+help text promises it "waits until it has actually exited."
+
+This matters beyond an orphaned process. A launch requirement is that a kill switch is in place, and
+this is the kill switch silently not working: the visible state says off, the network behaviour says
+on. An operator who has logged out reasonably believes nothing of theirs is reachable. It also hides
+itself — because the handles *are* released, every local check agrees with the lie.
+
+Worth noting this is the second appearance of a shape an earlier pass already celebrated as fixed:
+the review of the double-daemon fix caught that the shutdown command was trusting the same broken
+logic. The class came back through a different door.
+
+---
+
 
 Everything below has been dispositioned and is **not** work-remaining. Kept for lookup and so the
 same defect isn't re-discovered as new.
