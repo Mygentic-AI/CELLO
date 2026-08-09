@@ -192,6 +192,28 @@ export const AUTHORIZED_ISSUERS_SPEC: TierATableSpec = {
  * Registration then failed with CLAIM_CODE_INVALID, because claim codes minted on one node never
  * reached the node the client actually picked. Read the table's migrations to HEAD, never its
  * CREATE TABLE; `ae-spec-schema.test.ts` now asserts every spec column against the built schema.
+ *
+ * `scanner_version` IS INCLUDED, and it is not optional in either direction (DOD-SIGNAL-REPLICATION-1).
+ *
+ * It was missing, and because it is `TEXT NOT NULL` with no default (V46), `applyTierA` — which
+ * inserts exactly this list — failed on EVERY record with a not-null violation. 1530 consecutive
+ * apply failures at the time of measurement; not one trust-signal row has ever replicated between
+ * nodes. Signals existed only where they were minted, so which signals a counterparty could see
+ * depended on which node their client happened to pick, and the fork alarm climbed as a consequence.
+ *
+ * It has to be HASHED rather than carried alongside the hashed set. The column's own contract (V46)
+ * is that it is the submitter's assertion that the content was scanned clean at birth, unverifiable
+ * by the directory, and therefore only trustworthy inside a signature — "a forged scanner_version is
+ * a lie stored as evidence". A value carried across the AE wire outside the record hash is a value
+ * any peer can rewrite without invalidating the record, which is that same forgery with a different
+ * courier. Being immutable, it belongs here: it is set once in the submit INSERT and never UPDATEd.
+ *
+ * This DOES change the record hash of every existing row, which is normally the trap V58 documents
+ * and the reason `is_tombstone` went to `signal_revocations` instead. It is acceptable here and only
+ * here: replication of this table has never once succeeded, so there is no cross-node convergence to
+ * disturb. During a node-by-node roll a new node and an old node disagree on this table's digest and
+ * their applies fail — which is the unchanged status quo, not a regression — and they converge as
+ * soon as the last node carries this spec.
  */
 export const SIGNAL_RECORDS_SPEC: TierATableSpec = {
   table: "signal_records",
@@ -204,6 +226,7 @@ export const SIGNAL_RECORDS_SPEC: TierATableSpec = {
     "issuer_pubkey",
     "type",
     "supersedes_hash",
+    "scanner_version",
   ],
 };
 
