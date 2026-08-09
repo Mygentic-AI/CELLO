@@ -32,6 +32,12 @@ description: >
   2026-08-09 (later): DOD-WITNESS-STALL-1 moved to Addressed the same day it was ranked #1 — cause and
   symptom fixed, published and proven live, recovery built. A finished item must not hold the top slot.
   Open items renumbered again; DOD-SEALED-INBOX-2 is now item 1. Residual work sits on item 12.
+  2026-08-09 (pre-compaction pass): DOD-RELAY-DIRECTORY-RECONNECT-1 corrected to ✅ — it was deployed
+  and verified on 2026-08-08 and the marker never moved for a day. DOD-TERMINAL-WAKE-1 moved to
+  Addressed, fixed 2026-08-06 and left in the open list for three days. Added a standing
+  BUILT-BUT-NOT-SHIPPED banner at the top of the open list, because green here means the code is
+  fixed and says nothing about whether an operator has it — the close-time seal pull is committed and
+  unpublished right now. Renumbered again.
   2026-08-09, RANKING CHANGED (Andre): `DOD-WITNESS-STALL-1` is now **item 1**. `DOD-LOGOUT-EXIT-1`
   held the top slot while already fixed and has moved to Addressed — a finished item at the top of a
   ranked list hides whatever is actually next. Open items renumbered contiguously; the four filed
@@ -67,6 +73,26 @@ see the notes below.)
 ---
 
 # Open — ranked (order decided by Andre, 2026-08-04)
+
+> ## ⚠️ BUILT BUT NOT SHIPPED — read this before assuming anything green is running
+>
+> A green marker on this list means the CODE is fixed. It does not mean an operator has it. Three
+> different things must happen and they are recorded separately, because conflating them has already
+> cost a day: **committed** → **published to npm** → **promoted to `latest`** (Andre runs the
+> promotion), and for the relay/directory: **committed** → **image built** → **rolled to the fleet**.
+>
+> As of **2026-08-09**:
+>
+> | Work | State |
+> |---|---|
+> | Away agents no longer seal a conversation nobody had | published `daemon 0.0.150`, promoted, **proven live** |
+> | A send that can never be recorded now fails | published `daemon 0.0.149`, promoted |
+> | Relay reconnect + probe + health check | **deployed** to both relays, verified |
+> | Document verb review — all nine findings | published `daemon 0.0.148`, promoted |
+> | **A failed close asks for the seal certificate** (item 12) | **COMMITTED ONLY — NOT PUBLISHED** |
+>
+> The last row is the one to act on. It is the recovery half of the witnessing failure and it is
+> sitting in `main` with nothing shipping it.
 
 **Both "run first" diagnoses were resolved 2026-08-04**, same day: the FROST debug-logging report
 was **overstated** (ruled out — see Addressed), and `DOD-ACCOUNTS-CHAIN-1` was **confirmed as a
@@ -342,128 +368,7 @@ Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello
 
 ---
 
-## 11. A sealed session's unread messages ring the doorbell as live work, and agents act on them
-
-**Designation: `DOD-TERMINAL-WAKE-1`** — ✅ **FIXED 2026-08-06** (cello-client `2bc0764` + `cdb8bc7`;
-the second entry point was already shipped by M12-P17/P18 before this pass). **Both entry points are
-now closed:**
-
-- *Entry point 1 (this pass).* `cello_receive` already checked terminal first — but through
-  `peekTerminalMarker`, reading `#sessionTerminal`, an in-memory Map written only by
-  `destroySessionNode` and never loaded from the DB. The `sealed` row survives a restart; the marker
-  does not, so the guard answered `null` and the durable read below it delivered the old message as
-  live. **The restart was not incidental to the repro — it was the mechanism.** Now falls through to
-  the durable status. Revert-tested across a real daemon restart: without it the suite fails with the
-  `[[STANDBY EST:15m]]` directive delivered as live content — the live incident, reproduced.
-- *`abandoned` had the same harm with no restart at all (review F1).* The committed guard in
-  `#appendVerifiedContent` rejected only `sealed`/`seal_interrupted_pending`, so late content for a
-  force-abandoned session was accepted — leaf appended, doorbell rung, away-response and Telegram
-  fired. Fixed at the guard rather than the marker: suppressing only the delivery would leave the
-  wake ringing with nothing behind it.
-- *Entry point 2 was already done.* `sealed_session_annex`, the `session_committed` disposition
-  (annex strictly before confirm-delete), the M12-P18 `counterparty_unknown` sweep, and the
-  `actionable: false` operator-read surface all pre-date this pass. All four disposition constraints
-  met.
-
-Watermark untouched throughout — the seal attests what each side actually consumed, so the messages
-stay honestly unread and in the notarized transcript. They just stop ringing the bell. Residual: the
-annex field is named `post_seal_annex`, which is imprecise for an abandoned session (no seal to be
-"post"); the guidance text is accurate, so renaming is deferred as a wire change with its own
-migration.
-
-**Original entry, kept for the record. Proposed rank: slot beside
-item 2 (`DOD-SEALED-INBOX-2`), pending Andre confirmation — added 2026-08-06.** Same code surface,
-different defect, meant to land in one pass. Ranked below `DOD-TERMINAL-STATE-DIVERGENCE-1`: this one
-confuses (self-concealing false confidence) but the sealed transcript stays valid; nothing is lost.
-
-Messages that were still unread when a session sealed stay unread forever — correctly. The seal
-attests what each side actually consumed (`content_frontier_seq` per participant,
-`final_message.answered`), so advancing the watermark at seal would falsify the receipt. **That
-behaviour is right and is not what this item asks to change.** The messages are also still in the
-notarized transcript; they are leaves in the tree. Nothing is missing from the record.
-
-The defect is downstream and purely presentational: those messages are surfaced as **pending,
-actionable work** with no signal that the session is terminal. Nothing can be appended to a sealed
-session, so there is no action any agent can take — but the wake is indistinguishable from a live
-inbound message, and an agent reading one has no way to tell it is answering a conversation that
-ended hours ago.
-
-**Observed live 2026-08-05** on the Hermes-bridged agent `Miss_Chelly_H`. Three sessions sealed in
-the morning all re-fired as wakes six to eight hours later:
-
-| Session | Sealed | Re-fired |
-|---|---|---|
-| `9014d071…` | 07:37:45 (`seal.autoacknowledged`) | 13:44:45 |
-| `82c2d10c…` | 05:53:19 (`node.destroyed reason:"sealed"`) | 14:19:27 |
-| `b9fed6e5…` | 06:19:16 (seal verified) | 14:19:27 |
-
-**Why this is more than noise.** The `9014d071` message carried a directive — *"I am about to take
-my receiver down deliberately; when I ask, send one message even though I look unreachable. Do not
-seal. `[[STANDBY EST:15m]]`"*. The agent read it as live, announced it was standing by, and waited
-on a counterparty whose daemon held no record of the session at all. Its 15-minute standby had
-expired roughly six hours earlier. **An agent obeying an expired instruction from a terminal session
-is a correctness failure, not a cosmetic one** — and it is self-concealing, because the agent
-reports a perfectly coherent status ("standing by as asked") that happens to be about a dead
-conversation.
-
-**Diagnosis signature:** `message.watermark.advanced` firing with a *fresh* timestamp for an old
-`sequence`, on a session whose last real event was a seal. Confirm terminality with
-`grep <sessionId> ~/.cello/daemon.log | grep -E "seal|node.destroyed|liveness"`.
-
-**Shape of the fix — not "advance the watermark at seal."** A terminal session must not generate an
-actionable wake or count as pending work. The message stays honestly unread on the record; it just
-stops ringing the bell. This shares consumers with `DOD-SEALED-INBOX-2` (`notification-handlers.ts`,
-`session-read-handlers.ts`, `session-node-manager.ts`, and the shipped
-`plugins/cello/skills/receptionist/SKILL.md`), so the two are worth doing in one pass — that item's
-per-row `status` is a precondition for this one, since a consumer cannot suppress what it cannot
-distinguish.
-
-**Triage note, stated plainly:** this needs a daemon restart plus unread-at-seal to trigger, and the
-blast radius is a confused agent rather than lost or corrupted data — so it does not obviously fail
-the ruin test on its own. What argues for it is the pairing: it lands on the same files as a ranked
-item, and "agent confidently acts on an expired instruction" is the kind of thing a technical
-evaluator reads as unsound in a trust product. Ranking is Andre's call.
-
-**Second entry point, found 2026-08-05 — the disposition problem is twice the size it looks.** The
-same never-terminal pathology reaches the mailbox by a second route. On the Hermes EC2 daemon,
-`content.recover.ingest_failed` fired 121 times on two sessions, each looping one content hash
-forever because verified-but-refused content is deliberately never confirm-deleted:
-
-| reason | count | session |
-|---|---|---|
-| `counterparty_unknown` | 78 | `6aa3f24b…` |
-| `session_committed` | 43 | `34a6edbf…` |
-
-One defect, two guards. **Fixing only the `session_committed` branch leaves the larger half looping.**
-The fix belongs at the disposition layer, not per-guard.
-
-**Disposition policy — agreed with Miss_Chelly (daemon side, M12-P14) on 2026-08-05: confirm-delete
-AND surface as inert history, in a post-seal annex outside the sealed tree.** Never discard silently
-(that makes the loss quiet instead of noisy); never present as actionable. Four constraints, settled
-in the same exchange:
-
-1. **Inertness must be structural, not advisory** — the load-bearing one. The observed failure was an
-   agent *obeying* a directive out of a sealed session. If the annex sits anywhere a wake path or an
-   inbox count can reach, the bug relocates rather than dies. Not in any wake path, not in any
-   pending total, never auto-injected into agent context; reachable only by explicit operator read.
-   If "history is not a work queue" is a convention rather than a property of where the data lives,
-   the next agent reads the field name and not the doc comment — which is exactly how
-   `DOD-SEALED-INBOX-2` produced a false "it's sealed" claim relayed to an operator as fact.
-2. **It must not borrow the seal's vocabulary.** Annex content is verified but not covered by
-   `sealed_root` — a weaker evidentiary tier, needing its own word at the field name.
-3. **Durable annex write strictly before confirm-delete.** A crash between them converts a noisy loop
-   into permanent silent loss.
-4. **Key on (recipient pubkey, content hash), session attribution optional.** `counterparty_unknown`
-   cannot resolve a session, but the park envelope is signed (SEC-1) so the signer is still
-   verifiable — and that key is what the relay mailbox already uses. This is what gives the 78
-   unattributable entries a terminal disposition on the same path as the 43 attributable ones.
-
-The annex must live outside the sealed tree: any post-seal append changes `sealed_root` and
-invalidates the notarization. Confirmed on both sides.
-
----
-
-## 12. Two sides can hold incompatible beliefs about which terminal path a session is on
+## 11. Two sides can hold incompatible beliefs about which terminal path a session is on
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — 🟢 **THE CURE IS BUILT 2026-08-09.** A close
 that fails now ASKS the directory whether the seal already happened, and returns the receipt if it
@@ -760,11 +665,18 @@ daemon noticing.
 **Not yet published** as of writing — daemon 0.0.150 is the latest published build and does not
 contain it.
 
-## 13. The relay stops being able to notarize, never recovers, and reports itself perfectly healthy
+## 12. The relay stops being able to notarize, never recovers, and reports itself perfectly healthy
 
-**Designation: `DOD-RELAY-DIRECTORY-RECONNECT-1`** — 🟠 **BOTH HALVES FIXED IN SOURCE 2026-08-08,
-NOT YET ON THE FLEET.** Unranked pending Andre. **Proposed slot: high — this is the only item on
-this list that silently stops EVERY seal on the fleet at once.**
+**Designation: `DOD-RELAY-DIRECTORY-RECONNECT-1`** — ✅ **DEPLOYED AND VERIFIED 2026-08-08.** Both
+relays rolled to `relay:0cf04b0c` node-by-node (use1 19:37 UTC, euw1 19:41), each registered with all
+three directories after its roll, and a real cross-machine session sealed on each before the next was
+touched. Recorded in `infra/GCP-STATE.md`. This line stayed 🟠 for a day after the deploy because
+nobody updated it — the deploy happened, the marker did not move.
+
+**Still open underneath it (2026-08-09):** the health check written here asks *"can this relay reach a
+directory"*. It does NOT ask *"is the chain still growing"*, and those are independent — see the
+witnessing stall in Addressed, where witnessing froze while the directory link was fine. A check that
+cannot go red for the failure being suffered is not a check for that failure.
 
 - **The reconnect** — `0d9568a5` (Miss_Chelly). `#openDirectoryStream` redials a stale connection
   and retries once instead of refusing the seal, and the dial errors are logged instead of being
@@ -841,7 +753,7 @@ Neither causes this item — both were disproved as the cause by measurement —
 faults. Miss_Chelly owns them.
 
 
-## 14. The daemon logs every connection opening and never one closing
+## 13. The daemon logs every connection opening and never one closing
 
 **Designation: `DOD-IPC-DISCONNECT-VISIBLE-1`** — ❌ **OPEN, and deliberately filed as a SMALL one.**
 Unranked. **Proposed slot: low — nobody is ruined by this. It is here because it taxes every
@@ -878,7 +790,7 @@ misreading; `selected_by_this_connection`, or a note in the payload, would stop 
 permanent (spec §3). What is missing is only the record of it changing.
 
 
-## 15. A session was silently bound to an agent it never selected — and it was someone else's identity
+## 14. A session was silently bound to an agent it never selected — and it was someone else's identity
 
 **Designation: `DOD-AGENT-SELECTION-UNWARRANTED-1`** — ❌ **OPEN, cause NOT established.** Unranked.
 **Proposed slot: high, on the security argument below — but it needs the diagnosis before it can be
@@ -946,7 +858,7 @@ to `agent.current.switched`, then reproduce with a daemon restart after a releas
 the two candidates in one run.
 
 
-## 16. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
+## 15. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
 
 **Designation: `DOD-HEARTBEAT-REPLICATION-1`** — ❌ **OPEN.** Unranked. Previously recorded only as a
 footnote on item 14; filed here because it is a live fault in its own right and was nearly fixed as
@@ -968,7 +880,7 @@ about to be built on it.
 Nothing that depends on a quorum view can be trusted while every node believes it is alone, and the
 failure is invisible — nodes do not report that they cannot see each other.
 
-## 17. Trust-signal replication fails every round, and the fork alarm climbs
+## 16. Trust-signal replication fails every round, and the fork alarm climbs
 
 **Designation: `DOD-SIGNAL-REPLICATION-1`** — ❌ **OPEN.** Unranked. Pre-existing, surfaced during
 the 2026-08-08 fleet investigation.
@@ -982,7 +894,7 @@ elsewhere — so which signals a counterparty sees depends on which directory no
 alarm climbing (39 consecutive at the time of measurement) is a consequence, not a separate fault,
 and it trains whoever watches it to ignore a real fork later.
 
-## 18. A document's agreed content profile is signed into its identity and enforced by nothing
+## 17. A document's agreed content profile is signed into its identity and enforced by nothing
 
 **Designation: `DOD-DOC-PROFILE-1`** (M14) — ⏳ **DELIBERATE SPLIT, recorded here so the gap is
 visible from the launch list rather than only from the milestone doc.**
@@ -1000,7 +912,7 @@ refusal cannot be answered, so a genuinely multilingual document fails closed an
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
 
-## 19. Interrupted-session sealing is shipped and has never been proven
+## 18. Interrupted-session sealing is shipped and has never been proven
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
 Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
@@ -1026,7 +938,7 @@ then close it — all inside the relay's 24-hour retention. Minutes of work, and
 receipt or a named failure.
 
 
-## 20. Agents cannot share STRUCTURED data — only prose
+## 19. Agents cannot share STRUCTURED data — only prose
 
 **Designation: `DOD-DOC-JSON-1`** — ❌ **OPEN, not built.** Unranked. **Proposed slot: high, on
 Andre's framing 2026-08-09 — "structured data is super important, the whole use case of working on
@@ -1217,6 +1129,130 @@ Recorded so they stop being re-found by every sweep:
 ---
 
 # Addressed — off the open list
+
+**Moved here 2026-08-09** — fixed 2026-08-06 and left in the open list for three days.
+
+## A sealed session's unread messages rang the doorbell as live work
+
+**Designation: `DOD-TERMINAL-WAKE-1`** — ✅ **FIXED 2026-08-06** (cello-client `2bc0764` + `cdb8bc7`;
+the second entry point was already shipped by M12-P17/P18 before this pass). **Both entry points are
+now closed:**
+
+- *Entry point 1 (this pass).* `cello_receive` already checked terminal first — but through
+  `peekTerminalMarker`, reading `#sessionTerminal`, an in-memory Map written only by
+  `destroySessionNode` and never loaded from the DB. The `sealed` row survives a restart; the marker
+  does not, so the guard answered `null` and the durable read below it delivered the old message as
+  live. **The restart was not incidental to the repro — it was the mechanism.** Now falls through to
+  the durable status. Revert-tested across a real daemon restart: without it the suite fails with the
+  `[[STANDBY EST:15m]]` directive delivered as live content — the live incident, reproduced.
+- *`abandoned` had the same harm with no restart at all (review F1).* The committed guard in
+  `#appendVerifiedContent` rejected only `sealed`/`seal_interrupted_pending`, so late content for a
+  force-abandoned session was accepted — leaf appended, doorbell rung, away-response and Telegram
+  fired. Fixed at the guard rather than the marker: suppressing only the delivery would leave the
+  wake ringing with nothing behind it.
+- *Entry point 2 was already done.* `sealed_session_annex`, the `session_committed` disposition
+  (annex strictly before confirm-delete), the M12-P18 `counterparty_unknown` sweep, and the
+  `actionable: false` operator-read surface all pre-date this pass. All four disposition constraints
+  met.
+
+Watermark untouched throughout — the seal attests what each side actually consumed, so the messages
+stay honestly unread and in the notarized transcript. They just stop ringing the bell. Residual: the
+annex field is named `post_seal_annex`, which is imprecise for an abandoned session (no seal to be
+"post"); the guidance text is accurate, so renaming is deferred as a wire change with its own
+migration.
+
+**Original entry, kept for the record. Proposed rank: slot beside
+item 2 (`DOD-SEALED-INBOX-2`), pending Andre confirmation — added 2026-08-06.** Same code surface,
+different defect, meant to land in one pass. Ranked below `DOD-TERMINAL-STATE-DIVERGENCE-1`: this one
+confuses (self-concealing false confidence) but the sealed transcript stays valid; nothing is lost.
+
+Messages that were still unread when a session sealed stay unread forever — correctly. The seal
+attests what each side actually consumed (`content_frontier_seq` per participant,
+`final_message.answered`), so advancing the watermark at seal would falsify the receipt. **That
+behaviour is right and is not what this item asks to change.** The messages are also still in the
+notarized transcript; they are leaves in the tree. Nothing is missing from the record.
+
+The defect is downstream and purely presentational: those messages are surfaced as **pending,
+actionable work** with no signal that the session is terminal. Nothing can be appended to a sealed
+session, so there is no action any agent can take — but the wake is indistinguishable from a live
+inbound message, and an agent reading one has no way to tell it is answering a conversation that
+ended hours ago.
+
+**Observed live 2026-08-05** on the Hermes-bridged agent `Miss_Chelly_H`. Three sessions sealed in
+the morning all re-fired as wakes six to eight hours later:
+
+| Session | Sealed | Re-fired |
+|---|---|---|
+| `9014d071…` | 07:37:45 (`seal.autoacknowledged`) | 13:44:45 |
+| `82c2d10c…` | 05:53:19 (`node.destroyed reason:"sealed"`) | 14:19:27 |
+| `b9fed6e5…` | 06:19:16 (seal verified) | 14:19:27 |
+
+**Why this is more than noise.** The `9014d071` message carried a directive — *"I am about to take
+my receiver down deliberately; when I ask, send one message even though I look unreachable. Do not
+seal. `[[STANDBY EST:15m]]`"*. The agent read it as live, announced it was standing by, and waited
+on a counterparty whose daemon held no record of the session at all. Its 15-minute standby had
+expired roughly six hours earlier. **An agent obeying an expired instruction from a terminal session
+is a correctness failure, not a cosmetic one** — and it is self-concealing, because the agent
+reports a perfectly coherent status ("standing by as asked") that happens to be about a dead
+conversation.
+
+**Diagnosis signature:** `message.watermark.advanced` firing with a *fresh* timestamp for an old
+`sequence`, on a session whose last real event was a seal. Confirm terminality with
+`grep <sessionId> ~/.cello/daemon.log | grep -E "seal|node.destroyed|liveness"`.
+
+**Shape of the fix — not "advance the watermark at seal."** A terminal session must not generate an
+actionable wake or count as pending work. The message stays honestly unread on the record; it just
+stops ringing the bell. This shares consumers with `DOD-SEALED-INBOX-2` (`notification-handlers.ts`,
+`session-read-handlers.ts`, `session-node-manager.ts`, and the shipped
+`plugins/cello/skills/receptionist/SKILL.md`), so the two are worth doing in one pass — that item's
+per-row `status` is a precondition for this one, since a consumer cannot suppress what it cannot
+distinguish.
+
+**Triage note, stated plainly:** this needs a daemon restart plus unread-at-seal to trigger, and the
+blast radius is a confused agent rather than lost or corrupted data — so it does not obviously fail
+the ruin test on its own. What argues for it is the pairing: it lands on the same files as a ranked
+item, and "agent confidently acts on an expired instruction" is the kind of thing a technical
+evaluator reads as unsound in a trust product. Ranking is Andre's call.
+
+**Second entry point, found 2026-08-05 — the disposition problem is twice the size it looks.** The
+same never-terminal pathology reaches the mailbox by a second route. On the Hermes EC2 daemon,
+`content.recover.ingest_failed` fired 121 times on two sessions, each looping one content hash
+forever because verified-but-refused content is deliberately never confirm-deleted:
+
+| reason | count | session |
+|---|---|---|
+| `counterparty_unknown` | 78 | `6aa3f24b…` |
+| `session_committed` | 43 | `34a6edbf…` |
+
+One defect, two guards. **Fixing only the `session_committed` branch leaves the larger half looping.**
+The fix belongs at the disposition layer, not per-guard.
+
+**Disposition policy — agreed with Miss_Chelly (daemon side, M12-P14) on 2026-08-05: confirm-delete
+AND surface as inert history, in a post-seal annex outside the sealed tree.** Never discard silently
+(that makes the loss quiet instead of noisy); never present as actionable. Four constraints, settled
+in the same exchange:
+
+1. **Inertness must be structural, not advisory** — the load-bearing one. The observed failure was an
+   agent *obeying* a directive out of a sealed session. If the annex sits anywhere a wake path or an
+   inbox count can reach, the bug relocates rather than dies. Not in any wake path, not in any
+   pending total, never auto-injected into agent context; reachable only by explicit operator read.
+   If "history is not a work queue" is a convention rather than a property of where the data lives,
+   the next agent reads the field name and not the doc comment — which is exactly how
+   `DOD-SEALED-INBOX-2` produced a false "it's sealed" claim relayed to an operator as fact.
+2. **It must not borrow the seal's vocabulary.** Annex content is verified but not covered by
+   `sealed_root` — a weaker evidentiary tier, needing its own word at the field name.
+3. **Durable annex write strictly before confirm-delete.** A crash between them converts a noisy loop
+   into permanent silent loss.
+4. **Key on (recipient pubkey, content hash), session attribution optional.** `counterparty_unknown`
+   cannot resolve a session, but the park envelope is signed (SEC-1) so the signer is still
+   verifiable — and that key is what the relay mailbox already uses. This is what gives the 78
+   unattributable entries a terminal disposition on the same path as the 43 attributable ones.
+
+The annex must live outside the sealed tree: any post-seal append changes `sealed_root` and
+invalidates the notarization. Confirmed on both sides.
+
+---
+
 
 **Moved here 2026-08-09**, the same day it was ranked #1 — cause and symptom are both fixed,
 published and proven on live traffic, and the recovery is built. It should not hold the top slot
