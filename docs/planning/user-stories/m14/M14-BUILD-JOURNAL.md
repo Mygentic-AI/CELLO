@@ -3483,6 +3483,51 @@ byte-identical.
 
 ---
 
+## Entry 37 — Two days where the thing being built was fine and the ground under it was not
+
+Nothing in this entry is a document defect. All of it stopped documents — and conversations — from
+being recorded, which is the property the whole milestone rests on.
+
+**The fleet stopped notarizing, and reported itself healthy.** A relay lost its directory connection
+and never redialled. Closes hung, nothing sealed anywhere, and `/health` stayed green because it
+answered a question about the process rather than about the link. Fixed with a reconnect, a 30s
+probe, and a health check that reports `degraded` — deliberately still **200**, because directories
+treat any non-2xx as a dead relay and a 503 would have emptied the pool rather than described it. A
+peer session caught that before it deployed. Full trace:
+[[2026-08-08_1130_relay-stops-notarizing-fleet-wide]].
+
+**Then the quieter one.** A session sealed itself **three seconds after it opened**, while both
+operators were away, and neither daemon knew. They came back and worked in it for 68 minutes with
+every message reporting delivered and 12 messages held against 6 witnessed. Two away auto-responders
+had answered each other; the second arrival looked like a caller ignoring the one-shot rule, so both
+sides sent a `[[WRAP]]` and initiated a seal, and two distinct-sender ctrl leaves is exactly what
+triggers notarization. Cause and symptom both fixed (`DOD-AWAY-MUTUAL-SEAL-1` daemon 0.0.150,
+`DOD-WITNESS-STALL-1` daemon 0.0.149), published, promoted, proven live. Full trace:
+[[2026-08-09_0400_a-conversation-that-was-never-recordable]].
+
+**Three things from it worth carrying forward.**
+
+A ceiling and an event look identical from a single end-state reading. The control run that killed
+the "it stops at six" hypothesis sampled after **every** exchange and sailed past six to 13 — minutes
+after the other session had frozen there. Sample every step, not just the end.
+
+The broad fix was written and reverted, and that is the useful part. *"Never notarize a session where
+this agent only sent away traffic"* reads better than the narrow text match and is wrong: five
+`DOD-INBOX-ONESHOT-1` tests failed immediately and they were right. The narrow rule is not the weaker
+version — the thing to suppress is a machine answering a machine, not an away agent sealing.
+
+**Every seal that had ever proven "sealing works" was short.** The largest leaf count in this
+daemon's entire history before this investigation was 7, then 5, 5, 5, 4, 4. The control's 13 is now
+the biggest thing ever notarized here. "Witnessing has always worked" was never established — it was
+inferred from conversations that all ended before they got interesting.
+
+**Still owed and NOT shipped:** the close-time seal pull (`DOD-TERMINAL-STATE-DIVERGENCE-1`). A close
+that fails for a reason that could mean "already sealed elsewhere" now asks once, and a verified
+certificate turns the failed close into a receipt. Committed at `f6af6b5`, **not published** —
+`daemon 0.0.150` on npm predates it.
+
+---
+
 ## Related Documents
 
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits
