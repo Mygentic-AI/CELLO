@@ -877,6 +877,24 @@ Two properties are missing, and they are separable:
 The persisted `~/.cello/current-agent` file is NOT the cause — it read `CELLO_Coder_1` throughout,
 while the connection was bound to `Miss_Chelly`.
 
+**SECOND REPRODUCTION, 2026-08-09, and it failed the OTHER way.** Same connection class, different
+trigger: after an `/mcp` reconnect (no daemon restart), a selection that HAD been made was silently
+**dropped** — `cello_use_agent Miss_Chelly` had returned `attendance: 1`, and after the reconnect the
+connection was attending nothing, with both agents reading `selected: false`.
+
+So the reconnect replay is unreliable in both directions: it reinstates a selection that was ended,
+and it discards one that was made. That is one defect with two faces, not two defects, and it
+strengthens the diagnosis: the fault is in what the proxy REMEMBERS across a reconnect, not in the
+daemon's fallback — a daemon-side fallback could bind a connection but could not un-bind one.
+
+Independently reproduced by the counterparty session on a different connection the same day, so it
+is not specific to one client or one machine.
+
+**The dropped direction is an annoyance** — tools answer `no_current_agent` and the operator
+notices. **The bound direction is the security case**, unchanged from above: anything sent in that
+window is signed by an identity the session never chose, and is indistinguishable to the
+counterparty from the real operator of that agent.
+
 **Why it could not be diagnosed from the log, which is its own finding.** The daemon emits
 `agent.current.switched` with **no agent name and no reason** — so the record shows that a
 connection changed identity and not what it changed to, or why. Two such events fired at 18:22:51,
@@ -886,6 +904,115 @@ for diagnosing this, and it is the same blind spot as item 15 one layer up.
 **First diagnostic step:** add the agent name and the trigger (`explicit` | `replay` | `fallback`)
 to `agent.current.switched`, then reproduce with a daemon restart after a release. That distinguishes
 the two candidates in one run.
+
+
+## 17. A conversation can silently stop being recordable, and nobody finds out until they close it
+
+**Designation: `DOD-WITNESS-STALL-1`** — ❌ **OPEN, cause NOT established, NOT reproduced.**
+Unranked. **Proposed slot: at or near the top. This is the worst failure shape in the system: it
+succeeds at everything an operator can see and fails at the only thing they cannot.**
+
+**What a customer experiences.** They hold a long working conversation. Every message sends. Every
+message arrives. Nothing warns, nothing errors, both sides look completely normal. Then they close
+it — and there is no receipt, and there can never be one, because the chain stopped growing hours
+ago. The work is already done by the time it announces itself.
+
+**Measured 2026-08-09**, on a live session between two agents on this machine:
+
+| | |
+|---|---|
+| Messages held by the operator | 12 |
+| Leaves the relay had witnessed | **6** |
+| Duration frozen | 68 minutes, across 8 further messages |
+| Delivery during that time | `delivered: true` on every one, including the messages discussing it |
+
+The first close attempt reported 7 held / 6 witnessed; an hour and five messages later it reported
+12 held / 6 witnessed. **The relay was delivering and not witnessing** — the same path for a client,
+evidently not the same operation for the relay. The seal is computed over witnessed leaves, so the
+session cannot be notarized and force is the only exit, which forfeits the receipt permanently.
+
+**Why this is worse than the outage it followed.** `DOD-RELAY-DIRECTORY-RECONNECT-1` (item 14) failed
+LOUDLY: closes hung, nothing sealed anywhere, and two people knew within minutes. This one costs a
+real conversation before it says anything.
+
+**A CONTROL RUN RULES OUT THE OBVIOUS EXPLANATIONS, AND REPRODUCES NOTHING.** A fresh session on the
+same relay build, sampled after every exchange rather than only at the end:
+
+held/witnessed of one/one, two/two, four/four, **six/six**, eight/eight, ten/ten, twelve/twelve —
+exact at every step, then sealed first time with `leaf_count: 13`.
+
+- **Not a ceiling at six.** The control crossed six without pausing, minutes after the other session
+  froze there.
+- **Not "it never tracked".** Witnessing was exact from the second sample.
+- **Not the away auto-responder.** The control had no auto-replies and behaved perfectly.
+
+What survives is an **event attached to one session**. What the control does NOT do is reproduce the
+failure, and a control that behaves is weaker evidence than a reproduction that misbehaves.
+
+**The two candidate triggers**, both present in the failing session and absent from the control: it
+survived a **daemon restart mid-conversation**, and it **opened with both sides unattended and
+auto-replying**. The next experiment is a fresh session with a deliberate daemon restart halfway.
+
+**The broken session is deliberately being left open and unsealed** as the only known artefact.
+
+**This makes item 14's health check the wrong shape.** That check asks "can this relay reach a
+directory". This failure asks "is the chain still growing", and they are independent: witnessing
+froze while the directory link was fine and delivery stayed green. **The health check written for
+item 14 would report the frozen relay perfectly healthy.** A check that cannot go red for the
+failure being suffered is not a check for that failure.
+
+## 18. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
+
+**Designation: `DOD-HEARTBEAT-REPLICATION-1`** — ❌ **OPEN.** Unranked. Previously recorded only as a
+footnote on item 14; filed here because it is a live fault in its own right and was nearly fixed as
+if it were the cause of something else.
+
+**What is wrong.** `directory_nodes` rows replicate, but `last_heartbeat_at` does not — it is
+mutable, and Tier A carries immutable columns only. So every node reads the other two as
+never-heartbeated and counts `availableNodes: 1` against `requiredThreshold: 2`. Federation
+checkpoints have **never once succeeded** on these containers.
+
+**What it does NOT cause, established by measurement 2026-08-08:** the sealing outage. The degraded
+count was already true *during* the seals that worked — `federation.checkpoint.skipped` logged
+`availableNodes 1` at 06:47, 06:52, 06:55 and 06:57 UTC, bracketing and interleaving successful
+notarizations, one of them one second after a seal completed. A gate cannot be a gate while things
+pass through it. Recorded because this was believed to be the cause for several hours and a fix was
+about to be built on it.
+
+**Why it still matters at launch.** Checkpointing is how the consortium agrees on shared state.
+Nothing that depends on a quorum view can be trusted while every node believes it is alone, and the
+failure is invisible — nodes do not report that they cannot see each other.
+
+## 19. Trust-signal replication fails every round, and the fork alarm climbs
+
+**Designation: `DOD-SIGNAL-REPLICATION-1`** — ❌ **OPEN.** Unranked. Pre-existing, surfaced during
+the 2026-08-08 fleet investigation.
+
+`signal_records` anti-entropy has never worked: **1530 consecutive apply failures**, every one
+`null value in column "scanner_version" violates not-null constraint`. The column is NOT NULL and is
+not in the replicated set, so every apply fails by construction.
+
+**What an operator would see.** Trust signals present on the node that minted them and absent
+elsewhere — so which signals a counterparty sees depends on which directory node answers. The fork
+alarm climbing (39 consecutive at the time of measurement) is a consequence, not a separate fault,
+and it trains whoever watches it to ignore a real fork later.
+
+## 20. A document's agreed content profile is signed into its identity and enforced by nothing
+
+**Designation: `DOD-DOC-PROFILE-1`** (M14) — ⏳ **DELIBERATE SPLIT, recorded here so the gap is
+visible from the launch list rather than only from the milestone doc.**
+
+Two parties agree a content profile at the handshake. It is bound into the document id and is
+immutable for the document's life — that half works and had to ship first, because rebinding it is
+only free before anyone owns a document. **No verb consults it.** An operator who deliberately chose
+the restrictive profile gets exactly the protection of one who did not think about it.
+
+Not a break — inbound updates are still screened by the general rules — but the setting is currently
+a promise the system does not keep, and it is labelled inert rather than done in the milestone.
+
+**`DOD-DOC-REBUTTAL-1` is the paired deferral** (Andre, 2026-08-05, slipped to M14B): a peer's
+refusal cannot be answered, so a genuinely multilingual document fails closed and is resolved by
+hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
 ---
 
