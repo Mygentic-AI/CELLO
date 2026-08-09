@@ -1082,6 +1082,55 @@ Entry 31 in [[M14-BUILD-JOURNAL]] carries the full trace for each.
   ever fetched it. Every wrong turn in this milestone came from reasoning about the protocol instead
   of reading one comparison.
 
+  ---
+
+  **UPDATE 2026-08-09 — the build this was measured on has since been fixed twice, and the symptom
+  is a named defect of that build. This is a HYPOTHESIS with a mapped chain, not a fix.**
+
+  *What the evidence shows, and only that.* This ran on **daemon 0.0.139**. Two defects have since
+  been found, root-caused and shipped, both of them ABOVE this measurement in the causal chain:
+
+  - **`DOD-WITNESS-STALL-1` (daemon 0.0.149).** A **terminal** relay refusal — `session_sealed`,
+    `session_not_found` — was logged and then IGNORED, and the send returned success. Correct for a
+    relay briefly unreachable, where the sequence is recovered later; wrong for a seal, where there
+    is no later. "Not witnessed yet" and "will never be witnessed" were the same code path.
+  - **`DOD-AWAY-MUTUAL-SEAL-1` (daemon 0.0.150).** Two unattended agents sealed a session **three
+    seconds after it opened** by answering each other's away responders, and neither daemon learned,
+    because the seal completion is pushed with no pull twin.
+
+  *The consume path, traced in code rather than assumed.* A document frame is not on a special
+  transport. `createDocumentDeliveryTransport.sendBytes` calls **`SessionNodeManager.sendContent`**,
+  which calls `submitMessageHash` — the exact seam `DOD-WITNESS-STALL-1` fixed. On 0.0.139 a document
+  update sent into a sealed session therefore **reported `ok: true` and delivered nothing.** That is
+  the measured symptom in this section, word for word: *"The sends report success; nothing arrives."*
+
+  *The producer.* The delivery worker OPENS an autonomous session and then SEALS it
+  (`sealSession`, §16.4 — the ceremony goes to zero, the seal does not). It reuses the most recent
+  ACTIVE session when one exists. So there is a live route to a sealed session underneath an
+  in-flight delivery, without invoking the relay at all. The Hermes EC2 side was unattended, which is
+  the precondition of the away-responder seal.
+
+  *What this does NOT establish, and must not be written up as if it did.* Nobody has shown that
+  these sessions were sealed. The relay's record for them was never read, and by now may be gone. The
+  asymmetry — laptop 5 retries, EC2 exactly 1 — is still unexplained and is NOT accounted for by
+  either fix. A sealed session is one route to "reports success, arrives nowhere" and there may be
+  others.
+
+  **The measurement, unchanged in spirit and now cheaper: re-run the two-machine smoke on the current
+  build.** 0.0.152 carries both fixes, and its behaviour discriminates between the hypotheses without
+  anyone reading a log:
+
+  - If it CONVERGES → the cause was above the transport and is fixed.
+  - If it fails with an explicit terminal error → the session is being sealed; the seal is the cause
+    and the failure is now loud instead of silent. That is the fix working, and the remaining work is
+    the seal, not the transport.
+  - If it still reports success and delivers nothing → the cause is genuinely in the relay path, the
+    two fixes are irrelevant to it, and the original instruction stands: read the relay's own record.
+
+  **This requires Andre's two machines** — a laptop and a second host behind a different NAT. It
+  cannot be run from one host: the spine harness runs both daemons locally against a Docker relay,
+  which is precisely the path that never exercised this.
+
 ## DOD-DOC-TYPES-1 ✅ [cello-client] — document types (2026-08-09)
 
 Shipped as four units in `daemon 0.0.152` / `connect 0.0.136`. Design conversation and its settled
