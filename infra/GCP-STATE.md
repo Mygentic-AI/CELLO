@@ -7,6 +7,24 @@
 > **Rule (same as STATE.md):** update IMMEDIATELY after every GCP change, never batched.
 > A session that changes GCP without updating this file is incomplete.
 
+> ### 🚨 AN IMAGE TAG DOES NOT TELL YOU WHAT IS RUNNING
+> Every deployment below is recorded **by image tag**, and that is the field an operator reads to
+> answer "what is deployed". **It cannot answer that for anything templated** — cloud-init, env
+> vars, the health-check URL, internal-versus-public addressing. Those come from
+> `infra/terraform/templates/`, which **`terraform apply` renders from DISK, not from the commit
+> the image was built at.** The two sources are independent and nothing forces them to agree.
+>
+> Proven live 2026-08-08: a relay image was built from a commit whose cloud-init still published the
+> relay's PUBLIC health address (unreachable from any directory — it drains the pool and refuses
+> every session), and deployed onto instances that got the CORRECT internal address, because the fix
+> was sitting uncommitted in the working tree when `apply` ran. The running config was right and the
+> image tag said it was wrong. **A clean `terraform plan` does not catch this** — the plan showed
+> only the image swap, correctly, and said nothing about the template being newer than the image.
+>
+> **So:** when an entry below matters, verify the RUNNING config (`gcloud compute instances describe
+> … --format='value(metadata.items[].value)'`), not the tag. And when writing a new entry, record any
+> templated value you depended on **explicitly**, because the tag will not carry it.
+
 > ### ⚠️ STANDING DEVIATIONS — things that are deliberately NOT in their intended state
 > - **`gcp-usc1` is TEMPORARILY DOWNSIZED to `e2-medium`** (2 shared/burstable vCPU + 4 GB, vs
 >   `e2-standard-2`'s 8 GB), zone `us-central1-a`. Taken 2026-08-06 to restore the third node after a
