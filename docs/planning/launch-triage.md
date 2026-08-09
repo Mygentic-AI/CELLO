@@ -1010,7 +1010,49 @@ refusal cannot be answered, so a genuinely multilingual document fails closed an
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
 
-## 18. Interrupted-session sealing is shipped and has never been proven
+## 18. Same-operator standing: two layers exist, and one input can be absent
+
+**Designation: `DOD-SELF-STANDING-NULL-LINKAGE-1`** — ⚠️ **OPEN QUESTION, NOT a confirmed defect.**
+Raised 2026-08-09 from an endorsement exercise. Filed because it is a security property and the
+answer needs someone who knows registration, not because it is known to be broken.
+
+**First, the part that is NOT a problem, because it was nearly filed as one.** An endorsement between
+two of one operator's agents was refused live. The daemon's refusal names *"both your agents on this
+machine"*, which looks like it only catches a shared laptop — and the obvious conclusion, that a
+second agent on another host would sail through, is WRONG. The daemon check is a deliberate fast
+local pre-check; its own comment says the portal *"remains the real enforcer… only it can see account
+linkage, and only it can catch two agents under one account on different machines."* And the portal
+does: it flags same-operator on **account match OR verified phone-stub match**, the second
+specifically to catch the operator who opens a second account. The flag is pinned to the submission
+before minting so a re-mint cannot flip it into two notarized endorsements. Two layers, the outer one
+decisive.
+
+**The actual question.** The portal computes the flag as:
+
+> issuer resolved AND subject resolved AND ( accountId matches, OR phoneStubHash matches )
+
+Both inputs are nullable — the directory returns `account_id` and `phone_stub_hash` as
+possibly-absent, and the code handles null explicitly. So the flag is **false** in two situations
+that are not "these are different people":
+
+1. **Both agents have no account and no verified phone.** Nothing links them, so nothing flags them.
+2. **The ISSUER does not resolve in the directory at all.** `issuerAgent !== null` is a conjunct, so
+   an unresolvable issuer makes the whole expression false — *not same operator* — rather than
+   refusing. That is a fail-open on an unknown issuer rather than a fail-closed.
+
+**What I cannot prove from code alone, and what decides it:** whether either state is reachable by an
+agent that can actually submit. If submission requires portal authentication, the issuer necessarily
+has an account and case 2 is unreachable; case 1 then needs both agents account-bound but
+phone-unverified, which may or may not be possible at registration. **Someone who knows the
+registration and submission-auth path should answer this rather than someone reading the trust
+module.** Nothing here has been demonstrated against a running system.
+
+**Why it is worth an answer even if it turns out closed.** "You cannot manufacture standing out of
+your own machines" is an argument we make in writing (`[[shared-documents-objection-rebuttal]]`
+argument 3) and it is the kind of claim a technical evaluator will probe directly. A conjunct that
+evaluates to *not-same-operator* when an input is missing is the shape worth being certain about.
+
+## 19. Interrupted-session sealing is shipped and has never been proven
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
 Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
