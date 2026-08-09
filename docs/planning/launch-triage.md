@@ -94,6 +94,36 @@ see the notes below.)
 > The last row is the one to act on. It is the recovery half of the witnessing failure and it is
 > sitting in `main` with nothing shipping it.
 
+### How to actually ship something off this list — for an agent arriving cold
+
+**The code lives in TWO repos and most of this list is the second one.**
+
+| What | Where |
+|---|---|
+| Directory node, relay, infrastructure, e2e spine tests, this doc | `trustless-cello` |
+| Daemon, CLI, MCP shim, crypto, transport — i.e. `DOD-*` client fixes | `cello-client` (separate checkout) |
+
+**To ship a client fix (the usual case):**
+
+1. **Load the `/cello-publish` skill first — every time, for THAT publish.** It is enforced by a hook
+   and it is authoritative; the prose in `CLAUDE.md` is reference only. Publishing from memory has
+   burned npm versions permanently.
+2. Version-cascade, tag, push. CI publishes to the `beta` dist-tag.
+3. **Verify against the TARBALL, not CI status** — `npm pack` the package and grep its `dist/`. A
+   green build is not evidence the change shipped.
+4. **Andre runs the `latest` promotion. Never run it yourself.** Prepare all seven `npm dist-tag add`
+   commands and hand them over — all seven, at their current versions, not the subset you changed.
+
+**To ship a relay or directory change:** `gcloud builds submit` at a revision, then `terraform apply`
+**with `-target`** for ONE node, wait for it to come up and verify, then the next. An untargeted
+apply replaces every node at once. Read `infra/CLAUDE.md` before touching any of it, and update
+`infra/GCP-STATE.md` immediately after — not batched.
+
+**Before claiming anything on this list is done:** a green test suite is not evidence. Three separate
+defects this week passed every test and failed on live traffic — a document leaf mislabelled on the
+wire, a fix whose argument was dropped by the composition root, and a session that could not be
+sealed. Where a claim can be checked against a live daemon or the fleet logs, check it.
+
 **Both "run first" diagnoses were resolved 2026-08-04**, same day: the FROST debug-logging report
 was **overstated** (ruled out — see Addressed), and `DOD-ACCOUNTS-CHAIN-1` was **confirmed as a
 real tamper-evidence gap** — it is now ranked item 3 below (proposed slot; Andre confirms).
