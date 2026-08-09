@@ -968,9 +968,9 @@ then close it — all inside the relay's 24-hour retention. Minutes of work, and
 receipt or a named failure.
 
 
-## 19. Agents cannot share STRUCTURED data — only prose
+## 19. Document types: two important formats missing, three names that mean the same thing
 
-**Designation: `DOD-DOC-JSON-1`** — ❌ **OPEN, not built.** Unranked. **Proposed slot: high, on
+**Designation: `DOD-DOC-TYPES-1`** (was `DOD-DOC-JSON-1`) — ❌ **OPEN, not built.** Unranked. **Proposed slot: high, on
 Andre's framing 2026-08-09 — "structured data is super important, the whole use case of working on
 shared goals depends on json."** Filed after being wrongly judged low: it was ranked against what had
 been demonstrated (prose documents) rather than against what shared documents are FOR.
@@ -1009,6 +1009,59 @@ promise from "two agents share a map".
 
 **Related:** `DOD-DOC-PROFILE-1` (item 19) is the same shape of gap — a property agreed at the
 handshake that nothing enforces.
+
+
+### THE FULL PICTURE, 2026-08-09 — verified in the code, not inferred
+
+**What `document_type` actually does today.** Every branch in the codebase is *json versus
+not-json*: five in the write path, two in the notifier. **Nothing anywhere distinguishes `markdown`
+from `text` from `plaintext`.** The extension rule is `json → .json`, everything else → `.md`. So the
+field has exactly two live states — allowed-text and refused — behind a five-name vocabulary.
+
+**Two consequences, one of which is a real defect:**
+
+- `plaintext` and `text` are the same thing with two spellings, and neither differs from `markdown`.
+- **Ask for `plaintext` and you get a `.md` file.** Not a naming quibble: the operator asked for plain
+  text and the file on disk claims to be markdown. The extension does not follow the type both
+  parties agreed and signed.
+
+**Is there a justification for the field?** Yes, and it is real: `document_type` is bound into the
+signed `document_id` at the handshake and is **immutable for the document's life**. A field you cannot
+add later is worth reserving early — the same argument that landed `content_profile` inert (item 18).
+That argues for HAVING the field, not for three synonyms in it.
+
+### What the type SHOULD determine
+
+| type | merge strategy | file | diff |
+|---|---|---|---|
+| `markdown` | line / CRDT text | `.md` | line |
+| `text` | line / CRDT text | `.txt` | line |
+| `json` | **per-key on the map root** | `.json` | changed keys |
+| `html` | line / CRDT text | `.html` | line |
+
+### Recommended shape, in build order
+
+1. **Extension follows type** — smallest change, fixes the live wart, precondition for the rest.
+2. **`html`** — nearly free once (1) lands: text merge, different extension. Same caveat markdown
+   already carries, that a line merge can interleave two agents' edits into structurally odd output.
+3. **`plaintext` → accepted ALIAS for `text`**, normalised at propose so the wire carries one
+   canonical value. Not deleted: the type is inside the signed id, so anything already proposed as
+   `plaintext` keeps verifying.
+4. **`json` — the real work, roughly a day.** `read` serialises the map, `write` applies KEY-level
+   changes, `diff` reports changed keys. **The line-hunk diff must NOT be reused over serialised
+   JSON** — it would replace the structure wholesale and destroy the per-key merge that is the entire
+   reason to want structured data in a CRDT. Two agents editing different fields would clobber each
+   other, which is worse than today's refusal.
+
+**Settle BEFORE building `json`, not during:** schema-free, or an agreed shape bound at the handshake
+the way `content_profile` is? `schema_enforcement` already exists in the M14 properties and is not
+built. **Recommendation: schema-free for V1** — a shared map is a smaller promise than a shared
+schema, and the schema can be added later as its own agreed property.
+
+**Why this outranks a naming tidy-up:** Andre, 2026-08-09 — *"structured data is super important, the
+whole use case of working on shared goals depends on json."* Two agents converging on a plan, a task
+list or a spec need a structure they can both edit field by field, not a paragraph they take turns
+rewriting.
 
 ---
 
