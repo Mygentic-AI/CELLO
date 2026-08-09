@@ -1016,8 +1016,34 @@ have sent whoever picks this up at the wrong repair.
 
 ## 16. Trust-signal replication fails every round, and the fork alarm climbs
 
-**Designation: `DOD-SIGNAL-REPLICATION-1`** — ❌ **OPEN.** Unranked. Pre-existing, surfaced during
-the 2026-08-08 fleet investigation.
+**Designation: `DOD-SIGNAL-REPLICATION-1`** — ✅ **FIXED, DEPLOYED AND VERIFIED IN PRODUCTION
+2026-08-09.** Directory image `aa31516a`, all three nodes rolled.
+
+**What an operator gets now:** a trust signal minted on any node reaches the other two. Before this,
+which signals a counterparty could see depended on which of the three directory nodes their client
+happened to pick — and nothing said so.
+
+**Verified on the live databases, not from the logs alone.** All **17** `signal_records` rows are now
+present on all three nodes with byte-identical hashed content, and **every** Tier-A table has
+identical row counts across the fleet (profiles 14, seals 93, notarizations 94, attestations 186,
+claim codes 4, …). Tier-B is converged too (presence 2900 rows / 4 online, suspensions 0 on all
+three). `antientropy.apply.failed` was still firing at 20:33:09Z mid-roll with the exact not-null
+message and has fired **zero** times since the last node came up, across hundreds of rounds.
+
+**The cause was one missing column.** `scanner_version` is `TEXT NOT NULL` with no default and was
+absent from the Tier-A spec; `applyTierA` inserts exactly the spec's columns, so every apply failed
+by construction. Fixed by adding it to the hashed set — it must be hashed, not merely carried,
+because it is the submitter's unverifiable scanned-clean assertion and is forgeable outside a
+signature. A new static guard replays the migrations and fails any Tier-A spec that omits a column
+the schema requires; across all 18 tables it finds exactly this one.
+
+**⚠️ The fork alarm did NOT stop, and I over-claimed once before checking properly.** It dropped from
+39 consecutive and climbing to a counter that resets in the 2–5 range, but rounds still show
+`planned 1 / pulled 1 / applied 0`. The engine's own header calls that signature a non-converging
+fork — **but every table is demonstrably converged**, so the most likely reading is benign Tier-B
+presence churn (`applied` counts rows whose version CHANGED, and a merge that confirms the local
+copy already won changes nothing). **That is unconfirmed: the round log does not name the table.**
+Filed as its own item below rather than asserted either way.
 
 `signal_records` anti-entropy has never worked: **1530 consecutive apply failures**, every one
 `null value in column "scanner_version" violates not-null constraint`. The column is NOT NULL and is
@@ -1027,6 +1053,35 @@ not in the replicated set, so every apply fails by construction.
 elsewhere — so which signals a counterparty sees depends on which directory node answers. The fork
 alarm climbing (39 consecutive at the time of measurement) is a consequence, not a separate fault,
 and it trains whoever watches it to ignore a real fork later.
+
+---
+
+## 16b. A superseded trust signal still reads as current on two nodes out of three
+
+**Designation: `DOD-SIGNAL-STATUS-REPLICATION-1`** — ❌ **OPEN, found 2026-08-09** while verifying
+the fix above on the live databases. **Not caused by that fix, and not fixed by it.**
+
+**What an operator would see.** You replace a trust signal with a newer one. On `gcp-euw1` the old
+one correctly reads `superseded`; on `gcp-use1` and `gcp-usc1` it still reads **`active`**. So a
+counterparty checking your signals gets a different answer depending on which directory node their
+client happened to pick, and on two of three they are shown a signal you already replaced as though
+it were current. Measured: **7 rows `superseded` on euw1, the same 7 `active` on both others.**
+
+**Why.** `status` is mutable, so it is deliberately excluded from the Tier-A record hash — correctly,
+because revoking a signal must not change its hash or the directory could never find the signal it
+just revoked (V46). Revocation was therefore given its own replicating table, `signal_revocations`
+(V62). **Supersession never got the same treatment.** So the row content converges everywhere while
+the one column that says whether the signal still counts does not travel at all.
+
+**Note this is invisible to row counts and to the fork alarm** — all three nodes hold 17 identical
+rows and identical Tier-A digests. It was only found by reading `status` off the three databases
+side by side. Any future "replication is healthy" check built on counts or digests will keep missing
+it.
+
+**Shape of the fix (not yet built):** mirror `signal_revocations` — a small append-only table
+carrying the supersession fact, keyed on the superseded hash, from which each node derives `status`
+locally. That is the pattern already chosen and reviewed for revocation, so it needs no new
+argument.
 
 ## 17. A document's agreed content profile is signed into its identity and enforced by nothing
 

@@ -267,11 +267,23 @@ present** — the authoritative confirmation the roll is fully applied. (The fou
 unrelated Cloud Run drift: `ops_agent`, `ops_dashboard`, `portal`, `waitlist`. It was five before;
 the portal Cloud SQL instance no longer appears.)
 
-**Verified in production, not merely deployed:** `antientropy.apply.failed` for `signal_records` was
-still firing at 20:33:09Z mid-roll with the exact not-null message, and there have been **zero** since
-all three nodes came up. Rounds run every 1–5 seconds, so that silence is hundreds of rounds. The
-`fork_suspected` counter, which was 39 consecutive and climbing, now oscillates at 2–3 — it is
-resetting, which it can only do when rounds converge.
+**Verified in production against the DATABASES, not the logs alone.** All **17** `signal_records`
+rows are now on all three nodes with byte-identical hashed content, and every Tier-A table matches
+across the fleet (profiles 14, user_accounts 11, seals 93, notarizations 94, certificate fields 38,
+participation/attestations 186, claim codes 4, relay registrations 2, directory_nodes 3). Tier-B
+matches too (presence 2900 rows / 4 online, suspensions 0). `antientropy.apply.failed` fired at
+20:33:09Z mid-roll with the exact not-null message and **zero** times since the last node came up.
+
+**Two honest caveats, both recorded rather than smoothed over:**
+- **The fork alarm did not stop.** It fell from 39 consecutive and climbing to a counter that resets
+  in the 2–5 range, but rounds still show `planned 1 / pulled 1 / applied 0`. The engine header
+  calls that a non-converging fork signature — yet every table is demonstrably converged, so the
+  likely reading is benign Tier-B presence churn. **Unconfirmed: the round log does not name the
+  table.** An earlier version of this entry claimed the alarm was resetting cleanly on a three-sample
+  read; that was premature and is corrected here.
+- **A separate defect was found while verifying**: `status` does not replicate, so 7 signals read
+  `superseded` on `gcp-euw1` and `active` on the other two. Filed as `DOD-SIGNAL-STATUS-REPLICATION-1`
+  on [[launch-triage]]. Invisible to row counts and digests — only side-by-side `status` reads show it.
 
 > ### 📌 `GET /bootstrap` on port 8080 RETURNS 400 — AND ALWAYS DID
 > The roll procedure recorded below says "poll a real `GET /bootstrap` 200". **On port 8080 that is
