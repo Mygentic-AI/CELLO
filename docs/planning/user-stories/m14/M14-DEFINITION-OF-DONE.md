@@ -546,7 +546,37 @@ rather than the peer's state vector; and the working document having to BE the l
   consent accept/refuse pair. Tool descriptions carry the injection-boundary guidance (fetch is
   deliberate; notification is content-free). CLI parity proven the way the existing parity
   tests prove it.
-  — ⏳ **SEVEN VERBS SHIPPED, 2026-08-05** (`567a6c6`), unreviewed as of writing:
+  — ✅ **COMPLETE 2026-08-09 — REVIEWED, and every finding fixed, published and verified live.**
+
+  The review this line had never had ran 2026-08-08 against all ELEVEN verbs and their four
+  surfaces. It was not a clean report: nine findings, two of them work-losing. All are fixed
+  (daemon 0.0.148 / cli 0.0.155 / connect 0.0.135, promoted), each committed separately with the
+  gate green, and the two worst re-verified against real traffic rather than tests. Detail in
+  [[M14-BUILD-JOURNAL]] Entry 36.
+
+  **The two a customer would not have forgiven:**
+  - **An append to an append-only document was diffed as a DELETION** whenever the text did not end
+    in a newline, so the peer refused it and three refusals stalled the document — *terminal*. An
+    append-only document, whose whole premise is that appending is always safe, was destroyed by
+    appending to it. The sender's own surface reported success. The one existing test passed because
+    every string in it ended in a newline, the single shape that worked.
+  - **A failed publish left the edit applied, unsendable and invisible.** Every surface — publish,
+    write, and the pending count on list — reported a document fully in sync that the peer had never
+    seen, because pending is derived from the envelope log and no envelope was ever written.
+
+  **Also fixed:** `json` and any unknown `document_type` refused at BOTH ends rather than half-served
+  (json was advertised, accepted, and read as empty while writes went to a root nothing projects);
+  a write into a killed document no longer mutates the local copy and claims success; `close`/`kill`
+  stop reporting a local signing fault as an absent peer; the file publish path screens like the
+  write path; the `cello doc` sub-verbs finally have a guard (deleting any one left every test
+  green); a file that could not be written says why; and the log events match the DoD taxonomy.
+
+  **§16.5's passive notification is wired**, closing the clause this line carried. Both halves
+  existed with **no production caller at either end** — nothing wrote a notice, nothing read one,
+  and `cello_doc_read` was clearing rows that could never exist. That is the same
+  unit-with-no-caller shape this line's own history is made of.
+
+  Originally: seven verbs shipped 2026-08-05 (`567a6c6`):
   `propose`, `inbox`, `accept`, `refuse`, `list`, `read`, `write` — across all four surfaces, with
   `document-handlers.test.ts` as the reachability proof.
 
