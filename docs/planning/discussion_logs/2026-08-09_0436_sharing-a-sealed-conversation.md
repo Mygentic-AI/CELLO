@@ -158,15 +158,17 @@ them** — after that, A is just a person with a text file making an unverifiabl
 precisely the world without CELLO. That is a real and useful thing to sell. It is not containment,
 and if the UI lets B believe it is containment, B has been misled.
 
-### The named list means the directory learns who
+### The named list means the directory learns who — but only if we ask it to
 
-If the directory enforces membership, the directory sees the allowlist. Storing hashed pubkeys
-instead of raw ones sounds like it fixes this and does not: the directory holds the registry, so it
-can hash every pubkey it knows and match. All hashing buys is moving the disclosure from grant time
-to share time. Worth doing for that alone, but it should not be described as privacy.
+**Superseded by the leakage section below.** The claim as first written was that a named list forces
+the directory to learn the allowlist. That is true only if the *directory* is the one checking
+membership, and it does not have to be: the list sits inside a grant B signed, and the grant travels
+with the share, so the recipient can check their own membership offline. What that costs is
+enforcement against a recipient who does not care to check. Worked through properly below.
 
-So this settles the open question from the first draft in favour of naming recipients, with the
-metadata cost accepted rather than papered over.
+One thing that does hold: hashing the pubkeys is not a fix. The directory holds the registry, so it
+can hash every key it knows and match. Hashing moves disclosure from grant time to share time and
+should never be described as privacy.
 
 ### The bio is the highest-value injection target in the protocol
 
@@ -193,6 +195,76 @@ Flagging these as mine rather than settled, so they are easy to overturn:
 - **Exhausted, revoked, superseded and not-on-the-list are four different answers.** Never collapse
   them into "denied." The codebase is emphatic about this and it is right: a collapsed reason sends
   the operator to the wrong place.
+
+## What the directory can actually see — and how little it needs to
+
+Andre's framing:
+
+> Consider leakage — what a dir can see. X session (a hash) that agent A has a plain text copy of
+> can be shared with anyone.
+
+Exactly right, and it reframes the problem. The directory holds a hash and cannot read the
+conversation; A holds the plaintext. So nothing here leaks *content*. What leaks is the **graph** —
+who showed what to whom, when, and how often. That is the thing to minimise, and it turns out the
+three axes leak very differently.
+
+**Take them one at a time, asking only: does the directory have to be involved at all?**
+
+- **Expiry — no.** It is a field in the grant B signed. Anyone holding the grant can read the date
+  and check it. Zero leakage.
+- **Scope — no, if the recipient checks themselves.** The allowlist is inside the signed grant, and
+  the grant travels with the share. C looks for their own pubkey under B's signature. The directory
+  never has to see the list at all.
+- **Count — yes.** A count is shared mutable state across three nodes; there is nothing else it
+  could be. But the directory only needs to know **that a slot was spent**, not who spent it or who
+  received it.
+
+Which produces a much smaller record than the one this log proposed two sections ago. **The
+directory needs the grant's hash, its count limit, and its expiry. Not the allowlist, not the bios,
+not the recipients.** Everything with a name in it stays with A, B and C, and is verified against
+the hash. That is the hash-custodian pattern this project already runs on, applied properly.
+
+| | Who checks it | What the directory must see |
+|---|---|---|
+| Expiry | anyone, offline | nothing |
+| Scope, advisory | the recipient, offline | nothing |
+| Scope, enforced | the directory | the allowlist, and every recipient |
+| Count | the directory | that a slot was spent, and when |
+
+**The catch on scope, stated plainly.** Offline membership checking is advisory: it stops a
+well-behaved recipient from accepting something not meant for them, and it does nothing against an A
+and a C who are content to ignore it together. Enforcement requires the directory to hold the list
+and be told who each share is going to. So this is a real choice, and it belongs to B: *enforced,
+and the directory sees who* versus *advisory, and the directory sees nothing*. Neither is wrong.
+Hiding the trade would be.
+
+### The all-inclusive grant is the one the directory never hears about
+
+Now Andre's actual question. Take "anyone, unlimited, until March": scope needs no check because
+there is no list, count needs no check because there is no limit. **No per-share directory contact
+exists at all.** C is handed the transcript, the seal certificate and B's grant, and verifies the
+whole thing alone.
+
+Three consequences, and the middle one is the point:
+
+1. **It is the most private grant in the system.** The directory learns that a grant exists on a
+   session it cannot read, and never learns a single recipient. Not one.
+2. **Revocation dies with the directory check.** Nobody is asking, so there is nothing to answer.
+   **Expiry becomes the only surviving control on the most permissive grant we offer.**
+3. **It is also the cheapest to forget** — one row, no consumption facts, collected at its expiry.
+
+So the answer to what we do about expiry on all-inclusive grants is the opposite of the intuition
+that unlimited means B stopped caring: **the cap should be tighter here than on restricted grants,
+not looser**, because it is the only brake left. A restricted grant can be revoked the moment B
+changes their mind. An all-inclusive one runs to its date no matter what B wants on day two.
+
+### The trade nobody expects
+
+**Restricting costs privacy; permitting costs control.** The more B narrows who may see the
+conversation, the more the directory learns about exactly those people. The more freely B gives it
+away, the less anyone but B and A knows. That is genuinely counterintuitive, and it should be said
+out loud in the UI when B picks "only these three" — B is choosing to tell the directory about those
+three.
 
 ## Should the directory forget? Yes — but "once dead", not "once used"
 
@@ -230,9 +302,11 @@ zero standing information — the directory can confirm a grant with that hash e
 about its contents. That is the hash-custodian pattern this project already runs on, and it means the
 real archive lives where it should: both A and B hold B's signed grant themselves.
 
-**Be honest about what this buys.** Deleting later does not unlearn. The directory saw the allowlist
-at grant time and saw each recipient at share time; expunging shrinks what a future compromise or
-subpoena can extract, not what was observed. And it is cosmetic unless the retention rule covers
+**Be honest about what this buys.** Deleting later does not unlearn. Under directory-enforced scope
+the allowlist and every recipient were observed as they happened, and expunging shrinks what a
+future compromise or subpoena can extract, not what was seen. (Under the advisory default there is
+correspondingly little to expunge — which is the better argument for the advisory default than any
+retention policy.) And it is cosmetic unless the retention rule covers
 **logs too** — the observability rules require named events with context fields on every flow, so
 deleting rows while leaving a year of correlated pubkeys in log storage is theatre. Whatever TTL the
 table gets, the log events for the share flow need the same one.
@@ -299,11 +373,13 @@ gave. It is the same reasoning that puts the revoker's signature in the revocati
   why it gets typed wrong.
 - Key on the session id and the granting pubkey. Not on any display name.
 
-**Two kinds of fact, not one.** B's *grant* carries the scope, the count, the expiry and B's
-signature. Each *consumption* is a separate appended fact naming the grant it spends and the
-recipient it went to. The effective state is a fold: take the latest grant, check it has not
-expired, subtract the consumptions that reference it, and you have how many shares remain and to
-whom. The per-recipient bio rides on the grant, since that is what B was shown.
+**Two kinds of fact, not one — and the directory holds a redacted view of both.** The *grant* as an
+object carries scope, count, expiry, the per-recipient bios and B's signature, and it travels with
+the share so A, B and C all hold it whole. The directory's row holds only what it must enforce:
+**the grant's hash, the count limit, and the expiry.** No allowlist, no bios. Each *consumption* is
+an appended fact naming the grant it spends — and, in advisory mode, nothing else; the recipient
+appears only if B chose directory-enforced scope. Effective state is the fold: latest grant, still
+inside its expiry, minus the consumptions against it.
 
 **Append-only does not mean immortal.** The one thing that removes rows is the expiry-driven
 collection described above, and it is safe precisely because it is computed identically on every
@@ -346,9 +422,13 @@ containment a reader will assume.
 
 ## Open questions
 
-- **What is the default expiry, and is there a maximum?** Decided that it is mandatory; the actual
-  numbers are unset. The maximum is the more interesting one, since it caps how long the directory
-  can be made to remember.
+- **What is the default expiry, and what are the two maximums?** Decided that it is mandatory, and
+  that the cap on an all-inclusive grant should be tighter than on a restricted one since expiry is
+  the only control left there. The numbers themselves are unset.
+- **Is directory-enforced scope offered at all, or is advisory the only mode?** Enforcement is the
+  only thing that stops a colluding sender and recipient, and it is the single largest source of
+  graph leakage in the design. Offering both means explaining the trade to B; offering only advisory
+  means the allowlist is a request rather than a rule.
 - **Does the carrier session have to be open at the moment of sending**, or is an established
   contact enough?
 - **Is this a new verb, or does it belong under the attestation umbrella?** There is already
