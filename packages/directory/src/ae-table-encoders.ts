@@ -201,12 +201,21 @@ export const AUTHORIZED_ISSUERS_SPEC: TierATableSpec = {
  * nodes. Signals existed only where they were minted, so which signals a counterparty could see
  * depended on which node their client happened to pick, and the fork alarm climbed as a consequence.
  *
- * It has to be HASHED rather than carried alongside the hashed set. The column's own contract (V46)
- * is that it is the submitter's assertion that the content was scanned clean at birth, unverifiable
- * by the directory, and therefore only trustworthy inside a signature — "a forged scanner_version is
- * a lie stored as evidence". A value carried across the AE wire outside the record hash is a value
- * any peer can rewrite without invalidating the record, which is that same forgery with a different
- * courier. Being immutable, it belongs here: it is set once in the submit INSERT and never UPDATEd.
+ * It belongs here for a MECHANICAL reason, not a cryptographic one, and the distinction matters.
+ * `immutableColumns` is simultaneously the SELECT projection and the INSERT column list
+ * (`pg-ae-store.ts` — `tierAColumns` and `applyTierA`). There is no "carry it unhashed" channel to
+ * choose instead: a column that must reach another node has to be in this list. It qualifies because
+ * it is genuinely immutable — set once in the submit INSERT, never UPDATEd.
+ *
+ * **Being in the hash does NOT authenticate it.** No signature covers any `signal_records` column,
+ * and `applyTierA` RECOMPUTES the record hash from the body it was handed — so an authenticated but
+ * hostile peer can rewrite `scanner_version`, recompute, and pass the content-address check. What
+ * hashing buys is divergence DETECTION: two nodes holding different values never converge and show
+ * as a permanent digest mismatch. (An earlier version of this comment claimed hashing prevented a
+ * peer forging the value, quoting V46's "a forged scanner_version is a lie stored as evidence".
+ * V46 is talking about the SUBMIT path, where the directory cannot verify the submitter's claim;
+ * transplanting it here asserted a guarantee this table does not have. Compare `agent_revocations`,
+ * which carries a real `signature` column — that one is actually protected.)
  *
  * This DOES change the record hash of every existing row, which is normally the trap V58 documents
  * and the reason `is_tombstone` went to `signal_revocations` instead. It is acceptable here and only

@@ -107,6 +107,59 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     expect(await store.applyTierA("signal_records", [{ hash, body }])).toBe(0);
   });
 
+  // ── DOD-SIGNAL-REPLICATION-1 review F1: a revoke TOMBSTONE must never reach another node ──────
+  //
+  // `revokeSignal` writes the revocation as a row IN `signal_records`, keyed `(hash, 'revoke:'+node)`,
+  // carrying `is_tombstone=true`, `status='revoked'` and PLACEHOLDER descriptive fields the issuer
+  // never attested (`'(tombstone)'` for issuer_pubkey, type and scanner_version).
+  //
+  // None of `is_tombstone`, `status` or `revoker_*` is in the Tier-A spec — correctly, they are
+  // mutable or local. So if such a row is advertised and served, it lands on the peer with the
+  // COLUMN DEFAULTS: `is_tombstone=false`, `status='active'`. The revocation becomes an active
+  // notarization. V62's own comment says this outcome is "worse than not crossing at all".
+  //
+  // It could not happen before, because the missing `scanner_version` made every apply fail — so
+  // fixing that fix ARMED this. The sharpest consequence is the deliver gate in signal-write.ts,
+  // whose `AND is_tombstone = false` is load-bearing precisely so a hash that only ever had a revoke
+  // cannot pass: on the peer, the corrupted tombstone satisfies it.
+  //
+  // The revocation FACT already replicates properly via `signal_revocations` (V62). The tombstone row
+  // is node-local bookkeeping and has no business on the wire.
+  it("never advertises or serves a revoke tombstone — it would land on the peer as an ACTIVE signal", async () => {
+    const realHash = `${P}sig-real`;
+    const realBody = {
+      signal_hash: realHash, accepting_node: "gcp-use1", subject_kind: "agent", issuer_kind: "portal",
+      issuer_pubkey: "ab".repeat(32), type: "track_record", supersedes_hash: null, scanner_version: "scan-v1",
+    };
+    expect(await store.applyTierA("signal_records", [
+      { hash: encodeTierARecord(SIGNAL_RECORDS_SPEC, realBody).hash, body: realBody },
+    ])).toBe(1);
+
+    // Written with the PRODUCTION column list and values from revokeSignal — a hand-built body would
+    // not have caught this, which is the whole point.
+    await pool.query(
+      `INSERT INTO signal_records
+         (signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type,
+          supersedes_hash, status, revoked_at, scanner_version, is_tombstone)
+       VALUES ($1, $2, 'agent','portal','(tombstone)','(tombstone)', NULL, 'revoked', now(), '(tombstone)', true)`,
+      [realHash, `revoke:${"gcp-use1"}`],
+    );
+
+    const tombstoneBody = {
+      signal_hash: realHash, accepting_node: "revoke:gcp-use1", subject_kind: "agent", issuer_kind: "portal",
+      issuer_pubkey: "(tombstone)", type: "(tombstone)", supersedes_hash: null, scanner_version: "(tombstone)",
+    };
+    const tombstoneHash = encodeTierARecord(SIGNAL_RECORDS_SPEC, tombstoneBody).hash;
+
+    const advertised = await store.tierARecordHashes("signal_records");
+    expect(advertised, "a tombstone must not be offered to a peer").not.toContain(tombstoneHash);
+    // The real row must still be advertised — the filter must not throw the table out with it.
+    expect(advertised).toContain(encodeTierARecord(SIGNAL_RECORDS_SPEC, realBody).hash);
+
+    // And a peer that asks for it by hash anyway gets nothing.
+    expect(await store.serveTierA("signal_records", [tombstoneHash])).toEqual([]);
+  });
+
   it("advertises signal_records hashes matching encodeTierARecord — two nodes agree on the digest", async () => {
     // Digest parity is what makes the two sides ASK for the right records. The sender SELECTs
     // naturalKey ∪ immutableColumns, so a column added to the spec must appear on both sides at once

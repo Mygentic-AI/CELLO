@@ -46,7 +46,12 @@ interface ColumnState {
  * replicating a peer's chain hash would be wrong, because each node's chain is its own.
  */
 const SUPPLIED_ELSEWHERE: ReadonlyMap<string, string> = new Map([
-  ["chain_hash", "computed locally by ChainWriter.insertWithChain — a peer's chain hash is not ours"],
+  ["user_accounts.chain_hash", "computed locally by ChainWriter.insertWithChain — a peer's chain hash is not ours"],
+  ["relay_registrations.chain_hash", "computed locally by ChainWriter.insertWithChain"],
+  ["conversation_seals.chain_hash", "computed locally by ChainWriter.insertWithChain"],
+  ["conversation_participation.chain_hash", "computed locally by ChainWriter.insertWithChain"],
+  ["conversation_attestations.chain_hash", "computed locally by ChainWriter.insertWithChain"],
+  ["seal_notarizations.chain_hash", "computed locally by ChainWriter.insertWithChain"],
 ]);
 
 /** Numeric order — V9 before V10. Lexical sort would replay them wrong. */
@@ -127,13 +132,33 @@ function columnStateAtHead(): Map<string, Map<string, ColumnState>> {
       tables.set(table, cols);
     }
 
-    for (const m of sql.matchAll(
-      /ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\s+ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)([^;,]*)/gi,
+    // ADD COLUMN, matched TWO-LEVEL: the statement once, then every clause inside it.
+    //
+    // A single-level regex requiring an `ALTER TABLE` prefix per match captures only the FIRST column
+    // of `ALTER TABLE t ADD COLUMN a …, ADD COLUMN b …, …` — and V15 adds six that way, V5 eight. The
+    // loss is silent, so a future Tier-A table that gains a required column through a multi-column
+    // ALTER would leave this guard green while the table never replicates: the same shape as the
+    // defect the guard exists to prevent.
+    for (const stmt of sql.matchAll(
+      /ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?([a-z_][a-z0-9_]*)([\s\S]*?);/gi,
     )) {
-      tables.get(m[1]!.toLowerCase())?.set(m[2]!.toLowerCase(), {
-        notNull: /\bNOT\s+NULL\b/i.test(m[3]!),
-        hasDefault: suppliesOwnValue(m[3]!),
-      });
+      const table = stmt[1]!.toLowerCase();
+      const cols = tables.get(table);
+      for (const clause of stmt[2]!.matchAll(
+        /ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)((?:[^,;(]|\([^)]*\))*)/gi,
+      )) {
+        // A silent skip here is how a column goes missing without anyone noticing, so it throws.
+        if (!cols) {
+          throw new Error(
+            `${file}: ADD COLUMN on '${table}', which has no CREATE TABLE the parser recognised. ` +
+              `The parser is out of date with the migrations — fix it rather than letting the column vanish.`,
+          );
+        }
+        cols.set(clause[1]!.toLowerCase(), {
+          notNull: /\bNOT\s+NULL\b/i.test(clause[2]!),
+          hasDefault: suppliesOwnValue(clause[2]!),
+        });
+      }
     }
 
     for (const m of sql.matchAll(
@@ -180,6 +205,21 @@ describe("DOD-SIGNAL-REPLICATION-1 — a Tier-A spec supplies every column its I
     expect(signals!.get("is_tombstone")).toEqual({ notNull: true, hasDefault: true });
   });
 
+  it("proves the parser reads EVERY clause of a multi-column ALTER TABLE, not just the first", () => {
+    // V15 adds six columns in one statement. A single-level regex captures only `connection_id` and
+    // silently drops the other five — including `status`, which is exactly the shape of column that
+    // would later be mistaken for absent. Pin the LAST one in the statement.
+    const conn = schema.get("connections");
+    expect(conn).toBeDefined();
+    // `status` is the 5th clause and is the one that proves the multi-clause parse on its own: it
+    // keeps its DEFAULT 'active', while the statement's later ALTER COLUMN block drops the defaults
+    // of the others. A single-level parser sees neither it nor the drop.
+    expect(conn!.get("status"), "the 5th ADD COLUMN clause").toEqual({ notNull: true, hasDefault: true });
+    // ...and these two prove the ADD and the DROP DEFAULT compose in the right order within one file.
+    expect(conn!.get("connection_id"), "1st clause, default dropped later in V15").toEqual({ notNull: true, hasDefault: false });
+    expect(conn!.get("chain_hash"), "6th and last clause, default dropped later in V15").toEqual({ notNull: true, hasDefault: false });
+  });
+
   it("proves the parser applies DROP DEFAULT — a satisfied column becoming a required one", () => {
     // V12 adds seal_notarizations.session_id as `NOT NULL DEFAULT '\x00'` and then DROPs the default
     // in the same file. A parser that read only the ADD COLUMN would call it satisfied forever.
@@ -196,7 +236,7 @@ describe("DOD-SIGNAL-REPLICATION-1 — a Tier-A spec supplies every column its I
 
       const supplied = new Set<string>([...spec.naturalKey, ...spec.immutableColumns]);
       const unsupplied = [...live!.entries()]
-        .filter(([name, s]) => s.notNull && !s.hasDefault && !supplied.has(name) && !SUPPLIED_ELSEWHERE.has(name))
+        .filter(([name, s]) => s.notNull && !s.hasDefault && !supplied.has(name) && !SUPPLIED_ELSEWHERE.has(`${table}.${name}`))
         .map(([name]) => name);
 
       expect(

@@ -108,6 +108,26 @@ interface TierAPg {
    * available correctness lever, and it is why this is a refusal rather than a coercion.
    */
   readonly requiredColumns?: readonly string[];
+  /**
+   * A SQL predicate restricting which rows this table PUTS ON THE WIRE (advertise + serve). Omitted
+   * means every row, which is right for every table but one.
+   *
+   * This exists because a table can hold rows that are node-local bookkeeping rather than replicable
+   * facts, and the Tier-A body carries only `immutableColumns` — so such a row does not merely
+   * replicate uselessly, it replicates WRONG: every column outside the spec materialises on the peer
+   * as its DEFAULT. A row whose meaning lives in an excluded column therefore arrives meaning
+   * something else.
+   *
+   * `signal_records` is the case. `revokeSignal` writes a revocation as a row here carrying
+   * `is_tombstone=true`, `status='revoked'` and placeholder descriptive fields; none of those three
+   * are (or can be) in the spec, so the peer's copy is `is_tombstone=false, status='active'` — a
+   * revocation that arrives as an active notarization, which V62 already called "worse than not
+   * crossing at all". The revocation fact replicates properly via `signal_revocations`.
+   *
+   * The predicate must be applied to advertise AND serve together, or the two sides disagree about
+   * what exists and the round never terminates.
+   */
+  readonly wireFilter?: string;
 }
 
 // ORDER IS LOAD-BEARING: the engine applies Tier-A in this order and design §3.3 requires
@@ -154,7 +174,9 @@ const TIER_A: readonly TierAPg[] = [
   // belongs here. The AWS mesh replicated them automatically; AE requires explicit registration.
   { spec: CAPABILITY_CLAIM_CODES_SPEC, bytea: [], naturalKeyConstraint: "capability_claim_codes_pkey" },
   { spec: AUTHORIZED_ISSUERS_SPEC, bytea: [], naturalKeyConstraint: "authorized_issuers_pkey" },
-  { spec: SIGNAL_RECORDS_SPEC, bytea: [], naturalKeyConstraint: "signal_records_pkey" },
+  // `wireFilter`: revoke tombstones stay node-local — see the field's doc comment. The revocation
+  // fact crosses via `signal_revocations`, which was built for exactly that.
+  { spec: SIGNAL_RECORDS_SPEC, bytea: [], naturalKeyConstraint: "signal_records_pkey", wireFilter: "NOT is_tombstone" },
   {
     // V62. No FK to signal_records on purpose: a revocation can legitimately arrive before the
     // record it revokes (revoke-before-submit under replication), and branch 1 of the effective view
@@ -272,6 +294,16 @@ function tierASelectExpr(t: TierAPg): string {
   return tierAColumns(t)
     .map((c) => (t.bytea.includes(c) ? `encode(${c},'hex') AS ${c}` : c))
     .join(", ");
+}
+
+/**
+ * The full wire-side SELECT for a Tier-A table. ONE function so advertise and serve cannot drift:
+ * a filter applied to only one of them makes a peer ask for a record we then refuse to send, which
+ * shows up as a permanent `planned > served` shortfall rather than as the mistake it is.
+ */
+function tierAWireSelect(t: TierAPg): string {
+  const where = t.wireFilter ? ` WHERE ${t.wireFilter}` : "";
+  return `SELECT ${tierASelectExpr(t)} FROM ${t.spec.table}${where}`;
 }
 
 // ── Tier-B table registry ─────────────────────────────────────────────────────────────────────
@@ -484,7 +516,7 @@ export class PgAeStore implements AeStoreView {
   /** Record hashes for a Tier-A table (for the bucket walk + set reconciliation). */
   async tierARecordHashes(table: string): Promise<string[]> {
     const t = tierA(table);
-    const res = await this.#pool.query<Record<string, unknown>>(`SELECT ${tierASelectExpr(t)} FROM ${t.spec.table}`);
+    const res = await this.#pool.query<Record<string, unknown>>(tierAWireSelect(t));
     return res.rows.map((row) => encodeTierARecord(t.spec, row as TableRow).hash);
   }
 
@@ -505,7 +537,7 @@ export class PgAeStore implements AeStoreView {
   async serveTierA(table: string, hashes: readonly string[]): Promise<TierARecord[]> {
     const t = tierA(table);
     const want = new Set(hashes);
-    const res = await this.#pool.query<Record<string, unknown>>(`SELECT ${tierASelectExpr(t)} FROM ${t.spec.table}`);
+    const res = await this.#pool.query<Record<string, unknown>>(tierAWireSelect(t));
     const out: TierARecord[] = [];
     for (const row of res.rows) {
       const hash = encodeTierARecord(t.spec, row as TableRow).hash;
