@@ -1010,7 +1010,54 @@ refusal cannot be answered, so a genuinely multilingual document fails closed an
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
 
-## 18. Interrupted-session sealing is shipped and has never been proven
+## 18. A peer's edit that arrives while you are typing is DELETED by your next write
+
+**Designation: `DOD-DOC-STALE-WRITE-1`** — ❌ open, **measured live 2026-08-09** on daemon 0.0.152
+between two machines. Unranked. Not a CRDT fault and not a merge bug — the merge did exactly what it
+was told.
+
+**What happens to a customer, in order.**
+
+1. You read a shared document. You see what it says.
+2. You spend a minute deciding what to change.
+3. **Your counterparty's edit arrives during that minute.** Your copy silently gains their paragraph
+   — that is the feature working.
+4. You send your version back. `cello_doc_write` takes the **complete text**, and the text you send
+   is the one you read in step 1 — without their paragraph.
+5. The daemon diffs your text against the document, which now HAS their paragraph, and correctly
+   concludes you deleted it. It publishes that deletion, signed.
+6. **Both copies converge on your deletion. Their work is gone from both machines**, and neither of
+   you is told anything. Your write returned `ok: true, published: true`.
+
+**Measured, not reasoned.** On the laptop's own log, the peer's update was admitted at `12:35:41.807`
+and the write that erased it published at `12:35:42.033` — a **226 millisecond** window, and it was
+hit on the first HTML test anyone ran.
+
+**Why it is not a bug in the merge.** The full-text contract is deliberate and the tool description
+says so: *"Read first, then send the whole document back with your changes in it."* Every alternative
+is worse — a patch API means stale offsets, which in a CRDT is permanent corruption both sides agree
+on. The contract is right. What is missing is the guard.
+
+**Why JSON did not lose anything in the same test, and why that is luck.** The map root computes
+per-KEY operations, so a key absent from your text is only deleted if it was already in YOUR copy.
+In the test the peer's key had not arrived yet, so no delete was generated. Had it landed in the same
+226ms window, `jsonKeyOperations` would have emitted a delete for it exactly as the text path did.
+**Both roots have this hazard.**
+
+**The fix is small and the daemon already holds the input.** `cello_doc_read` sets a read mark —
+that is how `cello_doc_diff` answers "what changed since I looked". So the daemon can compare the
+document's state at write time against the caller's last read, and when the document has moved on:
+refuse with the current text and let the caller redo the edit against it, or apply and report loudly
+which of the peer's lines the write removed. Refusing is the safer default; this is content
+destruction, and it is silent.
+
+**Ranking note.** It needs a real concurrent edit to trigger, so it is invisible in single-agent
+testing and it gets MORE likely the more useful the document is — a long working session with an
+active counterparty is exactly the case where both of you are typing. Weigh it against the fact that
+losing a counterparty's work without telling either party is the kind of thing that costs trust
+rather than patience.
+
+## 19. Interrupted-session sealing is shipped and has never been proven
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
 Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
