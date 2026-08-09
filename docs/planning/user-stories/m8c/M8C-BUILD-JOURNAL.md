@@ -5098,3 +5098,149 @@ caption. Pre-launch with one operator is the only time a wire change is free.
 - [[M8C-MILESTONE-NOTES]] — inventory + verification evidence
 - [[2026-07-11_cli-mcp-parity-plan]] — the CLI↔MCP parity work order
 - [[2026-07-11_cursor-durable-read-before-write-design]] — the cursor fix design + the approved trade
+
+---
+
+## 2026-08-09 (overnight, autonomous) — the top triage item was already live, and trust signals had never once replicated
+
+Ran solo overnight with Andre asleep and explicit authority to deploy and publish. **Read this before
+picking anything up: two of the three things on the list turned out to be already done, and the one
+real defect was not the one that was ranked.**
+
+### THE PATTERN THAT COST THE MOST TIME — a ❌ in a doc is not evidence
+
+Four separate items were marked open or pending while the code was already shipped and running:
+
+| Item | Marked | Actually |
+|---|---|---|
+| `DOD-SEALED-INBOX-2` (triage item **1**, top of the ranked list) | ❌ open | Shipped in the daemon `0.0.134` cascade, on `latest` ever since |
+| `DOD-ACCOUNTS-CHAIN-1` (triage item 2) | 🟡 built, deploy owed | Deployed in `dir-22b9a522`; only the one-row repair is outstanding, and that is reserved for Andre |
+| GCP-STATE headline | directory on `dir-22b9a522` | Running `8e6b0f79`, agreeing with `terraform.tfvars` |
+| GCP-STATE standing deviation | `gcp-usc1` downsized to `e2-medium` | All three nodes on `e2-standard-2` |
+
+**The rule that falls out of it, and it is now written at the top of [[launch-triage]]:** a marker in
+a document tracks whoever last edited that document, not the code. **Unpack the published artifact or
+read the running instance before you trust one.** Every check below was done that way —
+`npm pack` + grep `dist/`, `gcloud compute instances describe`, and psql against the three live
+databases — and every one of them contradicted a document.
+
+The usc1 machine-type check was not academic: had that stale `e2-medium` been believed, the roll
+would have been aimed at the instance type that was exhausted during the 2026-08-06 outage.
+
+### `DOD-SEALED-INBOX-2` — closed against the binary, not the branch
+
+Branch `dod/sealed-inbox-2` is an ancestor of `main`. `npm pack @cello-protocol/daemon@latest`
+(`0.0.155`) shows `ended_unread` in three dist files, **`sealed_unread` absent from the whole dist**,
+each row carrying its real `status` plus `notarized`, and the guidance naming
+`seal_interrupted_pending` as "no receipt YET". The shipped receptionist skill, the receptionist
+agent's jq wake expression, and trustless-cello's own copy of it all read the new field;
+`plugin.json` is at `0.4.0`. The load-bearing publish order held **by construction** — the plugin
+commit went out on the branch merge, ahead of the daemon reaching `latest` — rather than because
+anyone remembered it.
+
+### Published: daemon `0.0.156` / cli `0.0.163` / connect `0.0.140`, tag `v0.0.229`
+
+Carries `7a92e1f` (`DOD-DOC-WATCH-1`). Gate on the tagged tree: 3519 tests, lint, typecheck, build.
+Verified against the tarballs — the doorbell case is in `connect/dist/channel-params.js`, the
+own-watch-patterns function in `daemon/dist/document-watch.js`, and the cross-pins are real versions
+(`cli → daemon 0.0.156`, `connect → crypto 0.0.44 / transport 0.0.50`), never `workspace:*`.
+**`beta` only — the seven `latest` promotions are Andre's and are listed in the handover.**
+
+### THE REAL WORK — `DOD-SIGNAL-REPLICATION-1`: trust signals had never replicated, at all
+
+`signal_records.scanner_version` is `TEXT NOT NULL` with no default and was missing from
+`SIGNAL_RECORDS_SPEC`. `applyTierA` inserts **exactly** the spec's columns, so every apply failed by
+construction — 1530 consecutive not-null violations, and not one signal row had ever crossed between
+nodes. A signal existed only where it was minted, so which signals a counterparty could see depended
+on which node their client picked.
+
+**It had to be hashed, not merely carried.** V46's own comment says the column is the submitter's
+unverifiable assertion and is forgeable outside a signature — "a forged scanner_version is a lie
+stored as evidence". Carrying it beside the hashed set lets any peer rewrite it without invalidating
+the record: the same forgery with a different courier.
+
+**The rehash exemption, which is the part to re-read before touching this file again.**
+`SIGNAL_REVOCATIONS_SPEC` (same file) says outright that adding columns to `SIGNAL_RECORDS_SPEC`
+"would rehash every historical row and make all three nodes report divergence" — which is why
+`is_tombstone` went to its own table instead. That objection does not bind here **only because this
+table had never replicated**, so there was no convergence to disturb. Mixed-version nodes disagreed
+during the roll and their applies failed (the unchanged status quo, and visible in the log as hash
+mismatches at 20:33–20:36Z), then converged the moment the last node rolled. **Do not reuse that
+exemption for a table that is already converging.**
+
+**The general fix matters more than the column.** `ae-spec-schema.test.ts` asserted spec ⊆ schema and
+was blind in the other direction — the direction that broke this. The new
+`ae-spec-required-columns.test.ts` replays the migrations, recovers each column's NOT NULL and
+DEFAULT state at HEAD (including `ADD COLUMN NOT NULL DEFAULT` followed by `DROP DEFAULT`, which
+turns a satisfied column into a required one), and fails any Tier-A spec that omits a column the
+schema requires. `chain_hash` is the single allowlisted exception with its producer named. Across all
+18 Tier-A tables it finds exactly this one. Its parser was independently confirmed against
+`information_schema` on a real V62 database.
+
+**`signal_records` had NO live coverage at all** — that is why this survived. Two tests added to
+`pg-ae-store.live.test.ts`. Note the pre-fix symptom is **not an exception**: `applyTierA` swallows a
+bad record on purpose so one poisoned row cannot kill the round, so it surfaces as `inserted === 0`
+and a row that never arrives. Revert-verified: removing the column fails both with
+`expected +0 to be 1`.
+
+### Deployed and verified in production
+
+Image `aa31516a`, Cloud Build `771856c8`, rolled node-by-node with `-target`. Post-roll
+`terraform plan` shows **no directory resource** — the authoritative confirmation. No migration, so
+the schema stays V62 and the ops-agent was untouched.
+
+**Verified against the three live databases, not the logs.** All 17 `signal_records` rows on all
+three nodes with identical hashed content; every Tier-A table matching across the fleet; Tier-B
+matching too. Zero `apply.failed` since the last node came up.
+
+> **⚠️ `GET /bootstrap` ON PORT 8080 RETURNS 400, AND ALWAYS DID.** The recorded roll procedure says
+> to poll it for a 200. Port 8080 is the WebSocket transport, so a plain HTTP GET is a legitimate
+> 400 — on every node, including ones nobody has touched. **Health is port 9090** (`9090/health` and
+> `9090/bootstrap` both 200). This looked exactly like a failed deploy for ten minutes and was
+> settled by checking the two nodes that had NOT been rolled. **A reading with no control is not
+> evidence.** Written into GCP-STATE beside the procedure.
+
+### TWO THINGS I DID NOT CLOSE, both stated rather than smoothed over
+
+1. **The fork alarm did not stop.** It fell from 39 consecutive and climbing to a counter that resets
+   in the 2–5 range, but rounds still show `planned 1 / pulled 1 / applied 0`, which
+   `anti-entropy-engine.ts`'s own header calls a non-converging fork signature. Every table is
+   demonstrably converged, so the likely reading is benign Tier-B presence churn — `applied` counts
+   rows whose version CHANGED, and a merge confirming the local copy already won changes nothing.
+   **Unconfirmed, because the round log does not name the table.** I claimed once, on a three-sample
+   read two minutes after the roll, that the alarm was resetting cleanly; that was premature and is
+   corrected in the triage doc and in GCP-STATE. If this is picked up, **the first step is to log the
+   table name on the round** — it is cheap and it is the whole diagnosis.
+
+2. **`DOD-SIGNAL-STATUS-REPLICATION-1` — filed, new, found while verifying.** `status` does not
+   replicate: 7 signals read `superseded` on `gcp-euw1` and `active` on the other two. So a signal
+   you already replaced still shows as current to a counterparty on two nodes out of three. Revocation
+   was given its own replicating table in V62; **supersession never got the same treatment.** It is
+   invisible to row counts and to Tier-A digests — all three nodes hold 17 identical rows — so any
+   "replication is healthy" check built on counts will keep missing it. The fix shape is the one
+   already argued and reviewed for revocation, so it needs no new design argument.
+
+### `DOD-HEARTBEAT-REPLICATION-1` re-scoped, NOT built
+
+Both surfaces a user can see already ignore the node heartbeat deliberately and since 2026-07-05 —
+discovery answers from the replicated presence flag alone, and the portal's list had the same
+conjunct dropped after it showed a working agent as offline. The only live consumer is the federation
+checkpoint, which is parked machinery. **A customer sees nothing from this**, so it should not be
+built ahead of things they do see. A code comment blaming a "BIGSERIAL id collision" was corrected —
+the cause is only that `last_heartbeat_at` is mutable and Tier A carries immutable columns, and the
+real fix is a Tier-B mutable merge for `directory_nodes`, a new merge table rather than a spec edit.
+
+### Reserved for Andre — NOT done unilaterally
+
+- **The seven `latest` promotions** for the `v0.0.229` cascade.
+- **The one unchained `user_accounts` row on `gcp-usc1`** (`DOD-ACCOUNTS-CHAIN-1` residual). GCP-STATE
+  reserves it explicitly: rewriting a `chain_hash` in an append-only tamper-evidence table, using
+  admin credentials to bypass the RLS that denies the app user UPDATE, is *the exact operation the
+  chain exists to detect*. Legitimate as a repair, but it must be a recorded decision.
+
+### Useful mechanics discovered
+
+Reading a directory node's database: IAP SSH → `CELLO_GSM_DB_APP_CREDENTIALS` off the container env →
+Secret Manager `:access` with the metadata-server token → `docker run postgres:18 psql` over the PSC
+address. Scripted in one command per node; this is what turned "the logs look quiet" into "17 rows on
+three nodes with identical content".
