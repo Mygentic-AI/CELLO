@@ -34,6 +34,9 @@ description: >
   ranked list hides whatever is actually next. Open items renumbered contiguously; the four filed
   today shifted from 18–21 to 17–20. Cross-references use designations, not numbers, so they survive
   this.
+  2026-08-09: added DOD-DOC-JSON-1 (item 21) — agents can share prose but not STRUCTURED data, which
+  Andre identifies as the use case shared documents exist for. Refused at both ends today because it
+  was half-built and losing content silently; building it is three verbs plus a per-key merge.
 ---
 
 # Launch Triage
@@ -1028,6 +1031,49 @@ notarized end to end and produce a receipt. That case has never run.
 **How to prove it:** open a session, exchange a few messages, restart the daemon to interrupt it,
 then close it — all inside the relay's 24-hour retention. Minutes of work, and it either produces a
 receipt or a named failure.
+
+
+## 21. Agents cannot share STRUCTURED data — only prose
+
+**Designation: `DOD-DOC-JSON-1`** — ❌ **OPEN, not built.** Unranked. **Proposed slot: high, on
+Andre's framing 2026-08-09 — "structured data is super important, the whole use case of working on
+shared goals depends on json."** Filed after being wrongly judged low: it was ranked against what had
+been demonstrated (prose documents) rather than against what shared documents are FOR.
+
+**What a customer cannot do.** Two agents working toward a shared goal need a shared *structure* —
+a task list, a plan with fields, a spec, a set of records — not a paragraph. Today the only document
+types admitted are `markdown`, `text` and `plaintext`. Proposing `json` is refused at both ends.
+
+**Why refusing is nonetheless correct TODAY** (`DOD-DOC-TOOLS-1` review, finding 2): JSON was
+advertised, accepted, and silently broken. A JSON document's content lives in the Yjs **map** root
+while `cello_doc_read`, `cello_doc_write` and `cello_doc_diff` all read the **text** root, and
+nothing bridges them. The file was written as `{}`, reads returned empty, writes landed where nothing
+projects, and diffs said "unchanged" forever. The file layer DOES handle JSON — it writes `.json` —
+which is exactly what made it read as finished to anyone checking that file. Refusing costs nothing
+that worked; it converts silent content loss into a clear "not supported".
+
+**What building it actually requires**, because this is the part that makes it a day of work rather
+than a flag flip. A text document is one string and merges by position. A structure merges **per
+key** — you change `owner`, I change `due`, both survive — and that per-key merge is the entire
+reason to want structured data in a CRDT at all.
+
+- **read** — serialise the map to JSON text.
+- **write** — parse the text and apply KEY-level changes. It must NOT reuse the line-hunk diff: line
+  hunks over a serialised map would replace the structure wholesale and destroy exactly the
+  concurrent merge that makes this worth having. Two agents editing different fields would clobber
+  each other, which is worse than the current refusal.
+- **diff** — report which KEYS changed, not which lines.
+
+The write path already has `#foldJson` and a `JSON_TYPES` set, so the folding half exists; the three
+verbs are what is missing.
+
+**One design question to settle before building**, not during: whether a JSON document is schema-free
+or carries an agreed shape at the handshake the way `content_profile` does. Schema enforcement is
+listed in the M14 properties but is not built, and "two agents agreed a structure" is a different
+promise from "two agents share a map".
+
+**Related:** `DOD-DOC-PROFILE-1` (item 19) is the same shape of gap — a property agreed at the
+handshake that nothing enforces.
 
 ---
 
