@@ -20,6 +20,15 @@ description: >
   2026-08-08: added DOD-RELAY-DIRECTORY-RECONNECT-1 (item 14), also unranked — the relay silently
   loses its directory connection, never reconnects, and passes its health check while sealing nothing
   fleet-wide. Restored by a manual restart; the defect is untouched.
+  2026-08-09: added six. DOD-IPC-DISCONNECT-VISIBLE-1 (15) — every connection open is logged and no
+  close is. DOD-AGENT-SELECTION-UNWARRANTED-1 (16) — a session bound to an agent it never selected,
+  now with a SECOND reproduction failing the opposite way (a reconnect dropped a selection that had
+  been made). DOD-WITNESS-STALL-1 (17) — a conversation can silently stop being recordable while
+  every message still delivers; measured at 12 held against 6 witnessed, frozen 68 minutes; proposed
+  at or near the top. DOD-HEARTBEAT-REPLICATION-1 (18) and DOD-SIGNAL-REPLICATION-1 (19), previously
+  footnotes on item 14, filed as faults in their own right. DOD-DOC-PROFILE-1 (20), the
+  agreed-but-unenforced content profile. And the verification half of DOD-TERMINAL-STATE-DIVERGENCE-1
+  (21) — interrupted-session sealing is shipped and has never once been proven.
 ---
 
 # Launch Triage
@@ -1013,6 +1022,32 @@ a promise the system does not keep, and it is labelled inert rather than done in
 **`DOD-DOC-REBUTTAL-1` is the paired deferral** (Andre, 2026-08-05, slipped to M14B): a peer's
 refusal cannot be answered, so a genuinely multilingual document fails closed and is resolved by
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
+
+
+## 21. Interrupted-session sealing is shipped and has never been proven
+
+**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
+Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
+does not.
+
+`4759b4b` (daemon 0.0.147) fixed the defect where an interrupted close agreed a signed record with
+the counterparty and **never asked anyone to notarize it** — the session reached a mutually signed
+state that nobody was ever asked to stamp, and sat there until the relay swept it.
+
+**The fix is deployed and the code path demonstrably runs**: on a real attempt the daemon logged
+`session.interrupted.responder.acked` followed by `session.interrupted.seal.leaf.submit_failed` —
+that is the request being made, where the previous build logged nothing at all because nothing asked.
+
+**But no interrupted session has ever been sealed with it.** Every stranded session available at the
+time predated the 2026-08-08 relay restart, so the relay had already dropped them and answered
+`session_not_found`. They were force-closed after confirming no certificate existed on any node.
+
+**What is unproven, precisely:** that an interrupted session whose relay session still EXISTS can be
+notarized end to end and produce a receipt. That case has never run.
+
+**How to prove it:** open a session, exchange a few messages, restart the daemon to interrupt it,
+then close it — all inside the relay's 24-hour retention. Minutes of work, and it either produces a
+receipt or a named failure.
 
 ---
 
