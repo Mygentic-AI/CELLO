@@ -1010,7 +1010,7 @@ refusal cannot be answered, so a genuinely multilingual document fails closed an
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
 
-## 18. A peer's edit that arrives while you are typing is DELETED by your next write
+## 18. There is no second refusal — so an accident and a rejection are the same signed act
 
 **Designation: `DOD-DOC-STALE-WRITE-1`** — ❌ open, **measured live 2026-08-09** on daemon 0.0.152
 between two machines. Unranked. Not a CRDT fault and not a merge bug — the merge did exactly what it
@@ -1056,6 +1056,54 @@ testing and it gets MORE likely the more useful the document is — a long worki
 active counterparty is exactly the case where both of you are typing. Weigh it against the fact that
 losing a counterparty's work without telling either party is the kind of thing that costs trust
 rather than patience.
+
+---
+
+### This is the SECOND REFUSAL gap, and it is already written down as a known hole
+
+[[shared-documents-objection-rebuttal]] argument 2 separates the two kinds of "no", and volunteers
+the missing one:
+
+- **A policy refusal** — *"this violated a rule, automatically, before anyone looked."* Built,
+  deterministic, pre-admission. It is the thing the category does not have.
+- **A taste refusal** — *"I have read your change and I do not want it."* **Not built.** The doc says
+  so out loud: *"There is no held-pending-your-approval state for a change that merely offends your
+  judgement — admission is mechanical once policy passes. If you don't like what landed, you read the
+  diff and publish a change that reverses it."*
+
+**That documented fallback is precisely the operation that just destroyed content by accident.**
+Publishing a reversal and accidentally omitting a line you never saw are **the same act**: a
+full-text write whose content lacks the peer's contribution. There is no signal distinguishing them,
+which means:
+
+> **The permanent record attributes an accident to you as a deliberate rejection of your
+> counterparty's work** — in the one system whose selling point is that the trail cannot be disputed
+> later. Losing the text is the smaller harm.
+
+### Which is why the guard is the FEATURE, not a safety net
+
+The moment the daemon is about to publish a removal of something the peer wrote is exactly the moment
+it must find out whether you mean it. That question has two answers, and they are the two refusals:
+
+- *"I never saw that"* → an accident. Re-merge, keep their content, publish only what you actually
+  changed. **Nothing is recorded as a rejection, because nothing was rejected.**
+- *"I saw it and I do not want it"* → a taste refusal, and now it is **first-class**: recorded as a
+  deliberate, attributable act rather than inferred from an absence.
+
+**It needs no held-pending state, which is the expensive thing the rebuttal correctly rules out**
+(*"holding one party's changes pending in a convergent replica is architecturally expensive"*). The
+peer's change is already admitted and the replicas already converged — nothing is held. The decision
+point is **outbound**, on your own publish, and the daemon already holds its input: `cello_doc_read`
+sets a read mark, so it can tell your write is built on a view older than the document.
+
+That converts the rebuttal's weakest admission into a claim: post-admission refusal exists, it is
+explicit, and unlike a rejected suggestion in Google Docs — which simply evaporates — **both the
+contribution and its rejection stay in the signed record.** The doc already argues that asymmetry is
+the better property; today the mechanism is missing under it.
+
+**Sequencing note for whoever builds it.** The accident half is the launch-blocking half — silent
+content loss with a false attribution. The explicit-refusal half can follow, because a write that
+says *"yes, remove it, I meant to"* is an ordinary signed edit and needs no new protocol state.
 
 ## 19. Interrupted-session sealing is shipped and has never been proven
 
@@ -1268,10 +1316,20 @@ produce the same bytes.
 deliberately NOT that anyone agreed with them; the certificate says so itself, and agreement is meant
 to be a separate signed act. Pasting the rendered document into a message and getting an explicit
 "yes, I agree" back IS that act, and puts both statements in the sealed tree — attesting the VALUES,
-not just the update chain. Carry the document's root beside the text so the peer verifies they are
-agreeing about the same document rather than about a paragraph. This is also why the deterministic
-serialiser matters here: comparing a paste against a differently-rendered local copy reads as a
-mismatch when nothing differs.
+not just the update chain.
+
+**CORRECTED — do NOT carry the document's internal root hash, which is what this note first said.**
+[[shared-documents-objection-rebuttal]] rules it out for launch and is right: a stable canonical root
+is the deferred tier, so two copies that are semantically identical can still hash differently, and
+both parties would go hunting a difference that does not exist. The deterministic serialiser shipped
+in `DOD-DOC-TYPES-1` makes the rendered TEXT canonical; it does not make the internal root canonical,
+and conflating the two is the mistake.
+
+**Hash the pasted bytes instead.** The thing being agreed to is the text in the message, so hash
+exactly that and put the digest in the message. "The text" is then unambiguous and tamper-evident
+inside the sealed record with no canonicalization required. The receiver's job is to compare the
+paste against their own copy before agreeing — and for JSON to parse both and compare structurally
+rather than by eye, so formatting noise does not read as disagreement.
 
 Full record: [[M14-DEFINITION-OF-DONE]] § `DOD-DOC-TYPES-1`, [[M14-BUILD-JOURNAL]] Entry 38.
 
