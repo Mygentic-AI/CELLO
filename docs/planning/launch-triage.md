@@ -43,6 +43,11 @@ description: >
   ranked list hides whatever is actually next. Open items renumbered contiguously; the four filed
   today shifted from 18–21 to 17–20. Cross-references use designations, not numbers, so they survive
   this.
+  2026-08-09 (end of day): DOD-DOC-TYPES-1 SHIPPED and promoted (daemon 0.0.152 / connect 0.0.136)
+  and moved to Addressed — filed and closed the same day; open items renumbered again and the list now
+  ends at 18. Building it found three live defects that were not what the item was about: plaintext was
+  admitted with a dead diff, and a JSON document would have flip-flopped forever between two key
+  orderings, each side publishing the other's rendering back as a real signed edit.
   2026-08-09: added DOD-DOC-JSON-1 (item 21) — agents can share prose but not STRUCTURED data, which
   Andre identifies as the use case shared documents exist for. Refused at both ends today because it
   was half-built and losing content silently; building it is three verbs plus a per-key merge.
@@ -89,11 +94,12 @@ see the notes below.)
 > | A send that can never be recorded now fails | published `daemon 0.0.149`, promoted |
 > | Relay reconnect + probe + health check | **deployed** to both relays, verified |
 > | Document verb review — all nine findings | published `daemon 0.0.148`, promoted |
-> | **A failed close asks for the seal certificate** (item 12) | published `daemon 0.0.151` / `cli 0.0.158`, **awaiting promotion** |
+> | **A failed close asks for the seal certificate** (item 12) | published `daemon 0.0.151`, promoted |
+> | Document types — json, html, the .txt extension, plaintext's dead diff | published `daemon 0.0.152` / `connect 0.0.136`, promoted |
 >
-> The last row is the one to act on: it is published to `beta` and verified against the tarball, and
-> **Andre has not promoted it to `latest` yet**, so no operator is running it. Promotion is his to
-> run, always.
+> **Everything in this table is now promoted and running** as of 2026-08-09. The table stays because
+> the distinction it draws is the one that has already cost a day: a green marker on this list means
+> the CODE is fixed and says nothing about whether an operator has it.
 
 ### How to actually ship something off this list — for an agent arriving cold
 
@@ -969,196 +975,6 @@ then close it — all inside the relay's 24-hour retention. Minutes of work, and
 receipt or a named failure.
 
 
-## 19. Document types: two important formats missing, three names that mean the same thing
-
-**Designation: `DOD-DOC-TYPES-1`** (was `DOD-DOC-JSON-1`) — ❌ **OPEN, not built.** Unranked. **Proposed slot: high, on
-Andre's framing 2026-08-09 — "structured data is super important, the whole use case of working on
-shared goals depends on json."** Filed after being wrongly judged low: it was ranked against what had
-been demonstrated (prose documents) rather than against what shared documents are FOR.
-
-**What a customer cannot do.** Two agents working toward a shared goal need a shared *structure* —
-a task list, a plan with fields, a spec, a set of records — not a paragraph. Today the only document
-types admitted are `markdown`, `text` and `plaintext`. Proposing `json` is refused at both ends.
-
-**Why refusing is nonetheless correct TODAY** (`DOD-DOC-TOOLS-1` review, finding 2): JSON was
-advertised, accepted, and silently broken. A JSON document's content lives in the Yjs **map** root
-while `cello_doc_read`, `cello_doc_write` and `cello_doc_diff` all read the **text** root, and
-nothing bridges them. The file was written as `{}`, reads returned empty, writes landed where nothing
-projects, and diffs said "unchanged" forever. The file layer DOES handle JSON — it writes `.json` —
-which is exactly what made it read as finished to anyone checking that file. Refusing costs nothing
-that worked; it converts silent content loss into a clear "not supported".
-
-**What building it actually requires**, because this is the part that makes it a day of work rather
-than a flag flip. A text document is one string and merges by position. A structure merges **per
-key** — you change `owner`, I change `due`, both survive — and that per-key merge is the entire
-reason to want structured data in a CRDT at all.
-
-- **read** — serialise the map to JSON text.
-- **write** — parse the text and apply KEY-level changes. It must NOT reuse the line-hunk diff: line
-  hunks over a serialised map would replace the structure wholesale and destroy exactly the
-  concurrent merge that makes this worth having. Two agents editing different fields would clobber
-  each other, which is worse than the current refusal.
-- **diff** — report which KEYS changed, not which lines.
-
-The write path already has `#foldJson` and a `JSON_TYPES` set, so the folding half exists; the three
-verbs are what is missing.
-
-**One design question to settle before building**, not during: whether a JSON document is schema-free
-or carries an agreed shape at the handshake the way `content_profile` does. Schema enforcement is
-listed in the M14 properties but is not built, and "two agents agreed a structure" is a different
-promise from "two agents share a map".
-
-**Related:** `DOD-DOC-PROFILE-1` (item 19) is the same shape of gap — a property agreed at the
-handshake that nothing enforces.
-
-
-### THE FULL PICTURE, 2026-08-09 — verified in the code, not inferred
-
-**What `document_type` actually does today.** Every branch in the codebase is *json versus
-not-json*: five in the write path, two in the notifier. **Nothing anywhere distinguishes `markdown`
-from `text` from `plaintext`.** The extension rule is `json → .json`, everything else → `.md`. So the
-field has exactly two live states — allowed-text and refused — behind a five-name vocabulary.
-
-**Two consequences, one of which is a real defect:**
-
-- `plaintext` and `text` are the same thing with two spellings, and neither differs from `markdown`.
-- **Ask for `plaintext` and you get a `.md` file.** Not a naming quibble: the operator asked for plain
-  text and the file on disk claims to be markdown. The extension does not follow the type both
-  parties agreed and signed.
-
-**Is there a justification for the field?** Yes, and it is real: `document_type` is bound into the
-signed `document_id` at the handshake and is **immutable for the document's life**. A field you cannot
-add later is worth reserving early — the same argument that landed `content_profile` inert (item 18).
-That argues for HAVING the field, not for three synonyms in it.
-
-### What the type SHOULD determine
-
-| type | merge strategy | file | diff |
-|---|---|---|---|
-| `markdown` | line / CRDT text | `.md` | line |
-| `text` | line / CRDT text | `.txt` | line |
-| `json` | **per-key on the map root** | `.json` | changed keys |
-| `html` | line / CRDT text | `.html` | line |
-
-### Recommended shape, in build order
-
-1. **Extension follows type** — smallest change, fixes the live wart, precondition for the rest.
-2. **`html`** — nearly free once (1) lands: text merge, different extension. Same caveat markdown
-   already carries, that a line merge can interleave two agents' edits into structurally odd output.
-3. **`plaintext` → accepted ALIAS for `text`**, normalised at propose so the wire carries one
-   canonical value. Not deleted: the type is inside the signed id, so anything already proposed as
-   `plaintext` keeps verifying.
-4. **`json` — the real work, roughly a day.** `read` serialises the map, `write` applies KEY-level
-   changes, `diff` reports changed keys. **The line-hunk diff must NOT be reused over serialised
-   JSON** — it would replace the structure wholesale and destroy the per-key merge that is the entire
-   reason to want structured data in a CRDT. Two agents editing different fields would clobber each
-   other, which is worse than today's refusal.
-
-**SETTLED 2026-08-09 (Andre): schema-free for V1.** `schema_enforcement` exists in the M14 properties
-and stays unbuilt. Rationale kept: a shared map is a smaller promise than a shared schema, and the
-schema can be added later as its own agreed property.
-
-**Superseded question, kept for the trail:** schema-free, or an agreed shape bound at the handshake
-the way `content_profile` is? **Recommendation was: schema-free for V1** — a shared map is a smaller promise than a shared
-schema, and the schema can be added later as its own agreed property.
-
-### CBOR for JSON documents — considered and NOT recommended (2026-08-09)
-
-Andre raised canonical CBOR so that "the same JSON" always hashes the same. **The problem he names is
-real** — `{"a":1,"b":2}` and `{"b":2,"a":1}` parse identically and hash differently, and for a system
-whose product is signatures over content that is a genuine hazard.
-
-**It does not arise here, because CELLO never signs the JSON text.** The content lives in a Yjs MAP.
-What is signed, hashed and entered into the record is the **update** — the binary CRDT operation. The
-JSON is a *projection* of the map for display and for the file. It is not the artifact.
-
-So two agents whose maps have converged hold the same state however either of them spelled their
-JSON. There is no serialisation in the signature chain to disagree about, and the receipt attests to a
-tree of update hashes rather than to a rendering. Canonical CBOR would give deterministic bytes for a
-value — which the data model already provides, because CRDT updates are binary and canonical by
-construction.
-
-**And CBOR as the FILE format would cost the primary surface.** §4.1 calls the file the surface a
-human actually edits. A `.cbor` file is unreadable and uneditable; that trades a hypothetical hashing
-concern for the loss of "open it in your editor and type".
-
-**What the instinct DOES land on, and this is worth building:** the file round-trip. Write JSON with
-two-space indent, let the operator's editor save four, and the fold-back sees changes that are not
-semantic — phantom edits published to the counterparty as though something changed. The fix is a
-**deterministic serialiser for the projection** (sorted keys, fixed indentation, stable number
-formatting), not CBOR. Cheap, keeps the file human-editable, and removes the phantom-diff class
-outright. **Build it as part of step 4.**
-
-**WHAT THE RECEIPT DOES AND DOES NOT ATTEST TO — corrected 2026-08-09 after Andre pushed back, and
-his reading is right.**
-
-An earlier version of this note said a receipt does not attest to document contents. That is wrong as
-written. The receipt commits to an ordered set of signed updates that both parties agreed on, and
-replaying those updates yields exactly ONE final document — that is what a CRDT guarantees. So
-**provenance is proven and the final content IS determined**: anyone holding the updates and the
-receipt can prove what the document became and who authored each change.
-
-Two real limits remain, and only the second bears on serialisation:
-
-1. **The receipt is a VERIFIER, not a CARRIER.** It commits to update HASHES; the document is derived
-   from update BYTES. Hand it a document plus the updates and it confirms them. It cannot reconstruct
-   the document if the payloads are gone.
-2. **What is determined is the MAP STATE — the structure — not any particular text you print it as.**
-   Two implementations could render the same agreed map as `{"a":1,"b":2}` or `{"b": 2, "a": 1}` and
-   both would be faithful. Nothing in the chain picks between them.
-
-**So the deterministic serialiser is not future insurance — it is needed the moment anyone quotes the
-document as a string**, which is today: an operator pasting it into an email, a diff rendered for a
-human, two machines comparing files. The structure is agreed; the spelling of it is not. That is a
-present-tense reason and a better one than the hypothetical this note first gave.
-
-This does NOT revive CBOR. The gap is in the human-facing projection, and CBOR's answer to it is a
-file nobody can read.
-
-### ATTESTING VALUES WITHOUT NEW CODE — the paste-and-agree pattern (Andre, 2026-08-09)
-
-Andre: *"plop all the markdown into a message with a header saying this is what we've arrived at, do
-you agree? The other one says yes I agree. Now you would have both agreeing to the actual output and
-the values."*
-
-**This is what the design already prescribes, arrived at independently.** The seal certificate's own
-legibility block says: *"No signature in this certificate implies agreement to, or assent to, the
-contents of any message. Agreement is always a separate, explicit act (its own signed reply)."* The
-paste-and-agree exchange IS that act.
-
-Both messages are leaves in the sealed tree — signed, witnessed, and inside the receipt. It converts
-*"we exchanged edits"* into *"we both looked at this exact text and said yes"*, and it needs **no new
-code**.
-
-It also gives something the update chain cannot: **a checkpoint**. The chain proves how you got
-there; the exchange proves you both examined the result and assented, at a moment. Different claims,
-and the second is usually the one a third party cares about.
-
-**The one gap, and it is small.** As described, the peer agrees to *the text in the message*. If their
-own copy has diverged — a peer edit that never landed, a refused update — they can sincerely agree to
-your paste while holding something different, and you have an attested agreement about a paragraph
-rather than about the document.
-
-**Fix: carry the document's current root alongside the text.** The peer checks their own root matches
-before agreeing. Equal → agreeing to the text is agreeing to the document. Not equal → they know to
-reconcile first, which is exactly when you want to catch it.
-
-**This raises the value of the deterministic serialiser rather than lowering it.** If a JSON document
-is pasted and the peer compares it against their own rendering, differing key order or indentation
-reads as a mismatch when nothing differs. Stable serialisation is what makes "compare my paste to
-your copy" a reliable check instead of a noisy one.
-
-**Status: a documented PATTERN, not a feature.** Nothing to build. Worth putting in the agent-facing
-guidance so both sides do it the same way, and worth stating in the receipt guidance so a reader knows
-what a plain seal does and does not claim.
-
-**Why this outranks a naming tidy-up:** Andre, 2026-08-09 — *"structured data is super important, the
-whole use case of working on shared goals depends on json."* Two agents converging on a plan, a task
-list or a spec need a structure they can both edit field by field, not a paragraph they take turns
-rewriting.
-
----
-
 # Post-launch — needed eventually, not for launch
 
 **Moved here 2026-08-04 (Andre).** Not on the launch punch list; none fails the ruin test. Kept
@@ -1306,6 +1122,50 @@ Recorded so they stop being re-found by every sweep:
 ---
 
 # Addressed — off the open list
+
+## Document types: JSON and HTML were missing, and plaintext's diff was dead
+
+**Designation: `DOD-DOC-TYPES-1`** (was `DOD-DOC-JSON-1`) — ✅ **SHIPPED 2026-08-09**, `daemon 0.0.152`
+/ `connect 0.0.136`, promoted. Filed and closed the same day.
+
+**What a customer can do now that they could not.** Share **structured data**. Two agents can hold a
+JSON document and edit **different fields at the same time** — one sets `owner`, the other sets `due`,
+both survive. That per-key merge is the entire reason to want structured data in a CRDT, and it is why
+`json` could not simply be line-merged. `html` also lands, and a `text` document is finally written as
+`.txt` rather than `.md`.
+
+**Three defects were found while building it, all live in the shipped build at the time:**
+
+- **`plaintext` was admitted and its diff was dead.** It could be proposed, accepted and co-edited,
+  and `cello_doc_diff` answered *"this build renders diffs for markdown, text, json"*. Two type lists
+  in two files had drifted and nothing failed. One registry now; every list derived.
+- **A JSON document would have flip-flopped forever.** Key order in the CRDT is insertion order, so
+  two peers holding an identical document rendered different files. Publish diffs the FILE, so a
+  peer's key arriving reordered the whole thing and that reordering published as a rewrite of every
+  line — each side sending the other's ordering back as a real signed edit, indefinitely. This would
+  have surfaced on the first real use of the feature.
+- **A re-ordered nested block counted as a changed value**, so a formatter's tidy-up published a
+  change nobody made and beat the peer's real edit to that key.
+
+All three trace to one thing: the CRDT determines the map STATE, not the STRING it is printed as.
+Keys now sort recursively; **arrays never sort**, because an array's order is content.
+
+**The design points settled with Andre, recorded so they are not re-opened:** schema-free for V1;
+**CBOR considered and declined** — it buys canonical bytes the deterministic serialiser already gives
+and costs the property that a human or an agent can open the file and read it; the serialiser is a
+present-tense need rather than insurance, because the moment anyone quotes the document everyone must
+produce the same bytes.
+
+**And a pattern that needs no code — paste-and-agree.** A seal attests that messages were exchanged,
+deliberately NOT that anyone agreed with them; the certificate says so itself, and agreement is meant
+to be a separate signed act. Pasting the rendered document into a message and getting an explicit
+"yes, I agree" back IS that act, and puts both statements in the sealed tree — attesting the VALUES,
+not just the update chain. Carry the document's root beside the text so the peer verifies they are
+agreeing about the same document rather than about a paragraph. This is also why the deterministic
+serialiser matters here: comparing a paste against a differently-rendered local copy reads as a
+mismatch when nothing differs.
+
+Full record: [[M14-DEFINITION-OF-DONE]] § `DOD-DOC-TYPES-1`, [[M14-BUILD-JOURNAL]] Entry 38.
 
 **Moved here 2026-08-09** — fixed 2026-08-06 and left in the open list for three days.
 
