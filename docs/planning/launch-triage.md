@@ -1053,10 +1053,44 @@ That argues for HAVING the field, not for three synonyms in it.
    reason to want structured data in a CRDT. Two agents editing different fields would clobber each
    other, which is worse than today's refusal.
 
-**Settle BEFORE building `json`, not during:** schema-free, or an agreed shape bound at the handshake
-the way `content_profile` is? `schema_enforcement` already exists in the M14 properties and is not
-built. **Recommendation: schema-free for V1** — a shared map is a smaller promise than a shared
+**SETTLED 2026-08-09 (Andre): schema-free for V1.** `schema_enforcement` exists in the M14 properties
+and stays unbuilt. Rationale kept: a shared map is a smaller promise than a shared schema, and the
+schema can be added later as its own agreed property.
+
+**Superseded question, kept for the trail:** schema-free, or an agreed shape bound at the handshake
+the way `content_profile` is? **Recommendation was: schema-free for V1** — a shared map is a smaller promise than a shared
 schema, and the schema can be added later as its own agreed property.
+
+### CBOR for JSON documents — considered and NOT recommended (2026-08-09)
+
+Andre raised canonical CBOR so that "the same JSON" always hashes the same. **The problem he names is
+real** — `{"a":1,"b":2}` and `{"b":2,"a":1}` parse identically and hash differently, and for a system
+whose product is signatures over content that is a genuine hazard.
+
+**It does not arise here, because CELLO never signs the JSON text.** The content lives in a Yjs MAP.
+What is signed, hashed and entered into the record is the **update** — the binary CRDT operation. The
+JSON is a *projection* of the map for display and for the file. It is not the artifact.
+
+So two agents whose maps have converged hold the same state however either of them spelled their
+JSON. There is no serialisation in the signature chain to disagree about, and the receipt attests to a
+tree of update hashes rather than to a rendering. Canonical CBOR would give deterministic bytes for a
+value — which the data model already provides, because CRDT updates are binary and canonical by
+construction.
+
+**And CBOR as the FILE format would cost the primary surface.** §4.1 calls the file the surface a
+human actually edits. A `.cbor` file is unreadable and uneditable; that trades a hypothetical hashing
+concern for the loss of "open it in your editor and type".
+
+**What the instinct DOES land on, and this is worth building:** the file round-trip. Write JSON with
+two-space indent, let the operator's editor save four, and the fold-back sees changes that are not
+semantic — phantom edits published to the counterparty as though something changed. The fix is a
+**deterministic serialiser for the projection** (sorted keys, fixed indentation, stable number
+formatting), not CBOR. Cheap, keeps the file human-editable, and removes the phantom-diff class
+outright. **Build it as part of step 4.**
+
+**When canonicalisation would genuinely be needed:** if schema enforcement ever hashes a projected
+value, or if a receipt ever attests to document CONTENTS rather than to the update chain. Neither
+exists today, and the deterministic serialiser is the cheap insurance that makes either easy later.
 
 **Why this outranks a naming tidy-up:** Andre, 2026-08-09 — *"structured data is super important, the
 whole use case of working on shared goals depends on json."* Two agents converging on a plan, a task
