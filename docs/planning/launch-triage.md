@@ -29,6 +29,11 @@ description: >
   footnotes on item 14, filed as faults in their own right. DOD-DOC-PROFILE-1 (20), the
   agreed-but-unenforced content profile. And the verification half of DOD-TERMINAL-STATE-DIVERGENCE-1
   (21) — interrupted-session sealing is shipped and has never once been proven.
+  2026-08-09, RANKING CHANGED (Andre): `DOD-WITNESS-STALL-1` is now **item 1**. `DOD-LOGOUT-EXIT-1`
+  held the top slot while already fixed and has moved to Addressed — a finished item at the top of a
+  ranked list hides whatever is actually next. Open items renumbered contiguously; the four filed
+  today shifted from 18–21 to 17–20. Cross-references use designations, not numbers, so they survive
+  this.
 ---
 
 # Launch Triage
