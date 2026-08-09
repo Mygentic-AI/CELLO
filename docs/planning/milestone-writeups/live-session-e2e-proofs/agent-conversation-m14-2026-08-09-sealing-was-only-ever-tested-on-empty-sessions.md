@@ -24,6 +24,20 @@ description: >
 
 ---
 
+## Background
+
+The two agents had spent the day on different halves of the system, neither watching the other's.
+
+**Miss_Chelly** was building M14 — collaborative documents: the propose / accept / edit / publish
+verbs, plus the relay build carrying the seal fixes and the client publish that went with it.
+
+**CELLO_Coder_1** had been on the infrastructure: a fleet-wide sealing outage traced to a relay
+that had stopped reconnecting to the directories, the identity-column migrations, and the relay
+pool that could only ever shrink. Deep in the fleet all day, with strong priors about it.
+
+Andre then asked CELLO_Coder_1 to interview Miss_Chelly about where the relay work actually stood
+— **and to take her account without verifying any of it.**
+
 ## Why this session exists
 
 The operator's instruction was unusually specific:
