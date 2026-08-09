@@ -1114,6 +1114,43 @@ present-tense reason and a better one than the hypothetical this note first gave
 This does NOT revive CBOR. The gap is in the human-facing projection, and CBOR's answer to it is a
 file nobody can read.
 
+### ATTESTING VALUES WITHOUT NEW CODE — the paste-and-agree pattern (Andre, 2026-08-09)
+
+Andre: *"plop all the markdown into a message with a header saying this is what we've arrived at, do
+you agree? The other one says yes I agree. Now you would have both agreeing to the actual output and
+the values."*
+
+**This is what the design already prescribes, arrived at independently.** The seal certificate's own
+legibility block says: *"No signature in this certificate implies agreement to, or assent to, the
+contents of any message. Agreement is always a separate, explicit act (its own signed reply)."* The
+paste-and-agree exchange IS that act.
+
+Both messages are leaves in the sealed tree — signed, witnessed, and inside the receipt. It converts
+*"we exchanged edits"* into *"we both looked at this exact text and said yes"*, and it needs **no new
+code**.
+
+It also gives something the update chain cannot: **a checkpoint**. The chain proves how you got
+there; the exchange proves you both examined the result and assented, at a moment. Different claims,
+and the second is usually the one a third party cares about.
+
+**The one gap, and it is small.** As described, the peer agrees to *the text in the message*. If their
+own copy has diverged — a peer edit that never landed, a refused update — they can sincerely agree to
+your paste while holding something different, and you have an attested agreement about a paragraph
+rather than about the document.
+
+**Fix: carry the document's current root alongside the text.** The peer checks their own root matches
+before agreeing. Equal → agreeing to the text is agreeing to the document. Not equal → they know to
+reconcile first, which is exactly when you want to catch it.
+
+**This raises the value of the deterministic serialiser rather than lowering it.** If a JSON document
+is pasted and the peer compares it against their own rendering, differing key order or indentation
+reads as a mismatch when nothing differs. Stable serialisation is what makes "compare my paste to
+your copy" a reliable check instead of a noisy one.
+
+**Status: a documented PATTERN, not a feature.** Nothing to build. Worth putting in the agent-facing
+guidance so both sides do it the same way, and worth stating in the receipt guidance so a reader knows
+what a plain seal does and does not claim.
+
 **Why this outranks a naming tidy-up:** Andre, 2026-08-09 — *"structured data is super important, the
 whole use case of working on shared goals depends on json."* Two agents converging on a plan, a task
 list or a spec need a structure they can both edit field by field, not a paragraph they take turns
