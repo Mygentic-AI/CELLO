@@ -19,7 +19,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import pg from "pg";
 import { PgAeStore } from "../pg-ae-store.js";
-import { encodeTierARecord, AGENT_REVOCATIONS_SPEC, AGENT_PROFILES_SPEC } from "../ae-table-encoders.js";
+import { encodeTierARecord, AGENT_REVOCATIONS_SPEC, AGENT_PROFILES_SPEC, SIGNAL_RECORDS_SPEC } from "../ae-table-encoders.js";
 import { encodeTierBVersion, SUSPENSION_VERSION_SPEC } from "../ae-mutable-version.js";
 import { runAntiEntropyRound, type AeStoreView } from "../anti-entropy-engine.js";
 import { computeTableDigest } from "../set-reconciliation.js";
@@ -63,6 +63,73 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     await pool.query(`DELETE FROM agent_presence WHERE k_local_pubkey LIKE $1`, [`${P}%`]);
     await pool.query(`DELETE FROM agent_revocations WHERE agent_id LIKE $1`, [`${P}%`]);
     await pool.query(`DELETE FROM agent_profiles WHERE k_local_pubkey LIKE $1`, [`${P}%`]);
+    await pool.query(`DELETE FROM signal_records WHERE signal_hash LIKE $1`, [`${P}%`]);
+  });
+
+  // ── DOD-SIGNAL-REPLICATION-1: signal_records must actually apply ────────────────────────────
+  //
+  // This table had NO live coverage at all, which is why the defect survived: `scanner_version` is
+  // TEXT NOT NULL with no default and was absent from SIGNAL_RECORDS_SPEC, so `applyTierA` — which
+  // inserts exactly the spec's columns — failed on EVERY record with a not-null violation. 1530
+  // consecutive failures in production and not one trust signal had ever crossed between nodes.
+  //
+  // The failure is SWALLOWED by design (a bad record must not take the round down), so the pre-fix
+  // symptom here is `inserted === 0` and a row that never arrives — never a thrown error. Asserting
+  // the row LANDS, with its real scanner_version, is the only assertion that catches it.
+  it("applyTierA inserts a signal_record and carries scanner_version — the column that made every apply fail", async () => {
+    const body = {
+      signal_hash: `${P}sig1`,
+      accepting_node: "gcp-use1",
+      subject_kind: "agent",
+      issuer_kind: "portal",
+      issuer_pubkey: "cd".repeat(32),
+      type: "track_record",
+      supersedes_hash: null,
+      scanner_version: "scan-v7",
+    };
+    const hash = encodeTierARecord(SIGNAL_RECORDS_SPEC, body).hash;
+
+    const inserted = await store.applyTierA("signal_records", [{ hash, body }]);
+    expect(inserted, "a signal record must actually land on the receiving node").toBe(1);
+
+    const got = await pool.query(
+      `SELECT scanner_version, subject_kind, type FROM signal_records WHERE signal_hash=$1 AND accepting_node=$2`,
+      [body.signal_hash, body.accepting_node],
+    );
+    expect(got.rows).toHaveLength(1);
+    // The submitter's signed assertion that the content was scanned clean at birth. If this arrived
+    // as anything other than the issuer's own value, the replica's copy would be evidence of a scan
+    // that never happened — which is why it is hashed rather than carried beside the hash.
+    expect(got.rows[0].scanner_version).toBe("scan-v7");
+    expect(got.rows[0].subject_kind).toBe("agent");
+
+    // Insert-if-absent by natural key (signal_hash, accepting_node) — convergence, not a duplicate.
+    expect(await store.applyTierA("signal_records", [{ hash, body }])).toBe(0);
+  });
+
+  it("advertises signal_records hashes matching encodeTierARecord — two nodes agree on the digest", async () => {
+    // Digest parity is what makes the two sides ASK for the right records. The sender SELECTs
+    // naturalKey ∪ immutableColumns, so a column added to the spec must appear on both sides at once
+    // or the nodes would disagree forever about what they each hold.
+    const body = {
+      signal_hash: `${P}sig2`,
+      accepting_node: "gcp-euw1",
+      subject_kind: "account",
+      issuer_kind: "agent",
+      issuer_pubkey: "ef".repeat(32),
+      type: "vouch",
+      supersedes_hash: null,
+      scanner_version: "scan-v9",
+    };
+    const hash = encodeTierARecord(SIGNAL_RECORDS_SPEC, body).hash;
+    expect(await store.applyTierA("signal_records", [{ hash, body }])).toBe(1);
+
+    expect(await store.tierARecordHashes("signal_records")).toContain(hash);
+
+    // And the body the store serves back must round-trip the column, or the next node to pull it
+    // would hit the same not-null violation one hop later.
+    const served = await store.serveTierA("signal_records", [hash]);
+    expect((served[0].body as Record<string, unknown>).scanner_version).toBe("scan-v9");
   });
 
   // ── Tier-A: advertise digest matches the encoder (incl. BYTEA hex) ──────────────────────────
