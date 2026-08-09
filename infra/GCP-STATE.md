@@ -788,13 +788,38 @@ capability, and this Telegram bot is the ONLY thing that issues one to a human �
 
 | | |
 |---|---|
-| Cloud Run | `cello-ops-agent`, us-east1, `INGRESS_TRAFFIC_INTERNAL_ONLY`, image `ops-c04bb0fa` |
+| Cloud Run | `cello-ops-agent`, us-east1, `INGRESS_TRAFFIC_INTERNAL_ONLY`, image **`ops-01b5fd5e`** (rolled 2026-08-09, revision `cello-ops-agent-00016-tmq`; was `ops-c04bb0fa`) |
 | Scaling | **min = max = 1, `cpu_idle = false`** — the Telegram adapter long-polls, so it needs a process between requests; two instances would race for the same update; a throttled poll loop goes deaf while looking healthy |
 | Directory | `http://10.10.0.35:8081` (gcp-use1 internal) + that node's own internal API key |
 | Database | `cello-ops-agent-database-url` → gcp-use1 Cloud SQL over PSC as **`cello_ops_agent`** (V26's least-privilege role — never the `postgres` owner, never `cello_service`). **No cross-cloud DB connection** |
-| Migration version | **57** — V57 grants `cello_ops_agent` SELECT on `flyway_schema_history`, mirroring V50 for `cello_service` |
+| Migration version | **62** as of 2026-08-09 (was 57 — see the drift note below). Set by `ops_agent_expected_migration_version` in `infra/terraform/ops-agent.tf`, asserted at startup as an EXACT match |
 | Per-node health | `DIRECTORY_HEALTH_URLS` → all three nodes' `/health` on 9090, **every 5 minutes**, after the port opens. Verified live: `3/3 nodes at schema 57`, and it caught both a real transient (`unreachable: 10.10.1.25 (timeout after 5000ms)` during a node roll) and its recovery |
 | Verified | `ops_agent.started`, `ops_agent.telegram.connected`, `telegram.polling.started`, `ops_agent.health_server.started` |
+
+### 2026-08-09 — rolled for the sign-up copy fix, and the schema assertion was 5 versions stale
+
+**What was deployed.** Image `ops-01b5fd5e` (Cloud Build `58b480f5`), carrying the registration-token
+message rewrite: it had been telling every new user to run `cello register`, which is not a CLI verb
+(the registry names `register-agent`), and assumed a CLI they had no way to have installed.
+
+**What was found on the way, and it gated the deploy.** `ops_agent_expected_migration_version` was
+`57` while all three nodes were at **62** — five migrations behind (V58–V62), drifting since at least
+2026-07-31. `ops_agent.nodes.degraded` had been logging `schema drift: … (expected 57)` **every five
+minutes for nine days** and nobody was reading it.
+
+Nothing had broken, and that is the trap: the assertion runs at STARTUP, so the running revision
+predated the drift and stayed up; the five-minute poll only WARNS. The next restart — this deploy
+included — re-runs the gate, finds `62 != 57`, logs `ops_agent.startup.failed` and calls `exit(1)`.
+At `min = max = 1` that is the registration bot not coming back. **Deploying the copy fix alone would
+have taken the bot down.** Bumped to 62 in the same apply.
+
+Root cause of the miss: `infra/CLAUDE.md` stated the expected-migration-version rule "belongs to the
+deleted AWS stack — it does not apply here". Only the SSM half died; the guard survived as this
+Terraform variable. Corrected there in the same change, with a one-command drift check.
+
+**Verified after the roll:** revision `cello-ops-agent-00016-tmq` is `latestReady`, `ops_agent.started`
+logged at 14:50:24Z with no `ops_agent.startup.failed`, and **zero `ops_agent.nodes.degraded` events
+since** — the nine-day warning is cleared.
 
 **Per-node health — CLOSED 2026-07-31.** The agent asserted a schema version against ONE database, so
 in a three-node consortium drift on the other two was invisible: each sovereign node runs its own

@@ -125,8 +125,33 @@ is restricted and gets `SELECT` on `flyway_schema_history` so the startup versio
 table it checks.
 
 Adding a migration is: add `V{N}__*.sql` under `packages/directory/db/migrations/`, build an image,
-roll the nodes per §2. **The old rule about updating `cello-ssm-parameters.yaml` and an ops-agent
-`EXPECTED_MIGRATION_VERSION` belongs to the deleted AWS stack — it does not apply here.**
+roll the nodes per §2 — **and bump `ops_agent_expected_migration_version` in
+`infra/terraform/ops-agent.tf` to `{N}` in the same change.**
+
+> **⚠️ This paragraph used to say the opposite**, and it cost a day. It read: *"The old rule about
+> updating `cello-ssm-parameters.yaml` and an ops-agent `EXPECTED_MIGRATION_VERSION` belongs to the
+> deleted AWS stack — it does not apply here."* Only the FIRST HALF was true. The SSM parameter is
+> gone; the guard it fed **survived the GCP migration** as a Terraform variable of the same meaning,
+> and it is still wired to `EXPECTED_MIGRATION_VERSION` in the Cloud Run env.
+>
+> By 2026-08-09 it was five migrations stale (`62` live, `57` asserted) and had been drifting since
+> 2026-07-31. **Nothing had broken, which is the dangerous part**: the assertion runs at STARTUP, so
+> a process that predates the drift keeps running; the five-minute node poll only WARNS. The bill
+> comes due on the next restart — a deploy included — when the gate finds a mismatch, logs
+> `ops_agent.startup.failed` and calls `exit(1)`. At `min = max = 1` that is the registration bot not
+> coming back, and it is the only thing that issues a registration capability to a human.
+>
+> **How to check it in one command**, since the warning is the earliest signal and nobody was reading
+> it:
+> ```bash
+> gcloud logging read 'resource.type="cloud_run_revision"
+>   AND resource.labels.service_name="cello-ops-agent"
+>   AND jsonPayload.event="ops_agent.nodes.degraded"' \
+>   --project cello-infra --limit 1 --freshness=1d \
+>   --format="value(jsonPayload.detail)"
+> ```
+> It prints, e.g., `schema drift: gcp-euw1 at 62, gcp-usc1 at 62, gcp-use1 at 62 (expected 57)`.
+> Empty output is the healthy answer.
 
 # 5. Secrets
 

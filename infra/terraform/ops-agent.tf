@@ -299,9 +299,25 @@ variable "ops_agent_image_tag" {
 
 variable "ops_agent_expected_migration_version" {
   type        = string
-  default     = "57"
+  default     = "62"
   description = "Schema version the ops agent asserts. Bump with every new V{N} migration — a stale value crash-loops it on a fresh deploy."
 }
+
+# 57 → 62 on 2026-08-09. It had been stale since at least 2026-07-31 (57 against an expected 56) and
+# was five migrations behind by the time anyone looked: V58 seal-certificate fields, V59 agent-account
+# links, V60 account email stubs, V61 conversation natural keys, V62 signal revocations.
+#
+# Nothing broke, because the assertion runs at STARTUP and the running revision predated the drift.
+# The five-minute node poll only WARNS (`ops_agent.nodes.degraded`, "schema drift: ... expected 57"),
+# and it had been warning for nine days. The trap is that the next restart — for any reason, a deploy
+# included — re-runs the gate, finds 62 != 57, logs ops_agent.startup.failed and exits(1). At
+# min=max=1 that is the registration bot not coming back, and this is the only thing that issues a
+# registration capability to a human.
+#
+# It went unbumped because infra/CLAUDE.md said the expected-migration-version rule "belongs to the
+# deleted AWS stack — it does not apply here". The rule was written for an SSM parameter; the guard
+# survived the migration to GCP as this variable. The document that should have caught it said not to
+# look. Corrected there in the same change.
 
 variable "ops_agent_ses_from_address" {
   type        = string
