@@ -239,11 +239,29 @@ unrelated set — **no relay resource appears**. Since `terraform plan` is this 
 (procedure §5), that is the authoritative confirmation the relay deploy is fully applied, not a claim
 from this document.
 
-## 🟢 CURRENT — directory on `aa31516a`, ALL 3 ROLLED (2026-08-09)
+## 🟢 CURRENT — directory on `1f9281f1`, ALL 3 ROLLED (2026-08-09, second roll)
 
-**Image tag:** `aa31516add032ca4566536a85224a04192d51f77`, Cloud Build
-`771856c8-88e6-41c4-8569-f4f32d355599`, built from the GitHub connection at that revision (not
-`builds submit .`). Relay unchanged on `0cf04b0c…` — no relay source changed.
+**Image tag:** `1f9281f14c859211ea13de1ef47d2db655541720`, Cloud Build
+`bc73f865-272b-42ad-98e9-77c268186de4`. Instances `cello-gcp-use1-pbl8`, `cello-gcp-usc1-v7zg`,
+`cello-gcp-euw1-dkhg`, all `9090/health` + `9090/bootstrap` 200. Post-roll `terraform plan` =
+`0 to add, 4 to change, 0 to destroy`, **no directory resource** — fully applied.
+
+**Why a second roll two hours after the first.** The unit review found that the first fix had
+**armed** a defect: `revokeSignal` writes a revocation as a row in `signal_records` carrying
+`is_tombstone=true, status='revoked'` and placeholder fields, the advertise/serve queries had no
+`WHERE`, and none of those three columns is in the Tier-A spec — so once apply started working, a
+tombstone would land on the peers as `is_tombstone=false, status='active'`: a revocation arriving as
+an **active notarization**, which would then satisfy the deliver gate's load-bearing
+`AND is_tombstone = false` on two nodes of three. Nothing had been corrupted only because production
+holds no revocations yet. Fixed with a per-table `wireFilter` (`NOT is_tombstone`) applied to
+advertise and serve through one function so they cannot drift.
+
+**Verified after this roll:** zero `apply.failed` / `table_failed` / `round.failed`; all 17
+`signal_records` rows still on all three nodes; presence still 2900/4 on all three.
+
+**Superseded — directory on `aa31516a` (first roll, same evening).** Cloud Build
+`771856c8-88e6-41c4-8569-f4f32d355599`. Carried `DOD-SIGNAL-REPLICATION-1`. Relay unchanged on
+`0cf04b0c…` across both rolls — no relay source changed.
 
 **What it carries: `DOD-SIGNAL-REPLICATION-1`, and nothing else functional.** `signal_records`
 anti-entropy had never once succeeded — `scanner_version` is `TEXT NOT NULL` with no default and was

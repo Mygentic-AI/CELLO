@@ -1792,3 +1792,36 @@ something needs no action is worth exactly the enforcer behind it, and these had
 - [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — the dead-signaling
   item, with the measurements and the open questions
 - [[protocol-map]] — where these fit relative to the overall milestone sequence
+
+---
+
+## Filed 2026-08-09 from the `DOD-SIGNAL-REPLICATION-1` unit review — three guard gaps, none armed
+
+Recorded here rather than built, because none of them is live breakage and the two that were live
+(the tombstone crossing as an active signal, and the parser dropping multi-`ADD COLUMN` clauses) were
+fixed and deployed the same night. **These three are the ones deliberately left.**
+
+**A. The required-column guard is blind to the class that produced the tombstone bug.**
+`ae-spec-required-columns.test.ts` fails a Tier-A spec that omits a NOT NULL column *with no default*.
+`is_tombstone` is `NOT NULL DEFAULT false` — semantically required, mechanically satisfied — so the
+guard not only misses it, its own anti-vacuum assertion pins it as a column that must **not** be
+reported. The right addition is a second assertion: every NOT-NULL-**with**-default column absent
+from a spec must carry a written justification naming what supplies the truth on a receiving node.
+Measured, the class is ~30 columns over 17 tables, and most fall into two mechanical groups
+(surrogate `id`, arrival timestamps like `created_at`/`linked_at`/`attested_at`). The ones that would
+need a real answer are `status` on `agent_profiles`, `authorized_issuers`, `signal_records` and
+`directory_nodes`, plus `signal_records.is_tombstone` — which is exactly the set worth writing down.
+
+**B. Tier-B has no equivalent guard at all.** `agent_suspensions.authorized_by_account` is
+`UUID NOT NULL`, supplied from a body whose validator explicitly permits null. Unreachable from an
+honest peer, but a hostile authenticated one sending null gets an uncaught throw out of `applyTierB`
+— on the kill-switch table.
+
+**C. Nullable-but-semantically-required columns replicate as NULL, unguarded.**
+`directory_nodes.endpoint` is nullable and excluded, so a node learned purely by replication arrives
+with no endpoint. Pre-existing and outside that diff; listed as the second example of the class in A.
+
+**Also worth knowing, unrelated to the above:** 30 DB-backed directory tests fail against a local
+Docker Postgres under `CELLO_ENV=local` (accounts-chain, account-001, MMR, federation-002,
+internal-api-auth, pg-pool). **Pre-existing** — verified by running them at `532e5bbe`, before any of
+that night's code. The default `pnpm run test` path skips them and is green at 1090.
