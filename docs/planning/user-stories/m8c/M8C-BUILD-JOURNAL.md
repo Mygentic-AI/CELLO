@@ -5244,3 +5244,51 @@ Reading a directory node's database: IAP SSH → `CELLO_GSM_DB_APP_CREDENTIALS` 
 Secret Manager `:access` with the metadata-server token → `docker run postgres:18 psql` over the PSC
 address. Scripted in one command per node; this is what turned "the logs look quiet" into "17 rows on
 three nodes with identical content".
+
+### Addendum, same night — the review found that the fix ARMED a defect, and it shipped too
+
+`cello-unit-reviewer` on the diff returned one finding that mattered more than the fix itself, and it
+is the reason to always run it on anything that changes what crosses the wire.
+
+**Making replication work is what armed it.** `revokeSignal` writes a revocation as a row *in*
+`signal_records`, keyed `(hash, 'revoke:'+node)`, carrying `is_tombstone=true`, `status='revoked'`
+and placeholder descriptive fields. The advertise and serve queries had no `WHERE` clause, so that
+row was always offered to peers — and always rejected on arrival, because the missing
+`scanner_version` failed every apply. Fix the apply and it lands, with the **column defaults**:
+`is_tombstone=false`, `status='active'`. A revocation arriving as an active notarization.
+
+The sharp end is the deliver gate in `signal-write.ts`, whose `AND is_tombstone = false` exists
+precisely so a hash that only ever had a revoke cannot pass — otherwise an envelope is queued under a
+hash the chokepoint never scanned, breaking *notarized ⇒ scanned-clean-at-birth*. On the two peer
+nodes, the corrupted tombstone would have satisfied that predicate itself.
+
+**Nothing was corrupted, and only by luck: production holds no revocations** (`signal_revocations` is
+0 on all three nodes, no row has `is_tombstone`). The next revocation would have done it.
+
+Fixed with a per-table `wireFilter` on the Tier-A registry (`NOT is_tombstone` for `signal_records`),
+applied to advertise and serve **through one function** so the two cannot drift — a filter on only one
+makes a peer ask for a record we then refuse to send. Tombstones are node-local; the revocation fact
+already replicates via `signal_revocations`, built for exactly that. Second image `1f9281f1`, all
+three nodes rolled, verified.
+
+**The test lesson worth keeping:** the new tombstone test writes the row with the **production column
+list**, not a hand-built body. Both original tests passed while this was broken *because* they built
+their bodies by hand — the reviewer's phrase for it was that the implementation which passes both
+tests while signals still cross wrongly is the shipped one.
+
+**And I had written a false security claim.** My spec comment said hashing `scanner_version` stops a
+peer forging it. It does not: no signature covers any `signal_records` column, and `applyTierA`
+recomputes the hash from the body it is handed, so a hostile peer rewrites the value and recomputes.
+The real reason it must be in `immutableColumns` is mechanical — that list is simultaneously the
+SELECT projection and the INSERT column list, so there is no unhashed carry channel. Hashing buys
+divergence *detection*, not authenticity. Corrected in place, because a false security belief in a
+comment outlives the person who wrote it.
+
+Two smaller review fixes shipped with it: the guard's `ADD COLUMN` regex captured only the first
+clause of a multi-column `ALTER TABLE` and dropped the rest silently (V15 adds six that way), and its
+allowlist was keyed on the bare column name so it exempted `chain_hash` on any table, chained or not.
+
+Three further findings were **filed, not built** — none armed — on [[launch-triage]] under
+"Filed 2026-08-09 from the DOD-SIGNAL-REPLICATION-1 unit review", with the measurements behind each.
+The most valuable is that the required-column guard is blind to NOT-NULL-**with**-default columns,
+which is the exact class `is_tombstone` sits in.
