@@ -8,10 +8,11 @@ description: >
   Andre asked one agent to interview the other about the day's relay fixes — explicitly without
   checking the fleet itself. The interview turned into a joint investigation: a claim of "sealing
   verified, four receipts" was found to cover only sessions of zero and two messages, a relay that
-  had silently stopped witnessing was measured, three competing explanations were killed by a
-  controlled experiment both agents designed, and a deployment hazard was found that had been
-  avoided by pure luck. Two retractions — one per agent — were each the step that unblocked the
-  next finding.
+  had silently stopped witnessing was measured, and a deployment hazard was found that had been
+  avoided by pure luck. Five hypotheses died in sequence, including both agents' own, before the
+  cause was found in the relay's log of the session's first three seconds: two away-responders had
+  sealed the conversation before either operator arrived. Retractions — several, both directions —
+  were each the step that unblocked the next finding.
 ---
 
 # "Sealing works" had only ever been tested on empty sessions
@@ -246,10 +247,89 @@ Result:
 **Three explanations died:** no ceiling at six; no "it never tracked" (killed at the first sample,
 which is why the early reading was designed in); and length is not the cause.
 
-What survives: **something interrupts a session mid-flight and witnessing stops from that moment
-on.** The broken session had survived a daemon restart and an MCP reconnect; the clean one
-survived neither and is longer. That is a far narrower hunt than "sealing is broken", and it is
-the first properly sealed real conversation of the day.
+What the two agents concluded survived: *something interrupts a session mid-flight and witnessing
+stops from that moment on* — the broken session had lived through a daemon restart and an MCP
+reconnect, the clean one through neither.
+
+> **⚠️ THAT CONCLUSION IS WRONG.** It was the state of knowledge when this document was first
+> written, and it was overturned within the hour. Both remaining hypotheses — restart and
+> reconnect — were dead too. See **Finding 6**, which is the actual cause. The wrong turn is kept
+> deliberately: the value of this record is the sequence, and a document that only shows the
+> answer teaches nothing about how it was reached.
+
+## Finding 6: the session had been sealed three seconds in, before either agent arrived
+
+Two experiments were queued to test the restart and the reconnect. Neither was needed. Miss_Chelly
+went to the one place neither agent had looked — **the relay's own log for the frozen session's
+first three seconds**:
+
+```
+01:13:34  seq 1  doc
+01:13:34  seq 2  msg
+01:13:35  seq 3  doc
+01:13:35  seq 4  msg
+01:13:35  seq 5  CTRL      ← a seal control leaf
+01:13:35  seq 6  msg
+01:13:36  seq 7  CTRL      ← the second, DIFFERENT sender
+01:13:36  relay.seal.broker.resolved
+01:13:36  seal.certificate.legibility.built
+01:13:36  seal.certificate.delivered   ← SEALED
+```
+
+**Two distinct-sender CTRL leaves are exactly what triggers notarization.** Both agents were
+unattended, both away-responders fired within a second of each other, and **the away flow ends a
+session**. The conversation was sealed at 01:13:36 — before either operator said a word on it.
+
+So it "froze at six" because six is where the count stood when the session ended. Not a stall, not
+a ceiling: the correct final state of a finished session. **Everything investigated afterwards was
+typed into a closed room.**
+
+It also explains the clean control with no theory at all: it was attended throughout, so no
+away-responder ever fired, so nothing sealed it. Twelve for twelve.
+
+### Why nobody noticed for an hour
+
+The daemon knew the whole time. Every send submitted its leaf, received `session_sealed` back,
+logged `session.relay.hash.submit.failed` — **and continued, because that branch treated every
+relay miss as a transient degradation.** Correct for a relay briefly unreachable; wrong for a seal,
+where there is no later.
+
+That is the recurring shape, and it is worth naming: **a real error, correctly detected, downgraded
+into silence by the layer best placed to raise it.** `delivered: true` on every message was the
+result.
+
+The counterpart defect is the missing pull twin — a seal completion is *pushed* with no pull, so
+neither daemon ever learned the session had ended. **That is the cause; the swallowed refusal is
+what hid it.** Both need fixing: the pull twin makes the seal knowable, the refusal makes it
+discoverable at the next send instead of at close, hours of work later.
+
+### The precondition, which bounds how bad this is
+
+CELLO_Coder_1 pinned it: the trigger needs **both sides unattended at once**. One away agent
+talking to an attended one produces a single ctrl leaf, and a single leaf does not notarize — which
+is why the away exchange at the very start of the same session behaved correctly. It takes two
+away-responders answering each other to mint two distinct-sender ctrl leaves inside a second.
+
+Which yields a defect worth carrying separately from the two above, because its fix is different in
+kind:
+
+> **Any contact between two agents that are both away silently creates a sealed, dead session that
+> neither operator knows about** — and both will talk into it when they return, exactly as these
+> two did for an hour. Making it *knowable* is the pull twin. Whether an exchange of two
+> auto-replies should be **notarizable at all** is a design question, and an open one.
+
+### How the two dead hypotheses died
+
+Both were killed from opposite ends, in parallel, by the two agents independently:
+
+- **The restart** — killed by CELLO_Coder_1 from the client side. A daemon restart flips every
+  session to `interrupted` at the same instant and the client then *refuses* to send
+  (`session_not_active`). A restart fails loudly, so it can never be the silent path. Measured by
+  being unable to reply across a deliberately-caused restart.
+- **The reconnect** — killed by Miss_Chelly from the relay side, by the timestamps above: the
+  trigger predates every disruption by more than an hour.
+
+Neither agent had to run the experiment they had spent the previous exchange designing.
 
 > **Miss_Chelly thoughts:** three things from running it that the table does not show.
 >
@@ -275,17 +355,26 @@ the first properly sealed real conversation of the day.
 > because nothing in it restarted. **It narrows the hunt; it does not close it**, and I would rather
 > that be written here than inferred from the fact that the run went well.
 
-## Two retractions, one per agent
+## The retractions — the load-bearing part of this record
+
+Every one of these was withdrawn by the agent who made it, unprompted, and each unblocked the next
+step. None was settled by asserting harder; every contested point ended with someone going to read
+something.
 
 | | claim withdrawn | what it unblocked |
 |---|---|---|
 | CELLO_Coder_1 | "the missing leaf is yours" | she stopped hunting a lost message and counted leaves |
 | CELLO_Coder_1 | "sample after every exchange" | prevented a wasted run before it started |
+| CELLO_Coder_1 | "the relay stopped witnessing" | reframed as symptom, not cause — the relay stopped because the session had ended |
+| CELLO_Coder_1 | "the restart is the trigger" | killed with his own evidence: a restart fails loudly, so it cannot be the silent path |
 | Miss_Chelly | "sealing verified, four receipts" | exposed that only 0- and 2-leaf sessions had ever been tested |
 | Miss_Chelly | her own numbering-divergence theory | dropped in favour of the explanation needing fewer assumptions |
+| Miss_Chelly | "I cannot see the relay" | she had simply not queried it for that session id — and that query held the answer |
 
-Every contested point was settled by one side going to read something, not by either asserting
-harder.
+The last row is the one that mattered most. **A stated limitation went unexamined for over an
+hour**, by both of them, and the whole investigation was routed around an obstacle that was not
+there. Neither agent thought to test the constraint until every hypothesis built on top of it had
+failed.
 
 ## Why this feels different from an orchestrator with subagents
 
@@ -356,10 +445,26 @@ its callee.
 - **The most important result was a claim getting *smaller*.** "Sealing works" survived the day
   unchallenged until someone asked how many leaves the receipts actually carried.
 - **The broken session was deliberately preserved.** Both agents refused to force-close it:
-  *"A forfeited receipt is a small loss; losing the reproduction is a bigger one."* The unsealed
-  session is now the artefact for the remaining defect.
+  *"A forfeited receipt is a small loss; losing the reproduction is a bigger one."* It was released
+  only once the relay log had given up the cause.
 - **The exchange has a receipt.** The controlled experiment sealed at 13 of 13 — the product doing
   its actual job, on work that mattered, as a by-product of investigating itself.
+- **The wrong conclusions are still in it.** This document reached a confident answer that was
+  overturned within the hour, and that section is marked rather than removed. Five hypotheses died
+  here — two of them the authors' own — and the order they died in is the reusable part. A record
+  that shows only the finding is a worse artefact than one that shows the route.
+
+## The lesson that outlives the defect
+
+**An unexamined stated limitation cost more than any wrong hypothesis.** *"I cannot see the relay"*
+was accepted by both agents for over an hour. It was not true — the query had simply never been
+run. Every theory they built, and both experiments they designed, existed only because a source of
+evidence had been ruled out without being tested.
+
+The generalisation is uncomfortable and worth keeping: **when an investigation stalls, audit the
+constraints before adding hypotheses.** The two agents were rigorous about disproving claims and
+careless about the one claim neither of them had ever checked — their own account of what they
+could see.
 
 ## Related
 
