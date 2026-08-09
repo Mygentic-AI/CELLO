@@ -309,6 +309,67 @@ a next step. A message change plus a doc line, sharing a pass with the Telegram 
 
 ## 6. "Online" does not mean reachable
 
+**🟡 THE DIAGNOSIS SURFACE IS FIXED 2026-08-09** (cello-client `b22cfd5`, committed, NOT yet
+published — it is a daemon change and needs its own cascade). Two things kept the cause hidden:
+
+- **`directory_endpoints_unresolved` was on the MCP `cello_status` tool only** — not on the
+  daemon-wide status the CLI `cello status` prints, which is the one an operator at a terminal runs
+  and the one that was run during the incident. Both surfaces now build from the same block, and a
+  test asserts they are equal so they cannot drift apart again.
+- **It was empty at the moment it mattered.** The startup sweep resolves the roster at boot, logged a
+  partial/none COUNT, and discarded which node failed and why. Nothing else resolves a roster until a
+  ceremony runs, so the block stayed empty through exactly the window where someone whose sessions
+  are all failing goes looking. The sweep now keeps its findings and seeds the routing store. A later
+  sweep REPLACES the seed, so a recovered node drops out rather than lingering as a stale complaint.
+
+**❌ STILL OPEN — the state word itself. Design SETTLED with Andre 2026-08-09; build it as its own
+unit, after `DOD-AGENT-SELECTION-UNWARRANTED-1`.** It touches the most surfaces of anything
+outstanding (the shipped skills, the Hermes assets, the CLI, every test keyed on `=== "online"`), so
+it gets its own change and its own review.
+
+Today: `AgentState = "registered" | "online" | "current" | "load_failed"`. `current` is already
+redundant — selection is a separate `selected` boolean, so a state value for it is two sources of
+truth for one fact. The agreed ladder, worst-fact-first, every value a fact about THAT agent:
+
+`load_failed` → `unregistered` → `stopped` → `paused` → `connecting` → `unattended` → `online`
+
+- **`unregistered`**, not `local_only` (Andre): "local only" describes a symptom that could equally
+  be a failure to reach the directory. State the fact — it has never been registered.
+- **`stopped`**, because the only way in should be that you stopped it. **It is not true yet:** the
+  daemon does NOT auto-start agents (`daemon.ts:389`); `cello login` does it afterwards via
+  `autoStartAllAgents`. When the daemon is spawned by the MCP shim instead — whenever Claude Code
+  starts with no daemon running — nothing starts the agents, so they read as stopped when nobody
+  stopped them, and none of them can receive anything. **Spin-off: start agents on daemon boot, not
+  only from `cello login`.** Own fix; same shape as the class this item is about.
+- **`unattended`** — ready to receive, nobody home to answer. Its own rung because it is a real
+  operational fact that was invisible: `DOD-WITNESS-STALL-1` happened precisely because BOTH sides
+  were unattended, both away responders fired, and the away flow ends a session. The word already
+  means this in our own vocabulary.
+- **`online`** — ready AND at least one attendee. The final good state, per Andre.
+
+**`isolated` was proposed and REJECTED (Andre) — and the objection kills the idea, not the word.** A
+consortium below threshold affects EVERY agent equally, so it was never a property of an agent;
+stamping it on each one attributes a system fault to the wrong thing. It moves to a daemon-level
+block, stated exactly, because the counts are what answer the question:
+
+```
+"directory": { "reachable": 1, "declared": 3, "required": 2, "state": "below_threshold" }
+```
+
+`ok` (all reachable) · `degraded` (some unreachable, still ≥ threshold — sessions work, redundancy
+reduced; its own value so the field does not cry wolf for the case that is fine) · `below_threshold`
+(no session can form). **`below_threshold` reuses the exact string of the error the operator already
+sees** when a session dies, so status and error share one vocabulary instead of needing translation.
+
+**The accepted trade:** an agent can read `online` while `directory.state` is `below_threshold`. That
+is correct attribution, and it only avoids the original lie if the directory block is impossible to
+miss — so `cello status` must LEAD with it whenever it is not `ok`, rather than leaving it a field
+partway down a JSON dump.
+
+---
+
+The original entry, kept because it is the evidence:
+
 `cello status` shows an agent as `online` with `standing_receiver_ready: true` whenever its signalling
 connection is up — even when the daemon cannot resolve a single directory endpoint and no session can
 possibly form.
