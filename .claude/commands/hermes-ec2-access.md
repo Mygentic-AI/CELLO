@@ -1,6 +1,6 @@
 ---
 name: hermes-ec2-access
-description: SSH access, directory layout, systemd services, and critical rules for the Hermes agent backend EC2 instance (hosts Miss_Chelly_H and other Hermes-side CELLO agents). Use when you need to check Hermes-side CELLO daemon state directly, restart Hermes services, update Hermes, or investigate a CELLO session/state dispute reported by a Hermes agent.
+description: SSH access, directory layout, systemd services, and critical rules for the Hermes agent backend EC2 instance (hosts Miss_Chelly_H and other Hermes-side CELLO agents). Use when you need to check Hermes-side CELLO daemon state directly, restart Hermes services, update Hermes or the cello client on that box, re-authenticate GitHub there (a git pull/push failing on credentials), or investigate a CELLO session/state dispute reported by a Hermes agent.
 ---
 
 # Hermes EC2 Access
@@ -123,3 +123,46 @@ second-hand description.
 ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@54.234.44.162 \
   "cello sessions --all --agent <agent-name>"
 ```
+
+## Re-authenticating GitHub on this host
+
+When a `git pull` or `git push` on EC2 starts failing on credentials — after a token expires, is
+revoked, or was never stored — re-authenticate `gh` on the box. Two ways, both fine.
+
+### Option A — Personal Access Token (cleanest for a server)
+
+No browser round-trip, and it is the one to prefer for anything unattended.
+
+1. https://github.com/settings/tokens → **Generate new token (classic)**
+2. Scopes: **`repo`** and **`read:org`**
+3. Then on EC2:
+
+```bash
+ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@54.234.44.162
+echo "YOUR_TOKEN_HERE" | gh auth login --with-token
+gh auth status   # verify
+```
+
+### Option B — Interactive web login over SSH
+
+```bash
+ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@54.234.44.162
+gh auth login
+# Choose: GitHub.com → HTTPS → Login with a web browser
+# Copy the one-time code, open the URL on your Mac, paste it in
+```
+
+This works fine over SSH even though the browser is not on EC2: the process just waits while you
+complete the web flow anywhere, then picks up the result.
+
+### Finish either one with a real push
+
+```bash
+cd ~/.hermes/hermes-agent && git push
+```
+
+**Do this once, by hand, and watch it succeed.** `gh auth status` says the CLI is authenticated; it
+does not prove git itself will use those credentials — that depends on the credential helper having
+stored them, which happens on first use. Every later push (from Hermes, or from an agent) then works
+without a prompt. Skip this step and the first failure surfaces inside an automated run, where a
+credential prompt has nobody to answer it and simply hangs.
