@@ -1228,7 +1228,9 @@ Recorded so they stop being re-found by every sweep:
 
 ## A write deleted a peer's edit it never saw — and the record called it deliberate
 
-**Designation: `DOD-DOC-STALE-WRITE-1`** — ✅ **SHIPPED 2026-08-09**, `daemon 0.0.154`, promoted.
+**Designation: `DOD-DOC-STALE-WRITE-1`** — ✅ **SHIPPED 2026-08-09**, `daemon 0.0.154`, promoted,
+and **PROVEN LIVE across two machines** (laptop ↔ Hermes EC2): a stale write was refused naming all
+three lines it would have destroyed, and read → re-apply → write then published first time.
 Found by running the two-machine document test, not by reading code.
 
 **What used to happen to you.** You read a shared document. You think for a minute. Your
@@ -1261,7 +1263,9 @@ wrote, and the whole check is gated on whether anything actually arrived.
 
 ## Nested fields in a shared JSON document did not merge — one edit vanished
 
-**Designation: `DOD-DOC-JSON-NESTED-1`** — ✅ **SHIPPED 2026-08-09**, `daemon 0.0.154`, promoted.
+**Designation: `DOD-DOC-JSON-NESTED-1`** — ✅ **SHIPPED 2026-08-09**, `daemon 0.0.154`, promoted,
+and **PROVEN LIVE across two machines**: concurrent edits to two flags inside one nested block, one
+raised and one cleared, both survived and both copies ended byte-identical.
 Raised by Miss_Chelly while assessing whether a JSON document can carry a multi-actor workflow.
 
 **What used to happen.** Two people edit two different fields inside the same nested block at the

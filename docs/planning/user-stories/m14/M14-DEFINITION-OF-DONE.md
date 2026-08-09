@@ -1208,6 +1208,89 @@ daemon said no.
 
 ---
 
+## DOD-DOC-STALE-WRITE-1 ✅ [cello-client] — a write cannot delete what its author never saw (2026-08-09)
+
+Shipped `daemon 0.0.154`, promoted. **Proven live between two machines**, not only in tests.
+
+**The defect, measured.** A peer's paragraph was admitted at `12:35:41.807`; a write published at
+`12:35:42.033` carried the complete text as READ a moment earlier, without it. `cello_doc_write`
+takes the COMPLETE text, so absent means delete. Both copies converged on the deletion and neither
+party was told. A **226ms** window, hit on the first HTML test anyone ran.
+
+**The lost text is the smaller harm.** The documented way to REJECT a peer's change is to publish a
+change reversing it — the same operation, byte for byte. So the signed record attributed an accident
+as a deliberate rejection of the counterparty's work, in the system whose claim is that the trail
+cannot be disputed later.
+
+**The rule as built.** Gated FIRST on whether any peer update has been admitted since this agent last
+looked; if none has, its view is current by construction and nothing is checked — that gate is what
+keeps it quiet. Otherwise a removal of something the author HELD (last read ∪ last written) publishes
+and is recorded as **deliberate**; a removal of something never held is REFUSED, with the changed
+lines and the current text travelling WITH the refusal.
+
+**The deliberate branch IS the "second refusal"** that `[[shared-documents-objection-rebuttal]]`
+argument 2 names as missing — obtained with no held-pending state, because the peer's change is
+already admitted and the decision point is on the author's own publish.
+
+**The first implementation was wrong and two existing tests caught it.** It consulted only the read
+mark, which refuses every EDIT of an existing line by an author who had not called read — changing a
+line removes the old line's text. A guard that fires during normal work does not get tightened, it
+gets switched off.
+
+**Live verification, laptop ↔ Hermes EC2, both on `daemon 0.0.154`:** the EC2 added an `escalation`
+block; a stale write from the laptop was refused naming all three lines it would have destroyed, with
+`currentContent` attached; read → re-apply → write then published first time. The recovery path is
+not a trap.
+
+**Limit, stated rather than implied:** "deliberate" is a LOCAL LOG EVENT. Putting it in the SIGNED
+record is a wire change and was not taken, so a third party reading the sealed transcript still
+cannot tell an accident from a rejection.
+
+## DOD-DOC-JSON-NESTED-1 ✅ [cello-client] — the per-key merge holds at every depth (2026-08-09)
+
+Shipped `daemon 0.0.154`, promoted. **Proven live between two machines.** Raised by Miss_Chelly while
+assessing whether a JSON document could carry a multi-actor workflow spine.
+
+**The defect.** `map.set(key, plainObject)` stores a nested object as ONE opaque item, so two actors
+editing two fields inside it are two writes to one item and the second wins. Confirmed in two lines of
+plain Yjs before touching anything: one raising `settlement_failed`, another clearing
+`insufficient_funds`, both sides ending with the raise gone.
+
+**The asymmetry was the danger, not the depth.** `jsonDiff` walks full depth and reports dotted paths,
+so every surface said the structure was understood at field granularity — which invites a schema
+author to nest exactly where several actors write, and then names the field that vanished. *A
+limitation you can see is survivable; one that advertises its opposite is not.*
+
+**Not a scope call.** `jsonKeyOperations` had been refactored the day before and nesting WAS reasoned
+about in that sitting — the comparison was made recursive so a re-ordered nested block would not count
+as a change. The thought reached change detection and not storage, three lines away. The claim "two
+agents setting different fields produce disjoint operations" then went into the code header, this
+document and the triage with no depth caveat.
+
+**Fixed:** nested objects are nested `Y.Map` and key operations recurse. An existing nested map is
+REUSED rather than replaced — replacing it is the same bug in another form — and untouched keys are
+not written at any depth.
+
+**Arrays stay atomic, deliberately.** Element-level merge interleaves two concurrent edits into an
+order neither party wrote, and an array's order is content. **Consequence recorded rather than
+hidden: a journal must not be an array**, because two concurrent appends lose one. Keyed as a map it
+merges for free.
+
+**Migration verified rather than assumed:** nothing walks the store; a legacy document converts the
+first time a write touches the key, and that first publish carries a representation change with no
+content change. Pinned to happen once.
+
+**Live verification:** a nested `blocking_flags` block, laptop raising `settlement_failed` while the
+EC2 cleared `insufficient_funds`, neither having seen the other. Both machines ended byte-identical
+with `{insufficient_funds: false, settlement_failed: true}` — both edits present.
+
+**Still open and it is a CLAIM rather than code:** `append_only` is whole-document, so a workflow
+record with a mutable status cannot be append-only. The map shape buys ordering and merge, NOT
+tamper-evidence. Nobody should be told a record keeps a tamper-evident audit trail until field
+authorization or a linked append-only journal ships.
+
+---
+
 ## Tier P4 — The five enforcers (each names its procedure definition, [[M14-PROCEDURE]] §1c)
 
 - **DOD-DOC-E2E-CONV-1** [trustless-cello] — **convergence enforcer GREEN** (`aa6dea04`, re-confirmed
