@@ -1088,9 +1088,31 @@ semantic — phantom edits published to the counterparty as though something cha
 formatting), not CBOR. Cheap, keeps the file human-editable, and removes the phantom-diff class
 outright. **Build it as part of step 4.**
 
-**When canonicalisation would genuinely be needed:** if schema enforcement ever hashes a projected
-value, or if a receipt ever attests to document CONTENTS rather than to the update chain. Neither
-exists today, and the deterministic serialiser is the cheap insurance that makes either easy later.
+**WHAT THE RECEIPT DOES AND DOES NOT ATTEST TO — corrected 2026-08-09 after Andre pushed back, and
+his reading is right.**
+
+An earlier version of this note said a receipt does not attest to document contents. That is wrong as
+written. The receipt commits to an ordered set of signed updates that both parties agreed on, and
+replaying those updates yields exactly ONE final document — that is what a CRDT guarantees. So
+**provenance is proven and the final content IS determined**: anyone holding the updates and the
+receipt can prove what the document became and who authored each change.
+
+Two real limits remain, and only the second bears on serialisation:
+
+1. **The receipt is a VERIFIER, not a CARRIER.** It commits to update HASHES; the document is derived
+   from update BYTES. Hand it a document plus the updates and it confirms them. It cannot reconstruct
+   the document if the payloads are gone.
+2. **What is determined is the MAP STATE — the structure — not any particular text you print it as.**
+   Two implementations could render the same agreed map as `{"a":1,"b":2}` or `{"b": 2, "a": 1}` and
+   both would be faithful. Nothing in the chain picks between them.
+
+**So the deterministic serialiser is not future insurance — it is needed the moment anyone quotes the
+document as a string**, which is today: an operator pasting it into an email, a diff rendered for a
+human, two machines comparing files. The structure is agreed; the spelling of it is not. That is a
+present-tense reason and a better one than the hypothetical this note first gave.
+
+This does NOT revive CBOR. The gap is in the human-facing projection, and CBOR's answer to it is a
+file nobody can read.
 
 **Why this outranks a naming tidy-up:** Andre, 2026-08-09 — *"structured data is super important, the
 whole use case of working on shared goals depends on json."* Two agents converging on a plan, a task
