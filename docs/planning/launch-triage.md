@@ -71,9 +71,43 @@ real tamper-evidence gap** — it is now ranked item 3 below (proposed slot; And
 
 ## 1. A conversation can silently stop being recordable, and nobody finds out until they close it
 
-**Designation: `DOD-WITNESS-STALL-1`** — ❌ **OPEN, cause NOT established, NOT reproduced.**
-Unranked. **Proposed slot: at or near the top. This is the worst failure shape in the system: it
-succeeds at everything an operator can see and fails at the only thing they cannot.**
+**Designation: `DOD-WITNESS-STALL-1`** — 🟠 **ROOT-CAUSED AND HALF-FIXED 2026-08-09.** The safety net
+is shipped (daemon 0.0.149); the CAUSE is `DOD-TERMINAL-STATE-DIVERGENCE-1`'s missing pull twin and
+is still open. **Ranked item 1 by Andre.**
+
+**THE CAUSE, from the relay's own log — not inferred.** The session was SEALED three seconds after it
+opened:
+
+    01:13:34  seq 1 doc · seq 2 msg
+    01:13:35  seq 3 doc · seq 4 msg · seq 5 CTRL · seq 6 msg
+    01:13:36  seq 7 CTRL  →  relay.seal.broker.resolved  →  certificate built and delivered
+
+Two distinct-sender CTRL leaves are exactly what triggers notarization. **Both agents were unattended,
+both away-responders fired, and the away flow ENDS a session** — so each side submitted a seal ctrl
+leaf within a second of the other. It froze at six because that is where the count stood when it was
+sealed, not because six is a limit. Everything the two agents then discussed happened on a
+conversation the relay had already closed.
+
+**Neither daemon learned, because the seal completion is pushed with no pull twin** — that is
+`DOD-TERMINAL-STATE-DIVERGENCE-1` (item 12), and it is not adjacent to this defect, it is half of it.
+
+**THE SILENCE IS FIXED (daemon 0.0.149, tag v0.0.221).** The daemon knew all along: every send
+submitted its leaf, got `session_sealed` back, logged
+`session.relay.hash.submit.failed`, and continued — that branch treated every relay miss as a
+transient degradation. Correct for a relay briefly unreachable, where the sequence is recovered
+later; wrong for a seal, where there is no later. Terminal refusals (`session_sealed`,
+`session_not_found`) are now enumerated, not pattern-matched, and FAIL the send with guidance naming
+the cause. An operator now learns at their next send rather than at close, hours of work later.
+
+**WHAT IS STILL OWED:** the pull twin. Until a daemon can ASK whether its session was sealed, sessions
+will keep dying without their owners knowing — the fix above only ensures they are told promptly
+afterwards.
+
+**TWO HYPOTHESES KILLED, recorded so nobody re-runs them.** *A ceiling at six* — a control run on the
+same relay build tracked exactly through 1, 2, 4, 6, 8, 10, 12 and sealed with `leaf_count: 13`.
+*A daemon restart* — a restart INTERRUPTS sessions loudly and the client then refuses to send, so it
+can never be the silent path (established independently by the counterparty session). The away
+auto-responder, which both of us had dismissed, was the trigger.
 
 **What a customer experiences.** They hold a long working conversation. Every message sends. Every
 message arrives. Nothing warns, nothing errors, both sides look completely normal. Then they close
