@@ -1010,102 +1010,7 @@ refusal cannot be answered, so a genuinely multilingual document fails closed an
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
 
-## 18. There is no second refusal — so an accident and a rejection are the same signed act
-
-**Designation: `DOD-DOC-STALE-WRITE-1`** — ❌ open, **measured live 2026-08-09** on daemon 0.0.152
-between two machines. Unranked. Not a CRDT fault and not a merge bug — the merge did exactly what it
-was told.
-
-**What happens to a customer, in order.**
-
-1. You read a shared document. You see what it says.
-2. You spend a minute deciding what to change.
-3. **Your counterparty's edit arrives during that minute.** Your copy silently gains their paragraph
-   — that is the feature working.
-4. You send your version back. `cello_doc_write` takes the **complete text**, and the text you send
-   is the one you read in step 1 — without their paragraph.
-5. The daemon diffs your text against the document, which now HAS their paragraph, and correctly
-   concludes you deleted it. It publishes that deletion, signed.
-6. **Both copies converge on your deletion. Their work is gone from both machines**, and neither of
-   you is told anything. Your write returned `ok: true, published: true`.
-
-**Measured, not reasoned.** On the laptop's own log, the peer's update was admitted at `12:35:41.807`
-and the write that erased it published at `12:35:42.033` — a **226 millisecond** window, and it was
-hit on the first HTML test anyone ran.
-
-**Why it is not a bug in the merge.** The full-text contract is deliberate and the tool description
-says so: *"Read first, then send the whole document back with your changes in it."* Every alternative
-is worse — a patch API means stale offsets, which in a CRDT is permanent corruption both sides agree
-on. The contract is right. What is missing is the guard.
-
-**Why JSON did not lose anything in the same test, and why that is luck.** The map root computes
-per-KEY operations, so a key absent from your text is only deleted if it was already in YOUR copy.
-In the test the peer's key had not arrived yet, so no delete was generated. Had it landed in the same
-226ms window, `jsonKeyOperations` would have emitted a delete for it exactly as the text path did.
-**Both roots have this hazard.**
-
-**The fix is small and the daemon already holds the input.** `cello_doc_read` sets a read mark —
-that is how `cello_doc_diff` answers "what changed since I looked". So the daemon can compare the
-document's state at write time against the caller's last read, and when the document has moved on:
-refuse with the current text and let the caller redo the edit against it, or apply and report loudly
-which of the peer's lines the write removed. Refusing is the safer default; this is content
-destruction, and it is silent.
-
-**Ranking note.** It needs a real concurrent edit to trigger, so it is invisible in single-agent
-testing and it gets MORE likely the more useful the document is — a long working session with an
-active counterparty is exactly the case where both of you are typing. Weigh it against the fact that
-losing a counterparty's work without telling either party is the kind of thing that costs trust
-rather than patience.
-
----
-
-### This is the SECOND REFUSAL gap, and it is already written down as a known hole
-
-[[shared-documents-objection-rebuttal]] argument 2 separates the two kinds of "no", and volunteers
-the missing one:
-
-- **A policy refusal** — *"this violated a rule, automatically, before anyone looked."* Built,
-  deterministic, pre-admission. It is the thing the category does not have.
-- **A taste refusal** — *"I have read your change and I do not want it."* **Not built.** The doc says
-  so out loud: *"There is no held-pending-your-approval state for a change that merely offends your
-  judgement — admission is mechanical once policy passes. If you don't like what landed, you read the
-  diff and publish a change that reverses it."*
-
-**That documented fallback is precisely the operation that just destroyed content by accident.**
-Publishing a reversal and accidentally omitting a line you never saw are **the same act**: a
-full-text write whose content lacks the peer's contribution. There is no signal distinguishing them,
-which means:
-
-> **The permanent record attributes an accident to you as a deliberate rejection of your
-> counterparty's work** — in the one system whose selling point is that the trail cannot be disputed
-> later. Losing the text is the smaller harm.
-
-### Which is why the guard is the FEATURE, not a safety net
-
-The moment the daemon is about to publish a removal of something the peer wrote is exactly the moment
-it must find out whether you mean it. That question has two answers, and they are the two refusals:
-
-- *"I never saw that"* → an accident. Re-merge, keep their content, publish only what you actually
-  changed. **Nothing is recorded as a rejection, because nothing was rejected.**
-- *"I saw it and I do not want it"* → a taste refusal, and now it is **first-class**: recorded as a
-  deliberate, attributable act rather than inferred from an absence.
-
-**It needs no held-pending state, which is the expensive thing the rebuttal correctly rules out**
-(*"holding one party's changes pending in a convergent replica is architecturally expensive"*). The
-peer's change is already admitted and the replicas already converged — nothing is held. The decision
-point is **outbound**, on your own publish, and the daemon already holds its input: `cello_doc_read`
-sets a read mark, so it can tell your write is built on a view older than the document.
-
-That converts the rebuttal's weakest admission into a claim: post-admission refusal exists, it is
-explicit, and unlike a rejected suggestion in Google Docs — which simply evaporates — **both the
-contribution and its rejection stay in the signed record.** The doc already argues that asymmetry is
-the better property; today the mechanism is missing under it.
-
-**Sequencing note for whoever builds it.** The accident half is the launch-blocking half — silent
-content loss with a false attribution. The explicit-refusal half can follow, because a write that
-says *"yes, remove it, I meant to"* is an ordinary signed edit and needs no new protocol state.
-
-## 19. Interrupted-session sealing is shipped and has never been proven
+## 18. Interrupted-session sealing is shipped and has never been proven
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
 Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
@@ -1278,6 +1183,63 @@ Recorded so they stop being re-found by every sweep:
 ---
 
 # Addressed — off the open list
+
+## A write deleted a peer's edit it never saw — and the record called it deliberate
+
+**Designation: `DOD-DOC-STALE-WRITE-1`** — ✅ **SHIPPED 2026-08-09**, `daemon 0.0.154`, promoted.
+Found by running the two-machine document test, not by reading code.
+
+**What used to happen to you.** You read a shared document. You think for a minute. Your
+counterparty's paragraph arrives during that minute — your copy gains it silently, which is the
+feature working. You send your version back, and `cello_doc_write` takes the COMPLETE text, so the
+version you read a minute ago no longer contains their paragraph. The daemon concludes you deleted
+it and publishes that deletion, signed. **Both copies converge on it and neither of you is told.**
+
+**Measured on the laptop's own log: their update admitted at `12:35:41.807`, the write that erased
+it published at `12:35:42.033`.** A 226ms window, hit on the first HTML test anyone ran.
+
+**The lost text was the smaller harm.** The documented way to REJECT a peer's change is to publish a
+change reversing it — the same operation. Nothing distinguished them, so the signed record attributed
+an accident as a deliberate rejection of your counterparty's work, in the system whose whole claim is
+that the trail cannot be disputed later.
+
+**What happens now.** If the document moved under you and your text would remove something you never
+saw, the write is refused, and the refusal carries **what changed and the current text** — so you act
+while it is still preventable, rather than your counterparty finding it gone hours later.
+
+It stays quiet otherwise: if no peer update arrived since you last looked, your view is current by
+construction and nothing is checked. And **a removal of something you HAVE read is allowed, and
+recorded as deliberate** — which is the second refusal `[[shared-documents-objection-rebuttal]]`
+argument 2 says the product lacks, now an explicit act rather than one inferred from an absence.
+
+**The first attempt was wrong and two existing tests caught it.** Editing a line removes the old
+line's text, so consulting only the read mark refused ordinary edits. A guard that fires on normal
+work is worse than no guard, because it gets switched off. "Held" is now what you last read *or*
+wrote, and the whole check is gated on whether anything actually arrived.
+
+## Nested fields in a shared JSON document did not merge — one edit vanished
+
+**Designation: `DOD-DOC-JSON-NESTED-1`** — ✅ **SHIPPED 2026-08-09**, `daemon 0.0.154`, promoted.
+Raised by Miss_Chelly while assessing whether a JSON document can carry a multi-actor workflow.
+
+**What used to happen.** Two people edit two different fields inside the same nested block at the
+same time — one raises a settlement failure, the other clears a funds hold — and **one edit
+disappears from both machines**, silently. A nested object was stored as a single opaque value, so
+two writes to two fields were two writes to one thing.
+
+**The asymmetry was the danger, not the depth.** The diff walks the full depth and reports dotted
+paths, so every surface told you the structure was understood at field granularity — which invites
+nesting exactly where several people write, and then names the field that vanished.
+
+Nested objects now merge per key at any depth. **Arrays stay atomic deliberately** — element-level
+merge interleaves two concurrent edits into an order neither party wrote, and an array's order is
+content. The consequence is recorded rather than hidden: **a journal must not be an array**, because
+two simultaneous entries lose one. Keyed as a map it merges for free.
+
+**Still open, and it is a claim rather than code:** `append_only` is whole-document, and a workflow
+record needs a mutable status — so the map shape buys ordering and merge but **not tamper-evidence**.
+Nobody should be told "this keeps a tamper-evident audit trail" until field-level authorization or a
+separate linked append-only journal ships.
 
 ## Document types: JSON and HTML were missing, and plaintext's diff was dead
 
