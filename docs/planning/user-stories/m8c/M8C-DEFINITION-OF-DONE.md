@@ -2246,7 +2246,7 @@ own story) deliberately, never smuggled in as a rider. Source:
      (b) after `cello_dismiss`, session no longer appears in either section; (c) `cello_dismiss`
      on an active session returns `session_not_terminal`.
 
-- **DOD-SEALED-INBOX-2** ❌ OPEN (raised 2026-07-30) — `cello_inbox` calls unsealed sessions sealed.
+- **DOD-SEALED-INBOX-2** ✅ **SHIPPED** (raised 2026-07-30) — `cello_inbox` called unsealed sessions sealed.
   The inbox is the one surface that asserts a seal, and for three of four statuses the assertion is
   false.
 
@@ -2295,9 +2295,31 @@ own story) deliberately, never smuggled in as a rider. Source:
 
   Full write-up, including the live probe table: [[2026-07-30_1330_inbox-calls-unsealed-sessions-sealed]].
 
-  **🟡 BUILT + REVIEWED 2026-08-06 — cello-client `40028de` + `5e1dc66`, branch `dod/sealed-inbox-2`,
-  plus trustless-cello `5a3704fc`. Gate green (2736 tests, lint/typecheck/build clean). NOT ✅: this
-  is a breaking wire change and it is not published — see the publish order below.**
+  **Built + reviewed 2026-08-06 — cello-client `40028de` + `5e1dc66`, branch `dod/sealed-inbox-2`,
+  plus trustless-cello `5a3704fc`. Gate green (2736 tests, lint/typecheck/build clean).**
+
+  **✅ FLIPPED 2026-08-09 — verified against the PUBLISHED BINARY, not the branch.** The branch was
+  merged and shipped in the `7fa39e1` cascade (daemon `0.0.134` / cli `0.0.137` / connect `0.0.131`)
+  and has ridden every cascade since; the line simply never got flipped, and the [[launch-triage]]
+  entry stayed stale behind it. `npm pack @cello-protocol/daemon@latest` (`0.0.155`, currently
+  promoted) confirms in `dist/`:
+  - `ended_unread` present in `notification-handlers.js`, `session-node-manager.js`,
+    `session-read-handlers.js`; **`sealed_unread` absent from the whole dist** — AC3 as deviated.
+  - Each row carries `...u` (the real `status`), plus `notarized: u.status === "sealed"` and a
+    per-row `actionable` — AC1, and `session_state: "sealed"` is gone.
+  - The guidance opens "ENDED CONVERSATIONS — history, not work", names `status`, and states
+    `seal_interrupted_pending` has "no receipt YET … check `cello_sealed_receipt` before telling the
+    operator either way" — AC2, with the mirror-image false claim still correctly avoided.
+  - AC4's shipped prose moved with it: `plugins/cello/agents/cello-receptionist.md` (the jq wake
+    expression), `plugins/cello/skills/receptionist/SKILL.md`, and the cross-repo
+    `trustless-cello/.claude/commands/cello-receptionist.md` all read `ended_unread`.
+    `plugin.json` is at `0.4.0`.
+  - AC5/AC6 pinned by `core/daemon/src/__tests__/dod-sealed-inbox-2.test.ts`.
+
+  **The publish-order risk below did NOT materialise, and the reason is worth keeping:** the plugin
+  commit went out on the same branch merge, ahead of the daemon reaching `latest`, so the required
+  order held by construction rather than by anyone remembering it. The residual — an operator who
+  never runs `/plugin update` — is still real and still accepted at one operator.
 
   **AC3 deviates DELIBERATELY, twice, on Andre's 2026-08-04 decision** ([[launch-triage]] item 2):
   the field is **`ended_unread`**, not `terminal_unread`, and there is **no alias**. An alias would

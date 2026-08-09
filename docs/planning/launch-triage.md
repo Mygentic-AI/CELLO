@@ -51,6 +51,11 @@ description: >
   2026-08-09: added DOD-DOC-JSON-1 (item 21) — agents can share prose but not STRUCTURED data, which
   Andre identifies as the use case shared documents exist for. Refused at both ends today because it
   was half-built and losing content silently; building it is three verbs plus a per-key merge.
+  2026-08-09 (overnight): DOD-SEALED-INBOX-2 corrected to ✅ — it was the top open item and it had
+  ALREADY BEEN LIVE for three days, shipped in the daemon 0.0.134 cascade. Verified by unpacking the
+  published daemon@latest, not by reading the branch. That is the third entry this week to sit ❌
+  while fixed, so the pattern is now the finding: **an item's marker here tracks whoever last edited
+  this file, not the code.** Before trusting any ❌, unpack the published artifact.
 ---
 
 # Launch Triage
@@ -137,7 +142,19 @@ real tamper-evidence gap** — it is now ranked item 3 below (proposed slot; And
 
 ## 1. The inbox says sessions are sealed when they are not
 
-**Designation: `DOD-SEALED-INBOX-2`** — ❌ open, raised 2026-07-30
+**Designation: `DOD-SEALED-INBOX-2`** — ✅ **FIXED AND LIVE.** Shipped in the daemon `0.0.134`
+cascade and on `latest` ever since; confirmed 2026-08-09 by unpacking the published
+`@cello-protocol/daemon@latest` (`0.0.155`) — `ended_unread` is in `dist/`, `sealed_unread` is
+absent from it entirely, each row carries its real `status` plus `notarized`, and the shipped
+receptionist skill and agent both read the new field. **This entry stayed ❌ for three days after the
+work was already on operators' machines** — the DoD line and this doc were both flipped on 2026-08-09.
+
+**What it means from the operator's chair:** the inbox no longer tells you a conversation is
+notarized when it isn't. Each ended conversation now says how it actually ended, and an agent
+reading it is told in the payload — not just in prose it might skip — to check `notarized` before
+ever repeating "this is sealed" to you.
+
+<details><summary>Original problem statement, kept for history</summary>
 
 The inbox is the one surface that asserts a session is notarized, and for three of the four statuses
 it applies that label to, the assertion is false. Only `sealed` is actually notarized; `abandoned`,
@@ -168,6 +185,8 @@ instructs agents directly — audit what ships, not only what compiles).
 and the receptionist skill. Pre-launch, with one operator and a greenfield cutover behind us, is the
 only time a wire change is free — deferring it is exactly the migration trap this doc warns about.
 Do the rename, the per-row `status`, and the corrected guidance string together, now.
+
+</details>
 
 ---
 
