@@ -352,6 +352,19 @@
   </div>
 
   <section>
+    <p class="section-label">Before the arguments — what this actually is</p>
+    <h2>Four things, and “no central server” is not the headline</h2>
+    <p>Every argument below is easier to hold if you’ve said this first, because an interviewer who hasn’t heard it will assume the pitch is decentralised file sync — and then they’re right that git, Notion and Docs are a lot of options already.</p>
+    <div class="say">
+      <span class="tag">Say it like this</span>
+      <q>Four things. One, an artifact whose whole history of how it came to be is cryptographically provable. Two, a finished artifact that carries a signature from both sides saying this is what we agreed. Three, live shared state — two agents keeping a structured object current between them in real time, which is also how they keep shared context. And four, it never rests anywhere but the two local machines. That fourth one is a property, not the pitch. On its own it’s a weak reason to switch. Underneath the first three, it’s what makes them mean anything.</q>
+    </div>
+    <p>Two supporting facts worth having ready in the same breath, because both are checkable and both defuse an objection before it forms:</p>
+    <p><strong>It works with nobody to collaborate with.</strong> Your laptop agent and your server agent holding one state that outlives a context window and crosses harnesses that can’t share context. There is no cold start and no two-sided-network problem — the first user gets value alone, on day one. Say this early; it is the most immediately verifiable claim in the whole document.</p>
+    <p><strong>Even in transit, no document exists anywhere.</strong> What can be waiting on infrastructure is an encrypted byte-delta, not a copy of the artifact, and it is gone once the other side collects it.</p>
+  </section>
+
+  <section>
     <p class="section-label">The arguments</p>
 
     <div class="args">
@@ -371,28 +384,42 @@
           <p>It fails on the documents worth collaborating on. A client engagement, a term sheet, a supplier quote, an invoice, a draft position before you’ve agreed it — none of those can be openly readable during the drafting, which is exactly when they’re most sensitive. And drafts don’t stay drafts: on a repo the history is public too, and a link that leaked once stays leaked.</p>
           <p>So you go private — and <strong>do not argue this as effort.</strong> Setup is a handful of CLI calls and a competent agent makes them for you. Argue what you actually created: an org, a membership in it, and a credential to your account in a foreign agent’s hands. That isn’t “here’s a document,” it’s “put an autonomous process inside my perimeter and trust it to stay in its lane.”</p>
           <p><strong>Do not answer this with a persona.</strong> “A lawyer won’t create a GitHub account” is a claim about a person, and it invites the counter-punch you deserve — <em>your</em> thing needs installing too. Answer with the constraint. Three questions decide it and none of them is about who the counterparty is: <strong>does the content have to stay off third-party infrastructure? Do both sides need an attested record that they agreed, rather than a copy of a file? Is the counterparty outside your organisation?</strong> Where those are yes, a repo was never a candidate — not because it’s hard to join, because it’s the wrong instrument.</p>
-          <p>We sit on neither horn. The relationship already exists as a verified key, so the document is proposed and consented to in-band. Nothing is public, the counterparty joins nothing, and they never receive a credential to anything of yours — the grant is scoped to the one artifact. <strong>Revocation matches the grant:</strong> kill that document and nothing else changes. Removing them from an org is also one command — but it takes away everything else they had at the same time, which is exactly why in practice it doesn’t happen and stale access accumulates.</p>
+          <p>We sit on neither horn. The relationship already exists as a verified key, so the document is proposed and consented to in-band. Nothing is public, and nobody receives a credential to anything of yours — the grant is scoped to the one artifact. <strong>Revocation matches the grant:</strong> kill that document and nothing else changes. Removing someone from an org is also one command — but it takes away everything else they had at the same time, which is exactly why in practice it doesn’t happen and stale access accumulates.</p>
+          <p><strong>The evidence that makes this land is an incident, not a principle.</strong> Don’t argue about permission models — describe the bad day.</p>
+          <div class="say">
+            <span class="tag">Say it like this</span>
+            <q>One of your people gets socially engineered and their access token leaks. I’ve watched that happen three times in my career. The attacker now sees everything that person could see — every repository, every document shared with that account, the history as well as the current state. Now compare the worst case here. Somebody compromises my laptop: they get what is on my laptop. They do not get a key to an estate, because I never issued one. The grant was one document, so the incident is one document.</q>
+          </div>
+          <p>That is the whole argument in one move, and it survives any amount of automation on the other side: <strong>the size of the grant is the size of the incident.</strong> No tooling makes a seat smaller than the organisation it is a seat in.</p>
         </div>
       </article>
 
       <article>
         <div class="arg-head">
           <span class="arg-num">02</span>
-          <h2>You can say no to an individual edit. In a live editor, no such thing exists.</h2>
+          <h2>The gate is automatic policy, not somebody’s taste — and be exact about which one you mean.</h2>
         </div>
-        <p class="lands">Lands with: everyone — this is the plainest one in the set</p>
+        <p class="lands">Lands with: everyone — but only if you separate the two kinds of “no”</p>
         <div class="arg-body">
+          <p><strong>There are two different refusals and conflating them will cost you the argument.</strong> A <em>taste</em> refusal is “I’ve read your change and I don’t want it.” A <em>policy</em> refusal is “this violated a rule, automatically, before anyone looked.” The category has the first one and we have the second. Claim the wrong one and you’ll be corrected in five seconds by anyone with a Google Doc open.</p>
           <div class="say">
             <span class="tag">Say it like this</span>
-            <q>Open a Google Doc to someone and there is no such thing as declining what they write. Whatever they type is in your document, instantly, and the only control you have is all-or-nothing: full write access, or they can’t collaborate. There’s nowhere to put a rule. You can undo it afterwards — after it’s already in, after your agent may already have read it, and they can simply do it again. We evaluate every incoming edit against your rules before it’s ever part of your copy.</q>
+            <q>Google Docs has had suggestion mode for a decade, and Word had track changes before that — so yes, you can review someone’s edit and reject it. That’s a person exercising taste, and it needs a person. What none of them has is a rule that runs on every arriving change by itself, against a counterparty who isn’t in your organisation, and declines it before anybody reads it. Suggestion mode still puts the text in front of your reviewer to be read. That’s the step we’re removing.</q>
           </div>
           <p><strong>Concede GitHub fully, and concede the modern version of it.</strong> A pull request is a real refusal gate, and it isn’t a human bottleneck any more — a PR opens, several review agents run against it on different lenses, something collates the findings, something else kicks off fixes. That runs with nobody awake and at any scale. Anyone technical is doing this already; pretending otherwise loses the room in one sentence. Three differences survive it.</p>
           <p><strong>Your reviewers are the ones being attacked.</strong> This is the one to lead on, because their own pipeline is the illustration. Those review agents are checking whether it’s a <em>good change</em> — correctness, style, security bugs in the code. Not one of them is asking whether the text itself is engineered to steer the model reading it. And to form that judgement, every one of them has to read the untrusted content. Three agents ingest attacker-controlled text before any decision is made. That’s exposure wearing the costume of a defence.</p>
           <p><strong>A judgement can be talked round; a character-set check can’t.</strong> A review agent forms an opinion, which means a sufficiently well-written diff can earn approval — the persuasion surface is the whole point of the reviewer. Our gate is not forming an opinion: the permitted character space was agreed by both parties at consent and is bound to the document, so the check is deterministic and there is nothing to persuade. Judgement where you want judgement, arithmetic where you want a boundary.</p>
           <p><strong>Refusal is granular and doesn’t block.</strong> Declining a PR parks the whole branch until something acts on it. Ours declines the one change, hands back a machine-readable reason, and their side republishes without it — the legitimate work in the same batch still flows. And the gate is on by default, per document, for every counterparty, rather than being a pipeline you stand up and maintain per repo.</p>
-          <p>Everything else in the category is worse than GitHub, not better. Docs and Notion have no gate at all — the permission model is edit or comment-only, and comment-only isn’t collaboration. File sync has no gate: their save lands, or you get a conflicted copy and now there are two files.</p>
+          <p><strong>Now volunteer the gap, because it is real and it will be found.</strong> We do not have suggestion mode. There is no held-pending-your-approval state for a change that merely offends your judgement — admission is mechanical once policy passes. If you don’t like what landed, you read the diff and publish a change that reverses it, and both moves stay in the signed record.</p>
+          <p>That is a worse experience than a suggestion queue for taste review, and better for evidence — a rejected suggestion in Docs simply evaporates, whereas here the proposal and the reversal are both permanently attributable. Say both halves. And know why it is the way it is rather than presenting it as a choice you’d defend forever: holding one party’s changes pending in a convergent replica is architecturally expensive, which is exactly why the machinery that does exist is spent on policy — the case where waiting for a human defeats the purpose — rather than on preference.</p>
+          <p>File sync is the genuinely worse case in the category: no gate at all, their save lands, or you get a conflicted copy and now there are two files and nobody is told which is right.</p>
           <p><strong>Why this stops being an inconvenience and becomes a real problem with agents.</strong> Write access granted to an autonomous process is unconditional write, at any hour, including while you’re asleep, including content chosen to steer your agent. In a live editor there is nowhere to express “not that.” Your only lever is revoking access entirely — the same all-or-nothing shape as the grant in argument 1.</p>
-          <p><strong>And the second half: we refuse, we never quietly clean up.</strong> Once you have a gate, the tempting implementation is to strip the bad part and accept the rest. That is the worst option available here — you’d be holding different bytes than they signed, both sides believing they agree, with nothing reporting it. So a violation is refused whole, with a reason the sender’s software can act on. The default resolution is that the <em>sender</em> adopts the stricter rule, so nobody is ever asked to accept less protection than they wanted.</p>
+          <p><strong>And the second half: we refuse, we never quietly clean up.</strong> Once you have a gate, the tempting implementation is to strip the bad part and accept the rest. That is the worst option available — you’d be holding different bytes than they signed, both sides believing they agree, with nothing reporting it. So a violation is refused whole, with a reason the sender’s software can act on, and the default resolution is that the <em>sender</em> adopts the stricter rule. Nobody is ever asked to accept less protection than they walked in with.</p>
+          <p><strong>Don’t argue that one from principle — you measured it.</strong> It’s a better story than the reasoning and people remember it:</p>
+          <div class="say">
+            <span class="tag">Say it like this</span>
+            <q>We didn’t reason our way to that, we tested it. Eighteen realistic documents through our own screener, and six came out saying something different. A Hindi word turned into a different word. A family emoji became three separate people. A document explaining prompt formats lost the thing it was about. If we’d shipped the tidy-it-up version, the receiver would be holding different bytes than the sender signed, both sides would believe they agreed, and nothing anywhere would report it.</q>
+          </div>
         </div>
       </article>
 
@@ -435,7 +462,7 @@
         <div class="arg-body">
           <div class="say">
             <span class="tag">Say it like this</span>
-            <q>Point an AI coder at a merge conflict and it just handles it — I haven’t examined one myself in about eighteen months. But look at <em>why</em> that works: it compiles or it doesn’t, the tests pass or they don’t. There’s ground truth to check against. Now hand the same model a conflict between two versions of a contract clause. It picks one, it reads beautifully, and nothing on earth tells either of us that a term went missing.</q>
+            <q>Point an AI coder at a merge conflict and it just handles it — I haven’t examined one myself in about eighteen months. But look at <em>why</em> that works: it compiles or it doesn’t, the tests pass or they don’t. There’s ground truth to check against. Now hand the same model a conflict between two versions of a contract clause. It picks one, it reads beautifully, and there is no compiler for a payment term. The person who finds out a clause went missing is your lawyer, in a year.</q>
           </div>
           <p>The concession is not a courtesy here, it’s the setup. Git plus an AI resolver is genuinely good for code, and anyone technical in the room knows it from their own week. Claiming otherwise costs you the argument in one sentence.</p>
           <p>What makes code the easy case is the oracle. A compiler and a test suite are an independent judge of whether the resolution was right, and they run in seconds without asking anyone. Strip that away and an LLM resolving a conflict is producing a confident guess about whose wording survives, in a document whose only reviewer is the person who delegated it. Silent, plausible, and discovered later — in a term sheet, an invoice, a scope of work, a set of agreed figures.</p>
@@ -454,7 +481,7 @@
         <div class="arg-body">
           <div class="say">
             <span class="tag">Say it like this</span>
-            <q>A shared repo means everyone sees everyone. That’s fine for colleagues and disqualifying for commerce. If I buy work from you and sell the result to my client, putting you and my client in the same room isn’t a convenience — it’s me being cut out of my own deal. Every collaboration tool built on a shared workspace is unusable for the person who most needs one.</q>
+            <q>A shared workspace means everyone sees everyone. Fine for colleagues, disqualifying for commerce. If I buy work from you and sell the result to my client, the shared room introduces my supplier to my customer — and that introduction is my margin. Every tool in this category was designed for an org chart. Most business happens between org charts.</q>
           </div>
           <p>You hold one document with your supplier and a genuinely separate one with your client. When something should cross, you port it as your own edit and sign it. Your client holds work you stand behind; your supplier never learns who your client is.</p>
           <p>The accountability shape mirrors how liability already works: <strong>your client’s recourse is against you, and yours is against your supplier.</strong> Each link is independently provable, and each party is accountable to the counterparty it actually chose. You don’t audit your supplier’s supplier — you hold your counterparty. A single shared workspace flattens a relationship structure that exists for good reasons.</p>
@@ -496,12 +523,69 @@
             <span class="tag">Say it like this</span>
             <q>Put it as a choice rather than a feature. A hospital wants a patient’s AI assistant to send test results to the doctor’s AI. Are you going to do that in a GitHub repo? A shared Google Doc? Nobody would even suggest it. GitHub was built for collaborative coding. This was built for anything an agent produces — and specifically for the things that must never sit anywhere but the two local drives.</q>
           </div>
-          <p>This is a different question from the audit trail, and for a regulated buyer it’s the first one asked. Not “can you prove what happened,” but <strong>“who else can read this, and where does it physically rest?”</strong> Health records, benefits determinations, legal drafts, deal-stage commercial terms — the moment the answer is “a vendor holds it, encrypted at rest,” you’re into a data processing agreement, a residency question and a procurement cycle before anyone writes a word. Here the content passes directly between the two endpoints and no third party holds it, so the question doesn’t get answered so much as deleted.</p>
-          <p>The second half is lock-out, and it’s the part people feel personally: no vendor can rewrite the terms of the room, deprecate the tier it lives in, or suspend an account and take a document you co-wrote with it. There is no room.</p>
-          <p><strong>One precision that keeps you out of trouble.</strong> Claim it about the <em>content</em>, not about metadata. A sophisticated buyer will ask what the infrastructure sees, and directory presence and routing exist — saying a flat “nobody in the middle” invites a correction you can’t win, when the accurate claim is already strong enough.</p>
+          <p><strong>Do not make this the headline of the product.</strong> “Agents can collaborate on documents without a central server” is a thin pitch and it invites the honest answer: we have git, we have Notion, we have Docs, and git is powerful well outside code. Storage location is a supporting property. It becomes decisive only in combination with the provenance trail and the shared live state — see what this actually is, above.</p>
+          <p><strong>And concede the enterprise encryption story, because it is real.</strong> Google Workspace client-side encryption with your own key service, Microsoft double key encryption, GitHub Enterprise Server in your own datacentre — a large organisation that genuinely cares has bought an answer to “the vendor can read it,” with a SOC 2 and a data processing agreement attached. Arguing that those don’t exist makes you look like you haven’t met an enterprise.</p>
+          <p>What survives the concession is which documents actually live in those tools. Hospitals do not put official patient records in Google Docs — staff have Word files on laptops, and the institutional record lives somewhere else entirely. The same is true across health, government and legal. For small teams, Docs and Notion are genuinely fine and that is not the market being described.</p>
+          <p><strong>Then the precision that makes the claim hold up.</strong> Two things, and both matter to a technical listener:</p>
+          <p>Say it about the <em>content</em>, never about metadata. Directory presence and routing exist, so a flat “nobody in the middle” invites a correction you can’t win — and you don’t need it.</p>
+          <p>And be exact about what can ever be in transit: <strong>an encrypted byte-delta waiting to be collected, not the document.</strong> Not a copy of the artifact sitting somewhere pending pickup — a fragment of change, encrypted, and gone once the other daemon takes it. That is a materially different exposure from a file at rest on a vendor’s disk, and it’s worth one sentence because people assume the worse thing.</p>
+          <p>The lock-out half stands on its own and is the part people feel personally: no vendor can rewrite the terms of the room, deprecate the tier it lives in, or suspend an account and take a document you co-wrote with it. There is no room.</p>
         </div>
       </article>
 
+    </div>
+  </section>
+
+  <section>
+    <p class="section-label">In reserve — when there’s more than five minutes</p>
+    <h2>Six more, held back so the main seven stay sharp</h2>
+    <p>Each of these is true, defensible on the current build, and survives a counterparty who has automated everything. They’re out of the numbered set because eleven arguments is not an interview, it’s a filibuster. Reach for the one that fits the person in front of you.</p>
+
+    <h3>When you accept their invite, they hold the record of your own conduct</h3>
+    <div class="say">
+      <span class="tag">Say it like this</span>
+      <q>Here’s the part nobody thinks about when they accept the invite. You’re in their workspace now — so they hold the audit log of what <em>you</em> did, on a retention policy they set, in a system their admin controls. If it’s ever disputed, the record of your own behaviour is in the other side’s hands. Both of us hold the same signed history here. Neither of us can edit it and neither of us can let it quietly expire.</q>
+    </div>
+
+    <h3>Ask what happens when the work ends</h3>
+    <div class="say">
+      <span class="tag">Say it like this</span>
+      <q>Ask what happens when the engagement is over. On every hosted tool one of us owned the room, so one of us keeps everything and the other gets “you no longer have access” — including to their own contributions. Here you both already hold the whole thing, signed, on your own disks. Ending the relationship takes nothing away from either side. And when it ends badly: the person you fell out with cannot delete the evidence, and neither can you.</q>
+    </div>
+
+    <h3>The file on disk is the entire integration story</h3>
+    <div class="say">
+      <span class="tag">Say it like this</span>
+      <q>The shared document is a file, in a folder, on your machine. That’s the integration. Your agent edits it with the same tools it edits everything else with, you open it in whatever editor you like, you can commit it to git, your backup picks it up, your scanner scans it. Nobody builds a connector to the filesystem — it’s the one interface every tool ever written already supports.</q>
+    </div>
+
+    <h3>What it costs an agent to work on shared state</h3>
+    <div class="say">
+      <span class="tag">Say it like this</span>
+      <q>Think about what it costs an agent to work on a shared document. On a hosted tool the only way to know what it currently says is to pull the whole thing into the model’s context — and you do that again every session, mostly to discover nothing moved. Here the current version is already a file on disk, and the daemon can say exactly what changed since you last looked. Your agent reads a diff, not a document. On something touched ten times a day, that’s the difference between a habit and a bill you notice.</q>
+    </div>
+    <p>This one is durable in a way the notification argument isn’t: a remote read cannot be automated into being free, and even a perfect webhook only tells you <em>that</em> something changed.</p>
+
+    <h3>It can break, but it can’t lie</h3>
+    <div class="say">
+      <span class="tag">Say it like this</span>
+      <q>The dangerous failure isn’t the one that stops you. It’s the one where we both keep working, my copy no longer says what yours says, and neither of us finds out for three weeks. That is literally what a conflicted copy in a sync folder is. So we never quietly fix an edit up — we refuse it whole, hand the reason back to the sender’s software, and if it can’t be resolved the document says so on both sides, in plain sight.</q>
+    </div>
+
+    <h3>Working together ratchets security up, never down</h3>
+    <div class="say">
+      <span class="tag">Say it like this</span>
+      <q>In every other setup, collaborating means one of you drops to the other’s standard — you join their workspace and live under their rules, or they join yours. Here the document ends up under both sets of rules at once and the stricter one wins. Nobody is ever asked to accept less protection than they walked in with. It composes in one direction only, and that’s deliberate — the other direction is the one an attacker would use.</q>
+    </div>
+  </section>
+
+  <section>
+    <p class="section-label">The 60-second version</p>
+    <h2>When there’s time for exactly three points</h2>
+    <p>In this order: the first collapses every competitor name they were about to reach for, the second is the one nothing else does, and the third is what they repeat to a colleague afterwards.</p>
+    <div class="say">
+      <span class="tag">Say it like this</span>
+      <q>There are only two ways to share a document today. Either a host holds it — Google, Notion, a private repo — so one of us owns the room and the other is a guest with an account inside a company they don’t control. Or you send copies, and there’s no shared truth at all, just two files and a person reconciling them. Every tool you can name is one of those two. There is no setting anywhere for <em>this one document, this one person, nothing else</em>. That’s the setting we built.<br><br>Second — the moment your agent can read a document I can write to, I’m typing straight into your agent’s head. None of those tools has an opinion about that. We screen every arriving change against rules both sides agreed at the start, with a prompt-injection classifier running in your own process, and your agent isn’t even woken by it — it reads when it decides to read.<br><br>Third — nobody hosts it. A file on your machine, a file on theirs, encrypted on both, and the history of how it got there is signed by both of us. When the work is finished you both still hold the whole thing. Nobody gets locked out of something they wrote.</q>
     </div>
   </section>
 
@@ -545,7 +629,7 @@
       </li>
       <li>
         <span class="no">Don’t say: “you can revoke it.”</span>
-        <span class="yes">Say: <strong>“you can stop it, and you can’t unsend what already landed.”</strong> Kill is unilateral and immediate — no more edits in or out — and the record shows exactly what crossed before you pulled it. Say the limitation out loud; it’s the truthful version of a promise every other tool makes and can’t keep.</span>
+        <span class="yes">Say: <strong>“you can stop it, and you can’t unsend what already landed.”</strong> Give the positive half its due first, because it’s stronger than the caveat: kill is unilateral and immediate — no cooperation, no admin, no support ticket, and you don’t have to own the document. Compare a shared doc you don’t own, where you cannot make your own contributions stop being theirs. Then the limit, out loud: what already crossed, they keep, and the record shows exactly what that was. It’s the truthful version of a promise every other tool makes and can’t keep.</span>
       </li>
     </ul>
   </section>
