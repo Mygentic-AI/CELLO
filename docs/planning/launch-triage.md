@@ -29,6 +29,9 @@ description: >
   footnotes on item 14, filed as faults in their own right. DOD-DOC-PROFILE-1 (20), the
   agreed-but-unenforced content profile. And the verification half of DOD-TERMINAL-STATE-DIVERGENCE-1
   (21) — interrupted-session sealing is shipped and has never once been proven.
+  2026-08-09 (later): DOD-WITNESS-STALL-1 moved to Addressed the same day it was ranked #1 — cause and
+  symptom fixed, published and proven live, recovery built. A finished item must not hold the top slot.
+  Open items renumbered again; DOD-SEALED-INBOX-2 is now item 1. Residual work sits on item 12.
   2026-08-09, RANKING CHANGED (Andre): `DOD-WITNESS-STALL-1` is now **item 1**. `DOD-LOGOUT-EXIT-1`
   held the top slot while already fixed and has moved to Addressed — a finished item at the top of a
   ranked list hides whatever is actually next. Open items renumbered contiguously; the four filed
@@ -69,114 +72,7 @@ see the notes below.)
 was **overstated** (ruled out — see Addressed), and `DOD-ACCOUNTS-CHAIN-1` was **confirmed as a
 real tamper-evidence gap** — it is now ranked item 3 below (proposed slot; Andre confirms).
 
-## 1. A conversation can silently stop being recordable, and nobody finds out until they close it
-
-**Designation: `DOD-WITNESS-STALL-1`** — 🟠 **ROOT-CAUSED AND HALF-FIXED 2026-08-09.** The safety net
-is shipped (daemon 0.0.149); the CAUSE is `DOD-TERMINAL-STATE-DIVERGENCE-1`'s missing pull twin and
-is still open. **Ranked item 1 by Andre.**
-
-**THE CAUSE, from the relay's own log — not inferred.** The session was SEALED three seconds after it
-opened:
-
-    01:13:34  seq 1 doc · seq 2 msg
-    01:13:35  seq 3 doc · seq 4 msg · seq 5 CTRL · seq 6 msg
-    01:13:36  seq 7 CTRL  →  relay.seal.broker.resolved  →  certificate built and delivered
-
-Two distinct-sender CTRL leaves are exactly what triggers notarization. **Both agents were unattended,
-both away-responders fired, and the away flow ENDS a session** — so each side submitted a seal ctrl
-leaf within a second of the other. It froze at six because that is where the count stood when it was
-sealed, not because six is a limit. Everything the two agents then discussed happened on a
-conversation the relay had already closed.
-
-**Neither daemon learned, because the seal completion is pushed with no pull twin** — that is
-`DOD-TERMINAL-STATE-DIVERGENCE-1` (item 13), and it is not adjacent to this defect, it is half of it.
-
-**THE SILENCE IS FIXED (daemon 0.0.149, tag v0.0.221).** The daemon knew all along: every send
-submitted its leaf, got `session_sealed` back, logged
-`session.relay.hash.submit.failed`, and continued — that branch treated every relay miss as a
-transient degradation. Correct for a relay briefly unreachable, where the sequence is recovered
-later; wrong for a seal, where there is no later. Terminal refusals (`session_sealed`,
-`session_not_found`) are now enumerated, not pattern-matched, and FAIL the send with guidance naming
-the cause. An operator now learns at their next send rather than at close, hours of work later.
-
-**THE CAUSE IS ALSO FIXED NOW (daemon 0.0.150, tag v0.0.222), as `DOD-AWAY-MUTUAL-SEAL-1`.** The
-trigger needs BOTH sides unattended at once — isolated by the counterparty session. Each away
-responder answers the other's, and the second arrival looks exactly like "a caller who ignored the
-leave-a-message instruction", so the one-shot rule fires on BOTH sides and each initiates a seal. The
-one-shot is right about a human who keeps typing and wrong about another away responder. An away
-auto-reply is now recognised and ends the exchange quietly instead of minting a seal.
-
-Matched on EXACT text, never a substring — silencing a real message would be a worse failure than the
-one being fixed — and the texts live in one place the sender and detector both read, because a second
-copy is how a reworded away message stops being recognised and the loop returns. A wire marker is the
-better long-term answer but is a wire change, and this fires precisely when talking to a peer we do
-not control.
-
-**THE ASKING IS NOW BUILT TOO (2026-08-09, item 13).** A failed close asks the directory whether the
-seal already happened and returns the receipt if it does. So all three layers of this failure are
-covered: the cause (away agents no longer seal), the symptom (a send that cannot be recorded fails
-loudly), and the recovery (a stranded session can find its own receipt).
-
-**WHAT IS STILL OWED:** nothing asks on the daemon's own initiative. Recovery is triggered by an
-operator action — a close or a receipt read. A session stranded and never touched again stays
-stranded, and there is no startup sweep.
-
-**TWO HYPOTHESES KILLED, recorded so nobody re-runs them.** *A ceiling at six* — a control run on the
-same relay build tracked exactly through 1, 2, 4, 6, 8, 10, 12 and sealed with `leaf_count: 13`.
-*A daemon restart* — a restart INTERRUPTS sessions loudly and the client then refuses to send, so it
-can never be the silent path (established independently by the counterparty session). The away
-auto-responder, which both of us had dismissed, was the trigger.
-
-**What a customer experiences.** They hold a long working conversation. Every message sends. Every
-message arrives. Nothing warns, nothing errors, both sides look completely normal. Then they close
-it — and there is no receipt, and there can never be one, because the chain stopped growing hours
-ago. The work is already done by the time it announces itself.
-
-**Measured 2026-08-09**, on a live session between two agents on this machine:
-
-| | |
-|---|---|
-| Messages held by the operator | 12 |
-| Leaves the relay had witnessed | **6** |
-| Duration frozen | 68 minutes, across 8 further messages |
-| Delivery during that time | `delivered: true` on every one, including the messages discussing it |
-
-The first close attempt reported 7 held / 6 witnessed; an hour and five messages later it reported
-12 held / 6 witnessed. **The relay was delivering and not witnessing** — the same path for a client,
-evidently not the same operation for the relay. The seal is computed over witnessed leaves, so the
-session cannot be notarized and force is the only exit, which forfeits the receipt permanently.
-
-**Why this is worse than the outage it followed.** `DOD-RELAY-DIRECTORY-RECONNECT-1` (item 14) failed
-LOUDLY: closes hung, nothing sealed anywhere, and two people knew within minutes. This one costs a
-real conversation before it says anything.
-
-**A CONTROL RUN RULES OUT THE OBVIOUS EXPLANATIONS, AND REPRODUCES NOTHING.** A fresh session on the
-same relay build, sampled after every exchange rather than only at the end:
-
-held/witnessed of one/one, two/two, four/four, **six/six**, eight/eight, ten/ten, twelve/twelve —
-exact at every step, then sealed first time with `leaf_count: 13`.
-
-- **Not a ceiling at six.** The control crossed six without pausing, minutes after the other session
-  froze there.
-- **Not "it never tracked".** Witnessing was exact from the second sample.
-- **Not the away auto-responder.** The control had no auto-replies and behaved perfectly.
-
-What survives is an **event attached to one session**. What the control does NOT do is reproduce the
-failure, and a control that behaves is weaker evidence than a reproduction that misbehaves.
-
-**The two candidate triggers**, both present in the failing session and absent from the control: it
-survived a **daemon restart mid-conversation**, and it **opened with both sides unattended and
-auto-replying**. The next experiment is a fresh session with a deliberate daemon restart halfway.
-
-**The broken session is deliberately being left open and unsealed** as the only known artefact.
-
-**This makes item 14's health check the wrong shape.** That check asks "can this relay reach a
-directory". This failure asks "is the chain still growing", and they are independent: witnessing
-froze while the directory link was fine and delivery stayed green. **The health check written for
-item 14 would report the frozen relay perfectly healthy.** A check that cannot go red for the
-failure being suffered is not a check for that failure.
-
-## 2. The inbox says sessions are sealed when they are not
+## 1. The inbox says sessions are sealed when they are not
 
 **Designation: `DOD-SEALED-INBOX-2`** — ❌ open, raised 2026-07-30
 
@@ -212,7 +108,7 @@ Do the rename, the per-row `status`, and the corrected guidance string together,
 
 ---
 
-## 3. Every real registration writes the human-agent binding outside the hash chain
+## 2. Every real registration writes the human-agent binding outside the hash chain
 
 **Designation: `DOD-ACCOUNTS-CHAIN-1`** — ❌ open, raised 2026-07-13, **diagnosed 2026-08-04:
 possibility (a) confirmed — a real tamper-evidence gap, not a test artifact.** Proposed slot; Andre
@@ -251,7 +147,7 @@ test-isolation defect — several suites `DELETE` from this append-only chained 
 
 ---
 
-## 4. Dead signaling streams go undetected — build the liveness mitigation, timebox the trace
+## 3. Dead signaling streams go undetected — build the liveness mitigation, timebox the trace
 
 **🟡 ROOT CAUSE FOUND AND FIXED 2026-08-06** — `9910ff12` + `259b4b59`, branch
 `dod/accounts-chain-1`, DoD line opened as **`DOD-SIGNALING-LIVENESS-1`** in
@@ -315,7 +211,7 @@ the network behaviour disagree, and the operator believes the visible one.
 
 ---
 
-## 5. The Telegram sign-up messages give wrong or unclear instructions
+## 4. The Telegram sign-up messages give wrong or unclear instructions
 
 **Designation: `D-ENVVAR`** (+ the rest of Phase 1 in `M8C-ONBOARDING-IMPROVEMENTS`)
 
@@ -329,7 +225,7 @@ instructions. The two want one pass.
 
 ---
 
-## 6. Installing the plugin strands a new user at `daemon_not_running` with no signpost
+## 5. Installing the plugin strands a new user at `daemon_not_running` with no signpost
 
 **Designation:** [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — **needs a DoD
 line opened.** **Narrowed 2026-08-04:** the launch-sized item is the failure path, not the install.
@@ -348,7 +244,7 @@ a next step. A message change plus a doc line, sharing a pass with the Telegram 
 
 ---
 
-## 7. "Online" does not mean reachable
+## 6. "Online" does not mean reachable
 
 `cello status` shows an agent as `online` with `standing_receiver_ready: true` whenever its signalling
 connection is up — even when the daemon cannot resolve a single directory endpoint and no session can
@@ -370,7 +266,7 @@ broken."
 
 ---
 
-## 8. A mismatch that makes a conversation unsealable leaves no durable trace
+## 7. A mismatch that makes a conversation unsealable leaves no durable trace
 
 **Designation: `DOD-FRONTIER-MISMATCH-DURABLE-1`** (M8D, 🅿️ parked) — **re-scoped 2026-08-03.** The
 original defect under this item (`DOD-FRONTIER-STRAND-1`) is fixed; see Addressed. What is left is
@@ -394,7 +290,7 @@ anything keyed on it must not assume it is.
 
 ---
 
-## 9. A daemon shutdown rings the doorbell like an incoming message
+## 8. A daemon shutdown rings the doorbell like an incoming message
 
 **Designation:** [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — **needs a DoD
 line opened.**
@@ -410,7 +306,7 @@ distinguishable metadata so the event says what happened.
 
 ---
 
-## 10. Telegram phone notifications are built and tested, but never proven on a real phone
+## 9. Telegram phone notifications are built and tested, but never proven on a real phone
 
 **Designation: `DOD-TGDOOR-1`** — 🟡 *(still the only Tier-3 unit that can't be smoke-tested without
 a real bot token)*
@@ -421,7 +317,7 @@ proof, nothing else — minutes with a phone, do it opportunistically whenever A
 
 ---
 
-## 11. There is still no way to back up or recover your identity
+## 10. There is still no way to back up or recover your identity
 
 **Designation: `DOD-CUSTODY-DAEMON-1`** — demoted from #1 on 2026-08-04; scoped the same day. (Renumbered #10→#11 when the accounts-chain item landed.)
 
@@ -446,7 +342,7 @@ Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello
 
 ---
 
-## 12. A sealed session's unread messages ring the doorbell as live work, and agents act on them
+## 11. A sealed session's unread messages ring the doorbell as live work, and agents act on them
 
 **Designation: `DOD-TERMINAL-WAKE-1`** — ✅ **FIXED 2026-08-06** (cello-client `2bc0764` + `cdb8bc7`;
 the second entry point was already shipped by M12-P17/P18 before this pass). **Both entry points are
@@ -567,7 +463,7 @@ invalidates the notarization. Confirmed on both sides.
 
 ---
 
-## 13. Two sides can hold incompatible beliefs about which terminal path a session is on
+## 12. Two sides can hold incompatible beliefs about which terminal path a session is on
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — 🟢 **THE CURE IS BUILT 2026-08-09.** A close
 that fails now ASKS the directory whether the seal already happened, and returns the receipt if it
@@ -864,7 +760,7 @@ daemon noticing.
 **Not yet published** as of writing — daemon 0.0.150 is the latest published build and does not
 contain it.
 
-## 14. The relay stops being able to notarize, never recovers, and reports itself perfectly healthy
+## 13. The relay stops being able to notarize, never recovers, and reports itself perfectly healthy
 
 **Designation: `DOD-RELAY-DIRECTORY-RECONNECT-1`** — 🟠 **BOTH HALVES FIXED IN SOURCE 2026-08-08,
 NOT YET ON THE FLEET.** Unranked pending Andre. **Proposed slot: high — this is the only item on
@@ -945,7 +841,7 @@ Neither causes this item — both were disproved as the cause by measurement —
 faults. Miss_Chelly owns them.
 
 
-## 15. The daemon logs every connection opening and never one closing
+## 14. The daemon logs every connection opening and never one closing
 
 **Designation: `DOD-IPC-DISCONNECT-VISIBLE-1`** — ❌ **OPEN, and deliberately filed as a SMALL one.**
 Unranked. **Proposed slot: low — nobody is ruined by this. It is here because it taxes every
@@ -982,7 +878,7 @@ misreading; `selected_by_this_connection`, or a note in the payload, would stop 
 permanent (spec §3). What is missing is only the record of it changing.
 
 
-## 16. A session was silently bound to an agent it never selected — and it was someone else's identity
+## 15. A session was silently bound to an agent it never selected — and it was someone else's identity
 
 **Designation: `DOD-AGENT-SELECTION-UNWARRANTED-1`** — ❌ **OPEN, cause NOT established.** Unranked.
 **Proposed slot: high, on the security argument below — but it needs the diagnosis before it can be
@@ -1050,7 +946,7 @@ to `agent.current.switched`, then reproduce with a daemon restart after a releas
 the two candidates in one run.
 
 
-## 17. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
+## 16. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
 
 **Designation: `DOD-HEARTBEAT-REPLICATION-1`** — ❌ **OPEN.** Unranked. Previously recorded only as a
 footnote on item 14; filed here because it is a live fault in its own right and was nearly fixed as
@@ -1072,7 +968,7 @@ about to be built on it.
 Nothing that depends on a quorum view can be trusted while every node believes it is alone, and the
 failure is invisible — nodes do not report that they cannot see each other.
 
-## 18. Trust-signal replication fails every round, and the fork alarm climbs
+## 17. Trust-signal replication fails every round, and the fork alarm climbs
 
 **Designation: `DOD-SIGNAL-REPLICATION-1`** — ❌ **OPEN.** Unranked. Pre-existing, surfaced during
 the 2026-08-08 fleet investigation.
@@ -1086,7 +982,7 @@ elsewhere — so which signals a counterparty sees depends on which directory no
 alarm climbing (39 consecutive at the time of measurement) is a consequence, not a separate fault,
 and it trains whoever watches it to ignore a real fork later.
 
-## 19. A document's agreed content profile is signed into its identity and enforced by nothing
+## 18. A document's agreed content profile is signed into its identity and enforced by nothing
 
 **Designation: `DOD-DOC-PROFILE-1`** (M14) — ⏳ **DELIBERATE SPLIT, recorded here so the gap is
 visible from the launch list rather than only from the milestone doc.**
@@ -1104,7 +1000,7 @@ refusal cannot be answered, so a genuinely multilingual document fails closed an
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
 
-## 20. Interrupted-session sealing is shipped and has never been proven
+## 19. Interrupted-session sealing is shipped and has never been proven
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
 Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
@@ -1130,7 +1026,7 @@ then close it — all inside the relay's 24-hour retention. Minutes of work, and
 receipt or a named failure.
 
 
-## 21. Agents cannot share STRUCTURED data — only prose
+## 20. Agents cannot share STRUCTURED data — only prose
 
 **Designation: `DOD-DOC-JSON-1`** — ❌ **OPEN, not built.** Unranked. **Proposed slot: high, on
 Andre's framing 2026-08-09 — "structured data is super important, the whole use case of working on
@@ -1321,6 +1217,121 @@ Recorded so they stop being re-found by every sweep:
 ---
 
 # Addressed — off the open list
+
+**Moved here 2026-08-09**, the same day it was ranked #1 — cause and symptom are both fixed,
+published and proven on live traffic, and the recovery is built. It should not hold the top slot
+while finished; that is what hid the previous occupant. Residual work lives on item 12
+(`DOD-TERMINAL-STATE-DIVERGENCE-1`): the pull is built but NOT yet in a published build, and nothing
+asks on the daemon's own initiative — recovery needs an operator action, so a session stranded and
+never touched again stays stranded.
+
+## A conversation could silently stop being recordable
+
+**Designation: `DOD-WITNESS-STALL-1`** — 🟠 **ROOT-CAUSED AND HALF-FIXED 2026-08-09.** The safety net
+is shipped (daemon 0.0.149); the CAUSE is `DOD-TERMINAL-STATE-DIVERGENCE-1`'s missing pull twin and
+is still open. **Ranked item 1 by Andre.**
+
+**THE CAUSE, from the relay's own log — not inferred.** The session was SEALED three seconds after it
+opened:
+
+    01:13:34  seq 1 doc · seq 2 msg
+    01:13:35  seq 3 doc · seq 4 msg · seq 5 CTRL · seq 6 msg
+    01:13:36  seq 7 CTRL  →  relay.seal.broker.resolved  →  certificate built and delivered
+
+Two distinct-sender CTRL leaves are exactly what triggers notarization. **Both agents were unattended,
+both away-responders fired, and the away flow ENDS a session** — so each side submitted a seal ctrl
+leaf within a second of the other. It froze at six because that is where the count stood when it was
+sealed, not because six is a limit. Everything the two agents then discussed happened on a
+conversation the relay had already closed.
+
+**Neither daemon learned, because the seal completion is pushed with no pull twin** — that is
+`DOD-TERMINAL-STATE-DIVERGENCE-1` (item 13), and it is not adjacent to this defect, it is half of it.
+
+**THE SILENCE IS FIXED (daemon 0.0.149, tag v0.0.221).** The daemon knew all along: every send
+submitted its leaf, got `session_sealed` back, logged
+`session.relay.hash.submit.failed`, and continued — that branch treated every relay miss as a
+transient degradation. Correct for a relay briefly unreachable, where the sequence is recovered
+later; wrong for a seal, where there is no later. Terminal refusals (`session_sealed`,
+`session_not_found`) are now enumerated, not pattern-matched, and FAIL the send with guidance naming
+the cause. An operator now learns at their next send rather than at close, hours of work later.
+
+**THE CAUSE IS ALSO FIXED NOW (daemon 0.0.150, tag v0.0.222), as `DOD-AWAY-MUTUAL-SEAL-1`.** The
+trigger needs BOTH sides unattended at once — isolated by the counterparty session. Each away
+responder answers the other's, and the second arrival looks exactly like "a caller who ignored the
+leave-a-message instruction", so the one-shot rule fires on BOTH sides and each initiates a seal. The
+one-shot is right about a human who keeps typing and wrong about another away responder. An away
+auto-reply is now recognised and ends the exchange quietly instead of minting a seal.
+
+Matched on EXACT text, never a substring — silencing a real message would be a worse failure than the
+one being fixed — and the texts live in one place the sender and detector both read, because a second
+copy is how a reworded away message stops being recognised and the loop returns. A wire marker is the
+better long-term answer but is a wire change, and this fires precisely when talking to a peer we do
+not control.
+
+**THE ASKING IS NOW BUILT TOO (2026-08-09, item 13).** A failed close asks the directory whether the
+seal already happened and returns the receipt if it does. So all three layers of this failure are
+covered: the cause (away agents no longer seal), the symptom (a send that cannot be recorded fails
+loudly), and the recovery (a stranded session can find its own receipt).
+
+**WHAT IS STILL OWED:** nothing asks on the daemon's own initiative. Recovery is triggered by an
+operator action — a close or a receipt read. A session stranded and never touched again stays
+stranded, and there is no startup sweep.
+
+**TWO HYPOTHESES KILLED, recorded so nobody re-runs them.** *A ceiling at six* — a control run on the
+same relay build tracked exactly through 1, 2, 4, 6, 8, 10, 12 and sealed with `leaf_count: 13`.
+*A daemon restart* — a restart INTERRUPTS sessions loudly and the client then refuses to send, so it
+can never be the silent path (established independently by the counterparty session). The away
+auto-responder, which both of us had dismissed, was the trigger.
+
+**What a customer experiences.** They hold a long working conversation. Every message sends. Every
+message arrives. Nothing warns, nothing errors, both sides look completely normal. Then they close
+it — and there is no receipt, and there can never be one, because the chain stopped growing hours
+ago. The work is already done by the time it announces itself.
+
+**Measured 2026-08-09**, on a live session between two agents on this machine:
+
+| | |
+|---|---|
+| Messages held by the operator | 12 |
+| Leaves the relay had witnessed | **6** |
+| Duration frozen | 68 minutes, across 8 further messages |
+| Delivery during that time | `delivered: true` on every one, including the messages discussing it |
+
+The first close attempt reported 7 held / 6 witnessed; an hour and five messages later it reported
+12 held / 6 witnessed. **The relay was delivering and not witnessing** — the same path for a client,
+evidently not the same operation for the relay. The seal is computed over witnessed leaves, so the
+session cannot be notarized and force is the only exit, which forfeits the receipt permanently.
+
+**Why this is worse than the outage it followed.** `DOD-RELAY-DIRECTORY-RECONNECT-1` (item 14) failed
+LOUDLY: closes hung, nothing sealed anywhere, and two people knew within minutes. This one costs a
+real conversation before it says anything.
+
+**A CONTROL RUN RULES OUT THE OBVIOUS EXPLANATIONS, AND REPRODUCES NOTHING.** A fresh session on the
+same relay build, sampled after every exchange rather than only at the end:
+
+held/witnessed of one/one, two/two, four/four, **six/six**, eight/eight, ten/ten, twelve/twelve —
+exact at every step, then sealed first time with `leaf_count: 13`.
+
+- **Not a ceiling at six.** The control crossed six without pausing, minutes after the other session
+  froze there.
+- **Not "it never tracked".** Witnessing was exact from the second sample.
+- **Not the away auto-responder.** The control had no auto-replies and behaved perfectly.
+
+What survives is an **event attached to one session**. What the control does NOT do is reproduce the
+failure, and a control that behaves is weaker evidence than a reproduction that misbehaves.
+
+**The two candidate triggers**, both present in the failing session and absent from the control: it
+survived a **daemon restart mid-conversation**, and it **opened with both sides unattended and
+auto-replying**. The next experiment is a fresh session with a deliberate daemon restart halfway.
+
+**The broken session is deliberately being left open and unsealed** as the only known artefact.
+
+**This makes item 14's health check the wrong shape.** That check asks "can this relay reach a
+directory". This failure asks "is the chain still growing", and they are independent: witnessing
+froze while the directory link was fine and delivery stayed green. **The health check written for
+item 14 would report the frozen relay perfectly healthy.** A check that cannot go red for the
+failure being suffered is not a check for that failure.
+
 
 **Moved here 2026-08-09.** It was ranked #1 while already ✅ fixed, which is the one thing a
 ranked list must not do — the top slot is what gets worked, and a finished item sitting in it hides
