@@ -99,3 +99,4 @@ An agent cannot make up things about what happened. The hash chain proves the ex
 - [[end-to-end-flow]] — canonical protocol narrative
 - [[agent-client]] — client-side storage and backup requirements
 - [[server-infrastructure]] — directory node specifications
+- [[2026-08-09_0436_sharing-a-sealed-conversation|Sharing a Sealed Conversation]] — a case where the custodian line is load-bearing: the directory answers whether a seal is current and whether sharing is permitted, without ever holding the conversation it is answering about

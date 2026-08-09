@@ -183,3 +183,12 @@ unrelated reason.
 A single test that enumerates every table and column and requires each to be either replicated or
 explicitly listed as node-local *with a reason* would have failed on day one of M12 — and would
 have caught `conversation_attestations`, which no human has yet decided about.
+
+---
+
+## Related Documents
+
+- [[2026-08-09_0436_sharing-a-sealed-conversation|Sharing a Sealed Conversation]] — proposes a new
+  share-permission table that must replicate so any node can answer the permission question. Exactly
+  the replicate-or-node-local decision this log shows has been getting made by omission, and a
+  chance to make one deliberately for once.

@@ -206,6 +206,34 @@ answer for at all.
 
 ---
 
+## Related Documents
+
+- [[2026-04-08_1930_client-side-trust-data-ownership|Client-Side Trust Data Ownership]] — the general
+  form of this feature. The client holds the data, the directory holds only the hash, and the
+  recipient verifies by comparing the two. Sharing a sealed conversation is that pattern applied to
+  a transcript instead of a trust score.
+- [[2026-04-14_1300_connection-request-flow-and-trust-relay|Connection Request Flow — Trust Data Relay and Selective Disclosure]] —
+  the existing instance of hash-verify-forward, and the thing Andre was pointing at when he said this
+  is "very similar to sharing your trust signals."
+- [[2026-05-31_1143_hash-custodian-positioning|Hash Custodian — Core Positioning Statement]] — why the
+  directory can hold the seal root and the sharing grant but must never hold the conversation body.
+- [[2026-04-13_1400_meta-merkle-tree-design|Meta-Merkle Tree Design]] — the conversation proof ledger
+  underneath all of this: inclusion proofs, and the fabricated-conversation problem a shared
+  transcript exists to answer. Also the machinery that would make partial sharing possible if the
+  whole-transcript-only decision is ever revisited.
+- [[2026-08-07_1912_replication-gap-what-m12-left-unfinished|Replication Gap — What M12 Left Unfinished]] —
+  the new share-permission table has to be a deliberate replicate-or-node-local decision, which is
+  exactly the decision that log shows has been getting made by omission.
+- [[2026-04-17_1000_trust-signal-pickup-queue|Trust Signal Pickup Queue]] — the encrypted
+  deliver-then-ack pattern a large transcript would most likely travel on.
+- [[2026-08-05_1230_document-screening-convergence-and-content-profiles|Document Screening Convergence and Content Profiles]] —
+  screening third-party content that arrives as data rather than as a message; the same problem the
+  notice-first decision is answering.
+- [[2026-07-07_1700_four-level-screening-policy|Four-Level Screening Policy]] — the screening tiers a
+  shared transcript would be read through.
+
+---
+
 *References: seal certificate signature covers `[session_id, sealed_root, leaf_count, timestamp]`
 plus the `legibility` object (`core/protocol-types/src/session.ts`); offline verification path is
 `verifyBilateralSealCertificate`; the encrypted-pickup-plus-ack delivery pattern is in
