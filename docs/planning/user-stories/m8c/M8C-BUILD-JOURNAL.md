@@ -4921,6 +4921,174 @@ non-destructive middle (make the loss observable) is what shipped instead.
 
 ---
 
+## 2026-08-09 — launch triage: the onboarding pair, the directory-health surface, and the agent-state ladder
+
+Andre ranked three triage items and all three landed, plus the state-word change he asked for after
+seeing the ladder proposal. **Read the LIVE/committed/designed split below before touching anything** —
+they are three different things and were conflated twice in one day.
+
+**Currently promoted `latest`:** connect `0.0.139`, cli `0.0.162`, daemon `0.0.155`, gateway `0.0.28`,
+crypto `0.0.44`, transport `0.0.50`, protocol-types `0.0.48`. Tags used: `v0.0.225`, `v0.0.226`,
+`v0.0.228` — **`v0.0.227` is the other session's.** The tag counter is shared; always take the next
+FREE one, never assume it tracks the connect version.
+
+### Live for a real user
+
+| Work | Shipped in |
+|---|---|
+| A plugin install no longer dead-ends at a missing daemon | connect `0.0.137`+ |
+| The Telegram sign-up message is the whole cold-start path | ops-agent `ops-01b5fd5e` |
+| `cello status` names an unreachable directory, on BOTH surfaces | daemon `0.0.153`+ |
+| A dropped agent selection says so instead of going silent | connect `0.0.138`+ |
+| Identity switches are attributable (`trigger` on the event) | daemon `0.0.153`+ |
+| The agent-state ladder — `online` means attended | daemon `0.0.155` / cli `0.0.162` / connect `0.0.139` |
+
+### The onboarding pair — the previous fix had shipped a second wrong instruction
+
+`D-ENVVAR` was recorded as fixed on 2026-07-07. It replaced "set `CELLO_REGISTRATION_TOKEN`" — an env
+var the CLI reads nowhere — with **`cello register`, which is not a CLI verb either**; the registry
+names `register-agent`. So the literal follower the rewrite exists for still hit an unknown command,
+and had done since July. **The test pinned the wrong string**, which is why nothing caught it: the
+defect was not unnoticed, it was *confirmed* by a passing test.
+
+It also assumed a CLI the user had no way to have, and stopped at `cello status` — leaving a
+registered agent Claude Code could not see, because nothing mentioned the plugin or the `--channels`
+flag. The message is now the whole path in four steps, pinned by tests including a negative match on
+`cello register` not followed by `-agent`.
+
+The shim half: with no daemon, `cello-mcp` wrote one stderr line and exited, so the MCP server showed
+as failed and there were **no `cello_*` tools at all** — the user never reached a tool error that
+could explain anything. That one line said "run `cello login`", naming a binary the plugin does not
+install. There was **no test on that path**, which is how it survived; there is now one that spawns
+the real built binary against an empty `CELLO_DIR`.
+
+**Proven live** by Andre's own registration through the bot on 2026-08-09.
+
+### The agent-state ladder
+
+`AgentState` was `"registered" | "online" | "current" | "load_failed"`. It is now, worst fact first:
+
+```
+load_failed → unregistered → stopped → paused → connecting → unattended → online
+```
+
+`core/daemon/src/agent-state.ts` holds it as a pure function. **Both status surfaces call it** — the
+daemon-wide `getStatus()` the CLI prints and the per-connection `cello_status` — because two copies of
+a truth claim is exactly how the directory-health block came to exist on one surface and not the
+other earlier the same day.
+
+Decisions, with the reasoning, so they are not re-litigated:
+
+- **`unregistered`, not `local_only`** (Andre) — "local only" describes a symptom that could equally
+  be a failure to reach the directory. State the fact.
+- **`stopped`, not `registered`** (Andre) — registration is a past event; the state is "not running".
+- **`isolated` REJECTED, and the objection killed the idea rather than the name** (Andre) — a
+  consortium below threshold affects every agent equally, so it was never a property of an agent.
+  Directory health moved to a daemon-level block with counts (`reachable / declared / required`),
+  because "1 of 3 reachable, need 2" is what answers the question. `below_threshold` reuses the exact
+  string of the error an operator already sees when a session dies.
+- **`unattended` is load-bearing** — `DOD-WITNESS-STALL-1` happened because BOTH sides were
+  unattended, both away responders fired, and the away flow ends a session, so two agents sealed a
+  conversation nobody had. That condition was live and invisible.
+- **Accepted trade** — an agent can read `online` while directory health is bad. Correct attribution,
+  and it only avoids the original lie if the directory block is impossible to miss.
+
+#### TWO THINGS THIS BROKE, both invisible to the compiler
+
+Narrowing `online` silently changed the meaning of every `state === "online"` check **because the
+string stayed valid**. Symptoms: `cello settings set` refusing healthy agents with
+`selected_agent_offline`, and every agent reading `connecting` because the state was read from the
+per-agent signaling map only, ignoring the shared-manager path that `directorySignalingStatus()`
+already handled.
+
+**The fix is `isAgentRunning`**, exported from `@cello-protocol/daemon`. It answers the question
+callers actually have — *may I claim this agent, or did the operator stop it* — so it includes
+`connecting`, since a directory still coming up is normal a minute after registering and local
+commands never needed one. **Never re-introduce a bare `state === "online"` for "usable".**
+
+#### `unregistered` is BUILT and deliberately NOT EMITTED
+
+The truthful signal is whether the DKG left a FROST share — registration's durable product, not a
+flag anyone can forget to set. Every test fixture creates agents without one, so switching it on
+relabels ~29 tests across 8 files, and the alternative (fabricating share material in fixtures)
+plants fake crypto material a later reader takes for real. `hasFrostShare: true` is hardcoded in
+`daemon.ts` with a comment saying exactly this. **The value stays in the type, so turning it on is a
+one-line change and NOT a second wire change.**
+
+Spin-off, open: **the daemon does not auto-start agents**; `cello login` does it afterwards. A daemon
+spawned by the MCP shim therefore leaves every agent unable to receive anything, and `stopped` does
+not yet strictly mean "you stopped it".
+
+### The identity-switch diagnosis — two triage premises were wrong
+
+The event **does** log the names; what it could not carry was WHO asked, since an operator's explicit
+`cello_use_agent` and the shim's reconnect replay arrive byte-identical. The replay now identifies
+itself and the daemon records a whitelisted `trigger`.
+
+**A daemon-side fallback cannot be the cause** — `cello_use_agent` is the ONLY writer of a
+connection's current agent; every other site writes null. And the "dropped selection" direction is
+explained and was working as designed: a refused replay drops the cache, correctly, but did it
+without a word anywhere. That silence was the report. **The bound direction remains unexplained;**
+this made the next occurrence readable, it did not fix it.
+
+### The ops-agent deploy nearly took the registration bot down
+
+Deployed image `ops-01b5fd5e` (Cloud Build `58b480f5`), revision `cello-ops-agent-00016-tmq`.
+
+`ops_agent_expected_migration_version` was `57` while all three nodes are at **62** — five migrations
+behind, drifting since at least 2026-07-31, logging `schema drift` every five minutes for nine days
+with nobody reading it. The assertion runs at STARTUP and calls `exit(1)` on an exact mismatch, at
+`min = max = 1`. **Shipping the copy fix alone would have taken the bot down.** Bumped in the same
+apply. Root cause of the miss: `infra/CLAUDE.md` said the rule "belongs to the deleted AWS stack" —
+only the SSM half died, the guard survived as a Terraform variable. Corrected there with a
+one-command drift check.
+
+### Hermes EC2 — updating it is a RESTART, not an install
+
+The daemon comes from the global npm install, so reinstalling and restarting works. **The shims do
+not.** Hermes spawns them via `npx @cello-protocol/connect@latest`; npx resolves `@latest` once and
+reuses its cache, and nothing restarts the process — so two shims had been running since **Aug 5 and
+Aug 7 on connect `0.0.133`**, six versions behind, while the global install read as current. The
+other session had done the install and bounced the daemon, which looks complete.
+**`systemctl --user restart hermes-serve hermes-gateway` is the step that actually updates them.**
+
+### Coordination — two agents in these repos
+
+Three collisions, none breaking, all costing time: a `git add -A` swept an in-progress
+`parity-commands.ts` into their commit `9b17f60`; the tag counter is shared; and on EC2 they
+installed while I restarted, each half looking finished from where we stood. **`git add` explicit
+paths, never `-A`.** And a local `pnpm run test` can include their uncommitted work, so a green local
+run does not gate the COMMITTED tree — CI's Build-and-Test on the tag does.
+
+### Owed on the next publish
+
+**The other session's doc-watch nudge fix is pushed and NOT published** — `7a92e1f`. It matters: the
+nudge carried the CHANGED PATHS into the doorbell body, and a changed path can contain a key the
+counterparty named, so a peer could have placed chosen text into an agent's context through an
+unscreened wake it never asked for. It now carries the operator's own local watch patterns. Andre:
+**include it in the next cascade** — daemon `0.0.156` / connect `0.0.140` / cli `0.0.163`, which is
+the same bump the sealed-inbox work needs.
+
+### NEXT — `DOD-SEALED-INBOX-2`, approved by Andre
+
+A conversation can end four ways — `sealed`, `abandoned`, `interrupted`, `seal_interrupted_pending` —
+and only the first is notarized. The inbox groups all four under a field named `sealed_unread` and
+captions them *"These sessions are sealed with unread messages."* Three times in four that is false.
+Found live: a session reported sealed while three other surfaces said interrupted and it had never
+sealed, and **the agent reading the inbox repeated "it's sealed" to the operator as fact.**
+
+The query is right — `#TERMINAL_STATUSES` correctly holds all four and `getSealedUnread` correctly
+selects on that set. The defect is downstream, in four places:
+`notification-handlers.ts` (the caption), `session-read-handlers.ts`, `session-node-manager.ts`, and
+`plugins/cello/skills/receptionist/SKILL.md` — **which ships, so it instructs agents directly**.
+
+**Decided 2026-08-04 (Andre) — ONE pass:** rename `sealed_unread` → status-neutral (`ended_unread`),
+add a per-row `status`, correct the guidance string. **The rename is not deferrable** — the field name
+is half the false claim, since an agent reading the JSON sees `sealed_unread` and never reaches the
+caption. Pre-launch with one operator is the only time a wire change is free.
+
+---
+
 ## Related Documents
 
 - [[M8C-SPEC]] — the design
