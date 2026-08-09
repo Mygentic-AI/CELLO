@@ -3378,6 +3378,111 @@ fix was in, and it was not.
 
 ---
 
+## Entry 36 — The last unreviewed line, and it was not clean
+
+*2026-08-08 → 09*
+
+`DOD-DOC-TOOLS-1` was the only line in the milestone that had never had a review pass, on a milestone
+otherwise closing. Reviewed against all **eleven** verbs and their four surfaces. **Nine findings,
+two of them work-losing.** All fixed and published; the two worst re-verified on live traffic.
+
+### An append-only document was destroyed by appending to it
+
+The worst of the nine, and it had been sitting in plain sight behind one character.
+
+`toChunks` gives every line a trailing newline **except the last**. So a text that does not end in
+one has a final chunk whose identity changes the moment anything is appended:
+
+```
+"# Draft"             → ["# Draft"]
+"# Draft\nline two\n"  → ["# Draft\n", "line two\n"]
+```
+
+The diff therefore reports the last line as **deleted and re-inserted**. Nothing was deleted — but
+the receiver's `append_only` gate counts any delete range and refuses, naming a deletion the sender
+never made. **Three refusals stall the document. Terminal.**
+
+So an append-only document — the one shape whose entire premise is that appending is always safe —
+was destroyed by appending to it, whenever the starting content lacked a trailing newline. Nothing
+told the operator that mattered, and their own surface said `published: true`.
+
+**The existing test passed because every string in it ends in a newline** — the single shape that
+works. Measured all three cases before fixing anything:
+
+| | deletions counted |
+|---|---|
+| append with trailing newline | 0 → admitted |
+| append with NO trailing newline | 1 → **refused** |
+| append to `"# Draft"` | 1 → **refused** |
+
+Fixed by trimming each hunk of the text it SHARES with what it replaces, so a hunk spans only what
+genuinely differs. Trimming rather than special-casing an append, because the same false deletion
+appears for any edit touching the last line of a file with no trailing newline — and minimal hunks
+are better for the CRDT regardless: a delete the peer did not need can collide with their concurrent
+edit to that line.
+
+### A failed publish reported a document in sync that the peer had never seen
+
+`writePath.publish` folds the file's edits in and advances the projection **before** it returns. When
+the publish then failed, `cello_doc_write` remembered the document so a later write could flush it.
+`cello_doc_publish` did not — while its own comment claimed it was "reported the same way".
+
+The sequence: publish fails → operator clears the cause and publishes again → the file now matches
+the projection, so nothing to diff → **a clean "nothing to do"**. They try `write` with the same
+text: also nothing to do. `cello_doc_list` shows `pendingDeliveries: 0`, because pending is derived
+from the envelope log and no envelope was ever written. **Every surface agrees the document is
+synced. The peer has never seen it.**
+
+### The one that is the shape of this whole milestone
+
+`DocumentNotifications.notice()` and `.pending()` — the writer and the reader of §16.5's passive
+notification. Both fully implemented, both tested, and **neither had a caller outside its own test
+file**. An admitted update wrote nothing; `cello_check_notifications` had no document section at all;
+`cello_doc_read` was dutifully clearing rows that could never exist.
+
+This line's own history is *"everything was built, tested, and unreachable — which reads exactly like
+a working layer"*, found by grep because no test can fail for "the only caller is a fixture". The
+notification clause was **carried onto this line explicitly** and was still the thing left unwired.
+
+Wired at both ends. The unread count is DERIVED from the envelope log against the read mark rather
+than incremented — envelopes redeliver, that is how an offline peer is caught up, so a per-arrival
+counter drifts upward and claims more unread than exists.
+
+### The rest
+
+- **`json` was advertised and silently broken.** Genuinely supported by the write path (map root) and
+  by none of `read`/`write`/`diff` (text root). A JSON document's file was written as `{}`, read as
+  empty — the exact "an empty document handed to an agent gets written back over the peer's real
+  content" hazard the read path warns about in its own comment — and diffed as unchanged forever.
+  Refused at both ends rather than finished: half-support reads as done in every review and loses
+  content in silence. `document_type` was never validated at all, so `yaml` created a real signed
+  peer-accepted document with no file and no explanation.
+- **A write into a killed document** applied the hunks, failed to publish, and returned `ok: true`
+  while remembering a stuck edit no flush could ever clear. The text then existed in no log and no
+  peer's copy, and vanished on the next restart.
+- **`close`/`kill` reported a local signing fault as an absent peer** — three distinct reasons
+  collapsed into "run it again when they are back". Waiting cannot load a key. The underlying message
+  was destroyed by a bare `catch {}` in a module with no logger.
+- **The `cello doc` sub-verbs had no guard.** Deleting the `diff` branch left every test green while
+  the command silently printed help and exited 1. The contact group has exactly this test.
+- The file publish path ran **no authoring-side screening**, on the surface §4.1 calls primary.
+
+### What this says about review timing
+
+Nine findings on a line that had shipped, been used daily, and passed every test — including two that
+destroy an operator's work. None were found by the suite, and the suite is not thin: the *new* tests
+in that diff all survive the revert test. They were found by reading the code against what it claims.
+
+The counter-lesson is equally real: three of the nine were fixed BY measurement, not by reading. The
+append case was settled by running the three inputs and counting deletions, not by arguing about
+`toChunks`.
+
+Published daemon 0.0.148 / cli 0.0.155 / connect 0.0.135, verified against the tarball, then verified
+live: an append-only document with no trailing newline, appended to, admitted by the peer, converged
+byte-identical.
+
+---
+
 ## Related Documents
 
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — the lines each entry closes or splits
