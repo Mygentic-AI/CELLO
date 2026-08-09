@@ -1095,11 +1095,28 @@ export class RegistrationStateMachine {
 
   /**
    * OA-1 (2026-07-07): deliver the pre-authorization token as TWO messages —
-   *   ① copy-pasteable instructions with the token inlined into the real `cello register` command;
+   *   ① copy-pasteable instructions with the token inlined into the real `cello register-agent` command;
    *   ② the bare token alone, for clean one-tap copy (the token is the error-prone part).
    * The prior copy told the user to "Set this as CELLO_REGISTRATION_TOKEN" — an env var the CLI reads
    * NOWHERE (it takes the token as a positional arg or CELLO_PREAUTH_TOKEN), so a literal follower was
-   * dead in the water (cross-repo drift). `[YOUR_NAME]` uses square brackets deliberately: they fail
+   * dead in the water (cross-repo drift).
+   *
+   * CORRECTED 2026-08-09 — that fix traded one wrong instruction for another, and it shipped. It
+   * named `cello register`, which is NOT a CLI verb (the registry names `register-agent`), so the
+   * literal follower this rewrite exists for still hit an unknown command. It also assumed the CLI
+   * was already installed: a brand-new user has no `cello` binary, so "run cello login first" was a
+   * dead end one step earlier. Both are fixed here and pinned by tests — including a negative match
+   * on `cello register` not followed by `-agent`, because the failure mode is a command that reads
+   * correct and does not exist.
+   *
+   * The message is now the WHOLE cold-start path, in three steps, because this is the only
+   * instruction a new user ever receives and there is nowhere else for them to look. It previously
+   * stopped at `cello status` — a registered agent that Claude Code cannot see, since nothing had
+   * told them the plugin exists. Step 3 is a Claude Code step, not a terminal one; the reconnect is
+   * `/mcp` → cello → Reconnect, NOT a Claude Code restart (Andre, 2026-08-09 — a restart works but
+   * asking for one when a reconnect will do is a worse instruction).
+   *
+   * `[YOUR_NAME]` uses square brackets deliberately: they fail
    * the CLI name charset ^[a-zA-Z0-9_-]{1,64}$, so a blind paste is cleanly REJECTED with the name-rule
    * error instead of creating a junk-named agent literally called `[YOUR_NAME]`. Telegram sends plain
    * text (no parse_mode), so the commands are written bare — no backticks or code fences.
@@ -1110,12 +1127,23 @@ export class RegistrationStateMachine {
     await channel.send(
       from,
       "Registration complete 🎉 Your CELLO agent pre-authorization token is ready — valid for 24 hours, single use.\n\n" +
-        'On a device with the CELLO CLI installed and logged in (run "cello login" first), run these two commands:\n\n' +
+        "STEP 1 — at your own terminal, install CELLO and start the local daemon:\n\n" +
+        "npm install -g @cello-protocol/cli @cello-protocol/connect\n" +
+        "cello login\n\n" +
+        "STEP 2 — create your agent and register it with the token:\n\n" +
         "# Replace [YOUR_NAME] with a name for your agent — letters, numbers, _ and - only, no spaces.\n" +
         "cello create-agent [YOUR_NAME]\n\n" +
         "# Use the SAME name; the token is already filled in.\n" +
-        `cello register [YOUR_NAME] ${token}\n\n` +
+        `cello register-agent [YOUR_NAME] ${token}\n\n` +
         'Then run "cello status" to confirm your agent is online.\n\n' +
+        "STEP 3 — connect it to Claude Code. In Claude Code, run these two commands:\n\n" +
+        "/plugin marketplace add Mygentic-AI/cello-client\n" +
+        "/plugin install cello@cello-protocol\n\n" +
+        "Then run /mcp, pick cello, and choose Reconnect. Your cello tools are now live.\n\n" +
+        "STEP 4 — turn on alerts, so your session wakes when someone messages you. Start Claude Code with:\n\n" +
+        "claude --channels plugin:cello@cello-protocol\n\n" +
+        'If the startup banner says "not on the approved channels allowlist", alerts did NOT register and ' +
+        'nothing will wake you. Run the CELLO "setup" skill in Claude Code — it has the one-time fix.\n\n' +
         "Thank you for choosing CELLO — happy agent-to-agent communicating!",
     );
     // ② the bare token, for clean one-tap copy.

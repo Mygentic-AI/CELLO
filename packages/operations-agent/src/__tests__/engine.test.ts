@@ -297,13 +297,33 @@ describeIntegration("RegistrationEngine integration", () => {
     expect(rawResult.rows[0].state).toBe("PRE_AUTH_TOKEN_ISSUED");
 
     // OA-1: the token is delivered as TWO messages — ① runnable instructions with the token inlined
-    // into the real `cello register` command, ② the bare token alone for clean one-tap copy.
-    const instr = channelState.sent.find((m) => m.message.includes("cello register [YOUR_NAME] DEV-CELLO-"));
+    // into the real `cello register-agent` command, ② the bare token alone for clean one-tap copy.
+    const instr = channelState.sent.find((m) => m.message.includes("cello register-agent [YOUR_NAME] DEV-CELLO-"));
     expect(instr).toBeDefined();
     // teeth: the old copy named CELLO_REGISTRATION_TOKEN (an env var the CLI reads nowhere) and gave
     // no runnable command — a literal follower was dead in the water. Both must be gone/present now.
     expect(instr!.message).not.toContain("CELLO_REGISTRATION_TOKEN");
     expect(instr!.message).toContain("cello create-agent [YOUR_NAME]");
+    // teeth for the SECOND instance of the same cross-repo drift: the D-ENVVAR fix replaced the wrong
+    // env var with a command that does not exist either. `cello register` is not a CLI verb — the
+    // registry names `register-agent` — so a literal follower still hit an unknown command.
+    expect(instr!.message).not.toMatch(/cello register(?!-agent)/);
+    // A brand-new user has no CLI at all: the plugin ships the MCP shim only. Naming `cello login`
+    // without the install that provides `cello` is the same dead end one step earlier.
+    expect(instr!.message).toContain("npm install -g @cello-protocol/cli @cello-protocol/connect");
+    // This message is the ONLY instruction a new user gets, so it must carry the whole path. It used
+    // to stop at `cello status` — leaving them a registered agent that Claude Code could not see,
+    // because nothing had mentioned the plugin. Pin all three steps.
+    expect(instr!.message).toContain("/plugin marketplace add Mygentic-AI/cello-client");
+    expect(instr!.message).toContain("/plugin install cello@cello-protocol");
+    expect(instr!.message).toContain("/mcp");
+    // Without the channels flag CELLO works but nothing ever wakes the session — the user has to
+    // poll by hand and will conclude nobody is messaging them. It is a startup flag, so it cannot
+    // be set after the fact, which is why it belongs in the one message they get (Andre, 2026-08-09).
+    expect(instr!.message).toContain("claude --channels plugin:cello@cello-protocol");
+    // The flag silently does not register unless CELLO is on the channels allowlist, so the message
+    // must name that banner — a step that looks done and is not is the failure mode of this whole item.
+    expect(instr!.message).toContain("not on the approved channels allowlist");
     // ② the bare-token message exists, equal to just the token (one-tap copy).
     const token = instr!.message.match(/DEV-CELLO-\S+/)![0];
     const bareToken = channelState.sent.find((m) => m.message === token);

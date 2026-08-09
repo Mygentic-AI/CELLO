@@ -297,7 +297,7 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     expect(preAuthState.calls.length).toBe(2); // first registration + re-registration
     // OA-1: each token delivery is now TWO messages (① runnable instructions with the token inlined,
     // ② the bare token). Count the instructions message per delivery → exactly one per registration.
-    const deliveries = channelState.sent.filter((m) => m.message.includes("cello register [YOUR_NAME] DEV-CELLO-"));
+    const deliveries = channelState.sent.filter((m) => m.message.includes("cello register-agent [YOUR_NAME] DEV-CELLO-"));
     expect(deliveries.length).toBe(2);
   });
 
