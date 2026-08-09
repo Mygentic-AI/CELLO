@@ -89,7 +89,7 @@ sealed, not because six is a limit. Everything the two agents then discussed hap
 conversation the relay had already closed.
 
 **Neither daemon learned, because the seal completion is pushed with no pull twin** — that is
-`DOD-TERMINAL-STATE-DIVERGENCE-1` (item 12), and it is not adjacent to this defect, it is half of it.
+`DOD-TERMINAL-STATE-DIVERGENCE-1` (item 13), and it is not adjacent to this defect, it is half of it.
 
 **THE SILENCE IS FIXED (daemon 0.0.149, tag v0.0.221).** The daemon knew all along: every send
 submitted its leaf, got `session_sealed` back, logged
@@ -112,10 +112,14 @@ copy is how a reworded away message stops being recognised and the loop returns.
 better long-term answer but is a wire change, and this fires precisely when talking to a peer we do
 not control.
 
-**WHAT IS STILL OWED:** the pull twin (`DOD-TERMINAL-STATE-DIVERGENCE-1`, item 12). The two fixes
-above stop THIS route to a silently-dead session and catch the symptom promptly whatever the route —
-but until a daemon can ASK whether its session was sealed, any other path to the same divergence
-stays silent until the next send.
+**THE ASKING IS NOW BUILT TOO (2026-08-09, item 13).** A failed close asks the directory whether the
+seal already happened and returns the receipt if it does. So all three layers of this failure are
+covered: the cause (away agents no longer seal), the symptom (a send that cannot be recorded fails
+loudly), and the recovery (a stranded session can find its own receipt).
+
+**WHAT IS STILL OWED:** nothing asks on the daemon's own initiative. Recovery is triggered by an
+operator action — a close or a receipt read. A session stranded and never touched again stays
+stranded, and there is no startup sweep.
 
 **TWO HYPOTHESES KILLED, recorded so nobody re-runs them.** *A ceiling at six* — a control run on the
 same relay build tracked exactly through 1, 2, 4, 6, 8, 10, 12 and sealed with `leaf_count: 13`.
@@ -565,12 +569,17 @@ invalidates the notarization. Confirmed on both sides.
 
 ## 13. Two sides can hold incompatible beliefs about which terminal path a session is on
 
-**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — 🟡 **PARTIALLY ADDRESSED 2026-08-06.**
+**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — 🟢 **THE CURE IS BUILT 2026-08-09.** A close
+that fails now ASKS the directory whether the seal already happened, and returns the receipt if it
+does. Detail at the end of this item; the history below is kept because it is what made the shape
+legible.
+
+**Designation (historical): ** — 🟡 **PARTIALLY ADDRESSED 2026-08-06.**
 **Mitigation SHIPPED** (cello-client `3e59b53` + `5e1a9af`, unit-reviewed): the guidance deadlock is
 broken, so an agent is no longer walked from two individually-true answers into a force-abandon that
 destroys its own half of the receipt. That was the mechanism by which a *recoverable* divergence
 became a *permanent* one on 2026-08-06 — the loss was caused by the escape, not by the missed frame.
-**The CURE — the `seal_certificate_request` pull twin — is designed but NOT built** (see the design
+**The CURE — the `seal_certificate_request` pull — was designed and, as of 2026-08-06, NOT built** (see the design
 and its corrected cost below: it needs V58, the SSM bump, and a directory deploy, and it cannot
 repair sessions sealed before that migration). Divergences will still OCCUR until the pull twin
 ships; they will simply stop being self-inflicted-permanent. Still ❌ as a defect, raised 2026-08-05, **ROOT-CAUSED
@@ -814,6 +823,46 @@ is 12:16:56.995 — two minutes later, on a different session. **Both correction
 the same direction: a verified explanation travelling to a case nobody had traced.** Worth reading
 before trusting any single-case diagnosis in this area.
 
+
+## BUILT 2026-08-09 — and it was smaller than this item implied
+
+**The asking already existed.** `seal-certificate-pull.ts` on the client, `seal_certificate_request`
+served by every directory node, both shipped earlier. It was wired to exactly ONE caller: reading a
+receipt (`cello_sealed_receipt`).
+
+It was NOT wired to the close — which is where an operator is actually stranded. They are not reading
+a receipt; they are trying to end a conversation, and the close fails in a way indistinguishable from
+"it has not sealed yet".
+
+So the work was not building the pull. It was **asking at the moment someone is stuck**.
+
+**What changes for an operator.** A close that fails for a reason that could mean "already sealed
+elsewhere" now asks once. If a certificate comes back AND verifies against its FROST signature, the
+close SUCCEEDS and hands over the receipt — the thing they were trying to do simply works. If there
+is genuinely none, the answer says **`asked_none_exists`**, which is a different fact from never
+having asked and is the one needed before a force-abandon.
+
+**Three judgements, recorded so they are not "simplified" later:**
+- **Scoped to reasons where a seal could plausibly exist** — the counterparty rejecting our request
+  because IT considers the session finished, a unilateral timeout, or the relay calling the session
+  terminal. Asking on every failure would put a directory round trip in front of refusals that fail
+  precisely because nothing was sealed.
+- **The directory is not trusted for the answer.** The certificate is re-verified before anything is
+  recorded, which is what makes serving it from any node safe.
+- **Wrapped, not patched into each exit.** The handler has six failure returns; a seventh would be
+  added without the recovery.
+
+**One real bug caught mid-change by the vocabulary audit:** the wrapper first read `cello_session_id`
+— the MCP TOOL's field name. The shim renames it, so over IPC the field is `session_id`: it would
+have found nothing and silently skipped every recovery, with no test failing for it. Now pinned by a
+test.
+
+**Still not covered:** a daemon that has never tried to close a stranded session does not ask on its
+own. There is no startup sweep. The recovery is triggered by the operator's action, not by the
+daemon noticing.
+
+**Not yet published** as of writing — daemon 0.0.150 is the latest published build and does not
+contain it.
 
 ## 14. The relay stops being able to notarize, never recovers, and reports itself perfectly healthy
 
