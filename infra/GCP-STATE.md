@@ -26,11 +26,13 @@
 > templated value you depended on **explicitly**, because the tag will not carry it.
 
 > ### ⚠️ STANDING DEVIATIONS — things that are deliberately NOT in their intended state
-> - **`gcp-usc1` is TEMPORARILY DOWNSIZED to `e2-medium`** (2 shared/burstable vCPU + 4 GB, vs
->   `e2-standard-2`'s 8 GB), zone `us-central1-a`. Taken 2026-08-06 to restore the third node after a
->   region-wide `ZONE_RESOURCE_POOL_EXHAUSTED` outage left the consortium at exactly threshold.
->   **REVERT to `e2-standard-2` when us-central1 has capacity** — re-probe with the recipe in the
->   capacity playbook below. The revert marker is in `terraform.tfvars` beside the value.
+> - ~~**`gcp-usc1` is TEMPORARILY DOWNSIZED to `e2-medium`**~~ — **RESOLVED, verified 2026-08-09.**
+>   All three nodes run `e2-standard-2`, confirmed from the running instances (`describe
+>   --format='value(machineType)'`), and `terraform.tfvars` says `e2-standard-2` with no revert
+>   marker beside it. The downsize was reverted at some point and this entry was left standing; it
+>   was checked before the 2026-08-09 roll precisely because a stale machine type would have aimed
+>   the roll at the type that was exhausted. us-central1 had capacity for `e2-standard-2` — the node
+>   rolled in under 90 seconds.
 > - **`max_surge_fixed = 1` was CONSIDERED AND REJECTED for the directory MIG** (2026-08-06). It
 >   would not work: the instance template pins BOTH single-holder addresses — `network_ip`
 >   (static internal) and `nat_ip` (static external) — so two instances from it can never coexist
@@ -237,7 +239,59 @@ unrelated set — **no relay resource appears**. Since `terraform plan` is this 
 (procedure §5), that is the authoritative confirmation the relay deploy is fully applied, not a claim
 from this document.
 
-## 🟡 Directory on `dir-22b9a522` — 2/3 ROLLED, us-central1 BLOCKED ON GCP CAPACITY (2026-08-06)
+## 🟢 CURRENT — directory on `aa31516a`, ALL 3 ROLLED (2026-08-09)
+
+**Image tag:** `aa31516add032ca4566536a85224a04192d51f77`, Cloud Build
+`771856c8-88e6-41c4-8569-f4f32d355599`, built from the GitHub connection at that revision (not
+`builds submit .`). Relay unchanged on `0cf04b0c…` — no relay source changed.
+
+**What it carries: `DOD-SIGNAL-REPLICATION-1`, and nothing else functional.** `signal_records`
+anti-entropy had never once succeeded — `scanner_version` is `TEXT NOT NULL` with no default and was
+missing from the Tier-A spec, so every apply failed on a not-null violation (1530 consecutive at the
+time of measurement). Trust signals existed only on the node that minted them.
+
+**No migration in this image** — schema stays at V62, so `ops_agent_expected_migration_version`
+stays 62 and the ops-agent was not touched.
+
+| Node | Instance | Health |
+|---|---|---|
+| `gcp-use1` 34.75.172.108 | `cello-gcp-use1-wkfl` | ✅ `9090/health` + `9090/bootstrap` 200 |
+| `gcp-euw1` 34.34.166.245 | `cello-gcp-euw1-tx5c` | ✅ `9090/health` + `9090/bootstrap` 200 |
+| `gcp-usc1` 34.136.176.190 | `cello-gcp-usc1-x5zw` | ✅ `9090/health` + `9090/bootstrap` 200 |
+
+Rolled node-by-node with `-target` on each node's instance template + instance group manager,
+each polled to a real 200 before the next was touched. us-central1 rolled without capacity trouble.
+
+**Post-roll `terraform plan` = `0 to add, 4 to change, 0 to destroy`, no directory resource
+present** — the authoritative confirmation the roll is fully applied. (The four are the standing
+unrelated Cloud Run drift: `ops_agent`, `ops_dashboard`, `portal`, `waitlist`. It was five before;
+the portal Cloud SQL instance no longer appears.)
+
+**Verified in production, not merely deployed:** `antientropy.apply.failed` for `signal_records` was
+still firing at 20:33:09Z mid-roll with the exact not-null message, and there have been **zero** since
+all three nodes came up. Rounds run every 1–5 seconds, so that silence is hundreds of rounds. The
+`fork_suspected` counter, which was 39 consecutive and climbing, now oscillates at 2–3 — it is
+resetting, which it can only do when rounds converge.
+
+> ### 📌 `GET /bootstrap` on port 8080 RETURNS 400 — AND ALWAYS DID
+> The roll procedure recorded below says "poll a real `GET /bootstrap` 200". **On port 8080 that is
+> wrong and it looks exactly like a failed deploy.** 8080 is the WebSocket transport
+> (`public_transport = "ws"`), and a plain HTTP GET against it is a legitimate 400. All three nodes
+> answer 400 there, including nodes nobody has touched.
+>
+> **The health surface is port 9090** — `http_health_check { port = 9090, request_path = "/health" }`
+> in `node-directory.tf`, which is also what the MIG autohealer uses. Both `9090/health` and
+> `9090/bootstrap` answer 200 on a healthy node. Poll those.
+>
+> This was caught by comparing against the two un-rolled nodes before concluding anything, which is
+> the general rule: **a reading with no control is not evidence.**
+
+## 🟡 SUPERSEDED — Directory on `dir-22b9a522` — 2/3 ROLLED, us-central1 BLOCKED ON GCP CAPACITY (2026-08-06)
+
+> **⚠️ This heading was stale for three days and misread twice.** It says `dir-22b9a522` while
+> `terraform.tfvars` pinned `8e6b0f79…`, which the running instances confirmed — tfvars was right,
+> exactly as the note under the 2026-07-30 section predicted would keep happening. Superseded by the
+> 2026-08-09 section above.
 
 **Image:** `dir-22b9a522`, Cloud Build `b9ae40fc`, built from the GitHub connection at revision
 `22b9a5220cb97936ecc8e599f92d5b4d8312611b` — NOT `builds submit .`, so the tag names a commit whose
@@ -313,13 +367,21 @@ the published consortium manifest stays valid. Moving to a different REGION chan
 roster is **bundled into the published client** — that is a client release, not an infra tweak.
 Never reach for a region change to solve a capacity problem.
 
-**The structural fix, not yet applied — `max_surge_fixed = 0` is what turns a shortage into an
-outage.** With surge 0 the MIG destroys the running instance first, so a capacity failure leaves
-NOTHING. With `max_surge_fixed = 1` it would create the replacement first, fail harmlessly, and
-leave the healthy node serving. The cost is briefly running two instances per region during a roll.
-**Strongly recommended before the next roll** — it converts this class from an outage into a no-op.
+**~~The structural fix, not yet applied — `max_surge_fixed = 0` is what turns a shortage into an
+outage.~~ ⛔ DO NOT APPLY THIS. It was written here as "strongly recommended before the next roll"
+and then CONSIDERED AND REJECTED later the same day** — see the STANDING DEVIATIONS block at the top
+of this file, which is the current answer. The reasoning below is sound about the failure mode and
+wrong about the remedy: the instance template pins BOTH single-holder addresses (`network_ip` and
+`nat_ip`), so two instances from one template can never coexist and a surge fails on an IP conflict.
+It plans cleanly and breaks the NEXT roll. Left in place, struck through, because deleting it would
+invite someone to re-derive the same recommendation from the same incident.
 
-**Current state of usc1 after the incident:** `zone = us-central1-a`, `machine_type = "e2-medium"`
+~~With surge 0 the MIG destroys the running instance first, so a capacity failure leaves
+NOTHING. With `max_surge_fixed = 1` it would create the replacement first, fail harmlessly, and
+leave the healthy node serving. The cost is briefly running two instances per region during a roll.~~
+
+**Current state of usc1 after the incident (SUPERSEDED — see the top of this file; it is back on
+`e2-standard-2` as of the 2026-08-09 verification):** `zone = us-central1-a`, `machine_type = "e2-medium"`
 — a **TEMPORARY DOWNSIZE** (2 shared/burstable vCPU + 4 GB, vs 8 GB on standard) taken to restore
 the third node rather than sit at threshold. Fine at pre-launch load. **Revert to `e2-standard-2`
 once us-central1 has capacity**; re-probe with the command above to check. The revert marker is in
