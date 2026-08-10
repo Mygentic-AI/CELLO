@@ -192,3 +192,9 @@ document the way the screening audit gates M14's screening line.
 - [[2026-07-31_federated-collaborative-state-architecture]] — spec-of-record (§16 + §6–§10, §3.3)
 - [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol Primitive]] —
   the schema-as-contract origin that Tier Q3 implements in its reshaped, opt-in form
+- [[2026-08-10_2116_multiplayer-artifacts-joining-an-existing-document|Multiplayer Artifacts —
+  Letting a Third Party Join an Existing Document]] — reopens the mesh deferral listed above under
+  "explicitly beyond M14B". Two consequences for this document: one of §11.2's four costs (N-way
+  agreement at quiescence) is Tier 2 and therefore lands here rather than with multiplayer, and
+  the epoch machinery this DoD owns is a dependency of the amendment record multiplayer needs —
+  so the milestone placement is an open decision recorded there

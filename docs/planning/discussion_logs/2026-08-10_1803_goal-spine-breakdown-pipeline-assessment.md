@@ -282,3 +282,7 @@ machines. Not yet reflected in the generator.
 - [[2026-08-05_1230_document-screening-convergence-and-content-profiles|Document Screening,
   Convergence and Content Profiles]] — the screening design whose outbound guard produced two
   false positives during this session, including redacting a CELLO pubkey as a generic API key
+- [[2026-08-10_2116_multiplayer-artifacts-joining-an-existing-document|Multiplayer Artifacts —
+  Letting a Third Party Join an Existing Document]] — the "multi-sharing" gap recorded here,
+  taken up as a design decision the same day: an eight-actor spine needs eight seats, and this
+  log's finding that pairwise scope makes it unrepresentable is cited there as evidence

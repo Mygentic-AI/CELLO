@@ -1569,6 +1569,11 @@ here — this section holds only decisions made DURING the milestone.
 - [[2026-08-05_1230_document-screening-convergence-and-content-profiles|Document Screening, Convergence and Content Profiles]] — the design behind `DOD-DOC-PROFILE-1`, `DOD-DOC-SCREEN-1` and
   `DOD-DOC-REBUTTAL-1`, including the measurement that settled them
 - [[M14B-DEFINITION-OF-DONE]] — V2's parked yardstick
+- [[2026-08-10_2116_multiplayer-artifacts-joining-an-existing-document|Multiplayer Artifacts —
+  Letting a Third Party Join an Existing Document]] — Andre's 2026-08-10 ruling that the bilateral
+  document shipped here must become joinable. Revises the topology parks (M14-P7 cross-document
+  diff, M14-P8 pass-through) and the "properties immutable after accept" premise; the wire slots
+  it needs (`topology`, `epoch_id`, `feature_version`) already shipped in this milestone
 - [[2026-07-31_federated-collaborative-state-architecture]] — spec-of-record (§16 = decisions)
 - [[M12-DEFINITION-OF-DONE]] — the DoD this one is modeled on
 - [[2026-05-08_1400_presence-notification-subscription|Presence Notification Subscription]] —

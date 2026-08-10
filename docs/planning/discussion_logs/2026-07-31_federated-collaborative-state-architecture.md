@@ -1389,3 +1389,11 @@ real rejection friction justifies it.
   Assessment & Redesign]] — measures this design against a real eight-actor workflow: §11.1's
   pairwise scope is what makes that spine unrepresentable, and the deferred multi-party work is
   recorded there as "multi-sharing" with the delivery-schema cost it actually carries
+- [[2026-08-10_2116_multiplayer-artifacts-joining-an-existing-document|Multiplayer Artifacts —
+  Letting a Third Party Join an Existing Document]] — **revises §11.** Andre ruled on 2026-08-10
+  that a document nobody can join is the wrong default for a collaboration platform: §11.1's
+  broker argument is sound but was promoted over the collaboration case, and cost #4 in §11.2
+  ("adding C forces a B–C connection") has its sign inverted for colleagues co-editing. Records
+  which parts of handshake immutability are load-bearing, the amendment-by-unanimous-consent
+  mechanism that replaces the rest, and that §11.2's N-way-agreement cost does not apply to
+  Tier 1

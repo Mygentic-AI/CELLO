@@ -552,3 +552,8 @@ Hybrid workflows (agents discussing *and* collaborating on a document) are natur
   Assessment & Redesign]] — measures what the pipeline actually generated from that same NICO
   workflow (3 actors of 8, an invented compliance gate) and finds the field-level authority
   named here still declared but unenforced
+- [[2026-08-10_2116_multiplayer-artifacts-joining-an-existing-document|Multiplayer Artifacts —
+  Letting a Third Party Join an Existing Document]] — the decision to widen the scope this log
+  originally specified. The 8-role, 8-phase workflow here is cited as the evidence that N-party
+  was always the target: the July design narrowed it to pairwise, shipped it that way, and this
+  log is where that narrowing is reversed
