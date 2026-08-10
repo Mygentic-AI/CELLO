@@ -247,19 +247,30 @@ Confirmed on live data first (the real row's hash IS the standalone digest). One
 `resolveOrCreateAccount` on the store, locking before the existence check so the chain cannot fork;
 `resolveAccountId` deleted. The recorded repro is green.
 
-**DEPLOYED — the code is live on all three nodes. What is left is ONE ROW and it is Andre's call.**
-The acceptance check was run 2026-08-06 by hand (there is still no health surface exposing
-`verifyChain`) and it FAILED on one node: `gcp-use1` valid, **`gcp-usc1` holds one pre-fix row whose
-stored hash is the old standalone digest**. The row's DATA is fine; only its `chain_hash` was computed
-the wrong way. Until it is repaired, `verifyChain("user_accounts")` stays red there — and a red
-verification cannot be told from a tamper, which is the precise defect this item exists to remove.
+**DEPLOYED, and the ONE ROW residual is GONE — RE-MEASURED 2026-08-10. Nothing is owed from Andre.**
+🚨 **DO NOT REPAIR THAT ROW. There is no longer a broken one, and both of the repairs this item used
+to recommend would now be the first damage the table has taken.** Measured twice an hour apart by
+dumping every row from all three live databases and recomputing the chain: **11 rows on each node,
+`verifyChain` VALID on all three**, including position 1 on `gcp-usc1` — the row recorded here as
+broken.
 
-**Why an agent must not just fix it:** rewriting a `chain_hash` in an append-only tamper-evidence
-table, using admin credentials to bypass the RLS that deliberately denies the app user `UPDATE`, is
-*the exact operation the chain exists to detect*. Legitimate as a repair of a known-bad write, but it
-has to be a recorded decision. Two options, both in `infra/GCP-STATE.md` with the verification recipe:
-recompute the single hash, or clear the row and let anti-entropy re-replicate it chained (note it is
-an FK target of `agent_profiles.account_id`, so `SET NULL` + re-link, never a bare `DELETE`).
+The 2026-08-06 check that found it was run when the table held **one** row; ten more were written on
+2026-08-07 and position 1's stored hash is now the chained value. Whether the deployed fix rewrote it
+or the original computation was wrong is not established, and does not change the answer: the running
+database is ground truth.
+
+**Why this needed saying loudly rather than quietly corrected.** A second session read this line on
+2026-08-10, believed a row was still broken, and was about to repair it with admin credentials —
+correctly, by the letter of what was written here. **Deleting position 1 breaks the ten rows behind
+it**, because each row's hash is computed over the previous row's stored hash; `verifyChain`'s own
+AC-005 says a deleted row is detected as a sequence gap. That option was the gentler-sounding of the
+two ("let anti-entropy re-replicate it chained") and it would have manufactured the exact failure this
+item exists to remove, on a clean table. The other option is a no-op at best and a chain break at
+worst. **A stale ❌ on this list is not a harmless overstatement — it is an instruction.**
+
+**The reasoning that made it Andre's call still stands, and is why nothing was broken:** rewriting a
+`chain_hash` in an append-only tamper-evidence table, using admin credentials to bypass the RLS that
+deliberately denies the app user `UPDATE`, is *the exact operation the chain exists to detect*.
 
 **Still owed alongside it:** surface `verifyChain("user_accounts")` on the ops-agent health output,
 or "still red on the origin node" gets closed and forgotten. Steps in [[M8C-DEFINITION-OF-DONE]]. Two spin-offs recorded there:

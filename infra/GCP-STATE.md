@@ -451,20 +451,57 @@ exactly as the unit review predicted: `pg-ae-store` applies replicated `user_acc
 receiver** and stayed **unchained on the node that originally wrote it**. Receivers converge clean;
 the origin does not. `gcp-usc1` was the origin.
 
-**⚠️ OPEN — one row on `gcp-usc1` needs repair, and it is deliberately NOT done unilaterally.**
-Until it is, `verifyChain("user_accounts")` stays red on that node, and a red verification cannot be
-told from a tamper — which is the precise defect `DOD-ACCOUNTS-CHAIN-1` exists to remove. The row's
-DATA is fine; only its `chain_hash` was computed with the wrong algorithm. Options:
-1. **Recompute the one hash** — `UPDATE ... SET chain_hash = SHA-256(serialize(record) ‖ GENESIS)`
-   for the single row at position 1. Surgical; account_id and phone_stub_hash untouched.
-2. **Delete it and let anti-entropy re-replicate it chained** — note it may be an FK target of
-   `agent_profiles.account_id`, so this is `SET NULL` + re-link, never a bare `DELETE`.
+## ✅ CLOSED 2026-08-10 — RE-MEASURED, ALL THREE NODES VALID. DO NOT REPAIR THIS ROW.
 
-**Why this needs an explicit decision rather than an agent's judgement:** rewriting a `chain_hash` in
-an append-only tamper-evidence table, using admin credentials to bypass the RLS that deliberately
-denies the app user `UPDATE`, is *the exact operation the chain exists to detect*. It is a legitimate
-repair of a known-bad write, but it must be a recorded decision, not a side effect. Andre's call.
-The verification recipe above is repeatable — re-run it after any repair.
+**`verifyChain("user_accounts")` passes on all three nodes. There is nothing to fix, and the repair
+options below are retained ONLY as history — running either one now would be the first damage this
+table has taken.**
+
+Measured twice on 2026-08-10, roughly an hour apart, by dumping every row from all three live
+databases and recomputing the chain from `CHAIN_GENESIS` with the production serializer's own rules
+(exclude `chain_hash`/`id`/`created_at`/`email_stub_hash`, sort keys, `SHA-256(serialize ‖ prev)`):
+
+| Node | `user_accounts` | `verifyChain` |
+|---|---|---|
+| `gcp-use1` | **11 rows** | ✅ VALID |
+| `gcp-usc1` | **11 rows** | ✅ VALID — including position 1, the row recorded below as broken |
+| `gcp-euw1` | **11 rows** | ✅ VALID |
+
+**Why the table above (2026-08-06) no longer describes reality:** it was run when the table held
+**one** row. Ten more were written on 2026-08-07. Position 1's stored hash on `gcp-usc1` is now the
+chained value, not the standalone digest. Whether it was rewritten by the deployed fix path or the
+2026-08-06 computation was itself wrong is **not established** — and does not change what to do,
+because the running database is ground truth (§8 of `infra/CLAUDE.md`: *verify against the running
+thing, not a STATE doc*).
+
+> ### 🚨 Option 2 below would DESTROY a currently-valid chain
+>
+> The chain is positional: every row's hash is computed over the **previous row's stored hash**.
+> Deleting position 1 does not "let anti-entropy re-replicate it chained" — it breaks verification
+> for **all ten rows behind it**, because their hashes chain off the value that was deleted.
+> `verifyChain`'s own AC-005 says exactly this: *"deleted row causes sequence gap (detected by chain
+> recomputation)."* That would manufacture the precise failure `DOD-ACCOUNTS-CHAIN-1` exists to
+> remove, on a table that is clean today.
+>
+> **Option 1 is a no-op if computed correctly** (it would write the value already stored) and a chain
+> break if computed against the wrong previous hash. There is no version of this repair that helps.
+
+**Retained as history — the 2026-08-06 options, neither of which should now be run:**
+1. ~~Recompute the one hash~~ — `UPDATE ... SET chain_hash = SHA-256(serialize(record) ‖ GENESIS)`
+   for the single row at position 1.
+2. ~~Delete it and let anti-entropy re-replicate it chained~~ — see the warning above; it is also an
+   FK target of `agent_profiles.account_id`.
+
+**The reasoning that made this Andre's call still stands and is worth keeping:** rewriting a
+`chain_hash` in an append-only tamper-evidence table, using admin credentials to bypass the RLS that
+deliberately denies the app user `UPDATE`, is *the exact operation the chain exists to detect*. That
+is why it was never done unilaterally — and it is why the stale ❌ above was dangerous rather than
+merely wrong.
+
+**What is still genuinely owed here:** nothing surfaces `verifyChain` anywhere, so this table's
+status is only ever known when somebody checks it by hand. That gap is the reason a three-day-old
+measurement could still read as current. Recipe: dump `SELECT * FROM user_accounts ORDER BY id` from
+each node and recompute; it takes two minutes and it is repeatable.
 
 ## Live image tags — directory on `dir-d35d0a1d` (2026-08-03, ROLL COMPLETE)
 
