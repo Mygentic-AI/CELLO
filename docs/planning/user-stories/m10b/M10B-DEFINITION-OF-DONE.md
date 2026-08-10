@@ -750,6 +750,75 @@ the additions M10B is accountable for.
   > own test had pinned as correct. Still open and named on the line, not silently closed: F2's
   > `issued_at`-through-a-queue problem, F3's silent `MIN(issuer_kind)` disagreement, F8's
   > replication column-skew window. — ✅
+- **DOD-END-REVOCABILITY-1** — **not every signal is the subject's to destroy, and the client says so
+  before it destroys anything.** Three categories, settled with Andre 2026-08-10: **mandatory**
+  (`track_record`, `email`, `phone`) — never revocable, because a behavioural record its subject can
+  delete is worth nothing to anyone, and the other two assert only THAT a channel was verified, never
+  the address or number, so no privacy argument applies; **security-derived** (`webauthn`, `totp`) —
+  mirrors of a portal security factor, removed by turning the factor OFF, never revoked directly,
+  because direct revocation is a one-way trap (factor stays on, signal gone, and it can never be
+  regenerated since the only trigger that mints one is an enrolment already performed);
+  **discretionary** — everything else, and the DEFAULT, so a new signal type never needs a client
+  release (`DOD-INV-ZERO-BUMP`). Checked BEFORE signing and BEFORE the local delete, which is
+  unconditional. **This is UX, not enforcement** — the operator owns the process and can edit it; the
+  PORTAL is the enforcement point for mandatory types (server-side, and the only party that knows a
+  signal is a track record rather than a GitHub link, since directory `type` is deliberately opaque),
+  and the DIRECTORY already enforces exact-issuer authority for attestations in
+  `signal_records_effective`.
+  > **✅ SHIPPED AND PROVEN LIVE 2026-08-10** — cello-client `c44c16d`, daemon `0.0.157`, promoted.
+  > Verified against Andre's running daemon, not a test: revoking a `track_record` returns
+  > `signal_not_revocable`, a `webauthn` returns `revoke_via_portal` naming the portal as the route,
+  > and the wallet is untouched. Before this the handler took ANY signal by hash prefix and went —
+  > the 2026-08-10 live test destroyed the local copy of a track record, and only the broken
+  > transport stopped the directory half. Revert-tested: moving the check after the signing fails a
+  > guard. 3528 tests, lint/typecheck/build clean. → also on the launch list.
+- **DOD-END-CONSENT-WITHDRAW-1** — **refusal is reachable AFTER acceptance**, so "I accepted this
+  endorsement and now I want it gone" has a path. Refusal rather than revocation, deliberately: the
+  decision is RECORDED rather than erased, so the trail stays honest, and a refused signal is already
+  inert everywhere it is checked. **Scoped to peer-issued attestations (`issuer_kind <> 'portal'`),
+  and that clause is load-bearing rather than tidy-up** — a refused signal is inert, so widening
+  refusal without it hands every operator a back door to suppressing their own MANDATORY signals,
+  achieving by consent exactly what revocation is forbidden from doing. Filtered on ISSUER and
+  deliberately NOT on type: a hostile peer can issue a signal it calls `track_record`, and refusing a
+  stranger's claim about you is precisely what the verb is for — filtering by type would protect the
+  attacker. The response distinguishes a withdrawal from a plain refusal and names the supersession
+  consequence (accepting a re-issue supersedes what it replaced; refusing it afterwards does not
+  restore the predecessor, so withdrawing from a replacement can leave you with neither).
+  > **✅ SHIPPED 2026-08-10** — cello-client `59c1c8e`, daemon `0.0.158`. The portal-issued guard is
+  > **proven live** on Andre's daemon (`not_decidable_for_agent`, a reason string that exists only in
+  > `0.0.158` — the old build said `not_pending_for_agent`, so the string is itself the proof of
+  > which build answered). The positive path — withdrawing an accepted endorsement — is covered by
+  > tests and revert-tested (dropping the `issuer_kind` clause fails two of eight) but has **NOT met
+  > real data**: Andre holds no peer-issued attestations, so the first endorsement he receives is the
+  > real proof. 3536 tests, lint/typecheck/build clean.
+- **DOD-END-REVOKE-3** — ❌ **the revocation TRANSPORT. The verb has never worked, and the four
+  defects are in one handler.** Found 2026-08-10 by running it against the live fleet: it POSTs
+  `/internal/signal/revoke` to port **9090**, the health port, when the route lives on the internal
+  API at **8081** (which is firewalled to the VPC and unreachable from an operator's machine at all —
+  so "fix the URL" is not an available answer); it signs as the AGENT when the route requires an
+  enrolled `submitter`, and omits the inner `revoker_pubkey`/`revoker_signature` V53 added for
+  exactly this; it contacts ONE node under a comment claiming "all reachable nodes get the
+  tombstone"; and it returns `ok: true` unconditionally while hard-deleting the local copy
+  "regardless of directory result" — so a failed retraction also destroys the ability to retry.
+  Measured: revoking `3a6512df…` left all three nodes byte-identical (`superseded`, zero revocation
+  rows) while the local copy vanished.
+  **Definition of done — all six, and the last one is not optional:**
+  1. A new signalling frame carries the revocation over the existing authenticated connection
+     (the only publicly reachable path; 4000/8080 are open, 8081 is not). The HTTP post is gone.
+  2. All three nodes are asked; the result reflects what happened at each.
+  3. `ok: true` only when it worked; failure returns `ok: false` with a named reason.
+  4. The local copy SURVIVES a failure — local delete only after the directory confirms.
+  5. The directory refuses a revocation whose signer is not entitled to it, enforced server-side.
+     **Verify before building**: `signal_records_effective` already makes a non-issuer's tombstone
+     inert for `issuer_kind: agent`, and portal-issued records keep role-based authority — this may
+     be satisfied already, and inventing work here would be worse than none.
+  6. **PROVEN LIVE**: revoke a real discretionary signal, then query all three node databases and
+     show it reading revoked on each. No query output, not done.
+  Spans both repos → publish cascade + a node-by-node directory roll.
+  > ❌ **NOT STARTED 2026-08-10.** `DOD-END-REVOCABILITY-1` narrowed the blast radius — mandatory and
+  > security-derived signals are now refused before the broken path runs — but it fixed none of the
+  > four. The residue is sharper than before, not merely smaller: the one path an operator can still
+  > reach is the one that silently destroys their local copy and reports success.
 - **DOD-END-WITHDRAW-1** — withdrawal takes effect everywhere, including for recipients already holding a
   copy (D-19). The endorsement stops being presentable, and any recipient holding it sees it marked
   withdrawn on next check. Rides `DOD-VERIFY-1`'s existing TTL-re-check-on-use machinery (spec §14.7) —
