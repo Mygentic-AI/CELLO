@@ -56,6 +56,13 @@ description: >
   published daemon@latest, not by reading the branch. That is the third entry this week to sit ❌
   while fixed, so the pattern is now the finding: **an item's marker here tracks whoever last edited
   this file, not the code.** Before trusting any ❌, unpack the published artifact.
+  2026-08-10 (later): added DOD-EMAIL-STUB-FORK-1 as item 1 — the fork alarm, once taught to name its
+  table, found a real one on its first round: one email key bound to two different accounts, one node
+  disagreeing with the other two. Junk row deleted on all three nodes and the alarm is quiet. Tracing
+  WHY the domain was in play at all found DOD-OTP-RATELIMIT-KEY-1 (item 13): signup throttling counts
+  5 per DOMAIN per hour, so unrelated gmail users would block each other at launch, while the counter
+  is in memory and resets on every deploy. Also established what `email_domain` was for — nothing
+  grants on it, it was a pre-V30 leftover, and its only live use is that rate limiter.
   2026-08-10, STRUCTURAL PASS: EIGHT finished or withdrawn items were still sitting in the ranked
   list, three of them fixed the night before and never marked. All eight moved to Addressed and the
   open list renumbered contiguously 1–12. Moved: DOD-SEALED-INBOX-2 (which held the TOP slot),
@@ -850,7 +857,38 @@ your own machines" is an argument we make in writing (`[[shared-documents-object
 argument 3) and it is the kind of claim a technical evaluator will probe directly. A conjunct that
 evaluates to *not-same-operator* when an input is missing is the shape worth being certain about.
 
-## 13. Interrupted-session sealing is shipped and has never been proven
+## 13. Signup throttling counts by company, so unrelated people block each other
+
+**Designation: `DOD-OTP-RATELIMIT-KEY-1`** — ❌ **OPEN, filed 2026-08-10** while tracing where the
+email domain is used at all. Small, and entirely in one file.
+
+**What a customer hits.** The sixth person from a given email domain to request a verification code
+in any hour is refused — *"Too many verification code requests. Please wait up to an hour"* — even
+though those six people have nothing to do with each other. The limit is **5 per domain per hour**,
+and consumer signups cluster on a handful of domains, so at launch `gmail.com` users would be
+throttling each other while a real abuser simply uses more than one domain.
+
+**And it barely limits anyone anyway.** The counter is an in-memory `Map` in the registration bot,
+which runs as a single instance — so it **resets on every restart and every deploy**. It was wiped
+by the ops-agent deploy on 2026-08-09.
+
+**Why it is keyed this way, which is the interesting part.** It needed something to throttle on and
+did not want to hold the address, so it took the domain as the safer-looking half. The trade-off
+fails in both directions: too coarse to protect, and too coarse to be safe. Same root shape as the
+`account_email_stubs` fork above — a domain standing in for a person — but a different blast radius.
+
+**The fix is smaller than the problem.** One line below the domain extraction the code already
+computes the address fingerprint (`hashEmail(email)`) and stores it. Keying the limiter on that
+throttles the actual person rather than their employer, holds no new data and leaks nothing the
+system does not already keep. Making it durable — a small table in the bot's own database instead of
+a `Map` — is what would make it survive a deploy and actually bite.
+
+**Not in the directory, and correctly so:** this lives in the registration bot, which is the signup
+backend. Nothing about the fix touches the directory or the protocol.
+
+---
+
+## 14. Interrupted-session sealing is shipped and has never been proven
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
 Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
@@ -876,7 +914,7 @@ then close it — all inside the relay's 24-hour retention. Minutes of work, and
 receipt or a named failure.
 
 
-## 14. Anyone can vouch for their own agent using a key they made thirty seconds ago
+## 15. Anyone can vouch for their own agent using a key they made thirty seconds ago
 
 **Designation: `DOD-END-ISSUER-REGISTERED-1`** (M10B) — 🟡 **BUILT 2026-08-10, NOT REVIEWED, NOT
 DEPLOYED.** Raised, decided and built the same day. Unranked. Filed from the verification pass on this
