@@ -239,7 +239,47 @@ unrelated set — **no relay resource appears**. Since `terraform plan` is this 
 (procedure §5), that is the authoritative confirmation the relay deploy is fully applied, not a claim
 from this document.
 
-## 🟢 CURRENT — directory on `63f7c4e5`, ALL 3 ROLLED (2026-08-10, third roll)
+## 🟢 CURRENT — directory on `b915c7af`, ALL 3 ROLLED (2026-08-10, fourth roll)
+
+**Image tag:** `b915c7af3265221f03a2f2321bed6062bb59a228`, Cloud Build
+`19fb71a3-5350-4198-97c4-d0801b16d4d9`, **built from GitHub at the revision** (not `builds submit .`
+— see the warning above). The short `_TAG` was aliased to the full SHA with
+`gcloud artifacts docker tags add`, so both tags are the same digest. Instances
+`cello-gcp-use1-qhzg`, `cello-gcp-usc1-32pg`, `cello-gcp-euw1-f1ck` — each confirmed on the new image
+off the INSTANCE, `/bootstrap` 200 and `/health` `{"status":"ok","schemaVersion":62}`, one at a time
+before the next was touched. Relay unchanged on `0cf04b0c`.
+
+**What it carries: `CELLO-REPL-001` — `/internal/agent-by-pubkey` resolves the account from the
+REPLICATED `agent_account_links` table**, not the node-local `agent_profiles.account_id`. Measured on
+the three live databases immediately before the roll: the old column resolved an account for
+**0 / 7 / 7** of 14 agents on use1 / usc1 / euw1; the join resolves **14 / 14 / 14**. That endpoint
+feeds the portal's same-operator check — the guard against an operator manufacturing standing from
+their own agents — so half of that check was previously decided by which node the portal asked.
+
+> ### ⚠️ TWO SILENT TRAPS HIT DURING THIS ROLL
+>
+> **A `-target` with the wrong key reports SUCCESS.** The `for_each` key on the directory node
+> resources is the **REGION** (`us-east1`), not the node id (`gcp-use1`). Targeting
+> `…directory["gcp-use1"]` matches nothing, and Terraform prints *"No changes. Your infrastructure
+> matches the configuration"* — indistinguishable from a genuinely clean plan. Confirm the plan says
+> `must be replaced` before believing a targeted roll did anything.
+>
+> **An out-of-band `gcloud run services update` makes Terraform want to REVERT it.** The portal was
+> deployed earlier the same day with `gcloud run services update --image`, leaving
+> `portal_image_tag` in `terraform.tfvars` on the previous image — so the next untargeted
+> `terraform apply` would have rolled the endorsement security fix back to `portal-9aeaf30`. Found by
+> reading the FULL untargeted plan after the roll rather than stopping at the targeted one.
+> `portal_image_tag` is now `portal-6ac77b8`, matching what runs. **Deploy a Cloud Run service by
+> hand and you must update its tfvars tag in the same breath.**
+
+**Post-roll untargeted plan: `0 to add, 4 to change, 0 to destroy`** — no directory resource and no
+image changes. All four are the same benign shape: the provider dropping a computed
+`scaling { manual_instance_count = 0 }` block on ops-agent, ops-dashboard, portal and waitlist.
+Pre-existing, not from this roll.
+
+---
+
+## Superseded — directory on `63f7c4e5`, ALL 3 ROLLED (2026-08-10, third roll)
 
 **Image tag:** `63f7c4e5dff7a4255430a0b00c547779b1a0758b`, Cloud Build
 `1e5e87dd-8b44-4de7-a55d-161524dd0be3`. Instances `cello-gcp-use1-5ldc`, `cello-gcp-usc1-gtgp`,
