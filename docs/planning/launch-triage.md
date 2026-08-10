@@ -56,6 +56,10 @@ description: >
   published daemon@latest, not by reading the branch. That is the third entry this week to sit ❌
   while fixed, so the pattern is now the finding: **an item's marker here tracks whoever last edited
   this file, not the code.** Before trusting any ❌, unpack the published artifact.
+  2026-08-10 (later): DOD-END-ISSUER-REGISTERED-1 moved to Addressed — fixed, reviewed and deployed
+  to the portal the same day it was raised. It was marked ✅ IN PLACE and left sitting at the bottom of
+  the ranked list, which is the same failure as leaving a ❌ on finished work: the list stops being a
+  list of what to do. **Marking is not moving.** Open list now 12.
   2026-08-10: DOD-TGDOOR-1 REMOVED from the list (Andre) — we are not doing the on-a-real-phone
   proof; the doorbell rides Telegram and that is what we rely on. Moved to "Left off this list on
   purpose" with the reasoning, not to Addressed, because it was never fixed — it was declined.
@@ -907,80 +911,6 @@ then close it — all inside the relay's 24-hour retention. Minutes of work, and
 receipt or a named failure.
 
 
-## 13. Anyone can vouch for their own agent using a key they made thirty seconds ago
-
-**Designation: `DOD-END-ISSUER-REGISTERED-1`** (M10B) — ✅ **FIXED, REVIEWED AND LIVE 2026-08-10.**
-Raised, decided, built, reviewed and deployed the same day. Filed from the verification pass on this
-list; it is the answer to the open question that used to sit on the same-operator item, and the answer
-was the fail-open one.
-
-> **Live** as portal image `portal-6ac77b8` (Cloud Run rev `cello-portal-00011-z49`, 100% traffic),
-> verified by grepping the pulled image rather than by trusting the build. Portal-only — no migration,
-> no wire change, no client cascade, no node roll.
->
-> **The review caught a blocker inside the fix, and it was worse than the defect.** Refusing an
-> unresolvable issuer is terminal — the submission is deleted. But the lookup stopped at the FIRST
-> directory node, and a newly registered agent exists on only one node for about a minute. So an
-> operator who endorsed someone shortly after registering would have had that endorsement
-> **destroyed outright, with neither side told** — roughly two times in three. The original defect
-> minted something wrong; this would have silently thrown work away. Now every node is asked before
-> anyone is called a stranger. **The identical bug had already taken sign-in down on 2026-08-07**, and
-> the write-up was sitting a few lines above the function nobody had moved.
->
-> Shipped with it: a refusal now actually **reaches the agent that submitted it**. Every rejection
-> reason had been written only to the portal's own private table, so from the operator's chair an
-> endorsement was accepted and then silently ceased to exist.
-
-**What an operator can do today.** An endorsement is one agent vouching in writing for another — the
-thing a stranger reads to decide whether to trust you. Endorsing your own second agent is supposed to
-be caught: the portal compares the two, finds one account or one verified phone behind both, and
-stamps the endorsement so the recipient is told in plain words that it is one person vouching for
-their own agent and is worth nothing as independent corroboration.
-
-**The stamp is skipped entirely if the endorser is nobody.** Submitting an endorsement requires no
-registration at all — proving you hold *some* key is enough, unlike starting a conversation or
-requesting a connection, both of which check. So: make a fresh key, never register it, sign an
-endorsement of your own registered agent, send it. The agent being endorsed resolves (that side IS
-required to be registered); the endorser does not resolve, because it is not anybody. The comparison
-that needs both sides never runs — and the answer that comes out is a clean **"not the same
-operator"**, not "cannot tell". The endorsement is minted, notarized, and that false answer is frozen
-into it permanently. Repeat as often as you like.
-
-**What the counterparty sees.** Nothing. The warning paragraph is expressed by its ABSENCE, and the
-endorser is shown to them only as `peer-claimed` — no name, no key. They cannot tell an endorsement
-from an established agent with a long history apart from one written by a key minted during the
-conversation.
-
-**Why it is currently harmless, and why that is not much of a softening.** Nothing acts on the count
-yet — the "minimum number of endorsements before you may talk to me" feature is deliberately switched
-off, correctly, because nobody has endorsements on day one. That is the entire mitigation: the
-feature that would be exploited is off. The moment it is switched on, the fabricated endorsements are
-already notarized and permanent.
-
-**The fix, decided by Andre 2026-08-10 and built the same day: the endorser must resolve too.** Both
-parties must already be registered agents in the directory, or the same-operator answer has no teeth.
-An unresolvable issuer is refused by name rather than minted, mirroring the refusal the subject side
-already gets. Refusal rather than a flag, because a flag would assert "these two are one operator" —
-exactly what cannot be known when one side is unidentifiable.
-
-**The test that matters is the revert test.** Asserting "it was rejected" would have passed WITHOUT
-the fix, because the old behaviour also produced a result — it minted one. So the load-bearing
-assertion is that nothing reaches the notary at all; run against the unfixed code it fails with the
-endorsement already notarized. That is the exploit reproduced in a test rather than described in a
-paragraph.
-
-**One property this depends on, worth stating because breaking it turns the fix into an outage.** The
-lookup returns "not registered" only when the directory says so; an unreachable consortium raises an
-error and leaves the submission queued. So refusing on "not registered" cannot refuse a legitimate
-endorsement while the fleet is down. Full detail, including the defense-in-depth option deliberately
-not taken, is on the DoD line.
-
-**Not demonstrated against a running system** — traced through code and confirmed in the directory's
-own comments. Worth knowing because "you cannot manufacture standing out of your own machines" is an
-argument we make in writing ([[shared-documents-objection-rebuttal]] argument 3), so it is the kind of
-claim a technical evaluator probes directly.
-
-
 # Post-launch — needed eventually, not for launch
 
 **Moved here 2026-08-04 (Andre).** Not on the launch punch list; none fails the ruin test. Kept
@@ -1114,6 +1044,13 @@ Recorded so they stop being re-found by every sweep:
   LIST 2026-08-10 (Andre). We are not doing this proof.** The doorbell reaches a phone through
   Telegram, and Telegram is what we rely on for that today. **Ship without.**
 
+  Original entry, verbatim, so the move loses nothing: *"still the only Tier-3 unit that can't be
+  smoke-tested without a real bot token. The doorbell-to-Telegram feature is built and passes its test
+  suite, but has never been watched working end-to-end on an actual phone. Low risk either way; just
+  unverified. Flips to done on a live proof, nothing else — minutes with a phone, do it
+  opportunistically whenever Andre is at hand."* **That reason — needing a real bot token — is why it
+  sat unproven, and it is the fact that did not survive my first pass at this move.**
+
   Andre's reasoning, recorded because it also answers a question this list does NOT currently ask:
   a Telegram account cannot share a phone number unless one is registered to it, and registering one
   requires passing Telegram's own phone verification — so anyone who can share a number through the
@@ -1154,6 +1091,86 @@ Recorded so they stop being re-found by every sweep:
 ---
 
 # Addressed — off the open list
+
+## Anyone can vouch for their own agent using a key they made thirty seconds ago
+
+**Moved here 2026-08-10.** Raised, decided, built, reviewed and deployed the same day — it never
+needed to sit on the ranked list overnight. Body carried across verbatim below.
+
+
+**Designation: `DOD-END-ISSUER-REGISTERED-1`** (M10B) — ✅ **FIXED, REVIEWED AND LIVE 2026-08-10.**
+Raised, decided, built, reviewed and deployed the same day. Filed from the verification pass on this
+list; it is the answer to the open question that used to sit on the same-operator item, and the answer
+was the fail-open one.
+
+> **Live** as portal image `portal-6ac77b8` (Cloud Run rev `cello-portal-00011-z49`, 100% traffic),
+> verified by grepping the pulled image rather than by trusting the build. Portal-only — no migration,
+> no wire change, no client cascade, no node roll.
+>
+> **The review caught a blocker inside the fix, and it was worse than the defect.** Refusing an
+> unresolvable issuer is terminal — the submission is deleted. But the lookup stopped at the FIRST
+> directory node, and a newly registered agent exists on only one node for about a minute. So an
+> operator who endorsed someone shortly after registering would have had that endorsement
+> **destroyed outright, with neither side told** — roughly two times in three. The original defect
+> minted something wrong; this would have silently thrown work away. Now every node is asked before
+> anyone is called a stranger. **The identical bug had already taken sign-in down on 2026-08-07**, and
+> the write-up was sitting a few lines above the function nobody had moved.
+>
+> Shipped with it: a refusal now actually **reaches the agent that submitted it**. Every rejection
+> reason had been written only to the portal's own private table, so from the operator's chair an
+> endorsement was accepted and then silently ceased to exist.
+
+**What an operator can do today.** An endorsement is one agent vouching in writing for another — the
+thing a stranger reads to decide whether to trust you. Endorsing your own second agent is supposed to
+be caught: the portal compares the two, finds one account or one verified phone behind both, and
+stamps the endorsement so the recipient is told in plain words that it is one person vouching for
+their own agent and is worth nothing as independent corroboration.
+
+**The stamp is skipped entirely if the endorser is nobody.** Submitting an endorsement requires no
+registration at all — proving you hold *some* key is enough, unlike starting a conversation or
+requesting a connection, both of which check. So: make a fresh key, never register it, sign an
+endorsement of your own registered agent, send it. The agent being endorsed resolves (that side IS
+required to be registered); the endorser does not resolve, because it is not anybody. The comparison
+that needs both sides never runs — and the answer that comes out is a clean **"not the same
+operator"**, not "cannot tell". The endorsement is minted, notarized, and that false answer is frozen
+into it permanently. Repeat as often as you like.
+
+**What the counterparty sees.** Nothing. The warning paragraph is expressed by its ABSENCE, and the
+endorser is shown to them only as `peer-claimed` — no name, no key. They cannot tell an endorsement
+from an established agent with a long history apart from one written by a key minted during the
+conversation.
+
+**Why it is currently harmless, and why that is not much of a softening.** Nothing acts on the count
+yet — the "minimum number of endorsements before you may talk to me" feature is deliberately switched
+off, correctly, because nobody has endorsements on day one. That is the entire mitigation: the
+feature that would be exploited is off. The moment it is switched on, the fabricated endorsements are
+already notarized and permanent.
+
+**The fix, decided by Andre 2026-08-10 and built the same day: the endorser must resolve too.** Both
+parties must already be registered agents in the directory, or the same-operator answer has no teeth.
+An unresolvable issuer is refused by name rather than minted, mirroring the refusal the subject side
+already gets. Refusal rather than a flag, because a flag would assert "these two are one operator" —
+exactly what cannot be known when one side is unidentifiable.
+
+**The test that matters is the revert test.** Asserting "it was rejected" would have passed WITHOUT
+the fix, because the old behaviour also produced a result — it minted one. So the load-bearing
+assertion is that nothing reaches the notary at all; run against the unfixed code it fails with the
+endorsement already notarized. That is the exploit reproduced in a test rather than described in a
+paragraph.
+
+**One property this depends on, worth stating because breaking it turns the fix into an outage.** The
+lookup returns "not registered" only when the directory says so; an unreachable consortium raises an
+error and leaves the submission queued. So refusing on "not registered" cannot refuse a legitimate
+endorsement while the fleet is down. Full detail, including the defense-in-depth option deliberately
+not taken, is on the DoD line.
+
+**Not demonstrated against a running system** — traced through code and confirmed in the directory's
+own comments. Worth knowing because "you cannot manufacture standing out of your own machines" is an
+argument we make in writing ([[shared-documents-objection-rebuttal]] argument 3), so it is the kind of
+claim a technical evaluator probes directly.
+
+
+
 
 ## One email address maps to two different accounts, depending on which node you ask
 
