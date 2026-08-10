@@ -250,3 +250,179 @@ describe("DOD-SIGNAL-REPLICATION-1 — a Tier-A spec supplies every column its I
     },
   );
 });
+
+/**
+ * ── THE COMPLEMENT CHECK: every column in a replicating table has an EXPLICIT disposition ─────────
+ *
+ * The guard above asks "will an apply CRASH?" — it fires only on NOT NULL columns with no default.
+ * Its own parser test pins `is_tombstone` (NOT NULL, WITH default) as something it must NOT report.
+ * So the entire class where replication SUCCEEDS WITH THE WRONG VALUE is invisible to it by design,
+ * and that is where every replication defect this project has hit actually lived: the kill switch's
+ * `agent_id`, the trust-signal tombstone, the heartbeat, the account link.
+ *
+ * That class also survived a real, hours-long deep dive (2026-08-07/08) because the dive tracked
+ * TABLES. Two tables were closed as "solved — moved to Tier A", and Tier A carries immutable columns
+ * only, so in each case the MUTABLE COLUMN the move was supposed to fix could not come along.
+ * `directory_nodes` moved to Tier A specifically to get last-writer-wins on `last_heartbeat_at`; the
+ * heartbeat is not in the spec and still does not replicate. The table got a tick, the requirement
+ * was dropped, and nothing anywhere noticed because nothing was watching columns.
+ *
+ * So this asks the other question: for EVERY column in a Tier-A table, is there a decision on
+ * record? Not "is it replicated" — replicating some of these would be wrong. Just: did somebody
+ * decide, and write down why. A column with no entry fails the build, which means the decision is
+ * forced at the moment the column is added, by the person who has the context — rather than being
+ * rediscovered months later as a wrong answer in production.
+ */
+const ALWAYS_LOCAL: ReadonlySet<string> = new Set([
+  // Surrogate row id. Per-node by construction; nothing joins across nodes on it.
+  "id",
+  // Each node chains in ITS OWN insertion order, so the same rows legitimately hash differently on
+  // different nodes. Verified live 2026-08-10: all three nodes' user_accounts chains VALID, and
+  // euw1's hashes differ from the other two because its rows arrived in a different order.
+  // Replicating this column would break every node's verification.
+  "chain_hash",
+  // When THIS node stored it. Replicating it would overwrite each node's own record of what it knew
+  // and when — which is the one thing a per-node audit trail is for.
+  "created_at",
+]);
+
+/**
+ * Columns present in a Tier-A table and deliberately NOT replicated, each with the reason.
+ *
+ * `UNDECIDED:` is a legal prefix and is pinned separately below, so an open question is visible
+ * rather than dressed up as a decision. Writing a confident-sounding reason for something nobody has
+ * actually decided is the failure this whole exercise exists to stop.
+ */
+const LOCAL_BY_DECISION: ReadonlyMap<string, string> = new Map([
+  ["capability_claim_codes.redeemed_at",
+   "AUDIT ONLY, verified 2026-08-10. Single-use is enforced by the nonce binder, not by this column. " +
+   "pre_auth_nonce_bindings is deliberately node-local (V40): a T-of-N registration has every " +
+   "participating node bind the SAME nonce at once, and replicating that would halt replication on a " +
+   "concurrent same-key write. Single-use still holds because T = floor(N/2)+1 (verified in " +
+   "protocol-types/registration.ts), so any two quorums share at least one node and that node rejects " +
+   "the replay. NOTE this is a security property that DEPENDS on the majority threshold."],
+  ["agent_profiles.status",
+   "INERT TODAY, AND ARMED IF ANYONE USES IT. `NOT NULL DEFAULT 'active'`, and nothing in the " +
+   "directory ever writes any other value (checked 2026-08-10 — retirement and burn go through " +
+   "agent_revocations / agent_suspensions instead). So every row is 'active' on every node and the " +
+   "column agrees across the fleet by accident, because the default happens to be the only value. " +
+   "TWO reads gate on it — `WHERE status = 'active'` in both the profile read-through and the " +
+   "load-all — so the day someone writes 'retired' here, that write does NOT travel and both gates " +
+   "FAIL OPEN on the other two nodes. That is precisely the kill-switch bug this project already " +
+   "shipped once (agent_id absent from this same spec meant a burned agent kept being co-signed by " +
+   "every node that learned it by replication). Either delete the column or give it a Tier-B merge " +
+   "BEFORE writing a second value to it."],
+  ["agent_profiles.account_id",
+   "DEAD COLUMN — superseded by the agent_account_links table, which IS Tier A and is converged (14 " +
+   "rows on all three nodes, verified 2026-08-10). Do not add this to replication; delete it, and " +
+   "move the last reader (internal-api-server.ts /internal/agent-by-pubkey) to the replicated table. " +
+   "That reader feeds the portal's same-operator check, which is why this is not cosmetic: measured " +
+   "live, the column reads 7/7/0 across the three nodes, so half of that security check is currently " +
+   "decided by which node the portal happened to ask. Tracked as CELLO-REPL-001."],
+  ["user_accounts.email_stub_hash",
+   "DEAD COLUMN — superseded by the account_email_stubs table, which IS Tier A and converged. The " +
+   "directory's own readers already moved (account-lookup.ts, account-facts.ts). Excluded from the " +
+   "hash chain too, so it is also not tamper-evident (DOD-ACCOUNTS-EMAIL-CHAIN-1). Delete rather " +
+   "than replicate."],
+  ["signal_records.is_tombstone",
+   "SOLVED BY A FACT TABLE, not by replication — the pattern to copy. A revocation is mutable state, " +
+   "so it cannot ride Tier A; V62 puts the immutable FACT in signal_revocations (which IS Tier A) and " +
+   "the signal_records_effective view unions it with the local tombstone. Replicating this column " +
+   "directly would land a revocation on peers as an ACTIVE signal — caught in review before it armed."],
+  ["signal_records.revoker_pubkey", "Part of the tombstone row; the fact replicates via signal_revocations. See is_tombstone."],
+  ["signal_records.revoker_signature", "Part of the tombstone row; the fact replicates via signal_revocations. See is_tombstone."],
+  ["signal_records.status",
+   "MUTABLE BY NECESSITY and correctly excluded: revoking must not change the signal's hash, or the " +
+   "directory could never find the signal it just revoked (V46). Consumers read " +
+   "signal_records_effective, which DERIVES status from supersedes_hash and signal_revocations, both " +
+   "replicated. Verified 2026-08-10: the view returns identical effective_status for all 17 signals " +
+   "on all three nodes. The raw column diverges and is a trap for a future direct reader."],
+  ["signal_records.revoked_at", "Timestamp of the mutable status above; derived by the effective view. Same reasoning."],
+  ["account_email_stubs.linked_at", "Arrival time on THIS node. Zero SQL readers (checked 2026-08-10)."],
+  ["agent_account_links.linked_at", "Arrival time on THIS node. Zero SQL readers (checked 2026-08-10)."],
+  ["authorized_issuers.added_at", "Arrival time on THIS node. Zero SQL readers (checked 2026-08-10)."],
+  ["conversation_attestations.attested_at", "Arrival time on THIS node."],
+  ["signal_revocations.recorded_at", "Arrival time on THIS node; the revocation FACT is what replicates."],
+  ["directory_nodes.last_heartbeat_at",
+   "UNDECIDED: the M12 design (§ Tier-B table) specified last-writer-wins on this column, and the " +
+   "table was then closed as 'solved — moved to Tier A', which cannot carry a mutable column. The " +
+   "requirement was dropped by the act of closing it. Live consequence, measured: every node reads " +
+   "the other two as never-heartbeated and counts availableNodes 1 against requiredThreshold 2, so " +
+   "federation checkpoints have never succeeded. Ranked NOT launch-blocking because both " +
+   "user-visible surfaces deliberately ignore the heartbeat and the checkpoint machinery is parked. " +
+   "Needs a real Tier-B merge, not a spec edit."],
+  ["directory_nodes.endpoint",
+   "UNDECIDED: nullable and excluded, so a node learned purely by replication arrives with no " +
+   "endpoint and cannot be dialled. Raised by the DOD-SIGNAL-REPLICATION-1 review as the second " +
+   "example of nullable-but-semantically-required. Nobody has decided whether the endpoint should " +
+   "travel or always be read from the signed manifest."],
+  ["directory_nodes.status",
+   "UNDECIDED: mutable node state. Same family as the heartbeat above and blocked on the same " +
+   "missing Tier-B merge for this table."],
+  ["authorized_issuers.status",
+   "UNDECIDED: mutable. A revoked issuer on one node may read active on another. The deliver gate " +
+   "reads this table; nobody has traced whether a stale 'active' here can admit a signal it should " +
+   "refuse. Flagged in the DOD-SIGNAL-REPLICATION-1 review as one of the four status columns worth " +
+   "a written answer."],
+  ["authorized_issuers.revoked_at", "UNDECIDED: timestamp of the mutable status above. Same question."],
+  ["relay_registrations.deregistered_at",
+   "UNDECIDED: a relay deregistered on one node may still be offered by another. Excluded from the " +
+   "hash chain for a stated reason (nullable, set post-INSERT); whether the FACT should replicate — " +
+   "the V62 pattern — has not been asked."],
+  ["seal_notarizations.supersedes_notarization_id",
+   "UNDECIDED: nullable pointer, set only on a superseding bilateral row. Excluded from the chain as " +
+   "'a pointer, not an integrity target'. Whether a peer needs to know a notarization was superseded " +
+   "has not been asked."],
+]);
+
+describe("every column in a Tier-A table has an explicit disposition", () => {
+  const schema = columnStateAtHead();
+
+  it.each(TIER_A_SPECS.map((s) => [s.table, s] as const))(
+    "%s — no column is silently absent from the spec",
+    (table, spec) => {
+      const live = schema.get(table);
+      expect(live, `${table} has no CREATE TABLE in any migration`).toBeDefined();
+
+      const declared = new Set<string>([
+        ...spec.naturalKey,
+        ...spec.immutableColumns,
+        ...((spec as { mutableColumns?: readonly string[] }).mutableColumns ?? []),
+      ]);
+      const undisposed = [...live!.keys()].filter(
+        (name) =>
+          !declared.has(name) &&
+          !ALWAYS_LOCAL.has(name) &&
+          !LOCAL_BY_DECISION.has(`${table}.${name}`) &&
+          !SUPPLIED_ELSEWHERE.has(`${table}.${name}`),
+      );
+
+      expect(
+        undisposed,
+        `${table}: column(s) ${undisposed.join(", ")} exist in the schema, are not in the Tier-A ` +
+          `spec, and have no recorded decision. This will NOT fail an apply — it will replicate the ` +
+          `row with this column's DEFAULT and every node will disagree quietly. Decide now and add ` +
+          `an entry to LOCAL_BY_DECISION (an 'UNDECIDED:' reason is allowed and is pinned below).`,
+      ).toEqual([]);
+    },
+  );
+
+  it("the UNDECIDED set is pinned — an open question must not grow silently", () => {
+    // A ratchet on the open questions themselves. Adding one requires editing this list, which is
+    // the moment somebody has to look at it; removing one is what progress looks like.
+    const undecided = [...LOCAL_BY_DECISION.entries()]
+      .filter(([, reason]) => reason.startsWith("UNDECIDED:"))
+      .map(([key]) => key)
+      .sort();
+
+    expect(undecided).toEqual([
+      "authorized_issuers.revoked_at",
+      "authorized_issuers.status",
+      "directory_nodes.endpoint",
+      "directory_nodes.last_heartbeat_at",
+      "directory_nodes.status",
+      "relay_registrations.deregistered_at",
+      "seal_notarizations.supersedes_notarization_id",
+    ]);
+  });
+});
