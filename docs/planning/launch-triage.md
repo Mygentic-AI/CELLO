@@ -913,8 +913,40 @@ receipt or a named failure.
 
 ## 15. You cannot retract a trust signal — and the tool says you did
 
-**Designation: `DOD-SIGNAL-REVOKE-BROKEN-1`** — ❌ **OPEN, found 2026-08-10 by running it against the
-live fleet.** Unranked. **Proposed slot: high.** This is the retraction verb, and it has never worked.
+**Designation: `DOD-SIGNAL-REVOKE-BROKEN-1`** — 🟡 **PARTLY FIXED 2026-08-10. The verb still does not
+work; it can no longer destroy anything it should not.** Found by running it against the live fleet.
+
+> ### What shipped 2026-08-10, and what did not
+>
+> **Shipped, live:** removing your last passkey now revokes the signal that claims you have one
+> (portal `portal-1cb90e7`). Before, that route touched the signal not at all, so removing your only
+> passkey left a live signal telling counterparties you still had a factor you no longer had — a
+> false claim about a security feature, reachable by simply removing a passkey. TOTP already did this
+> correctly; the two now share one implementation.
+>
+> **Shipped, published (daemon `0.0.157`, pending Andre's promotion):** revoke now refuses signals
+> that are not the operator's to destroy, BEFORE signing and BEFORE the unconditional local delete.
+> Three categories, decided with Andre: **mandatory** (`track_record`, `email`, `phone`) — a track
+> record its subject can delete is worth nothing to anyone, and the other two assert only THAT a
+> channel was verified, never the address or number; **security-derived** (`webauthn`, `totp`) —
+> mirrors of a portal factor, removed by turning the factor off, never revoked directly, because
+> revoking one directly leaves the factor on with no signal and NO WAY to regenerate it; and
+> **discretionary** — everything else, the default, so a new signal type never needs a client release.
+>
+> **NOT fixed — the verb is still broken for the signals that ARE revocable.** All four original
+> defects stand: it posts to the health port instead of the internal API, signs as the agent when the
+> route needs an enrolled submitter, contacts one node under a comment claiming all three, and returns
+> `ok: true` while hard-deleting the local copy regardless. So revoking your GitHub link still fails
+> and still lies about it. What changed is only that it can no longer do that to your track record.
+>
+> **NOT built — refuse-after-accept**, the decision Andre made for removing an endorsement you already
+> accepted. Refusal still only works while an attestation is pending.
+>
+> **Enforcement note.** The client guard is UX and says so in its own header — the operator owns that
+> process. The real enforcement is the portal for mandatory types (server-side, and the only party
+> that knows a signal is a track record rather than a GitHub link, since directory `type` is
+> deliberately opaque per `DOD-INV-ZERO-BUMP`) and the directory for attestations, where
+> `signal_records_effective` already makes a non-issuer's tombstone inert. Unranked. **Proposed slot: high.** This is the retraction verb, and it has never worked.
 
 **What happens to you.** You revoke a trust signal. The tool answers `ok: true` and tells you the
 signal is gone. Your local copy IS deleted. **The directory never receives the revocation**, so every
