@@ -791,7 +791,7 @@ the additions M10B is accountable for.
   > tests and revert-tested (dropping the `issuer_kind` clause fails two of eight) but has **NOT met
   > real data**: Andre holds no peer-issued attestations, so the first endorsement he receives is the
   > real proof. 3536 tests, lint/typecheck/build clean.
-- **DOD-END-REVOKE-3** — ❌ **the revocation TRANSPORT. The verb has never worked, and the four
+- **DOD-END-REVOKE-3** — ✅ **the revocation TRANSPORT. The verb has never worked, and the four
   defects are in one handler.** Found 2026-08-10 by running it against the live fleet: it POSTs
   `/internal/signal/revoke` to port **9090**, the health port, when the route lives on the internal
   API at **8081** (which is firewalled to the VPC and unreachable from an operator's machine at all —
@@ -815,8 +815,39 @@ the additions M10B is accountable for.
   6. **PROVEN LIVE**: revoke a real discretionary signal, then query all three node databases and
      show it reading revoked on each. No query output, not done.
   Spans both repos → publish cascade + a node-by-node directory roll.
-  > 🟡 **BUILT AND REVIEWED 2026-08-10, LIVE PROOF OUTSTANDING.** Both repos deployed; the tag does
-  > NOT flip, because clause 6 is the point of the line and it has not been met.
+  > ✅ **DONE 2026-08-10 — PROVEN LIVE ON ALL THREE NODES.**
+  >
+  > ```
+  > gcp-use1   db4e32c09cf7 | revoked | revocation_rows 1
+  > gcp-usc1   db4e32c09cf7 | revoked | revocation_rows 1
+  > gcp-euw1   db4e32c09cf7 | revoked | revocation_rows 1
+  > ```
+  > Baseline immediately before: `active` on all three, **0** revocation rows. `cello_trust_signals_revoke`
+  > on a real `github_id` returned `queued: true, revoked: false` — honest, not a false success — the
+  > portal drain returned `minted: 3, errored: 0`, and the revocation REPLICATED: two nodes revoked
+  > within seconds, the third after one anti-entropy pull. Clause 2 is therefore met by replication
+  > rather than fan-out, which is the stronger property.
+  >
+  > **It took FOUR attempts, and every failure was mine and invisible to review.** (1) `poison: 1` —
+  > the runtime op validator never learned `revoke`, because I widened the TYPE and a type has no
+  > runtime effect. (2) `rejected: 1` — I authorized against `minted_signals`, an index with
+  > HISTORICAL GAPS, and the operator's own signal was one of the gaps. (3) `errored: 2` — I moved the
+  > check to a directory endpoint that cannot answer it, because **the directory does not store the
+  > subject at all**; the resulting 500 surfaced through `#findAcross` as "all 3 nodes unreachable",
+  > masking a bad query as an outage. (4) Passed.
+  >
+  > The unit review found ten real defects and every one was fixed — but it could not find any of
+  > these four, because each needed live data or a running fleet. That is the argument for clause 6
+  > existing, and it is now evidence rather than principle.
+  >
+  > **The data defect was repaired, not worked around:** both GitHub ownership rows were missing from
+  > `minted_signals` — exactly matching the code comment saying that path shipped without the
+  > `recordMintedSignal` call every other mint makes — and were backfilled from facts the directory
+  > and wallet both confirm.
+  >
+  > Deployed: directory `7a480e52` on all three nodes (us-central1 needed `c3-standard-4`; the whole
+  > region was out of 2-vCPU capacity), portal `portal-ab7e75f`, client cascade through daemon
+  > `0.0.161` / protocol-types `0.0.53`, promoted.
   >
   > **Clauses 1, 3, 4, 5 met. Clause 2 met by REPLICATION rather than fan-out** (one node accepts,
   > `signal_revocations` is Tier-A and carries it to the other two) — recorded because the clause says
