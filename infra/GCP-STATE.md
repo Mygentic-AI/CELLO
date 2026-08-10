@@ -810,6 +810,27 @@ is its own migration, later.
 | Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`), `cello-portal-directory-api-keys`, **`cello-ops-agent-ses-credentials` (added 2026-08-07 — see below)**, and copied from AWS: `-github-client-id`, `-github-client-secret`, `-intake-key-0`, `-ingress-trigger-secret`, `-submission-seed` |
 | Verified | 307 → `/sign-in` over https on the real hostname; **portal→directory proven through the app** — POST `/api/internal/ingress/drain` returns `ok:true` with `nodeErrors: []` (refuses 401 without the trigger secret); issuer enrolled on usc1/euw1/use1 |
 
+### Deploy 2026-08-10 (second) — `portal-1cb90e7` (security-derived signal lifecycle)
+
+Cloud Run rev `cello-portal-00012-npq`, 100% traffic, `/sign-in` 200, zero ERROR entries on the new
+revision. Verified against the ARTIFACT before deploying — pulled the image and grepped its
+filesystem for `revokeSecurityDerivedSignal` and `portal.trust_signal.revoke.absent`, both present.
+`portal_image_tag` in `terraform.tfvars` updated in the SAME change, per the rule below.
+
+**What it carries:** removing your LAST passkey now revokes the `webauthn` trust signal. That route
+previously touched the signal not at all, so removing your only passkey left a live signal telling
+counterparties you still had a factor you no longer had. TOTP already did this correctly; both now
+share one implementation, and "no such active signal" is a SUCCESS rather than an error — an operator
+turning a factor off whose signal is already gone must not be blocked by the removal path looking for
+something that is not there.
+
+> **A KILLED BUILD CAN STILL HAVE PUSHED ITS IMAGE.** The first `gcloud builds submit` for this tag
+> was interrupted at the CLI; the retry failed with *"cannot update tag portal-1cb90e7. The
+> repository has enabled tag immutability"* — because the killed build HAD completed its push. The
+> retry's failure was the correct behaviour and the image was already good. Check
+> `gcloud artifacts docker images describe <tag>` before assuming an interrupted build produced
+> nothing; tag immutability means a "failure" here can mean "already done".
+
 ### Deploy 2026-08-10 — `portal-6ac77b8` (`DOD-END-ISSUER-REGISTERED-1`)
 
 **Portal-only: no migration, no wire change, no client cascade, no node roll.** Cloud Build
