@@ -344,7 +344,10 @@ const LOCAL_BY_DECISION: ReadonlyMap<string, string> = new Map([
   ["conversation_attestations.attested_at", "Arrival time on THIS node."],
   ["signal_revocations.recorded_at", "Arrival time on THIS node; the revocation FACT is what replicates."],
   ["directory_nodes.last_heartbeat_at",
-   "UNDECIDED: the M12 design (§ Tier-B table) specified last-writer-wins on this column, and the " +
+   "DECIDED: IT SHOULD TRAVEL, AND IT IS THE ONE THAT ACTUALLY NEEDS BUILDING. The only column of " +
+   "the 21 with a real reader that needs a fleet-wide answer — agent-presence-repository joins it to " +
+   "compute `node_fresh`. Tracked on the launch list; NOT launch-blocking because both user-visible " +
+   "surfaces deliberately ignore the heartbeat and the checkpoint machinery is parked. History: " +
    "table was then closed as 'solved — moved to Tier A', which cannot carry a mutable column. The " +
    "requirement was dropped by the act of closing it. Live consequence, measured: every node reads " +
    "the other two as never-heartbeated and counts availableNodes 1 against requiredThreshold 2, so " +
@@ -352,27 +355,38 @@ const LOCAL_BY_DECISION: ReadonlyMap<string, string> = new Map([
    "user-visible surfaces deliberately ignore the heartbeat and the checkpoint machinery is parked. " +
    "Needs a real Tier-B merge, not a spec edit."],
   ["directory_nodes.endpoint",
-   "UNDECIDED: nullable and excluded, so a node learned purely by replication arrives with no " +
-   "endpoint and cannot be dialled. Raised by the DOD-SIGNAL-REPLICATION-1 review as the second " +
-   "example of nullable-but-semantically-required. Nobody has decided whether the endpoint should " +
-   "travel or always be read from the signed manifest."],
+   "NO READER — written once and never read back (2026-08-10, table-scoped SQL scan of all 161 " +
+   "statements). Node endpoints come from the SIGNED MANIFEST, not from this table, which is the " +
+   "right source: an endpoint learned from a peer's row would be an unsigned address to dial. The " +
+   "earlier worry that 'a node learned by replication arrives undialable' does not bite, because " +
+   "nothing dials from here."],
   ["directory_nodes.status",
-   "UNDECIDED: mutable node state. Same family as the heartbeat above and blocked on the same " +
-   "missing Tier-B merge for this table."],
+   "NO READER — written by two INSERTs and never selected (table-scoped scan, 2026-08-10). Node " +
+   "liveness is answered by last_heartbeat_at below, not by this column."],
   ["authorized_issuers.status",
-   "UNDECIDED: mutable. A revoked issuer on one node may read active on another. The deliver gate " +
-   "reads this table; nobody has traced whether a stale 'active' here can admit a signal it should " +
-   "refuse. Flagged in the DOD-SIGNAL-REPLICATION-1 review as one of the four status columns worth " +
-   "a written answer."],
-  ["authorized_issuers.revoked_at", "UNDECIDED: timestamp of the mutable status above. Same question."],
+   "OPERATOR-MANAGED TABLE, and the hazard is the ASYMMETRY, not the column. No application code " +
+   "writes this table at all — issuers are enrolled by hand on each node (all three were seeded " +
+   "individually). `NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked'))`, one row today " +
+   "(the portal's KMS key). The authority check is fail-CLOSED on every branch: no row -> " +
+   "unknown_issuer, status != active -> issuer_revoked, wrong role -> issuer_wrong_role. " +
+   "SO THE TRAP IS: enrollment REPLICATES (pubkey/role/label are in the spec) and revocation DOES " +
+   "NOT. An operator who watched an enrollment propagate would reasonably assume a revocation does " +
+   "too — it does not, and the peers keep accepting that issuer. Not reachable from code today. " +
+   "Runbook rule until an issuer_revocations fact table exists (the V62 pattern): REVOKE AN ISSUER " +
+   "ON ALL THREE NODES, never one."],
+  ["authorized_issuers.revoked_at",
+   "NO READER (table-scoped scan, 2026-08-10) — the timestamp of a status nothing in the " +
+   "application writes. Rides with the status decision above."],
   ["relay_registrations.deregistered_at",
-   "UNDECIDED: a relay deregistered on one node may still be offered by another. Excluded from the " +
-   "hash chain for a stated reason (nullable, set post-INSERT); whether the FACT should replicate — " +
-   "the V62 pattern — has not been asked."],
+   "NO READER (table-scoped scan, 2026-08-10). Relay pool membership is decided by the /health " +
+   "probe the directories run, not by this column, so a deregistration that did not travel changes " +
+   "no answer anyone asks."],
   ["seal_notarizations.supersedes_notarization_id",
-   "UNDECIDED: nullable pointer, set only on a superseding bilateral row. Excluded from the chain as " +
-   "'a pointer, not an integrity target'. Whether a peer needs to know a notarization was superseded " +
-   "has not been asked."],
+   "CANNOT REPLICATE BY CONSTRUCTION — it is a nullable BIGINT FK to seal_notarizations.id, and `id` " +
+   "is a per-node BIGSERIAL that is itself never replicated. The same pointer value denotes a " +
+   "DIFFERENT row (or no row) on another node, so carrying it would not convey the fact, it would " +
+   "convey a wrong one. Same family as chain_hash. If a peer ever needs to know a notarization was " +
+   "superseded, that fact must travel by session_id, not by row id."],
 ]);
 
 describe("every column in a Tier-A table has an explicit disposition", () => {
@@ -415,14 +429,14 @@ describe("every column in a Tier-A table has an explicit disposition", () => {
       .map(([key]) => key)
       .sort();
 
-    expect(undecided).toEqual([
-      "authorized_issuers.revoked_at",
-      "authorized_issuers.status",
-      "directory_nodes.endpoint",
-      "directory_nodes.last_heartbeat_at",
-      "directory_nodes.status",
-      "relay_registrations.deregistered_at",
-      "seal_notarizations.supersedes_notarization_id",
-    ]);
+    // ALL SEVEN CLOSED 2026-08-10, by a table-scoped scan of every SQL literal in the directory
+    // (comments stripped first — the earlier bare column-name grep matched same-named columns in
+    // OTHER tables and produced three wrong answers). Four turned out to have no reader at all, one
+    // cannot replicate by construction, one is operator-managed with the hazard named, and exactly
+    // one — directory_nodes.last_heartbeat_at — genuinely needs building.
+    //
+    // Keep this assertion. An empty list is the state to defend: the next column added without a
+    // decision fails the test above, and the next UNDECIDED written fails this one.
+    expect(undecided).toEqual([]);
   });
 });
