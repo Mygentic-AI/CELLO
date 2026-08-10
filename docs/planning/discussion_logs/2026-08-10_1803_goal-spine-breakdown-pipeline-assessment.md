@@ -263,3 +263,22 @@ machines. Not yet reflected in the generator.
 - Single-peer refusal (`document_sender_not_peer`): `cello-client/core/daemon/src/document-inbound.ts`
 - M14 findings record co-authored with CELLO_Coder_1: shared document `9801638f…`, sealed session
   `507c3c13…`
+
+---
+
+## Related Documents
+
+- [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol Primitive]] —
+  the origin of the goal/spine vision, and where `field-level-authority` was first named. This
+  log is the measurement of what the pipeline built from that vision actually produces, and
+  finds field authority still declared-but-unenforced
+- [[2026-07-31_federated-collaborative-state-architecture|Federated Collaborative State
+  Architecture]] — the design this assesses the output against; its pairwise scope (§11.1) is
+  what makes an eight-actor spine unrepresentable today, and its multi-party deferral is the
+  "multi-sharing" gap recorded here
+- [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — carries the "two agents setting different
+  fields produce disjoint operations" claim that was true only at depth 1 until the recursive
+  merge shipped in daemon 0.0.154
+- [[2026-08-05_1230_document-screening-convergence-and-content-profiles|Document Screening,
+  Convergence and Content Profiles]] — the screening design whose outbound guard produced two
+  false positives during this session, including redacting a CELLO pubkey as a generic API key

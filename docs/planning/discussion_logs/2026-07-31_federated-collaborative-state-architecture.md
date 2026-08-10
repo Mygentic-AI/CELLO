@@ -1385,3 +1385,7 @@ real rejection friction justifies it.
   decision register
 - [[M14B-DEFINITION-OF-DONE|M14B Definition of Done]] — V2's parked yardstick (Tier 2,
   epochs, purge, schema enforcement)
+- [[2026-08-10_1803_goal-spine-breakdown-pipeline-assessment|Goal Spine — Breakdown Pipeline
+  Assessment & Redesign]] — measures this design against a real eight-actor workflow: §11.1's
+  pairwise scope is what makes that spine unrepresentable, and the deferred multi-party work is
+  recorded there as "multi-sharing" with the delivery-schema cost it actually carries

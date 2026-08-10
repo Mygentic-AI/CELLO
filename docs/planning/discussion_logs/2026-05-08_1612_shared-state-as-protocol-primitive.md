@@ -548,3 +548,7 @@ Hybrid workflows (agents discussing *and* collaborating on a document) are natur
 - [[goal-schema|Goal Schema]] (cello-agent) — JSON schema for Goal objects with phases, parties, tasks, journal
 - [[retail-equity-purchase workflow|Retail Equity Purchase Workflow]] (cello-agent) — real NICO workflow used as concrete example
 - [[shared-context|Retail Equity Purchase Shared Context]] (cello-agent) — actor analysis and field-level access patterns
+- [[2026-08-10_1803_goal-spine-breakdown-pipeline-assessment|Goal Spine — Breakdown Pipeline
+  Assessment & Redesign]] — measures what the pipeline actually generated from that same NICO
+  workflow (3 actors of 8, an invented compliance gate) and finds the field-level authority
+  named here still declared but unenforced
