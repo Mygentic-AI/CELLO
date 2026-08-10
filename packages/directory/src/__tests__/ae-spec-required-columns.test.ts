@@ -273,6 +273,26 @@ describe("DOD-SIGNAL-REPLICATION-1 — a Tier-A spec supplies every column its I
  * forced at the moment the column is added, by the person who has the context — rather than being
  * rediscovered months later as a wrong answer in production.
  */
+/**
+ * ⚠️ "DECIDED" IS NOT "NOTHING TO DO", AND CONFLATING THEM HID LIVE WORK.
+ *
+ * All 21 columns below carry a decision. That is a statement about KNOWLEDGE, not about health, and
+ * summarising this file as "only one column still needs building" was misleading — true only of the
+ * narrow question "which column needs REPLICATION MACHINERY built". Two different kinds of work fall
+ * out of these decisions and they must be counted separately:
+ *
+ *   NOT REPLICATING AND SHOULD BE — needs a merge tier built. Exactly ONE:
+ *     directory_nodes.last_heartbeat_at.
+ *
+ *   REPLICATION IS FINE, A READER STILL POINTS AT THE OLD COLUMN — needs no replication work at all,
+ *     because the replacement table is already converged on every node. The fix is to move the
+ *     reader and delete the column. TWO: agent_profiles.account_id (LIVE — it is decided by which
+ *     node the portal asks, and it is half of the same-operator security check) and
+ *     user_accounts.email_stub_hash (benign — its last reference decides nothing).
+ *
+ * The second kind is invisible if you only ask "does it replicate", which is exactly why the
+ * account_id defect survived a full replication deep dive and shipped to production.
+ */
 const ALWAYS_LOCAL: ReadonlySet<string> = new Set([
   // Surrogate row id. Per-node by construction; nothing joins across nodes on it.
   "id",
@@ -320,10 +340,12 @@ const LOCAL_BY_DECISION: ReadonlyMap<string, string> = new Map([
    "live, the column reads 7/7/0 across the three nodes, so half of that security check is currently " +
    "decided by which node the portal happened to ask. Tracked as CELLO-REPL-001."],
   ["user_accounts.email_stub_hash",
-   "DEAD COLUMN — superseded by the account_email_stubs table, which IS Tier A and converged. The " +
-   "directory's own readers already moved (account-lookup.ts, account-facts.ts). Excluded from the " +
-   "hash chain too, so it is also not tamper-evident (DOD-ACCOUNTS-EMAIL-CHAIN-1). Delete rather " +
-   "than replicate."],
+   "DEAD COLUMN, and unlike account_id this one is BENIGN — superseded by account_email_stubs, " +
+   "which IS Tier A and converged. Every DECISION reader already moved (account-lookup.ts, " +
+   "account-facts.ts). The one remaining reference is a read-back of the row just inserted, to build " +
+   "the return value — it decides nothing — and the insert dual-writes the replicated table beside " +
+   "it, logging at ERROR if that write fails. Also excluded from the hash chain, so it is not " +
+   "tamper-evident either (DOD-ACCOUNTS-EMAIL-CHAIN-1). Delete rather than replicate."],
   ["signal_records.is_tombstone",
    "SOLVED BY A FACT TABLE, not by replication — the pattern to copy. A revocation is mutable state, " +
    "so it cannot ride Tier A; V62 puts the immutable FACT in signal_revocations (which IS Tier A) and " +
