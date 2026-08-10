@@ -878,9 +878,15 @@ receipt or a named failure.
 
 ## 14. Anyone can vouch for their own agent using a key they made thirty seconds ago
 
-**Designation: `DOD-END-ISSUER-REGISTERED-1`** (M10B) — ❌ **OPEN, raised 2026-08-10.** Unranked.
-Filed from the verification pass on this list; it is the answer to the open question that used to sit
-on the same-operator item, and the answer is the fail-open one.
+**Designation: `DOD-END-ISSUER-REGISTERED-1`** (M10B) — 🟡 **BUILT 2026-08-10, NOT REVIEWED, NOT
+DEPLOYED.** Raised, decided and built the same day. Unranked. Filed from the verification pass on this
+list; it is the answer to the open question that used to sit on the same-operator item, and the answer
+is the fail-open one.
+
+> **What is left before this is real:** a unit review, and a **portal deploy**. It is portal-only —
+> no migration, no wire change, no client change, no directory roll — so nothing here waits on a
+> version cascade or a node-by-node roll. Until the deploy lands, the hole is open in production.
+> Built in cello-portal `df7f5be`; gate green (226 tests, lint clean, typecheck clean, build).
 
 **What an operator can do today.** An endorsement is one agent vouching in writing for another — the
 thing a stranger reads to decide whether to trust you. Endorsing your own second agent is supposed to
@@ -908,11 +914,17 @@ off, correctly, because nobody has endorsements on day one. That is the entire m
 feature that would be exploited is off. The moment it is switched on, the fabricated endorsements are
 already notarized and permanent.
 
-**The fix, decided by Andre 2026-08-10: the endorser must resolve too.** Both parties must already be
-registered agents in the directory, or the same-operator answer has no teeth. An unresolvable issuer
-is refused by name rather than minted, mirroring the refusal the subject side already gets. Refusal
-rather than a flag, because a flag would assert "these two are one operator" — exactly what cannot be
-known when one side is unidentifiable.
+**The fix, decided by Andre 2026-08-10 and built the same day: the endorser must resolve too.** Both
+parties must already be registered agents in the directory, or the same-operator answer has no teeth.
+An unresolvable issuer is refused by name rather than minted, mirroring the refusal the subject side
+already gets. Refusal rather than a flag, because a flag would assert "these two are one operator" —
+exactly what cannot be known when one side is unidentifiable.
+
+**The test that matters is the revert test.** Asserting "it was rejected" would have passed WITHOUT
+the fix, because the old behaviour also produced a result — it minted one. So the load-bearing
+assertion is that nothing reaches the notary at all; run against the unfixed code it fails with the
+endorsement already notarized. That is the exploit reproduced in a test rather than described in a
+paragraph.
 
 **One property this depends on, worth stating because breaking it turns the fix into an outage.** The
 lookup returns "not registered" only when the directory says so; an unreachable consortium raises an

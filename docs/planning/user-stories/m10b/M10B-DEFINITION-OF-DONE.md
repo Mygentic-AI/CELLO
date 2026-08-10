@@ -477,7 +477,19 @@ the additions M10B is accountable for.
   — it costs a directory deploy, and `requireRegistration` defaults to `false`, so it is a weaker and
   config-dependent guard than the portal refusal. The portal is the enforcer because it is the only
   party that can see linkage at all (`DOD-END-SUBJECTKIND-1`'s own reasoning).
-  > ❌ **OPEN, raised 2026-08-10.** Traced through code and confirmed in the directory's own comments;
+  > 🟡 **BUILT 2026-08-10, NOT YET REVIEWED AND NOT YET DEPLOYED** — cello-portal `df7f5be`, pushed to
+  > `main`. Refusal placed after the subject check, before the same-operator branch, exactly as
+  > specified above. **Two tests, and the first is a REVERT TEST:** asserting the counts alone passes
+  > without the fix, because the old behaviour *did* produce a result — it minted. The load-bearing
+  > assertion is that `postSignedSubmission` is never called; run against the unfixed code it fails
+  > with the endorsement already at the notary, which is the exploit demonstrated rather than
+  > described. The second pins the outage property — a thrown `DirectoryUnreachableError` leaves the
+  > row queued (`errored`, unacked, no `processed_submissions` row), so a degraded fleet cannot be
+  > mistaken for an unregistered issuer. Gate: 226 tests pass, lint 0 errors, typecheck clean, build
+  > succeeds. **The unit review has NOT run** (agent dispatch is off in the session that built it), so
+  > this is implemented, not done. **Deployment is a portal deploy, not a directory roll** — no
+  > migration, no wire change, no client change; `reason` is a free-form column.
+  > ❌ **The defect as found, 2026-08-10.** Traced through code and confirmed in the directory's own comments;
   > **not demonstrated against a running system.** Consequence measured at the receiving end: when the
   > flag is true the recipient is shown a paragraph saying the endorsement is worth nothing as
   > independent corroboration and does not count toward any minimum; when it is false that paragraph is
