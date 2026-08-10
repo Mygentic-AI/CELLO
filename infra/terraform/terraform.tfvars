@@ -32,7 +32,15 @@ directory_nodes = {
     node_id          = "gcp-usc1"
     zone             = "us-central1-a"
     subnet_index     = 1
-    machine_type     = "e2-standard-2"
+    # ⚠️ TEMPORARY UPSIZE 2026-08-10 — REVERT TO "e2-standard-2" WHEN us-central1 HAS CAPACITY.
+    # `ZONE_RESOURCE_POOL_EXHAUSTED` again, and WORSE than 2026-08-06: that time e2-medium had room
+    # in -a. This time the whole region was empty of 2-vCPU capacity — probed e2-standard-2, e2-medium,
+    # n2-standard-2, t2d-standard-2, n2d-standard-2 and e2-highcpu-4 across -a/-b/-c, all exhausted.
+    # `c3-standard-4` had capacity in -a, probed as the (zone, type) PAIR the playbook insists on.
+    # Bigger than needed (4 vCPU / 16 GB) and taken deliberately: the MIG deletes before it creates,
+    # so the alternative was leaving the consortium at exactly threshold with zero spare. GCP credits
+    # are not a constraint. Re-probe with the playbook command before reverting.
+    machine_type     = "c3-standard-4"
     db_tier          = "db-custom-1-3840"
     hostname         = "directory-gcp-usc1.cello.mygentic.ai"
     public_port      = 8080
