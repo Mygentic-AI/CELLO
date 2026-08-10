@@ -56,6 +56,18 @@ description: >
   published daemon@latest, not by reading the branch. That is the third entry this week to sit ❌
   while fixed, so the pattern is now the finding: **an item's marker here tracks whoever last edited
   this file, not the code.** Before trusting any ❌, unpack the published artifact.
+  2026-08-10, STRUCTURAL PASS: EIGHT finished or withdrawn items were still sitting in the ranked
+  list, three of them fixed the night before and never marked. All eight moved to Addressed and the
+  open list renumbered contiguously 1–12. Moved: DOD-SEALED-INBOX-2 (which held the TOP slot),
+  DOD-SIGNALING-LIVENESS-1, D-ENVVAR, the plugin dead-end, "online does not mean reachable" (both
+  halves), DOD-RELAY-DIRECTORY-RECONNECT-1, DOD-SIGNAL-REPLICATION-1, and DOD-SIGNAL-STATUS-
+  REPLICATION-1 — the last as WITHDRAWN, not fixed: it was filed on a reading of the raw status
+  column and the three nodes in fact return identical answers, so it was never a defect.
+  Also corrected four stale claims INSIDE items: the relay item told you a deploy was owed under its
+  own ✅ header, the accounts-chain item still asked for a deploy that had happened (its real residual
+  is one row, reserved for Andre), the seal-certificate pull read "not yet published" a day after it
+  shipped, and the BUILT-BUT-NOT-SHIPPED banner listed versions long superseded. The banner is now a
+  standing instruction to verify against the artifact rather than a snapshot that goes stale.
 ---
 
 # Launch Triage
@@ -84,27 +96,30 @@ see the notes below.)
 
 # Open — ranked (order decided by Andre, 2026-08-04)
 
-> ## ⚠️ BUILT BUT NOT SHIPPED — read this before assuming anything green is running
+> ## ⚠️ A MARKER ON THIS LIST TRACKS WHOEVER LAST EDITED IT — NOT THE CODE
 >
-> A green marker on this list means the CODE is fixed. It does not mean an operator has it. Three
-> different things must happen and they are recorded separately, because conflating them has already
-> cost a day: **committed** → **published to npm** → **promoted to `latest`** (Andre runs the
-> promotion), and for the relay/directory: **committed** → **image built** → **rolled to the fleet**.
+> **Before trusting any ❌, unpack the published artifact or read the running instance.** This is the
+> single most expensive failure mode this document has. On 2026-08-09–10 alone, **eight** items sat on
+> the ranked list while already finished — including the one holding the **top slot**, which had been
+> live on operators' machines for three days. Two infrastructure facts recorded here were stale the
+> same way, and one of them (a machine type) would have aimed a node roll at the instance type that
+> caused the August capacity outage.
 >
-> As of **2026-08-09**:
+> How to check, in one line each:
+> - **Client fix** → `npm pack @cello-protocol/daemon@latest` and grep `dist/`. Not the branch, not CI.
+> - **Directory/relay fix** → `gcloud compute instances describe … ` and read the image tag off the
+>   RUNNING instance. Not `terraform.tfvars`, not `GCP-STATE.md`.
+> - **Anything claiming convergence or replication** → query the databases and compare. Row counts and
+>   digests can match while the answer a consumer gets differs; ask the view the consumer reads.
 >
-> | Work | State |
-> |---|---|
-> | Away agents no longer seal a conversation nobody had | published `daemon 0.0.150`, promoted, **proven live** |
-> | A send that can never be recorded now fails | published `daemon 0.0.149`, promoted |
-> | Relay reconnect + probe + health check | **deployed** to both relays, verified |
-> | Document verb review — all nine findings | published `daemon 0.0.148`, promoted |
-> | **A failed close asks for the seal certificate** (item 12) | published `daemon 0.0.151`, promoted |
-> | Document types — json, html, the .txt extension, plaintext's dead diff | published `daemon 0.0.152` / `connect 0.0.136`, promoted |
+> **Three states, recorded separately, because conflating them has cost days:**
+> **committed** → **published to npm** → **promoted to `latest`** (Andre runs the promotion); and for
+> the relay/directory: **committed** → **image built** → **rolled to the fleet**.
 >
-> **Everything in this table is now promoted and running** as of 2026-08-09. The table stays because
-> the distinction it draws is the one that has already cost a day: a green marker on this list means
-> the CODE is fixed and says nothing about whether an operator has it.
+> **Currently promoted:** connect `0.0.140`, cli `0.0.163`, daemon `0.0.156`, gateway `0.0.28`,
+> crypto `0.0.44`, transport `0.0.50`, protocol-types `0.0.48` — *pending Andre running the seven
+> promotions for the `v0.0.229` cascade; `beta` is ahead of `latest` until he does.*
+> **Directory:** `1f9281f1` on all three nodes. **Relay:** `0cf04b0c` on both.
 
 ### How to actually ship something off this list — for an agent arriving cold
 
@@ -138,59 +153,9 @@ sealed. Where a claim can be checked against a live daemon or the fleet logs, ch
 
 **Both "run first" diagnoses were resolved 2026-08-04**, same day: the FROST debug-logging report
 was **overstated** (ruled out — see Addressed), and `DOD-ACCOUNTS-CHAIN-1` was **confirmed as a
-real tamper-evidence gap** — it is now ranked item 3 below (proposed slot; Andre confirms).
+real tamper-evidence gap** — it is now **item 1** below.
 
-## 1. The inbox says sessions are sealed when they are not
-
-**Designation: `DOD-SEALED-INBOX-2`** — ✅ **FIXED AND LIVE.** Shipped in the daemon `0.0.134`
-cascade and on `latest` ever since; confirmed 2026-08-09 by unpacking the published
-`@cello-protocol/daemon@latest` (`0.0.155`) — `ended_unread` is in `dist/`, `sealed_unread` is
-absent from it entirely, each row carries its real `status` plus `notarized`, and the shipped
-receptionist skill and agent both read the new field. **This entry stayed ❌ for three days after the
-work was already on operators' machines** — the DoD line and this doc were both flipped on 2026-08-09.
-
-**What it means from the operator's chair:** the inbox no longer tells you a conversation is
-notarized when it isn't. Each ended conversation now says how it actually ended, and an agent
-reading it is told in the payload — not just in prose it might skip — to check `notarized` before
-ever repeating "this is sealed" to you.
-
-<details><summary>Original problem statement, kept for history</summary>
-
-The inbox is the one surface that asserts a session is notarized, and for three of the four statuses
-it applies that label to, the assertion is false. Only `sealed` is actually notarized; `abandoned`,
-`interrupted` and `seal_interrupted_pending` are not.
-
-Found live: a session was reported under "sealed with unread messages" while three other surfaces
-said it was interrupted and had never sealed. **The agent reading the inbox repeated "it's sealed"
-to the operator as fact.** It took a direct "is it actually sealed?" to catch, because nothing in
-the system contradicts the label unless you go and ask a second surface.
-
-For a product whose entire proposition is verifiable trust, the failure mode here is not a wrong
-label — it is the product making a false claim about notarization and an agent relaying it onward.
-
-**Diagnosed 2026-07-31 — the fix is small and the location is exact.**
-`session-node-manager.ts:1005` defines `#TERMINAL_STATUSES` as
-`('sealed','abandoned','seal_interrupted_pending','interrupted')`. `getSealedUnread` (`:1039`)
-selects on that set, so it returns all four — correctly, they are all terminal-with-unread. The
-defect is downstream: `notification-handlers.ts:99` labels the whole set *"These sessions are sealed
-with unread messages"*, and the field is named `sealed_unread`. **The name is half the false claim**
-— an agent reading the JSON says "sealed" without ever reaching the guidance string.
-
-Three consumers to change plus its test: `notification-handlers.ts`, `session-read-handlers.ts`,
-`session-node-manager.ts`, and `plugins/cello/skills/receptionist/SKILL.md` (which ships, so it
-instructs agents directly — audit what ships, not only what compiles).
-
-**Decided 2026-08-04 (Andre): one pass, including the rename.** The earlier plan deferred renaming
-`sealed_unread` → something status-neutral (`ended_unread`) because it is a wire change for the shim
-and the receptionist skill. Pre-launch, with one operator and a greenfield cutover behind us, is the
-only time a wire change is free — deferring it is exactly the migration trap this doc warns about.
-Do the rename, the per-row `status`, and the corrected guidance string together, now.
-
-</details>
-
----
-
-## 2. Every real registration writes the human-agent binding outside the hash chain
+## 1. Every real registration writes the human-agent binding outside the hash chain
 
 **Designation: `DOD-ACCOUNTS-CHAIN-1`** — ❌ open, raised 2026-07-13, **diagnosed 2026-08-04:
 possibility (a) confirmed — a real tamper-evidence gap, not a test artifact.** Proposed slot; Andre
@@ -219,197 +184,31 @@ rechaining or reseeding the table is cheap now and becomes a migration later —
 **🟡 BUILT + REVIEWED 2026-08-06** — `493609dc` + `1aa25164`, branch `dod/accounts-chain-1`.
 Confirmed on live data first (the real row's hash IS the standalone digest). One writer now:
 `resolveOrCreateAccount` on the store, locking before the existence check so the chain cannot fork;
-`resolveAccountId` deleted. The recorded repro is green. **Not ✅ — a deploy step is owed**: the fix
-appends correct rows onto a broken prefix, so any database holding a legacy row stays red forever.
-Steps (GCP greenfield + acceptance check, `cello_spine_0` cleared or decommissioned, `verifyChain`
-on the ops-agent health surface) are in [[M8C-DEFINITION-OF-DONE]]. Two spin-offs recorded there:
+`resolveAccountId` deleted. The recorded repro is green.
+
+**DEPLOYED — the code is live on all three nodes. What is left is ONE ROW and it is Andre's call.**
+The acceptance check was run 2026-08-06 by hand (there is still no health surface exposing
+`verifyChain`) and it FAILED on one node: `gcp-use1` valid, **`gcp-usc1` holds one pre-fix row whose
+stored hash is the old standalone digest**. The row's DATA is fine; only its `chain_hash` was computed
+the wrong way. Until it is repaired, `verifyChain("user_accounts")` stays red there — and a red
+verification cannot be told from a tamper, which is the precise defect this item exists to remove.
+
+**Why an agent must not just fix it:** rewriting a `chain_hash` in an append-only tamper-evidence
+table, using admin credentials to bypass the RLS that deliberately denies the app user `UPDATE`, is
+*the exact operation the chain exists to detect*. Legitimate as a repair of a known-bad write, but it
+has to be a recorded decision. Two options, both in `infra/GCP-STATE.md` with the verification recipe:
+recompute the single hash, or clear the row and let anti-entropy re-replicate it chained (note it is
+an FK target of `agent_profiles.account_id`, so `SET NULL` + re-link, never a bare `DELETE`).
+
+**Still owed alongside it:** surface `verifyChain("user_accounts")` on the ops-agent health output,
+or "still red on the origin node" gets closed and forgotten. Steps in [[M8C-DEFINITION-OF-DONE]]. Two spin-offs recorded there:
 `DOD-ACCOUNTS-EMAIL-CHAIN-1` (the email half of the binding is stored but not chained), and a
 test-isolation defect — several suites `DELETE` from this append-only chained table, which makes the
 `CELLO_ENV=local` suite non-deterministic (36 vs 30 failures across two runs of the same tree).
 
 ---
 
-## 3. Dead signaling streams go undetected — build the liveness mitigation, timebox the trace
-
-**🟡 ROOT CAUSE FOUND AND FIXED 2026-08-06** — `9910ff12` + `259b4b59`, branch
-`dod/accounts-chain-1`, DoD line opened as **`DOD-SIGNALING-LIVENESS-1`** in
-[[M8C-DEFINITION-OF-DONE]]. The trace half landed first, so **the client-side liveness probe was
-deliberately NOT built** — it would have been a mitigation for a cause now removed.
-The mechanism: the directory's `#streams` delete guard (`get(pubkey) === stream`) protects the
-NEWEST stream, not the one the client is using — so an agent's own second stream, on closing,
-deregistered it while the first stayed open and kept answering pings. The heartbeat is
-*structurally* blind to this (the ping handler never reads `#streams`), which is why it caught 42 of
-3,556 stream deaths. The reviewer found the production trigger: the daemon's roster loop opens a
-visiting connection to the agent's **own home node** and tears it down, so every sweep was a chance
-to deregister. Three follow-ons carried forward on the DoD line (remove the trigger client-side;
-evict on send failure — the only real liveness signal, currently discarded; and split the
-`target_offline` label, which sent the original investigation at the wrong subsystem for 25 minutes).
-
-**Designation:** [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — no
-DoD line, **needs one opened.** Recorded 2026-08-03 as a decision to skip on the grounds that the M12
-cutover would make the class moot. That premise was checked 2026-08-04 and is false, so this is a
-real open item. **Split 2026-08-04 (Andre): the launch item is the mitigation build; the root-cause
-trace is timeboxed, not open-ended** — as one blob this was a rabbit hole.
-
-The 2026-07-31 incident: an agent reported online on every surface — `cello status`, the daemon, the
-directory's own database — while nothing could reach it, silently, for ~25 minutes, recovering only
-on a daemon restart.
-
-**The launch half — a liveness check on the *registration*, not the socket.** The directory's
-`#streams` entry for the agent disappeared server-side. The client observed nothing — no disconnect,
-therefore no reconnect, therefore no re-authentication, therefore nothing repopulated that map. The
-transport stream was genuinely alive, so the 15 s ping / 15 s pong heartbeat had nothing to report.
-A periodic re-register (or a registration echo the client verifies) converts "25 minutes of silent
-blackout" into "self-heals within one check interval" — which is what the launch test demands.
-
-**The timeboxed half — the untraced mystery.** Why the server-side `#streams` entry vanished was
-never traced. Named threads to pull: why the directory drops a `#streams` entry with no
-client-observable event, and the untraced `The operation was aborted due to timeout` reader errors
-(2,061), which read like an `AbortSignal` on our side but are not raised in `signaling-manager.ts`.
-If the timebox expires without an answer, the mitigation stands on its own and the trace parks.
-
-**Why the earlier fix does not cover this.** Daemon `0.0.105` (`2e734a1`) re-registers the standing
-receiver on signaling reconnect, and it is still wired (`daemon.ts:614`). The incident log's own
-CORRECTION explains why that is a different hole: `targetStreamFound` reads the directory's
-`#streams` map, which is populated at **auth** time and is not the standing receiver —
-re-registering one does not repopulate the other. And `onConnected` fires on a reconnect, while the
-client's first disconnect came 23 minutes *after* the failure.
-
-**Why the cutover does not clear it — verified 2026-08-04.** The skip was conditional: the class
-only dies if the cutover changes the **client-to-node** link. [[M12-ANTI-ENTROPY-DESIGN]] §8 names
-the client protocol explicitly under *"What this design does NOT change"*, and the mesh replaces the
-**node-to-node** layer. Presence replicating perfectly does not revive a dead client stream — every
-node just agrees the agent is owned by a node that cannot reach it. No code has changed on either
-side since the incident (`signaling-manager.ts`, `signaling-connect.ts`, `directory-node.ts`; the
-four `#streams` mutation sites are as they were).
-
-**The parked-mailbox mitigation does NOT apply — checked 2026-08-04.** The failure is a **session
-request** answered `target_offline`, which `outbound-sessions.ts:664` retries a bounded number of
-times and then surfaces as `counterparty_offline`. The session never forms, so no message ever
-parks. There is nothing to drain.
-
-Same shape as the logout item and the "online does not mean reachable" item: the visible state and
-the network behaviour disagree, and the operator believes the visible one.
-
----
-
-## 4. The Telegram sign-up messages give wrong or unclear instructions
-
-**Designation: `D-ENVVAR`** (+ the rest of Phase 1 in `M8C-ONBOARDING-IMPROVEMENTS`)
-
-The registration bot tells a new user to set something that doesn't exist, among a few other unclear
-or inconsistent messages along that flow. A literal first-time follower gets stuck with no next
-step. Not a security issue — a bad first impression. Fixing it is tedious rather than hard: several
-message rewrites plus the tests that check the exact wording, in one repo.
-
-Same class as the plugin-install item below — a first-time user hits a dead end with wrong or no
-instructions. The two want one pass.
-
----
-
-## 5. Installing the plugin strands a new user at `daemon_not_running` with no signpost
-
-**Designation:** [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — **needs a DoD
-line opened.** **Narrowed 2026-08-04:** the launch-sized item is the failure path, not the install.
-
-The plugin is the official install route. Installing it copies files and runs nothing: the MCP shim
-arrives lazily, but the `cello` binary and the daemon do not. A new user installs, sees the tools,
-calls one, and gets `daemon_not_running` — a dead end with no next step. The `setup` skill is the
-only thing that closes that gap today, and nothing points at it.
-
-The earlier framing ("install should give you a working CELLO") pulls toward an install hook — which
-would have a plugin install start a long-running process holding key material and a network
-identity, a much bigger claim on a user's machine than a plugin install normally makes. That
-decision stays deliberately unresolved. **The launch fix is smaller: the `daemon_not_running`
-failure path names the fix** ("run the setup skill") so a first-time user is never stranded without
-a next step. A message change plus a doc line, sharing a pass with the Telegram item above.
-
----
-
-## 6. "Online" does not mean reachable
-
-**🟡 THE DIAGNOSIS SURFACE IS FIXED 2026-08-09** (cello-client `b22cfd5`, committed, NOT yet
-published — it is a daemon change and needs its own cascade). Two things kept the cause hidden:
-
-- **`directory_endpoints_unresolved` was on the MCP `cello_status` tool only** — not on the
-  daemon-wide status the CLI `cello status` prints, which is the one an operator at a terminal runs
-  and the one that was run during the incident. Both surfaces now build from the same block, and a
-  test asserts they are equal so they cannot drift apart again.
-- **It was empty at the moment it mattered.** The startup sweep resolves the roster at boot, logged a
-  partial/none COUNT, and discarded which node failed and why. Nothing else resolves a roster until a
-  ceremony runs, so the block stayed empty through exactly the window where someone whose sessions
-  are all failing goes looking. The sweep now keeps its findings and seeds the routing store. A later
-  sweep REPLACES the seed, so a recovered node drops out rather than lingering as a stale complaint.
-
-**❌ STILL OPEN — the state word itself. Design SETTLED with Andre 2026-08-09; build it as its own
-unit, after `DOD-AGENT-SELECTION-UNWARRANTED-1`.** It touches the most surfaces of anything
-outstanding (the shipped skills, the Hermes assets, the CLI, every test keyed on `=== "online"`), so
-it gets its own change and its own review.
-
-Today: `AgentState = "registered" | "online" | "current" | "load_failed"`. `current` is already
-redundant — selection is a separate `selected` boolean, so a state value for it is two sources of
-truth for one fact. The agreed ladder, worst-fact-first, every value a fact about THAT agent:
-
-`load_failed` → `unregistered` → `stopped` → `paused` → `connecting` → `unattended` → `online`
-
-- **`unregistered`**, not `local_only` (Andre): "local only" describes a symptom that could equally
-  be a failure to reach the directory. State the fact — it has never been registered.
-- **`stopped`**, because the only way in should be that you stopped it. **It is not true yet:** the
-  daemon does NOT auto-start agents (`daemon.ts:389`); `cello login` does it afterwards via
-  `autoStartAllAgents`. When the daemon is spawned by the MCP shim instead — whenever Claude Code
-  starts with no daemon running — nothing starts the agents, so they read as stopped when nobody
-  stopped them, and none of them can receive anything. **Spin-off: start agents on daemon boot, not
-  only from `cello login`.** Own fix; same shape as the class this item is about.
-- **`unattended`** — ready to receive, nobody home to answer. Its own rung because it is a real
-  operational fact that was invisible: `DOD-WITNESS-STALL-1` happened precisely because BOTH sides
-  were unattended, both away responders fired, and the away flow ends a session. The word already
-  means this in our own vocabulary.
-- **`online`** — ready AND at least one attendee. The final good state, per Andre.
-
-**`isolated` was proposed and REJECTED (Andre) — and the objection kills the idea, not the word.** A
-consortium below threshold affects EVERY agent equally, so it was never a property of an agent;
-stamping it on each one attributes a system fault to the wrong thing. It moves to a daemon-level
-block, stated exactly, because the counts are what answer the question:
-
-```
-"directory": { "reachable": 1, "declared": 3, "required": 2, "state": "below_threshold" }
-```
-
-`ok` (all reachable) · `degraded` (some unreachable, still ≥ threshold — sessions work, redundancy
-reduced; its own value so the field does not cry wolf for the case that is fine) · `below_threshold`
-(no session can form). **`below_threshold` reuses the exact string of the error the operator already
-sees** when a session dies, so status and error share one vocabulary instead of needing translation.
-
-**The accepted trade:** an agent can read `online` while `directory.state` is `below_threshold`. That
-is correct attribution, and it only avoids the original lie if the directory block is impossible to
-miss — so `cello status` must LEAD with it whenever it is not `ok`, rather than leaving it a field
-partway down a JSON dump.
-
----
-
-The original entry, kept because it is the evidence:
-
-`cello status` shows an agent as `online` with `standing_receiver_ready: true` whenever its signalling
-connection is up — even when the daemon cannot resolve a single directory endpoint and no session can
-possibly form.
-
-**Found the hard way, 2026-07-31.** After the infra wake, this host held a stale DNS cache (hibernate
-deletes the ALBs; wake recreates them with new IPs). libp2p kept connecting off the bundled manifest,
-so all five agents reported healthy while every cross-node session died. It surfaced in sequence as
-`counterparty_offline`, then `directory_below_threshold`, then `ceremony_exhausted` — three errors
-naming three different subsystems, none of them the cause. `dns_error` was in the daemon log 26 times
-per node from startup and never reached the operator.
-
-The immediate trigger turned out to be the AWS→GCP migration (now complete), and the DNS surfacing
-is being handled separately. What stays open is the status word itself: an agent that cannot hold a
-session should not render identically to one that can.
-
-**Cost if unfixed:** roughly an hour, every time, and the first conclusion is always "the protocol is
-broken."
-
----
-
-## 7. A mismatch that makes a conversation unsealable leaves no durable trace
+## 2. A mismatch that makes a conversation unsealable leaves no durable trace
 
 **Designation: `DOD-FRONTIER-MISMATCH-DURABLE-1`** (M8D, 🅿️ parked) — **re-scoped 2026-08-03.** The
 original defect under this item (`DOD-FRONTIER-STRAND-1`) is fixed; see Addressed. What is left is
@@ -433,7 +232,7 @@ anything keyed on it must not assume it is.
 
 ---
 
-## 8. A daemon shutdown rings the doorbell like an incoming message
+## 3. A daemon shutdown rings the doorbell like an incoming message
 
 **Designation:** [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — **needs a DoD
 line opened.**
@@ -449,7 +248,7 @@ distinguishable metadata so the event says what happened.
 
 ---
 
-## 9. Telegram phone notifications are built and tested, but never proven on a real phone
+## 4. Telegram phone notifications are built and tested, but never proven on a real phone
 
 **Designation: `DOD-TGDOOR-1`** — 🟡 *(still the only Tier-3 unit that can't be smoke-tested without
 a real bot token)*
@@ -460,9 +259,9 @@ proof, nothing else — minutes with a phone, do it opportunistically whenever A
 
 ---
 
-## 10. There is still no way to back up or recover your identity
+## 5. There is still no way to back up or recover your identity
 
-**Designation: `DOD-CUSTODY-DAEMON-1`** — demoted from #1 on 2026-08-04; scoped the same day. (Renumbered #10→#11 when the accounts-chain item landed.)
+**Designation: `DOD-CUSTODY-DAEMON-1`** — ❌ open; demoted from #1 on 2026-08-04 and scoped the same day.
 
 `backup` and `restore` exist as commands, but nothing behind them works — call either one and it
 reports "not implemented." If your machine is lost, stolen, or dies, that agent and everything it
@@ -485,7 +284,7 @@ Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello
 
 ---
 
-## 11. Two sides can hold incompatible beliefs about which terminal path a session is on
+## 6. Two sides can hold incompatible beliefs about which terminal path a session is on
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — 🟢 **THE CURE IS BUILT 2026-08-09.** A close
 that fails now ASKS the directory whether the seal already happened, and returns the receipt if it
@@ -779,98 +578,12 @@ test.
 own. There is no startup sweep. The recovery is triggered by the operator's action, not by the
 daemon noticing.
 
-**Not yet published** as of writing — daemon 0.0.150 is the latest published build and does not
-contain it.
+**PUBLISHED and promoted** — shipped in `daemon 0.0.151` and on `latest` since 2026-08-09. (This line
+read "not yet published" for a day after it was.) **What keeps this item open is the residual, not the
+pull:** nothing asks on the daemon's own initiative, so a session stranded and never touched again
+stays stranded. There is no startup sweep.
 
-## 12. The relay stops being able to notarize, never recovers, and reports itself perfectly healthy
-
-**Designation: `DOD-RELAY-DIRECTORY-RECONNECT-1`** — ✅ **DEPLOYED AND VERIFIED 2026-08-08.** Both
-relays rolled to `relay:0cf04b0c` node-by-node (use1 19:37 UTC, euw1 19:41), each registered with all
-three directories after its roll, and a real cross-machine session sealed on each before the next was
-touched. Recorded in `infra/GCP-STATE.md`. This line stayed 🟠 for a day after the deploy because
-nobody updated it — the deploy happened, the marker did not move.
-
-**Still open underneath it (2026-08-09):** the health check written here asks *"can this relay reach a
-directory"*. It does NOT ask *"is the chain still growing"*, and those are independent — see the
-witnessing stall in Addressed, where witnessing froze while the directory link was fine. A check that
-cannot go red for the failure being suffered is not a check for that failure.
-
-- **The reconnect** — `0d9568a5` (Miss_Chelly). `#openDirectoryStream` redials a stale connection
-  and retries once instead of refusing the seal, and the dial errors are logged instead of being
-  discarded by an empty `catch {}`.
-- **The noticing** — `relay-service-lifecycle.ts` + `bin/relay.ts`. `/health` reports whether this
-  relay can reach a directory rather than a constant built at startup, and a 30s probe asks while
-  nobody is watching. The probe runs the SAME transport a seal runs, so it repairs the connection on
-  the way; a probe over any other route can be green while the route that matters is dead.
-
-  **It ALWAYS answers 200, and that is deliberate — the first version did not, and it was
-  dangerous.** `/health` is what the directories poll to decide relay POOL MEMBERSHIP, and
-  `defaultPingFn` counts any non-2xx as a failed check. A 503 on "cannot reach a directory" would
-  have withdrawn relays for a fault that does not stop them carrying sessions — and since the cause
-  is shared, all relays fail together and the pool empties. That converts *conversations cannot be
-  sealed* into *conversations cannot be started*, fleet-wide: strictly worse than the incident this
-  item exists to fix, and the same shape as the pool-emptying outage found the same day (relays
-  publishing a public health URL behind a VPC-only port). Degradation is reported as
-  `status: "degraded"` plus the directory block in the body, and as
-  `relay.directory.connection.lost` at ERROR. **If an autohealer should ever act on this it needs
-  its own signal that pool membership does not read — never this status code.**
-- **Still owed: the deploy.** The running relays carry the old behaviour until a relay image is
-  built and rolled. Until then this item's failure mode is live, and the only mitigation is the
-  manual restart that ended the 2026-08-08 outage.
-- **Not addressed:** splitting `directory_unavailable` into distinct reasons at every call site
-  (partially done — `directory_not_connected` now separates our own wiring from the network), and
-  `relay.seal.broker.unreachable` still logs a WARNING on the success path.
-
-**What a customer experiences.** They finish a conversation and close it. Nothing comes back. No
-error, no receipt, no explanation — the close simply hangs for about seven minutes and then reports
-a timeout. Every subsequent conversation does the same, for every user, on every machine, until an
-operator notices and restarts a server by hand. The receipt is the product; this makes the product
-produce nothing while claiming to be fine.
-
-**Measured 2026-08-08.** Three conversations sealed normally between 06:43 and 06:57 UTC. From 09:23
-onward, nothing sealed at all — five attempts across two machines, cross-node and same-machine,
-documents and plain chat, on two different client builds. A relay restart at 11:07:45 fixed it
-immediately: the next close returned a notarized receipt (`ff534c48…`). Between those points nobody
-deployed anything and nothing on the network changed.
-
-**Why it took a morning to find, which is itself part of the defect.**
-
-- The relay logs `relay.seal.broker.unreachable` as a WARNING on **every seal, including successful
-  ones** — it fired 4 seconds before the seal that worked. Both agents chased it as the cause.
-- `directory_unavailable` is one string covering opposite failures: the relay's own node reference
-  being absent, a dial timeout, and a non-Error throw. One of those is a bug and one is the network,
-  and they want opposite fixes.
-- **The health check cannot see it.** It returns `{status:'ok', relayId}` statically. A relay that
-  cannot notarize a single session passes every probe, so nothing alerts and no autohealer acts.
-- Three plausible causes were proposed and each was disproved by measurement: the schema migration
-  (three seals succeeded on it an hour after it deployed), the replication threshold
-  (`availableNodes:1` was already true *during* the working seals), and a dial backoff window (one
-  attempt came 67 minutes after the previous one and still failed in 1ms).
-
-**What the evidence says it is.** The failure is instantaneous — 1 millisecond from
-`broker.resolved` to `unreachable`, and 1 more to `rejected`. Nothing goes on the wire. Meanwhile
-the same relay keeps serving client traffic normally throughout, so it is not globally out of
-capacity. It is one connection — relay to its configured directory — that is established at boot
-(`connect(relayResult.node)` in `bin/relay.ts`, right after node startup), works, dies silently, and
-is never re-established. There is no reconnect, no keepalive, and no health check on it.
-
-**The fix has three parts, and the first two are the ones that matter:**
-1. **Re-establish the connection instead of failing forever.** Whatever drops it will drop it again;
-   the missing recovery is the actual defect.
-2. **Make the health check test what the relay is for.** A relay that cannot reach a directory must
-   fail its probe, so the autohealer replaces it instead of leaving it up and mute.
-3. Split `directory_unavailable` into distinct reasons, and stop logging a warning on the success
-   path.
-
-**Related but separate, both found the same day and both still open:** directory nodes do not
-replicate `last_heartbeat_at`, so every node counts itself as the only live one
-(`availableNodes:1` against `requiredThreshold:2`) and federation checkpoints have never succeeded;
-and `signal_records` anti-entropy fails every round on a `scanner_version` NOT NULL violation.
-Neither causes this item — both were disproved as the cause by measurement — but both are live
-faults. Miss_Chelly owns them.
-
-
-## 13. The daemon logs every connection opening and never one closing
+## 7. The daemon logs every connection opening and never one closing
 
 **Designation: `DOD-IPC-DISCONNECT-VISIBLE-1`** — ❌ **OPEN, and deliberately filed as a SMALL one.**
 Unranked. **Proposed slot: low — nobody is ruined by this. It is here because it taxes every
@@ -907,7 +620,7 @@ misreading; `selected_by_this_connection`, or a note in the payload, would stop 
 permanent (spec §3). What is missing is only the record of it changing.
 
 
-## 14. A session was silently bound to an agent it never selected — and it was someone else's identity
+## 8. A session was silently bound to an agent it never selected — and it was someone else's identity
 
 **Designation: `DOD-AGENT-SELECTION-UNWARRANTED-1`** — ❌ **OPEN, cause NOT established.** Unranked.
 **Proposed slot: high, on the security argument below — but it needs the diagnosis before it can be
@@ -975,7 +688,7 @@ to `agent.current.switched`, then reproduce with a daemon restart after a releas
 the two candidates in one run.
 
 
-## 15. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
+## 9. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
 
 **Designation: `DOD-HEARTBEAT-REPLICATION-1`** — ❌ **OPEN.** Unranked. Previously recorded only as a
 footnote on item 14; filed here because it is a live fault in its own right and was nearly fixed as
@@ -1014,107 +727,7 @@ heartbeat not replicating. That is wrong — `id` is simply not in the spec eith
 that `last_heartbeat_at` is mutable and Tier A carries immutable columns. Left uncorrected it would
 have sent whoever picks this up at the wrong repair.
 
-## 16. Trust-signal replication fails every round, and the fork alarm climbs
-
-**Designation: `DOD-SIGNAL-REPLICATION-1`** — ✅ **FIXED, DEPLOYED AND VERIFIED IN PRODUCTION
-2026-08-09.** Directory image `aa31516a`, all three nodes rolled.
-
-**What an operator gets now:** a trust signal minted on any node reaches the other two. Before this,
-which signals a counterparty could see depended on which of the three directory nodes their client
-happened to pick — and nothing said so.
-
-**Verified on the live databases, not from the logs alone.** All **17** `signal_records` rows are now
-present on all three nodes with byte-identical hashed content, and **every** Tier-A table has
-identical row counts across the fleet (profiles 14, seals 93, notarizations 94, attestations 186,
-claim codes 4, …). Tier-B is converged too (presence 2900 rows / 4 online, suspensions 0 on all
-three). `antientropy.apply.failed` was still firing at 20:33:09Z mid-roll with the exact not-null
-message and has fired **zero** times since the last node came up, across hundreds of rounds.
-
-**The cause was one missing column.** `scanner_version` is `TEXT NOT NULL` with no default and was
-absent from the Tier-A spec; `applyTierA` inserts exactly the spec's columns, so every apply failed
-by construction. Fixed by adding it to the hashed set — it must be hashed, not merely carried,
-because it is the submitter's unverifiable scanned-clean assertion and is forgeable outside a
-signature. A new static guard replays the migrations and fails any Tier-A spec that omits a column
-the schema requires; across all 18 tables it finds exactly this one.
-
-**⚠️ The fork alarm is still firing, and it is NOISE, not divergence — established 2026-08-10.**
-It reads `planned 1 / pulled 1 / applied 0` on roughly two rounds in three, and the consecutive
-counter had reached **412** by 04:06Z. The engine header calls that signature a non-converging fork.
-It is not one:
-
-- **Every Tier-A table is byte-identical across nodes.** All 17 tables dumped by their own wire
-  column lists (naturalKey ∪ immutableColumns, generated from the specs so the lists cannot be got
-  wrong) and compared between `gcp-use1` and `gcp-euw1`: 220343 bytes each, every table SAME.
-- **Both Tier-B tables are converged.** `agent_presence` is byte-identical across nodes on all five
-  version columns over 2900 rows; `agent_suspensions` is empty on all three.
-- **The answer consumers get is identical**: `signal_records_effective` matches row-for-row.
-
-So the planner asks for a record the node already holds, fetches it, and inserts nothing — every
-round, forever. **Cost: a wasted fetch per round, and an alarm that cries wolf.** That second half
-matters on its own terms, because "the fork alarm climbing trains whoever watches it to ignore a real
-fork later" is one of the reasons this item was raised at all — the alarm is now unusable for its
-actual purpose.
-
-**Next step is one line of logging, not an investigation:** the round log reports counts and never
-names the table, which is the only reason this took a database-wide diff to characterise. Log the
-table on `round.completed` / `fork_suspected` and the cause falls out of the next round.
-
-`signal_records` anti-entropy has never worked: **1530 consecutive apply failures**, every one
-`null value in column "scanner_version" violates not-null constraint`. The column is NOT NULL and is
-not in the replicated set, so every apply fails by construction.
-
-**What an operator would see.** Trust signals present on the node that minted them and absent
-elsewhere — so which signals a counterparty sees depends on which directory node answers. The fork
-alarm climbing (39 consecutive at the time of measurement) is a consequence, not a separate fault,
-and it trains whoever watches it to ignore a real fork later.
-
----
-
-## 16b. A superseded trust signal still reads as current on two nodes out of three
-
-**Designation: `DOD-SIGNAL-STATUS-REPLICATION-1`** — ⬇️ **WITHDRAWN AS FILED, 2026-08-10. This was
-NOT a user-visible defect and I should not have reported it as one.**
-
-**What I checked, and what I failed to check.** I read the raw `status` COLUMN off the three
-databases, saw 7 rows `superseded` on `gcp-euw1` and `active` on the other two, and reported that a
-counterparty would get a different answer depending on which node they asked. **Nothing reads that
-column for a decision.** Every consumer reads `signal_records_effective`, whose `effective_status`
-DERIVES supersession from `supersedes_hash` — a column that IS replicated — via
-`EXISTS (SELECT 1 FROM signal_records s WHERE s.supersedes_hash = r.signal_hash AND NOT revoked)`.
-The stored column is only a fallback branch behind that.
-
-**Verified 2026-08-10 on all three live nodes:** `signal_records_effective` returns **identical**
-`effective_status` for all 17 signals on every node — 10 `active`, 7 `superseded`, row for row. There
-is no divergence in the answer anyone actually gets.
-
-**What is left is a stale bookkeeping column on the two replicas**, and it is worth one line rather
-than an item: the origin node UPDATEs `status` when a signal is superseded, and that UPDATE does not
-travel, so a replica's raw column reads `active` for a signal the view correctly calls `superseded`.
-Harmless today because the view is the only reader. It is a **trap for a future reader** who queries
-`signal_records.status` directly, and the honest place for it is a comment on the column, not a
-ranked launch item.
-
-**The lesson, which is the reusable part:** I read the storage and reported it as the behaviour. The
-question was never "do the columns match" — it was "do the three nodes give the same answer", and
-those are different queries. Check the view a consumer reads, not the table underneath it.
-
-**Why.** `status` is mutable, so it is deliberately excluded from the Tier-A record hash — correctly,
-because revoking a signal must not change its hash or the directory could never find the signal it
-just revoked (V46). Revocation was therefore given its own replicating table, `signal_revocations`
-(V62). **Supersession never got the same treatment.** So the row content converges everywhere while
-the one column that says whether the signal still counts does not travel at all.
-
-**Note this is invisible to row counts and to the fork alarm** — all three nodes hold 17 identical
-rows and identical Tier-A digests. It was only found by reading `status` off the three databases
-side by side. Any future "replication is healthy" check built on counts or digests will keep missing
-it.
-
-**Shape of the fix (not yet built):** mirror `signal_revocations` — a small append-only table
-carrying the supersession fact, keyed on the superseded hash, from which each node derives `status`
-locally. That is the pattern already chosen and reviewed for revocation, so it needs no new
-argument.
-
-## 17. A document's agreed content profile is signed into its identity and enforced by nothing
+## 10. A document's agreed content profile is signed into its identity and enforced by nothing
 
 **Designation: `DOD-DOC-PROFILE-1`** (M14) — ⏳ **DELIBERATE SPLIT, recorded here so the gap is
 visible from the launch list rather than only from the milestone doc.**
@@ -1132,7 +745,7 @@ refusal cannot be answered, so a genuinely multilingual document fails closed an
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
 
-## 18. Same-operator standing: two layers exist, and one input can be absent
+## 11. Same-operator standing: two layers exist, and one input can be absent
 
 **Designation: `DOD-SELF-STANDING-NULL-LINKAGE-1`** — ⚠️ **OPEN QUESTION, NOT a confirmed defect.**
 Raised 2026-08-09 from an endorsement exercise. Filed because it is a security property and the
@@ -1174,7 +787,7 @@ your own machines" is an argument we make in writing (`[[shared-documents-object
 argument 3) and it is the kind of claim a technical evaluator will probe directly. A conjunct that
 evaluates to *not-same-operator* when an input is missing is the shape worth being certain about.
 
-## 19. Interrupted-session sealing is shipped and has never been proven
+## 12. Interrupted-session sealing is shipped and has never been proven
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
 Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
@@ -1347,6 +960,512 @@ Recorded so they stop being re-found by every sweep:
 ---
 
 # Addressed — off the open list
+
+## The inbox says sessions are sealed when they are not
+
+**Moved here 2026-08-10.** It held the TOP slot on the ranked list while already live on operators' machines — the exact thing this list must never do.
+
+**Designation: `DOD-SEALED-INBOX-2`** — ✅ **FIXED AND LIVE.** Shipped in the daemon `0.0.134`
+cascade and on `latest` ever since; confirmed 2026-08-09 by unpacking the published
+`@cello-protocol/daemon@latest` (`0.0.155`) — `ended_unread` is in `dist/`, `sealed_unread` is
+absent from it entirely, each row carries its real `status` plus `notarized`, and the shipped
+receptionist skill and agent both read the new field. **This entry stayed ❌ for three days after the
+work was already on operators' machines** — the DoD line and this doc were both flipped on 2026-08-09.
+
+**What it means from the operator's chair:** the inbox no longer tells you a conversation is
+notarized when it isn't. Each ended conversation now says how it actually ended, and an agent
+reading it is told in the payload — not just in prose it might skip — to check `notarized` before
+ever repeating "this is sealed" to you.
+
+<details><summary>Original problem statement, kept for history</summary>
+
+The inbox is the one surface that asserts a session is notarized, and for three of the four statuses
+it applies that label to, the assertion is false. Only `sealed` is actually notarized; `abandoned`,
+`interrupted` and `seal_interrupted_pending` are not.
+
+Found live: a session was reported under "sealed with unread messages" while three other surfaces
+said it was interrupted and had never sealed. **The agent reading the inbox repeated "it's sealed"
+to the operator as fact.** It took a direct "is it actually sealed?" to catch, because nothing in
+the system contradicts the label unless you go and ask a second surface.
+
+For a product whose entire proposition is verifiable trust, the failure mode here is not a wrong
+label — it is the product making a false claim about notarization and an agent relaying it onward.
+
+**Diagnosed 2026-07-31 — the fix is small and the location is exact.**
+`session-node-manager.ts:1005` defines `#TERMINAL_STATUSES` as
+`('sealed','abandoned','seal_interrupted_pending','interrupted')`. `getSealedUnread` (`:1039`)
+selects on that set, so it returns all four — correctly, they are all terminal-with-unread. The
+defect is downstream: `notification-handlers.ts:99` labels the whole set *"These sessions are sealed
+with unread messages"*, and the field is named `sealed_unread`. **The name is half the false claim**
+— an agent reading the JSON says "sealed" without ever reaching the guidance string.
+
+Three consumers to change plus its test: `notification-handlers.ts`, `session-read-handlers.ts`,
+`session-node-manager.ts`, and `plugins/cello/skills/receptionist/SKILL.md` (which ships, so it
+instructs agents directly — audit what ships, not only what compiles).
+
+**Decided 2026-08-04 (Andre): one pass, including the rename.** The earlier plan deferred renaming
+`sealed_unread` → something status-neutral (`ended_unread`) because it is a wire change for the shim
+and the receptionist skill. Pre-launch, with one operator and a greenfield cutover behind us, is the
+only time a wire change is free — deferring it is exactly the migration trap this doc warns about.
+Do the rename, the per-row `status`, and the corrected guidance string together, now.
+
+</details>
+
+---
+
+## Dead signaling streams go undetected — build the liveness mitigation, timebox the trace
+
+**Moved here 2026-08-10.** Root cause fixed and deployed; the mitigation this item asked for was deliberately not built because the cause it mitigated is gone.
+
+**🟡 ROOT CAUSE FOUND AND FIXED 2026-08-06** — `9910ff12` + `259b4b59`, branch
+`dod/accounts-chain-1`, DoD line opened as **`DOD-SIGNALING-LIVENESS-1`** in
+[[M8C-DEFINITION-OF-DONE]]. The trace half landed first, so **the client-side liveness probe was
+deliberately NOT built** — it would have been a mitigation for a cause now removed.
+The mechanism: the directory's `#streams` delete guard (`get(pubkey) === stream`) protects the
+NEWEST stream, not the one the client is using — so an agent's own second stream, on closing,
+deregistered it while the first stayed open and kept answering pings. The heartbeat is
+*structurally* blind to this (the ping handler never reads `#streams`), which is why it caught 42 of
+3,556 stream deaths. The reviewer found the production trigger: the daemon's roster loop opens a
+visiting connection to the agent's **own home node** and tears it down, so every sweep was a chance
+to deregister. Three follow-ons carried forward on the DoD line (remove the trigger client-side;
+evict on send failure — the only real liveness signal, currently discarded; and split the
+`target_offline` label, which sent the original investigation at the wrong subsystem for 25 minutes).
+
+**Designation:** [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — no
+DoD line, **needs one opened.** Recorded 2026-08-03 as a decision to skip on the grounds that the M12
+cutover would make the class moot. That premise was checked 2026-08-04 and is false, so this is a
+real open item. **Split 2026-08-04 (Andre): the launch item is the mitigation build; the root-cause
+trace is timeboxed, not open-ended** — as one blob this was a rabbit hole.
+
+The 2026-07-31 incident: an agent reported online on every surface — `cello status`, the daemon, the
+directory's own database — while nothing could reach it, silently, for ~25 minutes, recovering only
+on a daemon restart.
+
+**The launch half — a liveness check on the *registration*, not the socket.** The directory's
+`#streams` entry for the agent disappeared server-side. The client observed nothing — no disconnect,
+therefore no reconnect, therefore no re-authentication, therefore nothing repopulated that map. The
+transport stream was genuinely alive, so the 15 s ping / 15 s pong heartbeat had nothing to report.
+A periodic re-register (or a registration echo the client verifies) converts "25 minutes of silent
+blackout" into "self-heals within one check interval" — which is what the launch test demands.
+
+**The timeboxed half — the untraced mystery.** Why the server-side `#streams` entry vanished was
+never traced. Named threads to pull: why the directory drops a `#streams` entry with no
+client-observable event, and the untraced `The operation was aborted due to timeout` reader errors
+(2,061), which read like an `AbortSignal` on our side but are not raised in `signaling-manager.ts`.
+If the timebox expires without an answer, the mitigation stands on its own and the trace parks.
+
+**Why the earlier fix does not cover this.** Daemon `0.0.105` (`2e734a1`) re-registers the standing
+receiver on signaling reconnect, and it is still wired (`daemon.ts:614`). The incident log's own
+CORRECTION explains why that is a different hole: `targetStreamFound` reads the directory's
+`#streams` map, which is populated at **auth** time and is not the standing receiver —
+re-registering one does not repopulate the other. And `onConnected` fires on a reconnect, while the
+client's first disconnect came 23 minutes *after* the failure.
+
+**Why the cutover does not clear it — verified 2026-08-04.** The skip was conditional: the class
+only dies if the cutover changes the **client-to-node** link. [[M12-ANTI-ENTROPY-DESIGN]] §8 names
+the client protocol explicitly under *"What this design does NOT change"*, and the mesh replaces the
+**node-to-node** layer. Presence replicating perfectly does not revive a dead client stream — every
+node just agrees the agent is owned by a node that cannot reach it. No code has changed on either
+side since the incident (`signaling-manager.ts`, `signaling-connect.ts`, `directory-node.ts`; the
+four `#streams` mutation sites are as they were).
+
+**The parked-mailbox mitigation does NOT apply — checked 2026-08-04.** The failure is a **session
+request** answered `target_offline`, which `outbound-sessions.ts:664` retries a bounded number of
+times and then surfaces as `counterparty_offline`. The session never forms, so no message ever
+parks. There is nothing to drain.
+
+Same shape as the logout item and the "online does not mean reachable" item: the visible state and
+the network behaviour disagree, and the operator believes the visible one.
+
+---
+
+## The Telegram sign-up messages give wrong or unclear instructions
+
+**Moved here 2026-08-10.** Fixed 2026-08-09 and proven by Andre's own live registration through the bot.
+
+**Designation: `D-ENVVAR`** — ✅ **FIXED 2026-08-09, PROVEN LIVE.** Shipped in ops-agent image
+`ops-01b5fd5e` and confirmed by Andre registering through the bot himself.
+
+**The previous "fix" had shipped a SECOND wrong command, and a test was pinning it.** `D-ENVVAR` was
+recorded as fixed on 2026-07-07: it replaced "set `CELLO_REGISTRATION_TOKEN`" — an env var the CLI
+reads nowhere — with **`cello register`, which is not a CLI verb either** (the registry names
+`register-agent`). So the literal follower this rewrite exists for still hit an unknown command, and
+had done since July. The defect was not unnoticed; it was *confirmed* by a passing test.
+
+It also assumed a CLI the user had no way to have, and stopped at `cello status` — leaving a
+registered agent Claude Code could not see, because nothing mentioned the plugin or the `--channels`
+flag. **The message is now the whole cold-start path in four steps** (install → create + register →
+plugin + `/mcp` reconnect → channels), pinned by tests including a negative match on `cello register`
+not followed by `-agent`.
+
+**One near-miss worth keeping:** the ops-agent asserts an exact schema version at startup and calls
+`exit(1)` on a mismatch, at `min = max = 1`. It was pinned at 57 while the nodes were at 62 — drifting
+for nine days, logging a warning nobody read. **Shipping the copy fix alone would have taken the
+registration bot down**, and it is the only thing that issues a registration capability to a human.
+Bumped in the same apply.
+
+<details><summary>Original problem statement, kept for history</summary>
+
+The registration bot tells a new user to set something that doesn't exist, among a few other unclear
+or inconsistent messages along that flow. A literal first-time follower gets stuck with no next
+step. Not a security issue — a bad first impression. Fixing it is tedious rather than hard: several
+message rewrites plus the tests that check the exact wording, in one repo.
+
+Same class as the plugin-install item below — a first-time user hits a dead end with wrong or no
+instructions. The two want one pass.
+
+</details>
+
+---
+
+## Installing the plugin strands a new user at `daemon_not_running` with no signpost
+
+**Moved here 2026-08-10.** Fixed 2026-08-09; shipped in connect 0.0.137 and promoted.
+
+**Designation:** [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — ✅ **FIXED
+2026-08-09**, shipped in `connect 0.0.137` and promoted.
+
+**It was worse than "a dead end with no signpost".** With no daemon, `cello-mcp` wrote one stderr
+line and exited, so the MCP server showed as **failed and there were no `cello_*` tools at all** — a
+new user never even reached a tool error that could explain anything. That one line said "run
+`cello login`", naming a binary the plugin does not install. **There was no test on that path**,
+which is how it survived; there is now one that spawns the real built binary against an empty
+`CELLO_DIR`, including an ordering assertion that the install instruction precedes `cello login`.
+
+The message now names the install, the `/mcp` reconnect, and the setup skill.
+
+<details><summary>Original problem statement, kept for history</summary>
+
+**Narrowed 2026-08-04:** the launch-sized item is the failure path, not the install.
+
+The plugin is the official install route. Installing it copies files and runs nothing: the MCP shim
+arrives lazily, but the `cello` binary and the daemon do not. A new user installs, sees the tools,
+calls one, and gets `daemon_not_running` — a dead end with no next step. The `setup` skill is the
+only thing that closes that gap today, and nothing points at it.
+
+The earlier framing ("install should give you a working CELLO") pulls toward an install hook — which
+would have a plugin install start a long-running process holding key material and a network
+identity, a much bigger claim on a user's machine than a plugin install normally makes. That
+decision stays deliberately unresolved. **The launch fix is smaller: the `daemon_not_running`
+failure path names the fix** ("run the setup skill") so a first-time user is never stranded without
+a next step. A message change plus a doc line, sharing a pass with the Telegram item above.
+
+</details>
+
+---
+
+## "Online" does not mean reachable
+
+**Moved here 2026-08-10.** Both halves are done — the diagnosis surface and the state word — shipped in daemon 0.0.155 / cli 0.0.162 / connect 0.0.139 and promoted.
+
+**✅ BOTH HALVES FIXED AND PROMOTED 2026-08-09** — the diagnosis surface (`b22cfd5`) and the state
+word itself (`d4247c1`), shipped in `daemon 0.0.155` / `cli 0.0.162` / `connect 0.0.139`.
+
+**What an operator gets.** `online` now means somebody is actually there to answer. An agent that is
+running but has no attendee reads **`unattended`** — a real operational condition that used to be
+invisible and that caused a live defect: `DOD-WITNESS-STALL-1` happened precisely because BOTH sides
+were unattended, both away responders fired, and the away flow ends a session, so two agents sealed a
+conversation nobody was having. And an unreachable directory is now named on the surface an operator
+actually runs, with counts (`reachable / declared / required`) and the time the reading was taken.
+
+**Two things this broke, both invisible to the compiler, both caught and fixed before publish.**
+Narrowing `online` silently changed the meaning of every `state === "online"` check **because the
+string stayed valid** — `cello settings set` began refusing healthy agents. The answer is
+`isAgentRunning`, exported from the daemon: it answers the question callers actually have — *may I
+claim this agent, or did the operator stop it* — and includes `connecting`, because a directory still
+coming up is normal a minute after registering and local commands never needed one. **Never
+re-introduce a bare `state === "online"` to mean "usable".** The second was reading signaling status
+from the per-agent map only, ignoring the shared-manager path, so every agent read `connecting`.
+
+**One rung is BUILT and deliberately NOT EMITTED.** `unregistered` is in the type but `hasFrostShare`
+is hardcoded true, because the truthful signal is whether the DKG left a FROST share, and every test
+fixture creates agents without one — switching it on relabels ~29 tests, and the alternative
+(fabricating share material in fixtures) plants fake crypto material a later reader takes for real.
+Turning it on is a one-line change and NOT a second wire change.
+
+**Spin-off, still open and filed nowhere else: the daemon does not auto-start agents.** `cello login`
+does it afterwards, so a daemon spawned by the MCP shim leaves every agent unable to receive
+anything — and `stopped` does not yet strictly mean "you stopped it".
+
+<details><summary>The full design record and the original evidence, kept for history</summary>
+
+Two things kept the cause hidden:
+
+- **`directory_endpoints_unresolved` was on the MCP `cello_status` tool only** — not on the
+  daemon-wide status the CLI `cello status` prints, which is the one an operator at a terminal runs
+  and the one that was run during the incident. Both surfaces now build from the same block, and a
+  test asserts they are equal so they cannot drift apart again.
+- **It was empty at the moment it mattered.** The startup sweep resolves the roster at boot, logged a
+  partial/none COUNT, and discarded which node failed and why. Nothing else resolves a roster until a
+  ceremony runs, so the block stayed empty through exactly the window where someone whose sessions
+  are all failing goes looking. The sweep now keeps its findings and seeds the routing store. A later
+  sweep REPLACES the seed, so a recovered node drops out rather than lingering as a stale complaint.
+
+**The state word — design SETTLED with Andre 2026-08-09 and BUILT the same day.** It touched the most
+surfaces of anything outstanding (the shipped skills, the Hermes assets, the CLI, every test keyed on
+`=== "online"`), so it got its own change and its own review.
+
+Today: `AgentState = "registered" | "online" | "current" | "load_failed"`. `current` is already
+redundant — selection is a separate `selected` boolean, so a state value for it is two sources of
+truth for one fact. The agreed ladder, worst-fact-first, every value a fact about THAT agent:
+
+`load_failed` → `unregistered` → `stopped` → `paused` → `connecting` → `unattended` → `online`
+
+- **`unregistered`**, not `local_only` (Andre): "local only" describes a symptom that could equally
+  be a failure to reach the directory. State the fact — it has never been registered.
+- **`stopped`**, because the only way in should be that you stopped it. **It is not true yet:** the
+  daemon does NOT auto-start agents (`daemon.ts:389`); `cello login` does it afterwards via
+  `autoStartAllAgents`. When the daemon is spawned by the MCP shim instead — whenever Claude Code
+  starts with no daemon running — nothing starts the agents, so they read as stopped when nobody
+  stopped them, and none of them can receive anything. **Spin-off: start agents on daemon boot, not
+  only from `cello login`.** Own fix; same shape as the class this item is about.
+- **`unattended`** — ready to receive, nobody home to answer. Its own rung because it is a real
+  operational fact that was invisible: `DOD-WITNESS-STALL-1` happened precisely because BOTH sides
+  were unattended, both away responders fired, and the away flow ends a session. The word already
+  means this in our own vocabulary.
+- **`online`** — ready AND at least one attendee. The final good state, per Andre.
+
+**`isolated` was proposed and REJECTED (Andre) — and the objection kills the idea, not the word.** A
+consortium below threshold affects EVERY agent equally, so it was never a property of an agent;
+stamping it on each one attributes a system fault to the wrong thing. It moves to a daemon-level
+block, stated exactly, because the counts are what answer the question:
+
+```
+"directory": { "reachable": 1, "declared": 3, "required": 2, "state": "below_threshold" }
+```
+
+`ok` (all reachable) · `degraded` (some unreachable, still ≥ threshold — sessions work, redundancy
+reduced; its own value so the field does not cry wolf for the case that is fine) · `below_threshold`
+(no session can form). **`below_threshold` reuses the exact string of the error the operator already
+sees** when a session dies, so status and error share one vocabulary instead of needing translation.
+
+**The accepted trade:** an agent can read `online` while `directory.state` is `below_threshold`. That
+is correct attribution, and it only avoids the original lie if the directory block is impossible to
+miss — so `cello status` must LEAD with it whenever it is not `ok`, rather than leaving it a field
+partway down a JSON dump.
+
+---
+
+The original entry, kept because it is the evidence:
+
+`cello status` shows an agent as `online` with `standing_receiver_ready: true` whenever its signalling
+connection is up — even when the daemon cannot resolve a single directory endpoint and no session can
+possibly form.
+
+**Found the hard way, 2026-07-31.** After the infra wake, this host held a stale DNS cache (hibernate
+deletes the ALBs; wake recreates them with new IPs). libp2p kept connecting off the bundled manifest,
+so all five agents reported healthy while every cross-node session died. It surfaced in sequence as
+`counterparty_offline`, then `directory_below_threshold`, then `ceremony_exhausted` — three errors
+naming three different subsystems, none of them the cause. `dns_error` was in the daemon log 26 times
+per node from startup and never reached the operator.
+
+The immediate trigger turned out to be the AWS→GCP migration (now complete), and the DNS surfacing
+is being handled separately. What stays open is the status word itself: an agent that cannot hold a
+session should not render identically to one that can.
+
+**Cost if unfixed:** roughly an hour, every time, and the first conclusion is always "the protocol is
+broken."
+
+</details>
+
+---
+
+## The relay stops being able to notarize, never recovers, and reports itself perfectly healthy
+
+**Moved here 2026-08-10.** Deployed and verified 2026-08-08; it sat in the open list for two days after the deploy.
+
+**Designation: `DOD-RELAY-DIRECTORY-RECONNECT-1`** — ✅ **DEPLOYED AND VERIFIED 2026-08-08.** Both
+relays rolled to `relay:0cf04b0c` node-by-node (use1 19:37 UTC, euw1 19:41), each registered with all
+three directories after its roll, and a real cross-machine session sealed on each before the next was
+touched. Recorded in `infra/GCP-STATE.md`. This line stayed 🟠 for a day after the deploy because
+nobody updated it — the deploy happened, the marker did not move.
+
+**Still open underneath it (2026-08-09):** the health check written here asks *"can this relay reach a
+directory"*. It does NOT ask *"is the chain still growing"*, and those are independent — see the
+witnessing stall in Addressed, where witnessing froze while the directory link was fine. A check that
+cannot go red for the failure being suffered is not a check for that failure.
+
+- **The reconnect** — `0d9568a5` (Miss_Chelly). `#openDirectoryStream` redials a stale connection
+  and retries once instead of refusing the seal, and the dial errors are logged instead of being
+  discarded by an empty `catch {}`.
+- **The noticing** — `relay-service-lifecycle.ts` + `bin/relay.ts`. `/health` reports whether this
+  relay can reach a directory rather than a constant built at startup, and a 30s probe asks while
+  nobody is watching. The probe runs the SAME transport a seal runs, so it repairs the connection on
+  the way; a probe over any other route can be green while the route that matters is dead.
+
+  **It ALWAYS answers 200, and that is deliberate — the first version did not, and it was
+  dangerous.** `/health` is what the directories poll to decide relay POOL MEMBERSHIP, and
+  `defaultPingFn` counts any non-2xx as a failed check. A 503 on "cannot reach a directory" would
+  have withdrawn relays for a fault that does not stop them carrying sessions — and since the cause
+  is shared, all relays fail together and the pool empties. That converts *conversations cannot be
+  sealed* into *conversations cannot be started*, fleet-wide: strictly worse than the incident this
+  item exists to fix, and the same shape as the pool-emptying outage found the same day (relays
+  publishing a public health URL behind a VPC-only port). Degradation is reported as
+  `status: "degraded"` plus the directory block in the body, and as
+  `relay.directory.connection.lost` at ERROR. **If an autohealer should ever act on this it needs
+  its own signal that pool membership does not read — never this status code.**
+- ~~**Still owed: the deploy.**~~ **DONE** — both relays run `relay:0cf04b0c`, which carries this and
+  the "never answer non-2xx" correction below. Verified 2026-08-10 from the running instances. This
+  bullet contradicted the item's own ✅ header for two days.
+- **Not addressed:** splitting `directory_unavailable` into distinct reasons at every call site
+  (partially done — `directory_not_connected` now separates our own wiring from the network), and
+  `relay.seal.broker.unreachable` still logs a WARNING on the success path.
+
+**What a customer experiences.** They finish a conversation and close it. Nothing comes back. No
+error, no receipt, no explanation — the close simply hangs for about seven minutes and then reports
+a timeout. Every subsequent conversation does the same, for every user, on every machine, until an
+operator notices and restarts a server by hand. The receipt is the product; this makes the product
+produce nothing while claiming to be fine.
+
+**Measured 2026-08-08.** Three conversations sealed normally between 06:43 and 06:57 UTC. From 09:23
+onward, nothing sealed at all — five attempts across two machines, cross-node and same-machine,
+documents and plain chat, on two different client builds. A relay restart at 11:07:45 fixed it
+immediately: the next close returned a notarized receipt (`ff534c48…`). Between those points nobody
+deployed anything and nothing on the network changed.
+
+**Why it took a morning to find, which is itself part of the defect.**
+
+- The relay logs `relay.seal.broker.unreachable` as a WARNING on **every seal, including successful
+  ones** — it fired 4 seconds before the seal that worked. Both agents chased it as the cause.
+- `directory_unavailable` is one string covering opposite failures: the relay's own node reference
+  being absent, a dial timeout, and a non-Error throw. One of those is a bug and one is the network,
+  and they want opposite fixes.
+- **The health check cannot see it.** It returns `{status:'ok', relayId}` statically. A relay that
+  cannot notarize a single session passes every probe, so nothing alerts and no autohealer acts.
+- Three plausible causes were proposed and each was disproved by measurement: the schema migration
+  (three seals succeeded on it an hour after it deployed), the replication threshold
+  (`availableNodes:1` was already true *during* the working seals), and a dial backoff window (one
+  attempt came 67 minutes after the previous one and still failed in 1ms).
+
+**What the evidence says it is.** The failure is instantaneous — 1 millisecond from
+`broker.resolved` to `unreachable`, and 1 more to `rejected`. Nothing goes on the wire. Meanwhile
+the same relay keeps serving client traffic normally throughout, so it is not globally out of
+capacity. It is one connection — relay to its configured directory — that is established at boot
+(`connect(relayResult.node)` in `bin/relay.ts`, right after node startup), works, dies silently, and
+is never re-established. There is no reconnect, no keepalive, and no health check on it.
+
+**The fix has three parts, and the first two are the ones that matter:**
+1. **Re-establish the connection instead of failing forever.** Whatever drops it will drop it again;
+   the missing recovery is the actual defect.
+2. **Make the health check test what the relay is for.** A relay that cannot reach a directory must
+   fail its probe, so the autohealer replaces it instead of leaving it up and mute.
+3. Split `directory_unavailable` into distinct reasons, and stop logging a warning on the success
+   path.
+
+**Related but separate, both found the same day and both still open:** directory nodes do not
+replicate `last_heartbeat_at`, so every node counts itself as the only live one
+(`availableNodes:1` against `requiredThreshold:2`) and federation checkpoints have never succeeded;
+and `signal_records` anti-entropy fails every round on a `scanner_version` NOT NULL violation.
+Neither causes this item — both were disproved as the cause by measurement — but both are live
+faults. Miss_Chelly owns them.
+
+
+## Trust-signal replication fails every round, and the fork alarm climbs
+
+**Moved here 2026-08-10.** Fixed, deployed to all three nodes, and verified against the live databases.
+
+**Designation: `DOD-SIGNAL-REPLICATION-1`** — ✅ **FIXED, DEPLOYED AND VERIFIED IN PRODUCTION
+2026-08-09.** Directory image `aa31516a`, all three nodes rolled.
+
+**What an operator gets now:** a trust signal minted on any node reaches the other two. Before this,
+which signals a counterparty could see depended on which of the three directory nodes their client
+happened to pick — and nothing said so.
+
+**Verified on the live databases, not from the logs alone.** All **17** `signal_records` rows are now
+present on all three nodes with byte-identical hashed content, and **every** Tier-A table has
+identical row counts across the fleet (profiles 14, seals 93, notarizations 94, attestations 186,
+claim codes 4, …). Tier-B is converged too (presence 2900 rows / 4 online, suspensions 0 on all
+three). `antientropy.apply.failed` was still firing at 20:33:09Z mid-roll with the exact not-null
+message and has fired **zero** times since the last node came up, across hundreds of rounds.
+
+**The cause was one missing column.** `scanner_version` is `TEXT NOT NULL` with no default and was
+absent from the Tier-A spec; `applyTierA` inserts exactly the spec's columns, so every apply failed
+by construction. Fixed by adding it to the hashed set — it must be hashed, not merely carried,
+because it is the submitter's unverifiable scanned-clean assertion and is forgeable outside a
+signature. A new static guard replays the migrations and fails any Tier-A spec that omits a column
+the schema requires; across all 18 tables it finds exactly this one.
+
+**⚠️ The fork alarm is still firing, and it is NOISE, not divergence — established 2026-08-10.**
+It reads `planned 1 / pulled 1 / applied 0` on roughly two rounds in three, and the consecutive
+counter had reached **412** by 04:06Z. The engine header calls that signature a non-converging fork.
+It is not one:
+
+- **Every Tier-A table is byte-identical across nodes.** All 17 tables dumped by their own wire
+  column lists (naturalKey ∪ immutableColumns, generated from the specs so the lists cannot be got
+  wrong) and compared between `gcp-use1` and `gcp-euw1`: 220343 bytes each, every table SAME.
+- **Both Tier-B tables are converged.** `agent_presence` is byte-identical across nodes on all five
+  version columns over 2900 rows; `agent_suspensions` is empty on all three.
+- **The answer consumers get is identical**: `signal_records_effective` matches row-for-row.
+
+So the planner asks for a record the node already holds, fetches it, and inserts nothing — every
+round, forever. **Cost: a wasted fetch per round, and an alarm that cries wolf.** That second half
+matters on its own terms, because "the fork alarm climbing trains whoever watches it to ignore a real
+fork later" is one of the reasons this item was raised at all — the alarm is now unusable for its
+actual purpose.
+
+**Next step is one line of logging, not an investigation:** the round log reports counts and never
+names the table, which is the only reason this took a database-wide diff to characterise. Log the
+table on `round.completed` / `fork_suspected` and the cause falls out of the next round.
+
+<details><summary>Original problem statement, kept for history</summary>
+
+`signal_records` anti-entropy has never worked: **1530 consecutive apply failures**, every one
+`null value in column "scanner_version" violates not-null constraint`. The column is NOT NULL and is
+not in the replicated set, so every apply fails by construction.
+
+**What an operator would see.** Trust signals present on the node that minted them and absent
+elsewhere — so which signals a counterparty sees depends on which directory node answers. The fork
+alarm climbing (39 consecutive at the time of measurement) is a consequence, not a separate fault,
+and it trains whoever watches it to ignore a real fork later.
+
+</details>
+
+**A second defect was found by the unit review and fixed the same night — the fix had ARMED it.**
+`revokeSignal` writes a revocation as a row in `signal_records` carrying `is_tombstone=true`,
+`status='revoked'` and placeholder fields; none of those columns is in the replicated set. Once apply
+started working, a tombstone would land on the peers as `is_tombstone=false, status='active'` — a
+revocation arriving as an **active notarization**, which would then satisfy the deliver gate's
+load-bearing `AND is_tombstone = false` on two nodes of three. Nothing was corrupted only because
+production holds no revocations yet. Fixed with a per-table wire filter and deployed in a second roll
+(`1f9281f1`).
+
+---
+
+## A superseded trust signal still reads as current on two nodes out of three
+
+**Moved here 2026-08-10 as WITHDRAWN, not fixed** — it was never a real defect and should not have been filed.
+
+**Designation: `DOD-SIGNAL-STATUS-REPLICATION-1`** — ⬇️ **WITHDRAWN AS FILED, 2026-08-10. This was
+NOT a user-visible defect and I should not have reported it as one.**
+
+**What I checked, and what I failed to check.** I read the raw `status` COLUMN off the three
+databases, saw 7 rows `superseded` on `gcp-euw1` and `active` on the other two, and reported that a
+counterparty would get a different answer depending on which node they asked. **Nothing reads that
+column for a decision.** Every consumer reads `signal_records_effective`, whose `effective_status`
+DERIVES supersession from `supersedes_hash` — a column that IS replicated — via
+`EXISTS (SELECT 1 FROM signal_records s WHERE s.supersedes_hash = r.signal_hash AND NOT revoked)`.
+The stored column is only a fallback branch behind that.
+
+**Verified 2026-08-10 on all three live nodes:** `signal_records_effective` returns **identical**
+`effective_status` for all 17 signals on every node — 10 `active`, 7 `superseded`, row for row. There
+is no divergence in the answer anyone actually gets.
+
+**What is left is a stale bookkeeping column on the two replicas**, and it is worth one line rather
+than an item: the origin node UPDATEs `status` when a signal is superseded, and that UPDATE does not
+travel, so a replica's raw column reads `active` for a signal the view correctly calls `superseded`.
+Harmless today because the view is the only reader. It is a **trap for a future reader** who queries
+`signal_records.status` directly, and the honest place for it is a comment on the column, not a
+ranked launch item.
+
+**The lesson, which is the reusable part:** I read the storage and reported it as the behaviour. The
+question was never "do the columns match" — it was "do the three nodes give the same answer", and
+those are different queries. Check the view a consumer reads, not the table underneath it.
+
+**Mechanically, why the column differs at all:** `status` is mutable, so it is correctly excluded from
+the replicated set — revoking a signal must not change its hash, or the directory could never find
+the signal it just revoked (V46). The origin node UPDATEs it; the UPDATE does not travel. The view
+was built knowing this, which is why it derives the answer instead of reading the column.
+
 
 ## A write deleted a peer's edit it never saw — and the record called it deliberate
 
@@ -1808,24 +1927,6 @@ That list was a snapshot of confidence rather than a record of verification, and
 contact with someone looking. **It has not been reinstated, and shouldn't be** — a claim that
 something needs no action is worth exactly the enforcer behind it, and these had none.
 
----
-
-## Related Documents
-
-- [[M8C-DEFINITION-OF-DONE]] — full technical detail and status for every designation above
-- [[M8D-DEFINITION-OF-DONE]] — the co-attendance and frontier lines, and the parked debt on the
-  mismatch-trace item
-- [[M8C-ONBOARDING-IMPROVEMENTS]] — the Telegram/CLI onboarding checklist
-- [[2026-07-31_1043_two-sessions-one-agent-co-attendance]] — the receipt-integrity cluster and the
-  co-attendance decision, with the build order at the top
-- [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — the plugin-install and
-  shutdown-doorbell items
-- [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — the dead-signaling
-  item, with the measurements and the open questions
-- [[protocol-map]] — where these fit relative to the overall milestone sequence
-
----
-
 ## Filed 2026-08-09 from the `DOD-SIGNAL-REPLICATION-1` unit review — three guard gaps, none armed
 
 Recorded here rather than built, because none of them is live breakage and the two that were live
@@ -1856,3 +1957,21 @@ with no endpoint. Pre-existing and outside that diff; listed as the second examp
 Docker Postgres under `CELLO_ENV=local` (accounts-chain, account-001, MMR, federation-002,
 internal-api-auth, pg-pool). **Pre-existing** — verified by running them at `532e5bbe`, before any of
 that night's code. The default `pnpm run test` path skips them and is green at 1090.
+
+---
+
+## Related Documents
+
+- [[M8C-DEFINITION-OF-DONE]] — full technical detail and status for every designation above
+- [[M8D-DEFINITION-OF-DONE]] — the co-attendance and frontier lines, and the parked debt on the
+  mismatch-trace item
+- [[M8C-ONBOARDING-IMPROVEMENTS]] — the Telegram/CLI onboarding checklist
+- [[2026-07-31_1043_two-sessions-one-agent-co-attendance]] — the receipt-integrity cluster and the
+  co-attendance decision, with the build order at the top
+- [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — the plugin-install and
+  shutdown-doorbell items
+- [[2026-07-31_1200_incident-standing-receiver-not-reregistered-on-reconnect]] — the dead-signaling
+  item, with the measurements and the open questions
+- [[protocol-map]] — where these fit relative to the overall milestone sequence
+
+---
