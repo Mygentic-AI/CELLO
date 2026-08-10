@@ -909,15 +909,27 @@ receipt or a named failure.
 
 ## 13. Anyone can vouch for their own agent using a key they made thirty seconds ago
 
-**Designation: `DOD-END-ISSUER-REGISTERED-1`** (M10B) — 🟡 **BUILT 2026-08-10, NOT REVIEWED, NOT
-DEPLOYED.** Raised, decided and built the same day. Unranked. Filed from the verification pass on this
+**Designation: `DOD-END-ISSUER-REGISTERED-1`** (M10B) — ✅ **FIXED, REVIEWED AND LIVE 2026-08-10.**
+Raised, decided, built, reviewed and deployed the same day. Filed from the verification pass on this
 list; it is the answer to the open question that used to sit on the same-operator item, and the answer
-is the fail-open one.
+was the fail-open one.
 
-> **What is left before this is real:** a unit review, and a **portal deploy**. It is portal-only —
-> no migration, no wire change, no client change, no directory roll — so nothing here waits on a
-> version cascade or a node-by-node roll. Until the deploy lands, the hole is open in production.
-> Built in cello-portal `df7f5be`; gate green (226 tests, lint clean, typecheck clean, build).
+> **Live** as portal image `portal-6ac77b8` (Cloud Run rev `cello-portal-00011-z49`, 100% traffic),
+> verified by grepping the pulled image rather than by trusting the build. Portal-only — no migration,
+> no wire change, no client cascade, no node roll.
+>
+> **The review caught a blocker inside the fix, and it was worse than the defect.** Refusing an
+> unresolvable issuer is terminal — the submission is deleted. But the lookup stopped at the FIRST
+> directory node, and a newly registered agent exists on only one node for about a minute. So an
+> operator who endorsed someone shortly after registering would have had that endorsement
+> **destroyed outright, with neither side told** — roughly two times in three. The original defect
+> minted something wrong; this would have silently thrown work away. Now every node is asked before
+> anyone is called a stranger. **The identical bug had already taken sign-in down on 2026-08-07**, and
+> the write-up was sitting a few lines above the function nobody had moved.
+>
+> Shipped with it: a refusal now actually **reaches the agent that submitted it**. Every rejection
+> reason had been written only to the portal's own private table, so from the operator's chair an
+> endorsement was accepted and then silently ceased to exist.
 
 **What an operator can do today.** An endorsement is one agent vouching in writing for another — the
 thing a stranger reads to decide whether to trust you. Endorsing your own second agent is supposed to
@@ -1013,6 +1025,22 @@ column, and is correct on the node they happen to test against.
 **The ordering matters and is in the story.** Move the four readers, confirm on a converged fleet,
 then drop the columns in a SEPARATE release. Dropping with a reader left behind turns a wrong answer
 into a crash; dropping before convergence removes the only copy some node holds.
+
+**⚠️ ONE OF THE UNMOVED READERS IS A SECURITY CHECK, found 2026-08-10 by the review of
+`DOD-END-ISSUER-REGISTERED-1`. This raises the item above tidying and it was not previously listed.**
+The portal's same-operator test — the thing that stops an operator manufacturing standing by having
+their own agents endorse each other — is `accountId match OR verified-phone-stub match`. The
+phone-stub arm reads a replicated column and is sound. **The account arm reads exactly the node-local
+column this item is about**, so whether two co-owned agents are caught by it depends on which node the
+portal happened to ask. Measured live for one operator with three agents: `usc1` had 2 linked, `euw1`
+1, `use1` 0.
+
+Not a hole on its own — the phone arm still catches the case the check was designed around, and both
+agents must be registered — but it means half of a load-bearing security check is currently a coin
+flip per node, and nothing says so at the call site. **Searching every node does not fix this** (the
+fix shipped for the issuer lookup returns the FIRST node with a hit, which may be the one holding the
+NULL link); the reader has to move to the replicated table. That makes this reader the one to move
+first when the item is picked up.
 
 **Related:** the kill-switch half of this is DONE and verified live in both directions — an agent
 registered on one node can now be paused from another, and a caller asserting someone else's account

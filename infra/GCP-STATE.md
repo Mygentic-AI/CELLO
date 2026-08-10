@@ -759,7 +759,7 @@ is its own migration, later.
 
 | Resource | Value |
 |---|---|
-| Cloud Run service | `cello-portal`, us-east1, image **`portal-9aeaf30`** (rev `cello-portal-00010-brg`; was `portal-317ffba` → `bcb959c` → `89fb371` → `abf1cb4` → `6807d4e` → `c713746`) |
+| Cloud Run service | `cello-portal`, us-east1, image **`portal-6ac77b8`** (rev `cello-portal-00011-z49`, deployed 2026-08-10 08:59 UTC; was `portal-9aeaf30` rev `-00010-brg` ← `317ffba` ← `bcb959c` ← `89fb371` ← `abf1cb4` ← `6807d4e` ← `c713746`) |
 | Hostname | **https://portal.cello.mygentic.ai** — the same name it had on AWS |
 | Load balancer | global external ALB, IP `34.111.250.93`, serverless NEG `cello-portal-neg`, managed cert `cello-portal-cert`; :80 redirects to :443 |
 | DNS | Route 53 zone `Z02692523DOH7NW521CL8`, A record → `34.111.250.93` (was `198.51.100.1`, the hibernate placeholder) |
@@ -769,6 +769,32 @@ is its own migration, later.
 | Directory path | `DIRECTORY_API_URLS` → the three PINNED internal IPs on **8081**, over Direct VPC egress; one key per node in `cello-portal-directory-api-keys`, positionally paired |
 | Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`), `cello-portal-directory-api-keys`, **`cello-ops-agent-ses-credentials` (added 2026-08-07 — see below)**, and copied from AWS: `-github-client-id`, `-github-client-secret`, `-intake-key-0`, `-ingress-trigger-secret`, `-submission-seed` |
 | Verified | 307 → `/sign-in` over https on the real hostname; **portal→directory proven through the app** — POST `/api/internal/ingress/drain` returns `ok:true` with `nodeErrors: []` (refuses 401 without the trigger secret); issuer enrolled on usc1/euw1/use1 |
+
+### Deploy 2026-08-10 — `portal-6ac77b8` (`DOD-END-ISSUER-REGISTERED-1`)
+
+**Portal-only: no migration, no wire change, no client cascade, no node roll.** Cloud Build
+`c0046104` (1m6s) → `gcloud run services update --image` → rev `cello-portal-00011-z49` at 100%.
+
+**Verified against the ARTIFACT before deploying, not against the build status.** Pulled the image
+and grepped the exported filesystem: `issuer_not_registered` present (the guard, `df7f5be`) and
+`signal.ingress.result_unreported` present (the review fixes, `6ac77b8` — a string that exists only
+in the second commit, so it proves the image carries both rather than just the first). Post-deploy:
+`/` → 307 → `/sign-in`, `/sign-in` → 200, and zero ERROR-severity log entries on the new revision.
+
+**What it changes.** An endorsement whose ISSUER the directory cannot resolve is now refused
+(`issuer_not_registered`) instead of minted as independent third-party corroboration — closing the
+hole where a throwaway key could vouch for its owner's own agent and the same-operator flag read
+*false* because the comparison never ran. Two review findings shipped with it: the issuer lookup now
+searches **every** node instead of taking the first node's negative (a ~60 s post-registration
+replication window was otherwise going to destroy legitimate submissions terminally), and every
+post-authentication rejection now writes a `submission_results` row so the refusal actually reaches
+the agent that submitted it.
+
+**Rollback**, if needed — previous revision is intact and holds the previous image:
+```bash
+gcloud run services update cello-portal --region us-east1 --project cello-infra \
+  --image us-east1-docker.pkg.dev/cello-infra/cello/portal:portal-9aeaf30
+```
 
 ### 2026-08-07 — sign-in was impossible since the cutover, in three independent ways
 

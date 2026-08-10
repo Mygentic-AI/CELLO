@@ -477,8 +477,50 @@ the additions M10B is accountable for.
   — it costs a directory deploy, and `requireRegistration` defaults to `false`, so it is a weaker and
   config-dependent guard than the portal refusal. The portal is the enforcer because it is the only
   party that can see linkage at all (`DOD-END-SUBJECTKIND-1`'s own reasoning).
-  > 🟡 **BUILT 2026-08-10, NOT YET REVIEWED AND NOT YET DEPLOYED** — cello-portal `df7f5be`, pushed to
-  > `main`. Refusal placed after the subject check, before the same-operator branch, exactly as
+  > ✅ **SHIPPED AND LIVE 2026-08-10** — cello-portal `df7f5be` + `6ac77b8`, reviewed, deployed as
+  > image `portal-6ac77b8` (Cloud Run rev `cello-portal-00011-z49`, 100% traffic). Verified against
+  > the ARTIFACT before deploy — pulled the image and grepped its filesystem for
+  > `signal.ingress.result_unreported`, a string that exists only in the second commit, so the image
+  > provably carries the review fixes and not just the original guard. Post-deploy: `/sign-in` 200,
+  > zero ERROR entries on the new revision.
+  >
+  > **THE REVIEW FOUND A BLOCKER AND IT WAS IN THE FIX ITSELF (`6ac77b8`).** The guard made an
+  > unresolvable issuer TERMINAL — refuse and delete the queue row — while the lookup ran through
+  > `#tryEach`, which returns the FIRST node's null without asking the others. A profile row is
+  > written on the one node that fielded the registration and replicates on a ~60 s pull, and the
+  > daemon picks its submitting node at random on every start. So a new operator endorsing someone
+  > within a minute of registering had the submission **destroyed, permanently, with neither side
+  > told** — roughly 2-in-3 per attempt, and permanent for a row that landed with a NULL `agent_id`.
+  > Before this line the cost of that stale answer was a wrong `same_operator` flag; the line turned
+  > it into data loss. Fixed by routing through `#findAcross`. **The same bug had already shipped and
+  > bitten three days earlier** — `resolveAccountByEmailStub` was moved off `#tryEach` after it took
+  > sign-in down on 2026-08-07, and the write-up sits a few lines above the function that was left
+  > behind. Regression test verified red against the old routing (2 failed / 26 passed).
+  >
+  > **Second finding, also fixed: "refused by name" never reached the named party.**
+  > `recordSubmissionResult` had exactly one caller — the refuse handler — so every rejection wrote
+  > its reason to the portal's private `processed_submissions` and nowhere else, and the agent's
+  > `submission_results_request` returned nothing forever. All four post-authentication rejection
+  > paths now report, to every node, partial writes tolerated, never fatal.
+  >
+  > **A test I was pleased with was hollow.** The "directory unreachable" test STIPULATED the property
+  > it claimed to pin, by making the mock throw — so swapping in a client that swallowed the error and
+  > returned null would have kept it green while every endorsement submitted during an outage was
+  > destroyed. The property is now tested where it lives, with a partial-outage case beside it. And
+  > typecheck caught that the test harness never modelled `reason` at all, so no test could have caught
+  > a refusal arriving with no cause.
+  >
+  > **Recorded, NOT fixed — they belong to other lines.** (a) `same_operator`'s ACCOUNT arm reads
+  > `agent_profiles.account_id`, a per-node column that does not replicate — measured live at 2/1/0
+  > linked across three nodes for one operator, so that arm is roughly a coin flip depending on which
+  > node answers; the phone-stub arm is replicated and sound. (b) `same_operator_account_subject` is
+  > unreachable — the account subject never resolves, so the branch always yields
+  > `account_subject_unsupported`, and one test's NAME claims a guarantee its assertion contradicts.
+  > (c) `withdraw` from any key accumulates unacked rows and can head-of-line block the queue
+  > (`DOD-END-WITHDRAW-1`).
+  >
+  > <details><summary>The pre-review build note, kept because the revert-test reasoning is worth keeping</summary></details>
+  > Originally BUILT as cello-portal `df7f5be`, pushed to `main`. Refusal placed after the subject check, before the same-operator branch, exactly as
   > specified above. **Two tests, and the first is a REVERT TEST:** asserting the counts alone passes
   > without the fix, because the old behaviour *did* produce a result — it minted. The load-bearing
   > assertion is that `postSignedSubmission` is never called; run against the unfixed code it fails
