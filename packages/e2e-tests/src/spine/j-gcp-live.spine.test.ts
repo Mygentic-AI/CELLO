@@ -277,20 +277,21 @@ describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fle
       await new Promise((r) => setTimeout(r, 8_000));
       cli(b.dir, ["receive", sid]);
       cli(a.dir, ["receive", sid]);
-      // Retry, bounded — the same allowance the session step above already makes, one step later in
-      // the SAME eventually-consistent path. A session is brokered the moment discovery converges,
-      // but the relay assignment behind it settles slightly after; a single attempt asserts that
-      // both are instantaneous, which the design never promised.
+      // RECEIVE, THEN SEND — and re-receive on every retry. This is NOT a timing flake, which is what
+      // it looked like before the reason was surfaced: two of three runs died here and the message
+      // said only "expected false to be true".
       //
-      // Measured 2026-08-07: three consecutive runs of this file, and TWO died here — 130s and 108s
-      // in, before reaching either seal. A guard that fails two times in three for a transient
-      // reason cannot tell you whether a fix works; it tells you the fleet was busy. That is worse
-      // than no guard, because a red run gets attributed to whatever was changed most recently.
+      // The real reason is `session_not_current`: the protocol REFUSES a send while the sender has
+      // unread messages ("you are blocked from replying to something you haven't read"). The
+      // counterparty's greeting lands moments after the receive above, so A is blocked — and a
+      // retry of the SEND ALONE can never clear it. It would fail four identical times, thirty
+      // seconds slower, and read as a stubborn flake rather than a rule being enforced correctly.
       //
-      // Bounded on purpose, and deliberately shorter than the session step's 60s: if the relay path
-      // has not settled within ~30s of an established session, that IS the finding and must fail.
+      // So the loop drains first and sends second. Bounded: if reading and then sending still fails
+      // four times over ~30s, that IS the finding and must fail the run.
       let sent: { ok?: boolean; delivered?: boolean; reason?: string; guidance?: string } = {};
       for (let attempt = 1; attempt <= 4; attempt++) {
+        cli(a.dir, ["receive", sid]);
         sent = cli(a.dir, ["send", sid, "j-gcp-live", "--wrap"]) as typeof sent;
         if (sent.ok) break;
         if (attempt < 4) await new Promise((r) => setTimeout(r, 10_000));
