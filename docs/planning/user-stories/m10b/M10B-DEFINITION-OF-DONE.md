@@ -815,10 +815,68 @@ the additions M10B is accountable for.
   6. **PROVEN LIVE**: revoke a real discretionary signal, then query all three node databases and
      show it reading revoked on each. No query output, not done.
   Spans both repos → publish cascade + a node-by-node directory roll.
-  > ❌ **NOT STARTED 2026-08-10.** `DOD-END-REVOCABILITY-1` narrowed the blast radius — mandatory and
-  > security-derived signals are now refused before the broken path runs — but it fixed none of the
-  > four. The residue is sharper than before, not merely smaller: the one path an operator can still
-  > reach is the one that silently destroys their local copy and reports success.
+  > 🟡 **BUILT AND REVIEWED 2026-08-10, LIVE PROOF OUTSTANDING.** Both repos deployed; the tag does
+  > NOT flip, because clause 6 is the point of the line and it has not been met.
+  >
+  > **Clauses 1, 3, 4, 5 met. Clause 2 met by REPLICATION rather than fan-out** (one node accepts,
+  > `signal_revocations` is Tier-A and carries it to the other two) — recorded because the clause says
+  > "all three are asked", and that is NOT what happens; what matters is that all three end up
+  > revoked, and clause 6 is what proves it. **Clause 6 ❌.**
+  >
+  > **Clause 5 VERIFIED, NOT BUILT**, as the line asks. `signal_records_effective` branch 4 gives
+  > agent-issued signals exact-pubkey authority — a non-issuer's tombstone is written but INERT.
+  > Branch 3 gives portal/directory issuers ROLE-based authority, so for a portal-issued signal ANY
+  > tombstone through the submitter role counts. That is deliberate (portal keys rotate) and it means
+  > the directory is NOT the gate for these: the PORTAL's account-scoped `minted_signals` lookup is.
+  > Nothing was added at the directory.
+  >
+  > **REVIEWER'S VERDICT, quoted** (`cello-unit-reviewer`, read-only, no model override, on
+  > cello-client `a279d79` + cello-portal `70d80b3`):
+  > *"SPEC: DEVIATIONS FOUND (clause 2 missing, clause 3 deviated — both [blocking])… SILENT
+  > FALLBACKS FOUND (H0, H1, H2 — all [blocking])… ERROR SUBSTITUTION FOUND… HOLLOW TESTS FOUND (the
+  > daemon's new tests are source-greps and bypassable; clause-5 enforcement untested)… REMOVALS
+  > PROVEN."* Ten findings; **every one fixed** — H0 `24e419d`, H1 `896292a`, H2/M5/M6/M7 `9284c7c`,
+  > H3/H4/M8/L9/L10 + the clause-5 tests `9b65148`, the type-safe comparison `f56155f`.
+  >
+  > **THE LIVE PROOF FOUND WHAT THE REVIEW COULD NOT, and this is the entry's real content.** The
+  > reviewer flagged H0 exactly — the portal cannot decode a `revoke` — and I "fixed" it by promoting
+  > protocol-types, having diagnosed it as version skew. It was not skew. I had added `revoke` to the
+  > `SubmissionOp` **type**, and a type has no runtime effect: `decodeSubmission` carries its own
+  > literal op list that the union does not touch. So the verb was rejected at runtime by the very
+  > version published to fix it, twice, while both repos typechecked.
+  >
+  > Measured on the live fleet: baseline `active` on all three nodes with zero revocation rows;
+  > `cello_trust_signals_revoke` on `db4e32c0…` (a `github_id`) returned `queued: true, revoked:
+  > false` — honest; the portal drain returned `poison: 1`; the portal log said
+  > `submission_malformed: unknown op 'revoke'`. **Poison is documented as UNATTRIBUTABLE and reports
+  > nothing to anybody**, so the operator would have been told "queued" and waited forever while the
+  > signal stayed live. The exact false-success shape this line exists to remove, one layer out.
+  > Fixed in `24e419d` with a round-trip test over every op in the union, revert-tested.
+  >
+  > **Nothing was lost in the failed attempt** — clause 4 held, the wallet copy survived, and the
+  > revocation is retryable. That is the only reason this is an anecdote rather than an incident.
+  >
+  > **What clause 6 still needs:** the `v0.0.234` cascade promoted to `latest` (Andre runs it), the
+  > portal rebuilt against protocol-types `0.0.53` and redeployed, then revoke + query all three
+  > databases.
+- **DOD-END-UNKNOWNOP-1** — ❌ **an unknown op is destroyed silently, and its sender is perfectly
+  known.** Filed 2026-08-10 from `DOD-END-REVOKE-3`'s live proof, where it was the amplifier rather
+  than the cause. `decodeSubmission` throws `unknown op '<x>'`, `outcomeFor` maps that to **poison**,
+  and poison is documented as UNATTRIBUTABLE — "a body that will not decode has no known sender" —
+  so nothing is reported and the row is acked and deleted.
+  **That reasoning is right for a body that will not parse and WRONG for this case.** The seal opened,
+  the bytes decoded, the signature is over a body we can read: we know exactly who sent it. The
+  consequence is that any operator running a daemon NEWER than the portal has their submission
+  destroyed with no result ever written — told "queued", `pending` forever. It is a version-skew
+  amplifier: the skew is normal and expected, the silent destruction is not.
+  Required: an op the portal does not recognise but whose submission AUTHENTICATED is reported back
+  as `unsupported_op` with the op named, not poisoned.
+  > **NOT fixed inline, deliberately.** Reporting it needs the submitter pubkey out of a body
+  > `decodeSubmission` has just refused, and picking fields out of failed-validation CBOR is its own
+  > defect class. The clean shape is for `decodeSubmission` to surface an unrecognised verb as a
+  > decoded body carrying an unknown op rather than an exception, letting the existing `unhandledOps`
+  > dispatch answer — a protocol-types change plus an ingress branch. Does not block
+  > `DOD-END-REVOKE-3`: once protocol-types `0.0.53` is on `latest` the revoke path never reaches it.
 - **DOD-END-WITHDRAW-1** — withdrawal takes effect everywhere, including for recipients already holding a
   copy (D-19). The endorsement stops being presentable, and any recipient holding it sees it marked
   withdrawn on next check. Rides `DOD-VERIFY-1`'s existing TTL-re-check-on-use machinery (spec §14.7) —
