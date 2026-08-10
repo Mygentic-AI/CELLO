@@ -5292,3 +5292,70 @@ Three further findings were **filed, not built** — none armed — on [[launch-
 "Filed 2026-08-09 from the DOD-SIGNAL-REPLICATION-1 unit review", with the measurements behind each.
 The most valuable is that the required-column guard is blind to NOT-NULL-**with**-default columns,
 which is the exact class `is_tombstone` sits in.
+
+---
+
+## 2026-08-10 — the fork alarm was telling the truth, and two of yesterday's conclusions were wrong
+
+Appended rather than edited above, because both corrections are about claims that entry made
+confidently. **If you read the overnight entry, read this too — it reverses two of its findings.**
+
+### CORRECTION 1 — "the fork alarm is noise" was WRONG. It was a real fork.
+
+Yesterday's entry says every table is converged and the alarm is therefore crying wolf, marked
+"unconfirmed" because the round log named no table. It was confirmed the wrong way: **the alarm was
+right the whole time.**
+
+Teaching it to name the table (`unconverged` on `round.completed` and `fork_suspected`, tier + table
++ per-table planned/pulled/applied, image `63f7c4e5`) produced the answer in the **first round after
+the first node came up**: `account_email_stubs`, Tier-A, one record fetched and never inserted. The
+key `mygentic.ai` bound to two different accounts — `b2e1c705…` on `gcp-euw1`, `c9a1d4a0…` on the
+other two, written six minutes apart on 2026-08-08. Filed, fixed and closed the same day.
+
+**How the wrong conclusion was reached, which is the reusable part.** I dumped all 17 Tier-A tables
+off two nodes and reported them byte-identical. The dumps were correct; the COMPARISON was not. Each
+table came back as one multi-line block and the script split the whole output on newlines, so it kept
+only the FIRST row of every table and silently discarded **651 lines**. The forked row sorted second.
+Diffing the raw files — on disk the whole time — shows it in one line.
+
+> **A verifier that discards input silently is worse than no verifier: it produces a confident
+> all-clear.** Every check since has been given a teeth test first — the chain checker was run against
+> a row tampered in memory and had to report the break before its green was believed.
+
+### CORRECTION 2 — `DOD-SIGNAL-STATUS-REPLICATION-1` was WITHDRAWN, not fixed
+
+Filed yesterday as "a superseded signal still reads as current on two nodes out of three", on the
+strength of reading the raw `status` column off three databases. **Nothing reads that column for a
+decision.** Consumers read `signal_records_effective`, which DERIVES supersession from
+`supersedes_hash` — a column that does replicate. Measured on all three live nodes: identical
+`effective_status` for all 17 signals, 10 active and 7 superseded, row for row. There was never a
+divergence in the answer anyone gets. **The question was never "do the columns match", it was "do the
+three nodes give the same answer", and those are different queries.**
+
+### The email-domain question, answered — nothing grants on it
+
+Asked while tracing the fork: is the domain load-bearing, e.g. special permissions for a company
+domain? **No.** Searched all three repos for admin/privilege/allowlist keyed on domain — nothing. It
+is a pre-V30 leftover: the first registration schema stored only the domain half of a verified email,
+`CELLO-M6B-016` judged that a defect for the same collision reason, and V30 dropped it. The signed
+capability field is still *named* `email_domain` but has carried the address fingerprint since. Its
+one surviving live use is a signup rate limiter — filed as `DOD-OTP-RATELIMIT-KEY-1`, because it
+counts **5 per DOMAIN per hour**, so unrelated gmail users would throttle each other at launch while
+the counter sits in memory and resets on every deploy.
+
+**Worth keeping if domain grouping is ever built:** hashing the domain buys nothing. The domain space
+is small and enumerable, so a fingerprint of `mygentic.ai` is trivially reversed. Domain grouping can
+be a convenience; it must never be a permission.
+
+### Closed out
+
+- **All seven packages promoted** — `latest` is now connect `0.0.140`, cli `0.0.163`, daemon `0.0.156`,
+  gateway `0.0.28`, crypto `0.0.44`, transport `0.0.50`, protocol-types `0.0.48`. Verified ON DISK
+  after install, not from the install output.
+- **The unchained `user_accounts` row does not exist.** Re-measured on all three live databases: 11
+  rows each, `verifyChain` VALID everywhere. **DO NOT repair it** — the "delete and re-replicate"
+  option both documents recommended would break the ten rows behind position 1, since each hash is
+  computed over the previous row's stored hash. A parallel session caught that while I was reading
+  those same stale lines with admin credentials in hand.
+- **What is actually left on that line** is that `verifyChain` is on no health surface, which is why a
+  stale "it is broken" note survived four days.
