@@ -1037,13 +1037,27 @@ because it is the submitter's unverifiable scanned-clean assertion and is forgea
 signature. A new static guard replays the migrations and fails any Tier-A spec that omits a column
 the schema requires; across all 18 tables it finds exactly this one.
 
-**⚠️ The fork alarm did NOT stop, and I over-claimed once before checking properly.** It dropped from
-39 consecutive and climbing to a counter that resets in the 2–5 range, but rounds still show
-`planned 1 / pulled 1 / applied 0`. The engine's own header calls that signature a non-converging
-fork — **but every table is demonstrably converged**, so the most likely reading is benign Tier-B
-presence churn (`applied` counts rows whose version CHANGED, and a merge that confirms the local
-copy already won changes nothing). **That is unconfirmed: the round log does not name the table.**
-Filed as its own item below rather than asserted either way.
+**⚠️ The fork alarm is still firing, and it is NOISE, not divergence — established 2026-08-10.**
+It reads `planned 1 / pulled 1 / applied 0` on roughly two rounds in three, and the consecutive
+counter had reached **412** by 04:06Z. The engine header calls that signature a non-converging fork.
+It is not one:
+
+- **Every Tier-A table is byte-identical across nodes.** All 17 tables dumped by their own wire
+  column lists (naturalKey ∪ immutableColumns, generated from the specs so the lists cannot be got
+  wrong) and compared between `gcp-use1` and `gcp-euw1`: 220343 bytes each, every table SAME.
+- **Both Tier-B tables are converged.** `agent_presence` is byte-identical across nodes on all five
+  version columns over 2900 rows; `agent_suspensions` is empty on all three.
+- **The answer consumers get is identical**: `signal_records_effective` matches row-for-row.
+
+So the planner asks for a record the node already holds, fetches it, and inserts nothing — every
+round, forever. **Cost: a wasted fetch per round, and an alarm that cries wolf.** That second half
+matters on its own terms, because "the fork alarm climbing trains whoever watches it to ignore a real
+fork later" is one of the reasons this item was raised at all — the alarm is now unusable for its
+actual purpose.
+
+**Next step is one line of logging, not an investigation:** the round log reports counts and never
+names the table, which is the only reason this took a database-wide diff to characterise. Log the
+table on `round.completed` / `fork_suspected` and the cause falls out of the next round.
 
 `signal_records` anti-entropy has never worked: **1530 consecutive apply failures**, every one
 `null value in column "scanner_version" violates not-null constraint`. The column is NOT NULL and is
@@ -1058,14 +1072,31 @@ and it trains whoever watches it to ignore a real fork later.
 
 ## 16b. A superseded trust signal still reads as current on two nodes out of three
 
-**Designation: `DOD-SIGNAL-STATUS-REPLICATION-1`** — ❌ **OPEN, found 2026-08-09** while verifying
-the fix above on the live databases. **Not caused by that fix, and not fixed by it.**
+**Designation: `DOD-SIGNAL-STATUS-REPLICATION-1`** — ⬇️ **WITHDRAWN AS FILED, 2026-08-10. This was
+NOT a user-visible defect and I should not have reported it as one.**
 
-**What an operator would see.** You replace a trust signal with a newer one. On `gcp-euw1` the old
-one correctly reads `superseded`; on `gcp-use1` and `gcp-usc1` it still reads **`active`**. So a
-counterparty checking your signals gets a different answer depending on which directory node their
-client happened to pick, and on two of three they are shown a signal you already replaced as though
-it were current. Measured: **7 rows `superseded` on euw1, the same 7 `active` on both others.**
+**What I checked, and what I failed to check.** I read the raw `status` COLUMN off the three
+databases, saw 7 rows `superseded` on `gcp-euw1` and `active` on the other two, and reported that a
+counterparty would get a different answer depending on which node they asked. **Nothing reads that
+column for a decision.** Every consumer reads `signal_records_effective`, whose `effective_status`
+DERIVES supersession from `supersedes_hash` — a column that IS replicated — via
+`EXISTS (SELECT 1 FROM signal_records s WHERE s.supersedes_hash = r.signal_hash AND NOT revoked)`.
+The stored column is only a fallback branch behind that.
+
+**Verified 2026-08-10 on all three live nodes:** `signal_records_effective` returns **identical**
+`effective_status` for all 17 signals on every node — 10 `active`, 7 `superseded`, row for row. There
+is no divergence in the answer anyone actually gets.
+
+**What is left is a stale bookkeeping column on the two replicas**, and it is worth one line rather
+than an item: the origin node UPDATEs `status` when a signal is superseded, and that UPDATE does not
+travel, so a replica's raw column reads `active` for a signal the view correctly calls `superseded`.
+Harmless today because the view is the only reader. It is a **trap for a future reader** who queries
+`signal_records.status` directly, and the honest place for it is a comment on the column, not a
+ranked launch item.
+
+**The lesson, which is the reusable part:** I read the storage and reported it as the behaviour. The
+question was never "do the columns match" — it was "do the three nodes give the same answer", and
+those are different queries. Check the view a consumer reads, not the table underneath it.
 
 **Why.** `status` is mutable, so it is deliberately excluded from the Tier-A record hash — correctly,
 because revoking a signal must not change its hash or the directory could never find the signal it
