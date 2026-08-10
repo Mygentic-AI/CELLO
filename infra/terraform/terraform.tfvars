@@ -4,7 +4,7 @@
 environment = "dev"
 
 # Immutable commit-SHA tag built by Cloud Build. Never a moving tag — see infra/cloudbuild/*.yaml.
-directory_image_tag = "63f7c4e5dff7a4255430a0b00c547779b1a0758b"
+directory_image_tag = "b915c7af3265221f03a2f2321bed6062bb59a228"
 
 # One node = one region = one independent deployment. The map key is the region, which makes two
 # nodes in one region unrepresentable rather than merely discouraged.
@@ -116,7 +116,7 @@ consortium_threshold = 1
 preauth_issuer_pubkey = "4468292bbe38ab929e504a1d962abeebe4f02db0a380b4d7880eb4f4dbd56c07"
 
 # DOD-MOVE-PORTAL-1 — the operator surface on GCP.
-portal_image_tag = "portal-9aeaf30"
+portal_image_tag = "portal-6ac77b8"
 ops_agent_image_tag = "ops-01b5fd5e"
 waitlist_image_tag = "waitlist-a12fd1a3"
 
