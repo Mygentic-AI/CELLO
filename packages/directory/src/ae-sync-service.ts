@@ -29,7 +29,7 @@ import type { Logger } from "@cello-protocol/interfaces";
 import {
   AE_PROTOCOL_ID, runAeDialer, serveAeResponder,
   type AeWire, type AeNodeIdentity, AeProtocolError } from "./ae-channel.js";
-import type { AeStoreView } from "./anti-entropy-engine.js";
+import type { AeStoreView, RoundResult } from "./anti-entropy-engine.js";
 
 /** The transport surface the service needs (structurally satisfied by CelloNode). */
 export interface AeTransport {
@@ -297,6 +297,19 @@ export class AeSyncService {
       const applied = result.rounds.reduce((n, r) => n + r.tierAApplied + r.tierBApplied, 0);
       const planned = result.rounds.reduce((n, r) => n + r.tierAPlanned + r.tierBPlanned, 0);
       const failures = result.rounds.flatMap((r) => r.failures);
+      // The per-table breakdown behind the fork signature. Merged across rounds by (tier, table) so
+      // the alarm names each table once with its totals, rather than once per round.
+      const unconverged = [...result.rounds
+        .flatMap((r) => r.unconverged)
+        .reduce((m, u) => {
+          const k = `${u.tier}:${u.table}`;
+          const prev = m.get(k);
+          m.set(k, prev
+            ? { ...prev, planned: prev.planned + u.planned, pulled: prev.pulled + u.pulled, applied: prev.applied + u.applied }
+            : { ...u });
+          return m;
+        }, new Map<string, RoundResult["unconverged"][number]>())
+        .values()];
 
       // A table this node does not track, advertised by the peer — normal mid-rolling-deploy, and
       // silent until now. Named at WARN because the consequence is that the table is NOT replicating
@@ -309,6 +322,10 @@ export class AeSyncService {
       }
       logger.info("antientropy.round.completed", {
         peerNodeId, pulled, applied, planned, durationMs: Date.now() - startMs, correlationId,
+        // Named here too, not only on the alarm: `pulled > applied` is visible on every round, and
+        // an operator reading a healthy-looking round should be able to see WHERE the gap is without
+        // waiting for a streak to build.
+        ...(unconverged.length > 0 ? { unconverged } : {}),
       });
 
       // A table that failed no longer takes the round with it, so it has to be SAID — otherwise the
@@ -341,7 +358,18 @@ export class AeSyncService {
         const streak = (this.#forkStreak.get(peerNodeId) ?? 0) + 1;
         this.#forkStreak.set(peerNodeId, streak);
         if (streak >= 2) {
-          logger.error("antientropy.round.fork_suspected", { peerNodeId, consecutive: streak, correlationId });
+          logger.error("antientropy.round.fork_suspected", {
+            peerNodeId, consecutive: streak, correlationId, unconverged,
+            // READ THE TIER before treating this as divergence. Tier-A: a record whose hash we do not
+            // hold was fetched and inserted nothing, so the same natural key carries different
+            // content — a real fork insert-if-absent can never resolve. Tier-B: `applied` counts
+            // rows whose VERSION MOVED, so a merge confirming the local copy already won is healthy
+            // and lands here anyway. This alarm ran for a day on totals alone with no way to tell
+            // the two apart, and answering it took diffing every table off two live nodes.
+            reason: unconverged.some((u) => u.tier === "A")
+              ? "a Tier-A table fetched records that did not insert — same natural key, different content"
+              : "Tier-B only — may be a benign merge that confirmed the local copy, NOT necessarily divergence",
+          });
         }
       } else {
         this.#forkStreak.delete(peerNodeId);

@@ -246,5 +246,39 @@ describe("AeSyncService — libp2p-face wiring", () => {
     forks = dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected");
     expect(forks.length).toBe(1); // the streak IS the alarm
     expect(forks[0][1].consecutive).toBe(2);
+
+    // AND IT NAMES THE TABLE. Without this the alarm reports a count and nothing else: in production
+    // it fired continuously from 2026-08-09 past a streak of 412, and finding out which table was
+    // responsible meant dumping all 17 Tier-A tables off two live nodes and diffing them. An alarm
+    // that cannot say what is wrong cannot be acted on.
+    expect(forks[0][1].unconverged).toEqual([
+      { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0 },
+    ]);
+    // Tier-A is unambiguous — say so, because a Tier-B entry here is often benign and the operator
+    // must not have to know that to read the alarm.
+    expect(String(forks[0][1].reason)).toContain("same natural key, different content");
+
+    // The same breakdown rides the routine round log, so the gap is visible before a streak builds.
+    const completed = dialLogger.events.filter(([e]) => e === "antientropy.round.completed");
+    expect(completed.at(-1)![1].unconverged).toEqual([
+      { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0 },
+    ]);
+  });
+
+  it("a healthy round carries NO unconverged field — the alarm's input must not be noise", async () => {
+    // The counterpart that keeps the field meaningful. If it appeared on converged rounds it would
+    // be ignored within a day, which is exactly what happened to the bare counter it replaces.
+    const respStore = new MemStore();
+    respStore.revocations.set("agOK", rev("agOK"));
+    const dialStore = new MemStore(); // lacks it entirely → pulls AND applies
+    const { respService, dialService, dialLogger } = pairServices({ respStore, dialStore });
+    await respService.start();
+    respService.stop();
+
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+    const completed = dialLogger.events.filter(([e]) => e === "antientropy.round.completed");
+    expect(completed.length).toBeGreaterThan(0);
+    expect(completed.at(-1)![1].unconverged).toBeUndefined();
+    expect(dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected").length).toBe(0);
   });
 });

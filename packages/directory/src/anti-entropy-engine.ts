@@ -98,6 +98,24 @@ export interface RoundResult {
    * it, every round, for as long as one poisoned record is offered.
    */
   failures: Array<{ tier: "A" | "B"; table: string; reason: string }>;
+  /**
+   * Tables where records were FETCHED and did not land (`pulled > applied`) — the per-table
+   * breakdown behind the fork signature, so the alarm can NAME what is wrong.
+   *
+   * WHY THIS EXISTS. The counts above are round-wide totals, and the alarm fired on them alone. In
+   * production from 2026-08-09 it fired continuously, the streak passed 412, and answering the only
+   * question that matters — WHICH table — took dumping all 17 Tier-A tables off two live nodes and
+   * diffing them, because nothing in the log said. An alarm that cannot say what is wrong cannot be
+   * acted on; one that is always on stops being read, which is how the next real fork gets missed.
+   *
+   * READ THE TIER: the two mean different things and conflating them is what makes this alarm
+   * ambiguous. For **Tier-A** a planned record is one whose hash we do not hold, so fetching it and
+   * inserting nothing means the same natural key carries different content — a genuine fork that
+   * insert-if-absent can never resolve. For **Tier-B** `applied` counts rows whose VERSION MOVED, so
+   * a merge that correctly confirms the local copy already won reports pulled-without-applied and is
+   * perfectly healthy. A Tier-B entry here is therefore not by itself evidence of divergence.
+   */
+  unconverged: Array<{ tier: "A" | "B"; table: string; planned: number; pulled: number; applied: number }>;
 }
 
 /**
@@ -217,6 +235,8 @@ export async function runAntiEntropyRound(
   // reach the operator through the same channel — the apply-phase failures below are already
   // logged per table at `error` by the sync service.
   const failures: RoundResult["failures"] = [...basis.failures];
+  // Per-table, so the alarm can name the table rather than only a total (see RoundResult.unconverged).
+  const unconverged: RoundResult["unconverged"] = [];
 
   // Iterate in the LOCAL registry's table order — never the peer's advertisement order. Two
   // reasons: (1) a table the local store doesn't know is simply never pulled (a hostile peer
@@ -236,8 +256,12 @@ export async function runAntiEntropyRound(
     // peer indefinitely. Loud and contained beats loud and total.
     try {
       const records = await peer.serveTierA(table, hashes);
+      const applied = await local.applyTierA(table, records);
       tierAPulled += records.length;
-      tierAApplied += await local.applyTierA(table, records);
+      tierAApplied += applied;
+      if (records.length > applied) {
+        unconverged.push({ tier: "A", table, planned: hashes.length, pulled: records.length, applied });
+      }
     } catch (err) {
       // Containment is for STORE failures — a poisoned record must not take Tier-B, and the kill
       // switch, down with it. A WIRE failure is different in kind: the stream is dead, so continuing
@@ -257,13 +281,20 @@ export async function runAntiEntropyRound(
     tierBPlanned += keys.length;
     try {
       const records = await peer.serveTierB(table, keys);
+      const applied = await local.applyTierB(table, records);
       tierBPulled += records.length;
-      tierBApplied += await local.applyTierB(table, records);
+      tierBApplied += applied;
+      // NOT necessarily a fault for Tier-B — a merge confirming the local copy already won moves no
+      // version and is healthy. Recorded anyway, because the whole point is to say WHERE the round's
+      // pulled-without-applied came from; the tier is what tells the reader how to weigh it.
+      if (records.length > applied) {
+        unconverged.push({ tier: "B", table, planned: keys.length, pulled: records.length, applied });
+      }
     } catch (err) {
       if (isWireError(err)) throw err;
       failures.push({ tier: "B", table, reason: err instanceof Error ? err.message : String(err) });
     }
   }
 
-  return { tierAPulled, tierBPulled, tierAApplied, tierBApplied, tierAPlanned, tierBPlanned, failures };
+  return { tierAPulled, tierBPulled, tierAApplied, tierBApplied, tierAPlanned, tierBPlanned, failures, unconverged };
 }

@@ -94,6 +94,9 @@ const susp = (agent_id: string, seq: number, paused: boolean, extra?: Partial<Su
 const TERMINATED = {
   tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0,
   tierAPlanned: 0, tierBPlanned: 0, failures: [],
+  // Nothing fetched, so nothing can have failed to land — a converged round must never populate the
+  // field the fork alarm reads, or the alarm is noise from the first round onward.
+  unconverged: [],
 };
 
 describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
@@ -166,7 +169,44 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
       const res = await runAntiEntropyRound(A, B);
       expect(res.tierAPulled).toBeGreaterThan(0); // the fork re-pulls every round…
       expect(res.tierAApplied).toBe(0); // …and never applies — the alarm signature persists
+
+      // …AND IT MUST NAME THE TABLE. The counts alone are what made this alarm unactionable in
+      // production: it fired continuously from 2026-08-09, the streak passed 412, and establishing
+      // WHICH table was responsible required dumping all 17 Tier-A tables off two live nodes and
+      // diffing them — because `round.completed` and `fork_suspected` report only totals. An alarm
+      // that cannot say what is wrong cannot be acted on, and one that is always on stops being
+      // read at all, which is precisely how the next REAL fork gets missed.
+      expect(res.unconverged, "the fork signature must carry the table it fired for").toEqual([
+        { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0 },
+      ]);
     }
+  });
+
+  it("a CONVERGED round reports nothing unconverged — the field must not cry wolf", async () => {
+    // The counterpart the alarm depends on: if `unconverged` were populated on healthy rounds it
+    // would be noise, and the field would be discarded exactly like the counter it replaces.
+    const A = new MemStore();
+    const B = new MemStore();
+    A.revocations.set("agOK", rev("agOK"));
+    B.revocations.set("agOK", rev("agOK"));
+    expect((await runAntiEntropyRound(A, B)).unconverged).toEqual([]);
+  });
+
+  it("a table that PULLED AND APPLIED is not reported, even alongside a forked one", async () => {
+    // Applying something is convergence working. Reporting it beside a genuine fork would bury the
+    // one table an operator has to look at.
+    const A = new MemStore();
+    const B = new MemStore();
+    A.revocations.set("agF", rev("agF"));
+    B.revocations.set("agF", { ...rev("agF"), reason: "different-content" });
+    B.revocations.set("agNew", rev("agNew")); // A lacks it entirely → pulls AND applies
+
+    const res = await runAntiEntropyRound(A, B);
+    expect(res.tierAApplied).toBe(1); // the new one landed
+    // Still exactly one entry, and it is the fork — the applied row must not appear.
+    expect(res.unconverged).toEqual([
+      { tier: "A", table: "agent_revocations", planned: 2, pulled: 2, applied: 1 },
+    ]);
   });
 });
 

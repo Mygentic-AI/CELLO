@@ -208,7 +208,7 @@ describe("ae-channel: mutual handshake + rounds over the wire", () => {
     // and then served nothing.
     expect(dialerResult.rounds[1]).toEqual({
       tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0,
-      tierAPlanned: 0, tierBPlanned: 0, failures: [],
+      tierAPlanned: 0, tierBPlanned: 0, failures: [], unconverged: [],
     });
   });
 
@@ -382,7 +382,7 @@ describe("ae-channel: mutual handshake + rounds over the wire", () => {
     // wire" has to mean "there was something to compare and it matched".
     expect(result.ok && result.rounds[0]).toEqual({
       tierAPulled: 0, tierBPulled: 0, tierAApplied: 0, tierBApplied: 0,
-      tierAPlanned: 0, tierBPlanned: 0, failures: [],
+      tierAPlanned: 0, tierBPlanned: 0, failures: [], unconverged: [],
     });
     // …and nothing beyond it: no bucket walk, no hash list, no version map, no body pull.
     for (const detail of ["ae_buckets_req", "ae_bucket_hashes_req", "ae_versions_req", "ae_pull_a", "ae_pull_b"]) {
