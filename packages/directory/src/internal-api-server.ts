@@ -677,6 +677,73 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
     // AUTHENTICATED, and not merely for consistency. This links a pubkey seen on the wire to an
     // ACCOUNT, which is exactly the correlation the directory's no-PII posture withholds from
     // everyone except the portal.
+    // ── M10B / DOD-END-REVOKE-3: WHOSE signal is this, and what kind? ──────────────────────────
+    //
+    // The portal needs both to decide a subject-initiated revocation: whether the requester owns the
+    // signal, and which category it falls in. It had been answering the first from its own
+    // `minted_signals` index — and that index HAS HISTORICAL GAPS. Measured 2026-08-10 on live data:
+    // the operator's own `github_id` had zero rows there while four other GitHub signals had them, so
+    // the real owner was refused `not_authorized` for a signal the directory reports as active and
+    // theirs. An authorization check resting on a bookkeeping table that can be incomplete fails
+    // CLOSED against legitimate owners, silently, and no test finds it because the gap is in data.
+    //
+    // This is the authoritative answer instead. `signal_records` IS the record.
+    //
+    // RETURNING `type` DOES NOT BREAK ZERO-BUMP. The invariant forbids the directory BRANCHING on
+    // what a signal means — no enum, no CHECK, no code path asking "is this a track record". Handing
+    // the string back to the party that minted it is not interpretation; the portal does the
+    // interpreting, which is exactly where the rule already lives.
+    if (req.method === "POST" && req.url === "/internal/signal-by-hash") {
+      const providedKey = req.headers["x-cello-internal-api-key"];
+      if (!internalApiKey || providedKey !== internalApiKey) {
+        logger.warn("signal.by_hash.auth.failed", { remoteAddr: req.socket.remoteAddress, owningNodeId });
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      let signalHash: string;
+      try {
+        const parsed = JSON.parse((await readBody(req)).toString("utf8")) as { signal_hash?: unknown };
+        // Lowercased before the shape check, for the same reason the pubkey above is: hex case must
+        // never decide an answer, or a correct request fails as "not found".
+        const raw = typeof parsed.signal_hash === "string" ? parsed.signal_hash.toLowerCase() : "";
+        if (!/^[0-9a-f]{64}$/.test(raw)) throw new Error("signal_hash must be 64 hex characters");
+        signalHash = raw;
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "malformed_request", detail: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
+      try {
+        // The EFFECTIVE view, not the raw table: a revoked or superseded signal must not read as a
+        // live one here, and the view is what every other consumer reads.
+        const { rows } = await pool.query<{ subject_kind: string; subject: string; type: string; effective_status: string }>(
+          `SELECT subject_kind, subject, type, effective_status
+             FROM signal_records_effective WHERE signal_hash = $1 LIMIT 1`,
+          [signalHash],
+        );
+        const row = rows[0];
+        if (!row || !row.subject) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ found: false }));
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          found: true,
+          subject_kind: row.subject_kind,
+          subject: row.subject,
+          type: row.type,
+          effective_status: row.effective_status,
+        }));
+      } catch (err) {
+        logger.error("signal.by_hash.failed", { reason: err instanceof Error ? err.message : String(err), correlationId });
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "lookup failed" }));
+      }
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/internal/agent-by-pubkey") {
       const providedKey = req.headers["x-cello-internal-api-key"];
       if (!internalApiKey || providedKey !== internalApiKey) {
