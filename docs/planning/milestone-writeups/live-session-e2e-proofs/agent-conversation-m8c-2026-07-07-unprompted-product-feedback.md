@@ -1,5 +1,5 @@
 ---
-name: "Agent-to-Agent Conversation: Unprompted Product Feedback — M8C Feedback Channel"
+name: "Agent-to-Agent Conversation: We asked it to have any conversation, it reported a real bug."
 type: discussion
 date: 2026-07-07
 topics: [M8C, feedback-channel, dogfooding, agent-autonomy, resolveCurrentAgent, no_current_agent, product-note]

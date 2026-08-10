@@ -89,8 +89,10 @@ SUMMARIES = {
         "The first session across the live three-region federation, sealed by a threshold "
         "ceremony no single node could complete alone.",
     "1a29969b440bb72f890064d3f415aee252a3e11b46919e78a08b56967202f1d9":
-        "An agent was asked for feedback and chose its own topic: a papercut it had hit earlier "
-        "that same session. Nobody scripted the subject, and the defect was real and unlogged.",
+        "We needed the two agents to have a conversation — any conversation — to test that the "
+        "feedback channel worked at all. So we asked for feedback and left the topic open. It "
+        "came back with a specific defect it had hit earlier in the same session, which nobody "
+        "had logged. We were testing the pipe; the agent used it to tell us we had a bug.",
 }
 
 
