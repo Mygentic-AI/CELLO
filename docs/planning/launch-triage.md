@@ -155,7 +155,45 @@ sealed. Where a claim can be checked against a live daemon or the fleet logs, ch
 was **overstated** (ruled out — see Addressed), and `DOD-ACCOUNTS-CHAIN-1` was **confirmed as a
 real tamper-evidence gap** — it is now **item 1** below.
 
-## 1. Every real registration writes the human-agent binding outside the hash chain
+## 1. One email address maps to two different accounts, depending on which node you ask
+
+**Designation: `DOD-EMAIL-STUB-FORK-1`** — ❌ **OPEN, found 2026-08-10** by the fork alarm, one round
+after it was taught to name the table. Present since **2026-08-08**.
+
+**What an operator would hit.** Sign-in asks "which account owns this email?". Two of your three
+directory nodes answer `c9a1d4a0…`; the third answers `b2e1c705…`. Same key, two different accounts,
+and nothing resolves it — these rows are insert-if-absent, so each node keeps the copy it wrote first
+and neither can overwrite the other. Which identity you are treated as depends on which node your
+client happened to reach.
+
+**Measured on the three live databases:**
+
+| Node | `mygentic.ai` maps to | Written |
+|---|---|---|
+| `gcp-euw1` | `b2e1c705-d1c9-47b0-8baa-dec29cef3bcf` | 2026-08-08 05:52:26Z |
+| `gcp-use1` / `gcp-usc1` | `c9a1d4a0-4dd7-4653-99d0-a1dad607c396` | 2026-08-08 05:58:50Z |
+
+Both accounts exist on all three nodes, so this is two accounts each claiming the same address, six
+minutes apart, on different nodes — not a replication gap.
+
+**A second defect is visible in that key, and it may be the cause.** `email_stub_hash` is supposed to
+be a SHA-256 stub — the other row in the table is a proper 64-hex value. This one is the literal
+string **`mygentic.ai`**, a bare domain. Something wrote a raw domain where a hash belongs. If two
+different sign-ups both reduced to the domain, they would collide by construction, which would
+explain two accounts claiming one key. **Establish that before repairing the row** — repairing the
+data while the writer still produces domains just recreates it.
+
+**Why it is ranked here.** It is the identity binding, it is silently wrong, and it is exactly the
+class the portal's 2026-08-07 "ask every node and merge" workaround exists to paper over — that
+workaround makes the disagreement invisible rather than resolving it. It is also the only confirmed
+Tier-A fork in the fleet.
+
+**Do not repair the row unilaterally.** Same reasoning as the accounts-chain item below: choosing
+which of two accounts owns an address is a decision about someone's identity, not a cleanup.
+
+---
+
+## 2. Every real registration writes the human-agent binding outside the hash chain
 
 **Designation: `DOD-ACCOUNTS-CHAIN-1`** — ❌ open, raised 2026-07-13, **diagnosed 2026-08-04:
 possibility (a) confirmed — a real tamper-evidence gap, not a test artifact.** Proposed slot; Andre
@@ -208,7 +246,7 @@ test-isolation defect — several suites `DELETE` from this append-only chained 
 
 ---
 
-## 2. A mismatch that makes a conversation unsealable leaves no durable trace
+## 3. A mismatch that makes a conversation unsealable leaves no durable trace
 
 **Designation: `DOD-FRONTIER-MISMATCH-DURABLE-1`** (M8D, 🅿️ parked) — **re-scoped 2026-08-03.** The
 original defect under this item (`DOD-FRONTIER-STRAND-1`) is fixed; see Addressed. What is left is
@@ -232,7 +270,7 @@ anything keyed on it must not assume it is.
 
 ---
 
-## 3. A daemon shutdown rings the doorbell like an incoming message
+## 4. A daemon shutdown rings the doorbell like an incoming message
 
 **Designation:** [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — **needs a DoD
 line opened.**
@@ -248,7 +286,7 @@ distinguishable metadata so the event says what happened.
 
 ---
 
-## 4. Telegram phone notifications are built and tested, but never proven on a real phone
+## 5. Telegram phone notifications are built and tested, but never proven on a real phone
 
 **Designation: `DOD-TGDOOR-1`** — 🟡 *(still the only Tier-3 unit that can't be smoke-tested without
 a real bot token)*
@@ -259,7 +297,7 @@ proof, nothing else — minutes with a phone, do it opportunistically whenever A
 
 ---
 
-## 5. There is still no way to back up or recover your identity
+## 6. There is still no way to back up or recover your identity
 
 **Designation: `DOD-CUSTODY-DAEMON-1`** — ❌ open; demoted from #1 on 2026-08-04 and scoped the same day.
 
@@ -284,7 +322,7 @@ Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello
 
 ---
 
-## 6. Two sides can hold incompatible beliefs about which terminal path a session is on
+## 7. Two sides can hold incompatible beliefs about which terminal path a session is on
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — 🟢 **THE CURE IS BUILT 2026-08-09.** A close
 that fails now ASKS the directory whether the seal already happened, and returns the receipt if it
@@ -583,7 +621,7 @@ read "not yet published" for a day after it was.) **What keeps this item open is
 pull:** nothing asks on the daemon's own initiative, so a session stranded and never touched again
 stays stranded. There is no startup sweep.
 
-## 7. The daemon logs every connection opening and never one closing
+## 8. The daemon logs every connection opening and never one closing
 
 **Designation: `DOD-IPC-DISCONNECT-VISIBLE-1`** — ❌ **OPEN, and deliberately filed as a SMALL one.**
 Unranked. **Proposed slot: low — nobody is ruined by this. It is here because it taxes every
@@ -620,7 +658,7 @@ misreading; `selected_by_this_connection`, or a note in the payload, would stop 
 permanent (spec §3). What is missing is only the record of it changing.
 
 
-## 8. A session was silently bound to an agent it never selected — and it was someone else's identity
+## 9. A session was silently bound to an agent it never selected — and it was someone else's identity
 
 **Designation: `DOD-AGENT-SELECTION-UNWARRANTED-1`** — ❌ **OPEN, cause NOT established.** Unranked.
 **Proposed slot: high, on the security argument below — but it needs the diagnosis before it can be
@@ -688,7 +726,7 @@ to `agent.current.switched`, then reproduce with a daemon restart after a releas
 the two candidates in one run.
 
 
-## 9. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
+## 10. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
 
 **Designation: `DOD-HEARTBEAT-REPLICATION-1`** — ❌ **OPEN.** Unranked. Previously recorded only as a
 footnote on item 14; filed here because it is a live fault in its own right and was nearly fixed as
@@ -727,7 +765,7 @@ heartbeat not replicating. That is wrong — `id` is simply not in the spec eith
 that `last_heartbeat_at` is mutable and Tier A carries immutable columns. Left uncorrected it would
 have sent whoever picks this up at the wrong repair.
 
-## 10. A document's agreed content profile is signed into its identity and enforced by nothing
+## 11. A document's agreed content profile is signed into its identity and enforced by nothing
 
 **Designation: `DOD-DOC-PROFILE-1`** (M14) — ⏳ **DELIBERATE SPLIT, recorded here so the gap is
 visible from the launch list rather than only from the milestone doc.**
@@ -745,7 +783,7 @@ refusal cannot be answered, so a genuinely multilingual document fails closed an
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
 
-## 11. Same-operator standing: two layers exist, and one input can be absent
+## 12. Same-operator standing: two layers exist, and one input can be absent
 
 **Designation: `DOD-SELF-STANDING-NULL-LINKAGE-1`** — ⚠️ **OPEN QUESTION, NOT a confirmed defect.**
 Raised 2026-08-09 from an endorsement exercise. Filed because it is a security property and the
@@ -787,7 +825,7 @@ your own machines" is an argument we make in writing (`[[shared-documents-object
 argument 3) and it is the kind of claim a technical evaluator will probe directly. A conjunct that
 evaluates to *not-same-operator* when an input is missing is the shape worth being certain about.
 
-## 12. Interrupted-session sealing is shipped and has never been proven
+## 13. Interrupted-session sealing is shipped and has never been proven
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
 Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
@@ -1385,27 +1423,23 @@ because it is the submitter's unverifiable scanned-clean assertion and is forgea
 signature. A new static guard replays the migrations and fails any Tier-A spec that omits a column
 the schema requires; across all 18 tables it finds exactly this one.
 
-**⚠️ The fork alarm is still firing, and it is NOISE, not divergence — established 2026-08-10.**
-It reads `planned 1 / pulled 1 / applied 0` on roughly two rounds in three, and the consecutive
-counter had reached **412** by 04:06Z. The engine header calls that signature a non-converging fork.
-It is not one:
+**⚠️ THE FORK ALARM WAS RIGHT, AND MY "IT IS NOISE" CALL WAS WRONG — corrected 2026-08-10.**
+It was firing on a **real fork in `account_email_stubs`**, filed below as its own item. It is not
+this item's defect, and it is not caused by the fix above; it has been there since 2026-08-08.
 
-- **Every Tier-A table is byte-identical across nodes.** All 17 tables dumped by their own wire
-  column lists (naturalKey ∪ immutableColumns, generated from the specs so the lists cannot be got
-  wrong) and compared between `gcp-use1` and `gcp-euw1`: 220343 bytes each, every table SAME.
-- **Both Tier-B tables are converged.** `agent_presence` is byte-identical across nodes on all five
-  version columns over 2900 rows; `agent_suspensions` is empty on all three.
-- **The answer consumers get is identical**: `signal_records_effective` matches row-for-row.
+**How I got it wrong, because the method is the lesson.** I dumped all 17 Tier-A tables off two nodes
+and reported them byte-identical. The dumps were fine; **my comparison was not.** Each table's rows
+came back as one multi-line block, and the script split the whole output on newlines, so it kept only
+the FIRST row of every table and silently discarded 651 lines. The forked row sorted second. Diffing
+the raw files — which I had on disk the whole time — shows the difference immediately. **A verifier
+that drops data silently is worse than no verifier: it produced a confident all-clear.**
 
-So the planner asks for a record the node already holds, fetches it, and inserts nothing — every
-round, forever. **Cost: a wasted fetch per round, and an alarm that cries wolf.** That second half
-matters on its own terms, because "the fork alarm climbing trains whoever watches it to ignore a real
-fork later" is one of the reasons this item was raised at all — the alarm is now unusable for its
-actual purpose.
-
-**Next step is one line of logging, not an investigation:** the round log reports counts and never
-names the table, which is the only reason this took a database-wide diff to characterise. Log the
-table on `round.completed` / `fork_suspected` and the cause falls out of the next round.
+**The alarm could not have told me, and that is the fixed part.** It reported counts and never the
+table, so the only way to answer "which table" was a database-wide diff — the very thing I got wrong.
+`round.completed` and `fork_suspected` now carry an `unconverged` breakdown naming the tier, table
+and per-table counts, plus a plain-language reason distinguishing a genuine Tier-A fork from a benign
+Tier-B merge. Shipped in directory image `63f7c4e5`, all three nodes. **It named the table in the
+first round after the first node came up.**
 
 <details><summary>Original problem statement, kept for history</summary>
 

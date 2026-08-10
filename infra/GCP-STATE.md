@@ -239,7 +239,25 @@ unrelated set — **no relay resource appears**. Since `terraform plan` is this 
 (procedure §5), that is the authoritative confirmation the relay deploy is fully applied, not a claim
 from this document.
 
-## 🟢 CURRENT — directory on `1f9281f1`, ALL 3 ROLLED (2026-08-09, second roll)
+## 🟢 CURRENT — directory on `63f7c4e5`, ALL 3 ROLLED (2026-08-10, third roll)
+
+**Image tag:** `63f7c4e5dff7a4255430a0b00c547779b1a0758b`, Cloud Build
+`1e5e87dd-8b44-4de7-a55d-161524dd0be3`. Instances `cello-gcp-use1-5ldc`, `cello-gcp-usc1-gtgp`,
+`cello-gcp-euw1-mckm`, all `9090/health` 200. Post-roll plan `0 to add, 4 to change, 0 to destroy`,
+no directory resource. Relay unchanged on `0cf04b0c`.
+
+**What it carries: the fork alarm now names the table it fires for.** It reported a bare count, so
+answering "which table" required diffing every Tier-A table off two live nodes. `round.completed` and
+`fork_suspected` now carry an `unconverged` breakdown (tier, table, planned/pulled/applied) plus a
+reason distinguishing a real Tier-A fork from a benign Tier-B merge.
+
+**It found a real fork in the first round after the first node came up**, and it had been firing
+about it truthfully since 2026-08-08 while being dismissed as noise: `account_email_stubs` binds the
+key `mygentic.ai` to `b2e1c705…` on `gcp-euw1` and to `c9a1d4a0…` on the other two. Filed as
+`DOD-EMAIL-STUB-FORK-1` on [[launch-triage]]. **Not repaired — choosing which account owns an
+address is a decision, not a cleanup.**
+
+**Superseded — directory on `1f9281f1` (2026-08-09, second roll)**
 
 **Image tag:** `1f9281f14c859211ea13de1ef47d2db655541720`, Cloud Build
 `bc73f865-272b-42ad-98e9-77c268186de4`. Instances `cello-gcp-use1-pbl8`, `cello-gcp-usc1-v7zg`,
