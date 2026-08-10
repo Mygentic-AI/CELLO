@@ -913,8 +913,28 @@ receipt or a named failure.
 
 ## 15. You cannot retract a trust signal — and the tool says you did
 
-**Designation: `DOD-SIGNAL-REVOKE-BROKEN-1`** — 🟡 **PARTLY FIXED 2026-08-10. The verb still does not
-work; it can no longer destroy anything it should not.** Found by running it against the live fleet.
+**Designation: `DOD-SIGNAL-REVOKE-BROKEN-1`** — ✅ **FIXED AND PROVEN LIVE 2026-08-10. Retraction
+works, on all three nodes.**
+
+> ```
+> gcp-use1   db4e32c09cf7 | revoked | revocation_rows 1
+> gcp-usc1   db4e32c09cf7 | revoked | revocation_rows 1
+> gcp-euw1   db4e32c09cf7 | revoked | revocation_rows 1
+> ```
+> Baseline minutes earlier: `active` on all three, zero revocation rows. A real GitHub signal, revoked
+> from the daemon, replicated to every node.
+>
+> **What an operator gets.** Retracting a signal now actually retracts it, everywhere, and the answer
+> is honest at every step: `queued` while it is queued, never `revoked` before it is. Your local copy
+> is KEPT until the directory confirms, so a failure leaves you able to retry rather than destroying
+> the evidence — which is what the old verb did on every single attempt, while reporting success.
+>
+> And the things that must NOT be retractable are refused, server-side: your track record, verified
+> email and phone. Passkey and authenticator signals are removed by turning the factor off in the
+> portal, which revokes them as a consequence.
+>
+> Full record, including the four failed attempts and why the review could not have caught them:
+> [[M10B-DEFINITION-OF-DONE]] § `DOD-END-REVOKE-3`. Found by running it against the live fleet.
 
 > ### What shipped 2026-08-10, and what did not
 >
