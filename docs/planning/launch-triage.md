@@ -911,6 +911,57 @@ then close it — all inside the relay's 24-hour retention. Minutes of work, and
 receipt or a named failure.
 
 
+## 15. You cannot retract a trust signal — and the tool says you did
+
+**Designation: `DOD-SIGNAL-REVOKE-BROKEN-1`** — ❌ **OPEN, found 2026-08-10 by running it against the
+live fleet.** Unranked. **Proposed slot: high.** This is the retraction verb, and it has never worked.
+
+**What happens to you.** You revoke a trust signal. The tool answers `ok: true` and tells you the
+signal is gone. Your local copy IS deleted. **The directory never receives the revocation**, so every
+node keeps the signal and keeps serving it to counterparties — and you no longer hold a copy to retry
+with. The one operation whose entire purpose is taking something back does nothing, reports success,
+and destroys your ability to try again.
+
+**Measured, not inferred.** Revoked `3a6512df…` (an inert, twice-superseded track record) from a live
+agent. Before: `superseded` on all three nodes, `signal_revocations` empty everywhere. After: **identical
+on all three — still `superseded`, still zero revocation rows** — and the signal gone from the local
+wallet. The tool's own response carried the failure and returned success anyway:
+`{"ok":true, "removed_locally":true, "directory_results":[{"ok":false,"detail":"not found"}]}`.
+
+**Four defects in one handler** (`core/daemon/src/daemon.ts`, the `cello_trust_signals_revoke` handler):
+
+1. **Wrong port.** It POSTs `/internal/signal/revoke` to the directory's **health** port 9090. The
+   route lives on the internal API server, port **8081**. The 404 is what "not found" is.
+2. **Wrong identity.** The route's outer check requires an enrolled `submitter`; the daemon signs as
+   the AGENT. `authorized_issuers` holds one row and it is the portal's KMS key. The intended path is
+   agent → portal → directory, with the agent's authority carried INSIDE the body as
+   `revoker_pubkey` + `revoker_signature` (V53). The daemon sends neither.
+3. **One node, not three.** `const directoryUrls = [directoryUrl]` sits under a comment that says
+   "POST to all directory nodes … all reachable nodes get the tombstone."
+4. **`ok: true` unconditionally, and the local delete is unconditional too** — the code comment states
+   it: *"Always hard-delete locally regardless of directory result."* The directory results are
+   attached to the response and never consulted.
+
+**Why it stayed hidden:** nothing else exercises the path, and the response looks like success. It is
+the same shape as every other defect found today — a green answer over a failed operation.
+
+**This is also why the replication half could never be proven.** `signal_revocations` is empty on all
+three nodes because no revocation has ever been written by anyone. Five of the Tier-A column
+dispositions (`signal_records.is_tombstone`, `.status`, `.revoked_at`, `.revoker_pubkey`,
+`.revoker_signature`) rest on the claim that the FACT replicates via `signal_revocations` and the
+effective view unions it. That mechanism is correct in code and **has never carried a single row.**
+It cannot be proven until this is fixed.
+
+**The fix needs a decision, because it is a design question, not a bug fix:** route revocation
+through the portal exactly as submission is routed (the portal is the enrolled submitter and can carry
+the agent's inner authorization), or enrol agents to revoke their own signals directly at the
+directory. The first matches the existing chokepoint design; the second is fewer hops but widens who
+may write to the directory. **Andre's call.** Everything else — the port, the fan-out, and the false
+`ok: true` — is unambiguous and should be fixed whichever way that goes.
+
+**Do not "fix" this by making the local delete conditional alone.** The operator must be told the
+retraction failed, and the local copy must survive so a retry is possible.
+
 # Post-launch — needed eventually, not for launch
 
 **Moved here 2026-08-04 (Andre).** Not on the launch punch list; none fails the ruin test. Kept
