@@ -704,9 +704,27 @@ export function createInternalApiServer(opts: InternalApiServerOptions): Server 
         // accounts that verified the same phone are the same human, and same-operator endorsements
         // must not manufacture standing. It is a SHA-256 stub, never a number — the directory holds
         // no PII by design — so this discloses nothing beyond "these two share a verifier".
+        // ── THE ACCOUNT COMES FROM THE REPLICATED LINK, NOT agent_profiles.account_id (CELLO-REPL-001)
+        //
+        // That column is written by the node that ran the agent's registration and does not
+        // replicate, so this endpoint's answer depended on WHICH NODE the portal happened to ask.
+        // Measured live 2026-08-10, immediately before this change: the old column resolved an
+        // account for 0 of 14 agents on gcp-use1, 7 of 14 on gcp-usc1 and 7 of 14 on gcp-euw1. The
+        // JOIN below resolves 14 of 14 on all three.
+        //
+        // It is not cosmetic: the portal's SAME-OPERATOR check is `accountId match OR phone-stub
+        // match`, and it is what stops an operator manufacturing standing by having their own agents
+        // endorse each other. A blank account is not "I don't know" to that expression — it flows in
+        // as "no match", so half the check was silently decided by node choice.
+        //
+        // Joined on `agent_id`, the STABLE key, never on a mutable attribute. LEFT JOIN on purpose:
+        // an agent with no account link is a real state (registered, not yet portal-bound) and must
+        // still resolve as found with a null account, exactly as before.
         const { rows } = await pool.query<{ agent_id: string | null; account_id: string | null; phone_stub_hash: string | null }>(
-          `SELECT agent_id, account_id, NULLIF(phone_stub_hash, '') AS phone_stub_hash
-             FROM agent_profiles WHERE lower(k_local_pubkey) = $1 LIMIT 1`,
+          `SELECT p.agent_id, l.account_id, NULLIF(p.phone_stub_hash, '') AS phone_stub_hash
+             FROM agent_profiles p
+             LEFT JOIN agent_account_links l ON l.agent_id = p.agent_id
+            WHERE lower(p.k_local_pubkey) = $1 LIMIT 1`,
           [pubkey],
         );
         // NOT a 404 for an unknown pubkey. "This agent is not registered here" is a legitimate

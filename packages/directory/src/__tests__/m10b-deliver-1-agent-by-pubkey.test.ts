@@ -12,6 +12,8 @@
  * account when it needs one" — and this is that resolution.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Pool } from "pg";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -88,5 +90,54 @@ describeIntegration("DOD-END-DELIVER-1 — /internal/agent-by-pubkey", () => {
     // would be minted and never delivered, with nothing anywhere reporting a problem.
     const res = await post({ k_local_pubkey: PUBKEY.toUpperCase() });
     expect(((await res.json()) as { found: boolean }).found).toBe(true);
+  });
+});
+
+/**
+ * CELLO-REPL-001 — this endpoint must resolve the account from the REPLICATED link table.
+ *
+ * Ungated on purpose. The behavioural tests above need Postgres and are skipped without it, so on a
+ * normal `pnpm test` run NOTHING guarded which column this query reads — and that is precisely the
+ * defect that shipped: `agent_profiles.account_id` is written by the node that ran the registration
+ * and does not replicate, so this endpoint's answer depended on which node the portal happened to
+ * ask. Measured on the live fleet 2026-08-10, immediately before the fix: the old column resolved an
+ * account for 0 of 14 agents on gcp-use1 and 7 of 14 on each of the other two. The join resolves
+ * 14 of 14 everywhere.
+ *
+ * It matters because the portal's same-operator check — the thing that stops an operator
+ * manufacturing standing from their own agents — reads this answer, and a blank account does not
+ * mean "unknown" to it. It means "different people".
+ *
+ * A source-level assertion is weaker than a round-trip, and it is what can run everywhere. It fails
+ * the moment someone points this query back at the node-local column.
+ */
+describe("CELLO-REPL-001 — agent-by-pubkey reads the replicated account link", () => {
+  const source = readFileSync(
+    join(import.meta.dirname, "..", "internal-api-server.ts"),
+    "utf8",
+  );
+  // The one query in this file that answers /internal/agent-by-pubkey.
+  const query = /SELECT[^`]*?FROM\s+agent_profiles[^`]*?WHERE\s+lower\(p?\.?k_local_pubkey\)/is.exec(source)?.[0] ?? "";
+
+  it("finds the resolution query at all (guards the regex against passing vacuously)", () => {
+    expect(query, "the agent-by-pubkey query could not be located — this guard is checking nothing").not.toBe("");
+    expect(query).toMatch(/agent_id/);
+  });
+
+  it("JOINS agent_account_links rather than selecting the node-local column", () => {
+    expect(query, "the account must come from the replicated link table").toMatch(/JOIN\s+agent_account_links/i);
+  });
+
+  it("does NOT read agent_profiles.account_id", () => {
+    // `l.account_id` (the join) is correct; `p.account_id` or a bare `account_id` selected off
+    // agent_profiles is the defect. Match the qualified form so the join's own alias cannot pass.
+    expect(query, "agent_profiles.account_id is node-local — it must not be the source").not.toMatch(/\bp\.account_id\b/);
+  });
+
+  it("LEFT joins, so an agent with no account link still resolves", () => {
+    // An INNER join would turn "registered but not yet portal-bound" into found:false, and the
+    // portal refuses a submission whose subject does not resolve — so this would silently start
+    // rejecting endorsements about brand-new agents.
+    expect(query).toMatch(/LEFT\s+JOIN\s+agent_account_links/i);
   });
 });
