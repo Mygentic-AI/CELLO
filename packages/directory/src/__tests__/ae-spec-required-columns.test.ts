@@ -355,14 +355,17 @@ const LOCAL_BY_DECISION: ReadonlyMap<string, string> = new Map([
    "user-visible surfaces deliberately ignore the heartbeat and the checkpoint machinery is parked. " +
    "Needs a real Tier-B merge, not a spec edit."],
   ["directory_nodes.endpoint",
-   "NO READER — written once and never read back (2026-08-10, table-scoped SQL scan of all 161 " +
-   "statements). Node endpoints come from the SIGNED MANIFEST, not from this table, which is the " +
-   "right source: an endpoint learned from a peer's row would be an unsigned address to dial. The " +
-   "earlier worry that 'a node learned by replication arrives undialable' does not bite, because " +
-   "nothing dials from here."],
+   "NO PRODUCTION READER — and the first version of this reason was WRONG about why. It said " +
+   "'never selected'; there IS a select, `SELECT * FROM directory_nodes` in getDirectoryNode, which " +
+   "a column-name scan cannot see. That accessor's only caller is a TEST (deploy-001), so nothing " +
+   "in production reads the column — but the evidence is 'dead accessor', not 'no query'. " +
+   "Node endpoints reach CLIENTS from the SIGNED MANIFEST, never from this table, and that is the " +
+   "right source: an endpoint learned from a peer's replicated row would be an unsigned address to " +
+   "dial. So the 'a node learned by replication arrives undialable' worry does not bite."],
   ["directory_nodes.status",
-   "NO READER — written by two INSERTs and never selected (table-scoped scan, 2026-08-10). Node " +
-   "liveness is answered by last_heartbeat_at below, not by this column."],
+   "NO PRODUCTION READER — same correction as endpoint above: the `SELECT *` in getDirectoryNode " +
+   "reads it, and that accessor is test-only. Node liveness is answered by last_heartbeat_at below. " +
+   "Nothing serves this column to a client on any wire surface."],
   ["authorized_issuers.status",
    "OPERATOR-MANAGED TABLE, and the hazard is the ASYMMETRY, not the column. No application code " +
    "writes this table at all — issuers are enrolled by hand on each node (all three were seeded " +
@@ -420,6 +423,65 @@ describe("every column in a Tier-A table has an explicit disposition", () => {
       ).toEqual([]);
     },
   );
+
+  /**
+   * `SELECT *` DEFEATS EVERY COLUMN-NAME ARGUMENT ABOVE, so it needs a decision of its own.
+   *
+   * Several dispositions in this file rest on "nothing reads this column". That evidence is gathered
+   * by looking for the column's NAME in a query — and `SELECT *` names nothing while reading
+   * everything. The first pass of this file asserted "written and never selected" for two
+   * `directory_nodes` columns while `SELECT * FROM directory_nodes` sat in the store. The conclusion
+   * survived (that accessor's only caller is a test), but the reasoning was hollow and would not have
+   * survived a production caller appearing.
+   *
+   * So: a `SELECT *` against a REPLICATING table must be listed here with the reason it is safe.
+   * The listed ones are re-checked when their reason stops being true; an unlisted one fails.
+   */
+  const STAR_SELECTS_ON_TIER_A: ReadonlyMap<string, string> = new Map([
+    ["directory_nodes",
+     "getDirectoryNode (adapters/pg-directory-store.ts) — TEST-ONLY CALLER (deploy-001). It returns " +
+     "every column including the two excluded from replication, so if a production caller ever " +
+     "appears, re-check status and endpoint before trusting their 'no production reader' reasons."],
+  ]);
+
+  it("no SELECT * reads a replicating table without a recorded reason", () => {
+    const tierATables = new Set(TIER_A_SPECS.map((s) => s.table));
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== "__tests__") walk(full);
+          continue;
+        }
+        if (!entry.name.endsWith(".ts")) continue;
+        // COMMENTS FIRST. The first version of this guard scanned raw text and fired on PSEUDOCODE
+        // inside a JSDoc block ("SELECT * FROM agent_profiles" documenting a method whose real query
+        // is a properly-columned JOIN). A guard that cries wolf on prose gets switched off, and this
+        // is the same mistake — reading comments as code — that put a wrong reason in this file an
+        // hour earlier. Block comments and comment-continuation lines go before any matching.
+        const src = readFileSync(full, "utf8")
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .split("\n")
+          .filter((l) => !/^\s*(\/\/|\*)/.test(l))
+          .join("\n");
+        for (const m of src.matchAll(/SELECT\s+\*\s+FROM\s+([a-z_][a-z0-9_]*)/gi)) {
+          const table = m[1]!.toLowerCase();
+          if (tierATables.has(table) && !STAR_SELECTS_ON_TIER_A.has(table)) {
+            offenders.push(`${entry.name}: SELECT * FROM ${table}`);
+          }
+        }
+      }
+    };
+    walk(join(import.meta.dirname, ".."));
+
+    expect(
+      offenders,
+      `SELECT * against a replicating table reads columns this file has argued nothing reads: ` +
+        `${offenders.join("; ")}. Either name the columns explicitly, or add the table to ` +
+        `STAR_SELECTS_ON_TIER_A with the reason it is safe.`,
+    ).toEqual([]);
+  });
 
   it("the UNDECIDED set is pinned — an open question must not grow silently", () => {
     // A ratchet on the open questions themselves. Adding one requires editing this list, which is
