@@ -68,6 +68,19 @@ description: >
   is one row, reserved for Andre), the seal-certificate pull read "not yet published" a day after it
   shipped, and the BUILT-BUT-NOT-SHIPPED banner listed versions long superseded. The banner is now a
   standing instruction to verify against the artifact rather than a snapshot that goes stale.
+  2026-08-10, VERIFICATION PASS over all 12 open items, against the published tarballs, the running
+  instances and the live databases — never the branch. FOUR were already fixed and shipped: the
+  shutdown doorbell (item 4), the document content profile (item 11, which landed THREE DAYS BEFORE
+  the item was filed), and both halves of the agent-selection item's asked-for diagnosis (item 9).
+  ONE was never true as written: item 8 says no connection close is ever logged, and Andre's own daemon
+  log holds 3,300 of them, emitted since 2026-06-12 — the real residual is that the line names no
+  client type and no agent. ONE item's blocking residual is GONE: the accounts-chain repair reserved
+  for Andre (item 2) is unnecessary — the chain was recomputed by hand on all three live databases,
+  11 rows each, valid everywhere including the node that held the bad row. Confirmed still open and
+  accurately described: items 3, 5, 6, 7, 10 and 13. Added item 14 (`DOD-END-ISSUER-REGISTERED-1`) —
+  item 12's open question, answered, and the answer is the fail-open one.
+  Banner corrected twice in the same pass: it listed the BETA versions under the word "promoted", and
+  its directory tag went stale within the hour when the fork-alarm roll landed mid-verification.
 ---
 
 # Launch Triage
@@ -116,10 +129,13 @@ see the notes below.)
 > **committed** → **published to npm** → **promoted to `latest`** (Andre runs the promotion); and for
 > the relay/directory: **committed** → **image built** → **rolled to the fleet**.
 >
-> **Currently promoted:** connect `0.0.140`, cli `0.0.163`, daemon `0.0.156`, gateway `0.0.28`,
-> crypto `0.0.44`, transport `0.0.50`, protocol-types `0.0.48` — *pending Andre running the seven
-> promotions for the `v0.0.229` cascade; `beta` is ahead of `latest` until he does.*
-> **Directory:** `1f9281f1` on all three nodes. **Relay:** `0cf04b0c` on both.
+> **Currently promoted, read off npm 2026-08-10:** connect `0.0.139`, cli `0.0.162`, daemon `0.0.155`,
+> gateway `0.0.28`, crypto `0.0.44`, transport `0.0.50`, protocol-types `0.0.48`. **`beta` is ONE AHEAD
+> on the first three** — connect `0.0.140`, cli `0.0.163`, daemon `0.0.156` — *pending Andre running the
+> seven promotions for the `v0.0.229` cascade.* This line previously listed the BETA numbers under the
+> word "promoted", which reads as "operators have it" for a build nobody has.
+> **Directory:** `63f7c4e5` on all three nodes, read off the running instances 2026-08-10 (this line
+> said `1f9281f1` for an hour after the roll). **Relay:** `0cf04b0c` on both, verified the same way.
 
 ### How to actually ship something off this list — for an agent arriving cold
 
@@ -820,6 +836,15 @@ phone-unverified, which may or may not be possible at registration. **Someone wh
 registration and submission-auth path should answer this rather than someone reading the trust
 module.** Nothing here has been demonstrated against a running system.
 
+**✅ ANSWERED 2026-08-10 — case 2 IS reachable, and the answer moved to its own item.** Submission
+requires no portal authentication and no registration of any kind: `submission_write` has no
+`#requireRegistration` gate, so proving possession of any Ed25519 key is enough. So an unresolvable
+issuer is not a theoretical branch — it is one `openssl`-grade key away, and it evaluates to *not the
+same operator*. **The fix and the full trace are item 14 (`DOD-END-ISSUER-REGISTERED-1`); Andre decided
+the shape the same day: both parties must resolve or the answer has no teeth.** Case 1 (both agents
+account-bound but phone-unverified) is NOT answered and stays open here — it is a narrower hole than
+case 2 and is not addressed by item 14's fix, because two registered agents both resolve.
+
 **Why it is worth an answer even if it turns out closed.** "You cannot manufacture standing out of
 your own machines" is an argument we make in writing (`[[shared-documents-objection-rebuttal]]`
 argument 3) and it is the kind of claim a technical evaluator will probe directly. A conjunct that
@@ -849,6 +874,56 @@ notarized end to end and produce a receipt. That case has never run.
 **How to prove it:** open a session, exchange a few messages, restart the daemon to interrupt it,
 then close it — all inside the relay's 24-hour retention. Minutes of work, and it either produces a
 receipt or a named failure.
+
+
+## 14. Anyone can vouch for their own agent using a key they made thirty seconds ago
+
+**Designation: `DOD-END-ISSUER-REGISTERED-1`** (M10B) — ❌ **OPEN, raised 2026-08-10.** Unranked.
+Filed from the verification pass on this list; it is the answer to the open question that used to sit
+on the same-operator item, and the answer is the fail-open one.
+
+**What an operator can do today.** An endorsement is one agent vouching in writing for another — the
+thing a stranger reads to decide whether to trust you. Endorsing your own second agent is supposed to
+be caught: the portal compares the two, finds one account or one verified phone behind both, and
+stamps the endorsement so the recipient is told in plain words that it is one person vouching for
+their own agent and is worth nothing as independent corroboration.
+
+**The stamp is skipped entirely if the endorser is nobody.** Submitting an endorsement requires no
+registration at all — proving you hold *some* key is enough, unlike starting a conversation or
+requesting a connection, both of which check. So: make a fresh key, never register it, sign an
+endorsement of your own registered agent, send it. The agent being endorsed resolves (that side IS
+required to be registered); the endorser does not resolve, because it is not anybody. The comparison
+that needs both sides never runs — and the answer that comes out is a clean **"not the same
+operator"**, not "cannot tell". The endorsement is minted, notarized, and that false answer is frozen
+into it permanently. Repeat as often as you like.
+
+**What the counterparty sees.** Nothing. The warning paragraph is expressed by its ABSENCE, and the
+endorser is shown to them only as `peer-claimed` — no name, no key. They cannot tell an endorsement
+from an established agent with a long history apart from one written by a key minted during the
+conversation.
+
+**Why it is currently harmless, and why that is not much of a softening.** Nothing acts on the count
+yet — the "minimum number of endorsements before you may talk to me" feature is deliberately switched
+off, correctly, because nobody has endorsements on day one. That is the entire mitigation: the
+feature that would be exploited is off. The moment it is switched on, the fabricated endorsements are
+already notarized and permanent.
+
+**The fix, decided by Andre 2026-08-10: the endorser must resolve too.** Both parties must already be
+registered agents in the directory, or the same-operator answer has no teeth. An unresolvable issuer
+is refused by name rather than minted, mirroring the refusal the subject side already gets. Refusal
+rather than a flag, because a flag would assert "these two are one operator" — exactly what cannot be
+known when one side is unidentifiable.
+
+**One property this depends on, worth stating because breaking it turns the fix into an outage.** The
+lookup returns "not registered" only when the directory says so; an unreachable consortium raises an
+error and leaves the submission queued. So refusing on "not registered" cannot refuse a legitimate
+endorsement while the fleet is down. Full detail, including the defense-in-depth option deliberately
+not taken, is on the DoD line.
+
+**Not demonstrated against a running system** — traced through code and confirmed in the directory's
+own comments. Worth knowing because "you cannot manufacture standing out of your own machines" is an
+argument we make in writing ([[shared-documents-objection-rebuttal]] argument 3), so it is the kind of
+claim a technical evaluator probes directly.
 
 
 # Post-launch — needed eventually, not for launch

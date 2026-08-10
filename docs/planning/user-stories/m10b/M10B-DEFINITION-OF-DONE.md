@@ -436,6 +436,56 @@ the additions M10B is accountable for.
   > same-operator REFUSES as `same_operator_account_subject`; a missing agent→account resolution
   > REFUSES as `subject_not_registered` (also live). Revert-tested. D-27's tier CAP moved with
   > `DOD-END-TIER-1`. → Entry 42 — ✅
+- **DOD-END-ISSUER-REGISTERED-1** — **the ISSUER must resolve in the directory, exactly as the SUBJECT
+  already must.** An endorsement whose issuer the directory does not know is **REFUSED by name
+  (`issuer_not_registered`)**, never minted. Raised 2026-08-10 from the launch-triage verification pass;
+  it patches the expression `DOD-END-SUBJECTKIND-1` shipped, and until it lands that line's guarantee
+  does not hold.
+  **The defect.** `computedSameOperator` is a conjunction — `issuerAgent !== null AND subjectAgent !==
+  null AND (account match OR phone-stub match)`. An unresolvable issuer makes the whole expression
+  **false**, and false means *not the same operator*. So an input the portal could not evaluate is
+  recorded as a decision that it evaluated and cleared. That is a fail-open on the one check
+  `INV-NO-SELF-STANDING` rests on, and the false answer is then **pinned into `submission_mint_inputs`
+  and bound into the notarized envelope**, so it is permanent.
+  **Why an unregistered issuer can submit at all.** `submission_write` (`directory-node.ts`) has **no
+  `#requireRegistration` gate** — unlike `session_request` and `connection_request`, which do. Signaling
+  auth there is bare proof-of-possession of ANY Ed25519 key, and the handler's own comment says so. So
+  the reachable path is: mint a throwaway key, never register it, sign an endorsement of your own
+  registered agent, submit to any node. The subject resolves (it is registered and must be), the issuer
+  does not, the flag reads *not same operator*, and the endorsement is minted and notarized as
+  independent third-party corroboration.
+  **REFUSE, do not flag.** Flagging would assert "these two agents are one operator", which is precisely
+  what cannot be known when one side is unidentifiable; and a flagged mint still writes a permanent
+  notarized row for a submitter who does not exist. The subject-side precedent is already refusal
+  (`subject_not_registered`), and the reasoning is the same one written there: *a signal we cannot
+  attribute is worse than one we did not mint.*
+  **This must not become an availability bug, and the property that prevents it is load-bearing.**
+  `resolveAgentByPubkey` returns `null` **only** on the directory's explicit `found:false`; an
+  unreachable consortium THROWS (`DirectoryUnreachableError`, after `#tryEach` exhausts every node),
+  which leaves the row queued rather than refused. So `null` means *definitively not registered*, never
+  *could not check*. **If a later change makes a failed resolution return `null`, this check silently
+  starts refusing legitimate endorsements during an outage** — anyone touching that client must preserve
+  the distinction.
+  **Placement:** beside the existing subject resolution and BEFORE the same-operator branch, so it
+  covers both `subject_kind`s rather than only the agent-subject path. Out of scope: the `refuse` op,
+  which reaches `handleRefuse` earlier and validates the refuser against the target signal's subject —
+  a stronger check than registration.
+  Named events: `signal.ingress.rejected` with `reason: "issuer_not_registered"` (existing event, new
+  reason string; `reason` is a free-form column, so no type or migration is involved).
+  **Defense-in-depth, recorded and NOT required by this line:** a `#requireRegistration` gate on
+  `submission_write` at the directory would stop the row ever being written. Deliberately not folded in
+  — it costs a directory deploy, and `requireRegistration` defaults to `false`, so it is a weaker and
+  config-dependent guard than the portal refusal. The portal is the enforcer because it is the only
+  party that can see linkage at all (`DOD-END-SUBJECTKIND-1`'s own reasoning).
+  > ❌ **OPEN, raised 2026-08-10.** Traced through code and confirmed in the directory's own comments;
+  > **not demonstrated against a running system.** Consequence measured at the receiving end: when the
+  > flag is true the recipient is shown a paragraph saying the endorsement is worth nothing as
+  > independent corroboration and does not count toward any minimum; when it is false that paragraph is
+  > simply ABSENT, and the recipient sees the issuer only as `peer-claimed` — no name, no key. So a
+  > counterparty cannot distinguish an endorsement from an established agent from one written by a key
+  > minted during the conversation. Nothing acts on the count today (`DOD-FLOOR-1` is deliberately off),
+  > which is what makes this currently harmless and what makes it urgent to fix BEFORE the floor is
+  > switched on: by then the fabricated endorsements are already notarized and permanent.
 - **DOD-END-QUOTA-1** — **the issuance quota (`M10B-D6`).** At most **100** endorsements per **rolling
   30 days**, enforced **per account** (not per agent — a per-agent cap is bypassed by spinning up
   agents, which is the same farming hole `INV-NO-SELF-STANDING` exists to close), counted at the portal
