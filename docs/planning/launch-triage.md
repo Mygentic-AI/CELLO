@@ -136,11 +136,15 @@ see the notes below.)
 > **committed** → **published to npm** → **promoted to `latest`** (Andre runs the promotion); and for
 > the relay/directory: **committed** → **image built** → **rolled to the fleet**.
 >
-> **Currently promoted, read off npm 2026-08-10:** connect `0.0.139`, cli `0.0.162`, daemon `0.0.155`,
-> gateway `0.0.28`, crypto `0.0.44`, transport `0.0.50`, protocol-types `0.0.48`. **`beta` is ONE AHEAD
-> on the first three** — connect `0.0.140`, cli `0.0.163`, daemon `0.0.156` — *pending Andre running the
-> seven promotions for the `v0.0.229` cascade.* This line previously listed the BETA numbers under the
-> word "promoted", which reads as "operators have it" for a build nobody has.
+> **Currently promoted — the `v0.0.229` cascade IS on `latest`, read off npm 2026-08-10 06:41 UTC:**
+> connect `0.0.140`, cli `0.0.163`, daemon `0.0.156`, gateway `0.0.28`, crypto `0.0.44`, transport
+> `0.0.50`, protocol-types `0.0.48`. **`latest` == `beta` on all seven — nothing is pending.** This
+> carries `DOD-DOC-WATCH-1` (the selective document nudge), which was committed-but-unshipped for a day.
+>
+> Twice in one morning this line was wrong in opposite directions: it listed the BETA numbers under the
+> word "promoted" (reads as "operators have it" for a build nobody had), and then, once corrected, went
+> stale within the hour when the promotions actually ran. **Read it off npm; do not trust the numbers
+> here.** `npm view @cello-protocol/<pkg> dist-tags` — seven packages, ten seconds.
 > **Directory:** `63f7c4e5` on all three nodes, read off the running instances 2026-08-10 (this line
 > said `1f9281f1` for an hour after the roll). **Relay:** `0cf04b0c` on both, verified the same way.
 
