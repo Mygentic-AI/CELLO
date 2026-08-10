@@ -939,8 +939,19 @@ work; it can no longer destroy anything it should not.** Found by running it aga
 > `ok: true` while hard-deleting the local copy regardless. So revoking your GitHub link still fails
 > and still lies about it. What changed is only that it can no longer do that to your track record.
 >
-> **NOT built — refuse-after-accept**, the decision Andre made for removing an endorsement you already
-> accepted. Refusal still only works while an attestation is pending.
+> **BUILT AND PUBLISHED (daemon `0.0.158`) — refuse-after-accept**, the decision Andre made for
+> removing an endorsement you already accepted. Refusal previously worked only while an attestation
+> was pending, so once you said yes you were stuck with it being presented. It is refusal rather than
+> revocation on purpose: the decision is RECORDED rather than erased, and a refused signal is already
+> inert everywhere it is checked.
+>
+> **The scope was the dangerous half.** A refused signal is inert, so widening refusal without a
+> filter would have handed every operator a back door to suppressing their own MANDATORY signals —
+> refuse your `track_record` and it stops being presented, achieving by consent exactly what
+> revocation is forbidden from doing. Scoped to peer-issued attestations only, filtered on ISSUER and
+> deliberately NOT on type: a hostile peer can issue a signal it calls `track_record`, and refusing a
+> stranger's claim about you is precisely what the verb is for. Revert-tested — dropping that one
+> clause fails two of the eight tests.
 >
 > **Enforcement note.** The client guard is UX and says so in its own header — the operator owns that
 > process. The real enforcement is the portal for mandatory types (server-side, and the only party
