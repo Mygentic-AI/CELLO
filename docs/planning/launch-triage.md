@@ -56,6 +56,12 @@ description: >
   published daemon@latest, not by reading the branch. That is the third entry this week to sit ❌
   while fixed, so the pattern is now the finding: **an item's marker here tracks whoever last edited
   this file, not the code.** Before trusting any ❌, unpack the published artifact.
+  2026-08-10: DOD-TGDOOR-1 REMOVED from the list (Andre) — we are not doing the on-a-real-phone
+  proof; the doorbell rides Telegram and that is what we rely on. Moved to "Left off this list on
+  purpose" with the reasoning, not to Addressed, because it was never fixed — it was declined.
+  DOD-EMAIL-STUB-FORK-1 moved to Addressed, fixed the same day it was found. DOD-ACCOUNTS-CHAIN-1
+  narrowed: the defect is fixed, deployed and the data measured clean on all three nodes, so the only
+  thing still open on it is that verifyChain is on no health surface. Open list now 13.
   2026-08-10 (later): added DOD-EMAIL-STUB-FORK-1 as item 1 — the fork alarm, once taught to name its
   table, found a real one on its first round: one email key bound to two different accounts, one node
   disagreeing with the other two. Junk row deleted on all three nodes and the alarm is quiet. Tracing
@@ -307,18 +313,7 @@ distinguishable metadata so the event says what happened.
 
 ---
 
-## 4. Telegram phone notifications are built and tested, but never proven on a real phone
-
-**Designation: `DOD-TGDOOR-1`** — 🟡 *(still the only Tier-3 unit that can't be smoke-tested without
-a real bot token)*
-
-The doorbell-to-Telegram feature is built and passes its test suite, but has never been watched
-working end-to-end on an actual phone. Low risk either way; just unverified. Flips to done on a live
-proof, nothing else — minutes with a phone, do it opportunistically whenever Andre is at hand.
-
----
-
-## 5. There is still no way to back up or recover your identity
+## 4. There is still no way to back up or recover your identity
 
 **Designation: `DOD-CUSTODY-DAEMON-1`** — ❌ open; demoted from #1 on 2026-08-04 and scoped the same day.
 
@@ -343,7 +338,7 @@ Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello
 
 ---
 
-## 6. Two sides can hold incompatible beliefs about which terminal path a session is on
+## 5. Two sides can hold incompatible beliefs about which terminal path a session is on
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — 🟢 **THE CURE IS BUILT 2026-08-09.** A close
 that fails now ASKS the directory whether the seal already happened, and returns the receipt if it
@@ -642,7 +637,7 @@ read "not yet published" for a day after it was.) **What keeps this item open is
 pull:** nothing asks on the daemon's own initiative, so a session stranded and never touched again
 stays stranded. There is no startup sweep.
 
-## 7. The daemon logs every connection opening and never one closing
+## 6. The daemon logs every connection opening and never one closing
 
 **Designation: `DOD-IPC-DISCONNECT-VISIBLE-1`** — ❌ **OPEN, and deliberately filed as a SMALL one.**
 Unranked. **Proposed slot: low — nobody is ruined by this. It is here because it taxes every
@@ -679,7 +674,7 @@ misreading; `selected_by_this_connection`, or a note in the payload, would stop 
 permanent (spec §3). What is missing is only the record of it changing.
 
 
-## 8. A session was silently bound to an agent it never selected — and it was someone else's identity
+## 7. A session was silently bound to an agent it never selected — and it was someone else's identity
 
 **Designation: `DOD-AGENT-SELECTION-UNWARRANTED-1`** — ❌ **OPEN, cause NOT established.** Unranked.
 **Proposed slot: high, on the security argument below — but it needs the diagnosis before it can be
@@ -747,7 +742,7 @@ to `agent.current.switched`, then reproduce with a daemon restart after a releas
 the two candidates in one run.
 
 
-## 9. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
+## 8. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
 
 **Designation: `DOD-HEARTBEAT-REPLICATION-1`** — ❌ **OPEN.** Unranked. Previously recorded only as a
 footnote on item 14; filed here because it is a live fault in its own right and was nearly fixed as
@@ -786,7 +781,7 @@ heartbeat not replicating. That is wrong — `id` is simply not in the spec eith
 that `last_heartbeat_at` is mutable and Tier A carries immutable columns. Left uncorrected it would
 have sent whoever picks this up at the wrong repair.
 
-## 10. A document's agreed content profile is signed into its identity and enforced by nothing
+## 9. A document's agreed content profile is signed into its identity and enforced by nothing
 
 **Designation: `DOD-DOC-PROFILE-1`** (M14) — ⏳ **DELIBERATE SPLIT, recorded here so the gap is
 visible from the launch list rather than only from the milestone doc.**
@@ -804,7 +799,7 @@ refusal cannot be answered, so a genuinely multilingual document fails closed an
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
 
-## 11. Same-operator standing: two layers exist, and one input can be absent
+## 10. Same-operator standing: two layers exist, and one input can be absent
 
 **Designation: `DOD-SELF-STANDING-NULL-LINKAGE-1`** — ⚠️ **OPEN QUESTION, NOT a confirmed defect.**
 Raised 2026-08-09 from an endorsement exercise. Filed because it is a security property and the
@@ -855,7 +850,7 @@ your own machines" is an argument we make in writing (`[[shared-documents-object
 argument 3) and it is the kind of claim a technical evaluator will probe directly. A conjunct that
 evaluates to *not-same-operator* when an input is missing is the shape worth being certain about.
 
-## 12. Signup throttling counts by company, so unrelated people block each other
+## 11. Signup throttling counts by company, so unrelated people block each other
 
 **Designation: `DOD-OTP-RATELIMIT-KEY-1`** — ❌ **OPEN, filed 2026-08-10** while tracing where the
 email domain is used at all. Small, and entirely in one file.
@@ -886,7 +881,7 @@ backend. Nothing about the fix touches the directory or the protocol.
 
 ---
 
-## 13. Interrupted-session sealing is shipped and has never been proven
+## 12. Interrupted-session sealing is shipped and has never been proven
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
 Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
@@ -912,7 +907,7 @@ then close it — all inside the relay's 24-hour retention. Minutes of work, and
 receipt or a named failure.
 
 
-## 14. Anyone can vouch for their own agent using a key they made thirty seconds ago
+## 13. Anyone can vouch for their own agent using a key they made thirty seconds ago
 
 **Designation: `DOD-END-ISSUER-REGISTERED-1`** (M10B) — 🟡 **BUILT 2026-08-10, NOT REVIEWED, NOT
 DEPLOYED.** Raised, decided and built the same day. Unranked. Filed from the verification pass on this
@@ -1086,6 +1081,16 @@ Plan for the day it matters:
 # Left off this list on purpose
 
 Recorded so they stop being re-found by every sweep:
+
+- **`DOD-TGDOOR-1`** (M8C, 🟡 built and tested, never watched on a real phone) — **REMOVED FROM THE
+  LIST 2026-08-10 (Andre). We are not doing this proof.** The doorbell reaches a phone through
+  Telegram, and Telegram is what we rely on for that today. **Ship without.**
+
+  Andre's reasoning, recorded because it also answers a question this list does NOT currently ask:
+  a Telegram account cannot share a phone number unless one is registered to it, and registering one
+  requires passing Telegram's own phone verification — so anyone who can share a number through the
+  app had that number verified at some point in the not-too-distant past. Not perfect, and
+  **deliberately accepted as more than enough for launch.**
 
 - **`DOD-TESTDAEMON-REAP-1`** (M8C, ❌ raised 2026-07-30) — the test harness leaks its subject
   daemon, which then hammers the dev directory indefinitely. Raised in the same batch as the
