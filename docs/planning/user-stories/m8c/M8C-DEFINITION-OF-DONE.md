@@ -1939,8 +1939,9 @@ own story) deliberately, never smuggled in as a rider. Source:
   volume** (`down -v && up -d`, zero manual steps): `cello_service` authenticates and the directory
   suite goes **129 failures → 3**.
 
-- **DOD-ACCOUNTS-CHAIN-1** (2026-07-13, found by Ms_Chelly while clearing the above) — ❌ **OPEN, and
-  the one worth a real look.** `verifyChain("user_accounts")` fails **whenever the ops-agent suite has
+- **DOD-ACCOUNTS-CHAIN-1** (2026-07-13, found by Ms_Chelly while clearing the above) — 🟢 **FIXED,
+  DEPLOYED, DATA VERIFIED CLEAN 2026-08-10. Only the health surface remains — see the update further
+  down this line, and DO NOT repair any row.** Original finding:** `verifyChain("user_accounts")` fails **whenever the ops-agent suite has
   run against the same database**; on a clean DB with only the directory suite it passes. The test's
   own comment asserts the invariant: *"no row can exist that was inserted outside the chain
   mechanism."* If the **ops-agent registration flow writes `user_accounts` rows without going through
@@ -1966,8 +1967,27 @@ own story) deliberately, never smuggled in as a rider. Source:
   [[launch-triage]] (item "Every real registration writes the human-agent binding outside the hash
   chain") with the fix shape recorded there.
 
-  **🟡 BUILT + REVIEWED 2026-08-06 — `493609dc` + `1aa25164`, branch `dod/accounts-chain-1`. NOT ✅:
-  existing unchained rows are untouched and the deploy step below is owed.**
+  **Built + reviewed 2026-08-06 — `493609dc` + `1aa25164`, branch `dod/accounts-chain-1`.**
+
+  **🟢 UPDATED 2026-08-10 — DEPLOYED, AND THE DATA IS CLEAN. One thing is still open, and it is not
+  a repair.** The fix runs on all three nodes, and the chain was re-measured today by dumping every
+  `user_accounts` row from all three live databases and recomputing it with the app's own
+  `serializeRecord`/`computeChainHash`: **11 rows per node, VALID on all three** — including the row
+  on `gcp-usc1` that the deploy note below records as holding the old standalone digest.
+
+  **The checker was proven able to fail before that green was believed** — one row tampered in memory
+  (never written) reported the break at exactly that position. Stating this because a verification
+  script earlier the same day silently discarded most of its input and produced a confident all-clear.
+
+  **⛔ DO NOT REPAIR ANY ROW.** Both repairs the deploy note below recommends would now be the first
+  damage this table has taken. Each row's hash is computed over the PREVIOUS row's stored hash, so
+  deleting position 1 and letting anti-entropy re-replicate it breaks the ten rows behind it —
+  manufacturing exactly the failure this line exists to remove, on a table that is clean.
+
+  **What remains: `verifyChain` is on no health surface.** "Is the tamper-evidence intact?" can only
+  be answered by hand — IAP SSH per node, credentials from Secret Manager, a recomputation. That gap
+  is why a stale "it is broken" note survived four days and nearly drove a destructive repair. Put it
+  on the ops-agent health output. That is the whole of the outstanding work on this line.
 
   **Confirmed on LIVE DATA before any code changed** (`cello_spine_0`): the real row's stored
   `chain_hash` equals `SHA-256(account_id ‖ phone_stub_hash)` byte-for-byte, and not
@@ -1991,7 +2011,9 @@ own story) deliberately, never smuggled in as a rider. Source:
   store; revert-verified as the only test that catches it. **General shape: when the defect is a
   MISSING CALL, a test of the callee proves nothing.**
 
-  **⚠️ DEPLOY IS OWED — the fix appends correct rows on top of a broken prefix.** `verifyChain`
+  **⚠️ SUPERSEDED — read the 2026-08-10 block above first. The deploy happened and the data is clean;
+  the steps below are retained as history and step 2's options must NOT be run.** Original text:
+  **DEPLOY IS OWED — the fix appends correct rows on top of a broken prefix.** `verifyChain`
   walks the whole table, so any database holding a legacy unchained row stays **red forever**, which
   is the exact condition this unit exists to remove. Required steps:
   1. **GCP directories — nothing to migrate** (greenfield post-cutover), but add a post-deploy

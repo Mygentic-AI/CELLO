@@ -182,49 +182,30 @@ sealed. Where a claim can be checked against a live daemon or the fleet logs, ch
 was **overstated** (ruled out — see Addressed), and `DOD-ACCOUNTS-CHAIN-1` was **confirmed as a
 real tamper-evidence gap** — it is now **item 1** below.
 
-## 1. One email address maps to two different accounts, depending on which node you ask
+## 1. Every real registration writes the human-agent binding outside the hash chain
 
-**Designation: `DOD-EMAIL-STUB-FORK-1`** — ❌ **OPEN, found 2026-08-10** by the fork alarm, one round
-after it was taught to name the table. Present since **2026-08-08**.
+**Designation: `DOD-ACCOUNTS-CHAIN-1`** — 🟢 **THE DEFECT IS FIXED, DEPLOYED, AND THE DATA IS CLEAN.
+What is still open is ONE small thing: nothing surfaces `verifyChain` where anyone would see it.**
 
-**What an operator would hit.** Sign-in asks "which account owns this email?". Two of your three
-directory nodes answer `c9a1d4a0…`; the third answers `b2e1c705…`. Same key, two different accounts,
-and nothing resolves it — these rows are insert-if-absent, so each node keeps the copy it wrote first
-and neither can overwrite the other. Which identity you are treated as depends on which node your
-client happened to reach.
+**Narrowed 2026-08-10, because this line kept reading as though the whole item were outstanding.**
+Three of its four parts are done: the writer was fixed and reviewed (`493609dc` + `1aa25164`), it is
+deployed on all three nodes, and the data was re-measured today — **11 rows per node, `verifyChain`
+VALID on all three**, with the checker proven able to fail before the green was believed. **Do not
+repair any row; see the block below.**
 
-**Measured on the three live databases:**
+**The remainder, and it is the whole of what is left:** `verifyChain("user_accounts")` is exposed on
+no health surface, so "is the tamper-evidence actually intact?" can only be answered by hand — IAP
+SSH to each node, credentials out of Secret Manager, and a recomputation. That is why a stale "it is
+broken" note survived four days here and nearly caused a destructive repair. **Put it on the
+ops-agent health output**, or the next person is in the same position.
 
-| Node | `mygentic.ai` maps to | Written |
-|---|---|---|
-| `gcp-euw1` | `b2e1c705-d1c9-47b0-8baa-dec29cef3bcf` | 2026-08-08 05:52:26Z |
-| `gcp-use1` / `gcp-usc1` | `c9a1d4a0-4dd7-4653-99d0-a1dad607c396` | 2026-08-08 05:58:50Z |
+Two spin-offs stay recorded, neither blocking: `DOD-ACCOUNTS-EMAIL-CHAIN-1` (the email half is stored
+but not chained) and the test-isolation defect below.
 
-Both accounts exist on all three nodes, so this is two accounts each claiming the same address, six
-minutes apart, on different nodes — not a replication gap.
+<details><summary>The original defect, kept because it is the evidence and the diagnosis</summary>
 
-**A second defect is visible in that key, and it may be the cause.** `email_stub_hash` is supposed to
-be a SHA-256 stub — the other row in the table is a proper 64-hex value. This one is the literal
-string **`mygentic.ai`**, a bare domain. Something wrote a raw domain where a hash belongs. If two
-different sign-ups both reduced to the domain, they would collide by construction, which would
-explain two accounts claiming one key. **Establish that before repairing the row** — repairing the
-data while the writer still produces domains just recreates it.
-
-**Why it is ranked here.** It is the identity binding, it is silently wrong, and it is exactly the
-class the portal's 2026-08-07 "ask every node and merge" workaround exists to paper over — that
-workaround makes the disagreement invisible rather than resolving it. It is also the only confirmed
-Tier-A fork in the fleet.
-
-**Do not repair the row unilaterally.** Same reasoning as the accounts-chain item below: choosing
-which of two accounts owns an address is a decision about someone's identity, not a cleanup.
-
----
-
-## 2. Every real registration writes the human-agent binding outside the hash chain
-
-**Designation: `DOD-ACCOUNTS-CHAIN-1`** — ❌ open, raised 2026-07-13, **diagnosed 2026-08-04:
-possibility (a) confirmed — a real tamper-evidence gap, not a test artifact.** Proposed slot; Andre
-confirms the rank.
+Raised 2026-07-13. **Diagnosed 2026-08-04: possibility (a) confirmed — a real tamper-evidence gap,
+not a test artifact.**
 
 `user_accounts` — the table that binds a human to an agent — has two writers, and production uses
 the wrong one. The registration path (`directory-node.ts:3170`, step 6 after DKG) calls
@@ -282,9 +263,11 @@ or "still red on the origin node" gets closed and forgotten. Steps in [[M8C-DEFI
 test-isolation defect — several suites `DELETE` from this append-only chained table, which makes the
 `CELLO_ENV=local` suite non-deterministic (36 vs 30 failures across two runs of the same tree).
 
+</details>
+
 ---
 
-## 3. A mismatch that makes a conversation unsealable leaves no durable trace
+## 2. A mismatch that makes a conversation unsealable leaves no durable trace
 
 **Designation: `DOD-FRONTIER-MISMATCH-DURABLE-1`** (M8D, 🅿️ parked) — **re-scoped 2026-08-03.** The
 original defect under this item (`DOD-FRONTIER-STRAND-1`) is fixed; see Addressed. What is left is
@@ -308,7 +291,7 @@ anything keyed on it must not assume it is.
 
 ---
 
-## 4. A daemon shutdown rings the doorbell like an incoming message
+## 3. A daemon shutdown rings the doorbell like an incoming message
 
 **Designation:** [[2026-07-30_1423_cello-claude-code-plugin-and-channels-allowlist]] — **needs a DoD
 line opened.**
@@ -324,7 +307,7 @@ distinguishable metadata so the event says what happened.
 
 ---
 
-## 5. Telegram phone notifications are built and tested, but never proven on a real phone
+## 4. Telegram phone notifications are built and tested, but never proven on a real phone
 
 **Designation: `DOD-TGDOOR-1`** — 🟡 *(still the only Tier-3 unit that can't be smoke-tested without
 a real bot token)*
@@ -335,7 +318,7 @@ proof, nothing else — minutes with a phone, do it opportunistically whenever A
 
 ---
 
-## 6. There is still no way to back up or recover your identity
+## 5. There is still no way to back up or recover your identity
 
 **Designation: `DOD-CUSTODY-DAEMON-1`** — ❌ open; demoted from #1 on 2026-08-04 and scoped the same day.
 
@@ -360,7 +343,7 @@ Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello
 
 ---
 
-## 7. Two sides can hold incompatible beliefs about which terminal path a session is on
+## 6. Two sides can hold incompatible beliefs about which terminal path a session is on
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — 🟢 **THE CURE IS BUILT 2026-08-09.** A close
 that fails now ASKS the directory whether the seal already happened, and returns the receipt if it
@@ -659,7 +642,7 @@ read "not yet published" for a day after it was.) **What keeps this item open is
 pull:** nothing asks on the daemon's own initiative, so a session stranded and never touched again
 stays stranded. There is no startup sweep.
 
-## 8. The daemon logs every connection opening and never one closing
+## 7. The daemon logs every connection opening and never one closing
 
 **Designation: `DOD-IPC-DISCONNECT-VISIBLE-1`** — ❌ **OPEN, and deliberately filed as a SMALL one.**
 Unranked. **Proposed slot: low — nobody is ruined by this. It is here because it taxes every
@@ -696,7 +679,7 @@ misreading; `selected_by_this_connection`, or a note in the payload, would stop 
 permanent (spec §3). What is missing is only the record of it changing.
 
 
-## 9. A session was silently bound to an agent it never selected — and it was someone else's identity
+## 8. A session was silently bound to an agent it never selected — and it was someone else's identity
 
 **Designation: `DOD-AGENT-SELECTION-UNWARRANTED-1`** — ❌ **OPEN, cause NOT established.** Unranked.
 **Proposed slot: high, on the security argument below — but it needs the diagnosis before it can be
@@ -764,7 +747,7 @@ to `agent.current.switched`, then reproduce with a daemon restart after a releas
 the two candidates in one run.
 
 
-## 10. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
+## 9. Directory nodes cannot see each other's heartbeats — each believes it is the only one alive
 
 **Designation: `DOD-HEARTBEAT-REPLICATION-1`** — ❌ **OPEN.** Unranked. Previously recorded only as a
 footnote on item 14; filed here because it is a live fault in its own right and was nearly fixed as
@@ -803,7 +786,7 @@ heartbeat not replicating. That is wrong — `id` is simply not in the spec eith
 that `last_heartbeat_at` is mutable and Tier A carries immutable columns. Left uncorrected it would
 have sent whoever picks this up at the wrong repair.
 
-## 11. A document's agreed content profile is signed into its identity and enforced by nothing
+## 10. A document's agreed content profile is signed into its identity and enforced by nothing
 
 **Designation: `DOD-DOC-PROFILE-1`** (M14) — ⏳ **DELIBERATE SPLIT, recorded here so the gap is
 visible from the launch list rather than only from the milestone doc.**
@@ -821,7 +804,7 @@ refusal cannot be answered, so a genuinely multilingual document fails closed an
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
 
-## 12. Same-operator standing: two layers exist, and one input can be absent
+## 11. Same-operator standing: two layers exist, and one input can be absent
 
 **Designation: `DOD-SELF-STANDING-NULL-LINKAGE-1`** — ⚠️ **OPEN QUESTION, NOT a confirmed defect.**
 Raised 2026-08-09 from an endorsement exercise. Filed because it is a security property and the
@@ -872,7 +855,7 @@ your own machines" is an argument we make in writing (`[[shared-documents-object
 argument 3) and it is the kind of claim a technical evaluator will probe directly. A conjunct that
 evaluates to *not-same-operator* when an input is missing is the shape worth being certain about.
 
-## 13. Signup throttling counts by company, so unrelated people block each other
+## 12. Signup throttling counts by company, so unrelated people block each other
 
 **Designation: `DOD-OTP-RATELIMIT-KEY-1`** — ❌ **OPEN, filed 2026-08-10** while tracing where the
 email domain is used at all. Small, and entirely in one file.
@@ -903,7 +886,7 @@ backend. Nothing about the fix touches the directory or the protocol.
 
 ---
 
-## 14. Interrupted-session sealing is shipped and has never been proven
+## 13. Interrupted-session sealing is shipped and has never been proven
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
 Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
@@ -929,7 +912,7 @@ then close it — all inside the relay's 24-hour retention. Minutes of work, and
 receipt or a named failure.
 
 
-## 15. Anyone can vouch for their own agent using a key they made thirty seconds ago
+## 14. Anyone can vouch for their own agent using a key they made thirty seconds ago
 
 **Designation: `DOD-END-ISSUER-REGISTERED-1`** (M10B) — 🟡 **BUILT 2026-08-10, NOT REVIEWED, NOT
 DEPLOYED.** Raised, decided and built the same day. Unranked. Filed from the verification pass on this
@@ -1138,6 +1121,66 @@ Recorded so they stop being re-found by every sweep:
 ---
 
 # Addressed — off the open list
+
+## One email address maps to two different accounts, depending on which node you ask
+
+**Moved here 2026-08-10 — FIXED THE SAME DAY IT WAS FOUND.** The junk row was deleted from all three
+nodes (`DELETE 1` on each), leaving the one legitimate row identical everywhere. Verified after: the
+fork alarm went silent and every round reports `0 planned / 0 pulled / 0 applied` — full convergence,
+the terminal state this table had not reached since 2026-08-08.
+
+**The row was garbage, not a real collision.** Its key was the bare domain `mygentic.ai` where a
+SHA-256 address fingerprint belongs. Tracing every writer established that the live registration path
+sends a proper hash — the signed capability field is *named* `email_domain` but has carried the
+fingerprint since V30 — so no code path produces this. It was almost certainly written by hand
+against the database. **Nothing needed fixing in the code.**
+
+**Why it is still worth reading:** it is the only Tier-A fork the fleet has ever had, and it is what
+proved the fork alarm works once it can name a table. It also cost a wrong call — see the corrected
+claim on the trust-signal replication entry below.
+
+<details><summary>Original entry, kept because the measurement is the evidence</summary>
+
+
+**Designation: `DOD-EMAIL-STUB-FORK-1`** — ❌ **OPEN, found 2026-08-10** by the fork alarm, one round
+after it was taught to name the table. Present since **2026-08-08**.
+
+**What an operator would hit.** Sign-in asks "which account owns this email?". Two of your three
+directory nodes answer `c9a1d4a0…`; the third answers `b2e1c705…`. Same key, two different accounts,
+and nothing resolves it — these rows are insert-if-absent, so each node keeps the copy it wrote first
+and neither can overwrite the other. Which identity you are treated as depends on which node your
+client happened to reach.
+
+**Measured on the three live databases:**
+
+| Node | `mygentic.ai` maps to | Written |
+|---|---|---|
+| `gcp-euw1` | `b2e1c705-d1c9-47b0-8baa-dec29cef3bcf` | 2026-08-08 05:52:26Z |
+| `gcp-use1` / `gcp-usc1` | `c9a1d4a0-4dd7-4653-99d0-a1dad607c396` | 2026-08-08 05:58:50Z |
+
+Both accounts exist on all three nodes, so this is two accounts each claiming the same address, six
+minutes apart, on different nodes — not a replication gap.
+
+**A second defect is visible in that key, and it may be the cause.** `email_stub_hash` is supposed to
+be a SHA-256 stub — the other row in the table is a proper 64-hex value. This one is the literal
+string **`mygentic.ai`**, a bare domain. Something wrote a raw domain where a hash belongs. If two
+different sign-ups both reduced to the domain, they would collide by construction, which would
+explain two accounts claiming one key. **Establish that before repairing the row** — repairing the
+data while the writer still produces domains just recreates it.
+
+**Why it is ranked here.** It is the identity binding, it is silently wrong, and it is exactly the
+class the portal's 2026-08-07 "ask every node and merge" workaround exists to paper over — that
+workaround makes the disagreement invisible rather than resolving it. It is also the only confirmed
+Tier-A fork in the fleet.
+
+**Do not repair the row unilaterally.** Same reasoning as the accounts-chain item below: choosing
+which of two accounts owns an address is a decision about someone's identity, not a cleanup.
+
+---
+
+
+</details>
+
 
 ## The inbox says sessions are sealed when they are not
 
