@@ -20,10 +20,19 @@ description: >
   (received bytes of genesis + chain + log snapshot, signature binding every byte through
   hashes), and `validateDocumentJoinOffer`, the first production-facing consumer of
   deriveArrangement + the governance policy (invitee replays, never trusts). Remaining:
-  (i) invitee receive path — inbox surface, signed settle-once accept/refuse, on-accept
-  store-append (VALIDATE-BEFORE-APPEND CONDITION BINDS) + document row + log materialization;
-  (ii) inviter authoring path + tool surface (verb decision against the vocabulary guard);
-  (iii) DOD-MP-REMOVE-1 rides the same machinery. Then ONE review on the whole diff.
+  DONE SO FAR on the branch: join-answer frame (`b717c54`, settle-once on the amendment hash)
+  and the daemon join store (`dc66125`, both roles, refusals recorded never dropped). REMAINING:
+  (i) frame-router kinds `join_offer`/`join_answer`/`amendment` + layer receive wiring
+  (validate-on-receive via validateDocumentJoinOffer; amendment frames to EXISTING holders are
+  best-effort at P1 — journal the gap — with the epoch gate making a missed one loud);
+  (ii) the accept flow: re-validate stored bytes → append chain to DocumentAmendmentStore
+  (VALIDATE-BEFORE-APPEND BINDS) → record genesis into document_proposals (LiveDocuments reads
+  starting_content from there) → create documents row (peerAgentId = the inviter pre-P2, a
+  journaled nuance) → materialize envelope_log (verify per-envelope sig + set-based chain,
+  appendEnvelope, rebuild) → send signed answer via transport.sendBytes;
+  (iii) inviter verb `cello_doc_invite` (four lockstep surfaces + vocabulary) — author amendment,
+  validate-then-append, assemble offer, sendBytes to invitee + amendment frame to other holders;
+  (iv) DOD-MP-REMOVE-1. Then ONE review on the whole diff.
 - **Superseded context (kept for the record):** the wire half was built first on `m14b/amend-1`
   (`cello-client 57e06e6`, 30 tests green, full gate): document-amendment.ts — final-shape frame,
   strict codec, `deriveArrangement` replay with injected GOVERN-1 policy seam, last-admin +
