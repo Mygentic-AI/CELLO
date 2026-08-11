@@ -138,7 +138,12 @@ description: >
   always valid. Validation is per-kind and refuses a collection that does not meet its kind's
   requirement. The two-admin deadlock (neither can remove the other) is BY DESIGN — pinned by a
   test, and the refusal says the recourse (duplicate + start fresh). Proven entirely bilateral:
-  two parties amend a property; an amendment missing a required signature is rejected. — ❌
+  two parties amend a property; an amendment missing a required signature is rejected. — ✅
+  > Reviewed; 4 findings + 1 hollow row fixed, incl. the proof clause now running under the real
+  > policy; invitee-consent clause dispositioned to JOIN-1 (Entry 8); the holder-door bypass
+  > refused by name. Merged `cello-client 4523716`. → Journal Entries 7–8.
+  > NOTE: the policy seam consumed here reshaped AMEND-1's `SignerPolicy` to a claimed-set
+  > verdict — rationale in Entry 7.
 
 ## Tier P1 — Join (Phase 2)
 

@@ -15,10 +15,14 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next:** GOVERN-1 review IN FLIGHT (dispatched on 5108e12..2fba725 + Entry 7). On the
-  verdict: fix findings → merge `m14b/govern-1` → flip ✅ → P0 is ALL GREEN → pull
-  `DOD-MP-JOIN-1` (P1: the join flow — admin's add_holder amendment + the invitee's own consent
-  handshake carrying assurance_tier/feature_version; full document via log replay per D1).
+- **Next red:** `DOD-MP-JOIN-1` (P1) — the join flow: an admin's `add_holder` amendment + the
+  invitee's OWN consent handshake (offer carries genesis + amendment chain +
+  assurance_tier/feature_version; invitee derives the arrangement independently; full document
+  via log replay per D1; join effective only when amendment valid AND invitee consented — this
+  carries GOVERN-1's dispositioned consent clause, Entry 8). Branch `m14b/join-1` from
+  cello-client main (`4523716`). This unit wires the first production callers of
+  deriveArrangement/policy/store-append — AMEND-1's validate-before-append condition BINDS its
+  review.
 - **Superseded context (kept for the record):** the wire half was built first on `m14b/amend-1`
   (`cello-client 57e06e6`, 30 tests green, full gate): document-amendment.ts — final-shape frame,
   strict codec, `deriveArrangement` replay with injected GOVERN-1 policy seam, last-admin +
@@ -29,8 +33,8 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅🟡 (TRACE-1, SIG-1, AMEND-1; GOVERN-1 built/review-in-flight) · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
-- **Branches in flight:** `m14b/govern-1` (cello-client).
+- **Tiers:** P0 ✅✅✅✅ ALL GREEN · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
+- **Branches in flight:** none.
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
 - **Parked:** nothing yet.
@@ -424,3 +428,37 @@ never implied by absence; an admin who is not a party refuses with nothing creat
 **Carried:** the documents plugin skill's guidance on choosing admins rides the ship line's
 skill audit, not this unit. **Red-first slippage, recorded:** the governance suites ran first
 only after the module existed; the handler tests were written after the surface change.
+
+---
+
+## Entry 8 — GOVERN-1 review verdict, findings fixed, merged — P0 ALL GREEN (2026-08-11)
+
+**Reviewer verdict (`cello-unit-reviewer`, one pass, quoted):** "SPEC: DEVIATIONS FOUND —
+[blocking]: the bilateral change_property proof clause is unmet (F1), and the invitee-consent
+clause is un-journaled (F2, disposition line suffices). NO SILENT FALLBACKS. ERRORS NAME THEIR
+CAUSE. HOLLOW TESTS FOUND — one: the change_property policy row asserts on an impossible input
+shape; every other new test survives THE REVERT TEST (verified individually). REMOVALS PROVEN."
+The adversarial pass confirmed the voluntary-leave door is enforced by signature possession
+(the claim completes only with the subject's own Ed25519 signature over a TBS committing to the
+claimed set), and the deadlock guard cannot fire on states the replay's earlier checks exclude.
+
+**Findings disposition — all fixed (`cello-client 92b7d56`, merged `4523716`):**
+- **F1 (HIGH):** the DoD's proof clause now RUNS: two parties, one admin's signature flips
+  `append_only` under the real policy; the identical amendment with the signature absent is
+  rejected naming the missing signer. The hollow row asserts on `subject: null`.
+- **F2 (MEDIUM) — DISPOSITION:** the "plus the invitee's own consent" clause of `add_holder` is
+  **carried by DOD-MP-JOIN-1**, whose line already states it: "a join is not effective until
+  both the amendment is valid AND the invitee has consented — neither alone admits anyone." The
+  policy deliberately refuses expressing consent inside the collection (an inflated claim is a
+  veto smuggled through the claim); consent rides the offer/accept handshake JOIN-1 builds.
+- **F3 (LOW):** stale mint-model comment rewritten. **F4 (LOW):** a duplicated claim refuses at
+  the policy gate rather than being deduped into a collection the multisig layer throws on.
+- **Also taken:** AMEND-1's DoD evidence line gains a pointer to Entry 7's seam reshape so the
+  record does not describe a seam that no longer exists.
+
+**Said out loud, per the report:** no production code consults `documentGovernancePolicy` or
+`deriveArrangement` yet — today the admin set is signed bytes plus a policy nobody in
+production runs. The apply/receive units (JOIN-1, INBOUND-N-1) wire them, under AMEND-1's
+standing validate-before-append condition.
+
+**DOD-MP-GOVERN-1 flips ✅ on this entry. Tier P0 is ALL GREEN.**
