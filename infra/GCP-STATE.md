@@ -810,6 +810,36 @@ is its own migration, later.
 | Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`), `cello-portal-directory-api-keys`, **`cello-ops-agent-ses-credentials` (added 2026-08-07 — see below)**, and copied from AWS: `-github-client-id`, `-github-client-secret`, `-intake-key-0`, `-ingress-trigger-secret`, `-submission-seed` |
 | Verified | 307 → `/sign-in` over https on the real hostname; **portal→directory proven through the app** — POST `/api/internal/ingress/drain` returns `ok:true` with `nodeErrors: []` (refuses 401 without the trigger secret); issuer enrolled on usc1/euw1/use1 |
 
+### 🟢 2026-08-11 — the submission queue finally has something draining it
+
+`cello-portal-ingress-drain`, Cloud Scheduler, us-east1, `* * * * *`, `Etc/UTC`, ENABLED. POSTs the
+portal's `/api/internal/ingress/drain` with OIDC (`cello-portal-scheduler`, a NEW service account —
+not the waitlist's, not the portal's) plus the `x-cello-ingress-secret` header read from
+`cello-portal-ingress-trigger-secret`. `attempt_deadline = 50s`, deliberately under the interval.
+
+**NOTHING HAD EVER CALLED THAT ROUTE.** Until today the only Cloud Scheduler jobs in this project
+were the waitlist's four. The portal is the only party that can open a sealed submission, and the
+drain is the only thing that opens them — so every endorsement, refusal, withdrawal and revocation a
+daemon wrote reached `queued` and stopped there permanently. It looked like latency and it was
+total. Revocation was simply the first feature whose entire value sits on the far side of the drain,
+which is why it was the first to expose the absence.
+
+**Proved live end-to-end the same day, with the trigger untouched by hand:**
+
+| Step | Evidence |
+|---|---|
+| 12:57 — daemon queues a real `github_id` revocation | `queued: true`, `revoked: false` (the truthful intermediate answer) |
+| 12:57:02 — the SCHEDULER drains it | `signal.ingress.drained` count 1 on nodeIndex 1, `signal.ingress.authenticated` |
+| 12:57:03 — the portal acts | `signal.revoke.performed` |
+| replication | `revoked \| revocation_rows 1` on **all three** node databases, read independently per node |
+
+The queue is not replicated, so the row sat only on the node the daemon reached (index 1) — and the
+revocation still reached all three, which is the part that had to be true.
+
+Overlap and retry were checked rather than assumed safe: `drainSubmissions` is a plain SELECT with no
+lease, but `processed_submissions` dedupes on the id derived from the OPENED envelope, and the revoke
+branch sits after that check so a row whose ack failed is not revoked twice.
+
 ### Deploy 2026-08-10 (second) — `portal-1cb90e7` (security-derived signal lifecycle)
 
 Cloud Run rev `cello-portal-00012-npq`, 100% traffic, `/sign-in` 200, zero ERROR entries on the new
