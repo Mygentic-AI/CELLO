@@ -94,7 +94,10 @@ description: >
   consumer of `epoch_id` today; (d) the handshake property flow and where the immutability-after-
   accept rule is enforced; (e) how the M14 consent handshake would carry a join. Every divergence
   from the multiplayer log's assumptions becomes an AC on the unit it affects. No code ships from
-  this line. — ❌
+  this line. — ✅
+  > Five-seam map with verified citations; 2 defects found, 1 fixed (`content_profile` signed but
+  > not sendable, cello-client `59c1814`); reviewer's blocking finding (epoch map incomplete)
+  > corrected in the addendum. → Journal Entries 1–2.
 - **DOD-MP-SIG-1** [cello-client] — the multi-signature primitive: collect N Ed25519 signatures
   over ONE domain-separated preimage (`CELLO-DOC-MULTISIG-v1` TBS naming the document, the
   subject hash, and the required-signer set); a collection missing any required signature is
@@ -109,7 +112,16 @@ description: >
   `remove_admin`, `change_property`. Replay derives {participant set, admin set, properties} from
   genesis + the chain; a gap, an unknown predecessor, or an invalid amendment REFUSES loudly
   naming the gap. Store keyed on `document_id`/`agent_id` only. Amendments are envelopes in the
-  append-only log — new records, never edits. — ❌
+  append-only log — new records, never edits.
+  **ACs from TRACE-1 (Journal Entry 2):** every locally-authored envelope — publish
+  (`document-publish.ts:137`) AND rejection (`document-rejection.ts:246`) — stamps the current
+  epoch from replay, never the constant; `list` (`document-lifecycle.ts:177`) reads the real
+  value; the quarantine stubs (`document-store.ts:553`) read the real value or are exempted with
+  a journaled reason; the envelope decoder (`document-envelope.ts:203–207`) relaxes to
+  integer-shape only, and epoch CORRECTNESS moves to inbound — which may trust the decoded value
+  because `epoch_id` sits in the signed TBS (`document-envelope.ts:100`). The admin set at
+  creation rides a new slot in the SIGNED proposal preimage, **keyed by pubkey/`agent_id`**, as
+  one batched preimage change with frozen-vector reissue and `feature_version` 2. — ❌
 - **DOD-MP-GOVERN-1** [cello-client] — the signature-requirement policy, per §13-D2/D3: the
   admin set is fixed at creation by the initiator (everyone-is-admin, or a listed subset —
   the create flow makes the choice legible, never defaulting silently); a SINGLE admin's

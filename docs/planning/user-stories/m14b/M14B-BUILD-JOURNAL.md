@@ -15,13 +15,14 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next red:** `DOD-MP-TRACE-1` — the confirm-first trace. Target: journal a file/line map of
-  the fan-out shape, both topology refusal sites, `epoch_id`'s producers/consumers, the
-  property-immutability enforcement point, and the consent handshake's join fit; divergences from
-  the multiplayer log's assumptions become ACs on downstream units.
-- **Tiers:** P0 ❌❌❌❌ · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
-- **Branches in flight:** none.
-- **Publishes this milestone:** none.
+- **Next red:** `DOD-MP-AMEND-1` — the amendment record (SIG-1 is BUILT on branch `m14b/sig-1`,
+  cello-client `7277f82`, review in flight; AMEND-1 consumes it). Target: the amendment as an
+  epoch event in its final frame shape, replay deriving {participants, admins, properties}, per
+  the widened ACs on the DoD line.
+- **Tiers:** P0 ✅🟡❌❌ (TRACE-1 ✅; SIG-1 built/unreviewed) · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
+- **Branches in flight:** `m14b/sig-1` (cello-client) — merges when its review lands clean.
+- **Publishes this milestone:** none. (Two M14 defect-fix commits on cello-client main,
+  `6a26e21` + `59c1814`, ride the next ordinary publish.)
 - **Parked:** nothing yet.
 
 ---
@@ -161,3 +162,57 @@ over.
 
 **No code shipped from this line** beyond the defect fix, which is M14's, not scope pulled
 forward.
+
+---
+
+## Entry 2 — TRACE-1 review verdict + the corrected epoch map (2026-08-11)
+
+**Reviewer verdict (`cello-unit-reviewer`, one pass, quoted):** "SPEC: DEVIATIONS FOUND — clause
+(c) is an incomplete map ('one producer' is factually wrong; three hardcoded-0 sites and the
+delivery re-encode uncited). Blocking until a journal addendum amends the map and widens the
+AMEND-1 AC; clauses (a), (b), (d), (e) are faithful with citations verified. NO SILENT FALLBACKS.
+ERRORS NAME THEIR CAUSE. TESTS HAVE TEETH — test 1 survives THE REVERT TEST; one untested
+validation branch noted (LOW)." Findings: 1 blocking, 3 low. All fixed; disposition below.
+
+### The corrected clause (c) — every producer and consumer of `epoch_id` (supersedes Entry 1's)
+
+**Producers (locally authored values):**
+- `document-publish.ts:137` — publish stamps `DOCUMENT_EPOCH_V1` (0) on every update envelope.
+- **`document-rejection.ts:246` — rejection envelopes are locally-authored chain entries with a
+  hardcoded `epochId: 0`.** The second producer Entry 1 missed: a document at epoch N would
+  append rejections still claiming epoch 0.
+- `document-store.ts:553` — the quarantine bridge stubs carry hardcoded `epochId: 0`
+  (verification-only today; named so it is cleared, not discovered).
+- `document-lifecycle.ts:177` — the `list` surface hardcodes `epochId: 0` per document: after
+  any amendment it would report epoch 0 forever, no error anywhere.
+
+**Consumers / threading:**
+- `document-envelope.ts:203–207` — the decoder's hard refusal of `epoch_id !== 0` (the gate).
+- **`document-envelope.ts:100` — `epoch_id` is INSIDE the signed TBS** (omitted from Entry 1 and
+  material: post-verification, the inbound path can trust the decoded value — the relocation AC
+  rests on this).
+- `daemon.ts:3801` — the delivery-path wire re-encode reads `envelope.epochId` from the stored
+  row: the actual wire producer for delivered frames.
+- Threading: store `:455/:1331`, inbound `:431`.
+
+**AMEND-1's AC, widened accordingly (DoD updated in place):** every locally-authored envelope —
+publish AND rejection — stamps the current epoch from replay; `list` reads the real value; the
+quarantine stubs read the real value or are explicitly exempted with a journaled reason; the
+decoder relaxes to integer-shape only and epoch correctness moves to inbound, which may trust
+the decoded value because it sits in the signed TBS.
+
+### Disposition of the other findings
+
+- **LOW, citations:** `pendingDeliveries` begins at `document-store.ts:885` (Entry 1 cited its
+  WHERE clauses); the seam-blind-decoder comment is `document-proposal.ts:303–308`. Corrected
+  here rather than editing Entry 1 (append-only).
+- **LOW, test gap:** the malformed-`content_profile` refusal branch was revert-invisible — a
+  test now pins the named throw for non-string/empty/null (`cello-client 59c1814`).
+- **LOW, canonical form:** absent is the only wire encoding of "no profile"; explicit null is
+  refused though the TBS folds both to one slot — now stated in the codec comment
+  (`cello-client 59c1814`) so a second implementation learns it from the source, not from a
+  refused proposal.
+- Reviewer confirmed the Tier-2-readiness lenses hold on every AC Entry 1 wrote; one word
+  added to the DoD's admin-slot AC: admins are keyed by pubkey/`agent_id` (constraint 3).
+
+**DOD-MP-TRACE-1 flips ✅ on this entry.**
