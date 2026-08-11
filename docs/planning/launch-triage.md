@@ -913,16 +913,30 @@ receipt or a named failure.
 
 ## 15. You cannot retract a trust signal — and the tool says you did
 
-**Designation: `DOD-SIGNAL-REVOKE-BROKEN-1`** — ✅ **FIXED AND PROVEN LIVE 2026-08-10. Retraction
-works, on all three nodes.**
+**Designation: `DOD-SIGNAL-REVOKE-BROKEN-1`** — ✅ **FIXED AND PROVEN LIVE 2026-08-11. Retraction
+works, on all three nodes, with nobody driving it.**
 
 > ```
-> gcp-use1   db4e32c09cf7 | revoked | revocation_rows 1
-> gcp-usc1   db4e32c09cf7 | revoked | revocation_rows 1
-> gcp-euw1   db4e32c09cf7 | revoked | revocation_rows 1
+> gcp-use1   7fa402bc7d04 | revoked | revocation_rows 1
+> gcp-usc1   7fa402bc7d04 | revoked | revocation_rows 1
+> gcp-euw1   7fa402bc7d04 | revoked | revocation_rows 1
 > ```
-> Baseline minutes earlier: `active` on all three, zero revocation rows. A real GitHub signal, revoked
-> from the daemon, replicated to every node.
+> A real `github_id`, revoked from the daemon at 12:57, drained by the **scheduler** at 12:57:02,
+> revoked by the portal at 12:57:03, replicated to every node. No hand on the trigger.
+>
+> **⚠️ The 2026-08-10 version of this entry claimed the same thing and was wrong.** That proof
+> (`db4e32c09cf7`) reached all three nodes only because the drain was POSTed by hand. Nothing in the
+> system called it — the queue had no consumer at all, so an operator doing exactly the same thing
+> would have watched `queued` sit there forever. The defect was one level up from the feature: the
+> definition of done said "revoke a signal and show all three databases reading revoked", every verb
+> in which belongs to the person testing, so supplying the missing machinery by hand PASSED it. A
+> clause has to be an action the OPERATOR takes unattended, or it can be satisfied by the tester
+> standing in for the part that does not exist. Fixed by `cello-portal-ingress-drain`
+> (Cloud Scheduler, every minute) — see `infra/GCP-STATE.md`.
+>
+> **This was never revocation-specific.** Endorsements, refusals and withdrawals ride the same queue
+> and were failing identically; they just read as latency. Revocation was the first feature whose
+> whole value sits on the far side of the drain.
 >
 > **What an operator gets.** Retracting a signal now actually retracts it, everywhere, and the answer
 > is honest at every step: `queued` while it is queued, never `revoked` before it is. Your local copy
