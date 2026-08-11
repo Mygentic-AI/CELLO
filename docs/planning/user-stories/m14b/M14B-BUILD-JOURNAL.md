@@ -393,3 +393,35 @@ Final: full gate green; the cross-repo check confirmed no trustless-cello consum
 changed exports, so the feature_version bump is client-contained.
 
 **DOD-MP-AMEND-1 flips ✅ on this entry.**
+
+---
+
+## Entry 7 — GOVERN-1 code-complete; the policy is a verdict, not a minted set (2026-08-11)
+
+Branch `m14b/govern-1`, one commit (`2fba725`). Full gate green. Review dispatched.
+
+**Design shift discovered at the unit's front door:** AMEND-1's policy seam returned a single
+required set — but D2's "any single admin may act" has no single answer ({a} and {b} are both
+acceptable claims). The seam reshaped to a VERDICT on the collection's claimed set:
+`SignerPolicy(kind, subject, state, claimedRequiredSet) → ok | {reason}`. AMEND-1's replay calls
+it in place of set-equality; its stand-in policy and tests updated in the same commit.
+
+**One hole found and closed while writing the red tests:** without a guard, one admin's
+signature could `remove_holder` a FELLOW ADMIN — holder removal drops admin status too, so the
+single-admin rule would evade `remove_admin`'s all-others requirement and the two-admin
+deadlock in one move. `governance_remove_admin_first` refuses it; voluntary self-leave stays
+open (checked first, so a leaving admin is not told to demote themselves).
+
+**The rules as shipped:** single-admin kinds claim exactly ONE current admin (a wider claim is
+refused — every claimed signer must sign, so an inflated claim hands an absent co-signer a veto
+the rule does not grant); `remove_admin` claims ALL OTHER admins exactly, subject neither
+required nor counted; two admins = deadlock by design, recourse named in the refusal;
+self-signed leave always acceptable.
+
+**Creation legibility:** `cello_doc_propose` (tool + CLI `--admins` + daemon) writes the admin
+choice into the SIGNED proposal on every propose — the everyone default is recorded explicitly,
+never implied by absence; an admin who is not a party refuses with nothing created.
+
+**Carried:** the documents plugin skill's guidance on choosing admins rides the ship line's
+skill audit, not this unit. **Red-first slippage, recorded:** the governance suites ran first
+only after the module existed; the handler tests were written after the surface change.
