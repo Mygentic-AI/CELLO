@@ -15,11 +15,10 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next red:** `DOD-MP-GOVERN-1` — the signer policy: `requiredSignersFor` per D2/D3 (single
-  admin for add/promote/remove-non-admin/change-property; ALL OTHER admins for remove_admin;
-  self-signed leave always valid), wired as the injected policy seam AMEND-1's replay already
-  takes; plus creation-flow legibility (the admin-set choice made explicit at propose). Branch
-  `m14b/govern-1` from cello-client main (`5108e12`). AMEND-1 is ✅ (Entry 6).
+- **Next:** GOVERN-1 review IN FLIGHT (dispatched on 5108e12..2fba725 + Entry 7). On the
+  verdict: fix findings → merge `m14b/govern-1` → flip ✅ → P0 is ALL GREEN → pull
+  `DOD-MP-JOIN-1` (P1: the join flow — admin's add_holder amendment + the invitee's own consent
+  handshake carrying assurance_tier/feature_version; full document via log replay per D1).
 - **Superseded context (kept for the record):** the wire half was built first on `m14b/amend-1`
   (`cello-client 57e06e6`, 30 tests green, full gate): document-amendment.ts — final-shape frame,
   strict codec, `deriveArrangement` replay with injected GOVERN-1 policy seam, last-admin +
@@ -30,8 +29,8 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅❌ (TRACE-1, SIG-1, AMEND-1) · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
-- **Branches in flight:** none.
+- **Tiers:** P0 ✅✅✅🟡 (TRACE-1, SIG-1, AMEND-1; GOVERN-1 built/review-in-flight) · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
+- **Branches in flight:** `m14b/govern-1` (cello-client).
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
 - **Parked:** nothing yet.
