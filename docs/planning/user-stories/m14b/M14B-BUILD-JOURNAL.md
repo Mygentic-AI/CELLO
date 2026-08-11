@@ -216,3 +216,57 @@ the decoded value because it sits in the signed TBS.
   added to the DoD's admin-slot AC: admins are keyed by pubkey/`agent_id` (constraint 3).
 
 **DOD-MP-TRACE-1 flips ✅ on this entry.**
+
+---
+
+## Entry 3 — DOD-MP-AMEND-1: clause checklist + design (pre-implementation, 2026-08-11)
+
+**Target in one sentence:** an amendment is a signed epoch event in its final frame shape, and
+replaying genesis + the chain independently derives {participants, admins, properties} on every
+holder — or refuses loudly naming the gap.
+
+### Clause checklist (what the reviewer will receive)
+
+1. Amendment record IS an epoch event in FINAL frame shape (TIER2-READY 1): signed via SIG-1
+   collections, chained to the previous epoch, `epoch_id` increments past 0, canonical-hash slot
+   defined-absent.
+2. Kinds: `add_holder` | `remove_holder` | `promote_admin` | `remove_admin` | `change_property`.
+3. Replay derives {participant set, admin set, properties} from genesis + chain.
+4. Gap / unknown predecessor / invalid amendment → loud refusal naming the gap.
+5. Store keyed `document_id`/`agent_id`; amendments are append-only log records, never edits.
+6. [TRACE-1, Entry 2] publish AND rejection stamp epoch from replay; `list` reads the real
+   value; quarantine stubs read real or exempted with reason; decoder relaxes to integer-shape;
+   epoch correctness moves to inbound (trustable — `epoch_id` is in the signed TBS).
+7. [TRACE-1, Entry 2] admin set at creation = new slot in the SIGNED proposal preimage, keyed by
+   pubkey/`agent_id`, one batched preimage change, frozen-vector reissue, `feature_version` 2.
+
+### Design (pseudocode level — RFC 8032 for signatures via SIG-1, RFC 6962 not implicated)
+
+- **Wire (`core/protocol-types/document-amendment.ts`):** `CELLO-DOCUMENT-AMENDMENT-v1` TBS —
+  fixed-order CBOR array: domain, `document_id`, `epoch_id` (the epoch this amendment MINTS =
+  prev + 1), `prev_amendment_hash` (null for the first — the chain anchors to genesis through
+  `document_id`), `kind`, `subject_agent_id` (pubkey hex; null for `change_property`),
+  `property_change` {key, value} | null, `state_hash` (null — the defined-absent Tier 2 slot),
+  `authored_at_ms`. `amendmentHash` = sha256 over the TBS preimage. The SIG-1 collection rides
+  beside the body with `subject_kind: "document_amendment"`, `subject_hash: amendmentHash` — the
+  preimage each admin/holder actually signs commits to the exact amendment AND the exact
+  co-signer set.
+- **Policy seam:** replay takes `requiredSignersFor(kind, subjectAgentId, currentAdmins,
+  currentParticipants): string[]` INJECTED — GOVERN-1 implements it. AMEND-1's replay owns
+  mechanics (chain, completeness via `collectionStatus`, application order); GOVERN-1 owns who
+  must sign what. Keeps both units reviewable against their own DoD lines.
+- **Replay (`deriveArrangement`, pure):** start from genesis {proposer, peer, adminSet,
+  properties}; per amendment in epoch order: verify chain link (epoch = prev+1,
+  `prev_amendment_hash` matches), compute required set per policy AGAINST THE STATE BEFORE THIS
+  AMENDMENT, verify collection completeness (SIG-1), apply. Any failure → typed refusal naming
+  epoch + cause; never a partial arrangement.
+- **Daemon store:** `document_amendments` table, append-only, keyed
+  (`owner_agent_id`, `document_id`, `epoch_id`); received amendment frames stored as RECEIVED
+  BYTES (Entry 1 (d) AC).
+- **Epoch producers:** publish + rejection stamp from the derived current epoch; decoder
+  relaxation per checklist 6.
+
+**Sequencing note:** implementation starts when SIG-1's review lands and `m14b/sig-1` merges —
+both units export through `core/protocol-types/src/index.ts`, and two branches never touch one
+file. Checklist and design recorded now so the next session (or wake) starts at red tests, not
+at design.
