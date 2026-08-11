@@ -28,7 +28,15 @@ description: >
   AMEND-1's condition upheld); `arrangementGenesisFromProposal` extracted to ONE export.
   Amendment delivery to existing holders is BEST-EFFORT at P1 (durable per-holder delivery is
   FANOUT-1); the inbound epoch gate makes a missed amendment loud, not silent.
-  (ii) NEXT — the accept flow: re-validate stored bytes → append chain to DocumentAmendmentStore
+  (ii) DONE (`dbe76e4`): the accept flow — layer.acceptJoin/refuseJoin, validate-everything-
+  then-mutate (whole snapshot verified before one row lands; a bad envelope refuses the accept
+  by name), mutations in dependency order (recordJoined genesis → chain → row(peer=inviter) →
+  log → rebuild → file), consent settles once, signed answer returned for best-effort send.
+  (iii) NEXT — the HANDLER surfaces: cello_doc_inbox lists pending joins; cello_doc_accept/
+  refuse route by pending kind (proposal vs join, matched by document_id → amendmentHash) and
+  send the answer via a tellInviter twin of tellProposer (document-handlers.ts:~438);
+  (iv) the invite verb + (v) REMOVE-1 + layer-path tests, then ONE review. SUPERSEDED plan text
+  below kept for the record — the accept flow: re-validate stored bytes → append chain to DocumentAmendmentStore
   (VALIDATE-BEFORE-APPEND BINDS) → record genesis into document_proposals (LiveDocuments reads
   starting_content from there) → create documents row (peerAgentId = the inviter pre-P2, a
   journaled nuance) → materialize envelope_log (verify per-envelope sig + set-based chain,
