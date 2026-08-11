@@ -273,11 +273,14 @@ pull the next unit. **Exceptions that DO block (park the unit, work another):** 
 promotion, `/mcp` reconnect.
 
 ## 3b. Watchdog cron — 30-min heartbeat (session-only; re-arm after every compaction/restart)
-The defibrillator, not a metronome — if working, keep working. Fired prompt: (1) procedure/DoD/
-journal in context? re-read + re-arm if dropped; (2) stalled on a decision? apply §3a;
-(3) blocked on a human-only step? work a different line; (4) >15 min since commit? commit;
-(5) last unit unreviewed? dispatch now; (6) decision-theatre check; (7) one status line.
-Self-terminate when all DoD tiers are ✅.
+The defibrillator, not a metronome — if working, keep working. **The three checks that matter
+most (Andre, 2026-08-11): the not-stopping rules (§🛑/§3a), committing often, and the unit
+reviewer on every unit.** Fired prompt: (1) context check — THIS PROCEDURE mainly, the DoD's
+status lines to a lesser extent, and only the journal's RESUME STATE block (never the full
+journal); re-read + re-arm if dropped; (2) stalled on a decision? apply §3a; (3) blocked on a
+human-only step? work a different line; (4) >15 min since commit? commit; (5) last unit
+unreviewed? dispatch `cello-unit-reviewer` now, before the next line; (6) decision-theatre
+check; (7) one status line. Self-terminate when all DoD tiers are ✅.
 
 ## 4. First actions (P0 order — strictly)
 1. **DOD-MP-TRACE-1** — the confirm-first trace (the fan-out shape, the topology refusal sites,
