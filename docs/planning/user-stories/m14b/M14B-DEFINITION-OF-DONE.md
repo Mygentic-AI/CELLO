@@ -124,7 +124,11 @@ description: >
   integer-shape only, and epoch CORRECTNESS moves to inbound — which may trust the decoded value
   because `epoch_id` sits in the signed TBS (`document-envelope.ts:100`). The admin set at
   creation rides a new slot in the SIGNED proposal preimage, **keyed by pubkey/`agent_id`**, as
-  one batched preimage change with frozen-vector reissue and `feature_version` 2. — ❌
+  one batched preimage change with frozen-vector reissue and `feature_version` 2. — ✅
+  > Reviewed SPEC: FAITHFUL; 4 findings (1 HIGH: the admin-scalar hex boundary) all fixed;
+  > merged `cello-client 5108e12`. Store append/chain are consumer-less by design (ENVELOPE-1
+  > shape, reviewer-ruled) — the validate-before-append invariant binds JOIN-1/INBOUND-N-1/
+  > GOVERN-1 reviews. → Journal Entries 5–6.
 - **DOD-MP-GOVERN-1** [cello-client] — the signature-requirement policy, per §13-D2/D3: the
   admin set is fixed at creation by the initiator (everyone-is-admin, or a listed subset —
   the create flow makes the choice legible, never defaulting silently); a SINGLE admin's

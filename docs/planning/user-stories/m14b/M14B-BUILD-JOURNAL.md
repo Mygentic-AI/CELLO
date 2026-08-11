@@ -15,9 +15,11 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next:** AMEND-1 review IN FLIGHT (dispatched on f575a97..e7b427b + Entries 3/5). On a clean
-  verdict: fix findings → merge `m14b/amend-1` → flip ✅ → start GOVERN-1 (the policy:
-  requiredSignersFor per D2/D3, creation-flow legibility) from fresh main.
+- **Next red:** `DOD-MP-GOVERN-1` — the signer policy: `requiredSignersFor` per D2/D3 (single
+  admin for add/promote/remove-non-admin/change-property; ALL OTHER admins for remove_admin;
+  self-signed leave always valid), wired as the injected policy seam AMEND-1's replay already
+  takes; plus creation-flow legibility (the admin-set choice made explicit at propose). Branch
+  `m14b/govern-1` from cello-client main (`5108e12`). AMEND-1 is ✅ (Entry 6).
 - **Superseded context (kept for the record):** the wire half was built first on `m14b/amend-1`
   (`cello-client 57e06e6`, 30 tests green, full gate): document-amendment.ts — final-shape frame,
   strict codec, `deriveArrangement` replay with injected GOVERN-1 policy seam, last-admin +
@@ -28,8 +30,8 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅🟡❌ (TRACE-1 ✅, SIG-1 ✅, AMEND-1 built/review-in-flight) · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
-- **Branches in flight:** `m14b/amend-1` (cello-client).
+- **Tiers:** P0 ✅✅✅❌ (TRACE-1, SIG-1, AMEND-1) · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
+- **Branches in flight:** none.
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
 - **Parked:** nothing yet.
@@ -354,3 +356,40 @@ is the same genus, so it is named, not hidden.
 **Red-first slippage, recorded:** the store's tests were written before the module but run only
 after — the explicit red run was skipped once. The amendment/proposal/envelope suites all had
 their red runs.
+
+---
+
+## Entry 6 — AMEND-1 review verdict, findings fixed, merged (2026-08-11)
+
+**Reviewer verdict (`cello-unit-reviewer`, one pass, quoted):** "SPEC: FAITHFUL — the one
+deviation (stamp from store head, not live replay) is journaled in Entry 5 and therefore legal.
+SILENT FALLBACKS FOUND — F2 (MEDIUM). ERRORS NAME THEIR CAUSE. HOLLOW TESTS FOUND — T1
+[blocking]: publish, rejection, and list epoch stamping are all revert-invisible; T2: fork/gap
+order unpinned. REMOVALS PROVEN — the decoder relaxation is the DoD's own instruction, relocated
+with coverage on both sides." No-consumer ruling: "ACCEPTABLE — ENVELOPE-1 shape, not
+DELIVERY-2," conditioned on JOIN-1/INBOUND-N-1/GOVERN-1 reviews enforcing the
+validate-before-append invariant on every new append site — carried forward as a standing
+condition on those units.
+
+**Findings disposition — all four fixed (`cello-client 06029da`, merged `5108e12`):**
+- **F1 (HIGH):** admin entries enforced 64-hex at `canonicalAdminSet` — the comma-joined TBS
+  scalar was collision-free only by assumption; `["aa,bb"]` vs `["aa","bb"]` could have shared
+  one `document_id` and one valid signature. The charset is now the boundary, test-pinned with
+  the exact collision probe.
+- **F2 (MEDIUM):** the state-hash tier gate inverted to a whitelist (only `"attested"` defines
+  the slot) — a genesis missing the tier property now refuses loudly instead of degraded-accept.
+- **T1 (blocking):** epoch stamping made revert-visible in all three producers — each test
+  plants a non-empty amendment chain and asserts the stamped value; the stale
+  "constants in V1" comment rewritten.
+- **T2:** skipped-epoch-with-unknown-predecessor pinned as GAP, so the fork/gap diagnosis order
+  cannot silently swap.
+
+Also carried, non-blocking, from the report: unsorted admin_set wire accepted-and-canonicalized
+(journaled decision, softer canon than the file's null-rule — acceptable while sole
+implementation); `DOCUMENT_EPOCH_V1` is export-only now (delete when its documentary value
+expires).
+
+Final: full gate green; the cross-repo check confirmed no trustless-cello consumer of the
+changed exports, so the feature_version bump is client-contained.
+
+**DOD-MP-AMEND-1 flips ✅ on this entry.**
