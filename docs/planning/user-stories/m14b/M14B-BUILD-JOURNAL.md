@@ -462,3 +462,44 @@ production runs. The apply/receive units (JOIN-1, INBOUND-N-1) wire them, under 
 standing validate-before-append condition.
 
 **DOD-MP-GOVERN-1 flips ✅ on this entry. Tier P0 is ALL GREEN.**
+
+---
+
+## Entry 9 — DOD-MP-JOIN-1: clause checklist + design (pre-implementation, 2026-08-11)
+
+**Target in one sentence:** a third party enters an existing document through an admin's
+`add_holder` amendment PLUS their own signed consent — neither alone admits anyone — and
+materializes the full current document from the log.
+
+### Clause checklist
+1. Join offer = a NEW frame carrying: the genesis proposal (RECEIVED bytes — Entry 1(d) rule),
+   the FULL amendment chain including the pending `add_holder`, the envelope-log snapshot (D1's
+   cheap path — the joiner materializes the whole document), `assurance_tier`,
+   `feature_version`. No `document_id` minting; the amendment hash is the settle key.
+2. Invitee side: decode → verify genesis id + signature → **replay the chain including the
+   pending amendment via `deriveArrangement` + `documentGovernancePolicy`** — the FIRST
+   production callers of both (AMEND-1's validate-before-append condition BINDS here) → surface
+   in the doc inbox with the rules visible (arrangement, admins, properties) → operator
+   accepts/refuses; the answer is a signed settle-once ack (the proposal-ack pattern).
+3. Join EFFECTIVE only when amendment valid AND invitee consented (GOVERN-1's dispositioned
+   consent clause, Entry 8).
+4. Unsupported build refused with a sentence at BOTH ends (`feature_version`), and
+   `assurance_tier` visible to the invitee before consent (TIER2-READY 4).
+5. Removal (`DOD-MP-REMOVE-1`) rides the same machinery: forward-only, surfaced to the removed
+   operator, their next publish refused by name (proven per-unit; the enforcer is P4's).
+
+### Design decisions to take in-unit (both derivable from settled rulings — not Andre-gates)
+- **The documents-table shape for N parties:** `documents.peer_agent_id` stays as the GENESIS
+  counterparty (a display/legacy fact); every consumer that matters derives participants from
+  the replay (TRACE-1's derived-view AC). No schema rebuild in JOIN-1; FANOUT-1's per-holder
+  delivery table is where N-party delivery state lands.
+- **Content sync at join:** the offer carries the envelope-log snapshot (received bytes,
+  per-sender chains intact) — bounded by document size, fine at V1 scale, and honest before P2
+  exists: arrangement-level admission works end to end while LIVE flow to the third party lands
+  with FANOUT-1. Alternative (back-fill via ordinary delivery) requires per-holder ack state =
+  P2 machinery; rejected for ordering.
+
+### Sequencing note
+Implementation on `m14b/join-1` from cello-client `4523716`: wire frame first (red tests), then
+the invitee receive path, then the inviter authoring path + tool surface (`cello_doc_invite` or
+an extension of existing verbs — decide against the vocabulary guard in-unit), then REMOVE-1.
