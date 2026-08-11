@@ -15,14 +15,15 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next red:** `DOD-MP-JOIN-1` (P1) — the join flow: an admin's `add_holder` amendment + the
-  invitee's OWN consent handshake (offer carries genesis + amendment chain +
-  assurance_tier/feature_version; invitee derives the arrangement independently; full document
-  via log replay per D1; join effective only when amendment valid AND invitee consented — this
-  carries GOVERN-1's dispositioned consent clause, Entry 8). Branch `m14b/join-1` from
-  cello-client main (`4523716`). This unit wires the first production callers of
-  deriveArrangement/policy/store-append — AMEND-1's validate-before-append condition BINDS its
-  review.
+- **Next:** `DOD-MP-JOIN-1` (P1), daemon half. WIRE HALF BUILT on `m14b/join-1`
+  (`cello-client 2eb4160`, 18 tests, full gate): document-join.ts — the offer as a courier
+  (received bytes of genesis + chain + log snapshot, signature binding every byte through
+  hashes), and `validateDocumentJoinOffer`, the first production-facing consumer of
+  deriveArrangement + the governance policy (invitee replays, never trusts). Remaining:
+  (i) invitee receive path — inbox surface, signed settle-once accept/refuse, on-accept
+  store-append (VALIDATE-BEFORE-APPEND CONDITION BINDS) + document row + log materialization;
+  (ii) inviter authoring path + tool surface (verb decision against the vocabulary guard);
+  (iii) DOD-MP-REMOVE-1 rides the same machinery. Then ONE review on the whole diff.
 - **Superseded context (kept for the record):** the wire half was built first on `m14b/amend-1`
   (`cello-client 57e06e6`, 30 tests green, full gate): document-amendment.ts — final-shape frame,
   strict codec, `deriveArrangement` replay with injected GOVERN-1 policy seam, last-admin +
