@@ -76,6 +76,17 @@ locals {
         "roles/logging.logWriter",
       ]
     }
+    # The portal's scheduler, and SEPARATE from the waitlist's for the same
+    # reason the two services are: one identity driving both internal surfaces
+    # means a compromise of either schedule reaches the other. This one drives
+    # the submission-queue drain — the step that turns every "queued"
+    # endorsement, refusal and revocation into a decided outcome.
+    portal-scheduler = {
+      display_name = "CELLO portal scheduler"
+      roles = [
+        "roles/logging.logWriter",
+      ]
+    }
     # A trigger that names a user-specified service account creates its builds AS that account,
     # so the account itself needs builds.create — without it a push event fails at build creation
     # and leaves NO build record at all. That is how this project shipped no image between

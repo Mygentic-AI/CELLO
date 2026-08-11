@@ -527,3 +527,97 @@ resource "google_secret_manager_secret_iam_member" "portal_copied" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.workload["portal"].email}"
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// THE INGRESS DRAIN SCHEDULER — the thing that makes "queued" eventually mean "done".
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// Every client-side trust operation that is not a plain read — an endorsement, a refusal, a
+// withdrawal, a revocation — is written by the daemon as a SEALED ROW in each directory's
+// submission_queue and reported to the operator as `queued`. The directory cannot open those rows
+// (they are sealed to the portal's intake key) and must not act on them if it could. The portal
+// opens them, scans them, decides, mints, and acks — in `drainAndMint`, behind
+// POST /api/internal/ingress/drain.
+//
+// ⚠️ NOTHING CALLED THAT ROUTE. The route's own header says it expects "a scheduled task calling an
+// authenticated endpoint", and the scheduled task was never built — so the queue only emptied when
+// someone POSTed it by hand. Every operation above completed exactly never. It is not a revocation
+// bug: revocation was simply the first feature whose ENTIRE value sits on the far side of the
+// drain, so it was the first to make the absence visible. The rest were failing the same way and
+// looked like latency.
+//
+// ONE MINUTE. The operator is a human watching a CLI that just said "queued"; a five-minute floor
+// reads as broken. The pass is a no-op against an empty queue, so the cost of the tight cadence is
+// three cheap SELECTs a minute.
+//
+// OVERLAP AND RETRY ARE BOTH SAFE, and that was checked rather than assumed: `drainSubmissions` is
+// a plain SELECT with no lease, so two passes CAN see the same row — but `processed_submissions`
+// dedupes on the id derived from the OPENED envelope, and the revoke branch deliberately sits after
+// that check so a row whose ack failed is not revoked twice. `attempt_deadline` under the interval
+// keeps a wedged pass from stacking regardless; a killed pass leaves its rows on the queue, which is
+// the designed re-delivery path, not a loss.
+resource "google_cloud_scheduler_job" "portal_ingress_drain" {
+  project     = var.project_id
+  region      = "us-east1"
+  name        = "cello-portal-ingress-drain"
+  description = "Opens and mints the sealed submission queue on every directory node. Without it, every endorsement/refusal/revocation stays 'queued' forever."
+  schedule    = "* * * * *"
+  time_zone   = "Etc/UTC"
+
+  // Shorter than the one-minute interval ON PURPOSE — see the overlap note above.
+  attempt_deadline = "50s"
+
+  // A 503 from this route is "the portal is unfit to process right now, nothing was acked, the rows
+  // survive" (a missing intake key generation, an uncompiled scanner corpus). That is precisely the
+  // shape a retry is for. The next tick is only a minute away, so the backoff stays short.
+  retry_config {
+    retry_count          = 2
+    min_backoff_duration = "5s"
+    max_backoff_duration = "20s"
+  }
+
+  http_target {
+    http_method = "POST"
+    // The Cloud Run URI, NOT portal.cello.mygentic.ai. This is a control-plane call that no client
+    // ever sees, and routing it through the load balancer would make the drain depend on the LB and
+    // on DNS to do work that needs neither. Same shape as the waitlist scheduler.
+    uri = "${google_cloud_run_v2_service.portal.uri}/api/internal/ingress/drain"
+
+    headers = {
+      "Content-Type" = "application/json"
+      // The application-level half. Cloud Scheduler cannot reference Secret Manager from a header,
+      // so the value is read here and lands in Terraform state — the same trade the waitlist
+      // scheduler documents, and state lives in the restricted bucket CI cannot read.
+      "x-cello-ingress-secret" = data.google_secret_manager_secret_version.portal_ingress_trigger.secret_data
+    }
+
+    // TWO layers, as with the waitlist. OIDC proves to Cloud Run that the caller is this scheduler;
+    // the shared secret proves to the APPLICATION that the call is internal. The portal currently
+    // allows unauthenticated invocation, so OIDC is not load-bearing TODAY — it is what stops this
+    // job from breaking silently the day the portal is locked down.
+    oidc_token {
+      service_account_email = google_service_account.workload["portal-scheduler"].email
+      audience              = google_cloud_run_v2_service.portal.uri
+    }
+  }
+}
+
+// Read at plan time so the header carries the same secret the portal validates against. `latest`
+// deliberately: rotating the secret and re-applying is how the pair stays in step.
+data "google_secret_manager_secret_version" "portal_ingress_trigger" {
+  project = var.project_id
+  secret  = "cello-portal-ingress-trigger-secret"
+  version = "latest"
+}
+
+// The portal is public today, so this grant changes nothing now. It exists so that locking the
+// portal's ingress down later does not silently stop the drain — the failure mode would be
+// submissions queueing forever with every component reporting healthy, which is exactly the outage
+// this whole block was written to end.
+resource "google_cloud_run_v2_service_iam_member" "portal_scheduler_invoker" {
+  project  = var.project_id
+  location = google_cloud_run_v2_service.portal.location
+  name     = google_cloud_run_v2_service.portal.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.workload["portal-scheduler"].email}"
+}
