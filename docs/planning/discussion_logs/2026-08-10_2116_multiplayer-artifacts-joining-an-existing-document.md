@@ -444,6 +444,39 @@ with multiplayer** rather than waiting on the old plan.
 
 ---
 
+## 14. Build M14B Tier-2-ready — binding constraints (2026-08-11)
+
+Andre, after reviewing what the parked Tier 2 scope contains and confirming the seal proves the
+transcript but not the computed result: Tier 2 remains very important, and M14B must be built with
+it in mind. Four constraints, to be carried into the M14B DoD as ACs on the units they touch:
+
+1. **The epoch record is built once, to its final Tier 2 shape** (§10 of the architecture log):
+   signed, chained to the previous epoch, **with a slot for the canonical state hash at the
+   boundary**. At Tier 1 the slot is defined-absent — canonicalization does not exist yet, and
+   "tier upgrade is never retroactive" makes that legitimate — but the frame never migrates.
+   Tier 2 fills a field; it does not rebuild the record.
+
+2. **Collect-N-signatures-over-one-preimage is a reusable primitive, not amendment-internal.**
+   The amendment's unanimity/admin signing is the same shape as Tier 2's N-way quiescence
+   agreement (N parties signing "my state hashes to X"). Build it once, generically; Tier 2's
+   hardest multiplayer cost then mostly falls out.
+
+3. **The participant set is the identity spine.** Amendment-chain participant records key on
+   stable identity (pubkey — never display name, per the standing join-key rule). Tier 2 schema
+   write-authority (§3.3 — the 8-role case) later resolves against this list as a lookup, not a
+   migration.
+
+4. **No new frame bakes in "the counterparty."** Every frame multiplayer adds is asked at design
+   time what it means with N other parties, because Tier 2's agreement, divergence records, and
+   purge coordination will run N-way over it. A joiner's consent handshake carries the document's
+   `assurance_tier`, so an old build cannot join an attested document and silently compute
+   nothing (the same mutual-visibility failure the handshake field exists to prevent).
+
+**Explicitly not pulled forward:** canonicalization, the agreement handshake, purge, and schema
+enforcement stay parked with Tier 2. Multiplayer leaves the sockets; it does not fill them.
+
+---
+
 ## Related Documents
 - [[2026-07-31_federated-collaborative-state-architecture]] — spec-of-record; §11 is the topology
   section this log revises, §12 records the N-party narrowing, §15 the use cases, §16 the V1/V2 cut
