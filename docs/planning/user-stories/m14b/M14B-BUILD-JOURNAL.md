@@ -15,7 +15,10 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next red:** `DOD-MP-AMEND-1`, daemon half. The WIRE HALF IS BUILT on `m14b/amend-1`
+- **Next:** AMEND-1 review IN FLIGHT (dispatched on f575a97..e7b427b + Entries 3/5). On a clean
+  verdict: fix findings → merge `m14b/amend-1` → flip ✅ → start GOVERN-1 (the policy:
+  requiredSignersFor per D2/D3, creation-flow legibility) from fresh main.
+- **Superseded context (kept for the record):** the wire half was built first on `m14b/amend-1`
   (`cello-client 57e06e6`, 30 tests green, full gate): document-amendment.ts — final-shape frame,
   strict codec, `deriveArrangement` replay with injected GOVERN-1 policy seam, last-admin +
   cap-20 invariants, frozen vector. Remaining on the unit: (i) the `document_amendments`
@@ -25,7 +28,7 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅🟠❌ (TRACE-1, SIG-1; AMEND-1 wire half) · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
+- **Tiers:** P0 ✅✅🟡❌ (TRACE-1 ✅, SIG-1 ✅, AMEND-1 built/review-in-flight) · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
 - **Branches in flight:** `m14b/amend-1` (cello-client).
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
