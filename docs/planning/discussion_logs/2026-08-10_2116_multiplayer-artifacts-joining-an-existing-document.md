@@ -11,7 +11,8 @@ description: >
   is antithetical to what CELLO is for. This log records what actually ships today, which parts of
   "immutable" are load-bearing and which were self-imposed, the amendment-by-consent mechanism that
   replaces them, the hub-and-spoke versus mesh comparison, the phased pathway, and the decisions
-  still owed.
+  still owed. Updated 2026-08-11: all six open decisions ruled (§13) — admin-governed documents,
+  full-document join, forward-only removal, hub-and-spoke retired, cap 20, milestone M14B.
 ---
 
 # Multiplayer Artifacts — Letting a Third Party Join an Existing Document
@@ -303,6 +304,8 @@ people asking would accept a coordinator-dependent answer, which is a product qu
 
 ## 10. Open decisions — Andre's calls
 
+> **All six were ruled on 2026-08-11 — see §13. This section is retained for the framing.**
+
 **D1 — Does a joiner get the full history, or only what happens after they arrive?**
 Full history is simpler: replay the log, converge like everyone else, one code path. History-from-
 here needs a real epoch boundary and a snapshot the joiner starts from — and it is what people
@@ -371,6 +374,73 @@ signed envelopes, the append-only log, the rebuildable snapshot, the receiver-si
 refuses rather than mutates, the file-on-disk write path, autonomous delivery, and the document
 leaves in the sealed tree. Multiplayer is a widening of who may hold a document, not a rebuild of
 what a document is.
+
+---
+
+## 13. Rulings — 2026-08-11
+
+All six decisions from §10, ruled by Andre.
+
+### D1 — Joiner sees the full current document; history is incidental, not a feature
+
+A joiner must see the whole document — you cannot collaborate on something you cannot see. What
+they do **not** need is a view of how it evolved. Ruling: build the **cheap path**. If the simple
+implementation is replaying the existing log (which inherently carries the evolution), that is
+fine — we are not protecting anyone from the history, and we build **neither** a history-viewing
+feature **nor** a history-hiding feature. No snapshot-at-epoch machinery for V1.
+
+### D2 — Admins, not unanimity: a governance meta-parameter set at creation
+
+The unanimity-vs-owner framing was replaced. Every document has an **admin set**, fixed at
+creation by the initiator and amendable afterward:
+
+- At creation the initiator chooses: *everyone is an admin*, or a limited admin set (which can be
+  just the initiator).
+- **A single admin, acting alone, can:** invite a participant, promote a participant to admin,
+  remove a non-admin, and change document settings. Every such act is a signed record on the
+  amendment chain — attributable and independently checkable by every holder.
+- The invitee's own consent handshake is still required — nobody is joined to a document without
+  agreeing to its rules.
+
+**Consequence, accepted deliberately:** the invariant shifts from "nothing changes without
+everyone's signature" to *"you consented at join time to a document governed by its admin set,
+and every governance act is signed and permanently on the record."* Weaker as a headline claim,
+far more usable; tamper-evidence and attribution are preserved.
+
+### D3 — Removal: admins remove non-admins; removing an admin needs all the OTHER admins
+
+- A non-admin can be removed by an admin.
+- Removing an **admin** requires agreement of **all other admins** (the removed admin does not
+  vote). With exactly two admins, neither can remove the other — the recourse is to stop working
+  in that document, duplicate it, and start fresh without them.
+- **Removal is forward-only, by the nature of the system.** The removed holder keeps their local
+  copy forever — it is on their disk, "revoking" it would be meaningless theater, and any document
+  they cared about could be copied anyway. Removal means: they stop receiving new edits, and their
+  new edits are refused. We never claim more than that.
+- Fallback if the admin machinery proves complicated for V1: voluntary exit only. (Being kicked
+  out is low-stakes anyway — the removed party still holds the document.)
+
+### D4 — Hub-and-spoke retired as a concept; the broker case is served by construction
+
+With real multi-party documents, an operator who wants B and C kept apart simply creates two
+documents — which nobody can prevent and nobody has to build. Hub-and-spoke was never a feature;
+it was the absence of one. Ruling: it stops being a default, a declared topology, and a concept.
+Nothing is built, nothing is deleted; the parked cross-document tooling (M14-P7) stays parked,
+likely forever. The `topology` wire field itself survives (it is already signed into the proposal
+and will carry the multi-party value).
+
+### D5 — Cap: 20 holders
+
+Documents inherit the group-room cap of 20 ([[2026-04-19_2045_group-room-design]]). Andre's read:
+20 is already a bit big — start there.
+
+### D6 — This is M14B
+
+Multiplayer takes the **M14B** slot: its own folder, procedures, definition of done, and build
+journal. The previously-sketched M14B scope (Tier 2 — canonicalization, attestation,
+epochs-beyond-zero, purge, schema enforcement) moves out of the M14B name; its renumbering is
+settled when that work is scheduled, except that the **epoch machinery multiplayer needs comes
+with multiplayer** rather than waiting on the old plan.
 
 ---
 
