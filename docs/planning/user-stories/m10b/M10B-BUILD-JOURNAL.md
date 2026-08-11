@@ -3452,3 +3452,87 @@ The one unproven clause in this journey is "a `min_count` floor does not count i
 refuse counterparties who have no signals yet. It is not M10B work, and `DOD-END-COUNT-1` inherits
 that: M10B produced `same_operator` correctly and proved it live; the consumer lives in another
 milestone that is off on purpose.
+
+---
+
+## Entry 45 — retraction is CLOSED, and the last defect was in the definition of done
+
+`DOD-END-INGRESS-SCHED-1` ✅. `DOD-END-REVOKE-3` re-proven unattended. **The retraction journey is
+finished and the remaining architectural objection was heard, examined, and deliberately declined.**
+
+### The bug that survived a passing proof
+
+Entry-era `DOD-END-REVOKE-3` closed on a live measurement: a real `github_id` revoked, three node
+databases each reading `revoked | revocation_rows 1`. Every character of that was true.
+
+It was also a false statement about the product. **Nothing in the system ever called the drain.** The
+portal is the only party that can open a sealed submission; `drainAndMint` is the only thing that
+opens them; and the only Cloud Scheduler jobs in the project were the waitlist's four. The proof
+passed because the trigger was POSTed by hand. An operator running the identical command would have
+watched `queued` sit there permanently.
+
+**And it was never revocation-specific.** `submit`, `refuse` and `withdraw` ride the same queue and
+were failing the same way. They read as latency, because a queued row looks like patience.
+
+### Where the defect actually lived
+
+Not in the handler. In clause 6:
+
+> *"revoke a real discretionary signal, then query all three node databases and show it reading
+> revoked on each."*
+
+Every verb belongs to the person testing. Nothing in it asserts the system does this on its own, so
+supplying the absent machinery by hand satisfied it — honestly, and without anyone noticing.
+
+**The rule that comes out of it, and it generalises past this milestone:** *a completion clause has
+to name something the OPERATOR does unattended.* Otherwise the tester stands in for the missing part
+and the clause certifies its own absence. `DOD-END-INGRESS-SCHED-1` clause 4 is written that way on
+purpose, and the re-proof was run under it: queued at 12:57:00, drained by the SCHEDULER at 12:57:02
+from the single node holding it, revoked at 12:57:03, `revoked` on all three.
+
+A related note on watchdogs: a cron was running throughout, faithfully reciting the DoD back. It
+enforced the wrong bar perfectly. **A watchdog cannot be better than the standard it holds.**
+
+### The objection that was raised, examined, and declined — DO NOT REOPEN
+
+Andre pushed back on the architecture itself, and the pushback was substantially correct on the
+facts. The chain he questioned:
+
+1. The daemon sends **no plaintext** — `body: ""`, subject = the target hash. Already true.
+2. The revoke goes via the portal for three reasons, not one: the enforcement rule (a `track_record`
+   its subject can delete is worth nothing, and the directory cannot tell one from a `github_id`
+   because `type` is opaque by `DOD-INV-ZERO-BUMP`); V55 **dropped the `subject` column**, so a
+   directory cannot verify "you are who this is about"; and revocation authority is the **issuer's**
+   — `signal-write.ts` says so outright.
+3. **He found something real:** V55 moved the edge OUT of the directory and INTO the portal's
+   `minted_signals`. The trust graph was not deleted, it was relocated.
+
+A cleaner design exists and is recorded here rather than built: mint each signal with a **one-time
+revocation capability** — a fresh random keypair, public half on the directory record, private half
+in the holder's envelope. Daemon signs the hash with it and goes straight to the directory. No portal
+in the path, no plaintext, **no graph** (the key is per-signal and pairs with nothing — using the
+agent's own pubkey would rebuild the edge), synchronous instead of queued, and the mandatory rule
+needs no enum at all: *for a track record, don't mint a key.* Absence IS the rule.
+
+**Declined on 2026-08-11, by Andre, after being shown precisely what `minted_signals` holds:** a
+hash, an account UUID, a subject (UUID or agent pubkey), an opaque type string, an issuer pubkey, a
+timestamp. **No claim text, no payload, no PII** — no GitHub username, no email, no phone. The
+concern is therefore not disclosure of content but **centralisation of the graph**: one party can see
+who vouched for whom, and that party is the operator. Against the launch test — *would this ruin a
+prospective customer, or could they forgive it?* — it is forgivable, and the work is not a tweak.
+
+**This is settled. Do not re-raise it as a defect, and do not "discover" `minted_signals` and open it
+again.** If the capability design is ever built, build it for the speed and for taking the portal out
+of the path — not as a privacy fix, because that is not what it is.
+
+### What an operator gets, in the end
+
+Retraction works. It says `queued` while it is queued and never `revoked` before it is. Within a
+minute the signal is dead on all three nodes, and nothing will accept it afterwards — including from
+someone already holding a copy of the envelope. The local copy survives a failure, so a bad attempt
+leaves a retry rather than destroying the evidence. What must not be retractable is refused
+server-side: track record, verified email, phone. Passkey and authenticator signals die when the
+factor is turned off.
+
+One cosmetic wart, knowingly left: a revoked signal can still appear in the local wallet list with a
+stale status. It is dead at the directory regardless.

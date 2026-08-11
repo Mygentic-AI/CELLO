@@ -849,6 +849,56 @@ the additions M10B is accountable for.
   > region was out of 2-vCPU capacity), portal `portal-ab7e75f`, client cascade through daemon
   > `0.0.161` / protocol-types `0.0.53`, promoted.
   >
+  > ⚠️ **THE 2026-08-10 PROOF ABOVE PASSED ONLY BECAUSE THE DRAIN WAS TRIGGERED BY HAND.** It is a
+  > true measurement of the revocation path and a false statement about the product: nothing in the
+  > system called the drain, so an operator doing exactly this would have watched `queued` sit there
+  > forever. Re-proven unattended 2026-08-11 — see `DOD-END-INGRESS-SCHED-1`.
+  >
+  > **The flaw was in clause 6, not in the work.** "Revoke a signal, then query all three node
+  > databases and show it reading revoked" — every verb in that sentence belongs to the person
+  > testing. Nothing in it says the system does this on its own, so supplying the missing machinery
+  > by hand satisfied it honestly. **A completion clause has to name something the OPERATOR does
+  > unattended**, or the tester can stand in for the part that does not exist and the clause will
+  > certify its own absence.
+
+- **DOD-END-INGRESS-SCHED-1** — ✅ **something has to CALL the drain.** `DOD-END-INGRESS-1` built
+  `drainAndMint` and put it behind `POST /api/internal/ingress/drain`, whose own header says it
+  expects "a scheduled task calling an authenticated endpoint". **That scheduled task was never
+  built.** The only Cloud Scheduler jobs in the project were the waitlist's four.
+  The portal is the sole party that can open a sealed submission, and the drain is the only thing
+  that opens them — so **every** `submit`, `refuse`, `withdraw` and `revoke` a daemon ever wrote
+  reached `queued` and stopped there permanently. Not revocation-specific: endorsements and refusals
+  were failing identically and read as latency, because nothing about a queued row looks broken.
+  **Definition of done:**
+  1. A scheduled caller invokes the drain on an interval short enough that a human watching a CLI
+     does not read it as broken.
+  2. It authenticates as itself, and the endpoint still refuses an unauthenticated caller.
+  3. It is in IaC, not created by hand in the console.
+  4. **PROVEN LIVE, UNATTENDED**: a real submission queued from a daemon reaches a terminal outcome
+     on all three nodes with **nobody touching the trigger**. A proof that required a manual POST is
+     a proof of the wrong thing — see the clause-6 note above.
+  > ✅ **DONE 2026-08-11 — PROVEN WITH THE TRIGGER UNTOUCHED.**
+  >
+  > `cello-portal-ingress-drain`, Cloud Scheduler, us-east1, `* * * * *`, OIDC as a NEW
+  > `cello-portal-scheduler` service account (not the waitlist's, not the portal's) plus the
+  > `x-cello-ingress-secret` header; `attempt_deadline = 50s`, deliberately under the interval.
+  >
+  > ```
+  > 12:57:00  daemon queues a real github_id revocation → queued: true, revoked: false
+  > 12:57:02  signal.ingress.drained  count 1  nodeIndex 1   ← the SCHEDULER, not a human
+  > 12:57:03  signal.revoke.performed 7fa402bc…
+  >
+  > gcp-use1   7fa402bc7d04 | revoked | revocation_rows 1
+  > gcp-usc1   7fa402bc7d04 | revoked | revocation_rows 1
+  > gcp-euw1   7fa402bc7d04 | revoked | revocation_rows 1
+  > ```
+  > The queue is NOT replicated, so the row sat only on the node the daemon reached (index 1) — and
+  > the revocation still reached all three. That is the property that had to hold.
+  >
+  > Overlap and retry were checked rather than assumed: `drainSubmissions` is a plain SELECT with no
+  > lease, but `processed_submissions` dedupes on the id derived from the OPENED envelope, and the
+  > revoke branch sits after that check, so a row whose ack failed is not revoked twice.
+  >
   > **Clauses 1, 3, 4, 5 met. Clause 2 met by REPLICATION rather than fan-out** (one node accepts,
   > `signal_revocations` is Tier-A and carries it to the other two) — recorded because the clause says
   > "all three are asked", and that is NOT what happens; what matters is that all three end up
