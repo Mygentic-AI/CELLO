@@ -99,12 +99,15 @@ description: >
   > not sendable, cello-client `59c1814`); reviewer's blocking finding (epoch map incomplete)
   > corrected in the addendum. → Journal Entries 1–2.
 - **DOD-MP-SIG-1** [cello-client] — the multi-signature primitive: collect N Ed25519 signatures
-  over ONE domain-separated preimage (`CELLO-DOC-MULTISIG-v1` TBS naming the document, the
-  subject hash, and the required-signer set); a collection missing any required signature is
+  over ONE domain-separated preimage (`CELLO-DOCUMENT-MULTISIG-v1` TBS naming the document, the
+  subject kind + hash, and the required-signer set — tag follows the sibling `CELLO-DOCUMENT-*`
+  convention, Entry 4 DECISION); a collection missing any required signature is
   INVALID, verified independently by any holder; partial collections are storable-in-progress but
   never valid. Generic by construction (TIER2-READY lens 2) — the amendment is its first
   consumer, Tier 2's N-way agreement its named second. Frozen conformance vector pinning field
-  order. No mocks for crypto. — ❌
+  order. No mocks for crypto. — ✅
+  > 29 tests, real Ed25519, all 16 original tests survive the reviewer's revert test; 3 findings
+  > fixed; merged `cello-client f575a97`. → Journal Entry 4.
 - **DOD-MP-AMEND-1** [cello-client] — the amendment record, which IS an epoch event in its FINAL
   frame shape (TIER2-READY lens 1): signed via SIG-1's collections, chained to the previous
   epoch, `epoch_id` increments past constant-0 (the V1 seam pays off — no envelope migration),

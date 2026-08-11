@@ -15,14 +15,13 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next red:** `DOD-MP-AMEND-1` — the amendment record (SIG-1 is BUILT on branch `m14b/sig-1`,
-  cello-client `7277f82`, review in flight; AMEND-1 consumes it). Target: the amendment as an
-  epoch event in its final frame shape, replay deriving {participants, admins, properties}, per
-  the widened ACs on the DoD line.
-- **Tiers:** P0 ✅🟡❌❌ (TRACE-1 ✅; SIG-1 built/unreviewed) · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
-- **Branches in flight:** `m14b/sig-1` (cello-client) — merges when its review lands clean.
-- **Publishes this milestone:** none. (Two M14 defect-fix commits on cello-client main,
-  `6a26e21` + `59c1814`, ride the next ordinary publish.)
+- **Next red:** `DOD-MP-AMEND-1` — the amendment record. Design + clause checklist are Entry 3;
+  SIG-1 is merged (`cello-client f575a97`), so implementation starts at red tests on a fresh
+  `m14b/amend-1` branch from main.
+- **Tiers:** P0 ✅✅❌❌ (TRACE-1, SIG-1) · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
+- **Branches in flight:** none.
+- **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
+  ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
 - **Parked:** nothing yet.
 
 ---
@@ -270,3 +269,33 @@ holder — or refuses loudly naming the gap.
 both units export through `core/protocol-types/src/index.ts`, and two branches never touch one
 file. Checklist and design recorded now so the next session (or wake) starts at red tests, not
 at design.
+
+---
+
+## Entry 4 — SIG-1 review verdict, findings fixed, merged (2026-08-11)
+
+**Reviewer verdict (`cello-unit-reviewer`, one pass, quoted):** "SPEC: DEVIATIONS FOUND — the
+domain tag, un-journaled (one journal line + DoD text amendment clears it, no code change). NO
+SILENT FALLBACKS. ERRORS NAME THEIR CAUSE. TESTS HAVE TEETH — all 16 survive the revert test;
+the decode-strictness gap is a coverage hole to close, not a hollow test. REMOVALS PROVEN — n/a."
+Findings: 1 blocking (process), 1 medium, 1 low. All fixed (`cello-client 32d7dec`); merged to
+main (`f575a97`), branch deleted.
+
+**DECISION — the multisig domain tag is `CELLO-DOCUMENT-MULTISIG-v1`,** superseding the DoD
+line's abbreviated `CELLO-DOC-MULTISIG-v1`. Every sibling document domain is `CELLO-DOCUMENT-*`
+(PROPOSAL, UPDATE, ACK, CONTROL, REJECTION); the abbreviation would be the odd one out, and the
+frozen vector now pins the full spelling — flipping it later voids every signature. DoD line
+amended to match.
+
+**Findings disposition:**
+- **Medium (decode strictness):** every decode refusal is now pinned per field with its named
+  code (11-case parameterized test + non-map root), so a future coercing edit cannot return
+  silently through an unwatched field.
+- **Low (dead branch):** the missing-computation's redundant second filter removed — missing is
+  strictly "no row present".
+- **Recommended and taken:** the compensation attack (invalid signature + a second valid one
+  from the same signer) tested directly; `duplicates` asserted in the all-signed baseline.
+
+Final: 29 tests, full gate green, real Ed25519 throughout.
+
+**DOD-MP-SIG-1 flips ✅ on this entry.**
