@@ -306,3 +306,48 @@ amended to match.
 Final: 29 tests, full gate green, real Ed25519 throughout.
 
 **DOD-MP-SIG-1 flips ✅ on this entry.**
+
+---
+
+## Entry 5 — AMEND-1 code-complete; decisions taken in-unit (2026-08-11)
+
+Branch `m14b/amend-1`, four commits (`57e06e6` wire+replay, `058957e` admin slot, `2129738`
+store, `e7b427b` epoch wiring). Full gate green after each. Review dispatched on the whole diff.
+
+**Checklist verdicts (Entry 3's list):** 1–5 built as specified; 6 built with one exemption
+(quarantine stubs stay at epoch 0 — synthetic verification nodes, chain walk checks hash linkage
+only, documented in place); 7 built (admin slot, feature_version 2, both frozen vectors
+reissued deliberately — documents still do not exist).
+
+**Decisions taken in-unit (§3a authority, all reversible pre-launch):**
+- **Admin slot enters the TBS as a canonical SCALAR** (sorted pubkeys joined by ","), not an
+  array — the proposal preimage carries a pinned flatness invariant (no nested containers) whose
+  reason is container-encoding independence of `document_id`. The wire carries the real array,
+  canonicalized sorted on decode.
+- **Absent admin_set = every genesis participant is an admin.** The bilateral default: either
+  party can invite. The creation flow making the choice legible is GOVERN-1's AC.
+- **The amendable-property set starts at {append_only}.** Tier and schema changes are Tier 2
+  epoch events; topology and content_profile are identity-shaped — a new agreement, not an
+  amendment. Widening is a one-line journaled decision; shrinking after documents exist is a
+  migration.
+- **Store contiguity at append:** an out-of-order amendment refuses by name and the sender
+  retries — lag BUFFERING is INBOUND-N-1's design, not silently absorbed here.
+- **Epoch stamping reads `DocumentStore.currentDocumentEpoch`** (max recorded epoch) rather
+  than running full replay per publish — sound under the **validate-before-append invariant**:
+  every path that appends to `document_amendments` must run `deriveArrangement` first, so the
+  recorded head IS the replay's answer. Named here as a standing invariant; INBOUND-N-1/JOIN-1
+  reviews must enforce it on every new append site.
+- **Epoch mismatch directions differ:** behind = TERMINAL (`document_epoch_stale` — the TBS
+  binds the old epoch forever; republish under current); ahead = non-terminal
+  (`document_epoch_ahead` — our amendment is in flight; their retry resolves).
+
+**Stated plainly for the reviewer and the DoD evidence line:** `DocumentAmendmentStore.append`
+and `.chain` have NO production caller yet — their callers are JOIN-1/INBOUND-N-1 (receive
+side) and GOVERN-1 (authoring side). The consumed surface today is `currentDocumentEpoch`
+(publish, rejection, list, inbound ruling). This is the ENVELOPE-1 shape (types one unit ahead
+of their consumer), not the DELIVERY-2 defect (a worker constructed and never ticked) — but it
+is the same genus, so it is named, not hidden.
+
+**Red-first slippage, recorded:** the store's tests were written before the module but run only
+after — the explicit red run was skipped once. The amendment/proposal/envelope suites all had
+their red runs.
