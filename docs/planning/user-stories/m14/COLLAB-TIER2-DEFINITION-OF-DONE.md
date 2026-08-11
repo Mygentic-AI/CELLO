@@ -1,12 +1,14 @@
 ---
-name: M14B Federated Collaborative State V2 Definition of Done
+name: Collaborative State Tier 2 Definition of Done (unnumbered, parked; formerly M14B)
 type: definition-of-done
 date: 2026-08-04
-milestone: M14B
+milestone: collab-tier2-unnumbered
 status: parked
 topics: [m14b, collaborative-state, tier-2, canonicalization, epochs, purge, schema-enforcement, attestation]
 description: >
-  The PARKED yardstick for M14B — collaborative state V2 (Tier 2, attested): canonicalization,
+  The PARKED yardstick for collaborative state V2 (Tier 2, attested) — formerly named M14B
+  until 2026-08-11, when that designation passed to multiplayer and this wave became unnumbered
+  (renumbered when scheduled): canonicalization,
   per-batch attestation, quiescence agreement and divergence records, epochs, purge, and schema
   enforcement. Written 2026-08-04 alongside the M14 DoD so V2-shaped decisions have a durable
   home. Carries NO status tags and activates only when M14 closes AND the four preconditions are
@@ -14,7 +16,14 @@ description: >
   log plus the Tier-2 sections it points into (§6–§10, §3.3).
 ---
 
-# M14B — Definition of Done (PARKED)
+# Collaborative State Tier 2 — Definition of Done (PARKED, unnumbered)
+
+> **Renamed 2026-08-11.** This wave was M14B until Andre assigned that name to multiplayer
+> ([[M14B-DEFINITION-OF-DONE]]). Its scope is unchanged, minus what multiplayer pulls forward:
+> **the epoch machinery (Tier Q2's frame shape) ships with M14B** per the four Tier-2-readiness
+> constraints in [[2026-08-10_2116_multiplayer-artifacts-joining-an-existing-document]] §14 —
+> the epoch record lands in its final shape with the canonical-hash slot defined-absent, and this
+> wave fills the slot rather than rebuilding the record. This wave gets a number when scheduled.
 
 ## How to use this — the parking rules
 
@@ -176,11 +185,11 @@ document the way the screening audit gates M14's screening line.
 - **Exactly two canonicalization rules** (§8) — any proposal to parse XML/HTML/source
   structurally is a re-litigation; refuse it.
 
-## Explicitly beyond M14B (so absence reads as intent, not omission)
+## Explicitly beyond this wave (so absence reads as intent, not omission)
 
-- **Mesh / delivery lists** (§11.2) — deferred, not rejected; needs participant-list-as-state,
-  mandatory retry, N-way agreement, forced full mesh. Its own milestone when the peer case
-  demands it.
+- **Mesh / delivery lists** (§11.2) — NO LONGER DEFERRED: this is now **M14B, the multiplayer
+  milestone** ([[M14B-DEFINITION-OF-DONE]], active 2026-08-11). The N-way quiescence agreement
+  cost stays HERE (it exists only once Tier Q1's agreement machinery exists).
 - **Trust-signal integration for non-compliant senders** beyond the policy log (§16.7-2).
 - **Directory-side presence subscription** (M14-P4) — a delivery-latency upgrade, not Tier 2.
 
@@ -188,13 +197,14 @@ document the way the screening audit gates M14's screening line.
 
 ## Related Documents
 - [[M14-DEFINITION-OF-DONE]] — V1's active yardstick (this document activates when it closes)
-- [[M14-PROCEDURE]] — the operating runbook (M14B inherits it with a new §1c enforcer set)
+- [[M14-PROCEDURE]] — the operating runbook (this wave inherits it with a new §1c enforcer set)
 - [[2026-07-31_federated-collaborative-state-architecture]] — spec-of-record (§16 + §6–§10, §3.3)
 - [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol Primitive]] —
   the schema-as-contract origin that Tier Q3 implements in its reshaped, opt-in form
 - [[2026-08-10_2116_multiplayer-artifacts-joining-an-existing-document|Multiplayer Artifacts —
-  Letting a Third Party Join an Existing Document]] — reopens the mesh deferral listed above under
-  "explicitly beyond M14B". Two consequences for this document: one of §11.2's four costs (N-way
-  agreement at quiescence) is Tier 2 and therefore lands here rather than with multiplayer, and
-  the epoch machinery this DoD owns is a dependency of the amendment record multiplayer needs —
-  so the milestone placement is an open decision recorded there
+  Letting a Third Party Join an Existing Document]] — reopened the mesh deferral, took the M14B
+  name (D6, ruled 2026-08-11), and pulled the epoch frame shape forward under its §14
+  Tier-2-readiness constraints. Two consequences for this document: N-way quiescence agreement
+  (one of §11.2's four costs) stays HERE, and Tier Q2's epoch lines activate against the epoch
+  record multiplayer ships rather than building one — fill the hash slot, never rebuild the frame
+- [[M14B-DEFINITION-OF-DONE]] — the multiplayer milestone that now carries the M14B name

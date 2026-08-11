@@ -1024,11 +1024,20 @@ validated invariant, not a boolean.
 This section is the product of working the document backward from a Definition
 of Done: for every gap that surfaced, a decision was made with Andre on
 2026-08-04. It is the decision register the [[M14-DEFINITION-OF-DONE]] and
-[[M14B-DEFINITION-OF-DONE]] cite as spec-of-record. Where this section and an
+[[COLLAB-TIER2-DEFINITION-OF-DONE]] cite as spec-of-record. Where this section and an
 earlier section disagree, this section wins — it is later and it was decided
 explicitly.
 
 ### 16.1 The V1/V2 cut — V1 is Tier 1 only; V2 is M14B
+
+> **CORRECTION 2026-08-11:** the **M14B name now belongs to multiplayer**
+> ([[M14B-DEFINITION-OF-DONE]] — mesh, the topology this log's §11 deferred; the
+> sign-inversion is recorded in
+> [[2026-08-10_2116_multiplayer-artifacts-joining-an-existing-document]]). The
+> V2/Tier 2 wave this section describes is unchanged in scope but unnumbered:
+> [[COLLAB-TIER2-DEFINITION-OF-DONE]]. Multiplayer pulls the epoch frame shape
+> forward; everything else here still waits. Every "M14B" below this line means
+> the Tier 2 wave as named on 2026-08-04.
 
 **V1 (M14) ships Tier 1 — authenticated collaboration — only.** The handshake
 declares `assurance_tier` but accepts only `authenticated`, exactly the
@@ -1383,8 +1392,9 @@ real rejection friction justifies it.
 - [[M14-PROCEDURE|M14 Procedure]] — the operating runbook built from this design
 - [[M14-DEFINITION-OF-DONE|M14 Definition of Done]] — V1's yardstick; cites §16 as its
   decision register
-- [[M14B-DEFINITION-OF-DONE|M14B Definition of Done]] — V2's parked yardstick (Tier 2,
-  epochs, purge, schema enforcement)
+- [[COLLAB-TIER2-DEFINITION-OF-DONE|Collaborative State Tier 2 Definition of Done]] — V2's parked
+  yardstick (Tier 2, epochs, purge, schema enforcement; formerly M14B — that name passed to
+  multiplayer 2026-08-11, [[M14B-DEFINITION-OF-DONE]])
 - [[2026-08-10_1803_goal-spine-breakdown-pipeline-assessment|Goal Spine — Breakdown Pipeline
   Assessment & Redesign]] — measures this design against a real eight-actor workflow: §11.1's
   pairwise scope is what makes that spine unrepresentable, and the deferred multi-party work is

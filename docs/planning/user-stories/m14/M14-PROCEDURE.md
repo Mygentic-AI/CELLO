@@ -66,7 +66,8 @@ diffs it at publish into Yjs updates that ride ordinary signed/chained/sealed me
 never silent drop. The handshake mirrors attestation consent; delivery is **daemon-autonomous and
 presence-driven** (publish is fire-and-forget; daemons sync overnight with zero agent attention);
 notification is a content-free pending flag. Lifecycle verbs: list, close, kill, withdraw. Tier 2
-(canonical hashing, epochs, quiescence agreement, purge, schema enforcement) is **M14B, parked** —
+(canonical hashing, epochs, quiescence agreement, purge, schema enforcement) is **the Tier 2 wave,
+parked** ([[COLLAB-TIER2-DEFINITION-OF-DONE]] — the M14B name passed to multiplayer, 2026-08-11) —
 V1 carries the seam only (`assurance_tier`/`schema_enforcement` declared, `epoch_id: 0`,
 `doc_prev_hash`, nullable payload column). Spec-of-record:
 [[2026-07-31_federated-collaborative-state-architecture]] **§16** (the decision register); the
@@ -94,7 +95,7 @@ rest of that log is the derivation.
    the section the unit touches (§3.2 validation, §4 update flow, §5 publishing, §9 leaves,
    §14 implementation notes). [[2026-05-08_1612_shared-state-as-protocol-primitive]] is
    superseded — use for *why*, never for *what* (§12 has the reconciliation table).
-5. [[M14B-DEFINITION-OF-DONE]] (parked) before touching anything seam-shaped — so V2's shape is
+5. [[COLLAB-TIER2-DEFINITION-OF-DONE]] (parked) before touching anything seam-shaped — so V2's shape is
    in mind when building V1's seam lines.
 Then start the loop (§2).
 
@@ -103,7 +104,7 @@ Then start the loop (§2).
 |---|---|
 | **M14-DEFINITION-OF-DONE** | The **yardstick + sole status authority** — ordered, status-tagged, carries Decisions + Parked. Flip tags in place; one line of evidence + `→ Entry N`, never an essay. |
 | **M14-BUILD-JOURNAL** | The **audit trail + evidence home** — append-only, entries at END OF FILE, verified after writing (§1a). Full proofs, bug forensics, run output live HERE. |
-| **M14B-DEFINITION-OF-DONE** | V2's parked yardstick. Carries no status tags until it activates. If V1 work surfaces a V2-shaped decision, it lands there, not in a journal aside. |
+| **COLLAB-TIER2-DEFINITION-OF-DONE** | V2's parked yardstick. Carries no status tags until it activates. If V1 work surfaces a V2-shaped decision, it lands there, not in a journal aside. |
 | **Five enforcers** (§1c) | convergence · offline-delivery · rejection · append-only · write-path. A behavioural DoD line naming an enforcer is ✅ only when that enforcer RAN. |
 
 ## 1a. Journal writing — APPEND AT EOF, THEN VERIFY
@@ -305,7 +306,7 @@ Then P1 (the document engine), which can interleave with P0's publish waits.
 - **ABSENT IS NOT FINE.** A guard with missing input REFUSES — loudly, naming its cause.
 - **ERRORS NAME THEIR CAUSE, NOT THEIR EXIT POINT.**
 - **NO CONSUMER, NO SHIP.** New fields/flags/events need a named consumer in the same unit —
-  except the five seam fields (§2b seam lens), whose consumer is M14B by design; they need a
+  except the five seam fields (§2b seam lens), whose consumer is the Tier 2 wave by design; they need a
   serialization test instead.
 - **NO ARCHAEOLOGY COMMENTS.** Present tense, imperative; constraints the code can't show.
 - **DEADNESS IS PROVEN BY DELETION** + both repos' gates; assert absence on BUILT artifacts.
@@ -319,7 +320,8 @@ Then P1 (the document engine), which can interleave with P0's publish waits.
 - **Vitest: one worker, foreground, timeout, filtered.** Never background a test process.
 - **NEVER `pkill -f cello-daemon`** — it kills the production daemon. Test daemons die by
   captured PID; the harness owns its processes.
-- **Deferrals get a home** — DoD Parked (V1-shaped) or the M14B DoD (V2-shaped) + journal. No
+- **Deferrals get a home** — DoD Parked (V1-shaped) or the Tier 2 DoD
+  ([[COLLAB-TIER2-DEFINITION-OF-DONE]], V2-shaped) + journal. No
   silent deferral.
 
 ## 6. What a checkpoint/handoff entry contains
@@ -332,7 +334,7 @@ current journal file up to date.
 
 ## Related Documents
 - [[M14-DEFINITION-OF-DONE]] — yardstick + sole status authority
-- [[M14B-DEFINITION-OF-DONE]] — V2's parked yardstick
+- [[COLLAB-TIER2-DEFINITION-OF-DONE]] — V2's parked yardstick
 - [[2026-07-31_federated-collaborative-state-architecture]] — spec-of-record (§16 = decisions)
 - [[2026-05-08_1612_shared-state-as-protocol-primitive]] — superseded May design (the why)
 - [[M12-PROCEDURE]] — the procedure this one is modeled on

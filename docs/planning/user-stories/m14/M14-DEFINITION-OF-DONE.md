@@ -10,7 +10,7 @@ description: >
   0x04/0x05 leaves, the SQLCipher document store, the write path, the validation gate and
   supersession, the consent handshake, daemon-autonomous delivery, lifecycle verbs, and the five
   enforcers. Sole status authority. Spec-of-record is §16 of the 2026-07-31 federated
-  collaborative state architecture log. V2 lives in M14B-DEFINITION-OF-DONE (parked).
+  collaborative state architecture log. V2 lives in COLLAB-TIER2-DEFINITION-OF-DONE (parked).
 ---
 
 # M14 — Definition of Done
@@ -34,7 +34,7 @@ description: >
   seed and read the P0 store tables directly; the wire types and cross-daemon flows that
   populate them in production arrive in P2 and are proven end-to-end in P4.
 - **The V2 boundary:** anything Tier-2-shaped (canonicalization, epochs beyond `epoch_id: 0`,
-  quiescence agreement, purge, schema enforcement) belongs in [[M14B-DEFINITION-OF-DONE]], not
+  quiescence agreement, purge, schema enforcement) belongs in [[COLLAB-TIER2-DEFINITION-OF-DONE]], not
   here. If a unit is tempted to build it early, park it there instead.
 
 ## Repo Legend
@@ -320,7 +320,9 @@ description: >
   — 🅿️ **SLIPPED TO M14B, on that decision, 2026-08-07.** Acting on the call already recorded above
   rather than re-opening it. It is the tail case: nothing produces a rebuttal today, so no operator
   can reach it, and the fallback (fail closed, resolve by hand) is the same security with worse
-  ergonomics. M14B is where V2's deepening work already lives, and this belongs with it.
+  ergonomics. The Tier 2 wave is where V2's deepening work already lives, and this belongs with it
+  (2026-08-11: the M14B name passed to multiplayer; this deferral now lives in
+  [[COLLAB-TIER2-DEFINITION-OF-DONE]]).
 
   **It does NOT block M14.** SCREEN-1 and PROFILE-1, the two that cannot slip, are both complete.
 - **DOD-DOC-ENVELOPE-1** [cello-client] — **carries BLOCKING ACs from DOD-DOC-GATE-1's reviews.**
@@ -367,7 +369,7 @@ description: >
   nothing implements the interface, so the worker is a class the daemon never instantiates. Flipping
   this line ✅ would claim a `SessionNegotiator` consumer that does not exist, and
   [[M14-PROCEDURE]] §5's no-consumer exception does not cover it (that exception is scoped to the
-  five seam fields whose consumer is M14B by design, not to a whole unit).
+  five seam fields whose consumer is the Tier 2 wave by design, not to a whole unit).
   - **DOD-DOC-DELIVERY-1** — the worker: pending derived from the log, restart-survival, the
     reachability check, the capped backoff, ack-including-rejection, the re-entry guard, correlation
     IDs, and `document.delivery.*`. — ✅ (one review pass; the no-peer branch was a hot loop that
@@ -491,7 +493,7 @@ description: >
   peer, type, tier, epoch, status, pending-delivery state — tier and epoch are constants in V1
   but they are seam surface and cheap to show — "1 update pending, peer offline since …");
   **close** (bilateral: mutual close acks over the session, document marked complete —
-  the V1 shape; the Tier-2 quiescence agreement at close is M14B's addition); **kill**
+  the V1 shape; the Tier-2 quiescence agreement at close is the Tier 2 wave's addition); **kill**
   (unilateral: stop accepting and publishing, notify the peer, retain local copy and log —
   stated plainly: the peer keeps what it holds); **withdraw** (an UNDELIVERED update only:
   local rollback + a withdrawal record beside the original envelope — marked, never deleted;
@@ -1523,6 +1525,8 @@ here — this section holds only decisions made DURING the milestone.
   what the field holds and validate it, so an opaque string cannot silently arrive where a key is
   required and fail later as a signature error.
 - **M14-D1** (2026-08-04, Andre): V2 is **M14B** — same milestone family, second wave. Its DoD
+  (SUPERSEDED IN NAME 2026-08-11: the M14B designation passed to multiplayer —
+  [[M14B-DEFINITION-OF-DONE]]; the Tier 2 wave is [[COLLAB-TIER2-DEFINITION-OF-DONE]], unnumbered.)
   is written now, parked, in this directory.
 - **M14-D2** (2026-08-04, review finding B2 — default, Andre may overturn): **DOD-DOC-SCREEN-1
   must be ✅ before DOD-DOC-SHIP-1 flips.** §3.2 calls the screening-driven gate "not optional
@@ -1532,7 +1536,8 @@ here — this section holds only decisions made DURING the milestone.
   choose; until he does, this line is the close condition.
 - **M14-D3** (2026-08-04, review finding S3): **the V1 close shape is mutual close acks** —
   a forced derivation from §16.1 (the quiescence agreement that §3.5 puts at close is Tier-2
-  machinery). M14B's DOD-DOC2-AGREE-1 adds the agreement as close's final step on activation.
+  machinery). The Tier 2 wave's DOD-DOC2-AGREE-1 adds the agreement as close's final step on
+  activation.
 - **M14-D4** (2026-08-04, review finding S5): **V1 "watching presence" (§16.4) = per-attempt
   `discovery_lookup` + scheduled capped retry.** The spec's body describes presence-driven
   push; no presence subscription exists in the client today (verified 2026-08-04), so the
@@ -1568,7 +1573,7 @@ here — this section holds only decisions made DURING the milestone.
 
 - [[2026-08-05_1230_document-screening-convergence-and-content-profiles|Document Screening, Convergence and Content Profiles]] — the design behind `DOD-DOC-PROFILE-1`, `DOD-DOC-SCREEN-1` and
   `DOD-DOC-REBUTTAL-1`, including the measurement that settled them
-- [[M14B-DEFINITION-OF-DONE]] — V2's parked yardstick
+- [[COLLAB-TIER2-DEFINITION-OF-DONE]] — V2's parked yardstick
 - [[2026-08-10_2116_multiplayer-artifacts-joining-an-existing-document|Multiplayer Artifacts —
   Letting a Third Party Join an Existing Document]] — Andre's 2026-08-10 ruling that the bilateral
   document shipped here must become joinable. Revises the topology parks (M14-P7 cross-document

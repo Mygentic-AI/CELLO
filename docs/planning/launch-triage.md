@@ -798,7 +798,8 @@ the restrictive profile gets exactly the protection of one who did not think abo
 Not a break — inbound updates are still screened by the general rules — but the setting is currently
 a promise the system does not keep, and it is labelled inert rather than done in the milestone.
 
-**`DOD-DOC-REBUTTAL-1` is the paired deferral** (Andre, 2026-08-05, slipped to M14B): a peer's
+**`DOD-DOC-REBUTTAL-1` is the paired deferral** (Andre, 2026-08-05, slipped to the Tier 2 wave,
+[[COLLAB-TIER2-DEFINITION-OF-DONE]] — the M14B name passed to multiplayer 2026-08-11): a peer's
 refusal cannot be answered, so a genuinely multilingual document fails closed and is resolved by
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 

@@ -484,8 +484,12 @@ enforcement stay parked with Tier 2. Multiplayer leaves the sockets; it does not
   workflow this feature was originally designed around
 - [[M14-DEFINITION-OF-DONE]] — V1's yardstick; M14-P7 (cross-document diff, parked) and M14-P8
   (pass-through, parked) are the two topology parks
-- [[M14B-DEFINITION-OF-DONE]] — V2's parked yardstick; owns epochs, and lists mesh as explicitly
-  beyond its scope
+- [[M14B-DEFINITION-OF-DONE]] — the milestone this log produced (stood up 2026-08-11, with
+  [[M14B-PROCEDURE]] and [[M14B-BUILD-JOURNAL]]); §13's rulings and §14's constraints are binding
+  there
+- [[COLLAB-TIER2-DEFINITION-OF-DONE]] — the Tier 2 wave (formerly M14B, renamed when D6 gave the
+  name to multiplayer); still parked; owns everything attestation-shaped, minus the epoch frame
+  shape M14B pulls forward
 - [[M14-BUILD-JOURNAL]] — Entry 39 carries the multi-actor workflow assessment that found the
   nested-merge defect
 - [[2026-08-10_1803_goal-spine-breakdown-pipeline-assessment]] — the goal-spine work that assumes a
