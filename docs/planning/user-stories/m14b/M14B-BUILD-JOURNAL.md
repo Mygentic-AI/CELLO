@@ -22,10 +22,13 @@ description: >
   deriveArrangement + the governance policy (invitee replays, never trusts). Remaining:
   DONE SO FAR on the branch: join-answer frame (`b717c54`, settle-once on the amendment hash)
   and the daemon join store (`dc66125`, both roles, refusals recorded never dropped). REMAINING:
-  (i) frame-router kinds `join_offer`/`join_answer`/`amendment` + layer receive wiring
-  (validate-on-receive via validateDocumentJoinOffer; amendment frames to EXISTING holders are
-  best-effort at P1 — journal the gap — with the epoch gate making a missed one loud);
-  (ii) the accept flow: re-validate stored bytes → append chain to DocumentAmendmentStore
+  (i) DONE (`fe29225`): router kinds `join_offer`/`join_answer`/`amendment` + layer receive
+  wiring — offers validated by replay before recording, answers settle-once, amendments to
+  existing holders validate-the-whole-chain-then-append (the FIRST production append site,
+  AMEND-1's condition upheld); `arrangementGenesisFromProposal` extracted to ONE export.
+  Amendment delivery to existing holders is BEST-EFFORT at P1 (durable per-holder delivery is
+  FANOUT-1); the inbound epoch gate makes a missed amendment loud, not silent.
+  (ii) NEXT — the accept flow: re-validate stored bytes → append chain to DocumentAmendmentStore
   (VALIDATE-BEFORE-APPEND BINDS) → record genesis into document_proposals (LiveDocuments reads
   starting_content from there) → create documents row (peerAgentId = the inviter pre-P2, a
   journaled nuance) → materialize envelope_log (verify per-envelope sig + set-based chain,
