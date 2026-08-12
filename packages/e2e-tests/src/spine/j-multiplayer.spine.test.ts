@@ -247,9 +247,14 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       expect(invited.epochId).toBe(1);
 
       const offer = await awaitJoinOffer(c, documentId);
-      // THE RULES ARE VISIBLE BEFORE CONSENT — derived by C's own daemon, not asserted by A.
-      expect((offer.participants as string[]).sort()).toEqual([a.pubkey, b.pubkey].sort());
-      expect(offer.admins).toBeDefined();
+      // THE RULES ARE VISIBLE BEFORE CONSENT — derived by C's own daemon, not asserted by A, and
+      // the arrangement shown is the one C would BE IN: the pending admission replays too, so C
+      // sees themselves among the participants. That is the point of consenting to a computed
+      // arrangement rather than to a claim.
+      expect((offer.participants as string[]).sort()).toEqual(
+        [a.pubkey, b.pubkey, c.pubkey].sort(),
+      );
+      expect((offer.admins as string[]).sort()).toEqual([a.pubkey, b.pubkey].sort());
 
       const accepted = (await c.conn.call("cello_doc_accept", { document_id: documentId })) as {
         ok?: boolean;
@@ -292,9 +297,14 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       await connect(a, b);
       await connect(a, c);
 
+      // A IS THE SOLE ADMIN: the default makes both genesis parties admins, and an admin cannot
+      // be expelled through the holder door (the all-other-admins rule, D3) — so removing B
+      // would be correctly refused. The removal this enforcer proves is the DoD's: an admin
+      // removes a NON-admin holder.
       const proposed = (await a.conn.call("cello_doc_propose", {
         peer_pubkey: b.pubkey,
         starting_content: "base. ",
+        admins: [a.pubkey],
       })) as { ok?: boolean; documentId?: string };
       expect(proposed.ok).toBe(true);
       const documentId = proposed.documentId!;
