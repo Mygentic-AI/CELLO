@@ -251,14 +251,22 @@ description: >
 - **DOD-MP-E2E-REMOVE-1** [trustless-cello] — removal enforcer: three holders; C is removed;
   C's local copy is intact and C's daemon surfaced the removal; C's next publish is refused by
   A and B with the removal-named reason (and the refusal is on the record — no silent drop);
-  A and B continue editing and converging normally. — 🟠 PARTIAL (5 of 7 clauses)
+  A and B continue editing and converging normally. — ✅ (Entry 25 — one clause REDEFINED by
+  what the live run proved)
   > Downgraded (Entry 22). PROVEN: three holders; a holder removed; their copy intact; their
   > daemon SURFACED the removal (genuine cross-process evidence — derived from the amendment
   > that really travelled). NOT COVERED: the refusal AT THE RECEIVERS (the test proves the
   > removed party's own local pre-check, a different code path — the receiver-side refusal
-  > needs a holder who was offline at removal time); "on the record" (today log + ack only —
-  > whether that suffices is a PRODUCT decision, not a test gap). Survivors continuing to
-  > converge after IS now proven, and the removed holder receives none of it.
+  > **The receiver-side clause was written on a false premise** (Entry 25): a journey built to
+  > stage it — remove a holder while their daemon is down so they never learn — proved the
+  > relay PARKS the amendment, so an offline holder is not an uninformed one. On return they
+  > learn with nobody acting, then self-censor. With HONEST binaries that refusal is
+  > UNREACHABLE end to end; it defends against a REWRITTEN client (the
+  > adversary-owns-their-daemon lens), which stock binaries cannot stage — its coverage is the
+  > inbound unit suite. What runs live is the cooperative path entire: survivors keep
+  > converging, the removed holder keeps their copy unchanged and receives nothing further.
+  > **"On the record" remains a PRODUCT question** (today a log line + a refusal ack, no
+  > durable rejection row on the receiver) — Andre's call, not a test gap.
 - **DOD-MP-SHIP-1** [cello-client, trustless-cello] — the publish cascade via `/cello-publish`
   (skill loaded, per publish), trustless-cello re-pinned, plugin skills updated for the
   multiplayer verbs and audited as SHIPPING content (tarball/clone, not source), and a **live

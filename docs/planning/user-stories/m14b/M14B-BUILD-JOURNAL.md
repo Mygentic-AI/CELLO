@@ -1022,3 +1022,34 @@ by nothing." Seven findings on a 40-line diff. All fixed (`cello-client 606d33b`
 `open(p,'w')` truncates before the write, and the write raised. Restored from HEAD and re-applied
 via a temp file with a size assertion before the move. Any scripted edit to a file not yet
 committed should write-then-verify, never write-in-place.
+
+---
+
+## Entry 25 — the receiver-side removal clause rested on a false premise (2026-08-13)
+
+Built a third enforcer journey to stage REMOVE-1's remaining clause — the refusal AT THE
+RECEIVERS — by removing a holder while their daemon was down, so they would publish without
+knowing. **The premise was wrong, and the product is better than the clause assumed.**
+
+**What actually happens:** the removal amendment is sent while C is down, the relay PARKS it,
+and `holdersNotified[C]` reports true — the send was accepted. C returns, receives the parked
+amendment with NOBODY acting on any side, and their own daemon then self-censors: their next
+write is refused locally, naming the removal. C keeps their copy unchanged throughout.
+
+**The consequence, stated plainly:** with honest binaries the receiver-side refusal
+(`document_sender_removed`) is **unreachable end to end** — being offline only DELAYS the news,
+it does not withhold it. That gate is a defence against a **rewritten client**, which is exactly
+Andre's adversary-owns-their-daemon lens: the check runs on the honest holders' daemons because
+the removed party's own cannot be trusted to self-censor. Stock binaries cannot stage that, so
+its coverage is the inbound unit suite (three tests), and what the enforcer proves live is the
+cooperative path entire.
+
+**DOD-MP-E2E-REMOVE-1 flips ✅** on that reading — the clause is met by what the system actually
+does, with the adversarial half correctly located in unit coverage and named here. **"On the
+record" stays a PRODUCT question for Andre:** the receiver logs the refusal and acks it, but
+writes no durable rejection row or `0x05` leaf. Whether that satisfies "on the record" is a
+design call, not a test gap.
+
+**Tier P4 is now ✅✅✅✅ on the four enforcers** (3 journeys, 3/3 green, 329s, three daemons as
+three OS processes). SHIP-1's beta + promotion are done; the live GCP fleet smoke is the only
+open item, plus the two product questions above and the parked gathering flow (Entry 24).
