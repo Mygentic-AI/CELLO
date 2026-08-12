@@ -1374,3 +1374,45 @@ assertion that something was REFUSED, and that assertion has to fail when the gu
 otherwise the guard is untested no matter how green the suite is.
 
 5/5 journeys green, 356s. Gate: 3740 tests, eslint, tsc.
+
+---
+
+## Entry 32 — RESUME STATE (2026-08-13)
+
+**M14B is complete except SHIP-1, which is blocked on one operator-run step.**
+
+**Every DoD line ✅** — Tier P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅✅✅✅ (FANOUT-1, INBOUND-N-1, CONTROL-N-1,
+CLOSE-N-1) · P3 ✅ · P4 four enforcers ✅ — **except `DOD-MP-SHIP-1` ❌.**
+
+**Published and TARBALL-VERIFIED on `beta`** (five cascades this session, `/cello-publish`
+re-loaded for each; the guard hook blocked one and was right to):
+
+| package | version |
+|---|---|
+| connect | 0.0.148 |
+| cli | 0.0.172 |
+| daemon | 0.0.165 |
+| gateway | 0.0.34 |
+| crypto | 0.0.50 |
+| transport | 0.0.56 |
+| protocol-types | 0.0.54 |
+
+All CI green through `smoke-tag`; cross-pins are real versions; the legacy branch, the three-way
+verdict, the membership hook and the fan-out loop were each grepped out of the BUILT dist, not
+assumed from the commit.
+
+**SHIP-1's two remaining clauses, both downstream of the `latest` promotion (Andre's alone — it is
+what every operator installs):**
+1. the live fleet run on the three real agents — create → join → edit → converge → remove → seal;
+2. trustless-cello's lockfile refresh. Refs audited: all `latest`, no pins, no stale `workspace:*`
+   pointing at the dead local copies — so nothing moves until `latest` does.
+
+**Enforcers:** 5/5 green, 356s, three real daemons as three OS processes.
+**Gate:** 3740 tests, eslint, tsc, build.
+
+**Open by intent, not omission** — admin promotion/removal (parked, no authoring verb exists);
+what "on the record" should mean for a refused edit from a removed holder; both are Andre's calls
+and neither blocks the milestone.
+
+**Rulings taken autonomously this session, all logged as overturnable:** D7 (a close settles on all
+current holders), D8 (a removal completes the agreement for those who remain).
