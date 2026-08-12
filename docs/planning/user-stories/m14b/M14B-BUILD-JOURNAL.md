@@ -730,3 +730,34 @@ or stalls anyone else.
   authenticated sender of the ack; `markAcked` moves to (envelope, holder).
 - **Trust lens (Entry 13):** fan-out is the HONEST sender's availability machinery — no security
   claim rides on it; the receive side (INBOUND-N-1) is where counterparty enforcement lives.
+
+---
+
+## Entry 15 — FANOUT-1 code-complete; two counters, one worker, N holders (2026-08-12)
+
+Branch `m14b/fanout-1`, four commits (`782e43d` per-holder state, `5f6f686` type fix, `503d05d`
+the worker + wiring + test migration, + the availability proof). Full gate green. Review
+dispatched.
+
+**Checklist verdicts (Entry 14):** all eight built. Targets derive from replay (`holdersFor`,
+layer-exported; the daemon sweep and publish both consume it); publish REFUSES when the chain
+does not derive (an appended-but-unseeded envelope is invisible work) and seeds per-holder rows
+in the same act as the append; per-holder probe/backoff/ceiling/retirement; document stalls only
+when EVERY holder is exhausted; per-holder bounded window (partitioned row numbering); the
+removed-target gate generalized; ack gate widened to any current derived holder, the acking
+holder settles their own row; envelope-level ack now MEANS all-confirmed (zero-row legacy
+byte-identical).
+
+**Defect found mid-unit, in my own first cut:** "waiting is not sending" purism dropped attempt
+counting on deferrals — an offline holder would have been redialed at the FLOOR rate forever.
+The fix separates the two facts the old worker conflated: ATTEMPTS drives the escalating
+schedule (deferrals count), SENDS drives the unacked ceiling (only content that left counts) —
+the old conflation meant five quiet deferrals plus one real send abandoned the envelope.
+
+**Test migration, named:** eleven delivery tests moved from the envelope-row view to the
+per-holder view with the FANOUT-1 change annotated in place; the four full-suite stragglers
+were load flakes (green in isolation and on the re-run). The lifecycle sent-count reads the
+per-holder fact through `envelopeEverSent`.
+
+**Fixture slippage, recorded:** the store piece was committed once before its typecheck ran
+(caught and fixed one commit later).
