@@ -165,7 +165,11 @@ description: >
   post-removal envelopes with a reason naming the removal (never a silent drop — the refusal is
   the NO-SILENT-DROP-compatible answer to a removed peer still publishing); the removed holder's
   daemon surfaces the removal to its operator; their local copy is untouched and no surface
-  claims otherwise (FORWARD-ONLY-REMOVAL). — ❌
+  claims otherwise (FORWARD-ONLY-REMOVAL). — ✅
+  > Reviewed; blocking findings fixed — the delivery-stop half now runs on the HONEST holders'
+  > daemons (the adversary-owns-their-daemon lens, Entry 13), the missed-amendment case gets the
+  > removal answer, removal is DERIVED from the chain (no stored flag, no migration). Merged
+  > `cello-client cc06b3f`. → Journal Entries 12–13.
 
 ## Tier P2 — Fan-out delivery (Phase 3)
 

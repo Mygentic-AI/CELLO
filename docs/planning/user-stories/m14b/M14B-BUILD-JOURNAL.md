@@ -15,11 +15,13 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next:** REMOVE-1 review IN FLIGHT (dispatched on d0e079b..186d39f + Entry 12). On the
-  verdict: fix findings → merge → flip ✅ → P1 ALL GREEN → pull `DOD-MP-FANOUT-1` (P2: delivery
-  targets derive from the participant list; per-(envelope,holder) ack table; per-holder
-  stall/backoff/ceiling; one dead holder never stalls the document — Entry 1(a) carries the
-  traced ACs).
+- **Next red:** `DOD-MP-FANOUT-1` (P2) — delivery targets derive from the participant list
+  (never per-sender config); per-(envelope,holder) ack table (log-derived, restart-survivable);
+  per-holder reachability/backoff/unacked-ceiling; stall PER HOLDER (document-level only when
+  every holder is exhausted); pending window bounded per holder; cap 20 already enforced at
+  amendment validation. Entry 1(a) carries the traced ACs; the removed-target gate (Entry 13)
+  already generalizes. Branch `m14b/fanout-1` from cello-client main (`cc06b3f`). REMOVE-1 is ✅
+  — P1 ALL GREEN (Entry 13).
 - **Superseded:** WIRE HALF BUILT on `m14b/join-1`
   (`cello-client 2eb4160`, 18 tests, full gate): document-join.ts — the offer as a courier
   (received bytes of genesis + chain + log snapshot, signature binding every byte through
@@ -59,8 +61,8 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅✅ · P1 ✅🟡 (JOIN-1 ✅; REMOVE-1 built/review-in-flight) · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
-- **Branches in flight:** `m14b/remove-1` (cello-client).
+- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ ALL GREEN · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
+- **Branches in flight:** none.
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
 - **Parked:** nothing yet.
