@@ -215,24 +215,43 @@ description: >
   refused by every holder independently; A invites C properly → C consents → in; A promotes B;
   a `remove_admin` missing one other-admin signature → invalid everywhere; with the full set →
   admitted. All three daemons derive the identical {participants, admins, properties} at every
-  step. — ✅
-  > Green on 3 real daemons (2/2, 191s) — journey 1 of j-multiplayer.spine.ts. → Entry 21.
+  step. — 🟠 PARTIAL (2 of 9 clauses)
+  > Downgraded from ✅ on the enforcer review (Entry 22) — the tag was set against the run's
+  > note, not against this line. PROVEN: three daemons; A invites C properly → C consents → in.
+  > NOT COVERED: creation with admin set {A}; B joining by amendment; a non-admin's refusal
+  > (the assertion refused for `document_unknown`, not governance — hollow); identical
+  > {participants, admins, properties} at every step (proxied by epoch height only — no surface
+  > exposes the triple). **THREE CLAUSES ARE UNBUILDABLE:** `promote_admin` and both
+  > `remove_admin` cases have NO authoring verb — the N-signature gathering wire is parked
+  > (Entry 10). They cannot be tested and must not be tagged; see Entry 22 for the decision
+  > owed.
 - **DOD-MP-E2E-JOIN-1** [trustless-cello] — join enforcer: a bilateral A↔B document accumulates
   real edit history; C joins mid-life; C converges to the full current document by replay; C's
   first edit reaches BOTH A and B; `epoch_id` incremented across the join; the session seals and
-  the document leaves verify on all three sides. — ✅
-  > Green — C holds the whole prior history and their first edit reaches BOTH holders. → Entry 21.
+  the document leaves verify on all three sides. — 🟠 PARTIAL (5 of 6 clauses)
+  > Downgraded (Entry 22). PROVEN: real history before the join; C joins mid-life; C converges
+  > to the full document by replay; C's first edit reaches BOTH A and B; epoch incremented.
+  > NOT COVERED: the session seals and leaves verify on all three sides — and the clause needs
+  > DEFINING first: three pairwise sessions have three roots, so "all three sides" assumes a
+  > shared session that does not exist in a mesh.
 - **DOD-MP-E2E-FANOUT-1** [trustless-cello] — offline fan-out enforcer: three holders; B
   publishes while C's daemon is DOWN; **B's daemon is then killed and restarted** (pending
   derived from the log, not memory); A receives immediately — never blocked by C's absence; C's
-  daemon returns; C converges with zero agent attention on any side. — ✅
-  > Green — B converges with C's daemon killed; one absent holder blocks nobody. → Entry 21.
+  daemon returns; C converges with zero agent attention on any side. — 🟠 PARTIAL (3 of 5 clauses)
+  > Downgraded (Entry 22). PROVEN: three holders; a publish while one daemon is DOWN; the
+  > online holder receives, never blocked. NOT COVERED — and it is the BOLDED half:
+  > the publisher's daemon is never killed and restarted (restart-survivability at N holders),
+  > and the absent holder never returns to converge.
 - **DOD-MP-E2E-REMOVE-1** [trustless-cello] — removal enforcer: three holders; C is removed;
   C's local copy is intact and C's daemon surfaced the removal; C's next publish is refused by
   A and B with the removal-named reason (and the refusal is on the record — no silent drop);
-  A and B continue editing and converging normally. — ✅
-  > Green — B keeps the content, their surface reports removed, their publish refuses by name.
-  > → Entry 21.
+  A and B continue editing and converging normally. — 🟠 PARTIAL (4 of 7 clauses)
+  > Downgraded (Entry 22). PROVEN: three holders; a holder removed; their copy intact; their
+  > daemon SURFACED the removal (genuine cross-process evidence — derived from the amendment
+  > that really travelled). NOT COVERED: the refusal AT THE RECEIVERS (the test proves the
+  > removed party's own local pre-check, a different code path — the receiver-side refusal
+  > needs a holder who was offline at removal time); "on the record" (today log + ack only —
+  > whether that suffices is a product decision); survivors continuing to converge after.
 - **DOD-MP-SHIP-1** [cello-client, trustless-cello] — the publish cascade via `/cello-publish`
   (skill loaded, per publish), trustless-cello re-pinned, plugin skills updated for the
   multiplayer verbs and audited as SHIPPING content (tarball/clone, not source), and a **live
