@@ -646,3 +646,43 @@ holder-door refusal; inbound proof: removed sender refused terminally naming the
 **Fixture rule discovered:** planted amendment rows must be DECODABLE — the membership walk
 decodes every stored row, and garbage is a state no real daemon can hold
 (validate-before-append). Two suites corrected.
+
+---
+
+## Entry 13 — REMOVE-1 review verdict, findings fixed, merged — P1 ALL GREEN (2026-08-12)
+
+**Reviewer verdict (`cello-unit-reviewer`, one pass, quoted):** "SPEC: DEVIATIONS FOUND — the
+delivery-stop clause is missing and un-journaled (F1) [blocking]; the named-refusal clause holds
+only in an adversarial corner (F2/F4); three surfaces overclaim 'either way'. ERROR SUBSTITUTION
+FOUND — document_epoch_stale stands in for document_sender_removed in every honest
+removed-publisher flow [blocking]. HOLLOW TESTS FOUND — list overlay and removed_from warn
+revert-invisible; walkMembership re-add unpinned. REMOVALS PROVEN."
+
+**All findings fixed (`cello-client 8bf302a`, merged `cc06b3f`):** the delivery worker retires
+pending envelopes to a removed target (abandoned, announced); a daemon that knows itself removed
+refuses arrivals terminally; the missed-amendment removed publisher gets the removal answer in
+the epoch-behind branch (where our chain is definitive — the AHEAD case deliberately does not,
+because there OUR chain may be stale); a removed former holder is upgraded from the silent
+stranger-refusal to the terminal named one; a repeat remove re-sends the removal amendment (the
+invite-retry precedent — the offline-at-removal holder is no longer permanently unreachable);
+the CLI help mis-annotation fixed. Seven new revert-visible tests. F6 (list decodes chains per
+row) accepted at alpha scale, revisit when FANOUT-1 touches the table.
+
+**ANDRE'S STANDING PRINCIPLE, delivered mid-unit and now a procedure lens (§2b):** *a guard is
+not a guard if it only lives in the daemon the adversary controls — clients can rewrite their
+own daemons. Daemon-side enforcement counts only when it runs on the OTHER parties' daemons;
+otherwise it belongs in the directory or relay (or both).* Audit of this unit against it:
+- The load-bearing removal gates run on the HONEST side: every remaining holder's inbound
+  refuses a removed sender by ITS OWN chain, and every remaining holder's worker stops dialing
+  the removed target. A removed party who rewrites their client can neither push edits in nor
+  keep receiving them.
+- The removed daemon's self-checks (publish gate, recipient refusal, list overlay) are
+  ERGONOMICS for an honest client, not the boundary — correctly so.
+- Same shape across the milestone: amendments/joins validate by replay on EVERY receiving
+  daemon; consent protects the invitee on the invitee's own machine (self-protection, the one
+  place trusting your own daemon is the point).
+- Directory/relay-level enforcement (e.g. witnessing refusals for removed members) is
+  defense-in-depth for the Tier 2 wave — the relay today has no membership knowledge, and adding
+  it is a deliberate future decision, not a P2 slip-in.
+
+**DOD-MP-REMOVE-1 flips ✅ on this entry. Tier P1 is ALL GREEN.**

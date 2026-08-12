@@ -206,6 +206,11 @@ Supply: the DoD line VERBATIM (all clauses), the coder's clause checklist, the d
 > Every lens fires on EVERY unit's diff, whether or not that unit's DoD line mentions it.
 
 Standing M14B-specific lenses:
+- **Adversary-owns-their-daemon lens (BLOCKING — Andre, 2026-08-12):** clients can rewrite their
+  own daemons, so a guard that runs only on the party it constrains is not a guard. Every
+  security-relevant check must be enforced by the OTHER parties' daemons (each verifying
+  independently), or by the directory/relay. Sender-side checks are ergonomics; flag any
+  security claim whose only enforcement point is code the adversary controls.
 - **Amendment-validity lens (BLOCKING):** the arrangement derives ONLY from genesis + the chain;
   any path where an under-signed amendment is admitted, or where participant/admin state is read
   from anywhere but the replay, is critical. A missing signature is checkable — flag anything
