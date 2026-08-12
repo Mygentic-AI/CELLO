@@ -215,16 +215,18 @@ description: >
   refused by every holder independently; A invites C properly → C consents → in; A promotes B;
   a `remove_admin` missing one other-admin signature → invalid everywhere; with the full set →
   admitted. All three daemons derive the identical {participants, admins, properties} at every
-  step. — 🟠 PARTIAL (6 of 6 BUILDABLE clauses; 3 UNBUILDABLE, see below)
+  step. — 🟠 PARTIAL (6 of 6 clauses that remain; 3 PARKED out, Entry 24)
   > Downgraded from ✅ on the enforcer review (Entry 22) — the tag was set against the run's
   > note, not against this line. PROVEN: three daemons; A invites C properly → C consents → in.
   > NOW PROVEN (Entry 23): creation declares A sole admin and both holders derive it; a HOLDER
   > who is not an admin is refused `document_not_admin` (the first cut used a NON-holder, which
   > dies six checks earlier at `document_unknown` — green with all governance deleted); the
   > arrangement is agreed value-for-value by all three at every step, enabled by
-  > `cello_doc_list` now surfacing it. NOT COVERED: B joining by amendment (B is a genesis
-  > party by construction — arguably the line's own wording, not a gap); independent refusal at
-  > the OTHER holders (needs the rejected amendment put on the wire anyway); identical
+  > `cello_doc_list` now surfacing it. The three promotion/demotion clauses are PARKED OUT of
+  > this line (Explicitly beyond, Entry 24) — no verb authors them. NOT COVERED: B joining by
+  > amendment (B is a genesis party by construction — the line's own wording, not a gap);
+  > independent refusal at the OTHER holders (needs the rejected amendment put on the wire
+  > anyway); identical
   > {participants, admins, properties} at every step (proxied by epoch height only — no surface
   > exposes the triple). **THREE CLAUSES ARE UNBUILDABLE:** `promote_admin` and both
   > `remove_admin` cases have NO authoring verb — the N-signature gathering wire is parked
@@ -301,6 +303,28 @@ description: >
   with the Tier 2 wave, not here.
 - **Voting/majority governance** beyond the admin model; **per-field write authority** (Tier 2
   schema work); **directory-side presence subscription** (M14-P4).
+- **ADMIN PROMOTION AND ADMIN REMOVAL — PARKED HERE 2026-08-13 (§3a park, Entry 24).** The
+  replay engine implements `promote_admin` and `remove_admin` fully, and GOVERN-1's enforcer
+  line named three clauses about them — but NO VERB AUTHORS EITHER ONE, because
+  `remove_admin` needs signatures gathered from every other admin across different machines and
+  no wire carries a half-signed action between daemons. Those three clauses are parked OUT of
+  DOD-MP-E2E-GOVERN-1 so the line can close on what it can actually prove; the capability is
+  named below as owed work rather than left as an untestable clause.
+  **Andre's call, unchanged:** either the gathering flow gets its own DoD line (a pending-
+  governance inbox, a co-sign verb, expiry for a proposal nobody finishes signing — and, once
+  fan-out exists, delivering a half-signed amendment to a specific admin is just another
+  per-holder delivery), or promotion/demotion is declared out of scope in writing. Until then
+  `cello_doc_remove`'s guidance says "demote first" about a verb that does not exist — the one
+  operator-visible edge of this gap.
+- **THE SEALING CLAUSE'S MESH DEFINITION (DOD-MP-E2E-JOIN-1) — DEFINED 2026-08-13 (§3a,
+  Entry 24).** The line says "the session seals and the document leaves verify on all three
+  sides", which assumes ONE shared session; three holders means three PAIRWISE sessions with
+  three roots. Settled reading, least-reversal-risk: **each pairwise session seals, and BOTH of
+  its two parties independently recompute the same root over a tree containing that pair's
+  `0x04` document leaves** — exactly j-documents' bilateral proof, run per pair. Nothing about
+  multiplayer changes what a seal is; it changes how many there are. Testing it is a
+  straightforward extension of the existing bilateral pattern and is the JOIN-1 gap that
+  remains.
 
 ---
 
