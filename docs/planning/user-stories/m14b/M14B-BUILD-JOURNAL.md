@@ -975,3 +975,50 @@ and asserted on both receiving daemons' logs. Both are honest gaps on the line.
 
 **The three UNBUILDABLE clauses stand unchanged** — `promote_admin` and both `remove_admin`
 cases have no authoring verb. Decision still owed (Entry 22).
+
+---
+
+## Entry 24 — §3a parks, the mesh sealing definition, and the G0 review (2026-08-13)
+
+**Two decisions I had been CARRYING are now parked/defined, per §3a — the procedure says park,
+never block:**
+1. **Admin promotion and admin removal are PARKED OUT of GOVERN-1** (DoD "Explicitly beyond").
+   The replay engine implements both; no verb authors either, because `remove_admin` needs
+   signatures gathered from every other admin across machines and no wire carries a half-signed
+   action. The line can now close on what it can prove; the capability is named as owed work
+   with its shape sketched (a pending-governance inbox, a co-sign verb, expiry — and once
+   fan-out exists, delivering a half-signed amendment is just another per-holder delivery).
+   **Andre's call stands, nothing is blocked meanwhile.**
+2. **JOIN-1's sealing clause is DEFINED for a mesh:** each PAIRWISE session seals and both of
+   its parties independently recompute the same root over that pair's `0x04` leaves — the
+   bilateral proof, run per pair. Multiplayer does not change what a seal is, only how many
+   there are. **Then PROVEN** (A↔B and A↔C, mixed trees, roots compared side to side), so
+   **DOD-MP-E2E-JOIN-1 flips ✅ (6/6).**
+
+**The G0 review (`cello-unit-reviewer`, quoted):** "SPEC: DEVIATIONS FOUND — the cross-daemon
+agreement assertion covers `participants` and `admins` but not `properties`, which G0 named as
+part of the arrangement. NO SILENT FALLBACKS in the new read path. ERRORS NAME THEIR CAUSE.
+HOLLOW TESTS FOUND — the `arrangementUnavailable` branch and the `properties` field are asserted
+by nothing." Seven findings on a 40-line diff. All fixed (`cello-client 606d33b`,
+`trustless-cello` this entry):
+- **F1 (the one that mattered):** chain decoding THROWS on bytes this build cannot read (a
+  client downgrade past an amendment kind is reachable), and the throw escaped the row, escaped
+  the map, and left `cello_doc_list` returning NOTHING — one unreadable document taking down the
+  operator's whole list. Contained in BOTH chain readers; **the second one my own new test
+  caught after the first was fixed.**
+- **F2:** membership keys are always present, `null` on failure — an absent key is coerced to
+  `[]` and reads as "nobody holds this", which this unit's own enforcer helper did.
+- **F3/F5:** the genesis proposal is passed in rather than decoded twice per row; the
+  missing-genesis fault reuses the invite path's name and sentence rather than inventing a
+  second name for one condition.
+- **F6:** the row says whether the admin set was DECLARED or defaulted, so a default the code
+  chose is never rendered as agreed fact. (Chose the flag over refusing an absent `admin_set`:
+  refusing would strand documents created before the slot existed — Andre has some.)
+- **The deviation + both hollow gaps closed:** `properties` is in the agreement at every step;
+  the unavailable branch is pinned by a test that plants undecodable bytes and asserts the list
+  survives with one degraded row.
+
+**A harness lesson worth recording:** a scripted edit truncated this spine file to zero bytes —
+`open(p,'w')` truncates before the write, and the write raised. Restored from HEAD and re-applied
+via a temp file with a size assertion before the move. Any scripted edit to a file not yet
+committed should write-then-verify, never write-in-place.
