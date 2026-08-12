@@ -190,7 +190,10 @@ description: >
   reason; **amendment lag is defined, not discovered**: an envelope from a holder the receiver
   has not yet learned of (the amendment is in flight) is held or refused with a reason naming
   the unknown sender, never silently dropped, and resolves when the amendment arrives — exact
-  shape settled against TRACE-1's findings and journaled. — ❌
+  shape settled against TRACE-1's findings and journaled. — ✅
+  > Reviewed; the lag signature (unknown sender + epoch-ahead) is logged by name, wire silence
+  > stands; the settled shape + its retry-ceiling window journaled (Entry 18); per-sender chains
+  > pinned N-independent. Merged `cello-client 5748894`. → Journal Entries 17–18.
 
 ## Tier P3 — Topology declaration becomes meaningful (Phase 4)
 

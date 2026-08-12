@@ -15,11 +15,13 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next:** INBOUND-N-1 review IN FLIGHT (dispatched on a2ce49b..27fe7a1 + Entry 17). On the
-  verdict: fix findings → merge → flip ✅ → P2 ALL GREEN → pull `DOD-MP-TOPOLOGY-1` (P3, small:
-  mesh accepted + default at the handshake, both ends; hub-and-spoke retired per D4; the
-  TRACE-1 map has the one seam function + the propose-handler default site). Superseded text:
-  receive against N senders: per-sender
+- **Next red:** `DOD-MP-TOPOLOGY-1` (P3, small) — `topology: mesh` accepted at BOTH ends and
+  the default for new documents; hub-and-spoke retired per D4 (the wire field survives, nothing
+  built for it); unsupported topology refused with a sentence naming the mismatch. TRACE-1's
+  map: ONE seam function (`seamViolation`, three call sites follow) + the propose-handler
+  default site. Branch `m14b/topology-1` from cello-client main (`5748894`). P2 IS ALL GREEN
+  (Entry 18). Then P4: the four three-daemon enforcers (trustless-cello spine) + SHIP-1.
+  Superseded text: receive against N senders: per-sender
   `doc_prev_hash` chains validated per sender; an envelope from a non-holder (per the receiver's
   DERIVED participant set) refused by name; amendment-lag handling DEFINED (held/refused with a
   named reason, resolved when the amendment lands) — plus the two boundaries carried from
@@ -80,8 +82,8 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅🟡 (INBOUND-N-1 built/review-in-flight) · P3 ❌ · P4 ❌❌❌❌❌
-- **Branches in flight:** `m14b/inbound-n-1` (cello-client).
+- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅✅ ALL GREEN · P3 ❌ · P4 ❌❌❌❌❌
+- **Branches in flight:** none.
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
 - **Parked:** nothing yet.
@@ -842,3 +844,37 @@ find it twice.
 **Boundaries journaled, not built (Entry 16 carries):** late-joiner envelope service rides
 JOIN-1's transfer; one-holder-rejects-what-another-admitted supersession semantics are still an
 open design point for the Tier 2 wave's rejection work.
+
+---
+
+## Entry 18 — INBOUND-N-1 review verdict, findings fixed, merged — P2 ALL GREEN (2026-08-12)
+
+**Reviewer verdict (`cello-unit-reviewer`, one pass, quoted):** "SPEC: DEVIATIONS FOUND — the
+amendment-lag clause's unknown-sender scenario ships as stranger-silence with the epoch
+discriminator discarded, and Entry 17's 'stands AS DEFINED via epoch-ahead' does not describe
+that path [blocking]. NO SILENT FALLBACKS — the null-derivation fallback narrows and announces.
+ERRORS NAME THEIR CAUSE — with F3 as the one label sending the operator to the wrong subsystem.
+TESTS HAVE TEETH — joined-holder and N-chains fail on revert. REMOVALS PROVEN." The reviewer
+confirmed the N-chains test genuinely distinguishes per-sender from global chains (a global
+head throws document_chain_forked on the second prev-null root), and all three
+derived-membership seams wire to ONE producer.
+
+**Findings fixed (`cello-client d9dfd02`, merged `5748894`):** F1 — the lag signature is
+NAMED: an unknown sender whose envelope claims an epoch ahead of ours logs
+`document.inbound.sender_unknown_epoch_ahead` (an honest new holder can ONLY arrive
+epoch-ahead; a receiver holding their epoch would hold their amendment). The wire stays silent
+— the disclosure decision stands — but the operator no longer reads a stranger probe. F3 — the
+retirement checklist points at that receiver-side event. F4 — headers merged, archaeology
+dropped.
+
+**THE SETTLED LAG SHAPE (correcting Entry 17, as the reviewer demanded):** an unknown-holder's
+envelope resolves via the SENDER'S ORDINARY RETRY through the (logged) silent path once the
+amendment lands — NOT via the epoch-ahead refusal, which the sender gate precedes.
+**F2, journaled as the accepted boundary:** resolution holds within the retry ceiling's window
+(5 sends × the 600s ack timeout ≈ 40 minutes of receiver lag); past it, delivery to that
+receiver is retired and never reopened by the amendment's arrival. Re-seeding retired
+deliveries on a membership amendment is the named Tier 2 candidate reconcile; at alpha scale a
+receiver lagging behind an invite by 40+ minutes is the re-invite verb's territory (it re-fans
+the amendment and re-sends the offer).
+
+**DOD-MP-INBOUND-N-1 flips ✅ on this entry. Tier P2 is ALL GREEN.**
