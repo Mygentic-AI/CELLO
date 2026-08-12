@@ -524,3 +524,52 @@ materializes the full current document from the log.
 Implementation on `m14b/join-1` from cello-client `4523716`: wire frame first (red tests), then
 the invitee receive path, then the inviter authoring path + tool surface (`cello_doc_invite` or
 an extension of existing verbs — decide against the vocabulary guard in-unit), then REMOVE-1.
+
+---
+
+## Entry 10 — JOIN-1 code-complete; decisions taken in-unit (2026-08-12)
+
+Branch `m14b/join-1`, eight commits (`2eb4160` offer wire + validation, `b717c54` answer frame,
+`dc66125` join store, `fe29225` router + receive wiring, `dbe76e4` accept flow, `fe92f45`
+handler surfaces, `48be16a` invite verb ×4 surfaces, `81b7120` roundtrip proof). Full gate green
+after each. Review dispatched on the whole diff.
+
+**The proof that matters:** the in-process roundtrip — invite → offer crosses → inbox →
+accept-BY-DERIVATION → content materialized from the snapshot → both daemons derive epoch 1 →
+the signed answer settles on the inviter. Plus the negative: a non-admin cannot even mint an
+offer. (Three real OS processes is the P4 join enforcer's job; this is the strongest
+single-process evidence.)
+
+**Decisions taken in-unit (§3a authority):**
+- **The offer is a courier:** the invitee replays the carried bytes and consents to what it
+  COMPUTED; the offer's signature binds every carried byte so a misleading bundle of
+  individually-valid pieces is attributable.
+- **Consent decided with the EXISTING verbs:** joins list in `cello_doc_inbox` beside proposals
+  and are decided by `cello_doc_accept`/`refuse` (routed by exact pending match) — no new consent
+  vocabulary; ONE new verb total (`cello_doc_invite`), all four lockstep surfaces + the three
+  guards that fired on it.
+- **Snapshot re-encode is lossless and used:** update rows carry every TBS field (client id is a
+  column, encoding a pinned constant) — the same re-encode the delivery path ships. Rejection
+  records stay local (quarantine bridging is receiver-side state, not shared history).
+- **Re-invite re-sends the stored offer** (the proposal `--retry` precedent) — authoring afresh
+  would try to admit an already-admitted holder, which the replay refuses.
+- **Amendment delivery to existing holders is BEST-EFFORT at P1**, reported per holder, never
+  assumed; durable per-holder delivery is FANOUT-1, and the inbound epoch gate makes a missed
+  amendment loud (stale/ahead refusals name the mismatch), not silent.
+- **Historical snapshot envelopes are accepted at the epoch their SIGNED bytes claim** — the
+  inbound epoch gate is for live arrivals; a snapshot legitimately spans epochs.
+- **`recordJoined`** is the handshake store's third write path (the joiner is neither addressee
+  nor author) — forced through the immutability allowlist test with its justification.
+- **Consent clause closed:** GOVERN-1's dispositioned invitee-consent clause (Entry 8) is
+  implemented here — a join is effective only when the amendment is valid AND the invitee's
+  signed accept ran; `acceptJoin` re-validates at the moment of consequence.
+
+**Validate-before-append upheld at both new production append sites** (receive-side
+`recordAmendment` replays the whole chain including the arrival; authoring-side invite validates
+the chain including the new amendment) — the AMEND-1 standing condition, for the reviewer to
+verify.
+
+**REMOVE-1 is NOT in this diff** — it is its own DoD line and follows as its own unit. One open
+design note for it, parked with a name: authoring `remove_admin` needs an N-signature GATHERING
+flow across daemons (partial collections are storable; no line owns the gathering wire). Single-
+signer removals (non-admin holders, voluntary leave) need no gathering and are REMOVE-1's scope.
