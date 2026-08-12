@@ -311,6 +311,26 @@ description: >
 > built is proven on the fleet — including the close addressing both holders; only the steps that
 > need a frame to ARRIVE are unproven. Needs its own line and Andre's call.
 
+- **DOD-MP-REMOVE-FEEDBACK-1** [cello-client] — the FEEDBACK half of D9: a holder whose edit is
+  refused after removal learns, in a sentence they can act on, that they were removed, at which
+  epoch, that their copy and its history remain theirs, and that new edits no longer publish. The
+  refusal reason exists; what is owed is that every surface carrying it says the whole thing —
+  the write refusal, the list row, and the skill prose — and that none of them imply the copy was
+  taken away (FORWARD-ONLY-REMOVAL). Documented, not merely logged. — 🟠 PARTIAL (the write
+  refusal says it; the list row shows `removed: true` with no sentence; the skills do not cover
+  the removed holder's own view)
+- **DOD-MP-GOVERN-WIRE-1** [cello-client] — **ADMIN PROMOTION AND DEMOTION NEED A WIRE THAT DOES
+  NOT EXIST.** Ruled by Andre 2026-08-13: no longer "parked as out of scope" — it is owed work on
+  THIS milestone's board and it enters launch triage. The replay engine already implements
+  `promote_admin` and `remove_admin`; what is missing is the transport for a HALF-SIGNED action.
+  `remove_admin` requires every other admin's signature, gathered across different machines, and no
+  frame carries a partially-signed amendment between daemons. Needs designing, not just coding: a
+  pending-governance inbox, a co-sign verb, expiry for a proposal nobody finishes signing, and —
+  once fan-out exists — delivering a half-signed amendment to a specific admin is just another
+  per-holder delivery. **Launch-triage question to answer first:** at launch, is an operator who
+  cannot demote a co-admin *ruined* or *inconvenienced*? Until it ships, `cello_doc_remove`'s
+  guidance says "demote first" about a verb that does not exist — the one operator-visible edge,
+  and it must be reworded even if the feature waits. — ❌ NOT BUILT
 - **DOD-MP-SHIP-1** [cello-client, trustless-cello] — the publish cascade via `/cello-publish`
   (skill loaded, per publish), trustless-cello re-pinned, plugin skills updated for the
   multiplayer verbs and audited as SHIPPING content (tarball/clone, not source), and a **live
@@ -348,6 +368,11 @@ description: >
   forward-only removal (D3). Without it the document sat `active` forever reporting it waited on
   nobody — control frames are fire-once, so nothing could ever settle it. This is the loosening
   and therefore reversible direction. **Overturnable by Andre; not a blocking question.**
+- **D9 — a refused post-removal edit stays a LOG LINE PLUS A REFUSAL ACK; no durable rejection
+  row.** Ruled by Andre 2026-08-13 (option A). Provable-refusal is a Tier 2 attestation concern,
+  not a launch one. **But it must be DOCUMENTED and it must have affordances** — the removed
+  holder's own agent has to be told, in words, what happened and what is still theirs. Silence
+  here reads as a bug on their screen. See `DOD-MP-REMOVE-FEEDBACK-1`.
 - **Guards carried from the multiplayer log §11 — do not re-litigate:** floor control is not
   needed (a CRDT op is a spreadsheet cell, not an utterance); relaying is not the answer to
   delivery (every holder authors and delivers its own updates — no relay tier); arrays stay
@@ -368,19 +393,12 @@ description: >
   with the Tier 2 wave, not here.
 - **Voting/majority governance** beyond the admin model; **per-field write authority** (Tier 2
   schema work); **directory-side presence subscription** (M14-P4).
-- **ADMIN PROMOTION AND ADMIN REMOVAL — PARKED HERE 2026-08-13 (§3a park, Entry 24).** The
-  replay engine implements `promote_admin` and `remove_admin` fully, and GOVERN-1's enforcer
-  line named three clauses about them — but NO VERB AUTHORS EITHER ONE, because
-  `remove_admin` needs signatures gathered from every other admin across different machines and
-  no wire carries a half-signed action between daemons. Those three clauses are parked OUT of
-  DOD-MP-E2E-GOVERN-1 so the line can close on what it can actually prove; the capability is
-  named below as owed work rather than left as an untestable clause.
-  **Andre's call, unchanged:** either the gathering flow gets its own DoD line (a pending-
-  governance inbox, a co-sign verb, expiry for a proposal nobody finishes signing — and, once
-  fan-out exists, delivering a half-signed amendment to a specific admin is just another
-  per-holder delivery), or promotion/demotion is declared out of scope in writing. Until then
-  `cello_doc_remove`'s guidance says "demote first" about a verb that does not exist — the one
-  operator-visible edge of this gap.
+- **ADMIN PROMOTION AND ADMIN REMOVAL — NO LONGER PARKED (reversed by Andre 2026-08-13).** It was
+  parked as out-of-scope earlier the same day; Andre ruled instead that it is **owed work with a
+  line on this board and a place in launch triage** — see `DOD-MP-GOVERN-WIRE-1`. The reason it
+  cannot simply be coded stands: `remove_admin` needs signatures gathered from every other admin
+  across different machines, and no frame carries a half-signed amendment between daemons. That
+  is a design job, not a coding job.
 - **THE SEALING CLAUSE'S MESH DEFINITION (DOD-MP-E2E-JOIN-1) — DEFINED 2026-08-13 (§3a,
   Entry 24).** The line says "the session seals and the document leaves verify on all three
   sides", which assumes ONE shared session; three holders means three PAIRWISE sessions with

@@ -1521,3 +1521,41 @@ alive; the third is unreachable for reasons that have nothing to do with multipl
 
 `DOD-MP-SHIP-1` stays ❌ — honestly, and pointing at a defect outside this milestone rather than
 at anything M14B built.
+
+---
+
+## Entry 35 — three rulings, and a correction to my own severity claim (2026-08-13)
+
+**I OVERSTATED THE SEALED-SESSION DEFECT and Andre caught it.** I described it in a way that read
+as "sealing a session destroys document delivery to that person", which would indeed blow the
+feature out of the water. It does not, and the code says why.
+
+`documentTransportFor`'s `activeSessionsWith` filters on **`row.status === "active"` in this
+daemon's own store**, and falls through to `openSession` when nothing matches. So the normal path
+is safe: seal a conversation → the local row goes non-active → the document sender skips it and
+opens a FRESH session → documents keep flowing. **Sealing is not the trigger.**
+
+The trigger is a **DISAGREEMENT**: the local row says active while the relay says sealed. The relay
+pushes `session_sealed` exactly once, and a daemon that is down or restarting at that instant never
+records it. Then the sender keeps choosing a session the relay will never accept, permanently, and
+the stale row survives restarts.
+
+**Correct severity: narrow trigger, permanent and silent consequence.** Worth fixing as a recovery
+gap — not as a rescue of the feature. The distinction matters for triage, and stating it the first
+way was the kind of catastrophising that makes a launch call harder rather than easier.
+
+**Andre's rulings:**
+
+- **D1 → fix it (A)**, on the corrected reading.
+- **D2 → admin promote/demote is UN-PARKED.** Not "out of scope in writing" — it gets a line on
+  this board (`DOD-MP-GOVERN-WIRE-1`) and enters launch triage, with the launch question stated on
+  the line: is an operator who cannot demote a co-admin *ruined* or *inconvenienced*? The blocker
+  is a wire that does not exist for a half-signed action, so it needs designing, not just coding.
+  The `cello_doc_remove` guidance that says "demote first" about a non-existent verb must be
+  reworded regardless.
+- **D3 → option A, WITH DOCUMENTATION AND AFFORDANCES** (`DOD-MP-REMOVE-FEEDBACK-1`, D9). No
+  durable rejection row — that is Tier 2. But the removed holder's own agent must be told in a
+  sentence it can act on: that they were removed, at which epoch, that their copy and history
+  remain theirs, and that new edits no longer publish. Today the write refusal says it, the list
+  row shows a bare `removed: true`, and the skills never cover the removed holder's own view.
+  Silence there reads as a bug on their screen.
