@@ -15,13 +15,18 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next red:** `DOD-MP-FANOUT-1` (P2) — delivery targets derive from the participant list
-  (never per-sender config); per-(envelope,holder) ack table (log-derived, restart-survivable);
-  per-holder reachability/backoff/unacked-ceiling; stall PER HOLDER (document-level only when
-  every holder is exhausted); pending window bounded per holder; cap 20 already enforced at
-  amendment validation. Entry 1(a) carries the traced ACs; the removed-target gate (Entry 13)
-  already generalizes. Branch `m14b/fanout-1` from cello-client main (`cc06b3f`). REMOVE-1 is ✅
-  — P1 ALL GREEN (Entry 13).
+- **Next:** `DOD-MP-FANOUT-1` (P2) IN PROGRESS on `m14b/fanout-1`. DONE: the per-(envelope,
+  holder) delivery-state store (`5f6f686`, 7 tests — per-holder attempts/backoff/ceiling/
+  abandon, settle-once acks, PER-HOLDER bounded window via partitioned row numbering). REMAINING:
+  (i) the WORKER rewrite — tick takes `holdersFor(documentId): string[]` (derived: genesis
+  participants + amendment replay via the layer), pending from `pendingHolderDeliveries`,
+  per-holder reachability probe + removed-target gate (generalize Entry 13's), per-holder
+  unacked ceiling → holder exhausted (announced) → document stalled only when ALL exhausted;
+  (ii) publish SEEDS deliveries for every current holder (document-publish.ts) + legacy
+  bilateral rows backfill-on-first-pass; (iii) ack routing — the ACKING sender settles THEIR
+  row (`ackHolderDelivery`), document-ack-inbound + layer awaitAck semantics; (iv) daemon.ts
+  wiring (peerFor → holdersFor). Then Entry 14's checklist review + ONE unit review. Design:
+  Entry 14.
 - **Superseded:** WIRE HALF BUILT on `m14b/join-1`
   (`cello-client 2eb4160`, 18 tests, full gate): document-join.ts — the offer as a courier
   (received bytes of genesis + chain + log snapshot, signature binding every byte through
