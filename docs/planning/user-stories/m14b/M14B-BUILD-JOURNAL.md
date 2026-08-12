@@ -688,3 +688,40 @@ otherwise it belongs in the directory or relay (or both).* Audit of this unit ag
   it is a deliberate future decision, not a P2 slip-in.
 
 **DOD-MP-REMOVE-1 flips ✅ on this entry. Tier P1 is ALL GREEN.**
+
+---
+
+## Entry 14 — DOD-MP-FANOUT-1: clause checklist + design (pre-implementation, 2026-08-12)
+
+**Target in one sentence:** the delivery target set becomes the DERIVED participant list, with
+acknowledgement, retry, and stall tracked per (envelope, holder) — one dead holder never blocks
+or stalls anyone else.
+
+### Clause checklist (from the DoD line + Entry 1(a)'s traced ACs)
+1. Targets derive from amendment replay (`holdersFor`), never per-sender config — §7-1's
+   silent-divergence hazard is the reason.
+2. Per-(envelope, holder) delivery state: its own table (`document_deliveries`), log-derived,
+   restart-survivable; the envelope-row columns stay as the BILATERAL legacy read path until
+   this table owns delivery state (migration note in-unit).
+3. Reachability, backoff, attempts, and the unacked ceiling are PER HOLDER.
+4. Stall is PER HOLDER; the document stalls only when EVERY current holder is exhausted.
+5. The pending window is bounded PER HOLDER (the no_peer starvation shape, multiplied by N).
+6. One unreachable holder never delays the others (the availability clause — sovereign-node
+   doctrine applied to documents).
+7. The removed-target gate (Entry 13) generalizes: a holder removed from the arrangement is
+   retired from delivery state, announced.
+8. Cap 20 already enforced at amendment validation (AMEND-1) — nothing new here, referenced.
+
+### Design
+- **`document_deliveries` table:** (owner, document_id, envelope_hash, holder_agent_id) PK;
+  delivered_at, acked_at, abandoned_at, attempts, next_attempt_at — the envelope-row columns'
+  shape, per holder. Seeded on publish for every CURRENT holder at publish time (derived), and
+  for the LEGACY bilateral rows by the worker's first pass (backfill-on-read, journaled).
+- **Worker:** pending = per-holder unacked rows JOINed to envelopes; grouped (document, holder);
+  one reachability probe per (document, holder) pass; per-holder backoff via the existing
+  schedule; per-holder ceiling → holder marked exhausted (announced), document stalled only when
+  all are.
+- **Ack routing:** the existing ack frame names (envelope, sender) — the ACKING HOLDER is the
+  authenticated sender of the ack; `markAcked` moves to (envelope, holder).
+- **Trust lens (Entry 13):** fan-out is the HONEST sender's availability machinery — no security
+  claim rides on it; the receive side (INBOUND-N-1) is where counterparty enforcement lives.
