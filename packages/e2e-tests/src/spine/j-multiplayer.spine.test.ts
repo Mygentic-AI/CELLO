@@ -84,6 +84,7 @@ async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> 
 
 interface Party {
   name: string;
+  /** Mutable: the fan-out journey restarts daemons and re-attaches connections. */
   conn: McpConn;
   daemon: Proc;
   celloDir: string;
@@ -230,13 +231,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       ).toBe(true);
       await awaitContent(b, documentId, "line one from A. line two from A. ");
 
-      // ── GOVERNANCE: C is not an admin and cannot invite. ──
       await connect(a, c);
-      const rogue = (await c.conn.call("cello_doc_invite", {
-        document_id: documentId,
-        invitee_pubkey: b.pubkey,
-      })) as { ok?: boolean; reason?: string };
-      expect(rogue.ok, "a non-holder must not be able to invite").toBe(false);
 
       // ── JOIN: A (an admin) invites C; C consents by DERIVING what they were sent. ──
       const invited = (await a.conn.call("cello_doc_invite", {
@@ -265,6 +260,17 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
 
       // C HOLDS THE WHOLE DOCUMENT — the history that existed before they arrived.
       expect(await readDoc(c, documentId)).toBe("line one from A. line two from A. ");
+
+      // ── GOVERNANCE, asserted where it can only be governance: C is now a HOLDER and NOT an
+      // admin. The first cut asked a NON-holder to invite, which dies at the store lookup with
+      // `document_unknown` six checks before the governance gate — green with every line of
+      // governance deleted. The reason code is the assertion.
+      const rogue = (await c.conn.call("cello_doc_invite", {
+        document_id: documentId,
+        invitee_pubkey: "f".repeat(64),
+      })) as { ok?: boolean; reason?: string; guidance?: string };
+      expect(rogue.ok).toBe(false);
+      expect(rogue.reason, `wrong refusal: ${JSON.stringify(rogue)}`).toBe("document_not_admin");
 
       // ── C's first edit reaches BOTH existing holders. ──
       expect(
@@ -335,8 +341,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       ).toBe(true);
 
       // ── FANOUT: C's daemon goes DOWN; A publishes; B receives while C is dead. ──
-      const cDaemon = c.daemon;
-      await cDaemon.stop();
+      await c.daemon.stop();
       expect(
         ((await a.conn.call("cello_doc_write", {
           document_id: documentId,
@@ -346,6 +351,52 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       // THE AVAILABILITY CLAIM: B converges with C down — one absent holder blocks nobody.
       await awaitContent(b, documentId, "base. written while C was away. ");
 
+      // ── AND THE WORK FOR C IS QUEUED, not lost: per-holder pending, on A's own surface. ──
+      const pendingForC = await (async () => {
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline) {
+          const list = (await a.conn.call("cello_doc_list", {})) as {
+            documents?: Array<{ documentId?: string; pendingDeliveries?: number }>;
+          };
+          const row = (list.documents ?? []).find((d) => d.documentId === documentId);
+          if ((row?.pendingDeliveries ?? 0) >= 1) return row!.pendingDeliveries!;
+          await sleep(1000);
+        }
+        return 0;
+      })();
+      expect(pendingForC, "A queued nothing for the absent holder").toBeGreaterThanOrEqual(1);
+
+      // ── RESTART THE PUBLISHER: pending must be derived from the LOG, not held in memory. ──
+      await a.daemon.stop();
+      const aRestarted = await startLocalDaemon(a.celloDir, "mpfanA2");
+      daemons.push(aRestarted);
+      a.daemon = aRestarted;
+      const connA2 = await connectMcp(a.celloDir, "mpfan-A2");
+      mcpConns.push(connA2);
+      expect(((await connA2.call("cello_start_agent", { name: a.name })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await connA2.call("cello_use_agent", { name: a.name })) as { ok?: boolean }).ok).toBe(true);
+      a.conn = connA2;
+      const survived = (await a.conn.call("cello_doc_list", {})) as {
+        documents?: Array<{ documentId?: string; pendingDeliveries?: number }>;
+      };
+      const survivedRow = (survived.documents ?? []).find((d) => d.documentId === documentId);
+      expect(
+        survivedRow?.pendingDeliveries ?? 0,
+        "the backlog for the absent holder did not survive the publisher's restart",
+      ).toBeGreaterThanOrEqual(1);
+
+      // ── C COMES BACK and converges with ZERO agent attention on any side. ──
+      const cRestarted = await startLocalDaemon(c.celloDir, "mpfanC2");
+      daemons.push(cRestarted);
+      c.daemon = cRestarted;
+      const connC2 = await connectMcp(c.celloDir, "mpfan-C2");
+      mcpConns.push(connC2);
+      expect(((await connC2.call("cello_start_agent", { name: c.name })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await connC2.call("cello_use_agent", { name: c.name })) as { ok?: boolean }).ok).toBe(true);
+      c.conn = connC2;
+      // NOBODY ACTS: no send, no receive, no publish — the daemons sync by themselves.
+      await awaitContent(c, documentId, "base. written while C was away. ", 120_000);
+
       // ── REMOVE: A removes B — forward-only. ──
       const removed = (await a.conn.call("cello_doc_remove", {
         document_id: documentId,
@@ -353,19 +404,31 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       })) as { ok?: boolean; epochId?: number };
       expect(removed.ok, `remove failed: ${JSON.stringify(removed)}`).toBe(true);
 
+      // B's own daemon reports the removal — POLLED, because the amendment crosses a real
+      // transport and a fixed sleep is a flake waiting to happen.
+      const bRow = await (async () => {
+        const deadline = Date.now() + 60_000;
+        let last = "";
+        while (Date.now() < deadline) {
+          const bList = (await b.conn.call("cello_doc_list", {})) as {
+            documents?: Array<{ documentId?: string; removed?: boolean }>;
+          };
+          const row = (bList.documents ?? []).find((d) => d.documentId === documentId);
+          if (row?.removed === true) return row;
+          last = JSON.stringify(bList);
+          await sleep(1000);
+        }
+        throw new Error(`B never surfaced the removal: ${last}`);
+      })();
+
       // B KEEPS THEIR COPY — the whole content, still readable, forever.
-      await sleep(3000);
       expect(await readDoc(b, documentId)).toBe("base. written while C was away. ");
-
-      // And B's own daemon reports the removal rather than pretending nothing changed.
-      const bList = (await b.conn.call("cello_doc_list", {})) as {
-        documents?: Array<{ documentId?: string; removed?: boolean }>;
-      };
-      const bRow = (bList.documents ?? []).find((d) => d.documentId === documentId);
       expect(bRow, "B lost the document row entirely — removal is forward-only, not deletion").toBeDefined();
-      expect(bRow!.removed, "B's surface does not report the removal").toBe(true);
 
-      // B's next publish refuses NAMING the removal — never a silent drop, never a transport error.
+      // B's own publish refuses NAMING the removal. NOTE the scope of this evidence: it is B's
+      // LOCAL pre-check (the cooperative case), NOT the receiver-side refusal — that path needs
+      // a holder who never got the amendment, and it is named as a gap on the DoD line rather
+      // than claimed here.
       const refused = (await b.conn.call("cello_doc_write", {
         document_id: documentId,
         content: "base. written while C was away. B tries to keep editing. ",
@@ -373,8 +436,16 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       expect(refused.ok).toBe(false);
       expect(String(refused.reason)).toContain("removed");
 
-      // A's own copy is untouched by B's attempt.
-      expect(await readDoc(a, documentId)).toBe("base. written while C was away. ");
+      // ── THE SURVIVORS CARRY ON: A and C keep editing and converging after the removal. ──
+      expect(
+        ((await a.conn.call("cello_doc_write", {
+          document_id: documentId,
+          content: "base. written while C was away. and A and C carry on. ",
+        })) as { ok?: boolean }).ok,
+      ).toBe(true);
+      await awaitContent(c, documentId, "base. written while C was away. and A and C carry on. ");
+      // And the removed holder receives NONE of it — forward-only, from their chair.
+      expect(await readDoc(b, documentId)).toBe("base. written while C was away. ");
     },
     600_000,
   );
