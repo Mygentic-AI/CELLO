@@ -405,6 +405,128 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
   );
 
   it(
+    "REMOVE while OFFLINE: the parked amendment reaches them on return, so a removed holder always learns before they can publish (DOD-MP-E2E-REMOVE-1)",
+    async () => {
+      // WRITTEN to stage the receiver-side refusal — remove a holder while their daemon is down
+      // so they never learn — and it proved the premise false, which is the better outcome: the
+      // relay PARKS the amendment, so an offline holder is not an uninformed one. The journey
+      // now asserts what actually happens, which is stronger than what it set out to test.
+      const [a, b, c] = (await parties("mprecv", 3)) as [Party, Party, Party];
+      await connect(a, b);
+      await connect(a, c);
+
+      const proposed = (await a.conn.call("cello_doc_propose", {
+        peer_pubkey: b.pubkey,
+        starting_content: "shared base. ",
+        admins: [a.pubkey],
+      })) as { ok?: boolean; documentId?: string };
+      expect(proposed.ok).toBe(true);
+      const documentId = proposed.documentId!;
+      await (async () => {
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline) {
+          const inbox = (await b.conn.call("cello_doc_inbox", {})) as {
+            proposals?: Array<{ documentId?: string }>;
+          };
+          if ((inbox.proposals ?? []).some((p) => p.documentId === documentId)) return;
+          await sleep(1000);
+        }
+        throw new Error("B never saw the proposal");
+      })();
+      expect(
+        ((await b.conn.call("cello_doc_accept", { document_id: documentId })) as { ok?: boolean }).ok,
+      ).toBe(true);
+
+      expect(
+        ((await a.conn.call("cello_doc_invite", {
+          document_id: documentId,
+          invitee_pubkey: c.pubkey,
+        })) as { ok?: boolean }).ok,
+      ).toBe(true);
+      await awaitJoinOffer(c, documentId);
+      expect(
+        ((await c.conn.call("cello_doc_accept", { document_id: documentId })) as { ok?: boolean }).ok,
+      ).toBe(true);
+      await agreeOnArrangement(
+        [a, b, c],
+        documentId,
+        {
+          participants: [a.pubkey, b.pubkey, c.pubkey],
+          admins: [a.pubkey],
+          appendOnly: false,
+          epochId: 1,
+        },
+        "pre-removal",
+      );
+
+      // ── C GOES DOWN, and is removed while they cannot hear it. ──
+      await c.daemon.stop();
+      const removed = (await a.conn.call("cello_doc_remove", {
+        document_id: documentId,
+        holder_pubkey: c.pubkey,
+      })) as { ok?: boolean; epochId?: number; holdersNotified?: Record<string, boolean> };
+      expect(removed.ok, `remove failed: ${JSON.stringify(removed)}`).toBe(true);
+      // THE SEND IS ACCEPTED EVEN THOUGH C IS DOWN — the relay PARKS it. That is the whole
+      // finding of this journey: an offline holder is not an uninformed one, because parked
+      // content is waiting for them the moment they return.
+      expect((removed.holdersNotified ?? {})[c.pubkey]).toBe(true);
+      await agreeOnArrangement(
+        [a, b],
+        documentId,
+        { participants: [a.pubkey, b.pubkey], admins: [a.pubkey], appendOnly: false, epochId: 2 },
+        "post-removal",
+      );
+
+      // ── C COMES BACK KNOWING NOTHING and edits, as any honest holder would. ──
+      const cBack = await startLocalDaemon(c.celloDir, "mprecvC2");
+      daemons.push(cBack);
+      c.daemon = cBack;
+      const connC2 = await connectMcp(c.celloDir, "mprecv-C2");
+      mcpConns.push(connC2);
+      expect(((await connC2.call("cello_start_agent", { name: c.name })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await connC2.call("cello_use_agent", { name: c.name })) as { ok?: boolean }).ok).toBe(true);
+      c.conn = connC2;
+      // ── C LEARNS ON RETURN, from the parked amendment — nobody had to act. ──
+      const learned = await (async () => {
+        const deadline = Date.now() + 120_000;
+        while (Date.now() < deadline) {
+          const list = (await c.conn.call("cello_doc_list", {})) as {
+            documents?: Array<{ documentId?: string; removed?: boolean }>;
+          };
+          const row = (list.documents ?? []).find((d) => d.documentId === documentId);
+          if (row?.removed === true) return true;
+          await sleep(2000);
+        }
+        return false;
+      })();
+      expect(
+        learned,
+        "C never learned of the removal after returning — the parked amendment did not arrive",
+      ).toBe(true);
+
+      // ── AND THEN C SELF-CENSORS. This is the finding: with HONEST binaries the receiver-side
+      // refusal (`document_sender_removed`) is UNREACHABLE end to end, because a removed holder
+      // always learns before they can publish — offline merely delays it. That gate is a defence
+      // against a REWRITTEN client (Andre's adversary-owns-their-daemon lens, 2026-08-12), which
+      // stock binaries cannot stage. Its unit coverage is document-inbound.test.ts; what this
+      // journey proves live is the cooperative path all the way through. ──
+      const cWrite = (await c.conn.call("cello_doc_write", {
+        document_id: documentId,
+        content: "shared base. C edits after learning. ",
+      })) as { ok?: boolean; reason?: string };
+      expect(cWrite.ok).toBe(false);
+      expect(String(cWrite.reason)).toContain("removed");
+
+      // ── AND NEITHER REMAINING HOLDER'S DOCUMENT MOVED. ──
+      expect(await readDoc(a, documentId)).toBe("shared base. ");
+      expect(await readDoc(b, documentId)).toBe("shared base. ");
+      // C keeps their copy, exactly as it was — forward-only, from the removed chair.
+      expect(await readDoc(c, documentId)).toBe("shared base. ");
+    },
+    600_000,
+  );
+
+  it(
     "FANOUT + REMOVE: one holder offline never blocks the others; a removed holder keeps their copy and stops receiving (DOD-MP-E2E-FANOUT-1, DOD-MP-E2E-REMOVE-1)",
     async () => {
       const [a, b, c] = (await parties("mpfan", 3)) as [Party, Party, Party];
