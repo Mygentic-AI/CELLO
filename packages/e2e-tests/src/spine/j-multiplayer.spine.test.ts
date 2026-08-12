@@ -751,10 +751,21 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       // ── THE GENESIS PEER CLOSES: two of three. Under the old rule THIS is where A flipped to
       // `closed`, while the joiner was still editing. It must not. ──
       expect(((await b.conn.call("cello_doc_close", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
-      await sleep(8000);
+      // WAIT FOR THE RECEIPT, not for a duration. A sleep proves only "it had not settled YET" —
+      // and would pass vacuously if B's frame were parked and never arrived at all. Blocking on
+      // A's own record of the peer close turns "no news" into "both closes are in, and it still
+      // did not settle". (Measured: A records it ~2ms after B's call returns.)
+      await a.daemon.waitForLine(/document\.close\.peer_requested/, 30_000);
       expect(
         await statusOf(a),
         "A settled on the genesis pair while the joiner had not closed",
+      ).toBe("active");
+      // AND ON B'S OWN DAEMON. Asserting only the owner leaves the rule proven in one place: under
+      // the old two-party rule B's daemon (owner B, peer A, both closed) would already read
+      // `closed` here, so this is where the genesis peer's copy earns the clause.
+      expect(
+        await statusOf(b),
+        "B settled on the genesis pair while the joiner had not closed",
       ).toBe("active");
 
       // ── AND THE JOINER'S CLOSE COMPLETES IT. Twice load-bearing: a joiner is in nobody's
@@ -764,6 +775,94 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       await awaitStatus(a, "closed");
       await awaitStatus(b, "closed");
       await awaitStatus(c, "closed");
+    },
+    600_000,
+  );
+
+  it(
+    "END: a REMOVED holder cannot end the document — the gate REFUSES, and refusal is what no acceptance can prove (DOD-MP-CONTROL-N-1)",
+    async () => {
+      // THE CASE THE DoD LINE LEADS WITH, and the one a journey of acceptances cannot see: the
+      // first END journey stays green with the membership gate returning `true` for every sender.
+      // A test that only asserts things succeed reports that a gate is permissive enough, never
+      // that it restricts anything.
+      const [a, b, c] = (await parties("mprem", 3)) as [Party, Party, Party];
+      await connect(a, b);
+      await connect(a, c);
+
+      const proposed = (await a.conn.call("cello_doc_propose", {
+        peer_pubkey: b.pubkey,
+        starting_content: "refusal. ",
+        admins: [a.pubkey],
+      })) as { ok?: boolean; documentId?: string };
+      expect(proposed.ok).toBe(true);
+      const documentId = proposed.documentId!;
+      await (async () => {
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline) {
+          const inbox = (await b.conn.call("cello_doc_inbox", {})) as {
+            proposals?: Array<{ documentId?: string }>;
+          };
+          if ((inbox.proposals ?? []).some((p) => p.documentId === documentId)) return;
+          await sleep(1000);
+        }
+        throw new Error("B never saw the proposal");
+      })();
+      expect(((await b.conn.call("cello_doc_accept", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
+      expect(
+        ((await a.conn.call("cello_doc_invite", {
+          document_id: documentId, invitee_pubkey: c.pubkey,
+        })) as { ok?: boolean }).ok,
+      ).toBe(true);
+      await awaitJoinOffer(c, documentId);
+      expect(((await c.conn.call("cello_doc_accept", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
+
+      // ── B IS REMOVED. A's `peerAgentId` still says B — that column is frozen at creation, and it
+      // is exactly why the old gate admitted them. ──
+      const removed = (await a.conn.call("cello_doc_remove", {
+        document_id: documentId, holder_pubkey: b.pubkey,
+      })) as { ok?: boolean; epochId?: number };
+      expect(removed.ok, `remove failed: ${JSON.stringify(removed)}`).toBe(true);
+
+      // ── B TRIES TO END IT. Their own daemon self-censors first (forward-only removal), so what
+      // reaches A is nothing — which on its own is indistinguishable from a frame that was simply
+      // lost. So the assertion is TWO-SIDED: B is refused locally by name, AND A is still active. ──
+      const bEnds = (await b.conn.call("cello_doc_kill", { document_id: documentId })) as {
+        ok?: boolean; reason?: string; holdersNotified?: Record<string, boolean>;
+      };
+      // Whether B is stopped at their own door or at A's, what must NOT happen is A ending.
+      const aStatus = async (): Promise<string> => {
+        const list = (await a.conn.call("cello_doc_list", {})) as {
+          documents?: Array<{ documentId?: string; status?: string }>;
+        };
+        return (list.documents ?? []).find((d) => d.documentId === documentId)?.status ?? "missing";
+      };
+      await sleep(5000);
+      expect(
+        await aStatus(),
+        "a REMOVED holder ended the creator's document — the gate admitted a party the chain expelled",
+      ).toBe("active");
+      // The removed party's own refusal is recorded either way; if their daemon did send, A's log
+      // carries the receiving-side refusal. One of the two must be true, and both are on the record.
+      const refusedLocally = bEnds.ok === false;
+      const refusedAtA = a.daemon.countLines(/document\.(kill|close)\.not_holder/) > 0;
+      expect(
+        refusedLocally || refusedAtA,
+        "nobody refused the removed holder's ending — it was silently dropped",
+      ).toBe(true);
+
+      // ── AND THE SURVIVORS CAN STILL END IT PROPERLY: the refusal did not wedge the document. ──
+      expect(((await a.conn.call("cello_doc_close", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.conn.call("cello_doc_close", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
+      const deadline = Date.now() + 60_000;
+      let last = "";
+      while (Date.now() < deadline) {
+        last = await aStatus();
+        if (last === "closed") break;
+        await sleep(1000);
+      }
+      // The removed holder is NOT in the agreement — A and C alone complete it.
+      expect(last, "the two remaining holders could not complete the close").toBe("closed");
     },
     600_000,
   );
