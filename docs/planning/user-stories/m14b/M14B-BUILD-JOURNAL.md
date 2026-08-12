@@ -896,3 +896,30 @@ refuses at both ends naming the supported set and the asked-for value.
 field is signed into `document_id`, a document so labeled behaves identically (fan-out serves
 the derived holders regardless of the label), and refusing it would break every existing
 fixture for zero behavioral gain. Nothing is built for it; nothing writes it.
+
+---
+
+## Entry 20 — TOPOLOGY-1 review verdict, findings fixed, merged — P3 GREEN, ALL BUILD TIERS DONE (2026-08-13)
+
+**Reviewer verdict (`cello-unit-reviewer`, one pass, quoted):** "SPEC: FAITHFUL. NO SILENT
+FALLBACKS (F1 is a pre-existing notification gap on the refusing peer's side). ERRORS NAME THEIR
+CAUSE. HOLLOW TESTS FOUND — the mesh-default clause fails THE REVERT TEST. REMOVALS PROVEN." The
+reviewer proved `TOPOLOGY_V1`'s deletion three ways (both repos, the package's export map, and
+the built `dist/`), confirmed no behavior anywhere branches on the topology value, and **ruled
+no feature_version bump was owed** — the wire shape is unchanged and pre-M14B builds already
+refuse at the version gate with a truthful sentence.
+
+**Findings fixed (`cello-client 01740b5`, merged `252767a`):**
+- **F1 (MEDIUM, made real by this unit):** an arrival auto-refusal — seam violation or version
+  mismatch — wrote its sentence to OUR database and answered the proposer with SILENCE, a hang
+  they diagnose as a network fault. The join path had fixed exactly this shape; the proposal
+  path never got it. The signed refusal ack now travels best-effort to the authenticated
+  proposer. **The fixture gained the layer's own send seam** — its absence is why no test could
+  ever have caught this.
+- **F2/F3:** the gate's refusal prose stops citing the retired hub-and-spoke concept and names
+  what is actually parked (pass-through, M14-P8); the two stale seam comments corrected.
+- **The hollow test:** the mesh default's VALUE is pinned and the SENT proposal is asserted to
+  carry it literally — reverting the default was green before.
+
+**DOD-MP-TOPOLOGY-1 flips ✅. Tier P3 is GREEN — EVERY BUILD TIER (P0–P3) IS COMPLETE.**
+What remains is P4: proof, not construction.
