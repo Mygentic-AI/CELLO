@@ -1559,3 +1559,59 @@ way was the kind of catastrophising that makes a launch call harder rather than 
   remain theirs, and that new edits no longer publish. Today the write refusal says it, the list
   row shows a bare `removed: true`, and the skills never cover the removed holder's own view.
   Silence there reads as a bug on their screen.
+
+---
+
+## Entry 36 — D1 built, and the reviewer's completion REFUSED for the reason my own first cut was wrong
+
+`DOD-MP-SESSION-RETIRE-1` shipped (`cello-client 4a1f0f4`). Two reviews: an approach validation on
+Fable and the unit reviewer. **Between them, my fix was the more dangerous bug.**
+
+**Approach — VALIDATED.** Repair-at-the-bump is the established pattern here, not a hack:
+`DOD-TERMINAL-STATE-DIVERGENCE-1` already repairs this same divergence lazily at two other bump
+points (a failed close, and a receipt read that misses). The send path was the third with no repair.
+Also ruled OUT, and I agree: a background reconciliation sweep (heals only cosmetic cases —
+forgivable), and separating documents from conversation sessions (a dedicated per-document session
+hits the identical stale row; the coupling is not the root cause).
+
+**What I got wrong, worst first:**
+1. **I retired on `session_not_found`, which is documented THREE FUNCTIONS AWAY as TRANSIENT** —
+   DOD-FIRSTMSG-WITNESS-1, with live evidence: in all 23 logged first-message failures the relay
+   caught up 5ms–2.1s after the rejected submit. That would have destroyed live sessions seconds
+   old. **Trading a stuck document for a killed conversation is strictly worse than the bug.**
+2. **DB-only retirement.** Every other terminal path tears the node down, and that is not
+   bookkeeping: teardown records the terminal answer for a BLOCKED `cello_receive`, detaches the
+   relay stream, stops the node and frees its port — the port the replacement session may need.
+   Status flip first and synchronous, then teardown, because `destroySessionNode` returns early at
+   `if (!entry) return` and its status write sits after that guard.
+3. **A test pinned the UNSAFE order.** It asserted log-then-retire while its own comment claimed
+   retire-first was the guarantee — so it locked in the wrong behaviour and would have gone red for
+   anyone who fixed it.
+4. **All six tests drove a recorder.** Wire the retirement to a no-op and every one stays green.
+   Added a real-database test for the DoD's literal promise: a retired session stops being
+   selectable, per session not per peer, and it survives a restart — because the stale row did.
+
+### THE REVIEWER'S COMPLETION IS REFUSED, and the reason is instructive
+
+The unit reviewer's HIGH-1: the retirement never fires on the FULLY-sealed case, because the relay
+destroys its state on `confirmSeal` and the client rewrites the resulting `session_not_found` into
+**`relay_session_gone`**, which is not in `TERMINAL_RELAY_REFUSALS`. The finding is correct. The
+proposed fix — add `relay_session_gone` to the terminal set — **is not, and it fails for exactly the
+reason finding 1 above failed.**
+
+`relay-node.ts` defaults to **`InMemoryRelayStore`**. A relay restart or MIG roll wipes every
+session, and every client then gets `relay_session_gone` for sessions that are perfectly alive. Made
+terminal, that would **retire every live session on every client whenever the relay bounces** —
+which is precisely the sovereign-node invariant inverted: an unreachable node making the system
+unusable, rather than routed around.
+
+`relay_session_gone` conflates two facts — *"this session is over"* and *"the relay lost its
+memory"* — and destroying durable local state on the ambiguous one is the same mistake twice.
+
+**The safe shape for the remaining case (NOT built, needs Andre):** the document worker should open
+a FRESH session after repeated terminal-ish refusals on one session, rather than retiring the old
+one. That is availability-preserving and destroys nothing, so it is correct under both readings of
+the ambiguous string. It is a delivery-worker change, not a session-status change.
+
+**Recorded as owed work.** D1 is done for the case that was observed live (`session_sealed`); the
+fully-sealed variant remains, with the cheap fix rejected on evidence and the safe fix named.

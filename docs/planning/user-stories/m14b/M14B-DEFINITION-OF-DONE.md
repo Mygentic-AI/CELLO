@@ -320,7 +320,16 @@ description: >
   survived `cello logout && cello login`. The terminal branch already KNOWS (it logs "nothing sent
   now can ever be part of its record" and tells a conversation operator to start a new session);
   it must also act, because document delivery has no human in the loop to act for it. Availability
-  and fallback are first-class — a route with no fallback is the defect. — ❌ NOT BUILT
+  and fallback are first-class — a route with no fallback is the defect. — 🟠 PARTIAL (Entry 36)
+  > Built and reviewed twice (approach + unit); 4 findings fixed, incl. the HIGH that my first cut
+  > retired on `session_not_found` — documented as TRANSIENT with 23 logged cases — which would
+  > have destroyed live sessions seconds old. Now `session_sealed` only, status-flip-then-teardown,
+  > with a real-DB test for the promise. **REMAINING:** the FULLY-sealed case answers
+  > `relay_session_gone`, which is not terminal. The reviewer's fix (add it to the terminal set) is
+  > REFUSED on evidence: the relay stores sessions in memory, so that string also fires on a relay
+  > restart, and treating it as terminal would retire every live session on every client whenever
+  > the relay bounces — the sovereign-node invariant inverted. Safe shape, needing Andre: the
+  > DOCUMENT WORKER opens a fresh session after repeated terminal refusals, destroying nothing.
 - **DOD-MP-REMOVE-FEEDBACK-1** [cello-client] — the FEEDBACK half of D9: a holder whose edit is
   refused after removal learns, in a sentence they can act on, that they were removed, at which
   epoch, that their copy and its history remain theirs, and that new edits no longer publish. The
