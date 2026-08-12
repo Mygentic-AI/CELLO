@@ -204,7 +204,13 @@ description: >
   the document flipped to `closed` once two agreed while the third was still editing — the exact
   thing `document-lifecycle.ts`'s own header forbids ("one side's close is a REQUEST"). The list
   row's `closePending` asks the same question of all holders. Ruled under §3a; see Decisions
-  Carried. — 🟡 BUILT/UNVERIFIED-LIVE
+  Carried. **Derivation answers THREE ways — derived / legacy / unknown** (review, Entry 28): a
+  document with no chain is the pre-amendment bilateral case and settles on the pair; a chain that
+  exists and will not replay REFUSES, because standing in the pair there completes a three-holder
+  document on two. Collapsing the two cost correctness one way and every legacy document the
+  other. A membership change re-evaluates settlement, so removing the one holder who never closed
+  completes it. — 🟡 BUILT/UNVERIFIED-LIVE (reviewed, 3 HIGH + 4 more fixed; gate green;
+  awaits the cascade + the SHIP-1 re-run) → Journal Entry 28.
 - **DOD-MP-INBOUND-N-1** [cello-client] — the receive side against N senders: per-sender
   `doc_prev_hash` chains validated per sender (the chain is per-author, N of them); an envelope
   from a non-holder — per the receiver's derived participant set — is refused with a named
@@ -319,6 +325,12 @@ description: >
   asymmetric — loosening later (an admin closing for everyone) only widens what settles and
   strands nothing, whereas shipping the loose rule first leaves documents marked closed that never
   were, and no migration can un-say that. `DOD-MP-CLOSE-N-1`.
+- **D8 — a removal COMPLETES the agreement on behalf of those who remain.** Ruled 2026-08-13 under
+  §3a (raised by the CLOSE-N-1 review as a design call). A removed holder's silence no longer
+  counts: they are not a holder, everyone who remains has agreed, and it is consistent with
+  forward-only removal (D3). Without it the document sat `active` forever reporting it waited on
+  nobody — control frames are fire-once, so nothing could ever settle it. This is the loosening
+  and therefore reversible direction. **Overturnable by Andre; not a blocking question.**
 - **Guards carried from the multiplayer log §11 — do not re-litigate:** floor control is not
   needed (a CRDT op is a spreadsheet cell, not an utterance); relaying is not the answer to
   delivery (every holder authors and delivers its own updates — no relay tier); arrays stay
