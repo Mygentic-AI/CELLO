@@ -15,7 +15,11 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next:** `DOD-MP-FANOUT-1` (P2) IN PROGRESS on `m14b/fanout-1`. DONE: the per-(envelope,
+- **Next:** FANOUT-1 review IN FLIGHT (dispatched on cc06b3f..4330c9b + Entries 14/15). On the
+  verdict: fix findings → merge → flip ✅ → pull `DOD-MP-INBOUND-N-1` (P2's second unit: receive
+  against N senders — per-sender chains, non-holder refusal by derived membership, amendment-lag
+  buffering defined not discovered). Superseded progress text kept below.
+- **Superseded:** IN PROGRESS notes — the per-(envelope,
   holder) delivery-state store (`5f6f686`, 7 tests — per-holder attempts/backoff/ceiling/
   abandon, settle-once acks, PER-HOLDER bounded window via partitioned row numbering). REMAINING:
   (i) the WORKER rewrite — tick takes `holdersFor(documentId): string[]` (derived: genesis
@@ -66,8 +70,8 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ ALL GREEN · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
-- **Branches in flight:** none.
+- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 🟡❌ (FANOUT-1 built/review-in-flight) · P3 ❌ · P4 ❌❌❌❌❌
+- **Branches in flight:** `m14b/fanout-1` (cello-client).
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
 - **Parked:** nothing yet.
