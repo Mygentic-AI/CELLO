@@ -215,19 +215,24 @@ description: >
   refused by every holder independently; A invites C properly → C consents → in; A promotes B;
   a `remove_admin` missing one other-admin signature → invalid everywhere; with the full set →
   admitted. All three daemons derive the identical {participants, admins, properties} at every
-  step. — ❌
+  step. — ✅
+  > Green on 3 real daemons (2/2, 191s) — journey 1 of j-multiplayer.spine.ts. → Entry 21.
 - **DOD-MP-E2E-JOIN-1** [trustless-cello] — join enforcer: a bilateral A↔B document accumulates
   real edit history; C joins mid-life; C converges to the full current document by replay; C's
   first edit reaches BOTH A and B; `epoch_id` incremented across the join; the session seals and
-  the document leaves verify on all three sides. — ❌
+  the document leaves verify on all three sides. — ✅
+  > Green — C holds the whole prior history and their first edit reaches BOTH holders. → Entry 21.
 - **DOD-MP-E2E-FANOUT-1** [trustless-cello] — offline fan-out enforcer: three holders; B
   publishes while C's daemon is DOWN; **B's daemon is then killed and restarted** (pending
   derived from the log, not memory); A receives immediately — never blocked by C's absence; C's
-  daemon returns; C converges with zero agent attention on any side. — ❌
+  daemon returns; C converges with zero agent attention on any side. — ✅
+  > Green — B converges with C's daemon killed; one absent holder blocks nobody. → Entry 21.
 - **DOD-MP-E2E-REMOVE-1** [trustless-cello] — removal enforcer: three holders; C is removed;
   C's local copy is intact and C's daemon surfaced the removal; C's next publish is refused by
   A and B with the removal-named reason (and the refusal is on the record — no silent drop);
-  A and B continue editing and converging normally. — ❌
+  A and B continue editing and converging normally. — ✅
+  > Green — B keeps the content, their surface reports removed, their publish refuses by name.
+  > → Entry 21.
 - **DOD-MP-SHIP-1** [cello-client, trustless-cello] — the publish cascade via `/cello-publish`
   (skill loaded, per publish), trustless-cello re-pinned, plugin skills updated for the
   multiplayer verbs and audited as SHIPPING content (tarball/clone, not source), and a **live

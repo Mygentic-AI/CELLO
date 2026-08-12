@@ -15,78 +15,16 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next red:** `DOD-MP-E2E-GOVERN-1` (P4, the first enforcer) — three real daemons as separate
-  OS processes, in trustless-cello `packages/e2e-tests/src/spine/`. EXTEND `live-harness.ts` and
-  `session-fixture.ts`; NEVER a from-scratch fixture (blocking per /cello-review); template is
-  `j-unilateral.spine.test.ts` (3-node consortium + signed manifest in `beforeAll`,
-  `setupAtoBSession` drives two full daemons — this needs a THIRD). Then E2E-JOIN-1,
-  E2E-FANOUT-1, E2E-REMOVE-1, then SHIP-1 (publish cascade via `/cello-publish` LOADED FRESH
-  for that publish, trustless-cello re-pin, live fleet smoke; **Andre runs the latest
-  promotion** — prepare + hand over, never run it).
-- **NOTE for P4:** the enforcers need cello-client's `dist/` built LOCALLY (the harness spawns
-  the sibling checkout's binaries) — not published. Publishing is SHIP-1's own line.
-  Superseded text: receive against N senders: per-sender
-  `doc_prev_hash` chains validated per sender; an envelope from a non-holder (per the receiver's
-  DERIVED participant set) refused by name; amendment-lag handling DEFINED (held/refused with a
-  named reason, resolved when the amendment lands) — plus the two boundaries carried from
-  FANOUT-1's review (Entry 16): late-joiner envelope service via JOIN-1 transfer (note, not
-  build), and the one-holder-rejects-what-another-admitted supersession semantics. Much of the
-  receive side already exists (sender-not-peer upgrade, epoch gates, membership refusals) —
-  this unit's core is the PER-SENDER chain validation + the sender-is-a-holder gate replacing
-  sender-is-the-genesis-peer, mirroring the ack-gate fix. Branch `m14b/inbound-n-1` from
-  cello-client main (`a2ce49b`). FANOUT-1 is ✅ (Entry 16).
-- **Superseded:** IN PROGRESS notes — the per-(envelope,
-  holder) delivery-state store (`5f6f686`, 7 tests — per-holder attempts/backoff/ceiling/
-  abandon, settle-once acks, PER-HOLDER bounded window via partitioned row numbering). REMAINING:
-  (i) the WORKER rewrite — tick takes `holdersFor(documentId): string[]` (derived: genesis
-  participants + amendment replay via the layer), pending from `pendingHolderDeliveries`,
-  per-holder reachability probe + removed-target gate (generalize Entry 13's), per-holder
-  unacked ceiling → holder exhausted (announced) → document stalled only when ALL exhausted;
-  (ii) publish SEEDS deliveries for every current holder (document-publish.ts) + legacy
-  bilateral rows backfill-on-first-pass; (iii) ack routing — the ACKING sender settles THEIR
-  row (`ackHolderDelivery`), document-ack-inbound + layer awaitAck semantics; (iv) daemon.ts
-  wiring (peerFor → holdersFor). Then Entry 14's checklist review + ONE unit review. Design:
-  Entry 14.
-- **Superseded:** WIRE HALF BUILT on `m14b/join-1`
-  (`cello-client 2eb4160`, 18 tests, full gate): document-join.ts — the offer as a courier
-  (received bytes of genesis + chain + log snapshot, signature binding every byte through
-  hashes), and `validateDocumentJoinOffer`, the first production-facing consumer of
-  deriveArrangement + the governance policy (invitee replays, never trusts). Remaining:
-  DONE SO FAR on the branch: join-answer frame (`b717c54`, settle-once on the amendment hash)
-  and the daemon join store (`dc66125`, both roles, refusals recorded never dropped). REMAINING:
-  (i) DONE (`fe29225`): router kinds `join_offer`/`join_answer`/`amendment` + layer receive
-  wiring — offers validated by replay before recording, answers settle-once, amendments to
-  existing holders validate-the-whole-chain-then-append (the FIRST production append site,
-  AMEND-1's condition upheld); `arrangementGenesisFromProposal` extracted to ONE export.
-  Amendment delivery to existing holders is BEST-EFFORT at P1 (durable per-holder delivery is
-  FANOUT-1); the inbound epoch gate makes a missed amendment loud, not silent.
-  (ii) DONE (`dbe76e4`): the accept flow — layer.acceptJoin/refuseJoin, validate-everything-
-  then-mutate (whole snapshot verified before one row lands; a bad envelope refuses the accept
-  by name), mutations in dependency order (recordJoined genesis → chain → row(peer=inviter) →
-  log → rebuild → file), consent settles once, signed answer returned for best-effort send.
-  (iii) NEXT — the HANDLER surfaces: cello_doc_inbox lists pending joins; cello_doc_accept/
-  refuse route by pending kind (proposal vs join, matched by document_id → amendmentHash) and
-  send the answer via a tellInviter twin of tellProposer (document-handlers.ts:~438);
-  (iv) the invite verb + (v) REMOVE-1 + layer-path tests, then ONE review. SUPERSEDED plan text
-  below kept for the record — the accept flow: re-validate stored bytes → append chain to DocumentAmendmentStore
-  (VALIDATE-BEFORE-APPEND BINDS) → record genesis into document_proposals (LiveDocuments reads
-  starting_content from there) → create documents row (peerAgentId = the inviter pre-P2, a
-  journaled nuance) → materialize envelope_log (verify per-envelope sig + set-based chain,
-  appendEnvelope, rebuild) → send signed answer via transport.sendBytes;
-  (iii) inviter verb `cello_doc_invite` (four lockstep surfaces + vocabulary) — author amendment,
-  validate-then-append, assemble offer, sendBytes to invitee + amendment frame to other holders;
-  (iv) DOD-MP-REMOVE-1. Then ONE review on the whole diff.
-- **Superseded context (kept for the record):** the wire half was built first on `m14b/amend-1`
-  (`cello-client 57e06e6`, 30 tests green, full gate): document-amendment.ts — final-shape frame,
-  strict codec, `deriveArrangement` replay with injected GOVERN-1 policy seam, last-admin +
-  cap-20 invariants, frozen vector. Remaining on the unit: (i) the `document_amendments`
-  append-only store (received bytes, keyed owner/document/epoch) + an arrangement accessor;
-  (ii) epoch producers stamp from replay (publish `document-publish.ts:137`, rejection
-  `document-rejection.ts:246`), `list` reads real value, quarantine stubs; (iii) decoder
-  relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
-  to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
-  Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅✅ · P3 ✅ — **ALL BUILD TIERS DONE** · P4 ❌❌❌❌❌ (proof)
+- **Next red:** `DOD-MP-SHIP-1` — THE LAST LINE. (i) publish cascade: **LOAD `/cello-publish`
+  FRESH for this publish** (loading it earlier in the session does NOT count — hook-enforced),
+  bump + publish every changed cello-client package to beta, verify against the BUILT TARBALL
+  (`rm -rf core/*/dist` first — stale-dist orphans re-ship deleted files), confirm no
+  `workspace:*` cross-pins; (ii) re-pin trustless-cello's directory/relay package.json to the
+  new versions + `pnpm install`; (iii) the plugin's skills + the 12 `cello_doc_*` verbs verified
+  in the tarball/clone; (iv) live fleet smoke — three real daemons on the GCP fleet doing
+  create → join → edit → converge → remove → seal; (v) **Andre runs the `latest` promotion** —
+  prepare all seven promotions + `--dry-run`, hand them over, NEVER run them.
+- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅✅ · P3 ✅ · P4 ✅✅✅✅❌ — **only SHIP-1 remains**
 - **Branches in flight:** none.
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
@@ -926,3 +864,37 @@ refuse at the version gate with a truthful sentence.
 
 **DOD-MP-TOPOLOGY-1 flips ✅. Tier P3 is GREEN — EVERY BUILD TIER (P0–P3) IS COMPLETE.**
 What remains is P4: proof, not construction.
+
+---
+
+## Entry 21 — P4 ENFORCERS GREEN: three real daemons, three OS processes (2026-08-13)
+
+`packages/e2e-tests/src/spine/j-multiplayer.spine.test.ts` — two journeys covering all four
+enforcer lines, **2/2 green in 191s** against a real 3-node consortium (signed manifest, real
+FROST DKG registration) and a real relay. Commits `22d07dd2` (the file) + `7d329eb3` (green run).
+
+**Journey 1 — GOVERN + JOIN (E2E-GOVERN-1, E2E-JOIN-1):** A proposes, B accepts, A writes real
+history; a NON-HOLDER's invite is refused; A invites C; C's inbox shows the DERIVED rules; C
+accepts and holds the WHOLE prior history; C's first edit reaches BOTH A and B; all three
+daemons independently derive epoch 1 and the same arrangement.
+
+**Journey 2 — FANOUT + REMOVE (E2E-FANOUT-1, E2E-REMOVE-1):** with C's daemon KILLED, A
+publishes and B converges — one absent holder blocks nobody, the availability claim under real
+process separation. Then A removes B: B keeps the full content, B's own surface reports
+`removed: true` (not a vanished row), B's next publish refuses naming the removal, and A's copy
+is untouched.
+
+**Both first-run failures were the TEST, not the product** — and both are worth recording:
+1. The join offer shows the invitee the arrangement they would BE IN: the pending admission
+   replays too, so C sees themselves among the participants. That is the point of consenting to
+   a COMPUTED arrangement rather than a claim; the assertion was wrong, the behavior right.
+2. Removing a fellow ADMIN through the holder door was correctly refused (D3's all-other-admins
+   rule, surfacing verbatim from the policy). The journey now makes A the sole admin at creation
+   and removes a non-admin holder — which is the DoD clause's actual shape.
+
+**Harness note:** Docker must be running (the directory binary needs local Postgres); started
+locally, not a product dependency. The enforcers spawn cello-client's LOCAL `dist/` — built
+from the merged branch, not published.
+
+**DOD-MP-E2E-GOVERN-1, -JOIN-1, -FANOUT-1, -REMOVE-1 all flip ✅ on this entry.**
+Only `DOD-MP-SHIP-1` remains.
