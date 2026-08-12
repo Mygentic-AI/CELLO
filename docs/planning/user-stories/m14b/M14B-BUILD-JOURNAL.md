@@ -1322,3 +1322,55 @@ journey are green on three OS processes.
 
 **Promotion set handed over** (all published and tarball-verified): connect 0.0.148, cli 0.0.171,
 daemon 0.0.164, gateway 0.0.34, crypto 0.0.50, transport 0.0.56, protocol-types 0.0.54.
+
+---
+
+## Entry 31 — the enforcer review: both tags down, then earned back (2026-08-13)
+
+I flipped `DOD-MP-CONTROL-N-1` and `DOD-MP-CLOSE-N-1` to ✅ on the strength of a spine journey I
+wrote myself and never had reviewed. Dispatched the reviewer on it specifically because of that.
+**Both tags came down. Both are now back, on better evidence.** The reviewer ran the journey five
+times against deliberately broken builds and restored both repos byte-clean.
+
+**THE FINDING THAT MATTERS — the journey stayed green with the membership gate DELETED.** Set
+`#senderMayEnd` to `return true` for every sender — a removed holder, a stranger, anyone who can
+put a signed frame on the wire — and all four assertions passed. The reason is a shape worth
+naming: **the journey asserted only acceptances.** A test made of things succeeding can tell you a
+gate is permissive enough; it can never tell you the gate restricts anything. And refusal is
+precisely what the line LEADS with — "a removed holder could end the creator's document with two
+ordinary commands".
+
+The new journey stages it: B is removed, B tries to end the document, A's copy must stay `active`.
+With the gate admitting everyone it fails on **`expected 'killed' to be 'active'`** — a removed
+party ending someone else's document, live, on three processes. That is the assertion the ✅ was
+claiming all along.
+
+**A real production bug behind the legacy clause.** CLOSE-N-1 promises "a document with no chain
+settles on the pair". Settlement honoured it; the SEND path did not. `controlHolders` mapped
+`holdersFor`'s null — the identical condition the verdict function calls `legacy` — to a refusal,
+so no close frame ever left, neither side recorded the other's close, and a pre-amendment document
+could **never be ended by agreement at all**. Reachable for documents proposed before
+`recordOutgoing` shipped, and for a crash between `createDocument` and `recordOutgoing`, which run
+in that order. Fixed: legacy addresses the peer; only a chain that EXISTS and will not replay keeps
+the refusal.
+
+**And the test that pinned the clause could not have caught it** — it injected
+`withVerdict({kind:"legacy"})` and called `recordPeerClose` directly, so the notifier, the half
+that refused, was never in the picture. The replacement drives a real close through the real
+notifier and goes red when the branch is removed.
+
+**Two smaller repairs.** The two-of-three rule was proven on the OWNER's daemon only — B and C were
+inspected only once all three had closed, which is green under the old two-party rule too; it is
+now asserted on the genesis peer's daemon, where the old rule would already read `closed`. And the
+blind `sleep(8000)` is replaced by waiting for A's `document.close.peer_requested` line: a sleep
+proves "it had not settled YET" and passes vacuously if the frame never arrived, while the receipt
+turns it into "both closes are in, and it still did not settle". (Measured margin was 2ms against
+an 8000ms window — over-provisioned by three orders of magnitude and still the wrong kind of
+evidence.)
+
+**THE RULE THIS PRODUCES, and it generalises past this milestone:** *a test built only from
+successful outcomes cannot prove a restriction.* Every security property needs at least one
+assertion that something was REFUSED, and that assertion has to fail when the guard is removed —
+otherwise the guard is untested no matter how green the suite is.
+
+5/5 journeys green, 356s. Gate: 3740 tests, eslint, tsc.

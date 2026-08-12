@@ -197,13 +197,13 @@ description: >
   could end the creator's document with two ordinary commands and a joiner's own close was refused
   by every holder while the sender was told all had heard them. Inbound now gates on derived
   membership, mirroring `document-inbound.ts`; the peer column stands in only when the chain
-  cannot answer. — 🟡 DOWNGRADED from ✅ (enforcer review, Entry 31)
-  > The tag claimed a security property the journey cannot see. PROVEN LIVE and revert-sensitive:
-  > the close reaches BOTH the genesis peer and the joiner (revert → red), and the joiner's own
-  > close IS accepted by the creator (revert of the inbound gate → red). NOT PROVEN: that the gate
-  > REFUSES a non-holder — the journey stays green with `#senderMayEnd` returning `true` for
-  > everyone, so the removed-holder case the line LEADS with is untouched live. Unit coverage
-  > exists; the enforcer must stage it. → Journal Entries 26–27, 31.
+  cannot answer. — ✅ (downgraded, then EARNED — Entry 31)
+  > All three halves now live and revert-sensitive across three OS processes: the close reaches
+  > BOTH the genesis peer and the joiner; the joiner's own close IS accepted (revert of the
+  > inbound gate → red); and the gate REFUSES a removed holder — with `#senderMayEnd` admitting
+  > everyone, the removed party's kill KILLS the creator's document and the new journey goes red
+  > on it. The refusal is the half no journey of acceptances could see.
+  > → Journal Entries 26–27, 31.
 - **DOD-MP-CLOSE-N-1** [cello-client] — a close settles only when EVERY current holder has said
   it, derived from the chain. It settled on the owner plus the genesis peer, so with three holders
   the document flipped to `closed` once two agreed while the third was still editing — the exact
@@ -214,12 +214,13 @@ description: >
   exists and will not replay REFUSES, because standing in the pair there completes a three-holder
   document on two. Collapsing the two cost correctness one way and every legacy document the
   other. A membership change re-evaluates settlement, so removing the one holder who never closed
-  completes it. — 🟡 DOWNGRADED from ✅ (enforcer review, Entry 31)
-  > PROVEN on the OWNER's daemon and revert-sensitive there. The claim "across all three daemons"
-  > was mine, not the run's: B and C are only inspected once all three have closed, which is green
-  > under the old two-party rule too. And the line's own "legacy settles on the pair" clause is
-  > FALSE IN PRODUCTION — `controlHolders` refuses the same condition the verdict calls legacy, so
-  > no close frame is ever sent and such a document can never settle. → Journal Entries 28, 31.
+  completes it. — ✅ (downgraded, then EARNED — Entry 31)
+  > Two-of-three-does-not-settle now asserted on the genesis peer's daemon as well as the owner's,
+  > and the blind sleep replaced by waiting for the peer-close record — "both closes are in and it
+  > still did not settle", not "not yet". The legacy clause was FALSE IN PRODUCTION and is now
+  > true: `controlHolders` refused the very condition the settle path calls legacy, so a
+  > pre-amendment document could never be ended by agreement. Fixed and driven through the real
+  > notifier. → Journal Entries 28, 31.
 - **DOD-MP-INBOUND-N-1** [cello-client] — the receive side against N senders: per-sender
   `doc_prev_hash` chains validated per sender (the chain is per-author, N of them); an envelope
   from a non-holder — per the receiver's derived participant set — is refused with a named
