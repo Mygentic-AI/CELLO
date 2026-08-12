@@ -1287,3 +1287,38 @@ parking the line; `docker info` polls ready in ~10s.
 **Tier P2 is now ✅✅✅✅** (FANOUT-1, INBOUND-N-1, CONTROL-N-1, CLOSE-N-1). The only line left in
 the milestone is **SHIP-1**, whose remaining half is the live fleet run — genuinely blocked on the
 `latest` promotion, which is Andre's to run and nobody else's.
+
+---
+
+## Entry 30 — the shipping audit, and SHIP-1's blocked half (2026-08-13)
+
+Three publish cascades this session, each verified against the TARBALL rather than against CI
+status: `v0.0.236` (daemon 0.0.163, cli 0.0.170, connect 0.0.147), `v0.0.237` (daemon 0.0.164,
+cli 0.0.171), `v0.0.238` (connect 0.0.148). All green through `smoke-tag`, cross-pins real
+versions, no `workspace:*`. The `/cello-publish` skill was re-loaded for each — the guard hook
+blocked the second cascade for exactly the right reason, and it was right to.
+
+**The audit found a defect nothing else would have.** SHIP-1 requires the plugin skills be checked
+as SHIPPING content — tarball and clone, not source. Unpacking `connect@0.0.147` and reading the
+built `dist` showed the close description still promising *"the document settles only once the
+other side has said it too"*. That stopped being true the moment CLOSE-N-1 landed.
+
+It matters more than a stale doc line usually would: **a tool description is the instruction the
+agent acts on.** An agent reading that would report a document finished while a third holder was
+still editing — the very defect the code now prevents, restated in prose and shipped to the
+operator's disk. Three surfaces carried it (the MCP tool description, connect's own SKILL.md, the
+plugin skill reached by clone); all three corrected and re-shipped. **Rule that generalises: when
+a behaviour rule changes, the prose that TEACHES that rule is part of the change, and it must be
+audited on the artifact, not the source tree.**
+
+**SHIP-1 remains ❌, and correctly so.** Two clauses left, both downstream of the `latest`
+promotion, which is Andre's alone (it reaches outside — it is what every operator installs):
+- the live fleet run on the three real agents;
+- trustless-cello's lockfile refresh. Its refs were audited and are all `latest` with no pins and
+  no stale `workspace:*` pointing at the dead local copies — so nothing moves until `latest` does.
+
+**Everything else in M14B is ✅.** Tiers P0–P4 complete; the four enforcers plus the new END
+journey are green on three OS processes.
+
+**Promotion set handed over** (all published and tarball-verified): connect 0.0.148, cli 0.0.171,
+daemon 0.0.164, gateway 0.0.34, crypto 0.0.50, transport 0.0.56, protocol-types 0.0.54.
