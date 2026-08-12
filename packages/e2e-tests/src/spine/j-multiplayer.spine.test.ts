@@ -168,6 +168,57 @@ async function awaitJoinOffer(
   throw new Error(`${party.name} never saw a join offer for ${documentId}: ${last}`);
 }
 
+/** The arrangement THIS daemon derives from its OWN chain — the thing worth comparing. */
+async function arrangementOf(
+  party: Party,
+  documentId: string,
+): Promise<{ participants: string[]; admins: string[]; epochId: number }> {
+  const list = (await party.conn.call("cello_doc_list", {})) as {
+    documents?: Array<{
+      documentId?: string;
+      participants?: string[];
+      admins?: string[];
+      epochId?: number;
+      arrangementUnavailable?: string;
+    }>;
+  };
+  const row = (list.documents ?? []).find((d) => d.documentId === documentId);
+  if (!row) throw new Error(`${party.name} holds no row for ${documentId}`);
+  if (row.arrangementUnavailable) {
+    throw new Error(`${party.name} cannot derive: ${row.arrangementUnavailable}`);
+  }
+  return {
+    participants: [...(row.participants ?? [])].sort(),
+    admins: [...(row.admins ?? [])].sort(),
+    epochId: row.epochId ?? -1,
+  };
+}
+
+/** Every named party derives the SAME arrangement — polled, because amendments travel. */
+async function agreeOnArrangement(
+  who: Party[],
+  documentId: string,
+  want: { participants: string[]; admins: string[]; epochId: number },
+  label: string,
+): Promise<void> {
+  const target = JSON.stringify({
+    participants: [...want.participants].sort(),
+    admins: [...want.admins].sort(),
+    epochId: want.epochId,
+  });
+  for (const p of who) {
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+      const got = JSON.stringify(await arrangementOf(p, documentId));
+      if (got === target) break;
+      if (Date.now() > deadline) {
+        throw new Error(`${label}: ${p.name} derives ${got}, expected ${target}`);
+      }
+      await sleep(1000);
+    }
+  }
+}
+
 async function readDoc(party: Party, documentId: string): Promise<string> {
   const res = (await party.conn.call("cello_doc_read", { document_id: documentId })) as {
     content?: string;
@@ -202,6 +253,9 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       const proposed = (await a.conn.call("cello_doc_propose", {
         peer_pubkey: b.pubkey,
         starting_content: "line one from A. ",
+        // A IS THE SOLE ADMIN, declared at creation — the governance line's first clause, and
+        // what makes B a holder-who-is-not-an-admin for the refusal below.
+        admins: [a.pubkey],
       })) as { ok?: boolean; documentId?: string };
       expect(proposed.ok, `propose failed: ${JSON.stringify(proposed)}`).toBe(true);
       const documentId = proposed.documentId!;
@@ -222,6 +276,14 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
         ((await b.conn.call("cello_doc_accept", { document_id: documentId })) as { ok?: boolean }).ok,
       ).toBe(true);
 
+      // STEP 1 — the genesis arrangement, agreed by BOTH holders from their own chains.
+      await agreeOnArrangement(
+        [a, b],
+        documentId,
+        { participants: [a.pubkey, b.pubkey], admins: [a.pubkey], epochId: 0 },
+        "post-genesis",
+      );
+
       // Real history before the join — the joiner must receive THIS, not an empty document.
       expect(
         ((await a.conn.call("cello_doc_write", {
@@ -230,6 +292,19 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
         })) as { ok?: boolean }).ok,
       ).toBe(true);
       await awaitContent(b, documentId, "line one from A. line two from A. ");
+
+      // ── GOVERNANCE: B HOLDS the document and is NOT an admin — the refusal must be governance,
+      // not "I've never heard of this document" (which is what a non-holder gets, six checks
+      // earlier, and which was green with all governance deleted).
+      const bTriesToInvite = (await b.conn.call("cello_doc_invite", {
+        document_id: documentId,
+        invitee_pubkey: c.pubkey,
+      })) as { ok?: boolean; reason?: string };
+      expect(bTriesToInvite.ok).toBe(false);
+      expect(
+        bTriesToInvite.reason,
+        `wrong refusal for a non-admin HOLDER: ${JSON.stringify(bTriesToInvite)}`,
+      ).toBe("document_not_admin");
 
       await connect(a, c);
 
@@ -249,7 +324,8 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       expect((offer.participants as string[]).sort()).toEqual(
         [a.pubkey, b.pubkey, c.pubkey].sort(),
       );
-      expect((offer.admins as string[]).sort()).toEqual([a.pubkey, b.pubkey].sort());
+      // A declared itself sole admin at creation, and that is what C is shown.
+      expect(offer.admins).toEqual([a.pubkey]);
 
       const accepted = (await c.conn.call("cello_doc_accept", { document_id: documentId })) as {
         ok?: boolean;
@@ -282,16 +358,14 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       await awaitContent(a, documentId, "line one from A. line two from A. and C joins in. ");
       await awaitContent(b, documentId, "line one from A. line two from A. and C joins in. ");
 
-      // ── All three daemons derive the SAME arrangement. ──
-      for (const p of [a, b, c]) {
-        const list = (await p.conn.call("cello_doc_list", {})) as {
-          documents?: Array<{ documentId?: string; epochId?: number; removed?: boolean }>;
-        };
-        const row = (list.documents ?? []).find((d) => d.documentId === documentId);
-        expect(row, `${p.name} does not hold the document`).toBeDefined();
-        expect(row!.epochId, `${p.name} derives a different epoch`).toBe(1);
-        expect(row!.removed ?? false).toBe(false);
-      }
+      // ── STEP 2 — ALL THREE derive the SAME arrangement: participants, admins, epoch. Not a
+      // proxy: each daemon computed this from its own copy of the chain. ──
+      await agreeOnArrangement(
+        [a, b, c],
+        documentId,
+        { participants: [a.pubkey, b.pubkey, c.pubkey], admins: [a.pubkey], epochId: 1 },
+        "post-join",
+      );
     },
     600_000,
   );
