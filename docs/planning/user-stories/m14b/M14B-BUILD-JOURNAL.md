@@ -1416,3 +1416,61 @@ and neither blocks the milestone.
 
 **Rulings taken autonomously this session, all logged as overturnable:** D7 (a close settles on all
 current holders), D8 (a removal completes the agreement for those who remain).
+
+---
+
+## Entry 33 — the fleet re-run, and the neighbouring defect it flushed out (2026-08-13)
+
+Andre ran the promotion; all three agents came up on cli 0.0.172 / daemon 0.0.165. The re-run
+**proved the M14B work and was then blocked by a defect in the session seam.**
+
+**PROVEN LIVE on the new build:**
+- creation with a single named admin (`adminSetDefaulted: false`), `topology: mesh`;
+- the invitee saw participants, admin set and properties **before consenting**;
+- the joiner opened the document holding content nobody sent them, rebuilt from the log;
+- **`cello_doc_close` addressed BOTH other holders** — the defect that started this whole line. The
+  old build named only the genesis counterparty; the joiner would never have been told;
+- the all-failed guidance named exactly which holders missed it;
+- **and on the PREVIOUS document, `closePending` now reads `true`** where the old build read
+  `false` while a co-author had never closed. The settlement fix, visible on data that already
+  existed.
+
+**NOT PROVEN — convergence, the close landing, removal, seal.** All blocked by the same cause.
+
+### The cause, from the daemon's own words
+
+`session.relay.hash.submit.terminal` — *"the relay has ended this session — nothing sent now can
+ever be part of its record."* Meanwhile `cello_sessions` lists that same session as **active**.
+
+The daemon restarted mid-flight during the upgrade. **`session_sealed` is pushed exactly once**;
+miss it and this side holds a non-terminal row while the relay has finished. The code says this in
+a comment at `close-session-handler.ts:207` and carries a measured incident from 2026-08-09.
+
+### The gap, stated precisely
+
+For CONVERSATIONS this is handled correctly: the send is refused, and the operator is told to check
+`cello_sessions` and start a new session. A human reads it and acts.
+
+**DOCUMENTS have no human in that loop.** The delivery worker retries on its schedule against a
+session that can never carry anything again — observed retrying across ~15 minutes with a
+permanently unsent envelope — and nothing opens a replacement. The document becomes silently
+undeliverable to that peer; the only symptom is a pending count that never falls.
+
+**This is not in the M14B diff** — it is the session↔document seam, which is why all five spine
+journeys pass against three healthy daemons. But it defeats `DOD-MP-SHIP-1`'s fleet clause, and it
+violates the standing rule that *availability and fallback are first-class protocol concerns*.
+
+**Proposed shape (NOT built — needs Andre's call and its own line):** a terminal sealed-session
+refusal should RETIRE the local session row so the next document frame opens a fresh one, instead
+of retrying into a grave. Symptom-level workaround: `cello logout && cello login` clears the stale
+rows.
+
+### One defect of mine, found by the run and fixed
+
+The all-failed guidance said *"They are most likely offline."* It was a guess, and wrong — the
+holders were online and the real reason (`session_sealed`) was in the daemon's hand. The per-holder
+boolean discarded the cause, so the sentence had to invent one, and it told the operator to wait
+for something waiting cannot fix. **That is the third time this session I committed the
+error-substitution shape** — twice caught by the reviewer, once by the fleet — and this one landed
+in a branch I wrote *while fixing the other two*. The reason now travels per holder and the
+sentence names it. `cello-client 2c66e5f`, 2 tests, gate green.

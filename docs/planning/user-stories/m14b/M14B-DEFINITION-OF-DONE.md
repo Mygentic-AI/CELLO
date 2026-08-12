@@ -304,6 +304,13 @@ description: >
   > converging, the removed holder keeps their copy unchanged and receives nothing further.
   > **"On the record" remains a PRODUCT question** (today a log line + a refusal ack, no
   > durable rejection row on the receiver) — Andre's call, not a test gap.
+> ⚠️ **SHIP-1's fleet clause is BLOCKED BY A DEFECT OUTSIDE THIS MILESTONE (Entry 33).** The
+> daemon restarted mid-upgrade and missed the one-shot `session_sealed` frame, so it holds sessions
+> the relay has ended. Conversations refuse correctly and tell the operator; the DOCUMENT delivery
+> worker retries into a dead session forever with nobody to open a replacement. Everything M14B
+> built is proven on the fleet — including the close addressing both holders; only the steps that
+> need a frame to ARRIVE are unproven. Needs its own line and Andre's call.
+
 - **DOD-MP-SHIP-1** [cello-client, trustless-cello] — the publish cascade via `/cello-publish`
   (skill loaded, per publish), trustless-cello re-pinned, plugin skills updated for the
   multiplayer verbs and audited as SHIPPING content (tarball/clone, not source), and a **live
