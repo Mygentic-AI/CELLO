@@ -15,7 +15,11 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next:** `DOD-MP-JOIN-1` (P1), daemon half. WIRE HALF BUILT on `m14b/join-1`
+- **Next:** JOIN-1 review IN FLIGHT (dispatched on 4523716..81b7120 + Entries 9/10). On the
+  verdict: fix findings → merge → flip ✅ → pull `DOD-MP-REMOVE-1` (single-signer removals +
+  voluntary leave; the remove_admin N-signature GATHERING flow is a parked design note, Entry
+  10). Superseded build-plan text below kept for the record.
+- **Superseded:** WIRE HALF BUILT on `m14b/join-1`
   (`cello-client 2eb4160`, 18 tests, full gate): document-join.ts — the offer as a courier
   (received bytes of genesis + chain + log snapshot, signature binding every byte through
   hashes), and `validateDocumentJoinOffer`, the first production-facing consumer of
@@ -54,7 +58,7 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅✅ ALL GREEN · P1 ❌❌ · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
+- **Tiers:** P0 ✅✅✅✅ · P1 🟡❌ (JOIN-1 built/review-in-flight) · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
 - **Branches in flight:** none.
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
