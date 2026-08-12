@@ -247,7 +247,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
     "GOVERN + JOIN: an admin invites a third party, they consent, and all three derive the same arrangement (DOD-MP-E2E-GOVERN-1, DOD-MP-E2E-JOIN-1)",
     async () => {
       const [a, b, c] = (await parties("mpjoin", 3)) as [Party, Party, Party];
-      await connect(a, b);
+      const ab = await connect(a, b);
 
       // ── A proposes to B, B accepts: an ordinary bilateral document with real history. ──
       const proposed = (await a.conn.call("cello_doc_propose", {
@@ -306,7 +306,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
         `wrong refusal for a non-admin HOLDER: ${JSON.stringify(bTriesToInvite)}`,
       ).toBe("document_not_admin");
 
-      await connect(a, c);
+      const ac = await connect(a, c);
 
       // ── JOIN: A (an admin) invites C; C consents by DERIVING what they were sent. ──
       const invited = (await a.conn.call("cello_doc_invite", {
@@ -366,6 +366,30 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
         { participants: [a.pubkey, b.pubkey, c.pubkey], admins: [a.pubkey], epochId: 1 },
         "post-join",
       );
+
+      // ── STEP 3 — THE SEAL, per the mesh definition (DoD "Explicitly beyond", Entry 24):
+      // three holders means three PAIRWISE sessions with three roots, so each pair seals and
+      // BOTH of its parties independently recompute the SAME root over a tree carrying that
+      // pair's document leaves. Multiplayer does not change what a seal is — only how many.
+      type Receipt = { ok?: boolean; sealed_root?: string; leaf_count?: number };
+      for (const [x, xs, y, ys, label] of [
+        [a, ab.fromSession, b, ab.toSession, "A↔B"],
+        [a, ac.fromSession, c, ac.toSession, "A↔C"],
+      ] as const) {
+        const closeY = y.conn.call("cello_close_session", { cello_session_id: ys });
+        const closeX = (await x.conn.call("cello_close_session", { cello_session_id: xs })) as {
+          ok?: boolean;
+        };
+        await closeY;
+        expect(closeX.ok, `${label}: close failed`).toBe(true);
+        const rx = (await x.conn.call("cello_sealed_receipt", { cello_session_id: xs })) as Receipt;
+        const ry = (await y.conn.call("cello_sealed_receipt", { cello_session_id: ys })) as Receipt;
+        expect(rx.sealed_root, `${label}: ${x.name} has no sealed root`).toBeTruthy();
+        // Side to side, never one side's value against itself — the tamper-evidence claim.
+        expect(ry.sealed_root, `${label}: the two sides sealed different trees`).toBe(rx.sealed_root);
+        // MIXED: this pair carried an ordinary message AND document frames.
+        expect(rx.leaf_count, `${label}: too few leaves to be a mixed tree`).toBeGreaterThan(2);
+      }
     },
     600_000,
   );
