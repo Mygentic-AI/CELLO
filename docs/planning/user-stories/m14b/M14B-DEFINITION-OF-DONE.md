@@ -202,7 +202,11 @@ description: >
   decide for both); mesh becomes the default for new documents; `hub-and-spoke` is retired as a
   concept per §13-D4 — the wire field survives, nothing is built for it, and the broker case is
   served by construction (two documents). Pass-through (M14-P8) stays parked. An unsupported
-  topology is refused with a sentence naming the mismatch, both ends. — ❌
+  topology is refused with a sentence naming the mismatch, both ends. — ✅
+  > Reviewed SPEC: FAITHFUL; the accepted-value set changed in ONE place as TRACE-1 promised;
+  > `TOPOLOGY_V1` deletion proven three ways. F1 fixed: an arrival auto-refusal now ANSWERS the
+  > proposer (the join path's rule, applied where it was missing). Merged
+  > `cello-client 252767a`. → Journal Entries 19–20.
 
 ## Tier P4 — Enforcers + ship (THREE real daemons, separate OS processes)
 

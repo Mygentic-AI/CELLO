@@ -15,13 +15,16 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next:** TOPOLOGY-1 review IN FLIGHT (dispatched on 5748894..0a8ada8 + Entry 19). On the
-  verdict: fix findings → merge → flip ✅ → P3 GREEN → **P4 BEGINS**: the four three-daemon
-  enforcers in trustless-cello `packages/e2e-tests/src/spine/` (extend `live-harness.ts` +
-  `session-fixture.ts`, NEVER from scratch; template `j-unilateral.spine.test.ts`) — governance
-  · join · fan-out · removal, each as three separate OS processes — then SHIP-1 (publish
-  cascade via /cello-publish LOADED FRESH, re-pin, live fleet smoke; Andre runs the latest
-  promotion).
+- **Next red:** `DOD-MP-E2E-GOVERN-1` (P4, the first enforcer) — three real daemons as separate
+  OS processes, in trustless-cello `packages/e2e-tests/src/spine/`. EXTEND `live-harness.ts` and
+  `session-fixture.ts`; NEVER a from-scratch fixture (blocking per /cello-review); template is
+  `j-unilateral.spine.test.ts` (3-node consortium + signed manifest in `beforeAll`,
+  `setupAtoBSession` drives two full daemons — this needs a THIRD). Then E2E-JOIN-1,
+  E2E-FANOUT-1, E2E-REMOVE-1, then SHIP-1 (publish cascade via `/cello-publish` LOADED FRESH
+  for that publish, trustless-cello re-pin, live fleet smoke; **Andre runs the latest
+  promotion** — prepare + hand over, never run it).
+- **NOTE for P4:** the enforcers need cello-client's `dist/` built LOCALLY (the harness spawns
+  the sibling checkout's binaries) — not published. Publishing is SHIP-1's own line.
   Superseded text: receive against N senders: per-sender
   `doc_prev_hash` chains validated per sender; an envelope from a non-holder (per the receiver's
   DERIVED participant set) refused by name; amendment-lag handling DEFINED (held/refused with a
@@ -83,8 +86,8 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅✅ · P3 🟡 (built/review-in-flight) · P4 ❌❌❌❌❌
-- **Branches in flight:** `m14b/topology-1` (cello-client).
+- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅✅ · P3 ✅ — **ALL BUILD TIERS DONE** · P4 ❌❌❌❌❌ (proof)
+- **Branches in flight:** none.
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
 - **Parked:** nothing yet.
