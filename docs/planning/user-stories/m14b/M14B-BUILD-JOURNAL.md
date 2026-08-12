@@ -15,16 +15,19 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next red:** `DOD-MP-SHIP-1` — THE LAST LINE. (i) publish cascade: **LOAD `/cello-publish`
-  FRESH for this publish** (loading it earlier in the session does NOT count — hook-enforced),
-  bump + publish every changed cello-client package to beta, verify against the BUILT TARBALL
-  (`rm -rf core/*/dist` first — stale-dist orphans re-ship deleted files), confirm no
-  `workspace:*` cross-pins; (ii) re-pin trustless-cello's directory/relay package.json to the
-  new versions + `pnpm install`; (iii) the plugin's skills + the 12 `cello_doc_*` verbs verified
-  in the tarball/clone; (iv) live fleet smoke — three real daemons on the GCP fleet doing
-  create → join → edit → converge → remove → seal; (v) **Andre runs the `latest` promotion** —
-  prepare all seven promotions + `--dry-run`, hand them over, NEVER run them.
-- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅✅ · P3 ✅ · P4 ✅✅✅✅❌ — **only SHIP-1 remains**
+- **Next: SHIP-1's remaining halves.** DONE: version cascade (all seven bumped, `34f3d2a`),
+  tag `v0.0.235` pushed, CI green through `smoke-tag`, all seven on BETA, verified against the
+  TARBALL (daemon 0.0.162 dist carries document-join-store, document-amendment-store,
+  holdersFor, seedDeliveries, document_sender_removed, cello_doc_invite, cello_doc_remove) and
+  cross-pins are real versions (cli→daemon 0.0.162, connect→crypto 0.0.50/transport 0.0.56).
+  REMAINING: (a) **ANDRE RUNS THE `latest` PROMOTION** — the seven commands are prepared and
+  handed over, never run by me; (b) the trustless-cello lockfile refresh, which must follow the
+  promotion (both repos float `latest`, so `pnpm install` before it would lock the OLD version);
+  (c) the live fleet smoke on GCP — three real daemons doing create → join → edit → converge →
+  remove → seal (the local spine proof is green, this is the fleet one).
+- **BETA VERSIONS:** crypto 0.0.50 · protocol-types 0.0.54 · transport 0.0.56 · gateway 0.0.34 ·
+  daemon 0.0.162 · cli 0.0.169 · connect 0.0.146.
+- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅✅ · P3 ✅ · P4 🟠🟠✅🟠❌ (enforcer audit, Entry 22 — FANOUT earned; GOVERN/JOIN/REMOVE partial with named gaps + 2 decisions owed) · SHIP-1 beta done, promotion is Andre's
 - **Branches in flight:** none.
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
