@@ -1189,3 +1189,62 @@ second pass, per the hard cap.
 
 **Still not live.** The line stays 🟡 until the publish cascade lands and the fleet close is
 re-run. Andre's installed daemon (0.0.162) predates all of this.
+
+---
+
+## Entry 28 — the close-settlement review, and the fix that broke the legacy documents (2026-08-13)
+
+`cello-unit-reviewer` on DOD-MP-CLOSE-N-1. **THREE HIGH, two of them REPRODUCED rather than
+argued** — the reviewer corrupted a stored amendment and ran a removal on the existing fixture.
+All fixed (`cello-client 6f9cd15`).
+
+**F1 — one unreadable document took down the whole document list.** `holdersFor` decodes every
+stored amendment and THROWS on bytes this build cannot read; I put that throwing call outside the
+containment. The operator asking "what documents do I have" got `Data read, but end of buffer not
+reached` — a CBOR decoder string naming no document, no verb, no subsystem, and the whole list
+gone, not just the broken row. **This is the regression fixed TWO COMMITS EARLIER in
+`arrangementFor`, re-opened through a different call site.** The lesson is not "contain throws" —
+that was already written down, in a comment, forty lines away. It is that a fix recorded at ONE
+call site does not protect the next caller of the same function, and the guard belongs where the
+throw is, not where it was last felt.
+
+**F2 — the fallback re-created the defect the unit exists to remove.** When the chain would not
+derive, settlement stood in `[owner, peerAgentId]`. Both of those have typically closed, so a
+three-holder document COMPLETED ON TWO, silently, surface reading `closed`, log reading ordinary
+success. The comparison I had written in the docstring — "the same standing-in rule the inbound
+gate uses" — was wrong in the one way that mattered: the gate's null branch NARROWS who may act,
+`controlHolders`' refuses by name, and mine WIDENED what settles. Same syntax, opposite safety
+direction. Worth stating as a rule: **when a fallback changes who is authorised, check whether it
+adds or removes authority. Adding is almost never the safe default.**
+
+**F3 — a removal could leave a document permanently unsettleable.** Two holders close, the third
+never answers, the admin removes them — now everyone who REMAINS has agreed, and nothing
+re-evaluated. The document stayed `active` forever with `closePending` reading **false**: open,
+waiting on nobody, and unfixable, because control frames are fire-once and never swept. The
+`false` is the worse half; it told the operator there was nothing to wait for. `#settleClose` now
+runs on any membership change.
+
+**THE FIX FOR F2 BROKE EVERY PRE-AMENDMENT DOCUMENT, and the existing tests caught it inside a
+minute.** Refusing to settle on an underivable chain also refuses a document that has NO chain —
+which is every bilateral document created before amendments existed. Andre has some. The reviewer
+had predicted this exactly ("gate it on the absence of any amendment chain rather than on
+'derivation failed' — those are different facts, and only the first one is legacy"). The
+derivation now answers **derived / legacy / unknown** instead of one null. Collapsing them cost
+correctness in one direction and working documents in the other; there was no single null that
+was right.
+
+**Three smaller findings, all fixed:** a removed holder's close row is dropped, so a re-admission
+cannot carry their old agreement into a new tenure (`document_closes` has no epoch, so the stale
+row would have counted); `document.closed` carries the epoch, because two daemons derive from an
+eventually-consistent chain and can legitimately settle on different-sized sets — without it their
+logs cannot be reconciled; and the `[].some()` mirror of the vacuous-truth guard is closed
+alongside the `[].every()` one.
+
+**Every new test revert-tested individually** — each fix broken in turn, only its own test failing.
+Gate: 3739 tests, eslint, tsc, build. One review pass, all findings fixed, no second pass per the
+hard cap; the live fleet re-run is the stronger verification and it is next.
+
+**A decision taken rather than parked (§3a).** The reviewer flagged F3's fix as a design call:
+does a removed holder's silence still count? Ruled NO — they are not a holder, the people who
+remain have all agreed, it is consistent with forward-only removal, and it is the reversible
+direction. Recorded here and surfaced to Andre as overturnable, not as a question blocking work.
