@@ -878,3 +878,20 @@ receiver lagging behind an invite by 40+ minutes is the re-invite verb's territo
 the amendment and re-sends the offer).
 
 **DOD-MP-INBOUND-N-1 flips ✅ on this entry. Tier P2 is ALL GREEN.**
+
+---
+
+## Entry 19 — TOPOLOGY-1 code-complete (2026-08-13)
+
+Branch `m14b/topology-1`, one commit (`0a8ada8`). Full gate green. Review dispatched.
+
+**The smallest unit of the milestone, exactly as TRACE-1's map promised:** the accepted-value
+set changed in ONE place (`SUPPORTED_TOPOLOGIES` = {mesh, hub-and-spoke}), all three seam call
+sites follow; the propose handler writes `TOPOLOGY_DEFAULT` ("mesh"); `TOPOLOGY_V1` is deleted
+from the surface entirely (compiler-enforced sweep of every consumer). An unknown topology
+refuses at both ends naming the supported set and the asked-for value.
+
+**Decision, one line (D4 applied):** hub-and-spoke survives as an accepted VALUE only — the
+field is signed into `document_id`, a document so labeled behaves identically (fan-out serves
+the derived holders regardless of the label), and refusing it would break every existing
+fixture for zero behavioral gain. Nothing is built for it; nothing writes it.
