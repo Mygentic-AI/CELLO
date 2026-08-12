@@ -15,12 +15,13 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next red:** `DOD-MP-TOPOLOGY-1` (P3, small) — `topology: mesh` accepted at BOTH ends and
-  the default for new documents; hub-and-spoke retired per D4 (the wire field survives, nothing
-  built for it); unsupported topology refused with a sentence naming the mismatch. TRACE-1's
-  map: ONE seam function (`seamViolation`, three call sites follow) + the propose-handler
-  default site. Branch `m14b/topology-1` from cello-client main (`5748894`). P2 IS ALL GREEN
-  (Entry 18). Then P4: the four three-daemon enforcers (trustless-cello spine) + SHIP-1.
+- **Next:** TOPOLOGY-1 review IN FLIGHT (dispatched on 5748894..0a8ada8 + Entry 19). On the
+  verdict: fix findings → merge → flip ✅ → P3 GREEN → **P4 BEGINS**: the four three-daemon
+  enforcers in trustless-cello `packages/e2e-tests/src/spine/` (extend `live-harness.ts` +
+  `session-fixture.ts`, NEVER from scratch; template `j-unilateral.spine.test.ts`) — governance
+  · join · fan-out · removal, each as three separate OS processes — then SHIP-1 (publish
+  cascade via /cello-publish LOADED FRESH, re-pin, live fleet smoke; Andre runs the latest
+  promotion).
   Superseded text: receive against N senders: per-sender
   `doc_prev_hash` chains validated per sender; an envelope from a non-holder (per the receiver's
   DERIVED participant set) refused by name; amendment-lag handling DEFINED (held/refused with a
@@ -82,8 +83,8 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅✅ ALL GREEN · P3 ❌ · P4 ❌❌❌❌❌
-- **Branches in flight:** none.
+- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅✅ · P3 🟡 (built/review-in-flight) · P4 ❌❌❌❌❌
+- **Branches in flight:** `m14b/topology-1` (cello-client).
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
 - **Parked:** nothing yet.
