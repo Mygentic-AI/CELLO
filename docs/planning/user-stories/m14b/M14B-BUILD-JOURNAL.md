@@ -15,11 +15,11 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next red:** `DOD-MP-REMOVE-1` (P1) — single-signer removals: an admin removes a non-admin
-  holder; voluntary leave (self-signed); forward-only effect (their next publish refused by
-  name, local copy untouched, removal surfaced to the removed operator); the remove_admin
-  N-signature GATHERING flow stays parked (Entry 10 design note). Branch `m14b/remove-1` from
-  cello-client main (`d0e079b`). JOIN-1 is ✅ (Entry 11).
+- **Next:** REMOVE-1 review IN FLIGHT (dispatched on d0e079b..186d39f + Entry 12). On the
+  verdict: fix findings → merge → flip ✅ → P1 ALL GREEN → pull `DOD-MP-FANOUT-1` (P2: delivery
+  targets derive from the participant list; per-(envelope,holder) ack table; per-holder
+  stall/backoff/ceiling; one dead holder never stalls the document — Entry 1(a) carries the
+  traced ACs).
 - **Superseded:** WIRE HALF BUILT on `m14b/join-1`
   (`cello-client 2eb4160`, 18 tests, full gate): document-join.ts — the offer as a courier
   (received bytes of genesis + chain + log snapshot, signature binding every byte through
@@ -59,8 +59,8 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅✅ · P1 ✅❌ (JOIN-1 ✅; REMOVE-1 next) · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
-- **Branches in flight:** none.
+- **Tiers:** P0 ✅✅✅✅ · P1 ✅🟡 (JOIN-1 ✅; REMOVE-1 built/review-in-flight) · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
+- **Branches in flight:** `m14b/remove-1` (cello-client).
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
 - **Parked:** nothing yet.
