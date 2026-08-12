@@ -235,12 +235,12 @@ description: >
 - **DOD-MP-E2E-JOIN-1** [trustless-cello] — join enforcer: a bilateral A↔B document accumulates
   real edit history; C joins mid-life; C converges to the full current document by replay; C's
   first edit reaches BOTH A and B; `epoch_id` incremented across the join; the session seals and
-  the document leaves verify on all three sides. — 🟠 PARTIAL (5 of 6 clauses)
-  > Downgraded (Entry 22). PROVEN: real history before the join; C joins mid-life; C converges
-  > to the full document by replay; C's first edit reaches BOTH A and B; epoch incremented.
-  > NOT COVERED: the session seals and leaves verify on all three sides — and the clause needs
-  > DEFINING first: three pairwise sessions have three roots, so "all three sides" assumes a
-  > shared session that does not exist in a mesh.
+  the document leaves verify on all three sides. — ✅ (6 of 6, Entry 24)
+  > Downgraded then EARNED. The sealing clause was ill-posed for a mesh and is now DEFINED
+  > (Explicitly beyond, Entry 24): each PAIRWISE session seals and both of its parties
+  > independently recompute the same root over that pair's document leaves. Proven for A↔B and
+  > A↔C, mixed trees, roots compared side to side. Plus: real history before the join, C joins
+  > mid-life and converges by replay, C's first edit reaches BOTH, epoch incremented.
 - **DOD-MP-E2E-FANOUT-1** [trustless-cello] — offline fan-out enforcer: three holders; B
   publishes while C's daemon is DOWN; **B's daemon is then killed and restarted** (pending
   derived from the log, not memory); A receives immediately — never blocked by C's absence; C's
