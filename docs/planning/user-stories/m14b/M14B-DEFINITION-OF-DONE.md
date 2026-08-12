@@ -199,6 +199,12 @@ description: >
   membership, mirroring `document-inbound.ts`; the peer column stands in only when the chain
   cannot answer. — 🟡 BUILT/UNVERIFIED-LIVE (gate green, reviewed, all 8 findings fixed;
   awaits the publish + the SHIP-1 re-run) → Journal Entries 26–27.
+- **DOD-MP-CLOSE-N-1** [cello-client] — a close settles only when EVERY current holder has said
+  it, derived from the chain. It settled on the owner plus the genesis peer, so with three holders
+  the document flipped to `closed` once two agreed while the third was still editing — the exact
+  thing `document-lifecycle.ts`'s own header forbids ("one side's close is a REQUEST"). The list
+  row's `closePending` asks the same question of all holders. Ruled under §3a; see Decisions
+  Carried. — 🟡 BUILT/UNVERIFIED-LIVE
 - **DOD-MP-INBOUND-N-1** [cello-client] — the receive side against N senders: per-sender
   `doc_prev_hash` chains validated per sender (the chain is per-author, N of them); an envelope
   from a non-holder — per the receiver's derived participant set — is refused with a named
@@ -306,6 +312,13 @@ description: >
 - **D6 — this milestone is M14B.** The former M14B (Tier 2) is
   [[COLLAB-TIER2-DEFINITION-OF-DONE]], unnumbered until scheduled; the epoch frame shape comes
   forward with THIS milestone.
+- **D7 — a close settles on ALL current holders, not a pair.** Ruled 2026-08-13 under §3a (the
+  live fleet smoke raised it; §13 had not covered it). The conservative direction is required, not
+  preferred: settling early CLAIMS AN AGREEMENT THAT DOES NOT EXIST, and the lifecycle unit already
+  forbids that in writing. Identical to the old behaviour for two parties. Reversal risk is
+  asymmetric — loosening later (an admin closing for everyone) only widens what settles and
+  strands nothing, whereas shipping the loose rule first leaves documents marked closed that never
+  were, and no migration can un-say that. `DOD-MP-CLOSE-N-1`.
 - **Guards carried from the multiplayer log §11 — do not re-litigate:** floor control is not
   needed (a CRDT op is a spreadsheet cell, not an utterance); relaying is not the answer to
   delivery (every holder authors and delivers its own updates — no relay tier); arrays stay
