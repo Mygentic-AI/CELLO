@@ -1120,3 +1120,72 @@ bilateral handshake — `#settleClose` settles against `doc.peerAgentId`. With t
 document close when ONE co-author closes, or when ALL of them have? The frame now reaches everyone;
 what their agreement MEANS for settlement is a product call, not a bug. Today the bilateral settle
 logic stands unchanged.
+
+---
+
+## Entry 27 — the review found the fix was half a fix (2026-08-13)
+
+`cello-unit-reviewer` on DOD-MP-CONTROL-N-1. Verdict: **SPEC: DEVIATIONS FOUND · ERROR
+SUBSTITUTION FOUND · HOLLOW TESTS FOUND**, all blocking. Eight findings, all fixed
+(`cello-client 9d8d4bc`). The reviewer ran the revert test itself and restored the tree
+byte-identically (sha256 verified) — worth recording, because a reviewer that edits and does not
+restore is indistinguishable from one that breaks the build.
+
+**F1 — HIGH, and the one that mattered.** I fixed the SEND side and declared the invariant met.
+The RECEIVE side still authorized an ending by `sender === doc.peerAgentId` — the same frozen
+column the DoD line condemns. Two consequences, both reachable with **ordinary commands, no
+rewritten daemon**:
+
+- **A removed holder could still end the creator's document.** A created with B, invited C,
+  removed B. A's `peerAgentId` is still B. B kills; B's own daemon now correctly fans out to A and
+  C; A ACCEPTS it and marks the document killed, while C refuses (C's peer is A). Two operators,
+  two different states, driven by a party holding no rights at all.
+- **A joiner could never end a document they hold.** With {A,B,C}, C's close is correctly
+  addressed to both — and BOTH refuse it, because C is neither one's `peerAgentId`. C is told
+  `holdersNotified: {A: true, B: true}`. Everyone heard them; nobody recorded anything.
+
+Both now gate on derived membership, mirroring `document-inbound.ts` verbatim — the peer column
+stands in ONLY when the chain cannot answer. A close is also now recorded against the actual
+sender rather than the peer column, which had been crediting a joiner's close to the genesis peer.
+
+**The lens this proves out.** Andre's adversary-owns-their-daemon rule was written for rewritten
+clients; F1's first case needed no rewriting at all. The general form is stronger than the
+original statement: **a guard on the sender's side is not a guard.** Every ending is now decided by
+the receiver, from the signed chain.
+
+**F2/F3 — error substitution, both the shape this codebase keeps re-learning.** `document_chain_
+invalid` collapsed every derivation failure (fork, bad signature, unknown signer, policy
+violation) into one label that existed nowhere else. And four NEW refusal reasons fell through to
+the generic "did not reach the peer … the document cannot settle until they hear it" — telling the
+operator to wait for a counterparty for four faults that are entirely about their own machine.
+That is verbatim the defect `notifyGuidance`'s own header says it was written to remove. The
+reviewer captured the live string rather than inferring it. All four now branch, and the chain
+faults point at `document.holders.underivable` in the log.
+
+**F4 — the duplicated derivation, and the better fix.** I had hand-written the arrangement replay
+into the composition root. The reviewer noted it had ALREADY drifted from `holdersFor` — it never
+emitted `document.holders.underivable`, so the control path was invisible to exactly the log
+search meant to find it. Rather than call `holdersFor` from the closure, the derivation moved onto
+the layer as `controlHolders`: **one implementation, shared by the daemon and every fixture.** A
+closure in `daemon.ts` is untested by construction, so fixtures hand-copy it and a hand-copy
+cannot disagree with the original — which is precisely the lesson
+`document-control-notifier.ts`'s own header records about why IT is a module.
+
+**The hollow-test finding, which was correct and uncomfortable.** All 8 of my new tests stubbed
+the holder list. They proved the notifier fans out over whatever it is handed; they did not prove
+the LIST. The reviewer named the one-line bypass: hand back `[peerAgentId]` from the composition
+root and the whole repo stays green — the shipped defect restored, with 8 passing tests named
+after it. Four new tests now build the holder set through a **real invite and accept** on two
+in-process daemons, and one delivers a removed holder's signed frame straight into the honest
+daemon's inbound path. Verified they bite: reverting the inbound gate turns the joiner-close test
+red.
+
+It also caught that the existing "a THIRD party cannot end this pair's document" test now passes
+for the wrong reason — the sender's own daemon refuses first, so the honest-holder guard it used
+to cover is reached by nothing. That is what the new inbound test replaces.
+
+**Gate:** 3732 tests, eslint, tsc, build. One review pass, all findings fixed, committed — no
+second pass, per the hard cap.
+
+**Still not live.** The line stays 🟡 until the publish cascade lands and the fleet close is
+re-run. Andre's installed daemon (0.0.162) predates all of this.

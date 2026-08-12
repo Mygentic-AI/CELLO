@@ -192,7 +192,13 @@ description: >
   nothing, under a reported `peerNotified: true`. This is TIER2-READY lens 4, a blocking
   invariant. Signed once, byte-identical to each holder; reported per holder; one unreachable
   holder never blocks the others; a chain that will not derive REFUSES by name rather than falling
-  back to the genesis peer. — 🟡 BUILT/UNVERIFIED-LIVE
+  back to the genesis peer. **BOTH HALVES** — the review found the fix was outbound-only and the
+  RECEIVING side still authorized an ending by `sender === doc.peerAgentId`, so a removed holder
+  could end the creator's document with two ordinary commands and a joiner's own close was refused
+  by every holder while the sender was told all had heard them. Inbound now gates on derived
+  membership, mirroring `document-inbound.ts`; the peer column stands in only when the chain
+  cannot answer. — 🟡 BUILT/UNVERIFIED-LIVE (gate green, reviewed, all 8 findings fixed;
+  awaits the publish + the SHIP-1 re-run) → Journal Entries 26–27.
 - **DOD-MP-INBOUND-N-1** [cello-client] — the receive side against N senders: per-sender
   `doc_prev_hash` chains validated per sender (the chain is per-author, N of them); an envelope
   from a non-holder — per the receiver's derived participant set — is refused with a named
