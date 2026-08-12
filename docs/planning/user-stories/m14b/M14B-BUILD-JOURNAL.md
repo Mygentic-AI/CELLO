@@ -15,10 +15,16 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next:** FANOUT-1 review IN FLIGHT (dispatched on cc06b3f..4330c9b + Entries 14/15). On the
-  verdict: fix findings → merge → flip ✅ → pull `DOD-MP-INBOUND-N-1` (P2's second unit: receive
-  against N senders — per-sender chains, non-holder refusal by derived membership, amendment-lag
-  buffering defined not discovered). Superseded progress text kept below.
+- **Next red:** `DOD-MP-INBOUND-N-1` (P2's second unit) — receive against N senders: per-sender
+  `doc_prev_hash` chains validated per sender; an envelope from a non-holder (per the receiver's
+  DERIVED participant set) refused by name; amendment-lag handling DEFINED (held/refused with a
+  named reason, resolved when the amendment lands) — plus the two boundaries carried from
+  FANOUT-1's review (Entry 16): late-joiner envelope service via JOIN-1 transfer (note, not
+  build), and the one-holder-rejects-what-another-admitted supersession semantics. Much of the
+  receive side already exists (sender-not-peer upgrade, epoch gates, membership refusals) —
+  this unit's core is the PER-SENDER chain validation + the sender-is-a-holder gate replacing
+  sender-is-the-genesis-peer, mirroring the ack-gate fix. Branch `m14b/inbound-n-1` from
+  cello-client main (`a2ce49b`). FANOUT-1 is ✅ (Entry 16).
 - **Superseded:** IN PROGRESS notes — the per-(envelope,
   holder) delivery-state store (`5f6f686`, 7 tests — per-holder attempts/backoff/ceiling/
   abandon, settle-once acks, PER-HOLDER bounded window via partitioned row numbering). REMAINING:
@@ -70,8 +76,8 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 🟡❌ (FANOUT-1 built/review-in-flight) · P3 ❌ · P4 ❌❌❌❌❌
-- **Branches in flight:** `m14b/fanout-1` (cello-client).
+- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅❌ (FANOUT-1 ✅; INBOUND-N-1 next) · P3 ❌ · P4 ❌❌❌❌❌
+- **Branches in flight:** none.
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
 - **Parked:** nothing yet.

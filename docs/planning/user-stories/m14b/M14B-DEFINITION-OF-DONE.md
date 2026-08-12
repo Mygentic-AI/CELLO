@@ -179,7 +179,11 @@ description: >
   Acknowledgement is tracked per `(envelope, holder)`, derived from the log, restart-survivable;
   retry per holder on the capped backoff; **one unreachable holder never blocks or delays
   delivery to the others** — availability is a first-class protocol concern. The 20-holder cap
-  (§13-D5) is enforced at amendment validation. — ❌
+  (§13-D5) is enforced at amendment validation. — ✅
+  > Reviewed; 2 HIGH fixed (envelope-keyed ack waiters let any holder settle the dialed
+  > holder's row; a removed genesis peer kept ack rights) + 7 more + 3 revert-invisible test
+  > gaps closed. Attempts schedule, sends gate. Merged `cello-client a2ce49b`.
+  > → Journal Entries 14–16.
 - **DOD-MP-INBOUND-N-1** [cello-client] — the receive side against N senders: per-sender
   `doc_prev_hash` chains validated per sender (the chain is per-author, N of them); an envelope
   from a non-holder — per the receiver's derived participant set — is refused with a named
