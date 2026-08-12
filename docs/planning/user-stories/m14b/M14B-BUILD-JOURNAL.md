@@ -15,7 +15,11 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next red:** `DOD-MP-INBOUND-N-1` (P2's second unit) — receive against N senders: per-sender
+- **Next:** INBOUND-N-1 review IN FLIGHT (dispatched on a2ce49b..27fe7a1 + Entry 17). On the
+  verdict: fix findings → merge → flip ✅ → P2 ALL GREEN → pull `DOD-MP-TOPOLOGY-1` (P3, small:
+  mesh accepted + default at the handshake, both ends; hub-and-spoke retired per D4; the
+  TRACE-1 map has the one seam function + the propose-handler default site). Superseded text:
+  receive against N senders: per-sender
   `doc_prev_hash` chains validated per sender; an envelope from a non-holder (per the receiver's
   DERIVED participant set) refused by name; amendment-lag handling DEFINED (held/refused with a
   named reason, resolved when the amendment lands) — plus the two boundaries carried from
@@ -76,8 +80,8 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅❌ (FANOUT-1 ✅; INBOUND-N-1 next) · P3 ❌ · P4 ❌❌❌❌❌
-- **Branches in flight:** none.
+- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅🟡 (INBOUND-N-1 built/review-in-flight) · P3 ❌ · P4 ❌❌❌❌❌
+- **Branches in flight:** `m14b/inbound-n-1` (cello-client).
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
 - **Parked:** nothing yet.
