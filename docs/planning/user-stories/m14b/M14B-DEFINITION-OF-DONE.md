@@ -311,6 +311,16 @@ description: >
 > built is proven on the fleet — including the close addressing both holders; only the steps that
 > need a frame to ARRIVE are unproven. Needs its own line and Andre's call.
 
+- **DOD-MP-SESSION-RETIRE-1** [cello-client] — a session the relay has TERMINALLY ended must be
+  retired locally, so the next document delivery opens a fresh one instead of resubmitting into a
+  grave. The relay pushes `session_sealed` once; a daemon down or restarting at that instant never
+  records it, and then `activeSessionsWith` — which filters on THIS daemon's own `status` — keeps
+  handing every document frame to a session that can never accept one. Observed live 2026-08-13:
+  the delivery worker retried the same sealed session every 60s indefinitely, and the stale row
+  survived `cello logout && cello login`. The terminal branch already KNOWS (it logs "nothing sent
+  now can ever be part of its record" and tells a conversation operator to start a new session);
+  it must also act, because document delivery has no human in the loop to act for it. Availability
+  and fallback are first-class — a route with no fallback is the defect. — ❌ NOT BUILT
 - **DOD-MP-REMOVE-FEEDBACK-1** [cello-client] — the FEEDBACK half of D9: a holder whose edit is
   refused after removal learns, in a sentence they can act on, that they were removed, at which
   epoch, that their copy and its history remain theirs, and that new edits no longer publish. The
