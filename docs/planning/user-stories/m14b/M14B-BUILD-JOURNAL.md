@@ -898,3 +898,47 @@ from the merged branch, not published.
 
 **DOD-MP-E2E-GOVERN-1, -JOIN-1, -FANOUT-1, -REMOVE-1 all flip ✅ on this entry.**
 Only `DOD-MP-SHIP-1` remains.
+
+---
+
+## Entry 22 — THE ENFORCER REVIEW: four tags downgraded, gaps closed, two decisions owed (2026-08-13)
+
+**Reviewer verdict (`cello-unit-reviewer`, quoted):** "The evidence is real, and it is narrower
+than the four lines it was used to close. The tell is in the DoD file itself: every note written
+under a ✅ is accurate and every one of them describes LESS than the line above it. The tag was
+set against the note, not against the line." Coverage audit: GOVERN-1 2/9, JOIN-1 5/6,
+FANOUT-1 3/5, REMOVE-1 4/7.
+
+**I downgraded all four immediately (`077fc577`) before fixing anything** — an unearned ✅ is the
+one thing that must not sit in the record while work continues.
+
+**The finding that mattered (H1, error substitution):** the file's ONLY governance assertion had
+C — a NON-holder — attempt an invite and asserted `ok === false`. That call dies at the store
+lookup with `document_unknown`, six checks before the governance gate. **It was green with every
+line of governance deleted.** Now C invites AFTER joining (a holder who is not an admin) and the
+assertion is the reason code, `document_not_admin`.
+
+**Gaps closed (`5ad6f473`, 2/2 green in 314s):**
+- **FANOUT-1 → ✅ EARNED (5/5):** A queues work for the absent holder (per-holder pending on A's
+  own surface), A's daemon is KILLED AND RESTARTED and the backlog survives, then C returns and
+  converges with nobody acting on any side. The bolded clause now runs.
+- **REMOVE-1 → 5/7:** both survivors stay alive and keep converging after the removal, and the
+  removed holder receives none of it. The fixed sleep became a poll; the vacuous "A's copy is
+  untouched" assertion (B's write never left B's machine — it could not fail) is gone; B's
+  refusal is now stated in place as the LOCAL pre-check it is rather than overclaimed as the
+  receiver-side one.
+
+**TWO DECISIONS OWED — ANDRE'S, not mine:**
+1. **GOVERN-1 names three clauses with NO authoring verb** — `promote_admin` and both
+   `remove_admin` cases. The replay engine implements them fully; nothing can author one,
+   because the cross-daemon N-signature GATHERING wire is parked (Entry 10). Either that wire
+   gets its own DoD line, or those three clauses are cut from GOVERN-1 in writing. They cannot
+   be tested and must not be tagged.
+2. **JOIN-1's sealing clause is ill-posed for a mesh:** "the session seals and the document
+   leaves verify on all three sides" assumes a shared session. Three holders means three
+   PAIRWISE sessions with three roots. The clause needs defining before it can be tested.
+
+**Also carried:** REMOVE-1's "on the record" is today a warn log + an ack carrying the refusal —
+no quarantine row, no `0x05` leaf on the receiver's disk. Whether that satisfies the clause is a
+product decision. And the removal guidance still tells an operator to "demote first" via a verb
+that does not exist (the same gap as decision 1).

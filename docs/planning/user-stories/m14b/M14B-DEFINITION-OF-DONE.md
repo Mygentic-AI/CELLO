@@ -215,11 +215,13 @@ description: >
   refused by every holder independently; A invites C properly → C consents → in; A promotes B;
   a `remove_admin` missing one other-admin signature → invalid everywhere; with the full set →
   admitted. All three daemons derive the identical {participants, admins, properties} at every
-  step. — 🟠 PARTIAL (2 of 9 clauses)
+  step. — 🟠 PARTIAL (4 of 9 clauses; 3 UNBUILDABLE)
   > Downgraded from ✅ on the enforcer review (Entry 22) — the tag was set against the run's
   > note, not against this line. PROVEN: three daemons; A invites C properly → C consents → in.
-  > NOT COVERED: creation with admin set {A}; B joining by amendment; a non-admin's refusal
-  > (the assertion refused for `document_unknown`, not governance — hollow); identical
+  > The governance refusal is now REAL (a HOLDER who is not an admin, asserting
+  > `document_not_admin` — the first cut refused for `document_unknown`, green with all
+  > governance deleted). NOT COVERED: creation with admin set {A} asserted on all three;
+  > B joining by amendment; independent refusal at the OTHER holders; identical
   > {participants, admins, properties} at every step (proxied by epoch height only — no surface
   > exposes the triple). **THREE CLAUSES ARE UNBUILDABLE:** `promote_admin` and both
   > `remove_admin` cases have NO authoring verb — the N-signature gathering wire is parked
@@ -237,21 +239,21 @@ description: >
 - **DOD-MP-E2E-FANOUT-1** [trustless-cello] — offline fan-out enforcer: three holders; B
   publishes while C's daemon is DOWN; **B's daemon is then killed and restarted** (pending
   derived from the log, not memory); A receives immediately — never blocked by C's absence; C's
-  daemon returns; C converges with zero agent attention on any side. — 🟠 PARTIAL (3 of 5 clauses)
-  > Downgraded (Entry 22). PROVEN: three holders; a publish while one daemon is DOWN; the
-  > online holder receives, never blocked. NOT COVERED — and it is the BOLDED half:
-  > the publisher's daemon is never killed and restarted (restart-survivability at N holders),
-  > and the absent holder never returns to converge.
+  daemon returns; C converges with zero agent attention on any side. — ✅ (5 of 5, Entry 22)
+  > Downgraded then EARNED: the bolded half now runs — A queues work for the absent holder,
+  > A's daemon is killed and RESTARTED and the backlog survives (derived from the log, not
+  > memory), then C returns and converges with nobody acting on any side. 3 real daemons.
 - **DOD-MP-E2E-REMOVE-1** [trustless-cello] — removal enforcer: three holders; C is removed;
   C's local copy is intact and C's daemon surfaced the removal; C's next publish is refused by
   A and B with the removal-named reason (and the refusal is on the record — no silent drop);
-  A and B continue editing and converging normally. — 🟠 PARTIAL (4 of 7 clauses)
+  A and B continue editing and converging normally. — 🟠 PARTIAL (5 of 7 clauses)
   > Downgraded (Entry 22). PROVEN: three holders; a holder removed; their copy intact; their
   > daemon SURFACED the removal (genuine cross-process evidence — derived from the amendment
   > that really travelled). NOT COVERED: the refusal AT THE RECEIVERS (the test proves the
   > removed party's own local pre-check, a different code path — the receiver-side refusal
   > needs a holder who was offline at removal time); "on the record" (today log + ack only —
-  > whether that suffices is a product decision); survivors continuing to converge after.
+  > whether that suffices is a PRODUCT decision, not a test gap). Survivors continuing to
+  > converge after IS now proven, and the removed holder receives none of it.
 - **DOD-MP-SHIP-1** [cello-client, trustless-cello] — the publish cascade via `/cello-publish`
   (skill loaded, per publish), trustless-cello re-pinned, plugin skills updated for the
   multiplayer verbs and audited as SHIPPING content (tarball/clone, not source), and a **live
