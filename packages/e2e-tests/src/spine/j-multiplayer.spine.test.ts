@@ -172,12 +172,13 @@ async function awaitJoinOffer(
 async function arrangementOf(
   party: Party,
   documentId: string,
-): Promise<{ participants: string[]; admins: string[]; epochId: number }> {
+): Promise<{ participants: string[]; admins: string[]; appendOnly: unknown; epochId: number }> {
   const list = (await party.conn.call("cello_doc_list", {})) as {
     documents?: Array<{
       documentId?: string;
       participants?: string[];
       admins?: string[];
+      properties?: Record<string, unknown>;
       epochId?: number;
       arrangementUnavailable?: string;
     }>;
@@ -190,6 +191,9 @@ async function arrangementOf(
   return {
     participants: [...(row.participants ?? [])].sort(),
     admins: [...(row.admins ?? [])].sort(),
+    // PROPERTIES is the arrangement's third part (G0) — agreeing on two of three was the
+    // silent-simplification shape the review named.
+    appendOnly: row.properties?.["append_only"],
     epochId: row.epochId ?? -1,
   };
 }
@@ -198,12 +202,13 @@ async function arrangementOf(
 async function agreeOnArrangement(
   who: Party[],
   documentId: string,
-  want: { participants: string[]; admins: string[]; epochId: number },
+  want: { participants: string[]; admins: string[]; appendOnly: unknown; epochId: number },
   label: string,
 ): Promise<void> {
   const target = JSON.stringify({
     participants: [...want.participants].sort(),
     admins: [...want.admins].sort(),
+    appendOnly: want.appendOnly,
     epochId: want.epochId,
   });
   for (const p of who) {
@@ -280,7 +285,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       await agreeOnArrangement(
         [a, b],
         documentId,
-        { participants: [a.pubkey, b.pubkey], admins: [a.pubkey], epochId: 0 },
+        { participants: [a.pubkey, b.pubkey], admins: [a.pubkey], appendOnly: false, epochId: 0 },
         "post-genesis",
       );
 
@@ -363,7 +368,12 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       await agreeOnArrangement(
         [a, b, c],
         documentId,
-        { participants: [a.pubkey, b.pubkey, c.pubkey], admins: [a.pubkey], epochId: 1 },
+        {
+          participants: [a.pubkey, b.pubkey, c.pubkey],
+          admins: [a.pubkey],
+          appendOnly: false,
+          epochId: 1,
+        },
         "post-join",
       );
 
