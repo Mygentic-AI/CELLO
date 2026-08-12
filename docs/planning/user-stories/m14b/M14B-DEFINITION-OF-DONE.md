@@ -184,6 +184,15 @@ description: >
   > holder's row; a removed genesis peer kept ack rights) + 7 more + 3 revert-invisible test
   > gaps closed. Attempts schedule, sends gate. Merged `cello-client a2ce49b`.
   > → Journal Entries 14–16.
+- **DOD-MP-CONTROL-N-1** [cello-client] — control frames (`close`, `kill`) address the DERIVED
+  participant set, never the genesis `peerAgentId`. Found by the SHIP-1 live fleet smoke, not by
+  any test: the notifier sent to `doc.peerAgentId` and returned after one send, so with three
+  holders only one was told — and after a removal the genesis counterparty can BE the removed
+  holder, so the frame reached the one party it must not while the remaining co-author heard
+  nothing, under a reported `peerNotified: true`. This is TIER2-READY lens 4, a blocking
+  invariant. Signed once, byte-identical to each holder; reported per holder; one unreachable
+  holder never blocks the others; a chain that will not derive REFUSES by name rather than falling
+  back to the genesis peer. — 🟡 BUILT/UNVERIFIED-LIVE
 - **DOD-MP-INBOUND-N-1** [cello-client] — the receive side against N senders: per-sender
   `doc_prev_hash` chains validated per sender (the chain is per-author, N of them); an envelope
   from a non-holder — per the receiver's derived participant set — is refused with a named

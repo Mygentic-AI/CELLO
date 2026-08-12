@@ -1053,3 +1053,70 @@ design call, not a test gap.
 **Tier P4 is now ✅✅✅✅ on the four enforcers** (3 journeys, 3/3 green, 329s, three daemons as
 three OS processes). SHIP-1's beta + promotion are done; the live GCP fleet smoke is the only
 open item, plus the two product questions above and the parked gathering flow (Entry 24).
+
+---
+
+## Entry 26 — the live fleet smoke, and the defect only it could find (2026-08-13)
+
+Ran SHIP-1's live smoke on the real GCP fleet with Andre's three production agents — CELLO_Coder_1,
+CELLO_Support, Miss_Chelly — three separate machines' daemons, the real directory consortium and
+relay. Document `d858092773092bed60c24089ff5e7c7f3a638acd05be043f966f7f12810b6932`.
+
+**The cooperative journey passed end to end, exactly as designed:**
+
+1. Coder_1 proposed with `admins: [Coder_1]`; Support saw it in their inbox and accepted.
+2. Coder_1 invited Miss_Chelly → `epochId: 1`, and the existing holder was notified.
+3. **Miss_Chelly saw the derived rules BEFORE consenting** — all three participants, the admin
+   set, and the properties including `topology: "mesh"`, confirming mesh is live as the default
+   on the fleet and not just in tests.
+4. Miss_Chelly accepted and read the document: **content she was never sent directly**, arrived
+   by log replay (D1's cheap path, live).
+5. Miss_Chelly wrote line two. It reached BOTH other holders — including Support, with whom she
+   had **no prior session**; the fan-out worker opened one. That is the mesh doing the thing the
+   whole tier was built for, on real infrastructure.
+6. Coder_1 removed Support → `epochId: 2`, both holders notified including the removed one.
+   Support's next write was refused naming the removal; their copy stayed exactly as it was at
+   line two, while Coder_1 and Miss_Chelly went on to line three and converged. Forward-only
+   removal, proven on the fleet.
+
+**Then the close, and the defect.** `cello_doc_close` reported `peerNotified: true`. It was not
+true in any useful sense:
+
+- `createDocumentControlNotifier` addressed `doc.peerAgentId` — the GENESIS counterparty, frozen
+  at creation — and `return`ed after one send.
+- Coder_1's `peerAgentId` was Support. **Who had just been removed.** So the close went to the one
+  party it must not reach, and Miss_Chelly — the actual remaining co-author — was never told.
+- Live confirmation: Miss_Chelly's row still read `closePending: false, status: active`.
+
+This is **TIER2-READY lens 4** ("no frame assumes a single counterparty"), which this milestone's
+own DoD makes a blocking invariant. Control frames were the one surface never migrated to the
+derived participant set that FANOUT-1 established for update envelopes. No test caught it because
+the only coverage was a two-party surface test, and with two parties `peerAgentId` is right.
+
+**Fixed as DOD-MP-CONTROL-N-1.** The target is now the derived set (same `deriveArrangement` path
+`invite`/`remove`/`list` use, injected as a `holders()` seam rather than widening the notifier into
+the replay engine). Signed ONCE and sent byte-identical to each holder — the TBS commits to the
+document and verb, never to a recipient. Reported per holder: `holdersNotified`, because with N
+holders a partial fan-out is the ORDINARY failure and one boolean cannot describe it. One
+unreachable holder neither blocks nor aborts the others. **A chain that will not derive REFUSES by
+name and falls back to nothing** — the tempting fallback is the old behaviour, and after a removal
+it aims the frame at precisely the wrong party.
+
+Two traps caught while building it, both worth recording:
+- **`[].every()` is `true`.** Folding the per-holder map with `every` alone reports that everybody
+  was notified exactly when nobody was. Split out as `everyHolderNotified`, which requires at least
+  one entry.
+- **The bilateral fixtures had to take the REAL derivation, not a hardcoded peer** — a fixture
+  handing back `[peerAgentId]` would restore the very assumption under test. All 30 surface tests
+  pass against the real path, which also confirms an empty chain derives to the two genesis parties.
+
+New guidance branch: a partial fan-out now NAMES the holders who did not hear it, instead of a
+message about "the peer" that names nobody when there are several.
+
+8 new tests; full gate green (3728 tests, eslint, tsc). Reviewed under DOD-MP-CONTROL-N-1.
+
+**A DESIGN QUESTION FOR ANDRE that the smoke surfaced and this fix does NOT answer:** `close` is a
+bilateral handshake — `#settleClose` settles against `doc.peerAgentId`. With three holders, does a
+document close when ONE co-author closes, or when ALL of them have? The frame now reaches everyone;
+what their agreement MEANS for settlement is a product call, not a bug. Today the bilateral settle
+logic stands unchanged.
