@@ -811,3 +811,30 @@ served by JOIN-1's state transfer, not retro-seeding; supersession semantics whe
 rejects what another admitted.
 
 **DOD-MP-FANOUT-1 flips ✅ on this entry.**
+
+---
+
+## Entry 17 — INBOUND-N-1 code-complete (2026-08-12)
+
+Branch `m14b/inbound-n-1`, one commit (`27fe7a1`). Full gate green. Review dispatched.
+
+**A small unit by design — most of its clauses were built by earlier units and needed only the
+gate:** per-sender `doc_prev_hash` chains have been keyed by `lastEnvelopeHashBySender` since
+ENVELOPE-1 (the new N-senders test pins that N first-envelopes anchor N independent chains
+rather than forking a global one); the epoch gates, removed-sender refusals, and recipient
+self-check landed with AMEND-1/REMOVE-1; amendment-lag behavior stands AS DEFINED (epoch-ahead
+refuses non-terminally, resolving when the amendment lands; out-of-order amendments refuse by
+name and the sender retries — the loud-until-FANOUT-heals design from Entry 10, now the
+documented contract).
+
+**What this unit changed:** the sender gate. When the chain derives, derived membership is the
+WHOLE gate — a joined third holder's envelope admits at a receiver whose row names someone else
+as peer; a removed genesis peer's envelope refuses by name; a stranger stays silently refused
+(membership discloses nothing to non-parties). The row's peer column survives only as the
+bilateral-legacy fallback — the identical rule FANOUT-1's review forced onto the ack gate,
+applied to the twin seam the moment it was identified rather than waiting for a reviewer to
+find it twice.
+
+**Boundaries journaled, not built (Entry 16 carries):** late-joiner envelope service rides
+JOIN-1's transfer; one-holder-rejects-what-another-admitted supersession semantics are still an
+open design point for the Tier 2 wave's rejection work.
