@@ -765,3 +765,43 @@ per-holder fact through `envelopeEverSent`.
 
 **Fixture slippage, recorded:** the store piece was committed once before its typecheck ran
 (caught and fixed one commit later).
+
+---
+
+## Entry 16 — FANOUT-1 review verdict, findings fixed, merged (2026-08-12)
+
+**Reviewer verdict (`cello-unit-reviewer`, one pass, quoted):** "SPEC: FAITHFUL (the per-holder
+stall deviation is journaled). SILENT FALLBACKS FOUND — H1/H2 are a silent-drop pair: a
+wrong-holder or removed-holder ack permanently settles a row for content that never arrived,
+with no signal on any path; M5 is the crash-window variant [blocking]. ERRORS NAME THEIR CAUSE
+— with M6 as the one broken pointer. HOLLOW TESTS FOUND — publish seeding, the attempts/sends
+split, and the ack-gate widening are all revert-invisible [blocking]. REMOVALS PROVEN." The
+reviewer also confirmed: the ceiling cannot be evaded by ack-cycling; backfill does not
+un-retire abandoned envelopes; TIER2-READY 4 accommodated (per-batch attestation keys a sibling
+table on the same per-holder PK, no migration); no amendment append site added.
+
+**All findings fixed (`cello-client 1e4556f`, merged `a2ce49b`):**
+- **H1:** ack waiters keyed by the DIALED holder — the acker threads through onSettled,
+  awaitAck, and the transport; another holder's (or a redelivered) ack can no longer settle a
+  row for content that never arrived. §7-1's divergence through the sender's own bookkeeping,
+  closed.
+- **H2:** when the chain derives, derived membership is the WHOLE ack gate — a removed genesis
+  peer refuses like any outsider (the genesis column is not a permanent credential); retired
+  rows are not reopenable. The adversary-owns-their-daemon lens applied to acks.
+- **M3:** one deterministic envelope-level terminal rule (`reconcileEnvelopeSettlement`) from
+  every site. **M4:** settle-once/contradiction per ACKER — an admitted-then-rejecting holder
+  is refused mid-fan-out; the one-holder-rejects-what-another-admitted supersession semantics
+  are an explicit INBOUND-N-1 boundary. **M5:** append+seed transactional. **M6:** the
+  missing-genesis branch logs the event the refusal points at. **M7:** parked counts as
+  left-the-machine (journaled here as the deliberate reinterpretation the reviewer asked for).
+  **L8:** backfill scoped to zero-row envelopes. **L9:** dead envelope-level writers deleted,
+  proven by the gate.
+- **The three revert-invisible gaps closed:** publish seeding through the production path (the
+  one write that makes fan-out happen), the deferrals-never-spend-the-ceiling scenario (the
+  unit's own headline fix, now pinned), and the ack gate's positive/negative/per-acker cases.
+
+**Boundary notes carried to INBOUND-N-1:** a holder who joins after an envelope was published is
+served by JOIN-1's state transfer, not retro-seeding; supersession semantics when one holder
+rejects what another admitted.
+
+**DOD-MP-FANOUT-1 flips ✅ on this entry.**
