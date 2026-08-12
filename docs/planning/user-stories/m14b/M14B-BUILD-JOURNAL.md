@@ -618,3 +618,31 @@ Final: 34 handler tests including the three-daemon amendment-receive proof with 
 amendment refused; full gate green.
 
 **DOD-MP-JOIN-1 flips ✅ on this entry.**
+
+---
+
+## Entry 12 — REMOVE-1 code-complete; removal is DERIVED, never stored (2026-08-12)
+
+Branch `m14b/remove-1`, one commit (`186d39f`). Full gate green. Review dispatched.
+
+**The design decision the unit forced:** the first cut stored removal as a document status —
+and hit the documents table's CHECK constraint, whose widening means a table-rebuild migration
+on every operator DB. The second cut is the doctrine the milestone has been following all
+along: **removal is a chain fact, derived at every consumer** — the publish gate, the inbound
+refusal, and the list overlay all read ONE shared membership walk (`walkMembership`), because
+two walks disagreeing about a removal is two daemons disagreeing about the arrangement. No
+schema change, no migration, no flag to drift.
+
+**What ships:** `cello_doc_remove` (four surfaces + guards) — admin-removes-non-admin and
+voluntary self-leave, both single-signer; validate-before-append at the third production append
+site; the amendment travels to every holder INCLUDING the removed one (being told is how their
+daemon surfaces it — `document.removed_from`); the removed holder's publish refuses naming the
+removal and its epoch, their arriving envelopes refuse TERMINALLY on every remaining holder
+(`document_sender_removed`, inbound step 4c), their copy/file/history remain and every surface
+says so; a fellow admin cannot be expelled through the holder door (the policy sentence
+surfaces verbatim). Handler proofs: remove-after-join and voluntary-leave roundtrips + the
+holder-door refusal; inbound proof: removed sender refused terminally naming the epoch.
+
+**Fixture rule discovered:** planted amendment rows must be DECODABLE — the membership walk
+decodes every stored row, and garbage is a state no real daemon can hold
+(validate-before-append). Two suites corrected.
