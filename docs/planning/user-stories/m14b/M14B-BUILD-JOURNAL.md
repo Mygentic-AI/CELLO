@@ -1474,3 +1474,50 @@ for something waiting cannot fix. **That is the third time this session I commit
 error-substitution shape** — twice caught by the reviewer, once by the fleet — and this one landed
 in a branch I wrote *while fixing the other two*. The reason now travels per holder and the
 sentence names it. `cello-client 2c66e5f`, 2 tests, gate green.
+
+---
+
+## Entry 34 — the sealed session SURVIVES a restart, and the delivery worker retries it forever
+
+Correction to Entry 33's workaround: **`cello logout && cello login` does NOT clear it.** Hard
+evidence from the daemon log after the restart —
+
+```
+session.relay.hash.submit.terminal  sessionId 7bf49355…  reason session_sealed
+correlationId dlv-6988436e-1786559198727   18:26:39
+correlationId dlv-6988436e-1786559258727   18:27:39
+correlationId dlv-6988436e-1786559378730   18:29:39
+impact: "the relay has ended this session — nothing sent now can ever be part of its record"
+```
+
+The `dlv-` prefix is the DOCUMENT DELIVERY WORKER. It re-picks the same sealed session **every 60
+seconds**, is told **terminally** that nothing can ever enter that record, and tries again on the
+next tick. The session row is persisted, so a restart reloads it and the loop resumes.
+
+**This is a permanent stuck state, not a transient one.** A document that was in flight when a
+session sealed can never again be delivered to that peer, by any means available to the operator.
+Restarting does not help. The only visible symptom is a pending count that never falls.
+
+**Against the standing rule** — *availability and fallback are first-class protocol concerns, not
+operational nice-to-haves* — this is a fallback that does not exist: the worker has one route, that
+route is permanently dead, and there is no second one.
+
+**The shape of the fix** (not built; needs its own line): the terminal branch already KNOWS the
+session is over — it says so in the log and in its own guidance for conversations. It must also
+RETIRE the local session row, so the next delivery attempt opens a fresh session instead of
+resubmitting into a grave. The conversation path solves this by telling a human; the document path
+has no human and needs it done for it.
+
+### Fleet smoke — final state
+
+**PROVEN LIVE:** create with a sole admin · mesh · the invitee seeing the rules before consenting ·
+the joiner holding content never sent to them · **`cello_doc_close` addressing BOTH holders** ·
+**CONVERGENCE — Miss_Chelly's edit reached CELLO_Coder_1** · `closePending` correct on the older
+document.
+
+**BLOCKED, and only by the above:** delivery to CELLO_Support, whose sessions are sealed and
+un-healable. Everything the mechanism does is proven between the two holders whose sessions are
+alive; the third is unreachable for reasons that have nothing to do with multiplayer.
+
+`DOD-MP-SHIP-1` stays ❌ — honestly, and pointing at a defect outside this milestone rather than
+at anything M14B built.
