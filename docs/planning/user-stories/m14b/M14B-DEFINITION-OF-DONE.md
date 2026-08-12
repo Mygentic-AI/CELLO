@@ -155,7 +155,11 @@ description: >
   viewer, no history hiding). The join handshake carries `assurance_tier` + `feature_version`;
   an unsupported build is refused with a sentence at both ends (TIER2-READY lens 4). A join is
   not effective until both the amendment is valid AND the invitee has consented — neither alone
-  admits anyone. — ❌
+  admits anyone. — ✅
+  > Reviewed; 10 findings fixed incl. 2 HIGH (settle-key poisoning, planted snapshot content) +
+  > the demanded revert-visible test that exposed the amendment frame's missing discriminator
+  > (the fan-out path had never worked). In-process 3-daemon proof green; merged
+  > `cello-client d0e079b`. → Journal Entries 9–11.
 - **DOD-MP-REMOVE-1** [cello-client] — removal, forward-only: the amendment per GOVERN-1; on
   admission every remaining holder stops delivering to the removed holder and refuses their
   post-removal envelopes with a reason naming the removal (never a silent drop — the refusal is

@@ -15,10 +15,11 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next:** JOIN-1 review IN FLIGHT (dispatched on 4523716..81b7120 + Entries 9/10). On the
-  verdict: fix findings → merge → flip ✅ → pull `DOD-MP-REMOVE-1` (single-signer removals +
-  voluntary leave; the remove_admin N-signature GATHERING flow is a parked design note, Entry
-  10). Superseded build-plan text below kept for the record.
+- **Next red:** `DOD-MP-REMOVE-1` (P1) — single-signer removals: an admin removes a non-admin
+  holder; voluntary leave (self-signed); forward-only effect (their next publish refused by
+  name, local copy untouched, removal surfaced to the removed operator); the remove_admin
+  N-signature GATHERING flow stays parked (Entry 10 design note). Branch `m14b/remove-1` from
+  cello-client main (`d0e079b`). JOIN-1 is ✅ (Entry 11).
 - **Superseded:** WIRE HALF BUILT on `m14b/join-1`
   (`cello-client 2eb4160`, 18 tests, full gate): document-join.ts — the offer as a courier
   (received bytes of genesis + chain + log snapshot, signature binding every byte through
@@ -58,7 +59,7 @@ description: >
   relaxation (`document-envelope.ts:203–207` → integer-shape only) with epoch correctness moving
   to inbound; (iv) the proposal admin-slot preimage change (feature_version 2, vector reissue).
   Then ONE review on the whole unit's diff.
-- **Tiers:** P0 ✅✅✅✅ · P1 🟡❌ (JOIN-1 built/review-in-flight) · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
+- **Tiers:** P0 ✅✅✅✅ · P1 ✅❌ (JOIN-1 ✅; REMOVE-1 next) · P2 ❌❌ · P3 ❌ · P4 ❌❌❌❌❌
 - **Branches in flight:** none.
 - **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
   ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
@@ -577,3 +578,43 @@ verify.
 design note for it, parked with a name: authoring `remove_admin` needs an N-signature GATHERING
 flow across daemons (partial collections are storable; no line owns the gathering wire). Single-
 signer removals (non-admin holders, voluntary leave) need no gathering and are REMOVE-1's scope.
+
+---
+
+## Entry 11 — JOIN-1 review verdict, all findings fixed, merged (2026-08-12)
+
+**Reviewer verdict (`cello-unit-reviewer`, one pass, quoted):** "SPEC: DEVIATIONS FOUND —
+see-the-rules at the surface, assurance_tier visibility, and both-ends refusal are unmet
+[blocking]. SILENT FALLBACKS FOUND — F1 (poisoned settle key silently suppresses a real offer)
+and F3 (auto-refusals invisible from every chair) are HIGH and must fail loud before this unit
+closes. ERRORS NAME THEIR CAUSE. HOLLOW TESTS FOUND — untested recordAmendment
+(revert-invisible), unpinned consent-required half, untested refuse branch. REMOVALS PROVEN."
+Ten findings; the review also confirmed the roundtrip fixtures do genuine cross-key
+verification, the accept mutate order is idempotent-and-recoverable up to the decide, and the
+check order trusts nothing before its signature.
+
+**All ten fixed (`cello-client 66253b6`, merged `d0e079b`) — the two that mattered most:**
+- **F1 settle-key poisoning (HIGH):** any party holding the amendment bytes could deliver a
+  garbage offer FIRST, occupy the real settle key with a refused row, and the genuine offer met
+  DO-NOTHING — a silent veto over an admin's admission. Now: unauthenticated failures THROW
+  (nothing recorded, the forged-proposal treatment); authenticated refusals record under the
+  hash of their OWN bytes and can never occupy a real join's key.
+- **F4 planted content (HIGH):** snapshot envelopes were verified for signature but not
+  membership — an inviter could plant envelopes by never-holders and the joiner materialized
+  content no legitimate holder saw. Now refused unless the sender held the document at some
+  epoch of the carried chain.
+- Also: the rules the invitee consents to are SHOWN in the inbox (derived by replay); refusals
+  reach both ends (refused-joins listing + signed auto-answer for authenticated offers);
+  redelivery of a decided offer re-sends the standing answer (the lost-answer recovery);
+  re-invite re-fans the amendment to stale holders (the epoch-stale guidance now names a
+  recovery that works); rival pending joins settle refused instead of wedging.
+
+**And the bug the demanded test exposed:** the amendment wire frame had NO type discriminator —
+the router classified every fan-out amendment as conversation, so the existing-holder delivery
+path had never actually worked. Found the moment the review's revert-visible receive-side test
+ran. A frame field, not a TBS field: no hash or signature moved.
+
+Final: 34 handler tests including the three-daemon amendment-receive proof with a forged
+amendment refused; full gate green.
+
+**DOD-MP-JOIN-1 flips ✅ on this entry.**
