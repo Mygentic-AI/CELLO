@@ -1248,3 +1248,42 @@ hard cap; the live fleet re-run is the stronger verification and it is next.
 does a removed holder's silence still count? Ruled NO — they are not a holder, the people who
 remain have all agreed, it is consistent with forward-only removal, and it is the reversible
 direction. Recorded here and surfaced to Andre as overturnable, not as a question blocking work.
+
+---
+
+## Entry 29 — the END journey: both ending fixes proven on three OS processes (2026-08-13)
+
+`DOD-MP-CONTROL-N-1` and `DOD-MP-CLOSE-N-1` flip **✅**.
+
+The fleet re-run is blocked on Andre's `latest` promotion, so rather than wait (§3b-3) the proof
+came from the spine — and it turns out to be the BETTER proof anyway. The spine harness starts the
+daemon from the **local build** (`core/daemon/dist/bin/cello-daemon.js`), not from npm, so it can
+exercise an unpublished fix across three real OS processes today.
+
+**Why this had to be three processes.** Both defects are about a THIRD PARTY THE CODE COULD NOT
+SEE. A joiner exists in no `peerAgentId` column anywhere — not the creator's, not the genesis
+peer's — so every single-process test that stubs a holder list agrees with whatever the near side
+believes. The whole class is "two processes disagreeing about what a third would do", which is the
+reason the four enforcers exist at all.
+
+**The END journey** (`j-multiplayer.spine.test.ts`, 18.5s of a 349s suite):
+1. A creates with B (A sole admin), invites C, C consents — a real chain, three daemons.
+2. **A closes → `holdersNotified` names BOTH B and C.** This is the live-fleet defect exactly: it
+   named the genesis peer alone, and the joiner — converging and publishing for the life of the
+   document — was never told it had ended.
+3. **One of three closed: nothing settles.**
+4. **B closes → two of three.** Under the old rule this is precisely where A flipped to `closed`
+   while C was still editing. It stays `active`, asserted after an 8s settle window so the
+   assertion is not just winning a race.
+5. **C's close completes it, on all three daemons.** Twice load-bearing: before the inbound half
+   was fixed, a joiner's close was REFUSED by every holder while the joiner was told everyone had
+   heard it.
+
+**All four journeys green, 4/4, 349s** — the three existing enforcers unaffected.
+
+One operational note: the spine needs local Postgres and Docker was down. Started it rather than
+parking the line; `docker info` polls ready in ~10s.
+
+**Tier P2 is now ✅✅✅✅** (FANOUT-1, INBOUND-N-1, CONTROL-N-1, CLOSE-N-1). The only line left in
+the milestone is **SHIP-1**, whose remaining half is the live fleet run — genuinely blocked on the
+`latest` promotion, which is Andre's to run and nobody else's.
