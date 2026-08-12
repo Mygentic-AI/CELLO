@@ -679,4 +679,92 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
     },
     600_000,
   );
+
+  it(
+    "END: a close reaches EVERY holder and settles only when ALL of them have said it (DOD-MP-CONTROL-N-1, DOD-MP-CLOSE-N-1)",
+    async () => {
+      // Both units were found by the LIVE FLEET, not by a test, and both are about a third party
+      // the code could not see. Three OS processes is the only place they can be disproved:
+      // the sender, a genesis peer, and a joiner who exists in no `peerAgentId` column anywhere.
+      const [a, b, c] = (await parties("mpend", 3)) as [Party, Party, Party];
+      await connect(a, b);
+      await connect(a, c);
+
+      const proposed = (await a.conn.call("cello_doc_propose", {
+        peer_pubkey: b.pubkey,
+        starting_content: "ending. ",
+        admins: [a.pubkey],
+      })) as { ok?: boolean; documentId?: string };
+      expect(proposed.ok).toBe(true);
+      const documentId = proposed.documentId!;
+      await (async () => {
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline) {
+          const inbox = (await b.conn.call("cello_doc_inbox", {})) as {
+            proposals?: Array<{ documentId?: string }>;
+          };
+          if ((inbox.proposals ?? []).some((p) => p.documentId === documentId)) return;
+          await sleep(1000);
+        }
+        throw new Error("B never saw the proposal");
+      })();
+      expect(((await b.conn.call("cello_doc_accept", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
+      expect(
+        ((await a.conn.call("cello_doc_invite", {
+          document_id: documentId, invitee_pubkey: c.pubkey,
+        })) as { ok?: boolean }).ok,
+      ).toBe(true);
+      await awaitJoinOffer(c, documentId);
+      expect(((await c.conn.call("cello_doc_accept", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
+
+      // ── A CLOSES. The frame must reach BOTH — this is the live-fleet defect exactly: it went to
+      // the genesis peer alone, and the joiner, converging and publishing for the life of the
+      // document, was never told it had ended. ──
+      const closed = (await a.conn.call("cello_doc_close", { document_id: documentId })) as {
+        ok?: boolean; holdersNotified?: Record<string, boolean>; peerNotified?: boolean;
+      };
+      expect(closed.ok).toBe(true);
+      expect(Object.keys(closed.holdersNotified ?? {}).sort()).toEqual([b.pubkey, c.pubkey].sort());
+      expect(closed.holdersNotified?.[c.pubkey], "the joiner was not told the document ended").toBe(true);
+      expect(closed.holdersNotified?.[b.pubkey]).toBe(true);
+
+      const statusOf = async (p: Party): Promise<string> => {
+        const list = (await p.conn.call("cello_doc_list", {})) as {
+          documents?: Array<{ documentId?: string; status?: string }>;
+        };
+        return (list.documents ?? []).find((d) => d.documentId === documentId)?.status ?? "missing";
+      };
+      const awaitStatus = async (p: Party, want: string, timeoutMs = 60_000): Promise<void> => {
+        const deadline = Date.now() + timeoutMs;
+        let last = "";
+        while (Date.now() < deadline) {
+          last = await statusOf(p);
+          if (last === want) return;
+          await sleep(1000);
+        }
+        expect(last, `${p.name} never reached ${want}`).toBe(want);
+      };
+
+      // ── ONE OF THREE HAS CLOSED. Nothing is settled anywhere. ──
+      expect(await statusOf(a), "A settled its own close alone").toBe("active");
+
+      // ── THE GENESIS PEER CLOSES: two of three. Under the old rule THIS is where A flipped to
+      // `closed`, while the joiner was still editing. It must not. ──
+      expect(((await b.conn.call("cello_doc_close", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
+      await sleep(8000);
+      expect(
+        await statusOf(a),
+        "A settled on the genesis pair while the joiner had not closed",
+      ).toBe("active");
+
+      // ── AND THE JOINER'S CLOSE COMPLETES IT. Twice load-bearing: a joiner is in nobody's
+      // `peerAgentId` column, so before the inbound half was fixed every holder REFUSED their
+      // close while telling them everyone had heard it. ──
+      expect(((await c.conn.call("cello_doc_close", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
+      await awaitStatus(a, "closed");
+      await awaitStatus(b, "closed");
+      await awaitStatus(c, "closed");
+    },
+    600_000,
+  );
 });
