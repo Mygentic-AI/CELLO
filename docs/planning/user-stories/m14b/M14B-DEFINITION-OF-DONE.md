@@ -215,13 +215,16 @@ description: >
   refused by every holder independently; A invites C properly → C consents → in; A promotes B;
   a `remove_admin` missing one other-admin signature → invalid everywhere; with the full set →
   admitted. All three daemons derive the identical {participants, admins, properties} at every
-  step. — 🟠 PARTIAL (4 of 9 clauses; 3 UNBUILDABLE)
+  step. — 🟠 PARTIAL (6 of 6 BUILDABLE clauses; 3 UNBUILDABLE, see below)
   > Downgraded from ✅ on the enforcer review (Entry 22) — the tag was set against the run's
   > note, not against this line. PROVEN: three daemons; A invites C properly → C consents → in.
-  > The governance refusal is now REAL (a HOLDER who is not an admin, asserting
-  > `document_not_admin` — the first cut refused for `document_unknown`, green with all
-  > governance deleted). NOT COVERED: creation with admin set {A} asserted on all three;
-  > B joining by amendment; independent refusal at the OTHER holders; identical
+  > NOW PROVEN (Entry 23): creation declares A sole admin and both holders derive it; a HOLDER
+  > who is not an admin is refused `document_not_admin` (the first cut used a NON-holder, which
+  > dies six checks earlier at `document_unknown` — green with all governance deleted); the
+  > arrangement is agreed value-for-value by all three at every step, enabled by
+  > `cello_doc_list` now surfacing it. NOT COVERED: B joining by amendment (B is a genesis
+  > party by construction — arguably the line's own wording, not a gap); independent refusal at
+  > the OTHER holders (needs the rejected amendment put on the wire anyway); identical
   > {participants, admins, properties} at every step (proxied by epoch height only — no surface
   > exposes the triple). **THREE CLAUSES ARE UNBUILDABLE:** `promote_admin` and both
   > `remove_admin` cases have NO authoring verb — the N-signature gathering wire is parked

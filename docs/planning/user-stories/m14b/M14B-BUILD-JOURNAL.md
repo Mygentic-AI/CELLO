@@ -945,3 +945,33 @@ assertion is the reason code, `document_not_admin`.
 no quarantine row, no `0x05` leaf on the receiver's disk. Whether that satisfies the clause is a
 product decision. And the removal guidance still tells an operator to "demote first" via a verb
 that does not exist (the same gap as decision 1).
+
+---
+
+## Entry 23 — G0 built, GOVERN-1's buildable clauses closed (2026-08-13)
+
+**The review's blocking prerequisite (G0) is shipped:** `cello_doc_list` surfaces each
+document's DERIVED arrangement — participants, admins, properties — computed from that daemon's
+own chain, never stored. Until now nothing exposed who holds a document or who governs it: an
+operator could not answer "who is in this?", and the governance line's headline claim was
+unassertable from outside the process. A chain that cannot derive says so by name rather than
+rendering an empty list. (`cello-client 99f06e1`.)
+
+**GOVERN-1's remaining buildable clauses now run** (`trustless-cello 67236512`, 2/2 green,
+316s): creation declares A the sole admin and BOTH holders derive that; **B — a HOLDER who is
+not an admin — is refused `document_not_admin`** (the first cut asked a NON-holder, which dies
+six checks earlier at `document_unknown` and was green with every line of governance deleted);
+and after the join all three daemons agree on participants, admins, and epoch, compared
+value-for-value rather than proxied by epoch height.
+
+**Two test-side corrections found by the new assertions, both mine:** journey 1 was still
+proposing with the default admin set (the edit had been lost in an aborted batch), and the
+join-offer assertion still expected the old two-admin default. The product was right both times.
+
+**Still not covered, and why:** "B joins by amendment" — B is a genesis party by construction,
+so this reads as the line describing a shape the journey does not use rather than a gap;
+"independent refusal at the OTHER holders" needs the rejected amendment put on the wire anyway
+and asserted on both receiving daemons' logs. Both are honest gaps on the line.
+
+**The three UNBUILDABLE clauses stand unchanged** — `promote_admin` and both `remove_admin`
+cases have no authoring verb. Decision still owed (Entry 22).
