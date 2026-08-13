@@ -360,7 +360,9 @@ description: >
   governance frame reaching one party and not the others), and worse than the close bug it mirrors,
   because nothing surfaces it to anyone. Same derived-holder-set fan-out as CONTROL-N-1 is the
   shape; an absent holder must also be able to reconcile a missed amendment rather than diverge
-  forever. — ❌ NOT BUILT
+  forever. — ✅ (Entry 40) durable per-holder amendment queue, head-of-line by chain epoch, settled
+  by PROOF BY EPOCH; all four fan-out sites wired; 9 review findings + 4 spec deviations all fixed.
+  Reconciliation split out as [[M14B-DEFINITION-OF-DONE#DOD-MP-AMEND-CONFIRM-1]].
 - **DOD-MP-SWEEP-ALIVE-1** [cello-client] — **the document delivery sweep must not stop.** Observed
   live 2026-08-13 (Entry 37): the laptop's sweep ran every ~60s and then stopped dead, and eleven
   minutes later had still not run, while the daemon was demonstrably alive and a published envelope
@@ -371,6 +373,22 @@ description: >
   and no error precedes the stall.** What is established: it stops, it does not recover on its own, a
   restart clears it, and while stalled every edit is silently undelivered while the document reports
   healthy. Needs a producer/consumer trace of the timer's lifecycle before any fix. — ❌ NOT BUILT
+- **DOD-MP-AMEND-CONFIRM-1** [cello-client] — **a holder that fell behind must converge, and get
+  the edits it missed.** Split out of INVITE-FANOUT-1's clause 7 (Entry 40) once the durability half
+  landed. Two halves, and the second is the one that is easy to miss:
+  (a) **The sender never learns a holder is behind.** A non-terminal refusal deliberately sends NO
+  ack — `document-frame-router.ts` answers only when `terminal === true`, because "there the retry
+  IS the recovery path" — so `document_epoch_ahead` never reaches the sender and there is no hook to
+  react to. The amendment branch has no ack path at all, so a receiver that REFUSES an amendment
+  (`recordAmendment` throws on a chain gap or a failed derivation) reports nothing either.
+  (b) **A holder who is behind loses edits that will never be resent.** Quoted from the review: a
+  holder unreachable beyond the unacked-send window (5 sends × the 600s ack timeout, ~50 minutes) is
+  ABANDONED for that envelope permanently. Membership converges when the amendment retry lands; the
+  content does not. So reconciliation is not only "re-send the amendment" — it must re-drive the
+  abandoned envelopes too.
+  Today's partial cover: amendment rows settle by PROOF BY EPOCH (a holder acking an envelope at
+  epoch E demonstrably holds every amendment up to E) and otherwise re-send on the ack timeout. That
+  closes the common case without a wire change; it does not close (b). — ❌ NOT BUILT
 - **DOD-MP-DELIVERY-QUIET-1** [cello-client] — **a document delivery must not ring the operator's
   doorbell like a person asking to talk.** Observed live 2026-08-13 (Entry 37): a delivery session is
   one-shot — it is sealed after handing the frame over — so every subsequent fan-out opens a fresh

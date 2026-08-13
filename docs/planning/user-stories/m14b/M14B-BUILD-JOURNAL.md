@@ -1863,3 +1863,82 @@ somewhere I have not found.
 
 Bounding the dial itself is worth doing as well, but on its own it would only close the instance I
 happened to guess.
+
+---
+
+## Entry 40 — DOD-MP-INVITE-FANOUT-1: built, reviewed, every finding fixed
+
+**Unit:** DOD-MP-INVITE-FANOUT-1 · **Branch:** `m14b/invite-fanout` · **Repo:** cello-client
+**Gate:** `pnpm test` 3764 passed / 11 skipped, lint, typecheck, build — all exit 0, run with
+`set -o pipefail` and the exit code read, not the tail.
+
+### The reviewer's verdict, quoted
+
+> - **SPEC: DEVIATIONS FOUND** — clauses 1, 3, 5, 6 deviate, none journaled. [blocking]
+> - **SILENT FALLBACKS FOUND** — HIGH-1 (parked read as delivered) and HIGH-2 (bytes-arrived read
+>   as applied) are both [blocking]; MEDIUM-1 is a permanent failure with no signal at all.
+> - **ERROR SUBSTITUTION FOUND** — [blocking] … `detail` is dropped at two sites so `session_sealed`
+>   surfaces as an exit-point label with its cause discarded, and the MCP surface collapses every
+>   per-holder failure into `false` under `ok: true`.
+> - **HOLLOW TESTS FOUND** — [blocking] for the clause-6 migration test (proven not pre-migration)
+>   and the underivable-chain test (survives a no-op drain).
+> - **REMOVALS PROVEN** — n/a, no deletions.
+
+Nine findings (3 HIGH, 6 MEDIUM, 3 LOW) plus four spec deviations. **All fixed.** Two were proven
+by the reviewer with its own probes, not merely argued.
+
+### What it caught that I did not
+
+**The durable queue could still lose a membership change, three ways.** That is the humbling part:
+the unit's entire purpose is not losing one.
+
+1. **PARKED READ AS DELIVERED.** `sendBytes` returns `ok` when the RELAY took the frame because the
+   holder had no live counterparty. The transport computed that bit, logged it, and threw it away.
+   I cleared the debt on `ok`, so a holder who never drains the relay loses the change with both
+   surfaces reporting success. Fixed by returning `parked` and treating it as a retry.
+2. **BYTES ARRIVING READ AS GOVERNANCE APPLIED.** I asked the reviewer to check this and it came
+   back worse than theoretical: `recordAmendment` THROWS on the receiver for a chain gap or a failed
+   derivation, the router logs `document.frame.handler_threw`, and **answers nothing** — the
+   amendment branch has no ack path at all. So `ok` meant "their daemon saw bytes", the row was
+   acked, and a holder who refused the amendment stayed at the old epoch with the sender's queue
+   empty. **The original defect, reproduced through the new machinery.**
+3. **EPOCH INVERSION — proven with a probe.** `ORDER BY created_at` among only the rows that are DUE
+   inverts the chain: epoch N fails once and takes a backoff, N+1 is seeded due immediately, so the
+   pass sends N+1 alone. The receiver refuses it with `document_amendment_chain_gap`, whose message
+   says *"an out-of-order arrival is retried by its sender, never buffered silently"* — and under
+   ack-on-send nothing retried. The one message that would have explained the loss asserted the
+   opposite of what happened.
+
+**And the fix was wired into one of four sites.** The re-invite path — whose own comment calls it
+*"the healing verb"* for a holder that missed a fan-out, and which the tool's guidance tells the
+operator to run — still had the one-shot loop. So did both removal paths. A holder who misses a
+REMOVAL keeps accepting edits from someone the chain has removed. One helper now serves all four.
+
+### The one place I did better than the proposed fix
+
+The reviewer's remedy for HIGH-2 was to keep the row pending on an ack timeout and settle it "on a
+positive signal … clause 7's missing wire hook". That would leave every amendment ever re-sent every
+ten minutes forever, because no such signal exists.
+
+There already is one. **A holder that acks an envelope authored at epoch E demonstrably holds every
+amendment up to E** — the inbound epoch gate refuses any envelope whose epoch does not match the
+receiver's own derived arrangement, so their ack of the CONTENT is an ack of the GOVERNANCE that made
+the content admissible. `ackAmendmentsThroughEpoch` settles the rows on that. No new frame, no wire
+change, and it is proof rather than inference.
+
+It is not complete on its own — a document with no further edits never produces the proof — so the
+row also re-sends on the ack timeout. Belt and braces, with the braces being real evidence.
+
+### Deferred, with a home (no silent deferral)
+
+Clause 7 is NOT built and is now its own line, **DOD-MP-AMEND-CONFIRM-1**. The reviewer sharpened
+what it has to cover, and this is worth quoting because it changes the shape of the work:
+
+> If B is unreachable for longer than that ~50-minute window, C abandons B for that envelope
+> permanently. Membership converges when A's retry finally lands; **the content does not**. Clause 7
+> is not only "the sender never learns a holder is behind" — it is also "a holder who is behind loses
+> edits that will never be resent."
+
+Also deferred to the merge: splitting the amendment counters out of the aggregate
+`document.delivery.sweep` line, because that line lives in `daemon.ts`, which belongs to the
+SWEEP-ALIVE-1 branch — two branches must never touch one file.
