@@ -1717,3 +1717,77 @@ undelivered with the UI reporting a healthy document.
   `holderAgentId`s from one envelope).
 - The membership gate refuses a non-participant's edit — the very mechanism that made defect 1
   visible.
+
+---
+
+## Entry 38 — DOD-MP-INVITE-FANOUT-1: the diagnosis was wrong, and the right one is worse
+
+**Unit:** DOD-MP-INVITE-FANOUT-1 · **Branch:** `m14b/invite-fanout` · **Repo:** cello-client
+**State:** trace complete, clause checklist below, implementation next. NOT reviewed.
+
+### The correction, first
+
+Entry 37 concluded the invite "queues nothing for the holders already in the document" and inferred
+the code never notifies them. **That inference was wrong.** `cello_doc_invite` fans out — it loops
+`derived.arrangement.participants`, skips itself and the invitee, calls `sendBytes` per holder, and
+reports `holdersNotified[holder] = sent.ok`.
+
+The evidence I read as "never queued" was right about the queue and wrong about the cause: the
+amendment is sent over **direct transport**, which is not the durable delivery queue, so it never
+appears in a sweep's `attempted` count no matter what happens to it.
+
+**The real defect is worse than the one I reported.** The membership amendment — the single most
+trust-critical frame in this milestone, the thing that decides who is a party to the document — is
+delivered **best-effort, one shot, no pending row, no ack, no backoff, no restart survival**. A
+content edit gets all five of those. The governance act that admits a person gets none.
+
+**One failed send loses a membership change permanently, and every surface reports success.**
+
+### Why it failed on the night, and why the OTHER fix cannot save it
+
+At `17:00:45` the invite's `sendBytes` to the peer ran while this daemon's session with that peer was
+in the stuck `session_sealed` state — the SESSION-RETIRE-1 defect, still unfixed on that build. The
+send failed, `holdersNotified` recorded `false`, and nothing retried, ever.
+
+SESSION-RETIRE-1's fix retires the dead session so the NEXT delivery opens a fresh one. There is no
+next delivery here. **A retry-based cure cannot help a path with no retry** — which is the argument
+for fixing this at the durability layer rather than hoping the transport underneath gets healthier.
+
+### The design decision, and the one fact that settles it
+
+The amendment must ride the SAME per-holder queue as content, not a second queue beside it.
+
+**Ordering is the reason, and it is not a preference.** A holder must apply the admitting amendment
+BEFORE any edit authored at the new epoch — otherwise they reject that edit as coming from a
+non-participant, which is precisely the symptom observed. `document_deliveries` orders per holder by
+`created_at ASC, envelope_hash ASC`. One queue therefore guarantees amendment-then-edit; two
+independent queues cannot, and would reproduce the live symptom intermittently instead of always.
+
+Logged as a Decisions Carried entry rather than re-raised: **ONE queue, ordering is the reason.**
+
+The obstacle is that `document_deliveries JOIN document_envelopes`, and the amendment lives in
+`document_amendments` (PK `owner, document, epoch`; carries `amendment_hash` + `received_bytes`).
+`document_envelopes.kind` has a CHECK constraint (`update`/`withdrawal`/`rejection`), so an amendment
+cannot simply be stored as an envelope row without rebuilding that constraint.
+
+Shape: a `payload_kind` column on `document_deliveries` defaulting to `'envelope'` (existing rows
+keep their meaning), the amendment seeded with `payload_kind='amendment'` and
+`envelope_hash=<amendment_hash>`, and the pending query resolving its payload from whichever table
+the kind names. The migration window is open BY DESIGN right now (§REALITY CHECK: essentially no
+documents exist) and closes the day a real workflow depends on one.
+
+### Clause checklist (what the reviewer receives)
+
+1. An invite seeds a DURABLE per-holder delivery of the admitting amendment to every current holder
+   except the inviter and the invitee.
+2. A holder unreachable at invite time still receives the amendment — on a later sweep, after a
+   daemon restart, with no operator action.
+3. The amendment is delivered to a holder BEFORE any envelope authored at the new epoch.
+4. One unreachable holder never blocks, delays, or fails the amendment reaching the others
+   (fan-out-availability lens).
+5. Failure to reach a holder is reported as a fact per holder, never collapsed into one boolean and
+   never reported as success.
+6. Existing content deliveries are unaffected by the schema change; the upgrade path is tested
+   against a POPULATED pre-migration database, not a fresh one (§2e).
+7. A holder that missed an amendment can still converge rather than diverge forever — reconciliation,
+   the clause that makes this a trust fix and not just a retry fix.

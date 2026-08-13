@@ -341,12 +341,20 @@ description: >
 - **DOD-MP-INVITE-FANOUT-1** [cello-client] — **an invite must tell the EXISTING holders, not only
   the invitee.** Found live 2026-08-13 (Entry 37) and it is the most serious open defect on this
   board, because it is silent on every surface. Inviting a third agent into a two-party document
-  records the amendment locally and offers it to the invitee — and queues NOTHING for the holders
-  already in the document. Proof it was never queued, not merely delayed: the three delivery sweeps
-  spanning the invite each report `attempted: 1` (the unrelated text write), never 2. Content
-  envelopes do not carry the amendment either — the peer received and applied a later write while
-  remaining at epoch 0. End state: two holders at epoch 1 with 3 participants, the third at epoch 0
-  with 2, **nothing pending and no error on either side**. The joiner's edits are then dropped by the
+  records the amendment locally and offers it to the invitee — and delivers the amendment to the
+  existing holders **BEST-EFFORT, ONE SHOT, WITH NO DURABILITY AND NO RETRY.**
+  **Mechanism corrected 2026-08-13 (Entry 38) — the first reading was wrong.** `cello_doc_invite`
+  DOES fan out: it loops the derived participants and calls `sendBytes` per holder, recording
+  `holdersNotified[holder] = sent.ok`. But that is direct transport, **not** the durable delivery
+  queue — no pending row, no ack, no backoff, no restart survival. **One failed send loses the
+  membership change permanently.** That is exactly what happened live: at the moment of the invite
+  this daemon's session with the peer was stuck in the `session_sealed` state (the SESSION-RETIRE-1
+  defect), the send failed, and nothing ever retried — and SESSION-RETIRE-1's fix cannot rescue it,
+  because this path has no retry to rescue. The three sweeps spanning the invite each report
+  `attempted: 1` precisely because the amendment was never in the queue at all. Content envelopes do
+  not carry it either — the peer applied a later write while remaining at epoch 0. End state: two
+  holders at epoch 1 with 3 participants, the third at epoch 0 with 2, **nothing pending and no
+  error on either side**. The joiner's edits are then dropped by the
   stale holder — correctly, since at its epoch the sender is not a member — so the membership gate
   reads as the culprit when it is the only thing behaving. This is the CONTROL-N-1 family (a
   governance frame reaching one party and not the others), and worse than the close bug it mirrors,
