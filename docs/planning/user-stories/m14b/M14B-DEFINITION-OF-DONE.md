@@ -363,6 +363,16 @@ description: >
   and no error precedes the stall.** What is established: it stops, it does not recover on its own, a
   restart clears it, and while stalled every edit is silently undelivered while the document reports
   healthy. Needs a producer/consumer trace of the timer's lifecycle before any fix. — ❌ NOT BUILT
+- **DOD-MP-DELIVERY-QUIET-1** [cello-client] — **a document delivery must not ring the operator's
+  doorbell like a person asking to talk.** Observed live 2026-08-13 (Entry 37): a delivery session is
+  one-shot — it is sealed after handing the frame over — so every subsequent fan-out opens a fresh
+  session, and each one surfaces `"<agent>" wants to connect … Run cello_await_session to accept`.
+  Three fired during one short test, including between two of the operator's OWN agents. Nothing is
+  waiting and there is nothing to accept; the standing receiver has already handled it. LOWEST
+  SEVERITY ON THIS BOARD — no data is lost and no edit is delayed. It earns a line only because the
+  cost is asymmetric: an operator who learns these are noise will also swipe past the one that is a
+  real person opening a real conversation. The fix is to distinguish a delivery-opened session from a
+  conversation request at the notice surface, not to suppress notices. — ❌ NOT BUILT
 - **DOD-MP-REMOVE-FEEDBACK-1** [cello-client] — the FEEDBACK half of D9: a holder whose edit is
   refused after removal learns, in a sentence they can act on, that they were removed, at which
   epoch, that their copy and its history remain theirs, and that new edits no longer publish. The
