@@ -2219,3 +2219,73 @@ pinned by a test. This also gave `settleControlDelivery(..., "acked")` its only 
 while `cello_doc_list` reports zero pending — two queries disagreeing, one of them silently. Whether
 ending a document flushes or abandons its backlog is a real fork (close and kill plausibly differ),
 it is pre-existing, and it is Andre's call.
+
+---
+
+## Entry 46 — DOD-MP-REMOVE-FEEDBACK-1: reviewed, and my premise was refuted
+
+**Gate:** test 3800 passed / 11 skipped, lint, typecheck, build — all exit 0, on merged main.
+
+### The reviewer's verdict, quoted
+
+> **Headline: your NOTE is refuted. The DoD line was not stale — it was exactly right.**
+> `cello_doc_list` already shipped `removed: true` on the row … This means the diff's central
+> premise, stated as fact in three shipped/committed comments, is wrong — and the new field is a
+> **second name for a fact the row already carried, computed by a second walk of the same chain**,
+> which is the one thing this codebase's own header forbids.
+
+> **SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS FOUND** (F3 — absent `yourAccess` on an
+> undecodable chain reads as "you are still a holder"; [blocking]) … **ERROR SUBSTITUTION FOUND**
+> (F6, [pre-existing] …) … **HOLLOW TESTS FOUND** (subject-filter bypass green across 2286 tests;
+> [blocking])
+
+### What I got wrong, and it is the interesting part
+
+I checked whether the list row surfaced removal, did not find it, and **wrote the absence into three
+comments as established history.** It was there — `document-lifecycle.ts` has shipped `removed: true`
+since REMOVE-1, with a comment explaining exactly why. I had searched the handler and concluded from
+not finding it there.
+
+So the unit added a parallel signal computed by a second walk of the same chain, which
+`walkMembership`'s own header forbids in as many words: *"ONE implementation, because two walks …
+disagreeing about whether someone was removed is two daemons disagreeing about the arrangement."*
+
+The real gap is narrower and still worth closing: **a bare flag is not feedback.** It does not say
+when, it does not say the copy is still yours, and it does not say what actually stopped. The epoch
+now travels with the flag from the SAME walk, and the surface adds only the sentence.
+
+### A false sentence in shipped content
+
+The skill paragraph I added said an unconfirmed ending is owed and re-sent. True on the CONTROL-
+DURABLE branch; **false on this one**, where the daemon's own guidance said *"A close is not
+retried."* SKILL.md ships in the connect tarball, so that is a shipped wrong instruction, and an
+agent reading it would not re-run the close — leaving the document unsettled and a holder editing
+something everyone else ended. Deleted there; restored on main once the behaviour existed. The
+daemon's own now-stale sentence was corrected in the same commit.
+
+### The rename that matters
+
+`yourAccess: "removed"` was the last thing implying confiscation, and it was the field NAME rather
+than any sentence. Your access to the copy did not change — reading works, the file is there, the
+sentence says so. A surface rendering a badge from the key alone would show "access: removed". It is
+`yourStanding` now: standing is what changed.
+
+### The hollow test, proven against 2286 green tests
+
+My negative case used a document with an EMPTY amendment chain, so it could not tell "I am still a
+holder" from "nothing has happened here yet". The reviewer wrote an implementation that reports
+removal whenever the chain contains ANY `remove_holder` — subject filter ignored — and the entire
+suite stayed green. That implementation tells **the admin who removed somebody else** that they
+themselves are out.
+
+Both negative cases now carry real chains, and I mutation-tested the fix rather than trusting it:
+the subject-ignoring mutant now goes red on "REMOVING SOMEONE ELSE leaves your OWN row saying
+holder".
+
+### Fixed on the way (fix-errors-when-found)
+
+`holdersFor` is contracted to return null when it cannot derive; the chain decode threw straight past
+every caller written against that contract, so `cello_doc_write` handed the operator a raw
+`Data read, but end of buffer not reached` — a CBOR reader naming where it surfaced — while the
+publish path was already holding a named refusal ready. Contained at the function whose contract it
+is, not at the call site.

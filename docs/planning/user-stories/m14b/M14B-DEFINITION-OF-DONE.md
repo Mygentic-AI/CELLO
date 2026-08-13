@@ -471,9 +471,13 @@ description: >
   epoch, that their copy and its history remain theirs, and that new edits no longer publish. The
   refusal reason exists; what is owed is that every surface carrying it says the whole thing —
   the write refusal, the list row, and the skill prose — and that none of them imply the copy was
-  taken away (FORWARD-ONLY-REMOVAL). Documented, not merely logged. — 🟠 PARTIAL (the write
-  refusal says it; the list row shows `removed: true` with no sentence; the skills do not cover
-  the removed holder's own view)
+  taken away (FORWARD-ONLY-REMOVAL). Documented, not merely logged. — ✅ (Entry 46) the row's
+  existing `removed: true` COMPLETED — epoch carried from the same walk, sentence added,
+  `yourStanding` always present (`unknown` on an unreadable chain, because an absent key reads as
+  "you are fine"); skill covers the removed holder's own view and the field table names the keys.
+  **My premise was refuted by review:** the flag already shipped, and my first cut added a second
+  name for it computed by a second walk — the thing `walkMembership`'s header forbids. Named
+  `yourStanding`, not `yourAccess`: access to the copy never changed.
 - **DOD-MP-GOVERN-WIRE-1** [cello-client] — **ADMIN PROMOTION AND DEMOTION NEED A WIRE THAT DOES
   NOT EXIST.** Ruled by Andre 2026-08-13: no longer "parked as out of scope" — it is owed work on
   THIS milestone's board and it enters launch triage. The replay engine already implements
