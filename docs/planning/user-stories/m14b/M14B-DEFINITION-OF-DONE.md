@@ -320,7 +320,7 @@ description: >
   survived `cello logout && cello login`. The terminal branch already KNOWS (it logs "nothing sent
   now can ever be part of its record" and tells a conversation operator to start a new session);
   it must also act, because document delivery has no human in the loop to act for it. Availability
-  and fallback are first-class — a route with no fallback is the defect. — 🟠 PARTIAL (Entry 36, 37)
+  and fallback are first-class — a route with no fallback is the defect. — ✅ (Entries 36, 37, 42)
   > **The observed case is now PROVEN LIVE across two machines (Entry 37).** Reproduced unprompted on
   > shipped 0.0.165 four minutes into ordinary use, then fixed as a before/after on the SAME stuck
   > envelope with only the daemon version changed — and reproduced again in the opposite direction
