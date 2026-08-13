@@ -465,7 +465,16 @@ description: >
   SEVERITY ON THIS BOARD — no data is lost and no edit is delayed. It earns a line only because the
   cost is asymmetric: an operator who learns these are noise will also swipe past the one that is a
   real person opening a real conversation. The fix is to distinguish a delivery-opened session from a
-  conversation request at the notice surface, not to suppress notices. — ❌ NOT BUILT
+  conversation request at the notice surface, not to suppress notices.
+  **TRACED 2026-08-13, and it is NOT a one-liner — parked for Andre.** At the moment the notice
+  fires, the receiver cannot tell the two apart: `daemon.ts` dispatches `session_state_changed`
+  `created` straight off the inbound assignment, and that assignment carries NO purpose — the
+  distinguishing signal (a document frame versus a message) arrives only with the FIRST FRAME,
+  afterwards. So the two available fixes are both design decisions on the path real conversations
+  share: (a) carry a purpose hint on the session assignment — a wire change, and both sides must
+  agree; or (b) hold the notice until the first frame names the purpose — which risks delaying, or
+  losing, the notice for a real person. Guessing here trades cosmetic noise for a suppressed
+  connect request, which is strictly worse than the noise. — ❌ NOT BUILT (parked)
 - **DOD-MP-REMOVE-FEEDBACK-1** [cello-client] — the FEEDBACK half of D9: a holder whose edit is
   refused after removal learns, in a sentence they can act on, that they were removed, at which
   epoch, that their copy and its history remain theirs, and that new edits no longer publish. The
