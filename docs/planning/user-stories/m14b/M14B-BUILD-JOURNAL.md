@@ -2101,3 +2101,52 @@ because its invite predates the fix.
 So: laptop at epoch 1 with 3 participants, Hermes at epoch 0 with 2, permanently, with nothing
 pending and no error on either side. **That is DOD-MP-AMEND-CONFIRM-1 with a live specimen attached**
 — reconciliation is not a nicety, and there is a real document proving it.
+
+---
+
+## Entry 44 — DOD-MP-CONTROL-DURABLE-1 and DOD-MP-REMOVE-FEEDBACK-1 — BUILT, REVIEW OUTSTANDING
+
+Both units are written and green; **neither tag flips until a reviewer's verdict is quoted here.**
+CONTROL-DURABLE-1 is with the unit reviewer now; REMOVE-FEEDBACK-1 is queued behind it.
+
+### CONTROL-DURABLE-1 — the ending is now owed, not merely attempted
+
+The notifier signed once, sent to each derived holder, and persisted nothing. One failed send and
+the frame was gone, so a holder offline at that instant never learned the document had ended and
+their copy stayed open for good — while the operator's own surface reported the close as done.
+
+The frame is now recorded before it is attempted, retried by the worker, and settled honestly.
+
+**Two design points worth their own sentences:**
+
+**Control frames drain LAST, which is the opposite of amendments and deliberate.** An amendment must
+reach a holder BEFORE the content that depends on it, or they refuse that content as coming from a
+non-participant. A close must reach them AFTER the content it terminates, or they end the document
+holding less of it than the sender does. Same queue discipline, opposite ends, for the same reason:
+what the frame means relative to the content around it. *(This deviates from the DoD line's own
+words — "drain them ahead of content" — and the deviation is flagged to the reviewer rather than
+quietly taken.)*
+
+**A control frame has no ack, so it is never called acked.** It is marked SENT, re-offered every
+600s, and after five sends settled as RETIRED with an ERROR naming the holder — because the
+consequence is that somebody still believes this document is open. Giving up is a real choice: the
+alternative is chattering at every holder for the life of every document. Retired and acked are
+separate columns so the record cannot claim they were told.
+
+### REMOVE-FEEDBACK-1 — the view nobody writes down
+
+`cello_doc_list` said nothing about removal. A document you have been removed from simply stopped
+listing you among the participants — which renders identically to one you are still part of and have
+not looked at closely. The single fact that changes what you can do with it was the one fact missing.
+
+The row now carries `yourAccess`, the epoch it changed at, and a sentence constrained by
+FORWARD-ONLY-REMOVAL: it says what REMAINS yours and never uses the language of something taken,
+because nothing was and nothing could be. The skill gains the same view in prose — your copy is
+yours forever, what stops is the flow of edits in both directions, your write refuses with a reason,
+and getting back in needs an admin plus your own accept.
+
+**And it caught a third instance of an old regression.** `membershipOf` walks the chain and throws on
+one that will not decode; my new call ran inside the listing loop, so an unreadable chain on ONE
+document would have taken down the whole list. That exact defect has been fixed here twice before,
+each time through a different call site — **a new caller inherits the hazard, not the fix.** The
+existing regression tests went red immediately, which is what they are for.
