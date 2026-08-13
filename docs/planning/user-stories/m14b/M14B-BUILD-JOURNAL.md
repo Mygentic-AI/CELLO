@@ -2150,3 +2150,72 @@ one that will not decode; my new call ran inside the listing loop, so an unreada
 document would have taken down the whole list. That exact defect has been fixed here twice before,
 each time through a different call site — **a new caller inherits the hazard, not the fix.** The
 existing regression tests went red immediately, which is what they are for.
+
+---
+
+## Entry 45 — DOD-MP-CONTROL-DURABLE-1: reviewed, 11 findings, all fixed
+
+**Gate:** test 3795 passed / 11 skipped, lint, typecheck, build — all exit 0.
+
+### The reviewer's verdict, quoted
+
+> **SPEC: DEVIATIONS FOUND** — the drain-order deviation and the un-implemented "settle on evidence"
+> clause are both unjournaled `[blocking]` until written down. The ordering deviation I judge correct
+> in direction, wrong in scope.
+> **SILENT FALLBACKS FOUND** — F1 (legacy documents silently get no durability) and F2 (the
+> underivable branch reschedules forever with nothing said) are `[blocking]`; they must fail loud.
+> **ERRORS NAME THEIR CAUSE** — no error substitution … The gap is coverage, not naming.
+> **HOLLOW TESTS FOUND** — "a holder the chain no longer contains is not chased" does **not** survive
+> the revert test; the ceiling test has a live bypass (attempts-driven ceiling); the ordering test
+> survives the revert but pins the global-last design without testing it.
+
+### The one that matters most — I reintroduced the milestone's signature defect
+
+The notifier derives recipients with `controlHolders`, which has an explicit branch for a document
+with **no stored genesis proposal**. My drain used the sweep's `holdersFor`, which returns `null` for
+exactly those. So on a legacy document the row was seeded, sent once by the fast path, and then
+rescheduled forever — never delivered, never retired, nothing said about the owed ending, plus one
+ERROR per tick about a document it could not address.
+
+`controlHolders`'s own comment says it: *"The two paths must agree about what 'cannot answer' means.
+Their disagreeing is the whole shape of this milestone's defects."* I read that function, used the
+other one, and rebuilt the defect underneath a fix for it.
+
+### Proven, not argued: a double send
+
+Seeded immediately due and sent without claiming the row, so a sweep firing inside the notifier's own
+await produced `notifier→A, sweep→A, sweep→B, notifier→B` — both holders got the close twice and 40%
+of the five-send ceiling was spent before the first retry. The amendment loop closed this exact
+window and says so in a comment I had already written.
+
+### The one that would have bitten the operator hardest
+
+`ON CONFLICT DO NOTHING` meant a retired row could never be re-armed. So the natural response to our
+own `document.control.unconfirmed` ERROR — run `cello_doc_close` again — seeded nothing, sent once
+best-effort, and owed nothing. **The one-shot defect, restored at the exact moment the operator was
+acting on our warning.**
+
+### The ordering deviation: right direction, wrong scope
+
+The reviewer confirmed control-after-content is not merely about a lesser copy — the inbound path
+refuses envelopes on an ended document TERMINALLY and the worker treats a rejection as an ack, so
+control-first would settle every queued envelope unsent and never retry it. **Silent permanent
+content loss.** Same for `kill`.
+
+But my scope was wrong: draining globally last is starvable, because the pass is time-bounded and
+restarts from the top. The constraint is per-document. Now two-phase — documents with no queued
+content go first (they cannot violate the rule), the rest follow their own content.
+
+### Settled on evidence, at last
+
+A holder answers `document_closed` only once their status is closed, and that is set only on
+recording a close from OUR agent id — so that refusal is proof we were heard. It does NOT generalise
+to `kill`, where the same refusal is equally produced by their own kill, and that asymmetry is
+pinned by a test. This also gave `settleControlDelivery(..., "acked")` its only caller; it was dead.
+
+### Parked, not guessed
+
+**DOD-MP-ENDED-BACKLOG-1.** The reviewer proved that a killed document still ships its queued content
+while `cello_doc_list` reports zero pending — two queries disagreeing, one of them silently. Whether
+ending a document flushes or abandons its backlog is a real fork (close and kill plausibly differ),
+it is pre-existing, and it is Andre's call.

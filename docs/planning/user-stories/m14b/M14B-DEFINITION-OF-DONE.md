@@ -419,8 +419,27 @@ description: >
   MEMBERSHIP change diverges silently and permanently, which is why that one was fixed first. The
   per-holder reporting (`holdersNotified` + `holderFailures` with causes) already exists here, so
   an operator can see it happened — what is missing is the daemon acting on it without them.
-  The machinery now exists and is generic: seed rows, drain them ahead of content, settle on
-  evidence. — ❌ NOT BUILT
+  The machinery now exists and is generic: seed rows, drain them, settle on evidence. — ✅
+  (Entries 44, 45) durable per-holder control queue; endings drain AFTER that document's content
+  (the reverse of amendments, because the inbound path refuses envelopes on an ended document
+  TERMINALLY and a rejection counts as an ack — control-first would settle queued content unsent);
+  settled by real evidence where it exists, retired-not-acked where it does not. 11 review findings
+  fixed, incl. legacy documents getting no durability at all and a proven double-send.
+  **DEVIATION FROM THIS LINE, taken deliberately:** it said "drain them ahead of content"; endings
+  drain after, for the reason above.
+- **DOD-MP-ENDED-BACKLOG-1** [cello-client] — **does ending a document flush its queued content, or
+  abandon it?** Two queries disagree today, and one of them is silent about it. Found by review
+  2026-08-13 and PROVEN there: `pendingDeliveries` (the bilateral query) carries an ended-document
+  guard whose comment states the rule — *"An ENDED document does not deliver. A killed or closed
+  document that kept shipping would contradict the verb the operator just used."* Its per-holder
+  twin `pendingHolderDeliveries`, and `backfillBilateralDeliveries`, carry no such guard. So a
+  KILLED document goes on shipping its backlog, **and because `cello_doc_list` reads the filtered
+  query, the operator's surface reports zero pending while the worker ships.**
+  The two readings are both defensible and they point opposite ways: *close* plausibly means "send
+  what I already wrote, then end it" (which is also why endings drain after content), while *kill*
+  means "stop now" and shipping more contradicts the verb. Splitting them by verb is likely right
+  and is exactly the kind of choice that should not be made silently at 3am. **Andre's call.**
+  `[pre-existing]` — not introduced by CONTROL-DURABLE-1, but directly under it. — ❌ NOT BUILT
 - **DOD-MP-AMEND-CONFIRM-1** [cello-client] — **a holder that fell behind must converge, and get
   the edits it missed.** Split out of INVITE-FANOUT-1's clause 7 (Entry 40) once the durability half
   landed. Two halves, and the second is the one that is easy to miss:
