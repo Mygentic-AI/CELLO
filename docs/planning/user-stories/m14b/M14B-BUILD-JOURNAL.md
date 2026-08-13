@@ -1791,3 +1791,75 @@ documents exist) and closes the day a real workflow depends on one.
    against a POPULATED pre-migration database, not a fresh one (§2e).
 7. A holder that missed an amendment can still converge rather than diverge forever — reconciliation,
    the clause that makes this a trust fix and not just a retry fix.
+
+---
+
+## Entry 39 — DOD-MP-SWEEP-ALIVE-1: the trace, before any fix
+
+**Unit:** DOD-MP-SWEEP-ALIVE-1 · **Repo:** cello-client · **State:** traced, not yet implemented.
+
+The DoD line demands a producer/consumer trace of the timer's lifecycle before anything is changed,
+because no error precedes the stall and a guessed fix here would be a guessed fix in the delivery
+path every document depends on.
+
+### The consume path — what stops, and why silently
+
+`daemon.ts` ~3943:
+
+```
+let documentDeliveryRunning = false;
+const timer = setInterval(() => {
+  if (documentDeliveryRunning) return;      // <-- CONSUMER
+  documentDeliveryRunning = true;
+  (async () => {
+    try { ...sweep every agent... logger.debug("document.delivery.sweep", ...) }
+    catch (err) { logger.warn("document.delivery.tick.failed", ...) }
+    finally { documentDeliveryRunning = false; }   // <-- PRODUCER
+  })();
+}, 60_000);
+```
+
+The no-overlap guard is correct in intent — a tick that outlasts its interval must not run twice.
+Its failure mode is what matters: **the guard's release is the `finally` of an async body, so it runs
+only when that body SETTLES.** An exception is contained (the `catch` is there and the `finally`
+still runs). What is not covered is an await that never settles at all.
+
+**A single hung tick therefore disables document delivery permanently, and in total silence:** the
+timer keeps firing every 60s, hits `if (documentDeliveryRunning) return`, and emits nothing. No log
+line, no error, no counter. Which is precisely the observed signature — including the fact that the
+daemon was otherwise healthy and logging other subsystems throughout.
+
+### The gap in the produce path — an unbounded await
+
+Inside the pass, `document-delivery-transport.ts` `acquireSession` ends with:
+
+```
+const opened = await deps.openSession(deps.agentName, peerAgentId, correlationId);
+```
+
+That await carries no timeout of its own. The ack wait IS bounded (`awaitAck(..., graceMs)`, and
+`ack_grace_expired` fires in the live log, so that bound demonstrably works). The dial is the
+unbounded one.
+
+### What the evidence supports, and what it does NOT
+
+SUPPORTED — the last sweep line was `17:06:28`, and yet delivery work carrying a `dlv-` correlation
+id happened at `17:07:38` and `17:07:39`. **A tick was running after the last completion line and
+never logged one.** That is a started-but-never-finished pass, which is exactly the wedge shape
+above. The control also fits: the peer daemon had ONE agent and swept on schedule all night; the
+stalled daemon had three agents, so its pass had three times the opportunity to hit a bad dial.
+
+NOT SUPPORTED — I cannot prove from the logs WHICH await hung. `openSession` is the candidate
+because it is the unbounded one, not because anything recorded it. **No root cause is claimed for
+the specific instance.**
+
+### The fix this argues for
+
+Fix the CLASS, not the guessed instance: a sweep must not be able to wedge forever, whichever await
+hangs. Bound the per-agent tick; on exceeding the bound, log LOUDLY (a stuck sweep is the one thing
+this subsystem must never do quietly) and release the guard so the next tick proceeds. That converts
+a permanent silent outage into a logged, self-healing delay — and it holds even if the hang is
+somewhere I have not found.
+
+Bounding the dial itself is worth doing as well, but on its own it would only close the instance I
+happened to guess.
