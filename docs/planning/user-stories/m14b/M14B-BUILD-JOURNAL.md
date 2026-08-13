@@ -2054,3 +2054,50 @@ them at up to 600s of backoff each).
 Also found, in the OTHER repo and outside this milestone: `packages/relay/src/bin/relay.ts`
 constructs a file-backed WAL and never passes it to the relay node, so every gap-fill answers
 `wal_unavailable`. Recorded here so it is not lost.
+
+---
+
+## Entry 43 — the live proof, two machines: an invite survives an offline holder
+
+**Published:** daemon `0.0.167`, cli `0.0.174` (beta; the `latest` promotion is Andre's).
+**Verified against the tarball**, not the CI status: `delivery-sweep-bound.js` and
+`delivery-session-suspects.js` present, `document_amendment_deliveries` in the built store,
+`ackAmendmentsThroughEpoch` in store + worker, `relayRefusal` threaded through
+`session-node-manager.js` and `document-delivery-transport.js`. `cli@0.0.174` cross-pins
+`daemon@0.0.167` — a real version, never `workspace:*`.
+
+### The scenario, with the failure injected deliberately
+
+Andre's laptop and the Hermes EC2 agent, both on `0.0.167`. A two-party document, proposed and
+accepted across the two machines. Then **the Hermes daemon was stopped**, and a third holder invited
+— which is exactly the shape that diverged silently earlier tonight, except that tonight it happened
+by accident and here it is on purpose.
+
+| time | what happened |
+|---|---|
+| `20:40:40` | invite runs with the holder DOWN → `holdersNotified: { 698bf453…: false }` |
+| `20:40:40` | `document.amendment.holder_unnotified { verb: "invite", reason: "relay_parked", detail: "the relay is holding it — the holder had no live counterparty" }` |
+| — | Hermes brought back up. **No operator action of any kind after this point.** |
+| `20:42:27` | `session.document.received { kind: "amendment" }` |
+| `20:42:27` | `document.amendment.recorded { epochId: 1, kind: "add_holder", amendmentHash: d1252732… }` |
+
+**Hermes: epoch 0, 2 participants → epoch 1, 3 participants.** The hash matches the one the invite
+minted. Before tonight this was one `sendBytes` that failed and was forgotten.
+
+### `relay_parked` fired on the FIRST live run, which is the review's HIGH-1 in the wild
+
+The refusal reason was not a transport error — it was `relay_parked`. The relay accepted the frame
+because the holder had no live counterparty. **Under the code as I first wrote it that returns `ok`,
+and the debt would have been cleared right there**, losing the membership change with every surface
+reporting success. The reviewer found that by reading; the very first live run produced it.
+
+### What this does NOT fix, demonstrated on the way
+
+The document that diverged earlier tonight (`b6d58753…`) is **still diverged and cannot be healed.**
+Re-running the invite refuses with `document_already_holder`: the healing verb only re-fans while a
+join is still pending, and this joiner already accepted. There are no owed rows for it either,
+because its invite predates the fix.
+
+So: laptop at epoch 1 with 3 participants, Hermes at epoch 0 with 2, permanently, with nothing
+pending and no error on either side. **That is DOD-MP-AMEND-CONFIRM-1 with a live specimen attached**
+— reconciliation is not a nicety, and there is a real document proving it.

@@ -366,9 +366,13 @@ description: >
   governance frame reaching one party and not the others), and worse than the close bug it mirrors,
   because nothing surfaces it to anyone. Same derived-holder-set fan-out as CONTROL-N-1 is the
   shape; an absent holder must also be able to reconcile a missed amendment rather than diverge
-  forever. — ✅ (Entry 40) durable per-holder amendment queue, head-of-line by chain epoch, settled
-  by PROOF BY EPOCH; all four fan-out sites wired; 9 review findings + 4 spec deviations all fixed.
-  Reconciliation split out as [[M14B-DEFINITION-OF-DONE#DOD-MP-AMEND-CONFIRM-1]].
+  forever. — ✅ (Entries 40, 43) durable per-holder amendment queue, head-of-line by chain epoch,
+  settled by PROOF BY EPOCH; all four fan-out sites wired; 9 review findings + 4 spec deviations all
+  fixed. **PROVEN LIVE across two machines on daemon 0.0.167:** a third holder invited while the peer
+  daemon was STOPPED (`relay_parked`, `holdersNotified: false`) — the peer returned and reached epoch
+  1 with 3 participants unaided, amendment hash matching. Reconciliation split out as
+  DOD-MP-AMEND-CONFIRM-1, which now has a live specimen: the document that diverged before the fix
+  cannot be healed by any verb.
 - **DOD-MP-SWEEP-ALIVE-1** [cello-client] — **the document delivery sweep must not stop.** Observed
   live 2026-08-13 (Entry 37): the laptop's sweep ran every ~60s and then stopped dead, and eleven
   minutes later had still not run, while the daemon was demonstrably alive and a published envelope
