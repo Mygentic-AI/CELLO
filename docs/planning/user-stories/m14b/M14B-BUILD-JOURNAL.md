@@ -1942,3 +1942,115 @@ what it has to cover, and this is worth quoting because it changes the shape of 
 Also deferred to the merge: splitting the amendment counters out of the aggregate
 `document.delivery.sweep` line, because that line lives in `daemon.ts`, which belongs to the
 SWEEP-ALIVE-1 branch — two branches must never touch one file.
+
+---
+
+## Entry 41 — DOD-MP-SWEEP-ALIVE-1: bounding the sweep was not enough
+
+**Unit:** DOD-MP-SWEEP-ALIVE-1 · **Branch:** `m14b/sweep-alive` · **Repo:** cello-client
+**Gate:** test 3761 passed / 11 skipped, lint, typecheck, build — all exit 0.
+
+### The reviewer's verdict, quoted
+
+> - **SPEC: DEVIATIONS FOUND** — [blocking] the un-journaled deviation is that delivery for the
+>   wedged agent does not recover … It is fixed for the sweep and for other agents; it is not fixed
+>   for the agent that hung.
+> - **SILENT FALLBACKS FOUND** — [blocking] H1: the bound papers over the wedge for the sweep while
+>   the affected agent reports through a log line that asserts a recovery that cannot happen.
+> - **HOLLOW TESTS FOUND** — [blocking] T6 does not detect removal of the thing it names; T3 asserts
+>   the recovery clause against a stub that structurally cannot exhibit the production failure;
+>   T4/T5/T6 all survive a full revert of the fix; the daemon.ts integration point is uncovered.
+
+### What it caught, proven by running the code rather than reading it
+
+**The bound fixed the sweep and left the agent dead.** `DocumentDelivery.tick` has the IDENTICAL
+defect one layer down — it caches its pass in `#inFlight` and clears it in a `finally`. So after a
+hang, every later tick hands back the same hung promise: `#run` is never entered again, the agent
+never delivers again, and **each pass re-races that promise for the full bound**. On the live
+three-agent daemon that is a 2× sweep-interval regression for the healthy agents, presenting as
+"documents are slow" with nothing saying why.
+
+My own log line then told the operator to wait: *"its documents are not being delivered until it
+clears."* It never cleared.
+
+Fixed by evicting the wedged worker so the next tick constructs a fresh one. Verified safe: the pass
+claims each row (`recordHolderAttempt`) BEFORE it dials, so anything the hung pass was holding is
+already scheduled forward and is not due — eviction cannot double-send.
+
+**Three more, all correct:** a stuck agent was counted as swept, making the sweep line byte-identical
+to a healthy idle one on the one occasion it matters; the 120s bound is reachable by a legitimately
+slow pass (10s lookup × fan-out + 30s ack budget), so it would have warned on the normal case —
+raised past the arithmetic; and a pass that rejects AFTER being abandoned had its error absorbed by
+the settled race and logged nowhere, discarding the best evidence about which await hangs, on a
+defect whose root cause is still open.
+
+**On the tests it was blunt and right.** Reverting only the daemon wiring left all six green — every
+test was a unit test of the helper, and the defect lives in the guard release. The timer test could
+not detect removal of the `clearTimeout` it was named after (it measured elapsed wall-clock; the
+race resolves regardless). The recovery test's "second pass" was a fresh closure with no re-entry
+guard, so it could not exhibit the production failure at all. Replaced with a runner carrying
+`tick`'s exact cached-promise shape, plus the first coverage the call site has ever had.
+
+### One correction I made to my own fix mid-flight
+
+Adding the late-failure log made a pass that throws BEFORE the bound fires log twice — once here,
+once in the caller's `catch`. Narrowed to genuinely-late by tracking whether the bound had won.
+
+---
+
+## Entry 42 — DOD-MP-SESSION-RETIRE-1 (remaining half): the fix could not see its own signal
+
+**Unit:** DOD-MP-SESSION-RETIRE-1 · **Branch:** `m14b/delivery-fresh-session` · **Repo:** cello-client
+**Gate:** test 3764 passed / 11 skipped, lint, typecheck, build — all exit 0.
+
+### The reviewer's verdict, quoted
+
+> - **SPEC: DEVIATIONS FOUND** — the trigger clause is unmet; the fix cannot observe
+>   `relay_session_gone` [blocking]
+> - **SILENT FALLBACKS FOUND** — `session-node-manager.ts:3822` continues past a relay refusal and
+>   reports `ok: true, delivered: true` for an unwitnessed leaf, and this unit's `noteSuccess` then
+>   clears suspicion on it [blocking, HIGH]
+> - **HOLLOW TESTS FOUND** — 6 of 10 new tests survive full feature removal; 2 of the 3 transport
+>   tests survive; the reason-set test pins a string the producer cannot emit [blocking]
+
+And on the premise the whole unit rests on:
+
+> **First: your premise is TRUE. The refusal was right.** … Nothing repopulates sessions on restart.
+> So: relay restart → store wiped → client … gets `session_not_found` → relabels it
+> `relay_session_gone`. Making that terminal would retire live sessions on every relay bounce.
+
+### The unit was INERT, and worse than inert
+
+`relay_session_gone` is produced by the relay client, is deliberately not in
+`TERMINAL_RELAY_REFUSALS`, and therefore falls through to a warn — after which execution continues
+into the direct peer-to-peer send. On success `sendContent` returns `ok: true, delivered: true` **for
+a leaf the relay never witnessed**. The content arrives; the record stops growing, silently.
+
+So my counter could never see the one string the unit is named after — and every such send called
+`noteSuccess`, actively clearing the count. A session whose relay record was permanently gone stayed
+in rotation forever. This is the 68-minute unwitnessed-chain defect that `TERMINAL_RELAY_REFUSALS`
+was written to kill, re-entering through the door left open for the relay-bounce case.
+
+Fixed by carrying the relay's answer to the caller on the SUCCESS path. It changes success or failure
+for nobody; it lets the document worker — which has no human in the loop — see that a session's
+record is dead and route around it.
+
+**The measured eviction bug.** A session that CROSSED the threshold is filtered out of the candidate
+list, so it never fails again, ages to the front of the insertion order, and is evicted FIRST. My
+comment claimed the opposite. Reads now count as use.
+
+**The harshest finding was the fairest:** the tests stubbed `sendContent` returning
+`{ ok: false, reason: "relay_session_gone" }` — a shape the real dependency **cannot** return. The
+suite defined a contract the producer does not honour, which is exactly how a green suite sits on
+top of a fix that can never fire. Rewritten against the shape production actually returns.
+
+### Parked, with homes (no silent deferral)
+
+Two are genuine design forks, not defects in this diff, and both are now DoD lines:
+**DOD-MP-RELAY-GONE-DISAMBIG-1** (a send whose leaf was never witnessed should not report success)
+and **DOD-MP-ZOMBIE-SESSION-1** (bypassed sessions stay `active` forever, so every restart re-learns
+them at up to 600s of backoff each).
+
+Also found, in the OTHER repo and outside this milestone: `packages/relay/src/bin/relay.ts`
+constructs a file-backed WAL and never passes it to the relay node, so every gap-fill answers
+`wal_unavailable`. Recorded here so it is not lost.

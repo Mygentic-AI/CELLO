@@ -336,8 +336,14 @@ description: >
   > `relay_session_gone`, which is not terminal. The reviewer's fix (add it to the terminal set) is
   > REFUSED on evidence: the relay stores sessions in memory, so that string also fires on a relay
   > restart, and treating it as terminal would retire every live session on every client whenever
-  > the relay bounces — the sovereign-node invariant inverted. Safe shape, needing Andre: the
-  > DOCUMENT WORKER opens a fresh session after repeated terminal refusals, destroying nothing.
+  > the relay bounces — the sovereign-node invariant inverted. **The review independently verified
+  > this premise and could not falsify it** (`InMemoryRelayStore` is the only implementation and the
+  > deployed entrypoint passes no store).
+  > **NOW BUILT (Entry 42).** The document worker stops REUSING a session after repeated terminal-ish
+  > answers and opens a fresh one, destroying nothing. The first cut was INERT: `relay_session_gone`
+  > never reached it — the send falls through to a direct delivery and returns success for a leaf the
+  > relay never witnessed, so the counter never saw it and every such send CLEARED it. The relay's
+  > answer now survives to the caller on the success path. Two forks parked as their own lines below.
 - **DOD-MP-INVITE-FANOUT-1** [cello-client] — **an invite must tell the EXISTING holders, not only
   the invitee.** Found live 2026-08-13 (Entry 37) and it is the most serious open defect on this
   board, because it is silent on every surface. Inviting a third agent into a two-party document
@@ -372,7 +378,45 @@ description: >
   cleared it (first sweep after: `attempted: 3`). **Not diagnosed — no root cause is claimed here,
   and no error precedes the stall.** What is established: it stops, it does not recover on its own, a
   restart clears it, and while stalled every edit is silently undelivered while the document reports
-  healthy. Needs a producer/consumer trace of the timer's lifecycle before any fix. — ❌ NOT BUILT
+  healthy. Needs a producer/consumer trace of the timer's lifecycle before any fix. — ✅ (Entries
+  39, 41) traced first, then bounded: the overlap guard releases in a `finally` that only runs when
+  the pass SETTLES, so one hung await disabled delivery for the life of the process in total
+  silence. The wedged worker is now evicted too — the review proved by execution that bounding alone
+  left the agent permanently dead AND doubled the sweep interval for every healthy agent. Root cause
+  of the hang itself is still unclaimed; a late-failure log was added as the cheapest route to it.
+- **DOD-MP-RELAY-GONE-DISAMBIG-1** [cello-client] — **a send whose leaf was never witnessed must
+  not report success.** Found by review 2026-08-13 (Entry 42), pre-existing, and a genuine fork
+  rather than a defect in that diff. On `relay_session_gone` the daemon warns, delivers directly, and
+  returns `ok: true, delivered: true` — the content reaches the peer and the session's hash chain
+  stops growing, with the operator's surface showing a clean send. This is the shape of the measured
+  68-minute unwitnessed-chain defect. The ambiguity is resolvable AT THE RELAY CLIENT, which already
+  names the three sub-cases in its own guidance ("sealed, idle-swept, or restarted"): re-present the
+  assignment ONCE — if it succeeds the relay merely bounced and the session is alive; if it fails the
+  session is over. Today the code explicitly declines to run that test, to avoid recreating a session
+  with an empty leaf log. **Andre's call: it changes the send path, which conversations share.**
+  Mitigated meanwhile — the refusal is carried to the document worker, which routes around it. — ❌ NOT BUILT
+- **DOD-MP-ZOMBIE-SESSION-1** [cello-client] — **nothing ever reaps a bypassed session.** Because
+  DOD-MP-SESSION-RETIRE-1's remaining half deliberately destroys nothing, a session it routes around
+  stays `active` in the database forever, and the suspicion that hides it is in memory by design.
+  After every daemon restart delivery must re-learn each zombie — 2 failed attempts apiece, against a
+  backoff that caps at 600s — which the review costs at **~60 minutes with three zombies to one
+  peer**, presenting to the operator as exactly the original symptom: a pending count that never
+  falls. Persisting the suspicion is NOT the answer (that is the destructive fix wearing a smaller
+  hat). Either the reap belongs upstream — once RELAY-GONE-DISAMBIG-1 lands, a proven-dead session is
+  genuinely retirable — or the count is bounded: when a peer accumulates N active sessions and the
+  newest works, seal the older ones. Not a silent choice either way. — ❌ NOT BUILT
+- **DOD-MP-CONTROL-DURABLE-1** [cello-client] — **close and kill are still one-shot.** Found by
+  audit while fixing INVITE-FANOUT-1 (Entry 40), same family, deliberately NOT folded into it:
+  `document-control-notifier.ts` signs once, sends to each derived holder, and persists nothing —
+  no pending row, no retry, no restart survival, exactly the shape the amendment fan-out just shed.
+  A holder unreachable at that moment never learns the document ended.
+  **Ranked below the membership work on purpose.** A missed control frame diverges visibly: the
+  stale holder keeps editing and their edits start refusing, so something surfaces. A missed
+  MEMBERSHIP change diverges silently and permanently, which is why that one was fixed first. The
+  per-holder reporting (`holdersNotified` + `holderFailures` with causes) already exists here, so
+  an operator can see it happened — what is missing is the daemon acting on it without them.
+  The machinery now exists and is generic: seed rows, drain them ahead of content, settle on
+  evidence. — ❌ NOT BUILT
 - **DOD-MP-AMEND-CONFIRM-1** [cello-client] — **a holder that fell behind must converge, and get
   the edits it missed.** Split out of INVITE-FANOUT-1's clause 7 (Entry 40) once the durability half
   landed. Two halves, and the second is the one that is easy to miss:
