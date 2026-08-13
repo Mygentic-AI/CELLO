@@ -320,7 +320,15 @@ description: >
   survived `cello logout && cello login`. The terminal branch already KNOWS (it logs "nothing sent
   now can ever be part of its record" and tells a conversation operator to start a new session);
   it must also act, because document delivery has no human in the loop to act for it. Availability
-  and fallback are first-class — a route with no fallback is the defect. — 🟠 PARTIAL (Entry 36)
+  and fallback are first-class — a route with no fallback is the defect. — 🟠 PARTIAL (Entry 36, 37)
+  > **The observed case is now PROVEN LIVE across two machines (Entry 37).** Reproduced unprompted on
+  > shipped 0.0.165 four minutes into ordinary use, then fixed as a before/after on the SAME stuck
+  > envelope with only the daemon version changed — and reproduced again in the opposite direction
+  > and cured the same way. Three confirmations, two machines, both directions.
+  > **The cause stated above is TOO NARROW.** No restart is needed: the laptop's own seal-after-
+  > delivery timed out on its acknowledgement (`relay_submit_timeout`), the seal had in fact landed,
+  > and the peer went on believing the session was alive. One lost ack is enough, and every proposal
+  > creates the opportunity.
   > Built and reviewed twice (approach + unit); 4 findings fixed, incl. the HIGH that my first cut
   > retired on `session_not_found` — documented as TRANSIENT with 23 logged cases — which would
   > have destroyed live sessions seconds old. Now `session_sealed` only, status-flip-then-teardown,
@@ -330,6 +338,31 @@ description: >
   > restart, and treating it as terminal would retire every live session on every client whenever
   > the relay bounces — the sovereign-node invariant inverted. Safe shape, needing Andre: the
   > DOCUMENT WORKER opens a fresh session after repeated terminal refusals, destroying nothing.
+- **DOD-MP-INVITE-FANOUT-1** [cello-client] — **an invite must tell the EXISTING holders, not only
+  the invitee.** Found live 2026-08-13 (Entry 37) and it is the most serious open defect on this
+  board, because it is silent on every surface. Inviting a third agent into a two-party document
+  records the amendment locally and offers it to the invitee — and queues NOTHING for the holders
+  already in the document. Proof it was never queued, not merely delayed: the three delivery sweeps
+  spanning the invite each report `attempted: 1` (the unrelated text write), never 2. Content
+  envelopes do not carry the amendment either — the peer received and applied a later write while
+  remaining at epoch 0. End state: two holders at epoch 1 with 3 participants, the third at epoch 0
+  with 2, **nothing pending and no error on either side**. The joiner's edits are then dropped by the
+  stale holder — correctly, since at its epoch the sender is not a member — so the membership gate
+  reads as the culprit when it is the only thing behaving. This is the CONTROL-N-1 family (a
+  governance frame reaching one party and not the others), and worse than the close bug it mirrors,
+  because nothing surfaces it to anyone. Same derived-holder-set fan-out as CONTROL-N-1 is the
+  shape; an absent holder must also be able to reconcile a missed amendment rather than diverge
+  forever. — ❌ NOT BUILT
+- **DOD-MP-SWEEP-ALIVE-1** [cello-client] — **the document delivery sweep must not stop.** Observed
+  live 2026-08-13 (Entry 37): the laptop's sweep ran every ~60s and then stopped dead, and eleven
+  minutes later had still not run, while the daemon was demonstrably alive and a published envelope
+  sat `pendingUnsent: 1` with nothing attempting it. Control: the peer daemon on the IDENTICAL build
+  swept on schedule throughout the same window — so this is state-dependent, not a general code
+  break; the stalled side had three agents, heavy current-agent switching, and IPC churn. A restart
+  cleared it (first sweep after: `attempted: 3`). **Not diagnosed — no root cause is claimed here,
+  and no error precedes the stall.** What is established: it stops, it does not recover on its own, a
+  restart clears it, and while stalled every edit is silently undelivered while the document reports
+  healthy. Needs a producer/consumer trace of the timer's lifecycle before any fix. — ❌ NOT BUILT
 - **DOD-MP-REMOVE-FEEDBACK-1** [cello-client] — the FEEDBACK half of D9: a holder whose edit is
   refused after removal learns, in a sentence they can act on, that they were removed, at which
   epoch, that their copy and its history remain theirs, and that new edits no longer publish. The

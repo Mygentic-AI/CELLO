@@ -1615,3 +1615,105 @@ the ambiguous string. It is a delivery-worker change, not a session-status chang
 
 **Recorded as owed work.** D1 is done for the case that was observed live (`session_sealed`); the
 fully-sealed variant remains, with the cheap fix rejected on evidence and the safe fix named.
+
+---
+
+## Entry 37 — the live cross-machine test: D1 proven, and two NEW defects it surfaced
+
+**Date:** 2026-08-13
+**Topology:** CELLO_Coder_1 + CELLO_Support (Andre's laptop, one daemon) and Miss_Chelly_H (Hermes
+EC2, us-east-1, a second daemon on a second machine). Both sides upgraded to identical binaries
+before anything was measured — Hermes had been running daemon 0.0.155 since Aug 9 and would have
+tested version skew rather than the feature.
+
+### D1 reproduced on the SHIPPED build, unprompted, four minutes into ordinary use
+
+Nobody staged this. The very first document proposal produced it:
+
+1. `16:37:49` — the laptop opens session `cb380145` to carry the proposal to Hermes.
+2. `16:37:58` — proposal delivered; Hermes has it.
+3. `16:38:12` — the laptop seals that session (document delivery seals after handing off). The seal
+   submit fails: **`relay_submit_timeout`**.
+4. `16:38:35` — the laptop retries; the relay answers `session_sealed`. The seal HAD landed; only the
+   acknowledgement was lost. The laptop gives up (`session.seal.autoack.skipped`).
+5. **Hermes never learned the session was sealed.** Its local row still said `active`.
+6. `16:39:50` onward — Hermes' delivery worker selected that session, was refused `session_sealed`,
+   logged it, **left the row active**, and retried every 60s. Attempts 1, 2, 3, …
+
+**This corrects the DoD's stated cause.** DOD-MP-SESSION-RETIRE-1 blamed a daemon that "restarted
+mid-upgrade and missed the one-shot frame." No restart was involved here. A single lost seal
+acknowledgement is enough, and the document layer's own seal-after-delivery manufactures the
+opportunity on every proposal. The trigger is routine, not exotic — which is the part I understated
+when Andre pushed back on the severity and I conceded the case was narrow. He was right to push;
+I was right to be worried, for the wrong reason.
+
+### The fix, proven as a before/after on the SAME envelope
+
+The stuck envelope was deliberately left in place. Only the daemon version changed (0.0.165 →
+0.0.166, installed from `@beta`):
+
+- `16:57:41` — Hermes opens a **new** session `a9dcd54b`; `cb380145` is now `abandoned`/`failed`.
+- `16:57:50` — `document.delivery.sent`, `sessionOpened: true`, `parked: false`.
+- `pendingUnsent` 1 → **0**. An envelope stuck for eighteen minutes went through on the first
+  attempt after the upgrade, and the peer's text appeared on the laptop.
+
+Then the **same defect reproduced in the opposite direction** — the laptop, still on 0.0.165, stuck
+on the fresh session `a9dcd54b` (`attempts: 3`) — and was cured by the same upgrade at `17:05:47`:
+new session `8b2fa7c0` opened, delivered at `17:05:49`. **Three independent confirmations, two
+machines, both directions.** DOD-MP-SESSION-RETIRE-1's observed case is closed.
+
+### NEW DEFECT 1 — an invite never tells the EXISTING holders (silent split-brain)
+
+Inviting CELLO_Support into the two-party document produced this, and it is not a consequence of any
+restart:
+
+- `17:00:45` `document.amendment.recorded` (locally), `17:00:51` `document.join.offer_recorded`
+  (to the invitee). **No delivery is ever queued for the existing holder.**
+- Proof it was never queued: the sweeps at `17:01:24`, `17:02:10` and `17:03:10` each report
+  `attempted: 1` — the text write. Never 2. An amendment delivery row would have made it 2.
+- The subsequent content envelope DID reach Hermes and was applied — Hermes has the laptop's text —
+  and Hermes **stayed at epoch 0**. So content envelopes do not carry the amendment either.
+
+End state, with **nothing pending on either side and no error on either side**:
+
+| holder | epoch | participants | content |
+|---|---|---|---|
+| CELLO_Coder_1 | 1 | 3 | sha `54e32fb5`, 2214 chars |
+| CELLO_Support | 1 | 3 | sha `54e32fb5`, 2214 chars |
+| Miss_Chelly_H | **0** | **2** | sha `f2e9fc18`, 1961 chars |
+
+The joiner's edit WAS delivered to Hermes (`document.delivery.sent`, holder `698bf453`, `17:19:44`)
+and Hermes dropped it — correctly, because at epoch 0 the sender is not a participant. The membership
+gate is doing its job; it is being fed a stale membership. This is the CONTROL-N-1 family again — a
+governance frame that reaches one party and not the others — except here the omission is silent on
+both sides, which is worse than the close bug, because nothing surfaces it.
+
+### NEW DEFECT 2 — the document delivery sweep STOPS
+
+The laptop's delivery sweep ran every ~60s and then stopped dead at `17:06:28`. Eleven minutes later
+it had still not run, while the daemon was demonstrably alive (`registry.poll` at `17:17:21`) and a
+published envelope sat `pendingUnsent: 1` with nothing attempting it.
+
+**Control:** Hermes, on the identical daemon build, swept on schedule throughout the same window
+(`17:14:35`, `17:15:35`, `17:16:35`, `17:17:35`). So this is state-dependent, not a general code
+break. The laptop differs in having three agents, heavy `agent.current.switched` churn from
+per-agent CLI calls, and IPC connect/disconnect churn.
+
+A `cello logout && cello login` restored it: the first sweep after restart reported `attempted: 3`,
+draining everything that had been idle, and fan-out to BOTH holders then worked exactly as designed
+(`17:19:44` → Hermes, `17:19:55` → CELLO_Coder_1).
+
+**Not diagnosed — no root cause claimed.** No error precedes the stall. What is established: it
+stops, it does not recover on its own, a restart clears it, and while stalled every edit is silently
+undelivered with the UI reporting a healthy document.
+
+### What this run PROVED works
+
+- Cross-machine convergence, two daemons, two machines, both directions.
+- The on-disk file route (`cello doc publish`) carries an edit across machines.
+- A joiner replays the full prior chain before consenting — CELLO_Support's copy contained text
+  Miss_Chelly_H wrote before the joiner existed in the document.
+- Per-holder fan-out reaches every current holder (`17:19:44` and `17:19:55`, two distinct
+  `holderAgentId`s from one envelope).
+- The membership gate refuses a non-participant's edit — the very mechanism that made defect 1
+  visible.
