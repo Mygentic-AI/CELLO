@@ -21,13 +21,18 @@ description: >
 > taking a step back and thinking through from first principles."* The spec of record for all
 > further work is **[[M14B-RECONCILE-SPEC]] (v2)**. Anything below that predates it is history.
 
-- **NEXT ACTION: `DOD-SYNC-P3`, in progress on `m14b/sync-p3`.** The reconcile FRAME is built
-  and committed (`73082ed`, protocol-types: one shape for all three steps, dual per-author
-  positions, refusal sets, 32-doc batching cap, unsigned-by-design — Entry 55 has the wire
-  rationale). NEXT SUB-UNIT: the responder — derive the peer's entitlement class from own state,
-  compute the governance+content difference minus the peer's refusal set, reply with entries +
-  own position. Then the initiator/apply path, then forwarding + join-via-exchange (D5 physical
-  deletion). Full phase scope: the exchange (R10–R16), entitlement classes (R17–R20),
+- **NEXT ACTION: `DOD-SYNC-P3`, in progress on `m14b/sync-p3` @ `6c5f6ff`.** Built and
+  committed so far: the reconcile FRAME (`73082ed` — one shape for all three steps, dual
+  per-author positions, refusal sets, 32-doc cap, unsigned-by-design) and the RESPONDER ENGINE
+  (`6c5f6ff` — entitlement classes ruled first from own state, stranger refusal NON-terminal
+  per R19, removed terminal, difference per author minus the peer's refusal set, fork re-offer
+  from before the fork point, content along sender chains, `peerAhead` for step 3; store gained
+  `entriesByAuthorAfter`). NEXT SUB-UNIT: the INITIATOR + APPLY path — wire
+  `document_reconcile` into the frame router, build step 1 from `buildReconcileBlock`, apply a
+  reply (entries via `recordAmendment`'s causal door FIRST per R12, envelopes via the content
+  inbound gate), send step 3 on `peerAhead`, pin idempotence (three exchanges, no changes,
+  byte-identical state). Then forwarding + join-via-exchange (D5 physical deletion). Full phase
+  scope: the exchange (R10–R16), entitlement classes (R17–R20),
   refusals as entries (R35–R38), forwarding (R1–R2). The heart of the pivot; dissolves the
   invited window P2's review found. P3 also owes: D5's physical deletion once the exchange
   carries history; refuse_join authored by the refuser; invitation retraction (missing verb,
