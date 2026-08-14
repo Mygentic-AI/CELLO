@@ -2892,6 +2892,16 @@ of when it was authored).
    the position for content may need to be the set difference over envelope hashes instead —
    R9 permits any comparison that answers "what do you lack", and hash-set difference at cap-20
    scale is cheap.
+   **ANSWERED — YES, expressible today.** The store's own chain-linkage invariant
+   (`verifyChainLinkage`, document-store.ts) already requires that *"every sender's own links
+   form one unbroken chain from a single genesis"* — the `doc_prev_hash` chain is PER-SENDER,
+   not per-document. So content already has per-author chains, and the unified R7 position
+   primitive works for both halves: governance = (author, seq, headHash) from the entry store's
+   watermarks; content = (author, chain-length, headEnvelopeHash) walked along the sender's own
+   links. One wrinkle carried into P3a's design: refused envelopes are bridged as payload-less
+   stubs in the linkage walk, so the content position must count the sender's chain INCLUDING
+   refused links (they occupy chain positions) while the refusal set tells the peer not to
+   re-offer their payloads.
 2. Does the reconcile frame fit inside `MAX_DOCUMENT_FRAME_BYTES` (2 MiB) for a document with a
    long history, and what is the chunking rule when it does not? (R16 batching cuts the other
    way — multiple documents per exchange grows the frame.)
