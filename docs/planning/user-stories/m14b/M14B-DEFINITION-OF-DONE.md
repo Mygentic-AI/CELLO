@@ -524,7 +524,10 @@ description: >
   moves onto it. Endings and consent ride the existing amendment carrier until P4 — no third
   interim carrier. — ✅ merged `4ac91a9`; reviewed (4 blocking findings fixed, incl. the
   re-admission-breaking concurrency rule); linear replay deleted → Entry 51
-- **DOD-SYNC-P2** [cello-client] — one consent handshake (`R21`–`R25`); delete `D5`. — ❌
+- **DOD-SYNC-P2** [cello-client] — one consent handshake (`R21`–`R25`); delete `D5`. — ✅ merged
+  `3780817`; consent/refusal are the subject's own signed entries, participation = admitted ∧
+  consented, every seat delivered to and consulted by endings; reviewed, 6 findings fixed (the
+  invited-window class). D5's PHYSICAL deletion rides P3 (Entry 51 Decision Carried) → Entry 54
 - **DOD-SYNC-P3** [cello-client] — the exchange (`R10`–`R16`), entitlement (`R17`–`R20`),
   refusals (`R35`–`R38`), forwarding (`R1`–`R2`). — ❌
 - **DOD-SYNC-P4** [cello-client] — answer `SYNC-G1` (does causal ancestry replace every use of

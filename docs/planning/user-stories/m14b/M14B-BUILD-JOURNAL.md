@@ -21,12 +21,13 @@ description: >
 > taking a step back and thinking through from first principles."* The spec of record for all
 > further work is **[[M14B-RECONCILE-SPEC]] (v2)**. Anything below that predates it is history.
 
-- **NEXT ACTION: `DOD-SYNC-P2`** — one consent handshake (`R21`–`R25`): entry kinds `consent` +
-  `refuse_join`; participant = admitted ∧ consented (R22, genesis peer included); consent rides
-  the amendment carrier; D5's PHYSICAL deletion of the history-carrying offer completes at P3
-  (Decision Carried, Entry 51). **P0 ✅ (Entry 48: G2 passes, four specifications) · P1 ✅
-  (Entries 49–51: merged `4ac91a9`, reviewed, replay deleted).** `SYNC-G1` gates **P4**, not
-  earlier phases.
+- **NEXT ACTION: `DOD-SYNC-P3`** — the exchange (R10–R16), entitlement classes (R17–R20),
+  refusals as entries (R35–R38), forwarding (R1–R2). The heart of the pivot; dissolves the
+  invited window P2's review found. P3 also owes: D5's physical deletion once the exchange
+  carries history; refuse_join authored by the refuser; invitation retraction (missing verb,
+  Entry 53); the stranger-door held-before-admission refusal revisit (Entry 51). **P0 ✅
+  (Entry 48) · P1 ✅ (Entries 49–51, merged `4ac91a9`) · P2 ✅ (Entries 52–54, merged
+  `3780817`).** `SYNC-G1` gates **P4**.
 - **READ ORDER:** [[M14B-PROCEDURE]] → [[M14B-RECONCILE-SPEC]] (v2, the build) →
   [[M14B-DEFINITION-OF-DONE]] (status only) → this block → Entry 47.
   Rationale, if wanted, is [[2026-08-14_1155_document-protocol-reconcile-not-deliver]] — NOT needed
@@ -34,8 +35,8 @@ description: >
 - **STANDING RULING (2026-08-14, Andre):** **holders forward each other's signed entries.** This
   SUPERSEDES the prior guard that every holder delivers only its own updates. Forwarding confers no
   trust — the receiver verifies signature and entitlement itself (`SYNC-R2`).
-- **REPOS, both clean, both on `main`:** cello-client `4ac91a9` (P1 merged) · trustless-cello:
-  see git log. All six M14B unit branches merged, latest `m14b/sync-p1`.
+- **REPOS, both clean, both on `main`:** cello-client `3780817` (P2 merged) · trustless-cello:
+  see git log. All seven M14B unit branches merged, latest `m14b/sync-p2`.
 - **npm:** `latest` = cli 0.0.173 / daemon 0.0.166. `beta` = cli **0.0.175** / daemon **0.0.168**.
   **A `latest` PROMOTION IS OWED and is ANDRE'S to run — never mine:**
   `npm dist-tag add @cello-protocol/cli@0.0.175 latest` and
@@ -2774,4 +2775,63 @@ checklist, the deferrals above, and directed attention at: whether any path stil
 participation from admission alone; whether a modified daemon can mint participation without the
 subject's signature anywhere; the `consents_to` claim on documents with odd genesis properties;
 the invite-while-consent-in-flight race; and the bilateral accept's warn-only consent-failure
-path. **Verdict not yet in — this entry ends with the review outstanding.**
+path. **Verdict landed — Entry 54.**
+
+---
+
+## Entry 54 — the consent unit reviewed: every defect lived in the INVITED WINDOW; all fixed, MERGED ✅
+
+**Date:** 2026-08-14 · **Merged to `main` at `3780817`** (fix commit `95fdc3f`); all gates green
+with the vitest cache cleared; daemon 2310/2310, protocol-types 473/473.
+
+### The reviewer's verdict, in its own words
+
+> "The fold change itself is well built — the R22 invariant holds against a hostile daemon, and
+> the derive suite has real teeth. The problems are all in what the daemon does around the fold
+> during the **invited window** (the time between someone accepting and their consent entry
+> landing at the other holders), and in the failure paths of the two accept branches. The tests
+> route consent frames eagerly at every fixture, which is exactly why none of them ever sees the
+> window the production code now has." Verdicts: SPEC FAITHFUL (deviations journaled) · SILENT
+> FALLBACKS FOUND [blocking] · ERROR SUBSTITUTION FOUND [blocking] · TESTS HAVE TEETH (but zero
+> coverage of the shipped failure branches) · REMOVALS PROVEN.
+
+The adversary probes all held: no path confers participation without the subject's own signature;
+the tierless-genesis consent case is unreachable (decode-required field); the R22 revert test
+genuinely fails a reverted fold.
+
+### Findings and dispositions (all fixed in `95fdc3f`)
+
+1. **The delivery sweep destroyed an in-flight accepter's owed content and logged
+   `peer_removed` for a peer never removed.** Fixed: retirement now requires a removal proven
+   from the recorded chain; absence from a derivation defers. Pinned with seeded debt surviving
+   an owner-only holder set and reviving when the seat returns.
+2. **A failed consent recording had no cure and its guidance pointed at a dead verb** (the retry
+   dead-ended in `document_proposal_unknown`). Fixed: accept is now idempotent — hold the
+   document + derive as invited → re-running accept authors the missing entry. Pinned by
+   stripping the entry and retrying.
+3. **The re-invite recovery verb refused for exactly its own case** (lost offer, invitee
+   invited-not-participant). Fixed: the resend branch keys on invited ∪ participants.
+4. **Amendments authored during the window fanned to nobody and nothing backfilled.** Fixed as
+   part of the consolidated rule: **the who-is-seated set (holdersFor) = participants ∪
+   invited** for everything delivery-shaped; the CONTENT door gets its own strictly-participants
+   seam (R17: invited receive, never author). Pinned by an unrouted-consent invite reaching the
+   invited seat and both sides converging.
+5. **One party alone could settle "closed by agreement" during the window.** Fixed by the same
+   rule: the close agreement waits on every seat (strictly safer than R27's letter — the D7
+   precedent: settling early claims an agreement that does not exist) and the ending frame is
+   addressed to invited seats. Pinned.
+6. **A demoted-and-removed declared-genesis admin was silently re-armed by re-admission.**
+   Fixed: a removal SPENDS the declared grant (a refusal spends nothing); the re-admitted return
+   as plain holders and only an explicit promotion re-arms. Pinned in both directions.
+
+### Ruling logged (§3a, not asked)
+
+**Close waits on invited seats.** R27's letter says "every current participant"; counting
+invited seats is the strictly-more-agreement direction, reversible later by loosening, and the
+alternative (a proposer closing alone around an accepted-but-in-flight peer) is the exact
+claims-an-agreement-that-does-not-exist defect D7 forbids.
+
+**P2 is closed.** Next: `DOD-SYNC-P3` — the exchange itself (R10–R16), entitlement classes
+(R17–R20), refusals as entries (R35–R38), forwarding (R1–R2) — the heart of the pivot, and the
+phase that dissolves the invited window entirely (reconciliation delivers everything regardless
+of when it was authored).
