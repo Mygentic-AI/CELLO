@@ -2835,3 +2835,65 @@ claims-an-agreement-that-does-not-exist defect D7 forbids.
 (R17–R20), refusals as entries (R35–R38), forwarding (R1–R2) — the heart of the pivot, and the
 phase that dissolves the invited window entirely (reconciliation delivers everything regardless
 of when it was authored).
+
+---
+
+## Entry 55 — DOD-SYNC-P3 opened: the exchange — survey seed and clause checklist
+
+**Date:** 2026-08-14 · **Branch:** `m14b/sync-p3` (cello-client, to be cut from `3780817`).
+
+### What exists to build on (surveyed)
+
+- **The frame router** dispatches nine `document_*` frame kinds by a `type` discriminator
+  (`document-frame-router.ts` — update, ack, proposal, rejection, proposal_ack, control,
+  join_offer, join_answer, amendment). P3 adds ONE new kind: `document_reconcile`. All three
+  exchange steps are the SAME frame shape — position out, position + missing entries back,
+  missing entries out — with the entries payload optional, so a lost reply degrades to a fresh
+  exchange, never a stuck half-protocol.
+- **Governance position** is already the store's watermark surface: per author, highest
+  contiguous seq + head hash(es) (`watermarks()`, P1c). The wire shape is the same triple.
+- **Content position needs its own design decision:** content travels as per-author signed
+  `document_update` envelopes hash-chained per document (`doc_prev_hash`), NOT per-author-seq.
+  R7 wants one position primitive for both. The candidate: per-author watermark over the
+  envelope log (each author's envelopes ordered by their own chain links), with the envelope
+  hash as the head — needs a falsification pass against the actual log semantics BEFORE any
+  wire code (the v1 lesson: "send the difference" hid a re-architecture exactly here).
+
+### Clause checklist (what the reviewer will receive)
+
+1. **The exchange (R10–R16):** one `document_reconcile` frame; version named and refused by name
+   at both ends (R11); governance entries applied before content in one exchange (R12);
+   contiguous per-author application, gaps held (R13/R14 — the store already does this);
+   idempotent in any order any number of times (R15); multi-document batching (R16).
+2. **Entitlement (R17–R20):** the four classes derived from the responder's own state —
+   participant/invited/removed/stranger; a stranger refused BY NAME (R18, replacing the interim
+   stranger door's shape); the not-yet-known-admission refusal non-terminal and saying so (R19 —
+   this replaces the Entry 51 held-before-admission interim); content admitted by the author's
+   standing AT THE ENTRY'S ANCESTORS (R20 — the fold already rules this for governance).
+3. **Refusals as entries (R35–R38):** a refusal is an entry naming the refused hash and reason;
+   refusal sets travel in the position; nothing refused is ever re-offered by anyone; the
+   receiver-side records exist already (P1c pending + rejection records) and get surfaced.
+4. **Forwarding (R1–R2):** any holder may send any entry it holds to any entitled party; the
+   receiver verifies signature and entitlement itself. The door already admits any known
+   author's entry regardless of who carried it — P3 makes the CARRIER seam explicit and tests
+   the AC2 shape (author dead, entries arrive via the third holder).
+5. **P3's owed items from earlier entries:** D5's physical deletion once the exchange carries
+   history to joiners; `refuse_join` authored by the refusing invitee (they can answer the
+   exchange without holding the document); invitation retraction (the missing verb, Entry 53);
+   the Entry 51 stranger-door refusal revisit per R19.
+6. **Scheduling stays OUT** — triggers, sweeps, backoff are P5 (R39–R43). P3 wires the exchange
+   to fire on the existing nudge sites only as far as needed to prove the ACs; nothing
+   correctness-bearing may live in a trigger (R40).
+
+### The falsification questions to answer before the first line of wire code
+
+1. Can the content log express a per-author watermark TODAY, or does the envelope chain
+   (doc_prev_hash spans authors) make "author's own chain" ambiguous for content? If ambiguous,
+   the position for content may need to be the set difference over envelope hashes instead —
+   R9 permits any comparison that answers "what do you lack", and hash-set difference at cap-20
+   scale is cheap.
+2. Does the reconcile frame fit inside `MAX_DOCUMENT_FRAME_BYTES` (2 MiB) for a document with a
+   long history, and what is the chunking rule when it does not? (R16 batching cuts the other
+   way — multiple documents per exchange grows the frame.)
+3. What settles the inviter's join row once the answer frame dies with D5 — the arriving consent
+   entry must become the settle signal, and the refusal path needs its equivalent.
