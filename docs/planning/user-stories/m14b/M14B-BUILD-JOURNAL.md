@@ -38,9 +38,15 @@ description: >
   C receives A's signed envelope through B's exchange, verified against A's own signature. The
   proof surfaced the interim epoch stamp twice more (offer snapshots carry pre-invite content;
   an unseen consent shifts the author's stamp behind the receiver's gate) — both annotated in
-  the test as the P4/G1 deletion target. NEXT SUB-UNIT: join-via-exchange + D5's physical
-  deletion (offer/answer path), the R25 notice, consent-entry join settle, refuse_join by the
-  invitee, invitation retraction. Full phase scope: the exchange (R10–R16), entitlement classes (R17–R20),
+  the test as the P4/G1 deletion target. **JOIN-VIA-EXCHANGE IS PROVEN**
+  (`48b330e`): the invite's own step-1 frame is the R25 notice; an empty-handed holder answers
+  with an empty position; the reply carries the GENESIS (the one record that is not an entry,
+  validated by its hash being the document id) plus everything else; the joiner derives its own
+  invited standing from the entries and accepts with the ordinary consent-authoring verb — no
+  offer frame, no join-store row, no answer frame anywhere in the flow. NEXT SUB-UNIT: D5's
+  PHYSICAL deletion (the legacy offer/answer path and its join-store bookkeeping — replacement
+  now proven), consent-entry settle of the inviter's surface, refuse_join by the invitee,
+  invitation retraction — then the P3 unit review. Full phase scope: the exchange (R10–R16), entitlement classes (R17–R20),
   refusals as entries (R35–R38), forwarding (R1–R2). The heart of the pivot; dissolves the
   invited window P2's review found. P3 also owes: D5's physical deletion once the exchange
   carries history; refuse_join authored by the refuser; invitation retraction (missing verb,
