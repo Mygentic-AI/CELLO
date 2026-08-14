@@ -21,10 +21,11 @@ description: >
 > taking a step back and thinking through from first principles."* The spec of record for all
 > further work is **[[M14B-RECONCILE-SPEC]] (v2)**. Anything below that predates it is history.
 
-- **NEXT ACTION: answer `SYNC-G2`. No code.** Confirm the entry set tolerates concurrent authors —
-  that the deterministic tie-break yields identical derivations on every holder, and that genuinely
-  conflicting governance acts (two incompatible property changes; a removal concurrent with a
-  promotion) have a stated rule. This gates **P1**, and it is the assumption spec v1 got wrong.
+- **NEXT ACTION: `DOD-SYNC-P1`** — entries gain causal parents; position becomes a per-author
+  watermark; derivation by causality. **`SYNC-G2` is ANSWERED (Entry 48): PASSES, with four
+  specifications P1 must carry** — the Kahn+hash linearization, the fold rules F1–F4 (removal
+  judged at its own ancestors; void-by-concurrent-removal), property LWW by the total order, and
+  `(seq, headHash)` positions so same-author equivocation is detected, not silently divergent.
   `SYNC-G1` (does causal ancestry replace the per-envelope `epoch_id`?) gates **P4**, not P1.
 - **READ ORDER:** [[M14B-PROCEDURE]] → [[M14B-RECONCILE-SPEC]] (v2, the build) →
   [[M14B-DEFINITION-OF-DONE]] (status only) → this block → Entry 47.
@@ -2400,3 +2401,103 @@ findings fixed before the tag flips).
 
 Nothing is half-built. Both repos are clean, all five unit branches are merged, and the last publish
 is on `beta` awaiting Andre's promotion.
+
+---
+
+## Entry 48 — SYNC-G2 answered: concurrent authors converge, with four specifications P1 must carry
+
+**Date:** 2026-08-14 · **Unit:** P0 (`SYNC-G2`) — analysis only, no code, per the spec's §14.
+
+### Verdict
+
+**G2 PASSES.** The entry set tolerates concurrent authors — every holder computes the identical
+derivation, and every genuinely conflicting governance act has a stated, order-independent rule —
+**provided P1 carries the four specifications in §4 below.** The headline qualification: `SYNC-R6`'s
+hash tie-break is sufficient for *determinism* but must NOT be the *resolver* for authority
+conflicts. A hash decides ties that are semantically arbitrary (property values); it must never
+decide whether a removal took effect, because that answer would be a coin toss on a security
+question — and worse, a losable one, since causal concurrency is author-claimable (a modified
+daemon can backdate its parents at will; there is no trusted clock to catch it).
+
+### 1. Determinism — the mechanical half
+
+1. **Total order:** Kahn topological sort over the entry DAG; among ready entries, ascending entry
+   hash. This is a pure function of the entry set — two holders holding the same set compute the
+   same order, always.
+2. **Derivation = a fold over that order.** Every fold rule below is a function of the linearization
+   and of ancestor sets only. No wall clock, no arrival order, no per-holder state anywhere in the
+   computation.
+3. Entries with missing parents are excluded identically everywhere (`R14`), so holders mid-sync
+   also derive identically over their applied prefixes.
+4. **Content needs none of this.** Yjs updates commute (its CRDT contract), so content convergence
+   is order-independent by construction. The tie-break's entire blast radius is governance
+   derivation — which is what makes `SYNC-AC4` cheap rather than heroic.
+
+### 2. The conflict cases — each with its rule
+
+Grounded in the shipped signature policy (`core/protocol-types/src/document-governance.ts`):
+`add_holder` / `promote_admin` / `remove_holder`(non-admin) / `change_property` are **single-admin**
+acts; `remove_admin` takes **ALL other admins exactly**, and the two-admin case is refused outright
+(D3). Those requirements do real work below — several nasty cases are unconstructable because of
+them.
+
+**The fold rules:**
+
+- **F1.** A non-removal governance entry takes effect iff (a) it validates against the folded state
+  at its position, and (b) it is **not concurrent with a valid removal of its author**
+  ("void-by-concurrent-removal").
+- **F2.** A **removal** entry is judged at its **own ancestors** — the state derived recursively
+  from its ancestor sub-DAG (terminates: ancestor sets strictly shrink) — and is **exempt from
+  F1(b)**. The exemption is what breaks the mutual-removal cycle; see the table.
+- **F3.** Content follows `R20` unchanged: judged at its own ancestors. A removed author's earlier
+  or concurrent content stands.
+- **F4.** An entry that is void or without effect **remains in history** (`R5`) and still travels.
+  It is not a refusal; it simply contributes nothing to derived state.
+
+| Conflict | Outcome | Why this rule and not the tie-break |
+|---|---|---|
+| `change_property` ∥ `change_property`, same property | Both on the record; the value from the entry **later in the total order** stands (LWW). | Here the tie-break IS the rule — the value choice is semantically arbitrary; only convergence matters. |
+| `remove_holder(C)` ∥ `promote_admin(C)` | **C is removed, in every fold order.** The removal, judged at its ancestors (F2, where C was a plain participant, so the single-admin claim is valid), takes effect even if the promotion folded first; a promotion of a removed party validates against nothing (F1a). | Under a pure fold, promotion-first would trip the holder-door refusal (`governance_remove_admin_first`) and C would survive on a hash flip. And since concurrency is claimable by backdating, promotion-beats-removal would make every removal defeatable by a colluding admin with a modified daemon. Re-admission stays available and **visible** — a fresh `add_holder` + consent on the record — which is the legitimate version of what the hash accident would do silently. |
+| removal of admin C ∥ C's own `add_holder(D)` | C's grant is **void** unless it is an *ancestor* of the removal (i.e. the removers had seen it). Cascade: D's standing falls with the void admission; content D authored while legitimately admitted stays admitted (F3). | An admin who sees removal coming could pre-sign backdated invites forever. "Anything not ancestral to the removal is void" is checkable by every holder independently, with no fixpoint and no order sensitivity. |
+| removal of admin A ∥ A's `kill` | The kill is void — same rule, no special case. | A removed party's concurrent authority evaporates uniformly. |
+| Mutual concurrent removals | **Both stand** (F2's exemption exists precisely so this does not become circular). Only constructable with ≥3 admins and a common co-signer — `remove_admin` takes all-other-admins, and the two-admin case is refused by D3. E.g. admins {A,B,C}: remove(A) by {B,C} ∥ remove(B) by {A,C} → admins {C}. | Voiding one by hash would hand a hash-grinding attacker a clean asymmetric win (remove the victim, keep yourself). Both-stand removes the incentive entirely: a backdated counter-removal never restores its author. |
+| `close` ∥ `close` | Both count toward every-participant-closed — `R27` already names this the normal case, not a conflict. | — |
+| `kill` ∥ anything | Killed (`R28`) — unless the killer's own removal voids it, per the row above. | — |
+| `add_holder(D)` ∥ `add_holder(D)` by two admins | Duplicate. D consents once; D is a participant via whichever admission is ancestral to that consent; the other admission is inert. | — |
+| removal(D) ∥ D's own consent | The removal is invalid at its ancestors — D was not yet a holder there — so it has no effect (F2). D becomes a participant and is removable by a *subsequent* removal. | Falls straight out of F2; listed because it looks like a special case and is not. |
+
+### 3. The adversarial finding: equivocation breaks the watermark, not the DAG
+
+`R7`'s position primitive assumes each author's entries form a chain. A modified daemon can fork its
+own chain: two signed entries at the same (author, sequence). **The derivation is untroubled** — a
+fork is just concurrency, and every rule above applies. **The watermark encoding is not:** both
+branches report "seq N", the two position vectors compare equal, neither side offers anything, and
+the holders are permanently, silently divergent — the exact bug class that killed spec v1, arriving
+by adversary instead of by accident.
+
+Specification: **the position vector carries `(seq, headHash)` per author.** Equal seq + different
+head = equivocation, detected at the first exchange; the exchange falls back to enumerating that
+author's entry hashes and both sides converge on the union. Two signatures by one key at one seq are
+a self-contained misbehaviour proof; the *policy* response (refuse the author's future entries,
+surface it to the operator) is a P3 decision and `R35`'s refusal machinery is sufficient for it —
+convergence does not depend on which policy is chosen.
+
+### 4. What P1 must carry — the four specifications
+
+1. **The linearization:** Kahn + ascending-entry-hash, stated as *the* total order every derivation
+   uses (refines `R6`).
+2. **The fold rules F1–F4**, including removal-judged-at-ancestors and void-by-concurrent-removal.
+3. **Property LWW** by that total order.
+4. **`(seq, headHash)` position entries** with equivocation detection and the enumeration fallback
+   (the wire shape lands with `R10` in P3; the *store and derivation* must be fork-tolerant from
+   P1).
+
+### 5. Relied on, not proven here
+
+- Yjs update commutativity is Yjs's documented CRDT contract — relied on, exercised live by
+  AC1/AC4, not re-proven by analysis.
+- The recursion in F2 (deriving state at a removal's ancestors) is assumed cheap at document scale
+  (cap 20 holders, governance entries rare). If profiling ever disagrees, the result is memoizable
+  by entry hash — it is a pure function of the ancestor set.
+
+**P1 is unblocked.**

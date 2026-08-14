@@ -17,6 +17,12 @@ description: >
 
 # M14B — Definition of Done
 
+> ### 🔄 PIVOT (2026-08-14) — the spec of record is now [[M14B-RECONCILE-SPEC]] (v2)
+> The delivery half of this milestone is being **replaced, not repaired**. Active work lives in
+> **Tier SYNC** below (the spec's phases P0–P6); the pre-pivot tiers are history plus the seven
+> lines the spec's §15 strikes once its deletions land. Do not pull a unit from the old tiers
+> without checking §15 first.
+
 ## How to use this
 - Find the lowest-numbered line not ✅ in the active tier — that is the next unit.
 - **Evidence discipline:** a flipped tag carries ONE line of evidence plus `→ Journal Entry N`.
@@ -507,6 +513,28 @@ description: >
 
 ---
 
+## Tier SYNC — the reconcile pivot ([[M14B-RECONCILE-SPEC]] v2 §14; supersedes further work in the tiers above)
+
+- **DOD-SYNC-P0** [docs] — answer `SYNC-G2`: concurrent authors converge identically and every
+  conflicting governance act has a stated rule. — ✅ PASSES with four specifications P1 must carry
+  (linearization; fold rules incl. removal-dominance; property LWW; `(seq, headHash)` positions
+  for equivocation detection) → Entry 48
+- **DOD-SYNC-P1** [cello-client] — entries gain causal parents; position becomes a per-author
+  watermark; derivation by causality with the R6 tie-break + Entry 48's fold rules; governance
+  moves onto it. Endings and consent ride the existing amendment carrier until P4 — no third
+  interim carrier. — ❌
+- **DOD-SYNC-P2** [cello-client] — one consent handshake (`R21`–`R25`); delete `D5`. — ❌
+- **DOD-SYNC-P3** [cello-client] — the exchange (`R10`–`R16`), entitlement (`R17`–`R20`),
+  refusals (`R35`–`R38`), forwarding (`R1`–`R2`). — ❌
+- **DOD-SYNC-P4** [cello-client] — answer `SYNC-G1` (does causal ancestry replace every use of
+  the per-envelope `epoch_id`?), then delete `D1`–`D4`, `D6`–`D10`, proven by removal (`R49`);
+  strike the seven §15 lines above. — ❌
+- **DOD-SYNC-P5** [cello-client] — scheduling (`R39`–`R43`) and the surface (`R45`–`R48`). — ❌
+- **DOD-SYNC-P6** [trustless-cello] — enforcers re-pointed at `SYNC-AC1`–`AC20`, three daemons as
+  separate OS processes. — ❌
+
+---
+
 ## Decisions Carried (ruled 2026-08-11 — [[2026-08-10_2116_multiplayer-artifacts-joining-an-existing-document]] §13, binding)
 
 - **D1 — full document on join, cheap path on history.** The joiner sees the whole current
@@ -542,8 +570,11 @@ description: >
   holder's own agent has to be told, in words, what happened and what is still theirs. Silence
   here reads as a bug on their screen. See `DOD-MP-REMOVE-FEEDBACK-1`.
 - **Guards carried from the multiplayer log §11 — do not re-litigate:** floor control is not
-  needed (a CRDT op is a spreadsheet cell, not an utterance); relaying is not the answer to
-  delivery (every holder authors and delivers its own updates — no relay tier); arrays stay
+  needed (a CRDT op is a spreadsheet cell, not an utterance); ~~relaying is not the answer to
+  delivery (every holder authors and delivers its own updates — no relay tier)~~ **SUPERSEDED
+  2026-08-14 by Andre's forwarding ruling** (`SYNC-R1`/`R2`: holders forward each other's signed
+  entries; forwarding confers no trust — the receiver verifies signature and entitlement itself);
+  arrays stay
   atomic (a journal is a keyed map, never an array); `append_only` buys ordering, not
   tamper-evidence for a mutable workflow record — no surface claims a multi-actor "tamper-evident
   audit trail" until field-level authority or a linked append-only journal ships (Tier 2+).
