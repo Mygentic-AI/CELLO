@@ -2702,12 +2702,19 @@ take over history delivery — logged here as a Decision Carried so P3 owns that
 
 ### Falsification rulings (§3a, logged not asked)
 
-- **Genesis-peer bridge.** Making the bilateral peer's participation depend on a consent ENTRY
-  would break every existing bilateral flow until the accept path ships entries — and the
-  proposer already holds signed consent evidence (the proposal ack). Ruling: `ArrangementGenesis`
-  gains `peerConsented` (supplied by the caller from the handshake record). An entry-shaped
-  consent supersedes it; P3/P4 may migrate the ack into an entry when the exchange lands. The
-  fold stays pure — evidence is the caller's input, never a store read.
+- **Genesis-peer bridge — RULED AND THEN REVERSED IN THE SAME SITTING.** First ruling: pass
+  `peerConsented` into the genesis from the caller's handshake record. Falsified before a line
+  was written: the handshake ack is NOT shared data — a joiner C never saw it, so C's fold would
+  derive B as invited while A's derives B as participant. A fold input that differs per holder
+  is the two-records disease wearing a new hat. **Final ruling: full R21 — the peer's accept
+  AUTHORS a consent entry** (their first entry, parents empty, anchored to genesis), delivered
+  over the amendment carrier and carried in join offers like any entry. Genesis seeds
+  participants = {proposer}, invited = {peer}; declared genesis admins take effect only while
+  participants (`admins = declared ∩ participants`, so a sole-proposer-admin document is briefly
+  single-admin until the peer consents — self-resolving, and invites during the window simply
+  refuse on policy). Pre-P2 documents (peer consented by ack alone) do not derive a bilateral
+  peer — accepted: all holders upgrade together, essentially no documents exist, and the P2a/P2b
+  halves land on ONE branch so no commit leaves the accept flow torn.
 - **Consent payload rides the property slots** rather than a third TBS bump — the slots are
   signed, readable, and validated at fold position; P3's version negotiation (R11) reads the
   same claim.
