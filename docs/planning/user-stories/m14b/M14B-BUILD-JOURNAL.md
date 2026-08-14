@@ -43,10 +43,15 @@ description: >
   with an empty position; the reply carries the GENESIS (the one record that is not an entry,
   validated by its hash being the document id) plus everything else; the joiner derives its own
   invited standing from the entries and accepts with the ordinary consent-authoring verb — no
-  offer frame, no join-store row, no answer frame anywhere in the flow. NEXT SUB-UNIT: D5's
-  PHYSICAL deletion (the legacy offer/answer path and its join-store bookkeeping — replacement
-  now proven), consent-entry settle of the inviter's surface, refuse_join by the invitee,
-  invitation retraction — then the P3 unit review. Full phase scope: the exchange (R10–R16), entitlement classes (R17–R20),
+  offer frame, no join-store row, no answer frame anywhere in the flow. **THE INVITATION LIFECYCLE IS
+  COMPLETE** (`d953944`): the arriving consent/refusal entry settles the inviter's surface
+  directly (the answer frame now carries nothing the record does not); the invitee declines by
+  authoring refuse_join through the generalized entry-authoring path; and retraction exists —
+  remove_holder acts on invited seats, with a racing consent losing under removal dominance,
+  pinned at the fold and in process. NEXT: D5's PHYSICAL deletion (offer/answer path + its
+  join bookkeeping — every replacement now proven), then the P3 unit review. One observed
+  flake, unrelated: the spawn-three-daemons singleton test timed out once under full parallel
+  load; passes isolated and on re-run; owed a timeout-headroom fix. Full phase scope: the exchange (R10–R16), entitlement classes (R17–R20),
   refusals as entries (R35–R38), forwarding (R1–R2). The heart of the pivot; dissolves the
   invited window P2's review found. P3 also owes: D5's physical deletion once the exchange
   carries history; refuse_join authored by the refuser; invitation retraction (missing verb,
