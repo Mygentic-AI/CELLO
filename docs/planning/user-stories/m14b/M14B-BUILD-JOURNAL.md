@@ -2501,3 +2501,60 @@ convergence does not depend on which policy is chosen.
   by entry hash — it is a pure function of the ancestor set.
 
 **P1 is unblocked.**
+
+---
+
+## Entry 49 — DOD-SYNC-P1 opened: clause checklist, falsification, one G2 addendum
+
+**Date:** 2026-08-14 · **Unit:** `DOD-SYNC-P1` · **Branch:** `m14b/sync-p1` (cello-client).
+
+### G2 addendum found while falsifying (Entry 48 refined, not contradicted)
+
+Three admins {A,B,C} can author three pairwise-co-signed removals concurrently — remove(A) by
+{B,C} ∥ remove(B) by {A,C} ∥ remove(C) by {A,B}. Each is valid at its own ancestors (F2), so all
+three take effect and the admin set is EMPTY — violating the standing invariant the linear replay
+enforces ("a document with no admins can never be amended again"). Refinement: **F2 gains a
+fold-position floor — a removal that would empty the admin set at its position in the total order
+is void.** Deterministic (the fold order is), preserves the invariant, and leaves the mutual
+two-of-three case exactly as Entry 48 ruled ({C} survives). The 3-way race now leaves exactly one
+admin, hash-chosen — acceptable: the race requires every admin co-signing against every other.
+
+### Clause checklist (what the reviewer receives)
+
+1. **Entries gain causal parents** — amendment TBS (domain bumped) carries `author_agent_id`
+   (the accountable initiator, MUST be in the required-signer set), `author_seq` (that author's
+   own chain counter), `parents[]` (entry hashes applied at authoring; MUST include the author's
+   previous entry hash for seq > 1). `epoch_id`/`prev_amendment_hash` RETAINED as interim carrier
+   fields — they are D7's to delete at P4 behind G1, not P1's.
+2. **Position becomes a per-author watermark** — the store answers `(author → (seq, headHash))`
+   per document; contiguity per R13; entries with missing parents held pending (R14), never
+   counted in a watermark.
+3. **Derivation by causality** — Kahn + ascending-entry-hash linearization; fold rules F1–F4 of
+   Entry 48 plus the admin-floor addendum; property LWW by the total order; a fold-void entry
+   stays in history and contributes nothing. The fold REPLACES the linear replay (D8: exactly one
+   derivation) — chain-gap/fork refusals stop existing as derivation concepts.
+4. **Governance moves onto it** — all seven `deriveArrangement` call sites (document-layer ×2,
+   document-handlers ×5) consume the fold; inbound amendment admission is causal (verify → hold
+   pending parents → fold), no longer epoch-contiguity-gated.
+5. **No third interim carrier** — the v2 record rides the existing amendment delivery unchanged.
+6. **Fork tolerance** — same (author, seq) twice is admissible into the store and handled by the
+   fold as concurrency; the watermark headHash makes it detectable (exchange behaviour is P3).
+7. **Migration** — client-side SQLite migration for the store changes, tested against a POPULATED
+   pre-migration database, not only fresh.
+8. **Observability** — injected logger, `document.*` events, correlationIds threaded.
+
+### Falsification (before code)
+
+- *Old stored/wire frames:* the decoder refuses a v1 frame loudly by name (mandatory-field
+  discipline already in place). No compatibility owed; the live diverged specimen predates the
+  pivot build and will be re-demonstrated under the new protocol, not decoded by it.
+- *Interface check:* the fold needs signature verification + the signer policy — both already
+  injected into `deriveArrangement`'s signature; same seams, new internals. No new interface
+  method needed.
+- *F2 recursion:* deriving state at a removal's ancestors is a pure function of the ancestor
+  set — memoizable by entry hash; cap-20 documents keep it trivially cheap.
+- *What breaks if wrong:* the no-op refusals of the linear replay (add-existing-holder etc.)
+  become fold-voids rather than chain-killing refusals — this is R5/F4 BY DESIGN, and the
+  admission-invalid class (bad signature, malformed) still never enters the set.
+- *Publish:* NOT publishing mid-P1 — the phases ship as a coherent batch once the exchange
+  exists; logged as a Decision Carried on the unit, cascade ACs land at that batch.
