@@ -2672,3 +2672,42 @@ review window: two new entry kinds (`consent`, `refuse_join`), the fold's partic
 becomes admitted ∧ consented (R22, genesis peer included), consent entries ride the amendment
 carrier, and D5's *physical* deletion of the history-carrying offer waits for P3's exchange to
 take over history delivery — logged here as a Decision Carried so P3 owns that completion.
+
+---
+
+## Entry 52 — DOD-SYNC-P2 opened: clause checklist + two falsification rulings
+
+**Date:** 2026-08-14 · **Branch:** `m14b/sync-p2` (cello-client).
+
+### Clause checklist
+
+1. **Entry kinds `consent` and `refuse_join`** (`R21`/`R24`): subject = the consenting/refusing
+   party = the author = the sole required signer (policy rule); a consent names what it agrees
+   to (R22) via the SIGNED property slots — `property_change: { key: "consents_to", value:
+   "<assurance_tier>/<feature_version>" }` — no TBS change; the fold voids a consent whose
+   claim mismatches the document's properties at its position.
+2. **Participant = admitted ∧ consented** (`R22`): `add_holder` alone yields **invited**; the
+   subject's own consent entry causally after it yields participant. `refuse_join` ends the
+   invitation (not a participant, and P3 stops reconciling with them). The holder cap counts
+   admitted-not-refused (invited + participants), so over-inviting is refused at the same door.
+3. **Genesis** (`R21`): the proposer's signature on the proposal IS their consent. The genesis
+   PEER's consent is evidenced either by a consent entry or — INTERIM BRIDGE, ruled below — by
+   the recorded handshake acceptance the proposer holds.
+4. **`cello_doc_accept` authors the consent entry** and seeds it into the amendment carrier
+   (fan-out to derived holders); an ARRIVING consent entry settles the inviter's join row.
+   `cello_doc_refuse` authors `refuse_join`; the join ANSWER frame survives the interim to carry
+   the operator's refusal reason and the settle bookkeeping (D5 physical deletion is P3's, per
+   Entry 51).
+5. Gates green both repos; one reviewer pass; fold changes red-first in the derive suite.
+
+### Falsification rulings (§3a, logged not asked)
+
+- **Genesis-peer bridge.** Making the bilateral peer's participation depend on a consent ENTRY
+  would break every existing bilateral flow until the accept path ships entries — and the
+  proposer already holds signed consent evidence (the proposal ack). Ruling: `ArrangementGenesis`
+  gains `peerConsented` (supplied by the caller from the handshake record). An entry-shaped
+  consent supersedes it; P3/P4 may migrate the ack into an entry when the exchange lands. The
+  fold stays pure — evidence is the caller's input, never a store read.
+- **Consent payload rides the property slots** rather than a third TBS bump — the slots are
+  signed, readable, and validated at fold position; P3's version negotiation (R11) reads the
+  same claim.
