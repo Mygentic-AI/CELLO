@@ -27,12 +27,17 @@ description: >
   (`6c5f6ff` — entitlement classes ruled first from own state, stranger refusal NON-terminal
   per R19, removed terminal, difference per author minus the peer's refusal set, fork re-offer
   from before the fork point, content along sender chains, `peerAhead` for step 3; store gained
-  `entriesByAuthorAfter`). NEXT SUB-UNIT: the INITIATOR + APPLY path — wire
-  `document_reconcile` into the frame router, build step 1 from `buildReconcileBlock`, apply a
-  reply (entries via `recordAmendment`'s causal door FIRST per R12, envelopes via the content
-  inbound gate), send step 3 on `peerAhead`, pin idempotence (three exchanges, no changes,
-  byte-identical state). Then forwarding + join-via-exchange (D5 physical deletion). Full phase
-  scope: the exchange (R10–R16), entitlement classes (R17–R20),
+  `entriesByAuthorAfter`). **THE EXCHANGE IS LIVE END TO END** (`ac2c3bb`): the frame routes with the
+  session's authenticated sender threaded through; an arriving frame applies governance entries
+  then content envelopes through the ordinary doors, then answers with the difference or with
+  SILENCE when converged (the termination rule); refusals ride the same frame (`f095d77`);
+  pinned in process — two daemons diverge, one initiate converges them in exactly three steps,
+  and a repeat exchange produces no reply at all. Known interim limit recorded in the test:
+  pre-governance content still trips the per-envelope epoch stamp (the P4/G1 deletion target).
+  NEXT SUB-UNIT: forwarding + join-via-exchange — the AC2 shape (author dead, third holder's
+  exchange carries their entries), joiners fed by the ordinary exchange + R25 notice, D5's
+  physical deletion (offer/answer path), consent-entry join settle, refuse_join by the invitee,
+  invitation retraction. Full phase scope: the exchange (R10–R16), entitlement classes (R17–R20),
   refusals as entries (R35–R38), forwarding (R1–R2). The heart of the pivot; dissolves the
   invited window P2's review found. P3 also owes: D5's physical deletion once the exchange
   carries history; refuse_join authored by the refuser; invitation retraction (missing verb,
