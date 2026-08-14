@@ -522,7 +522,8 @@ description: >
 - **DOD-SYNC-P1** [cello-client] — entries gain causal parents; position becomes a per-author
   watermark; derivation by causality with the R6 tie-break + Entry 48's fold rules; governance
   moves onto it. Endings and consent ride the existing amendment carrier until P4 — no third
-  interim carrier. — ❌
+  interim carrier. — ✅ merged `4ac91a9`; reviewed (4 blocking findings fixed, incl. the
+  re-admission-breaking concurrency rule); linear replay deleted → Entry 51
 - **DOD-SYNC-P2** [cello-client] — one consent handshake (`R21`–`R25`); delete `D5`. — ❌
 - **DOD-SYNC-P3** [cello-client] — the exchange (`R10`–`R16`), entitlement (`R17`–`R20`),
   refusals (`R35`–`R38`), forwarding (`R1`–`R2`). — ❌

@@ -21,12 +21,12 @@ description: >
 > taking a step back and thinking through from first principles."* The spec of record for all
 > further work is **[[M14B-RECONCILE-SPEC]] (v2)**. Anything below that predates it is history.
 
-- **NEXT ACTION: `DOD-SYNC-P1`** — entries gain causal parents; position becomes a per-author
-  watermark; derivation by causality. **`SYNC-G2` is ANSWERED (Entry 48): PASSES, with four
-  specifications P1 must carry** — the Kahn+hash linearization, the fold rules F1–F4 (removal
-  judged at its own ancestors; void-by-concurrent-removal), property LWW by the total order, and
-  `(seq, headHash)` positions so same-author equivocation is detected, not silently divergent.
-  `SYNC-G1` (does causal ancestry replace the per-envelope `epoch_id`?) gates **P4**, not P1.
+- **NEXT ACTION: `DOD-SYNC-P2`** — one consent handshake (`R21`–`R25`): entry kinds `consent` +
+  `refuse_join`; participant = admitted ∧ consented (R22, genesis peer included); consent rides
+  the amendment carrier; D5's PHYSICAL deletion of the history-carrying offer completes at P3
+  (Decision Carried, Entry 51). **P0 ✅ (Entry 48: G2 passes, four specifications) · P1 ✅
+  (Entries 49–51: merged `4ac91a9`, reviewed, replay deleted).** `SYNC-G1` gates **P4**, not
+  earlier phases.
 - **READ ORDER:** [[M14B-PROCEDURE]] → [[M14B-RECONCILE-SPEC]] (v2, the build) →
   [[M14B-DEFINITION-OF-DONE]] (status only) → this block → Entry 47.
   Rationale, if wanted, is [[2026-08-14_1155_document-protocol-reconcile-not-deliver]] — NOT needed
@@ -34,8 +34,8 @@ description: >
 - **STANDING RULING (2026-08-14, Andre):** **holders forward each other's signed entries.** This
   SUPERSEDES the prior guard that every holder delivers only its own updates. Forwarding confers no
   trust — the receiver verifies signature and entitlement itself (`SYNC-R2`).
-- **REPOS, both clean, both on `main`:** cello-client `2424631` · trustless-cello `11c148ad`.
-  All five M14B unit branches are merged: `m14b/{invite-fanout,sweep-alive,delivery-fresh-session,control-durable,remove-feedback}`.
+- **REPOS, both clean, both on `main`:** cello-client `4ac91a9` (P1 merged) · trustless-cello:
+  see git log. All six M14B unit branches merged, latest `m14b/sync-p1`.
 - **npm:** `latest` = cli 0.0.173 / daemon 0.0.166. `beta` = cli **0.0.175** / daemon **0.0.168**.
   **A `latest` PROMOTION IS OWED and is ANDRE'S to run — never mine:**
   `npm dist-tag add @cello-protocol/cli@0.0.175 latest` and
@@ -2608,4 +2608,67 @@ green (test, lint, typecheck, build; daemon suite 2304/2304, protocol-types 459/
 clause checklist, the four knowing deviations, and directed attention at: fold determinism under
 the memoized ancestor-verdicts, subset-independence of `removalValidAtAncestors`, stranger-door
 wedges, stale old-table readers, bounded-cost sanity, and test teeth on the grind-both-orders
-technique. **Verdict not yet in — this entry ends with the review outstanding.**
+technique. **Verdict landed — Entry 51.**
+
+---
+
+## Entry 51 — SYNC-P1 reviewed, all findings fixed, MERGED ✅
+
+**Date:** 2026-08-14 · **Review:** one pass, `cello-unit-reviewer`, no model override. Merged to
+`main` at `4ac91a9` (fix commit `30f0282`); all gates green both before and after the fixes
+(daemon 2306/2306, protocol-types full suite, lint, typecheck, build).
+
+### The reviewer's verdict, in its own words
+
+> "SPEC: DEVIATIONS FOUND — F1 is an un-journaled deviation from Entry 48's F1(b) ('concurrent'
+> implemented as 'non-ancestral'), breaking the journal's own re-admission promise. [blocking] ·
+> SILENT FALLBACKS FOUND — F2: the held-path early return silently drops promoted entries'
+> removal notice and lifecycle completion; the system reports success while a document sticks
+> `active` forever. [blocking] · ERROR SUBSTITUTION FOUND — the F1 void reason asserts
+> concurrency that did not occur. [blocking] · HOLLOW TESTS FOUND — the F1(b) test passes ~50%
+> of runs against a reverted implementation. [blocking] · REMOVALS PROVEN."
+
+Spec-fidelity table: clauses 1–2 and 5–8 implemented; clause 3 carried F1; clause 4 carried F2.
+All four declared deviations checked out as declared. Determinism was probed directly and held:
+*"no two-holders-diverge construction exists — the derivation is a pure function of the entry
+set."* The reviewer proved F1 by executing a repro against the **built dist**, not by reading.
+
+### Findings and dispositions (all fixed in `30f0282`)
+
+1. **F1 (blocking) — re-admission was broken and the error lied.** The concurrency void skipped a
+   removal only when the entry was among the *removal's* ancestors, never the other direction —
+   so an act authored *after* an ancestral removal (the legitimate re-admit → re-promote → author
+   path) was voided as "concurrent" with a removal it was strictly ordered against. **Fixed:**
+   the check now also skips removals ancestral to the entry; the fold-position state fails safe
+   (a removed party's post-removal act still voids, as `governance_not_admin`, pinned by test).
+   Re-admission pinned end-to-end; the concurrent case now GROUND IN BOTH HASH ORDERS — the old
+   test passed a reverted implementation on the hash coin.
+2. **F2 (blocking) — held-then-promoted entries lost their notices.** The out-of-order arrival
+   path (exactly what the pending table exists for) never fired `document.removed_from` and never
+   ran the lifecycle completion — the CLOSE-N-1 stuck-`active` defect reintroduced. **Fixed:**
+   the store returns promoted envelopes; the layer runs identical post-apply surfacing for direct
+   arrivals and promotions. Pinned by a layer-level test that fails against the early return.
+3. **F3 (ruled) — a floor-voided removal still voids its victim's concurrent acts,** contra F4's
+   letter. **RULED: accepted as a deterministic, err-on-the-safe-side exception.** Constructable
+   only when every admin co-signs against every other AND the floored survivor authored a
+   concurrent non-removal act; no holder divergence is possible; the clean alternative needs a
+   second fold pass. Recorded in the code at the check site.
+4. **F4 (fixed) — the stranger door counted fold-void admissions,** so a hostile holder could
+   mint one self-signed void admission naming any key and hand it an unbounded license to grow
+   every holder's tables. **Fixed:** only EFFECTIVE admissions make an author known, and held
+   entries are capped per (document, author) (`MAX_PENDING_PER_AUTHOR`, refusal names the cause).
+5. **F5 (noted, unchanged):** `entry_linearize_stuck` stays as a loud invariant — unreachable for
+   ancestry-complete sets, and a silent return there would be worse.
+6. **Hollow-test findings:** all three closed — the ground-both-orders grant race, two
+   stranger-door tests (refused stranger not stored; known author's void stored as history), and
+   the held→promoted layer test.
+
+**Production source shrank; the test surface grew.** The four-commit unit deleted the linear
+replay, the epoch-slot store, and their refusal machinery (−~860 lines against +~540 of fold +
+store), while the derive suite alone added ~760 lines of adversarial pins.
+
+**Unit closed. Next: `DOD-SYNC-P2` — one consent handshake (`R21`–`R25`).** Scoped during the
+review window: two new entry kinds (`consent`, `refuse_join`), the fold's participant rule
+becomes admitted ∧ consented (R22, genesis peer included), consent entries ride the amendment
+carrier, and D5's *physical* deletion of the history-carrying offer waits for P3's exchange to
+take over history delivery — logged here as a Decision Carried so P3 owns that completion.
