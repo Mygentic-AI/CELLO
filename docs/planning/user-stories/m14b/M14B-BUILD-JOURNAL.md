@@ -21,7 +21,13 @@ description: >
 > taking a step back and thinking through from first principles."* The spec of record for all
 > further work is **[[M14B-RECONCILE-SPEC]] (v2)**. Anything below that predates it is history.
 
-- **NEXT ACTION: `DOD-SYNC-P3`** — the exchange (R10–R16), entitlement classes (R17–R20),
+- **NEXT ACTION: `DOD-SYNC-P3`, in progress on `m14b/sync-p3`.** The reconcile FRAME is built
+  and committed (`73082ed`, protocol-types: one shape for all three steps, dual per-author
+  positions, refusal sets, 32-doc batching cap, unsigned-by-design — Entry 55 has the wire
+  rationale). NEXT SUB-UNIT: the responder — derive the peer's entitlement class from own state,
+  compute the governance+content difference minus the peer's refusal set, reply with entries +
+  own position. Then the initiator/apply path, then forwarding + join-via-exchange (D5 physical
+  deletion). Full phase scope: the exchange (R10–R16), entitlement classes (R17–R20),
   refusals as entries (R35–R38), forwarding (R1–R2). The heart of the pivot; dissolves the
   invited window P2's review found. P3 also owes: D5's physical deletion once the exchange
   carries history; refuse_join authored by the refuser; invitation retraction (missing verb,
