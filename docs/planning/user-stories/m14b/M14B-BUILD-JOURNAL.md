@@ -2558,3 +2558,54 @@ admin, hash-chosen — acceptable: the race requires every admin co-signing agai
   admission-invalid class (bad signature, malformed) still never enters the set.
 - *Publish:* NOT publishing mid-P1 — the phases ship as a coherent batch once the exchange
   exists; logged as a Decision Carried on the unit, cascade ACs land at that batch.
+
+---
+
+## Entry 50 — DOD-SYNC-P1 BUILT — review IN FLIGHT, unit stays 🟡
+
+**Date:** 2026-08-14 · **Branch:** `m14b/sync-p1`, four commits `2424631..ea31d35`, all gates
+green (test, lint, typecheck, build; daemon suite 2304/2304, protocol-types 459/459).
+**Net −344 lines** (305 added, 649 deleted) — the simplification is real, not claimed.
+
+### What was built, by commit
+
+1. **`f183b38` — record v2.** The amendment TBS gained `author_agent_id` (must be in the
+   required-signer set), `author_seq`, `parents[]` (canonical ascending, capped at 64); domain
+   bumped to v2; frozen vector regenerated. A forwarder cannot re-attribute, re-sequence, or
+   re-parent without every signature failing (`SYNC-R2`).
+2. **`e25c067` — the causal derivation.** `deriveDocumentState`: Kahn + ascending-entry-hash
+   linearization, fold rules F1–F4 + the Entry 49 admin floor. The dominance cases are proven in
+   BOTH hash orders by grinding `authored_at_ms` until the entry hashes sort each way — the
+   removal-beats-promotion claim is pinned, not sampled.
+3. **`5a6d580` — the fork-tolerant store.** `document_entries` keys by entry hash; concurrent
+   entries at one epoch/seq both stored; missing-parent entries HELD in a pending table (R14) and
+   promoted on completion, cascade included — the invariant bought: everything in the entries
+   table has its full ancestry there too. Watermarks report highest CONTIGUOUS seq + head
+   hash(es) (two heads at one seq = equivocation, visible). Every old-table reader (membership
+   walk, epoch read, the delivery ledger's byte joins) re-pointed — one write home.
+4. **`ea31d35` — governance onto the fold; replay deleted.** All seven call sites consume the
+   fold; `deriveArrangement` is gone and chain-gap/fork cease to exist as derivation concepts
+   (D8 holds). Inbound door split: `checkEntryAdmissible` (permanent invalidity only) + the
+   STRANGER DOOR (`SYNC-R18` interim — an author neither in genesis nor named by a held
+   admission is refused, never stored); known-author semantic voids are stored as history (F4).
+   Locally-authored entries still refuse on fold-void. Authoring parents = the fold's frontier.
+
+### Decisions carried on this unit
+
+- **Own-chain rule refined (red→green finding):** the author's previous entry must be among the
+  ANCESTORS the parents reach — a direct parent is the common case, not the requirement.
+  Frontier authoring is the normal shape of concurrent work.
+- **Stranger door interim semantics:** an entry arriving before the admission naming its author
+  is REFUSED (sender retries) rather than held — acceptable until P3's exchange delivers
+  governance first, in order; journaled so P3 knows to revisit.
+- **`membershipOf`/`walkMembership` last-event walk survives until P3's entitlement classes;
+  the old `document_amendments` table stays created-but-unused until P4.**
+- **Not publishing mid-P1** — cascade lands when the phases ship as a coherent batch.
+
+### Review
+
+`cello-unit-reviewer` dispatched on `2424631..ea31d35` (no model override) with the Entry 49
+clause checklist, the four knowing deviations, and directed attention at: fold determinism under
+the memoized ancestor-verdicts, subset-independence of `removalValidAtAncestors`, stranger-door
+wedges, stale old-table readers, bounded-cost sanity, and test teeth on the grind-both-orders
+technique. **Verdict not yet in — this entry ends with the review outstanding.**
