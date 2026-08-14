@@ -2718,3 +2718,60 @@ take over history delivery — logged here as a Decision Carried so P3 owns that
 - **Consent payload rides the property slots** rather than a third TBS bump — the slots are
   signed, readable, and validated at fold position; P3's version negotiation (R11) reads the
   same claim.
+
+---
+
+## Entry 53 — DOD-SYNC-P2 BUILT — review IN FLIGHT, unit stays 🟡
+
+**Date:** 2026-08-14 · **Branch:** `m14b/sync-p2`, two commits `4ac91a9..ec2aaea`, all gates
+green (daemon 2306/2306 with the vitest cache CLEARED — see the trap below).
+
+### What was built
+
+1. **Consent is the subject's own signed entry.** Two new entry kinds: `consent` (answers an
+   admission, names what it agrees to — assurance tier + feature version — inside the signed
+   property slots) and `refuse_join` (ends an invitation). The policy accepts only claims where
+   the signer set is exactly the subject: nobody consents for you, and the fold voids a consent
+   whose claim mismatches the document, naming both sides.
+2. **Participant = admitted ∧ consented, genesis included.** An admission now only INVITES.
+   The proposer's proposal signature is their consent; the named peer starts invited and becomes
+   a participant when their own consent entry applies — at which point any admin power declared
+   for them at creation activates. The holder cap counts admitted seats (participants + open
+   invitations), closing the over-invite door.
+3. **Accepting authors the entry.** Both accept paths build the consent entry, append it, and
+   fan it out over the durable amendment carrier to the derived participants. The document list
+   and join inbox now show `invited` beside `participants`, so an unanswered proposal reads as
+   exactly that.
+
+### Two deliberate behavior changes the tests surfaced
+
+- A solo proposer cannot voluntarily leave before anyone consents — the admin floor refuses,
+  because the document would be orphaned with zero admins. Correct, kept, pinned by test.
+- An invited seat that never consented cannot be removed through the holder door. **Invitation
+  retraction is now a missing verb** — recorded as owed to P3 (the exchange phase), where a
+  refusal/retraction travels as an entry like everything else.
+
+### Deferred to P3, deliberately
+
+The refusing invitee does not yet author `refuse_join` (a refuser holds no document machinery;
+the interim join ANSWER frame carries the refusal and its reason), and D5's PHYSICAL deletion
+(the history-carrying offer, the proposal/accept/refuse/answer path) waits for the exchange to
+take over history delivery, per Entry 51's Decision Carried.
+
+### A trap worth its own heading: THE STALE VITEST TRANSFORM CACHE
+
+After the fold's participant rule changed, the full daemon suite reported 2306/2306 GREEN — and
+it was false. The vitest transform cache was serving the pre-change protocol-types source; the
+same test failed when run in isolation. Every gate verdict after a cross-package source change
+must run with the cache cleared (`--no-cache`, or remove `node_modules/.vite`) before it is
+believed. This is the "run it so it can FAIL" rule wearing a new disguise: a cached green is a
+green that cannot fail.
+
+### Review
+
+`cello-unit-reviewer` dispatched on `4ac91a9..ec2aaea` (no model override) with the Entry 52
+checklist, the deferrals above, and directed attention at: whether any path still confers
+participation from admission alone; whether a modified daemon can mint participation without the
+subject's signature anywhere; the `consents_to` claim on documents with odd genesis properties;
+the invite-while-consent-in-flight race; and the bilateral accept's warn-only consent-failure
+path. **Verdict not yet in — this entry ends with the review outstanding.**
