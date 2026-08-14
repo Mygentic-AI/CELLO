@@ -15,24 +15,48 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **Next: SHIP-1's remaining halves.** DONE: version cascade (all seven bumped, `34f3d2a`),
-  tag `v0.0.235` pushed, CI green through `smoke-tag`, all seven on BETA, verified against the
-  TARBALL (daemon 0.0.162 dist carries document-join-store, document-amendment-store,
-  holdersFor, seedDeliveries, document_sender_removed, cello_doc_invite, cello_doc_remove) and
-  cross-pins are real versions (cli→daemon 0.0.162, connect→crypto 0.0.50/transport 0.0.56).
-  REMAINING: (a) **ANDRE RUNS THE `latest` PROMOTION** — the seven commands are prepared and
-  handed over, never run by me; (b) the trustless-cello lockfile refresh, which must follow the
-  promotion (both repos float `latest`, so `pnpm install` before it would lock the OLD version);
-  (c) the live fleet smoke on GCP — three real daemons doing create → join → edit → converge →
-  remove → seal (the local spine proof is green, this is the fleet one).
-- **BETA VERSIONS:** crypto 0.0.50 · protocol-types 0.0.54 · transport 0.0.56 · gateway 0.0.34 ·
-  daemon 0.0.162 · cli 0.0.169 · connect 0.0.146.
-- **Tiers:** P0 ✅✅✅✅ · P1 ✅✅ · P2 ✅✅ · P3 ✅ · P4 🟠🟠✅🟠❌ (enforcer audit, Entry 22 — FANOUT earned; GOVERN/JOIN/REMOVE partial with named gaps + 2 decisions owed) · SHIP-1 beta done, promotion is Andre's
-- **Branches in flight:** none.
-- **Publishes this milestone:** none. (M14 defect-fix commits `6a26e21` + `59c1814` and SIG-1
-  ride the next ordinary publish — SIG-1 has no wire consumer until AMEND-1, so nothing skews.)
-- **Parked:** nothing yet.
+> ### 🔄 THE MILESTONE HAS PIVOTED. DO NOT CONTINUE PATCHING DELIVERY.
+> The delivery half of this milestone is being **replaced**, not repaired. Andre's ruling,
+> 2026-08-14, after five units of whack-a-mole: *"we've painted ourselves into a corner… instead of
+> taking a step back and thinking through from first principles."* The spec of record for all
+> further work is **[[M14B-RECONCILE-SPEC]] (v2)**. Anything below that predates it is history.
 
+- **NEXT ACTION: answer `SYNC-G2`. No code.** Confirm the entry set tolerates concurrent authors —
+  that the deterministic tie-break yields identical derivations on every holder, and that genuinely
+  conflicting governance acts (two incompatible property changes; a removal concurrent with a
+  promotion) have a stated rule. This gates **P1**, and it is the assumption spec v1 got wrong.
+  `SYNC-G1` (does causal ancestry replace the per-envelope `epoch_id`?) gates **P4**, not P1.
+- **READ ORDER:** [[M14B-PROCEDURE]] → [[M14B-RECONCILE-SPEC]] (v2, the build) →
+  [[M14B-DEFINITION-OF-DONE]] (status only) → this block → Entry 47.
+  Rationale, if wanted, is [[2026-08-14_1155_document-protocol-reconcile-not-deliver]] — NOT needed
+  to work.
+- **STANDING RULING (2026-08-14, Andre):** **holders forward each other's signed entries.** This
+  SUPERSEDES the prior guard that every holder delivers only its own updates. Forwarding confers no
+  trust — the receiver verifies signature and entitlement itself (`SYNC-R2`).
+- **REPOS, both clean, both on `main`:** cello-client `2424631` · trustless-cello `11c148ad`.
+  All five M14B unit branches are merged: `m14b/{invite-fanout,sweep-alive,delivery-fresh-session,control-durable,remove-feedback}`.
+- **npm:** `latest` = cli 0.0.173 / daemon 0.0.166. `beta` = cli **0.0.175** / daemon **0.0.168**.
+  **A `latest` PROMOTION IS OWED and is ANDRE'S to run — never mine:**
+  `npm dist-tag add @cello-protocol/cli@0.0.175 latest` and
+  `npm dist-tag add @cello-protocol/daemon@0.0.168 latest`. The other five packages are unchanged
+  and already on `latest`.
+- **LIVE MACHINES both run daemon 0.0.167** (installed from beta), NOT 0.0.168: Andre's laptop, and
+  the Hermes EC2 box `i-06db70df6b3e32207` (us-east-1, agent `Miss_Chelly_H`
+  `698bf453c715594fbcebe0178f899b1fd46f87eb5f63be744adf09799d3dbb8e`, services `hermes-serve` +
+  `hermes-gateway` under **user** systemd — `XDG_RUNTIME_DIR=/run/user/1000`).
+- **A LIVE DIVERGED DOCUMENT IS DELIBERATELY LEFT IN PLACE** as a specimen:
+  `b6d58753687f6d2e64a8c2c1285ea27b9b0e65c3f5ef1432f18bcdc1c70b44c6` — the laptop holds epoch 1
+  with 3 participants, Hermes holds epoch 0 with 2, both report nothing pending and no error. No
+  verb can heal it. Do not "fix" it; it is the acceptance target for the new design.
+- **No crons, watchdogs or background agents are standing.** Both M14B watchdogs were deleted.
+- **Tiers (pre-pivot, for history only):** P0–P3 ✅ · P4 partial · SHIP-1 beta done. Seven DoD lines
+  are struck once `SYNC-D1`–`D10` land; see [[M14B-RECONCILE-SPEC]] §15.
+- **Parked for Andre, all superseded by the spec except the last:** ENDED-BACKLOG (answered by
+  `SYNC-R30`), RELAY-GONE-DISAMBIG and ZOMBIE-SESSION (moot once the ledger goes),
+  AMEND-CONFIRM (moot), DELIVERY-QUIET (**still real** — the board's trace stands; needs the
+  notice of `SYNC-R25` to carry a purpose), GOVERN-WIRE (**still real**, and simpler under the new
+  primitive: a half-signed entry reconciles like any other and completes when the last signature
+  arrives).
 ---
 
 ## Entry 0 — Milestone setup (2026-08-11)
@@ -2289,3 +2313,90 @@ every caller written against that contract, so `cello_doc_write` handed the oper
 `Data read, but end of buffer not reached` — a CBOR reader naming where it surfaced — while the
 publish path was already holding a named refusal ready. Contained at the function whose contract it
 is, not at the call site.
+
+---
+
+## Entry 47 — the pivot: stop patching delivery, replace it
+
+**Date:** 2026-08-14 · **State:** design settled and reviewed; implementation NOT started.
+
+### What happened
+
+Five units shipped in one night (Entries 37–46), each one green, reviewed, and correct. Andre read
+the result and called it:
+
+> *"I've encountered some unanticipated problems and we've adapted to them by adding fixes… we've
+> painted ourselves into a corner where we're looking at the problem we're trying to fix and we're
+> adding more and more complexity instead of taking a step back and thinking through from first
+> principles… I don't understand it, and I am the original author of it."*
+
+He was right, and the diagnosis is sharper than "it got complicated." **The feature contains three
+ideas — a signed chain, converging content, and reconciling the two between holders — and we
+implemented them as seven.** Four separate delivery mechanisms, built at different times, that
+disagree with each other. Every bug this feature has ever produced has one shape: **two records
+disagreeing about the same fact.**
+
+Each of the five fixes was me porting the least-bad mechanism into a place that had a worse one.
+That is spreading, not architecture.
+
+### The design
+
+`M14B-RECONCILE-SPEC` v1 proposed: stop recording what we sent, ask what they have, send the
+difference. It was thrown to an adversarial reviewer, which found it **not buildable**:
+
+- **v1 made the chain multi-writer with no ordering rule.** Folding consent and endings into it
+  meant every join has two authors and every agreement-to-close has N. Position was a single
+  integer, so two honest concurrent closes produce different entries at the same slot, and **neither
+  side can see it**. Permanent invisible divergence from correct use.
+- **"Send the difference" hid a re-architecture.** Content is not a Yjs document on the wire; it is
+  per-author signed envelopes replayed into Yjs. A plain diff is a merged blob signed by nobody,
+  which makes "only accept entries from entitled authors" unimplementable and silently guts
+  notarisation.
+- **It omitted refused content entirely** — whose failure mode is already written down in
+  `document-rejection.ts`: re-offer forever, re-refuse forever, everything stacked on top stuck
+  behind it. The warning was a comment in a file that was not opened.
+- It also gated on the smaller of two assumptions, would have regressed the removed-holder feedback
+  shipped hours earlier, re-specified the sweep stall fixed three days earlier, and shipped five of
+  fifteen acceptance criteria that a do-nothing implementation would pass.
+
+### The ruling that collapsed it
+
+Andre, asked whether holders may pass on each other's signed edits: **yes.** This supersedes the
+guard that each holder delivers only its own.
+
+That unlocked the simplification the reviewer's findings were circling. Content already travels as
+per-author signed entries; once forwarding is allowed, and once consent and endings join governance,
+**both halves are the same shape.** So v2 has **one primitive used twice**: signed entries naming
+their causal parents, reconciled by comparing per-author watermarks. Position is "how far along I am
+with each author," for governance and content alike.
+
+Causality then does work the epoch stamp was doing, and does it better: content authored after an
+ending is refusable by every holder independently **including from a modified daemon**, and a
+removed author's earlier work still converges to holders who were behind at removal.
+
+### Standing decisions carried
+
+1. **Holders forward each other's signed entries** (Andre, 2026-08-14). Forwarding confers no trust:
+   the receiver verifies signature and entitlement itself. `SYNC-R1`/`R2`.
+2. **One primitive for governance and content** — entries with causal parents; watermark-vector
+   position. `SYNC-R3`–`R7`.
+3. **Refusals are entries and travel like anything else**; nothing refused is ever re-offered, by
+   anyone. Receiver-side refusal records are REQUIRED and are not the banned delivery ledger.
+   `SYNC-R35`–`R38`.
+4. **Scheduling is separated from safety.** Backoff, in-flight marks and suppression are permitted
+   and expected; they may delay an exchange, never forbid one. v1 accidentally banned them.
+   `SYNC-R39`–`R43`.
+5. **Session liveness stays in the session layer.** The document layer must never reference relay
+   vocabulary. v1 deleted the layer that owns route selection; v2 does not.
+6. **Withdrawal of an undelivered update is deleted** (`SYNC-D9`) — a product loss, accepted, and
+   verified local-only today.
+
+### What the next context does
+
+**Answer `SYNC-G2` first. No code.** It gates P1, which is the phase that makes writes concurrent —
+the exact assumption v1 got wrong. Then P1 through P6 in order, per the spec's §14, each phase
+gated by the milestone's ordinary loop (red-first, gates run so they can fail, one unit reviewer,
+findings fixed before the tag flips).
+
+Nothing is half-built. Both repos are clean, all five unit branches are merged, and the last publish
+is on `beta` awaiting Andre's promotion.
