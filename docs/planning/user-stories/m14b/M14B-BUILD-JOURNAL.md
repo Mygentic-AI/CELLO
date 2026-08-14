@@ -2932,6 +2932,60 @@ of when it was authored).
    stubs in the linkage walk, so the content position must count the sender's chain INCLUDING
    refused links (they occupy chain positions) while the refusal set tells the peer not to
    re-offer their payloads.
+
+---
+
+## Entry 56 — the exchange phase BUILT end to end; D5's deletion parked into P4's sweep; review IN FLIGHT
+
+**Date:** 2026-08-14 · **Branch:** `m14b/sync-p3`, seven commits `3780817..d953944`, all gates
+green throughout (daemon 2328/2328 cache-off; the singleton-spawn test flaked once under full
+parallel load, passes isolated and on re-run — owed a timeout-headroom fix, unrelated files).
+
+### What runs now, each with an in-process proof
+
+1. **One frame, three steps, terminated by silence.** Two daemons diverge in content; one
+   initiate produces exactly step 1 (positions), step 2 (the missing difference + the peer's
+   position), and step 3 (the catch-up) — and a repeat exchange over converged state produces
+   NO reply frame at all. Idempotence is the absence of a difference, not bookkeeping.
+2. **Forwarding is load-bearing (the AC2 shape).** A writes once and is never heard from again;
+   C — who joined later — converges on A's signed envelope through B's exchange and verifies
+   A's signature itself on apply.
+3. **Joining is being very far behind.** The invite's own step-1 frame is the R25 notice; an
+   empty-handed holder answers with an empty position; the reply carries the genesis (validated
+   by its hash BEING the document id) plus every entry and envelope; the joiner derives its own
+   invited standing and accepts with the ordinary consent-authoring verb. No offer frame, no
+   join-store row, no answer frame anywhere in the flow.
+4. **The invitation lifecycle closes.** Arriving consent/refusal entries settle the inviter's
+   surface directly (a new inviter-side settle — the store's existing decide was invitee-role
+   only and the first wiring updated zero rows, caught by the test); the invitee declines by
+   authoring `refuse_join`; and RETRACTION exists — `remove_holder` acts on invited seats, a
+   racing consent losing under removal dominance, pinned at the fold in both directions.
+
+### Ruling logged (§3a): D5's physical deletion lands with P4's deletion sweep
+
+Entry 51 carried "D5's physical deletion completes at P3." Amended: every replacement is now
+PROVEN in process, and the legacy offer path is entangled with the per-envelope epoch stamps
+that P4's gate (`SYNC-G1`) rules on — the offer carries epoch-chained amendments. Deleting it
+separately means two proof-by-removal passes over overlapping consumers; P4 is the designated
+deletion phase and gets it in ONE sweep: D1–D10 together, each proven by removal per `R49`.
+
+### The interim epoch stamp earned its deletion three times over
+
+Building honest fixtures for the exchange kept colliding with the per-envelope `epoch_id` gate:
+content authored before a governance change refuses at receivers who moved past it; a consent
+entry unseen by an author shifts their envelope stamp behind the receiver's gate; a join
+offer's snapshot problem sequencing. All three are annotated in the tests as the exact coupling
+`SYNC-G1` exists to rule on — the strongest field evidence yet that causal ancestry replaces
+the stamp.
+
+### Review
+
+`cello-unit-reviewer` dispatched on `3780817..d953944` (no model override), directed hard at
+the adversary lenses: entitlement caching, storage growth through empty-hand loops and giant
+refusal sets, refusal-set suppression semantics against third parties (R36's exact wording),
+the removed-holder path against R32's owed-removal delivery, the notice branch as an
+information oracle, the joiner bootstrap's peer binding, and stub-counting symmetry in content
+positions. **Verdict not yet in — this entry ends with the review outstanding.**
 2. Does the reconcile frame fit inside `MAX_DOCUMENT_FRAME_BYTES` (2 MiB) for a document with a
    long history, and what is the chunking rule when it does not? (R16 batching cuts the other
    way — multiple documents per exchange grows the frame.)
