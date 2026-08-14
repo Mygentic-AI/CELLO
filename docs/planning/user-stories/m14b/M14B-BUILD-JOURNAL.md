@@ -34,10 +34,13 @@ description: >
   pinned in process — two daemons diverge, one initiate converges them in exactly three steps,
   and a repeat exchange produces no reply at all. Known interim limit recorded in the test:
   pre-governance content still trips the per-envelope epoch stamp (the P4/G1 deletion target).
-  NEXT SUB-UNIT: forwarding + join-via-exchange — the AC2 shape (author dead, third holder's
-  exchange carries their entries), joiners fed by the ordinary exchange + R25 notice, D5's
-  physical deletion (offer/answer path), consent-entry join settle, refuse_join by the invitee,
-  invitation retraction. Full phase scope: the exchange (R10–R16), entitlement classes (R17–R20),
+  **FORWARDING IS PROVEN** (`19d2e68`): the AC2 shape runs in process — A writes and vanishes,
+  C receives A's signed envelope through B's exchange, verified against A's own signature. The
+  proof surfaced the interim epoch stamp twice more (offer snapshots carry pre-invite content;
+  an unseen consent shifts the author's stamp behind the receiver's gate) — both annotated in
+  the test as the P4/G1 deletion target. NEXT SUB-UNIT: join-via-exchange + D5's physical
+  deletion (offer/answer path), the R25 notice, consent-entry join settle, refuse_join by the
+  invitee, invitation retraction. Full phase scope: the exchange (R10–R16), entitlement classes (R17–R20),
   refusals as entries (R35–R38), forwarding (R1–R2). The heart of the pivot; dissolves the
   invited window P2's review found. P3 also owes: D5's physical deletion once the exchange
   carries history; refuse_join authored by the refuser; invitation retraction (missing verb,
