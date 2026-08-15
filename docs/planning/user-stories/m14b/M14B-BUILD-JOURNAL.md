@@ -70,7 +70,21 @@ description: >
   (birth-gated ALTER DROP) migrates old DBs; currentDocumentEpoch/currentEpoch deleted;
   chains order by (author_seq, entry_hash); every epoch-flavored surface (removal refusals,
   list epochId/removedAtEpoch, invite/remove results, the epoch-ahead lag log) is gone.
-  THEN, still owed in the sweep:
+  D8 DONE (`285bf46`): walkMembership/membershipOf/removedFromArrangement deleted — the layer's
+  fold-based `standingOf` (participant|invited|removed|stranger|unknown) is the ONE derivation,
+  wired into inbound, engine, lifecycle (injected seam), and the remove verb. D9 DONE
+  (`a92bfb1`): withdraw + withdrawals table + rollback seam deleted (no IPC surface existed);
+  the "withdrawal" kind + replay skip stay for old rows. D10 DONE (`cef3fb1`): sessionHint
+  deleted from the frame carrier. R35 DONE (`8e4f623`): the signed refusal record rides every
+  difference-bearing reply (new quarantine `rejection_wire` column, birth-gated; records ride
+  but never CAUSE a reply — termination by silence preserved); verified against the named
+  refuser on receipt; F5/F8 pinned end-to-end (third holder learns hash+reason; forged record
+  recorded nowhere). R49 prose DONE (`6badb11` + trustless `2f8a64dd`): the shipped documents
+  SKILL.md matches what ships; §15's seven pre-pivot DoD lines struck.
+  REMAINING FOR P4: the unit review (cello-unit-reviewer, diff `e616b0f..HEAD`, no model
+  override), findings fixed, DOD-SYNC-P4 flipped, merge to main. Then P5 (R39–R43 scheduling +
+  R45–R48 surface), P6 (enforcers → SYNC-AC1–AC20, three OS processes).
+  Older sweep notes (now done) follow:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
   commit-nudge replacement (publish/entry-commit → initiateReconcile to seats — R39's first
