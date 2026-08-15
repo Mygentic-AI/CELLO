@@ -27,10 +27,13 @@ description: >
   old DBs; every lossless re-encoder threads the row's real value (an empty list broke a
   signature in test — the exact class to watch). PROCESS TRAP LOGGED: `tsc --build` silently
   no-ops on a stale graph — gate typechecks after cross-package interface changes MUST use
-  `--force` (same disease as the vitest cache). NEXT: **step 2 — the inbound gate becomes the
-  causal admissibility ruling** (R20/R30 on governance_parents; the epoch equality check and
-  behind/ahead-republish cease to exist; AC14/AC16 shapes pinned). Then **step 3 — D1–D10 in
-  one sweep** per the plan below.
+  `--force` (same disease as the vitest cache). STEP 2 IS DONE (`335973b`): the gate rules at
+  the envelope's signed frontier via `deriveDocumentStateAt`; AC13+AC14 pinned side by side
+  (same removed author — post-removal work refused by name, pre-removal work ADMITTED);
+  unheld-ancestors refuses non-terminally (`document_governance_in_flight`); the equality
+  check, behind/ahead-republish, the lag heuristic, and the current-state removed-sender check
+  are DELETED (legacy bilateral keeps its membership walk — no frontier world exists there).
+  NEXT: **step 3 — D1–D10 in one sweep** per the plan below.
   `SYNC-G1` is ANSWERED (Entry 58): the stamp GOES, amended to replace-then-delete. Sweep
   order: **(1) update-envelope TBS v2** — `governance_parents` (author's governance frontier,
   canonical/capped) IN, `epoch_id` OUT, one bump; **(2) the inbound equality gate becomes the
