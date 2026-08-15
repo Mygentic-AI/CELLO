@@ -583,7 +583,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
   );
 
   it(
-    "NUDGE + SURFACE + REMOVE: an absent holder blocks nobody, the surface says behind-with-last-seen, and a removed holder keeps their copy (SYNC-AC1, AC5, AC13, AC20)",
+    "NUDGE + SURFACE: an absent holder blocks nobody, and the surface says behind-with-last-seen from the display cache (SYNC-AC1, AC5, AC20)",
     async () => {
       const [a, b, c] = (await parties("mpfan", 3, PROD_SWEEP_FAST_BELIEF)) as [Party, Party, Party];
       await connect(a, b);
@@ -692,6 +692,52 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       c.conn = connC2;
       // NOBODY ACTS: no send, no receive, no publish — the daemons sync by themselves.
       await awaitContent(c, documentId, "base. written while C was away. ", 120_000);
+
+      // The removal phase lives in its own journey below, on FAST cadence end to end: the
+      // known first-frame-after-open transport race can eat any single reply, and the model's
+      // repair is the next exchange — 3 seconds there, 2 minutes here.
+    },
+    600_000,
+  );
+
+  it(
+    "REMOVE surfaces to the REMOVED holder — the terminal refusal delivers their own removal, and the survivors carry on (SYNC-AC13, R32)",
+    async () => {
+      const [a, b, c] = (await parties("mprsurf", 3, FAST_SWEEP)) as [Party, Party, Party];
+      await connect(a, b);
+      await connect(a, c);
+      const proposed = (await a.conn.call("cello_doc_propose", {
+        peer_pubkey: b.pubkey,
+        starting_content: "base. written while C was away. ",
+        admins: [a.pubkey],
+      })) as { ok?: boolean; documentId?: string };
+      expect(proposed.ok).toBe(true);
+      const documentId = proposed.documentId!;
+      await (async () => {
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline) {
+          const inbox = (await b.conn.call("cello_doc_inbox", {})) as {
+            proposals?: Array<{ documentId?: string }>;
+          };
+          if ((inbox.proposals ?? []).some((p) => p.documentId === documentId)) return;
+          await sleep(1000);
+        }
+        throw new Error("B never saw the proposal");
+      })();
+      expect(((await b.conn.call("cello_doc_accept", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
+      expect(
+        ((await a.conn.call("cello_doc_invite", {
+          document_id: documentId, invitee_pubkey: c.pubkey,
+        })) as { ok?: boolean }).ok,
+      ).toBe(true);
+      await awaitJoinOffer(c, documentId);
+      expect(((await c.conn.call("cello_doc_accept", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
+      await agreeOnArrangement(
+        [a, b, c],
+        documentId,
+        { participants: [a.pubkey, b.pubkey, c.pubkey], admins: [a.pubkey], appendOnly: false },
+        "pre-removal",
+      );
 
       // ── REMOVE: A removes B — forward-only. ──
       const removed = (await a.conn.call("cello_doc_remove", {

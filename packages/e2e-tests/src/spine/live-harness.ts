@@ -162,6 +162,10 @@ export class Proc {
    * (not an identical one from an earlier phase). Subject to the same stdout-capture lag as the
    * backlog — await a short settle before reading after an action that should have logged.
    */
+  lastLines(n: number): string[] {
+    return this.lines.slice(-n);
+  }
+
   countLines(re: RegExp): number {
     return this.lines.filter((l) => re.test(l)).length;
   }
