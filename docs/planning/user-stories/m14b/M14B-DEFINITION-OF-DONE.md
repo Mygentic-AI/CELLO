@@ -554,7 +554,16 @@ description: >
   `j-multiplayer.spine.test.ts` still speaks the old surface via the PUBLISHED client — green
   vacuously today, red the day this client publishes; its re-point is P6's named job and P6
   must land before or with the publish.
-- **DOD-SYNC-P5** [cello-client] — scheduling (`R39`–`R43`) and the surface (`R45`–`R48`). — ❌
+- **DOD-SYNC-P5** [cello-client] — scheduling (`R39`–`R43`) and the surface (`R45`–`R48`). — ✅
+  built `17e6a85`, review fixes `6ce2f02` (both on main): reachable trigger BOTH sides
+  (inbound state-dispatch + a new onSessionOpened seam on the initiator), bounded periodic
+  sweep (volatile state, believed-current suppression, 30s→15min backoff, 60s in-flight bound
+  released loudly, 32-doc batching, time-stamped force-released pass guard), quiescence pinned
+  (ended/underivable docs contribute no targets); cello_doc_list is the R45/R46 shape from a
+  per-party display cache (in_sync|behind|unseen + blockedBy), R47 fields gone, R48 named
+  `underivable`; a refused origination surfaces as state "refused" WITH the peer's reason
+  (review F1 — the record was written and read by nothing). CAVEAT carried to P6: the live
+  cross-process sweep liveness proof is the three-daemon enforcers' job.
 - **DOD-SYNC-P6** [trustless-cello] — enforcers re-pointed at `SYNC-AC1`–`AC20`, three daemons as
   separate OS processes. — ❌
 

@@ -106,9 +106,17 @@ description: >
   written per inbound exchange block; R47 fields gone (peer's proposal answer lives on the
   handshake record as peerAccepted/peerReason); R48 named `underivable`; lifecycle.list and
   its seams deleted; SKILL.md table updated. All pinned incl. unseen→behind→in_sync across
-  real exchanges and the fake-clock scheduler suite. Awaiting the unit review; then flip
-  DOD-SYNC-P5 and start P6 (enforcers → SYNC-AC1–AC20, three OS processes; includes the
-  j-multiplayer spine re-point that MUST land before the next publish).
+  real exchanges and the fake-clock scheduler suite. **P5 REVIEWED AND FLIPPED** (`6ce2f02`):
+  the review's HIGH — a genesis peer who refuses before ever holding the document surfaced as
+  "pending" forever while the publish gate knew "they said no" — is fixed by reading the
+  handshake record into the invitation ledger (state "refused" + their reason, asserted at the
+  SURFACE); the daemon's sweep guard got the R42 treatment (time-stamped, wedge-warned,
+  force-released); the initiator-side reachable trigger exists now (onSessionOpened seam);
+  quiescence pinned at the layer; the NUL-byte key that made the scheduler file binary to git
+  is an escape. Accepted as-is (journaled): fork-invisible display beliefs, latency-only
+  scheduler races. **NEXT: P6** — enforcers → SYNC-AC1–AC20, three daemons as separate OS
+  processes (includes the j-multiplayer spine re-point that MUST land before the next publish,
+  and the live sweep-liveness proof carried from P5's review).
   Older sweep notes (now done) follow:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
