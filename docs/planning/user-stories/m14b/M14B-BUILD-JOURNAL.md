@@ -62,7 +62,23 @@ description: >
   debt rows; list loses the four pending counters (no producer without a ledger); the transport
   survives as sendBytes-only (reuse/hint/seal/suspect logic re-pinned through it); roundtrip/
   surface-e2e/handlers suites rewritten onto the exchange (offline-peer recovery + unreachable-
-  holder admission both proven via one exchange). REMAINING IN THE SWEEP, in order:
+  holder admission both proven via one exchange). D7 UNDERWAY — SOURCE DONE, TESTS RED,
+  **UNCOMMITTED in cello-client** (working tree on m14b/sync-p4 @ 2349a7c): the epoch spine is
+  out of BOTH signed preimages — amendment TBS drops epoch_id+prev_amendment_hash (domain
+  → CELLO-DOCUMENT-AMENDMENT-v3), update envelope drops epoch_id (domain → CELLO-DOCUMENT-
+  UPDATE-v3); fold drops interimMaxEpoch; MembershipVerdict/AppendResult/EnvelopeRow/ListRow
+  lose their epoch fields; currentDocumentEpoch + currentEpoch deleted; document_entries and
+  document_envelopes create WITHOUT epoch_id and `dropLegacyEpochColumn` (ALTER DROP, birth-
+  gated) migrates old DBs; all daemon source COMPILES + lints clean. REMAINING FOR D7:
+  (1) ~22 red tests: amendment-store suite (epoch tests + raw INSERT .run() arity — the column
+  list was fixed but .run() still passes the epoch arg in several files: handlers 3 sites,
+  lifecycle 2, inbound 2, publish 1, rejection 1), the document-inbound "EPOCH ruling" describe
+  (rewrite refusal texts/waits — removal refusals no longer name an epoch), lifecycle list
+  epoch tests, publish.test 151 (`epoch_id: row.epochId` re-encode), frame-router 1,
+  layer.test/surface-e2e/dod-doc-notice-reachable leftovers; (2) FROZEN VECTOR REISSUES in
+  protocol-types tests (document-amendment.test.ts + document-envelope.test.ts — domains
+  bumped, print new hex like P4a did); (3) gates + one D7 commit (full-substance message).
+  THEN, still owed in the sweep:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
   commit-nudge replacement (publish/entry-commit → initiateReconcile to seats — R39's first
