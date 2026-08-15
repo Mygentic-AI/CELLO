@@ -95,9 +95,20 @@ description: >
   withdrawals + epoch-keyed tables are dropped in place, never born fresh. REVIEWER'S CARRIED
   CAVEAT: the trustless-cello spine test speaks the old surface via the published client —
   P6 re-points it and MUST land before/with the next publish.
-  **NEXT: P5** — scheduling (R39–R43: reconcile triggers — session-open, on-notice, the
-  periodic sweep, backoff) and the status surface (R45–R48: in_sync|behind|unseen, blockedBy).
-  Then P6 (enforcers → SYNC-AC1–AC20, three OS processes).
+  **P5 IS BUILT (`17e6a85`, on main), review IN FLIGHT.** Scheduling: a ReconcileScheduler
+  with all-volatile state — session-up = reachable trigger (resets backoff), a 2-min sweep
+  (env-overridable) over fold-derived (party → active docs) targets, believed-current
+  suppression from the display cache (10-min belief), 30s→15min doubling backoff, 60s
+  in-flight bound released loudly (document.reconcile.inflight_expired), 32-doc batching;
+  ended/underivable documents contribute no targets (quiescence). Surface: cello_doc_list is
+  the R45/R46 shape (participants/admins/properties/ended/yourStanding/parties with
+  sync=in_sync|behind|unseen + blockedBy), fed by a new document_party_view display cache
+  written per inbound exchange block; R47 fields gone (peer's proposal answer lives on the
+  handshake record as peerAccepted/peerReason); R48 named `underivable`; lifecycle.list and
+  its seams deleted; SKILL.md table updated. All pinned incl. unseen→behind→in_sync across
+  real exchanges and the fake-clock scheduler suite. Awaiting the unit review; then flip
+  DOD-SYNC-P5 and start P6 (enforcers → SYNC-AC1–AC20, three OS processes; includes the
+  j-multiplayer spine re-point that MUST land before the next publish).
   Older sweep notes (now done) follow:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
