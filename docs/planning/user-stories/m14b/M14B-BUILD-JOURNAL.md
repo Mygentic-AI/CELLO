@@ -33,7 +33,22 @@ description: >
   unheld-ancestors refuses non-terminally (`document_governance_in_flight`); the equality
   check, behind/ahead-republish, the lag heuristic, and the current-state removed-sender check
   are DELETED (legacy bilateral keeps its membership walk — no frontier world exists there).
-  NEXT: **step 3 — D1–D10 in one sweep** per the plan below.
+  STEP 3 IS UNDERWAY (`35b7783`): **endings are entries** — close/kill kinds + policy
+  (self-act; kill takes admin power) + fold derivation (`ended`/`closedBy` on the state view;
+  closed = every current participant's own close among the applied set; removal-completes falls
+  out of the derivation with no code acting). Six fold pins green. REMAINING IN THE SWEEP, in
+  order: (a) daemon rewiring — cello_doc_close/kill author entries, lifecycle + surfaces read
+  the derived `ended`, publish gate refuses on an ended world (R29) and the causal content
+  gate refuses an ending in the frontier closure (R30/AC16) — THEN delete the control-frame
+  path (D3/D6: document-control*.ts, its router cases, notifier, settle bookkeeping);
+  (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
+  offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
+  commit-nudge replacement (publish/entry-commit → initiateReconcile to seats — R39's first
+  trigger; sweeps/backoff stay P5); (d) D7 remnants (amendment TBS drops epoch_id/prev —
+  ANOTHER vector reissue — store columns, currentDocumentEpoch) + D8 (stranger door →
+  engine entitlement; walkMembership consumers → fold) + D9 + D10; (e) R35 refusal-as-entry;
+  (f) R49 proof-by-removal: absence asserted on BUILT artifacts, §15's seven DoD lines struck.
+  Then the P4 review.
   `SYNC-G1` is ANSWERED (Entry 58): the stamp GOES, amended to replace-then-delete. Sweep
   order: **(1) update-envelope TBS v2** — `governance_parents` (author's governance frontier,
   canonical/capped) IN, `epoch_id` OUT, one bump; **(2) the inbound equality gate becomes the
