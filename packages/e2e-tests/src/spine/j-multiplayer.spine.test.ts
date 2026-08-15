@@ -106,14 +106,18 @@ interface Party {
 }
 
 /** N registered agents on N daemons — the two-party fixture, widened. */
-async function parties(label: string, count: number): Promise<Party[]> {
+async function parties(
+  label: string,
+  count: number,
+  extraEnv: Record<string, string> = {},
+): Promise<Party[]> {
   const out: Party[] = [];
   for (let i = 0; i < count; i++) {
     const name = `agent${String.fromCharCode(65 + i)}`;
     const celloDir = mkdtempSync(join(tmpdir(), `cello-${label}${name}-`));
     dirs.push(celloDir);
     const pubkey = await provisionAgent(celloDir, name);
-    const daemon = await startLocalDaemon(celloDir, `${label}${name}`);
+    const daemon = await startLocalDaemon(celloDir, `${label}${name}`, extraEnv);
     daemons.push(daemon);
     expect(
       registerAgent(name, `DEV-${label}-${name}-${randomBytes(6).toString("hex")}`, {
@@ -287,7 +291,9 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
   it(
     "GOVERN + JOIN: an admin invites a third party, they consent, and all three derive the same arrangement (DOD-MP-E2E-GOVERN-1, DOD-MP-E2E-JOIN-1)",
     async () => {
-      const [a, b, c] = (await parties("mpjoin", 3)) as [Party, Party, Party];
+      // FAST sweeps: this journey proves derivation and the exchange, not nudge latency — a
+      // first-contact send between seats with no session legitimately rides the sweep (R40).
+      const [a, b, c] = (await parties("mpjoin", 3, FAST_SWEEP)) as [Party, Party, Party];
       const ab = await connect(a, b);
 
       // ── A proposes to B, B accepts: an ordinary bilateral document with real history. ──
@@ -444,7 +450,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       // ledger. A holder removed while down learns the moment their own daemon reconciles on
       // return — the responder's terminal refusal CARRIES the removal entry and its ancestors
       // (R32), so the removed holder derives their own removal and their surface says so.
-      const [a, b, c] = (await parties("mprecv", 3)) as [Party, Party, Party];
+      const [a, b, c] = (await parties("mprecv", 3, FAST_SWEEP)) as [Party, Party, Party];
       await connect(a, b);
       await connect(a, c);
 
@@ -679,7 +685,10 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       // B's own daemon reports the removal — POLLED, because the amendment crosses a real
       // transport and a fixed sleep is a flake waiting to happen.
       const bRow = await (async () => {
-        const deadline = Date.now() + 60_000;
+        // LONGER THAN ONE PRODUCTION SWEEP TICK: this daemon deliberately runs the 2-minute
+        // cadence (the journey's first half is the nudge proof), and the removal's repair path
+        // for a first-contact miss is the sweep.
+        const deadline = Date.now() + 180_000;
         let last = "";
         while (Date.now() < deadline) {
           const bList = (await b.conn.call("cello_doc_list", {})) as {
@@ -715,7 +724,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
           content: "base. written while C was away. and A and C carry on. ",
         })) as { ok?: boolean }).ok,
       ).toBe(true);
-      await awaitContent(c, documentId, "base. written while C was away. and A and C carry on. ");
+      await awaitContent(c, documentId, "base. written while C was away. and A and C carry on. ", 180_000);
       // And the removed holder receives NONE of it — forward-only, from their chair.
       expect(await readDoc(b, documentId)).toBe("base. written while C was away. ");
     },
@@ -728,7 +737,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       // Both units were found by the LIVE FLEET, not by a test, and both are about a third party
       // the code could not see. Three OS processes is the only place they can be disproved:
       // the sender, a genesis peer, and a joiner who exists in no `peerAgentId` column anywhere.
-      const [a, b, c] = (await parties("mpend", 3)) as [Party, Party, Party];
+      const [a, b, c] = (await parties("mpend", 3, FAST_SWEEP)) as [Party, Party, Party];
       await connect(a, b);
       await connect(a, c);
 
@@ -836,7 +845,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       // first END journey stays green with the membership gate returning `true` for every sender.
       // A test that only asserts things succeed reports that a gate is permissive enough, never
       // that it restricts anything.
-      const [a, b, c] = (await parties("mprem", 3)) as [Party, Party, Party];
+      const [a, b, c] = (await parties("mprem", 3, FAST_SWEEP)) as [Party, Party, Party];
       await connect(a, b);
       await connect(a, c);
 
