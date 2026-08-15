@@ -42,10 +42,14 @@ description: >
   TRAP RE-CONFIRMED: daemon tests run against protocol-types' BUILT dist — a fold change
   invisible to them until `tsc --build --force` (stale dist made the fold look like it ignored
   open invitations). Gates at `cdcd806`: daemon 2328 --no-cache, monorepo 3889, lint, forced
-  build — all green. REMAINING IN THE SWEEP, in order: (a-rest) publish gate refuses on an
-  ended world (R29) — verify it rides deriveState — THEN delete the control-frame path
-  (D3/D6: document-control*.ts, its router cases, notifier, settle bookkeeping, lifecycle
-  close/kill/settle, controlHolders);
+  build — all green. CONTROL PATH DELETED (`a18cb45`, −2,234 net): wire type + notifier +
+  document_control_deliveries ledger + both delivery drain phases + lifecycle
+  close/kill/recordPeer*/close-rows/holder-verdict all gone; lifecycle keeps list/withdraw/
+  pause/status-gates with closePending injected from the derivation; NEW author-side R29/R30
+  mirror in authorConsent (entries refused on an ended world — pins the late-kill-cannot-
+  rewrite-closed guarantee); fold fix `2e071be`: remove_holder spends the subject's close so
+  re-admission waits on them again; dist orphans purged, absence asserted on rebuilt
+  artifacts. REMAINING IN THE SWEEP, in order:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
   commit-nudge replacement (publish/entry-commit → initiateReconcile to seats — R39's first
