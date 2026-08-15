@@ -114,9 +114,16 @@ description: >
   force-released); the initiator-side reachable trigger exists now (onSessionOpened seam);
   quiescence pinned at the layer; the NUL-byte key that made the scheduler file binary to git
   is an escape. Accepted as-is (journaled): fork-invisible display beliefs, latency-only
-  scheduler races. **NEXT: P6** — enforcers → SYNC-AC1–AC20, three daemons as separate OS
-  processes (includes the j-multiplayer spine re-point that MUST land before the next publish,
-  and the live sweep-liveness proof carried from P5's review).
+  scheduler races. **P6 UNDERWAY:** the five three-daemon journeys in
+  `j-multiplayer.spine.test.ts` are re-pointed at the reconcile model (`3dee3d13`) — invitation
+  as a derived inbox row (AC10/R22), removed-holder learning via the exchange's terminal
+  refusal (AC13/R32), the behind-with-last-seen surface + restart-surviving belief
+  (AC1/AC5/AC20 — original daemons keep the PRODUCTION sweep cadence so convergence proves the
+  NUDGE; restarted daemons get CELLO_DOCUMENT_RECONCILE_SWEEP_MS=3000), entry-model endings
+  with derived settlement, and the removed-cannot-end two-sided proof; plus a new AC17
+  artifact check (no relay vocabulary in the built layer files). THE LIVE RUN — three real
+  daemons, three directory nodes, real relay — is in flight now; it is the milestone's close
+  gate. On green: flip DOD-SYNC-P6 and the milestone-close checklist.
   Older sweep notes (now done) follow:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
