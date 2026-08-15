@@ -49,7 +49,13 @@ description: >
   mirror in authorConsent (entries refused on an ended world — pins the late-kill-cannot-
   rewrite-closed guarantee); fold fix `2e071be`: remove_holder spends the subject's close so
   re-admission waits on them again; dist orphans purged, absence asserted on rebuilt
-  artifacts. REMAINING IN THE SWEEP, in order:
+  artifacts. D5 DELETED (`f856fb6`, −1,945 net): offer/answer wire types + join store +
+  accept/refuse parallel path gone; the invite is an admission entry + a NOTICE (a step-1
+  reconcile frame, R25); the invitee bootstraps via the P3 exchange, decides from their OWN
+  derivation, answers with a consent/refuse_join ENTRY; the inviter's invitation ledger IS the
+  entry set (open = invited seat, refused = refuse_join in chain);
+  `arrangementGenesisFromProposal` moved to document-proposal.ts; tests seat everyone through
+  a shared `seatViaExchange` helper. REMAINING IN THE SWEEP, in order:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
   commit-nudge replacement (publish/entry-commit → initiateReconcile to seats — R39's first
