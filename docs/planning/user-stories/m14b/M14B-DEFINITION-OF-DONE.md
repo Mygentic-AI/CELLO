@@ -317,7 +317,8 @@ description: >
 > built is proven on the fleet — including the close addressing both holders; only the steps that
 > need a frame to ARRIVE are unproven. Needs its own line and Andre's call.
 
-- **DOD-MP-SESSION-RETIRE-1** [cello-client] — a session the relay has TERMINALLY ended must be
+- ~~**DOD-MP-SESSION-RETIRE-1**~~ — **STRUCK by SYNC-P4** (spec §15): its subject is deleted with the delivery/control machinery; the reconcile exchange carries the guarantee now.
+<!-- struck: **DOD-MP-SESSION-RETIRE-1** [cello-client] — a session the relay has TERMINALLY ended must be
   retired locally, so the next document delivery opens a fresh one instead of resubmitting into a
   grave. The relay pushes `session_sealed` once; a daemon down or restarting at that instant never
   records it, and then `activeSessionsWith` — which filters on THIS daemon's own `status` — keeps
@@ -349,8 +350,9 @@ description: >
   > answers and opens a fresh one, destroying nothing. The first cut was INERT: `relay_session_gone`
   > never reached it — the send falls through to a direct delivery and returns success for a leaf the
   > relay never witnessed, so the counter never saw it and every such send CLEARED it. The relay's
-  > answer now survives to the caller on the success path. Two forks parked as their own lines below.
-- **DOD-MP-INVITE-FANOUT-1** [cello-client] — **an invite must tell the EXISTING holders, not only
+  > answer now survives to the caller on the success path. Two forks parked as their own lines below. -->
+- ~~**DOD-MP-INVITE-FANOUT-1**~~ — **STRUCK by SYNC-P4** (spec §15): its subject is deleted with the delivery/control machinery; the reconcile exchange carries the guarantee now.
+<!-- struck: **DOD-MP-INVITE-FANOUT-1** [cello-client] — **an invite must tell the EXISTING holders, not only
   the invitee.** Found live 2026-08-13 (Entry 37) and it is the most serious open defect on this
   board, because it is silent on every surface. Inviting a third agent into a two-party document
   records the amendment locally and offers it to the invitee — and delivers the amendment to the
@@ -378,7 +380,7 @@ description: >
   daemon was STOPPED (`relay_parked`, `holdersNotified: false`) — the peer returned and reached epoch
   1 with 3 participants unaided, amendment hash matching. Reconciliation split out as
   DOD-MP-AMEND-CONFIRM-1, which now has a live specimen: the document that diverged before the fix
-  cannot be healed by any verb.
+  cannot be healed by any verb. -->
 - **DOD-MP-SWEEP-ALIVE-1** [cello-client] — **the document delivery sweep must not stop.** Observed
   live 2026-08-13 (Entry 37): the laptop's sweep ran every ~60s and then stopped dead, and eleven
   minutes later had still not run, while the daemon was demonstrably alive and a published envelope
@@ -394,7 +396,8 @@ description: >
   silence. The wedged worker is now evicted too — the review proved by execution that bounding alone
   left the agent permanently dead AND doubled the sweep interval for every healthy agent. Root cause
   of the hang itself is still unclaimed; a late-failure log was added as the cheapest route to it.
-- **DOD-MP-RELAY-GONE-DISAMBIG-1** [cello-client] — **a send whose leaf was never witnessed must
+- ~~**DOD-MP-RELAY-GONE-DISAMBIG-1**~~ — **STRUCK by SYNC-P4** (spec §15): its subject is deleted with the delivery/control machinery; the reconcile exchange carries the guarantee now.
+<!-- struck: **DOD-MP-RELAY-GONE-DISAMBIG-1** [cello-client] — **a send whose leaf was never witnessed must
   not report success.** Found by review 2026-08-13 (Entry 42), pre-existing, and a genuine fork
   rather than a defect in that diff. On `relay_session_gone` the daemon warns, delivers directly, and
   returns `ok: true, delivered: true` — the content reaches the peer and the session's hash chain
@@ -404,8 +407,9 @@ description: >
   assignment ONCE — if it succeeds the relay merely bounced and the session is alive; if it fails the
   session is over. Today the code explicitly declines to run that test, to avoid recreating a session
   with an empty leaf log. **Andre's call: it changes the send path, which conversations share.**
-  Mitigated meanwhile — the refusal is carried to the document worker, which routes around it. — ❌ NOT BUILT
-- **DOD-MP-ZOMBIE-SESSION-1** [cello-client] — **nothing ever reaps a bypassed session.** Because
+  Mitigated meanwhile — the refusal is carried to the document worker, which routes around it. — ❌ NOT BUILT -->
+- ~~**DOD-MP-ZOMBIE-SESSION-1**~~ — **STRUCK by SYNC-P4** (spec §15): its subject is deleted with the delivery/control machinery; the reconcile exchange carries the guarantee now.
+<!-- struck: **DOD-MP-ZOMBIE-SESSION-1** [cello-client] — **nothing ever reaps a bypassed session.** Because
   DOD-MP-SESSION-RETIRE-1's remaining half deliberately destroys nothing, a session it routes around
   stays `active` in the database forever, and the suspicion that hides it is in memory by design.
   After every daemon restart delivery must re-learn each zombie — 2 failed attempts apiece, against a
@@ -414,8 +418,9 @@ description: >
   falls. Persisting the suspicion is NOT the answer (that is the destructive fix wearing a smaller
   hat). Either the reap belongs upstream — once RELAY-GONE-DISAMBIG-1 lands, a proven-dead session is
   genuinely retirable — or the count is bounded: when a peer accumulates N active sessions and the
-  newest works, seal the older ones. Not a silent choice either way. — ❌ NOT BUILT
-- **DOD-MP-CONTROL-DURABLE-1** [cello-client] — **close and kill are still one-shot.** Found by
+  newest works, seal the older ones. Not a silent choice either way. — ❌ NOT BUILT -->
+- ~~**DOD-MP-CONTROL-DURABLE-1**~~ — **STRUCK by SYNC-P4** (spec §15): its subject is deleted with the delivery/control machinery; the reconcile exchange carries the guarantee now.
+<!-- struck: **DOD-MP-CONTROL-DURABLE-1** [cello-client] — **close and kill are still one-shot.** Found by
   audit while fixing INVITE-FANOUT-1 (Entry 40), same family, deliberately NOT folded into it:
   `document-control-notifier.ts` signs once, sends to each derived holder, and persists nothing —
   no pending row, no retry, no restart survival, exactly the shape the amendment fan-out just shed.
@@ -432,8 +437,9 @@ description: >
   settled by real evidence where it exists, retired-not-acked where it does not. 11 review findings
   fixed, incl. legacy documents getting no durability at all and a proven double-send.
   **DEVIATION FROM THIS LINE, taken deliberately:** it said "drain them ahead of content"; endings
-  drain after, for the reason above.
-- **DOD-MP-ENDED-BACKLOG-1** [cello-client] — **does ending a document flush its queued content, or
+  drain after, for the reason above. -->
+- ~~**DOD-MP-ENDED-BACKLOG-1**~~ — **STRUCK by SYNC-P4** (spec §15): its subject is deleted with the delivery/control machinery; the reconcile exchange carries the guarantee now.
+<!-- struck: **DOD-MP-ENDED-BACKLOG-1** [cello-client] — **does ending a document flush its queued content, or
   abandon it?** Two queries disagree today, and one of them is silent about it. Found by review
   2026-08-13 and PROVEN there: `pendingDeliveries` (the bilateral query) carries an ended-document
   guard whose comment states the rule — *"An ENDED document does not deliver. A killed or closed
@@ -445,8 +451,9 @@ description: >
   what I already wrote, then end it" (which is also why endings drain after content), while *kill*
   means "stop now" and shipping more contradicts the verb. Splitting them by verb is likely right
   and is exactly the kind of choice that should not be made silently at 3am. **Andre's call.**
-  `[pre-existing]` — not introduced by CONTROL-DURABLE-1, but directly under it. — ❌ NOT BUILT
-- **DOD-MP-AMEND-CONFIRM-1** [cello-client] — **a holder that fell behind must converge, and get
+  `[pre-existing]` — not introduced by CONTROL-DURABLE-1, but directly under it. — ❌ NOT BUILT -->
+- ~~**DOD-MP-AMEND-CONFIRM-1**~~ — **STRUCK by SYNC-P4** (spec §15): its subject is deleted with the delivery/control machinery; the reconcile exchange carries the guarantee now.
+<!-- struck: **DOD-MP-AMEND-CONFIRM-1** [cello-client] — **a holder that fell behind must converge, and get
   the edits it missed.** Split out of INVITE-FANOUT-1's clause 7 (Entry 40) once the durability half
   landed. Two halves, and the second is the one that is easy to miss:
   (a) **The sender never learns a holder is behind.** A non-terminal refusal deliberately sends NO
@@ -461,7 +468,7 @@ description: >
   abandoned envelopes too.
   Today's partial cover: amendment rows settle by PROOF BY EPOCH (a holder acking an envelope at
   epoch E demonstrably holds every amendment up to E) and otherwise re-send on the ack timeout. That
-  closes the common case without a wire change; it does not close (b). — ❌ NOT BUILT
+  closes the common case without a wire change; it does not close (b). — ❌ NOT BUILT -->
 - **DOD-MP-DELIVERY-QUIET-1** [cello-client] — **a document delivery must not ring the operator's
   doorbell like a person asking to talk.** Observed live 2026-08-13 (Entry 37): a delivery session is
   one-shot — it is sealed after handing the frame over — so every subsequent fan-out opens a fresh
