@@ -21,43 +21,17 @@ description: >
 > taking a step back and thinking through from first principles."* The spec of record for all
 > further work is **[[M14B-RECONCILE-SPEC]] (v2)**. Anything below that predates it is history.
 
-- **NEXT ACTION: `DOD-SYNC-P3`, in progress on `m14b/sync-p3` @ `6c5f6ff`.** Built and
-  committed so far: the reconcile FRAME (`73082ed` — one shape for all three steps, dual
-  per-author positions, refusal sets, 32-doc cap, unsigned-by-design) and the RESPONDER ENGINE
-  (`6c5f6ff` — entitlement classes ruled first from own state, stranger refusal NON-terminal
-  per R19, removed terminal, difference per author minus the peer's refusal set, fork re-offer
-  from before the fork point, content along sender chains, `peerAhead` for step 3; store gained
-  `entriesByAuthorAfter`). **THE EXCHANGE IS LIVE END TO END** (`ac2c3bb`): the frame routes with the
-  session's authenticated sender threaded through; an arriving frame applies governance entries
-  then content envelopes through the ordinary doors, then answers with the difference or with
-  SILENCE when converged (the termination rule); refusals ride the same frame (`f095d77`);
-  pinned in process — two daemons diverge, one initiate converges them in exactly three steps,
-  and a repeat exchange produces no reply at all. Known interim limit recorded in the test:
-  pre-governance content still trips the per-envelope epoch stamp (the P4/G1 deletion target).
-  **FORWARDING IS PROVEN** (`19d2e68`): the AC2 shape runs in process — A writes and vanishes,
-  C receives A's signed envelope through B's exchange, verified against A's own signature. The
-  proof surfaced the interim epoch stamp twice more (offer snapshots carry pre-invite content;
-  an unseen consent shifts the author's stamp behind the receiver's gate) — both annotated in
-  the test as the P4/G1 deletion target. **JOIN-VIA-EXCHANGE IS PROVEN**
-  (`48b330e`): the invite's own step-1 frame is the R25 notice; an empty-handed holder answers
-  with an empty position; the reply carries the GENESIS (the one record that is not an entry,
-  validated by its hash being the document id) plus everything else; the joiner derives its own
-  invited standing from the entries and accepts with the ordinary consent-authoring verb — no
-  offer frame, no join-store row, no answer frame anywhere in the flow. **THE INVITATION LIFECYCLE IS
-  COMPLETE** (`d953944`): the arriving consent/refusal entry settles the inviter's surface
-  directly (the answer frame now carries nothing the record does not); the invitee declines by
-  authoring refuse_join through the generalized entry-authoring path; and retraction exists —
-  remove_holder acts on invited seats, with a racing consent losing under removal dominance,
-  pinned at the fold and in process. NEXT: D5's PHYSICAL deletion (offer/answer path + its
-  join bookkeeping — every replacement now proven), then the P3 unit review. One observed
-  flake, unrelated: the spawn-three-daemons singleton test timed out once under full parallel
-  load; passes isolated and on re-run; owed a timeout-headroom fix. Full phase scope: the exchange (R10–R16), entitlement classes (R17–R20),
-  refusals as entries (R35–R38), forwarding (R1–R2). The heart of the pivot; dissolves the
-  invited window P2's review found. P3 also owes: D5's physical deletion once the exchange
-  carries history; refuse_join authored by the refuser; invitation retraction (missing verb,
-  Entry 53); the stranger-door held-before-admission refusal revisit (Entry 51). **P0 ✅
-  (Entry 48) · P1 ✅ (Entries 49–51, merged `4ac91a9`) · P2 ✅ (Entries 52–54, merged
-  `3780817`).** `SYNC-G1` gates **P4**.
+- **NEXT ACTION: `DOD-SYNC-P4` — answer `SYNC-G1`, then THE GREAT DELETION.** G1 first
+  (analysis: does causal ancestry replace every use of the per-envelope `epoch_id`? The
+  fixtures collided with the stamp three documented times — Entries 56/57). Then D1–D10 in ONE
+  sweep, each proven by removal per `R49` (deleted, gates green both repos, absence asserted on
+  the BUILT artifact): the content/amendment/control delivery ledgers and workers, ack
+  substitutes, the legacy offer/answer path (D5, replacement proven), control signing/fan-out,
+  the epoch spine (D7, behind G1), duplicate derivations (D8 — the interim stranger door and
+  membership walks), withdrawal (D9), delivery session hints (D10). Carried ACs: refusal
+  becomes a first-class signed entry (R35's letter — closes review F5/F8); §15's seven DoD
+  lines struck. **P0 ✅ · P1 ✅ (`4ac91a9`) · P2 ✅ (`3780817`) · P3 ✅ (`e616b0f`, Entries
+  55–57).**
 - **READ ORDER:** [[M14B-PROCEDURE]] → [[M14B-RECONCILE-SPEC]] (v2, the build) →
   [[M14B-DEFINITION-OF-DONE]] (status only) → this block → Entry 47.
   Rationale, if wanted, is [[2026-08-14_1155_document-protocol-reconcile-not-deliver]] — NOT needed
@@ -2985,7 +2959,62 @@ the adversary lenses: entitlement caching, storage growth through empty-hand loo
 refusal sets, refusal-set suppression semantics against third parties (R36's exact wording),
 the removed-holder path against R32's owed-removal delivery, the notice branch as an
 information oracle, the joiner bootstrap's peer binding, and stub-counting symmetry in content
-positions. **Verdict not yet in — this entry ends with the review outstanding.**
+positions. **Verdict landed — Entry 57.**
+
+---
+
+## Entry 57 — the exchange reviewed: two edge-holder betrayals found and fixed; MERGED ✅
+
+**Date:** 2026-08-15 · **Merged to `main` at `e616b0f`** (fix commit `7b320c9`); all gates green
+(daemon 2331/2331 cache-off).
+
+### The reviewer's verdict, in its own words
+
+> "SPEC: DEVIATIONS FOUND — R17 (removed class, F1) and R35 (refusal reason not an entry, F8)
+> deviate un-journaled; R16 batching drops refusals (F4). F1 is [blocking]. · SILENT FALLBACKS
+> FOUND — F2 (unverified genesis stored, storage growth + spoofed proposer) and F3 (oversized
+> reply silently dropped as unshaped) both mask a broken/hostile input as success. Both
+> [blocking]. · HOLLOW TESTS FOUND — the forwarding test proves delivery, not R2 verification;
+> the join test never feeds a forged genesis; the engine removed-holder test PINS THE F1 BUG AS
+> EXPECTED BEHAVIOR." R36's scoping was probed and came back clean: a peer's refusal set filters
+> only what is sent TO that peer — never stored, merged, or forwarded — so a lying refusal set
+> cannot suppress content to third parties.
+
+### Findings and dispositions
+
+1. **F1 (blocking, fixed) — the removed holder could never learn why.** The responder refused
+   them bare; a holder offline at removal time would believe themselves a participant forever,
+   and the masking legacy delivery queue dies at P4. Now the terminal ruling DELIVERS: the
+   removal entry and its full ancestor closure ride the refusal block, so their own derivation
+   says removed, with the reason. The test that had pinned the bare refusal was rewritten to
+   demand the delivery.
+2. **F2 (blocking, fixed) — the bootstrap took the anchor on faith.** No signature check, no
+   entitlement check: any session peer could spawn unlimited fabricated documents attributed to
+   proposers who never signed them. Now the proposal signature is verified against its named
+   proposer, and a world that names the receiving holder nowhere (neither genesis peer nor
+   subject of a carried admission) is refused, not stored. Both attacks pinned through the real
+   router.
+3. **F3 (blocking, fixed) — the oversized reply vanished.** Replies are now built under a
+   1.5 MB byte budget (headroom under the router's 2 MiB frame ceiling), positions always
+   intact, truncation logged loud; the peer's next exchange picks up from its advanced
+   position — idempotence makes chunking free.
+4. **F4 (fixed) — batching silenced refusals.** Refusals are now PER-DOCUMENT block
+   properties; a mixed batch answers every document by name.
+5. **F6 (fixed) — the joiner's peer column now records the genesis PROPOSER** (a governance
+   fact), not whichever holder's session carried the frame.
+6. **F7 (fixed)** — the reconcile path's file rewrite failure is logged, not dropped.
+7. **Hollow tests (fixed):** a corrupted-signature forward is pinned REFUSED (R2 verified, not
+   asserted); the forged and stranger-addressed geneses are pinned refused-not-stored.
+8. **F5 and F8 — carried into the P4 plan as named ACs, not silence.** F5: a refused content
+   stub can wedge a NON-refusing third holder behind a hole only the refuser can name — real
+   but latent until content forks across three holders; the fix is R35's refusal-as-entry.
+   F8: the refusal REASON still travels only on the legacy rejection frame; the exchange
+   carries bare hashes. Both belong to the same P4 work item: **make the refusal a first-class
+   signed entry (R35's letter) when the legacy rejection path is swept.**
+
+**P3 ✅ — the pivot's heart is merged.** Next: **P4 — answer `SYNC-G1`, then the great
+deletion** (D1–D10 in one sweep, each proven by removal per R49), carrying the two named ACs
+above plus the three epoch-stamp collisions the fixtures documented.
 2. Does the reconcile frame fit inside `MAX_DOCUMENT_FRAME_BYTES` (2 MiB) for a document with a
    long history, and what is the chunking rule when it does not? (R16 batching cuts the other
    way — multiple documents per exchange grows the frame.)

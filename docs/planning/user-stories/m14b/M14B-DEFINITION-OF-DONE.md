@@ -529,7 +529,11 @@ description: >
   consented, every seat delivered to and consulted by endings; reviewed, 6 findings fixed (the
   invited-window class). D5's PHYSICAL deletion rides P3 (Entry 51 Decision Carried) → Entry 54
 - **DOD-SYNC-P3** [cello-client] — the exchange (`R10`–`R16`), entitlement (`R17`–`R20`),
-  refusals (`R35`–`R38`), forwarding (`R1`–`R2`). — ❌
+  refusals (`R35`–`R38`), forwarding (`R1`–`R2`). — ✅ merged `e616b0f`; one frame/three
+  steps/terminated-by-silence, forwarding + join-via-exchange + invitation lifecycle proven in
+  process; reviewed, blocking findings fixed (removed-holder closure delivery, verified
+  bootstrap, byte budget, per-block refusals). D5 physical deletion + refusal-as-entry ride
+  P4's sweep → Entry 57
 - **DOD-SYNC-P4** [cello-client] — answer `SYNC-G1` (does causal ancestry replace every use of
   the per-envelope `epoch_id`?), then delete `D1`–`D4`, `D6`–`D10`, proven by removal (`R49`);
   strike the seven §15 lines above. — ❌
