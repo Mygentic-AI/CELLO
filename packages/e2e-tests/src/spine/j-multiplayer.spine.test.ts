@@ -28,6 +28,7 @@ import {
   type SpineCluster,
   type Proc,
   type McpConn,
+  CELLO_CLIENT_ROOT,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
@@ -75,12 +76,25 @@ afterAll(async () => {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> {
+async function startLocalDaemon(
+  celloDir: string,
+  label: string,
+  extraEnv: Record<string, string> = {},
+): Promise<Proc> {
   const nodes = cluster.directoryUrls.map((url, i) => spineDirectoryNode(i, url));
   return startDaemon(celloDir, cluster.directoryUrls[0]!, label, {
     manifestEnv: writeConsortiumManifest(celloDir, label, nodes),
+    extraEnv,
   });
 }
+
+/**
+ * SYNC-P5: a fast reconcile sweep for RESTARTED daemons — a returning holder converges on its
+ * own timer, and 2 minutes is a test's whole budget. The ORIGINAL daemons keep the production
+ * cadence deliberately: any convergence they show inside a journey's timeout is the NUDGE
+ * (SYNC-AC5), not a sweep.
+ */
+const FAST_SWEEP = { CELLO_DOCUMENT_RECONCILE_SWEEP_MS: "3000" };
 
 interface Party {
   name: string;
@@ -148,7 +162,11 @@ async function connect(from: Party, to: Party): Promise<{ fromSession: string; t
   return { fromSession, toSession };
 }
 
-/** Poll a party's inbox until a join offer for this document appears, and return it. */
+/**
+ * Poll a party's inbox until the INVITATION for this document appears. SYNC-P4: there is no
+ * offer frame — the invite's notice is a reconcile step-1, the invitee's daemon bootstraps the
+ * world through the exchange, and the inbox row is DERIVED from the record it now holds.
+ */
 async function awaitJoinOffer(
   party: Party,
   documentId: string,
@@ -172,21 +190,20 @@ async function awaitJoinOffer(
 async function arrangementOf(
   party: Party,
   documentId: string,
-): Promise<{ participants: string[]; admins: string[]; appendOnly: unknown; epochId: number }> {
+): Promise<{ participants: string[]; admins: string[]; appendOnly: unknown }> {
   const list = (await party.conn.call("cello_doc_list", {})) as {
     documents?: Array<{
       documentId?: string;
       participants?: string[];
       admins?: string[];
       properties?: Record<string, unknown>;
-      epochId?: number;
-      arrangementUnavailable?: string;
+      underivable?: string;
     }>;
   };
   const row = (list.documents ?? []).find((d) => d.documentId === documentId);
   if (!row) throw new Error(`${party.name} holds no row for ${documentId}`);
-  if (row.arrangementUnavailable) {
-    throw new Error(`${party.name} cannot derive: ${row.arrangementUnavailable}`);
+  if (row.underivable) {
+    throw new Error(`${party.name} cannot derive: ${row.underivable}`);
   }
   return {
     participants: [...(row.participants ?? [])].sort(),
@@ -194,7 +211,6 @@ async function arrangementOf(
     // PROPERTIES is the arrangement's third part (G0) — agreeing on two of three was the
     // silent-simplification shape the review named.
     appendOnly: row.properties?.["append_only"],
-    epochId: row.epochId ?? -1,
   };
 }
 
@@ -202,14 +218,13 @@ async function arrangementOf(
 async function agreeOnArrangement(
   who: Party[],
   documentId: string,
-  want: { participants: string[]; admins: string[]; appendOnly: unknown; epochId: number },
+  want: { participants: string[]; admins: string[]; appendOnly: unknown },
   label: string,
 ): Promise<void> {
   const target = JSON.stringify({
     participants: [...want.participants].sort(),
     admins: [...want.admins].sort(),
     appendOnly: want.appendOnly,
-    epochId: want.epochId,
   });
   for (const p of who) {
     const deadline = Date.now() + 60_000;
@@ -246,6 +261,27 @@ async function awaitContent(
   }
   expect(last, `${party.name} never converged on ${documentId}`).toBe(expected);
 }
+
+describe("J-MULTIPLAYER — the built artifact keeps its layer boundary", () => {
+  it("SYNC-AC17: the document layer's built artifact carries no relay vocabulary", async () => {
+    const { readFileSync, readdirSync } = await import("node:fs");
+    const distDir = join(CELLO_CLIENT_ROOT, "core/daemon/dist");
+    const layerFiles = readdirSync(distDir).filter(
+      (f) =>
+        f.endsWith(".js") &&
+        (f.startsWith("document-layer") ||
+          f.startsWith("document-reconcile") ||
+          f.startsWith("document-inbound")),
+    );
+    expect(layerFiles.length).toBeGreaterThan(0);
+    for (const f of layerFiles) {
+      const src = readFileSync(join(distDir, f), "utf8");
+      for (const word of ["session_sealed", "relay_session_gone", "parked", "witnessed"]) {
+        expect(src.includes(word), `${f} speaks relay vocabulary: ${word}`).toBe(false);
+      }
+    }
+  });
+});
 
 describe("J-MULTIPLAYER — three real daemons, one document", () => {
   it(
@@ -285,7 +321,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       await agreeOnArrangement(
         [a, b],
         documentId,
-        { participants: [a.pubkey, b.pubkey], admins: [a.pubkey], appendOnly: false, epochId: 0 },
+        { participants: [a.pubkey, b.pubkey], admins: [a.pubkey], appendOnly: false },
         "post-genesis",
       );
 
@@ -317,19 +353,17 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       const invited = (await a.conn.call("cello_doc_invite", {
         document_id: documentId,
         invitee_pubkey: c.pubkey,
-      })) as { ok?: boolean; offerSent?: boolean; epochId?: number };
+      })) as { ok?: boolean; noticeSent?: boolean };
       expect(invited.ok, `invite failed: ${JSON.stringify(invited)}`).toBe(true);
-      expect(invited.epochId).toBe(1);
 
+      // SYNC-AC10: the join rides the ORDINARY exchange — the notice was a step-1 position
+      // frame, C's daemon answered empty-handed, and the world (genesis + every entry + the
+      // content) arrived as a reply. What C's inbox shows is DERIVED by C's own daemon from
+      // the record it now holds — R22: C is an INVITED seat until its own consent entry exists.
       const offer = await awaitJoinOffer(c, documentId);
-      // THE RULES ARE VISIBLE BEFORE CONSENT — derived by C's own daemon, not asserted by A, and
-      // the arrangement shown is the one C would BE IN: the pending admission replays too, so C
-      // sees themselves among the participants. That is the point of consenting to a computed
-      // arrangement rather than to a claim.
-      expect((offer.participants as string[]).sort()).toEqual(
-        [a.pubkey, b.pubkey, c.pubkey].sort(),
-      );
-      // A declared itself sole admin at creation, and that is what C is shown.
+      expect((offer.participants as string[]).sort()).toEqual([a.pubkey, b.pubkey].sort());
+      expect(offer.invited as string[]).toContain(c.pubkey);
+      // A declared itself sole admin at creation, and that is what C derives.
       expect(offer.admins).toEqual([a.pubkey]);
 
       const accepted = (await c.conn.call("cello_doc_accept", { document_id: documentId })) as {
@@ -372,7 +406,6 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
           participants: [a.pubkey, b.pubkey, c.pubkey],
           admins: [a.pubkey],
           appendOnly: false,
-          epochId: 1,
         },
         "post-join",
       );
@@ -405,12 +438,12 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
   );
 
   it(
-    "REMOVE while OFFLINE: the parked amendment reaches them on return, so a removed holder always learns before they can publish (DOD-MP-E2E-REMOVE-1)",
+    "REMOVE while OFFLINE: a removed holder learns on return from the EXCHANGE — the terminal refusal delivers their own removal (SYNC-AC13, R32)",
     async () => {
-      // WRITTEN to stage the receiver-side refusal — remove a holder while their daemon is down
-      // so they never learn — and it proved the premise false, which is the better outcome: the
-      // relay PARKS the amendment, so an offline holder is not an uninformed one. The journey
-      // now asserts what actually happens, which is stronger than what it set out to test.
+      // SYNC-P4 rewrote this journey's mechanism: there is no parked amendment and no delivery
+      // ledger. A holder removed while down learns the moment their own daemon reconciles on
+      // return — the responder's terminal refusal CARRIES the removal entry and its ancestors
+      // (R32), so the removed holder derives their own removal and their surface says so.
       const [a, b, c] = (await parties("mprecv", 3)) as [Party, Party, Party];
       await connect(a, b);
       await connect(a, c);
@@ -454,7 +487,6 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
           participants: [a.pubkey, b.pubkey, c.pubkey],
           admins: [a.pubkey],
           appendOnly: false,
-          epochId: 1,
         },
         "pre-removal",
       );
@@ -464,21 +496,19 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       const removed = (await a.conn.call("cello_doc_remove", {
         document_id: documentId,
         holder_pubkey: c.pubkey,
-      })) as { ok?: boolean; epochId?: number; holdersNotified?: Record<string, boolean> };
+      })) as { ok?: boolean; holdersNotified?: Record<string, boolean> };
       expect(removed.ok, `remove failed: ${JSON.stringify(removed)}`).toBe(true);
-      // THE SEND IS ACCEPTED EVEN THOUGH C IS DOWN — the relay PARKS it. That is the whole
-      // finding of this journey: an offline holder is not an uninformed one, because parked
-      // content is waiting for them the moment they return.
-      expect((removed.holdersNotified ?? {})[c.pubkey]).toBe(true);
+      // The per-holder report is HONEST about the absent holder — no ledger promises delivery;
+      // the entry itself, in the chain, is the durable debt (SYNC-D2).
       await agreeOnArrangement(
         [a, b],
         documentId,
-        { participants: [a.pubkey, b.pubkey], admins: [a.pubkey], appendOnly: false, epochId: 2 },
+        { participants: [a.pubkey, b.pubkey], admins: [a.pubkey], appendOnly: false },
         "post-removal",
       );
 
       // ── C COMES BACK KNOWING NOTHING and edits, as any honest holder would. ──
-      const cBack = await startLocalDaemon(c.celloDir, "mprecvC2");
+      const cBack = await startLocalDaemon(c.celloDir, "mprecvC2", FAST_SWEEP);
       daemons.push(cBack);
       c.daemon = cBack;
       const connC2 = await connectMcp(c.celloDir, "mprecv-C2");
@@ -486,22 +516,24 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       expect(((await connC2.call("cello_start_agent", { name: c.name })) as { ok?: boolean }).ok).toBe(true);
       expect(((await connC2.call("cello_use_agent", { name: c.name })) as { ok?: boolean }).ok).toBe(true);
       c.conn = connC2;
-      // ── C LEARNS ON RETURN, from the parked amendment — nobody had to act. ──
+      // ── C LEARNS ON RETURN (SYNC-AC13): C's own sweep initiates an exchange; the responder's
+      // TERMINAL refusal carries C's removal and its ancestors (R32); C derives its own removal
+      // and the surface says so — nobody had to act on either side. ──
       const learned = await (async () => {
         const deadline = Date.now() + 120_000;
         while (Date.now() < deadline) {
           const list = (await c.conn.call("cello_doc_list", {})) as {
-            documents?: Array<{ documentId?: string; removed?: boolean }>;
+            documents?: Array<{ documentId?: string; yourStanding?: string }>;
           };
           const row = (list.documents ?? []).find((d) => d.documentId === documentId);
-          if (row?.removed === true) return true;
+          if (row?.yourStanding === "removed") return true;
           await sleep(2000);
         }
         return false;
       })();
       expect(
         learned,
-        "C never learned of the removal after returning — the parked amendment did not arrive",
+        "C never learned of the removal after returning — the exchange did not deliver it",
       ).toBe(true);
 
       // ── AND THEN C SELF-CENSORS. This is the finding: with HONEST binaries the receiver-side
@@ -527,7 +559,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
   );
 
   it(
-    "FANOUT + REMOVE: one holder offline never blocks the others; a removed holder keeps their copy and stops receiving (DOD-MP-E2E-FANOUT-1, DOD-MP-E2E-REMOVE-1)",
+    "NUDGE + SURFACE + REMOVE: an absent holder blocks nobody, the surface says behind-with-last-seen, and a removed holder keeps their copy (SYNC-AC1, AC5, AC13, AC20)",
     async () => {
       const [a, b, c] = (await parties("mpfan", 3)) as [Party, Party, Party];
       await connect(a, b);
@@ -581,24 +613,34 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       // THE AVAILABILITY CLAIM: B converges with C down — one absent holder blocks nobody.
       await awaitContent(b, documentId, "base. written while C was away. ");
 
-      // ── AND THE WORK FOR C IS QUEUED, not lost: per-holder pending, on A's own surface. ──
-      const pendingForC = await (async () => {
+      // ── SYNC-AC20 — the HONEST surface: with C unreachable, A shows C BEHIND with a
+      // last-seen time from the display cache. No pending count exists to show, and it must
+      // never read in_sync. ──
+      const partyCView = async (): Promise<{ sync?: string; lastSyncedAtMs?: number | null }> => {
+        const list = (await a.conn.call("cello_doc_list", {})) as {
+          documents?: Array<{
+            documentId?: string;
+            parties?: Array<{ agentId?: string; sync?: string; lastSyncedAtMs?: number | null }>;
+          }>;
+        };
+        const row = (list.documents ?? []).find((d) => d.documentId === documentId);
+        return (row?.parties ?? []).find((party) => party.agentId === c.pubkey) ?? {};
+      };
+      const behind = await (async () => {
         const deadline = Date.now() + 30_000;
+        let last: { sync?: string } = {};
         while (Date.now() < deadline) {
-          const list = (await a.conn.call("cello_doc_list", {})) as {
-            documents?: Array<{ documentId?: string; pendingDeliveries?: number }>;
-          };
-          const row = (list.documents ?? []).find((d) => d.documentId === documentId);
-          if ((row?.pendingDeliveries ?? 0) >= 1) return row!.pendingDeliveries!;
+          last = await partyCView();
+          if (last.sync === "behind") return last;
           await sleep(1000);
         }
-        return 0;
+        return last;
       })();
-      expect(pendingForC, "A queued nothing for the absent holder").toBeGreaterThanOrEqual(1);
+      expect(behind.sync, "A does not show the absent holder behind").toBe("behind");
 
       // ── RESTART THE PUBLISHER: pending must be derived from the LOG, not held in memory. ──
       await a.daemon.stop();
-      const aRestarted = await startLocalDaemon(a.celloDir, "mpfanA2");
+      const aRestarted = await startLocalDaemon(a.celloDir, "mpfanA2", FAST_SWEEP);
       daemons.push(aRestarted);
       a.daemon = aRestarted;
       const connA2 = await connectMcp(a.celloDir, "mpfan-A2");
@@ -606,17 +648,17 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       expect(((await connA2.call("cello_start_agent", { name: a.name })) as { ok?: boolean }).ok).toBe(true);
       expect(((await connA2.call("cello_use_agent", { name: a.name })) as { ok?: boolean }).ok).toBe(true);
       a.conn = connA2;
-      const survived = (await a.conn.call("cello_doc_list", {})) as {
-        documents?: Array<{ documentId?: string; pendingDeliveries?: number }>;
-      };
-      const survivedRow = (survived.documents ?? []).find((d) => d.documentId === documentId);
+      // The display cache is persisted (spec §9): after the publisher's restart, C still reads
+      // behind — the belief survived, and NOTHING correctness-bearing was lost with the process
+      // (the entry set is the only authority).
+      const survivedView = await partyCView();
       expect(
-        survivedRow?.pendingDeliveries ?? 0,
-        "the backlog for the absent holder did not survive the publisher's restart",
-      ).toBeGreaterThanOrEqual(1);
+        survivedView.sync,
+        "the party view did not survive the publisher's restart",
+      ).toBe("behind");
 
       // ── C COMES BACK and converges with ZERO agent attention on any side. ──
-      const cRestarted = await startLocalDaemon(c.celloDir, "mpfanC2");
+      const cRestarted = await startLocalDaemon(c.celloDir, "mpfanC2", FAST_SWEEP);
       daemons.push(cRestarted);
       c.daemon = cRestarted;
       const connC2 = await connectMcp(c.celloDir, "mpfan-C2");
@@ -631,7 +673,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       const removed = (await a.conn.call("cello_doc_remove", {
         document_id: documentId,
         holder_pubkey: b.pubkey,
-      })) as { ok?: boolean; epochId?: number };
+      })) as { ok?: boolean };
       expect(removed.ok, `remove failed: ${JSON.stringify(removed)}`).toBe(true);
 
       // B's own daemon reports the removal — POLLED, because the amendment crosses a real
@@ -641,10 +683,10 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
         let last = "";
         while (Date.now() < deadline) {
           const bList = (await b.conn.call("cello_doc_list", {})) as {
-            documents?: Array<{ documentId?: string; removed?: boolean }>;
+            documents?: Array<{ documentId?: string; yourStanding?: string }>;
           };
           const row = (bList.documents ?? []).find((d) => d.documentId === documentId);
-          if (row?.removed === true) return row;
+          if (row?.yourStanding === "removed") return row;
           last = JSON.stringify(bList);
           await sleep(1000);
         }
@@ -681,7 +723,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
   );
 
   it(
-    "END: a close reaches EVERY holder and settles only when ALL of them have said it (DOD-MP-CONTROL-N-1, DOD-MP-CLOSE-N-1)",
+    "END: closes are ENTRIES that settle by DERIVATION only when every seat has spoken (SYNC-AC4's settlement rule, R26–R28)",
     async () => {
       // Both units were found by the LIVE FLEET, not by a test, and both are about a third party
       // the code could not see. Three OS processes is the only place they can be disproved:
@@ -721,24 +763,32 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       // the genesis peer alone, and the joiner, converging and publishing for the life of the
       // document, was never told it had ended. ──
       const closed = (await a.conn.call("cello_doc_close", { document_id: documentId })) as {
-        ok?: boolean; holdersNotified?: Record<string, boolean>; peerNotified?: boolean;
+        ok?: boolean; closeDelivered?: Record<string, boolean>; ended?: string | null;
+        waitingOn?: string[];
       };
       expect(closed.ok).toBe(true);
-      expect(Object.keys(closed.holdersNotified ?? {}).sort()).toEqual([b.pubkey, c.pubkey].sort());
-      expect(closed.holdersNotified?.[c.pubkey], "the joiner was not told the document ended").toBe(true);
-      expect(closed.holdersNotified?.[b.pubkey]).toBe(true);
+      // The close ENTRY traveled to both other seats — including the joiner, who exists in no
+      // peerAgentId column anywhere (the live-fleet defect this journey was written for).
+      expect(Object.keys(closed.closeDelivered ?? {}).sort()).toEqual([b.pubkey, c.pubkey].sort());
+      expect(closed.closeDelivered?.[c.pubkey], "the joiner was not told the document ended").toBe(true);
+      expect(closed.closeDelivered?.[b.pubkey]).toBe(true);
+      // And the DERIVED verdict says exactly who the agreement still waits on.
+      expect(closed.ended).toBeNull();
+      expect((closed.waitingOn ?? []).sort()).toEqual([b.pubkey, c.pubkey].sort());
 
-      const statusOf = async (p: Party): Promise<string> => {
+      const endedOf = async (p: Party): Promise<string> => {
         const list = (await p.conn.call("cello_doc_list", {})) as {
-          documents?: Array<{ documentId?: string; status?: string }>;
+          documents?: Array<{ documentId?: string; ended?: string | null }>;
         };
-        return (list.documents ?? []).find((d) => d.documentId === documentId)?.status ?? "missing";
+        const row = (list.documents ?? []).find((d) => d.documentId === documentId);
+        if (!row) return "missing";
+        return row.ended === null || row.ended === undefined ? "live" : String(row.ended);
       };
-      const awaitStatus = async (p: Party, want: string, timeoutMs = 60_000): Promise<void> => {
+      const awaitEnded = async (p: Party, want: string, timeoutMs = 60_000): Promise<void> => {
         const deadline = Date.now() + timeoutMs;
         let last = "";
         while (Date.now() < deadline) {
-          last = await statusOf(p);
+          last = await endedOf(p);
           if (last === want) return;
           await sleep(1000);
         }
@@ -746,35 +796,35 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       };
 
       // ── ONE OF THREE HAS CLOSED. Nothing is settled anywhere. ──
-      expect(await statusOf(a), "A settled its own close alone").toBe("active");
+      expect(await endedOf(a), "A settled its own close alone").toBe("live");
 
       // ── THE GENESIS PEER CLOSES: two of three. Under the old rule THIS is where A flipped to
       // `closed`, while the joiner was still editing. It must not. ──
       expect(((await b.conn.call("cello_doc_close", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
       // WAIT FOR THE RECEIPT, not for a duration. A sleep proves only "it had not settled YET" —
-      // and would pass vacuously if B's frame were parked and never arrived at all. Blocking on
-      // A's own record of the peer close turns "no news" into "both closes are in, and it still
-      // did not settle". (Measured: A records it ~2ms after B's call returns.)
-      await a.daemon.waitForLine(/document\.close\.peer_requested/, 30_000);
+      // and would pass vacuously if B's entry never arrived at all. B's close is an ordinary
+      // ENTRY now; A logs its ingest, and blocking on that turns "no news" into "both closes
+      // are in, and it still did not settle".
+      await a.daemon.waitForLine(/document\.entry\.recorded/, 30_000);
       expect(
-        await statusOf(a),
+        await endedOf(a),
         "A settled on the genesis pair while the joiner had not closed",
-      ).toBe("active");
-      // AND ON B'S OWN DAEMON. Asserting only the owner leaves the rule proven in one place: under
-      // the old two-party rule B's daemon (owner B, peer A, both closed) would already read
-      // `closed` here, so this is where the genesis peer's copy earns the clause.
+      ).toBe("live");
+      // AND ON B'S OWN DAEMON. Under the old two-party rule B's daemon (owner B, peer A, both
+      // closed) would already read `closed` here, so this is where the genesis peer's copy
+      // earns the clause.
       expect(
-        await statusOf(b),
+        await endedOf(b),
         "B settled on the genesis pair while the joiner had not closed",
-      ).toBe("active");
+      ).toBe("live");
 
       // ── AND THE JOINER'S CLOSE COMPLETES IT. Twice load-bearing: a joiner is in nobody's
       // `peerAgentId` column, so before the inbound half was fixed every holder REFUSED their
       // close while telling them everyone had heard it. ──
       expect(((await c.conn.call("cello_doc_close", { document_id: documentId })) as { ok?: boolean }).ok).toBe(true);
-      await awaitStatus(a, "closed");
-      await awaitStatus(b, "closed");
-      await awaitStatus(c, "closed");
+      await awaitEnded(a, "closed");
+      await awaitEnded(b, "closed");
+      await awaitEnded(c, "closed");
     },
     600_000,
   );
@@ -821,31 +871,34 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       // is exactly why the old gate admitted them. ──
       const removed = (await a.conn.call("cello_doc_remove", {
         document_id: documentId, holder_pubkey: b.pubkey,
-      })) as { ok?: boolean; epochId?: number };
+      })) as { ok?: boolean };
       expect(removed.ok, `remove failed: ${JSON.stringify(removed)}`).toBe(true);
 
       // ── B TRIES TO END IT. Their own daemon self-censors first (forward-only removal), so what
       // reaches A is nothing — which on its own is indistinguishable from a frame that was simply
       // lost. So the assertion is TWO-SIDED: B is refused locally by name, AND A is still active. ──
       const bEnds = (await b.conn.call("cello_doc_kill", { document_id: documentId })) as {
-        ok?: boolean; reason?: string; holdersNotified?: Record<string, boolean>;
+        ok?: boolean; reason?: string;
       };
       // Whether B is stopped at their own door or at A's, what must NOT happen is A ending.
-      const aStatus = async (): Promise<string> => {
+      const aEnded = async (): Promise<string> => {
         const list = (await a.conn.call("cello_doc_list", {})) as {
-          documents?: Array<{ documentId?: string; status?: string }>;
+          documents?: Array<{ documentId?: string; ended?: string | null }>;
         };
-        return (list.documents ?? []).find((d) => d.documentId === documentId)?.status ?? "missing";
+        const row = (list.documents ?? []).find((d) => d.documentId === documentId);
+        if (!row) return "missing";
+        return row.ended === null || row.ended === undefined ? "live" : String(row.ended);
       };
       await sleep(5000);
       expect(
-        await aStatus(),
+        await aEnded(),
         "a REMOVED holder ended the creator's document — the gate admitted a party the chain expelled",
-      ).toBe("active");
+      ).toBe("live");
       // The removed party's own refusal is recorded either way; if their daemon did send, A's log
       // carries the receiving-side refusal. One of the two must be true, and both are on the record.
       const refusedLocally = bEnds.ok === false;
-      const refusedAtA = a.daemon.countLines(/document\.(kill|close)\.not_holder/) > 0;
+      // If B's daemon did somehow mint and send the entry, A's causal gate names the removal.
+      const refusedAtA = a.daemon.countLines(/document\.inbound\.sender_removed/) > 0;
       expect(
         refusedLocally || refusedAtA,
         "nobody refused the removed holder's ending — it was silently dropped",
@@ -857,11 +910,12 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       const deadline = Date.now() + 60_000;
       let last = "";
       while (Date.now() < deadline) {
-        last = await aStatus();
+        last = await aEnded();
         if (last === "closed") break;
         await sleep(1000);
       }
-      // The removed holder is NOT in the agreement — A and C alone complete it.
+      // The removed holder is NOT in the agreement — A and C alone complete it (derivation:
+      // the removal spent B's seat, so every CURRENT participant has spoken).
       expect(last, "the two remaining holders could not complete the close").toBe("closed");
     },
     600_000,
