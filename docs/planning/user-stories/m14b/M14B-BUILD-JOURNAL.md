@@ -21,7 +21,16 @@ description: >
 > taking a step back and thinking through from first principles."* The spec of record for all
 > further work is **[[M14B-RECONCILE-SPEC]] (v2)**. Anything below that predates it is history.
 
-- **NEXT ACTION: `DOD-SYNC-P4` — THE GREAT DELETION, on `m14b/sync-p4` (cut, empty).**
+- **NEXT ACTION: `DOD-SYNC-P4` step 2 of 3, on `m14b/sync-p4` @ `9520601`.** STEP 1 IS DONE:
+  the update envelope's signed TBS carries `governance_parents` (domain v2, frozen vector
+  reissued); publish stamps the fold's frontier or refuses; the store column is birth-gated for
+  old DBs; every lossless re-encoder threads the row's real value (an empty list broke a
+  signature in test — the exact class to watch). PROCESS TRAP LOGGED: `tsc --build` silently
+  no-ops on a stale graph — gate typechecks after cross-package interface changes MUST use
+  `--force` (same disease as the vitest cache). NEXT: **step 2 — the inbound gate becomes the
+  causal admissibility ruling** (R20/R30 on governance_parents; the epoch equality check and
+  behind/ahead-republish cease to exist; AC14/AC16 shapes pinned). Then **step 3 — D1–D10 in
+  one sweep** per the plan below.
   `SYNC-G1` is ANSWERED (Entry 58): the stamp GOES, amended to replace-then-delete. Sweep
   order: **(1) update-envelope TBS v2** — `governance_parents` (author's governance frontier,
   canonical/capped) IN, `epoch_id` OUT, one bump; **(2) the inbound equality gate becomes the
