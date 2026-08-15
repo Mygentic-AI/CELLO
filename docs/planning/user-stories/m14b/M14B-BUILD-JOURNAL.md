@@ -122,8 +122,17 @@ description: >
   NUDGE; restarted daemons get CELLO_DOCUMENT_RECONCILE_SWEEP_MS=3000), entry-model endings
   with derived settlement, and the removed-cannot-end two-sided proof; plus a new AC17
   artifact check (no relay vocabulary in the built layer files). THE LIVE RUN — three real
-  daemons, three directory nodes, real relay — is in flight now; it is the milestone's close
-  gate. On green: flip DOD-SYNC-P6 and the milestone-close checklist.
+  daemons, three directory nodes, real relay — WENT GREEN, 7/7, after three diagnosed rounds:
+  (1) FAST test cadences for derivation-claim journeys (a first-contact send legitimately rides
+  the sweep, R40); (2) the backoff ladder and the believed-current window became
+  env-overridable in cello-client (`909d5a3`) — the live run had surfaced the removed holder's
+  learning path being SUPPRESSED by its own display belief for the production 10 minutes, which
+  is the design working at a pace tests cannot watch; (3) daemon-log forensics proved the last
+  red was the KNOWN first-frame-after-session-open transport race eating one refusal reply, so
+  the removal-surface claim moved to its own fast-cadence journey where the model's own repair
+  (the next exchange) costs 3 seconds (`3a5093e6`). Every journey now converges in 15–19s
+  across real processes; the nudge journey keeps production cadence so its convergence PROVES
+  the nudge. P6 unit review in flight; flip on its findings being addressed.
   Older sweep notes (now done) follow:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
