@@ -55,7 +55,14 @@ description: >
   derivation, answers with a consent/refuse_join ENTRY; the inviter's invitation ledger IS the
   entry set (open = invited seat, refused = refuse_join in chain);
   `arrangementGenesisFromProposal` moved to document-proposal.ts; tests seat everyone through
-  a shared `seatViaExchange` helper. REMAINING IN THE SWEEP, in order:
+  a shared `seatViaExchange` helper. D1/D2/D4 DELETED (`2349a7c`, −5,313 net): content+amendment
+  delivery ledgers, the worker, the interval sweep + hang-eviction, the ack frame and its whole
+  receiving half all gone; publish NUDGES each seat (initiateReconcile — R39's first trigger)
+  and the exchange carries everything; entry fan-out keeps the best-effort direct send minus
+  debt rows; list loses the four pending counters (no producer without a ledger); the transport
+  survives as sendBytes-only (reuse/hint/seal/suspect logic re-pinned through it); roundtrip/
+  surface-e2e/handlers suites rewritten onto the exchange (offline-peer recovery + unreachable-
+  holder admission both proven via one exchange). REMAINING IN THE SWEEP, in order:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
   commit-nudge replacement (publish/entry-commit → initiateReconcile to seats — R39's first
