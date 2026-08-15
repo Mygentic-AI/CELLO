@@ -81,9 +81,23 @@ description: >
   refuser on receipt; F5/F8 pinned end-to-end (third holder learns hash+reason; forged record
   recorded nowhere). R49 prose DONE (`6badb11` + trustless `2f8a64dd`): the shipped documents
   SKILL.md matches what ships; §15's seven pre-pivot DoD lines struck.
-  REMAINING FOR P4: the unit review (cello-unit-reviewer, diff `e616b0f..HEAD`, no model
-  override), findings fixed, DOD-SYNC-P4 flipped, merge to main. Then P5 (R39–R43 scheduling +
-  R45–R48 surface), P6 (enforcers → SYNC-AC1–AC20, three OS processes).
+  **P4 IS MERGED (`b332225`) AND FLIPPED.** The review (one cello-unit-reviewer pass over
+  `e616b0f..HEAD`) returned 2 blocking correctness findings + 1 blocking error-substitution +
+  1 blocking test gap + residue, ALL FIXED in `266e539`: (F1) the inbound stored-status gate
+  contradicted R30/AC16 — a closed-column document terminally refused ending-free-frontier
+  content, silently losing the last edits before an agreed close; now only LEGACY documents
+  are judged by the column, everything derivable falls to the causal ruling; (F2) the ended
+  projection was one-way — the column now follows the fold BOTH directions on every applied
+  entry (document.reopened.derived), and canPublish asks the fold through a seam (canAdmit,
+  consumerless, deleted); (F3) failed nudges log document.reconcile.nudge_failed; (F4)
+  document_frontier_underivable logs the derivation's own reason; (test gap) the three
+  governance_parents decoder refusals are pinned (revert-test-proof); (F5/F6) the dead
+  withdrawals + epoch-keyed tables are dropped in place, never born fresh. REVIEWER'S CARRIED
+  CAVEAT: the trustless-cello spine test speaks the old surface via the published client —
+  P6 re-points it and MUST land before/with the next publish.
+  **NEXT: P5** — scheduling (R39–R43: reconcile triggers — session-open, on-notice, the
+  periodic sweep, backoff) and the status surface (R45–R48: in_sync|behind|unseen, blockedBy).
+  Then P6 (enforcers → SYNC-AC1–AC20, three OS processes).
   Older sweep notes (now done) follow:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the

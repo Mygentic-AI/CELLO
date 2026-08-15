@@ -543,7 +543,17 @@ description: >
   P4's sweep → Entry 57
 - **DOD-SYNC-P4** [cello-client] — answer `SYNC-G1` (does causal ancestry replace every use of
   the per-envelope `epoch_id`?), then delete `D1`–`D4`, `D6`–`D10`, proven by removal (`R49`);
-  strike the seven §15 lines above. — ❌
+  strike the seven §15 lines above. — ✅ merged `b332225`; SYNC-G1 answered (Entry 58:
+  replace-then-delete — `governance_parents` in the signed TBS, then the stamp out of both
+  preimages, domains → v3, frozen vectors reissued); endings + refusals are signed entries;
+  publish nudges via the exchange; one derivation each for membership and endings; ~11,500
+  lines deleted with absence proven on rebuilt artifacts; the seven §15 lines struck; reviewed
+  (cello-unit-reviewer), all blocking findings fixed and pinned (R30 status-gate fall-through,
+  two-way ended projection + fold-ruled canPublish, frontier reason logging, governance_parents
+  decoder refusal tests). CARRIED CAVEAT (reviewer, R49): trustless-cello's spine test
+  `j-multiplayer.spine.test.ts` still speaks the old surface via the PUBLISHED client — green
+  vacuously today, red the day this client publishes; its re-point is P6's named job and P6
+  must land before or with the publish.
 - **DOD-SYNC-P5** [cello-client] — scheduling (`R39`–`R43`) and the surface (`R45`–`R48`). — ❌
 - **DOD-SYNC-P6** [trustless-cello] — enforcers re-pointed at `SYNC-AC1`–`AC20`, three daemons as
   separate OS processes. — ❌
