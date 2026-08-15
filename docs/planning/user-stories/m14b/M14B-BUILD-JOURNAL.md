@@ -62,31 +62,14 @@ description: >
   debt rows; list loses the four pending counters (no producer without a ledger); the transport
   survives as sendBytes-only (reuse/hint/seal/suspect logic re-pinned through it); roundtrip/
   surface-e2e/handlers suites rewritten onto the exchange (offline-peer recovery + unreachable-
-  holder admission both proven via one exchange). D7 UNDERWAY — SOURCE DONE, TESTS RED,
-  **UNCOMMITTED in cello-client** (working tree on m14b/sync-p4 @ 2349a7c): the epoch spine is
-  out of BOTH signed preimages — amendment TBS drops epoch_id+prev_amendment_hash (domain
-  → CELLO-DOCUMENT-AMENDMENT-v3), update envelope drops epoch_id (domain → CELLO-DOCUMENT-
-  UPDATE-v3); fold drops interimMaxEpoch; MembershipVerdict/AppendResult/EnvelopeRow/ListRow
-  lose their epoch fields; currentDocumentEpoch + currentEpoch deleted; document_entries and
-  document_envelopes create WITHOUT epoch_id and `dropLegacyEpochColumn` (ALTER DROP, birth-
-  gated) migrates old DBs; all daemon source COMPILES + lints clean. REMAINING FOR D7:
-  (1) ~22 red tests: amendment-store suite (epoch tests + raw INSERT .run() arity — the column
-  list was fixed but .run() still passes the epoch arg in several files: handlers 3 sites,
-  lifecycle 2, inbound 2, publish 1, rejection 1), the document-inbound "EPOCH ruling" describe
-  (rewrite refusal texts/waits — removal refusals no longer name an epoch), lifecycle list
-  epoch tests, publish.test 151 (`epoch_id: row.epochId` re-encode), frame-router 1,
-  layer.test/surface-e2e/dod-doc-notice-reachable leftovers; (2) FROZEN VECTOR REISSUES in
-  protocol-types tests (document-amendment.test.ts + document-envelope.test.ts — domains
-  bumped, print new hex like P4a did); (3) gates + one D7 commit (full-substance message).
-  PROGRESS SINCE THE CHECKPOINT ABOVE: the mechanical test sweep is nearly done — remaining
-  RED (~9, all semantic now): document-inbound tests asserting refusal text that NAMED an
-  epoch ("removed at epoch N" — the detail is now epoch-free) + the "epoch-ahead sender
-  logged as amendment lag" test (that log branch was deleted; the event is plain
-  document.inbound.not_peer now — rewrite or delete the pin); document-rejection "stamps the
-  CURRENT epoch" test (the rejection row no longer stamps one — delete); handlers "degrades
-  ONE row"/REMOVE-FEEDBACK tests (likely removedAtEpoch/arrangement shapes); JOIN-1
-  REMOVE-1 forward-only (check with --no-cache singly). Vitest greps to run per fix:
-  document-inbound, document-rejection, document-handlers. All raw-insert arities are FIXED.
+  holder admission both proven via one exchange). D7 DONE (`d735d59`, −249 net): the epoch
+  spine is out of BOTH signed preimages (amendment domain → v3 dropping
+  epoch_id+prev_amendment_hash; update-envelope domain → v3 dropping epoch_id; both frozen
+  vectors reissued — amendment TBS hash d81a1cc0…, update hash 4d61ad4d…); fold drops
+  interimMaxEpoch; stores create WITHOUT epoch columns and `dropLegacyEpochColumn`
+  (birth-gated ALTER DROP) migrates old DBs; currentDocumentEpoch/currentEpoch deleted;
+  chains order by (author_seq, entry_hash); every epoch-flavored surface (removal refusals,
+  list epochId/removedAtEpoch, invite/remove results, the epoch-ahead lag log) is gone.
   THEN, still owed in the sweep:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
