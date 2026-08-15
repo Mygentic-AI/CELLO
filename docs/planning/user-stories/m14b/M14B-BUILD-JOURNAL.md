@@ -3015,6 +3015,79 @@ positions. **Verdict landed — Entry 57.**
 **P3 ✅ — the pivot's heart is merged.** Next: **P4 — answer `SYNC-G1`, then the great
 deletion** (D1–D10 in one sweep, each proven by removal per R49), carrying the two named ACs
 above plus the three epoch-stamp collisions the fixtures documented.
+
+---
+
+## Entry 58 — SYNC-G1 answered: the stamp GOES, but one of its jobs survives and must be re-homed causally
+
+**Date:** 2026-08-15 · **Unit:** P4's gate (`SYNC-G1`) — analysis only, no code. Gates D7.
+
+### Verdict
+
+**Neither of the spec's two contemplated outcomes is exactly right.** The per-envelope
+`epoch_id` stamp is deleted (D7 proceeds) — but one of its uses is genuinely load-bearing and
+survives the stamp's death: it is the content envelope's ONLY link to the governance its author
+held when authoring. Causal ancestry replaces that use **only if content envelopes gain causal
+governance anchoring of their own** — a `governance_parents` field (the author's governance
+frontier, entry hashes) in the update envelope's signed TBS. Without it, deleting the stamp
+leaves content admissibility checkable against current state only, which breaks the two
+acceptance criteria that exist precisely to prevent that: AC14 (a removed author's earlier work
+must still converge to holders who were behind at removal) and AC16 (post-ending forgery must
+be refusable by ancestry, including from a modified daemon).
+
+### Every producer and consumer, cited
+
+**Producer (one):** `document-publish.ts:145` stamps `epoch_id: currentDocumentEpoch` into the
+signed update TBS on every publish.
+
+**Consumers:**
+1. **The inbound EQUALITY gate** (`document-inbound.ts:326`) — refuses an envelope whose stamp
+   differs from the receiver's current epoch, both directions, with "republish under the
+   current epoch" guidance. THIS is the load-bearing use: it is a (crude, symmetric,
+   convergence-hostile) proxy for "the author held the governance that makes this content
+   admissible." Its crudeness is measured: the P3 fixtures collided with it three documented
+   times (Entries 56–57), refusing perfectly legitimate content authored before a governance
+   change. **Replacement: R20 evaluated causally over `governance_parents`** — admit iff the
+   author was a participant in the fold-state derived from the envelope's named governance
+   ancestors (the same recursive machinery removals already use), refuse a removal/ending among
+   those ancestors (R30). Asymmetric where the equality gate was symmetric: honest old content
+   ADMITS; post-removal and post-ending authorship REFUSES.
+2. **The lag signature** (`document-inbound.ts:266`) — a LOG-ONLY heuristic ("unknown sender
+   epoch-ahead = admission in flight") for operator diagnostics. Dies with the gate; the
+   exchange's non-terminal stranger refusal (R19) is its replacement and is better.
+3. **Removal-epoch surfaces** (`removedAtEpoch` in refusal sentences and the list row) —
+   DISPLAY of the interim stamp on removal entries, not a decision input. The removal ENTRY
+   hash is the stable identifier; sentences name it instead.
+4. **The delivery-ledger epoch joins/ordering** (`document-store.ts` amendment-delivery
+   queries) — property of D2's own tables; dies in the same sweep.
+5. **Rejection-record stamps** (`document-rejection.ts`) — recorded context on receiver-side
+   records; becomes the governance-frontier hash for the same diagnostic value.
+6. **The entry store's interim `epoch_id` column and `currentDocumentEpoch`** — the carrier
+   fields P1 explicitly kept for D7; authoring mints them, nothing else decides on them. Die
+   with the stamp; `interimMaxEpoch`/`interimLastHash` leave `DocumentStateView` with them.
+
+### What R20/R30 cover, shown
+
+- Author removed, content authored BEFORE removal, receiver behind: governance_parents exclude
+  the removal → author participant at those ancestors → ADMIT (AC14 satisfied; the equality
+  gate refused this).
+- Author removed, content authored AFTER learning: parents include (or causally follow) the
+  removal → not a participant at that frontier → REFUSE on the record (R20).
+- Content naming an ending among its governance ancestors: REFUSE everywhere, independently
+  (R30, AC16) — unforgeable because the parents are inside the signed TBS.
+- A modified daemon BACKDATING parents to before its removal: admits exactly the content an
+  honest holder at that position could have authored — the same bounded claim Entry 48 accepted
+  for governance backdating; removal still dominates everything the daemon does going forward.
+
+### The work this adds to P4's sweep (D7 becomes replace-then-delete)
+
+1. Update-envelope TBS v2: `governance_parents: string[]` (canonical ascending, capped like
+   entry parents), stamped by publish with the fold's frontier.
+2. Inbound gate rewrite: the equality check becomes the causal admissibility ruling above;
+   "behind/ahead — republish" ceases to exist as a refusal.
+3. Then and only then: delete the stamp, its column, and consumers 2–6.
+
+**D7 PROCEEDS, in this amended form. The sweep may begin.**
 2. Does the reconcile frame fit inside `MAX_DOCUMENT_FRAME_BYTES` (2 MiB) for a document with a
    long history, and what is the chunking rule when it does not? (R16 batching cuts the other
    way — multiple documents per exchange grows the frame.)
