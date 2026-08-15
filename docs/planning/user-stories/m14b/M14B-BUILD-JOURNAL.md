@@ -33,14 +33,19 @@ description: >
   unheld-ancestors refuses non-terminally (`document_governance_in_flight`); the equality
   check, behind/ahead-republish, the lag heuristic, and the current-state removed-sender check
   are DELETED (legacy bilateral keeps its membership walk — no frontier world exists there).
-  STEP 3 IS UNDERWAY (`35b7783`): **endings are entries** — close/kill kinds + policy
-  (self-act; kill takes admin power) + fold derivation (`ended`/`closedBy` on the state view;
-  closed = every current participant's own close among the applied set; removal-completes falls
-  out of the derivation with no code acting). Six fold pins green. REMAINING IN THE SWEEP, in
-  order: (a) daemon rewiring — cello_doc_close/kill author entries, lifecycle + surfaces read
-  the derived `ended`, publish gate refuses on an ended world (R29) and the causal content
-  gate refuses an ending in the frontier closure (R30/AC16) — THEN delete the control-frame
-  path (D3/D6: document-control*.ts, its router cases, notifier, settle bookkeeping);
+  STEP 3 IS UNDERWAY (`35b7783` protocol layer, `cdcd806` daemon rewiring): **endings are
+  entries** — close/kill kinds + policy + fold derivation (`ended`/`closedBy`); cello_doc_close/
+  kill author entries and report the DERIVED verdict (`ended`, `waitingOn` = unclosed
+  participants ∪ open invitations per Entry 54); the remove verb re-derives after appending so
+  removal-completes projects on the AUTHOR'S daemon too, not only on receivers; undecodable
+  chain refuses by name; notifyGuidance (117 lines of control-frame operator prose) deleted.
+  TRAP RE-CONFIRMED: daemon tests run against protocol-types' BUILT dist — a fold change
+  invisible to them until `tsc --build --force` (stale dist made the fold look like it ignored
+  open invitations). Gates at `cdcd806`: daemon 2328 --no-cache, monorepo 3889, lint, forced
+  build — all green. REMAINING IN THE SWEEP, in order: (a-rest) publish gate refuses on an
+  ended world (R29) — verify it rides deriveState — THEN delete the control-frame path
+  (D3/D6: document-control*.ts, its router cases, notifier, settle bookkeeping, lifecycle
+  close/kill/settle, controlHolders);
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
   commit-nudge replacement (publish/entry-commit → initiateReconcile to seats — R39's first
