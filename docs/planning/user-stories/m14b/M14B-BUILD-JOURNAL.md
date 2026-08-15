@@ -21,17 +21,21 @@ description: >
 > taking a step back and thinking through from first principles."* The spec of record for all
 > further work is **[[M14B-RECONCILE-SPEC]] (v2)**. Anything below that predates it is history.
 
-- **NEXT ACTION: `DOD-SYNC-P4` — answer `SYNC-G1`, then THE GREAT DELETION.** G1 first
-  (analysis: does causal ancestry replace every use of the per-envelope `epoch_id`? The
-  fixtures collided with the stamp three documented times — Entries 56/57). Then D1–D10 in ONE
-  sweep, each proven by removal per `R49` (deleted, gates green both repos, absence asserted on
-  the BUILT artifact): the content/amendment/control delivery ledgers and workers, ack
-  substitutes, the legacy offer/answer path (D5, replacement proven), control signing/fan-out,
-  the epoch spine (D7, behind G1), duplicate derivations (D8 — the interim stranger door and
-  membership walks), withdrawal (D9), delivery session hints (D10). Carried ACs: refusal
-  becomes a first-class signed entry (R35's letter — closes review F5/F8); §15's seven DoD
-  lines struck. **P0 ✅ · P1 ✅ (`4ac91a9`) · P2 ✅ (`3780817`) · P3 ✅ (`e616b0f`, Entries
-  55–57).**
+- **NEXT ACTION: `DOD-SYNC-P4` — THE GREAT DELETION, on `m14b/sync-p4` (cut, empty).**
+  `SYNC-G1` is ANSWERED (Entry 58): the stamp GOES, amended to replace-then-delete. Sweep
+  order: **(1) update-envelope TBS v2** — `governance_parents` (author's governance frontier,
+  canonical/capped) IN, `epoch_id` OUT, one bump; **(2) the inbound equality gate becomes the
+  causal admissibility ruling** (author a participant in the fold-state at the envelope's named
+  governance ancestors; removal/ending among them refuses; behind/ahead-republish ceases to
+  exist); **(3) D1–D10 in one sweep**, each proven by removal per `R49` (deleted, both repos'
+  gates green, absence asserted on the BUILT artifact): content/amendment/control delivery
+  ledgers + workers, ack substitutes (proof-by-epoch, retired-vs-acked, send ceilings), the
+  legacy offer/answer path (D5), control signing/fan-out, the epoch spine + its store columns +
+  `currentDocumentEpoch`, duplicate derivations (D8: the interim stranger door, `walkMembership`
+  consumers), withdrawal (D9), session hints (D10). Carried ACs: refusal becomes a first-class
+  signed ENTRY (R35's letter, closes P3-review F5/F8); §15's seven pre-pivot DoD lines struck;
+  scheduling hooks stay OUT (P5). **P0 ✅ · P1 ✅ (`4ac91a9`) · P2 ✅ (`3780817`) · P3 ✅
+  (`e616b0f`, Entries 55–57) · G1 ✅ (Entry 58).**
 - **READ ORDER:** [[M14B-PROCEDURE]] → [[M14B-RECONCILE-SPEC]] (v2, the build) →
   [[M14B-DEFINITION-OF-DONE]] (status only) → this block → Entry 47.
   Rationale, if wanted, is [[2026-08-14_1155_document-protocol-reconcile-not-deliver]] — NOT needed
