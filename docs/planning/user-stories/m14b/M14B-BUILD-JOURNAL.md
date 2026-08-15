@@ -78,6 +78,15 @@ description: >
   layer.test/surface-e2e/dod-doc-notice-reachable leftovers; (2) FROZEN VECTOR REISSUES in
   protocol-types tests (document-amendment.test.ts + document-envelope.test.ts — domains
   bumped, print new hex like P4a did); (3) gates + one D7 commit (full-substance message).
+  PROGRESS SINCE THE CHECKPOINT ABOVE: the mechanical test sweep is nearly done — remaining
+  RED (~9, all semantic now): document-inbound tests asserting refusal text that NAMED an
+  epoch ("removed at epoch N" — the detail is now epoch-free) + the "epoch-ahead sender
+  logged as amendment lag" test (that log branch was deleted; the event is plain
+  document.inbound.not_peer now — rewrite or delete the pin); document-rejection "stamps the
+  CURRENT epoch" test (the rejection row no longer stamps one — delete); handlers "degrades
+  ONE row"/REMOVE-FEEDBACK tests (likely removedAtEpoch/arrangement shapes); JOIN-1
+  REMOVE-1 forward-only (check with --no-cache singly). Vitest greps to run per fix:
+  document-inbound, document-rejection, document-handlers. All raw-insert arities are FIXED.
   THEN, still owed in the sweep:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
