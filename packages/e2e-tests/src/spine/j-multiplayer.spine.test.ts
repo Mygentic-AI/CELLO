@@ -94,7 +94,25 @@ async function startLocalDaemon(
  * cadence deliberately: any convergence they show inside a journey's timeout is the NUDGE
  * (SYNC-AC5), not a sweep.
  */
-const FAST_SWEEP = { CELLO_DOCUMENT_RECONCILE_SWEEP_MS: "3000" };
+const FAST_SWEEP = {
+  CELLO_DOCUMENT_RECONCILE_SWEEP_MS: "3000",
+  // The failure backoff too: a restarted daemon's first attempts can fail while its own
+  // signaling settles, and the production 30s-doubling ladder walks a 3s-sweep test out of
+  // its window while looking exactly like "the exchange is broken".
+  CELLO_DOCUMENT_RECONCILE_BACKOFF_MS: "2000",
+  // And the believed-current window: a removed holder learns ONLY from its own next
+  // unsuppressed exchange (R32's designed recovery), and the production 10-minute belief
+  // outlasts any test.
+  CELLO_DOCUMENT_RECONCILE_CURRENT_MS: "5000",
+};
+
+/**
+ * Journey 3's cadence: PRODUCTION sweep and backoff (its first half is the nudge-latency
+ * proof, AC5 — convergence inside the wait proves the nudge because the sweep could not have
+ * fired), but a short believed-current window: suppression pacing is orthogonal to the nudge,
+ * and the removal phase depends on the removed holder's own next exchange.
+ */
+const PROD_SWEEP_FAST_BELIEF = { CELLO_DOCUMENT_RECONCILE_CURRENT_MS: "5000" };
 
 interface Party {
   name: string;
@@ -567,7 +585,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
   it(
     "NUDGE + SURFACE + REMOVE: an absent holder blocks nobody, the surface says behind-with-last-seen, and a removed holder keeps their copy (SYNC-AC1, AC5, AC13, AC20)",
     async () => {
-      const [a, b, c] = (await parties("mpfan", 3)) as [Party, Party, Party];
+      const [a, b, c] = (await parties("mpfan", 3, PROD_SWEEP_FAST_BELIEF)) as [Party, Party, Party];
       await connect(a, b);
       await connect(a, c);
 
@@ -646,7 +664,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
 
       // ── RESTART THE PUBLISHER: pending must be derived from the LOG, not held in memory. ──
       await a.daemon.stop();
-      const aRestarted = await startLocalDaemon(a.celloDir, "mpfanA2", FAST_SWEEP);
+      const aRestarted = await startLocalDaemon(a.celloDir, "mpfanA2", { ...FAST_SWEEP, ...PROD_SWEEP_FAST_BELIEF });
       daemons.push(aRestarted);
       a.daemon = aRestarted;
       const connA2 = await connectMcp(a.celloDir, "mpfan-A2");
@@ -664,7 +682,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       ).toBe("behind");
 
       // ── C COMES BACK and converges with ZERO agent attention on any side. ──
-      const cRestarted = await startLocalDaemon(c.celloDir, "mpfanC2", FAST_SWEEP);
+      const cRestarted = await startLocalDaemon(c.celloDir, "mpfanC2", { ...FAST_SWEEP, ...PROD_SWEEP_FAST_BELIEF });
       daemons.push(cRestarted);
       c.daemon = cRestarted;
       const connC2 = await connectMcp(c.celloDir, "mpfan-C2");
