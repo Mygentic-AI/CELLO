@@ -47,6 +47,20 @@ variable "directory_nodes" {
     # the code falls back to, not something to repeat here.
     public_port      = number
     public_transport = string
+    # V8's old-space ceiling for the node process, in MB. NOT a machine size — Node picks its own
+    # default from total RAM (2240 MB on an 8 GB box) and will not use the rest no matter how much
+    # is free. At ~80% of that ceiling V8 stops doing occasional collection and starts collecting
+    # continuously, pinning one core for 40 s at a time. GC runs on the SAME thread that serves
+    # HTTP, so the node answers nothing for the duration — including its own /health and /bootstrap.
+    # Clients see a probe timeout, drop the node from the roster, and the consortium falls below
+    # threshold; the error a user gets is `counterparty_offline`, which names nothing involved.
+    # Observed 2026-08-16: use1 and euw1 at 1805/1659 MB against 2240 after ~6 days uptime, both
+    # stalling; usc1 at 538 MB on a 16 GB box, never once.
+    #
+    # Ceiling, not a reservation — V8 grows into it only as needed. Keep it under physical RAM with
+    # room for non-heap (buffers, native, code): past that the kernel OOM-kills the process, which
+    # is worse than the stall. On 8 GB with ~500 MB of non-node usage, 4096 leaves ~2.4 GB spare.
+    heap_mb = optional(number, 4096)
   }))
   default = {}
 }

@@ -239,7 +239,77 @@ unrelated set — **no relay resource appears**. Since `terraform plan` is this 
 (procedure §5), that is the authoritative confirmation the relay deploy is fully applied, not a claim
 from this document.
 
-## 🟢 CURRENT — directory on `b915c7af`, ALL 3 ROLLED (2026-08-10, fourth roll)
+## 🟢 CURRENT — node heap ceiling raised + memory sampler, ALL 3 ROLLED (2026-08-16)
+
+**No image change** — this is a cloud-init/instance-template change only. Directory stays on
+`b915c7af…` (section below). Live instances: `cello-gcp-use1-9vdj`, `cello-gcp-usc1-bpxn`,
+`cello-gcp-euw1-z03n`; all three verified `/bootstrap` 200 and `/health` `schemaVersion 62` from
+inside GCP after the roll.
+
+**The defect this fixes.** The directory process grows ~250 MB/day. Node sizes its own heap ceiling
+from total RAM and then never exceeds it no matter how much is free: **2,240 MB on an 8 GB box**.
+At ~80% of that ceiling V8 stops collecting occasionally and collects **continuously** — measured at
+**100% of one core, sustained, for 40 s at a time** (cpu ticks +4,096 over 40 wall-seconds). GC runs
+on the SAME single thread that serves HTTP, so for those 40 s the node answers **nothing** — verified
+by `curl http://localhost:9090/bootstrap` timing out *on the node itself* while the machine sat at
+load 0.4.
+
+Measured 2026-08-16 before the fix:
+
+| node | RAM | RSS | Node's ceiling | % | uptime | stalling |
+|---|---|---|---|---|---|---|
+| `gcp-use1` | 8 GB | 1,805 MB | 2,240 MB | **81%** | 5d 21h | yes |
+| `gcp-euw1` | 8 GB | 1,659 MB | 2,240 MB | **74%** | 5d 22h | yes |
+| `gcp-usc1` | 16 GB | 538 MB | 4,288 MB | 12% | 10h | no |
+
+**Why it presented as a client bug.** A stalled node fails a client's `/bootstrap` probe; the client
+drops it from the roster; the roster falls below threshold; the session surfaces
+**`counterparty_offline`** — which names the other agent and nothing that is actually involved. Hours
+went into the network path before the node was suspected. `usc1` looked immune only because it had
+been restarted 10 h earlier — not because 16 GB is required.
+
+**The change.** `heap_mb` (default **4096**) on each `directory_nodes` entry →
+`NODE_OPTIONS=--max-old-space-size` in `/etc/cello/directory.env`. Live heap limit is now **4,288 MB**
+on all three — V8 adds ~192 MB of young-generation space above the old-space setting, so the 8 GB
+nodes now carry **exactly the ceiling the 16 GB node had**, without a bigger machine and without
+another capacity gamble in us-central1. Ceiling, not reservation. Keep it under physical RAM: past
+that the kernel OOM-kills the process, which is worse than the stall.
+
+**`cello-memsample.timer` — memory is now recorded.** GCP collects CPU for every VM automatically;
+**memory needs the Ops Agent, which COS does not ship**, so the number that WAS the root cause was
+invisible in monitoring for six days and had to be read by SSH-ing into each box. A 60 s timer now
+emits `cello.node.memory node_id=… rss_kb=… heap_limit_mb=…`. Query it:
+
+```bash
+gcloud logging read 'jsonPayload.MESSAGE:"cello.node.memory"' \
+  --project cello-infra --freshness=12h --format="value(timestamp,jsonPayload.MESSAGE)"
+```
+
+> **⚠️ COS forwards journald to Cloud Logging at WARNING AND ABOVE ONLY.** The sampler shipped once
+> at default (info) priority and produced perfect lines that never left the instance — working
+> locally, invisible where anyone reads them, and it cost a second roll of all three nodes to fix
+> with `SyslogLevel=warning`. Verified by emitting one marker per priority: the `user.warning` one
+> arrived in `cos_journal_warning`, the `user.info` one arrived nowhere. **Anything added to a node
+> that must be readable remotely has to be warning or above.**
+
+> **⚠️ PROCESS FAILURE IN THIS ROLL — the second pass rolled all three nodes back-to-back without
+> waiting for `/bootstrap` 200 between them**, which §2 of `infra/CLAUDE.md` exists to prevent. All
+> three instances were created within ~2 minutes and were booting simultaneously; threshold was
+> unprotected for that window. It recovered (all three verified healthy afterwards) but that was
+> luck, not procedure. The first pass was done correctly, one at a time.
+
+**Baselines after the roll** (fresh process, for comparing against tomorrow): use1 ~194 MB,
+usc1 ~198 MB, euw1 ~189 MB.
+
+**Still open:** whether the ~250 MB/day growth is a leak or bounded accumulation. Raising the ceiling
+buys roughly 2 weeks instead of 6 days; it does not fix growth. Evidence so far points AWAY from
+client traffic driving it — `use1` (the hardcoded `PRODUCTION_DIRECTORY_URL` primary every client
+hits first) and `euw1` (reached only on failover) sat 9% apart after near-identical uptime. Anti-
+entropy, which every node runs continuously regardless of clients, is the untested candidate.
+**There are also ZERO alerting policies in this project** — nothing watches any metric, and CPU sat
+at 40% on a node that idles at 0.4% for days without a word.
+
+## Directory on `b915c7af`, ALL 3 ROLLED (2026-08-10, fourth roll)
 
 **Image tag:** `b915c7af3265221f03a2f2321bed6062bb59a228`, Cloud Build
 `19fb71a3-5350-4198-97c4-d0801b16d4d9`, **built from GitHub at the revision** (not `builds submit .`

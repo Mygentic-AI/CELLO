@@ -68,6 +68,12 @@ write_files:
       CELLO_DIRECTORY_CONSORTIUM_MANIFEST=/etc/cello/consortium-manifest.json
       CELLO_CONSORTIUM_ROOT_KEYS=${consortium_root_keys}
       CELLO_CONSORTIUM_THRESHOLD=${consortium_threshold}
+      # Raise V8's old-space ceiling off its default. Node sizes that default from total RAM and
+      # then never uses the rest: on an 8 GB box it caps itself at 2240 MB while 5.6 GB sits free.
+      # Near the cap, garbage collection goes continuous and — because it runs on the same single
+      # thread that serves requests — the node stops answering entirely for ~40 s at a time. See
+      # the heap_mb comment in variables.tf for the measurements and the failure chain.
+      NODE_OPTIONS=--max-old-space-size=${heap_mb}
       HOME=/tmp
 
   - path: /etc/cello/consortium-manifest.json
@@ -86,6 +92,60 @@ write_files:
       # that the node's restricted role has no business holding. The app credential is not here.
       CELLO_GSM_DB_CREDENTIALS=${gsm_db}
       HOME=/tmp
+
+  - path: /etc/cello/mem-sample.sh
+    permissions: "0755"
+    owner: root
+    content: |
+      #!/bin/bash
+      # Memory is the one number that matters here and the one nothing collects. GCP records CPU for
+      # every VM automatically, but memory needs Google's Ops Agent, which Container-Optimized OS
+      # does not ship — so on 2026-08-16 the process sat at 81% of its heap ceiling for six days,
+      # garbage-collecting continuously, and the only way to see it was to SSH into the box.
+      #
+      # journald is forwarded to Cloud Logging as `cos_system`, so echoing here is enough to make
+      # this queryable alongside everything else. Deliberately reads /proc rather than asking the
+      # process: when the event loop is blocked — exactly the state worth measuring — the process
+      # cannot answer anything, and a sampler that needs a reply goes blind precisely when it counts.
+      PID=$(pgrep -f 'node .*directory' | head -1)
+      [ -z "$PID" ] && exit 0
+      RSS_KB=$(awk '/VmRSS/{print $2}' /proc/$PID/status)
+      echo "cello.node.memory node_id=${node_id} rss_kb=$RSS_KB heap_limit_mb=${heap_mb}"
+
+  - path: /etc/systemd/system/cello-memsample.service
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=Sample the directory process's resident memory
+
+      [Service]
+      Type=oneshot
+      ExecStart=/etc/cello/mem-sample.sh
+      # COS forwards journald to Cloud Logging at WARNING AND ABOVE ONLY. Verified 2026-08-16 by
+      # emitting one marker at each priority: the `user.warning` one arrived (in
+      # `cos_journal_warning`), the `user.info` one never left the box. A sampler at the default
+      # info level therefore writes perfectly good lines to a journal nobody can query remotely —
+      # working locally, invisible where it is read. Not a severity claim; it is the only level
+      # that ships.
+      SyslogLevel=warning
+      SyslogIdentifier=cello-memsample
+
+  - path: /etc/systemd/system/cello-memsample.timer
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=Sample directory memory every minute
+
+      [Timer]
+      # Growth is slow (~300 MB/day observed), so this is for the TREND, not for catching a spike.
+      # A minute is frequent enough to show the shape of a collection stall in the same series.
+      OnBootSec=120
+      OnUnitActiveSec=60
+
+      [Install]
+      WantedBy=timers.target
 
   - path: /etc/systemd/system/cello-firewall.service
     permissions: "0644"
@@ -191,3 +251,4 @@ runcmd:
   - systemctl enable --now cello-firewall.service
   - systemctl enable --now cello-directory.service
   - systemctl enable --now cello-backup.timer
+  - systemctl enable --now cello-memsample.timer

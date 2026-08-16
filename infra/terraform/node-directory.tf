@@ -193,6 +193,7 @@ resource "google_compute_instance_template" "directory" {
       preauth_issuer_pubkey = var.preauth_issuer_pubkey
       consortium_root_keys  = var.consortium_root_keys
       consortium_threshold  = var.consortium_threshold
+      heap_mb               = each.value.heap_mb
       # Terraform's indent() does NOT indent the FIRST line, so the template supplies that one's
       # leading spaces and indent() supplies the rest. Getting this wrong put the manifest's opening
       # brace at column 0, which broke the YAML block scalar — and a cloud-config that fails to
