@@ -130,6 +130,48 @@ as a missing message.**
 That is stated as the leading hypothesis, not as proven. What is proven is that the two numbers
 disagree, that the gate is arithmetic on both of them, and that the disagreement is permanent.
 
+## The causal chain — and it is written in the code's own comments
+
+The trigger and the amplifier are different things, and conflating them is why this has been so hard
+to place.
+
+**Trigger — anything that makes one side append a leaf the other does not count.** Two are already
+documented in `session-node-manager.ts` and both were live today:
+
+> *"That is what stranded session dbb93dfc… for a week: an away responder fired twice with identical
+> text, the sender appended both, the receiver dropped the second as a 'redelivery', and the two
+> frontiers disagreed forever. No receipt was ever possible."*
+
+> *"a first message whose relay submit failed is appended locally and never counted by the relay,
+> leaving the local record permanently one ahead."*
+
+That second one is exactly `canonicalSeqs: [2], treeSize: 1` — observed three separate times today,
+on fresh sessions, at the SECOND message.
+
+**The bridge is a first-class trigger, and Andre called this.** In `delivery_mode: channel` the Hermes
+adapter **owns outbound delivery** — the agent's final turn text is sent automatically and the agent
+must NOT call `cello_send`. The contract is ambiguous at runtime and the agent guesses. `assets.ts`
+already carries a LIVE DEFECT note from 2026-08-07 for the same confusion producing two messages.
+Tonight it produced **three near-identical acknowledgements** (her seq 8, 12, 17) because the agent
+could not tell whether its reply had gone out. Duplicate sends are precisely the input the dedup path
+cannot disambiguate.
+
+**Amplifier — the hold gate turns one divergence into permanent death.** `canonicalSeq > tree.size()`
+holds. The tree only advances by appending. So a single leaf of divergence, from any cause, freezes
+delivery for the rest of the session's life and widens with every subsequent message.
+
+**Terminal — nothing repairs it and the evidence evaporates.** No resend request exists. The hold
+buffer is memory-only and is discarded on teardown.
+
+**This is why it feels like paper-thin china.** It is not that faults are frequent — it is that the
+system has **no tolerance for a single one**. One duplicate, ever, or one failed relay submit on a
+first message, ever, and that session is finished as a delivery channel with neither operator told.
+There is no self-healing step anywhere in the path.
+
+Claude-to-Claude is not immune, it is merely a quieter trigger environment: fewer duplicates, fewer
+document frames. The away-responder path produces duplicates too, which is how the three purely-local
+sessions in the table above died.
+
 ## Why this is confirmation, not a new disaster
 
 This is exactly the failure
