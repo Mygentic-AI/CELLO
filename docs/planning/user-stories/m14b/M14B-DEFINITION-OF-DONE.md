@@ -516,7 +516,21 @@ description: >
   (skill loaded, per publish), trustless-cello re-pinned, plugin skills updated for the
   multiplayer verbs and audited as SHIPPING content (tarball/clone, not source), and a **live
   smoke on the real fleet**: three real daemons, create → join → edit → fan out → converge →
-  remove → seal. Andre runs the `latest` promotion — never this session. — ❌
+  remove → seal. Andre runs the `latest` promotion — never this session. — 🟠 PARTIAL, 2026-08-16.
+  **BETA IS PUBLISHED AND VERIFIED AGAINST THE BINARY** (tag `v0.0.243`, run 31936756187: Build,
+  Publish, and the published-artifact smoke test all green). All seven bumped so the cross-pins
+  point at one tree: crypto 0.0.51 · protocol-types 0.0.55 · transport 0.0.57 · gateway 0.0.35 ·
+  daemon 0.0.169 · cli 0.0.176 · connect 0.0.149. Verified by unpacking the tarballs, not by
+  reading CI: the daemon's `dist/` carries `ReconcileScheduler`, the R32 refusal reason,
+  `dropLegacyColumns` and `document_party_view`, and carries NO `document_control_deliveries` and
+  no `markAcked`; the only surviving `delivered_at`/`next_attempt_at` strings are inside the DROP
+  list that removes them. Cross-pins are real versions on both installed-by-name packages
+  (cli→daemon 0.0.169, connect→crypto 0.0.51/transport 0.0.57) — no `workspace:*`. The shipped
+  plugin skills carry no retired surface name (`pendingContent`, `pendingAmendments`, `epochId`,
+  `removedAtEpoch`, `cello_doc_withdraw`) and no "demote first" prose.
+  **OWED, IN ORDER:** (1) Andre promotes all seven to `latest` — operator-run, never this session;
+  (2) `pnpm install` in trustless-cello to refresh the lockfile onto the promoted versions;
+  (3) the live fleet smoke on the real agents.
 
 ---
 
