@@ -667,6 +667,70 @@ description: >
   legacy document is a permanent error loop. With no users this is test data on one machine; the
   decision owed is whether old documents are migrated, quarantined with a named reason, or dropped
   at upgrade. Silently looping is the one option that is not acceptable.
+- **DOD-SYNC-FIRSTFRAME-1** [cello-client] — **after a restart, an edit made across the old
+  session never arrives, and the sender is told it published.** — ❌ **REPRODUCED ON DEMAND
+  2026-08-16** in a controlled rig: `packages/e2e-tests/src/spine/j-stale-session.spine.test.ts`,
+  two real daemons, real consortium, real relay. Sequence: A and B share a document and it works;
+  B's daemon restarts (asserted properly back — `agent.online` and `session.node.created` both
+  waited for, so "the daemon never came up" is excluded); A then writes.
+
+  **Measured, with the sides attributed:** A's write returns `published: true`. A puts 4 frames on
+  the wire and **2 of them park**. A initiates 3 reconciles and **1 sweep attempt fails**. B, after
+  its restart, receives **1 frame** and performs **0** inbound document operations. B never
+  converges — five minutes, past two production sweep ticks.
+
+  So the failure is not one lost frame. The sender believes it published, the frames park, the
+  returning peer pulls almost nothing and processes none of it, and the sweep that exists to
+  repair exactly this also fails. The live-fleet symptom (an invitation that took about four
+  minutes, recovering only when a fresh session was built) is the same shape.
+
+  This is the ONLY open defect from the 2026-08-16 investigation. Everything else raised that day
+  was withdrawn: the removal path works (probes), the nudge asymmetry is spec-conformant (R39/R40),
+  the file-rename error is harmless noise, and legacy documents are ruled out of scope — alpha, no
+  users, only legacy tests.
+- **~~DOD-SYNC-LAST-EDIT-2PARTY-1~~ — WITHDRAWN 2026-08-16, disproven by probe.** It claimed a
+  removed holder's last edit is lost forever when only two parties remain. Four isolated probes
+  (cello-client `removed-holder-last-edit.probe.test.ts`) say otherwise: the edit reaches the
+  remover on the REMOVED HOLDER'S OWN initiative, and still reaches it when that holder already
+  knows it was removed. The mechanism was in the arriving-frame handler all along, under the
+  comment `APPLY FIRST`: a receiver applies what a frame CARRIES before ruling on whether to
+  answer its sender. The terminal refusal stops the remover SERVING a removed party; it never
+  stopped that party's work landing. The three-party forward credited with rescuing the live run
+  was not load-bearing either — the remover already holds the edit before any forwarding happens.
+  Left on the board struck through rather than deleted: the claim was published, and a reader who
+  saw it deserves to find the retraction in the same place.
+- **DOD-SYNC-EXCHANGE-NO-FANOUT-1** [cello-client] — **a holder that takes content from an
+  exchange does not pass it on.** — ❌ CONFIRMED by probe (probe 3), 2026-08-16. Publishing nudges
+  the other seats; TAKING content through the exchange nudges nobody and sends not one frame, so a
+  third holder waits for a sweep to happen by. Measured directly: after admitting a peer's
+  envelope the holder made zero nudge calls and sent zero frames to the seat that now lags. It is
+  invisible in normal use because the sweep covers it eventually, and it is the most plausible
+  cause of the five-and-a-half-minute wait on the fleet — **not proven to be, and not claimed.**
+  Proposed fix: at the admit site in the arriving-frame handler, nudge the seats OTHER than the
+  sender, reusing the publish path's own nudge. Cheap, and the exchange already terminates by
+  silence, so a nudge that finds no difference costs one frame. The probe asserts today's
+  behaviour and says in the test that it flips when this lands, so the fix cannot arrive quietly.
+- **DOD-SYNC-FILE-REWRITE-NOISE-1** [cello-client] — the exchange's file rewrite logs
+  `ENOENT … rename '<doc>.md.tmp'`, 14 times in one live run. — ❌ **Mechanism confirmed by
+  reading both ends, 2026-08-16.** The temp path is a FIXED name per document
+  (`document-write-path.ts`: ``const tmp = `${path}.tmp` ``) and the apply loop fires rewrites
+  **without awaiting** (`void rewriteFileImpl(...)` per admitted envelope), so two rewrites of one
+  document race: the first renames the shared temp away and the second's rename finds nothing.
+  **No user-visible harm** — each rewrite renders the WHOLE document, so the winner's file is
+  correct, and all three holders' files were verified correct and matching. It is a real error
+  line for a non-error, which is how a genuine failure gets ignored later. Proposed fix: a unique
+  temp suffix per write (last writer wins, which is already the intent), rather than serializing —
+  the work is idempotent and cheap.
+- **DOD-SYNC-LEGACY-DOCS-1** [cello-client] — **documents created before this release are
+  permanently unverifiable, and they loop.** — ❌ Entry 60. The pivot moved the epoch stamp out of
+  both signed preimages and bumped the domains to v3, so entries signed under the old preimage
+  fail verification on this build: `document.inbound.signature_invalid` fires on every exchange
+  (39 times in one live run across two documents), the affected documents surface as
+  `yourStanding: "unknown"` or — worse — as `invited` for a holder who actually accepted long ago,
+  because the consent entry that seated them cannot be verified. Nothing quarantines them, so each
+  legacy document is a permanent error loop. With no users this is test data on one machine; the
+  decision owed is whether old documents are migrated, quarantined with a named reason, or dropped
+  at upgrade. Silently looping is the one option that is not acceptable.
 - **DOD-SYNC-FIRSTFRAME-1** [cello-client] — **the first frame after a session opens can be lost
   with NOBODY told.** — ❌ Promoted to a board line here because it has now cost three separate
   debugging sessions and it lives on a production path, not a test one. The shape: a frame sent
