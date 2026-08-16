@@ -3323,48 +3323,48 @@ that reason. The enforcer never reaches it because a returning holder gets the r
 parked frame first; on the fleet, a holder that stays UP and keeps exchanging hits the refusal
 directly. The DoD gap line is amended accordingly.
 
-### THE DEFECT: content admission is time-dependent, and the divergence never heals
+### CORRECTED — it converged. The forwarding path did exactly what it should
 
-Final state, stable across five minutes and several sweep intervals:
+**This section originally claimed a permanent divergence. That was wrong, and Andre called it:
+"Miss Chelly should be able to pass it on."** She did. Final state, both holders identical:
 
-- **Coder_1:** `line one… line two… line three, after Support was removed.`
-- **Miss_Chelly:** `line one… line two… line three, after Support was removed. Support tries to keep editing.`
+`line one… line two… line three, after Support was removed. Support tries to keep editing.`
 
-Two honest holders, same document, same entry set, permanently different text. No exchange
-reconciles them, because each side already ruled on that envelope and the ruling is not re-run.
+**What actually happened, from the log:**
 
-**The sequence, from the daemon log:**
+1. `10:31:03` Coder_1 authors the removal. `10:31:18` its line three is admitted everywhere.
+2. Support — which has not yet received the removal — writes and publishes (`290ecb8c`). Correct:
+   at the governance frontier Support names, Support is still seated.
+3. Support's direct publish reaches Miss_Chelly, who admits it (`10:31:25`). It does NOT reach
+   Coder_1: Coder_1 already holds the removal and refuses Support's frames terminally
+   (`document_reconcile_removed`, repeatedly from `10:31:22` on).
+4. `10:31:24` Support records its own removal; its next write is refused by name.
+5. `10:36:48` — **Coder_1 admits `290ecb8c` anyway, carried by MISS_CHELLY's ordinary exchange.**
+   Forwarding confers no trust (the signature is verified on arrival like any other), and the
+   author-at-named-frontier rule admits it whoever hands it over. Convergence latency **5m26s**.
 
-1. `10:31:03` Coder_1 authors the removal entry (`a0bad871`); `10:31:04` `document.holder_removed`.
-2. `10:31:18` Coder_1's line three (`a80af570`) is admitted.
-3. Support — which has NOT yet received the removal — writes. Its own daemon accepts and publishes
-   (`290ecb8c`, `published: true`), correctly: at the governance frontier Support names, Support
-   is a participant.
-4. `10:31:24` Support records the removal (`document.removed_from`). Its next write is refused by
-   name.
-5. `10:31:25` — one second later — `document.inbound.admitted` for `290ecb8c`, while in the same
-   second the responder refuses Support's exchange terminally with `document_reconcile_removed`.
+The error in the original write-up was procedural, and worth naming because it is repeatable: I
+read both copies inside the convergence window, saw them differ, waited a period shorter than the
+window, saw them still differ, and wrote "stable" — then asserted Coder_1 had REFUSED the envelope
+when no refusal event for it exists anywhere in the log. There is no ruling disagreement between
+the two holders. There was one slow path.
 
-**What this means, and why it is not simply "in-flight work is admitted."** Admitting an edge
-authored before its author learned of the removal is defensible on its own — the causal rule says
-an author must be seated in the fold AT THE FRONTIER THEY NAME, and Support was. The problem is
-that the OUTCOME DEPENDS ON WHEN EACH HOLDER LEARNED. The holder that already held the removal
-refused it; the holder that did not yet hold it admitted it. Same envelope, same entries
-eventually, two different documents forever. The pivot's central claim is that state is a
-deterministic fold of the entry set; content admission is a gate applied at ARRIVAL and sits
-outside that fold, so arrival order decides the text.
+### The real residue: with only TWO holders left, that last edit never arrives
 
-**What I cannot prove from the log alone:** which holder logged the admit at `10:31:25` — the
-inbound events carry no `ownerAgentId`, which is its own gap on a single daemon hosting three
-agents — and whether Coder_1 refused `290ecb8c` explicitly or never received it. Both readings
-produce the observed divergence and they need different fixes, so the next step is owner-scoped
-inbound logging, not a patch.
+The forwarding that saved this run needed a third party. Take Miss_Chelly out of it — an ordinary
+two-party document, admin removes the other holder, and the removed holder publishes one edit in
+the seconds before it learns:
 
-**Not fixed here.** The two candidate directions are a design call: rule content by the RECEIVER'S
-current fold (deterministic, but discards work that was legitimate when authored, and the receiver
-who was behind changes its mind about a document it already showed), or keep the causal rule and
-make admission converge by re-ruling refused content when the fold changes (keeps the work, costs
-a re-derivation path that does not exist yet).
+- the remover refuses that holder's frames terminally, so the edit cannot arrive directly;
+- there is nobody else holding it, so nothing can forward it.
+
+The removed holder keeps an edit the remover will never see, permanently, and neither side is told
+they differ. Not observed in this run — derived from the mechanism this run exposed — and the
+two-party document is the COMMON case, not the exotic one. `DOD-SYNC-LAST-EDIT-2PARTY-1`.
+
+**5m26s is also slower than it needs to be.** The edge sat on Miss_Chelly for five minutes waiting
+for a sweep to carry it, because a removal does not nudge the holders who now need to forward the
+departed party's last work.
 
 ### Two more findings from the same run
 

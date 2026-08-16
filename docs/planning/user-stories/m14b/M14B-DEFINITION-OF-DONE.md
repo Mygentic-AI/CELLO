@@ -624,24 +624,30 @@ description: >
     binaries: a removed holder always learns before it can publish, so its own daemon refuses
     first. It defends against a rewritten client; unit coverage is `document-inbound.test.ts`.
 
-- **DOD-SYNC-CONVERGE-REMOVAL-1** [cello-client] — **two honest holders end up with permanently
-  different text when one of them was slower to learn about a removal.** — ❌ Found by the live
-  fleet smoke, 2026-08-16 (Entry 60), on the real GCP fleet with Andre's three agents. An admin
-  removes a holder; that holder, not yet knowing, authors one more edit naming a governance
-  frontier in which it is still seated. The holder that already held the removal refuses that
-  edit; the holder that did not yet hold it ADMITS it. Both rulings follow the causal rule
-  correctly. The result is two copies of one document that differ forever, because admission is a
-  gate applied at ARRIVAL and therefore outside the deterministic fold, and no later exchange
-  re-runs it. Observed stable across five minutes and several sweep intervals. **This contradicts
-  the milestone's central claim** — that state is a deterministic function of the entry set — for
-  content, though not for governance. NOT FIXED, and the fix is a design call, not a patch:
-  either rule content by the RECEIVER's current fold (deterministic, but silently discards work
-  that was legitimate when authored, and a receiver who was behind must retract text it already
-  displayed), or keep the causal rule and make admission converge by re-ruling refused content
-  whenever the fold changes (keeps the work; needs a re-derivation path that does not exist).
-  **Blocked on one diagnostic first:** the inbound events carry no `ownerAgentId`, so the log
-  cannot say which holder admitted the envelope — add owner-scoped inbound logging before
-  choosing.
+- **DOD-SYNC-LAST-EDIT-2PARTY-1** [cello-client] — **in a two-party document, the removed
+  holder's last edit reaches nobody, and neither side is told they differ.** — ❌ Derived from the
+  live fleet run, 2026-08-16 (Entry 60). A removed holder publishes one edit in the seconds before
+  it learns of the removal — legitimately, since at the point in the history it names it is still
+  seated. The remover refuses that holder's frames terminally, so the edit cannot arrive directly.
+  On the fleet a THIRD holder had admitted it and forwarded it on the ordinary exchange, and the
+  two converged in 5m26s — the forwarding path working exactly as designed. With only two parties
+  there is no third holder, nothing forwards it, and the divergence is permanent and silent. The
+  two-party document is the common case. Options, in rough order of appeal: have the remover accept
+  work authored at a pre-removal frontier (the author WAS seated there — the terminal refusal is
+  about future work, and refusing the whole block is what loses this); or let the removed holder
+  see that it holds an edit nobody took. **A NOTE ON THE FIRST DRAFT of this line, which claimed a
+  permanent three-way divergence: it was wrong — the copies converged, and the claimed refusal on
+  the remover's side appears nowhere in the log.**
+- **DOD-SYNC-REMOVAL-NUDGE-1** [cello-client] — **a removal does not nudge the holders who must
+  now forward the departed party's last work**, so that work waits for a sweep. Measured at 5m26s
+  on the fleet where the exchange itself takes under a second. — ❌ Entry 60. Latency only; the
+  exchange gets there. Cheap fix, and it is the difference between "it appeared" and "it appeared
+  eventually".
+- **DOD-SYNC-FILE-REWRITE-NOISE-1** [cello-client] — the exchange's file rewrite logs
+  `ENOENT … rename '<doc>.md.tmp'` on a path where another writer has already consumed the temp
+  file — 14 times in one live run. — ❌ Entry 60. **No user-visible harm: the files on disk were
+  verified correct and matching on all three holders.** It is a real error line for a non-error,
+  which is how a genuine failure gets ignored later.
 - **DOD-SYNC-LEGACY-DOCS-1** [cello-client] — **documents created before this release are
   permanently unverifiable, and they loop.** — ❌ Entry 60. The pivot moved the epoch stamp out of
   both signed preimages and bumped the domains to v3, so entries signed under the old preimage
