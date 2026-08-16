@@ -98,6 +98,18 @@ description: >
   item 12's open question, answered, and the answer is the fail-open one.
   Banner corrected twice in the same pass: it listed the BETA versions under the word "promoted", and
   its directory tag went stale within the hour when the fork-alarm roll landed mid-verification.
+  2026-08-16: added four (items 16–19), all unranked, all found chasing ONE symptom — a session that
+  would not start, reported as `counterparty_offline`. DOD-NODE-HEAP-GROWTH-1 (16) — two of the three
+  directory nodes were going deaf for 40 s at a time, answering nothing including their own localhost,
+  because the process grows ~250 MB/day into a heap ceiling Node sets for itself at 2,240 MB on an 8 GB
+  box; mitigated the same day by raising the ceiling, cause NOT established. DOD-NODE-ALERTING-1 (17) —
+  zero alerting policies exist in the project, and the already-collected CPU metric sat at 100× the
+  healthy idle for days without a word; memory is not collected at all. DOD-STATUS-STALE-ROSTER-1 (18)
+  — a daemon stops sweeping once healthy, so `cello status` can report a node unreachable indefinitely
+  after it recovered; reproduced on two machines the same day. DOD-BOOTSTRAP-PROBE-RETRY-1 (19) — the
+  roster probe gets ONE attempt and a 5 s deadline with no retry, so one lost packet on a mobile link
+  drops a node for the whole sweep. The shared finding across 16, 18 and 19 is the error itself:
+  `counterparty_offline` was returned for three unrelated causes and named none of them.
 ---
 
 # Launch Triage
@@ -1039,6 +1051,137 @@ may write to the directory. **Andre's call.** Everything else — the port, the 
 
 **Do not "fix" this by making the local delete conditional alone.** The operator must be told the
 retraction failed, and the local copy must survive so a retry is possible.
+
+
+## 16. A directory node goes deaf for 40 seconds at a time, and comes back on its own
+
+**Designation: `DOD-NODE-HEAP-GROWTH-1`** — 🟡 **MITIGATED 2026-08-16, CAUSE NOT ESTABLISHED.**
+Unranked. **Proposed slot: high — the mitigation is a delay, not a fix, and when it expires the
+failure is "nobody can start a session" with an error that points at the wrong thing.**
+
+**What it costs a customer.** They try to reach another agent and are told the other agent is
+offline. The other agent is not offline. Nothing they can do changes it, and nothing they are shown
+names anything real. It clears by itself minutes later, which makes it look like the other person's
+problem rather than a fault — the worst shape a bug can have for trust in a product whose entire
+proposition is reliable agent-to-agent contact.
+
+**Measured 2026-08-16.** The directory process grows about **250 MB/day**. Node sizes its own heap
+ceiling from total RAM and then never exceeds it however much is free — **2,240 MB on an 8 GB box**.
+At ~80% of that ceiling, V8 stops collecting occasionally and collects continuously: **100% of one
+core, sustained, for 40 seconds**, measured as +4,096 CPU ticks over 40 wall-seconds. Collection runs
+on the same single thread that serves HTTP, so for those 40 seconds the node answers **nothing** —
+confirmed by curling `localhost:9090/bootstrap` **on the node itself** and watching it time out while
+the machine sat at load 0.4.
+
+| node | RSS | ceiling | % | uptime | stalling |
+|---|---|---|---|---|---|
+| `gcp-use1` | 1,805 MB | 2,240 MB | **81%** | 5d 21h | yes |
+| `gcp-euw1` | 1,659 MB | 2,240 MB | **74%** | 5d 22h | yes |
+| `gcp-usc1` | 538 MB | 4,288 MB | 12% | 10h | no |
+
+`usc1` looked immune only because it had been restarted ten hours earlier.
+
+**What was done.** Heap ceiling raised to 4,096 (live limit 4,288 MB) on all three nodes and all three
+rolled — infrastructure record in `infra/GCP-STATE.md`. **That buys roughly two weeks instead of six
+days. It does not stop the growth.**
+
+**What is still open, and it is the whole item:** whether the growth is a leak. Evidence so far points
+AWAY from client traffic — `use1` (the hardcoded primary every client hits first) and `euw1` (reached
+only on failover) sat 9% apart after near-identical uptime, which is not what traffic-driven growth
+looks like. Anti-entropy, which every node runs continuously regardless of clients, is the untested
+candidate. A 60-second memory sampler now runs on all three nodes; the growth rate across them is the
+measurement that decides whether this closes or becomes a real hunt.
+
+
+## 17. Nothing watches anything — the signal sat at 100× normal for days and nobody was told
+
+**Designation: `DOD-NODE-ALERTING-1`** — ❌ **OPEN.** Unranked. **Proposed slot: high, and cheap —
+this is the item that would have made item 16 a one-hour problem instead of a one-day one.**
+
+**What it costs.** Not a customer directly — you. Every fault in this list that happens on a node
+happens silently, and is found when someone happens to try something and it fails. There is no
+"something is wrong" signal anywhere in the system.
+
+**Measured 2026-08-16.** **There are ZERO alerting policies in the `cello-infra` project.** Meanwhile
+the CPU metric — which GCP collects for every VM automatically, with no agent and no setup — read:
+
+| node | CPU |
+|---|---|
+| `gcp-euw1` | 38–44% |
+| `gcp-use1` | 20–23% |
+| `gcp-usc1` (healthy) | **0.3–0.4%** |
+
+A node running at a hundred times its healthy idle, for days, on a metric already being recorded.
+A single policy on sustained CPU would have caught it within the hour.
+
+**Related and worth doing in the same pass: memory is not collected at all.** GCP records CPU
+automatically but memory needs Google's Ops Agent, which Container-Optimized OS does not ship — so
+the number that WAS the root cause of item 16 was invisible in monitoring and had to be read by
+SSH-ing into each box. A host-level sampler now emits it to Cloud Logging every 60 seconds
+(`cello.node.memory`). **Note for anyone adding another one: COS forwards journald to Cloud Logging
+at WARNING AND ABOVE ONLY** — the first version logged at info, produced perfect lines that never
+left the instance, and cost a second roll of all three nodes to fix.
+
+
+## 18. `cello status` can tell you a node is unreachable for hours after it recovered
+
+**Designation: `DOD-STATUS-STALE-ROSTER-1`** — ❌ **OPEN.** Unranked. **Proposed slot: with or just
+below item 17 — it is small, and it is the reason a real fault took a day to see.**
+
+**What it costs.** Anyone diagnosing anything. `directory_endpoints_unresolved` is the one surface
+that names which directory node a daemon cannot reach — and it only updates when a roster sweep runs.
+Once the daemon returns to its healthy path it **stops sweeping entirely** (the primary resolves, so
+no roster probe is needed), which means the field freezes on whatever the last sweep found and stays
+there indefinitely.
+
+**Measured twice on 2026-08-16, on two different machines.** Both daemons sat displaying node
+failures stamped mid-roll — `ECONNREFUSED`, timeouts — from minutes that had long passed, while
+`curl` from the same machines reached all three nodes in 37–184 ms. Both cleared only after a
+logout/login forced a fresh sweep, and both then logged `directory.consortium.resolved 3 / 3`.
+
+Its own guidance text says the reading is point-in-time, which is honest but does not help: the
+number that makes it actionable — how old — is the one nobody reads, and a stale failure is
+indistinguishable from a live one at a glance.
+
+**The fix is a decision, not a bug fix.** Either sweep on a slow timer even when healthy (costs three
+cheap HTTP probes per interval), or make the surface refuse to answer with a reading older than N
+minutes rather than presenting a stale one as current. **Do not fix it by hiding the field when
+stale** — absent and healthy must not look alike.
+
+
+## 19. One lost packet drops a directory node from the roster for the whole sweep
+
+**Designation: `DOD-BOOTSTRAP-PROBE-RETRY-1`** — ❌ **OPEN.** Unranked. **Proposed slot: high on the
+ruin test — this one fails for a normal user on a normal connection, with no fault anywhere in the
+system.**
+
+**What it costs a customer.** Someone on mobile data, hotel wifi, or any lossy link tries to start a
+session and is told the other agent is offline. Nothing is wrong with the other agent, the nodes, or
+their account. Retrying sometimes works and sometimes does not, which reads as "this product is
+flaky" rather than as any specific failure.
+
+**The mechanism.** `fetchBootstrapResult` gives each node **one attempt** with a **5-second**
+`AbortController` deadline and **no retry** (`core/daemon/src/directory-bootstrap.ts`). A probe that
+loses a packet spends the window inside TCP's retransmit backoff — ~1s, 2s, 4s, 8s — and is abandoned
+mid-recovery. The node is then absent from that sweep's roster, and enough absences put the roster
+below threshold.
+
+**Measured 2026-08-16 over a mobile link in Africa**, against nodes that answer in 0.7 ms locally: one
+request returned after **16.2 seconds** (the retransmit ladder, almost exactly), and another returned
+**nothing at all in 30 seconds**. Both would be abandoned at 5 s. Note that raising the deadline alone
+does not fix it — the 30-second case still fails — because the win comes from a **fresh connection**,
+not a longer wait.
+
+**Suggested shape:** ~3 attempts at ~8 s with a bounded total (~20 s), so it survives a lost packet
+but still gives up in bounded time against a node that is genuinely down. Numbers are a decision.
+
+> **The error message is its own defect, and it is shared by items 16, 18 and 19.** On 2026-08-16 a
+> single user-facing string — **`counterparty_offline`** — was returned for a garbage-collecting node,
+> for a short roster, and for a stale gateway on the far side. It names the other agent, which was
+> online and reachable in all three cases, and names nothing that was actually broken. Most of a day
+> went into the network path before the node was suspected, because the error pointed away from every
+> real cause. Whatever else is done here, **a roster that is below threshold must say so** rather than
+> borrowing a word about the counterparty.
 
 # Post-launch — needed eventually, not for launch
 
