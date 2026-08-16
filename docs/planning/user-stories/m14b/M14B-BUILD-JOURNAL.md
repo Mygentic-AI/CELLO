@@ -3384,3 +3384,49 @@ restart; Miss_Chelly pulled it and logged `content.recover.unauthenticated` foll
 fresh session was established and the ordinary exchange carried it. The system self-heals, which
 is the model working — but `noticeSent: true` is a claim about a send, not about arrival, and it
 reads to an operator as "they have it".
+
+## Entry 61 — probing before fixing: three of the four claims did not survive
+
+**Date:** 2026-08-16 · cello-client `f7d01a8` (`removed-holder-last-edit.probe.test.ts`)
+
+Andre's instruction, and it was the right one: *"before you actually fix, do very targeted tests to
+understand exactly what the issues are and whether you are correct. You are often in the ballpark,
+but not necessarily correct about the exact problem or mechanism."* Entry 60 had already been
+corrected once. Four probes later, most of what remained was also wrong.
+
+**The probes had to be built twice, which is itself the lesson.** The first cut asserted nothing
+useful: the handlers fixture STUBS `nudgeSeats`, so a publish puts no bytes on the wire at all, and
+every probe was measuring an empty channel while printing confident numbers. The second cut drives
+`initiateReconcile` explicitly and delivers each frame ONCE (the suite's shared `routeAll`
+re-delivers its whole backlog, which is fine for a hand-rolled bounded sequence and an infinite
+loop for drive-until-quiet).
+
+**Probe 1 — the remover's door, two parties only.** A removes B; B, ignorant, writes; only B
+initiates. **A ends up holding B's edit.** The `DOD-SYNC-LAST-EDIT-2PARTY-1` claim is dead. The
+mechanism was in `handleReconcile` under the comment `APPLY FIRST`, which I had read and walked
+past: a receiver applies what a frame CARRIES before it rules on whether to ANSWER the sender. The
+terminal refusal governs what A serves B, not what lands in A. Seventeen
+`document.reconcile.refused` events fired in that probe and the content still arrived, so this is
+not "the gate never ran".
+
+**Probe 4 — does learning first strand it?** No. B receives the removal, its standing reads
+`removed`, and its already-published edit still reaches A.
+
+**Probe 2 — was the third-party forward load-bearing?** No. A holds the edit before C forwards
+anything. The story in Entry 60 — "Miss_Chelly passed it on and that is what saved it" — was the
+right shape (Andre's instinct) but not what the code does.
+
+**Probe 3 — the one that survived.** A holder that ADMITS content from an exchange does not pass it
+on: zero nudge calls, zero frames to the seat that now lags. Publishing nudges the seats; taking
+content does not. That asymmetry is the confirmed gap (`DOD-SYNC-EXCHANGE-NO-FANOUT-1`) and the
+most plausible cause of the fleet's 5m26s — **plausible, not proven, and the entry says so.**
+
+**Also confirmed, by reading both ends rather than guessing:** the ENOENT rename is a fixed temp
+name (`${path}.tmp`) plus a fire-and-forget rewrite per admitted envelope, so two rewrites of one
+document race. Harmless because each rewrite renders the whole document.
+
+**The pattern worth keeping.** Three claims in a row were the right SHAPE and the wrong MECHANISM:
+delivery-ledger reasoning applied to a system that has none, a refusal assumed to block an inbound
+path it does not touch, a forward credited for an arrival that had already happened. Each survived
+because the evidence was consistent with it, not because the evidence selected it. A probe that
+isolates one step selects.

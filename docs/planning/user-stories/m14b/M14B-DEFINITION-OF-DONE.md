@@ -624,30 +624,39 @@ description: >
     binaries: a removed holder always learns before it can publish, so its own daemon refuses
     first. It defends against a rewritten client; unit coverage is `document-inbound.test.ts`.
 
-- **DOD-SYNC-LAST-EDIT-2PARTY-1** [cello-client] — **in a two-party document, the removed
-  holder's last edit reaches nobody, and neither side is told they differ.** — ❌ Derived from the
-  live fleet run, 2026-08-16 (Entry 60). A removed holder publishes one edit in the seconds before
-  it learns of the removal — legitimately, since at the point in the history it names it is still
-  seated. The remover refuses that holder's frames terminally, so the edit cannot arrive directly.
-  On the fleet a THIRD holder had admitted it and forwarded it on the ordinary exchange, and the
-  two converged in 5m26s — the forwarding path working exactly as designed. With only two parties
-  there is no third holder, nothing forwards it, and the divergence is permanent and silent. The
-  two-party document is the common case. Options, in rough order of appeal: have the remover accept
-  work authored at a pre-removal frontier (the author WAS seated there — the terminal refusal is
-  about future work, and refusing the whole block is what loses this); or let the removed holder
-  see that it holds an edit nobody took. **A NOTE ON THE FIRST DRAFT of this line, which claimed a
-  permanent three-way divergence: it was wrong — the copies converged, and the claimed refusal on
-  the remover's side appears nowhere in the log.**
-- **DOD-SYNC-REMOVAL-NUDGE-1** [cello-client] — **a removal does not nudge the holders who must
-  now forward the departed party's last work**, so that work waits for a sweep. Measured at 5m26s
-  on the fleet where the exchange itself takes under a second. — ❌ Entry 60. Latency only; the
-  exchange gets there. Cheap fix, and it is the difference between "it appeared" and "it appeared
-  eventually".
+- **~~DOD-SYNC-LAST-EDIT-2PARTY-1~~ — WITHDRAWN 2026-08-16, disproven by probe.** It claimed a
+  removed holder's last edit is lost forever when only two parties remain. Four isolated probes
+  (cello-client `removed-holder-last-edit.probe.test.ts`) say otherwise: the edit reaches the
+  remover on the REMOVED HOLDER'S OWN initiative, and still reaches it when that holder already
+  knows it was removed. The mechanism was in the arriving-frame handler all along, under the
+  comment `APPLY FIRST`: a receiver applies what a frame CARRIES before ruling on whether to
+  answer its sender. The terminal refusal stops the remover SERVING a removed party; it never
+  stopped that party's work landing. The three-party forward credited with rescuing the live run
+  was not load-bearing either — the remover already holds the edit before any forwarding happens.
+  Left on the board struck through rather than deleted: the claim was published, and a reader who
+  saw it deserves to find the retraction in the same place.
+- **DOD-SYNC-EXCHANGE-NO-FANOUT-1** [cello-client] — **a holder that takes content from an
+  exchange does not pass it on.** — ❌ CONFIRMED by probe (probe 3), 2026-08-16. Publishing nudges
+  the other seats; TAKING content through the exchange nudges nobody and sends not one frame, so a
+  third holder waits for a sweep to happen by. Measured directly: after admitting a peer's
+  envelope the holder made zero nudge calls and sent zero frames to the seat that now lags. It is
+  invisible in normal use because the sweep covers it eventually, and it is the most plausible
+  cause of the five-and-a-half-minute wait on the fleet — **not proven to be, and not claimed.**
+  Proposed fix: at the admit site in the arriving-frame handler, nudge the seats OTHER than the
+  sender, reusing the publish path's own nudge. Cheap, and the exchange already terminates by
+  silence, so a nudge that finds no difference costs one frame. The probe asserts today's
+  behaviour and says in the test that it flips when this lands, so the fix cannot arrive quietly.
 - **DOD-SYNC-FILE-REWRITE-NOISE-1** [cello-client] — the exchange's file rewrite logs
-  `ENOENT … rename '<doc>.md.tmp'` on a path where another writer has already consumed the temp
-  file — 14 times in one live run. — ❌ Entry 60. **No user-visible harm: the files on disk were
-  verified correct and matching on all three holders.** It is a real error line for a non-error,
-  which is how a genuine failure gets ignored later.
+  `ENOENT … rename '<doc>.md.tmp'`, 14 times in one live run. — ❌ **Mechanism confirmed by
+  reading both ends, 2026-08-16.** The temp path is a FIXED name per document
+  (`document-write-path.ts`: ``const tmp = `${path}.tmp` ``) and the apply loop fires rewrites
+  **without awaiting** (`void rewriteFileImpl(...)` per admitted envelope), so two rewrites of one
+  document race: the first renames the shared temp away and the second's rename finds nothing.
+  **No user-visible harm** — each rewrite renders the WHOLE document, so the winner's file is
+  correct, and all three holders' files were verified correct and matching. It is a real error
+  line for a non-error, which is how a genuine failure gets ignored later. Proposed fix: a unique
+  temp suffix per write (last writer wins, which is already the intent), rather than serializing —
+  the work is idempotent and cheap.
 - **DOD-SYNC-LEGACY-DOCS-1** [cello-client] — **documents created before this release are
   permanently unverifiable, and they loop.** — ❌ Entry 60. The pivot moved the epoch stamp out of
   both signed preimages and bumped the domains to v3, so entries signed under the old preimage
