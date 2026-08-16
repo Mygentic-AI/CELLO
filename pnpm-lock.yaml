@@ -49,16 +49,16 @@ importers:
         version: 3.1051.0
       '@cello-protocol/crypto':
         specifier: latest
-        version: 0.0.39
+        version: 0.0.51
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
         specifier: latest
-        version: 0.0.41
+        version: 0.0.55
       '@cello-protocol/transport':
         specifier: latest
-        version: 0.0.43
+        version: 0.0.57
       '@google-cloud/kms':
         specifier: ^5.7.0
         version: 5.7.0
@@ -86,7 +86,7 @@ importers:
     devDependencies:
       '@cello-protocol/daemon':
         specifier: latest
-        version: 0.0.120
+        version: 0.0.169
       '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
@@ -113,7 +113,7 @@ importers:
         version: 0.0.102
       '@cello-protocol/crypto':
         specifier: latest
-        version: 0.0.39
+        version: 0.0.51
       '@cello-protocol/directory':
         specifier: workspace:*
         version: link:../directory
@@ -122,13 +122,13 @@ importers:
         version: link:../interfaces
       '@cello-protocol/protocol-types':
         specifier: latest
-        version: 0.0.41
+        version: 0.0.55
       '@cello-protocol/relay':
         specifier: workspace:*
         version: link:../relay
       '@cello-protocol/transport':
         specifier: latest
-        version: 0.0.43
+        version: 0.0.57
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
         version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
@@ -152,7 +152,7 @@ importers:
     dependencies:
       '@cello-protocol/protocol-types':
         specifier: latest
-        version: 0.0.41
+        version: 0.0.55
       '@noble/curves':
         specifier: 2.2.0
         version: 2.2.0
@@ -187,16 +187,16 @@ importers:
     dependencies:
       '@cello-protocol/crypto':
         specifier: latest
-        version: 0.0.39
+        version: 0.0.51
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
       '@cello-protocol/protocol-types':
         specifier: latest
-        version: 0.0.41
+        version: 0.0.55
       '@cello-protocol/transport':
         specifier: latest
-        version: 0.0.46
+        version: 0.0.57
       '@chainsafe/libp2p-noise':
         specifier: ^17.0.0
         version: 17.0.0
@@ -242,7 +242,7 @@ importers:
     dependencies:
       '@cello-protocol/protocol-types':
         specifier: latest
-        version: 0.0.41
+        version: 0.0.55
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
@@ -543,21 +543,17 @@ packages:
     resolution: {integrity: sha512-hX2IhImQ1XjQR7C1kh85WCyzRZ772Ai5q9KXA0yFZX7s1nmvhZK0rzTrOV/LiDuTKPbfvQViJ4y97AijxzTYUw==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/crypto@0.0.39':
-    resolution: {integrity: sha512-sR127Edmtg8oXxzrK6GSrPColQH4eHFM7KUM6hPH3c3B5o4nwlozH+DuSByEjGGKesAhyxrB9HdNbUKmgqKRjw==}
+  '@cello-protocol/crypto@0.0.51':
+    resolution: {integrity: sha512-wwGexyNuRCaFGBcmTTMibXUInrEk72P5AVjHeiya65ndMt0R3030INeSoluwYJSSu2I20t5aZc8njCvaaY0QIw==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/crypto@0.0.40':
-    resolution: {integrity: sha512-tw+u7NCwgMzaOrZnWtJBKCW5leserU6g0BXEyCldlY492VZwWVqpMbbHrKGYJ1VCw/XQGsQJORlBN4YM3VKYGg==}
-    engines: {node: '>=24'}
-
-  '@cello-protocol/daemon@0.0.120':
-    resolution: {integrity: sha512-20jM0WG79W6b1Ho+fMp5BSmx2N9P40onyOQnO/Mhs7XxOMva3drfb9bW2K9eGg0l8XF8ZrD0Fuf/tPOrBIVC9g==}
+  '@cello-protocol/daemon@0.0.169':
+    resolution: {integrity: sha512-+eFMC9T4DHKByfEfXeDfjYsPpMFrg/Y3lnC3TyVdIyCyJOTml2aLwB3RYLMMwF5YfGfVdu33bHGGBB6izJPtbA==}
     engines: {node: '>=24'}
     hasBin: true
 
-  '@cello-protocol/gateway@0.0.23':
-    resolution: {integrity: sha512-tL2ZmARgnE979MuRtq0Q5/7u5mMmnJp2dRTESDNWzpeoHHwDmbw5LbWRoQkyfN54kKGTBGjY0nEO7KWKlXw3GQ==}
+  '@cello-protocol/gateway@0.0.35':
+    resolution: {integrity: sha512-2J8CA6wkDVz7p3SZtjupfnN+U7fq/Nan/0QudTHuq9SXzEwrvJcSzCLllAL9iWXI6FEP+WfPjQ083LGCfY7Qyw==}
     engines: {node: '>=24'}
     hasBin: true
 
@@ -573,24 +569,16 @@ packages:
     resolution: {integrity: sha512-cGSCw34ktipZq8ExKJlIISWAHBt3fErxYuJNadxopVT+93Cp/O36Klc/KpWkzmW/tXxGWxTkFVWFm2wCu2myEQ==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/protocol-types@0.0.41':
-    resolution: {integrity: sha512-APCLrdocgYrVn5vVUXbKgOv1BPOgIkUAwyTkzdjgqVuAClbACDrPYVKwTNzgnuUPkV3uzXk/eEDrweYltdhjAQ==}
-    engines: {node: '>=24'}
-
-  '@cello-protocol/protocol-types@0.0.44':
-    resolution: {integrity: sha512-8iZH9k7un0yOOWml0nqpzsrfj1ENIU2aDJRTAOnQAVb9JcY+zm6qkuRJ0WTrJxvif8re+SoE/eQFh2aTQNzlZQ==}
+  '@cello-protocol/protocol-types@0.0.55':
+    resolution: {integrity: sha512-t3TNf5HWT4nUWQJY+pZ4PV+lvGAEqwyz/EbEuEaJ47iR5kq0uiDY7aCFx38pWzeYmtzIWEx1vEupGewJA1W7CQ==}
     engines: {node: '>=24'}
 
   '@cello-protocol/transport@0.0.37':
     resolution: {integrity: sha512-c58acPRiZCff09zR4z2H9WdP3dPEQjxuIebXaEL0ts6aV6WD5bTr6VE2CjFrMK+P3Xba55GfMv6+oXavjOWrkA==}
     engines: {node: '>=24'}
 
-  '@cello-protocol/transport@0.0.43':
-    resolution: {integrity: sha512-kpjMHKHpm/4Lin+JfS1opFvVbkfOuGNDxaLOpBxFqYwo2CP+bZTKIi4kKBjyihU+4br55SHnM7t4cF+gvP9teg==}
-    engines: {node: '>=24'}
-
-  '@cello-protocol/transport@0.0.46':
-    resolution: {integrity: sha512-wFuaJ6Dw9D3+lf7R0B8E/lHoGRqz1nVvg1GKXq+uct2IBxHjU1boCqre6bmubPvbMLoeA0Xjktgav6hRgG2/vA==}
+  '@cello-protocol/transport@0.0.57':
+    resolution: {integrity: sha512-40pkLMyU/E22qMW+BnBRzBOTbF/2gfb3mGUJSsfgm86gXUt5fGTUFzvi7cj5kzUGHeu7ozSAj0QtL3lfPs/K9g==}
     engines: {node: '>=24'}
 
   '@chainsafe/as-chacha20poly1305@0.1.0':
@@ -1046,8 +1034,8 @@ packages:
     peerDependencies:
       hono: ^4
 
-  '@hono/node-server@2.1.0':
-    resolution: {integrity: sha512-XovyyCCnBzW+zKu+z/zq8hwNs4KOR5rEMAOxo2f40Q5xoOI37IMm6MIg2COOUtUApo0i6850MTBKH2u4QLGIqg==}
+  '@hono/node-server@2.1.1':
+    resolution: {integrity: sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg==}
     engines: {node: '>=20'}
     peerDependencies:
       hono: ^4
@@ -1829,8 +1817,8 @@ packages:
   '@ruvector/attention@0.1.32':
     resolution: {integrity: sha512-7ePEASX4+Y8qVU2p2CszL/fgP+E3BRSZm7oukDaTwED5HSrw1jdQk75LijR488s3dYYeHdgoSv67P+WWHbM98A==}
 
-  '@ruvector/core@0.1.31':
-    resolution: {integrity: sha512-DLyWGgSFislyXglfODFwpysZdOoh+eWILF18ecgd6HNPgOylBUNoObW32odqJScmmrX+7150ndWFtdFHO9nGqw==}
+  '@ruvector/core@0.1.32':
+    resolution: {integrity: sha512-tctBcZ9//AXHh6tntaYW3ezHN5aUlhv/kAwJlZgQiwmFhTL8Vl/WqqEQd+Uibdpbo2D2LQI8oRc/pehNFcMq7w==}
     engines: {node: '>=18.0.0'}
 
   '@ruvector/gnn-darwin-arm64@0.1.25':
@@ -2572,8 +2560,8 @@ packages:
     resolution: {integrity: sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g==}
     engines: {node: '>=18'}
 
-  cjs-module-lexer@2.2.0:
-    resolution: {integrity: sha512-4bHTS2YuzUvtoLjdy+98ykbNB5jS0+07EvFNXerqZQJ89F7DI6ET7OQo/HJuW6K0aVsKA9hj9/RVb2kQVOrPDQ==}
+  cjs-module-lexer@2.2.1:
+    resolution: {integrity: sha512-Ca8swihM+/4yKecYHY52kgJd300hi2lADU/a1RxNTRe+RJ9jvqQlESpbz9DnG9mowez8qwXHB8qYdIUw9e+F5Q==}
 
   cli-cursor@3.1.0:
     resolution: {integrity: sha512-I/zHAwsKf9FqGoXM4WWRACob9+SNukZTd94DWF57E4toouRulbCxcUh6RKUEOQlYTHJnzkPMySvPNaaSLNfLZw==}
@@ -2850,8 +2838,8 @@ packages:
     resolution: {integrity: sha512-70QWGkr4snxr0OXLRWsFLeRBIRPuQOvt4s8QYjmUlmlkyTZkRqS7EDVRZtzU3TiyDbXSzaOeF0XUKy8PchzukQ==}
     engines: {node: '>=18.0.0'}
 
-  eventsource-parser@3.1.0:
-    resolution: {integrity: sha512-kJezFj9YFAMLeORyi7aCLxLbD5/qWMQnoMVlVPyHIll7lgRJCc3JVln9Vgl9nwQi0YkMnhdGTMNn7CkRRAptMg==}
+  eventsource-parser@3.1.1:
+    resolution: {integrity: sha512-EKN1vKAMcZ8MlYMpaNuxN6R9yakzH6uajHcHVTqWJzvu5pWw9DyhbP35HH8MVBQ+dZjAfDxk+A8NiR9KWaXiyQ==}
     engines: {node: '>=18.0.0'}
 
   eventsource@3.0.7:
@@ -3103,8 +3091,8 @@ packages:
     resolution: {integrity: sha512-jN0ZewiNAWSe5khM3EyCmBb250+b40wWbwNILNfEvq84VREWwOIkuUsFONk/3i3nqkz7Oe1PcpM2mwQEK2L9Kg==}
     engines: {node: '>=16.9.0'}
 
-  hono@4.13.0:
-    resolution: {integrity: sha512-jhunvfHWxd7J5EFfSgH4xsYJzSe/lfqbUCxiyyeaQasUsXeEHXtzVid+7EOGByc5JnFa23SSFL3Y2RV/z1T+eQ==}
+  hono@4.13.2:
+    resolution: {integrity: sha512-JydRilDRkYBQMt9qR9U92mXxmbGqsqSn/IKOrh4e7/gEbn+0zSr8igTu0obwJoNGN4sez28DIql7FBHWydoJpA==}
     engines: {node: '>=16.9.0'}
 
   html-entities@2.6.0:
@@ -3192,8 +3180,8 @@ packages:
     resolution: {integrity: sha512-XXADHxXmvT9+CRxhXg56LJovE+bmWnEWB78LB83VZTprKTmaC5QfruXocxzTZ2Kl0DNwKuBdlIhjL8LeY8Sf8Q==}
     engines: {node: '>= 12'}
 
-  ip-address@10.4.0:
-    resolution: {integrity: sha512-oSK96Grm3aP6OrS263xVxbNDGVL7rzBtYdpGqlDG8iQdoenDoTs/nkki+DflYbAEE8Xl6o5YxhxlrKvI3nqKXQ==}
+  ip-address@10.5.0:
+    resolution: {integrity: sha512-R5SnVLJmgYYvf2F2ZgwSBnelz5G4q5AxIC277GDfUaNbrZKNANcBC7RHqYYePlszf4kBolVkJauG0ZjHHFh55g==}
     engines: {node: '>= 12'}
 
   ipaddr.js@1.9.1:
@@ -3243,6 +3231,9 @@ packages:
   isexe@4.0.0:
     resolution: {integrity: sha512-FFUtZMpoZ8RqHS3XeXEmHWLA4thH+ZxCv2lOiPIn1Xc7CxrqhWzNSDzD+/chS/zbYezmiwWLdQC09JdQKmthOw==}
     engines: {node: '>=20'}
+
+  isomorphic.js@0.2.5:
+    resolution: {integrity: sha512-PIeMbHqMt4DnUP3MA/Flc0HElYjMXArsw1qwJZcm9sqR8mq3l8NYizFMty0pWwE/tzIGH3EKK5+jes5mAr85yw==}
 
   it-all@3.0.11:
     resolution: {integrity: sha512-Gvqj6MO4GMLnFdtE68HZRpGBskNC+9+GQ+JevTGNYLyhjUuPhjDLU3jN1LpBemXJDW1bRSkczqA/qGyKlPKrcQ==}
@@ -3311,8 +3302,8 @@ packages:
   jose@6.2.3:
     resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
 
-  jose@6.2.8:
-    resolution: {integrity: sha512-Bsdjwm3Qsd/P0jR+BHDe3LytDfY7WBq2HmCCLIwuVRHMuEC9ae7/R474GIUdF1NgCyZjzVo/A9DOiOBtXq8ZoQ==}
+  jose@6.2.9:
+    resolution: {integrity: sha512-XrchZOFZUl/T3vTwRe8XK+cJrGtMF4th1ARnDfwbBXFKThGhlsxEE4Zu03AD/bjJSt/9jT/mxrOCkJWOg77aPA==}
 
   js-tokens@9.0.1:
     resolution: {integrity: sha512-mxa9E9ITFOt0ban3j6L5MpjwegGz6lBQmM1IJkWeBZGcMxto50+eWdjC/52xDbS2vy0k7vIMK0Fe2wfL9OQSpQ==}
@@ -3365,6 +3356,11 @@ packages:
   levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
     engines: {node: '>= 0.8.0'}
+
+  lib0@0.2.117:
+    resolution: {integrity: sha512-DeXj9X5xDCjgKLU/7RR+/HQEVzuuEUiwldwOGsHK/sfAfELGWEyTcf0x+uOvCvK3O2zPmZePXWL85vtia6GyZw==}
+    engines: {node: '>=16'}
+    hasBin: true
 
   libp2p@3.2.3:
     resolution: {integrity: sha512-sri0KjdVrzKlahFqrMC/v0wsmvbpIasM0yA1jCAM4d5+Xjj1IN4yFzksSIVqKu6pqhhggR+Pr2ZgTBkH3BlpMw==}
@@ -3557,8 +3553,8 @@ packages:
     resolution: {integrity: sha512-9MdFxmkKaOYVTV+XVRG8ArDwwQ77XIgIPyKASB1k3JPq3M8fGQQQE3YpMOrKm6g//Ktx8ivZr8xo1Qmtqub+GA==}
     engines: {node: ^18 || ^20 || >= 21}
 
-  node-addon-api@8.9.1:
-    resolution: {integrity: sha512-4eUQWVPCUUUiBjLnHS3cXWeC6ryoPUc0U3rP7IuzapoGbzMqd/r6KKO0clr0b+snQhsrueFEhCZDdK+LK7hxKg==}
+  node-addon-api@8.9.2:
+    resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
     engines: {node: ^18 || ^20 || >= 21}
 
   node-domexception@1.0.0:
@@ -3933,28 +3929,33 @@ packages:
     resolution: {integrity: sha512-2pt5dhcpHXXhNEVXeeDPzshXlGo3X8vWVuMfLA+fjUuXYFsW2YYrmUSgHOvEuqVxxow2Rgn9sZpxWQSBuT470g==}
     engines: {node: '>=16.0.0'}
 
-  ruvector-core-darwin-arm64@0.1.29:
-    resolution: {integrity: sha512-gjZ1/J/0Nh9Mn74VdifIIkPLP/M4FqD/g+QVxWcfWcNFWhHVz+zHyxGjc6gJgrfYBquiMyP5jLfvyR3TffLanQ==}
+  ruvector-core-darwin-arm64@0.1.30:
+    resolution: {integrity: sha512-2UxrmErYik+1SU8Qd7hK5tYWZpmS/4P25juNEATzpZoSbtW2MHsgnweytXB3rLDQoL+1IZB5Ov6t+W0wy05jIg==}
+    engines: {node: '>= 18'}
     cpu: [arm64]
     os: [darwin]
 
-  ruvector-core-darwin-x64@0.1.29:
-    resolution: {integrity: sha512-SNq2DrIBWM53qG3YSYcNV/BnBbAoJouafAADOjG3PkM8+RPrIucTeUDBavf148DNo5ZI337IS8TK1/0HpJEwFg==}
+  ruvector-core-darwin-x64@0.1.30:
+    resolution: {integrity: sha512-ba0vyYYNB94tS7wkz3oWd1U6dGq1PAxO2skVgJ8tlrX1uxAzmff9rciF9mst5B53DJVkDhmVN/mDyqa6UGnNKg==}
+    engines: {node: '>= 18'}
     cpu: [x64]
     os: [darwin]
 
-  ruvector-core-linux-arm64-gnu@0.1.29:
-    resolution: {integrity: sha512-gcA2qSQD9nEeHR8pIXr5SKpQAiHMxu4EyBUwUSG4UnWOxVQnnU0l2kA/Z2NZ6B+JWLrb5+nhkkv7AaSmb8YAsg==}
+  ruvector-core-linux-arm64-gnu@0.1.30:
+    resolution: {integrity: sha512-+dLsq9MCv7il60i/7/3BeF3AkT7BGOkCv5P53ljaWBrMdAY1Q0lS75Mb3ze24j2pEcd1tP/X92mHBPjsB6uBGw==}
+    engines: {node: '>= 18'}
     cpu: [arm64]
     os: [linux]
 
-  ruvector-core-linux-x64-gnu@0.1.29:
-    resolution: {integrity: sha512-GcYCVNRbAmiXmEaMNvVnA78ZIM469H0VwP2JFGfibwiSASBgWGX3BT+mqflX+gtBynbtQqslj8XcqVdDxEkEBg==}
+  ruvector-core-linux-x64-gnu@0.1.30:
+    resolution: {integrity: sha512-w4rm2Jakm+tNI1Ogf2S0Nq8ghH8F+tzf0LtrCra1Ox5xCoeDItN6yrGkXCplm4qiKdIVAhzVYdwEoTOYiAbSmA==}
+    engines: {node: '>= 18'}
     cpu: [x64]
     os: [linux]
 
-  ruvector-core-win32-x64-msvc@0.1.29:
-    resolution: {integrity: sha512-nqHrlUAKpTreGO87jQLtFVrQUBT/7J/dBsPD5/mV9Fet/shncN0QMij7YqBTrlhR9qtQ2gAUGrG0zw69T60AiQ==}
+  ruvector-core-win32-x64-msvc@0.1.30:
+    resolution: {integrity: sha512-tR3gB5AGe8QJyd8Tq/8HPrRBpbYiof3rE8Qxc2jiK4TfFq7egJN3Ak4Q+dknkcqldfOZjVNYrC312lmT+FbF9g==}
+    engines: {node: '>= 18'}
     cpu: [x64]
     os: [win32]
 
@@ -4075,8 +4076,8 @@ packages:
   sprintf-js@1.1.3:
     resolution: {integrity: sha512-Oo+0REFV59/rz3gfJNKQiBlwfHaSESl1pcGyABQsnnIfWOFt6JNj5gCog2U6MLZ//IGYD+nA8nI+mTShREReaA==}
 
-  sql.js@1.14.1:
-    resolution: {integrity: sha512-gcj8zBWU5cFsi9WUP+4bFNXAyF1iRpA3LLyS/DP5xlrNzGmPIizUeBggKa8DbDwdqaKwUcTEnChtd2grWo/x/A==}
+  sql.js@1.14.2:
+    resolution: {integrity: sha512-3ZGPovObMFrdw79zrUHbfdE/DLIsy8jdNdssmMSQuRAymedU6q84asPt0kgiqrdMYlPegDItiIMfmIXzZnYFcw==}
 
   stackback@0.0.2:
     resolution: {integrity: sha512-1XMJE5fQo1jGH6Y/7ebnwPOBEkIEnT4QF32d5R1+VXdXveM0IBMJt8zfaxX1P3QhVwrYe+576+jkANtSS2mBbw==}
@@ -4450,6 +4451,10 @@ packages:
   yargs@17.7.3:
     resolution: {integrity: sha512-GZtjxm/J/4TSxuL3FNYjCmLktBTnIw/rVmKSIyKeYAZpmJB2ig9VauCC5xsa82GNKVKDAqpOn3KVzNt0zmrU0g==}
     engines: {node: '>=12'}
+
+  yjs@13.6.32:
+    resolution: {integrity: sha512-lfiJIIC4Xayt5ItynE407ehlE03pCjeOc4hkR4yxxvvNJ4kuiN25B0g+Qp8XagYz361LLL7DCzR5bvFJ81QKtQ==}
+    engines: {node: '>=16.0.0', npm: '>=8.0.0'}
 
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
@@ -5092,33 +5097,28 @@ snapshots:
       '@noble/hashes': 2.2.0
       '@oqs/liboqs-js': 0.15.1
 
-  '@cello-protocol/crypto@0.0.39':
+  '@cello-protocol/crypto@0.0.51':
     dependencies:
       '@noble/curves': 2.2.0
       '@noble/hashes': 2.2.0
       '@oqs/liboqs-js': 0.15.1
 
-  '@cello-protocol/crypto@0.0.40':
+  '@cello-protocol/daemon@0.0.169':
     dependencies:
-      '@noble/curves': 2.2.0
-      '@noble/hashes': 2.2.0
-      '@oqs/liboqs-js': 0.15.1
-
-  '@cello-protocol/daemon@0.0.120':
-    dependencies:
-      '@cello-protocol/crypto': 0.0.39
-      '@cello-protocol/gateway': 0.0.23
-      '@cello-protocol/protocol-types': 0.0.41
-      '@cello-protocol/transport': 0.0.43
+      '@cello-protocol/crypto': 0.0.51
+      '@cello-protocol/gateway': 0.0.35
+      '@cello-protocol/protocol-types': 0.0.55
+      '@cello-protocol/transport': 0.0.57
       '@libp2p/interface': 3.2.2
       '@signalapp/sqlcipher': 3.3.5
       cbor-x: 1.6.4
       it-length-prefixed: 10.0.1
+      yjs: 13.6.32
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@cello-protocol/gateway@0.0.23':
+  '@cello-protocol/gateway@0.0.35':
     dependencies:
       re2-wasm: 1.0.2
     optionalDependencies:
@@ -5139,14 +5139,9 @@ snapshots:
       '@cello-protocol/crypto': 0.0.33
       cbor-x: 1.6.4
 
-  '@cello-protocol/protocol-types@0.0.41':
+  '@cello-protocol/protocol-types@0.0.55':
     dependencies:
-      '@cello-protocol/crypto': 0.0.39
-      cbor-x: 1.6.4
-
-  '@cello-protocol/protocol-types@0.0.44':
-    dependencies:
-      '@cello-protocol/crypto': 0.0.40
+      '@cello-protocol/crypto': 0.0.51
       cbor-x: 1.6.4
 
   '@cello-protocol/transport@0.0.37':
@@ -5174,35 +5169,10 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@cello-protocol/transport@0.0.43':
+  '@cello-protocol/transport@0.0.57':
     dependencies:
-      '@cello-protocol/crypto': 0.0.39
-      '@cello-protocol/protocol-types': 0.0.41
-      '@chainsafe/libp2p-noise': 17.0.0
-      '@chainsafe/libp2p-yamux': 8.0.1
-      '@libp2p/autonat': 3.0.20(patch_hash=4204195cc5d8c953020547b5655983198d96374b3eba3b831ca70496a73cf935)
-      '@libp2p/circuit-relay-v2': 4.2.3
-      '@libp2p/crypto': 5.1.21
-      '@libp2p/dcutr': 3.0.18
-      '@libp2p/identify': 4.1.3
-      '@libp2p/interface': 3.2.2
-      '@libp2p/peer-id': 6.0.12
-      '@libp2p/tcp': 11.0.18
-      '@libp2p/websockets': 10.1.11
-      '@multiformats/multiaddr': 13.0.3
-      '@noble/curves': 2.2.0
-      it-length-prefixed: 10.0.1
-      it-pipe: 3.0.1
-      libp2p: 3.2.3
-      uint8arrays: 5.1.1
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
-
-  '@cello-protocol/transport@0.0.46':
-    dependencies:
-      '@cello-protocol/crypto': 0.0.40
-      '@cello-protocol/protocol-types': 0.0.44
+      '@cello-protocol/crypto': 0.0.51
+      '@cello-protocol/protocol-types': 0.0.55
       '@chainsafe/libp2p-noise': 17.0.0
       '@chainsafe/libp2p-yamux': 8.0.1
       '@libp2p/autonat': 3.0.20(patch_hash=4204195cc5d8c953020547b5655983198d96374b3eba3b831ca70496a73cf935)
@@ -5261,7 +5231,7 @@ snapshots:
     dependencies:
       agentdb: 3.0.0-alpha.20(@types/node@25.6.2)(zod@4.4.2)
       better-sqlite3: 11.10.0
-      sql.js: 1.14.1
+      sql.js: 1.14.2
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - '@metaharness/kernel'
@@ -5273,7 +5243,7 @@ snapshots:
 
   '@claude-flow/shared@3.0.0-alpha.1':
     dependencies:
-      sql.js: 1.14.1
+      sql.js: 1.14.2
 
   '@claude-flow/swarm@3.0.0-alpha.1': {}
 
@@ -5577,9 +5547,9 @@ snapshots:
     dependencies:
       hono: 4.12.16
 
-  '@hono/node-server@2.1.0(hono@4.13.0)':
+  '@hono/node-server@2.1.1(hono@4.13.2)':
     dependencies:
-      hono: 4.13.0
+      hono: 4.13.2
 
   '@huggingface/jinja@0.5.9':
     optional: true
@@ -6064,18 +6034,18 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.30.0(zod@4.4.2)':
     dependencies:
-      '@hono/node-server': 2.1.0(hono@4.13.0)
+      '@hono/node-server': 2.1.1(hono@4.13.2)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
       cors: 2.8.6
       cross-spawn: 7.0.6
       eventsource: 3.0.7
-      eventsource-parser: 3.1.0
+      eventsource-parser: 3.1.1
       express: 5.2.1
       express-rate-limit: 8.6.2(express@5.2.1)
-      hono: 4.13.0
-      jose: 6.2.8
+      hono: 4.13.2
+      jose: 6.2.9
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
@@ -6557,13 +6527,13 @@ snapshots:
       '@ruvector/attention-win32-x64-msvc': 0.1.32
     optional: true
 
-  '@ruvector/core@0.1.31':
+  '@ruvector/core@0.1.32':
     optionalDependencies:
-      ruvector-core-darwin-arm64: 0.1.29
-      ruvector-core-darwin-x64: 0.1.29
-      ruvector-core-linux-arm64-gnu: 0.1.29
-      ruvector-core-linux-x64-gnu: 0.1.29
-      ruvector-core-win32-x64-msvc: 0.1.29
+      ruvector-core-darwin-arm64: 0.1.30
+      ruvector-core-darwin-x64: 0.1.30
+      ruvector-core-linux-arm64-gnu: 0.1.30
+      ruvector-core-linux-x64-gnu: 0.1.30
+      ruvector-core-win32-x64-msvc: 0.1.30
     optional: true
 
   '@ruvector/gnn-darwin-arm64@0.1.25':
@@ -7112,7 +7082,7 @@ snapshots:
       '@ruvector/graph-transformer': 2.0.4
       ajv: 8.20.0
       jsonwebtoken: 9.0.3
-      sql.js: 1.14.1
+      sql.js: 1.14.2
     optionalDependencies:
       '@huggingface/transformers': 4.2.0
       '@opentelemetry/resources': 1.30.1(@opentelemetry/api@1.9.1)
@@ -7185,7 +7155,7 @@ snapshots:
     dependencies:
       '@phc/format': 1.0.0
       cross-env: 10.1.0
-      node-addon-api: 8.9.1
+      node-addon-api: 8.9.2
       node-gyp-build: 4.8.4
     optional: true
 
@@ -7323,7 +7293,7 @@ snapshots:
   chownr@3.0.0:
     optional: true
 
-  cjs-module-lexer@2.2.0:
+  cjs-module-lexer@2.2.1:
     optional: true
 
   cli-cursor@3.1.0:
@@ -7652,7 +7622,7 @@ snapshots:
 
   eventsource-parser@3.0.8: {}
 
-  eventsource-parser@3.1.0: {}
+  eventsource-parser@3.1.1: {}
 
   eventsource@3.0.7:
     dependencies:
@@ -7674,7 +7644,7 @@ snapshots:
     dependencies:
       debug: 4.4.3
       express: 5.2.1
-      ip-address: 10.4.0
+      ip-address: 10.5.0
     transitivePeerDependencies:
       - supports-color
 
@@ -7999,12 +7969,12 @@ snapshots:
   hnswlib-node@3.0.0:
     dependencies:
       bindings: 1.5.0
-      node-addon-api: 8.9.1
+      node-addon-api: 8.9.2
     optional: true
 
   hono@4.12.16: {}
 
-  hono@4.13.0: {}
+  hono@4.13.2: {}
 
   html-entities@2.6.0: {}
 
@@ -8067,7 +8037,7 @@ snapshots:
 
   import-in-the-middle@3.3.3:
     dependencies:
-      cjs-module-lexer: 2.2.0
+      cjs-module-lexer: 2.2.1
       es-module-lexer: 2.3.1
       module-details-from-path: 1.0.4
     optional: true
@@ -8118,7 +8088,7 @@ snapshots:
 
   ip-address@10.1.0: {}
 
-  ip-address@10.4.0: {}
+  ip-address@10.5.0: {}
 
   ipaddr.js@1.9.1: {}
 
@@ -8150,6 +8120,8 @@ snapshots:
 
   isexe@4.0.0:
     optional: true
+
+  isomorphic.js@0.2.5: {}
 
   it-all@3.0.11: {}
 
@@ -8247,7 +8219,7 @@ snapshots:
 
   jose@6.2.3: {}
 
-  jose@6.2.8: {}
+  jose@6.2.9: {}
 
   js-tokens@9.0.1: {}
 
@@ -8310,6 +8282,10 @@ snapshots:
     dependencies:
       prelude-ls: 1.2.1
       type-check: 0.4.0
+
+  lib0@0.2.117:
+    dependencies:
+      isomorphic.js: 0.2.5
 
   libp2p@3.2.3:
     dependencies:
@@ -8487,7 +8463,7 @@ snapshots:
 
   node-addon-api@8.7.0: {}
 
-  node-addon-api@8.9.1:
+  node-addon-api@8.9.2:
     optional: true
 
   node-domexception@1.0.0: {}
@@ -8944,19 +8920,19 @@ snapshots:
   ruvector-attention-wasm@0.1.32:
     optional: true
 
-  ruvector-core-darwin-arm64@0.1.29:
+  ruvector-core-darwin-arm64@0.1.30:
     optional: true
 
-  ruvector-core-darwin-x64@0.1.29:
+  ruvector-core-darwin-x64@0.1.30:
     optional: true
 
-  ruvector-core-linux-arm64-gnu@0.1.29:
+  ruvector-core-linux-arm64-gnu@0.1.30:
     optional: true
 
-  ruvector-core-linux-x64-gnu@0.1.29:
+  ruvector-core-linux-x64-gnu@0.1.30:
     optional: true
 
-  ruvector-core-win32-x64-msvc@0.1.29:
+  ruvector-core-win32-x64-msvc@0.1.30:
     optional: true
 
   ruvector-graph-transformer-wasm@2.0.4:
@@ -8974,7 +8950,7 @@ snapshots:
       '@metaharness/workspace-probe': 0.1.1
       '@modelcontextprotocol/sdk': 1.30.0(zod@4.4.2)
       '@ruvector/attention': 0.1.32
-      '@ruvector/core': 0.1.31
+      '@ruvector/core': 0.1.32
       '@ruvector/gnn': 0.1.25
       '@ruvector/sona': 0.1.8
       chalk: 4.1.2
@@ -9132,7 +9108,7 @@ snapshots:
   sprintf-js@1.1.3:
     optional: true
 
-  sql.js@1.14.1: {}
+  sql.js@1.14.2: {}
 
   stackback@0.0.2: {}
 
@@ -9509,6 +9485,10 @@ snapshots:
       y18n: 5.0.8
       yargs-parser: 21.1.1
     optional: true
+
+  yjs@13.6.32:
+    dependencies:
+      lib0: 0.2.117
 
   yocto-queue@0.1.0: {}
 

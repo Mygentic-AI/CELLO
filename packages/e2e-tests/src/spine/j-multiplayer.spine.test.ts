@@ -687,7 +687,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       };
       const behind = await (async () => {
         const deadline = Date.now() + 30_000;
-        let last: { sync?: string } = {};
+        let last: { sync?: string; lastSyncedAtMs?: number | null } = {};
         while (Date.now() < deadline) {
           last = await partyCView();
           if (last.sync === "behind") return last;

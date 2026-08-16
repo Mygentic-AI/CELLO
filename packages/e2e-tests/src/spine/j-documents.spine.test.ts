@@ -133,7 +133,6 @@ function documentLines(proc: Proc): string {
   try {
     const path = `/tmp/cello-spine-${process.pid}-${Date.now()}.log`;
     writeFileSync(path, lines.join("\n"));
-    // eslint-disable-next-line no-console
     console.log(`[documentLines] full filtered log (${lines.length} lines) → ${path}`);
   } catch {
     /* diagnostics must never fail a test */
