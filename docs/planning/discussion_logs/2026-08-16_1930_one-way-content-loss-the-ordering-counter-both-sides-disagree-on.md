@@ -130,6 +130,59 @@ as a missing message.**
 That is stated as the leading hypothesis, not as proven. What is proven is that the two numbers
 disagree, that the gate is arithmetic on both of them, and that the disagreement is permanent.
 
+## ROOT CAUSE — measured: a resubmission gets a NEW relay position
+
+The drift is not mysterious and it is not churn. **The same message is submitted to the relay dozens
+of times, and each resubmission is assigned a brand-new canonical sequence**, while the receiver
+deduplicates by content hash and appends it once.
+
+From `cello relay-receipts`, 2026-08-16:
+
+| session | receipts | distinct content | max sequence | extra sequences burned by resubmission |
+|---|---|---|---|---|
+| `f54e0d07` | 49 | **1** | 98 | 48 |
+| `9e09883b` | 43 | 2 | 43 | 41 |
+| `1fbb7a72` | 76 | **2** | 157 | 74 |
+| `429ccd0c` | 52 | 11 | 108 | 41 |
+
+One hash, `831f6ffc90`, was submitted **49 times** and consumed sequences
+`1, 4, 6, 8, 10, 12, 14, 16, 18, 20, …`. Another, `b517fb8089`, **69 times**.
+
+### The false invariant
+
+`session-node-manager.ts` states the assumption the dedup path and the hold gate both rest on:
+
+> *"The relay already assigns every submission a unique position: a REDELIVERY carries the same
+> position, a genuinely new identical message carries a NEW one. So a duplicate is the same hash AT
+> THE SAME POSITION — never the same hash anywhere."*
+
+**This is false in production.** One identical hash holds 49 different positions. Everything built on
+"same hash at the same position" is therefore reasoning from a premise the relay does not honour.
+
+### The spiral
+
+1. A sends. Relay stamps **1**. B appends. B's count **1**.
+2. B does not acknowledge (it was held, or the ack did not land).
+3. A retries the SAME content. Relay stamps **4**.
+4. B dedups by hash and appends nothing. B's count stays **1**.
+5. Relay 4 vs local 1 — **they never agree again**.
+6. Every genuine message after this arrives numbered ahead of B's count and is HELD.
+7. Held means never surfaced, so never acknowledged, so **retried** — which widens the gap that
+   caused the hold.
+
+The recovery mechanism is the thing that destroys recovery. That is the whole of the brittleness: one
+unacknowledged message is enough, and every attempt to repair it makes it permanently worse.
+
+### What this does NOT settle
+
+Which side is wrong is a design decision, not a bug with an obvious owner: either the sender must
+resubmit carrying its original position, or the relay must recognise a resubmission and return the
+position it already assigned. Both are defensible; they have different security properties under the
+adversary-owns-their-daemon lens, because a position is what the seal signs over.
+
+Also unmeasured: what stops the acknowledgement in the first place. The spiral needs one missing ack
+to start, and that first ack has not been traced.
+
 ## The causal chain — and it is written in the code's own comments
 
 The trigger and the amplifier are different things, and conflating them is why this has been so hard
