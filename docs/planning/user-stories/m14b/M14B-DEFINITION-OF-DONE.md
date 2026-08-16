@@ -565,7 +565,64 @@ description: >
   (review F1 — the record was written and read by nothing). CAVEAT carried to P6: the live
   cross-process sweep liveness proof is the three-daemon enforcers' job.
 - **DOD-SYNC-P6** [trustless-cello] — enforcers re-pointed at `SYNC-AC1`–`AC20`, three daemons as
-  separate OS processes. — ❌
+  separate OS processes. — ✅ `e1d04b7b` + cello-client `7032ff3`. Seven journeys, three real
+  daemons in three OS processes against a three-node consortium and a real relay, 14–18s each.
+  Reviewed (cello-unit-reviewer); every blocking finding fixed, and the two that mattered changed
+  what the milestone CLAIMS, not just how it is tested — see the coverage split below, which is
+  part of this tag and not a footnote to it.
+
+  **What the live gate proves** (`j-multiplayer.spine.test.ts`): AC1 (three-way convergence, one
+  author at a time), AC4's settlement rule (a close settles only when every current seat has
+  spoken — sequential, not partitioned), AC5 (an entry commits and reaches a reachable holder
+  before any sweep could have fired — the elapsed time is now asserted against the interval, so
+  the premise cannot evaporate on a slow machine), AC6, AC10 (join with existing history through
+  the ordinary exchange), AC13 (both directions: a holder removed while offline, and one removed
+  while present), AC17 (the built artifact speaks no relay vocabulary), AC20 (behind WITH a
+  last-seen time, and no pending count offered — R47).
+
+  **What only in-process tests prove** (cello-client; each named here so the claim is checkable by
+  grep, not by trust): AC2 forwarding — the responder serves any AUTHOR's chain with no notion of
+  who sent it (`document-reconcile-engine.test.ts`); AC3 no sender ledger — the document schema is
+  enumerated and every table and column checked against a delivery-debt denylist
+  (`document-store.test.ts`); AC9 idempotence — a peer at our exact position gets nothing back;
+  AC12 refusal does not wedge; AC14 removed-author history; AC15 stranger refused; AC16
+  post-ending forgery refused; AC18 quiescence — an ended document contributes no sweep targets;
+  AC19 version refusal — added during this review, the gate had no test at all. AC15/AC16 are
+  in-process BY NATURE: both require a rewritten daemon, and stock binaries cannot stage one.
+
+  **Named gaps — not claimed, owed if they matter** (each is a live-coverage gap only; all have
+  in-process proof):
+  - **R32's terminal-refusal delivery is not exercised live.** The offline-removal journey said it
+    was; asserting it turned the journey red. A returning holder takes delivery of the removal as
+    an ordinary parked session frame recovered from the relay, well before its first exchange —
+    R32 is the backstop for when the park is gone (expired, or the entry was minted with no
+    session), and stock binaries do not reach it.
+  - **AC2's permanent kill** (A killed for good, B and C carry the history between them) is not
+    staged live; only the per-author mechanism is proven in process.
+  - **AC8 relay-loss mid-exchange** and **AC11's stranded joiner** (the admitting admin goes
+    offline before the third party learns) have no enforcer on either side.
+  - **AC1's concurrent-divergence half** (all three editing while mutually unreachable) and
+    **AC4's partition half** (two closes authored on opposite sides of a partition) are proven by
+    the fold in process, not live; the live journeys move one author at a time.
+  - **AC7's mid-exchange restart** — the live restarts are between exchanges, not during one.
+  - **The receiver-side `document_sender_removed` gate** is unreachable end to end with honest
+    binaries: a removed holder always learns before it can publish, so its own daemon refuses
+    first. It defends against a rewritten client; unit coverage is `document-inbound.test.ts`.
+
+- **DOD-SYNC-FIRSTFRAME-1** [cello-client] — **the first frame after a session opens can be lost
+  with NOBODY told.** — ❌ Promoted to a board line here because it has now cost three separate
+  debugging sessions and it lives on a production path, not a test one. The shape: a frame sent
+  immediately after `cello_initiate_session` returns is sometimes discarded by the receiving side;
+  the sender's send reports success, no error is raised anywhere, and the frame is simply gone.
+  Every enforcer that carries an ordinary message first has been reliable, which is why the
+  workaround is written into the live harness — but a workaround in a test fixture is not a fix,
+  and outside the tests nothing sends a warm-up message. For documents the pivot's own model
+  repairs it (the next exchange recomputes the difference, so the cost is one sweep interval of
+  latency), which is exactly why it keeps getting waved past. For an ordinary first message
+  between two agents there is no such repair: the counterparty never sees it and neither side is
+  told. Same shape as the two "send reports success, peer discards" defects this milestone already
+  paid for. Needs a producer/consumer trace across session establishment — which side discards,
+  and what precondition is not yet true when it does — not another retry.
 
 ---
 

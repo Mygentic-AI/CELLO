@@ -132,7 +132,23 @@ description: >
   the removal-surface claim moved to its own fast-cadence journey where the model's own repair
   (the next exchange) costs 3 seconds (`3a5093e6`). Every journey now converges in 15–19s
   across real processes; the nudge journey keeps production cadence so its convergence PROVES
-  the nudge. P6 unit review in flight; flip on its findings being addressed.
+  the nudge. **P6 IS REVIEWED AND FLIPPED** (`e1d04b7b` + cello-client `7032ff3`, Entry 59). The
+  review's two blocking findings both changed what the milestone CLAIMS: (1) the removal journeys
+  could pass with R32's terminal-refusal delivery reverted — asserting the refusal reason in the
+  returning holder's own log turned the journey RED and proved the live route is the relay's
+  ordinary parked frame, so the journey now asserts what it can (the standing flipped because the
+  daemon recorded and folded the remover's SIGNED ENTRY) and R32's live path is a NAMED GAP;
+  (2) AC5's premise ("the sweep could not have fired") was true at ~19s against a 120s first tick
+  and asserted nowhere — the elapsed time is now checked against the interval. Also: AC20's
+  last-seen half asserted (plus absence of any pending count), the online-removal journey retitled
+  to what it owns, a `toBeDefined()` on an already-thrown value replaced with a real derivation
+  check, stale cadence comment and fossil fixture text fixed. Two ACs had no enforcer anywhere and
+  now do: AC3 (the document schema is enumerated against a delivery-debt denylist) and AC19 (the
+  exchange version gate had no test at all). AC3's new test IMMEDIATELY caught live residue — P4
+  left DELIVERY-1's five bookkeeping columns standing on `document_envelopes` with no writer and
+  no reader; they are dropped, birth-gated. The DoD line now carries the full live/in-process/gap
+  split, and the first-frame-after-session-open transport race has its own board line
+  (`DOD-SYNC-FIRSTFRAME-1`) instead of living in test comments.
   Older sweep notes (now done) follow:
   (b) D5 delete (offer/answer wire types, router cases, layer/record paths, validate, store
   offer columns); (c) D1/D2/D4 delete (delivery ledgers + workers + ack substitutes) with the
@@ -3217,3 +3233,70 @@ signed update TBS on every publish.
    way — multiple documents per exchange grows the frame.)
 3. What settles the inviter's join row once the answer frame dies with D5 — the arriving consent
    entry must become the settle signal, and the refusal path needs its equivalent.
+
+## Entry 59 — P6 reviewed: the gate was claiming a mechanism it never exercised
+
+**Date:** 2026-08-16 · **Commits:** trustless-cello `e1d04b7b`, cello-client `7032ff3`
+
+The P6 unit review returned SPEC: DEVIATIONS FOUND and HOLLOW TESTS FOUND, both blocking. Neither
+was a test-hygiene complaint; both were the milestone claiming more than it had.
+
+**Finding 1 — the removal journeys could pass with R32 reverted.** Both asserted the SURFACE (the
+removed holder's row reads `removed`) and nothing about the route. The fix was a log assertion on
+the returning daemon requiring `document_reconcile_removed` — the refusal reason the responder's
+entitlement ruling mints and nothing else does. It went RED on the first live run. What the log
+showed: `session.document.received … kind: amendment` with `source: park`, then
+`content.recover.auto.completed … recovered: 1`, then `document.entry.recorded … remove_holder`.
+The removal reaches a returning holder as an ordinary PARKED SESSION FRAME recovered from the
+relay on reconnect, well before that holder's first exchange. R32's terminal-refusal delivery is
+the backstop for when the park is gone, and with stock binaries a returning holder never reaches
+it. So the journey now asserts what it can prove — the standing flipped because the daemon
+recorded and folded A's SIGNED ENTRY, not because something wrote a status column — and R32's live
+path is a named gap on the DoD. This is the second time this milestone that asserting a claim
+disproved it; the pattern is worth keeping: a surface check plus a mechanism check, never a
+surface check alone.
+
+**Finding 2 — AC5's premise was a story.** The nudge journey's whole argument is "convergence here
+proves the commit nudge, because the background sweep could not have fired yet." True in every
+observed run (~19s against a 120s first tick) and asserted nowhere; a slower machine would have
+silently converted it into a sweep test still claiming to prove the nudge. The elapsed time is now
+checked against the interval.
+
+**Two ACs had no enforcer at all**, and adding them paid immediately:
+- **AC3 (no sender ledger)** — the document schema is now enumerated and every table and column
+  checked against a delivery-debt denylist, schema-driven so future tables are covered without
+  anyone remembering. It went red on the first run: P4 deleted the delivery worker and its ledgers
+  but left DELIVERY-1's five bookkeeping columns standing on `document_envelopes` —
+  `delivered_at`, `acked_at`, `abandoned_at`, `attempts`, `next_attempt_at` — no writer, no reader,
+  and exactly the per-recipient debt the pivot abolishes. Dropped from the CREATE, the row mapper
+  and the row interface, with `dropLegacyColumns` (generalized from the epoch dropper) removing
+  them from existing databases on open.
+- **AC19 (version refusal)** — the gate existed and was exercised by nothing. Now pinned end to
+  end: the event fires, the refusal frame actually leaves, its sentence names both versions, and
+  it is non-terminal because a version bump fixes it.
+
+**Also fixed:** AC20's last-seen half asserted (behind with no timestamp cannot be told from "we
+have never reached them") plus the absence of any pending count (R47); the online-removal journey
+retitled to what it owns, since it cannot tell the two delivery routes apart either; a
+`toBeDefined()` on a value the loop above had already thrown without, replaced with a check that
+the removed holder's row still derives the arrangement; a cadence comment describing the
+production sweep in a journey running the fast one; fossil fixture text from a deleted phase; and
+the scheduler's believed-current override clamped to the production window as a ceiling (it could
+only sensibly shorten the window, and nothing enforced that — R41 lets scheduling state delay an
+exchange, never forbid one).
+
+**The DoD line carries the split, not just the tag.** Live-proven, in-process-only, and named gaps
+are enumerated on `DOD-SYNC-P6` itself. The gaps: R32's live path, AC2's permanent kill, AC8's
+relay loss, AC11's stranded joiner, AC1's concurrent-divergence half, AC4's partition half, AC7's
+mid-exchange restart, and the receiver-side removed-sender gate (unreachable with honest binaries
+by construction). AC15 and AC16 are in-process by nature — both need a rewritten daemon.
+
+**And the transport race got a board line.** `DOD-SYNC-FIRSTFRAME-1`: a frame sent immediately
+after `cello_initiate_session` returns is sometimes discarded, the send reports success, and
+nobody is told. Third debugging session it has cost; it sits on a production path; for documents
+the pivot's own model repairs it in one sweep interval, which is why it keeps getting waved past,
+but for an ordinary first message between two agents there is no such repair.
+
+**Gates:** cello-client daemon 2194 tests / 202 files `--no-cache`, lint, typecheck, forced build —
+green. Live: 7/7 journeys, three OS processes, 14–18s each (`mp-run9.log`).
+
