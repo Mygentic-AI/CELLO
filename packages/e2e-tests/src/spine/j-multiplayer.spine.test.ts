@@ -462,12 +462,14 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
   );
 
   it(
-    "REMOVE while OFFLINE: a removed holder learns on return from the EXCHANGE — the terminal refusal delivers their own removal (SYNC-AC13, R32)",
+    "REMOVE while OFFLINE: a holder removed while down learns their own removal on return, from A's signed entry, with NOBODY acting on either side (SYNC-AC13)",
     async () => {
-      // SYNC-P4 rewrote this journey's mechanism: there is no parked amendment and no delivery
-      // ledger. A holder removed while down learns the moment their own daemon reconciles on
-      // return — the responder's terminal refusal CARRIES the removal entry and its ancestors
-      // (R32), so the removed holder derives their own removal and their surface says so.
+      // SYNC-P4 rewrote this journey's mechanism: there is no delivery ledger and nothing retries
+      // on anyone's behalf. A holder removed while down comes back, its daemon takes delivery of
+      // A's signed removal through the ordinary carrier, folds it, and the surface says removed —
+      // no agent on either side does anything. What is NOT claimed here is which door the entry
+      // came through; see the assertion below, which was written the other way round first and
+      // went red.
       const [a, b, c] = (await parties("mprecv", 3, FAST_SWEEP)) as [Party, Party, Party];
       await connect(a, b);
       await connect(a, c);
@@ -540,9 +542,8 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       expect(((await connC2.call("cello_start_agent", { name: c.name })) as { ok?: boolean }).ok).toBe(true);
       expect(((await connC2.call("cello_use_agent", { name: c.name })) as { ok?: boolean }).ok).toBe(true);
       c.conn = connC2;
-      // ── C LEARNS ON RETURN (SYNC-AC13): C's own sweep initiates an exchange; the responder's
-      // TERMINAL refusal carries C's removal and its ancestors (R32); C derives its own removal
-      // and the surface says so — nobody had to act on either side. ──
+      // ── C LEARNS ON RETURN (SYNC-AC13): C's daemon takes delivery of A's removal entry, folds
+      // it, and the surface says removed — nobody had to act on either side. ──
       const learned = await (async () => {
         const deadline = Date.now() + 120_000;
         while (Date.now() < deadline) {
@@ -559,6 +560,24 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
         learned,
         "C never learned of the removal after returning — the exchange did not deliver it",
       ).toBe(true);
+      // ── AND IT ARRIVED AS A's SIGNED ENTRY, which is the claim that matters: C's standing is
+      // DERIVED from a removal it holds and can verify, not set by a local status write. Without
+      // this assertion the surface check above passes on any mechanism that flips a column.
+      //
+      // WHICH DOOR IT CAME THROUGH, measured rather than assumed: the first cut of this assertion
+      // demanded R32's terminal refusal (`document_reconcile_removed`) and went RED — the removal
+      // entry reaches a returning holder as an ordinary parked session frame, recovered from the
+      // relay on reconnect, long before C's first exchange. That is the ordinary carrier working,
+      // and R32 is the backstop for when the park is gone (expired, or the entry was minted while
+      // no session existed). Its proof is in-process — cello-client
+      // `document-reconcile-engine.test.ts`, "a REMOVED holder gets a terminal ruling that
+      // DELIVERS" — and its absence from live coverage is a NAMED GAP on the DoD line, not a
+      // claim quietly made here.
+      expect(
+        cBack.countLines(/document\.entry\.recorded[\s\S]*?remove_holder/),
+        `C's standing flipped without C recording A's signed removal entry — the surface moved on ` +
+          `something other than the chain. Last 40 lines of C's log:\n${cBack.lastLines(40).join("\n")}`,
+      ).toBeGreaterThan(0);
 
       // ── AND THEN C SELF-CENSORS. This is the finding: with HONEST binaries the receiver-side
       // refusal (`document_sender_removed`) is UNREACHABLE end to end, because a removed holder
@@ -585,6 +604,15 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
   it(
     "NUDGE + SURFACE: an absent holder blocks nobody, and the surface says behind-with-last-seen from the display cache (SYNC-AC1, AC5, AC20)",
     async () => {
+      // AC5's premise, made STRUCTURAL. The claim below is "B converged because A's commit nudged
+      // it", and the only thing that makes that more than a story is that the background sweep
+      // COULD NOT have fired yet: these daemons run the production 2-minute cadence, whose first
+      // tick is one interval after boot. Every daemon in this journey starts after this stamp, so
+      // if the whole journey stays inside one interval, no sweep has run. It was true in every
+      // observed run (~19s against 120s) and nothing asserted it — a slower machine would have
+      // silently converted this into a sweep test still claiming to prove the nudge.
+      const PRODUCTION_FIRST_SWEEP_MS = 120_000;
+      const bootedAt = Date.now();
       const [a, b, c] = (await parties("mpfan", 3, PROD_SWEEP_FAST_BELIEF)) as [Party, Party, Party];
       await connect(a, b);
       await connect(a, c);
@@ -636,6 +664,13 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       ).toBe(true);
       // THE AVAILABILITY CLAIM: B converges with C down — one absent holder blocks nobody.
       await awaitContent(b, documentId, "base. written while C was away. ");
+      // SYNC-AC5, the premise asserted: B has the edit, and no sweep tick has happened yet on any
+      // daemon in this journey. What moved it was the commit nudge.
+      expect(
+        Date.now() - bootedAt,
+        "this journey outlived a production sweep interval — convergence above can no longer be " +
+          "attributed to the commit nudge, so AC5 is unproven whatever the surface says",
+      ).toBeLessThan(PRODUCTION_FIRST_SWEEP_MS);
 
       // ── SYNC-AC20 — the HONEST surface: with C unreachable, A shows C BEHIND with a
       // last-seen time from the display cache. No pending count exists to show, and it must
@@ -661,6 +696,28 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
         return last;
       })();
       expect(behind.sync, "A does not show the absent holder behind").toBe("behind");
+      // ── AC20 IN FULL: "behind, and here is when we last heard from them". The last-seen half was
+      // unasserted, and it is the half that makes the surface HONEST rather than merely negative —
+      // "behind" with no timestamp cannot be told from "we have never reached them". C converged
+      // once (they joined and read the document), so A holds a real time from before this write. ──
+      expect(
+        typeof behind.lastSyncedAtMs,
+        `AC20 wants behind WITH a last-seen time; got ${JSON.stringify(behind)}`,
+      ).toBe("number");
+      expect(behind.lastSyncedAtMs!).toBeGreaterThan(bootedAt);
+      expect(behind.lastSyncedAtMs!).toBeLessThanOrEqual(Date.now());
+      // R47: and the surface offers NO pending/undelivered count — there is no such number to be
+      // had once delivery records are gone, and inventing one is the dishonesty this milestone
+      // deleted. Absence asserted on the wire shape, not assumed from the type.
+      const rawRow = await (async () => {
+        const list = (await a.conn.call("cello_doc_list", {})) as {
+          documents?: Array<Record<string, unknown>>;
+        };
+        return (list.documents ?? []).find((d) => d["documentId"] === documentId) ?? {};
+      })();
+      for (const gone of ["pending", "pendingCount", "undelivered", "unacked", "pendingHolders"]) {
+        expect(Object.keys(rawRow), `the list surface still reports ${gone}`).not.toContain(gone);
+      }
 
       // ── RESTART THE PUBLISHER: pending must be derived from the LOG, not held in memory. ──
       await a.daemon.stop();
@@ -701,14 +758,19 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
   );
 
   it(
-    "REMOVE surfaces to the REMOVED holder — the terminal refusal delivers their own removal, and the survivors carry on (SYNC-AC13, R32)",
+    "REMOVE surfaces to the REMOVED holder who never went away — standing flips, the copy stays, their own publish refuses by name, and the survivors carry on (SYNC-AC13)",
     async () => {
+      // SCOPE, stated because the earlier title overclaimed it: B is up throughout, so the removal
+      // may reach them by the commit nudge OR by their next exchange, and this journey cannot tell
+      // those apart. R32's terminal-refusal delivery — the door a holder who was DOWN comes back
+      // through — is proven in the offline journey above, by the refusal reason in that holder's
+      // own log. What this journey owns is the SURFACE and the survivors.
       const [a, b, c] = (await parties("mprsurf", 3, FAST_SWEEP)) as [Party, Party, Party];
       await connect(a, b);
       await connect(a, c);
       const proposed = (await a.conn.call("cello_doc_propose", {
         peer_pubkey: b.pubkey,
-        starting_content: "base. written while C was away. ",
+        starting_content: "removal surface. ",
         admins: [a.pubkey],
       })) as { ok?: boolean; documentId?: string };
       expect(proposed.ok).toBe(true);
@@ -749,26 +811,35 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       // B's own daemon reports the removal — POLLED, because the amendment crosses a real
       // transport and a fixed sleep is a flake waiting to happen.
       const bRow = await (async () => {
-        // LONGER THAN ONE PRODUCTION SWEEP TICK: this daemon deliberately runs the 2-minute
-        // cadence (the journey's first half is the nudge proof), and the removal's repair path
-        // for a first-contact miss is the sweep.
-        const deadline = Date.now() + 180_000;
+        // MANY FAST SWEEP TICKS: this journey runs the 3-second cadence end to end, so the repair
+        // path for a lost first frame is seconds — the deadline is slack for a loaded machine, not
+        // a wait on one production interval.
+        const deadline = Date.now() + 120_000;
         let last = "";
         while (Date.now() < deadline) {
           const bList = (await b.conn.call("cello_doc_list", {})) as {
-            documents?: Array<{ documentId?: string; yourStanding?: string }>;
+            documents?: Array<{ documentId?: string; yourStanding?: string; participants?: string[] }>;
           };
           const row = (bList.documents ?? []).find((d) => d.documentId === documentId);
           if (row?.yourStanding === "removed") return row;
           last = JSON.stringify(bList);
           await sleep(1000);
         }
-        throw new Error(`B never surfaced the removal: ${last}`);
+        throw new Error(
+          `B never surfaced the removal: ${last}\n` +
+            `--- last 40 lines of B's daemon ---\n${b.daemon.lastLines(40).join("\n")}`,
+        );
       })();
 
       // B KEEPS THEIR COPY — the whole content, still readable, forever.
-      expect(await readDoc(b, documentId)).toBe("base. written while C was away. ");
-      expect(bRow, "B lost the document row entirely — removal is forward-only, not deletion").toBeDefined();
+      expect(await readDoc(b, documentId)).toBe("removal surface. ");
+      // AND KEEPS DERIVING: the row is not a husk. B still folds the arrangement it holds — which
+      // now seats A and C and not B. (The old assertion here was `toBeDefined()` on a value the
+      // loop above had already thrown without, so it could never fail.)
+      expect(
+        [...(bRow.participants ?? [])].sort(),
+        "the removed holder's row no longer derives the arrangement",
+      ).toEqual([a.pubkey, c.pubkey].sort());
 
       // B's own publish refuses NAMING the removal. NOTE the scope of this evidence: it is B's
       // LOCAL pre-check (the cooperative case), NOT the receiver-side refusal — that path needs
@@ -776,7 +847,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       // than claimed here.
       const refused = (await b.conn.call("cello_doc_write", {
         document_id: documentId,
-        content: "base. written while C was away. B tries to keep editing. ",
+        content: "removal surface. B tries to keep editing. ",
       })) as { ok?: boolean; reason?: string };
       expect(refused.ok).toBe(false);
       expect(String(refused.reason)).toContain("removed");
@@ -785,12 +856,12 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       expect(
         ((await a.conn.call("cello_doc_write", {
           document_id: documentId,
-          content: "base. written while C was away. and A and C carry on. ",
+          content: "removal surface. and A and C carry on. ",
         })) as { ok?: boolean }).ok,
       ).toBe(true);
-      await awaitContent(c, documentId, "base. written while C was away. and A and C carry on. ", 180_000);
+      await awaitContent(c, documentId, "removal surface. and A and C carry on. ", 120_000);
       // And the removed holder receives NONE of it — forward-only, from their chair.
-      expect(await readDoc(b, documentId)).toBe("base. written while C was away. ");
+      expect(await readDoc(b, documentId)).toBe("removal surface. ");
     },
     600_000,
   );
