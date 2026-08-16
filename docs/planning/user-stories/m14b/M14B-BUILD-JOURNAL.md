@@ -3300,3 +3300,87 @@ but for an ordinary first message between two agents there is no such repair.
 **Gates:** cello-client daemon 2194 tests / 202 files `--no-cache`, lint, typecheck, forced build —
 green. Live: 7/7 journeys, three OS processes, 14–18s each (`mp-run9.log`).
 
+## Entry 60 — the live fleet smoke: two honest holders permanently disagree about the text
+
+**Date:** 2026-08-16 · Document `2270cfe5058cd2a9875f403893192458367f9bf34605b83de30e50fda90ff52e`,
+Andre's three production agents (CELLO_Coder_1, CELLO_Support, Miss_Chelly) on the real GCP fleet,
+daemon 0.0.169 / cli 0.0.176 / connect 0.0.149.
+
+**The cooperative journey passed, including the parts only a live fleet can show.** Coder_1
+proposed with itself as sole admin; Support accepted; Coder_1 invited Miss_Chelly, who saw the
+DERIVED arrangement before consenting (both participants, the admin set, mesh) and then read
+content she was never sent — history by exchange. Her first edit reached Support, with whom she
+had no session for this document: the daemon opened one on demand. Coder_1 removed Support and the
+per-holder report was honest about it (`holdersNotified: {Miss_Chelly: true, Support: false}` — no
+ledger claimed a delivery that had not happened). Support then learned of its own removal with
+NOBODY acting, its surface said `removed` with the standing sentence, and its next publish was
+refused by name. The party views carried real `sync` and `lastSyncedAtMs` values throughout.
+
+**R32's terminal refusal IS reachable in production** — correcting the gap this milestone recorded
+two hours earlier from the enforcers alone. The log carries `document.reconcile.refused` with
+`document_reconcile_removed` four times, and Support's own daemon logging `refused_by_peer` with
+that reason. The enforcer never reaches it because a returning holder gets the removal from a
+parked frame first; on the fleet, a holder that stays UP and keeps exchanging hits the refusal
+directly. The DoD gap line is amended accordingly.
+
+### THE DEFECT: content admission is time-dependent, and the divergence never heals
+
+Final state, stable across five minutes and several sweep intervals:
+
+- **Coder_1:** `line one… line two… line three, after Support was removed.`
+- **Miss_Chelly:** `line one… line two… line three, after Support was removed. Support tries to keep editing.`
+
+Two honest holders, same document, same entry set, permanently different text. No exchange
+reconciles them, because each side already ruled on that envelope and the ruling is not re-run.
+
+**The sequence, from the daemon log:**
+
+1. `10:31:03` Coder_1 authors the removal entry (`a0bad871`); `10:31:04` `document.holder_removed`.
+2. `10:31:18` Coder_1's line three (`a80af570`) is admitted.
+3. Support — which has NOT yet received the removal — writes. Its own daemon accepts and publishes
+   (`290ecb8c`, `published: true`), correctly: at the governance frontier Support names, Support
+   is a participant.
+4. `10:31:24` Support records the removal (`document.removed_from`). Its next write is refused by
+   name.
+5. `10:31:25` — one second later — `document.inbound.admitted` for `290ecb8c`, while in the same
+   second the responder refuses Support's exchange terminally with `document_reconcile_removed`.
+
+**What this means, and why it is not simply "in-flight work is admitted."** Admitting an edge
+authored before its author learned of the removal is defensible on its own — the causal rule says
+an author must be seated in the fold AT THE FRONTIER THEY NAME, and Support was. The problem is
+that the OUTCOME DEPENDS ON WHEN EACH HOLDER LEARNED. The holder that already held the removal
+refused it; the holder that did not yet hold it admitted it. Same envelope, same entries
+eventually, two different documents forever. The pivot's central claim is that state is a
+deterministic fold of the entry set; content admission is a gate applied at ARRIVAL and sits
+outside that fold, so arrival order decides the text.
+
+**What I cannot prove from the log alone:** which holder logged the admit at `10:31:25` — the
+inbound events carry no `ownerAgentId`, which is its own gap on a single daemon hosting three
+agents — and whether Coder_1 refused `290ecb8c` explicitly or never received it. Both readings
+produce the observed divergence and they need different fixes, so the next step is owner-scoped
+inbound logging, not a patch.
+
+**Not fixed here.** The two candidate directions are a design call: rule content by the RECEIVER'S
+current fold (deterministic, but discards work that was legitimate when authored, and the receiver
+who was behind changes its mind about a document it already showed), or keep the causal rule and
+make admission converge by re-ruling refused content when the fold changes (keeps the work, costs
+a re-derivation path that does not exist yet).
+
+### Two more findings from the same run
+
+**Legacy documents are unreadable to this build.** Documents created before the domain bump carry
+entries signed over the old preimage. The new daemon builds the v3 preimage, so their signatures
+fail: `document.inbound.signature_invalid` fires repeatedly (39 times in this run across two old
+documents), those documents surface with `yourStanding: "unknown"` or wrongly as `invited` — a
+holder who accepted years of edits reads as merely invited, because the consent entry that seated
+them cannot be verified — and the exchange re-offers the same entries every round. Nothing
+quarantines them, so this is a permanent error loop per legacy document. With no users this is
+test data, but it is what a migration would have to handle.
+
+**An invitation notice sent on a stale session is lost, and the sender is told it was sent.** The
+invite reported `noticeSent: true`; the frame went out PARKED on a session predating the daemon
+restart; Miss_Chelly pulled it and logged `content.recover.unauthenticated` followed by
+`content.recover.refused_session.swept`. The invitation surfaced about four minutes later, once a
+fresh session was established and the ordinary exchange carried it. The system self-heals, which
+is the model working — but `noticeSent: true` is a claim about a send, not about arrival, and it
+reads to an operator as "they have it".

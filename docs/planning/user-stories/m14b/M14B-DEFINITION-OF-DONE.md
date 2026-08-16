@@ -606,11 +606,12 @@ description: >
 
   **Named gaps — not claimed, owed if they matter** (each is a live-coverage gap only; all have
   in-process proof):
-  - **R32's terminal-refusal delivery is not exercised live.** The offline-removal journey said it
-    was; asserting it turned the journey red. A returning holder takes delivery of the removal as
-    an ordinary parked session frame recovered from the relay, well before its first exchange —
-    R32 is the backstop for when the park is gone (expired, or the entry was minted with no
-    session), and stock binaries do not reach it.
+  - **R32's terminal-refusal delivery is not exercised BY THE ENFORCERS** (it IS reached in
+    production — amended 2026-08-16, Entry 60: the fleet log carries `document_reconcile_removed`
+    four times, and the removed holder's own daemon logging `refused_by_peer` with that reason).
+    The enforcer's returning holder takes delivery of the removal as an ordinary parked frame
+    recovered from the relay before its first exchange, so it never reaches the refusal; a holder
+    that stays UP and keeps exchanging does. The gap is the enforcer's, not the protocol's.
   - **AC2's permanent kill** (A killed for good, B and C carry the history between them) is not
     staged live; only the per-author mechanism is proven in process.
   - **AC8 relay-loss mid-exchange** and **AC11's stranded joiner** (the admitting admin goes
@@ -623,6 +624,34 @@ description: >
     binaries: a removed holder always learns before it can publish, so its own daemon refuses
     first. It defends against a rewritten client; unit coverage is `document-inbound.test.ts`.
 
+- **DOD-SYNC-CONVERGE-REMOVAL-1** [cello-client] — **two honest holders end up with permanently
+  different text when one of them was slower to learn about a removal.** — ❌ Found by the live
+  fleet smoke, 2026-08-16 (Entry 60), on the real GCP fleet with Andre's three agents. An admin
+  removes a holder; that holder, not yet knowing, authors one more edit naming a governance
+  frontier in which it is still seated. The holder that already held the removal refuses that
+  edit; the holder that did not yet hold it ADMITS it. Both rulings follow the causal rule
+  correctly. The result is two copies of one document that differ forever, because admission is a
+  gate applied at ARRIVAL and therefore outside the deterministic fold, and no later exchange
+  re-runs it. Observed stable across five minutes and several sweep intervals. **This contradicts
+  the milestone's central claim** — that state is a deterministic function of the entry set — for
+  content, though not for governance. NOT FIXED, and the fix is a design call, not a patch:
+  either rule content by the RECEIVER's current fold (deterministic, but silently discards work
+  that was legitimate when authored, and a receiver who was behind must retract text it already
+  displayed), or keep the causal rule and make admission converge by re-ruling refused content
+  whenever the fold changes (keeps the work; needs a re-derivation path that does not exist).
+  **Blocked on one diagnostic first:** the inbound events carry no `ownerAgentId`, so the log
+  cannot say which holder admitted the envelope — add owner-scoped inbound logging before
+  choosing.
+- **DOD-SYNC-LEGACY-DOCS-1** [cello-client] — **documents created before this release are
+  permanently unverifiable, and they loop.** — ❌ Entry 60. The pivot moved the epoch stamp out of
+  both signed preimages and bumped the domains to v3, so entries signed under the old preimage
+  fail verification on this build: `document.inbound.signature_invalid` fires on every exchange
+  (39 times in one live run across two documents), the affected documents surface as
+  `yourStanding: "unknown"` or — worse — as `invited` for a holder who actually accepted long ago,
+  because the consent entry that seated them cannot be verified. Nothing quarantines them, so each
+  legacy document is a permanent error loop. With no users this is test data on one machine; the
+  decision owed is whether old documents are migrated, quarantined with a named reason, or dropped
+  at upgrade. Silently looping is the one option that is not acceptable.
 - **DOD-SYNC-FIRSTFRAME-1** [cello-client] — **the first frame after a session opens can be lost
   with NOBODY told.** — ❌ Promoted to a board line here because it has now cost three separate
   debugging sessions and it lives on a production path, not a test one. The shape: a frame sent
