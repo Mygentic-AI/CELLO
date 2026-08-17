@@ -1716,3 +1716,89 @@ the handler lazily.
 
 `pnpm run test` **exit 0** — **3802 passed / 11 skipped** (+10) · `lint` / `typecheck` / `build`
 all **exit 0**.
+
+---
+
+## Entry 22 — The review BLOCKED it, and it was right (2026-08-17, overnight)
+
+### The verdict, in the reviewer's own words
+
+> - **SPEC: DEVIATIONS FOUND** — clause 3 and the DoD's central sentence ("SEALS them — bilateral…
+>   unilateral once the directory's delivery grace allows") are un-journaled deviations. `[blocking]`
+> - **SILENT FALLBACKS FOUND** — `session.restart_seal.resolved` reports a receipt that was not
+>   obtained. `[blocking]`
+> - **ERROR SUBSTITUTION FOUND** — `seal_interrupted_rejected_by_counterparty` stands in for six
+>   distinct causes whose detail the code already computed, and the resulting guidance advises the
+>   one action that destroys a recoverable receipt. `[blocking]`
+> - **HOLLOW TESTS FOUND** — msg-014 #2 does not survive the revert test; no test asserts the
+>   resulting session status or the existence of a receipt. `[blocking]`
+> - **REMOVALS PROVEN** — n/a, nothing removed.
+>
+> *"I am not rubber-stamping this: the diff touches seal/receipt machinery, and F1 is the finding I
+> would expect to hide exactly there. The class itself is well built — scoping, staggering, unref,
+> the post-await `#stopped` re-check are all right. **The gap is between the class and what
+> `cello_close_session` actually does for an `interrupted` session.**"*
+
+**11 findings, 4 blocking.** The tag does NOT flip.
+
+### F1 — and I had this wrong in the findings doc too
+
+The reviewer's claim contradicted my own earlier reading, so I checked it rather than taking it.
+**It is right and I was wrong**, and the same error is in §3 of
+[[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]], now corrected.
+
+`cello_close_session` on an **interrupted** session takes a branch that **every exit returns from**.
+The unilateral seal lives in the *active* branch below it and is structurally unreachable. The
+interrupted branch's success type is literally `{ ok: true; status: "seal_interrupted_pending" }`,
+and the handler's own comment says so: *"THE BILATERAL COMMITMENT IS NOT THE SEAL… an interrupted
+session reached a mutually signed record that nobody was ever asked to notarize."*
+
+Verified the responder side too: `inbound-seal-request.ts` persists its commitment, acks, and
+**never submits a seal leaf to the relay**. The relay notarizes only when both sides have posted, so
+one side's leaf can never be enough.
+
+**So the resolver as built would have moved 137 receipt-less sessions into
+`seal_interrupted_pending` — the bucket the DoD line itself declares out of scope because nothing
+can leave it — and logged `resolved` for every one.** Worse than not shipping it.
+
+**This also explains the 26 stuck sessions §7 called unestablished.** They are not waiting for
+anything. Nothing escalates them, and `cello_close_session` refuses them by name.
+
+### What it unblocks — the fix is already half-present
+
+The interrupted branch **already calls `submitSealLeaf`** (inside its best-effort `notarize`) and
+throws away everything but a log line. That result carries `reportedRootHex` and `sequenceNumber` —
+**exactly the two values the active branch's unilateral escalation runs on.** So the escalation is
+reachable from the interrupted path with a shared helper, not a rewrite.
+
+Filed as **`DOD-M12B-INTERRUPTED-ESCALATE-1`**, its own line because it is a pre-existing defect this
+unit merely exposed: *an interrupted session cannot get a receipt today even when a human closes it
+by hand.* That is Andre's complaint — *"most of the time we can't even close them"* — stated in code.
+
+### The other blocking findings
+
+- **F2** `retry_after_seconds` is produced only inside the active branch, so its one named consumer
+  can never reach it. Falls out of F1's fix.
+- **F3** msg-014's scope test does not survive its own revert test: the default 5 s stagger keeps the
+  counterparty row outside the 2.5 s assertion window, so widening the query leaves it green. It
+  passes for the wrong reason.
+- **F4** the give-up guidance is a fixed string advising force-abandon — and for
+  `session_already_sealed` the close handler's own guidance says in capitals *"Do NOT reach for
+  force"*, because forcing there permanently forfeits a recoverable half.
+- **F5** six distinct causes collapse into one label whose detail (`your_leaf_count`,
+  `their_leaf_count`, `diverging_leaf_index`) was computed and then dropped one function later.
+
+Non-blocking: **F6** give-ups are in-memory, so a machine restarting 5.6×/day re-tries a hopeless
+session forever; **F7** no `message_count > 0` filter, so dead handshakes get a ceremony each and are
+then made visible; **F8** the readiness gate is inert on exactly this path (`#witnessedSeq` is not
+persisted) though the counterparty's leaf-count check still backstops it; **F9** `stop()` does not
+await an in-flight seal, and severing signaling one line later can leave the two sides permanently
+divergent; **F10** the defaults are never exercised; **F11** no timeout on a close that never settles.
+
+### Cleared by the reviewer — do not re-chase
+
+No counterparty-reachable path writes `interrupted_by='local'` (three producers, all local). The
+NULL→'local' backfill is a test seam, not production. No content is destroyed —
+`seal_interrupted_pending` is excluded from terminal disposition, so held frames are not annexed.
+Per-agent signaling is created at boot for every loaded agent, so the 30 s delay does buy a
+connected stream.
