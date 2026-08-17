@@ -1391,7 +1391,13 @@ error raised anywhere — each side saw an empty inbox and assumed the other had
 
 **FIXED 2026-08-17** — cello-client branch `m12b/reconcile-removed-holder` (`0650181` removed-holder
 check, `b1322c2` refusal backoff), full gate green. **Verified live on the fixed build: a message
-delivered directly, 0 parked, 0 held on the new session, 0 refusals.** Existing sessions carrying a
+delivered directly, 0 parked, 0 held on the new session, 0 refusals.**
+
+**⚠️ RE-MEASURED 20 MINUTES LATER, AND THAT WAS A SNAPSHOT.** The same session then showed **2 holds
+and 20 direct-send failures**. The refusal storm stays fixed (0, against 321) and acknowledgements
+now work (31 sent / 31 acked, against 36 straight failures) — but **the gap still opens, just far
+more slowly: 2 holds in 20 minutes instead of 367 in a morning.** This fix removed the ENGINE, not
+the DEFECT, and this item must not be read as "messaging works now". Existing sessions carrying a
 gap are NOT repaired and are not expected to be.
 
 **Still open, and now the highest-value line in M12B:** messages were reaching the relay instead of

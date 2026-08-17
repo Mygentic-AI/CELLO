@@ -311,6 +311,36 @@ Cause fixed in cello-client branch `m12b/reconcile-removed-holder` (`0650181` re
 0 parks, 0 holds on the new session, 0 refusals.** Every hold still appearing belongs to a
 pre-existing session carrying a permanent gap — which is the predicted behaviour, not a failure.
 
+### ⚠️ THE SAME SESSION, 20 MINUTES LATER — the first reading was a snapshot, not a steady state
+
+Re-measured on the SAME fixed build and the SAME test session (`de55efd6`) after ~20 minutes of
+ordinary running. **The flood fix removed the ENGINE. It did not remove the DEFECT.**
+
+| | at first send | ~20 min later |
+|---|---|---|
+| holds on the test session | 0 | **2** (gap of 1 each, 08:22:55 and 08:27:56) |
+| `session.content.direct.send.failed` | 0 | **20** |
+| document frames on the session | 0 | 51 |
+| canonical positions consumed | — | 54 |
+| `session.content.sequence_behind_tree` | 0 | 10 |
+| reconcile refusals | 0 | **0** ← the storm fix HOLDS |
+| acks sent / acknowledged | — | **31 / 31** |
+
+**Read this before trusting the ✅ tags anywhere in this milestone.** "A message delivered directly
+with zero holds" was true at the moment it was measured and is NOT the steady state. What is true:
+
+- The refusal storm is **gone** and stays gone (0 refusals, against 321 before).
+- Acknowledgements now **work** — 31 sent, 31 acknowledged, against 36 consecutive failures before.
+  So the stream defect is INTERMITTENT, not total, which is new information: Entry 2 saw it fail
+  every time.
+- The remaining document traffic on this session is **legitimate** sync between agents that really
+  do share documents — not the storm.
+- The gap still opens, just far more slowly: 2 holds in 20 minutes instead of 367 in a morning.
+
+**So the milestone is not closed by the flood fix, and nobody should read it that way.** The
+remaining producer is the stream defect below, now with a live reproduction on the fixed build:
+20 failures on one session in 20 minutes, each one named in the log by `7d36cfb`.
+
 ### What this does to Tier A
 
 **The submission id would not have fixed this.** Document frames are not retransmissions; each is a

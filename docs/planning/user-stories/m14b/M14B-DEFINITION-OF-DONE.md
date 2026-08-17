@@ -748,8 +748,11 @@ description: >
 
 - **DOD-SYNC-REFUSAL-BACKOFF-1** [cello-client] — **the sweep asks forever, and it took basic
   messaging down with it.** — ✅ FIXED 2026-08-17, cello-client branch `m12b/reconcile-removed-holder`
-  (`0650181`, `b1322c2`); full gate green; verified live (0 refusals after the fix, against 321
-  before).
+  (`0650181`, `b1322c2`); full gate green; verified live — **0 refusals after the fix, against 321
+  before, and that result holds.** Scope note: this fixed the RETRY STORM, and the messaging defect
+  it was driving is NOT fully closed by it — the same session later took 2 holds and 20 direct-send
+  failures from a separate stream defect ([[M12B-DEFINITION-OF-DONE]] `DOD-M12B-ACK-1`). Do not read
+  this ✅ as "messaging works now".
 
   **Two defects, both in this tier's code.**
   1. `sweepTargets` derived its targets from the OTHER seats on a document and never asked whether

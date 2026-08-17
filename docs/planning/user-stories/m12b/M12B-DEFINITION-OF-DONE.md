@@ -93,7 +93,9 @@ description: >
 > agents still could not have held a conversation.
 >
 > The document-side cause is FIXED (`DOD-SYNC-REFUSAL-BACKOFF-1` in [[M14B-DEFINITION-OF-DONE]])
-> and a live send then **delivered directly with zero holds**. Tier A remains correct work — a
+> and a live send then delivered directly with zero holds — **though re-measuring the same session
+> 20 minutes later found 2 holds and 20 direct-send failures. The flood fix removed the ENGINE, not
+> the DEFECT; the milestone is NOT closed by it (Entry 6).** Tier A remains correct work — a
 > retransmission can still burn a position — but it is no longer what stands between an operator
 > and a working conversation. **Priority order is restated under "Work order" below.**
 
@@ -112,7 +114,10 @@ description: >
   canonical positions**. The frames are not resubmissions — each is a distinct send taking its own
   position, correctly (`document-delivery-transport.ts` `sendBytes` → `sendContent` → `appendLeaf`,
   deliberate since `f75ea09`). The retry queue was NOT the burner. Cause fixed in M14B
-  (`DOD-SYNC-REFUSAL-BACKOFF-1`); live re-test after the fix delivered directly with **0 holds**.
+  (`DOD-SYNC-REFUSAL-BACKOFF-1`); live re-test after the fix delivered directly with 0 holds — but
+  **that was a first-minute snapshot, NOT the steady state**: the same session took 2 holds and 20
+  `session.content.direct.send.failed` over the next 20 minutes. The flood fix removed the ENGINE,
+  not the DEFECT. See Entry 6's follow-up table before trusting any ✅ here.
 
 - **DOD-M12B-TRACE-2** [cello-client + trustless-cello] — map every producer and consumer of a
   "position" in the messaging spine, and state which counter each one is. Known so far and to be
