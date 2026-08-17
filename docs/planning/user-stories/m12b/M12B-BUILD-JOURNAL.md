@@ -1612,3 +1612,101 @@ plan in §5 of that document.
 ### Gate
 
 `pnpm run test` **exit 0** — 3792 passed / 11 skipped · `lint` / `typecheck` / `build` **exit 0**.
+
+---
+
+## Entry 21 — Where interrupted sessions actually come from, and the seal that ends them (2026-08-17, overnight)
+
+**Status: IMPLEMENTED, review in flight.** No tag flips in the DoD until the reviewer's verdict is
+quoted here.
+
+### The measurement that re-ranked the plan
+
+The three-case plan in [[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]] §5 was
+written from code reading. Before building case A, the cases were counted against the operator's own
+405,925-record log, using event names that have existed since M7 — so this is what the binary Andre
+is running would have logged.
+
+| where an interruption came from | count |
+|---|---|
+| **our own daemon shutdown** — `session.node.destroyed reason=interrupted` immediately after `daemon.stopped` | **114** |
+| the operator's own `cello_set_agent_offline` | 2 |
+| unattributed, at startup | 2 |
+| relay said the counterparty went (`source=relay_frame`) | **0** |
+| our relay witness stream closed (`source=stream_close`) | **0** |
+| the boot sweep finding what a killed process left (`source=daemon_restart`) | **0** |
+
+**97% is us stopping.** 95 restarts in seventeen days, and the boot sweep found nothing to sweep at
+any of them because the shutdown sweep had already flipped everything on the way down. Nothing was
+ever interrupted by a laptop close, a wifi hop, a relay redeploy, a signaling reconnect, or a
+counterparty hanging up.
+
+**So case C is not the rarest of the three — it is the only one that has ever happened**, and the
+build order became C, then A, then B. Recorded in §1 of the findings doc.
+
+### Two premises of cases A and B were wrong, and correcting them makes them smaller
+
+Traced through `session-node-manager.ts`:
+
+1. **The standing receiver is NOT rebuilt on signaling reconnect.** The ensure returns immediately
+   when the agent already has a receiver, so the reconnect path is a no-op on a healthy one. There
+   are exactly two rebuild triggers: the 30-second watchdog finding the circuit-relay reservation
+   lost, and a one-shot upgrade when relay endpoints first arrive. **Four comments in the code claim
+   otherwise and have drifted from it.**
+2. **The peer id a counterparty holds belongs to the SESSION NODE, not the receiver.** The receiver
+   is *promoted* into the session node at establishment and a fresh receiver is built behind it, so
+   the id the counterparty was told is dedicated to that one session and does not churn under them.
+
+**The damage is therefore not identity churn — it is that a torn-down session node is never rebuilt
+by anything.** Which lands the fix exactly on Andre's ruling that a seed must be per-SESSION: a
+rebuilt node gets a fresh keypair, so we could dial them and they could never dial us.
+
+### The unit — `DOD-M12B-RESTART-SEAL-1`
+
+Commit **`91801ec`** in cello-client.
+
+A session our own stop orphaned now seals itself instead of waiting for a force-abandon that throws
+the receipt away. Startup enqueues every row with `status='interrupted' AND interrupted_by='local'`,
+and each one goes through the **existing** close path — no new ceremony, bilateral first, unilateral
+once the directory's grace allows.
+
+**The refusal now carries its own deadline as data.** `seal_unilateral_too_early` always knew
+exactly how long was left; the only consumer of that number was a sentence asking a human to come
+back in eleven minutes. It is returned as `retry_after_seconds` and becomes a scheduled retry.
+
+**Scope is the entire safety argument.** `interrupted_by` is the discriminator, and it only exists
+because of yesterday's cap work:
+
+| label | auto-sealed? | why |
+|---|---|---|
+| `local` | **yes** | boot sweep, shutdown sweep, the operator's own kill switch. Unresumable, and ours to explain. |
+| `counterparty` | no | they hung up; the operator may still want to wait. |
+| `relay_stream_close` | no | our witness link ended; the session may be fine. |
+| `NULL` | no | predates the column, so the cause is UNKNOWN — which is a reason not to notarize, not a licence to. |
+
+That keeps **SI-001** intact. It reads *"there is NO auto-seal on a session_interrupted receipt… a
+daemon that sealed on its own would notarize a conversation nobody chose to end"* — a ruling about a
+**live** interruption, where the operator is at the keyboard. It still governs that case. Andre's
+later ruling governs the restart case: *"do not resume. Resolve… make it a seal, not a force-close."*
+
+Bounded and quiet: serial with a stagger (a seal is a directory ceremony, and hundreds of orphans
+must not become hundreds of simultaneous ceremonies), a 30-second wait after boot so it does not
+spend an attempt on a directory connection still being established, five attempts then a give-up
+that names the manual exit, and `stop()` wired into the shutdown cancel block — a shutdown that
+keeps opening ceremonies is not draining.
+
+### The wiring is proven, not assumed
+
+Every review in this milestone found the same shape: a unit whose class works and whose call site
+could be deleted with the suite still green. So `msg-014` constructs no resolver at all. It
+pre-seeds an orphan, boots the **real `startDaemon`**, and swaps the live `cello_close_session`
+entry in the handler map for a spy — reachable only if the daemon built it, started it, and resolved
+the handler lazily.
+
+**Revert test RUN, not asserted:** deleting `restartSealResolver.start()` turns that case red
+(`exit=1`, "a session OUR OWN stop orphaned…" fails), and restoring it turns it green.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3802 passed / 11 skipped** (+10) · `lint` / `typecheck` / `build`
+all **exit 0**.
