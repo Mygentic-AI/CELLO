@@ -172,17 +172,22 @@ status fields that lied.
 
 | Rank | What it blocks | Item | Board line |
 |---|---|---|---|
-| **1** | A send is refused and doing exactly what the error says fails forever — six consecutive failed sends. Sending works again. | 32 | `DOD-M12B-SIGNAL-GUIDANCE-1` |
-| **2** | You cannot trust what the inbox says about a session; already-accepted sessions report as pending. Cost hours, and it lies precisely when something is wrong. | 26 | `DOD-M12B-INBOX-TRUTH-1` |
-| **3** | You believe you are talking to a person when you are not — the away reply is indistinguishable from a human answer. | 27 | `DOD-M12B-AWAY-MARK-1` |
-| **4** | Background document sync floods the spine, rings the doorbell, pushes your phone, and resets its own backoff — the amplifier behind the storm. | 23 | `DOD-M12B-DELIVERY-QUIET-1` |
-| **5** | **THE BLOCKER — messages park instead of delivering, and acknowledgements never arrive.** One error, *"Cannot write to a stream that is closed"*, breaks both. | 22 | `DOD-M12B-ACK-1` |
+| **1** ✅ | A send is refused and doing exactly what the error says fails forever — six consecutive failed sends. Sending works again. | 32 | `DOD-M12B-SIGNAL-GUIDANCE-1` |
+| **2** ✅ | You cannot trust what the inbox says about a session; already-accepted sessions report as pending. Cost hours, and it lies precisely when something is wrong. | 26 | `DOD-M12B-INBOX-TRUTH-1` |
+| **3** ✅ | You believe you are talking to a person when you are not — the away reply is indistinguishable from a human answer. | 27 | `DOD-M12B-AWAY-MARK-1` |
+| **4** ✅ | Background document sync floods the spine, rings the doorbell, pushes your phone, and resets its own backoff — the amplifier behind the storm. | 23 | `DOD-M12B-DELIVERY-QUIET-1` |
+| **5** | **THE BLOCKER — messages park instead of delivering, and acknowledgements never arrive.** One error, *"Cannot write to a stream that is closed"*, breaks both. **Measured 2026-08-17: 115 occurrences across THREE sites, not two — the third is the directory signaling stream that keeps the agent reachable at all. And a session whose every write fails goes on reporting `alive` for 70 minutes (one has never stopped). Evidence: M12B Entry 10.** | 22 | `DOD-M12B-ACK-1` |
 | **6** | Content you received is destroyed, so one hiccup kills a conversation permanently. Turns fatal into recoverable. | 24 | `DOD-M12B-STRAND-1` |
 | **7** | Your agent stops accepting sessions entirely — sessions that can neither seal nor be destroyed fill the per-sender cap. | 30 (+21) | `DOD-M12B-SEAL-STUCK-1` |
 | **8** | Nothing enforces that a message lands where the relay says. The guard that catches this whole class rather than one burner. | 25 | `DOD-M12B-INDEX-1` |
 | **9** | One connection blip degrades that conversation for life, silently, because nothing ever re-dials. | 28 | `DOD-M12B-REDIAL-1` |
 | **10** | Cleaning up a stuck session makes it worse — the far side is never told and keeps calling. The cause of the 2026-08-17 storm. | 29 | `DOD-M12B-ABANDON-NOTIFY-1` |
 | **11** | The daemon can refuse to exit, so recovery needs manual intervention. | 31 | `DOD-M12B-SHUTDOWN-1` |
+
+> **✅ RANKS 1–4 ARE DONE (2026-08-17)** — built, reviewed by `cello-unit-reviewer`, every
+> finding fixed, merged to cello-client `main` at `47fe15b`, gate green on exit code. **Not
+> published** — no operator has them, including Andre's own running daemon. Verdicts quoted in
+> M12B Build Journal Entry 9. Rank 4's first build did not work at all and was caught by review.
 
 **Ranks 1–4 are deliberately ahead of the blocker at 5.** They are all small, they touch different
 files from the send path so they cannot collide with it, and together they buy a quiet spine and
