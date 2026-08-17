@@ -482,6 +482,33 @@ description: >
   frame and turns the case red. Its counterweight is pinned too — an ordinary interrupted close must
   still escalate, or a guard keyed on "the flow succeeded" would stop every escalation. → Entry 32
 
+- **DOD-M12B-ANNOUNCE-BLINDS-RESERVATION-1** [cello-client] — **`CELLO_ANNOUNCE_ADDRS` makes every
+  reservation check blind, and the code comment says the EC2 demo agent is exactly that case.**
+  Traced against the libp2p sources by the reservation review: when `addresses.announce` is
+  configured, libp2p's address manager **returns only the announce addresses and early-returns** —
+  transport addresses, including the circuit-relay listener's, are dropped. `CelloNode.listenAddresses()`
+  is `getMultiaddrs()`, and **every** reservation check reads it: `#startReceiverNode`'s *"the only
+  proof that counts"*, `circuitAddrs`, the watchdog's `stillAdvertising`, and
+  `setDirectoryRelayEndpoints`' early return. So for a publicly-hosted agent a **granted** reservation
+  is invisible, every candidate reads as refused, and the node falls back to plain TCP.
+  **`DOD-M12B-RESERVATION-RETRY-1` makes it worse in one specific way**: the new ladder burns five
+  further attempts on such an agent, each pinning a relay slot for its full TTL, then reports
+  `unreachable` — the scarce-resource hazard, aimed at an agent that already had what it was asking
+  for. Latent today (the env var is set nowhere in-repo). Fix: `appendAnnounce` rather than
+  `announce`, which libp2p supports, so the circuit address survives; or read the grant from the
+  reservation store rather than the announced address list. — ❌
+
+- **DOD-M12B-TESTS-NOT-TYPECHECKED-1** [cello-client] — **no test file in this repo is type-checked,
+  and it has already let a defect ship.** Every package's `tsconfig.json` carries
+  `"exclude": […, "src/__tests__"]`, and `typecheck` is `tsc --build`. Evidence, not theory: pass 1
+  of the reservation retry called `ensureStandingReceiverForAgent("alice", "corr")` in three places
+  against a signature that has taken ONE parameter since before that commit. **A TS2554 shipped
+  through a gate that reported exit 0.** The general consequence is that a test asserting on a field
+  that does not exist, or calling a method that was removed, is invisible to the gate — it fails only
+  if vitest happens to execute that line, which is exactly the hollow-test shape every review this
+  milestone has hunted. Fix: a `tsconfig.test.json` per package including `src/__tests__` with
+  `noEmit`, added to the `typecheck` script. — ❌
+
 - **DOD-M12B-SIGNALING-TEST-FLAKE-1** [cello-client] — 🅿️ **a transport test fails under full-suite
   load and passes in isolation.** `core/transport/src/__tests__/signaling-manager.test.ts` →
   *"AC-005: Two-tier model — MCP immediate rejection, internal ops queued and drained"* failed once
