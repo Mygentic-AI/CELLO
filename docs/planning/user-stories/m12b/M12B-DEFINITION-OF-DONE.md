@@ -354,14 +354,33 @@ description: >
   against the per-sender cap (launch-triage item 21), so a spine defect converts directly into "this
   agent stops accepting sessions". The seal refusal is right; what is missing is any path OUT — the
   session is stuck between "cannot seal" and "must not be destroyed". Depends on
-  `DOD-M12B-STRAND-1`. — ❌
+  `DOD-M12B-STRAND-1`. — ✅ **PROVEN 2026-08-17** — both status surfaces carry a three-state
+  `sealReadiness` (`ready` / `blocked` / `unknown`) with the two numbers separated into what each
+  actually is, plus how long the oldest message has waited. The path OUT is force-abandon, which
+  rank 6 made non-destructive (holds move to the annex) and rank 10 made bilateral. Reviewer found
+  **4 blocking** in the first build, all fixed (`9e6ad50`): it reported transient as permanent, so a
+  healthy mid-conversation window looked identical to a stranded session (*"a warning on everything
+  is a warning on nothing"*); it counted one message twice, labelling the copy on our own disk
+  "never received"; it reported `null` — safe to close — for a session whose witness state predates
+  this daemon, where a close is terminal; and one unreadable session row took the whole status
+  response down, surfacing as `daemon: "broken_shutdown"` on a healthy daemon. Also: reading status
+  was DELIVERING messages (the probe's hydration was wired to release), so a diagnostic advanced the
+  chain. → Entry 14
 
 - **DOD-M12B-SHUTDOWN-1** [cello-client] — **the daemon can refuse to exit.** `cello logout`
   reported *"Daemon shutdown did not complete within 5s … it may be stuck closing sessions or its
   database"*, and the process was still alive **30+ seconds** later. The log shows it was still
   running `document.reconcile.sweep` **during shutdown**. The socket was already removed, so from the
   operator's side the daemon was down while the process ran on; it took a signal to exit. A shutdown
-  that keeps starting new outbound work is not draining. — ❌
+  that keeps starting new outbound work is not draining. — ✅ **PROVEN 2026-08-17** — the sweeper
+  refuses at every entry that starts work, inside its own party loop and between batches, and the
+  refusal is at the DOCUMENT LAYER's choke point so all four callers are covered (the scheduler was
+  only one). **And the actual hang is fixed:** the reviewer established that a detached, unref'd
+  sweep cannot hold the process by itself — it can only block an awaited teardown step, and those
+  had no deadline. Stopping the session nodes and closing the gateway socket are now bounded and say
+  so when they expire. Reviewer found **3 blocking**, all fixed (`963a853`), including that nothing
+  proved `daemon.stop()` called the sweeper's stop at all — *"one deleted line silently reverts the
+  whole unit"*. → Entry 14
 
 - **DOD-M12B-SIGNAL-GUIDANCE-1** [cello-client] — **the `missing_signal` error instructs the caller
   to do the wrong thing.** `cello_send` requires a `signal` PARAMETER (`over` / `standby` / `wrap`).

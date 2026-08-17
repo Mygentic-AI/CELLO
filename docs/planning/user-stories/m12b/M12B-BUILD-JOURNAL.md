@@ -1076,3 +1076,83 @@ deleting verified content on a timer is the invariant this unit exists to protec
 `pnpm run test` **exit 0** — 3756 passed / 11 skipped · `lint` **exit 0** · `typecheck` **exit 0** ·
 `build` **exit 0**. A first gate run **failed (exit 1)** on four unguarded uses of the nullable db
 handle, fixed before commit.
+
+---
+
+## Entry 14 — Ranks 7 and 11: both reviewed, both were fixing less than they claimed (2026-08-17)
+
+### Rank 7 — `DOD-M12B-SEAL-STUCK-1`: the surface built to end a lie was telling three of its own
+
+Built as a two-state `sealBlocked` on both status surfaces. The reviewer returned **4 blocking**,
+all fixed in `9e6ad50`, and every one of them was the same class of defect this milestone keeps
+finding — a counter reported as something it is not.
+
+1. **Transient reported as permanent.** The relay witnesses a counterparty leaf a moment *before*
+   the content arrives, so an ordinary mid-conversation window rendered identically to a session
+   stranded since breakfast. Worse, the close path *drains parked relay content and re-checks*
+   before refusing — the status path did not — so many of the sessions flagged would have closed
+   fine. Reviewer: *"an operator with 25 stuck sessions and 3 live ones sees 28 flagged. That is the
+   exact failure the test's own assertion message names."* Now carries `oldestHeldMs`, and says
+   plainly that a close may still succeed.
+2. **One message counted twice.** `missingLeaves` is `#witnessedSeq.size`, and a HELD frame keeps
+   its witness entry — so one message showed as one missing *and* one held, with the half labelled
+   "never received" sitting on our own disk. Split into `awaitingArrival` and `heldBehindGap`.
+3. **Health claimed that could not be verified.** `#witnessedSeq` is memory-only, so after a restart
+   a genuinely stranded session read as `null` — safe to close. A close on a short chain returns
+   `leaf_count_mismatch`, which is terminal. There are three states now, and *"we cannot tell"* is
+   one of them.
+4. **One bad row took the daemon's whole status response down.** The probe touches the database per
+   session; an unguarded throw rejected the response, after which the CLI found the singleton lock
+   held and printed `daemon: "broken_shutdown"` — telling the operator their healthy daemon had
+   failed to stop. Guarded per row; a failure yields `unknown`, never `ready`.
+
+Plus one the reviewer found that was not in the brief: **reading status was delivering messages.**
+The probe hydrates durable holds so its count is right, and hydration had been wired to also
+release them — so `cello status` appended leaves, advanced the session root, wrote transcript rows
+and rang the doorbell. Hydration and release are now tracked separately, so a read can neither
+mutate the chain nor consume the release the next real delivery was going to perform.
+
+The tests were hollow in the way that matters: both counters were equal in the fixture, so swapping
+them passed. The fixture now makes them differ, asserts the whole object, adds the interrupted
+surface (which had **no test at all**), pins the restart case, and drives the real IPC `status` call
+rather than the in-process function — an unrendered field is an invisible one.
+
+### Rank 11 — `DOD-M12B-SHUTDOWN-1`: it was fixing a contributor, not the cause
+
+The reviewer's sharpest finding is that the sweep **cannot hold the process by itself**: it is
+detached, its timer is `unref()`ed, and the binary exits from a `finally`. It can only delay exit by
+blocking an awaited teardown step — *and none of those steps had a deadline.* So the first build
+stopped real damage and did not close the DoD line it was named for.
+
+Fixed in `963a853`:
+- **Both unbounded waits are bounded** and announce themselves on expiry. `node.stop()` awaited
+  libp2p with no timeout, and the standing receivers were stopped **sequentially**, so five agents
+  meant five chances for one stuck teardown to hold the exit. The gateway socket close awaited a
+  clean FIN round-trip a half-open socket never completes — and it sits *ahead* of the sidecar's own
+  SIGTERM.
+- **The guard was in the wrong place.** At the sweep's entry it stops the NEXT agent while the one
+  being swept dials every remaining party — on a single-agent daemon, the measured case, that bought
+  nothing. Now inside the party loop and between batches.
+- **The scheduler is one of FOUR callers.** `nudgeSeats` and both invite notices reach
+  `initiateReconcile` directly, and every document verb is still served while the daemon tears down
+  because the IPC server is stopped last. The refusal moved to the document layer's choke point.
+- **Nothing proved the daemon called it.** Reviewer: *"one deleted line silently reverts the whole
+  unit."* The in-process daemon test now asserts `document.reconcile.stopped` on a real stop, and
+  fails when the wiring is removed.
+
+**Corrected in the record:** the rank-11 commit claimed a first gate run caught a startup race. It
+did not — that call cannot land before the scheduler is wired. The optional call is a TypeScript
+narrowing requirement and the comment now says so. The claim is withdrawn here rather than left
+standing.
+
+### Gate on the committed tree (§7)
+
+Rank 7 fixes: test **exit 0**, 3762 passed / 11 skipped. Rank 11 fixes: test **exit 0**, 3768
+passed / 11 skipped. `lint` / `typecheck` / `build` **exit 0** on both.
+
+### Residual, stated not deferred
+
+Rank 11 leaves the **inbound IPC surface open until last** — document verbs are still served during
+teardown. The choke point means they can no longer start a reconcile, but they can still be
+accepted. Bounding that is a shutdown-ordering change with its own blast radius and is not part of
+this line.
