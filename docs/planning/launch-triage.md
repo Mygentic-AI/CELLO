@@ -159,6 +159,51 @@ description: >
 
 # Launch Triage
 
+# 🔴 TOP OF THE LIST — SESSIONS DO NOT WORK (2026-08-17, Andre)
+
+**The core problem is that we cannot conduct a session at all.** Everything in this block was found
+on 2026-08-17 and all of it is being cleared today. **This block outranks the 2026-08-04
+ranking below**, which is otherwise untouched and still stands on its own terms.
+
+Ordered by what returns us to two agents holding a conversation — and sequenced so each step is
+debuggable. The organising principle came out of 2026-08-17 itself: **make the surfaces truthful and
+the spine quiet BEFORE debugging the hard one.** Most of that day was lost to a noisy spine and
+status fields that lied.
+
+| Rank | What it blocks | Item | Board line |
+|---|---|---|---|
+| **1** | A send is refused and doing exactly what the error says fails forever — six consecutive failed sends. Sending works again. | 32 | `DOD-M12B-SIGNAL-GUIDANCE-1` |
+| **2** | You cannot trust what the inbox says about a session; already-accepted sessions report as pending. Cost hours, and it lies precisely when something is wrong. | 26 | `DOD-M12B-INBOX-TRUTH-1` |
+| **3** | You believe you are talking to a person when you are not — the away reply is indistinguishable from a human answer. | 27 | `DOD-M12B-AWAY-MARK-1` |
+| **4** | Background document sync floods the spine, rings the doorbell, pushes your phone, and resets its own backoff — the amplifier behind the storm. | 23 | `DOD-M12B-DELIVERY-QUIET-1` |
+| **5** | **THE BLOCKER — messages park instead of delivering, and acknowledgements never arrive.** One error, *"Cannot write to a stream that is closed"*, breaks both. | 22 | `DOD-M12B-ACK-1` |
+| **6** | Content you received is destroyed, so one hiccup kills a conversation permanently. Turns fatal into recoverable. | 24 | `DOD-M12B-STRAND-1` |
+| **7** | Your agent stops accepting sessions entirely — sessions that can neither seal nor be destroyed fill the per-sender cap. | 30 (+21) | `DOD-M12B-SEAL-STUCK-1` |
+| **8** | Nothing enforces that a message lands where the relay says. The guard that catches this whole class rather than one burner. | 25 | `DOD-M12B-INDEX-1` |
+| **9** | One connection blip degrades that conversation for life, silently, because nothing ever re-dials. | 28 | `DOD-M12B-REDIAL-1` |
+| **10** | Cleaning up a stuck session makes it worse — the far side is never told and keeps calling. The cause of the 2026-08-17 storm. | 29 | `DOD-M12B-ABANDON-NOTIFY-1` |
+| **11** | The daemon can refuse to exit, so recovery needs manual intervention. | 31 | `DOD-M12B-SHUTDOWN-1` |
+
+**Ranks 1–4 are deliberately ahead of the blocker at 5.** They are all small, they touch different
+files from the send path so they cannot collide with it, and together they buy a quiet spine and
+honest surfaces to debug rank 5 on. Debugging rank 5 without them is what 2026-08-17 was.
+
+**Verification gate after rank 5:** re-run the 20-minute live measurement. The baseline to beat is
+**55 reconcile attempts / 2 holds / 20 direct-send failures**. If holds do not reach zero, stop —
+ranks 6 onward assume rank 5 worked.
+
+**Dependency notes.** 7 depends on 6 (a session that can resolve its gap can seal). Ranks 5–9 all
+touch the session manager and must be sequential, one commit each. Ranks 1–4 are independent of each
+other and of everything else. **One publish at the end, not eleven** — every item here is
+client-side.
+
+**Already FIXED on 2026-08-17 and therefore not ranked:** the document sync retry storm
+(`DOD-SYNC-REFUSAL-BACKOFF-1`, item 22's engine), the parked send that recorded no reason, and the
+unlogged counterparty identity. Item 22 stays open only for its stream defect, which is rank 5.
+
+---
+
+
 **Refreshed 2026-07-31, restructured 2026-08-04, re-ranked 2026-08-04 (Andre).** The ranking below
 is now the decided order. Four items (multi-device, endorsement retry, the floor, endorsement
 withdraw/refuse/quota) moved to **Post-launch — needed eventually, not for launch**. Three scoping
