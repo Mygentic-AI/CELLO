@@ -509,6 +509,20 @@ description: >
   unsealable carry was being answered "wait, a better receipt is coming" — plus the same
   reason-discarding defect surviving on the sibling branch. Both fixed. → Entries 27, 29
 
+- **DOD-M12B-RELAY-SLOTS-1** [trustless-cello] — 🅿️ **PARKED — relay-side, and it needs Andre to
+  decide whether to touch the fleet.** The other half of `RESERVATION-RETRY-1`. Every one of the
+  **2,215** measured `relay.rejected` events is `relay_granted_no_reservation` — the relay completes
+  the circuit handshake and grants nothing, which is what a relay out of reservation slots does. And
+  **2,472** `reservation.lost`, all `relay_connection_gone`: the client's connection to the relay
+  keeps dying, and each reconnect asks for a slot the relay may still be holding for the previous
+  one (a reservation is held for its full TTL even after the client disconnects). **The client-side
+  retry cannot fix a supply problem** — it only stops an agent being written off permanently.
+  Establish: what the per-relay slot limit is, how many are actually in use, and whether the TTL plus
+  the reconnect rate means one agent occupies several slots at once. **A 1,361-rejection spike on
+  08-14** against a 15–60/day baseline is the obvious place to start — something changed that day.
+  Until this is understood, an agent behind NAT is intermittently dialable by nobody, which is the
+  floor of the product. — 🅿️
+
 - **DOD-M12B-SEAL-SILENT-DROP-1** [trustless-cello] — 🅿️ **PARKED — needs a directory fleet roll, so
   it does not ship unattended** (procedure §3a). **The directory answers a unilateral seal request
   with silence, twice, and the client can only report a 30-second timeout.**
