@@ -1070,6 +1070,18 @@ notarized end to end and produce a receipt. That case has never run.
 > session could not obtain a receipt even when a human closed it by hand, which is the plain-language
 > version of *"most of the time we can't even close them"*.
 >
+> **And there was a second layer, found by the review of the fix.** Even once the escalation ran and
+> the directory notarized, the session's ROW never changed: every seal-completion path ends with
+> `destroySessionNode(..., "sealed")`, which returns early when the session has no in-memory node
+> and writes the status 26 lines below that guard. An interrupted session has no node by
+> construction. So the receipt was stored against a row that still said `interrupted` — `cello_sessions`
+> showed it stuck, the close verb still refused it by name, and the automatic resolver re-ran the
+> whole ceremony on the next boot and then advised force-abandoning a session that already held a
+> valid receipt. Fixed in `6e2a9fa`.
+>
+> **This is why the proof this item asks for would still have looked like a failure even after the
+> first fix.** Whoever runs it should assert on the session's STATUS, not only on the certificate.
+>
 > Fixed in `DOD-M12B-INTERRUPTED-ESCALATE-1` (cello-client `af8d4bb`): the escalation is a shared
 > helper both branches call. It fires when the two sides agreed OR when the counterparty never
 > answered, and **never after a refusal** — a rejection means the trees disagree, and notarizing over
