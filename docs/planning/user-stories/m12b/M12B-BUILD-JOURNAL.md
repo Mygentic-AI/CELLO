@@ -24,8 +24,10 @@ description: >
 - **`DOD-M12B-ACK-1` is DIAGNOSED, not fixed** (Entry 2): the ack write fails with
   `"Cannot write to a stream that is closed"`, 36 times, one error. Why the stream is closed is
   the remaining work.
-- **Relay loss is traced and OUT of scope** (Entry 3): no handoff exists; it constrains
-  `DOD-M12B-RELAY-IDEM-2` and needs its own launch-triage line.
+- **Relay loss is now Tier R** (Entries 3–4), sequenced AFTER Tier E but constraining Tiers A and B
+  from now via the failover-preservation lens. Failover is client-driven permanently;
+  `FEDERATION-003`'s predecessor-ACK carry is the sanctioned seam. Also constrains
+  `DOD-M12B-RELAY-IDEM-2`.
 - **HEAD at milestone open:** trustless-cello `2ee4dec5`, cello-client `7384489`.
 - **Published versions:** unchanged — no publish has happened for this milestone.
 - **Relay fleet:** unchanged. No M12B relay roll has occurred. When one does, §2f of the procedure
@@ -195,3 +197,39 @@ survives a relay restart, and the DoD must say so plainly.
 **Filed as out of M12B scope, needs its own home:** a session whose relay is gone should either
 retire loudly or be re-recordable somewhere, rather than continuing to report success against a
 chain that stopped growing. Candidate for launch-triage in its own right.
+
+
+## Entry 4 — Relay failover is client-driven, and the primitive already exists (2026-08-17)
+
+Andre, 2026-08-17, on the Entry 3 finding: *"Relays going down and losing the session is a pretty
+important point, but I think it's a different problem. Probably we do it in the same milestone but
+we do it after we've completed this… if we're rewriting stuff we probably should rewrite it with
+this problem in mind… And given that the relay could just stop functioning at any point, it can't be
+the relay handing it over."*
+
+Acted on: the work moved OUT of "Explicitly beyond" and INTO **Tier R**, sequenced after Tier E, with
+a standing constraint on Tiers A and B and a matching blocking reviewer lens (procedure §2b,
+"failover-preservation").
+
+### The reasoning is already the design
+`FEDERATION-003` implements exactly the shape Andre derived from first principles. A submission may
+carry `predecessor_relay_id`, `predecessor_relay_signature`, `predecessor_relay_sequence`,
+`predecessor_relay_timestamp` (`relay-types.ts:95-98`). The **client** presents the dead relay's
+signed ACK; the successor fetches the predecessor's public key from the **directory**
+(`getRelayPublicKey`) and verifies `Ed25519.verify(pubKey, buildRelayAckTbs(hash, seq, ts), sig)`
+before accepting (`relay-node.ts:1106-1130`). Rejection is unconditional on a bad signature (SI-002,
+no fallback). **No relay-to-relay contact anywhere** — the only shape that survives a relay that
+simply stops.
+
+### The gap in it — filed as DOD-M12B-RELAY-LOSS-1
+After verification the code comments "Predecessor ACK verified — proceed to process the
+re-submission", and the path falls through to `const seq = state.seq_counter + 1` on the NEW relay's
+own state. **Whether the successor continues numbering from `predecessor_relay_sequence` or restarts
+from its own counter is NOT established.** If it restarts, the primitive verifies a handover it
+cannot complete. Stated as a gap to trace, not as a defect — this was read, not run.
+
+### Also established, and worth not re-deriving
+The relay REFUSES with `session_not_found` when its state is gone (`relay-node.ts:1075-1076`) rather
+than restarting its counter and issuing colliding positions. **Colliding positions are not a failure
+mode.** The damage from relay loss is silence — a session that keeps reporting success against a
+chain that stopped growing — not corruption.

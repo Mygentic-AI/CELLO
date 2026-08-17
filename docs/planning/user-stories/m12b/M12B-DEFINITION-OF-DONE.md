@@ -178,6 +178,51 @@ description: >
 
 ---
 
+## Tier R — Relay loss and failover (work AFTER Tier E — Andre, 2026-08-17)
+
+> **Sequenced deliberately.** This is a different problem from the ordering defect and is not
+> allowed to delay it. It lives in the same milestone because it is the same subject — relay↔client
+> topology — and because **the ordering rewrite must not foreclose it.** Every Tier A and Tier B
+> unit is reviewed against the constraint below before it merges.
+
+> ### 🔒 STANDING CONSTRAINT ON TIERS A AND B — read before designing either
+> **Failover cannot be relay-initiated, because a relay can simply stop.** Andre, 2026-08-17. The
+> handover must be driven by the parties that survive: the clients. Anything built in Tier A or B
+> that makes a position meaningful ONLY relative to one relay's live in-memory counter — with no
+> client-holdable, independently verifiable proof of what that position was — is a blocking finding
+> even if it fixes the ordering defect perfectly.
+>
+> **The primitive already exists and has the right shape.** `FEDERATION-003`
+> (`relay-types.ts` / `relay-node.ts`): a submission may carry `predecessor_relay_id`,
+> `predecessor_relay_signature`, `predecessor_relay_sequence`, `predecessor_relay_timestamp`. The
+> CLIENT presents the dead relay's signed ACK; the new relay fetches the predecessor's public key
+> **from the directory** and verifies the Ed25519 signature (`buildRelayAckTbs`) before accepting.
+> No relay-to-relay contact. Design Tier A's submission id to sit alongside this, not across it.
+
+- **DOD-M12B-RELAY-LOSS-1** [trustless-cello] — establish what a new relay does with a verified
+  predecessor ACK. After verification the code comments "proceed to process the re-submission" and
+  the path falls through to `seq_counter + 1` on the NEW relay's own state. Does the successor
+  CONTINUE numbering from `predecessor_relay_sequence`, or restart from its own counter? If it
+  restarts, positions collide across a handover and the primitive verifies a handover it cannot
+  actually complete. Trace it; no code ships from this line. — ❌
+
+- **DOD-M12B-RELAY-LOSS-2** [cello-client] — a session whose relay is gone stops claiming success.
+  Today `relay_session_gone` is non-terminal: the client warns and keeps sending directly and
+  unwitnessed, so delivery continues while the record silently stops growing and there is no
+  re-recording path. Measured in-tree 2026-08-09: **68 minutes and 8 more messages against a chain
+  frozen at six leaves, every send reporting success.** Either the session retires loudly or it is
+  re-recordable — "delivered" must never be reported for content that entered no chain. — ❌
+
+- **DOD-M12B-RELAY-LOSS-3** [cello-client + trustless-cello] — the client-driven handover, end to
+  end: on losing its relay, a client presents its held predecessor ACKs to another relay from the
+  directory's roster and the session resumes WITH ITS NUMBERING INTACT. Proven with three real
+  daemons and a relay killed mid-session. Blocked on RELAY-LOSS-1's answer. — ❌
+
+  > **Good news established 2026-08-17 and worth not re-deriving:** the relay REFUSES
+  > (`session_not_found`) when its state is gone rather than restarting its counter and issuing
+  > colliding positions. Colliding positions are NOT a failure mode. The damage is silence, not
+  > corruption.
+
 ## Decisions Carried
 
 - **M12B, not a new milestone** (Andre, 2026-08-17) — relay↔client topology is M12's subject.
@@ -187,6 +232,12 @@ description: >
   enforceable rather than merely intended. Do not write security claims this cannot support.
 - **The relay stays the ordering authority.** Any proposal where the client picks or asserts its
   own position is refused — a client that can decide ordering is a client that can lie about it.
+- **Relay failover is CLIENT-DRIVEN, permanently** (Andre, 2026-08-17) — "given that the relay
+  could just stop functioning at any point, it can't be the relay handing it over." Any future
+  proposal for relay-to-relay handover is refused on this ground alone. `FEDERATION-003`'s
+  predecessor-ACK carry is the sanctioned seam.
+- **Tier R is sequenced after Tier E, but constrains Tiers A and B from now** — the ordering fix
+  ships first; it does not get to make failover harder on its way past.
 - **The relay's role is to be able to disagree** (Andre, 2026-08-17) — the deeper gap is that the
   relay today has no way to contradict a client about anything. Worth asking, per unit, where else
   it is silently accepting whatever it is told.
@@ -199,14 +250,6 @@ description: >
   again"). None exists today — grep across the daemon and protocol-types returns only database
   migration code — and adding one is a larger protocol change. M12B's approach is to stop creating
   gaps rather than to build machinery for repairing them.
-- **A session whose relay has died.** Traced in Entry 3 and deliberately NOT in scope. There is no
-  handoff — a session is bound to its directory-assigned relay for life, that relay's state is
-  memory-only, and once lost the session can never be witnessed again. The client treats
-  `relay_session_gone` as non-terminal, so delivery continues while the record silently stops
-  growing (measured in-tree 2026-08-09: 68 minutes and 8 messages against a chain frozen at six
-  leaves, every send reporting success). Good news established at the same time: the relay REFUSES
-  (`session_not_found`) rather than restarting its counter, so colliding positions are not a
-  failure mode. Needs its own launch-triage line and its own milestone slot.
 - The **second relay** returning `count=0` on every park pull from both daemons while never
   receiving a deposit. Observed 2026-08-16, wasted round trip, not a loss. Not in scope; do not
   re-chase it as part of this defect.
