@@ -513,10 +513,20 @@ description: >
   > **Do NOT reach for `appendAnnounce` first.** It works (it concatenates rather than replacing) but
   > it re-announces the private transport address, which is precisely what `announce` was chosen to
   > suppress — changing how every peer dials the demo agent, untestable from here.
-  > **The contained fix is `getDialability()`**, which already exists on `CelloNode` and reports
-  > `{dialable, publicAddr}`: an agent that is directly dialable should read `direct`, and should not
-  > start the ladder at all. Deferred rather than built at the end of the overnight run because it
-  > needs checking against the demo agent's actual configuration.
+  > **AND `getDialability()` IS NOT THE ANSWER EITHER — I suggested it above and then read it.**
+  > `deriveDialability` **deliberately excludes** any address whose host matches a configured
+  > listen/announce host, and `buildConfiguredHosts` folds the announce list in. Its own comment
+  > gives the reason: *"A node configured to listen on / announce a public IP that is actually behind
+  > a firewall is NOT dialable — advertising that unreachable direct address would deny service."*
+  > So for a `CELLO_ANNOUNCE_ADDRS` agent it returns `{dialable: false}` **always** — the exact
+  > opposite of the signal I wanted. Building on it would have produced a field that is wrong for
+  > every agent it was added to serve.
+  >
+  > **What is actually left:** change the announce semantics (`appendAnnounce`, which re-announces
+  > the private address `announce` exists to suppress), or read the grant from libp2p's reservation
+  > store instead of the announced address list — a transport-layer change. Neither is small, and
+  > neither can be judged without a real NAT'd-or-EIP agent to try it on. **That is the blocker: not
+  > effort, but the absence of anything to test against.**
 
 - **DOD-M12B-TESTS-NOT-TYPECHECKED-1** [cello-client] — **no test file in this repo is type-checked,
   and it has already let a defect ship.** Every package's `tsconfig.json` carries
