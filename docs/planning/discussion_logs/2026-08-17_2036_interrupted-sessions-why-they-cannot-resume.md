@@ -100,6 +100,17 @@ A and B are hardening against something not yet observed. They stay in the plan;
 first. Restart count by day tracks the development, not the protocol: 4 on 08-01, 29 on 08-16, 21 on
 08-17.
 
+> ### ⚠️ Do NOT read this as "A and B never happen." It is one developer's machine.
+> That daemon restarted **95 times in 17 days** — roughly six times a day. A session there rarely
+> lives long enough to experience a transport loss, because a restart gets to it first. **The
+> measurement says A and B are invisible BEHIND C, not that they are absent.**
+>
+> A real operator leaves the daemon up for days, and a laptop close is the single most ordinary
+> thing they will do to it. On that machine A becomes the dominant failure and C becomes the rare
+> one. So the order is C-then-A because C is provably hurting *now* and A is not yet measurable —
+> **not** because A is speculative. Re-measure once C has shipped and restarts stop dominating; that
+> is the first run where A and B can even be seen.
+
 ### Corrections to figures stated earlier in the session
 
 - **"93% never resolved" was WRONG.** That counted `session.node.created` events, which include node
