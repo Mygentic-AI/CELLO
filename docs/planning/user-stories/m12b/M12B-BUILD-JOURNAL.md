@@ -1420,3 +1420,62 @@ Establish why a document-worker session's frames are witnessed ahead of its own 
 holds are being created fresh each sweep. Read the producer of the canonical sequence on the
 document path — `document-delivery-transport.ts` `sendBytes` → `sendContent` → `placeOwnLeaf` —
 against a session whose tree starts empty, before writing anything.
+
+---
+
+## Entry 18 — "The normal close hangs" — it does not. It blocks for 11 minutes in silence (2026-08-17)
+
+**Diagnosed before it could be lost to a compaction.** Found while clearing 17 stale sessions to get
+a clean slate for a real end-to-end test.
+
+### What was observed
+
+`cello_close_session` with no `force`, on session `a0b81f4d…` — one my own test had created and
+whose counterparty had REFUSED (cap full, so only one half ever existed). The IPC call returned
+nothing for 10 minutes and the sweep script had to be killed.
+
+### What actually happened — measured, from `~/.cello/daemon.log`
+
+| time | event |
+|---|---|
+| 16:48:55.137 | `session.seal.leaf.submitted` — the close begins |
+| *(nothing for 11m 06s)* | |
+| 17:00:01.508 | `session.seal.ceremony.participated` → `session.seal.frost.signature.sent` |
+| 17:00:01.936 | `session.unilateral.certificate.verified` |
+| 17:00:01.941 | `session.unilateral.receipt.persisted` |
+| 17:00:01.942 | `session.seal.completed` → `session.node.destroyed reason=sealed` |
+
+**It did not hang. It completed, and it produced a real notarized unilateral receipt.**
+
+### The cause, named exactly
+
+`close-session-handler.ts:784` — `CELLO_SEAL_BILATERAL_TIMEOUT_MS` **defaults to `660_000` ms =
+11 minutes**. The close waits that long for a counterparty that will never answer before escalating
+to the unilateral seal. 16:48:55 → 17:00:01 is **11m 06s**. The measurement matches the constant;
+this is not inferred.
+
+### The defect is the SILENCE, not the wait
+
+The wait is correct — it is what earns the receipt. Nothing tells the caller it is happening:
+
+1. `cello_close_session` returns nothing for eleven minutes. No progress, no "this may take a while",
+   no indication the unilateral path has been entered.
+2. Any operator or agent concludes it is broken.
+3. The refusal guidance elsewhere in this same handler tells them `force: true` is the way out.
+4. **Force-abandon forfeits the exact receipt the wait was about to produce.**
+
+So the silence converts a working recovery into a receipt-destroying force-abandon. That is what
+happened here: 17 sessions were force-closed because the first normal close looked dead.
+
+### Not yet established
+
+Whether the 11-minute wait is reached on a session whose counterparty is merely OFFLINE (rather than
+one that refused). The directory's delivery-grace window gates `seal_unilateral`, and
+`close-session-handler.ts:781` says the timeout is deliberately set to expire AFTER that grace
+window — so the 11 minutes may be a floor set by grace, not a fixed cost. **Not measured, not
+assumed.**
+
+### Filed as
+
+`DOD-M12B-CLOSE-SILENT-WAIT-1` — see [[launch-triage]]. Not part of the eleven ranks; found after
+them.

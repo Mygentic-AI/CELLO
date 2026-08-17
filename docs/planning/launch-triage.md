@@ -184,6 +184,32 @@ status fields that lied.
 | **10** ✅ | Cleaning up a stuck session makes it worse — the far side is never told and keeps calling. **Fixed 2026-08-17: they are told, and they stop calling. They do NOT lose their receipt over it — review caught that the first build let anyone destroy their counterparty's notarized receipt just by hanging up, and that the fix undid itself a third of a second later.** | 29 | `DOD-M12B-ABANDON-NOTIFY-1` |
 | **11** ✅ | The daemon can refuse to exit, so recovery needs manual intervention. **Fixed 2026-08-17: it stops dialling peers on the way out, and every step of the shutdown now has a time limit — a stuck connection or a half-open socket can no longer hold the whole daemon open past the point where `cello logout` says it has gone.** | 31 | `DOD-M12B-SHUTDOWN-1` |
 
+## 🔴 FOUND AFTER THE ELEVEN — the two that actually stopped a conversation (2026-08-17)
+
+Both found by running a real end-to-end test between two of Andre's own agents on the promoted
+build. **The eleven ranks did NOT stop two agents talking; these did.** With them out of the way the
+same test passed clean: 0 held, 0 discarded, 0 send failures, 0 accept failures, `delivered: true`.
+
+**A. `DOD-CAP-SELF-HEAL-1` (item 21) — dead sessions fill the acceptance cap, and nobody is told.**
+Two of Andre's own agents could not open a session at all: `session.inbound.accept.failed
+reason=abuse_bound_sessions_per_sender`. The receiving agent held 5 FINISHED conversations
+(`interrupted`, 22–90 messages each) with the caller, against a stranger cap of 3. They are never
+reaped — correctly, since D18 requires interrupted sessions with received content to count — so the
+bound is all-time rather than concurrent. **Every pair of agents that has ever talked three times can
+never talk again, and every restart makes it worse.** The caller is told nothing: its send returns
+`ok` with "dispatched to relay", and the receiving side then sweeps the parked message as
+`counterparty_unknown` and deletes it. A success message for a conversation that never existed.
+
+**B. `DOD-M12B-CLOSE-SILENT-WAIT-1` — a normal close blocks for ELEVEN MINUTES in silence.**
+Not a hang: `CELLO_SEAL_BILATERAL_TIMEOUT_MS` defaults to 660,000 ms, and the close waits it out
+before escalating to a unilateral seal — which then succeeds and produces a real notarized receipt
+(measured 16:48:55 → 17:00:01, 11m 06s). The wait is correct. The silence is not: nothing tells the
+caller it is happening, so an operator concludes it is broken and reaches for `force: true` — which
+forfeits the exact receipt the wait was about to earn. That is what happened: 17 sessions were
+force-closed because the first normal close looked dead. Full trace in M12B Build Journal Entry 18.
+
+---
+
 > **✅ ALL ELEVEN RANKS ARE DONE (2026-08-17)** — built, reviewed by `cello-unit-reviewer`, every
 > finding fixed, merged to cello-client `main`, gate green on exit code, and **published to `beta`**
 > (daemon `0.0.170`, cli `0.0.177`, connect `0.0.150`; tag `v0.0.244`, smoke-tag green, verified by
