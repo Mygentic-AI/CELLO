@@ -18,47 +18,43 @@ description: >
 
 **Updated 2026-08-17, end of the eleven-rank run.**
 
-### NEXT ACTION — the seal chain is built and NOT LIVE-VERIFIED. That proof is the next thing.
+### NEXT ACTION — the seal chain is BUILT and NOT LIVE-VERIFIED. That proof is still first.
 
-Overnight 2026-08-17/18 the plan was re-ranked by measurement and then went somewhere better than
-planned. Read, in order:
-[[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]] §1 (the measurements) and §5 (the
-three cases), then **Entries 21–25**.
+Read [[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]] §1 and §5, then **Entries
+21–30**.
 
-**The one-line story:** the deluge of interrupted sessions is our own restarts — 114 of 118, and
+**The story in one line:** the deluge of interrupted sessions is our own restarts — 114 of 118, and
 **zero** from any transport event. Chasing that found something bigger: **an interrupted session
-could not obtain a receipt at all**, even when a human closed it by hand, because the unilateral
-escalation lived in a branch an interrupted session can never reach and the responder never posts a
-seal leaf. That is launch-triage item 21, answered, and it is why 26 sessions sat stuck for up to
-10.5 days.
+could not obtain a receipt at all**, even closed by hand. That is launch-triage item 21, answered.
 
-**FIRST, before any new code:** run the live proof launch-triage item 21 asks for — two real
-daemons, exchange messages, restart one to interrupt, then close. **Assert on the session's STATUS,
-not only on the certificate** (Entry 24 is why). Nothing here has been live-verified.
+**FIRST, before any new code:** the live proof (launch-triage item 21) — two real daemons, exchange,
+restart one, close. **Assert on the session's STATUS, not only the certificate** (Entry 24 is why).
+🔴 **Blocked on Andre:** registration needs two pre-auth tokens from the Operations Agent.
 
-Then, in dependency order:
-1. `DOD-M12B-PENDING-EXIT-1` — the 26 already-stuck rows still have no way out.
-2. `DOD-M12B-SEAL-WAITER-KEY-1` — two agents on one daemon clobber each other's seal waiter, and
-   the loser reports a timeout for a seal that succeeded. Andre runs exactly that topology.
-3. `DOD-M12B-SESSION-SEED-1` — case A/B. Not yet observed, but only because restarts reach every
-   session first; on a machine left up for days it becomes the dominant failure.
-4. `DOD-M12B-SEAL-BILATERAL-FIRST-1`, `DOD-M12B-SEAL-ESCALATE-DUP-1` — carried review findings.
+Then, in the order the evidence supports:
+1. `DOD-M12B-RESERVATION-RETRY-1` — built (`8147b88`), review in flight, unpublished.
+2. `DOD-M12B-SEAL-BILATERAL-FIRST-1`, `DOD-M12B-SEAL-ESCALATE-DUP-1` — carried review findings.
+3. `DOD-M12B-SESSION-SEED-1` (case A/B) — **deliberately ranked BELOW the above**: its trigger fired
+   **zero** times in 17 days, while the reservation defect fired 481. Still real for an operator who
+   leaves the daemon up for days; not what is hurting now. Entry 30 has the reasoning.
 
-🅿️ **Parked, needs a directory fleet roll:** `DOD-M12B-SEAL-SILENT-DROP-1` — the directory answers
-a unilateral seal request with silence in two cases, and at **50 occurrences that is the largest
-single blocker to any automated close.**
+🅿️ **Parked, both need Andre and a fleet decision:** `DOD-M12B-SEAL-SILENT-DROP-1` (the directory
+answers a seal request with silence — 50 occurrences, the largest single blocker to an automated
+close) and `DOD-M12B-RELAY-SLOTS-1` (2,215 refusals, all "granted, no reservation" — an agent behind
+NAT is intermittently dialable by nobody).
 
-**Still open for Andre:** the anti-DDoS rationale for ephemeral peer ids is not in ADR-0001 and needs
-recording before it constrains `SESSION-SEED-1`. Also unverified: whether the relay can serve as a
-rendezvous without the directory.
+**Still open for Andre:** the anti-DDoS rationale for ephemeral peer ids is not in ADR-0001 and
+constrains `SESSION-SEED-1`. Also unverified: whether the relay can serve as a rendezvous without the
+directory.
 
 ### REPO STATE — 2026-08-18, end of the overnight run
 | | |
 |---|---|
-| cello-client `main` | **`3c567a7`** — clean, pushed. Gate: test/lint/typecheck/build all **exit 0**, **3835 passed / 11 skipped**. |
+| cello-client `main` | **`8147b88`** — clean, pushed. Gate: test/lint/typecheck/build all **exit 0**, **3838 passed / 11 skipped**. |
 | trustless-cello `main` | clean, pushed. |
 | **`latest` (what Andre is RUNNING)** | daemon **`0.0.170`**, cli **`0.0.177`** — ranks 1–11 only. **Nothing from the overnight run is on his machine.** |
 | **`beta` (published, NOT promoted)** | tag **`v0.0.247`** → daemon **`0.0.173`**, cli **`0.0.180`**. Supersedes `v0.0.246` (daemon `0.0.172` / cli `0.0.179`), which shipped only the first two units. |
+| ⚠️ **`main` is AHEAD of `beta`** | `RESERVATION-RETRY-1` is on main and **unpublished** — it needs a `v0.0.248` once its review lands. |
 | other five packages | unchanged: crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, connect `0.0.150` — all already on `latest`. |
 
 **Promotion is Andre's, always.** Commands in the format of Entry 16.
@@ -2208,7 +2204,7 @@ comment asserting a property the code lacked.
 
 ### Gate
 
-`pnpm run test` **exit 0** — **3835 passed / 11 skipped** · lint / typecheck / build **exit 0**.
+`pnpm run test` **exit 0** — **3838 passed / 11 skipped** · lint / typecheck / build **exit 0**.
 
 ---
 
@@ -2263,7 +2259,7 @@ health it does not have. Fixing a pattern on one caller and not its twin is its 
 
 ### Gate
 
-`pnpm run test` **exit 0** — **3835 passed / 11 skipped** · lint / typecheck / build **exit 0**.
+`pnpm run test` **exit 0** — **3838 passed / 11 skipped** · lint / typecheck / build **exit 0**.
 
 ---
 
