@@ -2438,3 +2438,59 @@ one run in N teaches everyone to re-run instead of read**, which is how a real f
 ### Gate
 
 `pnpm run test` **exit 0** — **3843 passed / 11 skipped** · lint / typecheck / build **exit 0**.
+
+---
+
+## Entry 33 — The field had tests; the wiring did not (2026-08-18)
+
+**Commits `66d4559`, then the cascade to `v0.0.248`.** Second and final pass on
+`RESERVATION-RETRY-1`.
+
+### The blocking finding was the half that matters
+
+Every reachability assertion called the manager directly. **Delete the two lines in `daemon.ts` that
+populate the status payload and the entire suite still passes** — an implementation that added the
+getter and wired it nowhere would have been green. The commit's own headline was *"and `cello_status`
+said the agent was fine"*, and that half was the untested one. Now asserted off the already-built MCP
+and daemon surfaces; removing the wiring turns it red.
+
+**Fifth time this milestone that the mechanism was proven and the thing it produces was not.**
+
+### The budget was latched by a door I had not looked at
+
+`setDirectoryRelayEndpoints` fires on every signaling connect **and reconnect**, carries the
+directory's freshest relay pool, and rebuilds a reservation-less receiver **directly** — without
+consulting the budget. So attempts kept happening while the SURFACE stayed at `unreachable` for the
+rest of the online episode, including against relays we had never tried.
+
+Clearing unconditionally would have been wrong, and the reviewer had already done that falsification:
+auth_ok recurs on a short grid and would reset the bound the unit exists to add. **Gated on the relay
+set actually differing** — a relay we have never tried is new information; a repeat of the same list
+is not.
+
+### Two things the review settled rather than hedged
+
+- **The relay-peer-id change was checked against the libp2p sources**, not reasoned about. The held
+  circuit address is built from the relay's own reservation response, which already ends
+  `/p2p/<relayPeerId>`, and our side re-encapsulates `/p2p/<ourPeerId>` outside `/p2p-circuit` —
+  where a non-global `.match()` never reaches it. Correct, and strictly better than reading the first
+  candidate.
+- **The flake hunt came back empty**: 10 runs, 6 idle and 4 under 24 spinners on 14 cores, all green.
+
+### And two pre-existing findings worth more than the unit that surfaced them
+
+- **`CELLO_ANNOUNCE_ADDRS` makes every reservation check blind.** libp2p's address manager returns
+  only the announce addresses and drops the circuit listener's, and **every** reservation check reads
+  `listenAddresses()`. For a publicly-hosted agent a **granted** reservation is invisible and the node
+  falls back to plain TCP — and the code comment names the EC2 demo agent as exactly that case. The
+  new ladder would burn five attempts on such an agent, each pinning a slot for its TTL. Filed as
+  `DOD-M12B-ANNOUNCE-BLINDS-RESERVATION-1`.
+- **No test file in this repo is type-checked**, and it already let a defect ship: pass 1 called
+  `ensureStandingReceiverForAgent` with two arguments against a one-parameter signature, and
+  `typecheck` reported exit 0. A test asserting on a field that does not exist is invisible to the
+  gate — **the hollow-test shape every review this milestone has hunted, institutionalised.** Filed
+  as `DOD-M12B-TESTS-NOT-TYPECHECKED-1`.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3843 passed / 11 skipped** · lint / typecheck / build **exit 0**.
