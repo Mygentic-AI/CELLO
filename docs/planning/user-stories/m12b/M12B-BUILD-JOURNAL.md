@@ -423,3 +423,83 @@ This entry exists because three earlier explanations were asserted and withdrawn
 pushback, each time because a measurement contradicted them. The rule the milestone already carries
 — MEASURE BEFORE QUOTING A NUMBER — applies equally to mechanisms: a subagent's flagged hypothesis
 is not evidence, and repeating it without the check it asked for is how a day gets spent.
+
+## Entry 7 — The reachability trigger: a fix defeated by the thing it was fixing (2026-08-17)
+
+Traced after `DOD-SYNC-REFUSAL-BACKOFF-1` shipped, because the fix worked and the traffic did not
+stop. Filed as `DOD-M12B-DELIVERY-QUIET-1` here and launch-triage item 23. Raised by Andre from the
+symptom side: *"these kind of notifications should really go to the inbox and not to notification
+storms."* The trace found the notification problem and a feedback loop sharing one code path.
+
+### The code path, exactly
+
+`daemon.ts` — `dispatchSessionStateChangedWithTelegram(agentName, sessionId, state, counterpartyPubkey)`
+runs on every session state change. On `state === "created"` it does three things, in this order:
+
+1. **Resets the reconcile backoff and sweeps.**
+   `reconcileScheduler.onReachable(ownerAgentId, counterpartyPubkey.toLowerCase())`
+   → `document-reconcile-scheduler.ts` `onReachable`: `s.failures = 0; s.nextAttemptMs = 0;` then
+   `#attempt(...)` immediately, for every shared document with that peer.
+2. **Rings the conversation doorbell.**
+   `notificationDispatcher.dispatchSessionStateChanged(...)` → `session_state_changed`,
+   `state: "created"` → every connection whose current agent matches.
+3. **Pushes the operator's phone.** `sendTelegramDoorbell(agentName, sessionId, "state_change", …)`.
+
+**None of the three knows who opened the session.**
+
+### Why step 1 is right in general and wrong here
+
+The code states its own reasoning, and it is correct as written: *"an explicit reachability signal
+RESETS backoff: the backoff modeled 'they do not answer', and here they demonstrably just did."*
+That is SYNC-P5 R39 trigger 2, and it is what makes a document sync promptly when a peer comes back
+online. **It holds only when the PEER caused the session.**
+
+Document delivery opens sessions itself (`document-delivery-transport.ts` `acquireSession` →
+`deps.openSession`). When it does, the "reachability signal" is **our own outbound act reflected
+back at us**. Nothing was learned about the peer. And the backoff that gets wiped may be the one a
+refusal from that very peer set seconds earlier.
+
+### The loop
+
+1. Sweep has a frame, finds no reusable session, opens one.
+2. `state: "created"` fires.
+3. `onReachable` zeroes the backoff and sweeps every shared document with that peer.
+4. More frames → possibly more sessions → back to 1.
+
+### Measured, before and after the refusal fix
+
+| | before `DOD-SYNC-REFUSAL-BACKOFF-1` | after |
+|---|---|---|
+| reconcile attempts | 321 / 85 min | **55 / 20 min** |
+| refusals | 321 | **0** |
+| sessions → standing-receiver builds | 53 → 63 | — |
+
+**The refusal storm is genuinely gone and stays gone.** The VOLUME is not, and this trigger is why.
+The earlier fix is not in question; it cannot hold a backoff against a reset it does not control.
+Recorded plainly because the alternative reading — "the backoff fix did not work" — is wrong and
+would send the next person to re-examine correct code.
+
+### Ruling
+
+**Andre, 2026-08-17: exempt delivery-opened sessions from the reachability trigger.** Chosen over
+rate-limiting the trigger and over stopping delivery opening sessions at all.
+
+### The trap to avoid, and the test that catches it
+
+The exemption must key on **who opened the session**, not on what kind of frame is being sent. Key
+it on frame kind and a peer that dials in to sync a document stops triggering a reconcile — which
+removes R39 trigger 2, the thing that makes sync prompt, and trades a visible storm for an invisible
+staleness. That is the worse defect, because nothing reports it.
+
+The signal already exists: `acquireSession` returns `sessionOpened: true` for a session delivery
+opened. It needs threading through to the dispatch site, not inventing.
+
+**Assert both directions:**
+- a DELIVERY-opened session does **not** reset backoff and does **not** dispatch a doorbell;
+- a PEER-opened inbound session **still does both**.
+
+### How the fix is judged
+
+Re-run the 20-minute live measurement against the 55-attempts / 0-refusals baseline, and check that
+a document still syncs promptly after a peer comes back online. **Fewer attempts with a matching
+rise in sync latency is the failure mode, not the success criterion.**

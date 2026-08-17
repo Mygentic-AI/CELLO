@@ -1464,9 +1464,29 @@ backoff, and the next session creation wipes it. Measured after that fix: **55 r
 correct and still removed the refusal storm — it simply cannot hold against a reset it does not
 control.
 
-**What needs deciding (not decided).** Whether a delivery-opened session should be exempt from the
-reachability trigger, or the trigger should be rate-limited, or delivery should stop opening
-sessions of its own. All three are behaviour changes and none is obviously right.
+**DECIDED 2026-08-17 (Andre): exempt delivery-opened sessions from the reachability trigger.**
+Chosen over the two alternatives that were on the table — rate-limiting the trigger, and stopping
+delivery from opening sessions at all. Carried as `DOD-M12B-DELIVERY-QUIET-1` in
+[[M12B-DEFINITION-OF-DONE]], with the full trace in [[M12B-BUILD-JOURNAL]] Entry 7.
+
+**Why this option.** The trigger is correct in general and the code says why: a backoff models "they
+do not answer", and a session coming up is proof they just did. That reasoning holds only when the
+PEER opened the session. When delivery opened it, the signal is our own outbound act reflected back —
+nothing is learned about the peer, and the backoff being wiped may be the one that peer's own refusal
+set seconds earlier. Rate-limiting would blunt a trigger that is right; stopping delivery opening
+sessions is a much larger change to how documents move.
+
+**The trap, and the test that catches it.** The exemption must key on **who opened the session**, not
+on what kind of frame is being sent. Key it on frame kind and a peer who dials in to sync stops
+triggering a reconcile — which removes the very thing that makes sync prompt and trades a visible
+storm for invisible staleness. That is the worse defect, because nothing reports it. The signal
+already exists (`acquireSession` returns `sessionOpened: true` for a session delivery opened) and
+needs threading, not inventing. Tests must assert BOTH directions: a delivery-opened session neither
+resets backoff nor rings the doorbell; a peer-opened session still does both.
+
+**How it is judged.** Re-run the 20-minute live measurement against the 55-attempts / 0-refusals
+baseline, and confirm a document still syncs promptly after a peer comes back online. **Fewer
+attempts with a matching rise in sync latency is the failure mode, not the success criterion.**
 
 **Related:** item 22 (the storm this made unbearable), `DOD-SYNC-REFUSAL-BACKOFF-1` in
 [[M14B-DEFINITION-OF-DONE]] (the fix this undercuts), and item 21 (the cap these sessions fill).

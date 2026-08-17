@@ -213,6 +213,58 @@ description: >
   `stream.send(...)` **without awaiting it** and then awaits `stream.close()`, whose own comment
   says close waits for the write buffer to drain. — ❌
 
+- **DOD-M12B-DELIVERY-QUIET-1** [cello-client] — **a session that DOCUMENT DELIVERY opened must not
+  fire the party-became-reachable trigger, must not ring the conversation doorbell, and must not
+  push a phone notification.** Ruled by Andre 2026-08-17: exempting delivery-opened sessions from
+  the reachability trigger is the chosen direction of the three that were on the table. — ❌
+
+  **The circularity, which is the whole defect.** `dispatchSessionStateChangedWithTelegram`
+  (`daemon.ts`) fires on every `state === "created"` and calls
+  `reconcileScheduler.onReachable(ownerAgentId, counterpartyPubkey)`. That call is not a nudge — it
+  **sets `failures = 0` and `nextAttemptMs = 0`** (`document-reconcile-scheduler.ts` `onReachable`)
+  and attempts immediately, for every shared document, in `RECONCILE_BATCH_CAP` batches. The
+  rationale is sound and stated in the code: *"an explicit reachability signal RESETS backoff: the
+  backoff modeled 'they do not answer', and here they demonstrably just did."* (SYNC-P5 R39
+  trigger 2.)
+  **It is only sound when the PEER caused the session.** When DOCUMENT DELIVERY opened it, the
+  "signal" is our own outbound act reflected back at us. We learn nothing about the peer, and we
+  wipe the backoff that a refusal — possibly that same peer's refusal, seconds earlier — just set.
+
+  **The loop, in order:**
+  1. The sweep has a frame to deliver and finds no reusable session, so `acquireSession` opens one.
+  2. Session creation dispatches `state: "created"`.
+  3. That calls `onReachable`, which **zeroes the backoff** and immediately sweeps every shared
+     document with that peer.
+  4. The sweep produces more frames, which may open more sessions. Back to 1.
+
+  **Measured.** BEFORE the M14B fix: 321 reconcile attempts / 85 min, 53 sessions driving 63
+  standing-receiver builds. AFTER `DOD-SYNC-REFUSAL-BACKOFF-1` shipped: **55 reconcile attempts in
+  20 minutes with the backoff in place, and 0 refusals.** The refusal storm is genuinely gone; the
+  VOLUME is not, and this trigger is why. **This line is the reason that fix only got us part of
+  the way, and it must not be read as that fix having failed.**
+
+  **The two other consequences on the same code path**, both raised by Andre and both in scope here:
+  - **The doorbell.** `session_state_changed / created` is dispatched identically whether a human
+    opened the session or the delivery worker did. The operator sees "someone wants to connect" for
+    machine traffic. The correct surface already exists and is unused by delivery: `document_notices`
+    in `cello_inbox`, whose own guidance reads *"Nothing is waiting on a reply."*
+  - **The phone.** The same path calls `sendTelegramDoorbell(...)`, so a background document sync
+    can push a notification to the operator's phone.
+
+  **What must NOT break — the falsification to run before merging.** A session opened by the PEER
+  must still reset the backoff and sweep, or documents stop syncing promptly when someone comes back
+  online, which is exactly what R39 trigger 2 exists to deliver. The exemption must therefore key on
+  *who opened this session*, not on *what kind of frame is being sent*. The delivery transport
+  already knows — `acquireSession` returns `sessionOpened: true` for a session it opened — so the
+  signal exists and needs threading, not inventing.
+  Assert BOTH directions in tests: a delivery-opened session does NOT reset backoff and does NOT
+  dispatch a doorbell; a peer-opened inbound session STILL does both.
+
+  **How to know it worked.** Re-run the 20-minute measurement on a live daemon and compare against
+  the 55 attempts / 0 refusals baseline above, with no reduction in how quickly a document syncs
+  after a peer comes back online. A drop in attempts with a matching rise in sync latency is the
+  failure mode to watch for, not a success.
+
 ---
 
 ## Tier E — Proof (three real daemons, separate OS processes)
