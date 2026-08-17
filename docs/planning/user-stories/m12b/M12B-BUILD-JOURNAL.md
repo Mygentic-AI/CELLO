@@ -2405,3 +2405,36 @@ a fix to a case that only bites at pool size > 1.
 Prefer the held address, **fall back to the candidate**, which is our own constructed string and
 always carries the id. Strictly better than either alone, and pinned by a test whose node reports a
 circuit address with no relay id in it. Revert test run: dropping the fallback turns it red.
+
+---
+
+## Entry 32 — Not taking the worse receipt when the better one is coming (2026-08-18)
+
+**Commit `f0f18aa`.** `DOD-M12B-SEAL-BILATERAL-FIRST-1`, carried from the escalation review.
+
+When the counterparty answers `session_seal_already_pending` with
+`pendingCeremony: "relay_bilateral"`, it is saying it is on the relay's bilateral ceremony and was
+waiting for our half. The flow submits that half and returns `ok` — correctly. But the caller could
+not tell that apart from an ordinary interrupted commitment, so it escalated milliseconds later and
+asked the directory to notarize **with the counterparty marked ABSENT**, for a peer that is
+demonstrably present and co-operating.
+
+**The active close gives a bilateral round eleven minutes before escalating. This path gave it
+none** — and for any orphan older than the delivery grace, which is every one of the measured 26,
+the escalation is allowed. So the downgrade was certain rather than possible.
+
+The flow now carries the ceremony it knows it is on. **The counterweight is pinned too:** an ordinary
+interrupted close must still escalate, or a guard keyed on "the flow succeeded" would have stopped
+every escalation in the milestone.
+
+### One test failed under load and it was traced, not shrugged at
+
+`signaling-manager.test.ts` → *"AC-005: Two-tier model"* failed once during the full-suite run, then
+passed **twice in isolation and again on a full re-run**. `core/transport` cannot import from
+`core/daemon`, so the daemon change in flight could not reach it: the test is timing-sensitive under
+parallel load. Filed as `DOD-M12B-SIGNALING-TEST-FLAKE-1` rather than ignored — **a suite that fails
+one run in N teaches everyone to re-run instead of read**, which is how a real failure gets missed.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3843 passed / 11 skipped** · lint / typecheck / build **exit 0**.

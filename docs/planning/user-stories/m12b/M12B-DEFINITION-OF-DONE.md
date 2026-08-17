@@ -476,7 +476,20 @@ description: >
   path gives the bilateral round an 11-minute window before escalating; this path gives it none, and
   for any orphan older than the grace the receipt then records the peer as `absent` when they were
   live. Carry a flag out of the realign branch and skip the escalation for that one case, or give it
-  a short bilateral wait. — ❌
+  a short bilateral wait. — 🟡 **BUILT 2026-08-18** (`f0f18aa`). The flow now carries the ceremony it
+  knows it is on, and the close returns saying the better receipt is already coming instead of
+  silently taking the worse one. **Revert test RUN:** dropping the check sends a `seal_unilateral`
+  frame and turns the case red. Its counterweight is pinned too — an ordinary interrupted close must
+  still escalate, or a guard keyed on "the flow succeeded" would stop every escalation. → Entry 32
+
+- **DOD-M12B-SIGNALING-TEST-FLAKE-1** [cello-client] — 🅿️ **a transport test fails under full-suite
+  load and passes in isolation.** `core/transport/src/__tests__/signaling-manager.test.ts` →
+  *"AC-005: Two-tier model — MCP immediate rejection, internal ops queued and drained"* failed once
+  during the 2026-08-18 run and then passed twice in isolation and again on a full re-run. **Traced,
+  not attributed:** `core/transport` cannot import from `core/daemon`, so the daemon change in flight
+  at the time could not reach it — the test is timing-sensitive under parallel load. Filed rather
+  than shrugged at, because a suite that fails one run in N teaches everyone to re-run instead of
+  read. Not fixed here: it needs its own look at what the test races on. — 🅿️
 
 - **DOD-M12B-SEAL-ESCALATE-DUP-1** [cello-client] — **a THIRD copy of the unilateral escalation
   exists and was not extracted.** `daemon.ts`'s away/one-shot path is a line-for-line duplicate of
