@@ -38,22 +38,23 @@ The plan splits into three cases. A and B need **no protocol change and no direc
 recording before it constrains the design. Also unverified: whether the relay can serve as a
 rendezvous without the directory, and what the 26 `seal_interrupted_pending` sessions are waiting for.
 
-### REPO STATE
+### REPO STATE — verified at compaction
 | | |
 |---|---|
-| cello-client `main` | ranks 1–11 merged; cascade + tag `v0.0.244`. Gate on the merged tree, exit codes captured: test/lint/typecheck/build all **exit 0**, 3778 passed / 11 skipped. |
-| trustless-cello `main` | pushed. |
-| **`latest` — PROMOTED 2026-08-17** | crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, daemon `0.0.170`, cli `0.0.177`, connect `0.0.150`. |
+| cello-client `main` | **`d5be086`** — clean, pushed. Gate on this tree, exit codes captured: test/lint/typecheck/build all **exit 0**, 3792 passed / 11 skipped. |
+| trustless-cello `main` | clean, pushed. |
+| **`latest` (what Andre is RUNNING)** | daemon **`0.0.170`**, cli **`0.0.177`** — ranks 1–11 only. |
+| **`beta` (published, NOT promoted)** | daemon **`0.0.171`**, cli **`0.0.178`** — tag `v0.0.245`, smoke-tag green, tarball-verified. |
+| unpublished on `main` | the cap age-out (`d5be086`). Needs a third publish. |
+| other five packages | unchanged: crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, connect `0.0.150` — all on `latest`. |
 
-### ✅ THE RUNNING DAEMON IS THE NEW BUILD
-Andre ran the promotion, `npm i -g --prefer-online`, and `cello logout && cello login` at 15:40Z.
-`cello -v` → **0.0.177**; the daemon under it is **0.0.170**. Three agents up and unattended:
-`CELLO_Coder_1`, `CELLO_Support`, `Miss_Chelly`, all `standing_receiver_ready`.
+**What is in beta but NOT on Andre's machine:** the cap fix (counting what the counterparty ended,
+not our restarts), the operator's cap alarm, the visible seal wait, and the annexed-content false
+alarm. **Promotion is Andre's** — commands in Entry 16's format, at the versions above.
 
-**Its log is `~/.cello/daemon.log` again** — the old branch daemon (pid 66778) and its
-`/tmp/newbuild-daemon.out` are GONE, and so are the two broken sessions that were the only live
-specimens of the rank-5 defect (`de55efd683e8…`, `d35eef58a266…`). Nothing in Entries 10–12 depends
-on them still existing; the diagnosis is closed and the numbers are recorded there.
+**Andre's daemon** is pid from `cello login` at 15:40Z running `0.0.170`/`0.0.177`. Log is
+`~/.cello/daemon.log`. All 17 stale sessions were force-closed during this session; the table is
+**507 rows, 0 interrupted, 5 active**.
 
 ### WHAT SHIPPED — ranks 1–11, all ✅
 1 send guidance · 2 inbox truth · 3 away marker · 4 delivery quiet · **5 the blocker (the 33rd
@@ -1560,3 +1561,54 @@ its own database handle.
 ### Gate
 
 `pnpm run test` **exit 0** — 3788 passed / 11 skipped · `lint` / `typecheck` / `build` **exit 0**.
+
+---
+
+## Entry 20 — Second publish, and the caps finished (2026-08-17, at compaction)
+
+### Published to beta, NOT promoted
+
+Tag **`v0.0.245`** → daemon **`0.0.171`**, cli **`0.0.178`**. Build, publish and smoke-tag all green;
+verified by unpacking the tarball, not by CI status — `interrupted_by`, `capDiagnostics`,
+`sessionsConsumingCap`, `awaiting_counterparty`, `relay_stream_close` all present in
+`package/dist`, and `cli` cross-pinned to `daemon 0.0.171` (a real version, not `workspace:*`).
+
+The other five packages did not change and stay where they are. **`latest` is still the 0.0.170
+generation**, so nothing in this entry is on any operator's machine.
+
+### The cap work, finished
+
+`DOD-CAP-SELF-HEAL-1` ended up needing BOTH halves, and the first alone did not fix the case it was
+written for:
+
+- **Attribution** (`interrupted_by`) — excuses interruptions WE caused: the boot sweep, the shutdown
+  sweep, and `destroySessionNode` (the operator's own kill switch). Their disconnect still counts.
+  `stream_close` — our relay witness stream ending, i.e. a relay redeploy — is recorded as
+  `relay_stream_close` and **still counts**, because an attacker who can disturb our relay link must
+  not get a free cap reset.
+- **Age** (`d5be086`, unpublished) — an interrupted session untouched for 2 h stops counting,
+  whatever the label. **This is the half that clears an existing backlog.** Attribution only works
+  forward: every row written before the column existed is NULL, NULL counts, so Andre's five
+  blocking rows were untouched by attribution alone.
+
+D18 holds under both. The reviewer enumerated every path that writes `interrupted` and confirmed no
+counterparty-controllable action produces an excused row; the age rule survives because the attack
+is a RATE — churn faster than the window and everything you churn is recent and still counts.
+
+**Stated plainly because it is a real change in the guarantee:** the bound is now *concurrent, with
+amnesty at every restart and after 2 h*, not all-time.
+
+The refusal stays **byte-identical across tiers**. A first attempt hung the counts off the refusal
+object, putting a distinguishing oracle into the value the refusal path carries — the repo's own
+`dod-tier-2-tiered-bounds` no-oracle test caught it. The numbers are a separate local read now.
+
+### And the caps are a SYMPTOM
+
+The investigation written up in
+[[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]] establishes that the real defect is
+interrupted sessions having no exit. **Do not do more cap work.** The next move is the three-case
+plan in §5 of that document.
+
+### Gate
+
+`pnpm run test` **exit 0** — 3792 passed / 11 skipped · `lint` / `typecheck` / `build` **exit 0**.
