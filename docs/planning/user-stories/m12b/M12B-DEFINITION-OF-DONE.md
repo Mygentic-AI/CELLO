@@ -497,6 +497,26 @@ description: >
   for. Latent today (the env var is set nowhere in-repo). Fix: `appendAnnounce` rather than
   `announce`, which libp2p supports, so the circuit address survives; or read the grant from the
   reservation store rather than the announced address list. — ❌
+  > **🔴 THE FRAMING ABOVE IS INCOMPLETE — corrected 2026-08-18 after verifying against the installed
+  > libp2p source.** The mechanism is exactly right: `address-manager/index.js` early-returns the
+  > announce list and never concatenates `transportManager.getAddrs()`, so the circuit address is
+  > genuinely invisible. **But an agent that sets `CELLO_ANNOUNCE_ADDRS` has a PUBLIC address by
+  > definition** — that is what the variable is for (an EC2 Elastic IP the interface does not carry).
+  > **Such an agent does not need a circuit reservation to be dialable.** So the harm is not "nobody
+  > can reach it"; it is narrower and it is partly mine:
+  > 1. The retry ladder burns five reservation attempts on an agent that needs none. Refusals grant
+  >    nothing, so no slot is pinned — it is wasted dial effort, not exhaustion.
+  > 2. **`standing_receiver_reachability` reports `unreachable` for an agent that is perfectly
+  >    dialable.** A FALSE ALARM on a surface added specifically to be trusted — the *"a warning on
+  >    everything is a warning on nothing"* failure that `DOD-M12B-SEAL-STUCK-1`'s review named.
+  >
+  > **Do NOT reach for `appendAnnounce` first.** It works (it concatenates rather than replacing) but
+  > it re-announces the private transport address, which is precisely what `announce` was chosen to
+  > suppress — changing how every peer dials the demo agent, untestable from here.
+  > **The contained fix is `getDialability()`**, which already exists on `CelloNode` and reports
+  > `{dialable, publicAddr}`: an agent that is directly dialable should read `direct`, and should not
+  > start the ladder at all. Deferred rather than built at the end of the overnight run because it
+  > needs checking against the demo agent's actual configuration.
 
 - **DOD-M12B-TESTS-NOT-TYPECHECKED-1** [cello-client] — **no test file in this repo is type-checked,
   and it has already let a defect ship.** Every package's `tsconfig.json` carries
