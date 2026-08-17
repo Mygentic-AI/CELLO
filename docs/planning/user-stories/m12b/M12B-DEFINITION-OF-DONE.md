@@ -599,6 +599,27 @@ description: >
   > colliding positions. Colliding positions are NOT a failure mode. The damage is silence, not
   > corruption.
 
+## Work order — RESTATED AGAIN 2026-08-18 (the seal chain came first, and still leads)
+
+Ranks 1–11 shipped. The overnight run then found that **the largest remaining defect was not in the
+ordering spine at all** — it was that a session could not END. In dependency order, and this is the
+current queue:
+
+1. ✅ `DOD-M12B-RESTART-SEAL-1` + `DOD-M12B-INTERRUPTED-ESCALATE-1` — an interrupted session can now
+   obtain a receipt, and one our own stop orphaned resolves itself. **Not yet published, and the
+   live end-to-end proof (launch-triage item 21) is still owed.**
+2. `DOD-M12B-PENDING-EXIT-1` — the 26 already-stuck sessions still have no way out.
+3. `DOD-M12B-SEAL-WAITER-KEY-1` — two agents on one daemon clobber each other's seal waiter. Andre
+   runs exactly that topology.
+4. `DOD-M12B-SESSION-SEED-1` — case A/B (laptop close, reconnect). Not yet observed in the measured
+   log, but only because restarts reach every session first; on a machine left up for days it
+   becomes the dominant failure.
+5. `DOD-M12B-SEAL-BILATERAL-FIRST-1`, `DOD-M12B-SEAL-ESCALATE-DUP-1` — carried review findings.
+6. Then the ordering work below (Tier A), Tier E's proofs, and Phase 2.
+
+🅿️ `DOD-M12B-SEAL-SILENT-DROP-1` is parked behind a directory fleet roll and is the biggest single
+blocker to any automated close (50 of the measured seal failures).
+
 ## Work order — RESTATED 2026-08-17 (supersedes "lowest non-✅ line" within Phase 1)
 
 The tier order below is the priority the evidence supports, not the order the lines are written in.
