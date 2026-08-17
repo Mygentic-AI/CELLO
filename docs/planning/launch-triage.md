@@ -185,8 +185,11 @@ status fields that lied.
 | **11** ✅ | The daemon can refuse to exit, so recovery needs manual intervention. **Fixed 2026-08-17: it stops dialling peers on the way out, and every step of the shutdown now has a time limit — a stuck connection or a half-open socket can no longer hold the whole daemon open past the point where `cello logout` says it has gone.** | 31 | `DOD-M12B-SHUTDOWN-1` |
 
 > **✅ ALL ELEVEN RANKS ARE DONE (2026-08-17)** — built, reviewed by `cello-unit-reviewer`, every
-> finding fixed, merged to cello-client `main` at `47fe15b`, gate green on exit code. **Not
-> published** — no operator has them, including Andre's own running daemon. Verdicts quoted in
+> finding fixed, merged to cello-client `main`, gate green on exit code, and **published to `beta`**
+> (daemon `0.0.170`, cli `0.0.177`, connect `0.0.150`; tag `v0.0.244`, smoke-tag green, verified by
+> grepping the tarballs). **NOT YET ON `latest`** — the promotion is Andre's to run, and until he
+> does no operator has any of it, including his own running daemon. The seven commands are in M12B
+> Build Journal Entry 16. **No relay or directory change, so no fleet roll.** Verdicts quoted in
 > M12B Build Journal Entries 9, 12, 13, 14 and 15. Rank 4's first build did not work at all and was caught by
 > review, and rank 5 drew 16 findings across two reviews — every one fixed before the tag flipped.
 

@@ -1261,3 +1261,83 @@ violation this repo's own guard caught (`WHERE agent_name = ?`).
 **Tests that call the new method directly prove the method, not the unit.** Ranks 8, 9, 10 and 11
 each shipped a first build whose wiring could be deleted with the suite still green. Every one now
 has an assertion that fails when the call site is removed.
+
+---
+
+## Entry 16 — Published to beta: the whole eleven-rank block (2026-08-17)
+
+`/cello-publish` loaded for THIS publish, per the hook and the rule. Tag `v0.0.244` — picked as the
+next free `v*` counter, not from the connect version, because those have drifted.
+
+### The cascade
+
+All seven bumped, not just the four whose source changed (protocol-types, transport, gateway,
+daemon). Version churn is free in alpha and it guarantees npm matches local source with consistent
+pins.
+
+| package | beta |
+|---|---|
+| `crypto` | `0.0.52` |
+| `protocol-types` | `0.0.56` |
+| `transport` | `0.0.58` |
+| `gateway` | `0.0.36` |
+| `daemon` | `0.0.170` |
+| `cli` | `0.0.177` |
+| `connect` | `0.0.150` |
+
+### Verified against the BINARY, not against CI status
+
+CI was green — Build, Publish (tag release) with its own "Verify all published versions match
+local", and `smoke-tag` (clean-install + module-graph load) all ✓. That is not the check. These are:
+
+**`npm pack @cello-protocol/daemon@0.0.170`, grep `package/dist/`:**
+`placeOwnLeaf` ✓ · `retireOnCounterpartyAbandon` ✓ · `session_abandoned_notice` ✓ · `held_content` ✓ ·
+`CONTENT_MAX_INBOUND_STREAMS` ✓ · `counterparty_abandoned_at` ✓ · `sealReadinessView` ✓
+
+**`@cello-protocol/transport@0.0.58`:** `no_connection` ✓ · `countProtocolStreams` ✓
+**`@cello-protocol/gateway@0.0.36`:** the bounded socket close, `sock.destroy` on the deadline ✓
+
+**Cross-pins are real versions, no `workspace:*` anywhere:**
+`cli → daemon 0.0.170`, `cli → protocol-types 0.0.56`; `daemon → crypto 0.0.52 / protocol-types
+0.0.56 / gateway 0.0.36 / transport 0.0.58`; `connect → crypto 0.0.52 / transport 0.0.58 /
+interfaces 0.0.3`.
+
+### No relay or directory change, so NO FLEET ROLL
+
+Every line of these eleven ranks is client-side. `trustless-cello`'s references to cello-client
+packages are all `latest` already, so nothing needs re-pinning and §2f's staged bilateral rollout
+does not apply here. **Tier A is where the wire change and the fleet roll live, and Tier A has not
+shipped.**
+
+### ⛔ THE PROMOTION IS ANDRE'S — all seven, exactly as written
+
+```bash
+npm dist-tag add @cello-protocol/connect@0.0.150 latest
+npm dist-tag add @cello-protocol/cli@0.0.177 latest
+npm dist-tag add @cello-protocol/daemon@0.0.170 latest
+npm dist-tag add @cello-protocol/gateway@0.0.36 latest
+npm dist-tag add @cello-protocol/crypto@0.0.52 latest
+npm dist-tag add @cello-protocol/transport@0.0.58 latest
+npm dist-tag add @cello-protocol/protocol-types@0.0.56 latest
+```
+
+Then, on the operator machine:
+
+```bash
+npm i -g --prefer-online @cello-protocol/cli@latest @cello-protocol/connect@latest
+cello logout && cello login
+# then reconnect the MCP: /mcp
+```
+
+`--prefer-online` is not optional right after a promotion: `@latest` resolves from the machine's
+cached packument, so an install seconds later silently fetches the PREVIOUS version and reports
+success. Verify on disk, not from the install output:
+`node -p "require('$(npm prefix -g)/lib/node_modules/@cello-protocol/cli/package.json').version"`
+
+### Owed the moment the promotion lands
+
+The **20-minute live measurement**, which is the launch-triage's own verification gate after rank 5
+and could not run before now because it needs the code on a running daemon. Baseline to beat:
+**55 reconcile attempts / 2 holds / 20 `session.content.direct.send.failed` in 20 minutes — holds
+must reach ZERO.** A drop in attempts with a rise in document-sync latency is the failure mode to
+watch for, not a success.
