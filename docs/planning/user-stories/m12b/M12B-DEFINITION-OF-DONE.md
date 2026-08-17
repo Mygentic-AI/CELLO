@@ -209,9 +209,20 @@ description: >
   `liveness: alive, path: direct` **9.5 seconds before** its send parked); not a stale counterparty
   peer id (`newStream` SUCCEEDED — the failure is on the WRITE); not standing-receiver churn
   (**6** genuine teardowns in 2.5 h, **0** from the endpoint path — the ~57 other builds were the
-  by-design factory replacement after handoff). Candidate 2 is now the strongest: the code calls
-  `stream.send(...)` **without awaiting it** and then awaits `stream.close()`, whose own comment
-  says close waits for the write buffer to drain. — ❌
+  by-design factory replacement after handoff); **not** the unawaited `stream.send(...)` racing
+  `stream.close()` — only synchronous work sits between them.
+  — ✅ **PROVEN 2026-08-17. It is libp2p's per-protocol inbound-stream cap of 32, and the receiving
+  handler never released a slot.** `#handleContentStream` read one frame and returned without
+  closing, so every frame and every ACK left a half-open stream in the connection for its whole
+  life. The cap is enforced AFTER protocol negotiation answers, which is why `newStream` succeeded
+  and the write did not. **Measured: exactly 32 successful opens preceded the first failure on BOTH
+  affected sessions**, and the regression reproduces it at frame 33. Fixed at three levels — the
+  receiver closes (and after a linger, resets unilaterally, since a peer owns its own daemon), both
+  sender sites retire the stream they opened, and the failure logs now carry the live counts and
+  the cap. The **liveness lie is fixed in the same line**: a fourth daemon-local state `impaired`,
+  set and cleared from both send paths, carrying WHY and what became of the content so the receive
+  surface stops guessing. Reviewers: *"Diagnosis confirmed"* / *"the new test survives THE REVERT
+  TEST"*; 9 findings on the first pass and 7 on the second, **all fixed** (`cf345b3`). → Entry 12
 
 - **DOD-M12B-DELIVERY-QUIET-1** [cello-client] — **a session that DOCUMENT DELIVERY opened must not
   fire the party-became-reachable trigger, must not ring the conversation doorbell, and must not

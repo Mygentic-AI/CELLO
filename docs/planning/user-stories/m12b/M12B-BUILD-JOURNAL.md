@@ -16,50 +16,56 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-**Updated 2026-08-17 ~14:20 local.**
+**Updated 2026-08-17 ~16:10 local.**
 
 ### NEXT ACTION
-**Rank 5 of the launch-triage top block — `DOD-M12B-ACK-1`.** Diagnosis is in flight and written up
-in **Entry 10**; no fix exists and no hypothesis has been promoted to cause. The immediate next step
-is named at the end of Entry 10: read the muxer configuration in `core/transport` and count
-concurrent open streams, to decide between the two recorded hypotheses BEFORE writing code.
+**Rank 6 of the launch-triage top block — `DOD-M12B-STRAND-1`, durable held content.** Its red test
+is already written and is PARKED OUTSIDE THE TREE at
+`/private/tmp/claude-501/-Users-andrep-Documents-code-trustless-cello/3be856d9-6ff4-46ce-af02-550e44fddb11/scratchpad/msg-004-held-content-durable.test.ts`
+— move it back into `core/daemon/src/__tests__/` to start. It is RED for the right reason (the held
+frame does not survive a restart). Design already traced: follow `retry-queue.ts` — an inline
+`CREATE TABLE IF NOT EXISTS` in the constructor, keyed on **`agent_id`** (`resolveAgentId` exists at
+`session-node-manager.ts`), loaded into `#heldContent` at boot, row deleted on release, and NOT
+deleted at teardown. `session.content.held.discarded` stops being an epitaph.
 
-The work order is the block at the top of `docs/planning/launch-triage.md` —
-**"🔴 TOP OF THE LIST — SESSIONS DO NOT WORK"**, ranks 1–11. **Ranks 1–4 are DONE** (see below);
-rank 5 is next, and ranks 6–11 follow it in order.
+Work order: the block at the top of `docs/planning/launch-triage.md` — **"🔴 TOP OF THE LIST —
+SESSIONS DO NOT WORK"**. **Ranks 1–5 are DONE**; 6–11 follow in order, one commit each, sequential
+(they all touch the session manager).
 
 ### REPO STATE
 | | |
 |---|---|
-| cello-client `main` | `47fe15b` — ranks 1–4 MERGED, pushed. Gate re-run on the merged tree with exit codes captured: test/lint/typecheck/build all **exit 0**, 3741 passed / 11 skipped. |
-| cello-client working branch | `m12b/ack-stream-closed`, off `47fe15b`, pushed, **empty** — rank 5 lands here. |
-| trustless-cello `main` | `9132e746`+ (this commit), pushed. |
+| cello-client `main` | `bcc1de7` — ranks 1–5 MERGED, pushed. Gate re-run on the merged tree, exit codes captured: test/lint/typecheck/build all **exit 0**, 3748 passed / 11 skipped. |
+| cello-client working branch | none — `m12b/ack-stream-closed` is merged. Open `m12b/strand-durable-holds` for rank 6. |
+| trustless-cello `main` | pushed. |
 | published `@cello-protocol/daemon@latest` | **`0.0.169` — contains NONE of this.** |
 
-### ⚠️ THE RUNNING DAEMON IS NOT THE PUBLISHED ONE
-Andre's daemon is **pid 66778**, running the BRANCH build. Its log is **`/tmp/newbuild-daemon.out`**,
-**NOT `~/.cello/daemon.log`** (which stops at 08:17 and will mislead you). That log is the evidence
-base for Entry 10 — 5,866 records, 08:17→11:53. To restore the published build: stop that pid, then
-`cello login`. **Andre has not asked for that.** Two broken sessions (`de55efd683e8…`,
-`d35eef58a266…`) are still live on it and are the only live specimens of the rank-5 defect — do not
-close them without saying so.
+### ⚠️ THE RUNNING DAEMON IS NOT THE PUBLISHED ONE, AND IT IS NOW ALSO NOT THE BRANCH ONE
+Andre's daemon is **pid 66778**, running a build from BEFORE ranks 1–5. Its log is
+**`/tmp/newbuild-daemon.out`**, **NOT `~/.cello/daemon.log`** (which stops at 08:17). That log is the
+evidence base for Entries 10–12. Two broken sessions (`de55efd683e8…`, `d35eef58a266…`) are still
+live on it and are the only live specimens of the rank-5 defect — do not close them without saying
+so. To restore the published build: stop that pid, then `cello login`. **Andre has not asked for
+that**, and restarting it drops his live agents — so it is not something to do unprompted.
 
-### RANKS 1–4: DONE (built, reviewed, every finding fixed)
-Verdicts quoted in **Entry 9**; DoD tags flipped with evidence. Commits `0650181`→`86a14e9`.
-`SIGNAL-GUIDANCE-1`, `INBOX-TRUTH-1`, `AWAY-MARK-1`, `DELIVERY-QUIET-1`.
-**Rank 4's first build did not work** — the guard was keyed so it could never match on the only
-production path that emits `created`. Re-keyed on pubkeys at both ends. Read Entry 9 before touching
-`delivery-open-registry.ts`.
+### RANKS 1–5: DONE (built, reviewed, every finding fixed)
+Verdicts quoted in **Entry 9** (ranks 1–4) and **Entry 12** (rank 5). Rank 5 drew **16 findings
+across two reviews, all fixed** in `cf345b3`. Read Entry 11 before touching the content-stream path
+and Entry 12 before touching liveness or the impaired guidance.
 
 ### OWED, AND NOT CLAIMED
-The **20-minute live measurement** has not run on any of the four. Baseline to beat:
+The **20-minute live measurement** has not run on any of ranks 1–5. Baseline to beat:
 **55 reconcile attempts / 2 holds / 20 direct-send failures — holds must reach ZERO.** It cannot run
-until the code is on a running daemon, and **it must not run before rank 5**: a halved attempt count
-today would read as a whole fix. One publish at the END of ranks 1–11, not eleven.
+until the code is on a running daemon, and the work order is ONE publish at the END of ranks 1–11 —
+so it runs then. The test-level stand-in for rank 5: 40 messages on one session, zero holds, zero
+send failures, zero ACK failures, stream census drained.
 
 ### KILLED BY MEASUREMENT — DO NOT RE-RUN
 Excessive standing-receiver teardown; a stale counterparty peer id; a missing connection (Entry 6);
-a race between our own `send` and our own `close` (Entry 10 — only synchronous work sits between).
+a race between our own `send` and our own `close` (Entry 10); **yamux stream exhaustion** (Entry 11 —
+yamux allows 1000 and the whole 3.5-hour log opened ~450). The **third site**
+(`directory.signaling.disconnected`) is **not a defect** — the signaling path catches the same error,
+declares the stream dead and reconnects. Do not chase it.
 
 ### PROCESS RULES THIS SESSION BROKE — read §7 and §26 of the procedure
 1. **Gates were piped through `grep`**, so the exit status read was grep's — §7's exact laundering.
@@ -907,3 +913,77 @@ frames arriving genuinely concurrently could still touch 32 before any handler r
 `finally`. That is transient and self-clearing — unlike the permanent leak — and no measurement
 shows it. Recorded here rather than fixed speculatively; raising `maxInboundStreams` would mask
 the next leak of this shape.
+
+---
+
+## Entry 12 — Rank 5 reviewed: 16 findings, all fixed (2026-08-17)
+
+Two `cello-unit-reviewer` passes, one per commit, no model override. **Both returned
+`SPEC: DEVIATIONS FOUND`.** Every finding is fixed in `cf345b3`. One pass per artifact, per the
+standing cap — the fixes were not re-reviewed.
+
+### Pass 1 — `9ac9f93`, the stream leak
+
+Verdict lines, verbatim:
+> **SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS FOUND** … **TESTS HAVE TEETH** — the new test
+> survives THE REVERT TEST. One constructible bypass (raise the cap, keep the leak) with a cheap
+> closing assertion; not hollow. **REMOVALS PROVEN** — n/a.
+
+It re-derived the whole diagnosis against the installed libraries rather than trusting the commit
+message, and confirmed it — including one correction worth keeping: **yamux's `sendCloseRead` is a
+no-op**, so closing the read end cannot retire a stream. Only close-write from both sides, or an
+`abort()`, does.
+
+| # | Finding | Fix |
+|---|---|---|
+| H1 | **The slot release still depended on the PEER closing.** A peer that opens content streams and never closes them pins every inbound slot we have — a guard that runs only on the party it constrains. | 30-second linger, then a unilateral `abort()`. Not immediate: a reset landing while a well-behaved sender is inside its own `close()` would reject that close and turn every ordinary send into a park. |
+| H2 | `ackStream` assigned one statement after `newStream`, so a throw in the encode leaked both halves. | Assigned immediately. |
+| H3 | The ACK path still swallowed its close failure — the exact pattern the send path had deleted with a ten-line comment. It made the new abort **unreachable**, and logged `content.delivery.ack.sent` BEFORE the flush that failed. | Close reaches the outer catch; the log moved after it. |
+| M4 | The slot is held across gateway screening, so a genuinely concurrent burst >32 still trips the cap. | Cap raised to 512 as headroom — **explicitly not the fix**, and kept finite so a future leak of this shape fails boundedly instead of growing a heap. |
+| M5 | The close-failure branch was silent — the one line that would make H1/M4 a grep. | `session.content.stream.close.failed`. |
+| M6 | The surfaced error still names its exit point. | Both failure logs now carry the live inbound/outbound counts and the cap, via a new `countProtocolStreams` on the transport node. |
+| L7 | The ACK is silently not sent when the session node is gone — which produces this line's exact symptom with zero diagnostic. | `content.delivery.ack.skipped`, naming the reason. |
+| L8 | `lp.decode(stream)` sat OUTSIDE the try, so a throw bypassed the close **and** became an unhandled rejection on a bare `void`. | Moved inside; `.catch()` added at the call site. |
+| L9/L10 | Archaeology heading; a re-implemented leaf-hash helper. | Re-headed present-tense; the three new tests import `msgLeafHash` from `@cello-protocol/crypto`. |
+
+**The test's one constructible bypass, closed.** Delivering 40 messages would also pass under a
+raised cap over a live leak. The test now asserts the streams **drained** after the run — the only
+assertion that distinguishes "we closed what we opened" from "we bought more room".
+
+### Pass 2 — `6367438`, the liveness lie
+
+Verdict lines, verbatim:
+> **SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS FOUND** … **ERROR SUBSTITUTION FOUND** — the
+> impaired guidance names the relay for four causes, three of which are local. **HOLLOW TESTS
+> FOUND** — three of five new behaviours fail the revert test.
+
+It confirmed the two decisions that mattered — the `gone` guard, and keeping `impaired` off the
+relay's wire type — against the code: *"verified: `core/protocol-types/src/session-liveness.ts`
+untouched … No relay roll needed. Correct call."* Everything it flagged was in the half added
+*around* the core change.
+
+| # | Finding | Fix |
+|---|---|---|
+| HIGH-1 | **The guidance asserted two facts nobody had checked**, and one of them told the agent to sit on a message that was gone: "it was parked … do not resend" is false when the park was refused and the durable enqueue dropped — where `cello_send` has already said *send it again*. The failing write can also be an **ACK we owed them**, in which case the caller sent nothing at all. | The session now records `cause` (`direct_send` / `delivery_ack`) and `retained` (`parked` / `durable` / `lost` / `unknown`); the guidance states only that, and makes NO resend claim when retention is unknown. |
+| HIGH-2 | Impairment could be **set** on the ACK path and never **cleared** there. An agent that mostly listens latches after one bad ACK and reports a broken conversation for the rest of the session. | Cleared from both send paths. |
+| HIGH-3 | The downgrade guard fired only from `alive` and **declined silently**. A session whose recorded counterparty peer id has gone stale sits at `unknown` while every send fails forever — and `cello_receive` renders `unknown` as healthy-and-quiet. *The 70-minute lie relocated one lane over.* | Only `gone` is protected; `unknown` downgrades too. A declined downgrade is logged. |
+| MEDIUM-4 | Three of five new behaviours passed the suite on revert. | Tests added for all three. The ACK-path one was **unreachable** until the ACK write got its own fault seam — a listener sends no content, so the existing direct-send fault never fires for it. The reaper test carries a control row, so it cannot pass by the reaper simply not running. |
+| MEDIUM-5 | **"The unilateral-seal gate reads it" is not true of any code** — repeated in three comments. The coupling to sealing runs through the receive guidance, which turns `gone` into "call cello_close_session". | Corrected wherever it appears. |
+| LOW-6/7 | `session.liveness.changed` gained emitters with a different field set and `reason` holding a raw error string; guidance pointed an MCP agent at a shell command. | `counterpartyPubkey` carried, `reason` = contract string + `error` = message, `cello_status` named. |
+
+**One claim in `6367438`'s own message was wrong and is corrected here:** `cello_sessions` does
+**not** carry liveness — `SessionListEntry` has no such field. The surfaces that do are `status`
+and `cello_status`.
+
+### Gate on the committed tree (run so it could fail, §7)
+
+`pnpm run test` **exit 0** — 3748 passed / 11 skipped · `lint` **exit 0** · `typecheck` **exit 0** ·
+`build` **exit 0**.
+
+### Still owed on rank 5
+
+The **20-minute live measurement** (baseline 55 reconcile attempts / 2 holds / 20 direct-send
+failures; holds must reach ZERO). It cannot run until the code is on a running daemon, and the work
+order is one publish at the END of ranks 1–11 — so it runs then, not now. The test-level proof
+standing in for it: 40 messages on one session, zero holds, zero send failures, zero ACK failures,
+and the stream census drained.
