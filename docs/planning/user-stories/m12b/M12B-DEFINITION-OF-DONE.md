@@ -345,7 +345,15 @@ description: >
   several force-abandons, the surviving halves dialled continuously and the operator saw connection
   requests from agents nobody was driving. The guidance already warns the receipt is forfeited; it
   does not say the far side will keep calling. Either the abandon is signalled, or the surviving half
-  must be able to detect and retire itself. — ❌
+  must be able to detect and retire itself. — ✅ **PROVEN 2026-08-17** — the abandon is signalled on
+  the session's own authenticated stream, **pinned to the Noise-authenticated counterparty**, and the
+  receiving half retires its TRANSPORT: durable marker, dial addresses dropped, node torn down —
+  **not** its status. Reviewer found **4 blocking**, all fixed (`5a2b984`), and two were decisive. It
+  proved by RUNNING the code that the retire was undone ~300 ms later (the teardown wrote the status
+  back to `interrupted`) and that all four tests read inside that window: *"shipping this changes
+  nothing about the storm it was written for."* And flipping the receiver terminal **denied it the
+  unilateral seal** — a receipt the counterparty could destroy for free by hanging up, when going
+  silent is exactly what that seal was built to survive. → Entry 15
 
 - **DOD-M12B-SEAL-STUCK-1** [cello-client] — **a session holding content can never seal, so it never
   closes, and they accumulate.** `session.seal.blocked_incomplete` fires with `missingLeaves` /

@@ -1156,3 +1156,112 @@ Rank 11 leaves the **inbound IPC surface open until last** — document verbs ar
 teardown. The choke point means they can no longer start a reconcile, but they can still be
 accepted. Bounding that is a shutdown-ordering change with its own blast radius and is not part of
 this line.
+
+---
+
+## Entry 15 — Ranks 8, 9 and 10: three reviews, twelve blocking, two that shipped nothing (2026-08-17)
+
+### Rank 8 — `DOD-M12B-INDEX-1`: an off-by-one that would have made every session unsealable
+
+The sender held its own leaf when the relay's position was ahead of its tail, symmetric with the
+receiver — correct design, and the DoD's preferred option, so the "what is the Merkle root of a
+hole" question does not arise. Then the reviewer found the number space was wrong.
+
+> *"The relay assigns the first leaf of a session sequence number 1 … `placeOwnLeaf` takes
+> `witnessed.sequence_number` RAW and compares it to `tree.size()`. In a perfectly healthy session
+> the tree is at `assignedSeq - 1`, so … **every outbound message is held.**"*
+
+The full consequence, traced by the reviewer: the first message of a new session is held behind a
+gap that does not exist; the counterparty's reply normalises to the SAME key and overwrites it —
+our own message destroyed with an ERROR — and the session can then never close, because held
+content blocks the seal. **Every test passed** because they all hand the function 0-based numbers
+by hand: *"Nothing in `cello-client` can observe the relay's number space."*
+
+Three more blocking findings, all fixed in `09c4c5f`:
+- **The `origin` column never landed on an existing table.** `CREATE TABLE IF NOT EXISTS` is a
+  no-op, and `held_content` had shipped two commits earlier — so every database made since,
+  including the one on the running daemon, would have thrown on every insert and every restore.
+  Durable holds silently back to memory-only, now including our own sends.
+- **Our own held send was annexed as the counterparty's.** Both drains stamped the counterparty
+  pubkey on every row regardless of who wrote it.
+- **The close refusal named the wrong party.** Our own held sends were counted as *"received
+  message(s) waiting behind a gap"*, and the relay pull that gate performs first can never resolve
+  those — so the operator retries, gets the same refusal, and reaches for `force: true`.
+
+Also converted the four outbound appends left on the old path, **including the away responder** —
+which fires while inbound is still arriving, so it is the site most likely to have a gap under it,
+and one of them seals on the very next line.
+
+**One design call reversed on the reviewer's argument.** The `< tail` branch refused to place the
+leaf. But that case means an earlier unwitnessed append already put this side permanently ahead of
+the relay — the roots parted *there*, not here. Refusing cost the operator every later message in
+their own transcript to protect an agreement that was already gone. It now keeps the message, never
+writes over a committed leaf, and reports the divergence. A second review then caught that
+`diverged` had **no consumer**, so a session declared unsealable still returned an ordinary success;
+it now reaches the caller and makes the seal gate stop saying `ready`.
+
+### Rank 9 — `DOD-M12B-REDIAL-1`: the addresses were the missing piece
+
+Nothing re-dialled because nothing *could*: the counterparty's addresses arrived in the signed
+assignment, were used once, and were dropped. Retained now, with a demand-driven re-dial on the send
+path — never a timer, because a background loop is what caused the storm rank 10 exists to fix — and
+a cooldown so five sends at a dead peer cost one dial.
+
+Two findings worth keeping:
+- **The transport's `connection_lost` is a CATCH-ALL default**, so the re-dial was firing for the
+  stream-cap defect its own comment says it excludes — showing the counterparty a connection request
+  caused by a fault on this side. `no_connection` is now a distinct reason meaning what it says.
+- **The test never dialled.** The injected fault throws before the node is touched, so the retry
+  succeeded because the fault was spent, not because anything reconnected: *"replace the entire
+  catch body with `return attempt();` … case 1 passes identically."* It now asserts the dial itself
+  happened.
+
+Also from that review: a held **document** leaf was writing 32 bytes of its own hash into the
+operator's transcript as a message they sent, and coming back as a conversation message — the leaf
+kind survived the immediate append and was destroyed by the hold.
+
+### Rank 10 — `DOD-M12B-ABANDON-NOTIFY-1`: it fixed nothing as shipped, and the shape was wrong
+
+The reviewer proved this one by **running the code**, not reading it:
+
+> `PROBE immediate= abandoned  settled= interrupted`
+
+The retire fired a teardown that wrote the status **back** a few hundred milliseconds later, and all
+four tests read inside that window. *"Shipping this changes nothing about the storm it was written
+for."* Worse, the session's held content had been swept to the annex on the terminal flip — leaving
+a session the database called resumable with its pending content already reaped.
+
+**And the shape was wrong.** Flipping the receiver to `abandoned` handed the abandoning party a
+button that DENIES ITS COUNTERPARTY A RECEIPT: the unilateral seal exists precisely for *"the
+counterparty never co-closes"*, and a close refuses an `abandoned` session outright. Going silent is
+what that seal was built to survive, so hanging up must not be worse than going silent. The notice
+now retires the **transport** — durable marker, dial addresses dropped, node torn down without
+touching the status — and leaves the session sealable. That reversal is the reviewer's argument
+taken whole.
+
+Two more:
+- **Nothing authenticated a frame that ENDS a session.** The handler was discarding the
+  Noise-authenticated peer id it is handed. A session node is a promoted standing receiver, which
+  accepts everyone, and libp2p's gater does not close connections that already exist — so a peer
+  that dialled earlier could hang up a session it was not party to. Pinned, with the session id
+  required rather than treated as agreement when absent.
+- **The notice could not fire for the sessions people actually force-abandon.** An `interrupted`
+  session has no node, and `interrupted` is the receipt-forfeiting case force-abandon exists for —
+  and the operator was told *"could NOT be reached"*, sending them to debug a network fault when the
+  cause was our own torn-down node. It returns a reason now, and cannot hang (a catch covers a
+  throw, not a stream close waiting on a half-dead connection).
+
+The frame also reused `session_abandoned`, which is already a **directory→client signaling frame**
+with a different shape on a different rail. Renamed and declared in `protocol-types`.
+
+### Gate on the committed tree (§7)
+
+`pnpm run test` **exit 0** — 3778 passed / 11 skipped · `lint` **exit 0** · `typecheck` **exit 0** ·
+`build` **exit 0**. Along the way four gate runs failed on real defects, one of them a join-key
+violation this repo's own guard caught (`WHERE agent_name = ?`).
+
+### The one thing every review agreed on
+
+**Tests that call the new method directly prove the method, not the unit.** Ranks 8, 9, 10 and 11
+each shipped a first build whose wiring could be deleted with the suite still green. Every one now
+has an assertion that fails when the call site is removed.
