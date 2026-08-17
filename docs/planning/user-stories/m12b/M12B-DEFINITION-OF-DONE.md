@@ -10,9 +10,12 @@ description: >
   messaging. A retry is re-witnessed as a NEW submission, so the relay mints a fresh canonical
   position for content the receiver deduplicates and never appends; the receiver's tree then falls
   permanently behind the canonical counter and every later message is held behind a gap nothing can
-  ever fill. Held content is memory-only and destroyed at teardown. Scope: make a submission
-  idempotent end to end, and make the relay-assigned position the ONLY position anyone uses. Sole
-  status authority. Spec-of-record is
+  ever fill. Held content is memory-only and destroyed at teardown. TWO PHASES, one subject.
+  Phase 1: make a submission idempotent end to end, and make the relay-assigned position the ONLY
+  position anyone uses. Phase 2: relay loss and client-driven failover — the same topology, and too
+  intertwined with Phase 1 to live anywhere else, since a session is bound to one relay for life and
+  that relay's state is memory-only. Phase 2 is worked after Phase 1 and constrains it throughout.
+  Sole status authority. Spec-of-record is
   2026-08-16_1930_one-way-content-loss-the-ordering-counter-both-sides-disagree-on.
 ---
 
@@ -25,7 +28,9 @@ description: >
 > teardown and CI).
 
 ## How to use this
-- Find the lowest-numbered line not ✅ in the active tier — that is the next unit.
+- **Two phases. Phase 1 is active: Tiers T → A → B → E. Phase 2 is Tier R**, worked after Phase 1
+  closes — but its standing constraint applies to Phase 1 work from now (see Tier R).
+- Find the lowest-numbered line not ✅ in the active phase — that is the next unit.
 - **Evidence discipline:** a flipped tag carries ONE line of evidence plus `→ Journal Entry N`.
   Full run output lives in [[M12B-BUILD-JOURNAL]]. This document stays a scoreboard.
 
@@ -178,12 +183,16 @@ description: >
 
 ---
 
-## Tier R — Relay loss and failover (work AFTER Tier E — Andre, 2026-08-17)
+## Tier R — PHASE 2: relay loss and client-driven failover (after Phase 1 — Andre, 2026-08-17)
 
-> **Sequenced deliberately.** This is a different problem from the ordering defect and is not
-> allowed to delay it. It lives in the same milestone because it is the same subject — relay↔client
-> topology — and because **the ordering rewrite must not foreclose it.** Every Tier A and Tier B
-> unit is reviewed against the constraint below before it merges.
+> **A phase of this milestone, not an appendix to it** (Andre, 2026-08-17: *"it should be part of
+> this milestone in this work, given that it's so closely intertwined with the problem — it just
+> needs to be a later phase"*). Same subject, same code, same invariants: a session is bound to one
+> relay for life and that relay's state is memory-only, so failover and ordering are the same
+> topology question asked twice. Sequenced after Phase 1 so it cannot delay the fix that stops
+> messages being lost today — and **constraining Phase 1 from now**, because the ordering rewrite
+> must not foreclose it. Every Tier A and Tier B unit is reviewed against the constraint below
+> before it merges.
 
 > ### 🔒 STANDING CONSTRAINT ON TIERS A AND B — read before designing either
 > **Failover cannot be relay-initiated, because a relay can simply stop.** Andre, 2026-08-17. The
@@ -243,6 +252,8 @@ description: >
   it is silently accepting whatever it is told.
 
 ## Explicitly beyond M12B (so absence reads as intent, not omission)
+
+> Relay loss and failover are NOT here — they are **Phase 2 (Tier R)**, inside this milestone.
 
 - The **document** delivery ledger. M14B Tier SYNC replaced it with reconcile; this milestone
   fixes the messaging spine underneath and does not re-open that.

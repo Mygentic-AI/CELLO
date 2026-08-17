@@ -11,7 +11,7 @@ description: >
   FIRST, then M12B-DEFINITION-OF-DONE. Adapted from M14B-PROCEDURE, which is the most recent; the
   changes are the milestone paragraph, the severity triage, the lenses in §2b, and §2f — which is
   new, and exists because this milestone changes a wire contract between two independently
-  deployed programs.
+  deployed programs. Two phases: ordering first, then relay loss and client-driven failover.
 ---
 
 # M12B Procedure — How to Work the Milestone
@@ -67,6 +67,12 @@ original position and Structure 2 without advancing the counter, the leaf log, o
 a **client that stops re-asking**; and **position discipline** so a party's leaf index IS its
 assigned position. Measured shape: one content hash holding 49 canonical positions in session
 `f54e0d07`; `session.content.held.discarded` firing 20 times on one daemon in one day.
+**Then Phase 2, in this same milestone:** relay loss and client-driven failover. A session is bound
+for life to the relay the directory assigned it, that relay's state is memory-only, and when it goes
+the session keeps reporting success against a chain that stopped growing. Failover can only ever be
+client-driven — a relay that has stopped cannot hand anything over — and `FEDERATION-003`'s
+predecessor-ACK carry is the seam. Phase 2 is worked after Phase 1 and constrains it throughout
+(§2b, failover-preservation lens).
 Spec-of-record:
 [[2026-08-16_1930_one-way-content-loss-the-ordering-counter-both-sides-disagree-on]].
 
