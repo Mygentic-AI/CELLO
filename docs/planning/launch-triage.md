@@ -1432,6 +1432,45 @@ were burned by retransmissions; its planned submission-id fix would not have ded
 frames, because each is a genuinely distinct send. That milestone could have shipped in full,
 including a relay fleet roll, and two agents still could not have talked.
 
+## 23. A document syncing in the background rings your doorbell — and your phone
+
+**Designation: `DOD-DOC-QUIET-DELIVERY-1`** — ❌ **OPEN, traced 2026-08-17.** Unranked. **Raised by
+Andre: "these kind of notifications should really go to the inbox and not to notification storms."**
+
+**What it costs a customer.** Their agent lights up with "someone wants to connect" for sessions no
+human opened — a document syncing in the background. During the 2026-08-17 storm those pings were
+constant, and every one of them read exactly like a person starting a conversation. **They also go
+to Telegram**, so a background document sync can push a notification to the operator's phone.
+
+**The mechanism.** A session being created dispatches `session_state_changed` with `state:
+"created"` and then `sendTelegramDoorbell(...)`. **Nothing distinguishes a session a person opened
+from one the document delivery worker opened to push a frame.** The inbox already has the right
+surface for this — `document_notices`, whose own guidance says *"Nothing is waiting on a reply"* —
+but delivery does not use it; it rings the conversation doorbell instead.
+
+**And there is a feedback loop, which is the more serious half.** The same code path, on
+`state === "created"`, calls `reconcileScheduler.onReachable(...)` — which by design **resets the
+backoff to zero** and immediately attempts a reconcile for every shared document ("a session coming
+up IS the party-became-reachable signal"). So:
+
+1. Document delivery opens a session.
+2. Session creation resets the reconcile backoff and fires a fresh sweep.
+3. The sweep delivers more frames, which opens more sessions.
+4. Each one rings the doorbell and pushes Telegram on the way past.
+
+**This partially defeats `DOD-SYNC-REFUSAL-BACKOFF-1`**, shipped the same day: a refusal now sets a
+backoff, and the next session creation wipes it. Measured after that fix: **55 reconcile attempts in
+20 minutes** despite the backoff being in place, though with zero refusals. The backoff fix is still
+correct and still removed the refusal storm — it simply cannot hold against a reset it does not
+control.
+
+**What needs deciding (not decided).** Whether a delivery-opened session should be exempt from the
+reachability trigger, or the trigger should be rate-limited, or delivery should stop opening
+sessions of its own. All three are behaviour changes and none is obviously right.
+
+**Related:** item 22 (the storm this made unbearable), `DOD-SYNC-REFUSAL-BACKOFF-1` in
+[[M14B-DEFINITION-OF-DONE]] (the fix this undercuts), and item 21 (the cap these sessions fill).
+
 # Post-launch — needed eventually, not for launch
 
 **Moved here 2026-08-04 (Andre).** Not on the launch punch list; none fails the ruin test. Kept

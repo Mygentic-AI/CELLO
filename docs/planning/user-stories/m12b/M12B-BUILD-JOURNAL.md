@@ -368,6 +368,21 @@ Two things follow, and the second matters more:
    makes `DOD-M12B-ACK-1` a genuine product defect rather than a consequence of one bad dataset,
    which is the more important reading and the one to carry forward.
 
+### Why 55 sweeps still ran with the backoff in place — the reachability reset
+
+Traced after the fix, and it explains the residual traffic above. `dispatchSessionStateChangedWithTelegram`
+calls `reconcileScheduler.onReachable(...)` on `state === "created"`, which **sets `failures = 0` and
+`nextAttemptMs = 0`** and attempts immediately — deliberate, since a session coming up genuinely IS
+the party-became-reachable signal. But document delivery OPENS sessions, so **delivery resets the
+backoff that a refusal just set.** Loop: deliver → session created → backoff reset + fresh sweep →
+deliver more → more sessions.
+
+The same call path then rings the conversation doorbell (`session_state_changed`, `state: created`)
+and pushes a **Telegram** notification — for sessions no human opened. Nothing distinguishes a
+person's session from a delivery worker's. The inbox already carries the right surface for this
+(`document_notices`, whose guidance says "Nothing is waiting on a reply") and delivery does not use
+it. Raised by Andre and filed as launch-triage item 23, `DOD-DOC-QUIET-DELIVERY-1`.
+
 ### What this does to Tier A
 
 **The submission id would not have fixed this.** Document frames are not retransmissions; each is a

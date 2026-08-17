@@ -783,6 +783,15 @@ description: >
   `session.seal.blocked_incomplete`**, because a chain with held content cannot be co-signed. Those
   sessions never close and accumulate.
 
+  **⚠️ THIS FIX IS PARTIALLY DEFEATED BY THE REACHABILITY TRIGGER — traced 2026-08-17, filed as
+  launch-triage item 23 (`DOD-DOC-QUIET-DELIVERY-1`).** A session being created calls
+  `reconcileScheduler.onReachable(...)`, which **resets the backoff to zero by design** ("a session
+  coming up IS the party-became-reachable signal"). Document delivery opens sessions, so delivery
+  resets the very backoff a refusal just set. Measured after this fix: **55 reconcile attempts in
+  20 minutes** with the backoff in place — though **0 refusals**, so the refusal storm itself stays
+  fixed. The fix is correct and did its job; it cannot hold against a reset it does not control.
+  Same path also rings the conversation doorbell and pushes Telegram for sessions no human opened.
+
   **R41 is preserved.** A terminal refusal is NOT retired — it goes to the 15-minute cap. "Terminal"
   is one holder's current derivation and a later entry can make the same exchange admissible again,
   so scheduling state still only ever DELAYS an exchange. `onReachable` clears it outright.
