@@ -126,6 +126,14 @@ description: >
   — the operator whose cap fired is told nothing and is the only one who can clear it. Andre's
   framing, and the general principle it carries: an agent cannot self-heal against a limit it is
   never told it hit, so every cap in the system needs the same audit.
+  2026-08-17 (later): added item 22 (DOD-DOC-RECONCILE-TERMINAL-1) — the document sync worker dials
+  its peers about four times a minute forever, opening a session per attempt, for documents that can
+  never sync: 321 attempts against two documents in 85 minutes, refused 321 times, zero successes.
+  One peer's refusal carries `terminal: true` and was asked 105 more times; the agent doing the
+  asking had already been REMOVED from that document. Runs with every agent at attendance 0, so it
+  puts an agent online with no operator, no window and no session involved, and fills the item-21
+  cap with junk sessions on its way. Mistaken for the M12B ordering defect at first — the daemon log
+  names the document worker, not the message retry queue.
 ---
 
 # Launch Triage
@@ -1295,6 +1303,57 @@ extra steps.
 
 **Related, same night, same shape:** items 16–20. A guard that refuses without telling the party who
 could act is the recurring defect this list keeps rediscovering.
+
+
+## 22. A document you were removed from dials its old readers forever, four times a minute
+
+**Designation: `DOD-DOC-RECONCILE-TERMINAL-1`** — ❌ **OPEN, cause ESTABLISHED and measured
+2026-08-17.** Unranked. **Proposed slot: high — it runs with nobody signed in, it puts an agent
+online that its operator took offline, and it never stops on its own.**
+
+**What it costs a customer.** Their agent starts opening conversations by itself. Session requests
+arrive from agents nobody is driving, the operator's own agent keeps coming back online after being
+stopped, and the notifications do not stop. Every one of these sessions is opened, refused, and left
+lying around, so the per-sender session cap fills with junk — which is item 21, reached without the
+customer doing anything at all. From the outside it reads as the product having lost its mind.
+
+**Measured 2026-08-17 on one daemon, over 85 minutes: 321 document-sync attempts, against exactly
+two documents, refused 321 times, zero successes** — about four dials per minute, each one
+establishing a fresh session.
+
+**It runs with nothing attending.** The sync worker lives in the daemon and fires on a timer. It was
+observed dialing while all three agents on that daemon reported `attendance: 0` — no window, no
+session, no operator action. Standing receivers on the same daemon then auto-accept, which is why
+sessions appear in pairs between local identities and why an agent comes back online by itself.
+
+**Three defects, and they stack.**
+
+**(a) A terminal refusal is ignored.** The peer's refusal carries `"terminal": true` and says in
+words *"there is nothing further to reconcile."* The sender asked **105 more times**. The flag that
+exists to end the exchange is not read.
+
+**(b) A holder that was REMOVED still tries to sync.** The same document reports this agent's
+standing as `removed`, with the tool's own guidance stating that its edits no longer publish and the
+others' no longer arrive. A removed holder has, by that definition, nothing to sync — and it is the
+one doing the dialing.
+
+**(c) A non-terminal refusal retries forever with no backoff and no ceiling.** The second document
+refuses a would-be holder as not-a-party, deliberately marked non-terminal ("reconcile again after
+your inviter's entries spread"). The admission never spread. **79 attempts**, fixed interval,
+nothing escalates and nothing gives up.
+
+**The fix.** Honour the terminal flag — retire that document/peer pair permanently on first receipt.
+Never schedule a sync for a document whose local standing is `removed`. Give non-terminal refusals
+exponential backoff and a ceiling that surfaces to the operator instead of a fixed-interval retry
+with no end.
+
+**Immediate mitigation used 2026-08-17:** taking the dialing agents offline stops it, because the
+worker loses the ability to establish sessions. Deleting the dead document copy also stops it but
+destroys the only remaining copy of its history, so it is not the default move.
+
+**Related:** item 21 (the cap this fills), and the M12B lens on retries that have no ceiling. Note
+this is NOT the M12B ordering defect — it was mistaken for it at first, and the daemon log names the
+document sync worker, not the message retry queue.
 
 # Post-launch — needed eventually, not for launch
 
