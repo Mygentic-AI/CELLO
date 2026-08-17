@@ -2543,3 +2543,47 @@ control that was RUN, not an argument. Recorded here rather than silently skippe
 
 `pnpm run test` **exit 0** — **3843 passed / 11 skipped** · lint / **typecheck (now including the new
 step)** / build **exit 0**.
+
+---
+
+## Entry 35 — v0.0.248 published, and the finding that corrected itself (2026-08-18)
+
+### Published — this is the one to promote
+
+Tag **`v0.0.248`** → daemon **`0.0.174`**, cli **`0.0.181`**. Supersedes `v0.0.246` and `v0.0.247`.
+Tarball-verified: `retryReservationIfDue`, `getStandingReceiverReachability`,
+`srLastRejectionReason`, `reservation.gave_up`, `seal_carry_bilateral_in_progress` and
+`relay_bilateral` all present in `package/dist`; the cli's Hermes guidance carries
+`standing_receiver_reachability`; `cli@0.0.181 → daemon@0.0.174`, a real version.
+
+**cli changed on its own merits this time** — the shipped setup guidance told agents to report
+`standing_receiver_ready`, the very field this work exists to correct.
+
+### The announce finding, checked rather than accepted
+
+The review's F4 said `CELLO_ANNOUNCE_ADDRS` blinds every reservation check, making a **granted**
+reservation invisible. **The mechanism is exactly right** — verified in the installed
+`libp2p/dist/src/address-manager/index.js`: `getAddressesWithMetadata()` early-returns the announce
+list and never reaches `transportManager.getAddrs()`, so the circuit address is genuinely gone.
+
+**But the consequence it drew does not follow.** An agent that sets `CELLO_ANNOUNCE_ADDRS` has a
+PUBLIC address by definition — that is what the variable is for. **It does not need a circuit
+reservation to be dialable.** So the harm is narrower, and the sharper half of it is one I
+introduced hours earlier:
+
+1. The ladder burns five attempts on an agent that needs none. Refusals grant nothing, so no slot is
+   pinned — wasted dial effort, not exhaustion.
+2. **`standing_receiver_reachability` would report `unreachable` for an agent that is perfectly
+   dialable.** A false alarm on a surface added specifically to be trusted — *"a warning on
+   everything is a warning on nothing"*, which is `SEAL-STUCK-1`'s own review verdict, aimed back at
+   me.
+
+**And the obvious fix is the wrong first move.** `appendAnnounce` works — it concatenates rather than
+replacing — but it re-announces the private transport address, which is precisely what `announce` was
+chosen to suppress. That changes how every peer dials the demo agent and cannot be tested from here.
+`getDialability()` already exists on `CelloNode` and reports `{dialable, publicAddr}`; an agent that
+is directly dialable should read `direct` and should never start the ladder.
+
+**Deferred deliberately, not forgotten** — it needs checking against the demo agent's actual
+configuration, and inventing that at the end of an overnight run is the rabbit hole the procedure
+names.
