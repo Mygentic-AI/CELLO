@@ -465,7 +465,8 @@ description: >
   2026-08-18, review in flight.** Re-keyed at all three registrants and at the listener, which
   already had the agent in scope. Two agents on one daemon now hold separate waiters, and resolving
   one answers only that agent's close. **Revert test RUN:** keying by session alone turns both new
-  cases red. → Entry 28
+  cases red. Second pass found the map complete, the listener resolving by the stream's own agent
+  (not a guess), and no register-under-one-key/delete-under-another leak. → Entries 28, 29
 
 - **DOD-M12B-SEAL-BILATERAL-FIRST-1** [cello-client] — **a realigned bilateral seal is downgraded to
   a unilateral one, instantly.** When the counterparty rejects with `session_seal_already_pending` +
@@ -504,7 +505,9 @@ description: >
   than a duplicate (the directory's rule is one ctrl leaf *per party*). When the relay has already
   released the session the answer says the conversation survives and the receipt does not, instead of
   a status-shaped refusal. `submitAndEscalate` is factored out, not copied — a third copy is already
-  a filed finding. → Entry 27
+  a filed finding. Second pass caught an ordering bug the first fix introduced — a permanently
+  unsealable carry was being answered "wait, a better receipt is coming" — plus the same
+  reason-discarding defect surviving on the sibling branch. Both fixed. → Entries 27, 29
 
 - **DOD-M12B-SEAL-SILENT-DROP-1** [trustless-cello] — 🅿️ **PARKED — needs a directory fleet roll, so
   it does not ship unattended** (procedure §3a). **The directory answers a unilateral seal request

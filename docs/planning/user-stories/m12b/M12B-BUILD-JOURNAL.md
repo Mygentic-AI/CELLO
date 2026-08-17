@@ -2210,3 +2210,58 @@ comment asserting a property the code lacked.
 ### Gate
 
 `pnpm run test` **exit 0** — **3834 passed / 11 skipped** · lint / typecheck / build **exit 0**.
+
+---
+
+## Entry 29 — The final pass, and an ordering bug I introduced fixing the last one (2026-08-18)
+
+**Commit `9ed85d7`.** Review cap reached for both `PENDING-EXIT-1` and `SEAL-WAITER-KEY-1`; nothing
+further goes to a reviewer on these.
+
+### The verdict
+
+> **SPEC: DEVIATIONS FOUND** — the bilateral predicate is a strict subset of the directory's while
+> documented as matching it; the recovery coverage is two of three answers while documented as three.
+> **SILENT FALLBACKS FOUND** — a missing key provider reported as permanent relay-side loss.
+> **ERROR SUBSTITUTION FOUND** — *"a permanent, correctly-named terminal failure is now relabelled as
+> a transient one that tells the operator to wait for a receipt that will never arrive."*
+> **HOLLOW TESTS FOUND** — the recovery-succeeds path is untested and the stated revert test for the
+> `"none"` case does not hold.
+> **REMOVALS PROVEN.**
+>
+> *"Nothing here is large. Finding 1 is a two-block swap and is the one I would not ship without."*
+
+### The blocking one was mine, from the previous commit
+
+A carry holding **two of our own** ctrl leaves **plus the counterparty's** matched the new bilateral
+check first and answered *"both parties have posted, wait for the seal to land."* **Nothing was
+coming** — the directory demands exactly one ctrl leaf, so that session is permanently unsealable —
+and because the bilateral reason is deliberately non-terminal, the resolver would have spent five
+attempts over an hour where it previously gave up once with the truthful reason. **A fix made an
+answer worse than the one it replaced.** Two blocks swapped; the permanent case now says why it is
+judged first.
+
+### And the defect the last commit was blocked for survived on the sibling branch
+
+The interrupted close had the cause in hand and returned the bare commitment result, so the resolver
+logged `resolved` and dequeued a session that received **no notarization** — the system reporting
+health it does not have. Fixing a pattern on one caller and not its twin is its own failure mode.
+
+### Also
+
+- A **missing agent identity key** made the carry read empty, which answers *"the relay released the
+  session, the receipt is no longer obtainable"* — a **terminal** reason that writes a durable
+  give-up. An agent that is simply not loaded now has its own name and points at `cello_start_agent`.
+- The bilateral check's comment claimed to apply the directory's predicate. It applies a deliberately
+  **narrower** one, and now says which two cases it lets through and why refusing them here would be
+  a false refusal. **Fifth time this milestone has caught a comment asserting a property the code
+  lacked** — see [[project_comments_assert_properties_code_lacks]].
+- **The recovery-succeeds path had no test at any level**, and it is the one answer whose failure is
+  permanent: reporting "none" for a leaf that is on disk makes the caller post a second and the
+  receipt is gone forever. Verified by forcing "none" and watching it go red.
+- **Five harnesses injected a seal key of a different SHAPE from production's.** That mismatch is
+  what let the waiter-map keying bug live for a milestone. Normalised.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3835 passed / 11 skipped** · lint / typecheck / build **exit 0**.
