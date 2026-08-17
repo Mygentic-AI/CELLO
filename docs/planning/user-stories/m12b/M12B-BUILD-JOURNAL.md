@@ -2328,3 +2328,67 @@ already out of them.
 the raced-out case that could pin a slot has never happened here, and a refusal that grants nothing
 consumes nothing. Re-check this if the timeout reason ever starts appearing; that is the signal that
 the retry needs a tighter budget.
+
+---
+
+## Entry 31 — The retry budget was a latch, and `cello_status` said the agent was fine (2026-08-18)
+
+**Commit `d7cc8b6`.** First review pass on `RESERVATION-RETRY-1`; second pass in flight.
+
+### The verdict
+
+> **SPEC: DEVIATIONS FOUND** — the *"surface the operator reads rather than only in the log"* clause
+> is unimplemented and un-journaled. `[blocking]`
+> **SILENT FALLBACKS FOUND** — the exhausted retry latch survives agent offline→online and thereafter
+> neither retries nor logs. `[blocking]`
+> **ERROR SUBSTITUTION FOUND** — `gave_up` collapses relay-capacity, network and timeout causes into
+> one label with no upstream reason carried.
+> **HOLLOW TESTS FOUND** — the doubling backoff, the single clause guarding the scarce resource, is
+> bypassable by a one-line change that keeps all three tests green.
+
+### A budget that outlived the agent that spent it
+
+Nothing cleared `#srReservationRetry` when an agent went offline. Take it down and bring it back —
+`cello_set_agent_offline` then `cello_start_agent`, or the Hermes bridge restart — and the fresh
+receiver inherits a **spent** budget. The watchdog finds `attempts` past the cap and **returns having
+done nothing**: no retry, and not even a second give-up. The agent stays undialable and the machinery
+is inert and mute until a daemon restart, **while the relay may have had slots free for hours.**
+
+The fix is one line beside `#directoryRelayEndpoints.delete`, whose own comment already gives the
+reason: *"holding the old ones would keep a retired agent's relay list alive for the daemon's
+lifetime."*
+
+### And the status surface asserted health at exactly the wrong moment
+
+`standing_receiver_ready` is **presence-only** — `#standingReceivers.has(agentName)`. A receiver that
+had burned every retry and was dialable by nobody still reported `true`, on the one surface an
+operator reads and **the one the shipped Hermes skill tells agents to check by name**. New
+`standing_receiver_reachability` says which of `reserved` / `retrying` / `unreachable` / `absent` it
+actually is.
+
+**An ERROR log line was never going to be enough** — that is the whole premise of the unit:
+`reservation.none` was loud 481 times and nothing acted. A sixth event in the same file is the same
+failure mode with a different name.
+
+### Two more, one of them pre-existing and dormant
+
+- **The give-up named its exit point.** Three different problems reach it — relay capacity (a
+  `trustless-cello` problem), the network, and latency — and they need three different responses.
+  The third is also the only one that can pin a slot it never uses, so **its appearance is the signal
+  that this retry budget needs tightening**. The reason is captured at the rejection and carried.
+- **The recorded relay peer id came from `reservations.addrs[0]`, not the candidate that granted.**
+  `#startReceiverNode` returns the first that actually grants; with a pool larger than one, a refusal
+  on the first and a grant on the second recorded a relay we are not connected to — and the watchdog
+  reads that as a lost reservation on **every tick**, rebuilding on the 30-second grid and churning
+  the very reservations this unit conserves. Dormant at pool size 1; the pool is designed to be
+  larger. Now taken from the address the node actually holds.
+
+### The hollow test was the one guarding the scarce resource
+
+Replacing the doubling with a flat `now + retryMs` — precisely what the DoD forbids — left all three
+cases green. It now asserts the gaps grow. The offline/online latch had no coverage at all.
+**Both revert tests RUN:** flat interval turns the first red, removing the clear turns the second red.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3840 passed / 11 skipped** · lint / typecheck / build **exit 0**.

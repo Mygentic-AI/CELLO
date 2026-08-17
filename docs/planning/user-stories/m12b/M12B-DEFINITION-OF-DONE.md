@@ -562,7 +562,15 @@ description: >
   attempts is how a fleet exhausts a relay (that hazard is already written into
   `#startReceiverNode`). **Also measured:** `reservation.lost` **2,472**, all
   `relay_connection_gone`, and a 1,361-rejection spike on 08-14 against a 15–60/day baseline — the
-  relay-side slot supply deserves its own look, which is `trustless-cello` work. — ❌
+  relay-side slot supply deserves its own look, which is `trustless-cello` work. — 🟡 **BUILT
+  2026-08-18, second review pass in flight, NOT LIVE-VERIFIED.** Five re-attempts on a doubling
+  backoff from 5 minutes, then a give-up that says nobody can reach this agent. First pass found two
+  blocking: the budget was a **latch** that survived an agent going offline and back, after which
+  nothing retried and nothing logged; and the give-up reached only the log while `cello_status` still
+  reported `standing_receiver_ready: true` — new `standing_receiver_reachability` fixes that. Also
+  fixed a pre-existing defect in the same code: the recorded relay peer id came from the first
+  CANDIDATE rather than the one that granted, which with a pool larger than one makes the watchdog
+  read a healthy reservation as lost on every tick. → Entries 30, 31
 
 - **DOD-M12B-SESSION-SEED-1** [cello-client] — **a session node that is torn down can come back at
   the SAME peer id, and its session can return to `active`.** Traced 2026-08-17: the peer id a
