@@ -18,23 +18,29 @@ description: >
 
 **Updated 2026-08-17, end of the eleven-rank run.**
 
-### NEXT ACTION — ANDRE'S CALL, THEN BUILD
-The interrupted-session investigation is written up in full:
-[[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]]. **Read it before touching any of
-this** — it carries the measurements, what ADR-0001 does and does not allow, and three figures
-stated wrongly earlier in the session and corrected there.
+### NEXT ACTION — BUILD ORDER IS C, THEN A, THEN B (re-ranked by measurement, Entry 21)
 
-The plan splits into three cases. A and B need **no protocol change and no directory change**:
+Read [[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]] before touching any of this.
+§1 carries the measurements, §5 the per-case plan, §6a why seals fail, §6 Andre's invariants, §7
+what is deliberately unproven.
 
-- **A. Laptop close** (process alive, both peer ids still valid) — hold the receiver's seed in
-  memory instead of regenerating on rebuild; re-dial (✅ shipped); add the reverse edge
-  `interrupted → active` on reconnect.
-- **B. Signaling / relay reconnect** (process alive) — same fix, same mechanism.
-- **C. Daemon restart** (keypairs gone) — do NOT resume. **Auto-SEAL every open session on startup**
-  rather than force-closing, so it ends with a receipt. That converts the 137 receipt-less sessions
-  into sealed ones.
+**The re-rank, in one line:** 114 of 118 interrupted sessions came from our own shutdown sweep and
+**zero** from any transport event, so case C is the only case that has ever happened. A and B are
+hidden BEHIND C on a machine that restarts six times a day — not absent. Re-measure once C ships.
 
-**Open for Andre:** the anti-DDoS rationale for ephemeral peer ids is not in ADR-0001 and needs
+- **C. Daemon restart** — `DOD-M12B-RESTART-SEAL-1`. Implemented (`91801ec`), **review in flight**.
+- **A. Laptop close** — `DOD-M12B-SESSION-SEED-1`, written and ready. NOT the receiver seed: the
+  receiver is promoted into the session node at establishment, so the counterparty holds the SESSION
+  node's peer id. The damage is that a torn-down session node is never rebuilt. Per-session seed +
+  rebuild + the reverse edge `interrupted → active`, which no code path has ever performed.
+- **B. Signaling / relay reconnect** — same mechanism as A; folded into it.
+
+**PARKED, needs a directory fleet roll (§3a blocks it unattended):** `DOD-M12B-SEAL-SILENT-DROP-1` —
+the directory answers a unilateral seal request with silence in two cases, producing
+`seal_unilateral_timeout`, which at **50 occurrences is the largest single blocker to any automated
+close** (443 seal leaves submitted, 183 seals completed).
+
+**Still open for Andre:** the anti-DDoS rationale for ephemeral peer ids is not in ADR-0001 and needs
 recording before it constrains the design. Also unverified: whether the relay can serve as a
 rendezvous without the directory, and what the 26 `seal_interrupted_pending` sessions are waiting for.
 
