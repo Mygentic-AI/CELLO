@@ -1900,3 +1900,94 @@ Two questions, both answered in code rather than assumed:
 **Can the interrupted path double-seal?** The directory holds `#unilateralSeals` and returns early on a repeat. Safe — but *silently*, which is the parked `DOD-M12B-SEAL-SILENT-DROP-1`: a client that never received the first confirmation asks again and is answered with nothing, then reports `seal_unilateral_timeout`. That is the largest measured failure at 50 occurrences.
 
 **No downstream surface breaks.** Nothing in `core/cli` or the MCP shim reads the interrupted close's `status` field; `seal_receipt` and `retry_after_seconds` are additive, and the resolver is their named consumer.
+
+---
+
+## Entry 24 — The receipt landed and the row never moved (2026-08-18, overnight)
+
+**Status: IMPLEMENTED, second review pass in flight.** Commits **`8106955`** and **`6e2a9fa`**.
+
+### The finding, and it is the same shape as Entry 22's
+
+The escalation from Entry 23 worked. The state it should have produced did not land.
+
+Every seal-completion path ends with `destroySessionNode(agent, session, "sealed")` and trusts it to
+flip the status. **Its third line is `if (!entry) return`, and the status write is 26 lines BELOW
+that guard.** So it flips the status only for a session that still has an in-memory node — and an
+interrupted session has none *by construction*; the file says so itself: *"EVERY producer of that
+status deletes the entry."* A unilateral seal is exactly what an interrupted session escalates to,
+so on that path the guard fired **every single time**.
+
+The notarized root and the certificate were stored. The row still said `interrupted`.
+
+**What that cost, in order:**
+1. `cello_sessions` still showed the session stuck. From Andre's chair, nothing had changed.
+2. `cello_close_session` still refused it by name.
+3. The resolver re-selected it on the next boot, ran the whole ceremony again against a session that
+   already held a receipt, exhausted five attempts on a directory that silently ignores a duplicate,
+   and then **told the operator to force-abandon a session holding a valid receipt.**
+4. The terminal disposition hooks never ran, so held content was never annexed.
+
+`markSealed` flips the status synchronously, before teardown — the order `abandonSession` uses and
+that `retireSession` already documents 700 lines away. Applied at **all four** seal sites, including
+the certificate-pull path, which is the no-node case by definition: a daemon pulls a certificate
+exactly when it was down while the seal happened. **The comments at two of those sites asserted the
+property the code lacked**, which is why it survived; rewritten, not deleted.
+
+### The one that would have been permanent
+
+The one-shot responder-seal mark is **in memory**. A session whose close was in flight when the
+daemon stopped already has our SEAL ctrl leaf in the relay log — and on the next boot the resolver's
+automatic close would post a **second**. The directory requires exactly one
+(`ctrlLeaves.length !== 1 → unilateral_seal_leaf_invalid`) and the carry is durable, so every future
+attempt would carry both and be refused **forever**. One automatic retry, receipt gone permanently.
+
+The evidence was already on disk and simply not consulted. Our ctrl leaf is in
+`session_seal_leaves`, and its content hash — which cannot be recomputed, because the seal payload
+embeds a `close_timestamp` — is in the signed Structure 1. Recovered from there.
+
+### Root recovery — checked, because it was the likeliest thing to be wrong
+
+The recovered `reportedRootHex` is `tree.rootWithAppendedHex(ctrlContentHash)`, recomputed now rather
+than at submit time. **The directory compares `reported_root` against a root it rebuilds from the
+leaves WE carried**, so the only requirement is that the reported root matches the carry — not that
+it matches what was reported on some earlier attempt. If a gap filled between the two, the recovered
+root is the *more* correct one, and the original would have been rejected anyway. The new
+contiguity pre-check makes the carry's own shape a local, named refusal rather than a 30-second
+silence.
+
+### And a hazard the fix itself introduced
+
+`#updateSessionStatus` has no status guard, so `markSealed` had to carry one. Without it a
+certificate arriving after a **force-abandon** would silently resurrect the session as `sealed` —
+overturning the operator's documented decision to give up the receipt. It now refuses, loudly, and
+the certificate stays stored and retrievable. It also refuses an already-`sealed` row, so a no-op
+stops reporting that it landed.
+
+### The rest of the blocking findings
+
+- **`stop()` awaited the raw close, not the bounded race** — a close that never settles would have
+  hung shutdown forever *while holding the SQLCipher write lock*. The comment claimed the opposite.
+- **`seal_unilateral_timeout` stands for seven distinct directory refusals**, six of them silent bare
+  returns. Two are knowable locally — an empty carry, a gappy one — and are now refused by name.
+  **Deliberately ON for the INTERRUPTED path only:** turning it on for the active path broke four
+  existing tests that encode shipped behaviour, which is exactly the evidence for keeping the scope
+  narrow.
+- `markGaveUp` is required, not optional, so the compiler catches a wiring nobody did.
+- The terminal-refusal set dropped a string the close cannot produce and gained the two it can.
+
+### Three hollow tests
+
+The escalation harness stubbed an **empty carry** and asserted only the frame's `type` — it would
+have passed with an all-zero root, sequence 0 and no leaves, a request the directory refuses on three
+separate grounds. It now carries a real relay-receipted chain and asserts the root, the sequence and
+every carried leaf. The two new query guards and `markGaveUp` had no coverage at all.
+
+And the seal **call sites** are pinned by source order, because deleting one leaves every behavioural
+test green — which is precisely how this defect shipped. The first version of that pin could be
+satisfied by a *comment* containing the word; it now requires `.markSealed(`, verified by replacing a
+call with a comment naming it and watching it go red.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3824 passed / 11 skipped** · `lint` / `typecheck` / `build` **exit 0**.
