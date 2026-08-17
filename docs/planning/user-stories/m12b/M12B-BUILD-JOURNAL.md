@@ -52,13 +52,14 @@ single blocker to any automated close.**
 recording before it constrains `SESSION-SEED-1`. Also unverified: whether the relay can serve as a
 rendezvous without the directory.
 
-### REPO STATE — 2026-08-18, after the overnight run
+### REPO STATE — 2026-08-18, end of the overnight run
 | | |
 |---|---|
-| cello-client `main` | **`e67458f`** — clean, pushed. Gate: test/lint/typecheck/build all **exit 0**, **3826 passed / 11 skipped**. |
+| cello-client `main` | **`71f2c23`** — clean, pushed. Gate: test/lint/typecheck/build all **exit 0**, **3834 passed / 11 skipped**. |
 | trustless-cello `main` | clean, pushed. |
-| **`latest` (what Andre is RUNNING)** | daemon **`0.0.170`**, cli **`0.0.177`** — ranks 1–11 only. **None of the overnight work is on his machine.** |
-| **`beta`** | tag **`v0.0.246`** → daemon **`0.0.172`**, cli **`0.0.179`**. |
+| **`latest` (what Andre is RUNNING)** | daemon **`0.0.170`**, cli **`0.0.177`** — ranks 1–11 only. **Nothing from the overnight run is on his machine.** |
+| **`beta` (published, NOT promoted)** | tag **`v0.0.246`** → daemon **`0.0.172`**, cli **`0.0.179`**. Smoke-tag green, tarball-verified. |
+| ⚠️ **`main` is AHEAD of `beta`** | `v0.0.246` was cut at `e67458f`. `PENDING-EXIT-1`, `SEAL-WAITER-KEY-1` and the second-pass fixes are on main and **unpublished** — they need a `v0.0.247`. |
 | other five packages | unchanged: crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, connect `0.0.150` — all already on `latest`. |
 
 **Promotion is Andre's, always.** Commands in the format of Entry 16.
