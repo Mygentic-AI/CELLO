@@ -18,28 +18,31 @@ description: >
 
 **Updated 2026-08-17, end of the eleven-rank run.**
 
-### NEXT ACTION — ONE THING, AND IT IS ANDRE'S
-**Promote the cascade to `latest`.** The seven commands are in **Entry 16**. Nothing else is
-outstanding on the launch-triage top block: ranks 1–11 are built, reviewed, every finding fixed,
-merged, and published to `beta`.
+### NEXT ACTION
+**The 20-minute live measurement** — the launch-triage's own verification gate after rank 5, and the
+last thing owed on the eleven-rank block. It can finally run: Andre promoted and reinstalled at
+**15:40Z on 2026-08-17**, so the code is on a running daemon.
 
-**Then, and only then, the owed live measurement** — it cannot run until the code is on a running
-daemon, which needs the promotion. Baseline to beat: **55 reconcile attempts / 2 holds / 20
-direct-send failures over 20 minutes; holds must reach ZERO.**
+Baseline to beat, from the pre-fix run: **55 reconcile attempts / 2 holds / 20
+`session.content.direct.send.failed` in 20 minutes — holds must reach ZERO.** A drop in attempts
+with a RISE in document-sync latency is the failure mode to watch for, not a success.
 
 ### REPO STATE
 | | |
 |---|---|
-| cello-client `main` | ranks 1–11 merged; version cascade + tag `v0.0.244` pushed. Gate on the merged tree, exit codes captured: test/lint/typecheck/build all **exit 0**, 3778 passed / 11 skipped. |
+| cello-client `main` | ranks 1–11 merged; cascade + tag `v0.0.244`. Gate on the merged tree, exit codes captured: test/lint/typecheck/build all **exit 0**, 3778 passed / 11 skipped. |
 | trustless-cello `main` | pushed. |
-| published to **beta** | crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, daemon `0.0.170`, cli `0.0.177`, connect `0.0.150`. |
-| `latest` | still the **0.0.169 daemon generation — contains NONE of this**. |
+| **`latest` — PROMOTED 2026-08-17** | crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, daemon `0.0.170`, cli `0.0.177`, connect `0.0.150`. |
 
-### ⚠️ ANDRE'S RUNNING DAEMON IS OLDER STILL
-pid **66778**, a branch build from before rank 1. Its log is **`/tmp/newbuild-daemon.out`**, not
-`~/.cello/daemon.log`. Two broken sessions (`de55efd683e8…`, `d35eef58a266…`) are still live on it —
-the only live specimens of the rank-5 defect. Restoring it to the published build is
-`cello logout && cello login` **after** the promotion, and it drops his live agents, so it is his call.
+### ✅ THE RUNNING DAEMON IS THE NEW BUILD
+Andre ran the promotion, `npm i -g --prefer-online`, and `cello logout && cello login` at 15:40Z.
+`cello -v` → **0.0.177**; the daemon under it is **0.0.170**. Three agents up and unattended:
+`CELLO_Coder_1`, `CELLO_Support`, `Miss_Chelly`, all `standing_receiver_ready`.
+
+**Its log is `~/.cello/daemon.log` again** — the old branch daemon (pid 66778) and its
+`/tmp/newbuild-daemon.out` are GONE, and so are the two broken sessions that were the only live
+specimens of the rank-5 defect (`de55efd683e8…`, `d35eef58a266…`). Nothing in Entries 10–12 depends
+on them still existing; the diagnosis is closed and the numbers are recorded there.
 
 ### WHAT SHIPPED — ranks 1–11, all ✅
 1 send guidance · 2 inbox truth · 3 away marker · 4 delivery quiet · **5 the blocker (the 33rd
