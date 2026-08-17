@@ -216,7 +216,12 @@ description: >
 - **DOD-M12B-DELIVERY-QUIET-1** [cello-client] — **a session that DOCUMENT DELIVERY opened must not
   fire the party-became-reachable trigger, must not ring the conversation doorbell, and must not
   push a phone notification.** Ruled by Andre 2026-08-17: exempting delivery-opened sessions from
-  the reachability trigger is the chosen direction of the three that were on the table. — ❌
+  the reachability trigger is the chosen direction of the three that were on the table. —
+  ✅ **PROVEN 2026-08-17** — doorbell, phone push and backoff reset all suppressed for a
+  delivery-opened session and all still fire for a peer-opened one. **The first build did not work**:
+  keyed on agent NAME + peer pubkey, it could never match on the inbound half, which is the only
+  production emitter of `created` — reviewer: *"a guard that reads as protection and is unreachable."*
+  Re-keyed on pubkeys at both ends; a SECOND Telegram push was found unguarded. → Entry 9
 
   **The circularity, which is the whole defect.** `dispatchSessionStateChangedWithTelegram`
   (`daemon.ts`) fires on every `state === "created"` and calls
@@ -283,7 +288,11 @@ description: >
   and a confidently wrong diagnosis reported to Andre that the two sides disagreed about a session's
   existence. They never did. Minimum fix: carry per-entry truth (`accepted: true`) plus guidance
   saying the session is already readable and `cello_await_session` only drains the notice. Additive;
-  breaks no existing test. — ❌
+  breaks no existing test. — ✅ **PROVEN 2026-08-17** — both lists carry per-entry `accepted: true`
+  plus guidance naming what "pending" actually describes; the reaper now reaps TERMINAL before
+  `tooOld`, so the expired list only ever holds live sessions. Reviewer confirmed the central claim
+  (*"`accepted: true` really does hold on every production path"*); 1 blocking finding (the overlap
+  case), fixed at the source. → Entry 9
 
 - **DOD-M12B-AWAY-MARK-1** [cello-client] — **the away auto-responder answers on a session no window
   is attending, and nothing marks the reply as machine-generated.** It fires from
@@ -293,7 +302,11 @@ description: >
   exists but runs only on the SENDING side and cannot recognise a configured away message by design.
   Consequence measured today: two agents spent the morning exchanging each other's away responders
   while both operators believed a conversation was happening. Fix is a marker the receiving side can
-  read, NOT the removal of the away path. — ❌
+  read, NOT the removal of the away path. — ✅ **PROVEN 2026-08-17** — `[[AUTO-REPLY]]` prefixed at
+  the single send choke point (so a CONFIGURED away message is recognisable too) and after gateway
+  screening (so a redact verdict cannot strip it); both `cello_receive` exits carry `auto_reply` and
+  guidance stating the mark is a ONE-WAY signal. Seal-impact lens clean: *"no case where a marked and
+  an unmarked party disagree about a root."* 3 blocking findings, all fixed. → Entry 9
 
 - **DOD-M12B-REDIAL-1** [cello-client] — **nothing re-dials, ever.** Only the initiator dials, once,
   at establishment (`connectToCounterparty`). `newStream` never dials — it requires an already-open
@@ -336,7 +349,11 @@ description: >
   the same refusal, forever. Cost 2026-08-17: **six consecutive failed sends across two agents and
   three sessions**, initially misdiagnosed as a protocol defect and reported to Andre as such. The
   guidance must name the parameter. This is the milestone's own "errors name their cause" rule
-  applied to a success path. — ❌
+  applied to a success path. — ✅ **PROVEN 2026-08-17** — the refusal names the parameter, shows the
+  call, and shows no `[[…]]` token to paste; a repo-wide test fails on any documented `cello_send({…})`
+  that omits `signal`, which is what closed the two doc surfaces the review found (one ships inside
+  the connect tarball). Reviewer: *"SPEC: FAITHFUL … REMOVALS PROVEN"*, 2 blocking findings, both
+  fixed. → Entry 9
 
 ---
 
