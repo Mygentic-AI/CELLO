@@ -16,23 +16,63 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-- **NEXT ACTION: `DOD-M12B-TRACE-1`** — name the resubmitter with file/line evidence. No code
-  ships from Tier T. Do not write a fix that compares two counters until TRACE-2 has listed all
-  three of them.
-- **Nothing is built.** Every DoD line is ❌. The only artefact that exists is the pinned
-  regression test, committed deliberately red (see Entry 1).
-- **`DOD-M12B-ACK-1` is DIAGNOSED, not fixed** (Entry 2): the ack write fails with
-  `"Cannot write to a stream that is closed"`, 36 times, one error. Why the stream is closed is
-  the remaining work.
-- **Relay loss is now Tier R** (Entries 3–4), sequenced AFTER Tier E but constraining Tiers A and B
-  from now via the failover-preservation lens. Failover is client-driven permanently;
-  `FEDERATION-003`'s predecessor-ACK carry is the sanctioned seam. Also constrains
-  `DOD-M12B-RELAY-IDEM-2`.
-- **HEAD at milestone open:** trustless-cello `2ee4dec5`, cello-client `7384489`.
-- **Published versions:** unchanged — no publish has happened for this milestone.
-- **Relay fleet:** unchanged. No M12B relay roll has occurred. When one does, §2f of the procedure
-  governs it: relay tolerates the new field FIRST, one push per roll, node by node, poll a real
-  `GET /bootstrap` 200 before touching the next.
+**Updated 2026-08-17, end of session. Everything below was verified, not remembered.**
+
+### NEXT ACTION — work [[launch-triage]]'s top block, ranks 1 → 11, in order
+That block sits at the **very top of launch-triage.md** ("🔴 TOP OF THE LIST — SESSIONS DO NOT
+WORK") and is the authority on order. Andre: *"I want these issues gone today."* Ranks 1–4 are
+deliberately AHEAD of the blocker at rank 5 — they are small, they touch different files from the
+send path, and they buy a quiet spine and truthful surfaces to debug rank 5 on. Rank 1 is
+`DOD-M12B-SIGNAL-GUIDANCE-1`.
+
+### The state of the code
+- **cello-client branch `m12b/reconcile-removed-holder`, HEAD `4848228`, tree clean, NOT merged,
+  NOT published.** Four commits on it: `0650181` (removed-holder sweep), `b1322c2` (refusal
+  backoff), `7d36cfb` (parked send names its cause), `4848228` (counterparty identity logged).
+  Full gate green on each: 3697 tests, lint, typecheck, build.
+- **trustless-cello `main`, HEAD `0ec2f647`, tree clean, pushed.** Docs only.
+- **Published npm `@cello-protocol/daemon@latest` is `0.0.169` and does NOT contain any of this.**
+
+### ⚠️ THE RUNNING DAEMON IS THE BRANCH BUILD, NOT THE PUBLISHED ONE
+Andre's live daemon was stopped (`cello logout`, which hung 30 s and needed a TERM to pid 9757) and
+restarted from the branch build:
+`node /Users/andrep/Documents/code/cello-client/core/daemon/dist/bin/cello-daemon.js`, **pid 66778**,
+stdout at **`/tmp/newbuild-daemon.out`** — NOT `~/.cello/daemon.log`, which stops at 08:17.
+**Read `/tmp/newbuild-daemon.out` for anything after that.** To restore the published build: stop
+this process, then `cello login`. Andre has NOT asked for that yet.
+
+### What was proven today (Entries 6–8; do not re-derive)
+- The position burner was the **document sync sweep**, not retransmissions. `DOD-M12B-TRACE-1` ✅.
+- **Tier A would not have fixed it** — document frames are distinct sends, not retries, so no
+  idempotency key deduplicates them. Tier A is still correct work and is re-ranked, not cancelled.
+- Fix verified live, then **walked back**: 0 holds at first send, but **2 holds and 20 direct-send
+  failures 20 minutes later**. The fix removed the ENGINE, not the DEFECT.
+- **The remaining blocker is one error string** — `"Cannot write to a stream that is closed"` —
+  which breaks BOTH acknowledgements and ordinary delivery. `DOD-M12B-ACK-1`, rank 5.
+- **Killed by measurement, do NOT re-run:** excessive standing-receiver teardown (6 in 2.5 h; the
+  other ~57 builds are the by-design factory replacement), a stale counterparty peer id (`newStream`
+  SUCCEEDS — the failure is on the WRITE), and a missing/dead connection (`liveness: alive, direct`
+  logged 9.5 s before a send parked).
+
+### Live baseline to beat after rank 5 (the verification gate)
+On the branch build, 20 minutes, one session: **55 reconcile attempts, 0 refusals, 2 holds, 20
+`session.content.direct.send.failed`, 31 acks sent / 31 acked.** Holds must reach **0**. Fewer
+attempts with a matching rise in sync latency is a FAILURE, not a win.
+
+### Environment changes made today, so they are not mistaken for defects
+- Two documents were **refused** as CELLO_Support (`14896baa…`, `d8580927…`) — one-line M14B
+  fleet-test artifacts, read before refusing. Traffic from them should be gone.
+- Document `2270cfe5…` still shows `yourStanding: "removed"` and is now correctly excluded from
+  sweeps.
+- The 5-minute nudge cron used during Andre's walk was **deleted**. No background machinery is
+  running.
+- Test session `de55efd6…` (CELLO_Coder_1 ↔ CELLO_Support) exists and carries the baseline above.
+- Several older sessions were force-abandoned earlier; their peer halves may still redial
+  (`DOD-M12B-ABANDON-NOTIFY-1`, rank 10). That is a known defect, not new breakage.
+
+### Relay fleet / publish
+Unchanged. No M12B relay roll has occurred, no publish has happened. When one does, §2f of the
+procedure governs it. **One publish at the END of all eleven ranks, not one per fix.**
 
 ---
 
