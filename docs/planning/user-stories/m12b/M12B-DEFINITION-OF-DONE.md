@@ -545,6 +545,13 @@ description: >
   `interrupted → active`**, which no code path has ever performed. **No persistence** — a daemon
   restart still mints fresh identities, which keeps ADR-0001's "fresh per session" true at the only
   boundary where it can still mean anything, and the restart case is `DOD-M12B-RESTART-SEAL-1`'s.
+  **Why this does NOT create the agent-wide identifier Andre ruled against, worked out 2026-08-18 so
+  it is not re-derived:** the seed is minted with the standing receiver and **moves** to the session
+  at handoff (`#standingReceivers.delete(agentName)` already happens there), so the next receiver
+  mints a fresh one. A handoff occurs on every session, so the receiver identity churns naturally;
+  between handoffs it is stable, which is exactly what a reservation-lost rebuild needs. An agent
+  with no sessions keeps one receiver identity indefinitely — and never advertises it, because the
+  peer id only reaches the wire inside a session offer.
   Andre's other two invariants are ACs here: **idle is not interrupted** (any inactivity timeout is a
   configurable security setting, never a transport side effect), and **a session the receiver has
   closed must not accept new messages, whatever the sender does.** Also correct the **four drifted
