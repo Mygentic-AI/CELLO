@@ -21,6 +21,11 @@ description: >
   three of them.
 - **Nothing is built.** Every DoD line is ❌. The only artefact that exists is the pinned
   regression test, committed deliberately red (see Entry 1).
+- **`DOD-M12B-ACK-1` is DIAGNOSED, not fixed** (Entry 2): the ack write fails with
+  `"Cannot write to a stream that is closed"`, 36 times, one error. Why the stream is closed is
+  the remaining work.
+- **Relay loss is traced and OUT of scope** (Entry 3): no handoff exists; it constrains
+  `DOD-M12B-RELAY-IDEM-2` and needs its own launch-triage line.
 - **HEAD at milestone open:** trustless-cello `2ee4dec5`, cello-client `7384489`.
 - **Published versions:** unchanged — no publish has happened for this milestone.
 - **Relay fleet:** unchanged. No M12B relay roll has occurred. When one does, §2f of the procedure
@@ -97,3 +102,96 @@ Held back from that design, and now a Decision Carried: this is **correctness ha
 adversary defence.** A client that wants to burn positions can mint fresh submission ids and the
 relay cannot stop it. What it buys is that an honest daemon with a bug can no longer silently
 corrupt ordering.
+
+
+## Entry 2 — The first acknowledgement: traced (2026-08-17)
+
+**`DOD-M12B-ACK-1` diagnosis complete; cause of the closed stream still open.**
+
+### The producer/consumer chain
+- **Producer (receiver):** `#sendDeliveryAck` opens a **fresh stream** to
+  `entry.counterpartySessionPeerId` on `/cello/content/1.0.0` and writes one
+  `content_delivery_ack` frame at `level: "persisted"`. Logs `content.delivery.ack.sent`.
+- **Consumer (sender):** `#handleContentStream` reads **exactly one frame per stream**
+  (`await iter.next()`, then return), and on `content_delivery_ack` + `persisted` calls
+  `#resolveAwaitingAck` — which cancels the TTF timer and logs `content.delivery.acked`.
+- A hold is **deliberately never acknowledged**: *"deliberately NOT for a transient hold."*
+
+### The measurement
+Per-session event counts from the live daemon log:
+
+| session | ack.sent | acked | **ack.send.failed** | ttf_expired | held |
+|---|---|---|---|---|---|
+| `9cf17bbe` | 13 | 12 | **19** | 59 | 20 |
+| `25f9b36e` | 0 | 0 | 0 | 18 | 36 |
+| `01b578eb` | 1 | 1 | 0 | 1 | 1 |
+
+**`content.delivery.ack.send.failed` fired 36 times across the log, with exactly ONE distinct
+error, every time:**
+
+```
+"Cannot write to a stream that is closed"
+```
+
+### What this establishes
+The receiver appends and verifies the content, then fails to deliver the acknowledgement because
+the stream it just opened is closed. The sender never learns the content landed, its 20-second TTF
+expires, it parks and retries — and the retry takes a NEW canonical position. **That is the ignition
+step for the spiral in Entry 1**, and it needs no hold to start: the first ack simply never arrives.
+
+Note `25f9b36e` (the Hermes session): **zero acks sent, zero received, 36 holds.** Once everything is
+held, nothing is acknowledged by design, so the spiral is self-sustaining there without any further
+stream failure.
+
+### What is NOT established — the unit's remaining work
+**Why the stream is closed.** Three candidates, none tested:
+1. The underlying connection to the counterparty is already gone, so `newStream` returns a stream
+   that is closed on arrival.
+2. `stream.send(lp.encode.single(frame))` is **not awaited** and the enclosing `#sendDeliveryAck`
+   returns, racing the stream's close.
+3. The peer closed the inbound direction after sending content, and the ack dial reuses/collides
+   with that muxer state.
+
+This is a code question, not a log question. `DOD-M12B-ACK-1` stays ❌ until the cause is proven and
+the fix is red-tested.
+
+---
+
+## Entry 3 — Relay loss: no handoff exists, and the record dies silently (2026-08-17)
+
+Raised by Andre, 2026-08-17: *"What happens if a relay goes down or is unreachable? I'm concerned
+about the handoff to another relay."* Traced.
+
+### There is no handoff
+A session is bound to **one relay for its whole life**. The directory issues a signed
+`RelayAssignmentCarry` at establishment which the client presents to its chosen relay
+(`FED-OPTIONB-SETUP-001`, Option B). No other relay ever holds that session's `seq_counter`,
+`leaf_log`, or `running_root`, so no other relay can adopt it.
+
+### What happens when that relay dies
+1. Session state is **in memory only** — the client comment on `relay_session_gone` says it "fires
+   for perfectly live sessions whenever the relay restarts, because the relay stores sessions in
+   memory."
+2. Submissions then hit `relay-node.ts:1075` — `const state = this.#store.getSession(sessionKey);
+   if (!state) { await reply("session_not_found"); return; }`.
+3. **GOOD: the counter does not restart and re-issue colliding positions.** The relay refuses. That
+   failure mode does not exist, and this was worth confirming before assuming the worst.
+4. **BAD: the client treats `relay_session_gone` as non-terminal.** It warns and carries on sending
+   directly, unwitnessed — so delivery continues while the record stops growing. Already measured
+   in-tree, 2026-08-09: *"a session whose relay had sealed it after both away-responders fired ran
+   for 68 more minutes and 8 more messages, every send reporting success, against a chain that had
+   stopped growing at six leaves."*
+5. **No way back.** On reconnect the client deliberately does not re-record the session — the
+   assignment is documented as "absent … on the restart/persisted reconnect path (the relay already
+   recorded the session at first establishment)." Once the state is lost it cannot be restored, and
+   the session can never be witnessed again.
+
+### Bearing on M12B
+This does not change the ordering fix, but it constrains `DOD-M12B-RELAY-IDEM-2`: an idempotency
+record kept in the same in-memory store inherits exactly this lifetime. If the answer to IDEM-2 is
+"do not persist", then `DOD-M12B-CLIENT-REUSE-1` is not defence in depth — it is the only guard that
+survives a relay restart, and the DoD must say so plainly.
+
+**Filed as out of M12B scope, needs its own home:** a session whose relay is gone should either
+retire loudly or be re-recordable somewhere, rather than continuing to report success against a
+chain that stopped growing. Candidate for launch-triage in its own right.

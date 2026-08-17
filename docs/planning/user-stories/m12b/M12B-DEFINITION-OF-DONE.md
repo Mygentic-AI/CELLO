@@ -111,7 +111,11 @@ description: >
   whenever the relay restarts, because the relay stores sessions in memory" — so without this the
   defect returns after every restart, rarer and harder to see. Decide and implement: persist, or
   rely on DOD-M12B-CLIENT-REUSE-1 as the primary guard with this as defence in depth. Either way
-  the answer is recorded in Decisions Carried, not left implicit. — ❌
+  the answer is recorded in Decisions Carried, not left implicit. **Constrained by Entry 3:** a
+  session is bound to ONE relay for life (directory-signed assignment, no handoff), and its state
+  is memory-only. So if the answer here is "do not persist", CLIENT-REUSE-1 is not defence in
+  depth — it is the ONLY guard that survives a relay restart, and this DoD must say so plainly
+  rather than implying two independent protections. — ❌
 
 - **DOD-M12B-CLIENT-REUSE-1** [cello-client] — a retransmission does not ask again. The sender
   reuses the ordering record it already holds from the first submission rather than calling
@@ -143,8 +147,14 @@ description: >
   spiral needs exactly one unacknowledged send to start: held content is deliberately never
   acknowledged ("Held content is NOT yet a durable leaf, so it is deliberately NOT acknowledged"),
   and every send carries a 20-second TTF timer that fires on every message in production logs.
-  Establish whether the first ack is never sent, never arrives, or arrives late — this was NOT
-  determined during the 2026-08-16 investigation and is the one unknown left in the chain. — ❌
+  **Diagnosed 2026-08-17 → Entry 2: the ack is SENT and fails to write.**
+  `content.delivery.ack.send.failed` fired **36 times, with one single error every time —
+  `"Cannot write to a stream that is closed"`.** The receiver appends and verifies, opens a fresh
+  stream back to the sender, and the write fails; the sender never learns the content landed, its
+  TTF expires, and the retry takes a new position. That is the ignition step, and it needs no hold
+  to start. **Remaining work: prove WHY the stream is closed** — three untested candidates in
+  Entry 2 (connection already gone; the unawaited `stream.send(...)` racing the close; the peer
+  closing the inbound direction after sending content) — then fix it red-first. — ❌
 
 ---
 
@@ -189,6 +199,14 @@ description: >
   again"). None exists today — grep across the daemon and protocol-types returns only database
   migration code — and adding one is a larger protocol change. M12B's approach is to stop creating
   gaps rather than to build machinery for repairing them.
+- **A session whose relay has died.** Traced in Entry 3 and deliberately NOT in scope. There is no
+  handoff — a session is bound to its directory-assigned relay for life, that relay's state is
+  memory-only, and once lost the session can never be witnessed again. The client treats
+  `relay_session_gone` as non-terminal, so delivery continues while the record silently stops
+  growing (measured in-tree 2026-08-09: 68 minutes and 8 messages against a chain frozen at six
+  leaves, every send reporting success). Good news established at the same time: the relay REFUSES
+  (`session_not_found`) rather than restarting its counter, so colliding positions are not a
+  failure mode. Needs its own launch-triage line and its own milestone slot.
 - The **second relay** returning `count=0` on every park pull from both daemons while never
   receiving a deposit. Observed 2026-08-16, wasted round trip, not a loss. Not in scope; do not
   re-chase it as part of this defect.
