@@ -2113,3 +2113,33 @@ Andre's machine until he promotes**, and the promotion is his, always.
   seal?"*. LOW, unbuilt, and it rides whichever publish comes next.
 - The three larger carried findings have their own DoD lines: `SEAL-WAITER-KEY-1`,
   `SEAL-BILATERAL-FIRST-1`, `SEAL-ESCALATE-DUP-1`.
+
+---
+
+## Entry 27 — `seal_interrupted_pending` finally has an exit (2026-08-18)
+
+**Status: IMPLEMENTED, review in flight.** Commit **`f29df19`**. Not in `v0.0.246`.
+
+`cello_close_session` refused that status by name and told the operator the session was *"awaiting
+FROST notarization"*. **It was not awaiting anything.** Nobody ever requests that notarization: the
+relay stamps a chain only once BOTH parties have posted a SEAL ctrl leaf, and the responder never
+posts one. 26 sessions sat there for up to 10.5 days being told to wait for an event that could not
+occur.
+
+**Why escalating is safe here, which was the DoD's stated proof obligation:**
+- The status MEANS both sides signed the same root. That is exactly what a unilateral seal reports.
+- A second close cannot post a second ctrl leaf, because `ESCALATE-1`'s durable recovery reads the
+  one a previous run posted out of `session_seal_leaves`. **That fix is what made this one possible.**
+- The **responder-side** row is the case worth naming: it has no ctrl leaf of its own at all, since
+  `inbound-seal-request.ts` persists its commitment and stops. So this branch posts its FIRST — the
+  repair that was missing, not a duplicate. The directory's rule is one ctrl leaf *per party*.
+
+**And when the relay has released the session** (it drops one 24 h after the last message) the
+answer says so: the conversation survives in the transcript, the receipt does not. That is a fact
+the operator can act on; `session_not_closeable` was not.
+
+`submitAndEscalate` is factored out rather than copied — a third copy of the escalation is already a
+filed finding (`DOD-M12B-SEAL-ESCALATE-DUP-1`) and this would have been the fourth.
+
+**Gate:** `pnpm run test` **exit 0** — **3829 passed / 11 skipped** · lint / typecheck / build **exit
+0**. **Revert test RUN:** disabling the branch turns all three new cases red.
