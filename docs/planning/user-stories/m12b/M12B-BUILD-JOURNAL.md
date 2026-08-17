@@ -233,3 +233,53 @@ The relay REFUSES with `session_not_found` when its state is gone (`relay-node.t
 than restarting its counter and issuing colliding positions. **Colliding positions are not a failure
 mode.** The damage from relay loss is silence — a session that keeps reporting success against a
 chain that stopped growing — not corruption.
+
+
+## Entry 5 — Doc review: four findings, all valid, all fixed (2026-08-17)
+
+Reviewer: `CELLO_Support`, over CELLO. Brief: implementation-readiness of the M12B set. Verdict
+quoted: *"the set is strong — I verified every load-bearing pointer against the real repos… All
+real. A fresh session could open TRACE-1 from these docs alone."* Four deficiencies, **all four
+accepted and fixed**:
+
+1. **Wrong repo tag (worst).** `DOD-M12B-ENFORCE-1` was tagged `[trustless-cello]`, but the test it
+   flips lives in **cello-client** (`core/daemon/src/__tests__/msg-001-strict-in-order.test.ts`) and
+   `7384489` is a cello-client commit. An implementer trusting the tag starts in the wrong repo.
+   **Fixed:** retagged `[cello-client]`.
+2. **Order conflict inside Tier A.** The DoD's rule is "lowest non-✅ line" (submission id → relay
+   idempotency → client reuse), while Procedure §4 puts `CLIENT-REUSE-1` before the wire change and
+   §2f argues for exactly that. Two authorities disagreeing, neither yielding. **Fixed:** the DoD's
+   "How to use this" now names §4 as the authority within Tier A, and states the distinction — line
+   order is the DEPENDENCY order, §4 is the BUILD order, §4 wins.
+3. **§2c contradicts §2f as written.** §2c said "All parties upgrade together; there is no
+   dual-speak mode," while §2f's whole design is staged tolerance. **Fixed:** §2c is now explicitly
+   scoped to the client↔client contract and says it does NOT govern the client↔relay rollout, with
+   the reason — staged tolerance is not dual-speak, it is what makes a bilateral wire change
+   survivable when the two sides deploy on different schedules.
+4. **One-way parent link.** M12B pointed up to M12; M12 never mentioned M12B, so anyone resuming
+   from M12's docs would not discover the sub-milestone. **Fixed:** M12's DoD now carries a
+   sub-milestone banner pointing at all three M12B documents.
+
+The reviewer also endorsed the build order on its merits — *"your rationale (CLIENT-REUSE-1 works
+against an unchanged relay, so the client-side half ships risk-free first) is the better order in my
+view, and it's also the §2f-safe order"* — and asked only that the two documents stop disagreeing
+about who decides. That is what finding 2's fix does.
+
+### A caution worth more than the findings
+
+Getting this review took four attempts, and the three failures were reported to Andre as protocol
+defects. They were not. All three were tool-calling errors, and the tool named each one:
+
+| Reported as | Actually |
+|---|---|
+| "initiate_session silently drops its attached message" | `cello_initiate_session` has no message parameter |
+| "send reported ok but nothing was sent" | passed `message:` instead of `content:` → MCP `-32602` |
+| "refusing a correctly-terminated message as unterminated" | `[[OVER]]` in the body; the API needs `signal: "over"` |
+
+Two of those had already been half-filed here as protocol loss before the send path was measured
+(no `session.content.sent` event, and the SENDER's own transcript empty). **The measurable facts
+said "no send happened"; "it was lost" was an inference, and it was wrong.** The correct read was
+available from the sender's own record the whole time.
+
+Same lesson as Entry 1's two withdrawn hypotheses, and it is now three for three tonight: **an
+agent's account of what it did is not evidence of what happened — including this agent's.**

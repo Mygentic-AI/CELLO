@@ -30,7 +30,11 @@ description: >
 ## How to use this
 - **Two phases. Phase 1 is active: Tiers T → A → B → E. Phase 2 is Tier R**, worked after Phase 1
   closes — but its standing constraint applies to Phase 1 work from now (see Tier R).
-- Find the lowest-numbered line not ✅ in the active phase — that is the next unit.
+- Find the lowest-numbered line not ✅ in the active phase — that is the next unit, **except within
+  Tier A, where the work order is governed by [[M12B-PROCEDURE]] §4 and deliberately deviates from
+  line order.** §4 puts `CLIENT-REUSE-1` before the wire change because the client-side half works
+  against an unchanged relay and survives a relay restart, so it ships risk-free first. Line order
+  here is the DEPENDENCY order; §4 is the BUILD order, and §4 wins.
 - **Evidence discipline:** a flipped tag carries ONE line of evidence plus `→ Journal Entry N`.
   Full run output lives in [[M12B-BUILD-JOURNAL]]. This document stays a scoreboard.
 
@@ -174,7 +178,7 @@ description: >
 
 ## Tier E — Proof (three real daemons, separate OS processes)
 
-- **DOD-M12B-ENFORCE-1** [trustless-cello] — the pinned regression flips. `it.fails(...)` in
+- **DOD-M12B-ENFORCE-1** [cello-client] — the pinned regression flips. `it.fails(...)` in
   `core/daemon/src/__tests__/msg-001-strict-in-order.test.ts` ("a redelivery witnessed at a NEW
   canonical sequence must not strand every later message") becomes `it(...)` and passes. That test
   was committed red-on-purpose (cello-client `7384489`) precisely so this line has an unambiguous

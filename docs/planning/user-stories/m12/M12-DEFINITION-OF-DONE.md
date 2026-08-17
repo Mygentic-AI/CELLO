@@ -13,6 +13,14 @@ description: >
 
 # M12 — Definition of Done
 
+> ### ↳ SUB-MILESTONE: [[M12B-DEFINITION-OF-DONE]] — relay↔client ordering and failover (open)
+> Opened 2026-08-17. The relay↔client communication topology defect that strands basic messaging: a
+> retransmission is re-witnessed as a NEW submission, so the relay mints a fresh canonical position
+> for content the receiver deduplicates and never appends, and every later message is held behind a
+> gap nothing can fill. Phase 2 covers relay loss and client-driven failover. It is M12's subject,
+> which is why it lives here rather than in a milestone of its own. Runbook [[M12B-PROCEDURE]],
+> evidence [[M12B-BUILD-JOURNAL]].
+
 ## How to use this
 - Find the lowest-numbered line not ✅ in the active tier — that is the next unit.
 - **Evidence discipline:** a flipped tag carries ONE line of evidence plus `→ Journal Entry N`.

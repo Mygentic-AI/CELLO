@@ -198,7 +198,11 @@ Standing M12B-specific lenses:
 - cello-client changes reach operators only via `/cello-publish` — load the skill for EVERY
   publish; verify against the built tarball, not source (`rm -rf core/*/dist` before asserting
   absence — stale-dist orphans re-ship deleted files).
-- All parties upgrade together; there is no dual-speak mode.
+- All **clients** upgrade together; there is no client↔client dual-speak mode. **This is scoped to
+  the client↔client contract and does NOT govern the client↔relay rollout**, which is deliberately
+  staged tolerance — see §2f. The relay accepts the new field before any client sends it, and the
+  client tolerates a relay that ignores it. Those are not a dual-speak mode; they are the ordering
+  that makes a bilateral wire change survivable when the two sides deploy on different schedules.
 
 ## 2f. THE BILATERAL CONTRACT — new in M12B, and the reason this milestone can hurt
 This milestone changes a frame that a deployed relay fleet and an installed client must both
