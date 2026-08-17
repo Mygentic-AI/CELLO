@@ -1411,6 +1411,15 @@ being torn down excessively (6 genuine teardowns in 2.5 h); there is NO stale pe
 the stream succeeds — the failure is on the write); the connection is NOT missing or dead (the test
 session logged `liveness: alive, path: direct` 9.5 seconds before its send parked).
 
+**A THIRD document, and a lesson about half-states (2026-08-17).** Once the two broken documents
+were dealt with, the largest single source of sync frames turned out to be a document that had been
+**invited and never accepted** — 30 appearances against the stranger document's 15, and the removed
+one's zero. A document sitting in a half-state is not inert; it generates traffic. Both
+invited-never-accepted documents were refused the same day to quiet the spine. **The important
+consequence:** with zero refusals and purely legitimate sync, the holds still appeared — so the
+remaining defect is NOT an artifact of one operator's broken documents. Any session with enough
+frames will reach it.
+
 **Carried investigation, after the fixes are live (Andre, 2026-08-17):** document sync frames share
 the conversation's sequence line. That is deliberate and is being **left alone for now** —
 separating them changes what the tree contains, and the tree root is what the seal signs over, so it

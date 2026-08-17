@@ -341,6 +341,33 @@ with zero holds" was true at the moment it was measured and is NOT the steady st
 remaining producer is the stream defect below, now with a live reproduction on the fixed build:
 20 failures on one session in 20 minutes, each one named in the log by `7d36cfb`.
 
+### The traffic after the fix — and a THIRD document nobody was looking at
+
+Which documents actually generate sync traffic on the fixed build, over the same 20 minutes:
+
+| appearances | document | note |
+|---|---|---|
+| 30 | `14896baa…` | **invited and never accepted** — the new top talker |
+| 15 | `d8580927…` | the "stranger" one — still present, but **0 refusals** (backoff working) |
+| 3 | `93d17b00…` | the shared document from the spec-of-record |
+| **0** | `2270cfe5…` | **the removed one — gone entirely.** 105 refusals before, none now |
+
+**55 reconcile attempts, 0 refusals.** So the remaining traffic is not failure — it is legitimate
+sync doing legitimate work.
+
+Two things follow, and the second matters more:
+
+1. **A document sitting in a half-state generates sync traffic.** `14896baa…` was never refused and
+   never accepted; it simply sat as an open invitation, and after the two broken documents were
+   dealt with it became the LARGEST single source of frames on the session. Half-states are not
+   inert. Both invited-never-accepted documents were **refused 2026-08-17** to quiet the spine while
+   the stream defect is unfixed (`cello_doc_refuse`; both were one-line M14B fleet-test artifacts).
+2. **The remaining defect is therefore NOT an artifact of this operator's broken documents.** With
+   zero refusals and purely legitimate sync, the holds still appeared. Any session with enough
+   frames — a large document, a busy sync, a future feature — will reach the same failure. That
+   makes `DOD-M12B-ACK-1` a genuine product defect rather than a consequence of one bad dataset,
+   which is the more important reading and the one to carry forward.
+
 ### What this does to Tier A
 
 **The submission id would not have fixed this.** Document frames are not retransmissions; each is a
