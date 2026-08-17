@@ -410,6 +410,28 @@ description: >
   **Out of scope:** the 26 `seal_interrupted_pending` sessions — `cello_close_session` refuses them
   outright and what they wait for is unestablished. — ❌
 
+- **DOD-M12B-SEAL-SILENT-DROP-1** [trustless-cello] — 🅿️ **PARKED — needs a directory fleet roll, so
+  it does not ship unattended** (procedure §3a). **The directory answers a unilateral seal request
+  with silence, twice, and the client can only report a 30-second timeout.**
+  `seal_unilateral_timeout` is the **single largest blocker to any automated close — 50 occurrences**
+  against 443 seal leaves submitted and only 183 seals completed (59% of seals that start never
+  finish). Two `return`s at the top of `directory-node.ts`'s handler produce it:
+  - `if (this.#unilateralSeals.has(sessionIdHex)) return;` — *"Already sealed — ignore duplicate"*.
+    A client that never received the confirmation (its stream was down at that instant — the exact
+    case `DOD-TERMINAL-STATE-DIVERGENCE-1` exists for) asks again and is answered with nothing.
+    **The session IS sealed and the daemon can never learn it from this path.**
+  - `if (lastActivity == null) return;` — *"Unknown session — silently reject without leaking
+    session existence"*. `#sessionLastActivity` is in-memory, restored on boot only for sessions the
+    store considers ACTIVE — so a session the client calls interrupted may have no entry, and every
+    request about it is dropped forever.
+  The no-leak rationale is sound for an unauthenticated stranger. **This stream is authenticated**,
+  and the party asking is a participant asking about its own session. This is the milestone's own
+  "errors name their cause, not their exit point" rule applied to the directory: `seal_unilateral_timeout`
+  names the client's 30-second wait, which is the one thing that was working. Fix: answer both cases
+  — the already-sealed one with the certificate it is asking for. **Relay/directory rolls are
+  node-by-node and threshold tolerates one node down (§2f); batch this with any other pending
+  directory change.** — 🅿️
+
 - **DOD-M12B-SESSION-SEED-1** [cello-client] — **a session node that is torn down can come back at
   the SAME peer id, and its session can return to `active`.** Traced 2026-08-17: the peer id a
   counterparty holds belongs to the **session node**, not the standing receiver (the receiver is
