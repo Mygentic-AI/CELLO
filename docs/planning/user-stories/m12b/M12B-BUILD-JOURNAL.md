@@ -18,20 +18,25 @@ description: >
 
 **Updated 2026-08-17, end of the eleven-rank run.**
 
-### NEXT ACTION — ANDRE'S RULING, THEN A TRACE
-The 20-minute gate **DID NOT PASS** (Entry 17). 274 holds against **1 release**, on an exact
-120-second cadence that is the document reconcile sweep. Nothing is destroyed — that part of rank 6
-works — but the gap is still being created.
+### NEXT ACTION — ANDRE'S CALL, THEN BUILD
+The interrupted-session investigation is written up in full:
+[[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]]. **Read it before touching any of
+this** — it carries the measurements, what ADR-0001 does and does not allow, and three figures
+stated wrongly earlier in the session and corrected there.
 
-**This fires the DoD's own re-open trigger** ("any gap observed on a session after the flood fix is
-live") on the parked **shared-numbering** investigation. Separating the document and conversation
-sequence lines changes what the tree contains, and the root is what the seal signs over — so the
-scope call is Andre's, not this session's.
+The plan splits into three cases. A and B need **no protocol change and no directory change**:
 
-Before any code: read the producer of the canonical sequence on the document path
-(`document-delivery-transport.ts` `sendBytes` → `sendContent` → `placeOwnLeaf`) against a session
-whose tree starts EMPTY. `session.content.held.restored` was 0, so these holds are created fresh
-each sweep, not inherited. **No hypothesis is promoted.**
+- **A. Laptop close** (process alive, both peer ids still valid) — hold the receiver's seed in
+  memory instead of regenerating on rebuild; re-dial (✅ shipped); add the reverse edge
+  `interrupted → active` on reconnect.
+- **B. Signaling / relay reconnect** (process alive) — same fix, same mechanism.
+- **C. Daemon restart** (keypairs gone) — do NOT resume. **Auto-SEAL every open session on startup**
+  rather than force-closing, so it ends with a receipt. That converts the 137 receipt-less sessions
+  into sealed ones.
+
+**Open for Andre:** the anti-DDoS rationale for ephemeral peer ids is not in ADR-0001 and needs
+recording before it constrains the design. Also unverified: whether the relay can serve as a
+rendezvous without the directory, and what the 26 `seal_interrupted_pending` sessions are waiting for.
 
 ### REPO STATE
 | | |
