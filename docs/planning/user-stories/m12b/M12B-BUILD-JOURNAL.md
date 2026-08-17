@@ -32,8 +32,11 @@ restart one, close. **Assert on the session's STATUS, not only the certificate**
 🔴 **Blocked on Andre:** registration needs two pre-auth tokens from the Operations Agent.
 
 Then, in the order the evidence supports:
-1. `DOD-M12B-RESERVATION-RETRY-1` — built (`8147b88`), review in flight, unpublished.
-2. `DOD-M12B-SEAL-BILATERAL-FIRST-1`, `DOD-M12B-SEAL-ESCALATE-DUP-1` — carried review findings.
+1. `DOD-M12B-ANNOUNCE-BLINDS-RESERVATION-1` — a publicly-hosted agent's GRANTED reservation is
+   invisible, so it falls back to plain TCP. The code names the EC2 demo agent as that case.
+2. `DOD-M12B-TESTS-NOT-TYPECHECKED-1` — a TS2554 shipped through a gate reporting exit 0 during this
+   very milestone. Cheap, and it closes a whole class.
+3. `DOD-M12B-SEAL-ESCALATE-DUP-1` — the third copy of the escalation, which misses every fix.
 3. `DOD-M12B-SESSION-SEED-1` (case A/B) — **deliberately ranked BELOW the above**: its trigger fired
    **zero** times in 17 days, while the reservation defect fired 481. Still real for an operator who
    leaves the daemon up for days; not what is hurting now. Entry 30 has the reasoning.
@@ -50,11 +53,10 @@ directory.
 ### REPO STATE — 2026-08-18, end of the overnight run
 | | |
 |---|---|
-| cello-client `main` | **`8147b88`** — clean, pushed. Gate: test/lint/typecheck/build all **exit 0**, **3838 passed / 11 skipped**. |
+| cello-client `main` | **`v0.0.248` cascade** — clean, pushed. Gate: test/lint/typecheck/build all **exit 0**, **3838 passed / 11 skipped**. |
 | trustless-cello `main` | clean, pushed. |
 | **`latest` (what Andre is RUNNING)** | daemon **`0.0.170`**, cli **`0.0.177`** — ranks 1–11 only. **Nothing from the overnight run is on his machine.** |
-| **`beta` (published, NOT promoted)** | tag **`v0.0.247`** → daemon **`0.0.173`**, cli **`0.0.180`**. Supersedes `v0.0.246` (daemon `0.0.172` / cli `0.0.179`), which shipped only the first two units. |
-| ⚠️ **`main` is AHEAD of `beta`** | `RESERVATION-RETRY-1` is on main and **unpublished** — it needs a `v0.0.248` once its review lands. |
+| **`beta` (published, NOT promoted)** | tag **`v0.0.248`** → daemon **`0.0.174`**, cli **`0.0.181`**. Supersedes `v0.0.246` and `v0.0.247` — **promote this one**. |
 | other five packages | unchanged: crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, connect `0.0.150` — all already on `latest`. |
 
 **Promotion is Andre's, always.** Commands in the format of Entry 16.
