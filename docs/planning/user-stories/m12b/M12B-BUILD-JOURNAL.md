@@ -1802,3 +1802,88 @@ NULL→'local' backfill is a test seam, not production. No content is destroyed 
 `seal_interrupted_pending` is excluded from terminal disposition, so held frames are not annexed.
 Per-agent signaling is created at boot for every loaded agent, so the 30 s delay does buy a
 connected stream.
+
+---
+
+## Entry 23 — An interrupted session can now earn a receipt (2026-08-17, overnight)
+
+**Status: IMPLEMENTED, review in flight.** Commit **`af8d4bb`** in cello-client. No tag flips until
+the verdict is quoted.
+
+### What was actually broken
+
+`cello_close_session` on an `interrupted` session takes a branch **every exit returns from**. The
+unilateral escalation lives in the `active` branch below it, so it was structurally unreachable. The
+interrupted branch's success type is a bilateral **commitment** — `seal_interrupted_pending` — and
+the handler's own comment names the gap: *"an interrupted session reached a mutually signed record
+that nobody was ever asked to notarize."*
+
+The responder side seals it shut: `inbound-seal-request.ts` persists its commitment, acks, and
+**never submits a seal leaf**. The relay notarizes only once BOTH parties have posted one, so one
+side's leaf can never be enough — waiting for that round was waiting for something that cannot
+happen.
+
+**An interrupted session therefore could not obtain a receipt even when a human closed it by hand.**
+That is Andre's *"most of the time we can't even close them"*, in code, and it is why 26 sessions sat
+in `seal_interrupted_pending` for up to 10.5 days: nothing escalates them and the close verb refuses
+that status by name.
+
+### The fix, and why it was small
+
+The interrupted branch **already called `submitSealLeaf`** and threw away everything but a log line —
+and that result carries `reportedRootHex` and `sequenceNumber`, the exact two values the escalation
+runs on. So it became a shared helper both branches call, not a rewrite.
+
+**The eligibility rule is a trust decision, not a retry policy:**
+
+| the bilateral exchange | escalate? | why |
+|---|---|---|
+| succeeded | **yes** | both sides signed the same root |
+| `seal_interrupted_counterparty_unavailable` | **yes** | they never answered — the exact case a unilateral seal exists for |
+| `seal_interrupted_rejected_by_counterparty` | **no** | a rejection means the trees DISAGREE. Notarizing our own root over a stated objection is the one thing a trust layer must not do, however stuck the session is. |
+
+**A succeeded commitment is never downgraded to a failure** — that is what sends an operator to
+`force: true` and forfeits the half they hold. What changed is that the answer now says a receipt is
+**outstanding** rather than implying one exists, and carries the directory's own countdown as a
+number.
+
+### And the resolver's success test was the silent fallback
+
+It read `ok`. The interrupted close returns `ok: true` for a commitment — so it would have moved 137
+receipt-less sessions into the one bucket nothing can leave, and logged `resolved` for every one.
+**Success is now the presence of a `sealed_root`.**
+
+### The other ten findings, all fixed
+
+- The give-up carries **the close's own guidance**. A fixed string told the operator to
+  force-abandon; for `session_already_sealed` the close handler says in capitals NOT to, because
+  forcing there permanently forfeits a half that is still recoverable.
+- It carries **the detail the close computed and dropped** — `rejection_reason`, the two leaf counts,
+  the diverging index — so one label stops standing for six causes.
+- It is **durable** (`restart_seal_gave_up_at`, added to the guarded ALTERs *and* the pinned re-key
+  DDL). A machine restarting ~6×/day was re-running a hopeless session's whole budget every boot.
+- **Zero-message dead handshakes are excluded.** Sealing one spends a directory ceremony on nothing
+  and then moves it from the hidden "failed" bucket into the operator's CLOSED list.
+- An attempt that **never settles now times out** instead of wedging the queue silently.
+- **`stop()` awaits an in-flight ceremony.** Severing signaling under a half-finished exchange leaves
+  the counterparty at `seal_interrupted_pending` and us at `interrupted` — permanent divergence,
+  produced automatically on every shutdown.
+- Terminal refusals cost **one** attempt, not five: measured, `seal_interrupted_rejected_by_counterparty`
+  (18), `session_abandoned` (10), `leaf_count_mismatch` (4) can never be helped by retrying.
+
+### Two tests were hollow
+
+- The scope test passed **because of the 5 s stagger**, not the guard: the counterparty row was never
+  attempted inside the 2.5 s assertion window, so widening the query to every `interrupted` row left
+  it green. Now runs with a short stagger and asserts an **exact set**.
+- The production defaults were exercised by nothing — deleting `DEFAULT_INITIAL_DELAY_MS` changed
+  behaviour with the suite still green. Now pinned by the behaviour they produce.
+
+### Revert tests RUN, not asserted
+
+Stubbing out `escalateToUnilateralSeal` turns **4 of msg-015's 5** cases red. Deleting
+`restartSealResolver.start()` turns msg-014's first case red.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3812 passed / 11 skipped** · `lint` / `typecheck` / `build` **exit 0**.
