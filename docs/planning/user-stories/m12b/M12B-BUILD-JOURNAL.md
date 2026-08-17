@@ -2081,3 +2081,35 @@ this was fixed; it was not, and the comment now says so.
 **No live end-to-end proof.** Two real daemons have never run this. Launch-triage item 21 asks for
 exactly that and it is still owed — and Entry 24's finding is why it matters: whoever runs it must
 assert on the session's **STATUS**, not only on the certificate.
+
+---
+
+## Entry 26 — Published to beta (2026-08-18)
+
+Tag **`v0.0.246`** → daemon **`0.0.172`**, cli **`0.0.179`**. Build+test, publish and **smoke-tag all
+green** — the last of those clean-installs the published packages and loads their module graphs,
+which is the real success signal.
+
+**Cascade:** only `core/daemon/src` changed since `v0.0.245`, so daemon bumped and `cli` followed
+because it pins daemon exactly. `connect` does **not** depend on daemon (checked, not assumed:
+crypto / interfaces / transport only) and the other five packages did not change, so they stay put.
+No trustless-cello re-pin was needed either — `directory` and `relay` reference crypto,
+protocol-types and transport, all at `latest`, none of which moved.
+
+**Verified against the tarball, not CI status.** `npm pack @cello-protocol/daemon@0.0.172` and
+grepped `package/dist`: `markSealed`, `recoverOwnSealCtrlLeaf`, `escalateToUnilateralSeal`,
+`RestartSealResolver`, `seal_carry_empty`, `seal_leaf_recovery_unavailable`,
+`seal_carry_duplicate_own_ctrl_leaf`, `restart_seal_gave_up_at` — all present. Cross-pins are real
+versions, never `workspace:*`: `cli@0.0.179 → daemon@0.0.172`, and daemon → crypto `0.0.52`,
+gateway `0.0.36`, transport `0.0.58`, protocol-types `0.0.56`.
+
+**`latest` is untouched** — daemon `0.0.170`, cli `0.0.177`. **Nothing from the overnight run is on
+Andre's machine until he promotes**, and the promotion is his, always.
+
+### Carried, so nothing is silently deferred
+
+- `restart_seal_gave_up_reason` is written and never read. The reviewer's suggestion is to surface it
+  on `cello_sessions` beside the stuck status — which is where an operator asks *"why won't this
+  seal?"*. LOW, unbuilt, and it rides whichever publish comes next.
+- The three larger carried findings have their own DoD lines: `SEAL-WAITER-KEY-1`,
+  `SEAL-BILATERAL-FIRST-1`, `SEAL-ESCALATE-DUP-1`.
