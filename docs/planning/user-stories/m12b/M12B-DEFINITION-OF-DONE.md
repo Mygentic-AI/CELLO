@@ -491,7 +491,16 @@ description: >
   `seal_interrupted_pending` session escalate to a unilateral seal on a close, since the commitment
   it holds is exactly the agreed root the escalation reports. **The one thing to prove first:**
   whether `submitSealLeaf`'s one-shot `#responderSealSubmitted` mark, and the directory's
-  already-sealed gate, make a second request safe or a double-seal. Depends on ESCALATE-1. — ❌
+  already-sealed gate, make a second request safe or a double-seal. Depends on ESCALATE-1. — 🟡
+  **BUILT 2026-08-18, review in flight, NOT LIVE-VERIFIED.** The safety question is answered by
+  `ESCALATE-1`'s durable ctrl-leaf recovery: a second close recovers the leaf a previous run posted
+  out of `session_seal_leaves` instead of posting another. The **responder-side** pending row is the
+  case worth naming — it has no ctrl leaf of its own, because `inbound-seal-request.ts` persists its
+  commitment and stops — so this branch posts its FIRST, which is the repair that was missing rather
+  than a duplicate (the directory's rule is one ctrl leaf *per party*). When the relay has already
+  released the session the answer says the conversation survives and the receipt does not, instead of
+  a status-shaped refusal. `submitAndEscalate` is factored out, not copied — a third copy is already
+  a filed finding. → Entry 27
 
 - **DOD-M12B-SEAL-SILENT-DROP-1** [trustless-cello] — 🅿️ **PARKED — needs a directory fleet roll, so
   it does not ship unattended** (procedure §3a). **The directory answers a unilateral seal request
