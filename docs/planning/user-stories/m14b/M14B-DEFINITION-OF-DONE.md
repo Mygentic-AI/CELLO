@@ -746,6 +746,44 @@ description: >
   paid for. Needs a producer/consumer trace across session establishment — which side discards,
   and what precondition is not yet true when it does — not another retry.
 
+- **DOD-SYNC-REFUSAL-BACKOFF-1** [cello-client] — **the sweep asks forever, and it took basic
+  messaging down with it.** — ✅ FIXED 2026-08-17, cello-client branch `m12b/reconcile-removed-holder`
+  (`0650181`, `b1322c2`); full gate green; verified live (0 refusals after the fix, against 321
+  before).
+
+  **Two defects, both in this tier's code.**
+  1. `sweepTargets` derived its targets from the OTHER seats on a document and never asked whether
+     the OWNER still held one. A holder whose standing is `removed` kept sweeping the document it
+     was removed from — measured **105 refusals against one document in 85 minutes**, every one
+     flagged `terminal: true` with the words *"there is nothing further to reconcile"*, every one
+     asked again.
+  2. The scheduler could only observe whether the FRAME WAS SENT. A refusal arrives later on its own
+     inbound frame, where it was logged and dropped, so `allOk` stayed true, `failures` reset to 0,
+     `nextAttemptMs` was set to now, and the next sweep asked immediately. A second document,
+     refused as a non-party (deliberately non-terminal), was retried **79 times** at a fixed
+     interval with no ceiling. The layer's own comment already said the refusal was *"a fact to
+     surface, never to retry blindly"* — nothing downstream could act on it.
+
+  **Why a document defect is on the messaging critical path.** Document frames take a position in
+  the CONVERSATION's sequence space — correctly, and deliberately (`f75ea09`, 2026-08-05: a
+  document sender that skipped its leaf starved its own inbound). So a sweep that never stops
+  spends the conversation's numbers. Measured in one session: **3 real messages, 41 document ack
+  frames, 43 canonical positions consumed** — ~14 positions burned per message actually sent. The
+  receiving tree cannot keep pace, the strict-in-order gate holds everything past the gap, and
+  **367 pieces of verified content were held against 8 released and 24 destroyed** on one daemon
+  in one morning. Full chain: [[M12B-BUILD-JOURNAL]] Entry 5.
+
+  **Second-order damage, same root.** Every sweep attempt opens a session; every accepted session
+  consumes the pre-warmed standing receiver and mints a replacement. **53 sessions and 63 receiver
+  builds in 2.5 hours** — the factory working exactly as designed, driven far past its intended
+  rate. And every session the worker opened failed to seal: **25 opened, 25
+  `session.seal.blocked_incomplete`**, because a chain with held content cannot be co-signed. Those
+  sessions never close and accumulate.
+
+  **R41 is preserved.** A terminal refusal is NOT retired — it goes to the 15-minute cap. "Terminal"
+  is one holder's current derivation and a later entry can make the same exchange admissible again,
+  so scheduling state still only ever DELAYS an exchange. `onReachable` clears it outright.
+
 ---
 
 ## Decisions Carried (ruled 2026-08-11 — [[2026-08-10_2116_multiplayer-artifacts-joining-an-existing-document]] §13, binding)
