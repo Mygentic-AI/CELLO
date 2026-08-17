@@ -410,6 +410,26 @@ description: >
   **Out of scope:** the 26 `seal_interrupted_pending` sessions — `cello_close_session` refuses them
   outright and what they wait for is unestablished. — ❌
 
+- **DOD-M12B-INTERRUPTED-ESCALATE-1** [cello-client] — **an interrupted session can never get a
+  receipt, even when a human closes it by hand.** Found 2026-08-17 by the review of
+  `DOD-M12B-RESTART-SEAL-1`, which this blocks. `cello_close_session` on an `interrupted` session
+  takes a branch **every exit returns from**, so the `if (record.status === "active")` block below —
+  where the unilateral escalation actually lives — is structurally unreachable. The interrupted
+  branch's success type is literally `{ ok: true; status: "seal_interrupted_pending" }`, and the
+  handler says so itself: *"THE BILATERAL COMMITMENT IS NOT THE SEAL… an interrupted session reached
+  a mutually signed record that nobody was ever asked to notarize."* The responder confirms it —
+  `inbound-seal-request.ts` persists its commitment, acks, and **never submits a seal leaf** — and
+  the relay notarizes only once both sides have posted, so one side's leaf can never be enough.
+  **This is Andre's "most of the time we can't even close them", stated in code, and it is why the
+  26 `seal_interrupted_pending` sessions are stuck**: nothing escalates them and the close verb
+  refuses them by name. **The fix is already half-present:** the interrupted branch ALREADY calls
+  `submitSealLeaf` in its best-effort `notarize` and discards everything but a log line — and that
+  result carries `reportedRootHex` and `sequenceNumber`, the exact two values the active branch's
+  unilateral escalation runs on. Extract the escalation into a helper both branches call. **Seal
+  impact is the review's own top lens here**: state what the unilateral seal signs for a session
+  whose node is gone, and prove a `seal_interrupted_pending` row can reach `sealed`. Makes the DoD
+  sentence of `RESTART-SEAL-1` true and makes its `retry_after_seconds` reachable. — ❌
+
 - **DOD-M12B-SEAL-SILENT-DROP-1** [trustless-cello] — 🅿️ **PARKED — needs a directory fleet roll, so
   it does not ship unattended** (procedure §3a). **The directory answers a unilateral seal request
   with silence, twice, and the client can only report a 30-second timeout.**

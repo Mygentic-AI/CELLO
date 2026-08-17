@@ -158,9 +158,29 @@ unilateral seal. Measured end to end: seal leaf 16:48:55.137 → ceremony 17:00:
 matching the constant. It succeeds and produces a real notarized receipt. **The IPC call blocks for
 the whole 11 minutes and says nothing.**
 
-**INTERRUPTED session** (`close-session-handler.ts` ~630): sends a bilateral request, retries once
-after discovery, then attempts the unilateral seal. If the directory's delivery-grace window has not
-elapsed it answers `seal_unilateral_too_early` and the close returns:
+> ### 🔴 THE PARAGRAPH BELOW WAS WRONG — corrected 2026-08-17 after a code review caught it
+> **The interrupted branch never attempts a unilateral seal at all.** Every exit from
+> `if (record.status === "interrupted")` is a `return`, so the `if (record.status === "active")`
+> block below it — which is where the unilateral escalation actually lives — is structurally
+> unreachable for an interrupted session. Its success type is
+> `{ ok: true; status: "seal_interrupted_pending" }`, and the handler's own comment says it: *"THE
+> BILATERAL COMMITMENT IS NOT THE SEAL… an interrupted session reached a mutually signed record that
+> nobody was ever asked to notarize."* The responder side confirms it — `inbound-seal-request.ts`
+> persists its commitment, acks, and never submits a seal leaf, and the relay notarizes only when
+> both sides have posted.
+>
+> **So an interrupted session cannot get a receipt today even when a human closes it by hand.** That
+> is Andre's *"most of the time we can't even close them"*, stated in code — and it is why the 26
+> `seal_interrupted_pending` sessions in §7 are stuck: nothing escalates them, and
+> `cello_close_session` refuses them by name. Filed as `DOD-M12B-INTERRUPTED-ESCALATE-1`.
+>
+> The `seal_unilateral_too_early` refusal quoted below is **real**, but it belongs to the ACTIVE
+> branch, like the eleven-minute wait above it. Kept here because the refusal text and its unused
+> `remainingSeconds` are still exactly as described.
+
+**INTERRUPTED session** (`close-session-handler.ts` ~630): sends a bilateral request and retries once
+after discovery. ~~then attempts the unilateral seal~~. If the directory's delivery-grace window has
+not elapsed it answers `seal_unilateral_too_early` and the close returns:
 
 > *"Your SEAL leaf is recorded, but the counterparty has not closed and the directory's
 > delivery-grace window has not yet elapsed… **Retry `cello_close_session` after the grace period**,
