@@ -59,6 +59,10 @@ directory.
 | **`beta` (published, NOT promoted)** | tag **`v0.0.248`** → daemon **`0.0.174`**, cli **`0.0.181`**. Supersedes `v0.0.246` and `v0.0.247` — **promote this one**. |
 | other five packages | unchanged: crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, connect `0.0.150` — all already on `latest`. |
 
+**`main` carries one commit past the `v0.0.248` tag — `689931c`, the typecheck gate.** It touches a
+`tsconfig.test.json` and the root `package.json` script, neither of which is in any published
+tarball, so **there is nothing operator-facing to publish and no v0.0.249 is owed for it.**
+
 **Promotion is Andre's, always.** Commands in the format of Entry 16.
 
 ### WHAT SHIPPED — ranks 1–11, all ✅
