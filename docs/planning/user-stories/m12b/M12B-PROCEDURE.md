@@ -169,14 +169,16 @@ Standing M12B-specific lenses:
 - **Discrimination lens (BLOCKING):** two byte-identical messages are two different messages. Any
   change that makes them indistinguishable — deduplicating on hash alone, collapsing on content,
   reusing a submission id across logical messages — is blocking, however green the suite is.
-- **Failover-preservation lens (BLOCKING, fires on every Tier A and B diff):** a relay can stop at
+- **POSITION-SURVIVES-ITS-RELAY lens (BLOCKING, fires on EVERY diff in EVERY phase):** a relay can stop at
   any moment, so handover can only ever be driven by the clients. Flag anything that makes a
   position meaningful ONLY relative to one relay's live in-memory counter, with no client-holdable,
   independently verifiable proof of what it was. `FEDERATION-003`'s predecessor-ACK carry
   (`predecessor_relay_id`/`_signature`/`_sequence`/`_timestamp`, verified against the directory's
   copy of the predecessor's public key) is the sanctioned seam — a submission id must sit ALONGSIDE
-  it, never across it. Tier R is sequenced after Tier E; this lens is why it still constrains work
-  that ships first.
+  it, never across it. **This enforces the Tier I invariant of the same name** — Phase 2 BUILDS the
+  failover, but the property is owed by every unit in every phase, which is why this lens is not
+  scoped to a tier. A Phase 1 unit that fixes ordering perfectly and leaves a position provable only
+  by one relay's live memory is a blocking finding.
 - **Seal-impact lens (BLOCKING):** the tree root is what the seal signs over. Any diff that changes
   what a tree contains, what order it contains it in, or what the root of an incomplete tree is,
   must state the effect on existing receipts and on cross-party root agreement. "Tests pass" is

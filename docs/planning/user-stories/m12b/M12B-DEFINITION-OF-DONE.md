@@ -63,6 +63,15 @@ description: >
 - **NO SILENT STRANDING** — content that has been received and verified is never destroyed to
   tidy up an ordering problem. If it cannot be delivered it is durable and reported, never
   memory-only and discarded.
+- **POSITION-SURVIVES-ITS-RELAY** — a canonical position must remain provable by the parties that
+  survive the relay that issued it. A relay can stop at any moment, so nothing load-bearing may be
+  meaningful ONLY relative to one relay's live in-memory state: every position a client relies on
+  must be backed by something the client HOLDS and another relay can INDEPENDENTLY VERIFY — today
+  the relay's signed ACK, verifiable against the predecessor's public key in the directory
+  (`FEDERATION-003`). It follows that **failover is client-driven, permanently**: a relay that has
+  stopped cannot hand anything over, so the surviving parties must be able to carry the session
+  themselves. This is an invariant, not a Phase 2 deliverable — Phase 2 BUILDS the failover, but
+  every unit in every phase is reviewed against this property from the first line of code.
 - **THE RELAY MAY DISAGREE** — a client bug must not be able to silently corrupt ordering. Where
   the relay holds the facts to contradict a client, it says so rather than accepting whatever it
   is told. (Adversarial framing deliberately NOT claimed — see Decisions Carried.)
@@ -194,12 +203,13 @@ description: >
 > must not foreclose it. Every Tier A and Tier B unit is reviewed against the constraint below
 > before it merges.
 
-> ### 🔒 STANDING CONSTRAINT ON TIERS A AND B — read before designing either
-> **Failover cannot be relay-initiated, because a relay can simply stop.** Andre, 2026-08-17. The
-> handover must be driven by the parties that survive: the clients. Anything built in Tier A or B
-> that makes a position meaningful ONLY relative to one relay's live in-memory counter — with no
-> client-holdable, independently verifiable proof of what that position was — is a blocking finding
-> even if it fixes the ordering defect perfectly.
+> ### 🔒 THIS TIER BUILDS THE **POSITION-SURVIVES-ITS-RELAY** INVARIANT (Tier I)
+> The property is owed from the first line of Phase 1 code, not from the day this tier starts.
+> **Failover cannot be relay-initiated, because a relay can simply stop** (Andre, 2026-08-17) — the
+> handover must be driven by the parties that survive. Anything built in ANY phase that makes a
+> position meaningful ONLY relative to one relay's live in-memory counter, with no client-holdable
+> independently verifiable proof of what that position was, is a blocking finding even if it fixes
+> the ordering defect perfectly. Enforced per-unit by the lens of the same name (procedure §2b).
 >
 > **The primitive already exists and has the right shape.** `FEDERATION-003`
 > (`relay-types.ts` / `relay-node.ts`): a submission may carry `predecessor_relay_id`,
