@@ -987,3 +987,92 @@ failures; holds must reach ZERO). It cannot run until the code is on a running d
 order is one publish at the END of ranks 1–11 — so it runs then, not now. The test-level proof
 standing in for it: 40 messages on one session, zero holds, zero send failures, zero ACK failures,
 and the stream census drained.
+
+---
+
+## Entry 13 — Rank 6: held content is durable, and the review found two ways it still was not (2026-08-17)
+
+`DOD-M12B-STRAND-1`. Built on `m12b/strand-durable-holds`, reviewed by one `cello-unit-reviewer`
+pass on the unit's diff, **4 blocking findings, all fixed** in `72f5057`.
+
+### What it does
+
+Held frames are rows in `held_content`, keyed `(agent_id, session_id, canonical_seq)` — `agent_id`,
+never `agent_name`. The **relay's** position is part of the key, which is what lets a frame come
+back after a restart and land at its own index rather than the next free slot; anywhere else would
+change the root the seal signs over.
+
+Restore is **lazy**, on first use. The first build restored eagerly at session-node creation and it
+silently did nothing: one failed `sessions` row upsert returned before reaching it, leaving the
+frames on disk and invisible — the same outcome as losing them.
+
+### The review's four blocking findings — two would each have re-created the loss
+
+1. **The supersede test compared two different counters.** The code dropped a restored frame when
+   `canonical_seq < tree.size()`. Reviewer: *"`canonical_seq` is the RELAY's sequence space.
+   `frontier` is `tree.size()` — the local msg-leaf space… Under drift, `canonical_seq < frontier`
+   is true for a frame the tree has **never held** — and this line destroys it, permanently,
+   reporting it as an `info`-level `superseded` counter. That is the exact failure this unit exists
+   to end, reintroduced on the recovery path."**Our own test encoded the bug** — it asserted
+   `superseded: 1` for a case where the tree held different content. Now the tree is ASKED
+   (`hashAt`): same content → redundant, drop the row; different content → annexed and logged at
+   ERROR, never silently deleted.
+
+2. **A frame restored exactly AT the frontier was never released.** `#releaseHeld` has one caller,
+   the tail of an inbound ingest, while the tree also grows from outbound sends and queued leaves.
+   Reviewer: *"Under the old code that mattered for seconds, because the hold died with the node.
+   Now the hold is durable, so **the stall is durable too**… Undeliverable *and* unsealable."*
+   Hydration now ends with a release attempt.
+
+3. **Content held when a session ends was unreachable forever and reported as no loss.** Ingest
+   refuses a terminal session and the release path is only reachable from ingest, so nothing could
+   ever release those rows — while the teardown alarm said `lost: 0`. They now move to
+   `sealed_session_annex` (the store M12-P17 built for content that outlived its chain),
+   annex-first-delete-second, reported at WARN with the count and the oldest wait.
+
+4. **A failed COUNT was reported as destroyed content.** A bare `catch { durable = 0 }` drove
+   `lost = every held frame`, firing *"verified content was NOT written… and is destroyed"* — a
+   cause it had not established, over a query that **throws for a retired agent on that exact
+   path**. Unknown is now carried as unknown.
+
+Plus: a second frame claiming an occupied position no longer overwrites the first in silence; the
+persist comment stopped promising a fail-loud it does not do; the new events carry `correlationId`.
+
+### A pre-existing upgrade-path defect the same review turned up — fixed here
+
+The agent-id re-key rebuilds `sessions` from a pinned DDL and carries only the INTERSECTION of the
+old and new columns. **`read_at` was missing from that DDL**, so the one boot where a legacy
+database upgrades would have dropped every dismissal flag and left `getEndedUnread` (which filters
+on `read_at IS NULL`) throwing `no such column` for the rest of that process. The parity test could
+not catch it because it replayed the ALTERs **after** the re-key rather than before, as
+`initialize()` does — putting the column back and comparing over the top of the loss. Both fixed,
+and reverting the DDL now fails the test (verified: *"expected [ 13 ] to deeply equal [ 14 ]"*).
+
+Migration ordering was checked, not assumed. Reviewer: *"`held_content` is created… **before**
+`migrateSessionTablesToAgentId`… `REKEY_TARGETS` is a fixed literal list of seven tables,
+`held_content` is not one of them… **No ordering hazard.**"*
+
+### Two hollow tests, both fixed
+
+- *"Released content is removed from the store"* passed with the delete removed — the restarted
+  manager never reads a row behind its frontier. It now asserts against the store in the process
+  that released it.
+- The teardown assertion *"could not fire on that path with or without this fix"* — `gracefulShutdown`
+  never touches the hold map. It now drives the real teardown and asserts `durable: 1`.
+
+Added: the drift case (content annexed, readable, ERROR logged) and a **document frame** through the
+round trip — its raw bytes must survive or the released leaf binds the screened copy's hash and the
+two parties' roots part.
+
+### Named residual
+
+Nothing prunes `held_content` on a retention basis. The seal/abandon sweep now clears the largest
+source, and the per-session byte cap bounds the live case, so what remains is disk growth on rows
+whose session never reached a terminal status. Recorded rather than fixed with an age-based delete —
+deleting verified content on a timer is the invariant this unit exists to protect.
+
+### Gate on the committed tree (run so it could fail, §7)
+
+`pnpm run test` **exit 0** — 3756 passed / 11 skipped · `lint` **exit 0** · `typecheck` **exit 0** ·
+`build` **exit 0**. A first gate run **failed (exit 1)** on four unguarded uses of the nullable db
+handle, fixed before commit.

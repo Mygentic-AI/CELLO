@@ -184,7 +184,17 @@ description: >
   itself calls "a LOSS REPORT, not a fix — the content is unrecoverable by the time we are here."
   It fired **20 times on one daemon on 2026-08-16**. After this unit, verified content that cannot
   yet be delivered is durable and recoverable, and its loss report becomes an alarm rather than an
-  epitaph. — ❌
+  epitaph. — ✅ **PROVEN 2026-08-17** — held frames are rows in `held_content`, keyed on
+  `(agent_id, session_id, canonical_seq)` so a restored frame lands at its OWN relay-assigned index;
+  restored lazily on first use and released immediately if already in order; moved to
+  `sealed_session_annex` when a session goes terminal, since ingest refuses a terminal session and
+  nothing could ever release them again. Reviewer found **4 blocking**, all fixed (`72f5057`) —
+  two of which would each have re-created the loss: the supersede test compared the relay's counter
+  against the local leaf count (*"destroys verified content while reporting it as tidy-up"*), and a
+  frame restored exactly AT the frontier was never drained (*"Undeliverable **and** unsealable"*).
+  The same review found a **pre-existing upgrade-path defect** — the agent-id re-key dropped
+  `sessions.read_at` on the one boot a legacy DB migrates, hidden by a parity test that replayed the
+  ALTERs in the wrong order. Fixed here. → Entry 13
 
 - **DOD-M12B-ACK-1** [cello-client] — establish and fix why the FIRST acknowledgement fails. The
   spiral needs exactly one unacknowledged send to start: held content is deliberately never
