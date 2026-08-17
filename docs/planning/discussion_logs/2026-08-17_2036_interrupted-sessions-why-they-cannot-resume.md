@@ -363,6 +363,34 @@ waiting for is still unestablished (§7). Do not fold them in on a guess.
 
 ---
 
+## 6a. Why a seal fails, measured — and it fails a lot
+
+Counted 2026-08-17 on the same log, because a resolver that retries needs to know what it is
+retrying against.
+
+**`session.seal.leaf.submitted` fired 443 times. `session.seal.completed` fired 183.** Roughly
+**59% of seals that start never finish.** The refusal reasons:
+
+| reason | count | retryable? |
+|---|---|---|
+| `seal_unilateral_timeout` — the directory never confirmed within the 30 s wait | **50** | yes |
+| `session_incomplete` — a gap in the chain; the guidance itself says a relay pull may fill it | 29 | yes |
+| `seal_interrupted_rejected_by_counterparty` | 18 | **no** — they refused; retrying spams them |
+| `seal_interrupted_counterparty_unavailable` | 9 | yes |
+| `session_abandoned` | 10 | **no** — terminal by definition |
+| `leaf_count_mismatch` — the two trees genuinely disagree | 4 | **no** |
+| `relay_submit_timeout` | 2 | yes |
+
+**`seal_unilateral_timeout` is the single largest blocker to any automated close**, and it is a
+30-second wait for a directory confirmation that does not arrive. Worth its own investigation — the
+restart-seal resolver papers over it with retries, and papering is not fixing.
+
+**The design consequence, folded into `DOD-M12B-RESTART-SEAL-1`:** a flat retry budget is wrong. A
+refusal the counterparty authored, or one that names a state no retry can leave, must give up on the
+FIRST attempt and say so. Spending five attempts and fifteen minutes on `session_abandoned` is not
+persistence, it is noise — and retrying a rejection at a counterparty who already said no is worse
+than noise.
+
 ## 7. Not established — do not treat as known
 
 - **Whether the relay can serve as a rendezvous** for re-establishing an *existing* session without
