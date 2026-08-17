@@ -16,66 +16,62 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-**Updated 2026-08-17 ~16:10 local.**
+**Updated 2026-08-17, end of the eleven-rank run.**
 
-### NEXT ACTION
-**Rank 6 of the launch-triage top block — `DOD-M12B-STRAND-1`, durable held content.** Its red test
-is already written and is PARKED OUTSIDE THE TREE at
-`/private/tmp/claude-501/-Users-andrep-Documents-code-trustless-cello/3be856d9-6ff4-46ce-af02-550e44fddb11/scratchpad/msg-004-held-content-durable.test.ts`
-— move it back into `core/daemon/src/__tests__/` to start. It is RED for the right reason (the held
-frame does not survive a restart). Design already traced: follow `retry-queue.ts` — an inline
-`CREATE TABLE IF NOT EXISTS` in the constructor, keyed on **`agent_id`** (`resolveAgentId` exists at
-`session-node-manager.ts`), loaded into `#heldContent` at boot, row deleted on release, and NOT
-deleted at teardown. `session.content.held.discarded` stops being an epitaph.
+### NEXT ACTION — ONE THING, AND IT IS ANDRE'S
+**Promote the cascade to `latest`.** The seven commands are in **Entry 16**. Nothing else is
+outstanding on the launch-triage top block: ranks 1–11 are built, reviewed, every finding fixed,
+merged, and published to `beta`.
 
-Work order: the block at the top of `docs/planning/launch-triage.md` — **"🔴 TOP OF THE LIST —
-SESSIONS DO NOT WORK"**. **Ranks 1–5 are DONE**; 6–11 follow in order, one commit each, sequential
-(they all touch the session manager).
+**Then, and only then, the owed live measurement** — it cannot run until the code is on a running
+daemon, which needs the promotion. Baseline to beat: **55 reconcile attempts / 2 holds / 20
+direct-send failures over 20 minutes; holds must reach ZERO.**
 
 ### REPO STATE
 | | |
 |---|---|
-| cello-client `main` | `bcc1de7` — ranks 1–5 MERGED, pushed. Gate re-run on the merged tree, exit codes captured: test/lint/typecheck/build all **exit 0**, 3748 passed / 11 skipped. |
-| cello-client working branch | none — `m12b/ack-stream-closed` is merged. Open `m12b/strand-durable-holds` for rank 6. |
+| cello-client `main` | ranks 1–11 merged; version cascade + tag `v0.0.244` pushed. Gate on the merged tree, exit codes captured: test/lint/typecheck/build all **exit 0**, 3778 passed / 11 skipped. |
 | trustless-cello `main` | pushed. |
-| published `@cello-protocol/daemon@latest` | **`0.0.169` — contains NONE of this.** |
+| published to **beta** | crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, daemon `0.0.170`, cli `0.0.177`, connect `0.0.150`. |
+| `latest` | still the **0.0.169 daemon generation — contains NONE of this**. |
 
-### ⚠️ THE RUNNING DAEMON IS NOT THE PUBLISHED ONE, AND IT IS NOW ALSO NOT THE BRANCH ONE
-Andre's daemon is **pid 66778**, running a build from BEFORE ranks 1–5. Its log is
-**`/tmp/newbuild-daemon.out`**, **NOT `~/.cello/daemon.log`** (which stops at 08:17). That log is the
-evidence base for Entries 10–12. Two broken sessions (`de55efd683e8…`, `d35eef58a266…`) are still
-live on it and are the only live specimens of the rank-5 defect — do not close them without saying
-so. To restore the published build: stop that pid, then `cello login`. **Andre has not asked for
-that**, and restarting it drops his live agents — so it is not something to do unprompted.
+### ⚠️ ANDRE'S RUNNING DAEMON IS OLDER STILL
+pid **66778**, a branch build from before rank 1. Its log is **`/tmp/newbuild-daemon.out`**, not
+`~/.cello/daemon.log`. Two broken sessions (`de55efd683e8…`, `d35eef58a266…`) are still live on it —
+the only live specimens of the rank-5 defect. Restoring it to the published build is
+`cello logout && cello login` **after** the promotion, and it drops his live agents, so it is his call.
 
-### RANKS 1–5: DONE (built, reviewed, every finding fixed)
-Verdicts quoted in **Entry 9** (ranks 1–4) and **Entry 12** (rank 5). Rank 5 drew **16 findings
-across two reviews, all fixed** in `cf345b3`. Read Entry 11 before touching the content-stream path
-and Entry 12 before touching liveness or the impaired guidance.
+### WHAT SHIPPED — ranks 1–11, all ✅
+1 send guidance · 2 inbox truth · 3 away marker · 4 delivery quiet · **5 the blocker (the 33rd
+message)** · 6 durable holds · 7 seal-stuck visible · 8 index discipline · 9 re-dial · 10 abandon
+notify · 11 shutdown drain. Verdicts quoted in **Entries 9, 12, 13, 14, 15**; the publish is
+**Entry 16**.
 
-### OWED, AND NOT CLAIMED
-The **20-minute live measurement** has not run on any of ranks 1–5. Baseline to beat:
-**55 reconcile attempts / 2 holds / 20 direct-send failures — holds must reach ZERO.** It cannot run
-until the code is on a running daemon, and the work order is ONE publish at the END of ranks 1–11 —
-so it runs then. The test-level stand-in for rank 5: 40 messages on one session, zero holds, zero
-send failures, zero ACK failures, stream census drained.
+### THE ONE PATTERN EVERY REVIEW FOUND — read before writing the next unit
+**A test that calls the new method directly proves the method, not the unit.** Ranks 8, 9, 10 and 11
+each shipped a first build whose wiring could be deleted with the suite still green, and rank 10's
+first build did nothing at all in production while four tests passed. Every unit now carries an
+assertion that fails when its call site is removed. Write that assertion first.
 
 ### KILLED BY MEASUREMENT — DO NOT RE-RUN
 Excessive standing-receiver teardown; a stale counterparty peer id; a missing connection (Entry 6);
 a race between our own `send` and our own `close` (Entry 10); **yamux stream exhaustion** (Entry 11 —
-yamux allows 1000 and the whole 3.5-hour log opened ~450). The **third site**
+yamux allows 1000; the 3.5-hour log opened ~450). The **third site**
 (`directory.signaling.disconnected`) is **not a defect** — the signaling path catches the same error,
-declares the stream dead and reconnects. Do not chase it.
+declares the stream dead and reconnects.
+
+### STILL OPEN IN M12B (not the launch-triage block)
+Tier A (submission id + relay idempotency — the only part costing a **relay fleet roll**),
+Tier B's `TRACE-2` counter map, Tier E's three proofs, and Phase 2 (Tier R, relay loss and
+client-driven failover).
 
 ### PROCESS RULES THIS SESSION BROKE — read §7 and §26 of the procedure
 1. **Gates were piped through `grep`**, so the exit status read was grep's — §7's exact laundering.
    Always `pnpm run test > /tmp/gate.log 2>&1; echo "exit=$?"`.
 2. **No `cello-unit-reviewer` was run until Andre asked.** Four units were reported done while
-   unreviewed; three then failed review, one totally. §142: a tag flips ONLY when the reviewer's
-   verdict is quoted in the journal.
+   unreviewed; three then failed review, one totally.
 3. **The branch sat unpushed for eleven commits.** §2e: push on creation, §3: push after every commit.
-4. **Repeated stops on the NOPE list.** §26: exactly two reasons to stop. A 10-minute nudge cron
-   (`d5c61f67`) is running to enforce it; per Andre it must be DELETED before any legitimate stop.
+4. **Repeated stops on the NOPE list.** §26: exactly two reasons to stop.
 
 ---
 
