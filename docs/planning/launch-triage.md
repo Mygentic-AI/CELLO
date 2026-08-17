@@ -110,6 +110,14 @@ description: >
   roster probe gets ONE attempt and a 5 s deadline with no retry, so one lost packet on a mobile link
   drops a node for the whole sweep. The shared finding across 16, 18 and 19 is the error itself:
   `counterparty_offline` was returned for three unrelated causes and named none of them.
+  2026-08-17: added item 20 (DOD-M12B-SUBMIT-ID-1) — the cause behind the 2026-08-16 messaging
+  failure, now MEASURED rather than suspected: a retried message is re-witnessed as a new
+  submission, so the relay mints a fresh canonical position for content the receiver deduplicates
+  and never appends; the receiver falls permanently behind and every later message is held behind a
+  gap nothing can fill. One session burned 49 positions on ONE message. Unlike items 16–19 this one
+  carries a full work order — a new milestone M12B (relay/client topology, ruled by Andre as within
+  M12's scope rather than a milestone of its own) with DoD, procedure and journal. Item 19 now
+  points at it.
 ---
 
 # Launch Triage
@@ -1182,6 +1190,45 @@ but still gives up in bounded time against a node that is genuinely down. Number
 > went into the network path before the node was suspected, because the error pointed away from every
 > real cause. Whatever else is done here, **a roster that is below threshold must say so** rather than
 > borrowing a word about the counterparty.
+
+
+## 20. A retried message permanently kills the conversation it was retried in
+
+**Designation: `DOD-M12B-SUBMIT-ID-1`** (and the rest of **[[M12B-DEFINITION-OF-DONE]]**) — ❌
+**OPEN, cause ESTABLISHED and measured.** Unranked. **Proposed slot: at or near the top — this is
+basic messaging between two healthy agents, and it fails silently.**
+
+**What it costs a customer.** They send a message. The other side never sees it, and is never told
+anything is wrong. The sender's tool says delivered. From then on **every** later message in that
+conversation is silently withheld too, and the shared document stops taking the other person's
+edits — you see only your own writing. Nothing recovers it: not restarting, not resending. Resending
+makes it worse.
+
+**Measured 2026-08-16.** Nothing is lost in transit — relay sequences 1–55 arrived complete, no
+gaps. The content reaches the receiving daemon and its signature verifies. It is then **held** and
+never surfaced, because its position is ahead of what the receiver has counted. In one session a
+single message consumed **49 canonical positions** (49 receipts, one distinct message, sequence
+reaching 98); another was submitted 69 times. Verified content destroyed at teardown
+(`session.content.held.discarded`, memory-only, called "unrecoverable" by the code itself) fired
+**20 times on one daemon in one day**.
+
+**Why it is self-sustaining.** A retry is submitted as a *new* submission, so the relay — whose
+counter is `seq_counter + 1`, unconditional — mints a fresh position for content the receiver
+deduplicates and never appends. The receiver's count falls one further behind per retry. Held
+content is never acknowledged, so it is retried, which burns another position and widens the gap
+that caused it. **The repair mechanism is what makes it unrepairable.**
+
+**It is not the bridge and not documents.** Three of the dead sessions on 2026-08-16 were between
+two local agents on one daemon, with no bridge and no network in between.
+
+**The work order is [[M12B-DEFINITION-OF-DONE]]** — a submission id inside the signed frame so a
+retransmission is declarable, an idempotent `hash_submit` that returns the original position without
+advancing the counter or the relay's own tree, a client that stops re-asking, and position
+discipline so a leaf index IS its assigned position. Runbook: [[M12B-PROCEDURE]] (§2f governs the
+relay roll — it is a bilateral wire contract). Evidence: [[M12B-BUILD-JOURNAL]] Entry 1.
+
+**One open unknown, carried as `DOD-M12B-ACK-1`:** what stops the FIRST acknowledgement. The spiral
+needs one unacknowledged send to start and that first failure was never traced.
 
 # Post-launch — needed eventually, not for launch
 

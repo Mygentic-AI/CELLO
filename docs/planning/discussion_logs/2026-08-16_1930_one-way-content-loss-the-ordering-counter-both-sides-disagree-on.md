@@ -10,7 +10,9 @@ description: >
   that can never close, because the number the gate depends on means something different on each
   side, nothing anywhere requests a missing sequence, and the hold buffer is memory-only and is
   destroyed on teardown. Includes the evidence, the exact mechanism, and why this is confirmation of
-  the reconcile-don't-deliver diagnosis rather than a new problem.
+  the reconcile-don't-deliver diagnosis rather than a new problem. RESOLVED into a work order:
+  the cause is a retried submission taking a NEW canonical position, and the fix is an idempotent
+  submission — milestone M12B (DoD, procedure, journal), with launch-triage item 20 pointing at it.
 ---
 
 # One-way content loss — the ordering counter both sides disagree on
@@ -254,8 +256,71 @@ Also unresolved on the same day: two of three directory nodes had been going dea
 for six days (`DOD-NODE-HEAP-GROWTH-1`, `infra/GCP-STATE.md`). Every document conclusion drawn in
 those six days was measured on that substrate.
 
+## THE SOLUTION — work order, and where it lives
+
+**Milestone: M12B** (Andre, 2026-08-17). Not a new milestone of its own and not M14B: this is the
+**relay↔client communication topology**, which is M12's subject. M14B's Tier SYNC shipped and its
+spec never mentions messages; M12's own open lines are AWS teardown and CI.
+
+- **[[M12B-DEFINITION-OF-DONE]]** — the work order.
+- **[[M12B-PROCEDURE]]** — the runbook. §2f is new and specific to this milestone: it changes a
+  wire contract between a deployed relay fleet and an installed client, so the relay must tolerate
+  the new field BEFORE any client sends it, and the fleet rolls node by node.
+- **[[M12B-BUILD-JOURNAL]]** Entry 1 — this investigation, as evidence.
+
+### The design
+
+**An idempotency key on the submission.** The sender is the only party that knows whether it is
+retransmitting, so it declares it and the relay enforces it. The relay keeps deciding the number; it
+simply stops issuing a second one for the same declared act.
+
+1. **A submission id inside Structure 1** — the signed frame the relay already validates, so the
+   relay can verify the sender authored it and it cannot be altered in flight. Keyed
+   `(session_id, sender_pubkey, submission_id)`. A genuinely new message that happens to be
+   byte-identical gets a NEW id — which is exactly the discrimination the content hash cannot
+   provide, and the reason hash-based deduplication at the relay would be wrong.
+2. **`hash_submit` becomes idempotent** — a repeat returns the position AND the Structure 2 bytes
+   committed the first time. `seq_counter` does not advance, `leaf_log` does not grow,
+   `running_root` does not change. All four happen today, which is why the relay's own tree also
+   diverges from both clients'.
+3. **The client stops re-asking** — a retransmission reuses the ordering record it already holds.
+   The retry queue already persists `structure1_cbor`/`structure2_cbor` and its own comment says
+   those columns exist to stop "the divergent-leaf-index failure". This half works against an
+   unchanged relay and survives a relay restart, which matters because the relay stores session
+   state in memory.
+4. **Position discipline** — a party's leaf index IS its assigned position. Today the send path has
+   the position in hand ~4 ms before it appends, and appends at the tail anyway.
+
+### Why the relay could not have caught this itself
+
+It is asked to witness a **hash**, before the message is sent, and the acknowledgement goes
+peer-to-peer back to the sender — the relay is never in that loop for a direct send. So "was the
+previous one delivered?" is not a question it can answer. And a retransmission and a genuine repeat
+of the same text are byte-identical to it. It is not failing to police; it is structurally unable to
+with what it is handed. The submission id is what gives it the missing fact.
+
+### The framing that is deliberately NOT claimed
+
+This is **correctness hardening, not adversary defence.** A client that wants to burn positions can
+mint fresh submission ids and the relay cannot stop it. What it buys is that an honest daemon with a
+bug can no longer silently corrupt ordering, and the invariant becomes enforceable rather than
+merely intended. Andre's own framing names the deeper gap and is worth carrying beyond this
+milestone: *"there is a role for the relay to tell the daemon, hey you're full of shit, this is the
+same submission."* Today the relay has no way to disagree with a client about anything — worth
+asking, per unit, where else it silently accepts whatever it is told.
+
+### Still unknown
+
+**What stops the FIRST acknowledgement.** The spiral needs exactly one unacknowledged send to start.
+Held content is deliberately never acknowledged, and a 20-second timer fires on every send in
+production — but whether the first ack is never sent, never arrives, or arrives late was not traced.
+Carried as `DOD-M12B-ACK-1`.
+
 ## Related
 
+- [[M12B-DEFINITION-OF-DONE]] — **the work order this document specifies**
+- [[M12B-PROCEDURE]] — the runbook (§2f: the bilateral wire contract and the relay roll)
+- [[M12B-BUILD-JOURNAL]] — Entry 1 carries this investigation as evidence
 - [[2026-08-14_1155_document-protocol-reconcile-not-deliver]] — the design this is evidence for
-- [[launch-triage]] — items 16–19 filed the same day
+- [[launch-triage]] — items 16–19 filed the same day; **item 20 points at the M12B work order**
 - [[M14B-BUILD-JOURNAL]] — entries 37–46, the defects that prompted the reconsideration
