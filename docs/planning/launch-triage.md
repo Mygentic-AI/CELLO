@@ -134,6 +134,17 @@ description: >
   puts an agent online with no operator, no window and no session involved, and fills the item-21
   cap with junk sessions on its way. Mistaken for the M12B ordering defect at first — the daemon log
   names the document worker, not the message retry queue.
+  2026-08-17 (later, RE-SCOPED): item 22 is not a wasted-dial problem — it is why two agents on one
+  machine could not hold a conversation at all. Each sweep attempt burns a position in the
+  CONVERSATION's sequence line, so the receiving tree falls behind and the in-order gate holds every
+  later message: 367 held, 8 released, 24 destroyed on one daemon in one morning, 2% delivered, in
+  both directions, with no error anywhere. FIXED and verified live the same day (a message delivered
+  directly, 0 parked, 0 held). Correcting M12B's founding diagnosis in the process: it believed
+  retransmissions burned the positions, and its planned submission-id fix would not have
+  deduplicated these frames. One defect remains and is now M12B's top line — the direct send fails
+  with "Cannot write to a stream that is closed", the same error as its 36 known acknowledgement
+  failures. Three explanations were killed by measurement and are recorded so nobody re-runs them:
+  excessive receiver teardown, a stale peer identity, and a missing connection.
 ---
 
 # Launch Triage
@@ -1351,9 +1362,60 @@ with no end.
 worker loses the ability to establish sessions. Deleting the dead document copy also stops it but
 destroys the only remaining copy of its history, so it is not the default move.
 
-**Related:** item 21 (the cap this fills), and the M12B lens on retries that have no ceiling. Note
-this is NOT the M12B ordering defect — it was mistaken for it at first, and the daemon log names the
-document sync worker, not the message retry queue.
+---
+
+### ⬆️ RE-SCOPED 2026-08-17, LATER THE SAME DAY — this was not a wasted-dial problem. It was why basic messaging did not work at all.
+
+**Two agents on ONE machine could not hold a conversation, and this is why.** The entry above
+described the dialing. The dialing was the engine; here is what it drove.
+
+**What it cost, in one morning on one daemon.** **367 pieces of verified content held and never
+shown. 8 released. 24 destroyed.** Two percent of what arrived was delivered. Both directions. No
+error raised anywhere — each side saw an empty inbox and assumed the other had not written.
+
+**The chain, measured end to end.**
+1. Two documents could never reconcile. Refused **321 times in 85 minutes, 0 successes.**
+2. The sweep never backed off, because it could only see whether the frame was SENT. **105 refusals
+   carried an explicit terminal flag** and were asked again anyway.
+3. Every attempt pushes ack frames, and **each frame takes a position in the CONVERSATION's
+   sequence line** — deliberate, since a document sender that skips its leaf starves its own
+   inbound. One session: **3 real messages, 41 document frames, 43 positions.**
+4. The receiving side falls behind, and the strict-in-order gate **holds every later message**.
+5. Nothing can ever say "I am missing position N, resend" — no such protocol exists — so a gap only
+   closes by luck, and where held content was destroyed it **never closes**.
+6. Each attempt also opens a session, which consumes the pre-warmed standing receiver and mints a
+   replacement: **53 sessions → 63 receiver rebuilds.** The pre-warm design is correct; it was
+   driven far past its intended rate.
+7. And every session the worker opened **failed to seal** — 25 opened, 25 blocked — because a chain
+   holding content cannot be co-signed. They never close, and they accumulate into item 21's cap.
+
+**FIXED 2026-08-17** — cello-client branch `m12b/reconcile-removed-holder` (`0650181` removed-holder
+check, `b1322c2` refusal backoff), full gate green. **Verified live on the fixed build: a message
+delivered directly, 0 parked, 0 held on the new session, 0 refusals.** Existing sessions carrying a
+gap are NOT repaired and are not expected to be.
+
+**Still open, and now the highest-value line in M12B:** messages were reaching the relay instead of
+the peer because the direct send fails with `"Cannot write to a stream that is closed"` — the same
+error, verbatim, as the 36 acknowledgement failures already recorded there. One defect in two
+places; see `DOD-M12B-ACK-1`. Until 2026-08-17 that catch discarded its error, so **212 parks
+recorded no reason at all** (`7d36cfb` fixes that).
+
+**Three explanations killed by measurement — do not re-run them:** the standing receiver is NOT
+being torn down excessively (6 genuine teardowns in 2.5 h); there is NO stale peer identity (opening
+the stream succeeds — the failure is on the write); the connection is NOT missing or dead (the test
+session logged `liveness: alive, path: direct` 9.5 seconds before its send parked).
+
+**Carried investigation, after the fixes are live (Andre, 2026-08-17):** document sync frames share
+the conversation's sequence line. That is deliberate and is being **left alone for now** —
+separating them changes what the tree contains, and the tree root is what the seal signs over, so it
+risks existing receipts. But it is the condition that let a background sync failure strand
+foreground conversation. **Re-open if any gap appears on a session after the flood fix is live.**
+
+**Related:** item 21 (the cap this fills, reached with the customer doing nothing), and
+[[M12B-DEFINITION-OF-DONE]] — whose founding diagnosis this corrects. M12B believed the positions
+were burned by retransmissions; its planned submission-id fix would not have deduplicated these
+frames, because each is a genuinely distinct send. That milestone could have shipped in full,
+including a relay fleet roll, and two agents still could not have talked.
 
 # Post-launch — needed eventually, not for launch
 

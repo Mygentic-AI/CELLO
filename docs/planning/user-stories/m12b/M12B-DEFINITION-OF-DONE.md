@@ -84,6 +84,19 @@ description: >
 
 ## Tier T — Trace (confirm-first; no code ships from this tier)
 
+> ### 🔴 THE DIAGNOSIS BELOW WAS INCOMPLETE — CORRECTED 2026-08-17 (→ Entry 6)
+> This milestone was written believing the positions were burned by **retransmissions**, and its
+> headline fix (a submission id so a retry is recognisable) follows from that belief. **Measurement
+> found a second and far larger producer: document sync frames.** They are NOT retries — each is a
+> genuinely distinct send, legitimately entitled to its own position — so **no idempotency key
+> deduplicates them**. Tier A could have shipped in full, including the relay fleet roll, and two
+> agents still could not have held a conversation.
+>
+> The document-side cause is FIXED (`DOD-SYNC-REFUSAL-BACKOFF-1` in [[M14B-DEFINITION-OF-DONE]])
+> and a live send then **delivered directly with zero holds**. Tier A remains correct work — a
+> retransmission can still burn a position — but it is no longer what stands between an operator
+> and a working conversation. **Priority order is restated under "Work order" below.**
+
 - **DOD-M12B-TRACE-1** [cello-client] — name the resubmitter, with file/line evidence. Production
   shows one content hash consuming 49 canonical positions in session `f54e0d07` (49 receipts, ONE
   distinct message, max sequence 98) and another 69 times. Establish exactly which component
@@ -92,7 +105,14 @@ description: >
   have the original ordering record (`structure1_cbor`/`structure2_cbor`) in hand when it does?
   The retry queue already persists those columns and its own comment says they exist to stop "the
   divergent-leaf-index failure" — establish whether they are read on the resend path at all.
-  Every divergence from the spec-of-record's assumptions becomes an AC on the unit it affects. — ❌
+  Every divergence from the spec-of-record's assumptions becomes an AC on the unit it affects.
+  — ✅ **ANSWERED 2026-08-17: it is the document sync worker, not the retry queue** → Entry 6.
+  Measured on one live daemon: **321 reconcile attempts against 2 documents in 85 minutes, refused
+  321 times, 0 successes**; one session carried **3 real messages, 41 document ack frames, 43
+  canonical positions**. The frames are not resubmissions — each is a distinct send taking its own
+  position, correctly (`document-delivery-transport.ts` `sendBytes` → `sendContent` → `appendLeaf`,
+  deliberate since `f75ea09`). The retry queue was NOT the burner. Cause fixed in M14B
+  (`DOD-SYNC-REFUSAL-BACKOFF-1`); live re-test after the fix delivered directly with **0 holds**.
 
 - **DOD-M12B-TRACE-2** [cello-client + trustless-cello] — map every producer and consumer of a
   "position" in the messaging spine, and state which counter each one is. Known so far and to be
@@ -172,7 +192,21 @@ description: >
   TTF expires, and the retry takes a new position. That is the ignition step, and it needs no hold
   to start. **Remaining work: prove WHY the stream is closed** — three untested candidates in
   Entry 2 (connection already gone; the unawaited `stream.send(...)` racing the close; the peer
-  closing the inbound direction after sending content) — then fix it red-first. — ❌
+  closing the inbound direction after sending content) — then fix it red-first.
+  **PROMOTED 2026-08-17 to the milestone's most valuable open line (Entry 6).** The SAME error,
+  verbatim, is what makes an ordinary message PARK instead of deliver. `session.content.direct.send.failed`
+  (added cello-client `7d36cfb`, because this catch discarded its error and 212 parks recorded no
+  reason at all) fired on a live session with `"Cannot write to a stream that is closed"`. So
+  *"the ack never arrives"* and *"the message goes to the relay instead of to the peer"* are **ONE
+  defect in two places**, not two — and fixing it repairs both.
+  **Ruled OUT by measurement, so nobody re-runs them:** not a lost connection
+  (`session.transport.connected` fired 26 times for ~25 sessions, and the test session reported
+  `liveness: alive, path: direct` **9.5 seconds before** its send parked); not a stale counterparty
+  peer id (`newStream` SUCCEEDED — the failure is on the WRITE); not standing-receiver churn
+  (**6** genuine teardowns in 2.5 h, **0** from the endpoint path — the ~57 other builds were the
+  by-design factory replacement after handoff). Candidate 2 is now the strongest: the code calls
+  `stream.send(...)` **without awaiting it** and then awaits `stream.close()`, whose own comment
+  says close waits for the write buffer to drain. — ❌
 
 ---
 
@@ -245,6 +279,49 @@ description: >
   > (`session_not_found`) when its state is gone rather than restarting its counter and issuing
   > colliding positions. Colliding positions are NOT a failure mode. The damage is silence, not
   > corruption.
+
+## Work order — RESTATED 2026-08-17 (supersedes "lowest non-✅ line" within Phase 1)
+
+The tier order below is the priority the evidence supports, not the order the lines are written in.
+Ruled after the document flood was found and fixed and a live send then delivered directly.
+
+1. **`DOD-M12B-ACK-1`** — one error string breaks both the acknowledgement and ordinary delivery.
+   Highest value in the milestone; it is the reason messages reach the relay instead of the peer.
+2. **`DOD-M12B-STRAND-1`** — durable held content. This is what makes a gap RECOVERABLE instead of
+   fatal: 367 held / 8 released / **24 destroyed** on one daemon in one morning, and each
+   destruction is a gap nothing can ever fill.
+3. **`DOD-M12B-INDEX-1`** — position discipline. The invariant everything else assumes and nothing
+   enforces.
+4. **`DOD-M12B-SUBMIT-ID-1` + `RELAY-IDEM-1/2` + `CLIENT-REUSE-1`** — still correct work; a
+   retransmission can still burn a position. But it is no longer what stands between an operator
+   and a working conversation, and it is the only part that costs a **relay fleet roll**.
+5. Tier E proofs, then Phase 2 (Tier R).
+
+> **Do not read this as "Tier A is wrong."** It is right, and unchanged. It was mis-ranked because
+> the milestone believed retransmissions were the only position burner.
+
+## Owed follow-ups — do not lose these (ruled by Andre 2026-08-17)
+
+- **RE-MEASURE AFTER `DOD-M12B-STRAND-1` SHIPS, before building any resend-request protocol.**
+  Andre ruled that a resend/negative-acknowledgement protocol ("I am missing position N, send it
+  again") stays out of scope *for now* — but the reason gaps are FATAL rather than slow is that
+  held content dies at teardown. Once holds are durable, the missing frame may still be parked at
+  the relay and the gap may fill by itself on the next pull.
+  **What to re-measure, exactly:** on a daemon running durable holds, over a session that has taken
+  a gap — (a) the count of `session.content.held` versus `session.content.released`, which was
+  **367 vs 8**; (b) whether `session.content.held.discarded` ever fires, which was **24**; (c)
+  whether a gap present at teardown is still present after a restart + park drain. If holds survive
+  and gaps close on their own, the resend protocol is not needed. If gaps persist with durable
+  holds, the scope decision must be re-opened — that is the trigger, and it belongs to Andre.
+
+- **AFTER THE FIXES ARE OUT, INVESTIGATE WHETHER SHARED NUMBERING IS STILL A PROBLEM.** Document
+  sync frames take a position in the CONVERSATION's sequence space. That is deliberate (`f75ea09`,
+  2026-08-05 — a document sender that skipped its leaf starved its own inbound), and Andre ruled
+  2026-08-17 to **leave it alone for now**: separating the two lines changes what the tree contains,
+  and the tree root is what the seal signs over, so it risks existing receipts. But it is the
+  condition that turned a background sync failure into stranded foreground conversation.
+  Carried as a launch-triage investigation, not a build line. Trigger to re-open: any gap observed
+  on a session after the flood fix is live.
 
 ## Decisions Carried
 

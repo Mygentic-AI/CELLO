@@ -283,3 +283,71 @@ available from the sender's own record the whole time.
 
 Same lesson as Entry 1's two withdrawn hypotheses, and it is now three for three tonight: **an
 agent's account of what it did is not evidence of what happened — including this agent's.**
+
+## Entry 6 — The position burner is the DOCUMENT SWEEP, and one error string breaks everything (2026-08-17)
+
+Answers `DOD-M12B-TRACE-1`. Corrects this milestone's founding diagnosis. All numbers below are
+measured off one live daemon; nothing here is inferred from code alone.
+
+### The chain, end to end
+
+1. Two documents can never reconcile — one whose holder was **removed**, one whose asker is **not a
+   party**. Refused **321 times in 85 minutes, 0 successes**, ~4 dials/minute, forever.
+2. The sweep never backed off because `allOk` reports whether the FRAME WAS SENT, not whether
+   reconcile succeeded. 105 of those refusals carried `terminal: true`.
+3. Every attempt pushes ack frames, and **each frame takes a canonical position** — correctly and
+   deliberately (`f75ea09`). One session: **3 real messages, 41 document frames, 43 positions**.
+4. The receiving tree cannot keep pace → the strict-in-order gate holds everything past the gap.
+   **367 held / 8 released / 24 destroyed.** 2% of verified content delivered.
+5. Every sweep attempt opens a session; every accepted session consumes the pre-warmed standing
+   receiver and mints a replacement. **53 sessions → 63 receiver builds in 2.5 h.**
+6. Every session the worker opened failed to seal: **25 opened, 25 `seal.blocked_incomplete`** — a
+   chain with held content cannot be co-signed — so they never close and accumulate.
+
+### Fixed, and verified live
+
+Cause fixed in cello-client branch `m12b/reconcile-removed-holder` (`0650181` removed-holder check,
+`b1322c2` refusal backoff). Full gate green. **Live re-test on the fixed build: `delivered: true`,
+0 parks, 0 holds on the new session, 0 refusals.** Every hold still appearing belongs to a
+pre-existing session carrying a permanent gap — which is the predicted behaviour, not a failure.
+
+### What this does to Tier A
+
+**The submission id would not have fixed this.** Document frames are not retransmissions; each is a
+distinct send entitled to its own position, so no idempotency key deduplicates them. Tier A could
+have shipped in full — including the relay fleet roll — and two agents still could not have talked.
+Tier A stays correct and drops in priority; see the DoD's restated work order.
+
+### Three hypotheses KILLED by measurement — do not re-run them
+
+1. **"The standing receiver is torn down too often."** No: **6** genuine teardowns in 2.5 h, **0**
+   from the endpoint-rebuild path. The other ~57 builds are the by-design factory replacement after
+   handoff. The design is correct; it was being driven far past its intended rate by the flood.
+2. **"A stale counterparty peer id is recorded during negotiation."** No. `newStream` SUCCEEDS —
+   the failure is on the WRITE. Raised by a subagent trace that flagged itself as a hypothesis, and
+   repeated here with more confidence than it had earned. Andre's objection (it would need
+   near-exact overlap between two setups, so it cannot be this frequent) was correct.
+3. **"The connection was never established / had died."** No: `session.transport.connected` fired 26
+   times for ~25 sessions, and the test session logged `liveness: alive, path: direct` **9.5 seconds
+   before** its send parked.
+
+### The one defect left, and it is already on the board
+
+`session.content.direct.send.failed` — added in `7d36cfb` precisely because this catch discarded its
+error, leaving **212 parks with no recorded reason** — fired on a live session with:
+
+```
+Cannot write to a stream that is closed
+```
+
+That is the SAME string, verbatim, as the 36 acknowledgement failures in Entry 2. **`DOD-M12B-ACK-1`
+and the parking defect are one bug in two places.** Strongest remaining candidate: the code calls
+`stream.send(...)` without awaiting it, then awaits `stream.close()`, whose own comment notes that
+close waits for the write buffer to drain.
+
+### Process note
+
+This entry exists because three earlier explanations were asserted and withdrawn under Andre's
+pushback, each time because a measurement contradicted them. The rule the milestone already carries
+— MEASURE BEFORE QUOTING A NUMBER — applies equally to mechanisms: a subagent's flagged hypothesis
+is not evidence, and repeating it without the check it asked for is how a day gets spent.
