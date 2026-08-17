@@ -2318,3 +2318,17 @@ other half of this.
 ### Gate
 
 `pnpm run test` **exit 0** — **3838 passed / 11 skipped** · lint / typecheck / build **exit 0**.
+
+### Does the retry make the slot shortage WORSE? Measured: no.
+
+The obvious objection to re-attempting is that each attempt might PIN a slot it never uses —
+`#startReceiverNode` races each candidate against a deadline and abandons the loser with a
+best-effort `stop()`, and a relay holds a granted reservation for its full TTL even after the client
+disconnects. Five retries × N candidates could then be five times the slot pressure, on a relay
+already out of them.
+
+**It cannot, in the observed regime.** All 2,215 rejections are `relay_granted_no_reservation`.
+`reservation_did_not_complete_in_time` and `relay_unreachable` fired **zero** times in 17 days — so
+the raced-out case that could pin a slot has never happened here, and a refusal that grants nothing
+consumes nothing. Re-check this if the timeout reason ever starts appearing; that is the signal that
+the retry needs a tighter budget.
