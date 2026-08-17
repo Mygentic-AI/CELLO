@@ -190,7 +190,15 @@ Both found by running a real end-to-end test between two of Andre's own agents o
 build. **The eleven ranks did NOT stop two agents talking; these did.** With them out of the way the
 same test passed clean: 0 held, 0 discarded, 0 send failures, 0 accept failures, `delivered: true`.
 
-**A. `DOD-CAP-SELF-HEAL-1` (item 21) — dead sessions fill the acceptance cap, and nobody is told.**
+**A. `DOD-CAP-SELF-HEAL-1` (item 21) — ✅ FIXED 2026-08-17.** The bound now counts sessions the
+COUNTERPARTY ended, not ones our own restart, shutdown or kill switch ended — so finished
+conversations no longer lock out the person you had them with. D18 is intact and was verified path
+by path: no counterparty-controllable action produces an excused row. Stated plainly because it is a
+real change in the guarantee: the bound is now *concurrent with amnesty at every restart*, not
+all-time. The operator is also told when their own cap fires, once per peer per window, naming which
+sessions to close and how many. The refusal itself stays byte-identical across tiers — a first
+attempt put the counts on the refusal object and the repo's own no-oracle test caught it. → M12B
+Entry 19. **Original defect, for the record:**
 Two of Andre's own agents could not open a session at all: `session.inbound.accept.failed
 reason=abuse_bound_sessions_per_sender`. The receiving agent held 5 FINISHED conversations
 (`interrupted`, 22–90 messages each) with the caller, against a stranger cap of 3. They are never
@@ -200,7 +208,12 @@ never talk again, and every restart makes it worse.** The caller is told nothing
 `ok` with "dispatched to relay", and the receiving side then sweeps the parked message as
 `counterparty_unknown` and deletes it. A success message for a conversation that never existed.
 
-**B. `DOD-M12B-CLOSE-SILENT-WAIT-1` — a normal close blocks for ELEVEN MINUTES in silence.**
+**B. `DOD-M12B-CLOSE-SILENT-WAIT-1` — 🟡 HALF FIXED 2026-08-17.** The wait now announces itself when
+it starts, with the deadline and the cost of forcing, and a session mid-seal shows `sealing` on both
+status surfaces — so a second window can see the first one working. **Still open:** the caller is
+still not answered for up to eleven minutes. Answering early would orphan the unilateral escalation
+that runs inline after the wait, which changes the close contract and what produces the receipt —
+parked as a decision, not taken in passing. → M12B Entry 19. **Original defect:**
 Not a hang: `CELLO_SEAL_BILATERAL_TIMEOUT_MS` defaults to 660,000 ms, and the close waits it out
 before escalating to a unilateral seal — which then succeeds and produces a real notarized receipt
 (measured 16:48:55 → 17:00:01, 11m 06s). The wait is correct. The silence is not: nothing tells the

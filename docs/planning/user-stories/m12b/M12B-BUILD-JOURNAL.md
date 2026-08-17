@@ -1479,3 +1479,79 @@ assumed.**
 
 `DOD-M12B-CLOSE-SILENT-WAIT-1` — see [[launch-triage]]. Not part of the eleven ranks; found after
 them.
+
+---
+
+## Entry 19 — The caps, and the eleven-minute silence (2026-08-17)
+
+Both found by running a real end-to-end test between two of Andre's own agents on the promoted
+build — the thing the eleven ranks never did. **Neither was in the eleven, and the first was the
+actual blocker.**
+
+### `DOD-CAP-SELF-HEAL-1` — finished conversations locked out the person you had them with
+
+`session.inbound.accept.failed reason=abuse_bound_sessions_per_sender`. The receiving agent held
+five FINISHED conversations with the caller (`interrupted`, 22–90 messages) against a stranger cap
+of three. The reaper correctly refuses to take them — D18 requires interrupted sessions with
+received content to count — so the bound was **all-time rather than concurrent**. Every pair of
+agents that had talked three times could never talk again, and every restart tightened it.
+
+The caller was told nothing: its send returned `ok` / "dispatched to relay", and the receiver then
+swept the parked message as `counterparty_unknown` and **deleted it**.
+
+**The fix records WHO caused each interruption**, and the bound excuses only ours. The review found
+the first build had applied that to two paths and missed two more — **both of which charge the
+operator's own actions to the peer**:
+
+- **The kill switch.** `cello_set_agent_offline` tears sessions down through a status write that
+  never touched the column, so it read as the counterparty's doing. *"The operator presses their
+  own stop button three times while a conversation with the same peer is live, and that peer is
+  locked out forever."*
+- **A relay redeploy.** `stream_close` is OUR witness stream ending — a relay restart or fleet roll
+  — and it was labelled `counterparty`. Relay deploys are routine, so it ratchets faster than daemon
+  restarts. Now recorded honestly as `relay_stream_close`, and it **still counts**: an attacker who
+  can disturb our relay link must not get a free cap reset.
+
+**D18 was verified, not assumed.** The reviewer enumerated every path that writes `interrupted` and
+confirmed no counterparty-controllable action produces an excused row. The one race — a peer
+dropping in the instant before a shutdown sweep — requires guessing a shutdown they cannot observe,
+and those sessions were inside the concurrent cap anyway. **Stated plainly because it is a real
+weakening:** the bound is now *concurrent with amnesty at every restart*, not all-time.
+
+**The refusal stays byte-identical across tiers.** A first attempt hung the counts off the refusal
+object, which put a distinguishing oracle into the value the refusal path carries — a blocked party
+could tell blocking from throttling. `dod-tier-2-tiered-bounds` caught it. The numbers are a
+separate local read now.
+
+**The alarm** fires once per peer per window (the peer controls the retry rate), skips BLOCKED
+contacts (their cap is 0, so it fired on the first knock — an error telling the operator to unblock
+someone they blocked), names FINISHED-BUT-UNSEALED rather than "open" sessions, says how many to
+close to get *under* the cap rather than how many exist, lists which, and carries the correlationId.
+
+### `DOD-M12B-CLOSE-SILENT-WAIT-1` — the close that looked dead
+
+Not a hang. `CELLO_SEAL_BILATERAL_TIMEOUT_MS` is 660,000 ms and the close waits it out before
+escalating to a unilateral seal that then succeeds with a real receipt. Measured: seal leaf
+16:48:55.137, ceremony 17:00:01.508 — **11m 06s**, matching the constant.
+
+The wait earns the receipt. The silence is the defect: the operator sees a frozen command and
+reaches for `force`, which forfeits it. **That is exactly what happened — 17 sessions were
+force-closed because the first normal close looked dead.** The wait now announces itself at the
+START with the deadline and the cost of forcing, and a session mid-seal shows `sealing` on the
+status surface so a second window can see the first one working.
+
+**PARKED, not taken:** answering the caller early. The unilateral escalation runs inline after the
+wait, so returning early would orphan it — a change to the close contract and to what produces the
+receipt. Recorded as a decision rather than made in passing.
+
+### The pattern, now four reviews deep
+
+Every unit's first build had wiring a test could not see. Here it was the labels: **every
+`interrupted_by` value in the suite was written by a test seam**, so deleting the labelling from
+production left the whole suite green while the measured bug returned in full. Both paths now drive
+the real code — the shutdown sweep is read back from a SECOND process, because the shutdown closes
+its own database handle.
+
+### Gate
+
+`pnpm run test` **exit 0** — 3788 passed / 11 skipped · `lint` / `typecheck` / `build` **exit 0**.
