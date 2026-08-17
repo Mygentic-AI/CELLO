@@ -267,6 +267,79 @@ description: >
 
 ---
 
+## Tier S — Session lifecycle and surface truth (all found 2026-08-17, Entry 8)
+
+> These seven were hit while chasing the ordering defect. None is the ordering defect. Each one
+> either **lies to the operator** or **leaves a session in a state nothing can clear**, and every one
+> of them cost real debugging time today. They are on this board because they are messaging-spine
+> defects; the customer-facing framing of each is in [[launch-triage]] items 26–32.
+
+- **DOD-M12B-INBOX-TRUTH-1** [cello-client] — **`pending_session_requests` reports sessions that
+  were already accepted.** The field is produced from the in-memory notification queue and means
+  "no `cello_await_session` has claimed this notice". It is READ, by every agent and by its own
+  name, as "this session has not been accepted". The session was accepted by the standing receiver
+  before the notice was ever queued — the project's own skill file says so: *"Inbound sessions are
+  auto-accepted by the standing receiver — there is no separate accept step."* Cost today: hours,
+  and a confidently wrong diagnosis reported to Andre that the two sides disagreed about a session's
+  existence. They never did. Minimum fix: carry per-entry truth (`accepted: true`) plus guidance
+  saying the session is already readable and `cello_await_session` only drains the notice. Additive;
+  breaks no existing test. — ❌
+
+- **DOD-M12B-AWAY-MARK-1** [cello-client] — **the away auto-responder answers on a session no window
+  is attending, and nothing marks the reply as machine-generated.** It fires from
+  `inbound-sessions.ts` on accept and from `daemon.ts` on every inbound message, gated only on
+  "nobody is attending" plus "session is active". The reply is an ordinary `msg` leaf at a real
+  sequence, so to the initiator it is positive evidence that someone is there. `isOwnAwayAutoReply`
+  exists but runs only on the SENDING side and cannot recognise a configured away message by design.
+  Consequence measured today: two agents spent the morning exchanging each other's away responders
+  while both operators believed a conversation was happening. Fix is a marker the receiving side can
+  read, NOT the removal of the away path. — ❌
+
+- **DOD-M12B-REDIAL-1** [cello-client] — **nothing re-dials, ever.** Only the initiator dials, once,
+  at establishment (`connectToCounterparty`). `newStream` never dials — it requires an already-open
+  connection filed under the recorded peer id. There is no re-dial on `session.liveness.changed →
+  gone`, none on signaling reconnect, none on agent offline→online, none in the drain hook. So once
+  a session's direct connection is lost for any reason, that session parks **every** message for the
+  rest of its life, on both sides, permanently, and no surface says so. Note this is NOT the cause of
+  today's parking (see `DOD-M12B-ACK-1`) — it is a separate standing fragility found while ruling
+  that out. — ❌
+
+- **DOD-M12B-ABANDON-NOTIFY-1** [cello-client] — **force-abandon is local-only, and the counterparty
+  is never told.** `cello_close_session {force:true}` marks the session terminal on this side with no
+  bilateral seal. The other side keeps its half live, keeps retrying delivery into it, and keeps
+  re-dialling to re-establish. **This is what produced the 2026-08-17 "notification storm"**: after
+  several force-abandons, the surviving halves dialled continuously and the operator saw connection
+  requests from agents nobody was driving. The guidance already warns the receipt is forfeited; it
+  does not say the far side will keep calling. Either the abandon is signalled, or the surviving half
+  must be able to detect and retire itself. — ❌
+
+- **DOD-M12B-SEAL-STUCK-1** [cello-client] — **a session holding content can never seal, so it never
+  closes, and they accumulate.** `session.seal.blocked_incomplete` fires with `missingLeaves` /
+  `heldCount` — correctly, since a chain with a gap cannot be co-signed. Measured 2026-08-17:
+  **25 sessions opened by the document worker, 25 seals blocked, 0 closed.** Each one holds a slot
+  against the per-sender cap (launch-triage item 21), so a spine defect converts directly into "this
+  agent stops accepting sessions". The seal refusal is right; what is missing is any path OUT — the
+  session is stuck between "cannot seal" and "must not be destroyed". Depends on
+  `DOD-M12B-STRAND-1`. — ❌
+
+- **DOD-M12B-SHUTDOWN-1** [cello-client] — **the daemon can refuse to exit.** `cello logout`
+  reported *"Daemon shutdown did not complete within 5s … it may be stuck closing sessions or its
+  database"*, and the process was still alive **30+ seconds** later. The log shows it was still
+  running `document.reconcile.sweep` **during shutdown**. The socket was already removed, so from the
+  operator's side the daemon was down while the process ran on; it took a signal to exit. A shutdown
+  that keeps starting new outbound work is not draining. — ❌
+
+- **DOD-M12B-SIGNAL-GUIDANCE-1** [cello-client] — **the `missing_signal` error instructs the caller
+  to do the wrong thing.** `cello_send` requires a `signal` PARAMETER (`over` / `standby` / `wrap`).
+  Its refusal guidance says *"Every cello_send message must end with one of: [[OVER]] …"* — which
+  reads as "put this token at the end of your message body". Following the guidance exactly produces
+  the same refusal, forever. Cost 2026-08-17: **six consecutive failed sends across two agents and
+  three sessions**, initially misdiagnosed as a protocol defect and reported to Andre as such. The
+  guidance must name the parameter. This is the milestone's own "errors name their cause" rule
+  applied to a success path. — ❌
+
+---
+
 ## Tier E — Proof (three real daemons, separate OS processes)
 
 - **DOD-M12B-ENFORCE-1** [cello-client] — the pinned regression flips. `it.fails(...)` in

@@ -503,3 +503,60 @@ opened. It needs threading through to the dispatch site, not inventing.
 Re-run the 20-minute live measurement against the 55-attempts / 0-refusals baseline, and check that
 a document still syncs promptly after a peer comes back online. **Fewer attempts with a matching
 rise in sync latency is the failure mode, not the success criterion.**
+
+## Entry 8 — Seven defects found while chasing the ordering bug, none of them the ordering bug (2026-08-17)
+
+Filed as **Tier S**. Recorded here because each was discovered as a side effect of the M12B
+investigation, each cost real time today, and none of them existed in any document before this
+entry — they lived only in a chat session, which is disposable.
+
+### The seven, with what each actually cost
+
+1. **`pending_session_requests` reports already-accepted sessions.** Produced from the notification
+   queue, meaning "no `cello_await_session` claimed this notice"; read by its own name as "not
+   accepted". **Cost: hours, plus a confidently wrong report to Andre** that the two sides disagreed
+   about whether a session existed. They never did. The project's own skill file already says
+   inbound sessions are auto-accepted with no separate accept step.
+
+2. **The away auto-responder answers when nobody is attending, unmarked.** An ordinary `msg` leaf at
+   a real sequence, indistinguishable from a person. Two agents spent the morning talking to each
+   other's away responders while both looked live.
+
+3. **Nothing re-dials, ever.** Only the initiator dials, once. `newStream` requires an already-open
+   connection. No re-dial on liveness-gone, signaling reconnect, offline→online, or drain. A lost
+   connection means that session parks everything for life. **Not** today's parking cause — found
+   while ruling that out.
+
+4. **Force-abandon is local-only.** The far side keeps its half live, keeps retrying, keeps
+   re-dialling. **This produced the "notification storm"** that read as the system going berserk:
+   connection requests from agents nobody was driving.
+
+5. **A session holding content can never seal, so it never closes.** 25 opened by the document
+   worker, **25 blocked, 0 closed.** Each holds a slot against the per-sender cap, so a spine defect
+   converts directly into "this agent stops accepting sessions" (triage item 21).
+
+6. **The daemon can refuse to exit.** `cello logout` timed out at 5 s; the process was alive 30+ s
+   later, still running `document.reconcile.sweep` **during shutdown**, socket already removed. Took
+   a signal to exit.
+
+7. **The `missing_signal` guidance instructs the caller to do the wrong thing.** `cello_send` needs a
+   `signal` PARAMETER; the guidance shows a `[[OVER]]` token to append to the message body. Following
+   it exactly fails forever. **Cost: six consecutive failed sends** across two agents and three
+   sessions, misdiagnosed and reported as a protocol defect.
+
+### The pattern worth naming
+
+Five of the seven are the same shape: **a surface that reports something other than what is true.**
+A field named for the wrong thing, an auto-reply that reads as a person, a local-only abandon the
+peer never learns about, an error whose guidance is wrong, a session that reports success while its
+chain stopped growing. This milestone already has the rule — *errors name their cause, not their
+exit point* — and these show it applies to success paths and status fields too, not only to errors.
+
+The other two (no re-dial, unsealable sessions) are states with **no exit**: nothing recovers them
+and nothing reports them.
+
+### Cross-references
+
+Customer-facing framing for all seven: [[launch-triage]] items 26–32. Two of them are direct causes
+of things already on that list — item 4 caused the storm behind item 22's discovery, and item 5 feeds
+item 21's cap.
