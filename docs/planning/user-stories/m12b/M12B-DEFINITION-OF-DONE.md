@@ -430,6 +430,31 @@ description: >
   whose node is gone, and prove a `seal_interrupted_pending` row can reach `sealed`. Makes the DoD
   sentence of `RESTART-SEAL-1` true and makes its `retry_after_seconds` reachable. — ❌
 
+- **DOD-M12B-SEAL-WAITER-KEY-1** [cello-client] — **`pendingUnilateralWaiters` is keyed by session id
+  alone, and has three registrants.** Its sibling `sealInterruptedInProgress` is keyed
+  `agent:session`; this one is not. Two agents on one daemon — the topology `seal-flows.ts` explicitly
+  caters to, and the one Andre runs — closing the same session, or the away-path one-shot escalation
+  overlapping a manual close, clobber each other's resolver. **The loser waits out the full 30 s and
+  reports `seal_unilateral_timeout` for a seal that SUCCEEDED.** Key it `${agentName}:${sessionIdHex}`
+  and resolve by the agent owning the stream the frame arrived on. Found by the escalation review;
+  pre-existing, and the restart-seal resolver now collides with a human close on it. — ❌
+
+- **DOD-M12B-SEAL-BILATERAL-FIRST-1** [cello-client] — **a realigned bilateral seal is downgraded to
+  a unilateral one, instantly.** When the counterparty rejects with `session_seal_already_pending` +
+  `pendingCeremony: "relay_bilateral"`, the flow submits our half and returns `ok: true` — so the
+  interrupted close escalates milliseconds later and asks the directory to notarize with the
+  counterparty ABSENT, for a counterparty that is demonstrably present and co-operating. The ACTIVE
+  path gives the bilateral round an 11-minute window before escalating; this path gives it none, and
+  for any orphan older than the grace the receipt then records the peer as `absent` when they were
+  live. Carry a flag out of the realign branch and skip the escalation for that one case, or give it
+  a short bilateral wait. — ❌
+
+- **DOD-M12B-SEAL-ESCALATE-DUP-1** [cello-client] — **a THIRD copy of the unilateral escalation
+  exists and was not extracted.** `daemon.ts`'s away/one-shot path is a line-for-line duplicate of
+  `escalateToUnilateralSeal`, with a hardcoded 30 s and its own waiter registration. Every future fix
+  to the helper — including the local carry pre-check and the ctrl-leaf recovery just shipped — will
+  miss it. Fold it into the helper. — ❌
+
 - **DOD-M12B-PENDING-EXIT-1** [cello-client] — **`seal_interrupted_pending` has no exit at all, and
   `cello_close_session` refuses it by name.** Measured: **26 sessions**, idle **0.5 to 10.5 days**,
   carrying 2–14 messages each. The close handler's last branch answers `session_not_closeable` with
