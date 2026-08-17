@@ -18,14 +18,20 @@ description: >
 
 **Updated 2026-08-17, end of the eleven-rank run.**
 
-### NEXT ACTION
-**The 20-minute live measurement** — the launch-triage's own verification gate after rank 5, and the
-last thing owed on the eleven-rank block. It can finally run: Andre promoted and reinstalled at
-**15:40Z on 2026-08-17**, so the code is on a running daemon.
+### NEXT ACTION — ANDRE'S RULING, THEN A TRACE
+The 20-minute gate **DID NOT PASS** (Entry 17). 274 holds against **1 release**, on an exact
+120-second cadence that is the document reconcile sweep. Nothing is destroyed — that part of rank 6
+works — but the gap is still being created.
 
-Baseline to beat, from the pre-fix run: **55 reconcile attempts / 2 holds / 20
-`session.content.direct.send.failed` in 20 minutes — holds must reach ZERO.** A drop in attempts
-with a RISE in document-sync latency is the failure mode to watch for, not a success.
+**This fires the DoD's own re-open trigger** ("any gap observed on a session after the flood fix is
+live") on the parked **shared-numbering** investigation. Separating the document and conversation
+sequence lines changes what the tree contains, and the root is what the seal signs over — so the
+scope call is Andre's, not this session's.
+
+Before any code: read the producer of the canonical sequence on the document path
+(`document-delivery-transport.ts` `sendBytes` → `sendContent` → `placeOwnLeaf`) against a session
+whose tree starts EMPTY. `session.content.held.restored` was 0, so these holds are created fresh
+each sweep, not inherited. **No hypothesis is promoted.**
 
 ### REPO STATE
 | | |
@@ -1344,3 +1350,73 @@ and could not run before now because it needs the code on a running daemon. Base
 **55 reconcile attempts / 2 holds / 20 `session.content.direct.send.failed` in 20 minutes — holds
 must reach ZERO.** A drop in attempts with a rise in document-sync latency is the failure mode to
 watch for, not a success.
+
+---
+
+## Entry 17 — The verification gate: it does NOT pass, and the parked investigation is re-opened (2026-08-17)
+
+Twenty minutes on daemon `0.0.170`, 15:41→16:12Z, `~/.cello/daemon.log`. 1,411 records, 16 distinct
+sessions — a live window, not an idle one. **Andre closed his laptop partway through, and that does
+NOT explain the result** (see the cadence below).
+
+### Against the baseline
+
+| | pre-fix | now | |
+|---|---|---|---|
+| reconcile attempts | 55 | **17** | ↓ |
+| **holds** | 2 | **274** (154 gate + 120 recover) | ✗ **must be ZERO** |
+| direct-send failures | 20 | **2** | ↓ |
+
+**RELEASED: 1.** Against 274 holds. That is the whole finding.
+
+### What DID hold up
+
+- **`content.delivery.ack.send.failed`: 0.** Rank 5's defect — 22 in 3.5 hours before — is gone.
+- **`session.content.stream.close.failed`: 0**, `position_behind_frontier`: 0, `persist.failed`: 0.
+- **Re-dials: 2 attempted, 2 succeeded, 0 failed.** Rank 9 working on live traffic.
+- **Direct-send failures down 20 → 2**, and neither carried the stream-cap error.
+
+### Nothing was destroyed — and the alarm saying otherwise was MINE
+
+`session.content.held.lost` fired 10 times. It was **wrong every time**: `session.content.held.annexed`
+also fired 10 times, on the same frames, in the same second. Ending a session annexes the held
+frames and deletes their durable rows; teardown then found them still in the in-memory map, counted
+`held_content`, got zero, and announced destruction. Fixed in cello-client `0140568` — annexing now
+clears the entry it just saved.
+
+**The same class of defect the review caught pointing the other way** (a failed COUNT reported as
+destroyed content), and worse than a missing alarm: a false one on the most serious event in the
+system sends the next investigation after content that was never lost.
+
+### THE LAPTOP IS NOT THE EXPLANATION
+
+The discards land at **15:44:25, 15:46:24, 15:48:25, 15:50:24, 15:52:24** — an exact 120-second
+cadence. That is the document reconcile sweep, not a suspend/resume burst. Every two minutes a
+document-worker session opens, holds two frames behind a gap, and is torn down without ever
+releasing them. **33 sessions created in 20 minutes.**
+
+### ⚠️ THE PARKED INVESTIGATION'S RE-OPEN TRIGGER HAS FIRED
+
+The DoD carries this verbatim under "Owed follow-ups": *"AFTER THE FIXES ARE OUT, INVESTIGATE
+WHETHER SHARED NUMBERING IS STILL A PROBLEM … **Trigger to re-open: any gap observed on a session
+after the flood fix is live.**"*
+
+274 holds against 1 release, on a cadence that is the document sweep, is that gap. **The condition
+Andre ruled to leave alone is now the top open item on the messaging spine**, and it belongs to him
+to rule on, because separating the document and conversation sequence lines changes what the tree
+contains and the root is what the seal signs over.
+
+### What the eleven ranks DID achieve, stated precisely
+
+They made this failure **non-destructive and visible**: content that used to be thrown away is now
+durable and annexed, the ack path is clean, the write failures are gone, a dropped connection
+recovers, and a session that cannot close says so. **They did not stop the gap being created on
+document-worker sessions.** That was never one of the eleven — it is the parked item above.
+
+### Next diagnostic step, NOT yet taken (no hypothesis promoted)
+
+Establish why a document-worker session's frames are witnessed ahead of its own empty tree.
+`session.content.held.restored` was **0**, so no session is being re-created and re-hydrated; the
+holds are being created fresh each sweep. Read the producer of the canonical sequence on the
+document path — `document-delivery-transport.ts` `sendBytes` → `sendContent` → `placeOwnLeaf` —
+against a session whose tree starts empty, before writing anything.
