@@ -118,6 +118,14 @@ description: >
   carries a full work order — a new milestone M12B (relay/client topology, ruled by Andre as within
   M12's scope rather than a milestone of its own) with DoD, procedure and journal. Item 19 now
   points at it.
+  2026-08-17: added item 21 (DOD-CAP-SELF-HEAL-1) — an agent silently stops accepting sessions once
+  a per-sender cap is hit, and the cap counts INTERRUPTED sessions (what a restart leaves behind)
+  against a bound meant for live ones, so every restart tightens it until nothing connects. Found
+  when two agents ON THE SAME MACHINE could not open a session. The outward silence is correct and
+  must be preserved (no distinguishing oracle for a refused peer); the INWARD silence is the defect
+  — the operator whose cap fired is told nothing and is the only one who can clear it. Andre's
+  framing, and the general principle it carries: an agent cannot self-heal against a limit it is
+  never told it hit, so every cap in the system needs the same audit.
 ---
 
 # Launch Triage
@@ -1229,6 +1237,64 @@ relay roll — it is a bilateral wire contract). Evidence: [[M12B-BUILD-JOURNAL]
 
 **One open unknown, carried as `DOD-M12B-ACK-1`:** what stops the FIRST acknowledgement. The spiral
 needs one unacknowledged send to start and that first failure was never traced.
+
+
+## 21. Your agent stops accepting sessions and is never told which limit it hit
+
+**Designation: `DOD-CAP-SELF-HEAL-1`** — ❌ **OPEN.** Unranked. **Proposed slot: high — it takes an
+agent offline for conversations, it is invisible from every surface, and it gets worse with every
+restart until nothing connects.**
+
+**What it costs a customer.** Their agent simply stops being reachable by someone it was talking to
+fine an hour ago. No error, no warning, no entry in any status output. The other side gets a session
+that appears to open and then silently absorbs everything sent into it. Restarting the daemon —
+the obvious thing to try — **makes it worse**, for the reason below.
+
+**Two defects, and they compound.**
+
+**(a) A cap meant for LIVE sessions counts DEAD ones, and nothing reaps them.** The per-sender
+bound is enforced by `countActiveSessionsForCounterparty`, whose SQL is
+`status IN ('active', 'interrupted')`. An `interrupted` session is what a daemon restart leaves
+behind — graceful shutdown marks every live session interrupted. They are never cleared, so **every
+restart permanently tightens the limit** until an agent pair cannot open a session at all. Measured
+2026-08-16: `CELLO_Coder_1` held **4 of an allowed 5** against `CELLO_Support`, of which the majority
+were interrupted rather than live. The cap fired at 05:03 and the pair could not connect. Both agents
+were on the SAME machine.
+
+**(b) The refusal reaches nobody who can act on it.** Logged as `session.inbound.refusal.silent`,
+reason `abuse_bound_sessions_per_sender`.
+
+> **The outward silence is CORRECT and must be preserved.** A refused peer must not learn WHY it was
+> refused — the tier design deliberately routes a BLOCKED sender through the same reason and the same
+> path as an over-cap UNKNOWN one specifically so there is **no distinguishing oracle**. Do not
+> "fix" this by telling the sender.
+>
+> **The INWARD silence is the defect.** The operator whose own cap was hit is told nothing, and is
+> the only party who can clear it. Andre, 2026-08-17: *"when any cap is hit, the person whose cap is
+> triggered should have been notified — a session was refused because you've hit your limit, do X to
+> clear it. Without these kinds of affordances, an agent will have no idea how to solve its own
+> problems, no idea how to self-heal."*
+
+**The principle, which is bigger than this cap.** An agent cannot self-heal against a limit it is
+never told it hit. Every cap in the system should be audited against this: when it fires, does the
+party who owns the limit learn (1) that it fired, (2) which limit, and (3) the specific action that
+clears it? Today this one answers none of the three. A cap without an affordance is an outage with
+extra steps.
+
+**What a fix needs, at minimum:**
+- **Reap or exclude dead sessions.** Either interrupted sessions stop counting toward a live-session
+  cap, or they are reaped on a schedule. Prefer excluding — an interrupted session is not evidence
+  of abuse, which is what the cap exists to bound.
+- **Tell the receiving operator, on their own surface.** A notification and a `cello status` line:
+  which counterparty, which limit, how many are held, and the verb that clears it.
+- **Keep the sender's view unchanged.** Same silent refusal, same non-distinguishing reason.
+- **Cleanup must not force a false choice.** Today clearing an interrupted session is either a
+  proper close (both sides sign, receipt kept) or `--force` (abandons it and FORFEITS the receipt).
+  Sessions carrying 47, 81 and 104 real messages should not need their notarized receipt destroyed
+  to unblock a cap.
+
+**Related, same night, same shape:** items 16–20. A guard that refuses without telling the party who
+could act is the recurring defect this list keeps rediscovering.
 
 # Post-launch — needed eventually, not for launch
 
