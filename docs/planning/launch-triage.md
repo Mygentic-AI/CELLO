@@ -1082,6 +1082,13 @@ notarized end to end and produce a receipt. That case has never run.
 > **This is why the proof this item asks for would still have looked like a failure even after the
 > first fix.** Whoever runs it should assert on the session's STATUS, not only on the certificate.
 >
+> **🔴 WHY THE PROOF HAS NOT BEEN RUN, and it is not for lack of trying.** It needs two daemons with
+> REGISTERED agents, and registration requires a `preAuthToken` *"issued by the CELLO Operations
+> Agent (Telegram)"* — a human step only Andre can take. The alternative, running it against his own
+> five live agents, would seal his open sessions as a side effect of the test. **So this proof is
+> blocked on Andre issuing two pre-auth tokens for throwaway agents**, and that is the whole
+> blocker: the code is written, reviewed twice and gated green.
+>
 > Fixed in `DOD-M12B-INTERRUPTED-ESCALATE-1` (cello-client `af8d4bb`): the escalation is a shared
 > helper both branches call. It fires when the two sides agreed OR when the counterparty never
 > answered, and **never after a refusal** — a rejection means the trees disagree, and notarizing over
