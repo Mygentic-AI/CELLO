@@ -72,6 +72,34 @@ Andre: *"it wasn't one, but it has become one because of all the errors."* The d
 the no-exit defect was there at 12/day too — it just did not hurt at that rate.** With a stranger
 cap of 3, a handful of unresolvable sessions is enough to lock a peer out entirely.
 
+### 🔴 MEASURED 2026-08-17 (later): EVERY interruption was OUR OWN STOP. Not one was transport.
+
+Added after the plan in §5 was written, and it **re-ranks that plan**. Counted over the same
+405,925-record log, against event names that have existed since M7 — so this is what the binary
+Andre is actually running would have logged.
+
+| where an interruption came from | count |
+|---|---|
+| **our own daemon shutdown** (`session.node.destroyed reason=interrupted` immediately after `daemon.stopped`) | **114** |
+| the operator's own `cello_set_agent_offline` | 2 |
+| unattributed, at startup | 2 |
+| **relay said the counterparty went** (`markInterruptedWithDetails source=relay_frame`) | **0** |
+| **our relay witness stream closed** (`source=stream_close`) | **0** |
+| **the boot sweep finding a session a killed process left behind** (`source=daemon_restart`) | **0** |
+
+**97% of every interrupted session in seventeen days was the daemon being stopped**, and the
+graceful-shutdown sweep flipping every open session on the way down. The boot sweep found nothing to
+sweep at any of the **95 restarts**, because shutdown had already done it.
+
+**Nothing was ever interrupted by a laptop close, a wifi hop, a relay redeploy, a signaling
+reconnect, or a counterparty disconnecting.** Those paths exist, they are real fragilities, and they
+did not fire once.
+
+**Consequence for §5: case C is not the rarest case, it is the ONLY case that has ever happened.**
+A and B are hardening against something not yet observed. They stay in the plan; they stop being
+first. Restart count by day tracks the development, not the protocol: 4 on 08-01, 29 on 08-16, 21 on
+08-17.
+
 ### Corrections to figures stated earlier in the session
 
 - **"93% never resolved" was WRONG.** That counted `session.node.created` events, which include node
@@ -197,6 +225,37 @@ A defect the code worked around with better logging rather than fixing.
 
 ## 5. The three cases, and what each needs
 
+> **BUILD ORDER, set by the measurement above: C, then A, then B.** C is the only case that has
+> occurred. A and B are written second because they are hardening, not because they are smaller.
+
+### 🔴 A and B rest on two premises the code does not support — corrected 2026-08-17
+
+Traced through `session-node-manager.ts` after §5 was written. Both corrections make the fix
+*simpler* and land it exactly on Andre's per-session invariant (§6).
+
+1. **"The standing receiver is rebuilt on every signaling reconnect" is FALSE.** `ensureStandingReceiverForAgent`
+   returns immediately when the agent already has a receiver, so the reconnect path is a no-op on a
+   healthy one. There are exactly **two** rebuild triggers: the 30-second watchdog finding the
+   circuit-relay reservation lost, and a one-shot upgrade when relay endpoints first arrive. Four
+   comments in the code claim otherwise and have drifted from it; they are wrong and should be
+   corrected wherever a unit touches them.
+2. **The peer id a counterparty holds is NOT the standing receiver's — it is the SESSION NODE's.**
+   On both sides the standing receiver is *promoted* into the session node at establishment and a
+   brand-new receiver is built behind it. So the id the counterparty was told belongs to a node
+   dedicated to that one session, and it does not churn under them.
+
+**Therefore the damage is not identity churn — it is that a torn-down session node is never
+rebuilt.** `markInterruptedWithDetails` and `destroySessionNode` stop the node and delete it from
+`#activeNodes`, and nothing anywhere recreates one. That is why the session cannot come back even
+when both parties are healthy.
+
+**And it is why the seed must be per-session, which is what Andre ruled independently.** A rebuilt
+session node gets a fresh keypair, so we could dial them but they could never dial us. Minting a
+32-byte seed per session node, holding it for the session's life, and passing it as
+`transportPrivateKey` makes the rebuilt node come back at the *same* peer id the counterparty was
+given. No agent-wide identifier is ever created: each standing receiver still gets its own fresh
+seed, and the seed only becomes session-scoped at the moment of handoff.
+
 ### A. Laptop close — **process survives**
 
 macOS suspends; it does not kill. Confirmed in the log: a dozen gaps of 13–18 minutes with the same
@@ -206,12 +265,13 @@ daemon running straight through.
 - The far end's yamux keepalive (30 s) goes unanswered, so it closes the connection.
 - On wake, only the TCP connection is gone. **Nothing needs recreating.**
 
-**Needed:**
-1. **Stop regenerating the receiver identity on rebuild.** The rebuild exists to get a new *relay
-   reservation*, not a new identity. Hold the seed in memory and pass `transportPrivateKey`. No
-   persistence — the process is alive.
-2. **Re-dial.** ✅ Shipped 2026-08-17 (`DOD-M12B-REDIAL-1`) — demand-driven, cooldown-bounded.
-3. **The reverse edge: `interrupted → active` on reconnect.** Today a transport event changes a
+**Needed (restated after the trace above):**
+1. **A per-session transport seed**, minted with the node, held in memory for the session's life,
+   passed as `transportPrivateKey`. No persistence — the process is alive.
+2. **Rebuild the session node** when a non-terminal session is asked to send and has none. Today the
+   node is deleted and nothing recreates it, which is the actual reason the session is stuck.
+3. **Re-dial.** ✅ Shipped 2026-08-17 (`DOD-M12B-REDIAL-1`) — demand-driven, cooldown-bounded.
+4. **The reverse edge: `interrupted → active` on reconnect.** Today a transport event changes a
    session's status and nothing ever changes it back.
 
 ### B. Signaling / relay reconnect — **process survives**
@@ -242,6 +302,38 @@ be online), fall back to the unilateral seal once grace allows — ~10 minutes, 
 it already knows the exact remaining time because the refusal carries it.
 
 The operator sees nothing but a clean list and receipts on file.
+
+#### The prior ruling this has to be squared with — SI-001
+
+`close-session-handler.ts` opens with a decision recorded against auto-seal:
+
+> *"SI-001: there is NO auto-seal on a session_interrupted receipt. The operator must close
+> explicitly. A daemon that sealed on its own would notarize a conversation nobody chose to end."*
+
+That ruling is about a **live** interruption — the relay tells you the counterparty vanished while
+you are sitting at the keyboard. There, the operator may well want to wait and resume, and SI-001
+stands unchanged.
+
+It is not about a session **our own stop already destroyed**. Those are unresumable by construction
+(the keypairs are gone), and the operator's only existing exit is force-abandon, which the code
+itself calls an escape hatch and which destroys the receipt. So the real choice is *seal or abandon*,
+not *seal or resume* — and Andre's 2026-08-17 ruling ("do not resume. Resolve… make it a seal, not a
+force-close") is the later decision and governs.
+
+**The discriminator already exists.** `interrupted_by = 'local'` — shipped for the cap work — is
+exactly "we ended this, not them". Auto-seal keys on it. A `counterparty` or `relay_stream_close`
+interruption is left alone, and SI-001 keeps holding for it.
+
+#### The second half of C: the retry that never happens
+
+`seal_unilateral_too_early` is refused with `remainingSeconds` in hand and the operator is told to
+*"Retry `cello_close_session` after the grace period"*. Nothing schedules that retry. The same
+scheduler that resolves restart-orphans on startup is what turns that refusal into a wait, and it is
+why these are one unit and not two.
+
+**Out of scope for it:** the 26 `seal_interrupted_pending` sessions. `cello_close_session` refuses
+them outright (`session_not_closeable`, *"awaiting FROST notarization"*), and what they are actually
+waiting for is still unestablished (§7). Do not fold them in on a guess.
 
 ---
 
