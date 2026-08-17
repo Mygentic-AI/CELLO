@@ -408,7 +408,18 @@ description: >
   resume. Resolve… make it a seal, not a force-close."* Bounded attempts, staggered so N sessions do
   not fire N simultaneous directory ceremonies, and refusing to start new work during shutdown.
   **Out of scope:** the 26 `seal_interrupted_pending` sessions — `cello_close_session` refuses them
-  outright and what they wait for is unestablished. — ❌
+  outright and what they wait for is unestablished. — 🟡 **BUILT, TWO REVIEW PASSES, NOT LIVE-VERIFIED
+  2026-08-18.** Reviewer pass 1 found **11, 4 blocking** — the decisive one being that the resolver's
+  success test read `ok`, which the interrupted close returns for a *commitment*, so it would have
+  moved 137 receipt-less sessions into the one bucket nothing can leave and logged `resolved` for
+  each: *"a success report for something that did not happen."* Success is now the presence of a
+  `sealed_root`. Also fixed: the give-up carries the close's OWN guidance (a fixed string advised
+  force-abandon, which for `session_already_sealed` is the one action that destroys a recoverable
+  receipt), and the detail the close computed and dropped; it is durable, so a machine restarting
+  ~6×/day stops re-running a hopeless session's whole budget every boot; zero-message dead handshakes
+  are excluded; an attempt that never settles times out; `stop()` awaits the bounded race.
+  **🔴 Still owed: the live end-to-end proof** (launch-triage item 21) — no two real daemons have run
+  this. → Entries 22, 24
 
 - **DOD-M12B-INTERRUPTED-ESCALATE-1** [cello-client] — **an interrupted session can never get a
   receipt, even when a human closes it by hand.** Found 2026-08-17 by the review of
@@ -428,7 +439,20 @@ description: >
   unilateral escalation runs on. Extract the escalation into a helper both branches call. **Seal
   impact is the review's own top lens here**: state what the unilateral seal signs for a session
   whose node is gone, and prove a `seal_interrupted_pending` row can reach `sealed`. Makes the DoD
-  sentence of `RESTART-SEAL-1` true and makes its `retry_after_seconds` reachable. — ❌
+  sentence of `RESTART-SEAL-1` true and makes its `retry_after_seconds` reachable. — 🟡 **BUILT, TWO
+  REVIEW PASSES, NOT LIVE-VERIFIED 2026-08-18.** Pass 1: *"the diff touches seal/receipt machinery,
+  and F1 is the finding I would expect to hide exactly there… the gap is between the class and what
+  `cello_close_session` actually does for an `interrupted` session."* Pass 2 confirmed the two
+  riskiest pieces hold — Structure 1 index 1 IS the content hash, and **the recovered root is
+  correct because the directory compares `reported_root` against a root it rebuilds from the carry
+  WE send**, not against any earlier attempt — then found one more blocking defect *inside* the fix:
+  `#recoverOwnSealCtrlLeaf` returned the same value for *"I cannot tell"* as for *"there is none"*,
+  so a failed lookup would submit a second SEAL ctrl leaf and make the session unsealable forever,
+  while logging that it had refused. It refuses now. Two error substitutions also fixed: a
+  synchronous throw in the status flip could report a COMPLETED seal as `seal_unilateral_timeout`,
+  and an already-poisoned carry burned five attempts to say the same. The terminal guard moved from
+  the wrapper into `#updateSessionStatus`, because there are three writers of `sealed` and only one
+  had it. **🔴 Still owed: the live proof.** → Entries 23, 24, 25
 
 - **DOD-M12B-SEAL-WAITER-KEY-1** [cello-client] — **`pendingUnilateralWaiters` is keyed by session id
   alone, and has three registrants.** Its sibling `sealInterruptedInProgress` is keyed

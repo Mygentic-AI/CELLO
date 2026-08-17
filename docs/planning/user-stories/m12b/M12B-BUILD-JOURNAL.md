@@ -1991,3 +1991,92 @@ call with a comment naming it and watching it go red.
 ### Gate
 
 `pnpm run test` **exit 0** — **3824 passed / 11 skipped** · `lint` / `typecheck` / `build` **exit 0**.
+
+---
+
+## Entry 25 — Second review pass, and the fix that could still have lost a receipt (2026-08-18)
+
+**Commit `1cdf405`.** This was the SECOND pass — the hard cap. Everything blocking is fixed; the
+remainder is carried as DoD lines, not a third round.
+
+### The verdict
+
+> **SPEC: FAITHFUL** — all five fixes implement what they claim, with F1 incomplete by two sites.
+> **SILENT FALLBACKS FOUND** — F-A is `[blocking]`: three "cannot determine" paths return the same
+> value as "nothing there", and the code submits a second SEAL ctrl leaf while logging that it
+> refused.
+> **ERROR SUBSTITUTION FOUND** — F-B (a completed seal reported as `seal_unilateral_timeout`) and
+> F-E (an already-poisoned carry reported as `seal_unilateral_timeout`).
+> **TESTS HAVE TEETH** — every new test survives the revert test except msg-016's "destroySessionNode
+> ALONE does not", which is an explicitly-labelled defect pin rather than coverage.
+> **REMOVALS PROVEN.**
+>
+> *"I am not rubber-stamping this. F-A is inside the crypto/persistence path where I was told to
+> expect problems, and it is the one thing in the diff that can still permanently forfeit a receipt."*
+
+### Two things it CONFIRMED, so nobody re-derives them
+
+- **Structure 1 index 1 IS the content hash** (`structure1.ts:32-38` encodes
+  `[version, contentHash, senderPubkey, sessionId, lastSeenSeq, ts]`), and `senderPubkeyHex` on our
+  own leaves really is our K_local.
+- **The recovered root is correct**, which was the piece most likely to be wrong. The directory does
+  **not** compare against any earlier attempt's root — it rebuilds `recomputedRoot` over the carry
+  *we send*, in sequence order, and compares that. So if the tree grew because parked content
+  drained on reboot, the carry grew with it and the recovered root is the *more* correct one; the
+  original was already wrong.
+
+### The blocking finding, and it was inside the fix meant to prevent the loss
+
+`#recoverOwnSealCtrlLeaf` had three paths meaning *"I could not determine whether a ctrl leaf
+exists"* — identity unresolved, carry read failed, Structure 1 undecodable — and **all three
+returned the same value as "there is none"**, which the caller reads as permission to submit one. A
+second ctrl leaf in a durable carry makes the session unsealable **forever**. Its own log line said
+*"the close will refuse rather than risk a second one."* It did not refuse. It submitted.
+
+Same shape as the two comments Entry 24 rewrote for asserting a property the code lacked — three
+times now in this milestone. It returns `"unknown"` and refuses.
+
+### Two error substitutions, both producing the milestone's founding defect on its own fix
+
+- **A completed seal reported as a timeout.** `markSealed` is synchronous and reaches
+  `#requireAgentId`, which throws for a retired agent or a closed DB — and it sat *before* the
+  waiter, outside any try. A throw left the waiter unresolved, so the close waited out its full
+  timeout and answered `seal_unilateral_timeout` **for a seal that had completed and whose
+  certificate was already on disk.** The old line was an async `void`, whose throw became a
+  discarded rejection and could not do this: the fix introduced the hazard. Waiter first now, and
+  every call wrapped.
+- **An already-poisoned carry reported as a timeout.** Two of our own ctrl leaves is refused
+  silently by the directory, so each such session burned five resolver attempts. Now a named local
+  refusal — and these sessions may exist on the machine right now, because the one-shot submit mark
+  has always been in memory.
+
+### The guard was in the wrapper, not the transition
+
+Refusing to overwrite an `abandoned` row lived in `markSealed`, while `destroySessionNode` and
+`retireSession` still wrote `sealed` straight through. **The invariant was asserted in a test that
+exercised one of three writers.** Moved into `#updateSessionStatus`.
+
+### And my own source pin carried the anti-pattern it exists to prevent
+
+The call-site pin used a **hand-maintained file list**, and a fifth seal site already sat outside it.
+It scans every daemon source file for the teardown now and requires the flip, with one written
+exemption (the teardown itself, which cannot call the wrapper that works around it).
+
+### Stated rather than implied
+
+The resolver's post-timeout window is **not** closed: once the timeout wins the race, the in-flight
+handle clears while the close may still be running, so a later `stop()` can still cut an exchange.
+That is the deliberate trade — an unbounded wait wedges a daemon holding the SQLCipher write lock,
+and the divergence it prevents is repairable by the next close. The previous commit message claimed
+this was fixed; it was not, and the comment now says so.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3826 passed / 11 skipped** · `lint` / `typecheck` / `build` **exit 0**.
+**32 new tests** across the four files this work added.
+
+### What is NOT done
+
+**No live end-to-end proof.** Two real daemons have never run this. Launch-triage item 21 asks for
+exactly that and it is still owed — and Entry 24's finding is why it matters: whoever runs it must
+assert on the session's **STATUS**, not only on the certificate.
