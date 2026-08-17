@@ -1887,3 +1887,16 @@ Stubbing out `escalateToUnilateralSeal` turns **4 of msg-015's 5** cases red. De
 ### Gate
 
 `pnpm run test` **exit 0** — **3812 passed / 11 skipped** · `lint` / `typecheck` / `build` **exit 0**.
+
+### Seal impact — checked before shipping, so nobody re-derives it
+
+The escalation causes notarizations that would not otherwise happen, on a path that never did one.
+Two questions, both answered in code rather than assumed:
+
+**Can a SHORT chain be notarized?** No, and there are two independent gates.
+1. **Client-side, and it covers this path**: `const sealable = record.status === "active" || record.status === "interrupted"` — the readiness gate applies to interrupted sessions, drains parked content first, and refuses `session_incomplete` before any escalation. Its known limit stands (`#witnessedSeq` is not persisted, so `missingLeaves` reads 0 after a restart) — but held frames ARE rehydrated from `held_content`, so a gap that left content still blocks.
+2. **Directory-side, and this is the real backstop**: *"SESSION-002: verify the reported root, then FROST-notarize with B ABSENT — (Gap 1 fix — the directory no longer stores frame.reported_root on faith.)"* It rebuilds the tree from the relay's own chain and rejects `unilateral_leaves_unavailable` when it cannot. **So the absent counterparty's inability to object does not matter** — the relay's record objects on their behalf.
+
+**Can the interrupted path double-seal?** The directory holds `#unilateralSeals` and returns early on a repeat. Safe — but *silently*, which is the parked `DOD-M12B-SEAL-SILENT-DROP-1`: a client that never received the first confirmation asks again and is answered with nothing, then reports `seal_unilateral_timeout`. That is the largest measured failure at 50 occurrences.
+
+**No downstream surface breaks.** Nothing in `core/cli` or the MCP shim reads the interrupted close's `status` field; `seal_receipt` and `retry_after_seconds` are additive, and the resolver is their named consumer.
