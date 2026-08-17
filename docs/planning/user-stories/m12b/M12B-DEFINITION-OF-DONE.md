@@ -430,6 +430,20 @@ description: >
   whose node is gone, and prove a `seal_interrupted_pending` row can reach `sealed`. Makes the DoD
   sentence of `RESTART-SEAL-1` true and makes its `retry_after_seconds` reachable. — ❌
 
+- **DOD-M12B-PENDING-EXIT-1** [cello-client] — **`seal_interrupted_pending` has no exit at all, and
+  `cello_close_session` refuses it by name.** Measured: **26 sessions**, idle **0.5 to 10.5 days**,
+  carrying 2–14 messages each. The close handler's last branch answers `session_not_closeable` with
+  *"a seal_interrupted_pending session is awaiting FROST notarization"* — a notarization that
+  `DOD-M12B-INTERRUPTED-ESCALATE-1` established **nobody ever requests**: the responder never submits
+  a seal leaf, so the relay round cannot complete. They are not awaiting anything.
+  **What ESCALATE-1 changes and does not.** New interrupted closes now escalate, so the bucket stops
+  filling silently — but a row already in it still has nowhere to go, and escalation failing
+  (`seal_unilateral_timeout` is 50 of the measured failures) puts fresh rows there too. Ship: let a
+  `seal_interrupted_pending` session escalate to a unilateral seal on a close, since the commitment
+  it holds is exactly the agreed root the escalation reports. **The one thing to prove first:**
+  whether `submitSealLeaf`'s one-shot `#responderSealSubmitted` mark, and the directory's
+  already-sealed gate, make a second request safe or a double-seal. Depends on ESCALATE-1. — ❌
+
 - **DOD-M12B-SEAL-SILENT-DROP-1** [trustless-cello] — 🅿️ **PARKED — needs a directory fleet roll, so
   it does not ship unattended** (procedure §3a). **The directory answers a unilateral seal request
   with silence, twice, and the client can only report a 30-second timeout.**
