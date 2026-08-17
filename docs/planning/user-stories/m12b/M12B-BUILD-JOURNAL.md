@@ -18,49 +18,50 @@ description: >
 
 **Updated 2026-08-17, end of the eleven-rank run.**
 
-### NEXT ACTION — BUILD ORDER IS C, THEN A, THEN B (re-ranked by measurement, Entry 21)
+### NEXT ACTION — the seal chain is built and NOT LIVE-VERIFIED. That proof is the next thing.
 
-Read [[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]] before touching any of this.
-§1 carries the measurements, §5 the per-case plan, §6a why seals fail, §6 Andre's invariants, §7
-what is deliberately unproven.
+Overnight 2026-08-17/18 the plan was re-ranked by measurement and then went somewhere better than
+planned. Read, in order:
+[[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]] §1 (the measurements) and §5 (the
+three cases), then **Entries 21–25**.
 
-**The re-rank, in one line:** 114 of 118 interrupted sessions came from our own shutdown sweep and
-**zero** from any transport event, so case C is the only case that has ever happened. A and B are
-hidden BEHIND C on a machine that restarts six times a day — not absent. Re-measure once C ships.
+**The one-line story:** the deluge of interrupted sessions is our own restarts — 114 of 118, and
+**zero** from any transport event. Chasing that found something bigger: **an interrupted session
+could not obtain a receipt at all**, even when a human closed it by hand, because the unilateral
+escalation lived in a branch an interrupted session can never reach and the responder never posts a
+seal leaf. That is launch-triage item 21, answered, and it is why 26 sessions sat stuck for up to
+10.5 days.
 
-- **C. Daemon restart** — `DOD-M12B-RESTART-SEAL-1`. Implemented (`91801ec`), **review in flight**.
-- **A. Laptop close** — `DOD-M12B-SESSION-SEED-1`, written and ready. NOT the receiver seed: the
-  receiver is promoted into the session node at establishment, so the counterparty holds the SESSION
-  node's peer id. The damage is that a torn-down session node is never rebuilt. Per-session seed +
-  rebuild + the reverse edge `interrupted → active`, which no code path has ever performed.
-- **B. Signaling / relay reconnect** — same mechanism as A; folded into it.
+**FIRST, before any new code:** run the live proof launch-triage item 21 asks for — two real
+daemons, exchange messages, restart one to interrupt, then close. **Assert on the session's STATUS,
+not only on the certificate** (Entry 24 is why). Nothing here has been live-verified.
 
-**PARKED, needs a directory fleet roll (§3a blocks it unattended):** `DOD-M12B-SEAL-SILENT-DROP-1` —
-the directory answers a unilateral seal request with silence in two cases, producing
-`seal_unilateral_timeout`, which at **50 occurrences is the largest single blocker to any automated
-close** (443 seal leaves submitted, 183 seals completed).
+Then, in dependency order:
+1. `DOD-M12B-PENDING-EXIT-1` — the 26 already-stuck rows still have no way out.
+2. `DOD-M12B-SEAL-WAITER-KEY-1` — two agents on one daemon clobber each other's seal waiter, and
+   the loser reports a timeout for a seal that succeeded. Andre runs exactly that topology.
+3. `DOD-M12B-SESSION-SEED-1` — case A/B. Not yet observed, but only because restarts reach every
+   session first; on a machine left up for days it becomes the dominant failure.
+4. `DOD-M12B-SEAL-BILATERAL-FIRST-1`, `DOD-M12B-SEAL-ESCALATE-DUP-1` — carried review findings.
+
+🅿️ **Parked, needs a directory fleet roll:** `DOD-M12B-SEAL-SILENT-DROP-1` — the directory answers
+a unilateral seal request with silence in two cases, and at **50 occurrences that is the largest
+single blocker to any automated close.**
 
 **Still open for Andre:** the anti-DDoS rationale for ephemeral peer ids is not in ADR-0001 and needs
-recording before it constrains the design. Also unverified: whether the relay can serve as a
-rendezvous without the directory, and what the 26 `seal_interrupted_pending` sessions are waiting for.
+recording before it constrains `SESSION-SEED-1`. Also unverified: whether the relay can serve as a
+rendezvous without the directory.
 
-### REPO STATE — verified at compaction
+### REPO STATE — 2026-08-18, after the overnight run
 | | |
 |---|---|
-| cello-client `main` | **`d5be086`** — clean, pushed. Gate on this tree, exit codes captured: test/lint/typecheck/build all **exit 0**, 3792 passed / 11 skipped. |
+| cello-client `main` | **`e67458f`** — clean, pushed. Gate: test/lint/typecheck/build all **exit 0**, **3826 passed / 11 skipped**. |
 | trustless-cello `main` | clean, pushed. |
-| **`latest` (what Andre is RUNNING)** | daemon **`0.0.170`**, cli **`0.0.177`** — ranks 1–11 only. |
-| **`beta` (published, NOT promoted)** | daemon **`0.0.171`**, cli **`0.0.178`** — tag `v0.0.245`, smoke-tag green, tarball-verified. |
-| unpublished on `main` | the cap age-out (`d5be086`). Needs a third publish. |
-| other five packages | unchanged: crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, connect `0.0.150` — all on `latest`. |
+| **`latest` (what Andre is RUNNING)** | daemon **`0.0.170`**, cli **`0.0.177`** — ranks 1–11 only. **None of the overnight work is on his machine.** |
+| **`beta`** | tag **`v0.0.246`** → daemon **`0.0.172`**, cli **`0.0.179`**. |
+| other five packages | unchanged: crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, connect `0.0.150` — all already on `latest`. |
 
-**What is in beta but NOT on Andre's machine:** the cap fix (counting what the counterparty ended,
-not our restarts), the operator's cap alarm, the visible seal wait, and the annexed-content false
-alarm. **Promotion is Andre's** — commands in Entry 16's format, at the versions above.
-
-**Andre's daemon** is pid from `cello login` at 15:40Z running `0.0.170`/`0.0.177`. Log is
-`~/.cello/daemon.log`. All 17 stale sessions were force-closed during this session; the table is
-**507 rows, 0 interrupted, 5 active**.
+**Promotion is Andre's, always.** Commands in the format of Entry 16.
 
 ### WHAT SHIPPED — ranks 1–11, all ✅
 1 send guidance · 2 inbox truth · 3 away marker · 4 delivery quiet · **5 the blocker (the 33rd
