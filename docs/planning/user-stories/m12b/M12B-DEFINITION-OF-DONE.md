@@ -461,7 +461,11 @@ description: >
   overlapping a manual close, clobber each other's resolver. **The loser waits out the full 30 s and
   reports `seal_unilateral_timeout` for a seal that SUCCEEDED.** Key it `${agentName}:${sessionIdHex}`
   and resolve by the agent owning the stream the frame arrived on. Found by the escalation review;
-  pre-existing, and the restart-seal resolver now collides with a human close on it. — ❌
+  pre-existing, and the restart-seal resolver now collides with a human close on it. — 🟡 **BUILT
+  2026-08-18, review in flight.** Re-keyed at all three registrants and at the listener, which
+  already had the agent in scope. Two agents on one daemon now hold separate waiters, and resolving
+  one answers only that agent's close. **Revert test RUN:** keying by session alone turns both new
+  cases red. → Entry 28
 
 - **DOD-M12B-SEAL-BILATERAL-FIRST-1** [cello-client] — **a realigned bilateral seal is downgraded to
   a unilateral one, instantly.** When the counterparty rejects with `session_seal_already_pending` +
