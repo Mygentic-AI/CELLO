@@ -2392,3 +2392,16 @@ cases green. It now asserts the gaps grow. The offline/online latch had no cover
 ### Gate
 
 `pnpm run test` **exit 0** — **3840 passed / 11 skipped** · lint / typecheck / build **exit 0**.
+
+### And a regression I caught in my own fix before the reviewer did
+
+Reading the relay peer id from the address the node actually **holds** is right — it names the relay
+that really granted. But that address is **libp2p's string, not ours.** If a transport ever reports
+the circuit address without `/p2p/<id>/p2p-circuit`, reading only it yields `undefined` — and an
+undefined `relayPeerId` makes the watchdog treat a perfectly healthy reservation as **absent** and
+rebuild it. That would have been a regression on the single-relay case that works today, traded for
+a fix to a case that only bites at pool size > 1.
+
+Prefer the held address, **fall back to the candidate**, which is our own constructed string and
+always carries the id. Strictly better than either alone, and pinned by a test whose node reports a
+circuit address with no relay id in it. Revert test run: dropping the fallback turns it red.
