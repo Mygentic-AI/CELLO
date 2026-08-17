@@ -807,3 +807,103 @@ Establish which of the two hypotheses holds, by reading the muxer configuration 
 `core/transport` and counting concurrent open streams, before writing any code. Then likely TWO
 units: the stream cause, and the liveness lie (a session whose every write fails must not report
 `alive`) — the second is separable and is what made this invisible.
+
+---
+
+## Entry 11 — Rank 5 solved: the 33rd message kills the session (2026-08-17)
+
+**The cause is measured, not hypothesised.** Both of Entry 10's hypotheses are dead. The cap that
+bit is not the muxer's and the connection was never dead.
+
+### The mechanism, end to end
+
+1. Every content frame and every delivery ACK opens a **fresh** `/cello/content/1.0.0` stream on
+   the one muxed connection a session holds (`session-node-manager.ts`, both `newStream` sites).
+2. libp2p caps **inbound** streams per protocol per connection at **32**
+   (`libp2p@3.3.2/dist/src/registrar.js` → `DEFAULT_MAX_INBOUND_STREAMS = 32`). **Nothing in this
+   codebase passes `maxInboundStreams`** — `core/transport/src/node.ts` `handle()` accepts the
+   option and the daemon's single call site (the content handler) omits it.
+3. `connection.js` `onIncomingStream` enforces the cap **AFTER `mss.handle` has already answered
+   the protocol**, then calls `muxedStream.abort(err)`. So the sender's `newStream` resolves
+   normally and the stream is reset an instant later.
+4. `@libp2p/utils` `abstract-message-stream.ts`: `onRemoteReset()` sets `writeStatus = 'closed'`,
+   and `send()` throws ``Cannot write to a stream that is ${writeStatus}``. That is the error
+   string, exactly, from the only place it can come from.
+5. **Why it never recovered.** `#handleContentStream` read one length-prefixed frame and
+   **returned without closing the stream**. `AbstractStream.close()` closes only the WRITE end and
+   calls `onTransportClosed()` only when `remoteWriteStatus === 'closed'` — so the sender closing
+   its end left the stream **half-open**, sitting in `connection.streams` for the life of the
+   connection. The count only ever went up.
+
+### The number that proves it
+
+Counted over `/tmp/newbuild-daemon.out` (6,451 records), successful outbound
+`/cello/content/1.0.0` stream opens preceding the first failure:
+
+| session | opens before first failure |
+|---|---|
+| `d35eef58a266` | **32** |
+| `de55efd683e8` | **32** per direction (32 frames + 31 ACKs; both halves of this session live on this daemon) |
+
+Reproduced in a test: `msg-002-content-stream-leak.test.ts` on the real-transport seam-3 harness
+fails at **`send 32 refused`** — the 33rd message — and passes after the fix.
+
+### Entry 10's hypotheses, both killed
+
+1. **Per-connection stream exhaustion (yamux).** DEAD. `@chainsafe/libp2p-yamux@8.0.1`
+   `defaultConfig` is `maxInboundStreams: 1_000 / maxOutboundStreams: 1_000`, and the whole
+   3.5-hour log opened roughly **450** streams in total. It was the right shape and the wrong
+   component: the cap is libp2p's **registrar** default, one layer above the muxer.
+2. **The underlying connection is dead and `newStream` does not reject.** DEAD. The connection was
+   healthy throughout; `newStream` checks `c.status === "open"` and negotiation completed.
+
+### The third site is NOT a defect — do not chase it
+
+`directory.signaling.disconnected` carries the same error string, 4 times in 3.5 hours, and the
+signaling path is the one place that **handles it correctly**: `signaling-manager.ts` `sendPing`
+catches the write failure and calls `declareStreamDead(...)`, which triggers reconnect. Its
+heartbeat is 15 s against yamux's 120 s stream inactivity timeout, so the stream is kept alive and
+those four are ordinary network events, detected and recovered. It is the reference implementation
+for what the session path should do, not a fourth thing to fix.
+
+### What shipped
+
+**cello-client `9ac9f93` — the stream leak.** The receiver closes its write end in a `finally`
+(covering all five early returns), retiring the stream and freeing the slot; on a close failure it
+aborts rather than leave the slot occupied. Both sender sites now abort the stream they opened when
+the write fails — the outbound half of the same leak, against the 64-stream outbound cap.
+Gate on the committed tree: test **3742 passed / 11 skipped**, lint, typecheck, build — all
+**exit 0**.
+
+**cello-client `6367438` — the liveness lie.** Liveness was set ONLY from libp2p
+`onPeerConnect`/`onPeerDisconnect`, so it answered *"is there a connection object?"* while every
+surface printing it is read as *"can I talk to them?"*. A fourth **daemon-local** state,
+`impaired`, is set from both failure paths and cleared the moment a send lands again.
+
+- **`gone` is deliberately not reused.** It means the connection dropped and it feeds the
+  unilateral-seal gate; driving it from a failed write would let one bad send push a session toward
+  a seal the counterparty never agreed to. `impaired` only ever downgrades `alive`.
+- **The half-open reaper treats `impaired` as live** — its question is "did the counterparty ever
+  establish?", and impaired means it did.
+- **`impaired` is NOT in `protocol-types` `SessionLiveness`.** That is the relay's wire type for a
+  different question, byte-shared with the deployed fleet — so **this needs no relay roll**.
+- `cello_receive` gains the matching answer (`reason: "delivery_impaired"`), so an impaired session
+  no longer returns the same silence a quiet-but-healthy one does.
+
+Gate: test **3744 passed / 11 skipped**, lint, typecheck, build — all **exit 0**. The first gate
+run **failed (exit 1)** on a real defect — the liveness map was still typed to two values — fixed
+before commit. Run so it could fail, per §7.
+
+### Not yet claimed
+
+Both units are **IMPLEMENTED, not DONE** as of this entry: `cello-unit-reviewer` is running on
+each diff and no tag flips until its verdict is quoted here. The 20-minute live re-measurement is
+still owed and still must not run before rank 5 is reviewed and on a daemon.
+
+### Named residual, not deferred silently
+
+The cap is **released** but not **raised**: ingest is async (SQLCipher + gateway screening), so 33
+frames arriving genuinely concurrently could still touch 32 before any handler reaches its
+`finally`. That is transient and self-clearing — unlike the permanent leak — and no measurement
+shows it. Recorded here rather than fixed speculatively; raising `maxInboundStreams` would mask
+the next leak of this shape.
