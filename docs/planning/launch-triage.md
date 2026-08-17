@@ -145,6 +145,16 @@ description: >
   with "Cannot write to a stream that is closed", the same error as its 36 known acknowledgement
   failures. Three explanations were killed by measurement and are recorded so nobody re-runs them:
   excessive receiver teardown, a stale peer identity, and a missing connection.
+  2026-08-17 (end of day): added items 24-32, closing the gap between what the milestone boards hold
+  and what this list shows. Everything found during the 2026-08-17 investigation now has an entry
+  here, so this list can be used to decide order without reading M12B or M14B first. 24 is content
+  loss (received content destroyed, 24 times in one morning, and no resend protocol exists so a gap
+  can only be prevented). 25 is the unenforced leaf-index invariant that would have caught the whole
+  class. 26-32 are the seven found while chasing the ordering defect and previously recorded nowhere:
+  an inbox that reports accepted sessions as pending, an away reply indistinguishable from a person,
+  no re-dial anywhere, a force-abandon the far side is never told about (the cause of the storm), a
+  session that can neither seal nor be destroyed, a daemon that refuses to exit, and an error whose
+  guidance instructs the caller to do the wrong thing.
 ---
 
 # Launch Triage
@@ -1490,6 +1500,158 @@ attempts with a matching rise in sync latency is the failure mode, not the succe
 
 **Related:** item 22 (the storm this made unbearable), `DOD-SYNC-REFUSAL-BACKOFF-1` in
 [[M14B-DEFINITION-OF-DONE]] (the fix this undercuts), and item 21 (the cap these sessions fill).
+
+## 24. A message you already received is destroyed, and that conversation never recovers
+
+**Designation: `DOD-M12B-STRAND-1`** (+ the resend-protocol scope call) — ❌ **OPEN.** Unranked.
+**Proposed slot: at or near the top — this is content loss, not delay.**
+
+**What it costs a customer.** Someone sends them a message. It arrives, it verifies, it is withheld
+because it is ahead of what their side has counted — and then it is **deleted** when the session
+tears down. Nothing recovers it: not restarting, not reconnecting, not asking the sender to resend.
+From then on every later message in that conversation is withheld too. Both people see silence, and
+neither is told anything is wrong.
+
+**Measured 2026-08-17 on one daemon in one morning:** 367 pieces of verified content held, 8
+released, **24 destroyed**. Two percent delivered.
+
+**Why it is permanent, not slow.** Two things compound. Held content is memory-only and dies at
+teardown — the code calls its own log line *"a LOSS REPORT, not a fix; the content is unrecoverable
+by the time we are here."* And **no resend request exists** anywhere in the protocol: nothing can say
+*"I am missing position N, send it again."* So a gap can only be prevented, never repaired.
+
+**Two candidate fixes, and they are not equivalent.** Making holds durable is local and cheap and
+turns "dead forever" into "recovers on reconnect". A resend protocol is a wire change and a fleet
+roll. **Andre ruled 2026-08-17: build durable holds first, then re-measure before deciding whether
+the resend protocol is needed at all** — the re-measurement criteria are written into
+[[M12B-DEFINITION-OF-DONE]] under "Owed follow-ups".
+
+## 25. Nothing checks that a message lands where the relay says it should
+
+**Designation: `DOD-M12B-INDEX-1`** — ❌ **OPEN.** Unranked.
+
+**What it costs a customer.** Nothing visible, until it costs them a receipt. The position a message
+occupies is what the seal signs over, so if the two sides put the same message at different
+positions, the conversation still reads fine and the tamper-proof receipt at the end is worthless.
+
+**The mechanism.** The whole ordering design assumes a party's leaf index IS its relay-assigned
+position — `session-node-manager.ts` names it "the leaf-index === sequence invariant" — and
+**nothing enforces it**. The send path has the assigned position in hand and appends at the tail
+regardless.
+
+**Why it matters more after the 2026-08-17 findings.** Every defect in item 22 was a violation of
+exactly this invariant that no code was watching for. This is the guard that would have caught the
+whole class, and it is the difference between "we fixed the burner we found" and "a burner cannot
+open a gap unnoticed again".
+
+## 26. Your inbox says a session is waiting to be accepted when it was accepted already
+
+**Designation: `DOD-M12B-INBOX-TRUTH-1`** — ❌ **OPEN, found 2026-08-17.**
+
+**What it costs a customer.** Their agent looks at the inbox, sees sessions listed under
+`pending_session_requests`, and reasonably concludes nobody accepted them — so it waits, or tries to
+accept, or reports to its operator that the other side never answered. All of it is wrong. The
+session was accepted before the notice was ever created, the messages are readable right now, and
+`cello_await_session` only clears the notice.
+
+**Cost measured today:** hours of investigation, and a confident report to the operator that the two
+sides disagreed about whether a session existed. **They never disagreed.** The project's own skill
+file already states it: *"Inbound sessions are auto-accepted by the standing receiver — there is no
+separate accept step."*
+
+**Fix.** Additive: per-entry `accepted: true` and guidance saying the session is already readable.
+No wire change, no migration, no existing test broken.
+
+## 27. An away agent answers in a way that reads as a person being there
+
+**Designation: `DOD-M12B-AWAY-MARK-1`** — ❌ **OPEN, found 2026-08-17.**
+
+**What it costs a customer.** They open a session and get a reply. The reply is an ordinary message
+at a real position, so their agent treats it as contact and carries on — sending into a conversation
+no human will read until whenever. Nothing in the payload says "this was a machine".
+
+**Measured today:** two agents spent a morning exchanging each other's away auto-responders while
+both sides looked live and both operators believed a conversation was underway.
+
+**Fix, and the thing not to do.** Mark the reply so the receiving side can recognise it. Do **not**
+remove the away path — it exists on purpose, and "reachable but nobody home" is a designed state.
+The existing helper only runs on the sending side and cannot recognise a configured away message.
+
+## 28. A dropped connection is never re-dialled, and the conversation quietly goes the long way round
+
+**Designation: `DOD-M12B-REDIAL-1`** — ❌ **OPEN, found 2026-08-17.**
+
+**What it costs a customer.** One connection blip — sleep, wifi change, a relay hiccup — and that
+conversation silently drops onto the slow path for the rest of its life. Messages still arrive, up to
+**five minutes** later, via a round trip to another region. Nothing tells either side.
+
+**The mechanism.** Only the initiator dials, once, at setup. The send path never dials — it requires
+an already-open connection. There is no re-dial anywhere: not when liveness goes to `gone`, not on
+signaling reconnect, not on agent offline→online, not in the drain hook.
+
+**Note:** this is NOT the cause of the 2026-08-17 parking (that is item 22's stream defect). It was
+found while ruling that out, and it is a standing fragility in its own right.
+
+## 29. Ending a session on your side leaves the other side calling forever
+
+**Designation: `DOD-M12B-ABANDON-NOTIFY-1`** — ❌ **OPEN, found 2026-08-17.**
+
+**What it costs a customer.** They clear out a stuck session. It disappears from their side. The
+other party's agent never learns, keeps retrying delivery into it, and keeps re-dialling to
+re-establish — so the operator who cleaned up now gets a stream of connection requests from agents
+nobody is driving, with no way to tell where they come from.
+
+**This is what produced the 2026-08-17 "notification storm"** that read as the system going berserk,
+and it cost a long stretch of the day before the cause was understood. The existing guidance warns
+that the receipt is forfeited. It does not warn that the far side will keep calling.
+
+**Fix.** Either signal the abandon, or give the surviving half a way to detect and retire itself.
+
+## 30. Sessions that can never close pile up until your agent stops accepting new ones
+
+**Designation: `DOD-M12B-SEAL-STUCK-1`** — ❌ **OPEN, found 2026-08-17.**
+
+**What it costs a customer.** Their agent gradually stops being reachable, with no error and nothing
+in any status output — item 21's cap, reached without them doing anything at all.
+
+**The mechanism.** A session holding content cannot seal, correctly: a chain with a gap cannot be
+co-signed. But there is no path OUT — it can neither seal nor be destroyed, so it stays open
+forever. **Measured 2026-08-17: 25 sessions opened by the document worker, 25 seals blocked, 0
+closed.** Every one holds a slot against the per-sender bound.
+
+**Depends on** item 24 (durable holds). A session that can resolve its gap can seal; one that cannot
+needs a defined exit.
+
+## 31. The daemon can refuse to shut down
+
+**Designation: `DOD-M12B-SHUTDOWN-1`** — ❌ **OPEN, found 2026-08-17.**
+
+**What it costs a customer.** They stop CELLO. The command reports it did not complete. The process
+keeps running with its socket already removed — so every tool says the daemon is down while it is
+still up, still opening outbound sessions, still writing to the database. Restarting cleanly requires
+finding and signalling the process by hand.
+
+**Measured 2026-08-17:** `cello logout` timed out at 5 seconds; the process was alive **30+ seconds**
+later and the log shows it was still running document reconcile **sweeps during shutdown**. It took a
+signal to exit. A shutdown that keeps starting new outbound work is not draining.
+
+## 32. An error message tells you to do the wrong thing, and following it fails forever
+
+**Designation: `DOD-M12B-SIGNAL-GUIDANCE-1`** — ❌ **OPEN, found 2026-08-17.**
+
+**What it costs a customer.** A send is refused. The refusal explains exactly what to do. Doing it
+produces the identical refusal — every time, with no other clue. The obvious conclusion is that the
+product is broken.
+
+**The mechanism.** `cello_send` requires a `signal` parameter (`over` / `standby` / `wrap`). The
+refusal says *"Every cello_send message must end with one of: [[OVER]] …"*, which reads as an
+instruction to append a token to the message text. It is not.
+
+**Measured 2026-08-17: six consecutive failed sends** across two agents and three sessions, initially
+diagnosed and reported as a protocol defect. The guidance must name the parameter.
+
+**Related:** this list's recurring finding — an error that names its exit point rather than its cause
+— applied to guidance rather than to a reason string.
 
 # Post-launch — needed eventually, not for launch
 
