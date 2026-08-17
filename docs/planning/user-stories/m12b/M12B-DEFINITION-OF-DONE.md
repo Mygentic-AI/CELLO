@@ -410,6 +410,29 @@ description: >
   **Out of scope:** the 26 `seal_interrupted_pending` sessions — `cello_close_session` refuses them
   outright and what they wait for is unestablished. — ❌
 
+- **DOD-M12B-SESSION-SEED-1** [cello-client] — **a session node that is torn down can come back at
+  the SAME peer id, and its session can return to `active`.** Traced 2026-08-17: the peer id a
+  counterparty holds belongs to the **session node**, not the standing receiver (the receiver is
+  *promoted* into the session node at establishment and a fresh receiver is built behind it), so it
+  does not churn under them. **The damage is that a torn-down session node is never rebuilt by
+  anything** — `markInterruptedWithDetails` and `destroySessionNode` stop the node and delete it from
+  `#activeNodes`, and no path anywhere recreates one. That is why a session cannot come back even
+  when both parties are healthy and reachable. A rebuilt node today would get a fresh keypair, so we
+  could dial them and **they could never dial us**, which is exactly why Andre ruled the seed must be
+  **per-SESSION, never per-agent**: a per-agent seed would be one permanent correlatable identifier
+  for everything that agent does. Ship: a 32-byte seed minted with each standing receiver, carried
+  over to the session at handoff, held in memory for the session's life and passed as
+  `transportPrivateKey` (`createNode` already accepts it and nothing has ever supplied one); a
+  rebuild path when a non-terminal session needs a node and has none; and **the reverse edge
+  `interrupted → active`**, which no code path has ever performed. **No persistence** — a daemon
+  restart still mints fresh identities, which keeps ADR-0001's "fresh per session" true at the only
+  boundary where it can still mean anything, and the restart case is `DOD-M12B-RESTART-SEAL-1`'s.
+  Andre's other two invariants are ACs here: **idle is not interrupted** (any inactivity timeout is a
+  configurable security setting, never a transport side effect), and **a session the receiver has
+  closed must not accept new messages, whatever the sender does.** Also correct the **four drifted
+  comments** claiming the receiver is rebuilt on every signaling reconnect — it is not; the ensure
+  no-ops on a healthy receiver, and only a lost relay reservation rebuilds it. — ❌
+
 - **DOD-M12B-SIGNAL-GUIDANCE-1** [cello-client] — **the `missing_signal` error instructs the caller
   to do the wrong thing.** `cello_send` requires a `signal` PARAMETER (`over` / `standby` / `wrap`).
   Its refusal guidance says *"Every cello_send message must end with one of: [[OVER]] …"* — which
