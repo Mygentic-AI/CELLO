@@ -2143,3 +2143,69 @@ filed finding (`DOD-M12B-SEAL-ESCALATE-DUP-1`) and this would have been the four
 
 **Gate:** `pnpm run test` **exit 0** — **3829 passed / 11 skipped** · lint / typecheck / build **exit
 0**. **Revert test RUN:** disabling the branch turns all three new cases red.
+
+---
+
+## Entry 28 — Two agents stopped clobbering each other, and a refusal stopped lying (2026-08-18)
+
+**Commit `71f2c23`.** Two things: `DOD-M12B-SEAL-WAITER-KEY-1` (first pass in flight) and the
+second, final pass on `DOD-M12B-PENDING-EXIT-1`.
+
+### The waiter map was keyed by session id alone
+
+Its sibling guard `sealInterruptedInProgress` is keyed `agent \x1f session`. The waiter map was not,
+and it has **three** registrants. Whichever registered second **overwrote** the first's resolver, so
+the loser waited out the full 30 seconds and reported `seal_unilateral_timeout` **for a seal that
+succeeded** — telling the operator the directory could not verify their root, for a session that is
+notarized and whose certificate is on disk. Two agents on one daemon is the topology Andre runs.
+
+### The pending-exit review, and it caught the same class of defect again
+
+> **SILENT FALLBACKS FOUND** … **ERROR SUBSTITUTION FOUND** — *"its single invented failure message
+> is the exact defect class this milestone exists to remove, and it now has an automatic consumer
+> that writes a permanent give-up on the strength of it."*
+
+`submitAndEscalate` returned a bare `null` for **seven distinct conditions**, and the new branch
+relabelled all of them `seal_carry_empty` — *"the relay released the session… a notarized receipt is
+no longer obtainable."* Most of those conditions are transient and **local**:
+`standing_receiver_unavailable` simply means the agent has not been started yet, which a freshly
+booted daemon reports for every session. The real reason was written to a warn log and discarded one
+line later.
+
+**And it had an automatic consumer.** The reviewer corrected a premise in the DoD: the restart-seal
+resolver **does** reach this branch — attempt 1 on an `interrupted` session advances it to
+`seal_interrupted_pending`, so attempt 2 lands here. `seal_carry_empty` is in the terminal set, so a
+cold relay endpoint at boot would have written a **durable give-up** on a perfectly recoverable
+session.
+
+### A counterparty ctrl leaf means the relay is already sealing, better
+
+The pre-check counted only our OWN ctrl leaves; the directory's predicate is the **total**. On the
+responder side ours plus theirs is two, which the relay reads as both parties having posted — it
+starts a full **bilateral** seal, a better receipt than a unilateral one — while this side fires a
+unilateral request the directory refuses silently. Now refused by name, saying the better receipt is
+already coming.
+
+### The comment justifying the whole branch stated the wrong reason
+
+It said *"both sides signed the same root."* They did not: the escalation reports the tree root
+**with the SEAL ctrl leaf appended**, which is by construction not the committed root, and a
+responder-side row never receives the initiator's leaf at all. It is safe because **the directory
+rebuilds the tree from relay-witnessed leaves and never consults the commitment.** The commitment is
+what makes it legitimate to ASK, not what makes it verifiable. Writing down the wrong reason is how
+the next person justifies an unsafe extension of it — the fourth time this milestone has caught a
+comment asserting a property the code lacked.
+
+### Three test gaps
+
+- **The durable ctrl-leaf recovery had NO test at any level** — and it is the DoD's own "prove this
+  first". It now has one per answer, because *"there is none"* versus *"I could not tell"* is the
+  entire safety property.
+- The pending branch's own refusal block was **deletable with the suite green**; it now exercises a
+  failing submit.
+- The harness's seal key was a different SHAPE from production's, which is why the re-key surfaced
+  it rather than the tests catching the mismatch first.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3834 passed / 11 skipped** · lint / typecheck / build **exit 0**.
