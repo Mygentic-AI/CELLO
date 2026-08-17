@@ -390,6 +390,26 @@ description: >
   proved `daemon.stop()` called the sweeper's stop at all — *"one deleted line silently reverts the
   whole unit"*. → Entry 14
 
+- **DOD-M12B-RESTART-SEAL-1** [cello-client] — **a session our own stop interrupted resolves itself,
+  with a receipt.** Measured 2026-08-17 over 17 days of one operator's log: **114 of 118 interrupted
+  sessions were flipped by the graceful-shutdown sweep** immediately after `daemon.stopped`, 2 by the
+  operator's own offline switch, and **0 by any transport event** — not one relay frame, relay stream
+  close, or boot sweep. 95 restarts, and the boot sweep found nothing to sweep because shutdown had
+  already done it. Those sessions are unresumable (their keypairs died with the process) and their
+  only exit today is force-abandon, which forfeits the receipt: **137 sessions carrying 3,576
+  messages produced nothing.** After this unit the daemon walks them on startup and SEALS them —
+  bilateral if the counterparty answers, unilateral once the directory's delivery grace allows — and
+  when the directory refuses `seal_unilateral_too_early` it **reschedules at the `remainingSeconds`
+  the refusal already carries** instead of telling a human to come back in eleven minutes.
+  **Keyed on `interrupted_by = 'local'`, and only that**: a counterparty or relay-stream-close
+  interruption is left alone, so `SI-001` ("no auto-seal on a session_interrupted receipt — a daemon
+  that sealed on its own would notarize a conversation nobody chose to end") keeps holding for the
+  live case it was written about. Andre's 2026-08-17 ruling governs the restart case: *"do not
+  resume. Resolve… make it a seal, not a force-close."* Bounded attempts, staggered so N sessions do
+  not fire N simultaneous directory ceremonies, and refusing to start new work during shutdown.
+  **Out of scope:** the 26 `seal_interrupted_pending` sessions — `cello_close_session` refuses them
+  outright and what they wait for is unestablished. — ❌
+
 - **DOD-M12B-SIGNAL-GUIDANCE-1** [cello-client] — **the `missing_signal` error instructs the caller
   to do the wrong thing.** `cello_send` requires a `signal` PARAMETER (`over` / `standby` / `wrap`).
   Its refusal guidance says *"Every cello_send message must end with one of: [[OVER]] …"* — which
