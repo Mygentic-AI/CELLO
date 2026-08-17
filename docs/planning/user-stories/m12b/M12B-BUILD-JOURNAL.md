@@ -2264,3 +2264,57 @@ health it does not have. Fixing a pattern on one caller and not its twin is its 
 ### Gate
 
 `pnpm run test` **exit 0** — **3835 passed / 11 skipped** · lint / typecheck / build **exit 0**.
+
+---
+
+## Entry 30 — v0.0.247 published, and the finding that outranked case A (2026-08-18)
+
+### Published
+
+Tag **`v0.0.247`** → daemon **`0.0.173`**, cli **`0.0.180`**. Build, publish and **smoke-tag all
+green**. Tarball-verified: `seal_carry_bilateral_in_progress`, `seal_agent_key_unavailable`,
+`recoverOwnSealCtrlLeafForTest`, `markSealed`, `submitAndEscalate` all present in `package/dist`;
+`cli@0.0.180 → daemon@0.0.173`, a real version. **Supersedes `v0.0.246`** — promote this one.
+`latest` untouched at daemon `0.0.170` / cli `0.0.177`.
+
+### Then case A was measured before it was built, and lost
+
+The plan said case A next. Before writing it, the trigger was counted — the milestone's own rule.
+**`#rebuildStandingReceiver` fires 573 times in 17 days**, so the receiver identity does churn. But a
+rebuild replaces the NEXT receiver; the session node a counterparty actually dials is handed off at
+establishment and is never rebuilt. **So case A's first half has a weak consumer, and its strong
+consumer — a session-node rebuild — is for a case the transport paths fired ZERO times.**
+
+The same count surfaced something else entirely:
+
+| event | count |
+|---|---|
+| `session.standing_receiver.reservation.lost` | **2,472** (all `relay_connection_gone`) |
+| `session.standing_receiver.relay.rejected` | **2,215** (all `relay_granted_no_reservation`) |
+| `session.standing_receiver.reservation.none` | **481** |
+
+**481 receivers came up with no circuit reservation at all**, and the fallback is a plain TCP node
+with no circuit address. `#startReceiverNode`'s own comment says what that is: *"a relay that is out
+of reservation slots completes the handshake and simply grants nothing, leaving a node that looks
+started and is reachable by nobody."* **Behind NAT, that agent is dialable by NOBODY** — so every
+counterparty falls back to store-and-forward, which is the parked-message behaviour this milestone
+has been chasing from the other end.
+
+**And the watchdog skipped it by design.** `if (!sr.hasReservation …) continue; // never had one —
+not a LOSS`, justified as *"already degraded and already loud."* It was loud 481 times and nothing
+acted, while three lines below the same file calls this *"precisely the silent-loss-of-inbound
+failure this whole story exists to kill."* **A decision whose premise the data falsifies.**
+
+Filed and built as `DOD-M12B-RESERVATION-RETRY-1` (`8147b88`, review in flight): five re-attempts on
+a doubling backoff from 5 minutes — **deliberately not the watchdog's 30-second grid**, because a
+reservation is scarce and churning attempts across a fleet is how a relay is exhausted, a hazard
+`#startReceiverNode` already records. Then it stops and says what it MEANS: not that a reservation
+failed, but that nobody can reach this agent.
+
+**Also worth its own look, and it is `trustless-cello` work:** 2,215 refusals all of one kind, and a
+**1,361-rejection spike on 08-14** against a 15–60/day baseline. The relay-side slot supply is the
+other half of this.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3838 passed / 11 skipped** · lint / typecheck / build **exit 0**.
