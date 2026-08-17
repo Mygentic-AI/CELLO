@@ -531,6 +531,25 @@ description: >
   node-by-node and threshold tolerates one node down (§2f); batch this with any other pending
   directory change.** — 🅿️
 
+- **DOD-M12B-RESERVATION-RETRY-1** [cello-client] — **a standing receiver that never got a relay
+  reservation is never retried, so a NAT'd agent stays dialable by NOBODY for the life of that
+  receiver.** Measured over 17 days of one operator's log: `session.standing_receiver.reservation.none`
+  **481**, `relay.rejected` **2,215** — every one of them `relay_granted_no_reservation`, which the
+  code's own comment explains: *"a relay that is out of reservation slots completes the handshake and
+  simply grants nothing, leaving a node that looks started and is reachable by nobody."* The fallback
+  is a plain TCP node with no circuit address. **And the watchdog skips it by design**:
+  `if (!sr.hasReservation …) continue; // never had one — not a LOSS`, justified as *"already
+  degraded and already loud (reservation.none)."* Loud is not enough — it fired 481 times and nothing
+  acted, while three lines below the same file calls this *"precisely the silent-loss-of-inbound
+  failure this whole story exists to kill."* Ship: **re-attempt on a backoff**, since a relay out of
+  slots at boot may have one five minutes later; bounded, and when the budget is spent say so on a
+  surface the operator reads rather than only in the log. **Do NOT retry on the watchdog's 30-second
+  grid** — a reservation is a scarce resource the relay holds for its full TTL, and churning
+  attempts is how a fleet exhausts a relay (that hazard is already written into
+  `#startReceiverNode`). **Also measured:** `reservation.lost` **2,472**, all
+  `relay_connection_gone`, and a 1,361-rejection spike on 08-14 against a 15–60/day baseline — the
+  relay-side slot supply deserves its own look, which is `trustless-cello` work. — ❌
+
 - **DOD-M12B-SESSION-SEED-1** [cello-client] — **a session node that is torn down can come back at
   the SAME peer id, and its session can return to `active`.** Traced 2026-08-17: the peer id a
   counterparty holds belongs to the **session node**, not the standing receiver (the receiver is
