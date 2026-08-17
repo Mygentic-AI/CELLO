@@ -1397,6 +1397,20 @@ the obvious thing to try — **makes it worse**, for the reason below.
 
 **Two defects, and they compound.**
 
+> ### ✅ (a) FIXED 2026-08-17 — and it was a SYMPTOM, which matters more than the fix
+> `DOD-CAP-SELF-HEAL-1` (cello-client `d5be086`, beta only) took both halves: an interruption is now
+> labelled with WHO caused it, so our own restarts and the operator's kill switch stop being charged
+> to the peer; and an interrupted session untouched for 2 h stops counting whatever the label, which
+> is the half that clears an existing backlog — attribution only works forward, and every row written
+> before the column existed reads NULL. The bound is now *concurrent, with amnesty at every restart
+> and after 2 h*, rather than all-time. D18 survives because the disconnect-evasion attack is a RATE:
+> churn faster than the window and everything you churn is recent and still counts.
+>
+> **But the caps were never the disease.** The cap filled because interrupted sessions have no exit —
+> and 114 of 118 of them came from our own shutdown sweep, not from any transport event. See
+> [[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]] and item 21 above. **Do not do more
+> cap work.**
+
 **(a) A cap meant for LIVE sessions counts DEAD ones, and nothing reaps them.** The per-sender
 bound is enforced by `countActiveSessionsForCounterparty`, whose SQL is
 `status IN ('active', 'interrupted')`. An `interrupted` session is what a daemon restart leaves
