@@ -1057,6 +1057,29 @@ time predated the 2026-08-08 relay restart, so the relay had already dropped the
 **What is unproven, precisely:** that an interrupted session whose relay session still EXISTS can be
 notarized end to end and produce a receipt. That case has never run.
 
+> ### 🔴 ANSWERED 2026-08-17 — it could never have run, and now it can
+> `4759b4b` made the interrupted close SUBMIT a seal leaf. **One leaf can never notarize anything.**
+> The relay stamps a chain only once BOTH parties have posted a SEAL ctrl leaf, and the responder
+> never posts one — `inbound-seal-request.ts` persists its commitment, acks, and stops. So the
+> notarization this item has been waiting to observe was structurally impossible, and no live test
+> could ever have produced it.
+>
+> Worse, the escalation that WOULD have finished the job — the unilateral seal, which asks the
+> directory to notarize with the counterparty absent — lived in the close handler's `active` branch,
+> below an `interrupted` branch that returns from every exit. **Unreachable.** So an interrupted
+> session could not obtain a receipt even when a human closed it by hand, which is the plain-language
+> version of *"most of the time we can't even close them"*.
+>
+> Fixed in `DOD-M12B-INTERRUPTED-ESCALATE-1` (cello-client `af8d4bb`): the escalation is a shared
+> helper both branches call. It fires when the two sides agreed OR when the counterparty never
+> answered, and **never after a refusal** — a rejection means the trees disagree, and notarizing over
+> a stated objection is the one thing a trust layer must not do. Not yet published; the live proof
+> this item asks for is still owed and is now actually possible.
+>
+> Same investigation: **114 of 118 interrupted sessions came from our own shutdown sweep and zero
+> from any transport event** — see
+> [[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]].
+
 **How to prove it:** open a session, exchange a few messages, restart the daemon to interrupt it,
 then close it — all inside the relay's 24-hour retention. Minutes of work, and it either produces a
 receipt or a named failure.
