@@ -2496,3 +2496,46 @@ is not.
 ### Gate
 
 `pnpm run test` **exit 0** — **3843 passed / 11 skipped** · lint / typecheck / build **exit 0**.
+
+---
+
+## Entry 34 — The gate that reported exit 0 on a broken test (2026-08-18)
+
+**Commit `689931c`.** `DOD-M12B-TESTS-NOT-TYPECHECKED-1`, partially.
+
+Every package carries `"exclude": [… , "src/__tests__"]` and `typecheck` is `tsc --build`. So a test
+asserting on a field that does not exist, or calling a method that was removed, is **invisible to the
+gate** — it fails only if vitest happens to execute that line. That is the hollow-test shape every
+review in this milestone has hunted, institutionalised in the build config.
+
+**It already let a defect ship, in this milestone.** `msg-018` called
+`ensureStandingReceiverForAgent("alice", "corr")` against a signature that has taken ONE parameter
+since before that commit, and `pnpm run typecheck` reported **exit 0**. The second review pass found
+it by reading, which is not a gate.
+
+### Why this is PARTIAL, and the number that decides it
+
+Switching it on repo-wide surfaces **339 errors in the daemon's tests alone** — overwhelmingly
+deliberate partial fakes that need `as unknown as` casts, plus helper files not listed in the project.
+That is a genuine cleanup, not a unit, and doing it at 4am against a suite nobody can live-test would
+be the rabbit hole the procedure warns about.
+
+So the gate covers the **six files this work added plus the shared helpers**: where the defect
+shipped, and where the next regression lands. `files` rather than `include`, because the base
+config's `exclude` filters `include` and would drop every one of them. **The config carries the
+reason and the remaining scope**, so nobody reads a partial fix as a closed class.
+
+### Positive control, not a claim
+
+Reintroducing the exact defect — the second argument — makes the gate **exit 2 with `TS2554` on the
+line that previously passed**. That is the whole proof the unit needed.
+
+### No reviewer on this one, deliberately
+
+It changes **zero runtime code**: one tsconfig and one npm script. Its correctness is a positive
+control that was RUN, not an argument. Recorded here rather than silently skipped.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3843 passed / 11 skipped** · lint / **typecheck (now including the new
+step)** / build **exit 0**.

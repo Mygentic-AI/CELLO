@@ -507,7 +507,13 @@ description: >
   that does not exist, or calling a method that was removed, is invisible to the gate — it fails only
   if vitest happens to execute that line, which is exactly the hollow-test shape every review this
   milestone has hunted. Fix: a `tsconfig.test.json` per package including `src/__tests__` with
-  `noEmit`, added to the `typecheck` script. — ❌
+  `noEmit`, added to the `typecheck` script. — 🟠 **PARTIAL 2026-08-18** (`689931c`). The six files
+  the interrupted-session work added, plus the shared helpers, are now under the gate — that is where
+  the defect shipped and where a regression lands next. **Repo-wide is still owed:** switching it on
+  surfaces **339** errors in the daemon's existing tests alone, mostly deliberate partial fakes
+  needing `as unknown as` casts, which is a real cleanup rather than a unit. The config names the
+  remaining scope so it is not read as done. Verified by reintroducing the exact defect: the gate
+  exits 2 with TS2554 on the line that previously passed. → Entry 34
 
 - **DOD-M12B-SIGNALING-TEST-FLAKE-1** [cello-client] — 🅿️ **a transport test fails under full-suite
   load and passes in isolation.** `core/transport/src/__tests__/signaling-manager.test.ts` →
