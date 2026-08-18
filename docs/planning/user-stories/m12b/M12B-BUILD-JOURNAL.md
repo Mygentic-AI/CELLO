@@ -15,90 +15,66 @@ description: >
 # M12B Build Journal
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
+**Updated 2026-08-18 08:30 UTC — mid-session, Andre awake and reviewing.**
 
-**Updated 2026-08-17, end of the eleven-rank run.**
+### WHERE WE ARE
 
-### NEXT ACTION — the seal chain is BUILT and NOT LIVE-VERIFIED. That proof is still first.
+The promotion landed (cli `0.0.182`, daemon `0.0.175`, tag `v0.0.249`) and Andre restarted his
+daemon at 05:32 UTC. **The restart-seal resolver ran on real data for the first time and correctly
+sealed nothing** — see Entry 41. That is a pass, not a null result: the one interrupted session in
+the store had `interrupted_by = NULL` because the *previous* binary performed that shutdown, and
+NULL cause is documented as a reason not to notarize.
 
-Read [[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]] §1 and §5, then **Entries
-21–30**.
+**The sealing path is still unproven and needs no rig.** The next ordinary `cello logout` /
+`cello login` writes `'local'` at shutdown and enumerates a genuine orphan on boot. Watch for
+`session.restart_seal.enqueued` → `session.restart_seal.resolved`.
 
-**The story in one line:** the deluge of interrupted sessions is our own restarts — 114 of 118, and
-**zero** from any transport event. Chasing that found something bigger: **an interrupted session
-could not obtain a receipt at all**, even closed by hand. That is launch-triage item 21, answered.
+**RETRACTED:** the old "blocked on Andre for two pre-auth tokens" line. Andre asked why throwaway
+agents were needed at all; they were not. Use the existing agents.
 
-**FIRST, before any new code:** the live proof (launch-triage item 21) — two real daemons, exchange,
-restart one, close. **Assert on the session's STATUS, not only the certificate** (Entry 24 is why).
-🔴 **Blocked on Andre:** registration needs two pre-auth tokens from the Operations Agent.
+### DONE THIS SESSION
 
-Then, in the order the evidence supports:
-1. `DOD-M12B-ANNOUNCE-BLINDS-RESERVATION-1` — a publicly-hosted agent's GRANTED reservation is
-   invisible, so it falls back to plain TCP. **🔴 Blocked on having a real NAT'd-or-EIP agent to test
-   against** — both candidate fixes change behaviour that cannot be judged from here.
-2. `DOD-M12B-TESTS-NOT-TYPECHECKED-1` — five of seven packages covered; transport (33),
-   protocol-types (85) and the daemon's older tests (339) remain. Mechanical, and each one closes
-   real holes: the adapter's four turned out to be tests running a branch production cannot reach.
-3. `DOD-M12B-SESSION-SEED-1` (case A) — still ranked last of the buildable work: its trigger fired
-   **zero** times in 17 days while everything above it was measured.
-3. `DOD-M12B-SESSION-SEED-1` (case A/B) — **deliberately ranked BELOW the above**: its trigger fired
-   **zero** times in 17 days, while the reservation defect fired 481. Still real for an operator who
-   leaves the daemon up for days; not what is hurting now. Entry 30 has the reasoning.
+- `DOD-M12B-REVIVAL-BOUND-1` — ✅ `decd43e` (cello-client). An interrupted session that can never be
+  revived stayed writable forever, because `ingestReceivedContent` deliberately accepts `interrupted`
+  so recovery can work. Known cause seals; everything else abandons after a 24h window. Entry 42 has
+  the four defects found on the way, two of which would have destroyed data.
+- `DOD-M12B-SESSION-SEED-1` **first half** — built, gated (3865 pass, lint/typecheck/build clean),
+  **reviewer in flight, NOT yet committed.** Every standing receiver is now built from a held 32-byte
+  seed; at handoff the seed becomes the session's and the replacement mints its own; it survives
+  interruption and is zeroed at terminal status.
 
-🅿️ **Parked, both need Andre and a fleet decision:** `DOD-M12B-SEAL-SILENT-DROP-1` (the directory
-answers a seal request with silence — 50 occurrences, the largest single blocker to an automated
-close) and `DOD-M12B-RELAY-SLOTS-1` (2,215 refusals, all "granted, no reservation" — an agent behind
-NAT is intermittently dialable by nobody).
+### NEXT ACTION
 
-**Still open for Andre:** the anti-DDoS rationale for ephemeral peer ids is not in ADR-0001 and
-constrains `SESSION-SEED-1`. Also unverified: whether the relay can serve as a rendezvous without the
-directory.
+**Finish `SESSION-SEED-1`'s second half** — the identity is recoverable but nothing rebuilds the
+node yet. Two interception points, both already located:
 
-### REPO STATE — 2026-08-18, end of the overnight run
-| | |
-|---|---|
-| cello-client `main` | **`96fd178`** (two commits past `v0.0.249`; both are test/build config and ship nothing) — clean, pushed. Gate: test/lint/typecheck/build all **exit 0**, **3838 passed / 11 skipped**. |
-| trustless-cello `main` | clean, pushed. |
-| **`latest` (what Andre is RUNNING)** | daemon **`0.0.170`**, cli **`0.0.177`** — ranks 1–11 only. **Nothing from the overnight run is on his machine.** |
-| **`beta` (published, NOT promoted)** | tag **`v0.0.249`** → daemon **`0.0.175`**, cli **`0.0.182`**. Supersedes every earlier beta — **promote this one**. |
-| other five packages | unchanged: crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, connect `0.0.150` — all already on `latest`. |
+1. `session_node_unavailable` (`session-node-manager.ts`, two sites) — rebuild the node from
+   `#sessionSeeds` instead of refusing.
+2. `session_not_active` (`session-content-handlers.ts` and the manager's own status gate) — the
+   reverse edge, `interrupted → active`, which today no code path anywhere performs.
 
-**`main` carries one commit past the `v0.0.248` tag — `689931c`, the typecheck gate.** It touches a
-`tsconfig.test.json` and the root `package.json` script, neither of which is in any published
-tarball, so **there is nothing operator-facing to publish and no v0.0.249 is owed for it.**
+Both must stay **demand-driven** (the `REDIAL-1` discipline — nothing re-opens on a timer) and must
+respect the five blocking ACs in the 🔒 TENET block of `DOD-M12B-SESSION-SEED-1`.
 
-**Promotion is Andre's, always.** Commands in the format of Entry 16.
+### ANDRE'S TENET — governs everything in case A/B (ruled 2026-08-18)
 
-### WHAT SHIPPED — ranks 1–11, all ✅
-1 send guidance · 2 inbox truth · 3 away marker · 4 delivery quiet · **5 the blocker (the 33rd
-message)** · 6 durable holds · 7 seal-stuck visible · 8 index discipline · 9 re-dial · 10 abandon
-notify · 11 shutdown drain. Verdicts quoted in **Entries 9, 12, 13, 14, 15**; the publish is
-**Entry 16**.
+> *"No peer ID should be used for more than one session. If a session needs to be revived… it should
+> be possible to revive that session on those peer IDs. But after that, those peer IDs and that peer
+> connection needs to be shut down. It is an open connection that a malicious agent can farm for."*
 
-### THE ONE PATTERN EVERY REVIEW FOUND — read before writing the next unit
-**A test that calls the new method directly proves the method, not the unit.** Ranks 8, 9, 10 and 11
-each shipped a first build whose wiring could be deleted with the suite still green, and rank 10's
-first build did nothing at all in production while four tests passed. Every unit now carries an
-assertion that fails when its call site is removed. Write that assertion first.
+The threat model is that the daemon is entirely on the operator's machine and can be reprogrammed, so
+**every guarantee must hold on the side that is not the attacker**. The recorded rationale for
+ephemeral ids is PRIVACY/unlinkability (2026-04-11 log), not anti-DDoS — corrected 2026-08-18.
 
-### KILLED BY MEASUREMENT — DO NOT RE-RUN
-Excessive standing-receiver teardown; a stale counterparty peer id; a missing connection (Entry 6);
-a race between our own `send` and our own `close` (Entry 10); **yamux stream exhaustion** (Entry 11 —
-yamux allows 1000; the 3.5-hour log opened ~450). The **third site**
-(`directory.signaling.disconnected`) is **not a defect** — the signaling path catches the same error,
-declares the stream dead and reconnects.
+### STILL PARKED, NEEDS ANDRE
 
-### STILL OPEN IN M12B (not the launch-triage block)
-Tier A (submission id + relay idempotency — the only part costing a **relay fleet roll**),
-Tier B's `TRACE-2` counter map, Tier E's three proofs, and Phase 2 (Tier R, relay loss and
-client-driven failover).
-
-### PROCESS RULES THIS SESSION BROKE — read §7 and §26 of the procedure
-1. **Gates were piped through `grep`**, so the exit status read was grep's — §7's exact laundering.
-   Always `pnpm run test > /tmp/gate.log 2>&1; echo "exit=$?"`.
-2. **No `cello-unit-reviewer` was run until Andre asked.** Four units were reported done while
-   unreviewed; three then failed review, one totally.
-3. **The branch sat unpushed for eleven commits.** §2e: push on creation, §3: push after every commit.
-4. **Repeated stops on the NOPE list.** §26: exactly two reasons to stop.
+- `DOD-M12B-SEAL-SILENT-DROP-1` — fixed in code, needs a directory fleet roll.
+- `DOD-M12B-RELAY-SLOTS-1` — capacity decision. The 08-14 spike was 1,251 rejections from one relay;
+  the peer-id bug behind it is fixed (`d7cc8b6`/`0a49fb3`), the capacity question is not.
+- `DOD-M12B-ANNOUNCE-BLINDS-RESERVATION-1` — needs a real NAT'd/EIP agent to test against.
+- **One open trade from `REVIVAL-BOUND-1`:** abandoning forfeits a receipt an operator can still
+  obtain by hand today. Auto-sealing is NOT the alternative (SI-001 stands). The only question is
+  whether counterparty-caused interruptions deserve a window longer than 24h.
 
 ---
 
