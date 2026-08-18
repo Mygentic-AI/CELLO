@@ -15,7 +15,23 @@ description: >
 # M12B Build Journal
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
-**Updated 2026-08-18 08:30 UTC — mid-session, Andre awake and reviewing.**
+**Updated 2026-08-18 09:55 UTC — mid-session.**
+
+### 🔴 WAITING ON ANDRE — the `latest` promotion. Nothing else is blocked.
+
+`v0.0.250` is **published to beta and verified against the tarball** (not just CI): daemon `0.0.176`,
+cli `0.0.183`, connect `0.0.151`, crypto `0.0.53`, protocol-types `0.0.57`, transport `0.0.59`,
+gateway `0.0.37`. Cross-pins are real versions, and `reviveSessionNode`, `reviveIfNeededForRead`,
+`reviveIfNeededForSend`, `closeExpiredUnrevivableSessions` and `inboundReachable` are all present in
+`package/dist`. Smoke-tag green.
+
+**The seven promotion commands are in the session transcript and are ANDRE'S TO RUN — never run
+them.** After promoting he installs with `--prefer-online` (a promotion seconds earlier is not in the
+local npm cache; this has burned two rounds before) and runs `cello logout && cello login`.
+
+**That restart is also the live proof of `RESTART-SEAL-1`** — the shutdown will write
+`interrupted_by = 'local'` for the first time, and the next boot should enumerate a real orphan.
+Watch for `session.restart_seal.enqueued` → `session.restart_seal.resolved`.
 
 ### WHERE WE ARE
 
