@@ -2873,3 +2873,78 @@ The same hour shows the second defect, the one `RESERVATION-RETRY-1` fixes:
 ```
 
 Both are fixed and both are in `v0.0.249`.
+
+---
+
+## Entry 41 — the restart-seal resolver ran on real data for the first time, and correctly did nothing
+
+**2026-08-18 05:32 UTC.** Andre promoted to `latest` (cli `0.0.182`, daemon `0.0.175`), then
+`cello logout` / `cello login`. That boot is the first time `RestartSealResolver` has ever run
+outside a test, against the real 14 MB session store.
+
+**It sealed nothing, and that is the correct outcome — not a null result.**
+
+The store at that moment:
+
+| status | `interrupted_by` | rows |
+|---|---|---|
+| sealed | NULL | 396 |
+| abandoned | NULL | 194 |
+| seal_interrupted_pending | NULL | 28 |
+| active | NULL | 2 |
+| **interrupted** | **NULL** | **2** |
+
+The two interrupted rows are one session (`66292a58…`, 3 messages) seen from both of Andre's agents,
+and the log shows exactly where they came from:
+
+```
+05:32:04.183  session.node.destroyed  reason="interrupted"  agentName=CELLO_Coder_1
+05:32:04.183  session.node.destroyed  reason="interrupted"  agentName=CELLO_Support
+```
+
+That is our own shutdown sweep, at the `cello logout`. So it IS a restart orphan by every criterion
+the resolver cares about — 3 messages, agent not retired, never given up on — except one:
+`interrupted_by` is **NULL**, because the daemon that performed that shutdown was the *previous*
+binary, from before the column had a producer. The new binary booted and enumerated afterwards.
+
+`listRestartOrphanedSessions()` requires `interrupted_by = 'local'`, and NULL is documented there as
+*"written before the column existed, so the cause is UNKNOWN. An unknown cause is not a licence to
+notarize; it is the reason not to."* It held. **The one live opportunity to notarize a session on
+unknown cause was declined by the rule that exists to decline it.**
+
+**What is therefore still unproven, and how it proves itself.** No row has yet carried
+`interrupted_by = 'local'`, so the sealing path has never executed against the directory. The next
+`cello logout`/`cello login` closes that: the shutdown sweep now running is the one at
+`session-node-manager.ts:3573`, which writes `'local'`, and the boot after it will enumerate a
+genuine orphan. **No test rig needed — the proof arrives with the next ordinary restart.** Watch for
+`session.restart_seal.enqueued` → `session.restart_seal.resolved`; today's boot logged neither.
+
+**Do NOT "fix" this by backfilling NULL → 'local'.** That relabel exists only as a test seam
+(`markSessionsInterruptedByLocalShutdownForTest`) and is deliberately scoped to unlabelled rows, with
+the reason written at the call site: unscoped, it is *"one call excusing every interruption every
+attacker ever caused, on every agent."* Running it in production would forge the cause field on 2
+rows today and on every counterparty-caused interruption forever after.
+
+### The real defect this exposes — and it is the tenet's, not the resolver's
+
+Those two rows are now **permanently** interrupted. Nothing seals them (unknown cause), nothing
+resumes them (no revival path exists yet), and nothing ever will. And `ingestReceivedContent`
+**deliberately accepts `interrupted`** so that recovery can work — it refuses only `sealed`,
+`seal_interrupted_pending` and `abandoned`.
+
+So a session that can never be revived stays **writable by a reprogrammed peer, forever**. That is
+precisely what Andre's 2026-08-18 ruling forbids: *"leave nothing open that is no longer needed."*
+
+**The fix is not to notarize them.** Notarizing an unknown-cause session is the thing we just
+correctly refused. Separate the two concerns, because they are different:
+
+- **A receipt asserts a cause** → unknown cause must not get one. Unchanged.
+- **An open write surface asserts nothing** → it just has to close.
+
+So the terminus depends on what we know: `interrupted_by = 'local'` → **seal**, because we can say
+truthfully what ended it. `interrupted_by` NULL → **abandon**, which is terminal, refuses ingest, and
+claims nothing about cause. Both stop the session accepting content; only one spends a ceremony.
+
+Filed as `DOD-M12B-REVIVAL-BOUND-1` and built next. It is AC 2 + AC 3 of `SESSION-SEED-1` — the half
+that closes the door — and it is worth building before the half that re-opens it, because the store
+already contains sessions in the unbounded state.
