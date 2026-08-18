@@ -765,7 +765,12 @@ description: >
   holding ISO-8601 while `updated_at` beside it is INTEGER epoch millis. A bare numeric comparison
   is always false (SQLite orders storage classes first); `CAST(interrupted_at AS INTEGER)` reads
   `'2026-08-18T…'` as **2026** and would abandon the entire store on the next boot. Two existing
-  tests caught it. — ⏳
+  tests caught it. — ✅ `decd43e` (cello-client), reviewed, every finding fixed. Four more the
+  reviewer surfaced and the build now covers: the expiry clock was `updated_at`, which the peer
+  moves with every message it sends into the still-accepting session (write-once stamp now); local
+  sessions the seal path gave up on or will never take had no terminus (the sweep is the backstop);
+  boot-only scheduling never fired on a long-lived daemon (hourly now); and the boot wiring had no
+  test, so the whole control could be unwired with the suite green.
 
 - **DOD-M12B-SIGNAL-GUIDANCE-1** [cello-client] — **the `missing_signal` error instructs the caller
   to do the wrong thing.** `cello_send` requires a `signal` PARAMETER (`over` / `standby` / `wrap`).
