@@ -259,6 +259,19 @@ is precisely the correlatable identifier to avoid.
 The standing receiver is **per-agent by construction** — it is the door everyone knocks on — so a
 stable identity there *is* an agent-wide identifier. It must NOT be stabilised.
 
+> **BUILT 2026-08-18, and the distinction that keeps this true: HOLDING a seed is not STABILISING an
+> identity.** `SESSION-SEED-1` mints a fresh 32-byte seed inside each standing-receiver creation and
+> keeps it. Every rebuild — the reservation watchdog's, the relay-endpoint upgrade's — runs that
+> creation again and therefore mints a *new* seed, so the receiver's id still churns exactly as
+> before. Nothing about the door became stable.
+>
+> What the held seed buys is the *session*: at handoff the receiver is promoted into the session
+> node and its seed goes with it, while the replacement receiver mints its own. So the id the
+> counterparty was handed belongs to one session, is reproducible for that session's life, and is
+> destroyed with it. The per-agent identifier this section warns about is never created — and the
+> April rationale (unlinkability across sessions) is preserved, because the only thing made stable
+> is stable within a single session an observer can already correlate by watching its connection.
+
 And it is where the damage actually is. The codebase already knows, and says so twice:
 
 > *"`counterpartySessionPeerId` is recorded ONCE at session establishment and never refreshed, while
