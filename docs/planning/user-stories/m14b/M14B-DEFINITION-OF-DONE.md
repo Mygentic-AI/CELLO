@@ -873,6 +873,38 @@ description: >
 
 ---
 
+## Carried in from launch triage item 22 — found live 2026-08-18, ruled by Andre same day
+
+- **DOD-DOC-SEQUENCE-SEPARATE-1** — **document sync frames must not share the CONVERSATION's hash
+  chain.** Traced live on M12B's revival test: a document left `active` days earlier (24 such rows
+  found, oldest from 2026-08-07) triggers a reconcile sweep every ~2 minutes that writes an `ack`
+  frame into whatever session the two agents currently have open — real chat or not. Each frame
+  consumes a position in that session's sequence line. Two real messages arrived fine; the seal
+  refused with `session_incomplete` because 32 of the 34 occupied positions were sync frames, not
+  conversation content, and a gap in either direction blocks the whole chain from that point on.
+  Launch-triage item 22 named this on 2026-08-17 and **deliberately deferred it**: *"separating them
+  changes what the tree contains, and the tree root is what the seal signs over, so it risks
+  existing receipts."* Andre's tripwire — *"re-open if any gap appears on a session after the flood
+  fix is live"* — fired 2026-08-18. **Ruled: fix it.** Give document sync its own sequence space,
+  separate from the conversation tree the seal signs. **Costs an existing invariant, stated
+  plainly:** a session sealed under the old scheme has document frames baked into the root its
+  receipt covers; one sealed after this change does not. That is a real difference in what a past
+  receipt versus a future receipt attests to, not a bug — record it, do not paper over it.
+- **DOD-DOC-PUSH-NOT-POLL-1** — **a document must not sync on a timer when nothing has changed.**
+  Same investigation, same day: with the removed-holder and refusal-storm defects already fixed
+  (item 22, 2026-08-17), sync frames kept appearing on a document with **zero pending edits** —
+  launch-triage's own words, *"a document sitting in a half-state is not inert; it generates
+  traffic… with zero refusals and purely legitimate sync, the holds still appeared."* The sweep
+  asks "anything changed?" on a fixed interval regardless of whether anything has. Ruled: sync
+  fires on an actual pending change, never on a bare timer. No pending edit, no frame, no
+  position consumed. Cheaper than SEQUENCE-SEPARATE-1 — no receipt-shape consequence — and closes
+  the reason the sweep runs at all rather than only where its output lands.
+- Both are M12B's finding, filed here because the defect is a document-sync mechanism, not a
+  session-revival one — M12B's three cases (A/B/C) are otherwise complete and proven live
+  (`M12B-BUILD-JOURNAL` Entries 44/45/48). See that journal's Entry 47–48 discussion for the
+  live trace (34 relay positions, 2 real messages, `session_incomplete`, `missing_leaves: 2`
+  symmetric on both sides) that reopened this.
+
 ## Related Documents
 - [[M14B-PROCEDURE]] — the operating runbook; read FIRST
 - [[M14B-BUILD-JOURNAL]] — audit trail + evidence home
