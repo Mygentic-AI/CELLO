@@ -2679,3 +2679,50 @@ strands anything.
 ### Gate
 
 `pnpm run test` **exit 0** — **3845 passed / 11 skipped** · lint / typecheck / build **exit 0**.
+
+---
+
+## Entry 38 — v0.0.249, and the gate found a test exercising a branch production cannot reach (2026-08-18)
+
+### Published
+
+Tag **`v0.0.249`** → daemon **`0.0.175`**, cli **`0.0.182`**. Build, publish and smoke-tag green.
+Carries the single unilateral escalation. **Supersedes `v0.0.248` — promote this one.**
+
+### The typecheck gate, widened, and it earned its keep immediately
+
+Measured before choosing rather than guessing: gateway **1** error, crypto **5**, cli **5**,
+adapter **7**, transport **33**, protocol-types **85**, daemon **339**. The four cheapest are now
+fully covered, so **five of seven packages** are under the gate.
+
+**The adapter's were not cosmetic.** Four call sites passed `buildChannelParams` ONE argument where
+it takes two, so `type` was `undefined` at runtime — and `channel-params.ts` says in its own comment
+that `type` is required and **deliberately not re-derived** from the data, because real daemon frames
+carry it on `frame.notification` and re-deriving it *"is what produced the generic `CELLO event:
+cello_event.` doorbell in production."*
+
+So those tests were exercising a shape production cannot produce, **on the doorbell path — which is
+how an agent wakes.** A fifth had its cast backwards, casting the type STRING to
+`Record<string, unknown>`.
+
+That is the whole argument for the gate, found within an hour of installing it.
+
+### Fixed at the source, never cast away
+
+- **crypto** — adversarial manifest tests were `push`/`unshift`/index-assigning a **readonly** array.
+  They build the variant as a fresh array now: same input, honest types. And a `for…of […] as const`
+  narrowed an empty stub array to `readonly []`, which the constructor does not take — the two cases
+  are typed explicitly, since the point of them is that they are the shapes a real caller produces.
+- **cli** — under-declared rather than wrong: the tests read `Verdict.connected` and an env key the
+  literal type had lost, and **both assertions pass**, so the runtime does carry them. The types were
+  behind the tests using them.
+- **gateway** — a `ScreenContext` missing `direction`. Harmless because the method carries it, but a
+  real caller supplies it.
+
+**No cast anywhere.** A cast is how this class of defect stays hidden — it would have silenced the
+adapter finding rather than surfaced it.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3845 passed / 11 skipped** · lint / **typecheck across five packages'
+tests** / build **exit 0**.

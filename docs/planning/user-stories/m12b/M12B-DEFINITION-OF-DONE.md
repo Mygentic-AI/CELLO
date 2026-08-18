@@ -543,7 +543,14 @@ description: >
   surfaces **339** errors in the daemon's existing tests alone, mostly deliberate partial fakes
   needing `as unknown as` casts, which is a real cleanup rather than a unit. The config names the
   remaining scope so it is not read as done. Verified by reintroducing the exact defect: the gate
-  exits 2 with TS2554 on the line that previously passed. → Entry 34
+  exits 2 with TS2554 on the line that previously passed. **Widened 2026-08-18** (`31bf42e`,
+  `96fd178`): **five of seven packages** are now fully covered — gateway, crypto, cli,
+  adapter-claude-code, plus the daemon's `msg-*` files. **And the adapter's were not cosmetic**: four
+  call sites passed `buildChannelParams` one argument where it takes two, so `type` was `undefined`
+  at runtime on the **doorbell path** — the code's own comment says `type` is required and
+  deliberately not re-derived, so those tests exercised a shape production cannot produce. Remaining,
+  in the order they cost: transport **33**, protocol-types **85**, the daemon's older tests **339**.
+  → Entries 34, 38
 
 - **DOD-M12B-SIGNALING-TEST-FLAKE-1** [cello-client] — 🅿️ **a transport test fails under full-suite
   load and passes in isolation.** `core/transport/src/__tests__/signaling-manager.test.ts` →
