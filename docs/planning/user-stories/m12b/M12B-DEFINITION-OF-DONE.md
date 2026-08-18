@@ -707,6 +707,44 @@ description: >
   comments** claiming the receiver is rebuilt on every signaling reconnect — it is not; the ensure
   no-ops on a healthy receiver, and only a lost relay reservation rebuilds it. — ❌
 
+  > ### 🔒 THE TENET THIS UNIT MUST NOT BREAK — ruled by Andre 2026-08-18
+  > **"Leave nothing open that is no longer needed."** Verbatim: *"No peer ID should be used for more
+  > than one session. If a session needs to be revived because of a laptop close or some other event
+  > … it should be possible to revive that session on those peer IDs. But after that, those peer IDs
+  > and that peer connection needs to be shut down. It is an open connection that a malicious agent
+  > can farm for."*
+  >
+  > **The threat model is the reason, and it is the one Andre calls the scariest part of the system:**
+  > the daemon is entirely on the operator's machine and can be reprogrammed at any time. We have no
+  > guarantee it behaves as intended. **So every guarantee has to hold on the side that is NOT the
+  > attacker.**
+  >
+  > **Blocking ACs:**
+  > 1. **One peer id, one session.** Already true via the handoff — the receiver is promoted into the
+  >    session node and a fresh receiver is built behind it, so each advertised id serves exactly one
+  >    session. This unit must not change that.
+  > 2. **The seed dies with the session** — destroyed in the same step that writes `sealed` /
+  >    `abandoned` / `seal_interrupted_pending`, not on a later sweep.
+  > 3. **Revival is BOUNDED.** Past the revival window the seed is dropped and the session ends with
+  >    a receipt (`RESTART-SEAL-1`) rather than staying revivable for the life of the process.
+  >    *Revive, finish, close* — not a permanent door.
+  > 4. **Revival is DEMAND-DRIVEN, never a timer** — the `REDIAL-1` discipline, so nothing re-opens
+  >    on its own.
+  > 5. **No connection outlives the session.** Verified already true: every teardown path calls
+  >    `node.stop()`, which closes the libp2p connections. This unit adds the ability to RE-open; it
+  >    must add nothing that STAYS open.
+  >
+  > **A gap this exposes, which predates the unit.** `ingestReceivedContent` refuses `sealed`,
+  > `seal_interrupted_pending` and `abandoned` — but deliberately ACCEPTS `interrupted`, because that
+  > is what makes recovery possible at all. So a reprogrammed peer can push content into an
+  > interrupted session for as long as it stays interrupted, which today is **forever**. **AC 3
+  > closes that too**: a session that can no longer be revived gets sealed, and a sealed session
+  > refuses. Recorded here so it is not read as introduced by this work.
+  >
+  > **What a learned peer id does NOT buy an attacker:** libp2p's Noise handshake proves possession
+  > of the private key, so knowing an id is not being able to use it. The exposure named above is the
+  > OPEN CONNECTION and the reachable endpoint — which is why the BOUND, not secrecy, is the control.
+
 - **DOD-M12B-SIGNAL-GUIDANCE-1** [cello-client] — **the `missing_signal` error instructs the caller
   to do the wrong thing.** `cello_send` requires a `signal` PARAMETER (`over` / `standby` / `wrap`).
   Its refusal guidance says *"Every cello_send message must end with one of: [[OVER]] …"* — which
