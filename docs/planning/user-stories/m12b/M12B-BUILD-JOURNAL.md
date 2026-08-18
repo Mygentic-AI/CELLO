@@ -3275,3 +3275,95 @@ the give-up guidance told a pending session it was `interrupted` and pointed at 
 forfeits a receipt it is one request away from having; and two tests **passed before the code under
 test ran** — they seeded only the excluded row, so the status filter excluded it first and both
 stayed green with the entire change reverted.
+
+---
+
+## Entry 47 — the live test, seven rounds, and the principle it produced
+
+**Commits `55eeaa2`, `5d01add`, `4e2bfd4`, `6b3635c` (cello-client).** 3,902 tests pass; lint,
+typecheck, build clean. Reviewer run on the whole revival surface; three HIGHs found and fixed.
+
+### What actually happened
+
+Andre and a second window (Miss_Chelly) ran case A end to end, repeatedly. **Seven rounds. Every
+round found a different real defect.** None of them were visible to a green test suite, and none
+would have been found by reading the code forward from the last error message — which is exactly
+what I kept doing.
+
+| # | What the operator saw | What it was |
+|---|---|---|
+| 1 | `cello_receive` hung past two minutes | The read awaited the revival, which awaited a relay reservation with no deadline |
+| 2 | `session_identity_lost` | My own sequencing error — a daemon restart between runs destroys the seed |
+| 3 | `session_node_creation_failed` | The rebuild's `start()` **never** completed with 2 relay addrs (measured 10,002 ms; 1 ms with none) |
+| 4 | `counterparty_dial_failed` | A rebuild with no reservation is dialable by nobody |
+| 5–7 | *"could NOT be queued for retry — it is lost. Send it again."* | The revived entry carried no relay, so `#parkContent` refused and the message was declared lost |
+
+### Andre's intervention, which is the entry
+
+After the fifth identical error he stopped the build and said, in effect: *everything works when the
+session is first established; we re-establish it and nothing works; whatever we have re-established
+is not what we had.* That reframing found the root cause in one diff.
+
+**Establishment does five things. Revival did three.**
+
+| Step | New session | Revived |
+|---|---|---|
+| Build the node | ✅ | ✅ |
+| Register the content handler | ✅ | ✅ |
+| Wire liveness | ✅ | ✅ *(only after an earlier review caught it)* |
+| **Connect the relay witness** | ✅ | ❌ |
+| Dial the counterparty | ✅ | ❌ |
+
+The relay stream is the live inbound path — it is what delivers promptly and what rings the
+doorbell. Without it a session has no live delivery at all and falls back to the five-minute mailbox
+backstop. **That one gap produced three symptoms I had been investigating as separate defects:**
+doorbells not firing, three minutes to deliver what a fresh session delivers in seconds, and sends
+that could not park.
+
+**THE PRINCIPLE, ruled 2026-08-18: a revived session must be indistinguishable from a fresh one.**
+Anything establishment does that revival does not is a defect.
+
+### Then the reviewer found the fix didn't fix it
+
+`4e2bfd4` is named for connecting the relay and **did not connect it.** `registerSession` files a
+handler in a Map; it opens no stream. `#connectSessionRelay` ends with `await client.connect(node)`
+and the reconnect ended without it — so it logged *"the revived session has its live inbound path
+back"* over a client whose stream was `null`. The claim was in the commit message too.
+
+Two more, both worse than what they replaced:
+
+- **The retry drain would have parted the hash chain permanently.** Its queue holds only content with
+  no local leaf and no transcript row — deliberately, because *"a LOST message gets no leaf: that
+  would commit a sequence no content will ever fill."* The drain re-sent those rows through
+  `sendContent` and discarded the sequence it returned. The counterparty would receive the message
+  while our tree kept a permanent hole; every later message would hold behind it with guidance
+  blaming the counterparty for a message they had already sent; the session could never seal.
+  **Unwired.** A stranded queue row is recoverable; a parted chain is not.
+- **`await candidate.stop()` was a no-op.** libp2p's `stop()` returns immediately unless the node is
+  `'started'`, and through the entire timeout window it is `'starting'`. So the abandoned `start()`
+  stayed in flight and could bring a node live on the session's own peer id, sharing the gater, with
+  no content handler and no reference left to stop it — the open endpoint the tenet forbids. Teardown
+  now chains onto the candidate's own start promise.
+
+### And the test written to prevent this was hollow twice over
+
+The parity test claimed *"if establishment gains a sixth step, this fails until revival takes it
+too."* **It never read establishment** — it matched five hardcoded strings against revival's own
+source. It also passed while the `connect` was missing, and **both** of its region lookups were
+unbounded, so one was scanning most of the file.
+
+Rewritten to derive the step list from establishment, with a written exemption list. It immediately
+found two more gaps, one of them real: **the revival ignored `MAX_SESSION_NODES`**, so a daemon could
+walk past its node limit one reconnect at a time.
+
+### The lesson worth keeping
+
+Six of the seven rounds were spent fixing the newest error message. The seventh — after Andre made
+me stop and diff the two paths — found the cause of most of them in about ten minutes. **When a
+re-established thing misbehaves, diff it against the thing it is supposed to be, before chasing what
+it reports.**
+
+### Still owed
+
+The live test has NOT been re-run since the relay connect landed. The measurement that settles case A
+is **delivery time on a revived session**: three minutes before, seconds if this is right.
