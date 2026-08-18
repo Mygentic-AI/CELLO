@@ -3092,3 +3092,37 @@ race, which is finding 1 above, a HIGH. Doing it properly means bounding and awa
 teardown first, and an unawaited stop is exactly what the current code chose in order to keep a
 stuck libp2p teardown from blocking receiver creation. **Filed as follow-on rather than trading a
 MEDIUM fix for a HIGH regression.**
+
+---
+
+## Entry 44 — the demand edge: case A now does something for the operator
+
+**Committed `f45cd18` (cello-client).** 3,879 tests pass; lint, typecheck, build clean. Revert test
+run on the wiring.
+
+Entry 43 built the revival and **nothing called it**. That is worth stating plainly rather than
+filing as a loose end: with the mechanism unwired, an operator saw no change whatsoever —
+`cello_send` still refused an interrupted session forever — and the seeds being held were key
+material with no consumer, which is the exact shape the first-half review warned about in its scope
+note (*"land them together or not at all"*).
+
+**What an operator now experiences.** Their laptop sleeps mid-conversation. On waking they send the
+next message. That send revives the session — same peer id, so the counterparty needs to be told
+nothing and their stored dial target is still correct — flips the status back to `active`, and
+delivers. Before this the conversation was over, permanently, with both machines healthy.
+
+**The trigger is the send and nothing else.** No timer, no background rebuilder. That is the
+`REDIAL-1` discipline and Andre's tenet arriving at the same rule from two directions: a rebuilder
+running on its own would hold a dialable endpoint open for a session nobody is using.
+
+**A session that cannot come back still refuses, and now says which kind it is:**
+- `session_terminal` — it has ended; its identity was destroyed with it.
+- `session_identity_lost` — the keypair died with a daemon restart. **This is the one an operator
+  most needs named.** It means waiting for a reconnect is pointless and the session should be closed
+  for its receipt (`RESTART-SEAL-1` does that automatically). Minting a fresh identity here would
+  have "worked" while handing the session a second peer id the counterparty has never seen — a
+  silent one-way session.
+
+**The wiring is pinned by a source assertion.** Every behavioural test drives the manager directly,
+so deleting the hook from the send handler left all four green — the same gap the first half had, in
+a new place. The revert test now fails with the file named.

@@ -705,7 +705,13 @@ description: >
   configurable security setting, never a transport side effect), and **a session the receiver has
   closed must not accept new messages, whatever the sender does.** Also correct the **four drifted
   comments** claiming the receiver is rebuilt on every signaling reconnect — it is not; the ensure
-  no-ops on a healthy receiver, and only a lost relay reservation rebuilds it. — ❌
+  no-ops on a healthy receiver, and only a lost relay reservation rebuilds it. — ✅ `c4f6143` +
+  `f45cd18` (cello-client), reviewed, all ten findings fixed. Case A works end to end: a laptop-close
+  session is revived by the operator's next send, at the peer id the counterparty already holds, and
+  the status returns to `active` — an edge that had never existed in either direction. The four
+  drifted comments are corrected. **Follow-on, deliberately not done:** reusing a receiver's seed
+  across a watchdog rebuild (review F7). It fixes a real one-way-send defect but requires handing one
+  identity to the reservation candidate race, which is review F1, a HIGH — see Entry 43.
 
   > ### 🔒 THE TENET THIS UNIT MUST NOT BREAK — ruled by Andre 2026-08-18
   > **"Leave nothing open that is no longer needed."** Verbatim: *"No peer ID should be used for more
