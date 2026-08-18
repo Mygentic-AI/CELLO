@@ -446,8 +446,22 @@ than noise.
   the directory. It is the obvious candidate (both sides hold reservations, and the directory is
   observably not always up — `directory.bootstrap.unavailable` recurs on 08-16), but the path has
   not been traced.
-- **What the 26 `seal_interrupted_pending` sessions are waiting for**, and why nothing retries them.
-  Some have been stuck 10 days. This is a separate defect from `interrupted` and has no exit at all.
+- ~~**What the 26 `seal_interrupted_pending` sessions are waiting for**~~ — **ANSWERED 2026-08-18,
+  measured directly against the live store.** There are now **28**, aged 0.3 to 12.8 days, one of
+  them 14 messages long. Every one of them holds a bilateral commitment
+  (`seal_interrupted_artifacts`: 28 of 28), 26 hold relay-witnessed seal leaves, and **not one has a
+  `sealed_root_hex`**. So they are not waiting for a counterparty and not waiting for a signature —
+  **both parties already signed off.** They are waiting for someone to ASK the directory to notarize
+  what was agreed, and nobody ever does: the relay stamps a chain only once both parties post a SEAL
+  ctrl leaf, and the responder never posts one.
+  `DOD-M12B-PENDING-EXIT-1` built the exit and it works — but only when an operator runs
+  `cello_close_session` on that session **by hand**, having somehow deduced they should. Nothing
+  enumerated them, because `listRestartOrphanedSessions` and `listExpiredUnrevivableSessions` both
+  filter `status = 'interrupted'`. An exit nobody is told about is not an exit.
+  `DOD-M12B-PENDING-RESOLVE-1` puts them in the same queue as the restart orphans. The safety
+  argument is written there in full: **SI-001 is not weakened**, because it forbids notarizing *"a
+  conversation nobody chose to end"* and this row exists precisely because both sides chose to end
+  it.
 - **Whether the anti-DDoS concern is real at the scale that matters**, and what mitigations
   (relay-only re-establishment, per-session caps, the close invariant above) actually buy.
 - **What happens to an in-flight session when its directory node goes away** — the relay carries
