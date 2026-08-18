@@ -230,9 +230,25 @@ sessions, still unrelated to K_local. It stops being re-minted *mid-session*, wh
 asked for — and since the peer id carries no trust claim, stabilising it within a session weakens no
 stated property.
 
-**The anti-DDoS rationale is NOT in the ADR.** Andre's reasoning — a learnable peer id lets someone
-route around the directory and flood a node directly — is real but unrecorded. It needs writing down
-properly if it is going to constrain the design.
+**CORRECTED 2026-08-18 — the rationale IS recorded, and it is not the one written here.** Andre said
+he thought this had been settled when the design was first made, and he was right; I had claimed it
+was unrecorded without looking. It is in
+[`2026-04-11_1400_libp2p-dht-and-peer-connectivity.md`](2026-04-11_1400_libp2p-dht-and-peer-connectivity.md),
+and the reason given there is **privacy, not anti-DDoS**:
+
+> *"A passive observer watching network traffic sees different Peer IDs for each session and cannot
+> correlate 'Agent X's session on Monday' with 'Agent X's session on Tuesday' without access to the
+> directory."* … *"On session end, both key pairs are destroyed. No record of the Peer IDs is
+> retained."*
+
+That distinction matters for what a per-session seed is allowed to do. Against a **passive
+correlator**, a seed that is stable within one session and unlinkable across sessions gives up
+nothing — the observer already correlates a single session by watching its connection. Against
+**flooding**, secrecy of the id was never the control anyway: libp2p's Noise handshake proves
+possession of the private key, so a learned id is an address, not a credential. The exposure is the
+open connection and the reachable endpoint, which is why Andre's 2026-08-18 tenet attacks it as
+*"leave nothing open that is no longer needed"* and why `REVIVAL-BOUND-1` bounds the window rather
+than trying to keep an id secret.
 
 **Andre's ruling on scope:** *"if you keep a seed, the seed must be related to the session. Not the
 agent."* A per-agent seed would produce one permanent peer id for everything that agent does, which
