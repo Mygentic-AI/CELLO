@@ -48,6 +48,27 @@ NULL cause is documented as a reason not to notarize.
 **RETRACTED:** the old "blocked on Andre for two pre-auth tokens" line. Andre asked why throwaway
 agents were needed at all; they were not. Use the existing agents.
 
+### 🔴 NEXT ACTION — RE-RUN THE LIVE TEST. Everything else is secondary.
+
+The daemon Andre runs is the LOCAL BUILD, not npm:
+```
+cello logout
+node /Users/andrep/Documents/code/cello-client/core/cli/dist/bin/cello.js login
+```
+That loop is `pnpm run build` here → those two lines there → test. **No publish, no promotion during
+testing** — promotion is once, at the end. Back to npm with a plain `cello logout && cello login`.
+
+**Test 1 procedure** (a fresh session EVERY run — a daemon restart destroys the old session's
+identity, which is correct behaviour and confounded two earlier rounds):
+1. Coder_1 opens a session, sends message 1.
+2. Miss_Chelly replies once — baseline.
+3. Miss_Chelly: `cello_set_agent_offline`, then `cello_use_agent` — the break.
+4. Miss_Chelly sends once, no retry. **That send is the measurement.**
+
+**What settles case A: DELIVERY TIME on the revived session.** Three minutes before the relay-witness
+fix; seconds if it is right. A send that reports `dispatched_to_relay` is a pass on the send half
+only — the message must also ARRIVE.
+
 ### DONE THIS SESSION
 
 - `DOD-M12B-REVIVAL-BOUND-1` — ✅ `decd43e` (cello-client). An interrupted session that can never be
