@@ -2771,3 +2771,72 @@ None of these would have failed a test run. All of them are the shape the gate e
 
 `pnpm run test` **exit 0** — **3845 passed / 11 skipped** · lint / **typecheck across six packages'
 tests** / build **exit 0**.
+
+---
+
+## Entry 40 — What 08-14 actually was: you cannot lose a reservation you were never granted (2026-08-18)
+
+Andre's morning hypothesis was that the **1,361-rejection spike on 08-14** was document-collaboration
+work landing on main. **The data says no, and the real answer is better** — it is a defect that was
+fixed last night without knowing it explained this.
+
+### The doc hypothesis does not fit
+
+| day | doc delivery sweeps | doc reconcile | relay rejections |
+|---|---|---|---|
+| 08-08 | 1,324 | 0 | 30 |
+| 08-09 | 1,311 | 0 | 49 |
+| **08-14** | **928** | **0** | **1,361** |
+| 08-15 | 1,334 | 0 | 359 |
+| 08-16 | 567 | 949 | 35 |
+
+Document delivery on 08-14 was **lower** than on 08-08, 08-09 or 08-15, and reconcile had not started
+(it begins 08-16). The busiest document days are the quiet rejection days.
+
+### What DID spike: standing-receiver rebuilds
+
+**All 1,325 `session.node.created` events on 08-14 were standing-receiver builds** — 502
+`CELLO_Coder_1`, 482 `Miss_Chelly`, 341 `CELLO_Support`. Three agents, ~450 rebuilds each, spread
+evenly from 00:00 to 20:00. That is a **loop**, not a burst.
+
+### The contradiction that names the cause
+
+On 08-14 the daemon logged **1,217 `reservation.lost` events, every one naming relay
+`12D3KooWJXHpnWQh`** — and **1,251 rejections from that same relay.**
+
+**You cannot lose a reservation you were never granted.**
+
+And the watchdog cannot fire otherwise: `if (!sr.hasReservation || sr.relayPeerId === undefined)
+continue`. It only reports a loss for a receiver that HAS one. So 1,217 times the receiver held a
+real circuit reservation — from the **other** relay, `12D3KooWFpvG5ksT` — while the recorded
+`relayPeerId` said `JXHp`.
+
+That is exactly `M3` from the reservation review: `reservedRelayPeerId` was read from
+`reservations.addrs[0]`, the first **candidate**, not the relay that actually granted. So:
+
+1. Candidate 0 (`JXHp`) refuses — 1,251 times that day.
+2. Candidate 1 (`FpvG`) grants. The receiver is healthy and dialable.
+3. The manager records `relayPeerId = JXHp` anyway.
+4. The watchdog asks "is there a connection to `JXHp`?" — no — and declares the reservation **lost**.
+5. Rebuild. Go to 1. **Every 30 seconds, all day.**
+
+### Why 08-14 and not 08-08, when the second relay appeared
+
+The loop needs candidate 0 to **refuse while candidate 1 grants**. Two relays have been in the pool
+since 08-08, but `JXHp` was granting then — a handful of rejections a day. **On 08-14 it started
+refusing**, and that flipped all three agents into the loop at once. 08-15 is the tail (343 builds,
+359 rejections) as it recovered.
+
+**So: the trigger was relay `JXHp` running out of slots. The amplifier was the peer-id bug.** The
+1:1 ratio of rejections to rebuilds on those two days — and on no other day — is the signature.
+
+### Both halves are addressed
+
+- The amplifier is **fixed** (`d7cc8b6`, with the candidate fallback in `0a49fb3`): the relay peer id
+  now comes from the circuit address the node actually **holds**, falling back to the candidate only
+  when that address carries no id.
+- The trigger is `DOD-M12B-RELAY-SLOTS-1`, still parked and still Andre's call — but it is now a
+  **capacity** question rather than a mystery, and a single relay running out of slots no longer puts
+  three agents into a rebuild loop.
+
+**None of this is unpublished:** the fix is in `v0.0.249`, waiting on the `latest` promotion.
