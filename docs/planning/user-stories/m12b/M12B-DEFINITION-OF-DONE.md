@@ -778,6 +778,14 @@ description: >
   boot-only scheduling never fired on a long-lived daemon (hourly now); and the boot wiring had no
   test, so the whole control could be unwired with the suite green.
 
+> ⚠️ **THE SCOREBOARD HAS DRIFTED — 2026-08-18.** 14 lines still read ❌, and at least one of them
+> is done: `DOD-M12B-SIGNAL-GUIDANCE-1` has its module (`core/adapter-claude-code/src/signal-guidance.ts`),
+> is wired into the MCP shim's `missing_signal` return, and has its own test. Others (`REDIAL-1`,
+> `RESERVATION-RETRY-1`) are referenced in shipped source too. **Do not read a ❌ here as "not
+> built" without checking the source** — and do not flip one to ✅ without the review evidence the
+> tag requires. A full reconciliation pass is owed; it was deliberately not done mid-session because
+> it is bookkeeping, not launch-blocking work.
+
 - **DOD-M12B-SIGNAL-GUIDANCE-1** [cello-client] — **the `missing_signal` error instructs the caller
   to do the wrong thing.** `cello_send` requires a `signal` PARAMETER (`over` / `standby` / `wrap`).
   Its refusal guidance says *"Every cello_send message must end with one of: [[OVER]] …"* — which
