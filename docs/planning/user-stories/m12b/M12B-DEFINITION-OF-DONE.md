@@ -617,10 +617,16 @@ description: >
   one (a reservation is held for its full TTL even after the client disconnects). **The client-side
   retry cannot fix a supply problem** — it only stops an agent being written off permanently.
   Establish: what the per-relay slot limit is, how many are actually in use, and whether the TTL plus
-  the reconnect rate means one agent occupies several slots at once. **A 1,361-rejection spike on
-  08-14** against a 15–60/day baseline is the obvious place to start — something changed that day.
-  Until this is understood, an agent behind NAT is intermittently dialable by nobody, which is the
-  floor of the product. — 🅿️
+  the reconnect rate means one agent occupies several slots at once.
+  **🔴 THE 08-14 SPIKE IS SOLVED — Entry 40, and it was not what it looked like.** All 1,325 node
+  creations that day were standing-receiver **rebuilds** across three agents, evenly spread over
+  twenty hours: a loop, not a burst. The daemon logged **1,217 `reservation.lost` naming the same
+  relay that refused 1,251 reservations** — and you cannot lose one you were never granted. The
+  reservation came from the OTHER relay while the recorded peer id named the first candidate, which
+  is the `M3` defect **fixed in `d7cc8b6` / `0a49fb3`** (shipped in `v0.0.249`, awaiting promotion).
+  **So the amplifier is gone: one relay running out of slots can no longer put three agents into a
+  rebuild loop.** What remains here is a plain capacity question rather than a mystery — and it stays
+  Andre's call because it is a fleet decision. — 🅿️
 
 - **DOD-M12B-SEAL-SILENT-DROP-1** [trustless-cello] — 🅿️ **PARKED — needs a directory fleet roll, so
   it does not ship unattended** (procedure §3a). **The directory answers a unilateral seal request
