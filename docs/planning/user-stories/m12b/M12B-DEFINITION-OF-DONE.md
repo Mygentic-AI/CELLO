@@ -564,7 +564,13 @@ description: >
   optional hook rather than something the away path inherits. **The away path GAINS the four
   refusals it never had.** Pinned by a source assertion — one file constructs a `seal_unilateral`
   frame, one registers a unilateral waiter — which was RED before the extraction, naming both files.
-  → Entry 36
+  Review: **nothing blocking.** *"The extraction is faithful, the away path's new refusals are safe,
+  and the pin has real teeth."* It verified the four refusals against the DIRECTORY's own source —
+  every carry the client now rejects, the directory also rejects, with a bare return that sends no
+  frame, which is exactly why the old path burned 30 s. Three diagnostic findings fixed: the away
+  path was dropping the guidance it had just gained, the 30 s constant was still duplicated (this
+  unit's own defect in miniature), and the pin scanned one directory while claiming a repo-wide
+  property. → Entries 36, 37
 
 - **DOD-M12B-PENDING-EXIT-1** [cello-client] — **`seal_interrupted_pending` has no exit at all, and
   `cello_close_session` refuses it by name.** Measured: **26 sessions**, idle **0.5 to 10.5 days**,

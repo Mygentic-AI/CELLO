@@ -2628,3 +2628,54 @@ field: it would keep compiling and throw at runtime. The signature takes the nam
 ### Gate
 
 `pnpm run test` **exit 0** — **3845 passed / 11 skipped** · lint / typecheck / build **exit 0**.
+
+---
+
+## Entry 37 — The extraction reviewed clean, and three things it still got wrong (2026-08-18)
+
+**Commit `608f8d8`.** Review pass on `SEAL-ESCALATE-DUP-1`.
+
+> **SPEC: FAITHFUL · NO SILENT FALLBACKS · ERRORS NAME THEIR CAUSE · TESTS HAVE TEETH ·
+> REMOVALS PROVEN**
+>
+> *"I do not think I am rubber-stamping this. The diff touches seal/crypto territory where an
+> all-clear is normally suspect, but the reason it holds up is that the extraction is textually
+> provable and the close path was already pinned by fourteen pre-existing behavioural assertions that
+> still pass… The one place I looked hardest, whether the new refusals could strand an away session,
+> resolved against the directory's own source rather than against reasoning."*
+
+**First all-clear of the night**, and it earned it by checking the one thing I was least sure of:
+whether giving the away path four refusals it never had could strand a session. Every carry the
+client now rejects, **the directory rejects too** — with a bare return that sends no frame, which is
+exactly why the old path burned 30 seconds to learn nothing.
+
+It also found a fifth improvement I had not noticed: the old away code sent an **empty carry** when
+the agent key was missing, so a missing local key surfaced as `unilateral_leaves_unavailable` — a
+reader would attribute that to relay-side leaf loss.
+
+### Three diagnostic findings, all fixed
+
+- **The away path threw away the sentence it had just gained.** Its refusals each carry the guidance
+  that tells an operator whether to retry or force-abandon, and the log is that path's **only**
+  surface. Logging the reason and dropping the sentence leaves a nameable cause with no action
+  attached.
+- **The 30-second constant was still duplicated** — the body shared, the number not. Raise one and
+  the other stays silently at 30 s: **this unit's own defect in miniature.** One exported constant
+  now, and deliberately NOT injectable for the away path, because nothing drives it and a knob with
+  no consumer is its own smell.
+- **The pin scanned one directory while claiming a repo-wide property.** Now recursive — and
+  excluding `__tests__`, which is not tidiness: the pin file contains both literal strings inside
+  its own `includes()` arguments and would otherwise defeat itself. **Verified by planting a copy in
+  a subdirectory and watching it go red naming the file.**
+
+### Recorded, not fixed
+
+The away path now also emits `session.seal.completed` alongside its own event — three emitters, zero
+readers, and counting away seals under the same name is arguably more correct. And
+`seal_carry_bilateral_in_progress`'s "wait for the bilateral seal" reads oddly on a path that only
+reaches escalation after the 660-second bilateral wait already expired. Both are wording, neither
+strands anything.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3845 passed / 11 skipped** · lint / typecheck / build **exit 0**.
