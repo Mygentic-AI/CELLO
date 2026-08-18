@@ -2948,3 +2948,85 @@ claims nothing about cause. Both stop the session accepting content; only one sp
 Filed as `DOD-M12B-REVIVAL-BOUND-1` and built next. It is AC 2 + AC 3 of `SESSION-SEED-1` — the half
 that closes the door — and it is worth building before the half that re-opens it, because the store
 already contains sessions in the unbounded state.
+
+---
+
+## Entry 42 — REVIVAL-BOUND-1: the door closes, and four ways it nearly closed wrong
+
+**Built, gated, reviewed, committed `decd43e` (cello-client).** 3,857 tests pass; lint, typecheck and
+build clean. Twelve new tests, four revert tests run.
+
+**What it does.** An interrupted session now reaches a terminal state instead of staying interrupted
+forever. Known cause (`interrupted_by = 'local'`) goes to the restart-seal resolver and earns a
+receipt; everything else is abandoned once a 24-hour revival window expires. Both stop the session
+accepting content; only one spends a directory ceremony.
+
+**Why the window is 24 hours and not zero.** It has to clear a night's sleep, or it destroys the
+laptop-close case that `SESSION-SEED-1` exists to rescue. The bound is what makes revival *safe to
+add*, not a substitute for it.
+
+### Four defects, three caught by the gate and the reviewer rather than by me
+
+**1. The expiry clock was one the attacker holds.** The first build fell back to `updated_at` for
+rows with no `interrupted_at`. But `ingestReceivedContent` accepts content into an interrupted
+session — that acceptance is this line's entire premise — and a successful ingest writes
+`updated_at = now`. So the reprogrammed peer this control exists to stop could hold the door open
+indefinitely: **one message every 24 hours and the session never expires.** The comment above the
+query asserted the opposite in as many words ("can only be older… delays a close, never hastens
+one"), which is the "comment asserting a property the code lacks" shape, in persistence code, again.
+
+Fixed by stamping `interrupted_at` **write-once** (`WHERE interrupted_at IS NULL`) and reading only
+that. The scoping is the security property, not an optimisation: the sweep can run forever and a
+row's clock still cannot be moved after the first stamp. The honest cost is that a legacy row's
+window starts at the first sweep that sees it rather than at its true interruption — a late close is
+recoverable, a clock the peer winds is not.
+
+**2. `CAST(interrupted_at AS INTEGER)` reads an ISO date as the year 2026.** `interrupted_at` is a
+`TEXT` column holding `2026-08-18T05:32:04.179Z` sitting beside an `INTEGER` `updated_at` holding
+epoch millis. A bare numeric comparison is always false (TEXT affinity is applied to the bound
+parameter, so they compare as strings). The obvious repair — cast it — is worse: SQLite casts by
+leading digits, so every ISO timestamp becomes `2026`, older than any epoch bound. **That version
+would have abandoned every interrupted session in the store on the next boot.** Two pre-existing
+tests failed and stopped it. `strftime('%s', …) * 1000` is correct, verified against the real
+driver: `Z` parsed, UTC, fractional seconds truncated ≤999 ms in the closing direction, and
+unparseable input yields NULL rather than a date.
+
+**3. Local-cause sessions had no terminus at all — and they are about to be the majority.** The two
+queries were described as complements. They were not: a session the seal resolver **gave up on**
+keeps `status = 'interrupted'` and is then excluded from retry by `restart_seal_gave_up_at IS NULL`,
+and a **zero-message** local session is one the resolver deliberately never takes. Both fell through
+the gap and stayed permanently interrupted and permanently writable. The measured figure is that
+**59% of seals that start never finish**, so this is the common path. And no row has ever carried
+`interrupted_by = 'local'` yet — from the next shutdown onward, every shutdown orphan will. The
+sweep is now the genuine backstop: it takes a local-cause session once the seal path has declined
+or exhausted it, never before.
+
+**4. Boot-only is not a bound.** The sweep ran once at startup. A session interrupted at 09:00 on a
+daemon that stays up all week was writable for the whole week — and a long-lived daemon is the
+normal case. It fired precisely when least needed. Now hourly, `unref`'d, beside the existing
+reconcile sweep.
+
+### Two more the reviewer was right about
+
+**The boot wiring had no test.** All the behavioural cases drove the manager directly, so the entire
+wiring could be deleted with 12/12 still green — the security control could be silently unwired.
+There is now a test that boots a real daemon against a real schema and asserts the row reads
+`abandoned`; deleting the call fails it. Run.
+
+**A test that passed for the wrong reason.** The ingest-refusal case passed one options object where
+`content: Uint8Array` goes and nothing where `contentHash` goes, so it only reached
+`session_committed` because the status guard runs *before* the hash would have been computed. It
+proved a malformed call is refused, which is not the claim. It now sends a well-formed message.
+
+### One thing that needs Andre, and it is a real trade
+
+**Abandoning costs a receipt that is obtainable today.** Until this sweep runs, an operator can run
+`cello_close_session` (without `force`) on an interrupted session days later and still get a seal —
+the handler accepts `status IN ('active','interrupted')`. After the sweep, they cannot:
+`session_abandoned` is terminal. So a counterparty who closes their laptop on Friday and comes back
+Monday costs the operator a receipt they would have had.
+
+Auto-sealing those instead is **not** the answer — SI-001 forbids notarizing a conversation nobody
+chose to end, and that decision stands. The open question is only the **window for the
+counterparty-caused case**: 24 hours, or longer. The sweep now logs the forfeit by name when it
+closes one, so the cost is visible either way. Flagged, not guessed.
