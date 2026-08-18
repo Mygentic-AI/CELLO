@@ -898,7 +898,18 @@ description: >
   asks "anything changed?" on a fixed interval regardless of whether anything has. Ruled: sync
   fires on an actual pending change, never on a bare timer. No pending edit, no frame, no
   position consumed. Cheaper than SEQUENCE-SEPARATE-1 — no receipt-shape consequence — and closes
-  the reason the sweep runs at all rather than only where its output lands.
+  the reason the sweep runs at all rather than only where its output lands. — 🟡 BUILT + REVIEWED,
+  gates green, NOT YET PROVEN LIVE → Entry 62
+  > The suppressor was a belief with a TEN-MINUTE EXPIRY, so silence itself made it ask again —
+  > measured live at 60 sweeps/hour against 30 dormant test documents. Now: speak only for a
+  > holding the party has not confirmed, and an unchanged holding doubles its silence to the
+  > 15-minute cap. One review pass, 6 findings + 3 test gaps, all fixed; the refusal backoff is
+  > structurally un-steppable and now pinned. cello-client `057a2dd`, trustless-cello `f60df883`.
+  > **Owed for ✅:** the publish cascade, then the live fleet — the spine runs against the
+  > PUBLISHED client and cannot exercise this until it ships.
+  > **Does NOT cover:** a session coming up still reconciles every shared document into that
+  > conversation's sequence line (`onReachable` must, or nothing pulls). SEQUENCE-SEPARATE-1 is
+  > what makes that stop costing anything.
 - Both are M12B's finding, filed here because the defect is a document-sync mechanism, not a
   session-revival one — M12B's three cases (A/B/C) are otherwise complete and proven live
   (`M12B-BUILD-JOURNAL` Entries 44/45/48). See that journal's Entry 47–48 discussion for the

@@ -3430,3 +3430,140 @@ delivery-ledger reasoning applied to a system that has none, a refusal assumed t
 path it does not touch, a forward credited for an arrival that had already happened. Each survived
 because the evidence was consistent with it, not because the evidence selected it. A probe that
 isolates one step selects.
+
+## Entry 62 — DOD-DOC-PUSH-NOT-POLL-1: dormant documents stop spending a conversation's sequence numbers
+
+**Date:** 2026-08-18 · cello-client `13af392` → `8363349` → `057a2dd` (branch `m14b/doc-push-not-poll`)
+· trustless-cello `f60df883`
+
+First unit after M12B closed. Andre's ranking put it first: cheapest, no receipt-shape
+consequence, and it stops the bleeding on its own.
+
+### Measured before touching anything
+
+The daemon log, live, still running at the time of the reading: **60 `document.reconcile.sweep`
+lines an hour** in each of the 16:00 and 17:00 hours — the 120-second timer, two agents, every
+tick carrying 1–2 parties. `cello doc list` across the three agents:
+
+| agent | documents | how the peer read |
+|---|---|---|
+| CELLO_Coder_1 | 18 | 12 `in_sync` (last exchange days old), 1 `behind`, 2 `unseen` |
+| Miss_Chelly | 8 | 4 `in_sync`, 2 `behind`, 3 `unseen` |
+| CELLO_Support | 4 | 5 `behind`, 2 `unseen` |
+
+Every one a test document. None created that day.
+
+**The mechanism, and it is not the one the DoD line's wording suggests.** The suppressor was a
+BELIEF WITH AN EXPIRY: skip a party only while *every* shared document reads `in_sync` **and** was
+exchanged within ten minutes. Both halves have to hold, for all of them. One stale timestamp — and
+the freshest was days old — kept a whole party and all fourteen of its documents sweeping every
+120 seconds forever. So the line's "the sweep asks on a fixed interval regardless of whether
+anything has changed" is exactly right, and the reason is that the belief expires.
+
+### What was built
+
+`pendingFor(owner, document, party)` in the layer: what we hold that this party has not confirmed
+receiving, as a fingerprint. `null` = nothing. The scheduler speaks only when it is non-null, and
+an *unchanged* holding is offered once and then doubles its silence to the same 15-minute cap —
+because `allOk` only ever proved the frame went out, never that the party acted on it, which is
+how an invitation nobody accepts was re-offered on every single tick.
+
+`RECONCILE_BELIEVED_CURRENT_MS`, the `believedCurrentMs` dep, and the
+`CELLO_DOCUMENT_RECONCILE_CURRENT_MS` env knob are gone. `partySync`'s `behind` is now a
+projection of the same computation, so the list surface and the sweep cannot disagree.
+
+**Two deadlines, not one, and the separation is the guarantee.** `nextAttemptMs` is armed by a peer
+failing or refusing and is checked ABOVE the pending computation, so nothing can step over it —
+`DOD-SYNC-REFUSAL-BACKOFF-1` is untouched. `quietUntilMs` is armed only by us having nothing new to
+say, and a real change may step over that one. The ORDER of those two blocks is the whole
+guarantee, and a test now pins it.
+
+### The trades, all three stated in the code header
+
+1. `pendingFor` sees only what we hold that they lack, never the reverse, so removing the expiry
+   removes the timer-driven PULL. It moves onto the two triggers that are events rather than
+   clocks: their publish nudges us, and `onReachable` sweeps everything when a session comes up.
+   `onReachable` is deliberately exempt from the pending gate — gate it too and nothing ever asks.
+2. A removed holder is in neither the participants nor the invited set of the remover's derived
+   state, so the REMOVER never sweeps to them: no push, no nudge in that direction. Their primary
+   notice is the parked frame; the backstop was their belief expiring and earning the terminal
+   `document_reconcile_removed`. That backstop now waits for their next write or their next
+   session. This WIDENS the gap DOD-SYNC-P6 already names under "R32's terminal-refusal delivery
+   is not exercised by the enforcers" — it opens no new one, and forbids nothing.
+3. The frame carries every shared document, not only the pending ones (review F2, below).
+
+### Review — `cello-unit-reviewer`, one pass, six findings, all fixed
+
+Quoted verdicts: **"SPEC: FAITHFUL"** · **"NO SILENT FALLBACKS"** · **"ERRORS NAME THEIR CAUSE"** ·
+**"HOLLOW TESTS FOUND"** · **"UNPROVEN REMOVAL"**.
+
+**F1 (HIGH) — the removal was proven in one workspace only.** *"`CELLO_DOCUMENT_RECONCILE_CURRENT_MS`
+was declared dead on a single-workspace grep. It is set in three places in `trustless-cello`, one
+of which (`PROD_SWEEP_FAST_BELIEF`) is now an empty object silently changing what a spine journey
+tests."* Journey 3 believed it ran with a 5-second belief window and in fact ran with no belief
+mechanism at all — *"which is the worst kind of green."* Deleted rather than emptied, comments
+rewritten to the current rule. **Caveat carried: the spine suite needs the real fleet and was not
+run; lint and typecheck are what is green. It also runs against the PUBLISHED client, so it cannot
+exercise any of this until the cascade ships.**
+
+**F2 (HIGH) — my narrowing removed the pull for zero saving, and the reviewer proved it rather than
+asserting it.** I had the frame carry only the pending documents. The responder pushes a reply
+block *only* `if (hasDifference || answer.peerAhead)`, and a block carries positions only — so
+carrying every shared document in a frame already being sent costs **zero extra frames and zero
+extra positions on either side**, while restoring the pull for all of them. The gate belongs on the
+decision to speak, not on the frame's contents. Fixed.
+
+**F3 (MEDIUM) — one guaranteed duplicate frame per session establishment.** `onReachable` sent
+everything then set `lastPendingSignature = null`, so the next tick found no record of the offer,
+treated an unchanged holding as new, and spent another position — *"exactly the currency the DoD is
+defending."* It now records what it offered while still resetting both ladders.
+
+**F4 (MEDIUM) — my mitigation claim was false for one case.** I wrote that the lost pull is covered
+by the peer's publish nudge. The reviewer showed from `sweepTargets` that the remover never sweeps
+to a removed holder at all, so there is no nudge in that direction. Trade 2 above is that finding,
+written into the header.
+
+**F5 (LOW) — `skippedBackoff` counted two unrelated causes.** *"An operator reading
+`skippedBackoff: 3` will go looking for peer refusals, when the truth may be 'three quiet
+parties.' This unit exists because someone had to diagnose sweep traffic from these logs."* Split
+into `skippedQuiet`.
+
+**F6 (LOW)** — `partySync` read the party-view row twice per call, on a surface that walks every
+party of every document. One shared inner function now.
+
+**Test teeth — the finding that matters most.** One of five new tests failed the revert test
+(`onReachable still asks about EVERYTHING` passes against the pre-change scheduler too — it
+documents a preserved invariant, and is now named as a regression guard). And **two behaviours this
+diff added had no coverage at all: delete them and all 3919 tests stay green** — `onReachable`'s
+state resets, and the claim I explicitly asked the reviewer to check, that a new pending change
+never steps over a refusal backoff. Both now pinned. The second matters beyond this unit: an
+optimisation that computes the holding before the state lookup reorders those two blocks and
+silently reopens the 321-refusals-in-85-minutes defect with every test green.
+
+Also caught by reading my own diff before the review landed: splitting the comparison out left
+`partySync`'s doc block sitting above `pendingFor` and `partySync` with none — a comment asserting
+a property the code beneath it did not have, which is the shape that has hidden five defects in
+this codebase. Fixed in `8363349`.
+
+### Gates
+
+cello-client at `057a2dd`: **3921 tests pass**, 11 skipped, lint, typecheck and forced build all
+green, exit codes read rather than tails. `partySync` absent from `core/daemon/dist/` (`.js` and
+`.d.ts`) — the reviewer checked the declaration file too, which matters because the removed symbol
+was an export and a stale declaration would keep the other repo type-checking against a knob that
+no longer works. trustless-cello at `f60df883`: lint and typecheck green.
+
+### What this does NOT fix, and where it goes next
+
+A session coming up still reconciles every shared document into that conversation's sequence line —
+`onReachable` must, or nothing pulls. So opening a real chat still spends positions on dormant
+documents. **`DOD-DOC-SEQUENCE-SEPARATE-1` is what removes that cost**, and it is next: document
+frames stop taking positions in the tree the seal signs, so their count stops mattering.
+
+Andre's standing observation, recorded because it is the general rule behind both lines: *"things
+that are dormant that nobody's working on, that nobody's changing, are causing cascades of events
+to flow through the system… that must stop."*
+
+**Open and cheap:** all 30 documents are test data. Ending them drops them from `sweepTargets`
+entirely — an ended document contributes no targets from either trigger, on the version already
+running. Offered; Andre's data, so not done.
