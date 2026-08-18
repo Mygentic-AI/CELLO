@@ -2840,3 +2840,36 @@ refusing**, and that flipped all three agents into the loop at once. 08-15 is th
   three agents into a rebuild loop.
 
 **None of this is unpublished:** the fix is in `v0.0.249`, waiting on the `latest` promotion.
+
+### The 08-14 trace, because "does the hypothesis fit?" deserved better than inference
+
+Andre pushed on Entry 40's reasoning. It holds, and one hour of the log shows **both** defects
+side by side. Verbatim sequence, three agents in lockstep:
+
+```
+13:16:54  REJECT 12D3KooWJXHp          ← first candidate refuses. FpvG is NOT rejected.
+13:16:56  BUILD → circuitAddrs=5       ← so the OTHER relay granted. The receiver is healthy.
+13:17:19  LOST relay=12D3KooWJXHp      ← 23s later, one watchdog tick, naming the relay that REFUSED
+13:17:24  REJECT 12D3KooWJXHp
+13:17:26  BUILD → circuitAddrs=5       ← and round again, every ~30 seconds
+```
+
+**You cannot hold a live reservation with a relay that refused you two seconds earlier.** The node
+had five circuit addresses; the recorded `relayPeerId` named the one that said no. That is `M3`
+exactly — the id read from `reservations.addrs[0]`, the first *candidate*, rather than from the relay
+that granted.
+
+**This rules out the alternative** worth taking seriously: a flapping relay that genuinely granted
+and genuinely dropped would produce a similar count of losses, but not a grant in the same second as
+its own refusal.
+
+The same hour shows the second defect, the one `RESERVATION-RETRY-1` fixes:
+
+```
+13:01:23  REJECT JXHp
+13:01:23  REJECT FpvG                  ← BOTH refuse
+13:01:23  BUILD → circuitAddrs=0       ← plain TCP: dialable by nobody behind NAT
+          (no LOST follows — the watchdog skipped it, which is why nothing ever retried)
+```
+
+Both are fixed and both are in `v0.0.249`.
