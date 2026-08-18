@@ -100,19 +100,24 @@ const FAST_SWEEP = {
   // signaling settles, and the production 30s-doubling ladder walks a 3s-sweep test out of
   // its window while looking exactly like "the exchange is broken".
   CELLO_DOCUMENT_RECONCILE_BACKOFF_MS: "2000",
-  // And the believed-current window: a removed holder learns ONLY from its own next
-  // unsuppressed exchange (R32's designed recovery), and the production 10-minute belief
-  // outlasts any test.
-  CELLO_DOCUMENT_RECONCILE_CURRENT_MS: "5000",
 };
 
 /**
- * Journey 3's cadence: PRODUCTION sweep and backoff (its first half is the nudge-latency
- * proof, AC5 — convergence inside the wait proves the nudge because the sweep could not have
- * fired), but a short believed-current window: suppression pacing is orthogonal to the nudge,
- * and the removal phase depends on the removed holder's own next exchange.
+ * THERE IS NO BELIEVED-CURRENT WINDOW ANY MORE, and no knob that pretends otherwise.
+ *
+ * `CELLO_DOCUMENT_RECONCILE_CURRENT_MS` used to shorten a 10-minute belief so a suppressed party
+ * would be asked again inside a test's budget. DOD-DOC-PUSH-NOT-POLL-1 deleted the belief itself:
+ * the sweep now speaks when it HOLDS something the party has not confirmed, and stays silent
+ * otherwise however long it has been. A `PROD_SWEEP_FAST_BELIEF` constant survived that deletion
+ * here as an EMPTY-EFFECT object — three journeys spreading a variable the daemon ignores, still
+ * green, for a reason their own comments denied. That is why the constant is gone rather than
+ * emptied.
+ *
+ * WHAT THIS CHANGES FOR THE REMOVAL PHASE: a removed holder's primary notice is the parked frame,
+ * which is untouched. Its backstop was the belief expiring and asking anyway; the backstop is now
+ * that holder writing, or a session coming up. Journeys that depended on the belief expiring must
+ * make something pending or open a session, not wait.
  */
-const PROD_SWEEP_FAST_BELIEF = { CELLO_DOCUMENT_RECONCILE_CURRENT_MS: "5000" };
 
 interface Party {
   name: string;
@@ -613,7 +618,10 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       // silently converted this into a sweep test still claiming to prove the nudge.
       const PRODUCTION_FIRST_SWEEP_MS = 120_000;
       const bootedAt = Date.now();
-      const [a, b, c] = (await parties("mpfan", 3, PROD_SWEEP_FAST_BELIEF)) as [Party, Party, Party];
+      // Production cadence throughout — no overrides at all. The belief window this journey used
+      // to shorten no longer exists (DOD-DOC-PUSH-NOT-POLL-1), and the AC5 premise above only
+      // ever needed the sweep to be SLOW, which production already is.
+      const [a, b, c] = (await parties("mpfan", 3, {})) as [Party, Party, Party];
       await connect(a, b);
       await connect(a, c);
 
@@ -721,7 +729,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
 
       // ── RESTART THE PUBLISHER: pending must be derived from the LOG, not held in memory. ──
       await a.daemon.stop();
-      const aRestarted = await startLocalDaemon(a.celloDir, "mpfanA2", { ...FAST_SWEEP, ...PROD_SWEEP_FAST_BELIEF });
+      const aRestarted = await startLocalDaemon(a.celloDir, "mpfanA2", FAST_SWEEP);
       daemons.push(aRestarted);
       a.daemon = aRestarted;
       const connA2 = await connectMcp(a.celloDir, "mpfan-A2");
@@ -739,7 +747,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
       ).toBe("behind");
 
       // ── C COMES BACK and converges with ZERO agent attention on any side. ──
-      const cRestarted = await startLocalDaemon(c.celloDir, "mpfanC2", { ...FAST_SWEEP, ...PROD_SWEEP_FAST_BELIEF });
+      const cRestarted = await startLocalDaemon(c.celloDir, "mpfanC2", FAST_SWEEP);
       daemons.push(cRestarted);
       c.daemon = cRestarted;
       const connC2 = await connectMcp(c.celloDir, "mpfan-C2");
