@@ -3006,3 +3006,89 @@ Auto-sealing those instead is **not** the answer — SI-001 forbids notarizing a
 chose to end, and that decision stands. The open question is only the **window for the
 counterparty-caused case**: 24 hours, or longer. The sweep now logs the forfeit by name when it
 closes one, so the cost is visible either way. Flagged, not guessed.
+
+---
+
+## Entry 43 — SESSION-SEED-1: case A is built, and ten review findings on the way
+
+**Committed `c4f6143` (cello-client).** 3,874 tests pass; lint, typecheck and build clean. Fourteen
+new tests across three files, all inside the typecheck foothold. Five revert tests run.
+
+### What the operator gets
+
+A session interrupted by a laptop close or a network drop can now be brought back — on the **same
+peer id the counterparty already holds**, so they need to be told nothing and their stored dial
+target stays correct. Before this, such a session was permanently stuck.
+
+**The cause was not what §5 first assumed.** There was no missing transport capability. Both
+processes stay alive across a laptop close and both keypairs stay in memory; the only thing lost is
+a TCP connection. What was missing was an edge: `markInterruptedWithDetails` and `destroySessionNode`
+stop the node and delete it, and **nothing anywhere recreated one**.
+
+**Two edges, and building one alone changes nothing.** The node has to come back at the same id, or
+the counterparty can never dial us. And the status has to return to `active`, or every send still
+refuses with `session_not_active` — no code path had ever moved a session back to `active` in either
+direction.
+
+**Andre's tenet holds structurally, not by convention.** A seed is minted with each standing
+receiver; at handoff it becomes that session's and the replacement mints its own. So no identifier
+is ever shared between two sessions. The April rationale survives exactly: the id is stable *within*
+one session (which an observer already correlates by watching the connection) and unlinkable
+*across* sessions. Revival is demand-driven — nothing re-opens on a timer — and a terminal session
+refuses by name rather than quietly minting a second identity.
+
+### The three findings that mattered
+
+**1. One peer id on two live nodes.** Every candidate in the reservation race was built from the
+same seed, and a rejected candidate is stopped with an unawaited call while its `start()` may still
+be in flight. So two libp2p nodes could briefly hold **one advertised peer id** — and the loser
+shares the same gater object, so it *admits* dials, while having no content handler registered.
+Inbound arriving there goes nowhere, and it is an open endpoint under the identity we publish in
+`session_offer_accept`. Before seeds existed the loser had its own random key and was harmless;
+introducing a shared seed is what would have made it dangerous. Each candidate now mints its own,
+and the winner's seed is returned with it.
+
+**2. A revoked agent kept live keys.** The identity was destroyed only *after* the status write
+landed — and that write throws for a retired agent, so every terminal write for a revoked agent fell
+into the catch and its transport identity was held for the life of the process. Nothing reported it,
+and `REVIVAL-BOUND-1`'s sweep skips retired agents, so nothing else closed it either. Coupling a
+security teardown to a database write is backwards: the write can fail, and that is exactly when a
+live key must not be lying around. Destruction now happens on terminal **intent**, and a failed
+write now says the identity is already gone rather than leaving it to be inferred from a missing
+debug line.
+
+**3. `seal_interrupted_pending` was treated as revivable.** It is not. `ingestReceivedContent`
+refuses that status, and **both** sweeps that could otherwise close a session filter on
+`status = 'interrupted'` — so those sessions were unrevivable *and* unswept, holding their
+identities until the process exited. Entry 42's own measurement is that **59% of seals that start
+never finish**, so this was the common path, not a corner.
+
+### Three more worth recording
+
+- **Shutdown clears plaintext but not key material.** `gracefulShutdown` explicitly clears the
+  transcript and content caches because plaintext must not survive in memory, and left every seed
+  untouched. Both maps are now zeroed there.
+- **The zero-fill comment claimed a heap scrub it does not perform.** Checked against the
+  derivation rather than assumed: `@libp2p/crypto` *copies* the seed, so zeroing after start is safe
+  — but an identical usable copy lives on the node object. What the zero actually removes is *our*
+  long-lived copy, the one that would otherwise sit in a map decoupled from any node. Worth doing,
+  and now described accurately.
+- **The AC1 test never exercised the promotion it was named after.** It used
+  `removeStandingReceiverForAgent` + re-ensure, a different transition. Deleting the release from
+  the real promotion — which makes the next session on that agent reuse the peer id, breaking AC1
+  outright — left it green. Rewritten to drive a real promotion; the revert test now bites.
+
+**The typecheck foothold earned its keep immediately.** Adding the new files surfaced a teardown
+calling `shutdown?.()` on a manager whose method is `gracefulShutdown` — the optional-call swallowed
+it, so `afterEach` silently did nothing — and a source string passed into a `messageCount`
+parameter. Both invisible to a green vitest run.
+
+### Deliberately NOT done, with the reason
+
+**Reusing a receiver's seed across a watchdog rebuild** (review F7). It would fix a real, documented
+defect — a receiver rebuilt after its id is already inside a `session_offer_accept` makes every send
+in that direction park forever. But the preserved identity would have to be handed to the candidate
+race, which is finding 1 above, a HIGH. Doing it properly means bounding and awaiting the loser's
+teardown first, and an unawaited stop is exactly what the current code chose in order to keep a
+stuck libp2p teardown from blocking receiver creation. **Filed as follow-on rather than trading a
+MEDIUM fix for a HIGH regression.**
