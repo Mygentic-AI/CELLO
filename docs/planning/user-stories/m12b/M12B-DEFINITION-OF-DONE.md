@@ -558,7 +558,13 @@ description: >
   exists and was not extracted.** `daemon.ts`'s away/one-shot path is a line-for-line duplicate of
   `escalateToUnilateralSeal`, with a hardcoded 30 s and its own waiter registration. Every future fix
   to the helper — including the local carry pre-check and the ctrl-leaf recovery just shipped — will
-  miss it. Fold it into the helper. — ❌
+  miss it. Fold it into the helper. — 🟡 **BUILT 2026-08-18** (`ba7942c`, `6803ba0`), review in
+  flight. The body lives in `seal-escalation.ts` and both callers share it; the one
+  close-handler-specific behaviour (evicting the cross-node broker entry on a completed seal) is an
+  optional hook rather than something the away path inherits. **The away path GAINS the four
+  refusals it never had.** Pinned by a source assertion — one file constructs a `seal_unilateral`
+  frame, one registers a unilateral waiter — which was RED before the extraction, naming both files.
+  → Entry 36
 
 - **DOD-M12B-PENDING-EXIT-1** [cello-client] — **`seal_interrupted_pending` has no exit at all, and
   `cello_close_session` refuses it by name.** Measured: **26 sessions**, idle **0.5 to 10.5 days**,

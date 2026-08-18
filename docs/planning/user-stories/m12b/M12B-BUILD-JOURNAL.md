@@ -2587,3 +2587,44 @@ is directly dialable should read `direct` and should never start the ladder.
 **Deferred deliberately, not forgotten** — it needs checking against the demo agent's actual
 configuration, and inventing that at the end of an overnight run is the rabbit hole the procedure
 names.
+
+---
+
+## Entry 36 — One escalation, not two (2026-08-18)
+
+**Commits `ba7942c`, `6803ba0`.** `DOD-M12B-SEAL-ESCALATE-DUP-1`, carried from the escalation review.
+
+`daemon.ts`'s away/one-shot path was a **line-for-line duplicate** with its own hardcoded 30-second
+timeout and its own waiter registration. Every refusal this milestone added landed in the other copy
+and **not** in it:
+
+- the empty carry — the relay released the session, nothing to notarize from;
+- the gappy chain — a witnessed leaf that never arrived;
+- **two of our own ctrl leaves** — the permanently-unsealable case;
+- a bilateral seal already running — where asking for a unilateral one takes the worse receipt.
+
+For each of those the away path sent a request the directory refuses **silently**, waited out the
+full timeout, and reported `seal_unilateral_timeout` — the label that names our own wait, which is
+this milestone's founding error-fidelity defect. **Four fixes it never received, and nothing would
+have told anyone.**
+
+### Pinned by source, and argued rather than assumed
+
+The property is *"one implementation exists"*, which is a property of the source and not of any
+behaviour a single test could observe — and a behavioural test for the away one-shot needs the whole
+inbox flow stood up to reach four lines. `startup-ordering.test.ts` makes the same argument for the
+same reason. The pin also covers **who registers a unilateral waiter**, because a second registrant
+is exactly how the agent-scoped key from `SEAL-WAITER-KEY-1` would get forgotten in one copy.
+
+**The pin was RED before the extraction**, naming both files.
+
+### And a cast removed before it could bite
+
+The away path holds no `SessionRecord`, so the first cut passed `{agent_name, session_id} as
+SessionRecord`. I checked which fields the shared body actually reads — **only `agent_name`** — so
+the cast bought nothing except a latent crash the first time someone in there reaches for a third
+field: it would keep compiling and throw at runtime. The signature takes the name now.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3845 passed / 11 skipped** · lint / typecheck / build **exit 0**.
