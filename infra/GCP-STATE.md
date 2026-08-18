@@ -239,6 +239,58 @@ unrelated set — **no relay resource appears**. Since `terraform plan` is this 
 (procedure §5), that is the authoritative confirmation the relay deploy is fully applied, not a claim
 from this document.
 
+## 🔴 RECURRING — the relay's directory connections rot in ~24h and SEALING STOPS (2026-08-18)
+
+**Both relay CONTAINERS restarted 2026-08-18 ~20:45 UTC** (`docker restart cello-relay`, one region
+at a time, health 200 + `relay.service.started` + `relay.already.registered` verified between).
+No instance replacement, no image change, no Terraform. Instances stay `cello-gcp-relay-use1-h73m`
+/ `cello-gcp-relay-euw1-z5d9`, both created 2026-08-08.
+
+**A restart is a WORKAROUND on a ~24-hour clock. Expect this again tomorrow.**
+
+### The symptom, which does not look like a relay fault
+
+Sealing fails; ordinary messaging is perfect. Messages pass THROUGH the relay, but notarizing needs
+the relay to make an OUTBOUND call to a directory, and that is the connection that dies. So a
+conversation is flawless until the moment anyone asks for a receipt — then both parties block for
+the full 11-minute bilateral window, escalate to a unilateral seal, and the directory correctly
+refuses that too (`unilateral_root_unverifiable`: the unilateral path requires exactly ONE ctrl leaf
+and both parties had sealed). Nobody gets a receipt and nothing names the relay.
+
+### The evidence — process age against seals, on one clock
+
+| relay process | age at noon | `relay.directory.connection.stale` /hr | seals that day |
+|---|---|---|---|
+| restarted 2026-08-15 15:16 | ~21h on 08-16 | 134 | working |
+| **restarted 2026-08-17 11:23** | 37 min on 08-17 | **0** | **65 completed** |
+| same process | ~25h on 08-18 | 225 | 1 bilateral, all day |
+
+The `euw1` container read `Up 33 hours` at restart time — the 08-17 process, degraded again.
+
+The discriminating log line is `relay.seal.broker.unreachable`. Present → `relay.seal.rejected
+connection_lost: The connection muxer is "closed" and not "open"`. Absent → certificate built,
+delivered, `notarization.recorded`, ~7 s. Twelve rejections on 2026-08-18 against one bilateral
+success (13:11).
+
+**Proven by the fix:** a cross-machine seal immediately after the restart returned
+`sealed_root 42d671a2c1eeaefa…` with both parties `attestation_mode: live`.
+
+### Why the existing mitigation does not hold
+
+`0d9568a5` (2026-08-08) added redial-and-retry-once plus a 30 s directory probe for this exact
+failure. Both are running. The relay logs `relay.directory.connection.stale` **~220 times an hour**
+with `action: "redialling and retrying once"` and the seal still fails, so **the redial is not
+replacing the dead connection object** — the error is a cached muxer, not a failed dial. The static
+IPs are correct and attached to the live instances, so the address is never the problem.
+
+**Owed as a code fix in `packages/relay`, not another restart:** `#maybeProcessSeal` →
+`processSeal` must obtain a live connection, and the reconnect path must drop the dead handle rather
+than log around it. Until then this recurs daily.
+
+**Not caused by:** the 2026-08-16 directory roll (seals worked all of 08-17 after it), any
+cello-client build (0.0.178 was ruled out — the same failure predates it by hours), documents, or
+two agents sharing one daemon. Each was checked and excluded on evidence.
+
 ## 🟢 CURRENT — node heap ceiling raised + memory sampler, ALL 3 ROLLED (2026-08-16)
 
 **No image change** — this is a cloud-init/instance-template change only. Directory stays on
