@@ -33,10 +33,13 @@ restart one, close. **Assert on the session's STATUS, not only the certificate**
 
 Then, in the order the evidence supports:
 1. `DOD-M12B-ANNOUNCE-BLINDS-RESERVATION-1` — a publicly-hosted agent's GRANTED reservation is
-   invisible, so it falls back to plain TCP. The code names the EC2 demo agent as that case.
-2. `DOD-M12B-TESTS-NOT-TYPECHECKED-1` — a TS2554 shipped through a gate reporting exit 0 during this
-   very milestone. Cheap, and it closes a whole class.
-3. `DOD-M12B-SEAL-ESCALATE-DUP-1` — the third copy of the escalation, which misses every fix.
+   invisible, so it falls back to plain TCP. **🔴 Blocked on having a real NAT'd-or-EIP agent to test
+   against** — both candidate fixes change behaviour that cannot be judged from here.
+2. `DOD-M12B-TESTS-NOT-TYPECHECKED-1` — five of seven packages covered; transport (33),
+   protocol-types (85) and the daemon's older tests (339) remain. Mechanical, and each one closes
+   real holes: the adapter's four turned out to be tests running a branch production cannot reach.
+3. `DOD-M12B-SESSION-SEED-1` (case A) — still ranked last of the buildable work: its trigger fired
+   **zero** times in 17 days while everything above it was measured.
 3. `DOD-M12B-SESSION-SEED-1` (case A/B) — **deliberately ranked BELOW the above**: its trigger fired
    **zero** times in 17 days, while the reservation defect fired 481. Still real for an operator who
    leaves the daemon up for days; not what is hurting now. Entry 30 has the reasoning.
@@ -53,10 +56,10 @@ directory.
 ### REPO STATE — 2026-08-18, end of the overnight run
 | | |
 |---|---|
-| cello-client `main` | **`v0.0.248` cascade** — clean, pushed. Gate: test/lint/typecheck/build all **exit 0**, **3838 passed / 11 skipped**. |
+| cello-client `main` | **`96fd178`** (two commits past `v0.0.249`; both are test/build config and ship nothing) — clean, pushed. Gate: test/lint/typecheck/build all **exit 0**, **3838 passed / 11 skipped**. |
 | trustless-cello `main` | clean, pushed. |
 | **`latest` (what Andre is RUNNING)** | daemon **`0.0.170`**, cli **`0.0.177`** — ranks 1–11 only. **Nothing from the overnight run is on his machine.** |
-| **`beta` (published, NOT promoted)** | tag **`v0.0.248`** → daemon **`0.0.174`**, cli **`0.0.181`**. Supersedes `v0.0.246` and `v0.0.247` — **promote this one**. |
+| **`beta` (published, NOT promoted)** | tag **`v0.0.249`** → daemon **`0.0.175`**, cli **`0.0.182`**. Supersedes every earlier beta — **promote this one**. |
 | other five packages | unchanged: crypto `0.0.52`, protocol-types `0.0.56`, transport `0.0.58`, gateway `0.0.36`, connect `0.0.150` — all already on `latest`. |
 
 **`main` carries one commit past the `v0.0.248` tag — `689931c`, the typecheck gate.** It touches a
