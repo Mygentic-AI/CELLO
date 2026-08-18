@@ -3212,3 +3212,66 @@ The wiring test **did not survive a revert**: a substring grep passes with the c
 promises — *reading stored history is always allowed* — had no test, so a three-line bypass passed
 every behavioural case while breaking every read of an ended session. Both are now asserted against
 comment-stripped source, and both of the reviewer's exact bypasses were applied and confirmed red.
+
+---
+
+## Entry 46 — 🎉 THE LIVE PROOF FIRED, and PENDING-RESOLVE-1
+
+**Committed `7009e8b` (cello-client).** 3,893 tests pass; lint, typecheck, build clean.
+
+### The restart-seal path ran live for the first time — 2026-08-18 07:55 UTC
+
+Andre promoted `v0.0.250` and restarted. That shutdown was the **first ever performed by a binary
+that writes `interrupted_by = 'local'`**, so the boot after it finally had something real to find:
+
+```
+07:55:50  session.restart_seal.enqueued   count=2
+07:55:50  session.revival_bound.sweep     expired=0 closed=0
+07:56:22  session.restart_seal.waiting    reason=session_incomplete  retryInMs=60000
+          session.restart_seal.gave_up    reason=seal_interrupted_rejected_by_counterparty
+                                          stoppedBecause=refusal_is_terminal
+                                          detail={rejection_reason:"session_already_sealed"}
+```
+
+**Every part of the chain behaved.** The resolver enumerated two genuine orphans (the store now
+shows `interrupted / interrupted_by='local'` rows for the first time ever). One hit a terminal
+refusal and stopped immediately rather than burning five attempts. One is retrying on the backoff.
+The revival bound ran and correctly closed nothing — those rows were stamped seconds earlier and are
+inside the 24-hour window.
+
+**And the error-fidelity discipline held under live fire.** The counterparty claimed the session was
+already sealed, and the guidance we emit says, in as many words: *"That is its claim, relayed over
+the wire; this side has not seen or verified any such receipt, so do not repeat it to the operator as
+established fact."* That is exactly the rule this milestone was founded on, working without anyone
+watching.
+
+### PENDING-RESOLVE-1 — and the review that stopped it making things worse
+
+**The reviewer found that the unit as first written would have destroyed the thing it was built to
+save.** The standing receiver does not exist until an agent starts, so a freshly booted daemon
+refuses every seal with `standing_receiver_unavailable` — and a freshly booted daemon is *the only
+time the resolver runs*. Five attempts in ~15 minutes, then a **durable** `restart_seal_gave_up_at`
+that removes the session from the only queue that would ever look at it again, reported nowhere but a
+warn line in `daemon.log`. All 28 would have been permanently marked hopeless within a quarter of an
+hour of the next boot. Local preconditions now retry without spending an attempt and can never cause
+a give-up.
+
+**And my safety premise was false.** I wrote that all 28 hold a bilateral commitment. Measured:
+**14 initiator rows carry the counterparty's signed leaf; 14 responder rows carry the JSON string
+`"null"`.** A responder row is written from an *unsigned* request frame, *before* its ack is sent —
+so an ordinary send failure produces a one-sided row. The licence is therefore not "both signed" but
+**somebody chose to end this**, on two branches: their signature, or their request. What makes the
+outcome *verifiable* is neither — the directory rebuilds the tree from relay-witnessed leaves and
+never consults the commitment. `close-session-handler.ts` states this in capitals 200 lines from
+where I wrote the contradiction.
+
+**SI-001's written boundary needed restating, not quietly widening.** It said *"nothing the
+counterparty caused is auto-sealed."* That is no longer true — a responder-side pending row is
+created by a request the counterparty sent. It is the paragraph a future widening will cite, so it
+now says what is actually true and why.
+
+Three more: the query asserted a commitment it never checked (now an `EXISTS` on the artifact row);
+the give-up guidance told a pending session it was `interrupted` and pointed at force-abandon, which
+forfeits a receipt it is one request away from having; and two tests **passed before the code under
+test ran** — they seeded only the excluded row, so the status filter excluded it first and both
+stayed green with the entire change reverted.
