@@ -3126,3 +3126,73 @@ running on its own would hold a dialable endpoint open for a session nobody is u
 **The wiring is pinned by a source assertion.** Every behavioural test drives the manager directly,
 so deleting the hook from the send handler left all four green — the same gap the first half had, in
 a new place. The revert test now fails with the file named.
+
+---
+
+## Entry 45 — case B, and the two defects that made case A only half-work
+
+**Committed `13e0f01` (cello-client).** 3,884 tests pass; lint, typecheck, build clean. Four revert
+tests run, two of them against bypasses the reviewer wrote out explicitly.
+
+### What case B needed that case A did not
+
+Case B's causes — a wifi hop, a relay restart, a directory node cycling — are **symmetric**, so half
+the time the counterparty wakes first. They send; we have no session node, because revival is
+demand-driven and nobody has demanded anything. Their content parks at the relay.
+
+The operator then comes back and **reads**, and that left them stuck in a way that looked fine: the
+session stayed `interrupted`, so their own next send was refused, and the content waiting for them
+arrived only on the next five-minute backstop tick. A read is the operator's own demand, so it now
+revives and drains immediately.
+
+**A read may trigger revival; an inbound dial may not.** Andre's tenet is about what a REMOTE party
+can cause — *"an open connection that a malicious agent can farm for."* Reviving because a peer
+dialled us hands that lever to the peer: a stranger could keep our endpoints open indefinitely by
+poking dead sessions. A read is the operator asking, on their own machine, for their own session.
+The reviewer confirmed this is actually enforced — `reviveSessionNode` has exactly two callers, both
+IPC handlers, and nothing reaches it from an inbound frame, relay delivery, doorbell, watchdog or
+timer. The one path worth writing down: a parked frame drains → rings the doorbell → a channels-mode
+agent calls `cello_receive` → revival. Narrow, because only the session's actual counterparty can
+park into that session, which is the party we would revive for anyway.
+
+### The two HIGHs, both in code already committed
+
+Neither was visible until case B gave the revival an *inbound* promise to keep.
+
+**1. The revived node bound loopback and held no relay reservation.** Every session node in
+production reached its role by PROMOTION, inheriting the standing receiver's routable bind and its
+circuit reservation. A REBUILT one inherits nothing. So revival preserved a peer id nobody could
+dial — and preserving the id only matters *because the circuit address embeds it*, which is exactly
+the address that was not being taken. Case A appeared to work because `REDIAL-1` kept the
+counterparty's addresses, so we could still dial OUT. The reverse direction was silently dead.
+
+**2. Liveness was never rewired.** Both creation paths call `#wireSessionLiveness`; the revival did
+not. A revived session was therefore pinned `active` forever — a later disconnect fired no
+transition, nothing reached the MCP client, and the receive surface renders unknown liveness as
+healthy-and-quiet. **The second laptop close would have left the operator staring at a session that
+reports fine and is dead** — this milestone's founding defect, one revival later, and with no status
+change left to trigger another revival.
+
+### Three more
+
+- **The status write result was discarded.** A failed write left a live, talking session under an
+  `interrupted` row — where `REVIVAL-BOUND-1`'s sweep can seal or abandon it. The node is now torn
+  back down rather than run in that split state.
+- **The read path generated the best error message in the feature and destroyed it.**
+  `session_identity_lost` tells an operator their session cannot come back and should be closed for
+  its receipt. The caller ignored the result and nothing was logged, so an operator who only reads
+  got an ordinary-looking answer and kept waiting — the same asymmetry case B exists to close,
+  reproduced on the error channel. Now carried on the response and logged.
+- **The comments claimed a rescue where the truth is an accelerator.** Parked content was never
+  stranded: the drain runs off the AGENT's standing receiver, not the session node, ingest
+  deliberately accepts `interrupted`, and the backstop fires every five minutes. What the read
+  actually adds is the status edge plus immediacy. Both comments and the test header said otherwise
+  — one more instance of a comment asserting a property the code lacks.
+
+### Test teeth
+
+The wiring test **did not survive a revert**: a substring grep passes with the call dead behind
+`if (false)`, after an early return, or mentioned only in a comment. And the property the handler
+promises — *reading stored history is always allowed* — had no test, so a three-line bypass passed
+every behavioural case while breaking every read of an ended session. Both are now asserted against
+comment-stripped source, and both of the reviewer's exact bypasses were applied and confirmed red.
