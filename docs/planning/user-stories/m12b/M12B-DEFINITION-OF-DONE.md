@@ -549,8 +549,12 @@ description: >
   call sites passed `buildChannelParams` one argument where it takes two, so `type` was `undefined`
   at runtime on the **doorbell path** — the code's own comment says `type` is required and
   deliberately not re-derived, so those tests exercised a shape production cannot produce. Remaining,
-  in the order they cost: transport **33**, protocol-types **85**, the daemon's older tests **339**.
-  → Entries 34, 38
+  in the order they cost: protocol-types **85** and the daemon's older tests **339**. **Transport
+  landed too** (`6d4973c`) — **six of seven packages**. Its 33 split into one repeated cast pattern,
+  now explained once instead of 21 times, and twelve real inaccuracies: unions read without
+  narrowing (so a different refusal would have passed vacuously), a `stop()` reason silently dropped,
+  and a `waitFor` message option that does not exist, so the sentence explaining a timeout never
+  appeared. → Entries 34, 38, 39
 
 - **DOD-M12B-SIGNALING-TEST-FLAKE-1** [cello-client] — 🅿️ **a transport test fails under full-suite
   load and passes in isolation.** `core/transport/src/__tests__/signaling-manager.test.ts` →

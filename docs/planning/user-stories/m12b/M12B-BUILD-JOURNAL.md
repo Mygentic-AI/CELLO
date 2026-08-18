@@ -2729,3 +2729,45 @@ adapter finding rather than surfaced it.
 
 `pnpm run test` **exit 0** — **3845 passed / 11 skipped** · lint / **typecheck across five packages'
 tests** / build **exit 0**.
+
+---
+
+## Entry 39 — Six of seven packages type-check their tests (2026-08-18)
+
+**Commit `6d4973c`.** Transport joins daemon (`msg-*`), gateway, crypto, cli and adapter-claude-code.
+**Remaining: protocol-types (85) and the daemon's older tests (339).**
+
+### Transport's 33 split into two piles, and only one was churn
+
+**Twenty-one were ONE pattern.** `makeTestManifest` declares the loose *signing* shape while
+everything under test takes the structured one, and the two cannot be assigned across because the
+input type carries an index signature and TypeScript refuses an interface into one — which is also
+why the fixture cannot simply return the narrower type. **The values were always right:** the
+fixture's own comment says its node type *"structurally matches ConsortiumNode from
+protocol-types"*. That is now recorded **once**, in a paragraph naming exactly what the cast asserts
+and where it has to be re-argued if the promise stops holding — rather than 21 bare conversions that
+read like someone silencing a compiler.
+
+*(A first attempt tried to replace them with a helper function and broke multi-line calls with a
+regex. Reverted, and done as a substitution with no structural change — a scripted edit across
+nested calls is not worth the risk for a cosmetic gain.)*
+
+### The other twelve were real
+
+- **Two read `size` and `cap` off a refusal UNION without narrowing** on the reason — fields only the
+  `content_too_large` variant has. They would have read `undefined` and **still passed** if the
+  implementation ever returned `empty` or `decode_error`. Four more read `reason` off an
+  `OperationResult` union the same way — **and the line beside one of them had already reached for an
+  `as { guidance: string }` cast, which is the tell.** Both now narrow, and the wrong-variant case
+  fails loudly instead of vacuously.
+- **Three called `stop("test_cleanup")` on a method that takes no arguments.** The reason was
+  silently dropped; the tests believed they were passing one.
+- **Two passed a `message` option to a third-party `waitFor` that has no such field**, so on a
+  timeout the sentence explaining WHAT failed never appeared. It does now.
+
+None of these would have failed a test run. All of them are the shape the gate exists to find.
+
+### Gate
+
+`pnpm run test` **exit 0** — **3845 passed / 11 skipped** · lint / **typecheck across six packages'
+tests** / build **exit 0**.
