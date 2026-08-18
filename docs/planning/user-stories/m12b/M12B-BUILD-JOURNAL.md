@@ -3388,3 +3388,100 @@ it reports.**
 
 The live test has NOT been re-run since the relay connect landed. The measurement that settles case A
 is **delivery time on a revived session**: three minutes before, seconds if this is right.
+
+---
+
+## Entry 48 — Case A PASSES at 8 seconds, and a real network outage tested Case B for us
+
+**Commits `865eb26`, `d8447cf` (cello-client).** 3,910 tests pass; all four gates clean.
+
+### Case A: PASS
+
+The measurement that settles it, from the live run at 11:54 UTC:
+
+```
+11:54:10  session.revive.reservation.granted
+11:54:10  session.revive.node.started        startMs=5475  circuitListen=5
+11:54:14  session.revive.relay.connected     ← THE STEP THAT DID NOT EXIST
+11:54:14  session.revived
+11:54:18  she sends                          → dispatched_to_relay
+11:54:26  I receive it                       → doorbell fires
+```
+
+**Eight seconds. It was three minutes.** Same test, same two agents, same break — the only difference
+is that the revived session now connects its relay witness.
+
+| Step | Result |
+|---|---|
+| Normal conversation | ✅ |
+| One side disappears and returns | ✅ |
+| Reading after the break | ✅ |
+| Session reconnects on its original identity | ✅ 5 circuit addresses |
+| Replying after the break | ✅ |
+| **Delivery** | ✅ **8s, doorbell fired** |
+
+Andre's own score before this run was 3–4/10; with prompt delivery and no trick required, this is
+around 8/10. **The remaining gap is that the two session nodes still never re-dial each other**, so
+delivery goes via store-and-forward rather than direct. That is establishment's fifth step, still not
+taken by revival, and it is what the last two points are worth.
+
+### The defect the pass itself exposed
+
+Miss_Chelly — reading carefully and correctly — reported the run as **no change**. Her response was:
+
+```
+ok: true, delivered: false, reason: "dispatched_to_relay"
+guidance: "…delivered the next time the counterparty's daemon reconnects…"
+```
+
+That is **byte-identical to the response returned when the same send took three minutes**. A
+competent agent had no way to tell an 8-second success from the failure it replaced, and the rational
+next move on reading it is to send again — producing a duplicate of a message that was never lost.
+That is the *same* operator behaviour the old *"it is lost. Send it again."* guidance produced,
+reached from the opposite direction.
+
+The old text also asserted a cause it cannot know. The counterparty's daemon is typically up
+throughout; this path is taken because the two SESSION NODES hold no direct connection. Different
+fact, different party, wrong machine to go and look at.
+
+Fixed: the guidance now leads with what happened, gives the timescale, explains that
+`delivered: false` is about the PATH rather than failure, and says not to re-send. Four tests pin it
+and all four fail against the old string.
+
+**The pattern is worth naming, because it has now appeared three times in one day:** the system does
+the right thing and reports it in a way that reads as failure. A message that was queued was reported
+lost; a message delivered in 8 seconds was reported as pending someone else's reconnect. Both push
+the operator toward re-sending.
+
+### Case B tested itself — Andre's phone died
+
+Unplanned and better than the simulation: Andre's phone ran out of battery and the network was down
+for 2–3 minutes. No daemon restart, no manual offline/online.
+
+```
+11:58:38 – 11:59:45   directory.signaling.reconnecting   (retry with backoff)
+12:00:13              session.liveness.changed
+12:00:18              directory.signaling.connected      × all connections
+12:00:18              standing_receiver.reservation.rebuild × all 3 agents
+```
+
+**Recovered in one shot, ~100 seconds after the network died, unattended.** And the finding that
+matters: **zero `session.node.destroyed`, zero sessions marked `interrupted`.**
+
+**So case B in its REAL form does not need the revival at all.** A network drop with no traffic in
+flight does not tell the daemon anything is gone — it simply cannot reach anything, retries, and
+reconnects. The manual offline/online cycle we have been using *forces* an interruption that a real
+outage does not necessarily cause. Worth remembering before building anything further for case B:
+the mechanism that handles it already exists and demonstrably works.
+
+Untested by this accident: whether content in flight at the moment of the drop drains correctly.
+Nothing was being sent during the outage.
+
+### Coverage added
+
+The revival reservation race had **no behavioural tests at all** — every other test left the relay
+candidate list empty, so only the plain-node floor ever ran, which is why the dead teardown was
+invisible to review. Four cases now, including a fake node that models libp2p's `stop()` faithfully
+(it returns immediately unless the node is `'started'`). The first version of that fake always
+honoured `stop()` and therefore passed against the broken code — the hollow-test shape again, in the
+test written to close a hollow-test finding.
