@@ -239,14 +239,29 @@ unrelated set — **no relay resource appears**. Since `terraform plan` is this 
 (procedure §5), that is the authoritative confirmation the relay deploy is fully applied, not a claim
 from this document.
 
-## 🔴 RECURRING — the relay's directory connections rot in ~24h and SEALING STOPS (2026-08-18)
+## 🔴 RECURRING — the relay's directory connections die and never come back; SEALING STOPS (2026-08-18)
+
+> ### WHAT KILLS THE CONNECTION IS NOT KNOWN. WHAT KEEPS IT DEAD IS OURS.
+> An early version of this section said "rots in ~24h". **That was wrong and is corrected here:**
+> it is not an interval. Two consecutive relay lifetimes of 16h15m and 20h03m both ended at the
+> same wall clock — first dead connection at **07:32 UTC on 08-16** and **07:26 UTC on 08-18**.
+> Ruled out for that window, each on evidence: a GCP instance or container restart (relay instances
+> up since 08-08, directory containers up since the 08-16 roll); the daily Cloud SQL backup (on
+> 08-16 the connections died at 07:32 and the earliest backup that day ran at 08:50); a fixed TTL
+> (the two lifetimes differ by four hours). Nearest events at onset are a routine anti-entropy
+> round and a Postgres autovacuum, neither scheduled.
+>
+> **Do not spend more time there before fixing the reconnect.** Connections dying is normal and a
+> long-lived peer must survive it. The defect is that ONE such event takes sealing down until a
+> human restarts a container.
 
 **Both relay CONTAINERS restarted 2026-08-18 ~20:45 UTC** (`docker restart cello-relay`, one region
 at a time, health 200 + `relay.service.started` + `relay.already.registered` verified between).
 No instance replacement, no image change, no Terraform. Instances stay `cello-gcp-relay-use1-h73m`
 / `cello-gcp-relay-euw1-z5d9`, both created 2026-08-08.
 
-**A restart is a WORKAROUND on a ~24-hour clock. Expect this again tomorrow.**
+**A restart is a WORKAROUND. Expect this again the next time the connection dies — which on the
+two observed occasions was the following morning, but the trigger is not established.**
 
 ### The symptom, which does not look like a relay fault
 
