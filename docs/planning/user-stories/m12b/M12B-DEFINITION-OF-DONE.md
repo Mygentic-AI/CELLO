@@ -745,6 +745,28 @@ description: >
   > of the private key, so knowing an id is not being able to use it. The exposure named above is the
   > OPEN CONNECTION and the reachable endpoint — which is why the BOUND, not secrecy, is the control.
 
+- **DOD-M12B-REVIVAL-BOUND-1** [cello-client] — **an interrupted session that can never be revived
+  stays writable forever.** `ingestReceivedContent` refuses `sealed`, `seal_interrupted_pending` and
+  `abandoned`, but deliberately ACCEPTS `interrupted`, because that acceptance is the only reason
+  recovery can work at all. Nothing else ever leaves `interrupted`, so in practice it accepts
+  forever. Measured on Andre's own store 2026-08-18 (Entry 41): one session, 3 messages,
+  `interrupted_by` NULL — unsealable (unknown cause is not a licence to notarize), unrevivable (no
+  revival path exists), and still open to any peer that dials it. This is what Andre's ruling
+  forbids: *"leave nothing open that is no longer needed."*
+  **The split this rests on:** a receipt asserts a cause, so an unknown cause must not get one; an
+  open write surface asserts nothing and merely has to close. Different concerns, different termini
+  — `interrupted_by = 'local'` seals via `RESTART-SEAL-1`, everything else abandons once the
+  revival window expires. Abandoning spends no ceremony and claims nothing.
+  **Blocking ACs:** the window is long enough not to break the laptop-close case that `SESSION-SEED-1`
+  exists to rescue (24h); a local-cause session is never abandoned here, however old, because it can
+  still earn a receipt; a session whose timestamp cannot be parsed is treated as INSIDE the window,
+  never outside it; and after closure `ingestReceivedContent` refuses with `session_committed`.
+  **The trap, recorded because it was written and shipped to the gate:** `interrupted_at` is `TEXT`
+  holding ISO-8601 while `updated_at` beside it is INTEGER epoch millis. A bare numeric comparison
+  is always false (SQLite orders storage classes first); `CAST(interrupted_at AS INTEGER)` reads
+  `'2026-08-18T…'` as **2026** and would abandon the entire store on the next boot. Two existing
+  tests caught it. — ⏳
+
 - **DOD-M12B-SIGNAL-GUIDANCE-1** [cello-client] — **the `missing_signal` error instructs the caller
   to do the wrong thing.** `cello_send` requires a `signal` PARAMETER (`over` / `standby` / `wrap`).
   Its refusal guidance says *"Every cello_send message must end with one of: [[OVER]] …"* — which
