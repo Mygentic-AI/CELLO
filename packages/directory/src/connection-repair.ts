@@ -60,7 +60,7 @@ export function describeThrown(err: unknown): string {
  */
 export interface RepairableTransport {
   hangUp?(peerId: string): Promise<void>;
-  getConnections?(): Array<{ peerId: string; status?: string }>;
+  getConnections?(): Array<{ peerId: string; status?: string; muxerStatus?: string }>;
 }
 
 /** Did the eviction happen, and if not, why not — carried into the outcome log so it is never guessed. */
@@ -99,13 +99,20 @@ export function isConnectionLost(err: unknown): boolean {
 export function socketStatuses(
   transport: RepairableTransport,
   peerId: string,
-): { registered: number; statuses: string[] } | { unavailable: string } {
+): { registered: number; statuses: string[]; muxerStatuses: string[] } | { unavailable: string } {
   if (typeof transport.getConnections !== "function") {
     return { unavailable: "transport_has_no_getConnections" };
   }
   try {
     const conns = transport.getConnections().filter((c) => c.peerId === peerId);
-    return { registered: conns.length, statuses: conns.map((c) => c.status ?? "unreported") };
+    return {
+      registered: conns.length,
+      statuses: conns.map((c) => c.status ?? "unreported"),
+      // DOD-M12-CONN-MUXER-OBSERVE-1: the socket alone cannot identify the failure. The signature is
+      // socket "open" WITH muxer "closed", and `newStream` checks the muxer first, so the error
+      // returns before the socket is examined. `unreported` when the transport predates the field.
+      muxerStatuses: conns.map((c) => c.muxerStatus ?? "unreported"),
+    };
   } catch (err: unknown) {
     return { unavailable: describeThrown(err) };
   }

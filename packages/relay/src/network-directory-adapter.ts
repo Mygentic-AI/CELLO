@@ -93,6 +93,8 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
    * interval and cannot describe how long a connection was held.
    */
   readonly #openedAtMs = new Map<string, number>();
+  /** Last observed muxer health per directory, so the probe logs the DEATH rather than the state. */
+  readonly #lastMuxerHealthy = new Map<string, boolean>();
   #node: CelloNode | null = null;
 
   constructor(opts: NetworkDirectoryAdapterOptions) {
@@ -180,15 +182,20 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
    * Optional-chained on the field: an older `@cello-protocol/transport` returns entries without a
    * status, and reporting `undefined` honestly beats inventing "open".
    */
-  #connSnapshot(peerId: string): { count: number; statuses: string[] } {
+  #connSnapshot(peerId: string): { count: number; statuses: string[]; muxerStatuses: string[] } {
     try {
       const conns = this.#node?.getConnections().filter((c) => c.peerId === peerId) ?? [];
       return {
         count: conns.length,
         statuses: conns.map((c) => (c as { status?: string }).status ?? "unreported"),
+        // DOD-M12-CONN-MUXER-OBSERVE-1. The socket status alone cannot identify this failure — the
+        // signature is socket "open" WITH muxer "closed", and `newStream` checks the muxer first so
+        // the error returns before the socket is looked at. Reported as `unreported` when the
+        // transport predates the field, never guessed.
+        muxerStatuses: conns.map((c) => (c as { muxerStatus?: string }).muxerStatus ?? "unreported"),
       };
     } catch {
-      return { count: -1, statuses: [] }; // never let instrumentation break a seal
+      return { count: -1, statuses: [], muxerStatuses: [] }; // never let instrumentation break a seal
     }
   }
 
@@ -226,6 +233,49 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
         this.#lastGoodMs.set(peerId, Date.now());
       } catch (err: unknown) {
         results.push({ peerId, ok: false, detail: describeThrown(err) });
+      }
+    }
+
+    // DOD-M12-CONN-MUXER-OBSERVE-1 — RECORD THE DEATH, at the moment it happens.
+    //
+    // This is the only place that can. A muxer dying under a live socket emits NO libp2p event: the
+    // connection stays registered, so `peer:disconnect` never fires (it is dispatched only after
+    // the connection is removed). Every observation of this failure so far has been made minutes or
+    // hours later, when something tried to USE the link — which is why the cause has never been in
+    // the logs and three candidate mechanisms survived a full investigation.
+    //
+    // This probe already runs every 30s against every directory. Sampling the muxer state here and
+    // logging the TRANSITION bounds the unknown to 30 seconds and, for the first time, gives the
+    // death a timestamp and a duration. Transitions only — the state itself would be 220 lines an
+    // hour of noise, which is the mistake the reachability logging below already learned.
+    for (const { peerId } of this.#probeTargets()) {
+      const snap = this.#connSnapshot(peerId);
+      // "healthy" means at least one registered connection whose muxer is readable and open. An
+      // absent field reads as unknown, NOT as broken: an older transport must not raise a false
+      // alarm on every tick.
+      const readable = snap.muxerStatuses.filter((m) => m !== "unreported");
+      if (readable.length === 0) continue;
+      const healthy = readable.some((m) => m === "open");
+      const was = this.#lastMuxerHealthy.get(peerId);
+      if (was === healthy) continue;
+      this.#lastMuxerHealthy.set(peerId, healthy);
+      if (was === undefined) continue; // first observation is a baseline, not a transition
+      if (healthy) {
+        this.#logger?.warn("relay.directory.muxer.recovered", {
+          peerId, socketStatuses: snap.statuses, muxerStatuses: snap.muxerStatuses,
+        });
+      } else {
+        const openedAt = this.#openedAtMs.get(peerId);
+        this.#logger?.error("relay.directory.muxer.died", {
+          peerId,
+          socketStatuses: snap.statuses,
+          muxerStatuses: snap.muxerStatuses,
+          ...(openedAt !== undefined ? { heldForMs: Date.now() - openedAt } : {}),
+          impact: "this connection is registered and its socket reads open, so a plain redial "
+            + "would return it — seals adjudicated by this directory fail until it is EVICTED. "
+            + "This is the M12 Tier P5 failure, caught at the moment it happened rather than at "
+            + "the next seal.",
+        });
       }
     }
 
@@ -325,6 +375,7 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
             peerId,
             connectionsDestroyed: destroyed.count,
             socketStatuses: destroyed.statuses,
+            muxerStatuses: destroyed.muxerStatuses,
             impact: "hangUp is peer-scoped, so a SECOND connection to this directory was closed "
               + "alongside the dead one — if a stream was in flight on it, its failure originates "
               + "here and not at the directory",
@@ -404,6 +455,8 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
           connectionsAfter: after.count,
           socketStatusBefore: before.statuses,
           socketStatusAfter: after.statuses,
+          muxerStatusBefore: before.muxerStatuses,
+          muxerStatusAfter: after.muxerStatuses,
           recovered: true,
         });
         return stream;
@@ -415,6 +468,8 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
           connectionsAfter: after.count,
           socketStatusBefore: before.statuses,
           socketStatusAfter: after.statuses,
+          muxerStatusBefore: before.muxerStatuses,
+          muxerStatusAfter: after.muxerStatuses,
           recovered: false,
           reason: describeThrown(retryErr),
           // Reads the EVICTION first, because after this unit a repeat of the original failure

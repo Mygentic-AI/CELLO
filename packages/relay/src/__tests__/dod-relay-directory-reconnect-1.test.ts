@@ -566,3 +566,68 @@ describe("DOD-M12-CONN-EVICT-1 (c): a seal submission evicts too, not only the p
     expect(trace.slice(evictIdx, evictIdx + 3)).toEqual(["hangUp", "dial", "newStream"]);
   });
 });
+
+// ─── DOD-M12-CONN-MUXER-OBSERVE-1: the death gets a timestamp ────────────────
+//
+// A muxer dying under a live socket emits NO libp2p event — the connection stays registered, so
+// peer:disconnect never fires. Every observation of this failure has therefore been made minutes or
+// hours after the fact, when something tried to use the link. The 30-second probe is the only place
+// that can catch it, and it now samples the muxer state and logs the TRANSITION.
+describe("DOD-M12-CONN-MUXER-OBSERVE-1: the probe reports a muxer death when it happens", () => {
+  function nodeWithMuxer(states: Array<string | undefined>) {
+    let i = 0;
+    const { node } = scriptedNode({ dial: [null], newStream: [null] });
+    (node as unknown as { getConnections: () => unknown }).getConnections = () => {
+      const m = states[Math.min(i++, states.length - 1)];
+      return [{ peerId: DIR_PEER, encryption: "noise", status: "open", ...(m === undefined ? {} : { muxerStatus: m }) }];
+    };
+    return node;
+  }
+
+  it("logs the death at ERROR on the open -> closed transition, not the state", async () => {
+    const { logger, lines } = spyLogger();
+    // Two healthy samples establish the baseline, then the muxer dies.
+    const adapter = adapterOn(nodeWithMuxer(["open", "open", "closed", "closed"]), logger);
+
+    await adapter.checkDirectoryReachable();  // baseline
+    await adapter.checkDirectoryReachable();  // still healthy — must NOT log
+    expect(lines.some((l) => l.event === "relay.directory.muxer.died")).toBe(false);
+
+    await adapter.checkDirectoryReachable();  // died
+    const died = lines.find((l) => l.event === "relay.directory.muxer.died");
+    expect(died).toBeDefined();
+    expect(died!.ctx["muxerStatuses"]).toEqual(["closed"]);
+    // The socket reading open beside a dead muxer is the signature — it is what makes a plain
+    // redial a no-op, and it is the pair that was invisible before this field existed.
+    expect(died!.ctx["socketStatuses"]).toEqual(["open"]);
+
+    await adapter.checkDirectoryReachable();  // still dead — transitions only, no second line
+    expect(lines.filter((l) => l.event === "relay.directory.muxer.died").length).toBe(1);
+  });
+
+  it("says nothing when the transport cannot report a muxer state", async () => {
+    const { logger, lines } = spyLogger();
+    // An older @cello-protocol/transport omits the field entirely. Unknown must not read as broken,
+    // or every relay on an old build raises a false death every 30 seconds.
+    const adapter = adapterOn(nodeWithMuxer([undefined, undefined, undefined]), logger);
+
+    await adapter.checkDirectoryReachable();
+    await adapter.checkDirectoryReachable();
+    await adapter.checkDirectoryReachable();
+
+    expect(lines.some((l) => l.event === "relay.directory.muxer.died")).toBe(false);
+    expect(lines.some((l) => l.event === "relay.directory.muxer.recovered")).toBe(false);
+  });
+
+  it("logs the recovery too, so a flapping link is visible as flapping", async () => {
+    const { logger, lines } = spyLogger();
+    const adapter = adapterOn(nodeWithMuxer(["open", "closed", "open"]), logger);
+
+    await adapter.checkDirectoryReachable();
+    await adapter.checkDirectoryReachable();
+    await adapter.checkDirectoryReachable();
+
+    expect(lines.some((l) => l.event === "relay.directory.muxer.died")).toBe(true);
+    expect(lines.some((l) => l.event === "relay.directory.muxer.recovered")).toBe(true);
+  });
+});
