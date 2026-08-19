@@ -807,6 +807,18 @@ description: >
   >    That line's absence is the only proof the new transport is actually in the image.
 
   Until all five are done the two lines above are 🟡 and cannot go ✅. — ❌
+- **DOD-M12-CONN-OPENED-AT-WIRING-1** [trustless-cello] — `relay.directory.connection.opened`
+  never fires for the connections that matter, so `heldForMs` is absent on them too. **Found on the
+  live fleet 2026-08-19, minutes after the first roll**, by looking for the new event as positive
+  proof the image was running: the image WAS running (`cello/relay:c703b3aa` confirmed on the
+  instance) and the event was absent anyway. `bin/relay.ts` calls `directoryAdapter.connect(node)`
+  AFTER the relay has started and registered with its directories, so those libp2p connections
+  already exist when `onPeerConnect` is subscribed — the handler can only ever see a LATER
+  reconnect. Fix: at `connect()` time, seed `#openedAtMs` from `getConnections()` for peers already
+  attached and emit the opened line for them. Same shape as the reviewer's finding on the `closed`
+  line: instrumentation wired to an event that cannot fire in the case being investigated. **Not
+  worth its own roll** — it is a log line; it goes with whatever rolls next. — ❌
+
 - **DOD-M12-CONN-PROVE-1** [trustless-cello] — **held-connection enforcer.** With a relay running,
   kill its connection to the adjudicating directory underneath it, then close a session: it seals,
   with **no relay restart**. Must fail on the pre-fix build and pass on the post-fix one (revert
