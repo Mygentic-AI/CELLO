@@ -1693,7 +1693,25 @@ muxer). Full trail in `M12-DEFINITION-OF-DONE` Tier P5 and journal entries 90–
 | relay `euw1` | ✅ rolled | same |
 | directory `us-east1` | ✅ rolled | 4 anti-entropy rounds AFTER instance start |
 | directory `us-central1` | ⚠️ **OUTAGE then recovered** | see below |
-| directory `europe-west1` | pending at time of writing | — |
+| directory `europe-west1` | ✅ rolled | 3 anti-entropy rounds AFTER instance start |
+
+**ROLL COMPLETE 13:36 UTC.** All five instances verified on `cello/{directory,relay}:c703b3aa`:
+`cello-gcp-use1-4cxw` · `cello-gcp-usc1-qq2z` · `cello-gcp-euw1-s16j` ·
+`cello-gcp-relay-use1-4sxp` · `cello-gcp-relay-euw1-1n7v`.
+
+**⚠️ WHAT THE ROLL DOES AND DOES NOT PROVE.** It proves the new code is RUNNING —
+`relay.directory.connection.opened` fires (it exists only in this build) and `heldForMs` carries
+real durations up to 451,614ms rather than capping at the 30s probe interval, which is the defect
+that field was fixed for. It proves the new TRANSPORT is in the image: no
+`relay.directory.evict.unavailable` anywhere, and since sibling events from the same code do fire,
+that silence is not dead code.
+**It proves nothing about sealing.** No seal has been attempted since the roll — a fleet that seals
+correctly and a fleet the roll broke look identical while nobody is talking. **A live session close
+is owed** (`DOD-M12-CONN-PROVE-1`, and the project's own milestone-close gate). Note also that three
+directory restarts disconnected the relays repeatedly and produced ZERO
+`relay.directory.connection.stale`: a de-registered disconnect is genuinely benign and the next dial
+rebuilds, which is consistent with the analysis but means the roll exercised the repair path not
+once.
 
 ### The incident — `ZONE_RESOURCE_POOL_EXHAUSTED` on `c3-standard-4`
 
