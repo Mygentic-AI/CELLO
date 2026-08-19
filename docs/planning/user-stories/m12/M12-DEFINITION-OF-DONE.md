@@ -723,8 +723,12 @@ description: >
   the one measurement that converts the cause from inference to fact, because the muxer check
   returns before the socket check runs and the error alone cannot distinguish them. (b) libp2p
   connection **open and close** events for directory peers are logged at INFO with peer and held
-  duration. (c) No behaviour change: no dial, no eviction, no retry alters. — 🟡 BUILT, reviewed,
-  not yet live (no relay runs it — see the version-bump line below). → Entry 91
+  duration. (c) No behaviour change: no dial, no eviction, no retry alters. — ✅ **PROVEN LIVE
+  2026-08-19** → Entry 93. `relay.directory.connection.opened` fires on the rolled fleet (it exists
+  only in this build), and `heldForMs` carries real durations — 41,993ms · 231,283ms · 262,432ms ·
+  451,614ms — none capped at the 30s probe interval, which was the defect the reviewer found in it.
+  Clause (a)'s socket-status field is unit- and revert-tested but has NOT been seen live, because no
+  connection has gone stale since the roll; that is `DOD-M12-CONN-PROVE-1`'s job, not this line's.
 
   > **CLAUSE (b) DEVIATED, AND THE CLAUSE WAS WRONG.** It asked for the DEATH to be recorded via
   > connection open/close events. That is not obtainable: libp2p dispatches `peer:disconnect` only
@@ -755,8 +759,10 @@ description: >
   bounded at one, so a genuinely unreachable directory fails fast rather than spinning; (c) the
   probe path and the seal path go through the same code, so a repair proven by one is proven for
   the other; (d) failure to evict is logged and does not swallow the original error. — 🟡 BUILT,
-  reviewed, **not true of any running relay** until the transport is published and the fleet rolled.
-  → Entry 91
+  reviewed, and now RUNNING on all five nodes — but **still unproven**, because the repair path has
+  not executed once. Three directory restarts during the roll disconnected the relays repeatedly and
+  produced ZERO `relay.directory.connection.stale`: a de-registered disconnect is the benign case and
+  the next dial genuinely rebuilds. Goes ✅ only via `DOD-M12-CONN-PROVE-1`. → Entries 91, 93
 
   > **hangUp is PEER-scoped** — libp2p's `closeConnections(peerId)` closes every connection
   > registered for that peer, and the directory dials this relay independently, so a second inbound
@@ -806,7 +812,12 @@ description: >
   > 5. Confirm on the running fleet that `relay.directory.evict.unavailable` has STOPPED appearing.
   >    That line's absence is the only proof the new transport is actually in the image.
 
-  Until all five are done the two lines above are 🟡 and cannot go ✅. — ❌
+  **ALL FIVE DONE 2026-08-19. — ✅** → Entry 93. Promotion landed (all seven on `latest`, verified);
+  lockfile forced off 0.0.57 to 0.0.62 with `pnpm update -r` after `--lockfile-only` silently refused
+  to move it; both images built manually at `c703b3aa`; all five nodes rolled node-by-node and each
+  VERIFIED on `cello/{directory,relay}:c703b3aa` by inspecting the instance, not by trusting the
+  apply. `relay.directory.evict.unavailable` appears nowhere since — and sibling events from the
+  same build DO fire, so that silence is the new transport being present rather than dead code.
 > **WITHDRAWN 2026-08-19, same hour it was filed — `DOD-M12-CONN-OPENED-AT-WIRING-1` was not a
 > defect.** It claimed `relay.directory.connection.opened` could never fire for startup connections,
 > because `bin/relay.ts` wires the adapter after the relay registers with its directories. The
@@ -819,6 +830,19 @@ description: >
 > it had connected. Absence of evidence read as evidence of absence, one message after writing the
 > rule that says prove the query can return something before quoting nothing as a result. The
 > instrumentation is sound; the observation of it was not.
+
+- **DOD-M12-SEAL-LIVE-1** [trustless-cello] — **the roll did not break sealing.** Two live seals on
+  the rolled fleet, both verified in the DIRECTORY logs rather than taken from an agent's report:
+  session `891a3478…` → `notarization.recorded` root `3e39affe…` at 14:12:18Z, and session
+  `63fe7dc1…` → `notarization.recorded` root `9e7a624a…` at 14:27:47Z with `mmr.leaf.appended` and
+  `mmr.checkpoint.pending`. **Zero `relay.seal.rejected`, zero `relay.seal.broker.unreachable`, zero
+  `relay.directory.evict.unavailable` since the roll began.** The second was closed by this side, so
+  the ceremony ran end to end from a real `cello_close_session`. — ✅ → Entry 93
+
+  > **This is NOT `DOD-M12-CONN-PROVE-1` and must not be read as it.** Both seals ran over freshly
+  > restarted links, which is the case that has ALWAYS worked. Every observed failure needed an aged
+  > connection. This line says the roll is safe and the fleet notarizes; it says nothing about the
+  > defect.
 
 - **DOD-M12-CONN-PROVE-1** [trustless-cello] — **held-connection enforcer.** With a relay running,
   kill its connection to the adjudicating directory underneath it, then close a session: it seals,
@@ -851,7 +875,8 @@ description: >
   the unilateral-seal path. Same fix (evict, then dial), same absence-is-reported treatment, and the
   redial's outcome must name whether eviction happened. Found 2026-08-19 by applying the
   HELD-CONNECTION lens to the rest of the fleet rather than only to the diff that opened the tier.
-  — 🟡 BUILT, reviewed, blocked on DOD-M12-CONN-PUBLISH-1 like the others. → Entry 92
+  — 🟡 BUILT, reviewed, and RUNNING since the 2026-08-19 roll — unproven for the same reason as
+  EVICT-1: nothing has exercised the repair. → Entries 92, 93
 - **DOD-M12-CONN-AE-1** [trustless-cello] — the same class on the directory↔directory link.
   `ae-sync-service.ts` `#attempt` dials and then opens a stream with **no retry at all** and no
   eviction, so a cached connection whose muxer has died fails every anti-entropy round from then on,
@@ -859,7 +884,8 @@ description: >
   Needs the same eviction, a bounded retry, and a log line at the moment a peer link dies. Ranked
   after the two above because a stalled AE round degrades convergence where a dead relay↔directory
   link stops sealing outright, but it is the same defect and must not be left as folklore.
-  — 🟡 BUILT, reviewed, blocked on DOD-M12-CONN-PUBLISH-1 like the others. → Entry 92
+  — 🟡 BUILT, reviewed, and RUNNING since the 2026-08-19 roll — unproven for the same reason as
+  EVICT-1: nothing has exercised the repair. → Entries 92, 93
 
 **Explicitly beyond this tier** (recorded so nothing is silently deferred):
 - **The unilateral escalation failing 3 of 3** with `unilateral_root_unverifiable`. The 11-minute
