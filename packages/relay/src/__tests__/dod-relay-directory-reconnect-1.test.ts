@@ -84,15 +84,21 @@ function scriptedNode(script: {
   omitHangUp?: boolean;
   /** Make eviction itself fail, to prove the repair continues rather than dying on its own fixer. */
   hangUpError?: Error;
+  /** Override what libp2p reports as registered, to drive the socket-status and multi-connection paths. */
+  registeredConnections?: Array<{ peerId: string; encryption: string; status: string }>;
 }): {
   node: CelloNode;
   dialCalls: string[];
   streamCalls: number;
   /** Ordered trace of the calls that matter to the repair, so ORDER can be asserted, not just counts. */
   trace: string[];
+  firePeerConnect: (p: string) => void;
+  firePeerDisconnect: (p: string) => void;
 } {
   const dialCalls: string[] = [];
   const trace: string[] = [];
+  const peerConnectHandlers: Array<(p: string) => void> = [];
+  const peerDisconnectHandlers: Array<(p: string) => void> = [];
   let dialIdx = 0;
   let streamIdx = 0;
   const state = { streamCalls: 0 };
@@ -105,9 +111,11 @@ function scriptedNode(script: {
       return { peerId: "12D3KooWFakeDirectory" };
     },
     // Real nodes always have these — they are on the CelloNode interface. The fixture lacked them,
-    // which made it a double that could not have stood in for the thing it doubles.
-    onPeerConnect(_h: (p: string) => void) {},
-    onPeerDisconnect(_h: (p: string) => void) {},
+    // which made it a double that could not have stood in for the thing it doubles. They CAPTURE
+    // the handler rather than discarding it, so the lifecycle logging can actually be driven: with
+    // no-op stubs, deleting the whole observation block failed zero tests.
+    onPeerConnect(h: (p: string) => void) { peerConnectHandlers.push(h); },
+    onPeerDisconnect(h: (p: string) => void) { peerDisconnectHandlers.push(h); },
     ...(script.omitHangUp === true ? {} : {
       async hangUp(_p: string) {
         trace.push("hangUp");
@@ -127,9 +135,20 @@ function scriptedNode(script: {
         [Symbol.asyncIterator]: async function* () { /* no frames */ },
       } as never;
     },
-    getConnections: () => [],
+    // A REGISTERED connection, because that is the state the failure is defined by: still in
+    // libp2p's registry with a live socket, which is why dial() hands it back. Returning [] here
+    // made every socket-status assertion vacuous.
+    getConnections: () => (script.registeredConnections ?? [
+      { peerId: "12D3KooWFakeDirectory", encryption: "noise", status: "open" },
+    ]),
   } as unknown as CelloNode;
-  return { node, dialCalls, trace, get streamCalls() { return state.streamCalls; } };
+  return {
+    node, dialCalls, trace,
+    get streamCalls() { return state.streamCalls; },
+    /** Fire the libp2p peer lifecycle handlers the adapter registered on connect(). */
+    firePeerConnect: (p: string) => peerConnectHandlers.forEach((h) => h(p)),
+    firePeerDisconnect: (p: string) => peerDisconnectHandlers.forEach((h) => h(p)),
+  };
 }
 
 /** The exact libp2p error the live failures carried, shape included — `isConnectionLost` reads `.reason`. */
@@ -352,7 +371,7 @@ describe("DOD-M12-CONN-EVICT-1: a stale directory connection is evicted before t
     expect(trace).not.toContain("hangUp");
   });
 
-  it("reports the socket status alongside the muxer failure, so the two can be told apart", async () => {
+  it("reports the REGISTERED socket statuses, not an empty list, alongside the muxer failure", async () => {
     const { logger, lines } = spyLogger();
     const { node } = scriptedNode({ dial: [null], newStream: [muxerClosed(), null] });
     const adapter = adapterOn(node, logger);
@@ -361,9 +380,49 @@ describe("DOD-M12-CONN-EVICT-1: a stale directory connection is evicted before t
 
     const stale = lines.find((l) => l.event === "relay.directory.connection.stale");
     expect(stale).toBeDefined();
-    // The muxer check returns before the socket check, so the error alone cannot say which state we
-    // are in — and those need different fixes. DOD-M12-CONN-OBSERVE-1 exists for this one field.
-    expect(stale!.ctx).toHaveProperty("socketStatusBefore");
+    // Asserting the VALUE, not the key. Against an empty connection list this field is `[]` and a
+    // `toHaveProperty` check passes for an implementation that hardcodes it and never reads
+    // `status` at all — the field this unit exists for, tested vacuously.
+    expect(stale!.ctx["socketStatusBefore"]).toEqual(["open"]);
+    expect(stale!.ctx["connectionsBefore"]).toBe(1);
+  });
+
+  it("reports `unreported` — never an invented 'open' — when the transport predates the status field", async () => {
+    const { logger, lines } = spyLogger();
+    const { node } = scriptedNode({
+      dial: [null],
+      newStream: [muxerClosed(), null],
+      // What EVERY deployed relay returns today: @cello-protocol/transport without `status`.
+      registeredConnections: [{ peerId: "12D3KooWFakeDirectory", encryption: "noise" } as never],
+    });
+    const adapter = adapterOn(node, logger);
+
+    await adapter.checkDirectoryReachable();
+
+    const stale = lines.find((l) => l.event === "relay.directory.connection.stale");
+    expect(stale!.ctx["socketStatusBefore"]).toEqual(["unreported"]);
+  });
+
+  it("names an eviction that destroyed a SECOND connection, so an aborted verdict is attributable", async () => {
+    const { logger, lines } = spyLogger();
+    // hangUp is peer-scoped: libp2p closes every connection registered for the peer. The directory
+    // dials this relay independently, so a second inbound connection can exist under the same peer
+    // id and be carrying a seal verdict when we evict.
+    const { node } = scriptedNode({
+      dial: [null],
+      newStream: [muxerClosed(), null],
+      registeredConnections: [
+        { peerId: "12D3KooWFakeDirectory", encryption: "noise", status: "open" },
+        { peerId: "12D3KooWFakeDirectory", encryption: "noise", status: "open" },
+      ],
+    });
+    const adapter = adapterOn(node, logger);
+
+    await adapter.checkDirectoryReachable();
+
+    const multi = lines.find((l) => l.event === "relay.directory.evict.multiple");
+    expect(multi).toBeDefined();
+    expect(multi!.ctx["connectionsDestroyed"]).toBe(2);
   });
 
   it("still repairs when eviction itself fails, rather than dying on its own fixer", async () => {
@@ -417,5 +476,93 @@ describe("DOD-M12-CONN-EVICT-1: a stale directory connection is evicted before t
     // Having evicted and redialled and still failed, the cause is NOT on this side. Saying so is
     // what stops the next investigation repeating this one.
     expect(String(outcome!.ctx["reading"])).toContain("not a stale handle");
+  });
+});
+
+// ─── DOD-M12-CONN-OBSERVE-1 clause (b): the connection lifecycle lines ────────
+//
+// These had NO test at all in the first pass: every node double registered the handlers as no-ops
+// that never invoked them, so deleting the whole observation block — the directory-peer filter, the
+// duration arithmetic, the impact string — failed nothing. That is how a warning claiming "seals
+// are refused" survived on an event that fires for the benign case and cannot fire for the failure
+// this tier is about.
+describe("DOD-M12-CONN-OBSERVE-1 (b): directory connection lifecycle is logged, and honestly", () => {
+  it("logs open and close for a DIRECTORY peer", async () => {
+    const { logger, lines } = spyLogger();
+    const { node, firePeerConnect, firePeerDisconnect } = scriptedNode({ dial: [null], newStream: [null] });
+    adapterOn(node, logger);
+
+    firePeerConnect(DIR_PEER);
+    firePeerDisconnect(DIR_PEER);
+
+    expect(lines.some((l) => l.event === "relay.directory.connection.opened")).toBe(true);
+    expect(lines.some((l) => l.event === "relay.directory.connection.closed")).toBe(true);
+  });
+
+  it("ignores CLIENT peers — every agent using this relay would otherwise bury the directory lines", async () => {
+    const { logger, lines } = spyLogger();
+    const { node, firePeerConnect, firePeerDisconnect } = scriptedNode({ dial: [null], newStream: [null] });
+    adapterOn(node, logger);
+
+    firePeerConnect("12D3KooWSomeRandomAgent");
+    firePeerDisconnect("12D3KooWSomeRandomAgent");
+
+    expect(lines.some((l) => l.event.startsWith("relay.directory.connection."))).toBe(false);
+  });
+
+  it("measures heldForMs from the OPEN, not from the last probe", async () => {
+    const { logger, lines } = spyLogger();
+    const { node, firePeerConnect, firePeerDisconnect } = scriptedNode({ dial: [null], newStream: [null] });
+    const adapter = adapterOn(node, logger);
+
+    firePeerConnect(DIR_PEER);
+    // A successful probe in between. Deriving the duration from the probe's own bookkeeping made
+    // this number "time since the last 30-second probe" — a value with a 30-second ceiling wearing
+    // a name that claims to be the connection's lifetime.
+    await adapter.checkDirectoryReachable();
+    firePeerDisconnect(DIR_PEER);
+
+    const closed = lines.find((l) => l.event === "relay.directory.connection.closed");
+    expect(closed).toBeDefined();
+    expect(closed!.ctx).toHaveProperty("heldForMs");
+  });
+
+  it("does NOT claim seals are refused — this event cannot fire for the failure that refuses them", async () => {
+    const { logger, lines } = spyLogger();
+    const { node, firePeerConnect, firePeerDisconnect } = scriptedNode({ dial: [null], newStream: [null] });
+    adapterOn(node, logger);
+
+    firePeerConnect(DIR_PEER);
+    firePeerDisconnect(DIR_PEER);
+
+    const closed = lines.find((l) => l.event === "relay.directory.connection.closed");
+    // libp2p dispatches peer:disconnect only AFTER removing the connection from its registry, so a
+    // link that reaches this handler is one the next dial genuinely rebuilds. The dead-muxer failure
+    // keeps the connection registered and emits no event at all. A warning here would fire on the
+    // benign case and stay silent on the real one — the precise inversion this assertion pins.
+    expect(JSON.stringify(closed!.ctx)).not.toContain("are refused");
+    expect(String(closed!.ctx["note"])).toContain("emits no event");
+  });
+});
+
+// ─── DOD-M12-CONN-EVICT-1 clause (c): the SEAL path, not just the probe ───────
+//
+// Clause (c) says the probe path and the seal path share the code so a repair proven by one is
+// proven for the other. That was true structurally — both go through #openDirectoryStream — and
+// pinned by nothing: every eviction case drove checkDirectoryReachable(). A later refactor that
+// inlined a newStream into processSeal would break the claim with every test still green.
+describe("DOD-M12-CONN-EVICT-1 (c): a seal submission evicts too, not only the probe", () => {
+  it("evicts before redialling on processSeal", async () => {
+    const { logger } = spyLogger();
+    const { node, trace } = scriptedNode({ dial: [null], newStream: [muxerClosed(), null] });
+    const adapter = adapterOn(node, logger);
+
+    await adapter.processSeal(new Uint8Array(32).fill(9), {
+      leaves: [], merkle_root: new Uint8Array(32), seq_count: 0,
+    } as never);
+
+    const evictIdx = trace.indexOf("hangUp");
+    expect(evictIdx).toBeGreaterThan(-1);
+    expect(trace.slice(evictIdx, evictIdx + 3)).toEqual(["hangUp", "dial", "newStream"]);
   });
 });

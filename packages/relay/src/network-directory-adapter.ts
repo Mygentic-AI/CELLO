@@ -85,8 +85,14 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
   readonly #allDirectoryEndpoints: Record<string, string>;
   /** Last observed reachability per peer id, so the probe logs TRANSITIONS rather than every tick. */
   readonly #lastReachable = new Map<string, boolean>();
-  /** When each directory last served a stream, so a death can be reported with a duration. */
+  /** When each directory last served a stream — drives the reachability probe's `workingForMs`. */
   readonly #lastGoodMs = new Map<string, number>();
+  /**
+   * When each directory connection was OPENED. Distinct from `#lastGoodMs` on purpose: that one is
+   * refreshed by every 30-second probe, so a duration derived from it can never exceed the probe
+   * interval and cannot describe how long a connection was held.
+   */
+  readonly #openedAtMs = new Map<string, number>();
   #node: CelloNode | null = null;
 
   constructor(opts: NetworkDirectoryAdapterOptions) {
@@ -114,29 +120,45 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
   connect(node: CelloNode): void {
     this.#node = node;
 
-    // DOD-M12-CONN-OBSERVE-1: record the DEATH, not only the corpse.
+    // DOD-M12-CONN-OBSERVE-1: directory connection lifecycle, at INFO, with NO impact claim.
     //
-    // Every failure this milestone investigated was observed at the moment somebody tried to USE a
-    // connection — minutes or hours after it actually died — so the cause was never in the logs and
-    // three candidate mechanisms survived a full investigation. A connection to a directory going
-    // away is a fleet-level event: ordinary message relaying does not touch these links, so nothing
-    // else will ever surface it, and the first symptom is a customer's close timing out.
+    // ⚠️ THESE TWO LINES DO NOT RECORD THE DEATH THIS TIER EXISTS FOR, AND MUST NOT BE READ AS IF
+    // THEY DID. libp2p dispatches `peer:disconnect` from `ConnectionManager.onDisconnect`, and only
+    // after the connection has been REMOVED from its registry (verified in libp2p 3.3.2,
+    // `connection-manager/index.js` — `this.connections.delete(peerId)` immediately precedes the
+    // dispatch). The failure this milestone is about is the exact opposite state: the connection is
+    // STILL REGISTERED with a live socket status, which is why `dial()` hands it back and why
+    // `newStream`'s own `find(c => c.status === "open")` selects it. A muxer that dies under a
+    // registered connection emits no event at all.
     //
-    // Scoped to DIRECTORY peers deliberately. This node also holds a connection to every client
-    // using the relay, and logging those would bury the handful of lines that matter.
+    // So what these lines are worth: an ordinary de-registered disconnect is BENIGN here — the next
+    // probe tick or seal dials and libp2p genuinely reconnects, and no seal is refused by it. That
+    // is why there is no `impact` string and why this is INFO rather than WARN. A warning on the
+    // benign case would bury the one line that matters, which is the failure the transitions-only
+    // reachability logging above already exists to avoid.
+    //
+    // The honest instrument for the real death is a MUXER status, which `getConnections()` does not
+    // expose — libp2p's public `Connection` type carries `status` (the socket) and keeps the muxer
+    // internal. Owed as DOD-M12-CONN-MUXER-OBSERVE-1.
     const directoryPeers = new Set(this.#probeTargets().map((t) => t.peerId));
     node.onPeerConnect((peerId: string) => {
       if (!directoryPeers.has(peerId)) return;
+      this.#openedAtMs.set(peerId, Date.now());
       this.#logger?.info("relay.directory.connection.opened", { peerId });
     });
     node.onPeerDisconnect((peerId: string) => {
       if (!directoryPeers.has(peerId)) return;
-      const lastGood = this.#lastGoodMs.get(peerId);
-      this.#logger?.warn("relay.directory.connection.closed", {
+      // `heldForMs` is measured from the OPEN, not from the last successful probe. Reading it off
+      // `#lastGoodMs` made it "time since the last 30-second probe" — a number with a 30-second
+      // ceiling, wearing a name that claims to be the connection's lifetime, on the one field this
+      // unit says the investigation never had.
+      const openedAt = this.#openedAtMs.get(peerId);
+      this.#openedAtMs.delete(peerId);
+      this.#logger?.info("relay.directory.connection.closed", {
         peerId,
-        ...(lastGood !== undefined ? { heldForMs: Date.now() - lastGood } : {}),
-        impact: "seals adjudicated by this directory are refused until the connection is rebuilt; "
-          + "message relaying is unaffected, so nothing else will surface it",
+        ...(openedAt !== undefined ? { heldForMs: Date.now() - openedAt } : {}),
+        note: "de-registered by libp2p, so the next dial rebuilds it — this is NOT the "
+          + "still-registered dead-muxer failure, which emits no event",
       });
     });
   }
@@ -144,12 +166,16 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
   /**
    * What libp2p thinks it holds for a peer, at this instant.
    *
-   * `status` is the SOCKET status and is NOT the muxer's — the two are separate fields checked in
-   * that order when opening a stream, muxer first. So a stream failing with
-   * `The connection muxer is "closed" and not "open"` returns before the socket is examined, and
-   * this is the only way to learn which of the two we are actually looking at. `status: "open"`
-   * next to a muxer failure is the case where a plain redial CANNOT help, because that is exactly
-   * the connection libp2p's dial will hand back.
+   * `status` is the SOCKET status and is NOT the muxer's — separate fields, checked muxer-first
+   * when opening a stream.
+   *
+   * DO NOT read this as the discriminator for the muxer failure; it cannot be one. For
+   * `The connection muxer is "closed" and not "open"` to be thrown at all, `CelloNode.newStream`
+   * must already have selected the connection through its own `find(c => c.status === "open")`, so
+   * the socket status is `"open"` BY CONSTRUCTION in every instance of that error. What this
+   * actually buys is the COUNT and the mix when more than one connection is registered for the
+   * peer — which is what says whether eviction had one corpse to remove or several, and whether a
+   * healthy sibling connection existed alongside the dead one.
    *
    * Optional-chained on the field: an older `@cello-protocol/transport` returns entries without a
    * status, and reporting `undefined` honestly beats inventing "open".
@@ -229,7 +255,13 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
     // /health does not silently change definition. The per-directory truth is in the log above.
     const configured = results.find((r) => r.peerId === this.#directoryPeerId);
     if (configured && !configured.ok) {
-      return { ok: false, reason: "directory_unreachable", ...(configured.detail ? { detail: configured.detail } : {}) };
+      // `directory_stream_unavailable`, NOT `directory_unreachable`. What failed is opening a stream
+      // over the connection THIS PROCESS holds, and in the failure that opened this tier the
+      // directory was up the whole time — serving other clients, notarizing other sessions. Calling
+      // a dead local handle "the directory is unreachable" is the exact conflation that sent two
+      // investigations to the wrong tier, and this line was still saying it. `detail` carries the
+      // transport error verbatim.
+      return { ok: false, reason: "directory_stream_unavailable", ...(configured.detail ? { detail: configured.detail } : {}) };
     }
     return { ok: true };
   }
@@ -280,7 +312,24 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
         return "unavailable";
       }
       try {
+        // COUNTED BEFORE, because hangUp is PEER-scoped: libp2p's `closeConnections(peerId)` closes
+        // every connection registered for that peer, and the directory dials this relay
+        // independently — so a second, inbound connection can exist under the same peer id and be
+        // carrying a seal verdict right now. Evicting is still correct (the outbound one is
+        // unusable and nothing else removes it), but an aborted verdict must be ATTRIBUTABLE rather
+        // than mysterious, and a count above 1 here is the only thing that would ever say so.
+        const destroyed = this.#connSnapshot(peerId);
         await withHangUp.hangUp(peerId);
+        if (destroyed.count > 1) {
+          this.#logger?.warn("relay.directory.evict.multiple", {
+            peerId,
+            connectionsDestroyed: destroyed.count,
+            socketStatuses: destroyed.statuses,
+            impact: "hangUp is peer-scoped, so a SECOND connection to this directory was closed "
+              + "alongside the dead one — if a stream was in flight on it, its failure originates "
+              + "here and not at the directory",
+          });
+        }
         return "evicted";
       } catch (err: unknown) {
         // Does NOT rethrow. The caller is repairing a connection that is already unusable; failing
