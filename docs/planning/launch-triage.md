@@ -188,24 +188,37 @@ basic value has not been delivered.**
 
 | Rank | What it blocks | Item | Board line |
 |---|---|---|---|
-| **1** 🟡 | Closing a conversation fails about a third of the time and the receipt is unrecoverable — 38 refused seals against 11 successful, with an exact discriminator. The relay's connection to the directory is closed and the code that exists to repair it cannot. **Cause found, fix BUILT and reviewed 2026-08-19 — and running on nothing yet.** | 33 | `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` → M12 Tier P5 |
+| **1** 🟠 | Closing a conversation fails about a third of the time and the receipt is unrecoverable — 38 refused seals against 11 successful, with an exact discriminator. The relay's connection to the directory is closed and the code that exists to repair it cannot. **Cause found, fixed, reviewed twice, and LIVE on all five nodes as of 2026-08-19 14:00 UTC — and still unproven.** | 33 | `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` → M12 Tier P5 |
 
-> ### 🟡 WHAT "BUILT" MEANS HERE, AND WHY IT IS NOT ✅
-> The cause is settled and traced into libp2p's own source: `dial()` returns an EXISTING registered
-> connection whenever its socket status reads `open` and never inspects the muxer, so the relay's
-> redial handed the same dead object back on all 38 failures. The fix — evict, then dial — is
-> written, reviewed and gated in three places (relay→directory, directory→relay, and
-> directory↔directory anti-entropy, all of which had it).
+> ### 🟠 WHAT IS DONE, AND THE ONE THING THAT IS NOT
+> **Done and verified.** The cause is traced into libp2p's source: `dial()` returns an EXISTING
+> registered connection whenever its socket status reads `open` and never inspects the muxer, so the
+> relay's redial handed the same dead object back on all 38 failures. Evict-then-dial shipped in all
+> three places that had the defect (relay→directory, directory→relay, directory↔directory
+> anti-entropy). Published, promoted, and rolled node-by-node to all five nodes, each verified on
+> `cello/{directory,relay}:c703b3aa` by inspecting the instance.
 >
-> **No deployed node has any of it.** It needs `@cello-protocol/transport` published and promoted to
-> `latest` (Andre runs the promotion), then a node-by-node roll of both fleets. Until then every
-> relay logs `relay.directory.evict.unavailable` and keeps the old behaviour. **Do not read this row
-> as fixed** — that is the mistake this list has already made eight times, once on the item holding
-> the top slot.
+> **Sealing is confirmed working after the roll** — two live seals, both verified in the DIRECTORY
+> logs rather than taken from an agent's report: roots `3e39affe…` and `9e7a624a…`. Zero seal
+> rejections, zero broker-unreachable, zero `evict.unavailable` since. One piece is proven on
+> production traffic: `heldForMs` now carries real durations (up to 451,614ms) instead of capping at
+> the 30-second probe interval.
 >
-> Still owed after the roll: a live proof that a seal survives a killed connection with no relay
-> restart (`DOD-M12-CONN-PROVE-1`), and the instrument that can actually SEE the death — a muxer
-> status, which libp2p keeps internal (`DOD-M12-CONN-MUXER-OBSERVE-1`).
+> **NOT done: the fix has never been exercised.** The repair path has not fired once — three
+> directory restarts during the roll produced ZERO `relay.directory.connection.stale`, because a
+> de-registered disconnect is the benign case and the next dial genuinely rebuilds. **Both live
+> seals ran over freshly restarted links, which is the case that has ALWAYS worked.** Every observed
+> failure needed an aged connection. Nothing here shows the defect is gone.
+>
+> **The signal that would settle it**, and the only one: a `relay.directory.connection.stale`
+> carrying `eviction: "evicted"` and `recovered: true`, with the seal that triggered it returning a
+> receipt. Until one occurs this stays 🟠. **A quiet fleet is not evidence** — the old relay ran
+> 2h29m clean before failing.
+>
+> Three further defects were found on the way and filed in [[M12B-DEFINITION-OF-DONE]], because they
+> are relay↔client contract rather than relay↔directory: the relay answers `session_sealed` when it
+> means "I refused this"; a transport fault can terminalise a healthy session; and the certificate
+> pull has recovered nothing in 157 attempts.
 
 **This block outranks the 2026-08-04 ranking below**, on the same terms the 2026-08-17 block did.
 Item 33 keeps its number and its position in the body of the list — the doc's numbers are stable and
