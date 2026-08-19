@@ -887,6 +887,19 @@ description: >
   — 🟡 BUILT, reviewed, and RUNNING since the 2026-08-19 roll — unproven for the same reason as
   EVICT-1: nothing has exercised the repair. → Entries 92, 93
 
+- **DOD-M12-SEAL-ALERT-1** [trustless-cello] — **the fleet tells you when a conversation could not
+  be sealed.** During the failure the fleet emitted a perfectly good signal 220 times an hour for
+  ten hours and nobody was told; the signal was never missing, nothing watched it. Log sink →
+  Pub/Sub → Cloud Run → Telegram. **Scope ruled narrow by Andre: UNRECOVERABLE failures only** —
+  a seal actually refused, or a repair that ran and did not repair. Not muxer deaths, not evictions,
+  not a node on old code. If Tier P5 works this channel is SILENT, and the silence means something
+  precisely because the noisy events were left out.
+
+  Bot token and chat id are in Secret Manager, populated out of band so neither entered the repo nor
+  an agent's context; both verified live against Telegram's API (bot `@CelloAssistantOpBot`, id
+  8723677322) and a test message delivered end to end. Sink, topic, identities and secrets are
+  APPLIED. The notifier service is built and gated; image and deploy in progress. — 🟡 → Entry 94
+
 **Explicitly beyond this tier** (recorded so nothing is silently deferred):
 - **The unilateral escalation failing 3 of 3** with `unilateral_root_unverifiable`. The 11-minute
   wait promises the operator in capitals that it "escalates to a unilateral seal and produces a real
