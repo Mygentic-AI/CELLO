@@ -282,3 +282,102 @@ describe("AeSyncService — libp2p-face wiring", () => {
     expect(dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected").length).toBe(0);
   });
 });
+
+// ─── DOD-M12-CONN-AE-1: a dead connection must not end anti-entropy permanently ───────────────
+//
+// The same held-connection defect as the relay↔directory link, on the directory↔directory one, and
+// worse in one respect: `#attempt` dials and opens a stream with NO retry at all. `libp2p.dial()`
+// returns an existing registered connection whenever its SOCKET status reads `open` and never
+// inspects the muxer, so once a peer's muxer dies every round fails at `newStream` from then on —
+// silently, for as long as the process lives, while both nodes report healthy. Replication stops
+// and nothing says so; a restart is the only cure, because a restart is the only thing that empties
+// the connection manager.
+describe("DOD-M12-CONN-AE-1: a stale peer connection is evicted and retried, not fatal for the process", () => {
+  function transportThatFailsFirstStream(opts: { omitHangUp?: boolean } = {}) {
+    const trace: string[] = [];
+    let streamAttempts = 0;
+    let inboundHandler: ((stream: Stream, remotePeerId?: string) => void | Promise<void>) | undefined;
+    const respTransport: AeTransport = {
+      async handle(_p, handler) { inboundHandler = handler; },
+      async dial() { throw new Error("responder does not dial"); },
+      async newStream() { throw new Error("responder does not open streams"); },
+    };
+    const dialTransport: AeTransport = {
+      async handle() {},
+      async dial(multiaddr: string) {
+        trace.push("dial");
+        return { peerId: multiaddr.split("/p2p/")[1] ?? "" };
+      },
+      ...(opts.omitHangUp === true ? {} : {
+        async hangUp(_peerId: string) { trace.push("hangUp"); },
+      }),
+      async newStream(_peerId: string, _protocolId: string) {
+        streamAttempts += 1;
+        trace.push("newStream");
+        if (streamAttempts === 1) {
+          throw Object.assign(
+            new Error('The connection muxer is "closed" and not "open"'),
+            { reason: "connection_lost" },
+          );
+        }
+        if (!inboundHandler) throw new Error("responder handler not registered");
+        const [dialSide, respSide] = streamPair();
+        void inboundHandler(respSide, A.peerId);
+        return dialSide;
+      },
+    } as AeTransport;
+    return { respTransport, dialTransport, trace };
+  }
+
+  it("evicts and retries once, so a dead handle costs one round rather than every future round", async () => {
+    const { respTransport, dialTransport, trace } = transportThatFailsFirstStream();
+    const respStore = new MemStore();
+    const dialStore = new MemStore();
+    const respLogger = testLogger();
+    const dialLogger = testLogger();
+    const respService = new AeSyncService({
+      transport: respTransport, manifest: () => manifest, identity: B, store: respStore, logger: respLogger,
+    });
+    await respService.start();
+    const dialService = new AeSyncService({
+      transport: dialTransport, manifest: () => manifest, identity: A, store: dialStore, logger: dialLogger,
+    });
+
+    await dialService.syncPeer(B.nodeId, "http://host:8080", B.peerId);
+
+    // Eviction must sit between the failed stream and the second dial. Without it the dial resolves
+    // from libp2p's registry and returns the same dead connection.
+    const evictIdx = trace.indexOf("hangUp");
+    expect(evictIdx).toBeGreaterThan(-1);
+    expect(trace.slice(evictIdx, evictIdx + 3)).toEqual(["hangUp", "dial", "newStream"]);
+  });
+
+  it("does not evict when the first stream opens cleanly", async () => {
+    const { respService, dialService } = pairServices();
+    await respService.start();
+    // A healthy round must not tear the connection down — that would turn one cached connection
+    // into a reconnect per sync interval, per peer.
+    const trace: string[] = [];
+    await dialService.syncPeer(B.nodeId, "http://host:8080", B.peerId);
+    expect(trace).not.toContain("hangUp");
+  });
+
+  it("SAYS SO when the transport cannot evict, rather than looking like it retried properly", async () => {
+    const { respTransport, dialTransport, trace } = transportThatFailsFirstStream({ omitHangUp: true });
+    const respStore = new MemStore();
+    const dialStore = new MemStore();
+    const dialLogger = testLogger();
+    const respService = new AeSyncService({
+      transport: respTransport, manifest: () => manifest, identity: B, store: respStore, logger: testLogger(),
+    });
+    await respService.start();
+    const dialService = new AeSyncService({
+      transport: dialTransport, manifest: () => manifest, identity: A, store: dialStore, logger: dialLogger,
+    });
+
+    await dialService.syncPeer(B.nodeId, "http://host:8080", B.peerId);
+
+    expect(trace).not.toContain("hangUp");
+    expect(dialLogger.events.some(([e]) => e === "antientropy.peer.evict.unavailable")).toBe(true);
+  });
+});

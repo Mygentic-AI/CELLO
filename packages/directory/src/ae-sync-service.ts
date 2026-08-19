@@ -40,6 +40,29 @@ export interface AeTransport {
   ): Promise<void>;
   dial(multiaddr: string): Promise<{ peerId: string }>;
   newStream(peerId: string, protocolId: string): Promise<Stream>;
+  /**
+   * DOD-M12-CONN-AE-1. Optional because this repo floats on published `@cello-protocol/transport`
+   * and a node built before `hangUp` existed must still run — its absence is REPORTED, not
+   * defaulted. Needed because `dial()` returns an existing registered connection whenever its
+   * socket status reads `open` and never inspects the muxer, so a dial alone cannot replace a
+   * connection whose muxer has died.
+   */
+  hangUp?(peerId: string): Promise<void>;
+}
+
+/**
+ * DOD-M12-CONN-AE-1: is this the "the connection I hold is unusable" error?
+ *
+ * `CelloNode` throws STRUCTURED PLAIN OBJECTS carrying `reason`, not Errors, so the shape is what
+ * identifies it. Narrow deliberately: only a lost connection earns an evict-and-retry. A protocol
+ * mismatch or a handshake refusal is not repaired by reconnecting, and retrying those would double
+ * the cost of every genuine rejection.
+ */
+function isAeConnectionLost(err: unknown): boolean {
+  return (
+    typeof err === "object" && err !== null &&
+    (err as { reason?: unknown }).reason === "connection_lost"
+  );
 }
 
 /** Adapt a libp2p Stream to the channel's AeWire (lp varint framing, one CBOR frame per message). */
@@ -243,8 +266,46 @@ export class AeSyncService {
     const { transport } = this.#cfg;
     // The dial pins /p2p/<manifest peerId>; libp2p aborts if the remote's Noise key mismatches.
     // Still, channel-bind against the OBSERVED identity the dial returned — evidence, not intent.
-    const dialed = await transport.dial(manifestEntryMultiaddr(endpoint, peerId, multiaddr));
-    const stream = await transport.newStream(dialed.peerId, AE_PROTOCOL_ID);
+    const target = manifestEntryMultiaddr(endpoint, peerId, multiaddr);
+    const dialed = await transport.dial(target);
+    // DOD-M12-CONN-AE-1: a dead connection must cost ONE round, not every future one.
+    //
+    // The dial above does not necessarily reach the network — libp2p returns an existing registered
+    // connection whenever its socket status reads `open`, without inspecting the muxer. So once a
+    // peer's muxer dies, this `newStream` failed on every subsequent round for the life of the
+    // process, silently, while both nodes reported healthy: replication stops and nothing says so.
+    // There was no retry here at all, which made it permanent rather than merely slow.
+    let stream: Stream;
+    try {
+      stream = await transport.newStream(dialed.peerId, AE_PROTOCOL_ID);
+    } catch (err: unknown) {
+      if (!isAeConnectionLost(err)) throw err;
+      if (typeof transport.hangUp !== "function") {
+        this.#cfg.logger.error("antientropy.peer.evict.unavailable", {
+          peerNodeId, peerId: dialed.peerId,
+          impact: "this node's @cello-protocol/transport predates hangUp, so the redial can only "
+            + "return the dead connection it already holds — anti-entropy with this peer stays "
+            + "broken until the node is rebuilt on a newer transport",
+        });
+        throw err;
+      }
+      this.#cfg.logger.warn("antientropy.peer.connection.stale", {
+        peerNodeId, peerId: dialed.peerId,
+        reason: err instanceof Error ? err.message : String(err),
+        action: "evicting, redialling and retrying once",
+      });
+      try {
+        await transport.hangUp(dialed.peerId);
+      } catch (evictErr: unknown) {
+        // Not fatal to the repair: the dial that follows may still succeed.
+        this.#cfg.logger.warn("antientropy.peer.evict.failed", {
+          peerNodeId, peerId: dialed.peerId,
+          reason: evictErr instanceof Error ? evictErr.message : String(evictErr),
+        });
+      }
+      await transport.dial(target);
+      stream = await transport.newStream(dialed.peerId, AE_PROTOCOL_ID);
+    }
     return runAeDialer({
       wire: streamWire(stream),
       manifest: this.#cfg.manifest(),
