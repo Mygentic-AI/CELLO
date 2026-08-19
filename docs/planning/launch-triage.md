@@ -2,7 +2,7 @@
 name: Launch Triage
 type: triage
 date: 2026-07-31
-topics: [launch, security, backup, receipt-integrity, kill-switch, daemon-lifecycle, telegram, install, triage, sealed-sessions, wake]
+topics: [launch, security, backup, receipt-integrity, kill-switch, daemon-lifecycle, telegram, install, triage, sealed-sessions, wake, relay, observability]
 status: open
 description: >
   The launch punch list. Ranked by what actually goes wrong if left alone, not by build status.
@@ -155,11 +155,49 @@ description: >
   no re-dial anywhere, a force-abandon the far side is never told about (the cause of the storm), a
   session that can neither seal nor be destroyed, a daemon that refuses to exit, and an error whose
   guidance instructs the caller to do the wrong thing.
+  2026-08-19: added item 33 (DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1) — closing a conversation
+  fails about a third of the time and the receipt is unrecoverable. This is item 14
+  (DOD-RELAY-DIRECTORY-RECONNECT-1) RECURRING after it was marked ✅ on 2026-08-08: the redial that
+  item added does run and is not sufficient. Correlation is exact over 49 attempts — 38 of 38
+  rejected seals had the relay holding a CLOSED connection to the adjudicating directory, 0 of 11
+  successful ones did. The word "closed" is the trap: it describes an object in the relay's memory,
+  not the directory, which was up and serving throughout every failure. Two investigations read it as
+  a directory-availability problem and went to the wrong tier. Idle-timeout and rots-until-restart
+  are both dead — one connection went from a successful seal to closed in 128 seconds, untouched.
+  Two adjacent faults filed inside 33 rather than as items of their own because they are not this
+  cause: the unilateral escalation (the backstop the 11-minute wait promises) failed 3 of 3, and a
+  close can report a timeout on a session that sealed 1.4 seconds earlier. Also names the
+  observability failure concretely for item 17: the signal was firing 220 times an hour for ten
+  hours, unwatched, while relay.health.check.passed — the DIRECTORY checking the relay's machine,
+  which can never go red for this — was cited twice as evidence the relay was healthy.
 ---
 
 # Launch Triage
 
-# 🔴 TOP OF THE LIST — SESSIONS DO NOT WORK (2026-08-17, Andre)
+# 🔴 TOP OF THE LIST — CONVERSATIONS CANNOT BE RELIABLY CLOSED (2026-08-19, Andre)
+
+**Sessions work again. Closing them does not.** The 2026-08-17 block below returned us to two agents
+holding a conversation, and it is all ✅. This one is about the act that conversation ends with.
+
+**Ruled launch-blocking by Andre, 2026-08-19**, and the reason is not that a receipt is a nice
+artifact to point at — that would be a papercut. It is that **you cannot reliably close a session.**
+The user sees a close hang for eleven minutes and then fail, or sees no seal, and concludes the
+product does not work. CELLO's claim is a cryptographically undisputed record of what was said
+between two agents; the close is the only moment that claim is redeemed. **If you cannot seal, the
+basic value has not been delivered.**
+
+| Rank | What it blocks | Item | Board line |
+|---|---|---|---|
+| **1** ❌ | Closing a conversation fails about a third of the time and the receipt is unrecoverable — 38 refused seals against 11 successful, with an exact discriminator. The relay's connection to the directory is closed and the code that exists to repair it cannot. | 33 | `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` → M12 Tier P5 |
+
+**This block outranks the 2026-08-04 ranking below**, on the same terms the 2026-08-17 block did.
+Item 33 keeps its number and its position in the body of the list — the doc's numbers are stable and
+cross-references use names, so the rank lives here rather than in a renumbering.
+
+**Working it:** the three units are in [[M12-DEFINITION-OF-DONE]] Tier P5, ordered — observe, then
+evict, then prove. Do not skip to the fix; the observation line is what makes the fix provable.
+
+# 🔴 SECOND — SESSIONS DO NOT WORK (2026-08-17, Andre) — ALL CLEARED
 
 **The core problem is that we cannot conduct a session at all.** Everything in this block was found
 on 2026-08-17 and all of it is being cleared today. **This block outranks the 2026-08-04
@@ -1801,6 +1839,97 @@ diagnosed and reported as a protocol defect. The guidance must name the paramete
 
 **Related:** this list's recurring finding — an error that names its exit point rather than its cause
 — applied to guidance rather than to a reason string.
+
+## 33. Closing a conversation fails about a third of the time, and the receipt is gone for good
+
+**Designation: `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1`** — ❌ **OPEN, measured 2026-08-19.**
+**This is `DOD-RELAY-DIRECTORY-RECONNECT-1` (item 14) recurring after it was marked ✅ on 2026-08-08.**
+The redial that item added is real and does run. It is not sufficient.
+
+**What it costs a customer.** They finish a conversation and close it. Nothing comes back for eleven
+minutes, then the close reports a timeout. There is no receipt, on either side, and there never will
+be — the transcript stays permanently one leaf short of sealable. Nothing before the close warns
+them: every message sent, every message arrived, both agents looked healthy the whole way. The
+product's central promise is a notarized record of what was said, and it is the closing act — the
+only moment the promise is redeemed — that fails.
+
+**Measured across 49 seal attempts, 2026-08-18 05:00 → 2026-08-19 09:30 UTC:**
+
+| | attempts | relay found its connection to the adjudicating directory CLOSED |
+|---|---|---|
+| Rejected | 38 | **38** |
+| Sealed | 11 | **0** |
+
+No exception in either direction.
+
+**What "closed" means, precisely, because the word has misled this investigation twice.** The relay
+asks its held connection for a new stream and libp2p answers
+`connection_lost: The connection muxer is "closed" and not "open"`. That is a statement about an
+object in the relay's memory. **It is not a statement about the directory.** At every one of those
+moments the directory was up, serving other clients, notarizing other sessions and answering lookups;
+a TCP probe from inside the relay container reached all three directories on 8080. **No directory was
+ever down. This is a connection-lifecycle defect in the relay process, not a directory availability
+problem** — and reading it as the latter is what sent two separate investigations to the wrong tier.
+
+**The measurement that rules out an idle timeout.** On 2026-08-18 the same relay process sealed
+successfully through `gcp-usc1` at **07:58:03** and was refused by the same directory at **08:00:11**.
+No restart, no deploy, and nothing touched that connection in between: **128 seconds from working to
+closed, while idle.** Age-based and idle-based explanations are dead. So is "it goes bad and stays
+bad until restarted" — that success sits between two failures.
+
+**The fallback is not a fallback.** When the brokering directory's connection is closed, the relay
+retries against `relay_primary_directory`, which is `gcp-use1` for both relays. The relays could not
+reach `gcp-use1` on **any** attempt for over ten hours on 2026-08-18 — 220 failures an hour, logged
+the whole time. The backup path was the most reliably broken connection either relay had. Two of the
+four observed customer-visible failures died there rather than at the broker.
+
+**Nothing connected the alarm to the consequence.** `relay.directory.connection.stale` fired roughly
+**220 times an hour for more than ten hours** and no one saw it. The signal was not missing; it was
+unwatched and unattached to any user-visible meaning. Meanwhile `relay.health.check.passed` was green
+throughout — that is the *directory* checking whether the relay's machine answers, the opposite
+direction, and it can never go red for this. Two investigations cited it as evidence the relay was
+fine. **It should be renamed to say which side it tests.** This is item 17 (`nothing watches
+anything`) with a concrete, already-emitting signal to hang an alert on.
+
+**Symptoms of this item, filed here so they are not raised as separate faults:**
+
+- `session_incomplete` with `missing_leaves: 1`. When the relay refuses a seal it stops forwarding,
+  so the counterparty's closing leaf never arrives and every retry reports incomplete.
+- `seal_unilateral_timeout` after eleven minutes.
+- A counterparty answering `session_already_sealed` for a session no node ever notarized.
+
+**Two things that are NOT this item and need their own fix:**
+
+1. **The unilateral escalation, the promised backstop, failed 3 for 3** with
+   `unilateral_root_unverifiable`. The eleven-minute wait tells the operator in capitals that it
+   "escalates to a unilateral seal and produces a real receipt. It is working." In all three observed
+   cases it produced nothing. Five separate checks return that one reason, so the log cannot say
+   which failed.
+2. **A close can report failure on a session that sealed.** On 2026-08-19 session `21eebf70` was
+   notarized at 07:19:25.686 (root `a50c1c53`, receipt present on both machines) and a second close —
+   entered at 07:19:24.641, before the seal landed — read the status once as `active`, spent 2.4
+   seconds reconnecting, and by the time it looked the session had been sealed for 1.4 seconds. It
+   never re-read, waited the full eleven minutes, and reported a timeout. Its recovery pull came back
+   `missing_certificate_fields` from a certificate that was already in its own database. This is
+   deterministic, not intermittent, and it is the reason a "failure" count can include a session that
+   worked.
+
+**What is NOT known, and what would settle it.** Why the connection object closes. The relay logs the
+corpse and never the death — there is no libp2p connection-lifecycle logging on the relay at all, so
+we cannot tell whether the directory closed it, the connection manager pruned it, or a timeout fired.
+`relay.directory.redial.outcome` (deployed 2026-08-19 06:15 UTC) separates the three candidate
+mechanisms on the next failure and has one sample so far, a recovery. **The missing evidence is
+connection open/close events with peer and reason, on the relay.** Until those exist, any account of
+the cause is inference.
+
+**Do not read the current quiet as a fix.** Since the relay VMs were replaced at 06:15 UTC there have
+been ten consecutive receipts. The old relay had a clean run of 2 hours 29 minutes on 2026-08-18 that
+ended in failure. Nothing yet distinguishes "fixed" from "between deaths".
+
+**Method note for whoever picks this up.** Report only connections the logs actually make. Two prior
+diagnoses of this fault were wrong in the same way — a plausible narrative arc drawn between events
+the data never linked. The 38/38 table above is a count, not a story, and it is the only part of this
+entry that has survived an adversarial pass unchanged.
 
 # Post-launch — needed eventually, not for launch
 
