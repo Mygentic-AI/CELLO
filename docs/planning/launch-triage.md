@@ -219,13 +219,32 @@ basic value has not been delivered.**
 > are relay↔client contract rather than relay↔directory: the relay answers `session_sealed` when it
 > means "I refused this"; a transport fault can terminalise a healthy session; and the certificate
 > pull has recovered nothing in 157 attempts.
+>
+> ### ✅ ADDED LATER THE SAME DAY — the instrument, and what it changes about silence
+> **A second roll (all five nodes, `0d00e3bf`, transport `0.0.63`) shipped the observability half.**
+> The muxer status — the state the failure actually lives in, which libp2p keeps internal and which
+> nothing could previously see — is now exposed, and the relay's 30-second probe logs a death AT
+> THE MOMENT IT HAPPENS rather than when the next seal trips over it. **Six of six relay→directory
+> links confirm `readable: true`**, so the detector is provably watching rather than silently blind.
+> An unrecoverable failure now also reaches Telegram, scoped to failures only.
+>
+> **This changes what silence means, which is the point.** Before today, no news proved nothing. Now
+> `relay.directory.muxer.died` never appearing over days — with `readable: true` proving the
+> instrument was awake — is genuine evidence the fix is holding. That inversion was Andre's argument
+> when he overruled a narrower proposal, and it is the reason this item can sit open honestly rather
+> than being called done or watched blindly.
+>
+> **Still 🟠 for one reason:** the repair has never executed. Six directory restarts across two rolls
+> produced zero stale connections. It cannot be induced — there is no supported way to put a
+> connection into the failing state from outside libp2p — so this closes on a real occurrence or not
+> at all.
 
 **This block outranks the 2026-08-04 ranking below**, on the same terms the 2026-08-17 block did.
 Item 33 keeps its number and its position in the body of the list — the doc's numbers are stable and
 cross-references use names, so the rank lives here rather than in a renumbering.
 
-**Working it:** the three units are in [[M12-DEFINITION-OF-DONE]] Tier P5, ordered — observe, then
-evict, then prove. Do not skip to the fix; the observation line is what makes the fix provable.
+**Working it:** Tier P5 in [[M12-DEFINITION-OF-DONE]] is closed out — cause, fix, roll, instrument
+and alerting are all ✅; only `DOD-M12-CONN-PROVE-1` remains, and it waits on the fault recurring.
 
 # 🔴 SECOND — SESSIONS DO NOT WORK (2026-08-17, Andre) — ALL CLEARED
 
