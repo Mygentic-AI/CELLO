@@ -6848,3 +6848,90 @@ proving a NEW one was established, never that the retry eventually succeeded.
 - **A publish and a roll**, both outside this session's authority: `@cello-protocol/transport` needs
   publishing and promoting before a rolled relay can actually evict, and until then a rolled relay
   logs `relay.directory.evict.unavailable` rather than pretending.
+
+---
+
+## Entry 91 — 2026-08-19 — the review, and the observation half that watched the wrong event
+
+**Reviewer: `cello-unit-reviewer`, one pass, no model override. Verdict quoted verbatim:**
+
+> **SPEC: DEVIATIONS FOUND** — OBSERVE-1 (b) ships without the reason the clause requires and on an
+> event that cannot fire for the failure being observed; "Lands FIRST" was not honoured; EVICT-1's
+> headline claim is not true of any running relay. None is journaled as a decision. [blocking]
+>
+> **SILENT FALLBACKS FOUND** — F1 (a warning that fires on the benign case and is false when it
+> does, while the real death is silent) and F6 (a duration field that reports the probe interval as
+> the connection's lifetime). The `hangUp`-absent branch is **not** a fallback: it is reported at
+> error with its cost and named in the outcome — that one is right.
+>
+> **ERROR SUBSTITUTION FOUND** — F8 (`invalid_peer_id` surfacing as `connection_lost` …) and F9
+> (`directory_unreachable` for a dead local handle …). [blocking per the cause-not-symptom lens]
+>
+> **HOLLOW TESTS FOUND** — the socket-status test asserts key presence against an empty connection
+> list; OBSERVE-1 clause (b) has no test at all and a full revert of the observation block fails
+> nothing; the seal path is unexercised for eviction. [blocking]
+>
+> Not a rubber stamp: the mechanism is correctly diagnosed and the eviction is correctly ordered and
+> correctly scoped to the failure path — that half is the strongest thing in this diff. What does
+> not hold up is the observation half, which watches an event that by construction cannot fire for
+> the death it was built to record.
+
+**All twelve findings dispositioned. Nine fixed, three recorded as DoD lines.**
+
+### The finding that mattered
+
+`relay.directory.connection.closed` was built on `peer:disconnect`. libp2p dispatches that from
+`ConnectionManager.onDisconnect` and **only after `this.connections.delete(peerId)`** — verified in
+3.3.2, the delete immediately precedes the dispatch. Tier P5's failure is the opposite state: still
+registered, live socket, which is why `dial()` returns it. **So the death this line was written to
+record emits no event, and the line never fires for it.** Where it *does* fire — an ordinary
+de-registered close — the next dial rebuilds transparently and no seal is refused, so its
+`impact: "seals … are refused"` was false in every case it could ever print.
+
+A warning that fires on the benign case and is silent on the real one is worse than no line: it is
+the noise that buries the signal, which is the exact failure the transitions-only probe logging was
+built to avoid. Now INFO, no impact claim, and it names itself as NOT the dead-muxer failure. The
+instrument that *can* see it needs a muxer status libp2p keeps internal — `DOD-M12-CONN-MUXER-OBSERVE-1`.
+
+### The unknown that was not unknown
+
+Entry 90 recorded "whether the socket status actually read `open` during the live failures" as the
+one open question. It is answerable from source and I should have answered it there: for
+`The connection muxer is "closed" and not "open"` to be thrown at all, `CelloNode.newStream` must
+first have selected the connection through its own `find(c => c.status === "open")`. **It was `open`
+by construction, in all 38.** The procedure's "do not escalate what you can verify" applies to
+reading our own code, not only to running commands.
+
+### Fixed
+
+`heldForMs` measured time since the last 30-second probe, not the connection's lifetime — a value
+with a 30-second ceiling under a name that claimed otherwise, on the one field this unit says the
+investigation never had. Now measured from the open. `directory_unreachable` → `directory_stream_unavailable`.
+`newStream`'s unparseable-peer-id → `invalid_peer_id`, not `connection_lost` (it was newly harmful:
+a typo'd peer id now drove the evict-and-redial path and produced a "pre-fix behaviour" reading).
+`hangUp` is peer-scoped and can close a second connection carrying a seal verdict — correct to do,
+now counted and logged so the consequence is attributable. And the daemon's standing-receiver
+watchdog read `getConnections()` without a status check, so a registered corpse read as a live relay
+and the rebuild never fired: one clause, fixable only because `status` now exists.
+
+### Tests, before and after
+
+| | before | after |
+|---|---|---|
+| Socket status | `toHaveProperty` against `getConnections: () => []` — passes on a hardcoded `[]` | asserts `["open"]`, plus a case pinning `["unreported"]` for today's transport |
+| Lifecycle logging | **no test; deleting the whole block failed 0** | doubles capture the handlers; deleting the block fails **3** |
+| Seal-path eviction | structural only | order asserted on `processSeal` |
+
+### Rule
+
+**A test double that stubs an interface method as a no-op is a hole in the revert test, not a
+convenience.** Four doubles registered `onPeerConnect`/`onPeerDisconnect` and never invoked them, so
+an entire observation block — filter, arithmetic, and a false impact string — was unreachable from
+the suite. The block was not under-tested; it was untestable, and that is why a claim nobody could
+have believed survived to review.
+
+### Owed
+
+`DOD-M12-CONN-PUBLISH-1` — nothing above reaches a running node until `@cello-protocol/transport` is
+published and the fleet rolled. Both fix lines stay 🟡. `DOD-M12-CONN-PROVE-1` and
+`DOD-M12-CONN-MUXER-OBSERVE-1` remain ❌.
