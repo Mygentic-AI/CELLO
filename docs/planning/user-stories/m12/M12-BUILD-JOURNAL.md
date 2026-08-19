@@ -6935,3 +6935,70 @@ have believed survived to review.
 `DOD-M12-CONN-PUBLISH-1` — nothing above reaches a running node until `@cello-protocol/transport` is
 published and the fleet rolled. Both fix lines stay 🟡. `DOD-M12-CONN-PROVE-1` and
 `DOD-M12-CONN-MUXER-OBSERVE-1` remain ❌.
+
+---
+
+## Entry 92 — 2026-08-19 — the directory's repair told the operator "[object Object]"
+
+**Units: DOD-M12-CONN-DIR-RELAY-1, DOD-M12-CONN-AE-1. Reviewer: `cello-unit-reviewer`, one pass,
+no model override. Verdict quoted verbatim:**
+
+> - **SPEC: DEVIATIONS FOUND** — [blocking] the redial-outcome clause of DOD-M12-CONN-DIR-RELAY-1 is
+>   not implemented at all; "same fix as the relay side" deviated by dropping the `connection_lost`
+>   narrowing, un-journaled.
+> - **ERROR SUBSTITUTION FOUND** — [blocking] the three new failure logs emit `[object Object]`
+>   where the file's own exported `describeThrown` exists for exactly this …
+> - **HOLLOW TESTS FOUND** — [blocking] `ae-sync-service.test.ts:355`. All other new tests survive
+>   the revert test …
+>
+> I do not think this is a rubber stamp: the two units land in the same file family as an
+> already-reviewed sibling that solved four of these problems (narrowing, outcome logging,
+> `describeThrown`, peer-scope counting), and the divergences are all in the direction of the
+> sibling being right. The cheapest closure is to port `network-directory-adapter.ts:288-427`
+> structurally into both new call sites rather than fix six findings individually.
+
+**Taken, including the closing advice.** The shared pieces now live in `connection-repair.ts` and
+both directory call sites use them. NOT shared with `packages/relay` — the relay-extractability
+invariant means it keeps its own copy.
+
+### The finding I could not have caught with my own tests
+
+Every new failure log rendered its cause as `[object Object]`. `CelloNode` throws **structured plain
+objects** on every `newStream` path, so `err instanceof Error` is false and `String(err)` is
+worthless — and this file already **exported `describeThrown` for exactly this**, four lines above
+the code that ignored it.
+
+**My fixtures threw `Object.assign(new Error(...), { reason: "connection_lost" })` — an Error, which
+is the one shape production never produces.** So the tests passed on the branch that is dead in
+production and could never have exercised the branch that runs. Five call sites fixed, including the
+two pre-existing ones carrying the unilateral-seal path's only diagnostic: a directory that could
+not fetch seal leaves logged `error: "[object Object]"` and the operator got
+`unilateral_leaves_unavailable` after eleven minutes.
+
+### The fix I got wrong, and the pre-existing test that caught it
+
+Narrowing the eviction to `connection_lost` is right. Narrowing the **redial** to it is not, and I
+did both. `updateMultiaddr`'s test went red immediately: when a relay re-registers at a new address,
+`newStream` throws `no_connection`, there is nothing registered to evict, and **the redial against
+the updated multiaddr IS the recovery**. Gating both would have broken relay re-registration
+outright — a worse defect than the one being fixed, shipped under a review fix.
+
+**The narrowing gates the eviction; the redial runs for every failure.** That distinction is now the
+comment at the call site, because it is not obvious and it cost a red test to find.
+
+### Also fixed
+
+Redial outcome logged on both branches (a DoD clause verbatim, missing entirely — a directory that
+stopped fetching seal leaves went silent after the first line). Socket statuses return a
+discriminated answer, since `[]` meant "nothing registered" (informative — the dial will genuinely
+reconnect), "the call threw", and "this transport has no `getConnections`" indistinguishably, on the
+tier's key measurement. `correlationId` threaded through the AE lines. The AE retry binds to the
+identity the SECOND dial observed rather than to evidence from a connection it just destroyed.
+`connect()` no longer swallows every dial failure. Peer-scoped eviction counts what it destroyed.
+
+### Rule
+
+**A fixture that throws the wrong ERROR SHAPE tests the wrong branch, silently.** Every assertion
+passed; none of them ran the code production runs. When a system throws plain objects rather than
+`Error`s — and this one documents that it does — a test that constructs an `Error` is not a test of
+that path. Check what the producer actually throws before writing the double.
