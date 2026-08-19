@@ -687,6 +687,74 @@ description: >
   removal-integrity review (proven deadness, built-artifact absence, deleted-test triage by
   subject). — ❌
 
+## Tier P5 — Relay↔directory connection integrity (opened 2026-08-19)
+
+> **WHY THIS TIER EXISTS.** Closing a conversation fails intermittently and the receipt is
+> unrecoverable — measured at 38 refused seals against 11 successful ones over 28 hours. The
+> correlation is exact: **every refused seal had the relay holding a CLOSED libp2p connection to
+> the directory adjudicating it; no successful seal did.** This is the user-facing failure in
+> [[launch-triage]] (`DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1`) and it is launch-blocking — a
+> notary that intermittently cannot notarize has not delivered its basic value.
+>
+> **It is NOT a directory availability problem, and reading it as one has already cost two
+> investigations.** `connection_lost: The connection muxer is "closed" and not "open"` describes an
+> object in the relay's memory. At every failure the directory was up, serving other clients and
+> notarizing other sessions; a TCP probe from inside the relay container reached all three
+> directories. Age and idleness are ruled out too — one connection went from a successful seal to
+> closed in **128 seconds**, untouched, with no restart in between.
+>
+> **This is `DOD-RELAY-DIRECTORY-RECONNECT-1` recurring.** That fix (2026-08-08, recorded on
+> `DOD-DOC-DELIVERY-1` below) added a redial and a 30-second probe. Both are real, both ran during
+> every one of the 38 failures, and neither repaired anything. The reason is in Tier I's new
+> HELD-CONNECTION lens: `libp2p.dial()` returns an EXISTING connection whenever one is registered
+> for that peer whose socket status reads `open` — `findExistingConnection` filters on
+> `con.status === 'open'` and never inspects the muxer — so dialling without evicting first hands
+> the same dead object back to the caller.
+
+- **DOD-M12-CONN-OBSERVE-1** [trustless-cello] — the relay says what its directory connections are
+  DOING, not just that a call failed. (a) When `newStream` fails, the log line carries the
+  connection's **socket status** alongside the muxer status, so the two can be told apart — this is
+  the one measurement that converts the cause from inference to fact, because the muxer check
+  returns before the socket check runs and the error alone cannot distinguish them. (b) libp2p
+  connection **open and close** events for directory peers are logged with peer and reason, so the
+  next occurrence records the death and not only the corpse. (c) No behaviour change: no dial, no
+  eviction, no retry alters. Lands FIRST — the fix is not provable without it. — ❌
+- **DOD-M12-CONN-EVICT-1** [trustless-cello] — the repair can actually repair. Before redialling a
+  directory whose stream failed with a lost connection, the relay **evicts** the registered
+  connection (`hangUp(peerId)`) so `dial()` must establish a new one instead of returning the dead
+  one. Correct whichever socket status the dead connection carried: if `open`, it removes the object
+  being handed back; if `closed`, it costs one no-op call. Clauses: (a) eviction precedes the
+  redial on the failure path, not on the success path; (b) the retry after eviction is still
+  bounded at one, so a genuinely unreachable directory fails fast rather than spinning; (c) the
+  probe path and the seal path go through the same code, so a repair proven by one is proven for
+  the other; (d) failure to evict is logged and does not swallow the original error. — ❌
+- **DOD-M12-CONN-PROVE-1** [trustless-cello] — **held-connection enforcer.** With a relay running,
+  kill its connection to the adjudicating directory underneath it, then close a session: it seals,
+  with **no relay restart**. Must fail on the pre-fix build and pass on the post-fix one (revert
+  test), and must assert the eviction happened rather than that the seal eventually worked — a seal
+  can succeed because a 30-second probe got lucky, which is exactly the intermittency being fixed.
+  A green unit test does not discharge this line: the defect is that a redial SUCCEEDS and changes
+  nothing, so the proof has to be that a *new* connection was established. — ❌
+
+**Explicitly beyond this tier** (recorded so nothing is silently deferred):
+- **The unilateral escalation failing 3 of 3** with `unilateral_root_unverifiable`. The 11-minute
+  wait promises the operator in capitals that it "escalates to a unilateral seal and produces a real
+  receipt"; in all three observed cases it produced nothing, and five separate checks return that
+  one reason so the log cannot say which failed. Separate defect, separate fix, filed in
+  [[launch-triage]] under the same item.
+- **A close reporting failure on a session that sealed.** Session `21eebf70` was notarized at
+  07:19:25.686 and a second close — entered 1.0s earlier, status read once as `active` — waited the
+  full 11 minutes and reported a timeout. Deterministic, not intermittent. Client-side, so it is
+  cello-client work, not M12.
+- **Alerting.** `relay.directory.connection.stale` fired ~220 times an hour for over ten hours and
+  nobody was told. The signal exists; nothing watches it. That is launch-triage item 17's subject,
+  not a Tier P5 deliverable — but note the fix below removes the noise floor, so an alert becomes
+  viable for the first time.
+- **The fallback directory being unreachable.** Both relays fall back to `relay_primary_directory`
+  = `gcp-use1`, which they could not reach on any attempt across those ten hours. A config choice,
+  fixed by the eviction above only if the cause is shared; if it survives the fix, it is its own
+  line.
+
 ---
 
 ## Decisions
