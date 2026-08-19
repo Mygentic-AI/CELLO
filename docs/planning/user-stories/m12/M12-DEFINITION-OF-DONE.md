@@ -695,6 +695,36 @@ description: >
 
 ## Tier P5 — Relay↔directory connection integrity (opened 2026-08-19)
 
+> ### 🟡 TIER STATUS, CLOSED OUT 2026-08-19 — everything is built, shipped and observable; the fix is NOT proven
+>
+> | | |
+> |---|---|
+> | Cause | ✅ traced into libp2p's source, not inferred |
+> | Fix, in all three places it was needed | ✅ built, reviewed twice, live on all five nodes |
+> | Sealing still works after the roll | ✅ two live seals verified in the DIRECTORY logs |
+> | The instrument can see the failure state | ✅ six of six links `readable: true` |
+> | A death is recorded WHEN it happens | ✅ 30s probe, transition-logged |
+> | An unrecoverable failure reaches a phone | ✅ end to end, flood-protected |
+> | **The repair has ever actually repaired** | ❌ **never executed once** |
+>
+> **THE TIER DOES NOT CLOSE GREEN, and the reason is the whole point.** The repair path has not run
+> a single time. Six directory restarts across two rolls produced ZERO
+> `relay.directory.connection.stale`, because a de-registered disconnect is the benign case — the
+> next dial genuinely rebuilds and no seal is affected. Every live seal today ran over a
+> freshly-restarted link, which is the case that has ALWAYS worked. **Nothing observed today shows
+> the defect is gone.**
+>
+> **What closes it:** one `relay.directory.connection.stale` carrying `eviction: "evicted"` and
+> `recovered: true`, with the seal that triggered it returning a receipt. That is
+> `DOD-M12-CONN-PROVE-1` and it cannot be induced — there is no supported way to put a connection
+> into the failing state from outside libp2p.
+>
+> **A quiet fleet is not evidence.** The old relay ran 2h29m clean before failing. What IS now
+> evidence, and was not this morning: `relay.directory.muxer.died` never appearing over days, with
+> `readable: true` proving the instrument was watching. That inversion — silence meaning something —
+> is the deliverable Andre insisted on when he overruled the argument for minimal logging.
+
+
 > **WHY THIS TIER EXISTS.** Closing a conversation fails intermittently and the receipt is
 > unrecoverable — measured at 38 refused seals against 11 successful ones over 28 hours. The
 > correlation is exact: **every refused seal had the relay holding a CLOSED libp2p connection to
@@ -746,10 +776,29 @@ description: >
   > answered rather than carried.
 
 - **DOD-M12-CONN-MUXER-OBSERVE-1** [cello-client, trustless-cello] — the instrument that CAN see
-  this death. `getConnections()` exposes the socket status; the muxer's status is what actually
-  goes bad and libp2p keeps it internal to `Connection`. Expose it, and have the relay's 30-second
-  probe log the transition to muxer-closed. Without this, the only thing that ever notices is the
-  next seal — which is the whole complaint. — ❌
+  this death. `getConnections()` now reports the MUXER status alongside the socket status; the
+  relay's 30-second probe logs the TRANSITION to muxer-closed, so a death is recorded when it
+  happens rather than when the next seal trips over it. — ✅ **PROVEN LIVE 2026-08-19** → Entry 94.
+  Shipped in transport `0.0.63` (verified in the published tarball, not the source) and rolled to
+  all five nodes on `0d00e3bf`. **Six of six links report
+  `relay.directory.muxer.observability readable: true`** — both relays against all three
+  directories.
+
+  > **THE BASELINE LINE IS THE POINT, and it was almost missed.** A transition-only detector says
+  > nothing while healthy AND nothing when blind, so a node rolled without the transport that
+  > provides the field would have been indistinguishable from a node with no problems — this tier's
+  > founding defect, rebuilt inside the instrument written to detect it. Each link now states ONCE
+  > whether the muxer is visible, before any judgement about health, and names the cost when it is
+  > not. Found by asking how the roll itself would be verified, not by a test.
+
+- **DOD-M12-ALERT-DIAGNOSABLE-1** [trustless-cello] — an alert carries enough to act on. Found by
+  Andre reading the first real message as a recipient rather than as its author. `relay.seal.rejected`
+  truncated the session id to **8 characters** — enough to grep, not enough for `cello
+  sealed-receipt` or `cello transcript`, so the notification pointed at a conversation it could not
+  open. It now carries the full id and `adjudicator` (broker / configured / redirect), which is the
+  first branch of any diagnosis of this failure. A self-test also announces itself in its first
+  line: Andre received a drill and had to ask whether it was real, and the expensive direction is
+  the reverse, later. — ✅ → Entry 94
 - **DOD-M12-CONN-EVICT-1** [trustless-cello] — the repair can actually repair. Before redialling a
   directory whose stream failed with a lost connection, the relay **evicts** the registered
   connection (`hangUp(peerId)`) so `dial()` must establish a new one instead of returning the dead
@@ -857,7 +906,8 @@ description: >
   > There is no supported way to induce that state from outside a libp2p node: closing the
   > connection de-registers it (which is the benign case that already recovers), and killing the
   > remote process eventually does the same. What produced it live is still unknown — that is
-  > `DOD-M12-CONN-MUXER-OBSERVE-1`'s job.
+  > `DOD-M12-CONN-MUXER-OBSERVE-1`'s job — now ✅, so the next occurrence is recorded at the moment
+  > it happens.
   >
   > So this line is discharged by TWO pieces, and neither alone is enough:
   > 1. **Mechanism, offline:** already proven in `m12-conn-evict.test.ts` against real libp2p over
