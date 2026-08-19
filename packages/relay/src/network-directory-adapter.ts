@@ -95,6 +95,8 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
   readonly #openedAtMs = new Map<string, number>();
   /** Last observed muxer health per directory, so the probe logs the DEATH rather than the state. */
   readonly #lastMuxerHealthy = new Map<string, boolean>();
+  /** Peers whose muxer-observability baseline has been stated once. */
+  readonly #muxerObservabilityLogged = new Set<string>();
   #node: CelloNode | null = null;
 
   constructor(opts: NetworkDirectoryAdapterOptions) {
@@ -254,6 +256,31 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
       // absent field reads as unknown, NOT as broken: an older transport must not raise a false
       // alarm on every tick.
       const readable = snap.muxerStatuses.filter((m) => m !== "unreported");
+
+      // CAN WE SEE IT AT ALL? Logged ONCE per peer, before any judgement about health.
+      //
+      // Without this line, "the muxer is fine" and "this relay cannot read the muxer" are the same
+      // observation: silence. The detector below deliberately says nothing while everything is
+      // healthy, and it also says nothing when the field is absent — so a relay rolled without the
+      // transport that provides it looks exactly like a relay with no problems. That is the precise
+      // failure this whole tier is about, reproduced in the instrument built to detect it.
+      //
+      // It also answers the question a roll cannot: the image builds `--frozen-lockfile`, so the
+      // transport version is an inference from the lockfile rather than something observed. This is
+      // the observation.
+      if (!this.#muxerObservabilityLogged.has(peerId)) {
+        this.#muxerObservabilityLogged.add(peerId);
+        this.#logger?.info("relay.directory.muxer.observability", {
+          peerId,
+          readable: readable.length > 0,
+          muxerStatuses: snap.muxerStatuses,
+          impact: readable.length > 0
+            ? "muxer state is visible on this link — a death here will be reported when it happens"
+            : "muxer state is NOT visible; this relay's @cello-protocol/transport predates the "
+              + "field, so a muxer death on this link will go unreported until the node is rebuilt",
+        });
+      }
+
       if (readable.length === 0) continue;
       const healthy = readable.some((m) => m === "open");
       const was = this.#lastMuxerHealthy.get(peerId);

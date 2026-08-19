@@ -631,3 +631,53 @@ describe("DOD-M12-CONN-MUXER-OBSERVE-1: the probe reports a muxer death when it 
     expect(lines.some((l) => l.event === "relay.directory.muxer.recovered")).toBe(true);
   });
 });
+
+// ─── The instrument has to say whether it can see ────────────────────────────
+//
+// "The muxer is healthy" and "this relay cannot read the muxer" are the same observation —
+// silence — because the detector only speaks on a transition. A relay rolled without the transport
+// that provides the field would therefore look exactly like a relay with no problems, which is the
+// precise failure this tier is about, reproduced inside the instrument built to detect it.
+describe("DOD-M12-CONN-MUXER-OBSERVE-1: the probe states ONCE whether it can see the muxer", () => {
+  function nodeWithMuxer(states: Array<string | undefined>) {
+    let i = 0;
+    const { node } = scriptedNode({ dial: [null], newStream: [null] });
+    (node as unknown as { getConnections: () => unknown }).getConnections = () => {
+      const m = states[Math.min(i++, states.length - 1)];
+      return [{ peerId: DIR_PEER, encryption: "noise", status: "open", ...(m === undefined ? {} : { muxerStatus: m }) }];
+    };
+    return node;
+  }
+
+  it("says readable:true when the transport provides the field", async () => {
+    const { logger, lines } = spyLogger();
+    const adapter = adapterOn(nodeWithMuxer(["open", "open"]), logger);
+    await adapter.checkDirectoryReachable();
+    const l = lines.find((x) => x.event === "relay.directory.muxer.observability");
+    expect(l).toBeDefined();
+    expect(l!.ctx["readable"]).toBe(true);
+  });
+
+  it("says readable:false — LOUDLY — when the transport predates the field", async () => {
+    const { logger, lines } = spyLogger();
+    const adapter = adapterOn(nodeWithMuxer([undefined, undefined]), logger);
+    await adapter.checkDirectoryReachable();
+    const l = lines.find((x) => x.event === "relay.directory.muxer.observability");
+    expect(l).toBeDefined();
+    expect(l!.ctx["readable"]).toBe(false);
+    // Names the consequence, not just the state — an operator reading this needs to know a death
+    // on this link will go unreported, which is the whole cost of the missing field.
+    expect(String(l!.ctx["impact"])).toContain("go unreported");
+  });
+
+  it("states it ONCE per link, not every 30 seconds", async () => {
+    const { logger, lines } = spyLogger();
+    const adapter = adapterOn(nodeWithMuxer(["open", "open", "open", "open"]), logger);
+    await adapter.checkDirectoryReachable();
+    await adapter.checkDirectoryReachable();
+    await adapter.checkDirectoryReachable();
+    // A baseline repeated every tick is the 220-lines-an-hour mistake that buried the original
+    // signal for ten hours.
+    expect(lines.filter((x) => x.event === "relay.directory.muxer.observability").length).toBe(1);
+  });
+});
