@@ -1601,3 +1601,46 @@ cello-gcp-relay-euw1-20260808194022…   http://10.10.2.25:4000/health
 **The public address is not wrong, it is for a different job.** It stays on
 `CELLO_RELAY_PUBLIC_MULTIADDR`, which is what *agents* dial. Health is an internal concern between
 directory and relay; client reachability is not the same property and must not share a value.
+
+---
+
+## ⚠️ Automatic image builds are NOT working — verified 2026-08-19T11:55Z
+
+**Nothing has been built automatically since 2026-08-12. Do not plan a roll assuming a push
+produces an image.**
+
+What the evidence shows, and only that:
+
+- Both triggers exist, are enabled, watch `^main$`, are path-filtered correctly
+  (`packages/relay/**`, `packages/directory/**`), and point at connection `cello-github` →
+  `Mygentic-AI/CELLO`. The connection reports `installationState.stage = COMPLETE`, not disabled.
+- **The last four trigger-driven builds all FAILED**, on 2026-08-17, every one at the path-filter
+  step with the same error:
+
+  ```
+  [_CHANGED_FILES -> $(changed_files)]: ListChangedFiles(... commit_pair:{old_commit:"41268dbd…"
+  new_commit:"9948e0b7…"}) failed: not_found: GET .../compare/41268dbd…...9948e0b7… : 404 Not Found
+  ```
+
+  Cloud Build asks GitHub to diff the previous head against the new one to evaluate `includedFiles`.
+  One of those commits is no longer reachable on GitHub, so the filter cannot be evaluated and the
+  build dies before running a step.
+- **Since 2026-08-17 the trigger has created no build at all.** On 2026-08-19 four pushes to `main`
+  touching `packages/relay/**` and `packages/directory/**` produced nothing — no build, no queued
+  build, no FAILURE entry.
+- **The `relay:7838bbeb` image rolled this morning was built BY HAND.** Its build carries
+  `buildTriggerId = None`, where every trigger-driven build in the history carries
+  `e563f69e-befb-4e2a-91e9-529591b38ed3`. That is how the fleet has kept moving while this was
+  broken, and it is why nobody noticed.
+
+**What is NOT established:** why the trigger now creates nothing rather than creating a failure. The
+404 explains the 08-17 failures; it does not explain the silence since. **The evidence that would
+settle it is GitHub's webhook delivery log for app installation `149532787` on
+`Mygentic-AI/CELLO`** — whether GitHub delivered today's pushes at all, and what Cloud Build
+answered. That lives in the GitHub account, not in GCP.
+
+**Consequence for M12 Tier P5:** the seal fix cannot reach the fleet through the normal path. Either
+the trigger is repaired, or the image is built manually as on 2026-08-19 — and if it is built
+manually, the operator must remember that a `pnpm install --frozen-lockfile` build takes the
+`@cello-protocol/transport` version from `pnpm-lock.yaml` (currently **0.0.57**), not from the
+`latest` specifier.
