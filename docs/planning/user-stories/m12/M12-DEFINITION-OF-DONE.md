@@ -44,6 +44,12 @@ description: >
 
 ## Tier I — Invariants (properties, NOT deliverables — no status tags)
 
+> **TWO LENSES ADDED 2026-08-19 (Tier P5).** **HELD-CONNECTION** — every long-lived libp2p
+> connection is a cache with no invalidation, so each one must answer what notices when it dies,
+> what repairs it *and whether that repair can actually work*, and what the log says at the moment
+> of death. **CAUSE-NOT-SYMPTOM** — `connection_lost` is a fact about a local object, never a claim
+> about the remote node's availability. Both live in [[M12-PROCEDURE]] §2b and fire on every diff.
+
 > **CHANGED 2026-07-30. These nine carried ❌ tags and should never have.** An invariant is a property
 > every unit must not violate — you never *build* one, so it cannot be a deliverable, and a permanent
 > ❌ on a property reads as unfinished work no unit can ever finish. They are **enforced per-unit as
