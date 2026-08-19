@@ -3750,3 +3750,97 @@ covered by an injected fake and the live signal is the startup line reporting AC
 enforcers have not run against any of this.
 
 **Status: 🟡 on all three. One `cello-unit-reviewer` pass owed before any tag flips.**
+
+## Entry 65 — Tier SCREEN reviewed: the screen was reading the wrong text, and the wiring reverted green
+
+One `cello-unit-reviewer` pass on the three units. Four blocking classes, all fixed. The two that
+changed what the milestone CLAIMS, not just how it is tested, are first.
+
+### The screened text was not the inserted text — two bypasses, proven by execution
+
+`projectedDiff.inserted` was a common-prefix / fixed-length-tail window over the projected TEXT
+root, and screening consumes it. Measured by the reviewer against the real function:
+
+- **A net-SHRINKING update returned `""`.** A peer deleting 500 characters while inserting a
+  200-character payload was screened by nothing — the semantic screen never ran, and the denylist
+  rule reads the same field, so it did not run either.
+- **One character at the front hid everything at the end.** On a 3,150-character document, inserting
+  `"X"` at position 0 and appending a 51-character payload yielded 52 characters of the document's
+  own opening prose. Payload screened: false.
+- **`json` documents were screened by nothing at all.** `inserted` read `getText("content")` only,
+  and a json document's content lives in the map root. Permanently empty, permanently unscreened.
+
+The gate's own `append_only` rule carries this exact lesson in its comment — *"Diffing only the text
+root made append_only a COMPLETE NO-OP for json documents"* — and the fix had been applied there and
+not here. It now reads the update's OWN insert set, the way `countDeletions` already reads the delete
+set: root-agnostic, type-agnostic, and it answers the question actually being asked. Three tests pin
+the three shapes.
+
+### Every terminal block was relabelled an injection — and it silently reversed a journaled trade
+
+`screenProjected` calls the gateway's whole inbound composition, not just the injection scanner, so
+three distinct terminal blocks arrived as one string `document_content_injection`: the language
+allowlist, the sanitizer's size cap, and the actual injection verdict.
+
+The second-order effect is the one that mattered. **Entry 64 recorded CLASSIFY-1's cost as "documents
+lose the language allowlist — it has never fired, and it was judging mojibake."** CONTENT-1 then
+handed the gateway real readable text three commits later, so the allowlist was back on the document
+path and would now genuinely fire. A colleague writing a shared document in Japanese, Arabic or
+Russian would have had **every update refused, permanently** — the same bytes are the same language
+on redelivery — **and been told it was classified as a prompt-injection attempt.** Nothing recorded
+that.
+
+Ruled and written down where the decision is made: only the injection verdict refuses a document.
+The allowlist exists so a jailbreak in a low-resource language cannot dodge English-trained
+screening; refusing a colleague's document outright is a far worse trade than that gap, and the
+character denylist still runs on every script. The upstream reason is now carried, not overwritten.
+
+### The document path fails open when the gateway is down, and said nothing
+
+The trade is deliberate and stands — holding convergence hostage to an optional layer breaks a layer
+that degrades by design. What was wrong is that the weaker guarantee looked identical to the stronger
+one at every surface an operator can see. Now `document.inbound.screen.unavailable`, by name, with
+the consequence spelled out. The comment claiming the replacement layer "cannot be down" was true
+when CLASSIFY-1 was written and false once CONTENT-1 landed in the same branch; it now states the
+trade instead of denying it.
+
+### The three wiring lines were untested — the defect reproduced inside its own fix
+
+The reviewer reverted each composition-root line in turn: `setOnDocumentFrame`'s second argument,
+`document-layer`'s forwarding of `screenProjected`, and `new InboundScreener({...})`. **2451 daemon
+tests and 178 gateway tests stayed green for all three.** Each is the single line that makes its unit
+real in production — which is precisely the defect CLASSIFIER-1 exists to fix, reproduced three times
+in the commits that fix it.
+
+Now asserted against the BUILT ARTIFACT (`screen-order-composition-root.test.ts`), because that is
+what an operator runs and a stale `dist/` has shipped deleted code in this repo before. Verified by
+execution: reverting the classify wiring turns two of them red.
+
+### Smaller findings, all fixed
+
+The semantic refusal now names which screen refused (`document_content_semantic_screen`) and copies
+the bytes BEFORE the awaits rather than after a gateway round trip and a signing call — the gate's
+own quarantine copies for that stated reason. A classifier throw degrades Layer 2 with a named
+stderr line instead of returning a transient block that redelivers forever on a permanent condition.
+The library's global remote-model switch is set rather than resting on one per-call option, and a
+test now reads the options object (deleting it previously left all 178 gateway tests green). The
+absent-model guidance stops naming `cello gateway install-model`, a command nobody has built — the
+same defect this branch fixed in `cello_doc_remove`'s description.
+
+### Evidence
+
+Full gate on the committed tree, run so it could fail: `TEST=0` (344 files, 3984 passed), `LINT=0`,
+`TYPECHECK=0`, build clean. cello-client `m14b/doc-screen-classify`.
+
+### Owed, and NOT claimed
+
+- **`installModel` still has no production caller** and `@huggingface/transformers` is not a
+  dependency, so an operator cannot turn Layer 2 on. The wiring is real and the guidance now says so
+  honestly. A CLI command is owed — carried as a new DoD line rather than pretended away.
+- **Every document frame is CBOR-decoded twice** — once by `isDocumentFrame` at ingest, once by
+  `routeSync`. The router's own header records that this doubling was measured and rejected on the
+  hostile-input budget. The fix is to pass the classification through instead of a boolean.
+- **The proposal's starting content** gets the denylist but no semantic screen, and after CLASSIFY-1
+  no gateway screen either. It is the largest single block of peer-authored text an operator
+  receives.
+- **Inference against the real model is unproven** (no weights in CI) and **no enforcer has run.**
