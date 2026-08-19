@@ -89,9 +89,27 @@ CLAUDE.md is infrastructure policy here, not an abstraction.
 - **MIGs NEVER surge.** The instance template pins BOTH single-holder addresses (`network_ip` and
   `nat_ip`), so two instances from one template can never coexist. `max_surge_fixed = 1` was
   considered and **rejected** 2026-08-06: it plans cleanly and breaks the *next* roll.
-- **Roll node-by-node, and poll a real `GET /bootstrap` 200 before touching the next.**
+- **Roll node-by-node, and confirm the node is SERVING before touching the next.**
   `update_policy = PROACTIVE` means one un-targeted `terraform apply` replaces **all three at
   once**. The threshold tolerates exactly one node down.
+
+  > **CORRECTED 2026-08-19 — `GET /bootstrap` 200 is not obtainable and never was.** Port 8080 is
+  > the libp2p **WebSocket** listener, so a plain HTTP GET returns
+  > **`400 "Only WebSocket connections are supported"`** — from a perfectly healthy node. Treating
+  > 200 as the gate means the roll never proceeds; treating 400 as failure means it never proceeds
+  > either. The relay is worse: its `/health` on :4000 answers **000 from outside the VPC** by
+  > design (see the pool-emptying outage that rule came from), so it cannot be polled from a laptop
+  > at all.
+  >
+  > **Use the signal the fleet already produces, which proves the node is doing its JOB rather than
+  > merely listening:**
+  > - **Directory** — anti-entropy rounds resume from its zone:
+  >   `jsonPayload.event=~"antientropy.round.(started|completed)"`, filtered by
+  >   `resource.labels.zone`. Healthy baseline is a handful per zone per 3 minutes.
+  > - **Relay** — the DIRECTORIES' own probe of it resumes:
+  >   `jsonPayload.event="relay.health.check.passed"` filtered to that relay's `relayId`. Healthy
+  >   baseline is ~10 per relay per 3 minutes (every 30s, from each directory). This is a real
+  >   cross-node network check and it is already running; nothing new has to be built for it.
 - **Use `-target` for a single node or the relay.** A full apply is what turns a one-node roll into
   a consortium outage.
 - **A node that will not come up is often capacity, not config.** `ZONE_RESOURCE_POOL_EXHAUSTED`
