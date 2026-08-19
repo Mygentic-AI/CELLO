@@ -20,7 +20,14 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json tsconfig
 COPY patches/ patches/
 COPY packages/seal-notifier/package.json ./packages/seal-notifier/
 COPY packages/interfaces/package.json ./packages/interfaces/
-RUN pnpm install --frozen-lockfile --filter @cello-protocol/seal-notifier...
+# --ignore-scripts, and it is load-bearing rather than an optimisation. The workspace install pulls
+# better-sqlite3 into the store (a sibling package depends on it), whose install script compiles
+# native code and needs python3 + a C++ toolchain this image deliberately does not carry. THIS
+# service has zero runtime dependencies — only node:http and the built-in fetch — so nothing it
+# executes ever needs a compiled artifact. The alternative the ops-agent takes (apt-get g++ make
+# python3) is the right call for a package that genuinely uses native deps and the wrong one here:
+# it would add a compiler toolchain to the image that sends your alerts.
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter @cello-protocol/seal-notifier...
 
 COPY packages/seal-notifier ./packages/seal-notifier
 COPY packages/interfaces ./packages/interfaces
