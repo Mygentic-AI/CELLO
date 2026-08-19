@@ -444,6 +444,8 @@ if (directoryMultiaddr) {
     directoryPeerId: dirPeerId,
     directoryMultiaddrs: [directoryMultiaddr],
     logger,
+    // The probe must watch every directory a seal can be adjudicated by, not only this one.
+    allDirectoryEndpointsByPubkey: dirEndpointsByPubkey,
   });
   logger.info("adapter.initialised", { adapterName: "NetworkDirectoryAdapter", directoryMultiaddr, env: celloEnv });
 }

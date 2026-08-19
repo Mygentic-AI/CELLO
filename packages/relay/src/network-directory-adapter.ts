@@ -68,18 +68,47 @@ export interface NetworkDirectoryAdapterOptions {
   /** Optional logger — when provided, relay.registered / relay.already.registered are
    *  logged at INFO with { relayId, region } on successful registration (AC-002). */
   logger?: Logger;
+  /**
+   * EVERY directory this relay may have to call, as pubkey → multiaddr — not just the configured
+   * one. A seal is adjudicated by the directory that BROKERED the session, and may then follow a
+   * redirect to a third; the probe watching only the configured one read green for eight hours
+   * across a connection the seal needed and could not use (2026-08-19). Optional so a
+   * single-directory deployment is unchanged.
+   */
+  allDirectoryEndpointsByPubkey?: Record<string, string>;
 }
 
 export class NetworkDirectoryAdapter implements DirectoryAdapter {
   readonly #directoryPeerId: string;
   readonly #directoryMultiaddrs: string[];
   readonly #logger: Logger | undefined;
+  readonly #allDirectoryEndpoints: Record<string, string>;
+  /** Last observed reachability per peer id, so the probe logs TRANSITIONS rather than every tick. */
+  readonly #lastReachable = new Map<string, boolean>();
+  /** When each directory last served a stream, so a death can be reported with a duration. */
+  readonly #lastGoodMs = new Map<string, number>();
   #node: CelloNode | null = null;
 
   constructor(opts: NetworkDirectoryAdapterOptions) {
     this.#directoryPeerId = opts.directoryPeerId;
     this.#directoryMultiaddrs = opts.directoryMultiaddrs;
     this.#logger = opts.logger;
+    this.#allDirectoryEndpoints = opts.allDirectoryEndpointsByPubkey ?? {};
+  }
+
+  /** peerId → addrs for every directory we might call; the configured one is always included. */
+  #probeTargets(): Array<{ peerId: string; addrs: string[] }> {
+    const byPeer = new Map<string, string[]>();
+    byPeer.set(this.#directoryPeerId, this.#directoryMultiaddrs);
+    for (const multiaddr of Object.values(this.#allDirectoryEndpoints)) {
+      const parts = multiaddr.split("/");
+      const i = parts.findIndex((p) => p === "p2p");
+      const peerId = i !== -1 ? parts[i + 1] : undefined;
+      // A malformed endpoint is skipped rather than probed as the configured directory — probing
+      // the wrong peer is exactly the green-while-dead failure this exists to end.
+      if (peerId && !byPeer.has(peerId)) byPeer.set(peerId, [multiaddr]);
+    }
+    return [...byPeer].map(([peerId, addrs]) => ({ peerId, addrs }));
   }
 
   connect(node: CelloNode): void {
@@ -107,13 +136,51 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
   async checkDirectoryReachable(): Promise<{ ok: true } | { ok: false; reason: string; detail?: string }> {
     const node = this.#node;
     if (!node) return { ok: false, reason: "directory_not_connected" };
-    try {
-      const stream = await this.#openDirectoryStream(node, this.#directoryMultiaddrs, this.#directoryPeerId);
-      await stream.close();
-      return { ok: true };
-    } catch (err: unknown) {
-      return { ok: false, reason: "directory_unreachable", detail: describeThrown(err) };
+
+    // EVERY directory, not just the configured one. On 2026-08-19 this probe reported nothing at
+    // all for the eight hours in which the connection a seal needed died — because the seal used
+    // the BROKERING directory and then a redirect to a third, and this watched neither.
+    const results: Array<{ peerId: string; ok: boolean; detail?: string }> = [];
+    for (const { peerId, addrs } of this.#probeTargets()) {
+      try {
+        const stream = await this.#openDirectoryStream(node, addrs, peerId);
+        await stream.close();
+        results.push({ peerId, ok: true });
+        this.#lastGoodMs.set(peerId, Date.now());
+      } catch (err: unknown) {
+        results.push({ peerId, ok: false, detail: describeThrown(err) });
+      }
     }
+
+    // TRANSITIONS ONLY. The failing state produced 220 lines an hour before, which is noise that
+    // hides the one line that matters: the moment it changed. Each flip is logged once, and a
+    // death carries how long that directory had been working — the duration we have never had.
+    for (const r of results) {
+      const was = this.#lastReachable.get(r.peerId);
+      if (was === r.ok) continue;
+      this.#lastReachable.set(r.peerId, r.ok);
+      if (was === undefined) continue; // first observation is a baseline, not a transition
+      if (r.ok) {
+        this.#logger?.warn("relay.directory.reachability.recovered", { peerId: r.peerId });
+      } else {
+        const lastGood = this.#lastGoodMs.get(r.peerId);
+        this.#logger?.warn("relay.directory.reachability.lost", {
+          peerId: r.peerId,
+          reason: r.detail,
+          ...(lastGood !== undefined ? { workingForMs: Date.now() - lastGood } : {}),
+          impact: "seals adjudicated by this directory will be refused until the connection is "
+            + "repaired; ordinary message relaying is unaffected, so nothing else will surface it",
+        });
+      }
+    }
+
+    // The health surface keeps its existing meaning — the CONFIGURED directory — so a green
+    // /health does not silently change definition. The per-directory truth is in the log above.
+    const configured = results.find((r) => r.peerId === this.#directoryPeerId);
+    if (configured && !configured.ok) {
+      return { ok: false, reason: "directory_unreachable", ...(configured.detail ? { detail: configured.detail } : {}) };
+    }
+    return { ok: true };
   }
 
   /**
@@ -135,7 +202,31 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
    * fails both attempts and must surface as such rather than spinning.
    */
   async #openDirectoryStream(node: CelloNode, addrs: string[], peerId: string) {
+    // OBSERVATION ONLY (2026-08-19). Three mechanisms fit every symptom we have and the logs
+    // separate none of them: the dial hands back a connection libp2p still lists but whose muxer
+    // is closed; the address list is EMPTY so the dial is a silent no-op; or the dial genuinely
+    // opens a connection and the stream still fails for a reason past both. Each implies a
+    // different fix, so the next failure has to name which — nothing here changes behaviour.
+    const liveCount = (): number => {
+      try {
+        return node.getConnections().filter((c) => c.peerId === peerId).length;
+      } catch {
+        return -1; // never let instrumentation break a seal
+      }
+    };
+
     const dial = async (): Promise<void> => {
+      // MECHANISM 2. An empty list means the loop below never runs, `lastError` stays undefined,
+      // nothing is logged, and the caller cannot tell this apart from a dial that worked. That is
+      // a candidate cause of the live failure, so it gets its own line rather than silence.
+      if (addrs.length === 0) {
+        this.#logger?.warn("relay.directory.dial.no_address", {
+          peerId,
+          impact: "no address to dial, so the redial did nothing — the caller will see the same "
+            + "dead connection it already had",
+        });
+        return;
+      }
       let lastError: unknown;
       for (const addr of addrs) {
         try {
@@ -159,13 +250,38 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
       return await node.newStream(peerId, DIRECTORY_RELAY_PROTOCOL_ID);
     } catch (err: unknown) {
       if (!isConnectionLost(err)) throw err;
+      // MECHANISMS 1 vs 3. The connection count either side of the redial is what separates them:
+      // unchanged with the retry still failing says the dial returned the connection we already
+      // held (1); a count that grew and still fails says a genuinely new connection cannot carry a
+      // stream (3), which is a directory-side or protocol fault and no reconnect will cure it.
+      const before = liveCount();
       this.#logger?.warn("relay.directory.connection.stale", {
         peerId,
         reason: describeThrown(err),
         action: "redialling and retrying once",
+        connectionsBefore: before,
       });
       await dial();
-      return await node.newStream(peerId, DIRECTORY_RELAY_PROTOCOL_ID);
+      const after = liveCount();
+      try {
+        const stream = await node.newStream(peerId, DIRECTORY_RELAY_PROTOCOL_ID);
+        this.#logger?.warn("relay.directory.redial.outcome", {
+          peerId, connectionsBefore: before, connectionsAfter: after, recovered: true,
+        });
+        return stream;
+      } catch (retryErr: unknown) {
+        this.#logger?.warn("relay.directory.redial.outcome", {
+          peerId,
+          connectionsBefore: before,
+          connectionsAfter: after,
+          recovered: false,
+          reason: describeThrown(retryErr),
+          reading: after === before
+            ? "the dial added no connection — it returned the one we already held"
+            : "a NEW connection was opened and the stream still failed — not a stale handle",
+        });
+        throw retryErr;
+      }
     }
   }
 
