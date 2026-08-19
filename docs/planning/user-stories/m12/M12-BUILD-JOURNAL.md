@@ -7002,3 +7002,79 @@ identity the SECOND dial observed rather than to evidence from a connection it j
 passed; none of them ran the code production runs. When a system throws plain objects rather than
 `Error`s — and this one documents that it does — a test that constructs an `Error` is not a test of
 that path. Check what the producer actually throws before writing the double.
+
+---
+
+## Entry 93 — 2026-08-19 — rolled to all five nodes, sealing confirmed, the fix still unproven
+
+### What shipped
+
+Published `v0.0.254` (all seven, beta → `latest`), moved the lockfile, built both images manually,
+rolled five nodes. Every instance verified on `cello/{directory,relay}:c703b3aa` by inspecting it —
+not by trusting the apply.
+
+### The two things that nearly made the roll a no-op
+
+1. **`pnpm install --lockfile-only` did NOT move the lockfile.** It sat at transport `0.0.57` while
+   `latest` had moved four times. pnpm treats an already-satisfied `latest` specifier as up to date
+   and leaves the resolution alone, so the obvious command reports success and changes nothing. It
+   took `pnpm update -r` naming each package. Both Dockerfiles build `--frozen-lockfile`, so a roll
+   without this ships the OLD transport and looks exactly like a roll that worked.
+2. **The image tags nearly pointed at `HEAD`, which had moved past the built images** while they
+   built (doc commits). Terraform pointed at a SHA with no image fails the roll at the worst moment.
+   Both tags name `c703b3aa` and both images were confirmed to exist at it.
+
+### The incident
+
+`us-central1` hit `ZONE_RESOURCE_POOL_EXHAUSTED` on `c3-standard-4`. The MIG cannot surge, so the
+healthy node was destroyed and could not be replaced — consortium at exactly threshold, 2 of 3, for
+about six minutes. **Used the GCP-STATE playbook instead of re-deriving it**: probe the (zone,
+machine type) PAIR. `e2-standard-2` HAS capacity, which is the revert the tfvars marker has asked for
+since 2026-08-10. Node back as `cello-gcp-usc1-qq2z`. Probe instance deleted.
+
+### What the roll PROVES
+
+- **The new code runs.** `relay.directory.connection.opened` fires and exists only in this build.
+- **`heldForMs` is fixed, on production traffic** — 41,993 · 231,283 · 262,432 · 451,614 ms, none
+  capped at the 30s probe interval, which was the reviewer's finding against it.
+- **The new transport is in the image.** No `relay.directory.evict.unavailable` anywhere, and since
+  sibling events from the same build DO fire, that silence is presence rather than dead code.
+- **Sealing survived the roll.** Two live seals verified in the DIRECTORY logs, not taken from an
+  agent's report: `891a3478…` → `3e39affe…` at 14:12:18Z; `63fe7dc1…` → `9e7a624a…` at 14:27:47Z
+  with `mmr.leaf.appended`. Zero `relay.seal.rejected`, zero `broker.unreachable` since.
+
+### What it does NOT prove, and this is the whole point
+
+**The repair path has not executed once.** Three directory restarts disconnected the relays
+repeatedly and produced ZERO `relay.directory.connection.stale` — a de-registered disconnect is the
+benign case, the next dial genuinely rebuilds, and no seal is affected. **Both live seals ran over
+freshly restarted links, the case that has ALWAYS worked.** Every observed failure needed an aged
+connection.
+
+The only signal that settles it: `connection.stale` carrying `eviction: "evicted"` and
+`recovered: true`, with the seal that triggered it returning a receipt. **A quiet fleet is not
+evidence** — the old relay ran 2h29m clean before failing, which is longer than any window watched
+since.
+
+### Three runbook corrections, all from things that cost time today
+
+- **`infra/CLAUDE.md`'s readiness check could never pass.** "Poll `GET /bootstrap` 200" — port 8080
+  is the libp2p WEBSOCKET listener and returns `400 "Only WebSocket connections are supported"` from
+  a healthy node; the relay's `/health` answers `000` from outside the VPC by design. Replaced with
+  signals the fleet already emits: anti-entropy rounds resuming from a directory's zone, and
+  `relay.health.check.passed` resuming for a relay's id.
+- **The recorded manual-build command was missing `--project`**, so `--service-account` resolves
+  against the ACTIVE gcloud project and fails with `PERMISSION_DENIED` on a numeric SA id — for an
+  account that is `roles/owner` and a service account that exists. Two retries and an IAM audit.
+- **The dead Cloud Build trigger was already documented in TWO files** and I re-derived it from
+  scratch. What was actually new: 24 of 32 builds in history are manual, and the only successful
+  trigger-driven ones were the three on the day it was created.
+
+### Rule
+
+**Verify a counterparty's factual claims; their reasoning can still be worth more than their
+diagnosis.** Everything in the Entry 92/93 exchange that came from the other agent was re-checked
+here — its claimed seal against the directory logs (true), its pull-twin count against this
+machine's log (157/0, true), its relay mechanism against the source (true, and tighter than stated).
+Its EC2 log excerpt was never verifiable and is NOT recorded as fact anywhere; the mechanism it was
+offered to support is established from the code instead, which needs no trust at all.
