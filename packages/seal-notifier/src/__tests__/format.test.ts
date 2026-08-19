@@ -73,6 +73,45 @@ describe("formatAlert — what an operator reads on their phone", () => {
   });
 });
 
+describe("the three fields added after the first real message was read", () => {
+  it("a self-test says so in the FIRST line, not by an odd-looking session id", () => {
+    const { text } = formatAlert(entry({
+      event: "relay.seal.rejected", selftest: true, sessionId: "SYNTHETIC-SELFTEST",
+    }));
+    // The first synthetic alert was distinguishable only by squinting at the session id. An
+    // operator who mistakes a drill for an outage once will mistake an outage for a drill later.
+    expect(text.split("\n")[0]).toContain("TEST — NOT A REAL FAILURE");
+    expect(text).toContain("Nothing is wrong");
+  });
+
+  it("a REAL alert carries no test marker anywhere", () => {
+    const { text } = formatAlert(entry({ event: "relay.seal.rejected", sessionId: "abc" }));
+    expect(text).not.toContain("TEST");
+    expect(text).not.toContain("Nothing is wrong");
+  });
+
+  it("names WHICH directory was asked — the first branch of any diagnosis", () => {
+    const { text } = formatAlert(entry({
+      event: "relay.seal.rejected",
+      adjudicator: "redirect",
+      brokerPeerId: "12D3KooWExQLMbvaioVqQCPkc1ZZgJ5kdoePymtMrg46ugMBs5zi",
+    }));
+    // broker / configured / redirect are three quite different failures. Without this the alert
+    // announces a problem it cannot narrow, and the first question asked is one it cannot answer.
+    expect(text).toContain("asked: redirect");
+    expect(text).toContain("ugMBs5zi");
+  });
+
+  it("carries the FULL session id when the relay sends one", () => {
+    const full = "df2a2a0892cfd35973f70016aaf27ece";
+    const { text } = formatAlert(entry({ event: "relay.seal.rejected", sessionId: full }));
+    // 8 hex characters is enough to grep and NOT enough to run `cello sealed-receipt` or
+    // `cello transcript`, which is the whole point of putting it in a notification.
+    expect(text).toContain(full);
+    expect(full.length).toBe(32);
+  });
+});
+
 describe("Throttle — alerting Andre will not mute", () => {
   it("sends the first, suppresses a repeat of the same link inside the cooldown", () => {
     const t = new Throttle({ cooldownMs: 1000, windowMs: 60_000, maxPerWindow: 100 });

@@ -39,8 +39,21 @@ export function formatAlert(entry: LogEntry): Formatted {
   const reason = str(p["reason"]);
   const peer = str(p["peerId"]);
   const eviction = str(p["eviction"]);
+  const adjudicator = str(p["adjudicator"]);
+  const broker = str(p["brokerPeerId"]);
+  // A SELF-TEST MUST ANNOUNCE ITSELF STRUCTURALLY. The first synthetic alert was distinguishable
+  // only by an odd-looking session id, which is exactly the kind of "obvious if you look" that
+  // stops being obvious at 2am — and an operator who mistakes a drill for an outage once will
+  // mistake an outage for a drill later.
+  const selftest = p["selftest"] === true;
 
   const lines: string[] = [];
+
+  if (selftest) {
+    lines.push("🧪 TEST — NOT A REAL FAILURE. Nothing is wrong.");
+    lines.push("Sent deliberately to prove the alerting path works.");
+    lines.push("");
+  }
 
   if (event === "relay.seal.rejected") {
     // The one that actually cost something. Say so in the first line — this is a lost receipt, not
@@ -60,6 +73,11 @@ export function formatAlert(entry: LogEntry): Formatted {
   if (session) lines.push(`session: ${session}`);
   if (peer) lines.push(`peer:  ${peer}`);
   if (reason) lines.push(`why:   ${reason}`);
+  // THE FIRST BRANCH OF ANY DIAGNOSIS. `adjudicator` says which directory the relay asked — the
+  // one that brokered the session, its statically configured fallback, or a redirect it was sent
+  // on — and `broker` says who that resolved to. Without them the alert can announce the failure
+  // but not narrow it, and the first question an operator asks is one it cannot answer.
+  if (adjudicator) lines.push(`asked: ${adjudicator}${broker ? ` (${broker})` : ""}`);
 
   // THE LINE THAT SAYS WHETHER THIS IS THE KNOWN BUG OR A NEW ONE. `eviction` is what M12 Tier P5
   // added; reading it is the difference between "the fix ran and was not enough" and "the fix never

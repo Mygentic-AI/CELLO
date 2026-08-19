@@ -1409,9 +1409,17 @@ export class CelloRelayNode {
       // without this the only trace of the cause was one stdout line — and both agents simply waited
       // out the full bilateral window and reported a timeout. The cause dies here otherwise.
       this.#logger.warn("relay.seal.rejected", {
-        sessionId: truncHex(Buffer.from(sessionId).toString("hex")),
+        // FULL session id, not truncHex. Every other line here truncates for readability, and that
+        // is right for log skimming — but this one is ALERTED on, and an operator holding 8 hex
+        // characters cannot run `cello sealed-receipt` or `cello transcript`, which need all 32.
+        // A notification whose job is to let someone act must carry enough to act with.
+        sessionId: Buffer.from(sessionId).toString("hex"),
         reason: dirResult.reason,
         adjudicator,
+        // WHICH directory was being asked. `adjudicator` says broker / configured / redirect, and
+        // this says who that resolved to — together they are the first branch of any diagnosis of
+        // this failure, and without them the alert announces a problem it cannot narrow.
+        brokerPeerId: brokerTarget?.peerId ?? null,
       });
       this.rejectSeal(sessionId, dirResult.reason);
     }
