@@ -3660,3 +3660,93 @@ list fails 13 of the new tests and no others. cello-client `m14b/doc-screen-clas
 **Status: 🟡 BUILT — review IN FLIGHT.** `cello-unit-reviewer` dispatched on the diff, told to judge
 the scope deviation above as a possible silent simplification. The tag flips only when its verdict
 is quoted here.
+
+## Entry 64 — Tier SCREEN built end to end: the reorder, the shadow screen, and the layer nobody had switched on
+
+All three work-order units are written, the gate is green on the committed tree, and one review pass
+is owed. Order taken was 1 → 3 → 2, not 1 → 2 → 3, because unit 2 has nothing to call until unit 3
+exists.
+
+### DOD-DOC-SCREEN-CLASSIFY-1 — identify the frame first
+
+The router now exposes a classify-only entry point, reusing its own discriminator read rather than a
+second copy, and the session ingest keys the gateway-screen skip on it. A document frame keeps
+everything that matters — its leaf at its canonical position with kind `doc`, ordering, hold and
+release — and skips only the content screen, which was inert or worse for it: the sanitizer's
+rewrites are discarded by the funnel (rewriting a signed envelope destroys it), and the language and
+pattern checks were judging a UTF-8 decode of binary.
+
+Nothing fail-closed is lost, and that was the falsification that mattered: what screens document
+content is in-process and cannot be down, unlike the gateway being skipped. Size stays bounded twice
+on that path. The classify hook rides the same setter as the routing hook so the two cannot disagree
+about what a document frame is, and with no classifier injected every frame takes the full screen —
+pinned by a test, because that is the pre-document behaviour.
+
+**Stated cost, recorded not discovered:** documents lose the language allowlist. Zero blocks in the
+daemon log, ever, and it was reading mojibake.
+
+### DOD-DOC-SCREEN-CLASSIFIER-1 — the layer that was never constructed
+
+Nothing was broken. The scanner is correct and unit-tested, the installer works, the manifest is
+complete. The wire between them had never been run: the gateway built `new InboundScreener()` with
+no arguments, the constructor fell back to a null classifier, `available()` returned false, and the
+call site short-circuited — in every shipped build, for messages and documents alike, while the
+gateway reported mode `enforcing`.
+
+Now constructed, with the ONNX runtime as a lazy injected import so it stays out of a default
+install. The weights are already opt-in at 568 MB on explicit consent; a runtime every operator
+installs to support a model most have not downloaded is that cost again somewhere they cannot
+decline it, and install size is user-facing here because operators reinstall on every version bump.
+
+Every failure path names itself and none return a silent null — no model, no runtime, a runtime
+exporting something else, a model that will not load. Those need different answers, and collapsing
+them sends the operator to the wrong fix. **The state is announced on stderr at startup either way**,
+because "is semantic screening on?" should be answerable from a log line rather than by reading the
+composition root — which is exactly how this survived.
+
+The classifier reads P(injection) across all labels. Asking the runtime for the top label alone
+returns SAFE's high score for benign text, and handed to `scoreToVerdict` that is a confident BLOCK
+on an innocent message. An unrecognised label set throws rather than scoring: a fabricated 0 would
+report Layer 2 available while blocking nothing.
+
+**The installer now refuses unpinned digests by default**, before requesting a byte. Every manifest
+file carries `sha256: null` and the revision is a floating `"main"`, so size and HTTPS are the only
+integrity left — fetching 568 MB of executable weights from a third-party mirror on those terms is a
+decision someone has to write down. One existing test needed `allowUnpinnedDigests` because it
+exercises the SIZE check, which sits downstream of the new gate; without it that assertion would
+have passed for the wrong reason.
+
+### DOD-DOC-SCREEN-CONTENT-1 — the screener finally sees text
+
+The projected inserted text goes to the same gateway that screens messages, from the shadow, after
+the gate admits and before anything reaches the live document or disk. That placement is the point:
+the shadow is inert, so it is the last moment the content is both readable and harmless. It also has
+to sit outside the gate, because `validate` is synchronous and the gateway is a separate program.
+
+Only a TERMINAL block refuses — a transient one means the gateway is down, and holding convergence
+hostage to that breaks a layer that degrades by design. `redact` is deliberately not honoured. A
+refusal is treated like every other refusal: bytes held so the peer's next link stays bridgeable,
+peer answered once by name so it supersedes rather than stalling, nothing applied. Only INSERTED
+text is screened; re-screening the whole document would refuse a peer's edit over prose admitted
+days earlier.
+
+### Also fixed on the way
+
+`cello_doc_remove`'s MCP tool description told the operator to demote a co-admin first, naming a verb
+that does not exist. The CLI help and the governance refusal already said this correctly; the tool
+description was the last surface still pointing at the missing verb.
+
+### Evidence
+
+Full gate on the committed tree, run so it could fail: `TEST=0` (343 files, 3973 passed), `LINT=0`,
+`TYPECHECK=0`, build clean. Revert tests: the marker list revert fails 14 tests and no others; the
+starting-content revert fails 3 of 4 (the fourth is the admits-ordinary counterweight, correctly
+insensitive). cello-client branch `m14b/doc-screen-classify`.
+
+### What is NOT proven
+
+Inference against the real model. No weights are downloaded in CI, so the classifier's own scoring is
+covered by an injected fake and the live signal is the startup line reporting ACTIVE. The three-daemon
+enforcers have not run against any of this.
+
+**Status: 🟡 on all three. One `cello-unit-reviewer` pass owed before any tag flips.**

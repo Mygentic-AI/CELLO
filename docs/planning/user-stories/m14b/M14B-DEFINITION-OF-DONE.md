@@ -819,7 +819,12 @@ description: >
   untouched. **Stated cost:** documents lose the language allowlist, which has never fired and was
   judging mojibake. **Falsification owed first:** confirm no terminal-block path is load-bearing
   for document frames today — a terminal block currently appends a `msg`-kind leaf without
-  delivering, so if it ever fires for a document the leaf kind is already wrong. — ❌ NOT BUILT
+  delivering, so if it ever fires for a document the leaf kind is already wrong. — 🟡 BUILT, gate
+  green, REVIEW IN FLIGHT → Entry 64
+  > Classify-only entry point reuses the router's own discriminator; the skip rides the same setter
+  > as the routing hook so the two cannot disagree. Leaf, ordering and hold/release untouched; with
+  > no classifier injected every frame takes the full screen (pinned). `cello-client` branch
+  > `m14b/doc-screen-classify`.
 - **DOD-DOC-SCREEN-CONTENT-1** [cello-client] — **the projected text is screened, at the shadow.**
   The gate already builds an inert shadow copy, applies the update to it, and computes a projected
   diff carrying the before-and-after text — and nothing but a character denylist reads it. After
@@ -830,7 +835,11 @@ description: >
   matching the document path's existing contract. The refused envelope is quarantined by the
   existing mechanism: held, never discarded. The gate's `validate` is synchronous and the screen is
   not, so the call lands in the inbound receive path around the gate verdict — no gate refactor.
-  — ❌ NOT BUILT
+  — 🟡 BUILT, gate green, REVIEW IN FLIGHT → Entry 64
+  > All five clauses now implemented. Only a TERMINAL block refuses (a transient one means the
+  > gateway is down, and holding convergence hostage to that breaks a layer that degrades by
+  > design); `redact` is deliberately not honoured. Only INSERTED text is screened — re-screening
+  > the whole document would refuse a peer's edit over prose admitted days earlier.
 - **DOD-DOC-SCREEN-CLASSIFIER-1** [cello-client] — **nothing anywhere judges meaning, and that is
   system-wide.** The IN-002 semantic scanner
   (`protectai/deberta-v3-small-prompt-injection-v2`) is implemented, tested, and has an installer
@@ -842,7 +851,15 @@ description: >
   Fetch, verify, construct, pass to the screener. **Pin the model digests while doing it:** the
   manifest carries `sha256: null` for every file and a floating `revision: "main"`, so integrity
   rests on file size alone — the corner that gets cut when a feature is switched on in a hurry.
-  Once wired, `DOD-DOC-SCREEN-CONTENT-1` inherits it with no further change. — ❌ NOT BUILT
+  Once wired, `DOD-DOC-SCREEN-CONTENT-1` inherits it with no further change. — 🟡 BUILT, gate
+  green, REVIEW IN FLIGHT → Entry 64
+  > Classifier constructed and announced on stderr at startup either way. Runtime is a lazy,
+  > injected import so it stays out of a default install — the weights are already opt-in at 568 MB,
+  > and a runtime every operator installs for a model most have not downloaded is the same cost
+  > where they cannot decline it. Every failure path names itself; none return a silent null. The
+  > installer now REFUSES unpinned digests by default, before requesting a byte.
+  > **Not proven against the real model** — no weights are downloaded in CI, so inference itself is
+  > covered by an injected fake. The live check is the startup line saying ACTIVE.
 
 ---
 
