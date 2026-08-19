@@ -14,6 +14,10 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json tsconfig.json ./
+# The lockfile references patches/, so pnpm READS those files during install and fails outright
+# without them. The directory, relay and ops-agent Dockerfiles all carry this same copy and the
+# same comment — it is the third time this has bitten.
+COPY patches/ patches/
 COPY packages/seal-notifier/package.json ./packages/seal-notifier/
 COPY packages/interfaces/package.json ./packages/interfaces/
 RUN pnpm install --frozen-lockfile --filter @cello-protocol/seal-notifier...
