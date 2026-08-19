@@ -914,6 +914,67 @@ Ruled after the document flood was found and fixed and a live send then delivere
 
 ## Owed follow-ups — do not lose these (ruled by Andre 2026-08-17)
 
+### Found 2026-08-19 during M12 Tier P5 — both are relay↔CLIENT contract, which is this milestone
+
+> These surfaced while fixing the relay↔DIRECTORY connection defect (M12 Tier P5) and were filed
+> here rather than there, because the failure is in what the relay TELLS A CLIENT. Both were verified
+> by reading the source and this repo's own logs — neither rests on an agent's diagnosis.
+
+- **DOD-M12B-TERMINAL-REASON-1** [trustless-cello, cello-client] — **the relay says `session_sealed`
+  when it means "I refused this seal", and a client cannot tell the difference.** Verified in source:
+
+  ```
+  relay-node.ts:728   rejectSeal(sessionId, _reason) { ... status: "seal_rejected" ... }
+  relay-node.ts:1077  if (state.status !== "active") { await reply("session_sealed"); return; }
+  ```
+
+  `session_sealed` is the reply for EVERY non-active status, `seal_rejected` included. And
+  `rejectSeal` is HANDED the real cause at the call site (`relay-node.ts:1416`,
+  `this.rejectSeal(sessionId, dirResult.reason)` — `connection_lost: …` for a transport fault, a
+  directory string for a merits refusal) and **discards it**: the parameter is underscore-prefixed
+  and reaches nothing but a `protocolLog` line.
+
+  **What it costs, measured on session `df2a2a08`:** the relay refused that seal at 04:53 on a
+  transport fault, then answered `session_sealed` to the counterparty's next hash submission. That
+  side wrote a terminal `sealed` row at 04:58 — six minutes BEFORE its own close timed out — and
+  holds no certificate, because none was ever notarized. Meanwhile THIS side got
+  `relay_session_gone`, classified it transient, and kept the session live. One dead session, a
+  terminal state on one side and a live one on the other, both clients behaving correctly on what
+  they were told.
+
+  Needs: distinct terminal reasons (at minimum notarized / refused-permanently / in-progress) AND a
+  defined meaning for an unrecognised terminal reason, or an older client swaps one silent misread
+  for another. Wire-visible: the relay tolerates before any client depends on it (§2f). — ❌
+
+- **DOD-M12B-TRANSPORT-FAULT-NOT-TERMINAL-1** [trustless-cello] — **a transport fault must not end a
+  healthy session, and today it does.** Upstream of the line above and the more valuable of the two.
+  `rejectSeal` terminalises unconditionally, so when the relay merely could not REACH a directory —
+  nothing wrong with the session, the parties, or the leaves — it marked a healthy session
+  `seal_rejected` and told a client it was sealed. M12 Tier P5's eviction removes one PRODUCER of
+  that `connection_lost`; it does not remove the class, and every future transport fault (a
+  directory rolling, a capacity outage, a network blip) arrives at the same line. If `rejectSeal`
+  branched on transport-vs-merits and left the session active and retryable on transport, there
+  would be no false row to detect and no divergence to repair. — ❌
+
+- **DOD-M12B-PULL-NEVER-RECOVERS-1** [cello-client] — **the certificate pull has never once
+  recovered anything.** Counted in this machine's `~/.cello/daemon.log` on 2026-08-19:
+
+  | event | count |
+  |---|---|
+  | `seal.certificate.pull.not_found` | **157** |
+  | `seal.certificate.pull.recovered` | **0** |
+  | `seal.certificate.pull.malformed` | 1 |
+  | `seal.certificate.pull.timeout` | 1 |
+
+  It was built for `DOD-TERMINAL-STATE-DIVERGENCE-1` — "the counterparty holds a receipt and this
+  side was never told" — and every invocation has come back empty. Either the certificates genuinely
+  are not there (which points at the two lines above), or the recovery path cannot find records that
+  exist. Both matter and neither is "it works". **Do not read a `not_found` as proof no certificate
+  exists** — homing moves (`relay.seal.redirected` / `seal_initiator_not_local` is in today's logs),
+  the record may sit on another consortium node, and a grace window may not have elapsed. Repairing
+  a terminal row on that signal would be strictly worse than the divergence it repairs. — ❌
+
+
 - **RE-MEASURE AFTER `DOD-M12B-STRAND-1` SHIPS, before building any resend-request protocol.**
   Andre ruled that a resend/negative-acknowledgement protocol ("I am missing position N, send it
   again") stays out of scope *for now* — but the reason gaps are FATAL rather than slow is that
