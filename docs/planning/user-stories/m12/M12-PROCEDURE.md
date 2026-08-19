@@ -1,28 +1,43 @@
 ---
 name: M12 Procedure — How to Work the Milestone
 type: procedure
-date: 2026-07-28
+date: 2026-08-19
 milestone: M12
 status: open
-topics: [m12, gcp, migration, multi-cloud, anti-entropy, role-split, infrastructure, procedure, runbook]
+topics: [m12, gcp, migration, multi-cloud, anti-entropy, role-split, infrastructure, relay, procedure, runbook]
 description: >
   The operating runbook for M12 (multi-cloud rebuild — GCP nodes, anti-entropy sync,
-  full-node/validator role split, CI on Cloud Build, AWS teardown). SELF-CONTAINED — no other
-  milestone's procedure needs to be read. Read FIRST, then M12-DEFINITION-OF-DONE. Spec-of-record
-  is the 2026-07-28 GCP rebuild decision record; derivations live in the superseded 2026-07-25 log.
+  full-node/validator role split, CI on Cloud Build, and the ongoing integrity of the connections
+  between deployed infrastructure). SELF-CONTAINED — no other milestone's procedure needs to be
+  read. Read FIRST, then M12-DEFINITION-OF-DONE. Spec-of-record is the 2026-07-28 GCP rebuild
+  decision record; derivations live in the superseded 2026-07-25 log.
+  REFRESHED 2026-08-19 against M12B-PROCEDURE, which is the current shape. Four things were stale
+  and actively wrong to follow: `cello-done-auditor` was still mandated here after being retired
+  everywhere (§2d, §2 step 8, §3); the AWS protocol stack it gates on was DELETED on 2026-08-06;
+  there was no gate-discipline section, so a gate piped through `grep` could launder a red tree;
+  and the relay fleet roll — which reaches outside this system — carried no rule. Tier P5 is added
+  for relay↔directory connection integrity.
 ---
 
 # M12 Procedure — How to Work the Milestone
 
 ## REALITY CHECK — read before anything
 One user: Andre, also the only developer. CELLO is **alpha — no production, no real users.**
-Total data loss is not merely acceptable, it is **the plan** — this milestone is a rebuild from zero.
+Total data loss on the DATA is not merely acceptable, it was **the plan** — this milestone began as
+a rebuild from zero.
+
+**That changed on 2026-08-06 and the difference governs how you work now.** The rebuild landed. The
+GCP fleet is the only protocol stack that exists — the AWS directory, relay, database, pipelines,
+ops-agent and dashboard were **deleted**, not hibernated. So M12's remaining work is no longer
+"stand it up where nothing is running"; it is **change a fleet that is the only thing running**, one
+node at a time, while agents are using it. A mistake now is an outage, not a redo.
+`infra/GCP-STATE.md` is authoritative; read it before any unit that touches deployed state.
 
 ## 🛑 THERE ARE EXACTLY TWO REASONS TO STOP AND HAND BACK TO ANDRE
 
 **Everything else is a NOPE — do not stop for it. Keep working.**
 
-1. **A manual operation only Andre can do, that blocks you.** You cannot proceed in some area until he does it. (Examples: the npm `latest` promotion, a browser OAuth flow, `/mcp` reconnect, an AWS-teardown per-stack go.)
+1. **A manual operation only Andre can do, that blocks you.** You cannot proceed in some area until he does it. (Examples: the npm `latest` promotion, a browser OAuth flow, `/mcp` reconnect, **a relay or directory fleet roll** — see §2c.)
 2. **A critical design decision that could cause harm, where you need his guidance.** A genuine fork where guessing wrong does damage.
 
 **That is the whole list.** If what you're about to write is not one of these two, it is a NOPE — do not send it, keep working:
@@ -39,11 +54,18 @@ The durable record is the journal + commits, not messages to Andre. Report progr
 - **Do not invent decisions for Andre.** "Should I do this code work?" is always yes.
 - **DO pause for a GENUINE design fork** (materially different architectures) — in autonomous mode
   you PARK it (DoD "Parked" section + journal), never block.
-- **GCP actions are AUTHORIZED inside the `cello-infra` project** (create, deploy, tear down —
-  it exists for this milestone). **AWS actions require two checks first:** (1) infra is AWAKE —
-  never touch hibernated infra, missing resources during hibernate are intentional; (2) the action
-  is in IaC or STATE.md gets updated immediately after. AWS teardown (P4) additionally requires
-  Andre's explicit go per stack — it is irreversible and the old system is the fallback until Wave 2 proves out.
+- **READ-ONLY GCP inspection is AUTHORIZED and expected** inside `cello-infra` — `gcloud logging
+  read`, `terraform plan`, describing instances. Do not escalate what you can verify.
+- **A GCP change that RESTARTS or REPLACES a running node is not a code change** and does not ship
+  on the same reflex. It rolls node by node, and it is stop-reason 1 in autonomous mode (§3a).
+  Creating disposable resources, IaC edits, and anything that does not disturb a serving node stay
+  yours.
+- **`infra/GCP-STATE.md` updates IMMEDIATELY after every GCP change — never batched.**
+- **AWS is not part of this milestone any more.** The protocol stack was deleted 2026-08-06. What
+  remains on AWS is the waitlist, the portal RDS, SES (which still sends the GCP registration OTP),
+  Route 53 and NAT — `infra/STATE.md` covers those and is otherwise SUPERSEDED. `infra/deploy.sh`,
+  `infra/cloudformation/` and `infra/buildspecs/` deploy stacks that no longer exist: seeing a
+  deploy script is not evidence it is the deploy path.
 
 ## 🎭 DECISION THEATRE — the failure mode INSIDE the two-stop rule (added 2026-07-31)
 
@@ -66,7 +88,9 @@ Only the fourth (an npm publish, which reaches operators) was a real gate.
 ### The three questions. All three must be NO for it to be yours.
 
 1. **Does it reach OUTSIDE this system?** npm, a counterparty, a customer, a bill, a public claim,
-   someone else's machine. Internal GCP + local + this repo is not outside.
+   someone else's machine. Internal GCP + local + this repo is not outside. **A roll that restarts
+   a serving relay or directory IS outside** — it is the fleet real agents are talking through, and
+   since 2026-08-06 there is no second stack behind it.
 2. **Is it genuinely irreversible?** Not "destructive-sounding" — irreversible. Deleting rows you
    created, on an alpha fleet with no users, that anti-entropy will re-replicate, is not.
 3. **Is it already authorized in writing?** §Reality Check authorizes GCP actions inside `cello-infra`.
@@ -91,16 +115,20 @@ Any YES → it is a real gate. **All NO → it is yours. Do it, journal it, move
   makes the one that matters harder to see and trains him to skim the list.
 
 ## THE MILESTONE IN ONE PARAGRAPH
-Rebuild CELLO at the launch topology across two clouds: **N=3 directories — one AWS (us-east-1)
-+ two GCP — with T = majority(validators) = 2**, relays on both clouds, and the Postgres
-replication mesh **retired** in favour of **libp2p anti-entropy** (no VPN, no PSA, ever). Build
-the **full-node/validator role split** (manifest `role` field; replicas hold no shares and never
-enter threshold arithmetic). Nodes run as **MIG(size 1) + Container-Optimized OS with Cloud SQL
-per node**; CI moves to **Cloud Build + Artifact Registry**; ops-agent and portal move to GCP
-(email via the SES HTTPS API). Sequence: GCP standalone first (testable with AWS off), then the
-AWS node joins over anti-entropy, then the outage claim is proven ("GCP down → existing agents
-still seal"), then old AWS infra is torn down. Spec-of-record:
-[[2026-07-28_0700_gcp-rebuild-decision-record]].
+Rebuild CELLO at the launch topology and then keep it standing. **N=3 directories** — `gcp-use1`
+(us-east1), `gcp-usc1` (us-central1), `gcp-euw1` (europe-west1) — with **T = majority(validators)
+= 2**, two relays (`use1`, `euw1`), and the Postgres replication mesh **retired** in favour of
+**libp2p anti-entropy** (no VPN, no PSA, ever). The **full-node/validator role split** ships here
+(manifest `role` field; replicas hold no shares and never enter threshold arithmetic). Nodes run as
+**MIG(size 1) + Container-Optimized OS with Cloud SQL per node**; CI is **Cloud Build + Artifact
+Registry**. Wave 1 (GCP standalone) is done and the AWS stack was deleted 2026-08-06, which makes
+Tiers P3/P4 historical — read them for the decisions, not for work.
+**What M12 still owns is the part the rebuild exposed: the connections BETWEEN the deployed pieces.**
+A directory reaching its peers, a relay reaching a directory, a client reaching either. These are
+long-lived libp2p connections held for a process's whole life across a fleet that runs for days, and
+they are where the rebuilt system actually fails — not in the ceremonies, which work. **Tier P5**
+carries that. Spec-of-record: [[2026-07-28_0700_gcp-rebuild-decision-record]] for the topology;
+per-unit evidence lives in the journal.
 
 ## 0a. Severity triage (spend effort top-down, never invert)
 1. **CONSORTIUM CORRECTNESS.** Threshold arithmetic over validators only; kill-switch convergence
@@ -108,9 +136,13 @@ still seal"), then old AWS infra is torn down. Spec-of-record:
    Any silent violation is critical — this is the trust product itself.
 2. **THE CORE JOURNEY.** Fresh register → DKG → seal → live two-agent session → kill a directory →
    sealing continues → client failover. If this breaks on the rebuilt system, nothing else matters.
-3. **THE OUTAGE CLAIM.** GCP directories unreachable → existing agent seals via the AWS node;
-   registration correctly refuses (needs |Q| ≥ T). This is a product claim at launch.
-4. **Real non-core gaps.** Workload moves (ops-agent, portal), CI polish, teardown completeness.
+3. **A CONNECTION THAT DIES AND STAYS DEAD.** The fleet runs for days; a libp2p connection does
+   not. Anything where a held connection can go unusable and no code path restores it, or where a
+   repair runs and cannot work, ranks here — because the failure is silent, fleet-wide, and only
+   ever surfaces as some unrelated verb timing out. **Sealing is the current instance** (Tier P5)
+   and it is launch-blocking: a notary that intermittently cannot notarize has not delivered its
+   basic value.
+4. **Real non-core gaps.** CI polish, IaC completeness, alerting on the signals we already emit.
 5. **Hardening / polish.**
 
 ## 0. Read order (every session)
@@ -121,8 +153,10 @@ still seal"), then old AWS infra is torn down. Spec-of-record:
    alternatives: [[2026-07-25_1034_gcp-relay-and-directory-deployment-plan]] (superseded — use for
    *why*, never for *what*). Anti-entropy/role-split units also read the M8B plan
    (quorum registration, enrollment deferral) before touching consortium code.
-5. `infra/STATE.md` before ANY AWS-touching unit. `infra/GCP-STATE.md` (created in P0) before any
-   GCP-touching unit.
+5. **`infra/CLAUDE.md` before ANY infrastructure unit** — it carries the rules that have already
+   cost outages. **`infra/GCP-STATE.md`** before any unit that touches deployed state; it is the
+   authoritative record and you update it immediately after every change. `infra/STATE.md` is AWS
+   and SUPERSEDED — it covers only the waitlist, portal RDS, SES, Route 53 and NAT.
 Then start the loop (§2).
 
 ## 1. The artifacts
@@ -131,8 +165,9 @@ Then start the loop (§2).
 | **M12-DEFINITION-OF-DONE** | The **yardstick + sole status authority** — ordered, status-tagged, carries Decisions + Parked. Flip tags in place; one line of evidence + `→ Entry N`, never an essay. |
 | **M12-BUILD-JOURNAL** | The **audit trail + evidence home** — append-only. Full proofs, bug forensics, run output live HERE. Never edit a prior entry. New file per tier (`M12-BUILD-JOURNAL-T{n}.md`) seeded with a 10-line resume block. **Entries are written at END OF FILE and VERIFIED after writing — see §1a.** |
 | **Local convergence enforcer** | Three directory processes on loopback, divergent state → anti-entropy converges them; kill/restart/catch-up proven; suspended-wins proven under partition. No cloud needed. |
-| **GCP standalone enforcer** | The live journey (§0a.2) run entirely on GCP with AWS unreachable. Wave 1 lines are ✅ only after this passes. |
-| **Outage-claim enforcer** | GCP directories blocked → existing agent still seals via AWS; new registration refuses loudly. Wave 2 lines are ✅ only after this passes. |
+| **GCP standalone enforcer** | The live journey (§0a.2) run entirely on GCP. Wave 1 lines are ✅ only after this passes. |
+| **Outage-claim enforcer** | One directory blocked → an existing agent still seals via the remaining two (T=2 of N=3); with two blocked, registration refuses loudly with a cause-naming error. **Rewritten 2026-08-19** — it used to read "GCP blocked → seals via AWS", and there is no AWS node. The claim is now survive-one-node-loss, which is what T=majority(N) actually buys. |
+| **Held-connection enforcer** (Tier P5) | Kill the relay→directory connection underneath a live relay, then close a session: it seals, with no relay restart. Proves the repair repairs. A green unit test does not discharge this — the defect is that a redial SUCCEEDS and changes nothing. |
 | **IaC enforcer** | The region-expansion test: would this node come up in a brand-new region with zero manual steps? Every manual `gcloud`/console fix must land in IaC and the STATE file before its unit closes. |
 
 ## 1a. Journal writing — APPEND AT EOF, THEN VERIFY (added 2026-07-30)
@@ -181,13 +216,14 @@ the archaeology.
 4. **Red-first** — write the test, confirm it fails for the right reason, then implement. SPARC
    applies to every code unit (pseudocode citing the RFC for anything cryptographic).
 5. **Implement** — minimum change to green; nothing speculative.
-6. **Floor holds** — `pnpm run test` → `lint` → `typecheck` → `build` in every touched repo.
+6. **Floor holds** — `pnpm run test` → `lint` → `typecheck` → `build` in every touched repo, run
+   so it can FAIL (§7).
 7. **Commit** (constantly — §3), push after every commit.
 8. **Review — ONE read-only `cello-unit-reviewer` on the unit's diff, no model override.**
-   Dispatch per §2b. Fix EVERY finding; commit fixes. At tier boundaries, `cello-done-auditor`
-   audits every ✅ flipped since the last checkpoint — **scoped per §2d**.
+   Dispatch per §2b. Fix EVERY finding; commit fixes. **That is the whole review surface — see
+   §2d.**
 9. **Update docs** — flip the DoD tag (+ one-line evidence + journal pointer), journal entry,
-   STATE file if any cloud resource changed.
+   `infra/GCP-STATE.md` if any cloud resource changed.
 10. **Merge the branch** (§2e) — a reviewed-green unit does not sit on a branch.
 11. Back to 1.
 
@@ -240,6 +276,25 @@ Standing M12-specific lenses:
 - **Relay-extractability lens:** the relay gains no consortium state, no shared internal config
   package, no directory import. It must remain a standalone shippable artifact (enterprise
   private-relay deliverable).
+- **HELD-CONNECTION lens (BLOCKING, added 2026-08-19 — Tier P5's founding defect):** any long-lived
+  libp2p connection kept across calls is a cache with no invalidation. For every such handle the
+  diff touches, ask three things and answer all three:
+  1. **When it goes bad, what NOTICES?** A connection whose only detector is the next user is a
+     connection that fails as somebody's timeout.
+  2. **When it goes bad, what REPAIRS it — and can that repair actually work?** A redial that hands
+     back the same object is not a repair. `libp2p.dial()` returns an EXISTING connection whenever
+     one is registered for that peer and its socket status reads `open`; it never inspects the
+     muxer. So dialling without first evicting is a no-op against precisely the failure it is
+     there to fix. **Evict, then dial.**
+  3. **What does the log say the MOMENT it dies?** Recording only the corpse — the failed call —
+     leaves you inferring a cause forever. Connection open/close, with peer and reason, or the next
+     investigation starts from zero.
+  A diff that adds a retry against a cached connection without answering (2) is a blocking finding,
+  however green the suite is.
+- **Cause-not-symptom lens (BLOCKING):** `connection_lost` describes an object in THIS process, not
+  the peer. Any error string, log line, comment or doc that turns a local handle's state into a
+  claim about the remote node's availability is a finding — that exact conflation sent two separate
+  investigations to the wrong tier before Tier P5 was opened.
 - **Node-identity lens (BLOCKING):** every node id is `<cloud>-<region>`, chosen once and NEVER
   renamed — a rename destroys the FROST identifier. Flag any diff that renames, derives, or defaults
   a node id, and any manifest version where two entries could hold one FROST identifier.
@@ -257,37 +312,53 @@ Standing M12-specific lenses:
   this milestone retires the mesh, so deletion discipline (grep both repos, built-artifact
   absence, `rm -rf dist` before asserting) will be exercised heavily.
 
-## 2c. Deploy sequencing
-- **Images build ONLY in CI** (Cloud Build once P0 lands; CodePipeline for the AWS node until
-  teardown). NEVER `docker push` from local, either cloud.
-- **AWS directory deploys still cost 25–30 min** — batch ALL pending AWS directory changes into
-  one push. GCP MIG rolling replace is per-node; deploy nodes **sequentially, never simultaneously**
-  (a deploy restarts the node; T−1=1 tolerates it, simultaneity doesn't).
+## 2c. Deploy sequencing — THE FLEET IS THE ONLY ONE THERE
+- **Images build ONLY in CI** (Cloud Build). NEVER `docker push` from local.
+- **Roll node by node. Never simultaneously.** A roll restarts the node. With N=3 and T=2, exactly
+  one directory may be down at a time; rolling two at once takes the consortium below threshold and
+  no session can form. **This has already caused an outage — 2026-08-16.** `infra/CLAUDE.md` §2 is
+  the authority.
+- **Poll a real endpoint for a real 200 before touching the next node** — `GET /bootstrap` for a
+  directory, `/health` for a relay. "The MIG says RUNNING" is not the same claim; the container can
+  be crash-looping inside a healthy VM.
+- **Batch every pending change for a fleet into ONE roll.** Shipping fixes one at a time multiplies
+  the outage window by the number of fixes.
+- **`/health` on a relay ALWAYS answers 200, deliberately.** The directories poll it to decide
+  relay POOL MEMBERSHIP, and any non-2xx withdraws the relay. A relay that cannot reach a directory
+  can still carry sessions, and since that cause is shared, a 503 there empties the pool fleet-wide
+  — converting "cannot seal" into "cannot start a conversation". Degradation is reported in the
+  BODY (`status: "degraded"`) and as a log event. **If an autohealer ever acts on this it needs its
+  own signal; never the status code.**
+- **After the roll, verify the thing the change was FOR**, not that the process came up. A relay
+  that starts is not a relay that can seal.
 - **Org-policy traps (verified live 2026-07-28):** no service-account keys exist or can be created
   (org-enforced) — cross-cloud auth is Workload Identity Federation or nothing; default SAs have
   ZERO grants — every permission is explicit, and the failure mode is a silent 403.
 - **Cloud SQL:** each node's DB accepts connections from its own node only. Nothing cross-cloud
   ever connects to a node's Postgres — that is the anti-entropy dividend; protect it.
 
-## 2d. `cello-done-auditor` — RETIRED EVERYWHERE ELSE, DELIBERATELY KEPT HERE (added 2026-07-30)
+## 2d. `cello-done-auditor` — RETIRED HERE TOO (2026-08-19). DO NOT DISPATCH IT.
 
-The auditor is retired across the project: on code milestones it re-litigates work the unit reviewer
-already passed, at high token cost. **M12 is a standing exception, and it has earned it twice** —
-`DOD-GCP-PROJECT-1`'s "only the needed APIs" was live-false (33 enabled, including project-creation
-defaults), and `DOD-GCP-IAM-1` had an out-of-band `builds.builder` grant Google added automatically.
-Neither is findable in a diff.
+**This section used to carry M12 as a standing exception. That exception is withdrawn.** The
+auditor is retired across the whole project: it re-litigates work the unit reviewer already passed,
+at high token cost, and a procedure doc mandating a retired tool is how it keeps getting summoned.
+The unit reviewer's single pass is the entire review surface.
 
-**The reason is structural, so hold the scope exactly:** M12's claims are about **live cloud state**,
-and a reviewer reading a diff cannot see what is actually enabled, granted, or running. Terraform says
-what was declared; the auditor asks what is *there*.
+**The concern that earned the old exception was real and does not need an agent.** M12's claims can
+depend on **live cloud state**, and a reviewer reading a diff cannot see what is enabled, granted or
+running. The answer is a COMMAND in the evidence, not a second opinion:
 
-- **IN scope:** any ✅ whose truth depends on live cloud state — enabled APIs, IAM grants, MIG/instance
-  health, DNS, deployed image digests, migration versions in each regional DB, what a STATE file
-  claims versus what the cloud returns. It anchors to command output, never to the journal's prose.
-- **OUT of scope:** re-reviewing code diffs, test quality, or spec fidelity. That is the unit
-  reviewer's single pass and it does not get a second opinion.
-- **Cadence:** tier boundaries only, over every ✅ flipped since the last checkpoint. Never per unit.
-- A finding downgrades the tag and the correction is recorded on the line — as Entry 7 did.
+- **A ✅ whose truth depends on live state cites the command output that proves it** — `gcloud`,
+  `terraform plan`, a log query — pasted in the journal entry. Not the journal's prose about it.
+- **`terraform plan` is the GCP inventory.** A clean plan is the claim that declared state matches
+  reality; run it rather than asserting it.
+- **A tag flips on evidence, never on an agent's blessing.** If you cannot produce the command, the
+  line is not ✅.
+
+## 2d-bis. ONE review pass per unit; TWO is the hard cap
+Reviewers always find something, so "review until clean" has no termination condition. At pass two,
+any remaining findings become ACs on the units they affect, recorded in the DoD. This already cost
+a whole session elsewhere — five passes, zero lines shipped.
 
 ## 2e. Parallel work — branches, worktrees, and merge (added 2026-07-30)
 
@@ -316,22 +387,25 @@ auditors and explorers only, never a parallel implementation agent inside one se
 ## 3. Cadence
 - **Commit constantly** — never >~15 min without one; push after every commit. Docs commit to main.
 - **Review every unit** on its diff, right after green. Never batch reviews.
-- **STATE files update immediately after each cloud action** — never batched, never at story close.
-- **Checkpoint at every tier boundary:** `cello-done-auditor` on every ✅ since the last checkpoint;
-  only EARNED stays ✅. Journal summary, commit, new journal file for the next tier.
+- **`infra/GCP-STATE.md` updates immediately after each cloud action** — never batched, never at
+  story close.
+- **Checkpoint at every tier boundary:** journal summary, commit, and verify every ✅ since the last
+  checkpoint names the command output that proves it (§2d). Only EARNED stays ✅.
 
 ## 3a. Autonomous-mode rules (if running unattended)
 NEVER `AskUserQuestion`, never end a turn waiting. Decision rubric: pick the common best practice —
 the choice least likely to need reversing — log it in the DoD Decisions section, proceed
 (redo > block, always). Genuine undecidable fork → PARK and pull the next unit, saying so.
-**Exceptions that DO block (park the unit, work another):** AWS teardown per-stack go (§Reality
-Check), the npm `latest` promotion, `/mcp` reconnect.
+**Exceptions that DO block (park the unit, work another):** the npm `latest` promotion, `/mcp`
+reconnect, and **a roll that restarts a serving relay or directory** (§2c). Build it, gate it,
+review it, commit it, and hand the roll over — an unrolled fix is a finished unit whose DoD line
+stays 🟡 until the roll happens.
 
 ## 3b. Watchdog crons — arm both (self-contained)
 Session-only; re-arm BOTH after every compaction/restart. **Cron 1 — deploy watchdog** (armed only
-while a deploy/pipeline is in flight, `*/4 * * * *`): check REAL health — Cloud Build build status,
-MIG instance health + serial console for crash loops, `aws codepipeline get-pipeline-state` for the
-AWS side; genuine failure → stop waiting, diagnose; terminal → CronDelete itself. **Cron 2 —
+while a deploy/roll is in flight, `*/4 * * * *`): check REAL health — Cloud Build build status, MIG
+instance health, serial console for crash loops, and a real `GET /bootstrap` or `/health` 200 from
+the rolled node; genuine failure → stop waiting, diagnose; terminal → CronDelete itself. **Cron 2 —
 30-min heartbeat** (whole milestone, off-minute e.g. `17,47 * * * *`): the defibrillator, not a
 metronome — if working, keep working. Fired prompt: (1) procedure/DoD/journal in context? re-read +
 re-arm if dropped; (2) stalled on a decision? apply §3a; (3) blocked on a human-only step? work a
@@ -340,13 +414,15 @@ different line; (4) >15 min since commit? commit; (5) last unit unreviewed? disp
 questions (§Decision Theatre). All NO → do it now. Any YES → it belongs in DoD Parked, and you do not
 mention it again this cycle;** (7) one status line. Self-terminate when all DoD tiers are ✅.
 
-## 4. First actions (P0 order — strictly)
-1. **DOD-GCP-PROJECT-1** — create `cello-infra`, link billing, enable APIs deliberately, create
-   `infra/GCP-STATE.md`.
-2. **DOD-GCP-IAM-1** — per-workload service accounts with explicit minimal grants.
-3. **DOD-CI-REGISTRY-1** — Artifact Registry + Cloud Build building both images from GitHub.
-4. **DOD-IAC-BASE-1** — the IaC skeleton (tool per M12-D2) proving one disposable VM up/down.
-Then P1 (protocol code — all local-provable, no cloud dependency, can interleave with P0 waits).
+## 4. First actions (2026-08-19 — P0/P1/P2 are done, P3/P4 are historical)
+The active tier is **P5 — relay↔directory connection integrity**, and its lines run in order:
+1. **DOD-M12-CONN-OBSERVE-1** — log the connection's socket status beside the muxer error, and log
+   connection open/close with peer and reason. This is what turns the diagnosis from near-certain
+   into certain, and it must land first so the fix's effect is legible.
+2. **DOD-M12-CONN-EVICT-1** — evict before dialling, so the repair can actually repair.
+3. **DOD-M12-CONN-PROVE-1** — a seal survives a killed relay↔directory connection with no relay
+   restart, proven against real processes.
+Do not skip ahead to the fix. The observation line is cheap and the fix is unprovable without it.
 
 ## 5. Hard rules (non-negotiable)
 - **ABSENT IS NOT FINE.** A guard with missing input REFUSES — unless refusing would violate the
@@ -361,15 +437,21 @@ Then P1 (protocol code — all local-provable, no cloud dependency, can interlea
   of truth that silently disagrees with the first. **`GCP-STATE.md` records only what Terraform cannot:**
   the billing-slot ledger, org constraints (no SA keys, zero default grants), the undisable-able
   platform APIs, and manual one-offs still owed an import — plus a pointer to `terraform plan`. Do not
-  copy resource inventories into it. `infra/STATE.md` keeps its existing role for the AWS side until
-  teardown, because CloudFormation there has no equivalent single command.
+  copy resource inventories into it. `infra/STATE.md` covers only the AWS services that outlived the
+  teardown — waitlist, portal RDS, SES, Route 53, NAT — and is superseded for everything else.
 - **DO NOT ESCALATE WHAT YOU CAN VERIFY.** Check gcloud/aws/code first.
 - **MEASURE BEFORE QUOTING A NUMBER.**
-- **Subagents stay READ-ONLY** (unit-reviewer, done-auditor, explorer) — never a parallel
-  implementation agent inside one session. Deployment and code work stay in foreground. *(Parallel
-  coders on separate story branches are the deliberate M12 model — rules in §2e. This line no longer
-  says "one thread, one coder"; that was inherited from a single-thread milestone and contradicted
-  `M12-D4`.)*
+- **Subagents stay READ-ONLY** (unit-reviewer, explorer) — never a parallel implementation agent
+  inside one session. Deployment and code work stay in foreground. *(Parallel coders on separate
+  story branches are the deliberate M12 model — rules in §2e.)* **`cello-done-auditor` is retired;
+  do not dispatch it (§2d).**
+- **A COMMENT IS NOT A GUARANTEE.** A comment asserting a safety property the code does not enforce
+  is how defects survive review here — caught five times in one night in seal/persistence code.
+  Verify the claim against the code; rewrite a wrong comment rather than deleting it.
+- **NEVER DIAGNOSE A RACE CONDITION.** It is the lazy answer reached for instead of reading the
+  evidence, and it has not once been the cause. Find the CONDITION — the value, flag, status or
+  empty list — and quote it. If code reuses a stale read across an `await`, say exactly that and
+  give the deterministic fix.
 - **`node:sqlite` VERBOTEN** (SQLCipher only, client side). **No mocks for crypto.** **No
   `console.log`** in implementation — injected logger, `domain.noun.verb` events, correlationId
   threading; observability ACs are first-class on every unit.
@@ -381,15 +463,36 @@ Then P1 (protocol code — all local-provable, no cloud dependency, can interlea
 
 ## 6. What a checkpoint/handoff entry contains
 Which DoD lines are ✅ WITH enforcer-run output (not a claim); the exact next red + one-sentence
-target; HEAD commits (all active repos); cloud-state deltas (both STATE files current?); anything
-parked; anything that changes the DoD. Keep the RESUME STATE block at the top of the current
-journal file up to date.
+target; HEAD commits (all active repos); cloud-state deltas (`infra/GCP-STATE.md` current?); the
+fleet's rolled state if a roll happened; anything parked; anything that changes the DoD. Keep the
+RESUME STATE block at the top of the current journal file up to date.
+
+## 7. Gate discipline — run it so it can FAIL (added 2026-08-19)
+M14 found a gate piped through `grep`, whose exit status is grep's — so the chain proceeded on a red
+tree and a failing suite was recorded as green. Run gates so a failure stops the chain:
+
+```
+set -o pipefail        # or: capture to a file and check $?
+pnpm run test > /tmp/gate.log 2>&1; echo "exit=$?"
+```
+
+**Read the exit code, not the tail of the output.** A check whose failure mode is "still reports
+success" launders a red tree into a green claim, and every ✅ downstream of it is unearned.
+
+The same rule applies to live verification, and it is the more common miss on this milestone: a
+`gcloud` command that returns zero rows because the filter was wrong looks exactly like a system
+with nothing to report. **Prove the query can return something** — run it against a case you know
+exists — before quoting an empty result as evidence.
 
 ---
 
 ## Related Documents
 - [[M12-DEFINITION-OF-DONE]] — yardstick + sole status authority
 - [[M12-BUILD-JOURNAL]] — audit trail + evidence home
+- [[M12B-DEFINITION-OF-DONE]] — sub-milestone: relay↔**client** ordering and failover. Different
+  connection from Tier P5's relay↔**directory**, with different failure modes; do not conflate them.
+- [[M12B-PROCEDURE]] — the current-shape procedure this one was refreshed against (2026-08-19)
 - [[2026-07-28_0700_gcp-rebuild-decision-record]] — spec-of-record (the decisions)
 - [[2026-07-25_1034_gcp-relay-and-directory-deployment-plan]] — superseded derivations (the why)
 - [[2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan]] — M8B quorum/enrollment context
+- [[launch-triage]] — Tier P5's user-facing entry and the measured evidence behind it
