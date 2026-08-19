@@ -1604,18 +1604,26 @@ directory and relay; client reachability is not the same property and must not s
 
 ---
 
-## ⚠️ Automatic image builds are NOT working — verified 2026-08-19T11:55Z
+## ⚠️ Image builds are MANUAL — that is the operating model, not a regression
 
-**Nothing has been built automatically since 2026-08-12. Do not plan a roll assuming a push
-produces an image.**
+**CORRECTED 2026-08-19T12:15Z (Andre: "I'm surprised that automated builds were ever working. I
+thought we were manually driving these things"). He is right, and the first version of this section
+overstated it by calling the trigger's death recent.**
+
+Counted across all 32 builds in the project's history: **24 MANUAL, 8 trigger-driven** — and of the
+eight, **the only successful ones were the three on 2026-07-28, the day the trigger was created.**
+Every trigger-driven build since has FAILED: one on 08-12, four on 08-17. So the trigger worked on
+day one, has never worked since, and every image the fleet has actually run was built by hand.
+
+**Do not plan a roll assuming a push produces an image. It never has, in practice.**
 
 What the evidence shows, and only that:
 
 - Both triggers exist, are enabled, watch `^main$`, are path-filtered correctly
   (`packages/relay/**`, `packages/directory/**`), and point at connection `cello-github` →
   `Mygentic-AI/CELLO`. The connection reports `installationState.stage = COMPLETE`, not disabled.
-- **The last four trigger-driven builds all FAILED**, on 2026-08-17, every one at the path-filter
-  step with the same error:
+- **Every trigger-driven build since 2026-07-28 has FAILED**, most recently four on 2026-08-17,
+  every one at the path-filter step with the same error:
 
   ```
   [_CHANGED_FILES -> $(changed_files)]: ListChangedFiles(... commit_pair:{old_commit:"41268dbd…"
@@ -1628,10 +1636,10 @@ What the evidence shows, and only that:
 - **Since 2026-08-17 the trigger has created no build at all.** On 2026-08-19 four pushes to `main`
   touching `packages/relay/**` and `packages/directory/**` produced nothing — no build, no queued
   build, no FAILURE entry.
-- **The `relay:7838bbeb` image rolled this morning was built BY HAND.** Its build carries
-  `buildTriggerId = None`, where every trigger-driven build in the history carries
-  `e563f69e-befb-4e2a-91e9-529591b38ed3`. That is how the fleet has kept moving while this was
-  broken, and it is why nobody noticed.
+- **The `relay:7838bbeb` image rolled this morning was built BY HAND**, like almost every image
+  before it. Its build carries `buildTriggerId = None`, where a trigger-driven build carries
+  `e563f69e-befb-4e2a-91e9-529591b38ed3`. Nobody noticed the trigger was dead because nobody was
+  depending on it.
 
 **What is NOT established:** why the trigger now creates nothing rather than creating a failure. The
 404 explains the 08-17 failures; it does not explain the silence since. **The evidence that would
