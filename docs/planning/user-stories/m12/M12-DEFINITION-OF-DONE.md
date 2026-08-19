@@ -780,9 +780,26 @@ description: >
   > `evict.unavailable` forever, and looks exactly like a roll that worked.**
   >
   > Order, and every step is load-bearing:
-  > 1. Tag → CI publishes the cascade to `beta`. *(done — `v0.0.254`)*
-  > 2. **Andre promotes all seven to `latest`.** Nothing below can happen first: the `latest`
-  >    specifier resolves off the dist-tag.
+  > 1. Tag → CI publishes the cascade to `beta`. ✅ **DONE 2026-08-19 — tag `v0.0.254`, all three
+  >    jobs green including `Published-artifact smoke test (tag)`, which is the real signal.**
+  >    Verified against the TARBALL, not CI: `npm pack @cello-protocol/transport@0.0.62` contains
+  >    `hangUp` in `dist/node.js` and `dist/types.d.ts`, and `status: c.status` in `getConnections`.
+  >    Cross-pins are real versions, no `workspace:*` — `cli@0.0.186 → daemon@0.0.179`,
+  >    `connect@0.0.154 → transport@0.0.62`. Published on `beta`:
+  >    crypto `0.0.56` · protocol-types `0.0.60` · transport `0.0.62` · gateway `0.0.40` ·
+  >    daemon `0.0.179` · cli `0.0.186` · connect `0.0.154`.
+  > 2. **Andre promotes all seven to `latest`** — operator-run, never an agent. Nothing below can
+  >    happen first: the `latest` specifier resolves off the dist-tag.
+  >
+  >    ```
+  >    npm dist-tag add @cello-protocol/connect@0.0.154 latest
+  >    npm dist-tag add @cello-protocol/cli@0.0.186 latest
+  >    npm dist-tag add @cello-protocol/daemon@0.0.179 latest
+  >    npm dist-tag add @cello-protocol/gateway@0.0.40 latest
+  >    npm dist-tag add @cello-protocol/crypto@0.0.56 latest
+  >    npm dist-tag add @cello-protocol/transport@0.0.62 latest
+  >    npm dist-tag add @cello-protocol/protocol-types@0.0.60 latest
+  >    ```
   > 3. In trustless-cello, re-resolve and COMMIT the lockfile; assert it moved off 0.0.57.
   > 4. Rebuild images, then roll relays and directories **node by node**, a real `200` between
   >    nodes (§2c).
