@@ -798,6 +798,54 @@ description: >
 
 ---
 
+## Tier SCREEN — screening order ([[M14B-SCREEN-ORDER-WORK-ORDER]]; traced 2026-08-19)
+
+> The full 36-step arrival trace and its evidence live in the work order. In one sentence: the
+> shared message screener runs on a document frame's raw bytes — a signed binary envelope — where
+> its three rewriting rules are discarded by design and its remaining rules judge mojibake, while
+> the gate later computes the document's READABLE projected text and screens it with a
+> ten-codepoint denylist. Content screening happens where the content is not legible, and does not
+> happen where it is.
+
+- **DOD-DOC-SCREEN-CLASSIFY-1** [cello-client] — **a document frame is identified before the shared
+  content screener, not after it.** Today classification happens only when the bytes reach the
+  document router, which is why every cheap authorization check the document layer owns — do we
+  know this document, is this author still a seated member, has it ended, does the signature verify
+  — runs AFTER the whole shared screen. A classify-only entry point on the frame router (reusing
+  the existing discriminator read — a second copy of that rule is a blocking finding); a frame that
+  classifies as document traffic skips the shared screener's CONTENT steps and keeps its size cap.
+  The skip is logged by name, so its absence is visible rather than assumed. The frame still takes
+  its leaf at its canonical position with kind `doc`; ordering and the hold/release path are
+  untouched. **Stated cost:** documents lose the language allowlist, which has never fired and was
+  judging mojibake. **Falsification owed first:** confirm no terminal-block path is load-bearing
+  for document frames today — a terminal block currently appends a `msg`-kind leaf without
+  delivering, so if it ever fires for a document the leaf kind is already wrong. — ❌ NOT BUILT
+- **DOD-DOC-SCREEN-CONTENT-1** [cello-client] — **the projected text is screened, at the shadow.**
+  The gate already builds an inert shadow copy, applies the update to it, and computes a projected
+  diff carrying the before-and-after text — and nothing but a character denylist reads it. After
+  the gate admits and before the update reaches the live document, the projected inserted text goes
+  to the EXISTING gateway screen (same program, same detectors the message path uses, this time
+  handed real text) and a `block` verdict becomes a refusal carrying its reason. A `redact` verdict
+  cannot be honoured on a replica, so a rewrite-worthy finding REFUSES — there is no third outcome,
+  matching the document path's existing contract. The refused envelope is quarantined by the
+  existing mechanism: held, never discarded. The gate's `validate` is synchronous and the screen is
+  not, so the call lands in the inbound receive path around the gate verdict — no gate refactor.
+  — ❌ NOT BUILT
+- **DOD-DOC-SCREEN-CLASSIFIER-1** [cello-client] — **nothing anywhere judges meaning, and that is
+  system-wide.** The IN-002 semantic scanner
+  (`protectai/deberta-v3-small-prompt-injection-v2`) is implemented, tested, and has an installer
+  and a manifest — and no code constructs it. The gateway builds its inbound screener with no
+  arguments, so it falls back to a null classifier that reports itself unavailable and is skipped
+  at the call site. Verified two ways on 2026-08-19: the only non-test construction in the client
+  repo is that null fallback, and the daemon log carries zero inbound blocks of any kind. This is
+  NOT document-specific — no inbound content, message or document, is judged for meaning today.
+  Fetch, verify, construct, pass to the screener. **Pin the model digests while doing it:** the
+  manifest carries `sha256: null` for every file and a floating `revision: "main"`, so integrity
+  rests on file size alone — the corner that gets cut when a feature is switched on in a hurry.
+  Once wired, `DOD-DOC-SCREEN-CONTENT-1` inherits it with no further change. — ❌ NOT BUILT
+
+---
+
 ## Decisions Carried (ruled 2026-08-11 — [[2026-08-10_2116_multiplayer-artifacts-joining-an-existing-document]] §13, binding)
 
 - **D1 — full document on join, cheap path on history.** The joiner sees the whole current
@@ -890,6 +938,17 @@ description: >
   plainly:** a session sealed under the old scheme has document frames baked into the root its
   receipt covers; one sealed after this change does not. That is a real difference in what a past
   receipt versus a future receipt attests to, not a bug — record it, do not paper over it.
+  — ❌ NOT BUILT. Traced 2026-08-19: no relay or directory change is needed (the relay already
+  carries a `doc` leaf kind, sessions key on `session_id` not on the pair, and the directory finds
+  the seal ceremony by kind, so document leaves interleaving disturbs nothing). Client-only. The
+  two throttling fixes below reduce the VOLUME of document frames in the conversation's chain and
+  cannot reach the normal case: a session coming up still reconciles every shared document into
+  that conversation's sequence line, and must, or nothing pulls. This line is what makes that stop
+  costing anything. Skipping the position entirely is DEAD — a sender that does not take its slot
+  starves its own inbound permanently (fixed 2026-08-05, `f75ea09`), and the control-leaf exemption
+  is not a template (a ctrl leaf still takes its position and still enters the sealed root; it is
+  excluded only from the readiness bookkeeping). The viable shape is a genuinely separate sequence
+  space.
 - **DOD-DOC-PUSH-NOT-POLL-1** — **a document must not sync on a timer when nothing has changed.**
   Same investigation, same day: with the removed-holder and refusal-storm defects already fixed
   (item 22, 2026-08-17), sync frames kept appearing on a document with **zero pending edits** —
