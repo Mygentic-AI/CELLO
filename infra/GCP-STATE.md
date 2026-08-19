@@ -1675,3 +1675,56 @@ the trigger is repaired, or the image is built manually as on 2026-08-19 — and
 manually, the operator must remember that a `pnpm install --frozen-lockfile` build takes the
 `@cello-protocol/transport` version from `pnpm-lock.yaml` (currently **0.0.57**), not from the
 `latest` specifier.
+
+---
+
+## 🔄 M12 Tier P5 ROLL — 2026-08-19, and the usc1 capacity incident inside it
+
+**Why:** ship the relay↔directory connection fix (evict a dead libp2p connection before redialling,
+because `dial()` returns a registered connection whose socket reads `open` without inspecting the
+muxer). Full trail in `M12-DEFINITION-OF-DONE` Tier P5 and journal entries 90–92.
+
+**Image:** `c703b3aa63dba5f6561fbe134260442f868c3681` — relay and directory, both built manually
+(`gcloud builds submit`, the trigger has never worked — see M12-P11 below).
+
+| Node | Result | Evidence |
+|---|---|---|
+| relay `use1` | ✅ rolled | directories' 30s probe resumed; `relay.directory.connection.opened` observed |
+| relay `euw1` | ✅ rolled | same |
+| directory `us-east1` | ✅ rolled | 4 anti-entropy rounds AFTER instance start |
+| directory `us-central1` | ⚠️ **OUTAGE then recovered** | see below |
+| directory `europe-west1` | pending at time of writing | — |
+
+### The incident — `ZONE_RESOURCE_POOL_EXHAUSTED` on `c3-standard-4`
+
+Rolling `us-central1` destroyed the running directory and could not recreate it: Google had no
+`c3-standard-4` capacity in `us-central1-a`. Three failed creation attempts (13:24:43, 13:24:56,
+13:26:36 UTC). **`max_surge_fixed = 0` means the MIG deletes before it creates**, so the healthy
+node was already gone — that trade-off is deliberate and is documented, struck through, in the
+playbook below; do not re-propose surging, it fails on an IP conflict.
+
+**The consortium ran at exactly threshold (2 of 3) for roughly six minutes.** Sealing continued;
+zero spare.
+
+### The fix — a revert that was already owed
+
+Probed the (zone, machine type) PAIR per the playbook instead of guessing:
+**`e2-standard-2` HAS capacity in `us-central1-a`.** That is the size the `terraform.tfvars` revert
+marker has been asking for since 2026-08-10 — `c3-standard-4` was a TEMPORARY upsize taken when the
+region was short of 2-vCPU capacity, and the shortage has now inverted: the small type is available
+and the big one is not.
+
+**`directory_nodes["us-central1"].machine_type`: `c3-standard-4` → `e2-standard-2`.** Applied
+`-target`ed. Node back as `cello-gcp-usc1-qq2z` at 13:31:07Z.
+
+**The probe instance was deleted.** A stray VM outside Terraform is what breaks the NEXT apply.
+
+### Two things a future roller should know
+
+1. **`us-central1` is the risky node.** It has now hit capacity exhaustion twice (2026-08-06,
+   2026-08-19) on two different machine types. Probe before rolling it, not after it fails.
+2. **A bare `terraform apply` right now would also change four Cloud Run services** — `portal`,
+   `waitlist`, `ops-agent`, `ops-dashboard` all show as "update in-place". Inspected: it is cosmetic
+   provider drift (scaling fields `0 -> null`, a `client = "gcloud"` metadata field), NOT an image
+   or config change. Harmless, but it is not this roll's business and every apply here was
+   `-target`ed.

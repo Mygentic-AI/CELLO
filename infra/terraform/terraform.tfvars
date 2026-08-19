@@ -40,7 +40,12 @@ directory_nodes = {
     # Bigger than needed (4 vCPU / 16 GB) and taken deliberately: the MIG deletes before it creates,
     # so the alternative was leaving the consortium at exactly threshold with zero spare. GCP credits
     # are not a constraint. Re-probe with the playbook command before reverting.
-    machine_type     = "c3-standard-4"
+    # ⬇️ REVERTED 2026-08-19 — `c3-standard-4` itself hit ZONE_RESOURCE_POOL_EXHAUSTED during the
+    # M12 Tier P5 roll, so the temporary upsize below is no longer available and the node could not
+    # be recreated. Probed the (zone, machine type) PAIR per the GCP-STATE playbook rather than
+    # guessing: `e2-standard-2` HAS capacity in `us-central1-a`, which is the size the revert marker
+    # below always intended to return to. The upsize note is kept for the history it explains.
+    machine_type     = "e2-standard-2"
     db_tier          = "db-custom-1-3840"
     hostname         = "directory-gcp-usc1.cello.mygentic.ai"
     public_port      = 8080
