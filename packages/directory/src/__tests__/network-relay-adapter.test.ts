@@ -531,3 +531,116 @@ describe("updateMultiaddr: adapter dials updated address after relay IP changes"
 
 // AC-007 (full end-to-end session flow) lives in:
 // packages/e2e-tests/src/__tests__/node-004-e2e.test.ts
+
+// ─── DOD-M12-CONN-DIR-RELAY-1: the directory's end of the same dead link ──────
+//
+// The relay's redial was fixed in DOD-M12-CONN-EVICT-1. This is the SAME link from the other end,
+// and it had the identical shape: newStream, and on failure dial once and retry, with nothing
+// evicting the dead connection. `libp2p.dial()` returns an EXISTING connection whenever one is
+// registered for the peer and its socket status reads `open` — `findExistingConnection` filters on
+// `con.status` and never inspects the muxer — so the redial returns the same dead object and the
+// retry fails on the check that just failed.
+//
+// This is not a hypothetical parallel. `#sendAndReceive` is how the directory asks the relay for
+// seal leaves and session liveness, which is the UNILATERAL-SEAL path — the backstop an operator is
+// told in capitals will "escalate to a unilateral seal and produce a real receipt", and which
+// produced nothing 3 times out of 3 in the same window.
+
+describe("DOD-M12-CONN-DIR-RELAY-1: the directory evicts a dead relay connection before redialling", () => {
+  /** Scripted node: fails the first newStream with the real muxer error, then succeeds. */
+  function scriptedNode(opts: { omitHangUp?: boolean } = {}) {
+    const trace: string[] = [];
+    let streamAttempts = 0;
+    const node = {
+      async dial(_addr: string) { trace.push("dial"); return { peerId: "12D3KooWFakeRelay" }; },
+      onPeerConnect(_h: (p: string) => void) {},
+      onPeerDisconnect(_h: (p: string) => void) {},
+      getConnections: () => [],
+      ...(opts.omitHangUp === true ? {} : {
+        async hangUp(_p: string) { trace.push("hangUp"); },
+      }),
+      async newStream() {
+        streamAttempts += 1;
+        trace.push("newStream");
+        if (streamAttempts === 1) {
+          throw Object.assign(
+            new Error('The connection muxer is "closed" and not "open"'),
+            { reason: "connection_lost" },
+          );
+        }
+        return {
+          send: () => {},
+          close: async () => {},
+          [Symbol.asyncIterator]: async function* () { /* no frames — transport path is the subject */ },
+        } as never;
+      },
+    };
+    return { node, trace };
+  }
+
+  function adapterOn(node: unknown, logger?: unknown) {
+    const a = new NetworkRelayAdapter({
+      relayPeerId: "12D3KooWFakeRelay",
+      relayMultiaddrs: ["/ip4/10.0.0.9/tcp/4001/p2p/12D3KooWFakeRelay"],
+      keyProvider: generateKeypair(),
+      ...(logger ? { logger } : {}),
+    } as never);
+    (a as unknown as { connect(n: unknown): void }).connect(node);
+    return a;
+  }
+
+  it("evicts BEFORE the redial, so the dial cannot return the dead connection", async () => {
+    const { node, trace } = scriptedNode();
+    const adapter = adapterOn(node);
+
+    // getSessionLiveness swallows transport errors by design (it returns "unknown"), so the call's
+    // return value is not the assertion — the ORDER of the repair is.
+    await adapter.getSessionLiveness(new Uint8Array(32).fill(3));
+
+    const evictIdx = trace.indexOf("hangUp");
+    expect(evictIdx).toBeGreaterThan(-1);
+    // Evicting after the dial would tear down the connection just established; never evicting
+    // leaves the dial resolving from the registry. Only this order repairs anything.
+    expect(trace.slice(evictIdx)).toEqual(["hangUp", "dial", "newStream"]);
+  });
+
+  it("does not evict when the first stream succeeds", async () => {
+    const trace: string[] = [];
+    const node = {
+      async dial(_addr: string) { trace.push("dial"); return { peerId: "12D3KooWFakeRelay" }; },
+      onPeerConnect() {}, onPeerDisconnect() {}, getConnections: () => [],
+      async hangUp(_p: string) { trace.push("hangUp"); },
+      async newStream() {
+        trace.push("newStream");
+        return {
+          send: () => {}, close: async () => {},
+          [Symbol.asyncIterator]: async function* () { /* none */ },
+        } as never;
+      },
+    };
+    const adapter = adapterOn(node);
+
+    await adapter.getSessionLiveness(new Uint8Array(32).fill(3));
+
+    // A repair, not a policy: hanging up a healthy link on every call would turn one cached
+    // connection into a reconnect per request.
+    expect(trace).not.toContain("hangUp");
+  });
+
+  it("SAYS SO when the transport cannot evict, instead of looking repaired", async () => {
+    const logged: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const logger = {
+      info: () => {}, warn: () => {}, debug: () => {},
+      error: (event: string, fields: Record<string, unknown>) => { logged.push({ event, fields }); },
+    };
+    const { node, trace } = scriptedNode({ omitHangUp: true });
+    const adapter = adapterOn(node, logger);
+
+    await adapter.getSessionLiveness(new Uint8Array(32).fill(3));
+
+    expect(trace).not.toContain("hangUp");
+    // Absence is REPORTED. Without this the directory keeps exactly the behaviour this unit
+    // removes while its logs look identical to a fixed one.
+    expect(logged.some((l) => l.event === "relay.adapter.evict.unavailable")).toBe(true);
+  });
+});

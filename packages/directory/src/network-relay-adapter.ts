@@ -307,16 +307,44 @@ export class NetworkRelayAdapter implements RelayAdapter {
   }
 
   /**
+   * DOD-M12-CONN-DIR-RELAY-1: the SOCKET status of what we hold for the relay, which is NOT the
+   * muxer's. libp2p checks the two separately when opening a stream, muxer first, so the error a
+   * caller receives returns before the socket is examined — and "dead muxer on a live socket"
+   * (a redial is a no-op; evict first) and "dead through" (the dial will genuinely reconnect) are
+   * otherwise indistinguishable. Optional-chained on the field so an older transport reports
+   * `unreported` rather than having "open" invented for it.
+   */
+  #relaySocketStatuses(node: CelloNode): string[] {
+    try {
+      return node.getConnections()
+        .filter((c) => c.peerId === this.#relayPeerId)
+        .map((c) => (c as { status?: string }).status ?? "unreported");
+    } catch {
+      return []; // never let instrumentation break a seal-leaf fetch
+    }
+  }
+
+  /**
    * Open a stream to the relay, send one frame, read one response frame, close.
    * One request/response per stream open — same pattern as /cello/frost/1.0.0.
-   * If the connection dropped since startup (idle timeout), re-dial once before giving up.
+   * If the connection dropped since startup (idle timeout), evict and re-dial once before giving up.
    */
   async #sendAndReceive(frameBytes: Uint8Array): Promise<Record<string, unknown>> {
     const node = this.#node;
     if (!node) throw new Error("NetworkRelayAdapter: not connected");
 
-    // Re-dial if the connection to the relay has dropped since startup (idle timeout).
-    // newStream throws on a dead connection; re-dial once and retry.
+    // DOD-M12-CONN-DIR-RELAY-1. Re-dial if the connection to the relay has dropped, and EVICT
+    // first — the dial alone cannot repair it.
+    //
+    // `libp2p.dial()` does not always reach the network: `openConnection` returns an existing
+    // connection whenever one is registered for the peer and its SOCKET status reads `open`
+    // (`findExistingConnection` filters on `con.status` and never inspects the muxer). So when the
+    // muxer dies under a live socket, the redial below resolved from the registry, handed the same
+    // dead object back, and the retry failed on the identical check. Measured on the relay's end of
+    // this very link: 38 refused seals, a redial on every one, not one repaired.
+    //
+    // This path carries `get_seal_leaves` and `get_session_liveness` — the unilateral seal. An
+    // operator waiting out the 11-minute window is told that escalation "produces a real receipt".
     const stream = await node.newStream(this.#relayPeerId, DIRECTORY_RELAY_PROTOCOL_ID).catch(
       async (firstErr: unknown) => {
         let firstMsg: string;
@@ -328,7 +356,35 @@ export class NetworkRelayAdapter implements RelayAdapter {
         this.#logger?.warn("relay.adapter.newstream.first_attempt_failed", {
           relayPeerId: this.#relayPeerId,
           error: firstMsg,
+          socketStatus: this.#relaySocketStatuses(node),
         });
+
+        // Narrow local type: `hangUp` ships in @cello-protocol/transport and this repo floats on
+        // `latest`, so a directory built before that version must still run. Absence is REPORTED,
+        // never defaulted — otherwise this node keeps exactly the behaviour the unit removes and
+        // its logs are indistinguishable from a repaired one.
+        const withHangUp = node as Partial<{ hangUp(p: string): Promise<void> }>;
+        if (typeof withHangUp.hangUp !== "function") {
+          this.#logger?.error("relay.adapter.evict.unavailable", {
+            relayPeerId: this.#relayPeerId,
+            impact: "this directory's @cello-protocol/transport predates hangUp, so the redial "
+              + "below can only return the dead connection it already holds — seal-leaf and "
+              + "liveness requests to this relay keep failing until the node is rebuilt",
+          });
+        } else {
+          try {
+            await withHangUp.hangUp(this.#relayPeerId);
+          } catch (evictErr: unknown) {
+            // Does not rethrow: we are repairing something already unusable, and the dial that
+            // follows may still succeed.
+            this.#logger?.warn("relay.adapter.evict.failed", {
+              relayPeerId: this.#relayPeerId,
+              error: evictErr instanceof Error ? evictErr.message : String(evictErr),
+              impact: "the dead connection may still be registered, so the redial can return it",
+            });
+          }
+        }
+
         let dialSucceeded = false;
         for (const addr of this.#relayMultiaddrs) {
           try {
