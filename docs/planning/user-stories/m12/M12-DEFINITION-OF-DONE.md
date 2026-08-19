@@ -769,10 +769,27 @@ description: >
 - **DOD-M12-CONN-PUBLISH-1** [cello-client, trustless-cello] — **the fix reaches nothing until this
   lands, and the DoD must not read as though it does.** `@cello-protocol/transport` carries
   `hangUp` and the `status` field; nothing is published, so every deployed relay and directory logs
-  `relay.directory.evict.unavailable` at ERROR and keeps the pre-fix behaviour. Bump and publish per
-  `/cello-publish` (the `latest` promotion is Andre's), `pnpm install` in trustless-cello to move
-  the lockfile, then roll relays and directories **node by node** with a real `200` between nodes
-  (§2c). Until then the two lines above are 🟡 and cannot go ✅. — ❌
+  `relay.directory.evict.unavailable` at ERROR and keeps the pre-fix behaviour.
+
+  > **⚠️ THE LOCKFILE IS THE TRAP, NOT THE PROMOTION.** Both Dockerfiles run
+  > `pnpm install --frozen-lockfile`, so the image is built from `pnpm-lock.yaml`, NOT from the
+  > `latest` specifier in `package.json`. That lockfile currently resolves
+  > `@cello-protocol/transport` to **0.0.57** while published `latest` is already **0.0.61** — the
+  > fleet has been four versions stale, silently, because a frozen install neither errors nor warns.
+  > **A roll performed without moving the lockfile first ships the old transport, logs
+  > `evict.unavailable` forever, and looks exactly like a roll that worked.**
+  >
+  > Order, and every step is load-bearing:
+  > 1. Tag → CI publishes the cascade to `beta`. *(done — `v0.0.254`)*
+  > 2. **Andre promotes all seven to `latest`.** Nothing below can happen first: the `latest`
+  >    specifier resolves off the dist-tag.
+  > 3. In trustless-cello, re-resolve and COMMIT the lockfile; assert it moved off 0.0.57.
+  > 4. Rebuild images, then roll relays and directories **node by node**, a real `200` between
+  >    nodes (§2c).
+  > 5. Confirm on the running fleet that `relay.directory.evict.unavailable` has STOPPED appearing.
+  >    That line's absence is the only proof the new transport is actually in the image.
+
+  Until all five are done the two lines above are 🟡 and cannot go ✅. — ❌
 - **DOD-M12-CONN-PROVE-1** [trustless-cello] — **held-connection enforcer.** With a relay running,
   kill its connection to the adjudicating directory underneath it, then close a session: it seals,
   with **no relay restart**. Must fail on the pre-fix build and pass on the post-fix one (revert
