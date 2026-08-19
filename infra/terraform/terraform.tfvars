@@ -91,7 +91,7 @@ relay_primary_directory = "gcp-use1"
 # DOD-RELAY-KEEPALIVE-1 / DOD-GCP-RELAY-DRIFT-1. Built by Cloud Build 8eaddd07 from the GitHub
 # repository resource at this exact revision — not from a local tree — and verified to resolve
 # @cello-protocol/transport@0.0.44, the version below which this relay refuses to start.
-relay_image_tag = "0cf04b0c8a2334d37ff81eb5c663487241e1b464"
+relay_image_tag = "7838bbeb9ef1544989a995af4046d90f10f18457"
 
 relay_nodes = {
   us-east1 = {

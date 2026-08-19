@@ -239,72 +239,80 @@ unrelated set — **no relay resource appears**. Since `terraform plan` is this 
 (procedure §5), that is the authoritative confirmation the relay deploy is fully applied, not a claim
 from this document.
 
-## 🔴 RECURRING — the relay's directory connections die and never come back; SEALING STOPS (2026-08-18)
+## 🔴 OPEN — the relay's directory connection dies and never recovers; SEALING STOPS (2026-08-19)
 
-> ### WHAT KILLS THE CONNECTION IS NOT KNOWN. WHAT KEEPS IT DEAD IS OURS.
-> An early version of this section said "rots in ~24h". **That was wrong and is corrected here:**
-> it is not an interval. Two consecutive relay lifetimes of 16h15m and 20h03m both ended at the
-> same wall clock — first dead connection at **07:32 UTC on 08-16** and **07:26 UTC on 08-18**.
-> Ruled out for that window, each on evidence: a GCP instance or container restart (relay instances
-> up since 08-08, directory containers up since the 08-16 roll); the daily Cloud SQL backup (on
-> 08-16 the connections died at 07:32 and the earliest backup that day ran at 08:50); a fixed TTL
-> (the two lifetimes differ by four hours). Nearest events at onset are a routine anti-entropy
-> round and a Postgres autovacuum, neither scheduled.
+> ### THREE HYPOTHESES WERE STATED HERE AND ALL THREE WERE FALSIFIED. READ THIS BEFORE ADDING A FOURTH.
+> Every earlier version of this section named a cause. Each was wrong, and each was written with
+> more confidence than the evidence carried. Recorded so the next reader does not re-run them:
 >
-> **Do not spend more time there before fixing the reconnect.** Connections dying is normal and a
-> long-lived peer must survive it. The defect is that ONE such event takes sealing down until a
-> human restarts a container.
+> | claimed | killed by |
+> |---|---|
+> | "rots on a ~24-hour clock" | the two lifetimes were 16h15m and 20h03m — not an interval |
+> | "dies at ~07:30 UTC daily" | on 2026-08-19 it died before 04:53; two coincident samples over-read |
+> | "the seal itself breaks the connection" | two seals back to back after a fresh relay BOTH sealed |
+> | "the directories are unreachable" | TCP to all three from inside the relay container: OK |
+> | "the daily Cloud SQL backup does it" | on 08-16 it died at 07:32; the first backup ran at 08:50 |
+>
+> **WHAT IS ACTUALLY ESTABLISHED, and it is only this:** after some hours the relay cannot open a
+> libp2p stream to a directory; its redial does not recover it; a restart does. Nothing else about
+> the mechanism is known, because nothing observes that connection between seals.
 
-**Both relay CONTAINERS restarted 2026-08-18 ~20:45 UTC** (`docker restart cello-relay`, one region
-at a time, health 200 + `relay.service.started` + `relay.already.registered` verified between).
-No instance replacement, no image change, no Terraform. Instances stay `cello-gcp-relay-use1-h73m`
-/ `cello-gcp-relay-euw1-z5d9`, both created 2026-08-08.
-
-**A restart is a WORKAROUND. Expect this again the next time the connection dies — which on the
-two observed occasions was the following morning, but the trigger is not established.**
+**Relays rolled onto `relay:7838bbeb…` 2026-08-19 ~06:15 UTC** — instrumentation only, no behaviour
+change (commit `7838bbeb`). One region at a time per `infra/CLAUDE.md` §2, `-target` on the relay
+template + MIG only. Instances `cello-gcp-relay-use1-7453` and `cello-gcp-relay-euw1-6pjx` replaced
+`-h73m` / `-z5d9`. `relay_image_tag` in `terraform.tfvars` moved off `0cf04b0c…`.
 
 ### The symptom, which does not look like a relay fault
 
 Sealing fails; ordinary messaging is perfect. Messages pass THROUGH the relay, but notarizing needs
 the relay to make an OUTBOUND call to a directory, and that is the connection that dies. So a
-conversation is flawless until the moment anyone asks for a receipt — then both parties block for
-the full 11-minute bilateral window, escalate to a unilateral seal, and the directory correctly
-refuses that too (`unilateral_root_unverifiable`: the unilateral path requires exactly ONE ctrl leaf
-and both parties had sealed). Nobody gets a receipt and nothing names the relay.
+conversation is flawless until anyone asks for a receipt — then both parties block for the full
+11-minute bilateral window, escalate to a unilateral seal, and the directory correctly refuses that
+too (`unilateral_root_unverifiable`: the unilateral path requires exactly ONE ctrl leaf and both
+parties had sealed). Nobody gets a receipt and nothing names the relay.
 
-### The evidence — process age against seals, on one clock
+### The discriminating log line
 
-| relay process | age at noon | `relay.directory.connection.stale` /hr | seals that day |
-|---|---|---|---|
-| restarted 2026-08-15 15:16 | ~21h on 08-16 | 134 | working |
-| **restarted 2026-08-17 11:23** | 37 min on 08-17 | **0** | **65 completed** |
-| same process | ~25h on 08-18 | 225 | 1 bilateral, all day |
+`relay.seal.broker.unreachable`. Present → `relay.seal.rejected connection_lost: The connection
+muxer is "closed" and not "open"`. Absent → certificate built, delivered, `notarization.recorded`,
+~7 s. On 2026-08-18: twelve rejections against one bilateral success.
 
-The `euw1` container read `Up 33 hours` at restart time — the 08-17 process, degraded again.
+**A restart cures it, twice proven.** After the 08-17 11:23 restart: 65 seals that day. After the
+08-18 20:45 restart: `sealed_root 42d671a2…` four minutes later, both parties `attestation_mode:
+live`, `notarization.recorded` on the directory at 20:49:01.
 
-The discriminating log line is `relay.seal.broker.unreachable`. Present → `relay.seal.rejected
-connection_lost: The connection muxer is "closed" and not "open"`. Absent → certificate built,
-delivered, `notarization.recorded`, ~7 s. Twelve rejections on 2026-08-18 against one bilateral
-success (13:11).
+**It buys under eight hours, not a day.** Sealed at 20:49; the next attempt at 04:53 failed. The
+break is somewhere in that window and cannot be narrowed, because nothing touched the connection in
+between.
 
-**Proven by the fix:** a cross-machine seal immediately after the restart returned
-`sealed_root 42d671a2c1eeaefa…` with both parties `attestation_mode: live`.
+### WHY NOTHING SEES IT — the finding that matters most
 
-### Why the existing mitigation does not hold
+`checkDirectoryReachable` probed **`#directoryPeerId` only: one directory out of three.** A seal is
+adjudicated by the directory that BROKERED the session and may follow a redirect to a third, so the
+probe was green across a connection the seal needed and could not use. Measured 2026-08-19: **five**
+`relay.directory.connection.stale` events in the eight hours after a restart — three at the restart
+itself and two from the failing seal. Nothing in between. The probe's own header warns that "a probe
+that dials by some other route can be green while the route that matters is dead"; it was that
+probe.
 
-`0d9568a5` (2026-08-08) added redial-and-retry-once plus a 30 s directory probe for this exact
-failure. Both are running. The relay logs `relay.directory.connection.stale` **~220 times an hour**
-with `action: "redialling and retrying once"` and the seal still fails, so **the redial is not
-replacing the dead connection object** — the error is a cached muxer, not a failed dial. The static
-IPs are correct and attached to the live instances, so the address is never the problem.
+### What `7838bbeb` adds — observation, not a fix
 
-**Owed as a code fix in `packages/relay`, not another restart:** `#maybeProcessSeal` →
-`processSeal` must obtain a live connection, and the reconnect path must drop the dead handle rather
-than log around it. Until then this recurs daily.
+1. The probe covers **every** directory the relay can call, and logs
+   `relay.directory.reachability.lost` / `.recovered` on TRANSITIONS only (the failing state already
+   produced ~220 lines/hour, which buries the one line that matters). A loss carries `workingForMs`
+   — the duration this record has never had.
+2. `relay.directory.dial.no_address` — the dial loop over an EMPTY address list runs zero
+   iterations, logs nothing, and returns as if it worked.
+3. `relay.directory.redial.outcome` — connection count either side of the redial. Unchanged and
+   still failing ⇒ the dial returned the connection we already held. Grown and still failing ⇒ a NEW
+   connection cannot carry a stream, which is a directory-side fault and no reconnect cures it.
+   **These imply opposite fixes, which is why the fix waits for this line.**
 
-**Not caused by:** the 2026-08-16 directory roll (seals worked all of 08-17 after it), any
-cello-client build (0.0.178 was ruled out — the same failure predates it by hours), documents, or
-two agents sharing one daemon. Each was checked and excluded on evidence.
+### The mitigation that does not hold
+
+`0d9568a5` (2026-08-08) added redial-and-retry-once plus the probe for this exact failure. Both run.
+The relay logs the redial and the seal still fails, and `relay.directory.dial.failed` has **never**
+appeared — so the dial does not throw, yet nothing is repaired. That is the gap `7838bbeb` measures.
 
 ## 🟢 CURRENT — node heap ceiling raised + memory sampler, ALL 3 ROLLED (2026-08-16)
 
