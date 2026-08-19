@@ -188,7 +188,24 @@ basic value has not been delivered.**
 
 | Rank | What it blocks | Item | Board line |
 |---|---|---|---|
-| **1** ❌ | Closing a conversation fails about a third of the time and the receipt is unrecoverable — 38 refused seals against 11 successful, with an exact discriminator. The relay's connection to the directory is closed and the code that exists to repair it cannot. | 33 | `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` → M12 Tier P5 |
+| **1** 🟡 | Closing a conversation fails about a third of the time and the receipt is unrecoverable — 38 refused seals against 11 successful, with an exact discriminator. The relay's connection to the directory is closed and the code that exists to repair it cannot. **Cause found, fix BUILT and reviewed 2026-08-19 — and running on nothing yet.** | 33 | `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` → M12 Tier P5 |
+
+> ### 🟡 WHAT "BUILT" MEANS HERE, AND WHY IT IS NOT ✅
+> The cause is settled and traced into libp2p's own source: `dial()` returns an EXISTING registered
+> connection whenever its socket status reads `open` and never inspects the muxer, so the relay's
+> redial handed the same dead object back on all 38 failures. The fix — evict, then dial — is
+> written, reviewed and gated in three places (relay→directory, directory→relay, and
+> directory↔directory anti-entropy, all of which had it).
+>
+> **No deployed node has any of it.** It needs `@cello-protocol/transport` published and promoted to
+> `latest` (Andre runs the promotion), then a node-by-node roll of both fleets. Until then every
+> relay logs `relay.directory.evict.unavailable` and keeps the old behaviour. **Do not read this row
+> as fixed** — that is the mistake this list has already made eight times, once on the item holding
+> the top slot.
+>
+> Still owed after the roll: a live proof that a seal survives a killed connection with no relay
+> restart (`DOD-M12-CONN-PROVE-1`), and the instrument that can actually SEE the death — a muxer
+> status, which libp2p keeps internal (`DOD-M12-CONN-MUXER-OBSERVE-1`).
 
 **This block outranks the 2026-08-04 ranking below**, on the same terms the 2026-08-17 block did.
 Item 33 keeps its number and its position in the body of the list — the doc's numbers are stable and
