@@ -1374,13 +1374,30 @@ If `CELLO` is present, the App is healthy and the next lever is deleting and rec
 `cello-github` connection (which changes `app_installation_id` in `terraform/cloudbuild.tf` — plan
 will show loud drift, which is intended).
 
-Workaround while open, unchanged and working:
+Workaround while open, unchanged and working — **`--project` ADDED 2026-08-19, it is not optional**:
 ```
 gcloud builds submit "projects/cello-infra/locations/us-east1/connections/cello-github/repositories/CELLO" \
+  --project=cello-infra \
   --revision=<SHA> --region=us-east1 --config=infra/cloudbuild/relay.yaml \
   --service-account=projects/cello-infra/serviceAccounts/cello-cloud-build@cello-infra.iam.gserviceaccount.com \
   --substitutions=_TAG=<SHA>
 ```
+
+> **Without `--project` this fails with a PERMISSION_DENIED that points at the wrong thing.** The
+> resource path names `cello-infra` in full, so the command looks self-contained — but
+> `--service-account` is resolved against the ACTIVE gcloud project, under `projects/-`. With
+> `gcloud config project` set to anything else (it was `mygentic-sdk-agent` on 2026-08-19) the
+> lookup happens in that project and returns:
+>
+> ```
+> PERMISSION_DENIED: Permission 'iam.serviceAccounts.get' denied on resource
+> '//iam.googleapis.com/projects/-/serviceAccounts/115640263108282262406'
+> ```
+>
+> The account is `roles/owner` on `cello-infra` and the SA exists, so the error reads as a broken
+> IAM grant and sends you to the troubleshooter for a permission that is not missing. Two retries
+> and an IAM policy audit cost ~15 minutes before the active project was checked. Every OTHER
+> command in this file passes `--project` explicitly, which is why nothing else surfaced it.
 
 
 ### M12-P11 — PROBE 3 (2026-08-06): repository link RECREATED, still no events
@@ -1605,6 +1622,12 @@ directory and relay; client reachability is not the same property and must not s
 ---
 
 ## ⚠️ Image builds are MANUAL — that is the operating model, not a regression
+
+> **This is the SAME open item as "M12-P11 — PROBE 3" below, not a new one.** That investigation
+> (2026-08-05/06, three probes, suspects ruled out, workaround recorded) already owns the trigger
+> failure. This section adds only what it did not have: the counts, and the fact that manual is the
+> norm rather than the fallback. Read P11 first — re-deriving it cost a fresh investigation on
+> 2026-08-19 that ruled out nothing new.
 
 **CORRECTED 2026-08-19T12:15Z (Andre: "I'm surprised that automated builds were ever working. I
 thought we were manually driving these things"). He is right, and the first version of this section
