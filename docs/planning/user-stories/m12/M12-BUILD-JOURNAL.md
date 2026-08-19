@@ -6753,3 +6753,98 @@ no route to recovery except a restart.
 
 **Roll order until this is deployed:** roll relays → restart each directory one at a time (quorum is
 2 of 3) → confirm `relay.health.check.passed` appears for all three node ids before calling it done.
+
+---
+
+## Entry 90 — 2026-08-19 — Tier P5 opened: the redial that has never once repaired anything
+
+**Units: DOD-M12-CONN-OBSERVE-1, DOD-M12-CONN-EVICT-1. Status at time of writing: IMPLEMENTED, not
+DONE — the unit reviewer's verdict is not yet quoted here, and the DoD tags stay ❌ until it is.**
+
+### What was measured, before any code
+
+Closing a conversation fails intermittently and the receipt is unrecoverable. Over 28 hours
+(2026-08-18 05:00 → 2026-08-19 09:30 UTC) there were 49 seal attempts:
+
+| | attempts | relay held a CLOSED connection to the adjudicating directory |
+|---|---|---|
+| Rejected | 38 | **38** |
+| Sealed | 11 | **0** |
+
+No exception in either direction. The correlation is a count, not a narrative — it is the only part
+of this investigation that survived an adversarial pass unchanged, and three earlier framings did
+not.
+
+### Three framings that were WRONG, recorded so nobody re-runs them
+
+1. **"The health check was green throughout."** `relay.health.check.passed` is emitted by
+   `relay-pool-manager.ts` — the DIRECTORY probing the relay, the opposite direction. It cannot go
+   red for this and was cited twice as evidence the relay was fine.
+2. **"Dead until you restart it."** Falsified: the same relay process sealed through `gcp-usc1` at
+   07:58:03 on 2026-08-18 and was refused by it at 08:00:11. No restart, nothing touched that
+   connection in between. **128 seconds from working to closed, while idle.** Age and idle-timeout
+   explanations are dead with it.
+3. **"A directory availability problem."** No directory was ever down. They were serving clients,
+   notarizing other sessions and answering certificate pulls throughout; a TCP probe from inside the
+   relay container reached all three on 8080. `connection_lost` describes an object in the relay's
+   memory and says nothing about the peer — reading it as a claim about the remote node is what sent
+   two investigations to the wrong tier, and is now a reviewer lens.
+
+### The cause, traced rather than inferred
+
+Verified by reading libp2p 3.3.2 in `node_modules`, not from memory:
+
+- `connection-manager/index.js` `openConnection` → `findExistingConnection` when `force !== true`.
+- `connection-manager/utils.js` filters `.filter(con => con.status === 'open')` and returns the
+  first match. **It never inspects the muxer.**
+- `connection.js` `newStream` checks `this.muxer.status !== 'open'` FIRST and throws
+  `The connection muxer is "closed" and not "open"`, then separately checks `this.status`. Two
+  different fields, and `get status() { return this.maConn.status; }` — the socket, not the muxer.
+- Our own `CelloNode.newStream` does the same: `connections.find(c => c.status === "open")`.
+
+So a connection whose muxer has died under a live socket is returned by `dial()` without touching
+the network, and the retry fails on the identical check. The relay never evicted, so nothing removed
+it. **A restart was the only cure because a restart is the only thing that empties the connection
+manager.**
+
+**What remains UNPROVEN and is stated as such:** that the socket status actually read `open` during
+the live failures. The muxer check returns before the socket check, so the error cannot say. That is
+exactly what DOD-M12-CONN-OBSERVE-1 exists to record, and why it lands before the fix.
+
+### What shipped
+
+**cello-client `core/transport`** — `CelloNode` gained two things it did not have, which is why the
+falsification step mattered: neither `hangUp` nor a connection status was reachable from the relay
+at all.
+- `hangUp(peerId)`. Chosen over `{ force: true }` on the dial, which opens a second connection but
+  LEAVES the corpse registered where `newStream`'s own status filter can select it again.
+- `getConnections()` now carries the socket `status`.
+
+**trustless-cello `packages/relay`** — evict before redial; socket status captured before the
+eviction (evicting destroys the evidence); connection open/close logged for directory peers only.
+`hangUp` is reached through a narrow local type because this repo floats on published `latest`, and
+its absence is reported at ERROR with what it costs rather than silently degrading.
+
+### Evidence
+
+- cello-client gate: `test exit=0` (3926 passed), `lint exit=0`, `typecheck exit=0`, `build exit=0`.
+- trustless-cello gate: `test exit=0` (1363 passed), `lint exit=0` (0 errors), `typecheck exit=0`
+  (`tsc --build` — this repo has no separate build script).
+- **Revert test:** removing `await evict()` fails 3 of the new cases
+  (`evicts BEFORE dialling`, `still repairs when eviction itself fails`, `SAYS SO LOUDLY when the
+  transport is too old to evict`); restoring it returns 209/209.
+
+### Rule
+
+**A repair that runs is not a repair that works.** `DOD-RELAY-DIRECTORY-RECONNECT-1` added this
+redial on 2026-08-08, was marked ✅, and the redial then ran on 38 consecutive failures without
+fixing one. Nothing in the logs distinguished it from a working repair, because it reported success.
+Any repair path must be asserted to change the thing it repairs — for a cached connection that means
+proving a NEW one was established, never that the retry eventually succeeded.
+
+### Owed
+
+- **DOD-M12-CONN-PROVE-1** — the live enforcer. Not discharged by the unit tests above.
+- **A publish and a roll**, both outside this session's authority: `@cello-protocol/transport` needs
+  publishing and promoting before a rolled relay can actually evict, and until then a rolled relay
+  logs `relay.directory.evict.unavailable` rather than pretending.
