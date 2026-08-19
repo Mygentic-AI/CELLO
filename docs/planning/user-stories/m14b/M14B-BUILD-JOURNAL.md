@@ -3567,3 +3567,96 @@ to flow through the system… that must stop."*
 **Open and cheap:** all 30 documents are test data. Ending them drops them from `sweepTargets`
 entirely — an ended document contributes no targets from either trigger, on the version already
 running. Offered; Andre's data, so not done.
+
+## Entry 63 — the 36-step arrival trace: screening runs where the content is unreadable, and not where it is
+
+**Why this entry exists.** Andre asked what M14B still owes, the answer pointed at
+`DOD-DOC-SEQUENCE-SEPARATE-1`, and confirming its cost turned into a full read of what happens when
+a document update arrives. Three findings came out of it, one of them not document-shaped at all.
+
+### The trace
+
+Read from source, not inferred: `screen/inbound.ts` and `detect/sanitize.ts` end to end;
+`document-gate.ts`'s `#validate` in full; `session-node-manager.ts` around the tier byte cap, the
+`screenInbound` call, the ordering gate and the hand-off to the document router; and
+`document-inbound.ts`'s own numbered section markers. Two soft spots recorded honestly: the hash
+cross-check at step 1 was taken from a comment describing it rather than the code, and the file
+write + nudge at the end came from an explorer trace rather than a direct read.
+
+The 36 steps are in [[M14B-SCREEN-ORDER-WORK-ORDER]]. What they establish:
+
+1. **The shared screener's content rules are inert for documents.** Its three rewriting steps
+   produce a `redact` verdict whose bytes the document path deliberately discards — correctly:
+   rewriting inside a signed envelope destroys it rather than cleaning it, and roughly half of all
+   proposals once vanished that way, intermittently, because a proposal carries a random nonce so
+   whether its bytes tripped a rule varied per run.
+2. **What remains judges garbage.** The frame is decoded with
+   `TextDecoder("utf-8", { fatal: false })`, so for a document the language allowlist and the
+   pattern matcher see the typed text mixed with replacement characters from signatures and hashes.
+   The language check has never fired — zero inbound blocks of any kind in the daemon log.
+3. **The readable text exists and nothing screens it.** The gate builds an inert shadow, applies the
+   update to it, and computes a projected diff carrying before-and-after text. The only rule reading
+   it is a ten-codepoint denylist plus the profile agreed at consent.
+
+Andre's reaction is the ruling: cheap content-free authorization first, then the shadow — which is
+inert and cannot reach an agent until admitted — then content screening, on the projected text. The
+architectural reason the current order exists is real and is also the lever: **at the screening step
+nothing knows the frame is a document yet**; classification happens later, when the bytes reach the
+document router.
+
+### The finding that is not about documents
+
+`InjectionScanner` is implemented, tested, has an installer and a pinned-file manifest, and **no
+code constructs it.** `bin/cello-gateway.ts` builds `new InboundScreener()` with no arguments, so
+the constructor falls back to a null classifier that reports `available() === false` and the call
+site short-circuits. Verified two ways: the only non-test construction in the whole client repo is
+that fallback, and the daemon log carries zero inbound blocks. **No inbound content anywhere —
+message or document — is judged for meaning today.** Filed as `DOD-DOC-SCREEN-CLASSIFIER-1`.
+
+The manifest also carries `sha256: null` for every file and a floating `revision: "main"`, so
+integrity would rest on file size alone. Both are the corners that get cut when a feature is
+switched on in a hurry, so they are ACs on that line rather than a footnote.
+
+### DOD-DOC-SCREEN-CONTENT-1 — built, gate green, review dispatched
+
+**The order was reversed during falsification, and the reason matters.** The obvious first unit was
+CLASSIFY-1 (skip the useless shared screening for document frames). Falsifying it found that
+skipping also removes today's fail-closed behaviour when the gateway is down, which would leave a
+window with *less* protection than now. Adding protection precedes removing any.
+
+**Then CONTENT-1 as written turned out to be wrong in two ways, both caught before coding.** Calling
+the gateway screen on the projected text and treating `redact` as a refusal would refuse legitimate
+documents — the rule's own header records an 18-sample audit in which 6 were silently altered
+(Hindi ZWJ, family emoji, full-width CJK, ligatures). And the `block` verdict that matters is the
+semantic one, which cannot fire while the classifier is unwired, so the unit would have shipped
+inert code against the milestone's own NO CONSUMER, NO SHIP rule.
+
+**What shipped instead is the model-free half, and it closes a real hole.** The message sanitizer
+strips ten privileged-turn markers, case-insensitively, because — its own words — a case-sensitive
+match "would leave the whole point of the strip bypassable by shift-key". The document rule kept a
+private copy: four literals, matched case-sensitively. So `[SYSTEM]`, `[/SYSTEM]`, `<<SYS>>`,
+`<</SYS>>`, `[INST]`, `[/INST]`, `SYSTEM PROMPT:`, `<system>`, `</system>` and `<|IM_START|>` in any
+casing reached an operator's agent through a shared document while being removed from every message
+between the same two agents.
+
+The sharpest case is the affordance prefix. The sanitizer strips `[cello security layer, local]`
+from inbound messages precisely so a counterparty cannot forge the marker that tells an agent a line
+came from its own security layer. A document carried it verbatim.
+
+Now one list, exported from the gateway, consumed by both — the file's own warning about two copies
+of a security literal drifting had already come true. Same list, different remedy: the message path
+strips, and a signed replica cannot be rewritten without diverging both copies permanently, so the
+document path refuses and names the literal.
+
+**Deliberately not taken from the sanitizer:** its `### Instruction:` heading family and its `</s>`
+pattern. Those are ordinary markdown and ordinary prose in a technical document; refusing them would
+refuse legitimate writing, which is the false-positive class the rule exists to avoid. Pinned by a
+test so the park reads as intent.
+
+**Evidence.** Full gate on the committed tree, run so it could fail: `TEST_EXIT=0` (342 files, 3943
+passed), `LINT_EXIT=0`, `TYPECHECK_EXIT=0`, build clean. Revert test: restoring the old four-literal
+list fails 13 of the new tests and no others. cello-client `m14b/doc-screen-classify`.
+
+**Status: 🟡 BUILT — review IN FLIGHT.** `cello-unit-reviewer` dispatched on the diff, told to judge
+the scope deviation above as a possible silent simplification. The tag flips only when its verdict
+is quoted here.
