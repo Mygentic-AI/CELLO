@@ -116,3 +116,101 @@ resource "google_secret_manager_secret_iam_member" "seal_notifier_chat" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.seal_notifier.email}"
 }
+
+# ─── The notifier: Pub/Sub push → Telegram ───────────────────────────────────────────────────────
+variable "seal_notifier_image_tag" {
+  description = "Commit SHA of the seal-notifier image. No :latest exists; consumers pin SHAs."
+  type        = string
+}
+
+resource "google_cloud_run_v2_service" "seal_notifier" {
+  name     = "cello-seal-notifier"
+  project  = var.project_id
+  location = "us-east1"
+  # Internal only. Nothing outside GCP has any business reaching this, and a public endpoint that
+  # sends Telegram messages is an open relay for anyone who finds it.
+  ingress = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+
+  template {
+    service_account = google_service_account.seal_notifier.email
+
+    scaling {
+      min_instance_count = 0
+      # Bounded deliberately. Each instance throttles independently (in-memory), so N instances can
+      # send up to N times the intended volume. One keeps the throttle honest; alert volume is tiny
+      # by construction and a cold start costs seconds on a path nobody is waiting on.
+      max_instance_count = 1
+    }
+
+    containers {
+      image = "${google_artifact_registry_repository.cello.location}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.cello.repository_id}/seal-notifier:${var.seal_notifier_image_tag}"
+
+      env {
+        name = "TELEGRAM_BOT_TOKEN"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.telegram_bot_token.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "TELEGRAM_CHAT_ID"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.telegram_chat_id.secret_id
+            version = "latest"
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    google_secret_manager_secret_iam_member.seal_notifier_token,
+    google_secret_manager_secret_iam_member.seal_notifier_chat,
+  ]
+}
+
+# Pub/Sub pushes as its own SA and must be allowed to invoke the service.
+resource "google_service_account" "seal_pusher" {
+  account_id   = "cello-seal-pusher"
+  display_name = "CELLO seal alert Pub/Sub push identity"
+  project      = var.project_id
+}
+
+resource "google_cloud_run_v2_service_iam_member" "seal_pusher_invoke" {
+  project  = var.project_id
+  location = google_cloud_run_v2_service.seal_notifier.location
+  name     = google_cloud_run_v2_service.seal_notifier.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.seal_pusher.email}"
+}
+
+resource "google_pubsub_subscription" "seal_alerts" {
+  name    = "cello-seal-alerts-push"
+  project = var.project_id
+  topic   = google_pubsub_topic.seal_alerts.name
+
+  push_config {
+    push_endpoint = google_cloud_run_v2_service.seal_notifier.uri
+    oidc_token {
+      service_account_email = google_service_account.seal_pusher.email
+    }
+  }
+
+  # The notifier answers 5xx ONLY for transient failures (Telegram down, secrets unbound) and 2xx
+  # for anything it can never process. So a retry here is always worth making — but not forever:
+  # 24h of retries on a genuinely broken alert is 24h of noise in the logs about the alert rather
+  # than the outage.
+  message_retention_duration = "3600s"
+  ack_deadline_seconds       = 30
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "600s"
+  }
+  # A message that cannot be delivered is DROPPED after the retention window rather than dead-
+  # lettered. Deliberate: the alert is a convenience copy — the log entry it came from is durable
+  # in Cloud Logging either way, so nothing is actually lost, and a dead-letter topic nobody reads
+  # is one more thing that looks like coverage.
+}

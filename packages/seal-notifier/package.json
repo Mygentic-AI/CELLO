@@ -1,0 +1,21 @@
+{
+  "name": "@cello-protocol/seal-notifier",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^25.6.2"
+  }
+}

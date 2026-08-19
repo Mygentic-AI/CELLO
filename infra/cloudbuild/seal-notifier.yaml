@@ -1,0 +1,36 @@
+# Cloud Build — CELLO seal-alert notifier image → Artifact Registry.
+#
+# The push trigger does NOT fire (M12-P11, open since 2026-07-28), so this is submitted by hand.
+# `--project` is NOT optional: without it `--service-account` resolves against the ACTIVE gcloud
+# project and fails with PERMISSION_DENIED on a numeric service-account id, for an account that is
+# roles/owner on cello-infra. See infra/GCP-STATE.md.
+#
+#   gcloud builds submit \
+#     "projects/cello-infra/locations/us-east1/connections/cello-github/repositories/CELLO" \
+#     --project=cello-infra --revision=<SHA> --region=us-east1 \
+#     --config=infra/cloudbuild/seal-notifier.yaml \
+#     --service-account=projects/cello-infra/serviceAccounts/cello-cloud-build@cello-infra.iam.gserviceaccount.com \
+#     --substitutions=_TAG=<SHA>
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+timeout: 1800s
+
+substitutions:
+  _REGISTRY: us-east1-docker.pkg.dev/cello-infra/cello
+  _TAG: ${COMMIT_SHA}
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - packages/seal-notifier/Dockerfile
+      - -t
+      - ${_REGISTRY}/seal-notifier:${_TAG}
+      - .
+
+# No :latest tag — two concurrent builds finishing out of order would leave :latest pointing at the
+# older one, and consumers pin commit SHAs for exactly that reason.
+images:
+  - ${_REGISTRY}/seal-notifier:${_TAG}
