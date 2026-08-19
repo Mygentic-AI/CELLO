@@ -742,6 +742,21 @@ description: >
   A green unit test does not discharge this line: the defect is that a redial SUCCEEDS and changes
   nothing, so the proof has to be that a *new* connection was established. — ❌
 
+- **DOD-M12-CONN-DIR-RELAY-1** [trustless-cello] — the SAME defect on the directory's end of the
+  same link. `network-relay-adapter.ts` `#sendAndReceive` does `newStream` → on failure dial → retry
+  once, with no eviction — the identical shape, so the identical no-op against a dead muxer. This is
+  the path the directory uses to ask the relay for seal leaves and session liveness, which is to say
+  the unilateral-seal path. Same fix (evict, then dial), same absence-is-reported treatment, and the
+  redial's outcome must name whether eviction happened. Found 2026-08-19 by applying the
+  HELD-CONNECTION lens to the rest of the fleet rather than only to the diff that opened the tier. — ❌
+- **DOD-M12-CONN-AE-1** [trustless-cello] — the same class on the directory↔directory link.
+  `ae-sync-service.ts` `#attempt` dials and then opens a stream with **no retry at all** and no
+  eviction, so a cached connection whose muxer has died fails every anti-entropy round from then on,
+  silently and until the process restarts — replication stopping while every node reports healthy.
+  Needs the same eviction, a bounded retry, and a log line at the moment a peer link dies. Ranked
+  after the two above because a stalled AE round degrades convergence where a dead relay↔directory
+  link stops sealing outright, but it is the same defect and must not be left as folklore. — ❌
+
 **Explicitly beyond this tier** (recorded so nothing is silently deferred):
 - **The unilateral escalation failing 3 of 3** with `unilateral_root_unverifiable`. The 11-minute
   wait promises the operator in capitals that it "escalates to a unilateral seal and produces a real
