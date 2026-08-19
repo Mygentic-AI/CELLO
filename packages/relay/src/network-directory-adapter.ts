@@ -113,6 +113,57 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
 
   connect(node: CelloNode): void {
     this.#node = node;
+
+    // DOD-M12-CONN-OBSERVE-1: record the DEATH, not only the corpse.
+    //
+    // Every failure this milestone investigated was observed at the moment somebody tried to USE a
+    // connection — minutes or hours after it actually died — so the cause was never in the logs and
+    // three candidate mechanisms survived a full investigation. A connection to a directory going
+    // away is a fleet-level event: ordinary message relaying does not touch these links, so nothing
+    // else will ever surface it, and the first symptom is a customer's close timing out.
+    //
+    // Scoped to DIRECTORY peers deliberately. This node also holds a connection to every client
+    // using the relay, and logging those would bury the handful of lines that matter.
+    const directoryPeers = new Set(this.#probeTargets().map((t) => t.peerId));
+    node.onPeerConnect((peerId: string) => {
+      if (!directoryPeers.has(peerId)) return;
+      this.#logger?.info("relay.directory.connection.opened", { peerId });
+    });
+    node.onPeerDisconnect((peerId: string) => {
+      if (!directoryPeers.has(peerId)) return;
+      const lastGood = this.#lastGoodMs.get(peerId);
+      this.#logger?.warn("relay.directory.connection.closed", {
+        peerId,
+        ...(lastGood !== undefined ? { heldForMs: Date.now() - lastGood } : {}),
+        impact: "seals adjudicated by this directory are refused until the connection is rebuilt; "
+          + "message relaying is unaffected, so nothing else will surface it",
+      });
+    });
+  }
+
+  /**
+   * What libp2p thinks it holds for a peer, at this instant.
+   *
+   * `status` is the SOCKET status and is NOT the muxer's — the two are separate fields checked in
+   * that order when opening a stream, muxer first. So a stream failing with
+   * `The connection muxer is "closed" and not "open"` returns before the socket is examined, and
+   * this is the only way to learn which of the two we are actually looking at. `status: "open"`
+   * next to a muxer failure is the case where a plain redial CANNOT help, because that is exactly
+   * the connection libp2p's dial will hand back.
+   *
+   * Optional-chained on the field: an older `@cello-protocol/transport` returns entries without a
+   * status, and reporting `undefined` honestly beats inventing "open".
+   */
+  #connSnapshot(peerId: string): { count: number; statuses: string[] } {
+    try {
+      const conns = this.#node?.getConnections().filter((c) => c.peerId === peerId) ?? [];
+      return {
+        count: conns.length,
+        statuses: conns.map((c) => (c as { status?: string }).status ?? "unreported"),
+      };
+    } catch {
+      return { count: -1, statuses: [] }; // never let instrumentation break a seal
+    }
   }
 
   /**
@@ -202,16 +253,45 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
    * fails both attempts and must surface as such rather than spinning.
    */
   async #openDirectoryStream(node: CelloNode, addrs: string[], peerId: string) {
-    // OBSERVATION ONLY (2026-08-19). Three mechanisms fit every symptom we have and the logs
-    // separate none of them: the dial hands back a connection libp2p still lists but whose muxer
-    // is closed; the address list is EMPTY so the dial is a silent no-op; or the dial genuinely
-    // opens a connection and the stream still fails for a reason past both. Each implies a
-    // different fix, so the next failure has to name which — nothing here changes behaviour.
-    const liveCount = (): number => {
+    /**
+     * DOD-M12-CONN-EVICT-1: remove the registered connection so the redial below can do something.
+     *
+     * `libp2p.dial()` does not always reach the network — `openConnection` returns an EXISTING
+     * connection whenever one is registered for the peer and its socket status reads `open`
+     * (`findExistingConnection` filters on `con.status` and never looks at the muxer). So against a
+     * dead muxer the old redial resolved from the registry, handed the same object back, and the
+     * retry failed on the identical check that had just failed. That is why 38 refused seals all
+     * carried a redial that "ran", and why only a process restart ever cleared it.
+     */
+    const evict = async (): Promise<"evicted" | "unavailable" | "failed"> => {
+      // Narrow local type rather than a blanket cast: `hangUp` ships in
+      // @cello-protocol/transport and this repo floats on `latest`, so a relay built before that
+      // version is promoted must still run. Absence is REPORTED, never defaulted — without this
+      // line a relay silently keeps the exact behaviour this unit exists to remove, and its logs
+      // would look identical to a fixed one.
+      const withHangUp = node as Partial<{ hangUp(p: string): Promise<void> }>;
+      if (typeof withHangUp.hangUp !== "function") {
+        this.#logger?.error("relay.directory.evict.unavailable", {
+          peerId,
+          impact: "this relay's @cello-protocol/transport predates hangUp, so the redial below can "
+            + "only return the dead connection it already holds — seals adjudicated by this "
+            + "directory will keep failing until the relay is rebuilt on a newer transport",
+        });
+        return "unavailable";
+      }
       try {
-        return node.getConnections().filter((c) => c.peerId === peerId).length;
-      } catch {
-        return -1; // never let instrumentation break a seal
+        await withHangUp.hangUp(peerId);
+        return "evicted";
+      } catch (err: unknown) {
+        // Does NOT rethrow. The caller is repairing a connection that is already unusable; failing
+        // the repair here would replace a recoverable stale handle with a hard error, and the dial
+        // that follows may still succeed.
+        this.#logger?.warn("relay.directory.evict.failed", {
+          peerId,
+          reason: describeThrown(err),
+          impact: "the dead connection may still be registered, so the redial can return it",
+        });
+        return "failed";
       }
     };
 
@@ -250,35 +330,51 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
       return await node.newStream(peerId, DIRECTORY_RELAY_PROTOCOL_ID);
     } catch (err: unknown) {
       if (!isConnectionLost(err)) throw err;
-      // MECHANISMS 1 vs 3. The connection count either side of the redial is what separates them:
-      // unchanged with the retry still failing says the dial returned the connection we already
-      // held (1); a count that grew and still fails says a genuinely new connection cannot carry a
-      // stream (3), which is a directory-side or protocol fault and no reconnect will cure it.
-      const before = liveCount();
+      // The SOCKET status beside the muxer failure is the measurement the whole diagnosis turned
+      // on. libp2p checks muxer first and returns, so this error alone cannot distinguish a dead
+      // muxer on a live socket — where a plain redial is a no-op, because that is precisely the
+      // connection `dial()` hands back — from a connection that is dead through. Recorded before
+      // the eviction, because eviction destroys the evidence.
+      const before = this.#connSnapshot(peerId);
       this.#logger?.warn("relay.directory.connection.stale", {
         peerId,
         reason: describeThrown(err),
-        action: "redialling and retrying once",
-        connectionsBefore: before,
+        action: "evicting, redialling and retrying once",
+        connectionsBefore: before.count,
+        socketStatusBefore: before.statuses,
       });
+      const eviction = await evict();
       await dial();
-      const after = liveCount();
+      const after = this.#connSnapshot(peerId);
       try {
         const stream = await node.newStream(peerId, DIRECTORY_RELAY_PROTOCOL_ID);
         this.#logger?.warn("relay.directory.redial.outcome", {
-          peerId, connectionsBefore: before, connectionsAfter: after, recovered: true,
+          peerId,
+          eviction,
+          connectionsBefore: before.count,
+          connectionsAfter: after.count,
+          socketStatusBefore: before.statuses,
+          socketStatusAfter: after.statuses,
+          recovered: true,
         });
         return stream;
       } catch (retryErr: unknown) {
         this.#logger?.warn("relay.directory.redial.outcome", {
           peerId,
-          connectionsBefore: before,
-          connectionsAfter: after,
+          eviction,
+          connectionsBefore: before.count,
+          connectionsAfter: after.count,
+          socketStatusBefore: before.statuses,
+          socketStatusAfter: after.statuses,
           recovered: false,
           reason: describeThrown(retryErr),
-          reading: after === before
-            ? "the dial added no connection — it returned the one we already held"
-            : "a NEW connection was opened and the stream still failed — not a stale handle",
+          // Reads the EVICTION first, because after this unit a repeat of the original failure
+          // means something other than a stale handle and must not be diagnosed as one again.
+          reading: eviction !== "evicted"
+            ? "the dead connection was NOT evicted, so the dial could still return it — this is the "
+              + "pre-fix behaviour and the eviction field says why"
+            : "evicted and redialled and the stream STILL failed — not a stale handle; the "
+              + "directory is refusing streams and no reconnect on this side will cure it",
         });
         throw retryErr;
       }

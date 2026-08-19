@@ -63,10 +63,29 @@ const SEAL: SealData = {
 
 const sessionId = new Uint8Array(32).fill(7);
 
+/**
+ * The parts of `CelloNode` every double here needs but none of them declared.
+ *
+ * `onPeerConnect`/`onPeerDisconnect` are on the interface and a real node always has them — the
+ * adapter subscribes to both on `connect()` to log a directory link dying at the moment it dies
+ * (DOD-M12-CONN-OBSERVE-1), and a double without them was never a stand-in for the thing it doubles.
+ * `hangUp` is the eviction that makes the redial able to repair anything (DOD-M12-CONN-EVICT-1);
+ * a double without it exercises the pre-fix path while claiming to test the fixed one.
+ */
+function nodeBase() {
+  return {
+    onPeerConnect: vi.fn(),
+    onPeerDisconnect: vi.fn(),
+    hangUp: vi.fn(async () => {}),
+    getConnections: vi.fn(() => []),
+  };
+}
+
 describe("seal submission when the directory connection has died mid-life", () => {
   it("surfaces the REAL reason instead of substituting directory_unavailable", async () => {
     // The node is alive and dialable; only the existing connection is gone.
     const node = {
+      ...nodeBase(),
       dial: vi.fn(async () => ({ peerId: PEER_ID })),
       newStream: vi.fn(async () => {
         throw connectionLost();
@@ -94,6 +113,7 @@ describe("seal submission when the directory connection has died mid-life", () =
     // throw was terminal and the seal was rejected outright.
     let attempts = 0;
     const node = {
+      ...nodeBase(),
       dial: vi.fn(async () => ({ peerId: PEER_ID })),
       newStream: vi.fn(async () => {
         attempts += 1;
@@ -122,6 +142,7 @@ describe("seal submission when the directory connection has died mid-life", () =
     // between the last good seal and the first failure contained no evidence at all.
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
     const node = {
+      ...nodeBase(),
       dial: vi.fn(async () => {
         throw { reason: "dial_failed", message: "connection refused" };
       }),

@@ -76,20 +76,47 @@ function spyLogger(): { logger: Logger; lines: LogLine[] } {
 function scriptedNode(script: {
   dial: Array<Error | null>;
   newStream: Array<Error | null>;
-}): { node: CelloNode; dialCalls: string[]; streamCalls: number } {
+  /**
+   * DOD-M12-CONN-EVICT-1. Omit to get a node that HAS `hangUp` (the shipped shape); pass
+   * `omitHangUp: true` to model a relay still running a transport from before it existed, which
+   * must report that absence rather than silently keeping the broken behaviour.
+   */
+  omitHangUp?: boolean;
+  /** Make eviction itself fail, to prove the repair continues rather than dying on its own fixer. */
+  hangUpError?: Error;
+}): {
+  node: CelloNode;
+  dialCalls: string[];
+  streamCalls: number;
+  /** Ordered trace of the calls that matter to the repair, so ORDER can be asserted, not just counts. */
+  trace: string[];
+} {
   const dialCalls: string[] = [];
+  const trace: string[] = [];
   let dialIdx = 0;
   let streamIdx = 0;
   const state = { streamCalls: 0 };
   const node = {
     async dial(addr: string) {
       dialCalls.push(addr);
+      trace.push("dial");
       const outcome = script.dial[Math.min(dialIdx++, script.dial.length - 1)];
       if (outcome) throw outcome;
       return { peerId: "12D3KooWFakeDirectory" };
     },
+    // Real nodes always have these — they are on the CelloNode interface. The fixture lacked them,
+    // which made it a double that could not have stood in for the thing it doubles.
+    onPeerConnect(_h: (p: string) => void) {},
+    onPeerDisconnect(_h: (p: string) => void) {},
+    ...(script.omitHangUp === true ? {} : {
+      async hangUp(_p: string) {
+        trace.push("hangUp");
+        if (script.hangUpError) throw script.hangUpError;
+      },
+    }),
     async newStream() {
       state.streamCalls += 1;
+      trace.push("newStream");
       const outcome = script.newStream[Math.min(streamIdx++, script.newStream.length - 1)];
       if (outcome) throw outcome;
       // A stream that yields no frames — enough to exercise the transport path; the response
@@ -102,7 +129,15 @@ function scriptedNode(script: {
     },
     getConnections: () => [],
   } as unknown as CelloNode;
-  return { node, dialCalls, get streamCalls() { return state.streamCalls; } };
+  return { node, dialCalls, trace, get streamCalls() { return state.streamCalls; } };
+}
+
+/** The exact libp2p error the live failures carried, shape included — `isConnectionLost` reads `.reason`. */
+function muxerClosed(): Error {
+  return Object.assign(
+    new Error('The connection muxer is "closed" and not "open"'),
+    { reason: "connection_lost" },
+  );
 }
 
 const DIR_PEER = "12D3KooWFakeDirectory";
@@ -269,5 +304,118 @@ describe("the relay notices before a user does", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ─── DOD-M12-CONN-EVICT-1: the repair must be able to repair ──────────────────
+
+/**
+ * The 2026-08-08 fix above added a redial. On 2026-08-18/19 it ran on all 38 refused seals and
+ * repaired none of them, because a redial alone CANNOT repair this failure:
+ *
+ *   `libp2p.dial()` returns an EXISTING connection whenever one is registered for the peer and its
+ *   socket status reads `open`. `findExistingConnection` filters on `con.status` and never inspects
+ *   the muxer. So when the muxer dies under a live socket, the dial resolves from the registry and
+ *   hands the same dead object back, and the retry fails on the identical check that just failed.
+ *
+ * Restarting the relay was the only thing that ever cleared it — a restart being the only thing
+ * that empties the connection manager. These cases pin the eviction that makes the dial reach the
+ * network instead.
+ */
+describe("DOD-M12-CONN-EVICT-1: a stale directory connection is evicted before the redial", () => {
+  it("evicts BEFORE dialling — order is the whole fix, not the call count", async () => {
+    const { logger } = spyLogger();
+    // Stream fails once with the real muxer error, then succeeds: the shape of a repair that works.
+    const { node, trace } = scriptedNode({ dial: [null], newStream: [muxerClosed(), null] });
+    const adapter = adapterOn(node, logger);
+
+    await adapter.checkDirectoryReachable();
+
+    // dial (opportunistic, before the first attempt) → newStream fails → hangUp → dial → newStream.
+    // If `hangUp` came AFTER the second dial it would evict the connection just established, and if
+    // it never ran the second dial would return the corpse. Only this order repairs anything.
+    const evictIdx = trace.indexOf("hangUp");
+    expect(evictIdx).toBeGreaterThan(-1);
+    expect(trace.slice(evictIdx)).toEqual(["hangUp", "dial", "newStream"]);
+  });
+
+  it("does not evict on the happy path — a healthy connection is never torn down", async () => {
+    const { logger } = spyLogger();
+    const { node, trace } = scriptedNode({ dial: [null], newStream: [null] });
+    const adapter = adapterOn(node, logger);
+
+    await adapter.checkDirectoryReachable();
+
+    // Eviction is a repair, not a policy. Hanging up a working directory link on every call would
+    // turn one cached connection into a reconnect per seal, and cost the latency the cache exists
+    // to save.
+    expect(trace).not.toContain("hangUp");
+  });
+
+  it("reports the socket status alongside the muxer failure, so the two can be told apart", async () => {
+    const { logger, lines } = spyLogger();
+    const { node } = scriptedNode({ dial: [null], newStream: [muxerClosed(), null] });
+    const adapter = adapterOn(node, logger);
+
+    await adapter.checkDirectoryReachable();
+
+    const stale = lines.find((l) => l.event === "relay.directory.connection.stale");
+    expect(stale).toBeDefined();
+    // The muxer check returns before the socket check, so the error alone cannot say which state we
+    // are in — and those need different fixes. DOD-M12-CONN-OBSERVE-1 exists for this one field.
+    expect(stale!.ctx).toHaveProperty("socketStatusBefore");
+  });
+
+  it("still repairs when eviction itself fails, rather than dying on its own fixer", async () => {
+    const { logger, lines } = spyLogger();
+    const { node } = scriptedNode({
+      dial: [null],
+      newStream: [muxerClosed(), null],
+      hangUpError: new Error("hangUp exploded"),
+    });
+    const adapter = adapterOn(node, logger);
+
+    const res = await adapter.checkDirectoryReachable();
+
+    // The caller is repairing something already unusable. Throwing here would replace a recoverable
+    // stale handle with a hard failure of the repair, and the dial that follows may still work.
+    expect(res.ok).toBe(true);
+    expect(lines.some((l) => l.event === "relay.directory.evict.failed")).toBe(true);
+  });
+
+  it("SAYS SO LOUDLY when the transport is too old to evict, instead of pretending it repaired", async () => {
+    const { logger, lines } = spyLogger();
+    // A relay built before @cello-protocol/transport shipped hangUp. This repo floats on `latest`,
+    // so that relay exists until the promotion lands and a roll happens.
+    const { node, trace } = scriptedNode({
+      dial: [null], newStream: [muxerClosed(), muxerClosed()], omitHangUp: true,
+    });
+    const adapter = adapterOn(node, logger);
+
+    await adapter.checkDirectoryReachable();
+
+    expect(trace).not.toContain("hangUp");
+    // ABSENT IS NOT FINE. Without this the relay keeps exactly the behaviour this unit removes and
+    // its logs are indistinguishable from a fixed one — the failure mode that let the 2026-08-08
+    // fix look complete for eleven days.
+    const unavailable = lines.find((l) => l.event === "relay.directory.evict.unavailable");
+    expect(unavailable).toBeDefined();
+    expect(String(unavailable!.ctx["impact"])).toContain("hangUp");
+  });
+
+  it("names eviction in the outcome, so a repeat failure is not re-diagnosed as a stale handle", async () => {
+    const { logger, lines } = spyLogger();
+    const { node } = scriptedNode({ dial: [null], newStream: [muxerClosed(), muxerClosed()] });
+    const adapter = adapterOn(node, logger);
+
+    await adapter.checkDirectoryReachable();
+
+    const outcome = lines.find((l) => l.event === "relay.directory.redial.outcome");
+    expect(outcome).toBeDefined();
+    expect(outcome!.ctx["recovered"]).toBe(false);
+    expect(outcome!.ctx["eviction"]).toBe("evicted");
+    // Having evicted and redialled and still failed, the cause is NOT on this side. Saying so is
+    // what stops the next investigation repeating this one.
+    expect(String(outcome!.ctx["reading"])).toContain("not a stale handle");
   });
 });
