@@ -722,9 +722,30 @@ description: >
   connection's **socket status** alongside the muxer status, so the two can be told apart — this is
   the one measurement that converts the cause from inference to fact, because the muxer check
   returns before the socket check runs and the error alone cannot distinguish them. (b) libp2p
-  connection **open and close** events for directory peers are logged with peer and reason, so the
-  next occurrence records the death and not only the corpse. (c) No behaviour change: no dial, no
-  eviction, no retry alters. Lands FIRST — the fix is not provable without it. — ❌
+  connection **open and close** events for directory peers are logged at INFO with peer and held
+  duration. (c) No behaviour change: no dial, no eviction, no retry alters. — 🟡 BUILT, reviewed,
+  not yet live (no relay runs it — see the version-bump line below). → Entry 91
+
+  > **CLAUSE (b) DEVIATED, AND THE CLAUSE WAS WRONG.** It asked for the DEATH to be recorded via
+  > connection open/close events. That is not obtainable: libp2p dispatches `peer:disconnect` only
+  > after REMOVING the connection from its registry, and this tier's failure is defined by the
+  > connection staying registered with a live socket — which is why `dial()` hands it back. **The
+  > death emits no event.** What shipped is an honest lifecycle line at INFO with no impact claim,
+  > and it says in its own payload that it is not the dead-muxer failure. Found by the unit
+  > reviewer, whose first version of this line claimed "seals adjudicated by this directory are
+  > refused" — false for every case it can fire on.
+  >
+  > **"Lands FIRST" also deviated** — both units shipped in one commit. The question it existed to
+  > answer (was the socket `open` during the live failures?) turned out to be answerable from
+  > source without the roll: `CelloNode.newStream` selects through its own `find(c => c.status ===
+  > "open")` before the muxer can throw, so it was `"open"` by construction in all 38. Recorded as
+  > answered rather than carried.
+
+- **DOD-M12-CONN-MUXER-OBSERVE-1** [cello-client, trustless-cello] — the instrument that CAN see
+  this death. `getConnections()` exposes the socket status; the muxer's status is what actually
+  goes bad and libp2p keeps it internal to `Connection`. Expose it, and have the relay's 30-second
+  probe log the transition to muxer-closed. Without this, the only thing that ever notices is the
+  next seal — which is the whole complaint. — ❌
 - **DOD-M12-CONN-EVICT-1** [trustless-cello] — the repair can actually repair. Before redialling a
   directory whose stream failed with a lost connection, the relay **evicts** the registered
   connection (`hangUp(peerId)`) so `dial()` must establish a new one instead of returning the dead
@@ -733,7 +754,25 @@ description: >
   redial on the failure path, not on the success path; (b) the retry after eviction is still
   bounded at one, so a genuinely unreachable directory fails fast rather than spinning; (c) the
   probe path and the seal path go through the same code, so a repair proven by one is proven for
-  the other; (d) failure to evict is logged and does not swallow the original error. — ❌
+  the other; (d) failure to evict is logged and does not swallow the original error. — 🟡 BUILT,
+  reviewed, **not true of any running relay** until the transport is published and the fleet rolled.
+  → Entry 91
+
+  > **hangUp is PEER-scoped** — libp2p's `closeConnections(peerId)` closes every connection
+  > registered for that peer, and the directory dials this relay independently, so a second inbound
+  > connection can exist under the same peer id and be carrying a seal verdict when we evict.
+  > Evicting is still correct (the outbound one is unusable and nothing else removes it), but the
+  > count is now logged so an aborted verdict is attributable rather than mysterious. A
+  > stream-aware eviction (libp2p has `safelyCloseConnectionIfUnused`) is the better shape and is
+  > owed if the multi-connection line ever fires in anger.
+
+- **DOD-M12-CONN-PUBLISH-1** [cello-client, trustless-cello] — **the fix reaches nothing until this
+  lands, and the DoD must not read as though it does.** `@cello-protocol/transport` carries
+  `hangUp` and the `status` field; nothing is published, so every deployed relay and directory logs
+  `relay.directory.evict.unavailable` at ERROR and keeps the pre-fix behaviour. Bump and publish per
+  `/cello-publish` (the `latest` promotion is Andre's), `pnpm install` in trustless-cello to move
+  the lockfile, then roll relays and directories **node by node** with a real `200` between nodes
+  (§2c). Until then the two lines above are 🟡 and cannot go ✅. — ❌
 - **DOD-M12-CONN-PROVE-1** [trustless-cello] — **held-connection enforcer.** With a relay running,
   kill its connection to the adjudicating directory underneath it, then close a session: it seals,
   with **no relay restart**. Must fail on the pre-fix build and pass on the post-fix one (revert
