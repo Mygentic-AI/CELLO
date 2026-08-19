@@ -807,17 +807,18 @@ description: >
   >    That line's absence is the only proof the new transport is actually in the image.
 
   Until all five are done the two lines above are 🟡 and cannot go ✅. — ❌
-- **DOD-M12-CONN-OPENED-AT-WIRING-1** [trustless-cello] — `relay.directory.connection.opened`
-  never fires for the connections that matter, so `heldForMs` is absent on them too. **Found on the
-  live fleet 2026-08-19, minutes after the first roll**, by looking for the new event as positive
-  proof the image was running: the image WAS running (`cello/relay:c703b3aa` confirmed on the
-  instance) and the event was absent anyway. `bin/relay.ts` calls `directoryAdapter.connect(node)`
-  AFTER the relay has started and registered with its directories, so those libp2p connections
-  already exist when `onPeerConnect` is subscribed — the handler can only ever see a LATER
-  reconnect. Fix: at `connect()` time, seed `#openedAtMs` from `getConnections()` for peers already
-  attached and emit the opened line for them. Same shape as the reviewer's finding on the `closed`
-  line: instrumentation wired to an event that cannot fire in the case being investigated. **Not
-  worth its own roll** — it is a log line; it goes with whatever rolls next. — ❌
+> **WITHDRAWN 2026-08-19, same hour it was filed — `DOD-M12-CONN-OPENED-AT-WIRING-1` was not a
+> defect.** It claimed `relay.directory.connection.opened` could never fire for startup connections,
+> because `bin/relay.ts` wires the adapter after the relay registers with its directories. The
+> reasoning was plausible and the conclusion was false: the line fires, roughly a minute after a
+> rolled relay comes up, and `heldForMs` is present on every subsequent close with real durations
+> (measured on the live fleet: 41,993ms · 231,283ms · 262,432ms · 451,614ms — none of them capped at
+> the 30s probe interval, which is the fix this unit shipped).
+>
+> **It was filed off an EMPTY QUERY run too early** — minutes after the first relay rolled, before
+> it had connected. Absence of evidence read as evidence of absence, one message after writing the
+> rule that says prove the query can return something before quoting nothing as a result. The
+> instrumentation is sound; the observation of it was not.
 
 - **DOD-M12-CONN-PROVE-1** [trustless-cello] — **held-connection enforcer.** With a relay running,
   kill its connection to the adjudicating directory underneath it, then close a session: it seals,
