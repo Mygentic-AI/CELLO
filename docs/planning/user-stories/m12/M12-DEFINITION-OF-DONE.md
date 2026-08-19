@@ -798,6 +798,22 @@ description: >
   A green unit test does not discharge this line: the defect is that a redial SUCCEEDS and changes
   nothing, so the proof has to be that a *new* connection was established. — ❌
 
+  > **THE OBVIOUS TEST CANNOT BE WRITTEN, so do not spend a day discovering that.** The fault is a
+  > connection whose MUXER is closed while its socket still reads `open` and it stays REGISTERED.
+  > There is no supported way to induce that state from outside a libp2p node: closing the
+  > connection de-registers it (which is the benign case that already recovers), and killing the
+  > remote process eventually does the same. What produced it live is still unknown — that is
+  > `DOD-M12-CONN-MUXER-OBSERVE-1`'s job.
+  >
+  > So this line is discharged by TWO pieces, and neither alone is enough:
+  > 1. **Mechanism, offline:** already proven in `m12-conn-evict.test.ts` against real libp2p over
+  >    loopback — after `hangUp`, a dial establishes a genuinely new connection rather than
+  >    returning the registered one. That is the exact property the fix depends on.
+  > 2. **Effect, on the fleet:** after the roll, the next natural `relay.directory.connection.stale`
+  >    carries `eviction: "evicted"` and `recovered: true`, and the seal that triggered it returns a
+  >    receipt. Observed, not induced. Until one occurs, this line stays ❌ — and a quiet fleet is
+  >    NOT evidence, since the old relay ran 2h29m clean before failing.
+
 - **DOD-M12-CONN-DIR-RELAY-1** [trustless-cello] — the SAME defect on the directory's end of the
   same link. `network-relay-adapter.ts` `#sendAndReceive` does `newStream` → on failure dial → retry
   once, with no eviction — the identical shape, so the identical no-op against a dead muxer. This is
