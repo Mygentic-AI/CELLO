@@ -4,7 +4,7 @@
 environment = "dev"
 
 # Immutable commit-SHA tag built by Cloud Build. Never a moving tag — see infra/cloudbuild/*.yaml.
-directory_image_tag = "c703b3aa63dba5f6561fbe134260442f868c3681"
+directory_image_tag = "0d00e3bf57adf62a008f49e95fa8395137395caf"
 
 # One node = one region = one independent deployment. The map key is the region, which makes two
 # nodes in one region unrepresentable rather than merely discouraged.
@@ -96,7 +96,7 @@ relay_primary_directory = "gcp-use1"
 # DOD-RELAY-KEEPALIVE-1 / DOD-GCP-RELAY-DRIFT-1. Built by Cloud Build 8eaddd07 from the GitHub
 # repository resource at this exact revision — not from a local tree — and verified to resolve
 # @cello-protocol/transport@0.0.44, the version below which this relay refuses to start.
-relay_image_tag = "c703b3aa63dba5f6561fbe134260442f868c3681"
+relay_image_tag = "0d00e3bf57adf62a008f49e95fa8395137395caf"
 
 relay_nodes = {
   us-east1 = {
@@ -135,3 +135,6 @@ waitlist_image_tag = "waitlist-a12fd1a3"
 
 # DOD-GCP-OPS-1 — built by Cloud Build from Andre-Mygentic/cello-ops-dashboard.
 ops_dashboard_image_tag = "ops-e6d0f32"
+
+# Seal-alert notifier (M12 Tier P5 / DOD-M12-SEAL-ALERT-1). No :latest exists; SHAs are pinned.
+seal_notifier_image_tag = "b6d574dae99bbb216fc215eafee67849e4e02472"

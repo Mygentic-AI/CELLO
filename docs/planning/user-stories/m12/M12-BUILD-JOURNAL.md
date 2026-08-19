@@ -7078,3 +7078,69 @@ here — its claimed seal against the directory logs (true), its pull-twin count
 machine's log (157/0, true), its relay mechanism against the source (true, and tighter than stated).
 Its EC2 log excerpt was never verifiable and is NOT recorded as fact anywhere; the mechanism it was
 offered to support is established from the code instead, which needs no trust at all.
+
+---
+
+## Entry 94 — 2026-08-19 — the observability roll, and an instrument that could not see itself
+
+### What shipped
+
+Second roll of the day, all five nodes onto `0d00e3bf`, carrying `@cello-protocol/transport@0.0.63`.
+**Andre overruled the framing that got us here** — I had argued for one narrow alert over closing the
+logging gaps, and his reason was better than mine: *when we check the logs periodically and see
+these at all, that is a strong indication we nailed the fix.* Absence becomes evidence, which is the
+one thing this investigation has never been able to obtain.
+
+| | |
+|---|---|
+| Muxer status exposed on `getConnections()` | transport `0.0.63`, verified in the published tarball |
+| Muxer-death detector on the 30s probe | relay — logs the TRANSITION, not the state |
+| Muxer status in the directory's repair logs | directory — covers the unilateral-seal link |
+| Full session id in `relay.seal.rejected` | relay — 8 hex chars cannot be fed to `cello sealed-receipt` |
+| Alert says which directory was asked | notifier — `adjudicator` is the first branch of any diagnosis |
+| Self-test says so in its first line | notifier — Andre read a drill and had to ask if it was real |
+
+**Verified on the fleet, six of six links: `relay.directory.muxer.observability readable: true`.**
+
+### The thing that nearly shipped, and how it was caught
+
+I could not verify the built image contained `0.0.63` — no docker here, and the build log does not
+print resolved versions. Looking for a way to confirm it AFTER the roll is what exposed the real
+defect: **there was no way, and there never would have been.**
+
+The detector speaks only on a transition and skips silently when the field is unreadable. So
+*"the muxer is healthy"* and *"this relay cannot read the muxer at all"* produced the same output —
+nothing. **A relay rolled without the right transport would have been indistinguishable from a relay
+with no problems.** That is this tier's founding defect, rebuilt inside the instrument written to
+detect it.
+
+Fixed by stating the baseline ONCE per link before any judgement about health, naming the
+consequence when it is absent. It is also the observation that settles the image question, which no
+amount of lockfile reasoning could.
+
+### Two corrections to how the chain was understood
+
+1. **The `latest` promotion does NOT gate a fleet roll.** Images build from the lockfile, which
+   records exact versions and tarball URLs and never consults dist-tags — a version on `beta` is
+   sufficient. Promotion is a separate track for operators installing the client. I had serialised
+   the entire chain behind it. **Andre asked "what's stopping you"** and the answer turned out to be
+   nothing.
+2. **`pnpm update pkg@version` REWRITES specifiers to pins.** It changed five `package.json` files
+   from `latest` to exact versions — forbidden here. Caught by diffing the manifests rather than
+   trusting the command. The manifests were restored and the lockfile's `specifier` fields put back
+   to `latest` while keeping the resolved versions, then proven with a real `--frozen-lockfile`
+   install. **To move a lockfile ahead of a promotion, this is the procedure.**
+
+### Rule
+
+**An instrument must report whether it can observe, not only what it observed.** Silence from a
+transition-only detector means "nothing happened" AND "I am blind", and those are opposite facts. The
+notifier already had this shape (`configured: true` at boot) and the relay's detector did not; the
+inconsistency was invisible until someone asked how the roll would be verified.
+
+### Still true, and unchanged by any of this
+
+**The fix remains unproven.** The repair path has not executed once — three more directory restarts
+today produced zero `relay.directory.connection.stale`, because a de-registered disconnect is the
+benign case. What changed is that the next real occurrence will now be *recorded when it happens*
+rather than inferred hours later, and will reach a phone.
