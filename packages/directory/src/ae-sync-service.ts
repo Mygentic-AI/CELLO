@@ -30,6 +30,11 @@ import {
   AE_PROTOCOL_ID, runAeDialer, serveAeResponder,
   type AeWire, type AeNodeIdentity, AeProtocolError } from "./ae-channel.js";
 import type { AeStoreView, RoundResult } from "./anti-entropy-engine.js";
+import { isConnectionLost, socketStatuses, evictForRepair, describeThrown } from "./connection-repair.js";
+
+// Re-exported so existing importers keep working; it LIVES in connection-repair now, because the
+// repair helpers need it and importing it back from here made the two modules a cycle.
+export { describeThrown };
 
 /** The transport surface the service needs (structurally satisfied by CelloNode). */
 export interface AeTransport {
@@ -48,21 +53,6 @@ export interface AeTransport {
    * connection whose muxer has died.
    */
   hangUp?(peerId: string): Promise<void>;
-}
-
-/**
- * DOD-M12-CONN-AE-1: is this the "the connection I hold is unusable" error?
- *
- * `CelloNode` throws STRUCTURED PLAIN OBJECTS carrying `reason`, not Errors, so the shape is what
- * identifies it. Narrow deliberately: only a lost connection earns an evict-and-retry. A protocol
- * mismatch or a handshake refusal is not repaired by reconnecting, and retrying those would double
- * the cost of every genuine rejection.
- */
-function isAeConnectionLost(err: unknown): boolean {
-  return (
-    typeof err === "object" && err !== null &&
-    (err as { reason?: unknown }).reason === "connection_lost"
-  );
 }
 
 /** Adapt a libp2p Stream to the channel's AeWire (lp varint framing, one CBOR frame per message). */
@@ -92,38 +82,6 @@ export function streamWire(stream: Stream): AeWire {
       stream.close().catch(() => { /* already closing */ });
     },
   };
-}
-
-/**
- * Render a thrown value for a log field.
- *
- * `String(err)` on a plain object yields the literally useless "[object Object]", and libp2p dial
- * failures throw aggregates rather than Errors — so an anti-entropy round that could not reach a
- * peer reported its cause as "[object Object]" and an operator learned nothing at all. Errors must
- * name their cause; that includes the ones that are not Error instances.
- */
-export function describeThrown(err: unknown): string {
-  if (err instanceof Error) {
-    // AggregateError carries the real reasons in .errors; the outer message is usually generic.
-    const inner = (err as { errors?: unknown[] }).errors;
-    if (Array.isArray(inner) && inner.length > 0) {
-      return `${err.message} [${inner.map((e) => (e instanceof Error ? e.message : String(e))).join("; ")}]`;
-    }
-    return err.message;
-  }
-  if (err !== null && typeof err === "object") {
-    const o = err as Record<string, unknown>;
-    const parts = ["name", "code", "message", "reason"]
-      .filter((k) => typeof o[k] === "string" || typeof o[k] === "number")
-      .map((k) => `${k}=${String(o[k])}`);
-    if (parts.length > 0) return parts.join(" ");
-    try {
-      return JSON.stringify(err).slice(0, 300);
-    } catch {
-      return "unserialisable thrown object";
-    }
-  }
-  return String(err);
 }
 
 /**
@@ -262,7 +220,7 @@ export class AeSyncService {
   }
 
   /** One dial + handshake + rounds attempt against a peer. */
-  async #attempt(peerNodeId: string, endpoint: string, peerId: string, multiaddr?: string) {
+  async #attempt(peerNodeId: string, endpoint: string, peerId: string, multiaddr: string | undefined, correlationId: string) {
     const { transport } = this.#cfg;
     // The dial pins /p2p/<manifest peerId>; libp2p aborts if the remote's Noise key mismatches.
     // Still, channel-bind against the OBSERVED identity the dial returned — evidence, not intent.
@@ -276,35 +234,64 @@ export class AeSyncService {
     // process, silently, while both nodes reported healthy: replication stops and nothing says so.
     // There was no retry here at all, which made it permanent rather than merely slow.
     let stream: Stream;
+    let actualRemotePeerId = dialed.peerId;
     try {
       stream = await transport.newStream(dialed.peerId, AE_PROTOCOL_ID);
     } catch (err: unknown) {
-      if (!isAeConnectionLost(err)) throw err;
-      if (typeof transport.hangUp !== "function") {
-        this.#cfg.logger.error("antientropy.peer.evict.unavailable", {
-          peerNodeId, peerId: dialed.peerId,
-          impact: "this node's @cello-protocol/transport predates hangUp, so the redial can only "
-            + "return the dead connection it already holds — anti-entropy with this peer stays "
-            + "broken until the node is rebuilt on a newer transport",
-        });
-        throw err;
-      }
+      // NARROWED. Eviction is peer-scoped and closes the peer's inbound connection too — possibly
+      // one that is mid-round serving us — so it must not fire on a protocol mismatch, a bad peer
+      // id, or `no_connection` (which already means there is nothing registered to evict and the
+      // dial genuinely reconnects on its own).
+      if (!isConnectionLost(err)) throw err;
+      const before = socketStatuses(transport, dialed.peerId);
       this.#cfg.logger.warn("antientropy.peer.connection.stale", {
-        peerNodeId, peerId: dialed.peerId,
-        reason: err instanceof Error ? err.message : String(err),
+        peerNodeId, peerId: dialed.peerId, correlationId,
+        // `describeThrown`, not `String(err)`. CelloNode throws PLAIN OBJECTS, so `String(err)`
+        // renders "[object Object]" — which is what the one line this clause asks for used to say.
+        reason: describeThrown(err),
+        socketStatusBefore: before,
         action: "evicting, redialling and retrying once",
       });
+      const eviction = await evictForRepair(transport, dialed.peerId, this.#cfg.logger, {
+        unavailable: "antientropy.peer.evict.unavailable",
+        failed: "antientropy.peer.evict.failed",
+        multiple: "antientropy.peer.evict.multiple",
+      }, { peerNodeId, correlationId });
+
+      // Re-dial and bind to the identity THIS dial observed. The pinned `/p2p/<peerId>` makes them
+      // identical by construction (libp2p aborts on a Noise key mismatch), but the previous
+      // observation came from a connection we have just destroyed, and the channel binds against
+      // "the identity the dial returned — evidence, not intent".
+      const redialed = await transport.dial(target);
+      actualRemotePeerId = redialed.peerId;
       try {
-        await transport.hangUp(dialed.peerId);
-      } catch (evictErr: unknown) {
-        // Not fatal to the repair: the dial that follows may still succeed.
-        this.#cfg.logger.warn("antientropy.peer.evict.failed", {
-          peerNodeId, peerId: dialed.peerId,
-          reason: evictErr instanceof Error ? evictErr.message : String(evictErr),
+        stream = await transport.newStream(redialed.peerId, AE_PROTOCOL_ID);
+        this.#cfg.logger.warn("antientropy.peer.redial.outcome", {
+          peerNodeId, peerId: redialed.peerId, correlationId, eviction,
+          socketStatusBefore: before, socketStatusAfter: socketStatuses(transport, redialed.peerId),
+          recovered: true,
         });
+        return runAeDialer({
+          wire: streamWire(stream),
+          manifest: this.#cfg.manifest(),
+          identity: this.#cfg.identity,
+          remoteNodeId: peerNodeId,
+          actualRemotePeerId,
+          store: this.#cfg.store,
+        });
+      } catch (retryErr: unknown) {
+        this.#cfg.logger.warn("antientropy.peer.redial.outcome", {
+          peerNodeId, peerId: redialed.peerId, correlationId, eviction,
+          socketStatusBefore: before, socketStatusAfter: socketStatuses(transport, redialed.peerId),
+          recovered: false,
+          reason: describeThrown(retryErr),
+          reading: eviction !== "evicted"
+            ? "the dead connection was NOT evicted, so the dial could still return it — this is the "
+              + "pre-fix behaviour and the eviction field says why"
+            : "evicted and redialled and the stream STILL failed — not a stale handle on this side",
+        });
+        throw retryErr;
       }
-      await transport.dial(target);
-      stream = await transport.newStream(dialed.peerId, AE_PROTOCOL_ID);
     }
     return runAeDialer({
       wire: streamWire(stream),
@@ -323,7 +310,7 @@ export class AeSyncService {
     const startMs = Date.now();
     logger.info("antientropy.round.started", { peerNodeId, correlationId });
     try {
-      let result = await this.#attempt(peerNodeId, endpoint, peerId, multiaddr);
+      let result = await this.#attempt(peerNodeId, endpoint, peerId, multiaddr, correlationId);
       // §1c manifest-rotation skew: during a rollout the peer may hold vN+1 while we still run vN
       // (or vice versa) — a sync outage here is a KILL-SWITCH PROPAGATION outage. On an identity-
       // binding failure, re-read the manifest (the verifying store re-reads + re-verifies from
@@ -336,7 +323,7 @@ export class AeSyncService {
       if (!result.ok && (result.reason === "manifest_entry_incomplete" || result.reason === "peerid_mismatch")) {
         const refreshed = this.#cfg.manifest().nodes.find((n) => n.nodeId === peerNodeId);
         if (refreshed?.peerId && refreshed.endpoint) {
-          result = await this.#attempt(peerNodeId, refreshed.endpoint, refreshed.peerId, (refreshed as { multiaddr?: string }).multiaddr);
+          result = await this.#attempt(peerNodeId, refreshed.endpoint, refreshed.peerId, (refreshed as { multiaddr?: string }).multiaddr, correlationId);
         }
       }
       if (!result.ok) {

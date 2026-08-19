@@ -293,7 +293,7 @@ describe("AeSyncService — libp2p-face wiring", () => {
 // and nothing says so; a restart is the only cure, because a restart is the only thing that empties
 // the connection manager.
 describe("DOD-M12-CONN-AE-1: a stale peer connection is evicted and retried, not fatal for the process", () => {
-  function transportThatFailsFirstStream(opts: { omitHangUp?: boolean } = {}) {
+  function transportThatFailsFirstStream(opts: { omitHangUp?: boolean; neverFails?: boolean } = {}) {
     const trace: string[] = [];
     let streamAttempts = 0;
     let inboundHandler: ((stream: Stream, remotePeerId?: string) => void | Promise<void>) | undefined;
@@ -314,7 +314,7 @@ describe("DOD-M12-CONN-AE-1: a stale peer connection is evicted and retried, not
       async newStream(_peerId: string, _protocolId: string) {
         streamAttempts += 1;
         trace.push("newStream");
-        if (streamAttempts === 1) {
+        if (streamAttempts === 1 && opts.neverFails !== true) {
           throw Object.assign(
             new Error('The connection muxer is "closed" and not "open"'),
             { reason: "connection_lost" },
@@ -353,12 +353,29 @@ describe("DOD-M12-CONN-AE-1: a stale peer connection is evicted and retried, not
   });
 
   it("does not evict when the first stream opens cleanly", async () => {
-    const { respService, dialService } = pairServices();
+    // Uses the SAME scripted transport as the eviction case, with the first-failure branch turned
+    // off, so `hangUp` is both present and traced. The previous version of this test inspected a
+    // locally declared `const trace = []` that no transport ever wrote to, against a fixture whose
+    // dial transport had no `hangUp` at all — so eviction was impossible by construction and the
+    // assertion was `expect([]).not.toContain("hangUp")`. It passed on an implementation that
+    // evicted on every single round.
+    const { respTransport, dialTransport, trace } = transportThatFailsFirstStream({ neverFails: true });
+    const respService = new AeSyncService({
+      transport: respTransport, manifest: () => manifest, identity: B,
+      store: new MemStore(), logger: testLogger(),
+    });
     await respService.start();
-    // A healthy round must not tear the connection down — that would turn one cached connection
-    // into a reconnect per sync interval, per peer.
-    const trace: string[] = [];
+    const dialService = new AeSyncService({
+      transport: dialTransport, manifest: () => manifest, identity: A,
+      store: new MemStore(), logger: testLogger(),
+    });
+
     await dialService.syncPeer(B.nodeId, "http://host:8080", B.peerId);
+
+    // A healthy round must not tear the connection down — that would turn one cached connection
+    // into a reconnect per sync interval, per peer, and (because hangUp is peer-scoped) would abort
+    // the peer's own inbound round every time.
+    expect(trace).toContain("newStream");
     expect(trace).not.toContain("hangUp");
   });
 

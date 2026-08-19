@@ -72,6 +72,7 @@ import { Encoder, decode as cborDecode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import type { KeyProvider } from "@cello-protocol/crypto";
 import type { CelloNode } from "@cello-protocol/transport";
+import { isConnectionLost, evictForRepair, describeThrown, socketStatuses } from "./connection-repair.js";
 import type { Logger } from "@cello-protocol/interfaces";
 import type { RelayAdapter } from "./directory-node.js";
 import type { RelaySessionAssignment, RelaySealData } from "./directory-types.js";
@@ -135,15 +136,24 @@ export class NetworkRelayAdapter implements RelayAdapter {
   async connect(node: CelloNode): Promise<void> {
     this.#node = node;
     // Pre-connect to ensure we can reach the relay
+    let lastError: unknown;
     for (const addr of this.#relayMultiaddrs) {
       try {
         await node.dial(addr);
         return;
-      } catch {
-        // try next address
+      } catch (err: unknown) {
+        lastError = err;
       }
     }
-    // If all addresses fail, we'll still attempt on first use
+    // NOT SWALLOWED. An empty catch here meant a directory that could not reach the relay at
+    // startup logged nothing at all, and the first evidence was a seal failing minutes later with
+    // a cause that had been discarded. Non-fatal on purpose — first use retries — but said out loud.
+    this.#logger?.warn("relay.adapter.connect.failed", {
+      relayPeerId: this.#relayPeerId,
+      addressesTried: this.#relayMultiaddrs.length,
+      reason: lastError === undefined ? "no addresses configured" : describeThrown(lastError),
+      impact: "no pre-connection to the relay; the first request will dial, so this is not fatal",
+    });
   }
 
   async recordAssignment(assignment: RelaySessionAssignment): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -182,13 +192,7 @@ export class NetworkRelayAdapter implements RelayAdapter {
       this.#logger?.error("relay.record_assignment.rejected", { reason });
       return { ok: false, reason };
     } catch (err) {
-      let msg: string;
-      try {
-        msg = err instanceof Error ? err.message : JSON.stringify(err);
-      } catch {
-        msg = String(err);
-      }
-      this.#logger?.error("relay.record_assignment.transport_error", { error: msg });
+      this.#logger?.error("relay.record_assignment.transport_error", { error: describeThrown(err) });
       return { ok: false, reason: "relay_unavailable" };
     }
   }
@@ -275,8 +279,9 @@ export class NetworkRelayAdapter implements RelayAdapter {
         seq_count: response["seq_count"] as number,
       };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.#logger?.error("relay.get_seal_leaves.transport_error", { error: msg });
+      // describeThrown: CelloNode throws plain objects, so String(err) reads "[object Object]" —
+      // and this is the unilateral-seal path's only diagnostic when leaves cannot be fetched.
+      this.#logger?.error("relay.get_seal_leaves.transport_error", { error: describeThrown(err) });
       return null;
     }
   }
@@ -300,28 +305,23 @@ export class NetworkRelayAdapter implements RelayAdapter {
       if (liveness === "alive" || liveness === "gone" || liveness === "unknown") return liveness;
       return "unknown";
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.#logger?.warn("relay.get_session_liveness.transport_error", { error: msg });
+      // describeThrown: CelloNode throws plain objects, so String(err) reads "[object Object]" —
+      // and this is the unilateral-seal path's only diagnostic.
+      this.#logger?.warn("relay.get_session_liveness.transport_error", { error: describeThrown(err) });
       return "unknown";
     }
   }
 
   /**
-   * DOD-M12-CONN-DIR-RELAY-1: the SOCKET status of what we hold for the relay, which is NOT the
-   * muxer's. libp2p checks the two separately when opening a stream, muxer first, so the error a
-   * caller receives returns before the socket is examined — and "dead muxer on a live socket"
-   * (a redial is a no-op; evict first) and "dead through" (the dial will genuinely reconnect) are
-   * otherwise indistinguishable. Optional-chained on the field so an older transport reports
-   * `unreported` rather than having "open" invented for it.
+   * DOD-M12-CONN-DIR-RELAY-1: what libp2p holds for the relay, as a DISCRIMINATED answer.
+   *
+   * Delegates to the shared helper so "nothing registered" (informative — the dial WILL genuinely
+   * reconnect), "the call threw", and "this transport has no getConnections at all" stay three
+   * different answers. They used to be one empty array, on the very measurement this tier exists
+   * to obtain.
    */
-  #relaySocketStatuses(node: CelloNode): string[] {
-    try {
-      return node.getConnections()
-        .filter((c) => c.peerId === this.#relayPeerId)
-        .map((c) => (c as { status?: string }).status ?? "unreported");
-    } catch {
-      return []; // never let instrumentation break a seal-leaf fetch
-    }
+  #relaySocketStatuses(node: CelloNode): ReturnType<typeof socketStatuses> {
+    return socketStatuses(node, this.#relayPeerId);
   }
 
   /**
@@ -347,44 +347,34 @@ export class NetworkRelayAdapter implements RelayAdapter {
     // operator waiting out the 11-minute window is told that escalation "produces a real receipt".
     const stream = await node.newStream(this.#relayPeerId, DIRECTORY_RELAY_PROTOCOL_ID).catch(
       async (firstErr: unknown) => {
-        let firstMsg: string;
-        try {
-          firstMsg = firstErr instanceof Error ? firstErr.message : JSON.stringify(firstErr);
-        } catch {
-          firstMsg = String(firstErr);
-        }
+        // `describeThrown`, not `String(err)`/`JSON.stringify`. CelloNode throws STRUCTURED PLAIN
+        // OBJECTS on every newStream path, so `String(err)` renders "[object Object]" — which is
+        // what this file's other transport-error lines still said before this unit.
+        const before = this.#relaySocketStatuses(node);
         this.#logger?.warn("relay.adapter.newstream.first_attempt_failed", {
           relayPeerId: this.#relayPeerId,
-          error: firstMsg,
-          socketStatus: this.#relaySocketStatuses(node),
+          error: describeThrown(firstErr),
+          socketStatus: before,
         });
 
-        // Narrow local type: `hangUp` ships in @cello-protocol/transport and this repo floats on
-        // `latest`, so a directory built before that version must still run. Absence is REPORTED,
-        // never defaulted — otherwise this node keeps exactly the behaviour the unit removes and
-        // its logs are indistinguishable from a repaired one.
-        const withHangUp = node as Partial<{ hangUp(p: string): Promise<void> }>;
-        if (typeof withHangUp.hangUp !== "function") {
-          this.#logger?.error("relay.adapter.evict.unavailable", {
-            relayPeerId: this.#relayPeerId,
-            impact: "this directory's @cello-protocol/transport predates hangUp, so the redial "
-              + "below can only return the dead connection it already holds — seal-leaf and "
-              + "liveness requests to this relay keep failing until the node is rebuilt",
-          });
-        } else {
-          try {
-            await withHangUp.hangUp(this.#relayPeerId);
-          } catch (evictErr: unknown) {
-            // Does not rethrow: we are repairing something already unusable, and the dial that
-            // follows may still succeed.
-            this.#logger?.warn("relay.adapter.evict.failed", {
-              relayPeerId: this.#relayPeerId,
-              error: evictErr instanceof Error ? evictErr.message : String(evictErr),
-              impact: "the dead connection may still be registered, so the redial can return it",
-            });
-          }
-        }
+        // THE NARROWING GATES THE EVICTION, NOT THE REDIAL. Both must happen for a dead muxer;
+        // only the redial must happen for everything else. `no_connection` is the case that proves
+        // it: when the relay moves to a new address, `newStream` throws `no_connection`, nothing is
+        // registered to evict, and the redial against the updated multiaddr IS the recovery — a
+        // narrowing that skipped the redial there would break relay re-registration outright, which
+        // is what the updateMultiaddr test caught. Eviction stays gated because it is peer-scoped
+        // and closes the relay's own inbound connection to this directory along with ours.
+        const eviction = isConnectionLost(firstErr)
+          ? await evictForRepair(node, this.#relayPeerId, this.#logger, {
+              unavailable: "relay.adapter.evict.unavailable",
+              failed: "relay.adapter.evict.failed",
+              multiple: "relay.adapter.evict.multiple",
+            })
+          : "not_needed";
 
+        // THE REDIAL — restored to run for EVERY failure, which is what makes relay
+        // re-registration work: `updateMultiaddr` replaces the address and the next dial is the
+        // only thing that reaches the relay's new location.
         let dialSucceeded = false;
         for (const addr of this.#relayMultiaddrs) {
           try {
@@ -392,20 +382,45 @@ export class NetworkRelayAdapter implements RelayAdapter {
             dialSucceeded = true;
             break;
           } catch (dialErr: unknown) {
-            let dialMsg: string;
-            try {
-              dialMsg = dialErr instanceof Error ? dialErr.message : JSON.stringify(dialErr);
-            } catch {
-              dialMsg = String(dialErr);
-            }
-            this.#logger?.warn("relay.adapter.redial.failed", { addr, error: dialMsg });
+            this.#logger?.warn("relay.adapter.redial.failed", { addr, error: describeThrown(dialErr) });
           }
         }
         if (!dialSucceeded) {
           const addrList = this.#relayMultiaddrs.length > 0 ? this.#relayMultiaddrs.join(", ") : "(no addresses configured)";
+          this.#logger?.warn("relay.adapter.redial.outcome", {
+            relayPeerId: this.#relayPeerId, eviction,
+            socketStatusBefore: before, recovered: false,
+            reason: `all addresses failed — ${addrList}`,
+            reading: "no address could be dialled, so the retry below was never attempted",
+          });
           throw new Error(`relay.adapter.redial: all addresses failed — ${addrList}`);
         }
-        return node.newStream(this.#relayPeerId, DIRECTORY_RELAY_PROTOCOL_ID);
+
+        // THE OUTCOME, on both branches. Without it an operator reading a directory that stopped
+        // fetching seal leaves sees the first failure and then silence — they cannot tell whether
+        // the eviction ran, whether it helped, or whether our own peer-scoped hangUp is what killed
+        // a concurrent verdict. That distinction is the entire subject of this tier.
+        try {
+          const stream = await node.newStream(this.#relayPeerId, DIRECTORY_RELAY_PROTOCOL_ID);
+          this.#logger?.warn("relay.adapter.redial.outcome", {
+            relayPeerId: this.#relayPeerId, eviction,
+            socketStatusBefore: before, socketStatusAfter: this.#relaySocketStatuses(node),
+            recovered: true,
+          });
+          return stream;
+        } catch (retryErr: unknown) {
+          this.#logger?.warn("relay.adapter.redial.outcome", {
+            relayPeerId: this.#relayPeerId, eviction,
+            socketStatusBefore: before, socketStatusAfter: this.#relaySocketStatuses(node),
+            recovered: false,
+            reason: describeThrown(retryErr),
+            reading: eviction !== "evicted"
+              ? "the dead connection was NOT evicted, so the dial could still return it — this is "
+                + "the pre-fix behaviour and the eviction field says why"
+              : "evicted and redialled and the stream STILL failed — not a stale handle on this side",
+          });
+          throw retryErr;
+        }
       },
     );
     let closeSent = false;
