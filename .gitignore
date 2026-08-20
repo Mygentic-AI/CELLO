@@ -12,6 +12,10 @@ docs/planning/discussion_logs_drafts/
 
 # Node
 node_modules/
+# Bare (no trailing slash) so it also matches the node_modules -> node_modules.nosync SYMLINKS at
+# every depth (root, demo/, packages/*/) — a symlink is a different filesystem entry from a real
+# directory, so the slash-suffixed rule above does not match it on its own.
+node_modules
 
 # TypeScript build output
 packages/*/dist/
