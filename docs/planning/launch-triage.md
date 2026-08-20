@@ -170,6 +170,18 @@ description: >
   observability failure concretely for item 17: the signal was firing 220 times an hour for ten
   hours, unwatched, while relay.health.check.passed — the DIRECTORY checking the relay's machine,
   which can never go red for this — was cited twice as evidence the relay was healthy.
+  2026-08-20: item 33's DoD (M12 Tier P5) closed out — cause traced into libp2p source, fix live on
+  all five nodes, sealing confirmed with two live seals, muxer visibility confirmed on six of six
+  relay-directory links, alerting wired end to end to Telegram. Stays 🟠, not ✅: the repair path has
+  never executed once across two rolls and six directory restarts, because a de-registered
+  disconnect is the benign case the redial always handled. Added items 34-36
+  (DOD-M12B-TRANSPORT-FAULT-NOT-TERMINAL-1, DOD-M12B-TERMINAL-REASON-1,
+  DOD-M12B-PULL-NEVER-RECOVERS-1) — previously a footnote inside item 33, now their own ranked
+  entries. All three found while fixing item 33, verified in source and this machine's own logs, not
+  diagnosed by an agent. 34 is upstream of the other two: a transport hiccup with nothing wrong with
+  the conversation itself can permanently kill it, and fixing that likely shrinks or removes 35 and
+  36. 36 needs investigation before any fix — 157 recovery attempts, 0 successes, and it is not yet
+  known whether the certificates are genuinely absent or the recovery path is asking the wrong place.
 ---
 
 # Launch Triage
@@ -215,10 +227,9 @@ basic value has not been delivered.**
 > receipt. Until one occurs this stays 🟠. **A quiet fleet is not evidence** — the old relay ran
 > 2h29m clean before failing.
 >
-> Three further defects were found on the way and filed in [[M12B-DEFINITION-OF-DONE]], because they
-> are relay↔client contract rather than relay↔directory: the relay answers `session_sealed` when it
-> means "I refused this"; a transport fault can terminalise a healthy session; and the certificate
-> pull has recovered nothing in 157 attempts.
+> Three further defects were found on the way, because they are relay↔client contract rather than
+> relay↔directory. **Given their own ranked entries 2026-08-20** — items 34–36 below — rather than
+> living only as a footnote here. Also filed in [[M12B-DEFINITION-OF-DONE]] under "Owed follow-ups".
 >
 > ### ✅ ADDED LATER THE SAME DAY — the instrument, and what it changes about silence
 > **A second roll (all five nodes, `0d00e3bf`, transport `0.0.63`) shipped the observability half.**
@@ -1979,6 +1990,102 @@ ended in failure. Nothing yet distinguishes "fixed" from "between deaths".
 diagnoses of this fault were wrong in the same way — a plausible narrative arc drawn between events
 the data never linked. The 38/38 table above is a count, not a story, and it is the only part of this
 entry that has survived an adversarial pass unchanged.
+
+## 34. A transport hiccup can permanently kill a perfectly healthy conversation
+
+**Designation: `DOD-M12B-TRANSPORT-FAULT-NOT-TERMINAL-1`** — ❌ **OPEN, found 2026-08-19 while
+fixing item 33. Upstream of items 34 and 35 below, and the most valuable of the three — fixing this
+one likely shrinks or removes the other two.**
+
+**What it costs a customer.** Nothing was wrong with their conversation, their agent, or the
+messages exchanged. The relay simply could not reach a directory at the moment it tried to notarize
+the close — a two-second network blip, a directory mid-restart, a brief outage. The relay treats
+that identically to "this seal is invalid, refuse it forever": the conversation is killed,
+permanently, over a problem that had nothing to do with the conversation itself.
+
+**The mechanism.** `rejectSeal` (`relay-node.ts:728`) terminalises the session unconditionally on
+every path that reaches it, with no branch for "the failure was transport, not merits." M12 Tier
+P5's eviction fix (item 33) removes one PRODUCER of the transport fault that trips this line — a
+stale libp2p connection. It does not touch the shape of the bug: any future transport hiccup (a
+directory rolling, a capacity outage, an ordinary network blip) still arrives at the same
+unconditional kill.
+
+**Why it is upstream of items 35 and 36.** If a transport fault left the session active and
+retryable instead of dead, there would be no falsely-terminal row for item 35 to misreport, and
+nothing for item 36's recovery path to need to find. It is the root; the other two are downstream
+symptoms of not having this fix.
+
+**What "fixed" looks like.** `rejectSeal` distinguishes a transport failure (could not reach a
+directory) from a merits failure (the directory examined the seal and refused it), and only the
+merits case terminalises. A transport failure instead leaves the session active, so the client
+retries rather than believing it is over.
+
+## 35. The relay has one word for "sealed" and one word for "gave up," and they are the same word
+
+**Designation: `DOD-M12B-TERMINAL-REASON-1`** — ❌ **OPEN, found 2026-08-19 while fixing item 33.**
+
+**What it costs a customer.** Two sides of the same dead conversation get told two different
+stories, and both are behaving correctly given what they were told. One side believes it holds a
+receipt. It holds nothing.
+
+**Measured on session `df2a2a08`.** The relay refused that seal at 04:53 on a transport fault (item
+34). The counterparty's next status check got back `session_sealed` — the SAME string the relay
+uses for an actual successful notarization — and wrote a terminal "sealed" row at 04:58, six minutes
+before its own close attempt even timed out. It holds no certificate, because none was ever
+notarized. Meanwhile this side got a different answer (`relay_session_gone`), correctly read it as
+transient, and kept the session live.
+
+**The mechanism, verified in source, not inferred:**
+```
+relay-node.ts:728   rejectSeal(sessionId, _reason) { ... status: "seal_rejected" ... }
+relay-node.ts:1077  if (state.status !== "active") { await reply("session_sealed"); return; }
+```
+`session_sealed` is the reply for EVERY non-active status, `seal_rejected` included — a refused seal
+and a notarized one are indistinguishable to the client asking. `rejectSeal` is HANDED the real
+cause at its call site (`relay-node.ts:1416`, `dirResult.reason` — `connection_lost: …` for a
+transport fault, a directory string for a merits refusal) and discards it: the parameter is
+underscore-prefixed and reaches nothing but a `protocolLog` line.
+
+**What "fixed" looks like.** At minimum three distinct terminal reasons — notarized /
+refused-permanently / still-in-progress — with a defined meaning for an unrecognised reason, so an
+older client fails safely rather than silently misreading a new answer the same way it misreads
+this one today. **Wire-visible: the relay must tolerate the new reasons before any client is allowed
+to depend on them** (§2f) — the same staged-rollout discipline M12B already uses.
+
+## 36. The one safety net for item 35 has never once caught anything
+
+**Designation: `DOD-M12B-PULL-NEVER-RECOVERS-1`** — ❌ **OPEN, found 2026-08-19 while fixing item
+33. Needs investigation before any fix — not a quick patch.**
+
+**What it costs a customer.** When a client suspects the counterparty might hold a receipt it was
+never told about (exactly item 35's situation), it can ask the network directly: "does anyone have a
+certificate for this conversation?" That mechanism is the only thing standing between "the relay
+said sealed but lied" and "the receipt is gone for good" — and right now nobody knows if it works.
+
+**Measured on this machine's daemon log, 2026-08-19:**
+
+| event | count |
+|---|---|
+| `seal.certificate.pull.not_found` | **157** |
+| `seal.certificate.pull.recovered` | **0** |
+| `seal.certificate.pull.malformed` | 1 |
+| `seal.certificate.pull.timeout` | 1 |
+
+157 attempts, zero recoveries. Built for `DOD-TERMINAL-STATE-DIVERGENCE-1` — exactly the shape of
+item 35's failure — and every invocation has come back empty. Either the certificates genuinely are
+not there (which points back at items 34 and 35), or the recovery path cannot find records that do
+exist. Both are real problems; neither is "it works."
+
+**The trap to avoid.** Do NOT read a `not_found` as proof no certificate exists and start
+auto-repairing a terminal row on that signal. Homing moves (`relay.seal.redirected` /
+`seal_initiator_not_local` is in this machine's own logs from the same day), the record may sit on
+another consortium node entirely, and a grace window may not have elapsed. Treating absence as proof
+would risk destroying a genuinely terminal state — strictly worse than the divergence it exists to
+repair.
+
+**What "fixed" looks like.** First, establish WHICH of the two explanations above is true — that is
+its own measurement, not assumed. Only then does a fix make sense: either the pull is asking the
+wrong place, or there really is nothing to find and items 34/35 are where the fix belongs instead.
 
 # Post-launch — needed eventually, not for launch
 
