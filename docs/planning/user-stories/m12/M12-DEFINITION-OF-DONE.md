@@ -695,7 +695,41 @@ description: >
 
 ## Tier P5 — Relay↔directory connection integrity (opened 2026-08-19)
 
-> ### 🟡 TIER STATUS, CLOSED OUT 2026-08-19 — everything is built, shipped and observable; the fix is NOT proven
+> ### ✅ TIER CLOSES GREEN — 2026-08-21, THE REPAIR FIRED ON REAL TRAFFIC AND HELD
+>
+> **`DOD-M12-CONN-PROVE-1` is discharged by a live occurrence, not a drill.** Two days after the
+> roll, with no restart in between, a real relay→directory connection went stale during an ordinary
+> conversation (`CELLO_Coder_1` ↔ `Miss_Chelly_H`, session `2bd33101…`, 2026-08-21 ~02:19 UTC) —
+> exactly the "quiet fleet, then it happens" shape the tier always expected:
+>
+> ```
+> 02:19:05.692  relay.directory.connection.stale   reason: connection_lost: operation aborted due to timeout
+> 02:19:06.132  relay.directory.connection.opened
+> 02:19:06.246  relay.directory.redial.outcome     eviction: evicted   recovered: true
+> ```
+>
+> The eviction fired, the redial built a genuinely new connection, and **the seal riding on it
+> completed** — `sealed_root: 2bfb48c5c7aaecc099c035334df8747fa95e420af65daaf058048ea31f4cfeaa`, both
+> participants `attestation_mode: "live"`. This is precisely the signal the tier named as the only
+> thing that would close it: `eviction: "evicted"`, `recovered: true`, and the triggering seal
+> returning a receipt. Observed on real traffic, not induced.
+>
+> | | |
+> |---|---|
+> | Cause | ✅ traced into libp2p's source, not inferred |
+> | Fix, in all three places it was needed | ✅ built, reviewed twice, live on all five nodes |
+> | Sealing still works after the roll | ✅ two live seals verified in the DIRECTORY logs |
+> | The instrument can see the failure state | ✅ six of six links `readable: true` |
+> | A death is recorded WHEN it happens | ✅ 30s probe, transition-logged |
+> | An unrecoverable failure reaches a phone | ✅ end to end, flood-protected |
+> | **The repair has ever actually repaired** | ✅ **fired 2026-08-21, seal returned a receipt** |
+>
+> **What this does NOT prove:** `DOD-M12-CONN-DIR-RELAY-1`, the directory's own end of the same class
+> of link (`network-relay-adapter.ts`), has not independently fired. This occurrence was the relay's
+> connection to the directory, not the reverse — that line stays open on its own terms below.
+>
+> **Original closeout, 2026-08-19, kept for the record — this is what "unproven" looked like before
+> the occurrence above:**
 >
 > | | |
 > |---|---|
@@ -807,11 +841,12 @@ description: >
   redial on the failure path, not on the success path; (b) the retry after eviction is still
   bounded at one, so a genuinely unreachable directory fails fast rather than spinning; (c) the
   probe path and the seal path go through the same code, so a repair proven by one is proven for
-  the other; (d) failure to evict is logged and does not swallow the original error. — 🟡 BUILT,
-  reviewed, and now RUNNING on all five nodes — but **still unproven**, because the repair path has
-  not executed once. Three directory restarts during the roll disconnected the relays repeatedly and
-  produced ZERO `relay.directory.connection.stale`: a de-registered disconnect is the benign case and
-  the next dial genuinely rebuilds. Goes ✅ only via `DOD-M12-CONN-PROVE-1`. → Entries 91, 93
+  the other; (d) failure to evict is logged and does not swallow the original error. — ✅ **PROVEN
+  LIVE 2026-08-21.** A connection went stale on real traffic two days after the roll
+  (`relay.directory.connection.stale`, reason `connection_lost: operation aborted due to timeout`);
+  eviction fired, the redial built a new connection (`eviction: "evicted"`, `recovered: true`), and
+  the seal riding on it returned a receipt (`sealed_root: 2bfb48c5…`). Full trace on
+  `DOD-M12-CONN-PROVE-1` below. → Entries 91, 93, and the 2026-08-21 live occurrence
 
   > **hangUp is PEER-scoped** — libp2p's `closeConnections(peerId)` closes every connection
   > registered for that peer, and the directory dials this relay independently, so a second inbound
@@ -899,7 +934,31 @@ description: >
   test), and must assert the eviction happened rather than that the seal eventually worked — a seal
   can succeed because a 30-second probe got lucky, which is exactly the intermittency being fixed.
   A green unit test does not discharge this line: the defect is that a redial SUCCEEDS and changes
-  nothing, so the proof has to be that a *new* connection was established. — ❌
+  nothing, so the proof has to be that a *new* connection was established. — ✅ **PROVEN LIVE
+  2026-08-21.**
+
+  > **THE OCCURRENCE, 2026-08-21 ~02:19 UTC.** Session `2bd33101…`, `CELLO_Coder_1` (this machine) ↔
+  > `Miss_Chelly_H` (Hermes EC2), opened deliberately to test whether the relay/directory fleet had
+  > gone stale after running untouched since the 2026-08-19 roll. The connection HAD gone stale —
+  > two days idle, no restart, exactly the aged-connection shape the tier was built for:
+  >
+  > ```
+  > 02:19:05.692  relay.directory.connection.stale   reason: connection_lost: operation aborted due to timeout
+  > 02:19:06.132  relay.directory.connection.opened
+  > 02:19:06.246  relay.directory.redial.outcome     eviction: evicted   recovered: true
+  > ```
+  >
+  > `eviction: "evicted"` and `recovered: true` are exactly the two fields clause 2 named as the only
+  > acceptable evidence — not a probe getting lucky, an actual eviction-then-redial. The close that
+  > triggered it returned a real receipt: `sealed_root:
+  > 2bfb48c5c7aaecc099c035334df8747fa95e420af65daaf058048ea31f4cfeaa`, both participants
+  > `attestation_mode: "live"`. Read from `gcloud logging read` against `cello-infra`, not taken from
+  > an agent's report.
+  >
+  > **What this proves and no more.** It discharges clause 2 (effect, on the fleet) for
+  > `DOD-M12-CONN-EVICT-1` — the relay's eviction of its OWN connection to the directory. It does
+  > NOT discharge `DOD-M12-CONN-DIR-RELAY-1` (the directory's end of the same class of defect,
+  > `network-relay-adapter.ts`), which has not independently fired and stays open below.
 
   > **THE OBVIOUS TEST CANNOT BE WRITTEN, so do not spend a day discovering that.** The fault is a
   > connection whose MUXER is closed while its socket still reads `open` and it stays REGISTERED.

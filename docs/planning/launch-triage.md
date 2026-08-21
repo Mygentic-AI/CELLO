@@ -200,7 +200,7 @@ basic value has not been delivered.**
 
 | Rank | What it blocks | Item | Board line |
 |---|---|---|---|
-| **1** 🟠 | Closing a conversation fails about a third of the time and the receipt is unrecoverable — 38 refused seals against 11 successful, with an exact discriminator. The relay's connection to the directory is closed and the code that exists to repair it cannot. **Cause found, fixed, reviewed twice, and LIVE on all five nodes as of 2026-08-19 14:00 UTC — and still unproven.** | 33 | `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` → M12 Tier P5 |
+| **1** ✅ | Closing a conversation fails about a third of the time and the receipt is unrecoverable — 38 refused seals against 11 successful, with an exact discriminator. The relay's connection to the directory is closed and the code that exists to repair it cannot. **Cause found, fixed, reviewed twice, LIVE on all five nodes since 2026-08-19 14:00 UTC, and PROVEN 2026-08-21 — the repair fired on real traffic and the seal it was blocking returned a receipt.** | 33 | `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` → M12 Tier P5 |
 
 > ### 🟠 WHAT IS DONE, AND THE ONE THING THAT IS NOT
 > **Done and verified.** The cause is traced into libp2p's source: `dial()` returns an EXISTING
@@ -245,17 +245,40 @@ basic value has not been delivered.**
 > when he overruled a narrower proposal, and it is the reason this item can sit open honestly rather
 > than being called done or watched blindly.
 >
-> **Still 🟠 for one reason:** the repair has never executed. Six directory restarts across two rolls
-> produced zero stale connections. It cannot be induced — there is no supported way to put a
-> connection into the failing state from outside libp2p — so this closes on a real occurrence or not
-> at all.
+> **Was 🟠 for one reason:** the repair had never executed. Six directory restarts across two rolls
+> produced zero stale connections, and it cannot be induced — there is no supported way to put a
+> connection into the failing state from outside libp2p — so it could only close on a real
+> occurrence, not a drill.
+>
+> ### ✅ PROVEN 2026-08-21 — the occurrence happened, and the repair held
+> Two days after the roll, with no restart in between, a real relay→directory connection went stale
+> during an ordinary conversation opened specifically to test whether the fleet had gone stale
+> (`CELLO_Coder_1` ↔ `Miss_Chelly_H`, session `2bd33101…`, ~02:19 UTC):
+>
+> ```
+> 02:19:05.692  relay.directory.connection.stale   reason: connection_lost: operation aborted due to timeout
+> 02:19:06.132  relay.directory.connection.opened
+> 02:19:06.246  relay.directory.redial.outcome     eviction: evicted   recovered: true
+> ```
+>
+> `eviction: "evicted"` and `recovered: true` — the exact two fields named above as the only
+> acceptable evidence. The seal riding on that connection completed:
+> `sealed_root: 2bfb48c5c7aaecc099c035334df8747fa95e420af65daaf058048ea31f4cfeaa`, both participants
+> `attestation_mode: "live"`. Read from Cloud Logging on `cello-infra`, not taken from an agent's
+> report. Full detail on `DOD-M12-CONN-PROVE-1` in [[M12-DEFINITION-OF-DONE]].
+>
+> **What this does not close:** `DOD-M12-CONN-DIR-RELAY-1`, the directory's own end of the same class
+> of defect, has not independently fired and stays open (unranked, not launch-blocking on its own —
+> see [[M12-DEFINITION-OF-DONE]] Tier P5).
 
 **This block outranks the 2026-08-04 ranking below**, on the same terms the 2026-08-17 block did.
 Item 33 keeps its number and its position in the body of the list — the doc's numbers are stable and
 cross-references use names, so the rank lives here rather than in a renumbering.
 
-**Working it:** Tier P5 in [[M12-DEFINITION-OF-DONE]] is closed out — cause, fix, roll, instrument
-and alerting are all ✅; only `DOD-M12-CONN-PROVE-1` remains, and it waits on the fault recurring.
+**Working it:** Tier P5 in [[M12-DEFINITION-OF-DONE]] is fully closed — cause, fix, roll, instrument,
+alerting and the live-fire proof are all ✅. `DOD-M12-CONN-PROVE-1` discharged 2026-08-21. Items
+34–36 below are the residual: what happens when a seal DOES fail, which this occurrence did not
+exercise.
 
 # 🔴 SECOND — SESSIONS DO NOT WORK (2026-08-17, Andre) — ALL CLEARED
 
@@ -1902,7 +1925,13 @@ diagnosed and reported as a protocol defect. The guidance must name the paramete
 
 ## 33. Closing a conversation fails about a third of the time, and the receipt is gone for good
 
-**Designation: `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1`** — ❌ **OPEN, measured 2026-08-19.**
+**Designation: `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1`** — ✅ **PROVEN LIVE 2026-08-21.** See
+the top-of-list block above for the occurrence: a real connection went stale two days after the roll,
+was evicted and redialed (`eviction: "evicted"`, `recovered: true`), and the seal riding on it
+returned a receipt. The description below is the original diagnosis and stays accurate as history —
+it is what made the fix possible.
+
+**Original entry, OPEN as measured 2026-08-19:**
 **This is `DOD-RELAY-DIRECTORY-RECONNECT-1` (item 14) recurring after it was marked ✅ on 2026-08-08.**
 The redial that item added is real and does run. It is not sufficient.
 
