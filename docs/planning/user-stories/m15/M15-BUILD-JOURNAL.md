@@ -15,20 +15,25 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 TIER 0 CLOSED. Tier 1 and Tier 2 are both open and have no dependency on each other.
-> **49 DoD lines**, 1 ✅ (`DOD-M15-SPIKE-1`), 1 🅿️ (`DOD-M15-SWEEP-1`, sequencing only), rest ❌.
-> Every line is inside the launch gate; the gate is a state, not a date.
+> ### 🟢 TIER 0 CLOSED. First Tier-2 unit shipped and reviewed. Tier 1 part-swept.
+> **51 DoD lines** (2 added by review), 2 ✅, 1 🅿️, rest ❌. Every line is inside the launch gate;
+> the gate is a state, not a date.
 
-- **`DOD-M15-DIVERGE-1` is 🟡 IMPLEMENTED, REVIEW IN FLIGHT** — cello-client branch `m15/diverge`,
-  commit `4478a03`. Gate green: daemon 2470, monorepo 3995 passed, lint, forced typecheck, build,
-  all run so they could fail. **The tag does not flip until the reviewer's verdict is quoted in a
-  journal entry.** Not merged.
+- **NEXT ACTION: `DOD-M15-FRAME-1`** — the injection path, the worst-looking finding in the
+  milestone, and the line that also makes four of the screening claims true. **Already traced
+  (→ Entry 4) and largely mechanical:** `session_abandoned_notice` sits in the same switch as a
+  complete, correct reference to copy. Branch `m15/frame`.
+- **`DOD-M15-DIVERGE-1` is ✅** — cello-client `4478a03` + `9f05300`, merged. Ten review findings,
+  three blocking, all fixed; verdict quoted in Entry 5. **Two follow-on lines came out of it:**
+  `DOD-M15-UNWITNESSED-1` (the two *suspected* partings, one of which the review found and I had
+  missed) and `DOD-M15-DIVERGE-DURABLE-1` (the flag is still memory-only across a restart).
 - **`DOD-M15-LEDGER-1` is part-swept** — 13 rows across `AUDIT-ME.md`, `README.md`, and the shipped
-  skill/tool surfaces (→ Entries 3–4, rows in the DoD). Remaining: the rest of the MCP tool
+  skill/tool surfaces (→ Entries 3, and rows in the DoD). Remaining: the rest of the MCP tool
   descriptions, CLI help, status output.
-- **NEXT ACTION after the review lands:** fix every finding, quote the verdict, flip the tag, merge
-  `m15/diverge`. **Then `DOD-M15-FRAME-1`** — the injection path, the worst-looking finding in the
-  milestone, and the line that also makes four of the screening claims true.
+- **Process note worth keeping:** the review's own diagnosis of why its blocking finding shipped —
+  *every close-gate test stubs `sealReadiness` and every manager test calls it directly, so nothing
+  drove a real manager through a real teardown.* A unit whose tests all sit on one side of a seam
+  has not been tested across it.
 - **Spike answers that re-scoped lines → Entry 1:** step-6 directory auth IS active in production
   (`DOD-M15-DIRAUTH-1` does not escalate); both relays accept all three directories (the feared
   single-directory dependency does not exist); relay selection is effectively deterministic at 99:1
@@ -556,5 +561,133 @@ walk every remaining handler on the protocol. The one genuinely new piece is dis
 already-attached peers when the gate narrows (`setAllowedPeer`), because libp2p will not do it.
 
 **Not started. No edits made.** Pulled after `DOD-M15-DIVERGE-1` merges.
+
+---
+
+## Entry 5 — DOD-M15-DIVERGE-1: built, reviewed, ten findings fixed, ✅ (2026-08-21)
+
+**Built:** cello-client `4478a03`; **review fixes:** `9f05300`. Branch `m15/diverge`.
+
+### What shipped
+
+`sealReadiness` gained `diverged` as a third term and `ready` accounts for it, so the close gate
+that already existed started acting on a fact it previously could not see. The refusal is its own
+branch with its own reason (`session_record_diverged`), because the sibling `session_incomplete`
+guidance says *"wait a moment and close again"* — right for a session waiting on arrival, wrong for
+this one. The ERROR log at the detection site stays; the response is its second half, not a
+relocation.
+
+### Reviewer verdict — QUOTED
+
+> **SPEC: DEVIATIONS FOUND** — clause 5 shipped narrower than its text (proven parting only, plus an
+> uncovered third producer at `session-node-manager.ts:6904`); clause 4 is not enforced on the away
+> one-shot seal path. The clause-5 narrowing is recorded in the commit body and at the code site —
+> **not** a silent simplification — but it is not journaled and the DoD line is unamended. [blocking
+> until an M15 journal entry + a named follow-on line exist]
+>
+> **SILENT FALLBACKS FOUND** — HIGH-2: `#diverged` is cleared on every node teardown and never
+> persisted, and the read site cannot distinguish "not diverged" from "forgotten", so the gate
+> silently reads ready for the whole post-teardown/post-restart `interrupted` population. [blocking]
+>
+> **ERRORS NAME THEIR CAUSE** — `session_record_diverged` is a cause, not an exit point, and it
+> correctly refuses to inherit the transient `session_incomplete` guidance in either direction; both
+> directions are pinned by tests. The separate problem is over-claim, not substitution: the refusal
+> states a peer-side outcome it never measured and offers force-abandon as the only exit (HIGH-1).
+> [blocking on wording]
+>
+> **TESTS HAVE TEETH** — all three new clauses survive the revert test, and the false-positive cases
+> (healthy, in-order, relay-less, `assignedSeq === undefined`) are covered. Two gaps: no test
+> exercises the real manager through the real close handler, which is why HIGH-2 shipped; and the
+> guidance assertions check prose shape, not the truth of the claim.
+>
+> **REMOVALS PROVEN**
+>
+> Not a rubber stamp — the direction of the change is right and the ordering trap the coder called
+> out was real and is correctly handled.
+
+**Count: ten findings — HIGH-1, HIGH-2, HIGH-3, MEDIUM-4, MEDIUM-5, MEDIUM-6, LOW-7 … LOW-10. Three
+blocking. All ten fixed in `9f05300`; nothing deferred as "acceptable".**
+
+### The three blocking ones, and what each really was
+
+**HIGH-1 — the refusal predicted something it never measured.** It said the two sides *"can never
+compute the same root"* and that a seal *"would be refused as leaf_count_mismatch"*. The daemon knows
+neither. `#diverged` records a parting between **this tree and the relay's counter**; the bilateral
+check compares **leaf counts, not roots** (`seal-flows.ts`: *"Merkle-root agreement is NOT verified
+at this leaf-exchange layer"*), and both sides append a behind-frontier leaf **at the tail** — so a
+counterparty that skewed the same way still agrees and the seal succeeds. The guidance now states
+what was measured, says plainly that it may still succeed, offers comparing counts first, and names
+force as the last resort rather than the only exit. **Two new tests assert the absence of the
+over-claim**, which is the only way prose assertions can have teeth.
+
+**HIGH-2 — the flag was being forgotten in exactly the population it guards.** `#evictSessionCaches`
+deleted it on every teardown, including `destroySessionNode`'s non-sealed path, which writes
+`interrupted` — one of the two statuses the gate acts on. It now clears at a terminal status
+instead. The reviewer's diagnosis of *why* it shipped is the part worth keeping: **every close-gate
+test stubs `sealReadiness` and every manager test calls it directly, so nothing drove a real manager
+through a real teardown.** That test now exists and goes red on the old behaviour.
+
+**HIGH-3 — the gate held for the human and not for the machine.** The away one-shot path read
+`placed.placed`, discarded `placed.diverged`, and sealed. It now consults readiness and skips, and
+**the log is the whole surface there rather than half of it, because no caller is awaiting a
+response** — which is Invariant 2 applied, not weakened.
+
+### The test that turned red, and why that was the finding
+
+HIGH-3's fix broke `m8c-away-1`'s relay-path seal test. The cause was in the fixture: it called
+`ingestReceivedContent` for two inbound messages **without ever submitting their hashes to the
+relay**, so the tree ran ahead of the relay's counter and the session diverged — twice, with
+`session.tree.position_behind_frontier` firing at ERROR both times (`assignedSeq 0 / nextExpected 1`,
+then `assignedSeq 1 / nextExpected 3`) — **and then sealed anyway.**
+
+**The test had been asserting that a diverged tree completes a seal**, which is precisely the
+outcome `placeOwnLeaf`'s comment calls the riskiest append in the codebase. In production the
+counterparty's daemon submits every message it sends, so the relay's counter is already past an
+inbound message when this side appends it. Submitting first restores that shape: the divergence
+disappears entirely and the seal initiates on the relay path, so the test now exercises the healthy
+path it always claimed to. Two assertions pin that it stays healthy.
+
+### Corrections to my own earlier record
+
+- **Entry 2's counterbalance was mis-stated** (review MEDIUM-4). I wrote that the peer independently
+  refuses to co-sign *"a root it cannot reproduce"*. The peer never reproduces a root — it compares
+  **leaf counts** and signs its own root. The honest form: *the peer independently compares leaf
+  counts, which catches the unequal-length shape and not an equal-count divergence; root agreement is
+  checked later at the FROST step against the directory-held tree.* **This matters beyond wording:
+  the equal-count case is exactly where a client-side gate carries real weight, and it is the case
+  `DOD-M15-DIVERGE-DURABLE-1` leaves best-effort.**
+- **A third producer of clause 2's text existed and I missed it** — `assignedSeq === undefined`, the
+  relay-degraded own-send. Now `DOD-M15-UNWITNESSED-1(b)`.
+
+### Two questions the reviewer put to Andre — decided under §3a, logged, not blocked on
+
+1. **Should a session diverged from the RELAY be blocked at all, given the bilateral check is on leaf
+   count?** **Yes.** The relay's leaf list is what the directory notarizes, so a tree parted from it
+   cannot produce a matching certificate — and `DOD-M15-SEALWIRE-1` makes that comparison explicit,
+   at which point this becomes strictly correct rather than merely prudent. The asymmetry decides it:
+   a wrongly-blocked session still has `force`, while a wrongly-allowed one loses the receipt
+   terminally. Least likely to need reversing.
+2. **Durable now, or ship knowingly best-effort?** **Best-effort now, durable next.** The in-process
+   hole is closed; the restart hole needs a column and is `DOD-M15-DIVERGE-DURABLE-1` with its
+   trade stated at the declaration site, the way `frontier-mismatch.ts` states its own. The guidance
+   no longer promises a retry answers identically, which was the sentence the restart hole falsified.
+
+### Gate — run so it could fail
+
+```
+daemon + monorepo   exit=0   3997 passed | 11 skipped (4008)
+lint                exit=0
+tsc --build --force exit=0
+build               exit=0
+```
+
+**Toolchain repair, unrelated to the change:** the first test run died on
+`Cannot start service: Host version "0.27.7" does not match binary version "0.28.1"`.
+`@esbuild/darwin-arm64@0.27.7`'s `bin/` was **empty** in the pnpm store, so esbuild's shim found the
+0.28.1 binary and refused. `pnpm install` wanted to purge all nine projects' modules without a TTY,
+which is far too blunt — the package was restored in place instead. Not a code defect; recorded
+because it will recur on a fresh clone.
+
+**DoD amended, follow-ons named, tag flipped ✅.**
 
 ---

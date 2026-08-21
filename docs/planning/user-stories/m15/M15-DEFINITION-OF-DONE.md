@@ -140,17 +140,53 @@ The six known checked-then-ignored instances; three carry such a comment.
 The checked-then-ignored class and the unauthenticated surfaces. **Runs in parallel with Tier 3** —
 different repos, different disciplines, neither blocks the other.
 
-### `DOD-M15-DIVERGE-1` — ❌ A divergent local tree blocks the seal instead of printing a string
-**The cheapest line in the milestone and it should be pulled early** — it acts on signals that
-already exist, has no wire dependency, and starts catching transcript divergence before the much
-larger Tier 4 lands.
+### `DOD-M15-DIVERGE-1` — ✅ A divergent local tree blocks the seal instead of printing a string
+> **Shipped and reviewed 2026-08-21 → Entries 2, 5.** cello-client `4478a03` + `9f05300`. Ten
+> review findings, three blocking, all fixed. Gate: 3997 tests, lint, forced typecheck, build.
+> **Clause 2 shipped NARROWER than written — amended below, with two follow-on lines.**
+
 - Local/relay leaf divergence is already detected correctly on the next send and already logged as
   an error. **The log line stays** (M15-PROCEDURE Invariant 2). What is added: the agent is told in
-  the response, and the session is **blocked from sealing**.
-- The seal-readiness check becomes **symmetric**: today it counts only leaves the relay holds that
-  we lack, and must also fail when the local tree holds leaves the relay never witnessed — the
-  direction an injected or forged leaf actually appears in.
-- **Enforcer:** receipt.
+  the response, and the session is **blocked from sealing** — on the operator-driven close **and**
+  on the away one-shot path that seals with no operator present.
+- The seal-readiness check becomes symmetric **for the PROVEN parting**: `ready` now also fails when
+  an ack has come back behind this side's frontier, the case where the tree demonstrably holds a
+  leaf at a position the relay assigned elsewhere.
+  > **AMENDED 2026-08-21, after review.** As written this clause said "must also fail when the local
+  > tree holds leaves the relay never witnessed", which covers **three** producers; one shipped. The
+  > other two are *suspected* rather than proven partings, and gating on them risks the false
+  > positive this codebase calls worse than the bug — force-abandon with no receipt as the only
+  > exit. They are `DOD-M15-UNWITNESSED-1`, not dropped. **The reviewer confirmed the narrowing is
+  > substantively right, not merely defensible:** the peer-side check this gate pre-empts compares
+  > **leaf count**, not content, so an unwitnessed *received* leaf — which both peers hold — changes
+  > neither count, and gating on it would be a pure false positive.
+- **Enforcer:** receipt. *(Not run — the unit is carried by suite + review; the enforcer itself is
+  built by `DOD-M15-INTERRUPTED-1` and this line is re-asserted there.)*
+
+### `DOD-M15-UNWITNESSED-1` — ❌ The two SUSPECTED partings are judged, not ignored
+Split from `DOD-M15-DIVERGE-1` on review — that clause covered three producers and only the proven
+one could ship safely. **Neither of these is visible to `sealReadiness` today.**
+- **(a) An unwitnessed RECEIVED append.** `ingestReceivedContent`: a relay is attached, no witness
+  bound the hash, the content is logged at WARN (`session.content.unwitnessed`) and **ingested
+  anyway.** This is the direction an injected leaf appears in, so it is where `DOD-M15-FRAME-1`'s
+  attack lands. **Gating on it today would be a false positive** — both peers hold the leaf, so leaf
+  counts still agree. The useful work is separating "the relay has not witnessed it *yet*" from "it
+  never will", which needs a fixture that can attach a relay client.
+- **(b) An unwitnessed OWN send** — `assignedSeq === undefined`, the relay-degraded append. **Found
+  by the review; not in the original record.** It sets no flag, emits no ERROR, and reads ready —
+  while `placeOwnLeaf`'s own comment says *"the seal was already lost at the unwitnessed append, not
+  here."* **So the gate fires one send later than the code says the damage happens.**
+- **Do not gate either on suspicion alone.** The bar is a signal separating a relay catching up from
+  a leaf it will never carry.
+
+### `DOD-M15-DIVERGE-DURABLE-1` — ❌ The divergence flag survives a daemon restart
+`#diverged` is in memory. `DOD-M15-DIVERGE-1` closed the in-process hole — it is no longer dropped
+on node teardown, only at a terminal status — but a restart still empties it, and the read site
+cannot distinguish *not diverged* from *forgotten*: both are `false`, both read ready.
+- **Not the same trade `frontier-mismatch.ts` accepts on purpose.** A frontier mismatch is
+  **re-detected by the very next close**; divergence is re-detected only by the next send that gets
+  an ack behind the frontier. A restart therefore costs a **wrong answer**, not a re-detection.
+- Needs a column. Until it lands, no guidance may promise that a retry answers identically.
 
 ### `DOD-M15-FRAME-1` — ❌ A stranger cannot inject content on the direct path
 One diff across the session content handler and the connection gater; fixing any subset leaves the
