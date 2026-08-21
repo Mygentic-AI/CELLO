@@ -234,6 +234,26 @@ Session established via relay circuit:
 dcutr runs on session nodes only (not the standing receiver — it is a receiver,
 not a dialer). Failure is non-fatal. The session continues over relay regardless.
 
+> **⛔ STALE — corrected 2026-08-21.** Two things in the paragraph above are wrong.
+>
+> **1. DCUtR is on EVERY node, unconditionally**, and has been since 2026-07-14. The exclusion was
+> removed that day (the standing receiver is the inbound side of a relayed connection, and the
+> inbound side is what starts the upgrade — so excluding it was backwards). The code comment at
+> `core/transport/src/node.ts` says so explicitly.
+>
+> **2. DCUtR never succeeds anyway.** `@libp2p/tcp` has **no port reuse** — no `localPort`, no
+> `localAddress`, no `SO_REUSEPORT`; the option type does not carry them. A real hole punch requires
+> the punch dial to leave from the *listening* port so the NAT mapping matches the advertised
+> address. This transport dials from a fresh ephemeral port every time, so what runs is a timed
+> direct dial, not a simultaneous-open punch. It succeeds only against a target that was already
+> dialable — i.e. when no punch was needed. `DOD-TRANSPORT-PATH-1`: *"We have never once observed a
+> successful hole punch in production."*
+>
+> **Consequence:** "the session continues over relay regardless" is not a fallback — for any session
+> crossing a NAT boundary it is **the only path**. Same-machine and same-LAN sessions are direct
+> because the address is directly dialable, no punch involved. See the 2026-08-21 live P2P exposure
+> audit.
+
 ### Circuit Relay
 
 When AutoNAT confirms not-dialable, the session node obtains a circuit relay

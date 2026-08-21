@@ -619,28 +619,88 @@ the overwhelming majority of users, removing it costs nothing.
 **What it does cost:** operators with public routable IPs lose direct inbound dials. Hence the
 opt-in recommendation rather than outright removal.
 
-**BLOCKING VERIFICATION — do not act on the above until this is settled.** Whether libp2p's hole
-punching can complete with **no listen address configured** is unconfirmed. It works by reusing the
-local port an outbound dial originated from, which is different in principle from listening — but
-"different in principle" is not "confirmed in our tree". Two related unknowns: whether the TCP
-transport reuses a listener's port when dialling (if it does, no listener may mean no punch), and
-whether any UPnP/NAT-PMP service is enabled, which would mean routers are opening ports to the
-internet automatically — an additional exposure nobody has accounted for.
+### VERIFIED 2026-08-21 — hole punching does not work, with or without a listening socket
 
-**If hole punching turns out to require a listen socket, the trade becomes real** and the choice is
-between an open port and permanently relayed inbound sessions — which would put the relay in the
-content path for every inbound conversation and cut against the "we don't see your content" tenet.
-That is a genuinely serious differentiator to give up and must not be traded away by accident.
+The verification above was run. Results, which change the recommendation:
 
-**Separately unverified:** that content on the relay path is end-to-end encrypted such that the relay
-cannot read it. [[AUDIT-ME]] claims the relay never sees plaintext and the parking store does hold
-ciphertext, but this was not verified in this investigation. Given how many claims in this document
-turned out to be assertions rather than facts, it should be checked rather than repeated.
+**1. A reservation works fine with no listening socket.** Confirmed in the circuit-relay package —
+reserving is purely outbound (dial the relay, hold the connection), and inbound delivery is gated on
+the reservation plus a live connection, not on any listener. A `/p2p-circuit` entry must appear in
+`addresses.listen`, but that entry opens **no socket**. CELLO's transport already supports that shape.
 
-A related defect noticed and not chased: **hole punching is currently omitted from the standing
-receiver**, and [[2026-07-14_DOD-NAT-REACHABILITY-1-inbound-is-impossible]] flags that as wrong —
-the receiver is precisely the node whose relayed inbound connection needs upgrading. So this area may
-not behave as designed today regardless of which option is chosen.
+**2. Hole punching cannot fire from a zero-listen node — but it cannot fire from a listening node
+either.** The reason is decisive: **`@libp2p/tcp` has no port reuse at all.** No `localPort`, no
+`localAddress`, no `SO_REUSEPORT` — the option type does not even carry them, and a grep for any of
+them across the package returns nothing.
+
+**Why that is fatal.** A real hole punch works because the punch dial leaves from the *listening*
+port, so the NAT mapping it creates matches the address the peer was told to dial. This library dials
+from a fresh ephemeral port every time. The mapping is at the wrong address. So what js-libp2p calls
+DCUtR is not a simultaneous-open punch — **it is a timed direct dial**, which succeeds only when the
+target was already dialable, in which case no punch was needed.
+
+**The record already said so and it was not connected to this question.** The 2026-07-14 live proof
+notes DCUtR did not fire, and `DOD-TRANSPORT-PATH-1` states plainly: *"We have never once observed a
+successful hole punch in production."* Go-libp2p does perform TCP simultaneous open, so the mechanism
+is real — the JavaScript implementation simply does not implement it.
+
+**3. No UPnP/NAT-PMP anywhere.** Not in the service map, not in `core/`, not in the package store. No
+router ports are being opened automatically. That concern is closed.
+
+**4. CORRECTION — this document previously asserted that DCUtR is omitted from the standing
+receiver. That was false and is retracted.** DCUtR is registered on **every** node, unconditionally,
+and has been since 2026-07-14. The claim was copied from
+[[2026-07-14_DOD-NAT-REACHABILITY-1-inbound-is-impossible]], which describes the state *before* a fix
+that landed the same day. **This is exactly the failure mode Part 1 of this document is about — a
+stale claim read as current — committed inside the document recording it.**
+[[m7-architecture-2026-06-12]] carries the same stale assertion and needs the same correction.
+
+### What the listening socket actually buys — and the resulting decision
+
+| Case | Path today |
+|---|---|
+| Two agents, same machine | **Direct.** No punch needed — the receiver's address is directly dialable. |
+| Two agents, same LAN | **Direct.** Same reason. |
+| Across the internet, either side NAT'd | **Relayed for the entire conversation.** Always. |
+
+Removing the listening socket would cost:
+
+1. **Nothing on hole punching** — it cannot fire either way.
+2. **Nothing on outbound direct dials to publicly-reachable agents** — that is an outbound dial and
+   survives with zero sockets.
+3. **Same-machine, same-LAN, and inbound to publicly-hosted agents.** These are the socket's real
+   job.
+
+**Point 3 is launch-critical.** The launch intent explicitly names *"your own two agents connect too —
+across different devices, or even two sessions on the same device."* That is LAN and loopback, which
+is precisely what the socket serves.
+
+**Decision: keep the socket, gate it on the assignment.** Two independent reasons — it is load-bearing
+for local and LAN connections today, and if hole punching is ever fixed it becomes load-bearing for
+NAT traversal too, because the punch must dial *from* the listening port. See Decisions Made 6.
+
+### Correction to a claim made earlier in this investigation
+
+An earlier framing that "everything goes through the relay" was **wrong and is retracted**. The
+accurate statement is: **everything that crosses a NAT boundary goes through the relay.** Same-machine
+and same-LAN sessions are direct and always have been — which is why two agents on one laptop
+connected successfully back when the relay was not yet working.
+
+### The follow-on this opens
+
+Making hole punching work is now a scoped engineering question rather than a mystery. Three candidate
+routes, none of them evaluated:
+
+- **Patch TCP port reuse.** Node's connect accepts a local port and address, so the shape exists;
+  whether Node permits binding a client socket to a port an active listener holds is unverified.
+  Smallest change if it works.
+- **QUIC.** UDP hole punching is materially more reliable than TCP and is where NAT traversal
+  actually lives in practice. libp2p has a QUIC transport.
+- **WebRTC.** Purpose-built, with ICE and STUN. libp2p has a transport for it.
+
+This deserves its own investigation. **It should not start before the relay-encryption question
+below is answered**, because that determines whether hole punching is a scheduled improvement or a
+launch blocker.
 
 **Answering the question directly: the standing receiver is not needed for the directory to reach
 you** — that path is outbound and already works. It is needed to accept a counterparty's dial. The
@@ -915,9 +975,12 @@ backward-compatibility grounds is not a recommendation — re-derive it against 
 **Confirmed by Andre on re-reading: proceed with option (a), the bilateral certified root moves to
 the content-hash domain.**
 
-**2. Listening socket: not yet decided.** Open pending the libp2p verification named in Part 11. This
-is the highest-leverage open question in the document — if the answer is that we can bind nothing,
-every finding in Part 4 becomes unreachable rather than merely gated.
+**2. Listening socket: DECIDED — keep it and gate it (option (a)).** The verification in Part 11 came
+back and reversed the draft recommendation. Removing the socket would buy nothing on NAT traversal,
+because hole punching cannot fire either way — `@libp2p/tcp` has no port reuse. What the socket
+actually serves is same-machine and same-LAN connections, which the launch intent explicitly names.
+And if hole punching is ever fixed, the socket becomes required for it, since the punch must dial from
+the listening port. Both reasons point the same way.
 
 **3. Relay authorization: option (b) — the relay verifies a directory-signed credential the caller
 presents, and learns nothing itself.** Keeps the relay a signature-verifier rather than a stateful
@@ -931,7 +994,30 @@ requiring T directory signatures and (c) introducing a directory-consortium thre
 deeper evaluation and is deliberately not being made now.** Natural time to do that evaluation is
 alongside the cryptographic-sortition work, when directory-side threshold mechanics are already open.
 
-**5. Settled, moved out of design decisions and into the build list: the standing receiver's gate
+**6. Hole punching is broken and its repair is a scoped project, not a mystery.** Root cause is
+identified — no TCP port reuse in the JavaScript libp2p transport, so DCUtR is a timed direct dial
+rather than a simultaneous-open punch. Andre confirms this matches observed behaviour: he has never
+seen a successful punch, only same-machine direct connections or relayed ones. Three candidate routes
+(patch TCP port reuse / QUIC / WebRTC), none evaluated. **Sequencing ruling: do not start this until
+the relay-encryption question is settled**, because that decides whether hole punching is a scheduled
+improvement or a launch blocker.
+
+**7. The perception problem is distinct from the technical one, and is the reason the encryption
+question is urgent.** Andre's framing, recorded because it sets the bar for what may be claimed:
+
+> The public position has always been that most peer-to-peer connections end up direct — roughly
+> 80–90% — and that the remaining 10–20% fall back to the relay. Public material has been careful to
+> say the relay does not see conversations *in most cases*, and to disclose the fallback. That is
+> transparent and defensible.
+>
+> **If the real number is "everything except sessions on your own laptop", the disclosure becomes a
+> lie.** Not because the architecture changed, but because the fallback turned out to be the primary
+> path.
+
+So the technical question — can the relay decrypt what passes through it — determines whether this is
+a performance problem or a truthfulness problem.
+
+**8. Settled, moved out of design decisions and into the build list: the standing receiver's gate
 admits assignment-named dialers only.** Not a genuine X-versus-Y choice — a trusted-tier bypass
 cannot work at this layer, because the gate sees a transport Peer ID that is freshly minted per
 session and unknowable in advance. Trust tiers already do their work one layer up at session
