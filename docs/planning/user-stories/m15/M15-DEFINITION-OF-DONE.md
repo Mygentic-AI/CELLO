@@ -877,9 +877,47 @@ does not re-open them.
 
 ---
 
-**Remaining surfaces to sweep** (`DOD-M15-LEDGER-1` is not ✅ until each has been walked): the five
-shipped `plugins/cello/skills/*/SKILL.md` and the receptionist agent; MCP tool descriptions in
-`core/adapter-claude-code/src/bin/cello-mcp.ts`; CLI help text; product status output.
+## Swept 2026-08-21 — shipped skill prose and MCP tool descriptions
+
+**These ship inside the npm package to every operator, and they carry the product's strongest
+safety claim in its most unqualified form.** All four say screening is ACTIVE, without distinguishing
+the character-denylist layer (live) from the semantic layer (not installable anywhere).
+
+| # | Claim, as written | Where | Disposition |
+|---|---|---|---|
+| 10 | *"Content screening **is active**, in both directions. Inbound messages are screened before they reach any reader"* | `plugins/cello/skills/setup/SKILL.md:150` | **withdrawn**, then made true |
+| 11 | *"content screening is the boundary, and it is **ACTIVE** in both directions at every tier"* | `plugins/cello/skills/cello/SKILL.md:205` | **withdrawn**, then made true |
+| 12 | *"It does NOT change content screening, which is **ACTIVE at every tier** … a higher tier never buys less screening"* | `cello-mcp.ts:230` — a shipped **tool description** | **withdrawn**, then made true |
+| 13 | *"CONTENT screening (prompt-injection defense) **IS live** as of DOD-M9B-WIRE-1"* | `cello-mcp.ts:190` — source comment, public repo | **rewritten** (`DOD-M15-CLAIM-COMMENTS-1`) |
+
+**Why these are false rather than merely imprecise.** Two independent findings undercut them:
+
+1. **The semantic half cannot be installed on any operator's machine.** `installModel` has no
+   production caller — no command, no dependency, not even optional — so the layer that judges what
+   a message *means* reports OFF forever (`DOD-M15-SCREENINSTALL-1`). What is live is the character
+   denylist, which exists for the crude cases. **Partially true is false**, and none of these four
+   surfaces makes the distinction.
+2. **Even the live half is bypassable on the direct path.** The relay audit's Finding 1 lands
+   injected content *below the layer where all screening lives* — blocked contacts, per-sender caps
+   and trust tiers all sit on the signalling channel and that path never touches them. So row 12's
+   *"ACTIVE at every tier"* is doubly wrong: a stranger who never appears as a contact at any tier
+   reaches the reader anyway, until `DOD-M15-FRAME-1` lands.
+
+**Recorded because it is the mechanism, not the blame:** `setup/SKILL.md:156` documents its own
+upgrade — *"This paragraph previously said screening was 'planned, not yet active'. That was true
+when the paragraph was written."* The claim was deliberately strengthened when the denylist landed,
+and the semantic half never arrived behind it. **That is how a claim outruns its code**, and it is
+the argument for the ledger existing at all: the moment a protection partially lands is the moment
+its claim needs a scope, not a promotion.
+
+**Sequencing:** withdraw now (add the scope), make true when `DOD-M15-SCREENINSTALL-1` and
+`DOD-M15-FRAME-1` both land. Withdrawal is not optional pending the fix — these are read today.
+
+---
+
+**Remaining surfaces to sweep** (`DOD-M15-LEDGER-1` is not ✅ until each has been walked): the
+remaining three `SKILL.md` files and the receptionist agent; the rest of the MCP tool descriptions;
+CLI help text; product status output.
 
 **Seed rows, from the two investigations — not yet individually verified against the tree:**
 
