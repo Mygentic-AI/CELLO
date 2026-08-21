@@ -17,7 +17,7 @@ description: >
   threshold; the client never verifies the directory's signature on a session assignment at all;
   and the relay has almost no abuse controls. Also establishes that NOBODY verifies the sealed root
   against the local transcript on the normal seal path — each side's code comments defer the check
-  to the other. All five design decisions are RESOLVED (see Decisions Made); 24 build items remain,
+  to the other. All five design decisions are RESOLVED (each states its ruling inline); 26 build items remain,
   plus one live-deployment verification.
 ---
 
@@ -678,7 +678,7 @@ is precisely what the socket serves.
 
 **Decision: keep the socket, gate it on the assignment.** Two independent reasons — it is load-bearing
 for local and LAN connections today, and if hole punching is ever fixed it becomes load-bearing for
-NAT traversal too, because the punch must dial *from* the listening port. See Decisions Made 6.
+NAT traversal too, because the punch must dial *from* the listening port. See Design Decision 2.
 
 ### Correction to a claim made earlier in this investigation
 
@@ -709,7 +709,7 @@ real question is whether accepting *direct* dials is worth an open port at all.
 
 **Not verified:** that circuit reservations need no listening socket was reasoned from how
 circuit-relay-v2 works, not confirmed against this libp2p version in our tree. Confirm before
-treating it as decided. This is Outstanding Design Decision 2 below.
+treating it as decided. This is Design Decision 2 below.
 
 ---
 
@@ -728,7 +728,7 @@ research problem.
 connection the link is saturated before any of our code runs. Rate limiting, gating, authentication —
 all of it executes after the damage.
 
-**So the only client-side defence is not being addressable — which is Outstanding Design Decision 2.**
+**So the only client-side defence is not being addressable — which is Design Decision 2.**
 
 This is the convergence worth seeing: **relay-mediated inbound _is_ the volumetric DDoS defence for
 clients.** It moves the addressable endpoint off the operator's laptop and onto infrastructure that
@@ -862,6 +862,139 @@ runtime URL match. Two log events discriminate it.
 
 ---
 
+## Design Decisions
+
+Each entry states the choice that had to be made, the options weighed, and what was decided.
+All five are decided; nothing here is outstanding.
+
+---
+
+### 1. How to bind the receipt to the transcript
+
+The certified root lives in the directory's leaf-encoding domain; the client's root lives in the
+content-hash domain. They are different numbers by construction, so this is a protocol change, not a
+missing comparison.
+
+- **(a) Switch the bilateral certified root to the content-hash domain**, as the unilateral path
+  already does. A one-line client comparison then works. Cost: previously sealed receipts are in the
+  old domain.
+- **(b) Revive `seal_attempt`.** The directory handler is written and tested; only the client sender
+  is missing. It compares both parties' reported roots and catches divergence *before* notarization.
+- **(c) Ship a reported root on the bilateral submit too** and reuse the unilateral verification path
+  that already works.
+
+The first recommendation was (c), on the grounds that (a) pays a migration cost on every existing
+receipt. **That reasoning was wrong for our situation.** We are in alpha with one user and everything
+is wiped before launch, so there is no data to preserve and the only argument for (c) evaporates.
+
+> **DECIDED: (a).** Move the bilateral certified root into the content-hash domain. The client's check
+> becomes a one-line comparison of two hashes it already holds, both seal paths use a single hash
+> domain, and the unilateral path stops being a special case. Alpha is precisely when this is free.
+>
+> *Rule this illustrates, worth carrying forward:* a recommendation that survives only on
+> backward-compatibility grounds is not a recommendation — re-derive it against an empty database.
+
+---
+
+### 2. Whether the daemon should bind a listening socket at all
+
+*(Raised after the first draft — see Part 11.)*
+
+- **(a) Keep the open port** — accept direct inbound dials, and gate them on the assignment.
+- **(b) Bind nothing** — accept inbound only via relay circuit, which needs no listening socket.
+- **(c) Bind nothing by default, opt in** — operators with public IPs set an env var; everyone else
+  has no port.
+
+The first recommendation was (c), on the assumption that removing the socket cost only direct inbound
+dials while hole punching continued to deliver direct content. **The verification in Part 11 killed
+that assumption:** hole punching cannot fire at all, with or without a socket, because
+`@libp2p/tcp` has no port reuse.
+
+> **DECIDED: (a).** Keep the socket and gate it on the assignment. Two independent reasons. First,
+> removing it buys nothing on NAT traversal, since punching cannot fire either way — what the socket
+> actually serves is same-machine and same-LAN connections, which the launch intent explicitly names
+> (*"your own two agents connect too — across different devices, or two sessions on the same
+> device"*). Second, if hole punching is ever repaired the socket becomes **required** for it, because
+> the punch must dial *from* the listening port.
+
+---
+
+### 3. Whether the relay should learn agent registration state
+
+Making the relay check that an authenticating key is a real agent, and that a caller is a participant
+in the session it asks about, requires the relay to consult the directory — which cuts against the
+relay being cheap, stateless and numerous, and against keeping it extractable as a standalone
+enterprise deliverable.
+
+- **(a) Relay queries the directory** for registration and participation.
+- **(b) Relay verifies a directory-signed credential the caller presents**, learning nothing itself.
+
+> **DECIDED: (b).** Same guarantee with no new relay-to-directory dependency, no new state, and no
+> per-request latency — the caller already holds the assignment, so it simply presents it. It also
+> preserves extractability: a private enterprise relay stays a signature-verifier rather than becoming
+> a directory client. (a) would make every relay a stateful participant in the consortium, which is
+> the opposite of the intended cost model.
+
+---
+
+### 4. Whether the relay-facing assignment should require a threshold
+
+One directory currently signs it. The narrowing factors in Part 7 mean the practical exposure is
+small, but the trust model says a threshold should be required and here it is not.
+
+- **(a) Leave it.** Document the single-node authority as a known, bounded property.
+- **(b) Require T directory signatures** on the relay-facing assignment.
+- **(c) Introduce a directory-consortium threshold key**, which does not currently exist.
+
+> **DECIDED: (a) for launch, hardening to follow.** The practical reach of a forged relay assignment
+> is a relay-side session record and a Peer ID binding, gated behind also being an authenticated
+> participant — it cannot make the permanent record lie. Against that, (b) adds a multi-node
+> round-trip to every session establishment on the latency-sensitive path, for a bounded gain, and
+> (c) is substantially larger. **This must be recorded as a known bounded property, not silently
+> left.**
+>
+> **The choice between (b) and (c) is deliberately not being made now and needs a deeper
+> evaluation.** Natural time for it is alongside the cryptographic-sortition work, when directory-side
+> threshold mechanics are already open.
+
+---
+
+### 5. What shape the application-layer content encryption should take
+
+*(Drives build items 19a and 19b.)*
+
+The stated intent was "both sides derive the same key, and the key is never transmitted." That
+describes a **static-static** agreement between the two agents' long-term identity keys. It is the
+obvious reading and **it has a trap in it**, which is why this is a decision rather than a build note.
+
+- **(a) Static-static** — derive one key from both agents' long-term identity keys.
+- **(b) Per-session ephemeral handshake** — each side mints a fresh keypair per session, agrees a
+  session key, and discards the ephemerals at close. Messages are AEAD-sealed under that key.
+- **(c) (b) plus hybrid post-quantum** — run a classical X25519 agreement and a PQ key-encapsulation
+  agreement, and mix both into the session key.
+
+**Why not (a), which is the intuitive answer.** A key derived only from long-term identity keys gives
+the same key forever. **It has no forward secrecy** — anyone who ever obtains an agent's identity key
+can decrypt every conversation that agent ever had, including traffic recorded years earlier. That is
+strictly worse than what runs today, because the current transport layer *does* use fresh ephemeral
+keys per connection. [[design-problems]] already claims forward secrecy as a structural property;
+option (a) would quietly remove it while appearing to strengthen the system. **Adding our own
+encryption layer must not cost a property the existing one already provides.**
+
+> **DECIDED: (b), with the post-quantum hook built in from the start.** Concretely:
+>
+> - Each side mints a fresh keypair per session, the two agree a session key, and the ephemerals are
+>   destroyed at session close. This keeps the "never transmitted" property that was the original
+>   intent **and** keeps forward secrecy.
+> - **The key derivation must accept an additional shared secret from day one**, before there is a PQ
+>   contribution to put in it. Hybrid PQ then becomes mixing a second agreed secret into the same
+>   derivation — an addition, not a rewrite. Since PQ independence is the entire reason for this work,
+>   omitting the hook would defeat it.
+> - **The content-hash salt (build item 19b) comes out of this same handshake.** One agreement, two
+>   outputs: the message-sealing key and the per-session salt.
+
+---
+
 ## What Needs to Be Built or Modified
 
 1. **Pin the direct-path content frame to the dialing peer.** Require `remotePeerId` to equal the
@@ -879,7 +1012,7 @@ runtime URL match. Two log events discriminate it.
    always exists in time. **Settled 2026-08-21** — no trusted-tier bypass, because the gate sees a
    transport Peer ID that is freshly minted per session and unknowable in advance; trust tiers do
    their work one layer up at session acceptance. Depends on item 4. Superseded in scope if
-   Outstanding Design Decision 2 lands on binding no socket at all.
+   Design Decision 2 lands on binding no socket at all.
 
 4. **Verify the directory's signature on the session assignment client-side.** Currently the parser
    only checks that signatures are 64 bytes. Item 3 is worthless without this.
@@ -923,7 +1056,7 @@ runtime URL match. Two log events discriminate it.
     signed body.
 
 15. **Bind the receipt to the transcript.** The client must verify the certified root against its own
-    tree before accepting or co-signing a certificate. See Outstanding Design Decision 1 for the
+    tree before accepting or co-signing a certificate. See Design Decision 1 for the
     three shapes this can take.
 
 16. **Implement `cello_get_inclusion_proof`.** Currently a `not_implemented` stub; it is what lets an
@@ -956,7 +1089,7 @@ runtime URL match. Two log events discriminate it.
     harvest-now-decrypt-later — every cross-NAT conversation is relayed today, so it is recordable at
     fixed endpoints today, and adding the layer later does not protect traffic already sent. The
     parked-content seal is a working in-tree pattern to extend. **Shape decided: per-session
-    ephemeral handshake with a PQ hook in the derivation — Decisions Made 11.** Not static-static;
+    ephemeral handshake with a PQ hook in the derivation — Design Decision 5.** Not static-static;
     that would void forward secrecy.
 
 19b. **Salt the content hash.** It is currently an unsalted SHA-256 of the plaintext, submitted to the
@@ -964,9 +1097,27 @@ runtime URL match. Two log events discriminate it.
     which defeats content privacy for short predictable messages ("yes", "approved", a price, a
     name). Use a per-session salt derived alongside the session key, so the hash stays deterministic
     for both participants and useless to anyone else. The salt comes out of the same handshake as the
-    session key (Decisions Made 11) — one agreement, two outputs. **This is a wire change** — it
+    session key (Design Decision 5) — one agreement, two outputs. **This is a wire change** — it
     alters what is submitted and what the directory verifies, so it must be sequenced with the seal
     work in item 15 rather than shipped independently.
+
+21. **Repair hole punching.** Root cause identified: `@libp2p/tcp` has no port reuse, so DCUtR is a
+    timed direct dial rather than a simultaneous-open punch, and it has never succeeded in production.
+    Three candidate routes, none evaluated: patch TCP port reuse (Node's connect accepts a local port
+    and address, but whether it permits binding to a port an active listener holds is unverified);
+    adopt QUIC (UDP hole punching is materially more reliable and is where NAT traversal actually
+    lives); adopt WebRTC (purpose-built, with ICE and STUN). **Not a launch blocker** — the relay
+    cannot read relayed content (Part 13), so the confidentiality claim survives while every cross-NAT
+    conversation is relayed. What must be corrected regardless is the **frequency** claim: public
+    material citing an 80–90% direct rate describes hole punching that has never worked. See item 20.
+
+22. **Rewrite the audit document.** Already intended before launch; recorded here so the rewrite starts
+    from corrected facts. Four of its seven cited file paths no longer exist (pre-repo-split layout),
+    and its supporting detail for the encryption claim is wrong — it states content is additionally
+    encrypted at the application layer, which is true only for parked content, and cites the database
+    backup file as evidence. **The claims themselves are true; the document proves them badly**, which
+    for a trust-infrastructure product whose evaluators point a coding agent at the repo is worse than
+    publishing nothing.
 
 20. **Correct the outward-facing claims** in the investor competitive analysis and the GTM messaging
     framework. The June internal documents were corrected in `d683099f`; the drafts repo was not.
@@ -989,227 +1140,6 @@ runtime URL match. Two log events discriminate it.
     *"strangers cannot reach your agent; only counterparties the directory has authorized."* Anything
     promising the absence of an endpoint is unachievable for a system that accepts incoming
     connections at all, and should not be written again.
-
----
-
-## Outstanding Design Decisions
-
-**1. How to bind the receipt to the transcript.**
-
-The certified root lives in the directory's leaf-encoding domain; the client's root lives in the
-content-hash domain. They are different numbers by construction, so this is a protocol change, not a
-missing comparison. Three shapes:
-
-- **(a) Switch the bilateral certified root to the content-hash domain**, as the unilateral path
-  already does. A one-line client comparison then works. Cost: previously sealed receipts are in the
-  old domain.
-- **(b) Revive `seal_attempt`.** The directory handler is written and tested; only the client sender
-  is missing. It compares both parties' reported roots and catches divergence *before* notarization.
-- **(c) Ship a reported root on the bilateral submit too** and reuse the unilateral verification path
-  that already works.
-
-**Original recommendation was (c), then (b) — on the grounds that (a) pays a migration cost on every
-existing receipt. That reasoning was wrong for our situation and is superseded; see Decisions Made.**
-
-**2. Whether the daemon should bind a listening socket at all.** *(Raised after the first draft — see
-Part 11.)*
-
-- **(a) Keep the open port** — accept direct inbound dials, and gate them on the assignment.
-- **(b) Bind nothing** — accept inbound only via relay circuit, which needs no listening socket.
-  Zero listening sockets on the whole daemon.
-- **(c) Bind nothing by default, opt in** — operators with public IPs who want direct inbound set an
-  env var; everyone else has no port.
-
-**Recommendation: (c), pending the verification named in Part 11.** It gives retail users — who are
-behind NAT, already relayed, and have no firewall — an attack surface of literally nothing, while
-preserving direct inbound for the deployments that can actually use it. (b) is the strongest security
-position but removes a capability some deployments legitimately want, and it puts the relay in the
-path for every inbound session, which is a privacy regression the record already treats as a real
-trade. (a) keeps a port open on every laptop in order to serve a minority of deployments.
-
-**Blocking prerequisite:** confirm that a circuit reservation genuinely requires no listening socket
-in this libp2p version. If it does require one, (b) and (c) both collapse and (a) is the only option.
-
-**3. Whether the relay should learn agent registration state.**
-
-Making the relay check that an authenticating key is a real agent, and that a caller is a participant
-in the session it asks about, requires the relay to consult the directory — which cuts against the
-relay being cheap, stateless and numerous, and against keeping it extractable as a standalone
-enterprise deliverable.
-
-- **(a) Relay queries the directory** for registration and participation.
-- **(b) Relay verifies a directory-signed credential the caller presents**, learning nothing itself.
-
-**Recommendation: (b).** It delivers the same guarantee with no new relay-to-directory dependency, no
-new state, and no per-request latency — the caller already holds the assignment, so it can simply
-present it. It also preserves the extractability property: a private enterprise relay stays a
-signature-verifier rather than becoming a directory client. (a) would make every relay a stateful
-participant in the consortium, which is the opposite of the intended cost model.
-
-**4. Whether the relay-facing assignment should require a threshold.**
-
-One directory currently signs it. The narrowing factors in Part 7 mean the practical exposure is
-small, but the trust model says a threshold should be required and here it is not.
-
-- **(a) Leave it.** Document the single-node authority as a known, bounded property.
-- **(b) Require T directory signatures** on the relay-facing assignment.
-- **(c) Introduce a directory-consortium threshold key**, which does not currently exist.
-
-**Recommendation: (a) for launch, revisit with the sortition work.** The practical reach of a forged
-relay assignment is a relay-side session record and a Peer ID binding, gated behind also being an
-authenticated participant — it cannot make the permanent record lie. Against that, (b) adds a
-multi-node round-trip to every session establishment, on the latency-sensitive path, for a
-bounded gain. (c) is a substantially larger change. The right time to reopen it is alongside the
-cryptographic-sortition work already decided, since that is when directory-side threshold mechanics
-are being touched anyway. **This should be recorded as a known bounded property rather than silently
-left.**
-
-**5. What shape the application-layer content encryption should take** *(build item 19a).*
-
-The stated intent was "both sides derive the same key, and the key is never transmitted." That
-describes a **static-static** agreement between the two agents' long-term identity keys. It is the
-obvious reading and **it has a trap in it**, which is why this is a decision rather than a build note.
-
-- **(a) Static-static** — derive one key from both agents' long-term identity keys.
-- **(b) Per-session ephemeral handshake** — each side mints a fresh keypair per session, agrees a
-  session key, and discards the ephemerals at close. Messages are AEAD-sealed under that key.
-- **(c) (b) plus hybrid post-quantum** — run a classical X25519 agreement and a PQ key-encapsulation
-  agreement, and mix both into the session key.
-
-**Recommendation: (b) now, structured so (c) is a drop-in later.**
-
-**Why not (a), which is the intuitive answer.** A key derived only from long-term identity keys gives
-the same key forever. **It has no forward secrecy** — anyone who ever obtains an agent's identity key
-can decrypt every conversation that agent ever had, including traffic recorded years earlier. That is
-strictly worse than what runs today, because the current transport layer *does* use fresh ephemeral
-keys per connection. [[design-problems]] already claims forward secrecy as a structural property;
-option (a) would quietly remove it while appearing to strengthen the system. **Adding our own
-encryption layer must not cost the property the existing one provides.**
-
-(c) is the destination and is the whole reason for doing this work — but the PQ half should be added
-as a second contribution mixed into the same derivation, not designed for now. Building (b) with the
-derivation written to accept an additional shared secret makes (c) an addition rather than a rewrite.
-
-**Note the interaction with build item 19b:** the per-session salt for the content hash should come
-out of this same derivation. One handshake, two outputs.
-
-*Decided — see Decisions Made 11. Left here as the record of what was weighed, including why the
-intuitive option was rejected.*
-
----
-
-## Decisions Made (Andre, 2026-08-21)
-
-**1. Receipt binding: option (a) — move the bilateral certified root into the content-hash domain.**
-**This reverses the recommendation above, and the reversal is the point.** The only argument for (c)
-was avoiding a migration on previously sealed receipts. We are in alpha with one user and everything
-is being wiped before launch, so there is no data to preserve and that argument is void. With the
-migration cost removed, (a) is strictly better: the client's check becomes a one-line comparison of
-two hashes it already holds, both seal paths use a single hash domain, and the unilateral path stops
-being a special case. Alpha is precisely when this is free.
-
-*General rule this illustrates, worth carrying forward:* a recommendation that survives only on
-backward-compatibility grounds is not a recommendation — re-derive it against an empty database.
-
-**Confirmed by Andre on re-reading: proceed with option (a), the bilateral certified root moves to
-the content-hash domain.**
-
-**2. Listening socket: DECIDED — keep it and gate it (option (a)).** The verification in Part 11 came
-back and reversed the draft recommendation. Removing the socket would buy nothing on NAT traversal,
-because hole punching cannot fire either way — `@libp2p/tcp` has no port reuse. What the socket
-actually serves is same-machine and same-LAN connections, which the launch intent explicitly names.
-And if hole punching is ever fixed, the socket becomes required for it, since the punch must dial from
-the listening port. Both reasons point the same way.
-
-**3. Relay authorization: option (b) — the relay verifies a directory-signed credential the caller
-presents, and learns nothing itself.** Keeps the relay a signature-verifier rather than a stateful
-consortium participant, adds no relay-to-directory dependency or per-request latency, and preserves
-the extractability property that lets an enterprise run its own relay
-([[project_relay_is_future_enterprise_deliverable|relay as future enterprise deliverable]]).
-
-**4. Relay-facing assignment signature: option (a) for launch — accept the single-node signature as a
-known, bounded property and document it as such. Hardening to follow.** The choice between (b)
-requiring T directory signatures and (c) introducing a directory-consortium threshold key **needs a
-deeper evaluation and is deliberately not being made now.** Natural time to do that evaluation is
-alongside the cryptographic-sortition work, when directory-side threshold mechanics are already open.
-
-**5. Hole punching is broken and its repair is a scoped project, not a mystery.** Root cause is
-identified — no TCP port reuse in the JavaScript libp2p transport, so DCUtR is a timed direct dial
-rather than a simultaneous-open punch. Andre confirms this matches observed behaviour: he has never
-seen a successful punch, only same-machine direct connections or relayed ones. Three candidate routes
-(patch TCP port reuse / QUIC / WebRTC), none evaluated. **Sequencing ruling: do not start this until
-the relay-encryption question is settled**, because that decides whether hole punching is a scheduled
-improvement or a launch blocker.
-
-**6. The perception problem is distinct from the technical one, and is the reason the encryption
-question is urgent.** Andre's framing, recorded because it sets the bar for what may be claimed:
-
-> The public position has always been that most peer-to-peer connections end up direct — roughly
-> 80–90% — and that the remaining 10–20% fall back to the relay. Public material has been careful to
-> say the relay does not see conversations *in most cases*, and to disclose the fallback. That is
-> transparent and defensible.
->
-> **If the real number is "everything except sessions on your own laptop", the disclosure becomes a
-> lie.** Not because the architecture changed, but because the fallback turned out to be the primary
-> path.
-
-So the technical question — can the relay decrypt what passes through it — determines whether this is
-a performance problem or a truthfulness problem.
-
-**7. The relay-encryption question is answered and the perception problem dissolves.** The relay
-cannot read message content on any path — verified. So even though every cross-NAT conversation is
-relayed for its whole duration, *"the relay never sees your conversations"* remains **true**. The
-disclosure about a relay fallback stays defensible; what needs revising is the **frequency** claim
-(the 80–90% direct figure describes hole punching that has never worked), not the confidentiality
-claim. **Hole-punching repair is therefore a scheduled improvement, not a launch blocker** — which
-resolves the sequencing question in Decision 5.
-
-**8. Application-layer content encryption on the live path must be built, and the reason is
-post-quantum independence.** Andre's ruling: peer-to-peer content confidentiality must not depend on
-libp2p. *"At some point in the not too distant future we may upgrade a portion of our cryptographic
-libraries and processes to become quantum computing resistant. We don't want to have encryption
-between two peers passing messages through the relay dependent on libp2p."* Build item 19a; shape is
-Outstanding Design Decision 5. Note this is time-sensitive rather than deferrable — relayed traffic
-recorded today is decryptable later, so the window for protecting a given conversation closes when it
-is sent, not when the fix ships.
-
-**9. Salt the content hash.** Build item 19b. An unsalted plaintext hash lets a relay confirm guessed
-messages. Sequenced with the seal work, since it is a wire change.
-
-**10. The audit document is known-broken and its rewrite is already intended before launch.** Not a
-new finding — it was written as a placeholder. Recorded so the rewrite starts from corrected facts:
-four cited paths no longer exist, and the application-layer encryption claim is true only of parked
-content.
-
-**11. Application-layer encryption shape: option (b) — per-session ephemeral handshake, with the
-post-quantum hook built in from the start.** Decided 2026-08-21.
-
-Concretely, this means:
-
-- **Each side mints a fresh keypair per session**, the two agree a session key, and the ephemerals
-  are destroyed at session close. This preserves the "never transmitted" property that was the
-  original intent while keeping **forward secrecy** — an identity key that leaks later does not
-  decrypt past conversations.
-- **Static-static was explicitly rejected**, even though it is the more intuitive reading of "both
-  sides hold the same key". One key derived from long-term identities never changes, so a single
-  identity-key compromise retroactively opens every conversation that agent ever had. That is
-  strictly worse than the status quo, since libp2p's transport already uses fresh ephemerals per
-  connection, and it would silently void the forward-secrecy property [[design-problems]] claims as
-  structural. **Adding our own layer must not cost a property the existing one already provides.**
-- **The key derivation must accept an additional shared secret from day one**, even before there is a
-  post-quantum contribution to put in it. Hybrid PQ then becomes mixing a second agreed secret into
-  the same derivation — an addition, not a rewrite. Since PQ independence is the entire reason for
-  this work, designing the derivation without the hook would defeat the purpose.
-- **The content-hash salt (build item 19b) comes out of this same handshake.** One agreement, two
-  outputs — the message-sealing key and the per-session salt.
-
-This closes the last open design decision from this investigation.
-
-**12. Settled, moved out of design decisions and into the build list: the standing receiver's gate
-admits assignment-named dialers only.** Not a genuine X-versus-Y choice — a trusted-tier bypass
-cannot work at this layer, because the gate sees a transport Peer ID that is freshly minted per
-session and unknowable in advance. Trust tiers already do their work one layer up at session
-acceptance. See build item 3.
 
 ---
 
