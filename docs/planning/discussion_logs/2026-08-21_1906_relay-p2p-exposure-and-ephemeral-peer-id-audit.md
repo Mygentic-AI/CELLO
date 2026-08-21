@@ -597,11 +597,50 @@ nothing at all.** The daemon would then have **zero listening sockets** — outb
 outbound to the relay, and that is the entire network surface. Every finding in Part 4 becomes
 unreachable, because there is no port to dial.
 
-**The cost is direct P2P on the inbound side.** An agent still dials out directly when it initiates.
-But when someone calls *it*, the connection comes via the relay — putting the relay in the path, which
-is the privacy trade [[2026-06-11_1030_daemon-transport-architecture]] §7 already discusses. Note that
-for essentially every retail user behind NAT this is already what happens; the open port serves a
-minority of deployments with public IPs.
+### Does this force all content through the relay? No — and this is the crux
+
+**The relay circuit is used to _establish_ the connection, not to carry it.** The designed sequence:
+
+1. The counterparty reaches you through the relay circuit. A connection exists, relayed.
+2. **Hole punching upgrades that connection to direct.** Both sides simultaneously dial using the
+   address information they exchanged; the outbound attempt punches the hole that admits the inbound
+   packet.
+3. Traffic flows peer-to-peer. The relay leaves the path.
+
+That is exactly the stated architecture — *the relay is the introduction, not the channel*. Removing
+the listening socket does not touch it. It removes the **other** way in: a stranger dialling your port
+directly, which is the entire Part 4 attack surface.
+
+**For a NAT'd user the listening socket is already doing no inbound work.** It binds to a private
+address nothing on the internet can route to — that was precisely the pre-July finding. The **circuit
+reservation** is what makes NAT'd users reachable today; the open port is just sitting there. So for
+the overwhelming majority of users, removing it costs nothing.
+
+**What it does cost:** operators with public routable IPs lose direct inbound dials. Hence the
+opt-in recommendation rather than outright removal.
+
+**BLOCKING VERIFICATION — do not act on the above until this is settled.** Whether libp2p's hole
+punching can complete with **no listen address configured** is unconfirmed. It works by reusing the
+local port an outbound dial originated from, which is different in principle from listening — but
+"different in principle" is not "confirmed in our tree". Two related unknowns: whether the TCP
+transport reuses a listener's port when dialling (if it does, no listener may mean no punch), and
+whether any UPnP/NAT-PMP service is enabled, which would mean routers are opening ports to the
+internet automatically — an additional exposure nobody has accounted for.
+
+**If hole punching turns out to require a listen socket, the trade becomes real** and the choice is
+between an open port and permanently relayed inbound sessions — which would put the relay in the
+content path for every inbound conversation and cut against the "we don't see your content" tenet.
+That is a genuinely serious differentiator to give up and must not be traded away by accident.
+
+**Separately unverified:** that content on the relay path is end-to-end encrypted such that the relay
+cannot read it. [[AUDIT-ME]] claims the relay never sees plaintext and the parking store does hold
+ciphertext, but this was not verified in this investigation. Given how many claims in this document
+turned out to be assertions rather than facts, it should be checked rather than repeated.
+
+A related defect noticed and not chased: **hole punching is currently omitted from the standing
+receiver**, and [[2026-07-14_DOD-NAT-REACHABILITY-1-inbound-is-impossible]] flags that as wrong —
+the receiver is precisely the node whose relayed inbound connection needs upgrading. So this area may
+not behave as designed today regardless of which option is chosen.
 
 **Answering the question directly: the standing receiver is not needed for the directory to reach
 you** — that path is outbound and already works. It is needed to accept a counterparty's dial. The
@@ -753,6 +792,39 @@ runtime URL match. Two log events discriminate it.
 
 ---
 
+## Part 12 — Volumetric denial of service: what is actually defensible
+
+Everything else in this document is about **unauthorized access** — who is admitted. This is about
+**flooding** — how much traffic arrives. They are separate problems with separate answers, and
+conflating them is what produced the false claims in the first place.
+
+**Against the relay: solvable, and it is ordinary infrastructure work.** Scrubbing in front of the
+public endpoint (Cloud Armor or equivalent), plus reservations with more than one relay so a single
+one going down does not take agents offline. Build items 17 and 17a. This is a bought problem, not a
+research problem.
+
+**Against a user's machine: nothing at the application layer helps.** Once packets arrive at a home
+connection the link is saturated before any of our code runs. Rate limiting, gating, authentication —
+all of it executes after the damage.
+
+**So the only client-side defence is not being addressable — which is Outstanding Design Decision 2.**
+
+This is the convergence worth seeing: **relay-mediated inbound _is_ the volumetric DDoS defence for
+clients.** It moves the addressable endpoint off the operator's laptop and onto infrastructure that
+can have scrubbing in front of it. An attacker holding only a circuit address must flood the relay to
+reach the agent — and the relay is precisely the thing that can be defended. The surface is not
+irreducible; the choice is whether it sits on a laptop or on a machine we control.
+
+**The one limit no architecture removes:** a direct peer-to-peer connection exposes the operator's IP
+address to the counterparty. Routing requires it. So anyone an agent has talked to directly can flood
+it afterwards regardless of ports, gates or ephemerality.
+[[2026-06-11_1030_daemon-transport-architecture]] §7 concedes this and offers relay routing as the
+mitigation for operators who do not want to reveal their network location — a correct escape hatch
+that needs to become a documented, surfaced choice rather than a footnote. Nothing in the shipped
+client documentation currently discloses that direct sessions reveal the operator's IP.
+
+---
+
 ## Outstanding Design Decisions
 
 **1. How to bind the receipt to the transcript.**
@@ -839,6 +911,9 @@ being a special case. Alpha is precisely when this is free.
 
 *General rule this illustrates, worth carrying forward:* a recommendation that survives only on
 backward-compatibility grounds is not a recommendation — re-derive it against an empty database.
+
+**Confirmed by Andre on re-reading: proceed with option (a), the bilateral certified root moves to
+the content-hash domain.**
 
 **2. Listening socket: not yet decided.** Open pending the libp2p verification named in Part 11. This
 is the highest-leverage open question in the document — if the answer is that we can bind nothing,
