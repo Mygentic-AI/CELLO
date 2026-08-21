@@ -471,30 +471,78 @@ an innocent counterparty is a new attack surface the Part 8 fix would otherwise 
 
 ---
 
-## Open items — Andre's call
+## What Needs to Be Built or Modified
 
-- Whether and when to require dual-party pre-signature approval for bilateral seals (Part 3 fix).
-- Whether truncation-resistance (multi-relay fan-out, cross-checked at seal) is worth building now
-  versus documenting as a known limitation, given it touches the live message path, not just the
-  seal ceremony.
-- Whether the unilateral-seal trigger should incorporate actual liveness evidence instead of a flat
-  600s clock, and whether that's a launch-relevant fix or an accepted limitation.
-- Whether to pursue a real sortition design for session-establishment threshold selection, and if
-  so, sizing T/N/assumed-compromise-fraction explicitly before building it.
-- Whether to make the existing wrong-signer detection (Part 8) a hard, blocking, session-ending gate
-  from message one, and design the emergency-freeze status/tag (neutral wording, no automatic
-  trust-signal impact) that goes with it.
-- Whether to build relay-side corroboration of a client-reported signature mismatch (Part 9),
-  including whether to make it proactive/continuous rather than on-demand — this is the same
-  multi-relay fan-out investment as Part 3's truncation fix, serving a second purpose.
-- Whether every content leaf (not just the final SEAL pair) should be independently confirmed to
-  belong to one of the session's two registered participants at seal time — flagged in Part 7 as
-  not fully resolved, distinct from the confirmed finding it sits next to.
-- None of the above blocks on the others — they're independently scoped, and independently
-  deferrable, but the escape-hatch risk noted in Part 4 means the bilateral-seal fix and the
-  unilateral-seal fix should probably not ship far apart from each other, and Part 9's relay
-  corroboration should not ship far apart from Part 8's blocking gate (the gate alone reopens the
-  false-accusation risk Part 9 exists to close).
+- **Seal ceremony:** require affirmative pre-signature approval from *both* real participants — not
+  just the seal initiator — before any FROST signature is produced over a bilateral seal (Part 3).
+- **Seal ceremony:** forward the raw signed leaf sequence, not just the claimed root, to every
+  co-signing directory node, so each independently re-verifies against real K_local signatures
+  instead of trusting an assertion handed to it (Part 3, Gap 1).
+- **Truncation-resistance:** fan the live hash-relay out to two or three relays instead of one, with
+  the receiving side cross-checking a single relay's account against the others at seal time (Part 3).
+- **Unilateral seal:** split the sealed artifact into an explicitly labeled, full-strength
+  mutually-signed prefix and a distinctly lower-weight unconfirmed tail, instead of presenting the
+  whole thing as uniformly weaker (Part 4).
+- **Unilateral seal:** require the absence trigger to be evidenced by a third party (a genuine
+  delivery-attempt/timeout record from the relay or directory), not just asserted by the initiator
+  (Part 4) — depends on the relay fan-out above landing first.
+- **Live content-ingest path:** make the existing wrong-signer detection a hard, blocking,
+  session-ending gate — covering all three failure shapes (missing, malformed, *and* mismatched
+  signature proof, not just mismatch) — refusing ingestion/display/attribution outright, firing on
+  the first affected message rather than after a pattern emerges (Part 7–8).
+- **Live content-ingest path:** on detection, trigger an immediate, unilateral, emergency freeze with
+  its own status/tag distinct from an ordinary "counterparty absent" unilateral seal, worded as a
+  neutral observation ("signature failed to verify against expected counterparty; cause
+  undetermined") — never as an assertion of intent — and excluded from feeding automatically into any
+  trust-signal or reputation score (Part 8).
+- **Relay:** build on-demand corroboration — when a client suspects a signature mismatch, pull the
+  relay's independently-held signed record for that message and verify it against the counterparty's
+  real key before the mismatch is treated as an established finding, not just the accusing client's
+  own word (Part 9).
+- **Relay:** build proactive, continuous verification — the relay already holds both participants'
+  real pubkeys from session setup and already receives every signed hash live, so check each one as
+  it arrives rather than only on request; alert the affected daemon on a mismatch, and consider
+  having the relay itself decline to keep relaying/witnessing a session it has flagged (Part 9).
+- **Verify, and close if confirmed:** whether seal-time verification restricts every content leaf —
+  not only the final two SEAL control leaves — to one of the session's two registered participants;
+  not yet confirmed either way (Part 7).
+
+**Sequencing dependencies among the above, not open questions:** the live-ingest blocking gate and
+the relay corroboration items should ship together — the gate alone, without corroboration, reopens
+the false-accusation risk corroboration exists to close. Strengthening bilateral sealing without also
+fixing the unilateral-absence trigger creates an escape hatch — a bad actor just waits out the
+unilateral timer instead of beating the strengthened bilateral path — so those two should also not
+ship far apart.
+
+---
+
+## Outstanding Design Decisions
+
+- **Unilateral-seal trigger — pure elapsed time (current) vs. third-party-evidenced delivery failure
+  vs. a hybrid of both.** Today's flat 600s clock can't distinguish "genuinely gone" from "still
+  typing." Pure evidenced-failure is more accurate but depends on the relay fan-out work landing
+  first. **Recommendation:** hybrid — keep a time floor as a backstop, but require it to be paired
+  with an actual delivery-attempt/timeout record once the relay infrastructure supports it, rather
+  than elapsed time alone ever being sufficient on its own.
+- **Unilateral-seal timeout — fixed constant vs. configurable per session/stakes-tier.**
+  **Recommendation:** make it a dial. Casual sessions keep today's fast default; a session either
+  party flags as high-stakes gets a longer wait and requires stronger absence-evidence before
+  falling back to unilateral.
+- **T-of-N — keep deterministic `majority(N)` vs. pursue cryptographic sortition (unpredictable
+  random committee selection) to decouple T from N.** Note this decision's shape changed over the
+  course of this investigation: sortition's original motivating case was defending session-open, but
+  that's now separately addressed by the blocking signer-check above, which works regardless of what
+  T or N are. So this decision is now purely about availability/scaling as N grows, not about closing
+  the MITM gap. **Recommendation:** defer. `majority(N)` is simple, deterministic, and already
+  correct; sortition requires real cryptographic engineering (unbiasable, unpredictable selection
+  with no retry-until-favorable) for a benefit — leaner per-ceremony node counts at large N — that
+  isn't urgent until directory count actually needs to grow past what majority(N) comfortably
+  supports.
+- **Relay corroboration — on-demand (pulled only when a client suspects a mismatch) vs.
+  proactive/continuous (every relay checks every hash as it arrives).** **Recommendation:**
+  proactive. It's the same data the relay already holds, costs nothing new to check continuously, and
+  — unlike the on-demand version — doesn't depend on the client's own (possibly compromised)
+  cooperation to ever get triggered at all.
 
 ---
 
