@@ -17,7 +17,7 @@ description: >
   threshold; the client never verifies the directory's signature on a session assignment at all;
   and the relay has almost no abuse controls. Also establishes that NOBODY verifies the sealed root
   against the local transcript on the normal seal path — each side's code comments defer the check
-  to the other. Decisions 1-5 ruled inline; 6 and 7 raised by a completeness review and open. 38 build items,
+  to the other. All seven design decisions ruled inline. 39 build items,
   two of which are live-deployment verifications that cannot be answered by reading code.
 ---
 
@@ -865,9 +865,8 @@ runtime URL match. Two log events discriminate it.
 ## Design Decisions
 
 Each entry states the choice that had to be made, the options weighed, and what was decided.
-Decisions 1–5 are ruled. Decision 4 carries a deliberately deferred follow-on (scheduled, with a
-trigger — build item 34). Decisions 6 and 7 were surfaced by the completeness review and **need a
-ruling**.
+All seven are ruled. Decision 4 carries a deliberately deferred follow-on, scheduled with a trigger
+(build item 35). Decisions 6 and 7 were surfaced by the completeness review and ruled the same day.
 
 ---
 
@@ -999,7 +998,7 @@ encryption layer must not cost a property the existing one already provides.**
 
 ### 6. Whether the transcript record should carry per-message sender proof
 
-**NEEDS A RULING — surfaced by the completeness review, 2026-08-21.**
+*Surfaced by the completeness review and ruled the same day, 2026-08-21.*
 
 Part 4 established that the stored record has **no sender signature and no sender field**. A
 transcript row holds the message and a direction — "sent" or "received" — and the Merkle leaf holds a
@@ -1015,19 +1014,31 @@ evidence of who spoke.
 - **(b) Store the sender's signature with each leaf**, so the record proves authorship independently
   of whatever gate was in force when it was written.
 
-**Recommendation: (a), recorded explicitly rather than left silent.** (b) is a wire and schema change
-touching the seal path, for a property that items 1–5 already deliver at the boundary — and this
-investigation has just spent its length establishing that the fix belongs at the gate. But the
-limitation is real and should be written down: **the local transcript cannot independently prove who
-authored a message.** Revisit if the transcript is ever presented as third-party evidence rather than
-as the operator's own record, because that is the point at which "the gate was correct" stops being a
-sufficient answer.
+The first recommendation was (a) — accept it, on the grounds that (b) is a wire and schema change
+touching the seal path for a property items 1–5 already deliver at the boundary. **That was the same
+mistake as Decision 1's first pass**: weighing a migration cost that does not exist yet.
+
+> **DECIDED: (b).** Store the sender's signature with each leaf so the record proves authorship
+> independently of whatever gate was in force when it was written.
+>
+> Andre's reasoning, and it generalises: **a schema change is cheapest now and never gets cheaper.**
+> With no users, no transcripts worth preserving and no seals in the wild, adding the field costs a
+> migration of nothing. Adding it later means adding a field to directories and clients that breaks
+> past transcripts and seals — precisely the migration trap this project already warns about. Every
+> such issue surfaced and fixed before there are clients is one that never becomes a stranding event.
+>
+> This also removes the limitation (a) would have accepted: the transcript becomes able to prove who
+> authored a message on its own, rather than depending on the gate having been correct at ingest
+> time. That matters the moment a transcript is shown to anyone other than its owner.
+>
+> **Sequence with build items 11 and 30** — all three are wire changes to the seal path and should
+> land as one protocol change, not three.
 
 ---
 
 ### 7. Whether the relay's long-lived per-agent handle is accepted or mitigated
 
-**NEEDS A RULING — surfaced by the completeness review, 2026-08-21.**
+*Surfaced by the completeness review and ruled the same day, 2026-08-21.*
 
 The standing receiver holds a **relay reservation from agent-online, independent of any session**. For
 an agent that is not constantly in sessions, that receiver identity is stable for long stretches and
@@ -1044,12 +1055,23 @@ Build item 26 (reservations with several relays) is an **availability** fix and 
 - **(c) Spread reservations across several relays** so no single relay sees a continuous handle —
   which item 26 would deliver as a side effect.
 
-**Recommendation: (a) plus (c) as a side effect of item 26.** (b) buys little for real cost: the relay
-sees the reconnection either way and can trivially link old and new identities by timing, so rotation
-against a party that watches continuously is theatre. (c) is genuinely useful and is already being
-built for availability reasons, so the linkability benefit is free. What matters is that this is
-**stated** rather than left as an unexamined erosion of a property the design record treats as a
-protocol constraint.
+> **DECIDED: (a) plus (c) as a side effect of item 26.** (b) is theatre — the relay sees the
+> reconnection either way and can link old and new identities by timing, so rotating against a party
+> that watches continuously buys nothing for real cost. (c) is genuinely useful and is already being
+> built for availability, so the linkability benefit is free. What matters is that this is **stated**
+> rather than left as an unexamined erosion of a property the design record treats as a protocol
+> constraint.
+>
+> **Two caveats that decide whether (c) delivers anything at all, raised by Andre:**
+>
+> 1. **We run only two relays.** "Spread across relays" is technically true at N=2 and weak. The
+>    mitigation scales with relay count, so it is partial until the relay fleet grows.
+> 2. **Relay selection may not be random — and if it is deterministic, (c) delivers nothing.** If an
+>    agent's relay is chosen by a stable rule (first reachable, lowest index, nearest region) then it
+>    reserves with the *same* relay every time and that relay sees a continuous handle regardless of
+>    how many relays exist. Andre's assessment is that selection is probably **not** random. **This is
+>    unverified and is now build item 33** — it must be checked before (c) is treated as a mitigation
+>    rather than an assumption.
 
 ---
 
@@ -1250,9 +1272,18 @@ Grouped by what they achieve. Dependencies are called out where order matters.
     routing around a dead node. Verify the deployed value, and make an empty set fail startup loudly
     rather than degrade silently.
 
+33. **Confirm how an agent's relay is selected.** Decision 7 accepts the relay's long-lived per-agent
+    handle on the basis that spreading reservations across relays (item 26) erodes it as a side
+    effect. **That holds only if selection actually spreads.** If the rule is deterministic — first
+    reachable, lowest index, nearest region — an agent reserves with the same relay every time and
+    that relay sees a continuous handle no matter how many relays exist, so item 26 delivers
+    availability and nothing else. Read the selection code, and note the mitigation is weak at the
+    current fleet size of two regardless. If selection is deterministic, either make it spread or
+    withdraw the linkability claim in Decision 7.
+
 ### G — Correct the record
 
-33. **Correct the outward-facing claims** in the investor competitive analysis and the GTM messaging
+34. **Correct the outward-facing claims** in the investor competitive analysis and the GTM messaging
     framework. The June internal documents were corrected in `d683099f`; the drafts repo was not.
 
     **These claims do not become true once the list above is built — they become _partially_ true,
@@ -1275,10 +1306,10 @@ Grouped by what they achieve. Dependencies are called out where order matters.
     connections at all, and should not be written again.
 
     **Also correct the frequency claim.** Material citing an 80–90% direct-connection rate describes
-    hole punching that has never worked (item 37). The *confidentiality* disclosure survives — the
+    hole punching that has never worked (item 39). The *confidentiality* disclosure survives — the
     relay cannot read relayed content — but "most sessions are direct" does not.
 
-34. **Record the single-node relay assignment as a known bounded property.** Decision 4 chose to leave
+35. **Record the single-node relay assignment as a known bounded property.** Decision 4 chose to leave
     it and explicitly required that it be written down rather than silently left — this item is that
     requirement. Put it in the threat-model/protocol reference: one directory node's key signs the
     relay-facing assignment while the client-facing artifact requires a threshold; practical reach is
@@ -1287,20 +1318,20 @@ Grouped by what they achieve. Dependencies are called out where order matters.
     (b)-versus-(c) evaluation as an open item scheduled with the cryptographic-sortition work, so it
     has a trigger rather than resurfacing as a fresh discovery.
 
-35. **Disclose the IP exposure, and surface relay-only routing as an operator choice.** A direct
+36. **Disclose the IP exposure, and surface relay-only routing as an operator choice.** A direct
     session reveals the operator's IP address to the counterparty permanently — no gate, port change
     or ephemeral identity removes it, and anyone who has talked to you directly can flood you
     afterwards with no protocol remedy. (a) State this in the shipped client documentation, which
     currently says nothing about it. (b) Promote relay-only routing from a footnote in the
     architecture record to a real operator setting.
 
-36. **State the relay's metadata visibility** in shipped documentation and outward-facing material.
+37. **State the relay's metadata visibility** in shipped documentation and outward-facing material.
     The relay sees who talks to whom, when, how often, and message sizes. This is inherent to its role
     and cannot be removed; the day-zero review already acknowledges it. Write it beside the true claim
     that the relay cannot read message content, so it is a disclosed property rather than something a
     customer's follow-up question exposes.
 
-37. **Rewrite the audit document.** Already intended before launch; recorded here so the rewrite starts
+38. **Rewrite the audit document.** Already intended before launch; recorded here so the rewrite starts
     from corrected facts. Four of its seven cited file paths no longer exist (pre-repo-split layout),
     and its supporting detail for the encryption claim is wrong — it states content is additionally
     encrypted at the application layer, which is true only for parked content, and cites the database
@@ -1310,7 +1341,7 @@ Grouped by what they achieve. Dependencies are called out where order matters.
 
 ### H — Scheduled, explicitly not launch-blocking
 
-38. **Repair hole punching.** Root cause identified: `@libp2p/tcp` has no port reuse, so DCUtR is a
+39. **Repair hole punching.** Root cause identified: `@libp2p/tcp` has no port reuse, so DCUtR is a
     timed direct dial rather than a simultaneous-open punch, and it has never succeeded in production.
     Three candidate routes, none evaluated: patch TCP port reuse (Node's connect accepts a local port
     and address, but whether it permits binding to a port an active listener holds is unverified);
@@ -1318,7 +1349,7 @@ Grouped by what they achieve. Dependencies are called out where order matters.
     lives); adopt WebRTC (purpose-built, with ICE and STUN). **Not a launch blocker** — the relay
     cannot read relayed content (Part 13), so the confidentiality claim survives while every cross-NAT
     conversation is relayed. The claim that must be corrected regardless is the frequency one — item
-    33.
+    34.
 
 ---
 
