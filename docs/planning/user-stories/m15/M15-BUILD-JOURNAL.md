@@ -15,13 +15,18 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟡 MILESTONE NOT STARTED — scaffolding only.
-> [[M15-PROCEDURE]] exists. **[[M15-DEFINITION-OF-DONE]] does not yet exist** and is the next
-> artifact to write; until it does there is no yardstick and no unit to pull.
+> ### 🟢 SCAFFOLDING COMPLETE — the milestone is ready to work.
+> [[M15-PROCEDURE]], [[M15-DEFINITION-OF-DONE]] and this journal all exist. **49 DoD lines across
+> six tiers**, all ❌ except `DOD-M15-SWEEP-1` (🅿️, sequencing only). **Every line is inside the
+> launch gate** and the gate is a state, not a date.
 
-- **NEXT ACTION:** write [[M15-DEFINITION-OF-DONE]], then run the P0 live-deployment verification
-  spike (M15-PROCEDURE §4.1) before scoping anything else — it is hours of work and it re-prices at
-  least two units.
+- **NEXT ACTION: `DOD-M15-SPIKE-1`** — the live-deployment verification spike (Tier 0). Three
+  questions that cannot be answered by reading source, whose answers re-scope
+  `DOD-M15-DIRAUTH-1` and `DOD-M15-MULTIRELAY-1` and may expose a silent single-directory
+  dependency in the relay. Hours, no code, no branch. **Do it before anything else is scoped.**
+- **Cheapest line, pull it early once the spike is done:** `DOD-M15-DIVERGE-1` — it acts on signals
+  that already exist, has no wire dependency, and starts catching transcript divergence before
+  Tier 4 lands.
 - **HEAD commits:** trustless-cello `main` — see `git log`; cello-client `main` — see `git log`.
 - **Published versions:** unchanged; no M15 publish has occurred.
 - **Parked:** nothing yet.
@@ -63,10 +68,16 @@ delivers. **Every item gets built. M15 decides order, not selection.**
 
 **What exists as of this entry:**
 
-- [[M15-PROCEDURE]] — self-contained runbook. §1c defines the three enforcers (stranger · receipt ·
-  journey); §1d defines the claims ledger; §2b carries the four invariants this milestone installs.
+- [[M15-PROCEDURE]] — self-contained runbook. §0z states the gate; §1c defines the three enforcers
+  (stranger · receipt · journey); §1d defines the claims ledger; §2b carries the four invariants
+  this milestone installs.
+- [[M15-DEFINITION-OF-DONE]] — 49 status-tagged lines across six tiers, all ❌ except
+  `DOD-M15-SWEEP-1` (🅿️ on sequencing alone). Tier 0 is the verification spike; Tier 1 claims;
+  Tier 2 the doors and the detections that must act; Tier 3 basic value delivery; Tier 4 encryption
+  then the seal wire change; Tier 5 abuse controls, relay redundancy and infrastructure. Carries
+  twelve Decisions Carried, an Explicitly Beyond section where every deferral has a trigger, and
+  the claims ledger with eight seed rows.
 - This journal.
-- **No DoD yet** — it is the next artifact.
 
 **The four invariants, recorded here because they outlive M15** (full text in M15-PROCEDURE §2b):
 
@@ -108,6 +119,13 @@ next one to be found later, which is why the sweep is a named deliverable and no
 
 **Decisions carried into the DoD (Andre, 2026-08-21):**
 
+- **EVERY item in M15 is inside the launch gate, and the gate is a STATE, not a date.** Launch
+  happens when M15 closes, however long that takes. No fast-follow tier, no subset, no cut list —
+  the two items argued as trackable (relay abuse controls + Cloud Armor, and the
+  checked-then-ignored sweep) are in. DoD tiers therefore encode **dependency order only**: there is
+  no within-tier prioritisation and nothing is ever descoped for time. This closes the commonest
+  decision theatre available on a hardening milestone — an item's presence in the DoD *is* its
+  launch-blocking status, so there is nothing to relitigate.
 - **The seal wire change is INSIDE the launch gate.** Ruled on the migration argument, not the
   security one: no working attack against the seal was demonstrated, and a wire + schema change is
   cheapest against an empty database and never gets cheaper. Consistent with Decisions 1 and 6 in

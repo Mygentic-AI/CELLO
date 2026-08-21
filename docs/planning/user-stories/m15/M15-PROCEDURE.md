@@ -108,6 +108,27 @@ Spec-of-record: [[2026-08-21_1906_relay-p2p-exposure-and-ephemeral-peer-id-audit
 units, phased) and [[2026-08-21_1135_tofn-decoupling-and-seal-integrity-gaps]] (seal-ceremony gaps
 + four ruled decisions), plus the open items in [[launch-triage]].
 
+## 0z. THE GATE — settled 2026-08-21 (Andre), do not re-open
+
+**Every item in M15 is inside the launch gate. Launch happens when M15 closes.**
+
+- **Scope: all of it.** There is no fast-follow tier, no "ships right after," no subset. The two
+  candidates that were argued as trackable — relay abuse controls plus the Cloud Armor work, and
+  the checked-then-ignored sweep — are **in**. The only thing outside is what the spec-of-record
+  itself ruled deferred with a trigger (§Explicitly Beyond in the DoD), and even that is deferred,
+  not dropped.
+- **The gate is a STATE, not a DATE.** Launch waits for the gate to close, however long that takes.
+  **Consequences that change how you work:** the DoD tiers encode **dependency order only** — there
+  is no within-tier prioritisation to argue about and no cut list to maintain. Nothing is ever
+  descoped because time ran out; if something turns out to be bigger than expected, it takes longer
+  and that is the correct outcome. **Do not propose trimming scope to hit anything.** There is
+  nothing to hit.
+- **The seal wire change is in**, ruled on the migration argument (§0a.4), and it pulls the
+  application-layer content encryption in with it.
+
+This removes the most common form of decision theatre available on a hardening milestone: relitigating
+whether an item is *really* launch-blocking. It is in the DoD, therefore it is in the gate. Build it.
+
 ## 0a. Severity triage (spend effort top-down, never invert)
 
 1. **A FALSE CLAIM THAT IS ALREADY READABLE.** Anything the product, the public repo, the shipped
