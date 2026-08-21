@@ -712,6 +712,92 @@ treating it as decided. This is Outstanding Design Decision 2 below.
 
 ---
 
+## Part 13 — Can the relay read your messages? No. But the live path depends on libp2p to say so
+
+Verified 2026-08-21, in response to the question raised by Part 11: if everything crossing a NAT
+boundary is relayed, does that make "the relay never sees your conversations" untrue?
+
+**It does not. The relay cannot read message content on any path.**
+
+### The three paths
+
+**Relayed connections.** The relay is a **blind byte pipe** — the hop handler joins the two streams
+and passes bytes; the only inspection is byte-counting for a transfer limit. **The encrypted session
+is negotiated between the two agents _through_ that pipe**, not between each agent and the relay. The
+relay holds neither session key.
+
+It also cannot substitute itself for the destination. The peer identity each side demands is the
+**last** `/p2p` component of the circuit address — the destination, not the relay — and the
+handshake hard-fails on mismatch. The destination's identity arrives on the directory's signed
+assignment, not from the relay, so the relay cannot inject its own key into the address either.
+
+There is no bypass: encryption is skipped only on an explicit flag CELLO never sets, and Noise is
+registered as the sole encrypter with no plaintext option imported.
+
+**Parked messages (offline mailbox).** Sealed before reaching the relay: ephemeral X25519 key
+agreement to the recipient's long-term identity key, HKDF, AES-256-GCM. The relay stores the blob
+verbatim and hands it back on pull. **There is no decryption code and no key anywhere in the relay
+package.** Deposit being unauthenticated is safe because a sender signature over
+`(session_id, recipient_pubkey, content_hash)` sits *inside* the seal, and recovery fails closed on a
+missing, bad, or wrong-signer envelope.
+
+**Hash submission.** Hashes only. The frame type has no content field.
+
+### The design intent — partly built, differently shaped
+
+The stated intent was that two parties derive a shared key without transmitting it.
+
+**For parked content: built, and genuinely unreadable by the relay.** But the shape is
+*ephemeral-to-static*, not a shared key between the two agents' long-term identities. The sender mints
+a throwaway key per message; only the recipient's identity participates. Two consequences worth
+knowing: the **sender cannot reopen its own parked message**, and the seal is anonymous — which is
+exactly why a separate sender signature had to be added inside it.
+
+**For live conversations: there is no application-layer encryption at all.** Content rides plaintext
+inside the transport's Noise session. That session performs end-to-end key agreement between the two
+agents, so the confidentiality property holds — **but it is libp2p's key agreement over ephemeral
+transport keys, not CELLO's over agent identity keys.**
+
+### Why that dependency is a problem — the post-quantum argument
+
+Confidentiality on the live path rests entirely on one layer, and **we do not control that layer.**
+
+The driver is quantum resistance. If the encryption protecting peer-to-peer content is libp2p's, then
+migrating to post-quantum primitives happens on libp2p's timeline, with libp2p's algorithm choices,
+and only when they ship. **CELLO cannot upgrade its own confidentiality guarantee.**
+
+**This is not a "later" problem, and that is the part that makes it urgent.** The threat is
+*harvest-now-decrypt-later*: an adversary recording relayed traffic **today** can decrypt it once
+quantum capability arrives. Every cross-NAT conversation is currently relayed, so every one of them
+is recordable at a known, fixed set of endpoints. Traffic sent today is retroactively at risk. Adding
+the layer later does not protect what has already crossed the wire.
+
+The primitive already exists in the tree — the parked-content seal is a working X25519 + HKDF +
+AES-GCM envelope. The work is extending an application-layer envelope to the live path, under a key
+CELLO derives, so the algorithm is ours to change.
+
+### Two things the claim does not cover
+
+**Metadata.** The relay sees who talks to whom, when, how often, and message sizes. That is inherent
+to its role and is already acknowledged in the day-zero review; it should be stated rather than left
+for a follow-up question to expose.
+
+**The content hash is unsalted.** It is a SHA-256 of the plaintext, so a relay that *guesses* a
+message can confirm the guess. For short predictable content — "yes", "approved", a price, a name —
+that is a real leak against an adversary who holds the stored hashes.
+
+### The audit document
+
+[[AUDIT-ME]] proves these true claims badly: four of its seven cited file paths no longer exist
+(pre-repo-split layout), and its supporting detail for the encryption claim is wrong — it says content
+is additionally encrypted at the application layer, which is true only for parked content, and cites
+the database backup file as evidence.
+
+**Known and already scheduled** — it was written as a placeholder with the intent to redo it before
+launch. Recorded here so the rewrite has the corrected facts to work from.
+
+---
+
 ## Scorecard against the four original hypotheses
 
 **"Ephemeral Peer IDs reduced the DDoS surface."** No. The node made ephemeral binds loopback and was
@@ -827,6 +913,24 @@ runtime URL match. Two log events discriminate it.
 
 19. **Replace the seal spine tests that assert both sides received the same certificate bytes** with
     tests that assert each side's *own* tree matches the certified root.
+
+19a. **Add application-layer content encryption on the live path, independent of libp2p.** Today live
+    content is plaintext inside the transport's Noise session — confidentiality is real but it is
+    *libp2p's* key agreement over *libp2p's* ephemeral transport keys. **CELLO therefore cannot
+    upgrade its own confidentiality guarantee.** The driver is post-quantum readiness: migrating to PQ
+    primitives must not wait on libp2p's timeline or accept libp2p's algorithm choices. The threat is
+    harvest-now-decrypt-later — every cross-NAT conversation is relayed today, so it is recordable at
+    fixed endpoints today, and adding the layer later does not protect traffic already sent. The
+    parked-content seal is a working in-tree pattern to extend. Shape is Outstanding Design
+    Decision 5.
+
+19b. **Salt the content hash.** It is currently an unsalted SHA-256 of the plaintext, submitted to the
+    relay and stored. A relay holding those hashes can *guess* a message and confirm the guess —
+    which defeats content privacy for short predictable messages ("yes", "approved", a price, a
+    name). Use a per-session salt derived alongside the session key, so the hash stays deterministic
+    for both participants and useless to anyone else. **This is a wire change** — it alters what is
+    submitted and what the directory verifies, so it must be sequenced with the seal work in item 15
+    rather than shipped independently.
 
 20. **Correct the outward-facing claims** in the investor competitive analysis and the GTM messaging
     framework. The June internal documents were corrected in `d683099f`; the drafts repo was not.
@@ -957,6 +1061,35 @@ cryptographic-sortition work already decided, since that is when directory-side 
 are being touched anyway. **This should be recorded as a known bounded property rather than silently
 left.**
 
+**5. What shape the application-layer content encryption should take** *(build item 19a).*
+
+The stated intent was "both sides derive the same key, and the key is never transmitted." That
+describes a **static-static** agreement between the two agents' long-term identity keys. It is the
+obvious reading and **it has a trap in it**, which is why this is a decision rather than a build note.
+
+- **(a) Static-static** — derive one key from both agents' long-term identity keys.
+- **(b) Per-session ephemeral handshake** — each side mints a fresh keypair per session, agrees a
+  session key, and discards the ephemerals at close. Messages are AEAD-sealed under that key.
+- **(c) (b) plus hybrid post-quantum** — run a classical X25519 agreement and a PQ key-encapsulation
+  agreement, and mix both into the session key.
+
+**Recommendation: (b) now, structured so (c) is a drop-in later.**
+
+**Why not (a), which is the intuitive answer.** A key derived only from long-term identity keys gives
+the same key forever. **It has no forward secrecy** — anyone who ever obtains an agent's identity key
+can decrypt every conversation that agent ever had, including traffic recorded years earlier. That is
+strictly worse than what runs today, because the current transport layer *does* use fresh ephemeral
+keys per connection. [[design-problems]] already claims forward secrecy as a structural property;
+option (a) would quietly remove it while appearing to strengthen the system. **Adding our own
+encryption layer must not cost the property the existing one provides.**
+
+(c) is the destination and is the whole reason for doing this work — but the PQ half should be added
+as a second contribution mixed into the same derivation, not designed for now. Building (b) with the
+derivation written to accept an additional shared secret makes (c) an addition rather than a rewrite.
+
+**Note the interaction with build item 19b:** the per-session salt for the content hash should come
+out of this same derivation. One handshake, two outputs.
+
 ---
 
 ## Decisions Made (Andre, 2026-08-21)
@@ -1017,7 +1150,32 @@ question is urgent.** Andre's framing, recorded because it sets the bar for what
 So the technical question — can the relay decrypt what passes through it — determines whether this is
 a performance problem or a truthfulness problem.
 
-**8. Settled, moved out of design decisions and into the build list: the standing receiver's gate
+**9. The relay-encryption question is answered and the perception problem dissolves.** The relay
+cannot read message content on any path — verified. So even though every cross-NAT conversation is
+relayed for its whole duration, *"the relay never sees your conversations"* remains **true**. The
+disclosure about a relay fallback stays defensible; what needs revising is the **frequency** claim
+(the 80–90% direct figure describes hole punching that has never worked), not the confidentiality
+claim. **Hole-punching repair is therefore a scheduled improvement, not a launch blocker** — which
+resolves the sequencing question in Decision 6.
+
+**10. Application-layer content encryption on the live path must be built, and the reason is
+post-quantum independence.** Andre's ruling: peer-to-peer content confidentiality must not depend on
+libp2p. *"At some point in the not too distant future we may upgrade a portion of our cryptographic
+libraries and processes to become quantum computing resistant. We don't want to have encryption
+between two peers passing messages through the relay dependent on libp2p."* Build item 19a; shape is
+Outstanding Design Decision 5. Note this is time-sensitive rather than deferrable — relayed traffic
+recorded today is decryptable later, so the window for protecting a given conversation closes when it
+is sent, not when the fix ships.
+
+**11. Salt the content hash.** Build item 19b. An unsalted plaintext hash lets a relay confirm guessed
+messages. Sequenced with the seal work, since it is a wire change.
+
+**12. The audit document is known-broken and its rewrite is already intended before launch.** Not a
+new finding — it was written as a placeholder. Recorded so the rewrite starts from corrected facts:
+four cited paths no longer exist, and the application-layer encryption claim is true only of parked
+content.
+
+**13. Settled, moved out of design decisions and into the build list: the standing receiver's gate
 admits assignment-named dialers only.** Not a genuine X-versus-Y choice — a trusted-tier bypass
 cannot work at this layer, because the gate sees a transport Peer ID that is freshly minted per
 session and unknowable in advance. Trust tiers already do their work one layer up at session
