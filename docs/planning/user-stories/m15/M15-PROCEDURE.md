@@ -89,10 +89,11 @@ Do it, journal it, move on. REDO > ASK. Never bundle a real gate with fake ones.
 ## THE MILESTONE IN ONE PARAGRAPH
 
 Close the gap between what CELLO **claims** and what it **delivers**, in three streams that run in
-parallel. **(1) Claims.** Every assertion — in outward-facing material, in shipped client docs, in
-status output, in code comments — either becomes true or stops being made; the investor and GTM
-material currently promise a property (*"no persistent endpoint to DDoS"*) that is false today and
-stays structurally false after every fix, and `AUDIT-ME` invites an audit it cannot survive.
+parallel. **(1) Claims.** Every assertion already readable by someone outside — in the public repo,
+in the shipped package, in status output, in code comments — either becomes true or stops being
+made; `AUDIT-ME.md` sits at the root of a public repository inviting an audit it cannot survive, and
+screening reads as active while its semantic half cannot be installed anywhere. (The investor and
+GTM material is unpublished and unsent, and is corrected after M15 against what shipped — see §0a.)
 **(2) Doors.** A stranger can dial an operator's open port, hold the connection through session
 promotion, and inject content that is attributed to the legitimate counterparty; the relay answers
 "is agent X online?" to anyone holding any keypair; the client never verifies the directory's
@@ -109,11 +110,33 @@ units, phased) and [[2026-08-21_1135_tofn-decoupling-and-seal-integrity-gaps]] (
 
 ## 0a. Severity triage (spend effort top-down, never invert)
 
-1. **A FALSE CLAIM.** Anything the product, the shipped docs, the outward-facing material, a status
-   output, or a code comment asserts that is not true in the tree today. Highest damage per hour of
-   work, zero dependencies, and **wrong right now** — the only stream that can start before anything
-   is scoped. A claim is corrected by making it true OR by withdrawing it; both count, and
+1. **A FALSE CLAIM THAT IS ALREADY READABLE.** Anything the product, the public repo, the shipped
+   package, or a status output asserts that is not true in the tree today. Highest damage per hour
+   of work, zero dependencies, and **readable right now** — the only stream that can start before
+   anything is scoped. A claim is corrected by making it true OR by withdrawing it; both count, and
    withdrawing is often the launch-correct answer.
+
+   > **Scoped 2026-08-21 (Andre).** The investor competitive analysis and the GTM messaging
+   > framework **have never been made public and have never been sent.** They are corrected **after
+   > M15 closes**, against what actually shipped — not now, and not twice. They are not part of this
+   > stream.
+   >
+   > **What IS live, and therefore what this stream means:**
+   > - **`AUDIT-ME.md`, at the root of the PUBLIC `Mygentic-AI/cello-client` repo.** A file whose
+   >   name invites an audit it cannot survive: four of its seven cited file paths no longer exist
+   >   (pre-repo-split layout), and its supporting detail for the encryption claim is wrong — it
+   >   says content is additionally encrypted at the application layer, true only for parked
+   >   content, and cites the database backup file as evidence. **The claims themselves are true;
+   >   the document proves them badly**, which for a trust product whose evaluators point a coding
+   >   agent at the repo is worse than publishing nothing. This is the single most exposed artifact
+   >   in the milestone and it is the first row in the ledger.
+   > - **Code comments in the public repo** asserting properties the code does not enforce — three
+   >   of the six known checked-then-ignored instances carry one.
+   > - **Tool descriptions and skill prose**, which ship inside the npm package to every operator.
+   > - **Product status output** — most sharply, screening reading as active while the semantic half
+   >   cannot be installed on any operator's machine.
+   > - **Shipped client documentation**, including what it does NOT say: a direct session reveals
+   >   the operator's IP to the counterparty permanently, and nothing discloses it.
 2. **THE BASIC VALUE.** Install → register → connect → session → messages arrive → seal → receipt →
    trust signal received. If this breaks, nothing else matters and there is no launch to harden.
    Streams 2 and 3 run in parallel — different repos, different disciplines, neither blocks the
@@ -219,7 +242,8 @@ ledger in the DoD: one row per claim, its current text, where it appears, and it
 **made true**, **withdrawn**, or **disclosed as a bounded property**. Three rules:
 
 - **A claim becomes true or it goes.** "It will be true after M15" is not a disposition while the
-  claim is being read today.
+  claim is being read today. A claim nobody can read yet is not in this ledger at all — see §0a on
+  the unpublished investor and GTM material.
 - **Partially true is false.** The audit's own worked example: after every fix on the list,
   *"strangers cannot reach your agent"* is true and *"no persistent endpoint to DDoS"* is still
   false — a gate changes who is admitted, not that the endpoint exists. Authorization claims are
@@ -271,10 +295,15 @@ ledger in the DoD: one row per claim, its current text, where it appears, and it
   the seal wire change, Cloud Armor / Terraform, the three spine enforcers in `packages/e2e-tests`,
   these docs. Re-pins published cello-client semvers — `workspace:*` for a cello-client package is a
   bug.
+- **`Mygentic-AI/cello-client` IS A PUBLIC REPOSITORY.** Every comment, every dead file, every
+  document at its root is readable by anyone evaluating CELLO — which is the whole premise of §"What
+  this milestone is for". Treat a misleading comment there as shipped output, not as an internal
+  note.
 - **The drafts repo** (`docs/planning/discussion_logs_drafts/`) — the investor competitive analysis
-  and the GTM messaging framework live here. **It is a NESTED GIT REPO with its own remote:** an
-  edit there needs its own commit and its own push; committing in the parent commits nothing. It is
-  also outward-facing, so §2f applies.
+  and the GTM messaging framework live here. **NOT IN M15** (§0a): unpublished, never sent,
+  corrected after the milestone against what actually shipped. If a unit nonetheless needs to touch
+  it: **it is a NESTED GIT REPO with its own remote** — an edit there needs its own commit and its
+  own push; committing in the parent commits nothing. And §2f applies.
 - **corp-cello-site / cello-portal** — only where a DoD line names them.
 
 A unit that touches two repos states so in its journal checklist up front, and worktrees are created
@@ -462,10 +491,15 @@ and is dispatched on any unit touching a verification path — it hunts exactly 
 
 ## 2f. Outward-facing claim wording is Andre's
 
-Stream 1 changes text that customers, evaluators and investors read. **Agree the copy before editing
-it:** state the claims that are simply false and must go, then offer three or four replacement
-variants with their trade-offs, and wait. Do not publish a rewritten claim on your own judgement,
-and do not soften a false claim into a vaguer one — vagueness is how a false claim survives.
+Stream 1 changes text that customers and evaluators read — including everything in the public
+client repo. **Agree the copy before editing it:** state the claims that are simply false and must
+go, then offer three or four replacement variants with their trade-offs, and wait. Do not publish a
+rewritten claim on your own judgement, and do not soften a false claim into a vaguer one — vagueness
+is how a false claim survives.
+
+Two things that are NOT gated on this and should just be done: **deleting** a claim that is flatly
+false, and **rewriting a code comment** to describe what the code actually does. Neither is
+marketing copy.
 
 ## 3. Cadence
 
@@ -503,7 +537,8 @@ next line; (6) decision-theatre check; (7) one status line. Self-terminate when 
    actually selected. **Hours, no code, and it changes the scope of at least two other units. Do it
    before anything else is scoped.**
 2. **The claims ledger** — build the ledger itself (§1d), which is also the audit of stream 1. No
-   dependency on anything; the claims are wrong today regardless of what gets built.
+   dependency on anything. **Start with `AUDIT-ME.md`**: it is at the root of a public repository,
+   its name is an invitation, and it cannot survive the audit it invites.
 3. **Direct-path frame handler hardening** — pin the content frame and the delivery ack to the
    dialing peer, collapse missing/malformed/mismatched into one hard-fail path, disconnect peers
    when the gate narrows. Fixing any subset leaves the injection path open.
