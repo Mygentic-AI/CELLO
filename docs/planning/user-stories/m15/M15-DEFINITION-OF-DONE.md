@@ -41,7 +41,14 @@ run output quoted. Vitest green is necessary, never sufficient.
 Three questions that **cannot be answered by reading source**. Their answers change the scope of
 other lines, so they run before anything else is scoped. Hours, no code.
 
-### `DOD-M15-SPIKE-1` — ❌ What the live deployment actually does
+### `DOD-M15-SPIKE-1` — ✅ What the live deployment actually does
+> **All three answered 2026-08-21 → Entry 1.** (a) Step-6 directory auth **IS active**:
+> `daemon.manifest.bundled` 115, `.skipped` 0 — `DOD-M15-DIRAUTH-1` does not escalate. (b) Both
+> relays log `count=3, anyDirectory=True` on every restart back to 2026-08-17 — **the feared silent
+> single-directory dependency does not exist.** (c) Selection is **not random**: both relays are
+> requested (`reservationsRequested: 2`) but one carries **2,648 of 2,675** reservations (99%), so
+> `DOD-M15-MULTIRELAY-1` delivers availability only and the linkability claim is **withdrawn**.
+> No diff, therefore no unit review; every command is quoted in Entry 1 and re-runnable.
 Read the running fleet and the running daemon; write the three answers into the journal with the
 evidence, and re-scope the lines each one touches.
 - **(a) Which directory-authentication path fires in production.** The roster challenge runs only
@@ -117,6 +124,14 @@ The six known checked-then-ignored instances; three carry such a comment.
   participant named in it; **it cannot make the permanent record lie.** Carries the deferred
   (b)-vs-(c) evaluation as an open item with a trigger, so it does not resurface as a fresh
   discovery.
+- **The relay's long-lived per-agent handle, disclosed rather than claimed-mitigated.** The standing
+  receiver holds a reservation from agent-online, independent of any session, and **measurement
+  shows one relay carries 99% of an agent's reservations** (`DOD-M15-SPIKE-1(c)`, Entry 1). Decision
+  7 accepted this on the basis that spreading reservations would erode it; that basis does not hold,
+  so the linkability claim is **withdrawn** and the property is stated instead: one relay can
+  correlate an agent's sessions over time. The April design made relay/directory operator separation
+  a protocol constraint precisely to stop a single party doing this; say so rather than let it be
+  discovered.
 
 ---
 
@@ -295,9 +310,12 @@ the only safety net standing between "the relay said sealed but lied" and "the r
   — inside the relay's 24-hour retention. **Assert on the session's STATUS, not only the
   certificate**: a receipt was previously stored against a row still reading `interrupted`, so the
   close verb refused it by name and the resolver re-ran the whole ceremony on the next boot.
-- **Blocked on Andre issuing two pre-auth tokens for throwaway agents** — the only human-only step
-  in this tier. Park the line and work another if it is not available; do not test against the live
-  five agents, which would seal open sessions as a side effect.
+- **NOT blocked** (Andre, 2026-08-21): *"You do not need throw away agent tokens. Use existing
+  ones."* Run against existing registered agents — `CELLO_Coder_1` and `CELLO_Support`
+  (`f8d518ca0b5596fd0f383f17f03560975ea210a763249b342fd767bd067c2f3c`) locally, or `Miss_Chelly_H`
+  on the Hermes EC2 instance for a genuinely different device. **Check the chosen agents hold no
+  open sessions before running** — the proof seals what it touches, and that is managed by
+  selection, not assumed away.
 - Pre-V58 sessions can never be served by the pull; that is recorded, not repaired.
 - **Enforcer:** receipt.
 
@@ -594,6 +612,13 @@ Parallel with Tier 4 — different disciplines, no shared files.
 - **Delete the directory-admin push handler, or justify keeping it in the code.** It is live, has no
   caller, and its signed body carries no nonce and no timestamp — no replay protection. Adding
   replay protection hardens a path nothing uses; **deleting it is cheaper and strictly safer.**
+- **An empty `CELLO_DIRECTORY_PUBKEYS` fails startup loudly instead of degrading silently.** The
+  deployed config is correct today — both relays log `count=3, anyDirectory=True`
+  (`DOD-M15-SPIKE-1(b)`, Entry 1) — so this is not a live fault. What is unfixed is the failure mode
+  that would hide it becoming wrong: with one key the relay silently accepts assignments from one
+  directory and sessions brokered by the other two are unusable, which surfaces as random
+  per-directory session failures rather than as a config gap. The startup log already makes it
+  visible; make it fatal.
 
 ### `DOD-M15-RELAYLEAK-1` — ❌ Relay clients are closed
 Graceful shutdown never closes relay clients, and the seal-only detached-transport path registers a
@@ -601,13 +626,20 @@ session that is never unregistered, so a cached relay client is never closed for
 lifetime. Client-side, small, standalone.
 
 ### `DOD-M15-MULTIRELAY-1` — ❌ An agent's reachability does not rest on one relay
-An agent reserves with exactly **one** relay, so the cheapest way to take it offline is to flood that
-relay — a concentrated, infrastructure-shaped target, the opposite of the diffuse surface the pitch
-describes.
-- **Scope depends on `DOD-M15-SPIKE-1(c)`.** If relay selection is deterministic, this delivers
-  availability and **not** the linkability mitigation Decision 7 assumes — in which case either make
-  selection spread or withdraw that claim in `DOD-M15-DISCLOSE-1`.
-- Note the mitigation is weak at the current fleet size of two regardless.
+**Scoped by `DOD-M15-SPIKE-1(c)` → Entry 1. This line is AVAILABILITY ONLY.** The client already
+requests reservations with every known relay (`reservationsRequested: 2`) — the audit's "reserves
+with exactly one relay" was the outcome, not the request. But one relay carries **2,648 of 2,675**
+reservations (99.0%), so the linkability mitigation Decision 7 assumed **does not hold** and that
+claim is withdrawn rather than relied on (`DOD-M15-DISCLOSE-1`). Making selection genuinely spread is
+an improvement, not a mitigation we are counting on; the fleet is two relays regardless.
+- Inbound reachability must survive one relay going away. Today the cheapest way to take an agent
+  offline is to flood the relay its reservation actually landed on — a concentrated,
+  infrastructure-shaped target, the opposite of the diffuse surface the pitch describes.
+- **First, explain the churn** (measured, Entry 1, one daemon's log): **2,675 `reservation.lost`,
+  664 `reservation.none`, 88 retries, 9 `gave_up`**, with `reason: relay_connection_gone`. An agent
+  whose reservation is gone is **unreachable by any NAT'd peer while still looking perfectly
+  healthy** — exactly the silent-loss-of-inbound failure `DOD-NAT-REACHABILITY-1` was built to kill.
+  Whoever pulls this line starts by explaining those numbers, not by adding relays under them.
 
 ### `DOD-M15-RELAYFANOUT-1` — ❌ A single relay's account of a conversation can be cross-checked
 Serves **three** separate problems, which is a good sign it is the right thing to build: truncation
@@ -642,8 +674,9 @@ compromised and could weaponize "signature mismatch" as a false accusation.
   `DOD-M15-RELAYFANOUT-1`.
 
 ### `DOD-M15-DIRAUTH-1` — ❌ Directory authentication cannot be silently skipped
-**Scope set by `DOD-M15-SPIKE-1(a)`** — if the challenge is being skipped in production today, this
-is not hardening.
+**Scoped by `DOD-M15-SPIKE-1(a)` → Entry 1: the challenge IS running in production** —
+`daemon.manifest.bundled` 115 times, `.skipped` zero. This stays hardening and does not escalate.
+The byte-match workaround is holding; the fail-open underneath it is not fixed.
 - The roster challenge runs **only when the resolved directory URL byte-matches a bundled
   endpoint**. A DNS name pointing at the same machine does not match, and the client then skips
   directory authentication **entirely, silently**. That is why the production directory URL is a raw
@@ -747,6 +780,15 @@ Rulings that bind every line above. **Re-asking one is decision theatre** (M15-P
 12. **A recommendation that survives only on backward-compatibility grounds is not a
     recommendation** — re-derive against an empty database. This reversed two first-pass
     recommendations in the spec-of-record and it will try to reverse more.
+13. **The relay-linkability mitigation is WITHDRAWN, not relied on** (§3a ruling, Entry 1). Decision
+    7 accepted the long-lived per-agent handle because spreading reservations across relays would
+    erode it; measurement shows one relay carries 99% of an agent's reservations, so that basis does
+    not hold. `DOD-M15-MULTIRELAY-1` is availability only, and the property is disclosed in
+    `DOD-M15-DISCLOSE-1`. Making selection genuinely spread remains worth doing — as an improvement,
+    never as the thing a claim rests on.
+14. **The interrupted-seal proof runs against EXISTING agents** (Andre, 2026-08-21) — no pre-auth
+    tokens, no throwaway registrations. Manage the side effect by choosing agents with no open
+    sessions, verified before the run.
 
 ---
 
@@ -771,6 +813,7 @@ unaudited claim.*
 | "no persistent endpoint to DDoS" | outward-facing material (not in M15) | **withdrawn** — structurally false; a gate is not a flood defense |
 | relay assignment requires a threshold | trust-model prose | **disclosed as bounded** — one node signs it; reach stated in `DOD-M15-DISCLOSE-1` |
 | a direct session is private to the two parties | shipped docs (absent) | **disclosed** — it reveals the operator's IP permanently |
+| an agent's sessions are unlinkable across time | design record / Decision 7 | **disclosed as bounded** — one relay carries 99% of an agent's reservations and can correlate them (Entry 1) |
 
 ---
 

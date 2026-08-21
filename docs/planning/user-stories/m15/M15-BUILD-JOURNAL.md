@@ -15,22 +15,28 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 SCAFFOLDING COMPLETE — the milestone is ready to work.
-> [[M15-PROCEDURE]], [[M15-DEFINITION-OF-DONE]] and this journal all exist. **49 DoD lines across
-> six tiers**, all ❌ except `DOD-M15-SWEEP-1` (🅿️, sequencing only). **Every line is inside the
-> launch gate** and the gate is a state, not a date.
+> ### 🟢 TIER 0 CLOSED. Tier 1 and Tier 2 are both open and have no dependency on each other.
+> **49 DoD lines**, 1 ✅ (`DOD-M15-SPIKE-1`), 1 🅿️ (`DOD-M15-SWEEP-1`, sequencing only), rest ❌.
+> Every line is inside the launch gate; the gate is a state, not a date.
 
-- **NEXT ACTION: `DOD-M15-SPIKE-1`** — the live-deployment verification spike (Tier 0). Three
-  questions that cannot be answered by reading source, whose answers re-scope
-  `DOD-M15-DIRAUTH-1` and `DOD-M15-MULTIRELAY-1` and may expose a silent single-directory
-  dependency in the relay. Hours, no code, no branch. **Do it before anything else is scoped.**
-- **Cheapest line, pull it early once the spike is done:** `DOD-M15-DIVERGE-1` — it acts on signals
-  that already exist, has no wire dependency, and starts catching transcript divergence before
-  Tier 4 lands.
+- **NEXT ACTION: `DOD-M15-DIVERGE-1`** (Tier 2) — the cheapest line in the milestone. Acts on
+  signals that already exist, no wire dependency, and starts catching transcript divergence before
+  Tier 4 lands. `cello-client`, branch `m15/diverge`.
+- **Then either** `DOD-M15-FRAME-1` (the injection path — the worst-looking finding in the
+  milestone) **or** `DOD-M15-LEDGER-1` + `DOD-M15-AUDITME-1` (Tier 1, no dependencies, and
+  `AUDIT-ME.md` is at the root of a public repo).
+- **Spike answers that re-scoped lines → Entry 1:** step-6 directory auth IS active in production
+  (`DOD-M15-DIRAUTH-1` does not escalate); both relays accept all three directories (the feared
+  single-directory dependency does not exist); relay selection is effectively deterministic at 99:1
+  (`DOD-M15-MULTIRELAY-1` is availability only, linkability claim withdrawn).
+- **Live agents available for enforcer runs** (Andre, 2026-08-21): `CELLO_Coder_1` and
+  `CELLO_Support` (`f8d518ca0b5596fd0f383f17f03560975ea210a763249b342fd767bd067c2f3c`) locally;
+  `Miss_Chelly_H` on the Hermes EC2 instance for a genuinely different device. No pre-auth tokens
+  needed. **Check for open sessions before any sealing proof.**
 - **HEAD commits:** trustless-cello `main` — see `git log`; cello-client `main` — see `git log`.
 - **Published versions:** unchanged; no M15 publish has occurred.
-- **Parked:** nothing yet.
-- **Claims ledger:** not yet built (M15-PROCEDURE §1d). It is P0 item 2 and has no dependencies.
+- **Parked:** `DOD-M15-SWEEP-1` (sequencing: after `DOD-M15-FRAME-1` and Tier 4).
+- **Claims ledger:** seeded with 9 rows in the DoD; not yet swept (`DOD-M15-LEDGER-1`).
 
 ---
 
@@ -137,5 +143,136 @@ next one to be found later, which is why the sweep is a named deliverable and no
 **First action:** the live-deployment verification spike (M15-PROCEDURE §4.1) — three questions that
 cannot be answered by reading source and that re-price other units. Hours, no code, before anything
 else is scoped.
+
+---
+
+## Entry 1 — DOD-M15-SPIKE-1: what the live deployment actually does (2026-08-21)
+
+**Target:** answer the three questions that cannot be answered by reading source, and re-scope the
+lines each one touches. No code, no branch, no diff — **and therefore no unit review**; the evidence
+is quoted below and every command is independently re-runnable.
+
+### (a) Directory authentication IS active in production — `DOD-M15-DIRAUTH-1` stays hardening
+
+The discriminating pair is in `core/daemon/src/manifest-deps.ts`: `daemon.manifest.bundled` (step-6
+ENABLED) versus `daemon.manifest.bundled.skipped` (step-6 DISABLED, with `reason:
+directory_not_in_bundled_roster`).
+
+Measured on the live daemon log (`~/.cello/daemon.log`, 142 MB, back to 2026-08-17):
+
+```
+daemon.manifest.bundled          115
+daemon.manifest.bundled.skipped    0
+```
+
+Most recent, 2026-08-21T02:15:12Z:
+`{"event":"daemon.manifest.bundled","version":2,"nodeCount":3,"rootKeyCount":1,"threshold":1}`
+
+**The byte-match workaround is holding.** `PRODUCTION_DIRECTORY_URL` is the raw address
+`http://34.75.172.108:9090` precisely so it matches a bundled endpoint byte for byte, and it does —
+every daemon start in the log took the enabled branch and not one took the skipped branch.
+
+**Re-scope:** `DOD-M15-DIRAUTH-1` does **NOT** move into a higher tier. The fail-open is real and
+still gets fixed (a DNS name for the same host silently disables the defense, and the bootstrap
+coordinate still comes from plaintext HTTP on 9090) — but the production client is authenticating
+the directory today. This is the *only* one of the three answers that could have escalated a line,
+and it did not.
+
+### (b) The relay accepts all three directories — the feared single-directory dependency does NOT exist
+
+`packages/relay/src/bin/relay.ts:238` already logs the answer at startup, by design:
+`relay.startup.consortium-directories { count, anyDirectory }`. A forgotten
+`CELLO_DIRECTORY_PUBKEYS` would show `count: 1, anyDirectory: false`.
+
+Read from Cloud Logging across both relay instances, every restart back to 2026-08-17:
+
+```
+2026-08-19T18:19:51Z  count=3  anyDirectory=True
+2026-08-19T18:16:26Z  count=3  anyDirectory=True
+2026-08-19T13:19:49Z  count=3  anyDirectory=True
+2026-08-19T13:16:40Z  count=3  anyDirectory=True
+2026-08-19T06:19:02Z  count=3  anyDirectory=True
+2026-08-19T06:16:18Z  count=3  anyDirectory=True
+2026-08-19T05:14:29Z  count=3  anyDirectory=True
+2026-08-18T20:46:38Z  count=3  anyDirectory=True
+2026-08-18T20:45:50Z  count=3  anyDirectory=True
+2026-08-17T11:23:11Z  count=3  anyDirectory=True
+```
+
+Two distinct instance ids appear throughout, so this is both relays and not one repeatedly.
+
+**Re-scope: a clean negative, and it removes a risk rather than adding work.** A session brokered by
+any of the three directories is usable. `DOD-M15-SPIKE-1(b)`'s worry — a value-delivery fault hiding
+inside a security item — is not present. **What survives into `DOD-M15-RELAYABUSE-1` as a small
+clause:** an empty key set still *degrades silently* rather than refusing to start. The config is
+right today; the failure mode that would hide it being wrong tomorrow is not fixed. Make an empty
+set fatal at startup.
+
+### (c) Relay selection is NOT random, and Decision 7's mitigation does not hold as things stand
+
+The mechanism is not what either hypothesis assumed. `#reservationCircuitAddrs`
+(`core/daemon/src/session-node-manager.ts:8183`) does **not** pick a relay — it merges the
+directory's auth-time relay pool with persisted endpoints, dedupes by relay peer id, and hands
+libp2p **every** resulting `/p2p-circuit` address. Confirmed live: `reservationsRequested: 2`, with
+both relay peer ids listed.
+
+So the client asks both. **The outcome is nonetheless effectively deterministic** — across 2,675
+`session.standing_receiver.reservation.lost` events in the live log:
+
+```
+12D3KooWJXHpnWQhGk3jXBJYdXMmeLxEhRqzwZCYd1bxSUh4pg83   2648   (99.0%)
+12D3KooWFpvG5ksTBoiMCfyy3n126AtpFNYGXB14R2335DAf1BYt     27   ( 1.0%)
+```
+
+and the `relayPeerIds` array is in a stable order, `pg83` first, on every sample.
+
+**Andre's assessment was right — selection is not random — though not for the reason predicted.** It
+is not that the client chooses one relay; it is that both are requested and **one carries 99% of the
+reservations in practice.** For linkability purposes the distinction does not matter: that relay
+sees a continuous per-agent handle.
+
+**Re-scope, and this is the one answer that changes a decision:**
+- `DOD-M15-MULTIRELAY-1` delivers **availability only**. Decision 7's claim that spreading
+  reservations erodes the long-lived per-agent handle **does not hold as things stand**, so per its
+  own terms the fork is: make selection actually spread, or **withdraw the linkability claim**.
+- **Ruling (§3a, least likely to need reversing): WITHDRAW the claim now, and treat "make it spread"
+  as an improvement rather than a mitigation we are relying on.** Reasons: the fleet is two relays,
+  where Decision 7 already conceded the mitigation is "technically true and weak"; and a disclosed
+  bounded property is honest whether or not spreading later works, whereas a claim resting on
+  behaviour we have now measured as 99:1 is a claim we would be making on hope. `DOD-M15-DISCLOSE-1`
+  gains the row; `DOD-M15-MULTIRELAY-1` keeps its availability rationale, which is untouched and
+  still worth building.
+
+### Bonus finding, recorded because it was measured and nobody asked for it
+
+The reservation churn is severe: **2,675 lost, 664 `reservation.none`, 88 retries, 9 `gave_up`** on
+one daemon's log. `reservation.lost` carries `reason: relay_connection_gone`. An agent whose
+reservation is gone is **unreachable by any NAT'd peer while still looking perfectly healthy** —
+which is exactly the silent-loss-of-inbound failure `DOD-NAT-REACHABILITY-1` was built to kill.
+
+**Not chased here** (a spike answers its three questions and stops), but it is a real signal and it
+belongs to a line: added as a clause on `DOD-M15-MULTIRELAY-1`, whose whole subject is an agent's
+inbound reachability resting on relays. Whoever pulls that line starts by explaining these numbers.
+
+### Also recorded: an unblocking from Andre, 2026-08-21
+
+**`DOD-M15-INTERRUPTED-1` is NOT blocked on pre-auth tokens.** Ruling: *"You do not need throw away
+agent tokens. Use existing ones."* The proof runs against existing registered agents. The stated
+side effect — sealing open sessions — is managed by choosing agents that hold none, checked before
+the run rather than assumed. The line's park is removed and it is a normal Tier 3 unit.
+
+**Commands, so this entry is checkable rather than believed:**
+```
+grep -c 'daemon.manifest.bundled"' ~/.cello/daemon.log
+grep -c 'daemon.manifest.bundled.skipped' ~/.cello/daemon.log
+gcloud logging read 'jsonPayload.event="relay.startup.consortium-directories"' \
+  --project cello-infra --limit 10 --freshness=30d \
+  --format="value(timestamp,resource.labels.instance_id,jsonPayload.count,jsonPayload.anyDirectory)"
+grep '"session.standing_receiver.reservation.lost"' ~/.cello/daemon.log \
+  | grep -o '"relayPeerId":"[^"]*"' | sort | uniq -c | sort -rn
+```
+
+**Next:** `DOD-M15-DIVERGE-1` — the cheapest line in the milestone, no wire dependency, starts
+catching transcript divergence immediately.
 
 ---
