@@ -346,8 +346,50 @@ a promise the system does not keep, and it is labelled inert rather than done in
 refusal cannot be answered, so a genuinely multilingual document fails closed and is resolved by
 hand. Identical security, worse ergonomics. Listed for completeness, not as owed work.
 
+## 10. The injection-detection model cannot be turned on in production, and has never been tested against the real thing
 
-## 10. Same-operator standing: two layers exist, and one input can be absent
+**Designation: `DOD-DOC-SCREEN-INSTALL-1`, `DOD-DOC-SCREEN-CLASSIFIER-1`** (M14B Tier SCREEN) — 🟡
+**Built and wired, but inert everywhere it would run.** This is the semantic layer of injection
+defense — judging what a message or document update actually *means*, not just matching characters
+— and it covers messages as much as documents: nothing inbound, of any kind, is judged for meaning
+today.
+
+**What it costs a customer.** The product's safety claim is that inbound content is screened for
+prompt-injection attempts. The character-denylist half of that is live. The half that actually reads
+meaning is not reachable on any operator's machine — so an attack that doesn't trip the denylist (the
+common case; that layer exists for the crude cases) reaches the operator's agent exactly as if no
+semantic screening existed at all, while the product's own status output can still read as "screening
+active."
+
+**Two separate defects stack here:**
+1. **No operator can install it.** `installModel` has no production caller anywhere — no
+   `cello gateway install-model` command, no `@huggingface/transformers` dependency, not even an
+   optional one. The classifier constructs itself, announces its state honestly on startup, and
+   reports OFF forever, because nothing can put the model weights on disk or the runtime in the
+   tree. Not a bug that hides itself — but a customer who read "screening: active" would be wrong to
+   assume the semantic half is doing anything.
+2. **Even installed, it has never run against the real model.** No weights are downloaded in CI, so
+   every test of the classifier runs against an injected fake. The only live signal that would prove
+   inference actually works is the startup line saying ACTIVE, and nobody has seen that line fire in
+   production — because of defect 1.
+
+**Two smaller gaps found in the same investigation, real but lower severity:**
+- **`DOD-DOC-SCREEN-DOUBLE-DECODE-1`** — every document frame is CBOR-decoded twice (once to
+  classify, once to route), against a resource budget the router's own header says was measured and
+  rejected for exactly this doubling — a hostile input the budget was built to catch may now clear
+  it.
+- **`DOD-DOC-SCREEN-STARTING-CONTENT-1`** — a document's initial seeded content, the largest single
+  block of peer-authored text an operator ever receives, gets only the character denylist. It is now
+  the one inbound document text with no meaning-level check at all.
+
+**What "fixed" looks like.** Ship the install path (command + optional dependency +
+`--allow-unpinned-digests`), so `DOD-DOC-SCREEN-CLASSIFIER-1` can be observed running against real
+weights at least once. The double-decode and starting-content gaps are smaller, standalone fixes.
+
+Full trace: [[M14B-DEFINITION-OF-DONE]] § Tier SCREEN, [[M14B-BUILD-JOURNAL]].
+
+
+## 11. Same-operator standing: two layers exist, and one input can be absent
 
 **Designation: `DOD-SELF-STANDING-NULL-LINKAGE-1`** — ⚠️ **OPEN QUESTION, NOT a confirmed defect.**
 Raised 2026-08-09 from an endorsement exercise. Filed because it is a security property and the
@@ -398,7 +440,7 @@ your own machines" is an argument we make in writing (`[[shared-documents-object
 argument 3) and it is the kind of claim a technical evaluator will probe directly. A conjunct that
 evaluates to *not-same-operator* when an input is missing is the shape worth being certain about.
 
-## 11. Signup throttling counts by company, so unrelated people block each other
+## 12. Signup throttling counts by company, so unrelated people block each other
 
 **Designation: `DOD-OTP-RATELIMIT-KEY-1`** — ❌ **OPEN, filed 2026-08-10** while tracing where the
 email domain is used at all. Small, and entirely in one file.
@@ -429,7 +471,7 @@ backend. Nothing about the fix touches the directory or the protocol.
 
 ---
 
-## 12. Interrupted-session sealing is shipped and has never been proven
+## 13. Interrupted-session sealing is shipped and has never been proven
 
 **Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
 Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
@@ -497,7 +539,7 @@ then close it — all inside the relay's 24-hour retention. Minutes of work, and
 receipt or a named failure.
 
 
-## 13. You cannot retract a trust signal — and the tool says you did
+## 14. You cannot retract a trust signal — and the tool says you did
 
 **Designation: `DOD-SIGNAL-REVOKE-BROKEN-1`** — ✅ **FIXED AND PROVEN LIVE 2026-08-11. Retraction
 works, on all three nodes, with nobody driving it.**
@@ -626,7 +668,7 @@ may write to the directory. **Andre's call.** Everything else — the port, the 
 retraction failed, and the local copy must survive so a retry is possible.
 
 
-## 14. A directory node goes deaf for 40 seconds at a time, and comes back on its own
+## 15. A directory node goes deaf for 40 seconds at a time, and comes back on its own
 
 **Designation: `DOD-NODE-HEAP-GROWTH-1`** — 🟡 **MITIGATED 2026-08-16, CAUSE NOT ESTABLISHED.**
 Unranked. **Proposed slot: high — the mitigation is a delay, not a fix, and when it expires the
@@ -666,7 +708,7 @@ candidate. A 60-second memory sampler now runs on all three nodes; the growth ra
 measurement that decides whether this closes or becomes a real hunt.
 
 
-## 15. Nothing watches anything — the signal sat at 100× normal for days and nobody was told
+## 16. Nothing watches anything — the signal sat at 100× normal for days and nobody was told
 
 **Designation: `DOD-NODE-ALERTING-1`** — ❌ **OPEN.** Unranked. **Proposed slot: high, and cheap —
 this is the item that would have made `DOD-NODE-HEAP-GROWTH-1` a one-hour problem instead of a one-day one.**
@@ -696,7 +738,7 @@ at WARNING AND ABOVE ONLY** — the first version logged at info, produced perfe
 left the instance, and cost a second roll of all three nodes to fix.
 
 
-## 16. `cello status` can tell you a node is unreachable for hours after it recovered
+## 17. `cello status` can tell you a node is unreachable for hours after it recovered
 
 **Designation: `DOD-STATUS-STALE-ROSTER-1`** — ❌ **OPEN.** Unranked. **Proposed slot: alongside
 `DOD-NODE-ALERTING-1` — it is small, and it is the reason a real fault took a day to see.**
@@ -722,7 +764,7 @@ minutes rather than presenting a stale one as current. **Do not fix it by hiding
 stale** — absent and healthy must not look alike.
 
 
-## 17. One lost packet drops a directory node from the roster for the whole sweep
+## 18. One lost packet drops a directory node from the roster for the whole sweep
 
 **Designation: `DOD-BOOTSTRAP-PROBE-RETRY-1`** — ❌ **OPEN.** Unranked. **Proposed slot: high on the
 ruin test — this one fails for a normal user on a normal connection, with no fault anywhere in the
@@ -758,7 +800,7 @@ but still gives up in bounded time against a node that is genuinely down. Number
 > borrowing a word about the counterparty.
 
 
-## 18. A retried message permanently kills the conversation it was retried in
+## 19. A retried message permanently kills the conversation it was retried in
 
 **Designation: `DOD-M12B-SUBMIT-ID-1`** (and the rest of **[[M12B-DEFINITION-OF-DONE]]**) — ❌
 **OPEN, cause ESTABLISHED and measured.** Unranked. **Proposed slot: at or near the top — this is
@@ -797,7 +839,7 @@ relay roll — it is a bilateral wire contract). Evidence: [[M12B-BUILD-JOURNAL]
 needs one unacknowledged send to start and that first failure was never traced.
 
 
-## 19. A document you were removed from dials its old readers forever, four times a minute
+## 20. A document you were removed from dials its old readers forever, four times a minute
 
 **Designation: `DOD-DOC-RECONCILE-TERMINAL-1`** — ❌ **OPEN**, but narrower than it was filed. The
 2026-08-17 storm this item describes (321 dials in 85 minutes against two documents, 367 pieces of
@@ -812,7 +854,7 @@ Full investigation — the three stacking defects behind the original storm and 
 is why messaging didn't work at all": [[M12B-DEFINITION-OF-DONE]] § `DOD-DOC-RECONCILE-TERMINAL-1`,
 [[M12B-BUILD-JOURNAL]].
 
-## 20. A close doesn't tell you it's waiting, so you force it and forfeit the receipt it was about to earn
+## 21. A close doesn't tell you it's waiting, so you force it and forfeit the receipt it was about to earn
 
 **Designation: `DOD-M12B-CLOSE-SILENT-WAIT-1`** — 🟡 **HALF FIXED 2026-08-17.** The wait now
 announces itself when it starts — with the deadline and the cost of forcing — and a session mid-seal
@@ -833,7 +875,7 @@ a decision, parked rather than taken in passing.
 Full trace: [[M12B-DEFINITION-OF-DONE]] § `DOD-M12B-CLOSE-SILENT-WAIT-1`, [[M12B-BUILD-JOURNAL]]
 Entry 19.
 
-## 21. A transport hiccup can permanently kill a perfectly healthy conversation
+## 22. A transport hiccup can permanently kill a perfectly healthy conversation
 
 **Designation: `DOD-M12B-TRANSPORT-FAULT-NOT-TERMINAL-1`** — ❌ **OPEN, found 2026-08-19 while
 fixing `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` (closed). Upstream of the two items below it,
@@ -862,7 +904,7 @@ directory) from a merits failure (the directory examined the seal and refused it
 merits case terminalises. A transport failure instead leaves the session active, so the client
 retries rather than believing it is over.
 
-## 22. The relay has one word for "sealed" and one word for "gave up," and they are the same word
+## 23. The relay has one word for "sealed" and one word for "gave up," and they are the same word
 
 **Designation: `DOD-M12B-TERMINAL-REASON-1`** — ❌ **OPEN, found 2026-08-19 while fixing
 `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` (closed).**
@@ -895,7 +937,7 @@ older client fails safely rather than silently misreading a new answer the same 
 this one today. **Wire-visible: the relay must tolerate the new reasons before any client is allowed
 to depend on them** (§2f) — the same staged-rollout discipline M12B already uses.
 
-## 23. The one safety net for `DOD-M12B-TERMINAL-REASON-1` has never once caught anything
+## 24. The one safety net for `DOD-M12B-TERMINAL-REASON-1` has never once caught anything
 
 **Designation: `DOD-M12B-PULL-NEVER-RECOVERS-1`** — ❌ **OPEN, found 2026-08-19 while fixing
 `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` (closed). Needs investigation before any fix — not a
