@@ -78,12 +78,14 @@ delivers. **Every item gets built. M15 decides order, not selection.**
    chain, their act of sending locks in what *you* said. Neither side can repudiate without
    abandoning the exchange. **Every unit names its counterbalance before the code.**
 2. **Fail loudly — and loud is not blocking.** Most failures fail loudly and may continue; what is
-   never right is failing quietly. Three requirements: the audience for a warning is the **agent**,
-   not the log — a detection whose only consumer is a log line or a status string is not a control;
-   a **security** failure is loud **and blocks** (a signature that fails against the expected
-   counterparty means possible impersonation — announce and stop, session-ending, worded as an
-   observation and never as a verdict); and **missing, malformed and mismatched collapse into one
-   path**, because an attacker evading a mismatch check simply supplies no proof at all.
+   never right is failing quietly. Three requirements: a warning reaches the **log AND the agent** —
+   both, never one instead of the other, because the log is the durable forensic record and the
+   agent-facing response is the control, and a detection whose only consumer is a log line or a
+   status string changes no behaviour (**never delete a log line to satisfy this**); a **security**
+   failure is loud **and blocks** (a signature that fails against the expected counterparty means
+   possible impersonation — announce and stop, session-ending, worded as an observation and never as
+   a verdict); and **missing, malformed and mismatched collapse into one path**, because an attacker
+   evading a mismatch check simply supplies no proof at all.
 3. **The upstream cause survives downstream.** Errors name their cause, not their exit point, and a
    downstream handler never overwrites an upstream descriptive error with a generic one. Wrapping
    adds context; replacing destroys signal. Measured instance: one string, `counterparty_offline`,
@@ -103,6 +105,16 @@ status marker on it.
 identity or integrity proof is computed, evaluated correctly, and then not acted on, with a nearby
 comment asserting the property the code does not enforce. Fixing instances individually leaves the
 next one to be found later, which is why the sweep is a named deliverable and not a cleanup task.
+
+**Decisions carried into the DoD (Andre, 2026-08-21):**
+
+- **The seal wire change is INSIDE the launch gate.** Ruled on the migration argument, not the
+  security one: no working attack against the seal was demonstrated, and a wire + schema change is
+  cheapest against an empty database and never gets cheaper. Consistent with Decisions 1 and 6 in
+  the spec-of-record. **This pulls the application-layer content encryption in with it** — the seal
+  change consumes the per-session hash salt that the key agreement produces, and the seal items
+  cannot be split, so the per-session ephemeral handshake with its PQ hook is gated too. Largest
+  coupled pair in the milestone; both in.
 
 **First action:** the live-deployment verification spike (M15-PROCEDURE §4.1) — three questions that
 cannot be answered by reading source and that re-price other units. Hours, no code, before anything

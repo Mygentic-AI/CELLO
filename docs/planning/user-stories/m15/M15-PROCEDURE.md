@@ -121,9 +121,14 @@ units, phased) and [[2026-08-21_1135_tofn-decoupling-and-seal-integrity-gaps]] (
 3. **AN OPEN DOOR.** Unauthenticated access, injection, anything a stranger can do to an operator's
    machine or to the relay. Includes the whole **checked-then-ignored** class (§2b), because a
    detection that does not act is an open door with a witness.
-4. **THE RECEIPT BINDING.** The seal wire change. Not launch-blocking on the security argument — no
-   working attack against the seal was demonstrated — but launch-blocking on the **migration**
-   argument, which is Andre's own and applied consistently with Decisions 1 and 6.
+4. **THE RECEIPT BINDING.** The seal wire change. **INSIDE THE LAUNCH GATE — Andre, 2026-08-21.**
+   Not launch-blocking on the security argument (no working attack against the seal was
+   demonstrated), and launch-blocking on the **migration** argument, which is his own and is applied
+   consistently with Decisions 1 and 6: a wire and schema change is cheapest against an empty
+   database and never gets cheaper. **Consequence, stated because it is easy to miss:** the seal
+   change consumes the per-session hash salt produced by the per-session key agreement, and its
+   items cannot be split — so **the application-layer content encryption is pulled inside the gate
+   with it**, PQ hook and all. That is the largest coupled pair in the milestone and it is in.
 5. **ABUSE CONTROLS AND VOLUMETRIC DEFENCE.** Rate limiting, idle timers, caps, Cloud Armor.
 6. **Deferred with a trigger** — never deferred silently.
 
@@ -324,12 +329,22 @@ is failing *quietly*.
 
 **Three requirements, and all three are checkable on a diff:**
 
-1. **The audience for a warning is the AGENT, not the log.** A detection whose only consumer is a
-   log line, a metric, or a status string **is not a control.** If the system continues past a
-   problem, it continues *in the knowledge that the agent has received the warning* — which means
-   the warning is in the response the agent reads, not in a file it will never open. The canonical
-   violation is on this milestone's own list: local/relay leaf divergence is detected correctly on
-   the next send, and its entire effect is what `cello status` prints.
+1. **A warning goes to the AGENT *and* to the LOG. Both. Never one instead of the other.** These are
+   two different jobs and neither substitutes for the other:
+   - **The log is the durable forensic record.** It is what an investigation reads days later, what
+     correlates across processes, and what survives the session. Removing a log line because the
+     agent now gets told is a regression — it destroys the evidence trail that every debugging
+     protocol in this project depends on.
+   - **The agent-facing response is the control.** A detection whose only consumer is a log line, a
+     metric, or a status string **is not a control**, because nothing in the running system changes
+     behaviour on it. If the system continues past a problem, it continues *in the knowledge that
+     the agent has received the warning* — which means the warning is in the response the agent
+     reads, not only in a file it will never open.
+
+   The canonical violation is on this milestone's own list: local/relay leaf divergence is detected
+   correctly on the next send, logged as an error — and its entire effect on behaviour is what
+   `cello status` prints. The log line there is right and stays; what is missing is the half that
+   reaches the agent and the half that acts.
 2. **A SECURITY failure is loud AND blocks.** If an inbound message's signature does not verify
    against the expected counterparty, that means someone may be impersonating them. Announce it and
    **stop** — no ingest, no display, no attribution to anyone. Session-ending, not per-message: one
@@ -345,7 +360,8 @@ must not feed automatically into any trust-signal or reputation score.
 
 **Flag as BLOCKING:** a verification whose failure path is `log` + continue; a detection whose only
 consumer is a status string; a security check that warns instead of stopping; any branch where a
-missing proof is treated more leniently than a wrong one.
+missing proof is treated more leniently than a wrong one; **and a fix that satisfies this invariant
+by moving a message out of the log into the response — the log line stays.**
 
 ### Invariant 3 — THE UPSTREAM CAUSE SURVIVES DOWNSTREAM (BLOCKING)
 
@@ -500,9 +516,12 @@ relocates trust rather than closing it), then the rest of Phase 1.
 - **ABSENT IS NOT FINE.** A guard with missing input REFUSES — loudly, naming its cause. Missing,
   malformed and mismatched share one path.
 - **ERRORS NAME THEIR CAUSE, NOT THEIR EXIT POINT — and downstream never overwrites upstream.**
-- **A DETECTION THAT DOES NOT ACT IS NOT A CONTROL.** Logs and status strings are not consumers.
-- **SECURITY FAILS LOUD AND BLOCKS. Everything else may fail loud and continue** — but the agent is
-  told, in the response, not in a log.
+- **A DETECTION THAT DOES NOT ACT IS NOT A CONTROL.** A log line alone changes no behaviour, and a
+  status string is not a consumer.
+- **LOUD MEANS THE LOG *AND* THE AGENT — both, never one instead of the other.** The log is the
+  durable forensic record; the response is the control. Never delete a log line to satisfy this.
+- **SECURITY FAILS LOUD AND BLOCKS. Everything else may fail loud and continue** — but only where
+  the agent has been told, in the response it reads.
 - **EVERY RESPONSE WITH A FAILURE OR WAITING STATE CARRIES ITS NEXT STEP.**
 - **NAME THE COUNTERBALANCE BEFORE THE CODE.** Assume the peer rewrote their daemon.
 - **NO CONSUMER, NO SHIP.** New fields/flags/events need a named consumer in the same unit.
