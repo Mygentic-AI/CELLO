@@ -147,13 +147,24 @@ side can dial the other's session-specific identity.
 
 ## 3. Security Properties Achieved
 
+> **⛔ CORRECTION 2026-08-21 — this table is titled "Achieved" and three of its six rows are
+> not.** Verified against the code. The design record kept this table as a live claim for two
+> months; it is the source of the same claim in [[m7-architecture-2026-06-12]] and of the
+> "no persistent endpoint to DDoS" line in GTM and investor material. Corrections are inline
+> below. The section's *architecture* (signaling node / session node split, standing receiver)
+> is accurate and shipped — only the security properties are overstated.
+>
+> The anti-DDoS **premise** of this whole document was separately retracted on 2026-08-18 —
+> address secrecy was never the control, since the Noise handshake proves key possession.
+> The original April rationale was privacy, not DDoS.
+
 | Property | How |
 |----------|-----|
-| **Session-scoped DDoS defense** | Counterparty's address for you dies when the session node tears down. Cannot flood you after session ends. |
-| **Session-scoped unlinkability** | Each session has a unique Peer ID. No observer can correlate sessions by transport identity. |
-| **Directory connection privacy** | Directory-facing Peer ID never shared with counterparties. Counterparties cannot reach your signaling layer. |
+| ⛔ ~~**Session-scoped DDoS defense**~~ **NOT ACHIEVED** | ~~Counterparty's address for you dies when the session node tears down.~~ The session node binds **loopback** — it was never reachable, so nothing was defended. The reachable node is the **standing receiver**, which is per-agent, lives as long as the daemon, and holds a circuit-relay reservation from agent-online (since 2026-07-14), making every online agent dialable from the internet. |
+| **Session-scoped unlinkability** | Each session has a unique Peer ID. No observer can correlate sessions by transport identity. — **Holds against a passive network observer, but is bypassed entirely by the relay's `session_liveness_query`**, which answers "is agent X online?" for any pubkey, to any caller, with no participant check and no rate limit. |
+| **Directory connection privacy** | Directory-facing Peer ID never shared with counterparties. Counterparties cannot reach your signaling layer. — Holds. Note the directory-facing node still binds `0.0.0.0` with **no gater at all** (`DirectoryConnectionGater` is test-only), so it is reachable even though its id is not advertised. |
 | **Multi-session isolation** | Sessions share nothing at the transport level. A compromised session node reveals nothing about other sessions. |
-| **connectionGater is trivial** | Each session node accepts connections from exactly one peer: its counterparty. Everyone else rejected before Noise handshake. Simpler and stronger than the shared-node allowlist approach discussed in the audit. |
+| ⛔ ~~**connectionGater is trivial**~~ **NOT ACHIEVED** | ~~Each session node accepts connections from exactly one peer: its counterparty. Everyone else rejected before Noise handshake.~~ The **standing receiver** is created with `allowedPeerId: null` = **allow everyone**. Worse, narrowing the gate at promotion does **not** disconnect peers already attached, so a stranger who dialled the open receiver earlier is still connected when the content protocol activates. |
 | **No address broadcasting** | Session Peer IDs travel through the directory only, in the SessionAssignment. Never broadcast to a DHT or gossipsub mesh. |
 
 ---

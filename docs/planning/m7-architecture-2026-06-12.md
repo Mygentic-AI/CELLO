@@ -3,15 +3,45 @@ name: M7 Architecture Overview
 type: reference
 date: 2026-06-12
 topics: [daemon, architecture, flow, libp2p, frost, tuf, manifest, session, transport, m7]
-status: current
+status: superseded-in-part
 description: >
   Master architecture and flow reference for CELLO post-M7. Covers component
   layout, libp2p primitives in use, the TUF-aligned manifest model, every major
   protocol flow from onboarding through seal, and the SQLCipher data model.
-  Supersedes all pre-M7 architecture documents for the client side.
+  Supersedes all pre-M7 architecture documents for the client side. NOTE: its
+  network-exposure security claims (ephemeral Peer IDs defeat DDoS, connectionGater
+  rejects all non-counterparty peers) were verified against the code on 2026-08-21
+  and found FALSE. See the correction banner below.
 ---
 
 # CELLO Architecture — M7
+
+> ## ⛔ CORRECTION — 2026-08-21: the network-exposure security claims in this document are FALSE
+>
+> A code audit on 2026-08-21 checked this document's transport security claims against
+> what actually runs. **The component layout, protocol flows, and data model in this
+> document remain accurate. The security claims about network exposure do not.**
+>
+> **What this document claims — and why each is wrong:**
+>
+> | Claim | Reality |
+> |---|---|
+> | "DDoS and cross-session linking are both defeated" (§Key Invariants) | Neither is defeated. The claim only ever described the **session node**, which binds loopback and was never reachable from the internet. The node that *is* reachable — the standing receiver — is per-agent, lives as long as the daemon, and is not covered by the ephemerality argument at all. |
+> | "Each session node accepts exactly one peer. All others rejected before Noise" (§Key Invariants, §3) | True of session nodes; **false of the standing receiver**, which is the only node an outsider can reach. It is created with `allowedPeerId: null`, which the gater treats as *allow everyone*. |
+> | "the rejected peer learns nothing — not even that CELLO is running" (§3) | Nobody is rejected on the standing receiver, so nothing is withheld. `identify` answers with the public key, listen addresses, and protocol list. |
+> | Implied: the client is not dialable by strangers | Since 2026-07-14 the standing receiver takes a **circuit-relay reservation at agent-online, before any session exists**, and the relay installs no filter on who may dial a reservation holder. Every online agent is reachable from the internet, NAT irrelevant. |
+>
+> **The rationale in §1 was itself retracted.** This document justifies ephemerality as
+> anti-DDoS. That justification was withdrawn on 2026-08-18: address secrecy was never
+> the control, because the Noise handshake proves possession of the private key — a learned
+> id is an address, not a credential. The governing rule is now *"leave nothing open that
+> is no longer needed"*; the control is the **bound**, not the secrecy. The original (April
+> 2026) rationale was **privacy/unlinkability**, not DDoS — see
+> [[2026-04-11_1400_libp2p-dht-and-peer-connectivity]].
+>
+> **Do not cite this document for any security property.** For the current state see
+> [[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]] (the retraction) and the
+> 2026-08-21 relay/transport exposure audit.
 
 > **This document reflects the system as it will exist after M7 is fully implemented.**
 > All component stories (DAEMON-001 through DIR-PING-001) are specified; implementation
@@ -228,6 +258,25 @@ Each ephemeral session node has a connectionGater configured at creation:
 This is simpler and stronger than a shared-node allowlist. Because the gate fires
 before the Noise handshake, the rejected peer learns nothing — not even that CELLO
 is running.
+
+> **⛔ FALSE as implemented (verified 2026-08-21).** This describes the *session node*.
+> The **standing receiver** — the only node an outsider can actually reach — is built with
+> `allowedPeerId: null`, and `#denyIfNotAllowed` returns *allow* when that is null. Nobody
+> is rejected, so nobody "learns nothing": any peer completes the Noise handshake and
+> `identify` answers with the pubkey, addresses, and protocol list.
+>
+> Two further gaps in the same mechanism:
+> - **Narrowing the gate does not disconnect anyone.** When the receiver is promoted into a
+>   session and `setAllowedPeer` narrows it, connections established *before* the narrowing
+>   survive — libp2p's gater runs only at connection establishment. A peer who dialled the
+>   open receiver earlier is still attached when `/cello/content/1.0.0` is registered.
+> - **`DirectoryConnectionGater` is dead code.** It exists but is constructed only in tests,
+>   so the directory-facing node (which binds `/ip4/0.0.0.0/tcp/0`) has no peer filtering at all.
+>
+> The intended gate is *"refuse any dialer whose peer id is not named in a live,
+> directory-signed session assignment"* — workable because the responder always receives the
+> offer and reports its peer id **before** the counterparty dials. That check is not implemented,
+> and it depends on first verifying the assignment's signature, which the client also does not do.
 
 ---
 
@@ -984,8 +1033,8 @@ AES-256-GCM encrypted at rest, key derived from K_local).
 | Invariant | What It Means |
 |---|---|
 | **Sovereign directory nodes** | 3 nodes, 3 regions, independently operated. No single node can complete a FROST ceremony. No region failure takes down the system. |
-| **Ephemeral session Peer IDs** | After seal, a recorded session address leads nowhere. DDoS and cross-session linking are both defeated. |
-| **connectionGater per session node** | Each session node accepts exactly one peer. All others rejected before Noise — they learn nothing. |
+| ~~**Ephemeral session Peer IDs**~~ ⛔ **FALSE** | ~~After seal, a recorded session address leads nowhere. DDoS and cross-session linking are both defeated.~~ **Neither is defeated.** True only of the session node, which binds loopback and was never reachable. The reachable node (standing receiver) is per-agent, lives as long as the daemon, and its address does not die at seal. Verified 2026-08-21. |
+| ~~**connectionGater per session node**~~ ⛔ **FALSE** | ~~Each session node accepts exactly one peer. All others rejected before Noise — they learn nothing.~~ **The standing receiver accepts everyone** (`allowedPeerId: null` = allow-all), and narrowing the gate at promotion does not close connections already open. Verified 2026-08-21. |
 | **transport_mode is FROST-signed** | The dial strategy cannot be influenced by controlling address strings. Only the signed field is authoritative. |
 | **Manifest version monotonicity** | An attacker who serves a stale manifest gains nothing — the client rejects it and disconnects. |
 | **No auto-seal on session_interrupted** | The relay frame is unsigned. A malicious relay cannot force FROST ceremony consumption. Operator must explicitly seal. |
