@@ -99,3 +99,6 @@ here. This document states only the problem.
 - [[M8C-DEFINITION-OF-DONE]] — SEC-2 entry under "Tracked, not M8C-fruit"
 - [[M8C-BUILD-JOURNAL]] — Entry 39 (how it was found, full confirmation trail)
 - [[M8C-DECISIONS]] — D20 (DOD-PRIMARY-1's ceremony-gate parked on this fix)
+- [[2026-08-21_1135_tofn-decoupling-and-seal-integrity-gaps]] — a different, later-found FROST
+  forgery gap in the same signing path (co-signing directory nodes never re-verify seal content,
+  only one node in the ceremony does) — same family of problem, different mechanism than SEC-2

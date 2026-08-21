@@ -104,3 +104,4 @@ See commits `dee781c` and `ea72180` for the full process changes.
 - [[2026-05-30_0637_federation-transport-sovereignty-and-mtls]] — the VPC Peering incident; same process failure class
 - [[2026-05-30_0800_node-infrastructure-cost-model]] — per-node cost breakdown (~$156/node/month AWS); the operational cost of the three-region infrastructure
 - [[M2-frost-threshold-layer]] — M2 milestone write-up; the bootstrapKeyShares stub that REG-001 was meant to replace
+- [[2026-08-21_1135_tofn-decoupling-and-seal-integrity-gaps]] — later investigation into decoupling T from majority(N); Part 2 treats this doc's DKG-quorum-scope defect as settled background for the enrollment/resharing discussion

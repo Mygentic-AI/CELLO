@@ -276,3 +276,37 @@ committing to it, not eyeballed.
 - None of the above blocks on the others — they're independently scoped, and independently
   deferrable, but the escape-hatch risk noted in Part 4 means the bilateral-seal fix and the
   unilateral-seal fix should probably not ship far apart from each other.
+
+---
+
+## Related Documents
+
+- [[end-to-end-flow]] — Core Invariant 3 and the §2.3 bookend description this whole investigation
+  starts from; also the source for the relay-submits-to-one-directory seal flow traced in Part 3
+- [[cello-initial-design]] — the original forgery-resistance rationale for FROST ("compromising a
+  threshold of nodes across jurisdictions is required to forge a signature") that Part 3 found
+  doesn't hold as coded for the seal specifically
+- [[2026-04-15_0900_session-level-frost-signing]] — why per-message FROST was dropped in favor of
+  bookend-only ceremonies; the K_local-alone-in-between design this whole gap analysis sits inside
+- [[2026-05-31_0900_cryptographic-custody-chain]] — the FROST-as-third-party-witness framing Part 1
+  draws on, and the "Not Me" mechanism that's explicitly out of scope here
+- [[2026-06-03_1200_frost-dkg-single-directory-gap]] — the earlier, different DKG-quorum defect
+  (multi-directory DKG never actually implemented as 3-of-5); Part 2's DKG-scope/enrollment
+  discussion is the settled aftermath of this
+- [[2026-07-04_0556_tofn-registration-availability-quorum-enrollment-plan]] — the enrollment/
+  resharing design Part 2 cites directly, including the "SETTLED, DO NOT RE-RAISE" threshold ruling
+- [[2026-07-03_1618_tofn-registration-preauth-capability-design]] — the resharing-vs-fresh-DKG
+  distinction (§9) that Part 2's enrollment summary is drawn from
+- [[2026-07-07_1030_sec-2-frost-signing-forgery-finding]] — a different, earlier confirmed FROST
+  forgery hole (arbitrary-message signing via a public key alone) in the same signing path; same
+  family of problem, different mechanism than the Gap 1/Gap 2 findings here
+- [[2026-04-08_1430_protocol-strength-and-commerce]] — the original fabricated-conversation-attack
+  threat model; Part 3's truncation vector is a variant this doc did not anticipate
+- [[2026-04-17_1400_directory-relay-architecture-reassessment]] — source of the relay-cheap/
+  directory-expensive cost split Part 3's truncation-fix direction (relay fan-out, not directory
+  fan-out) leans on
+- [[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]] — a different unilateral-seal-
+  adjacent investigation (sessions that can't resume at all); shares the unilateral-seal topic but
+  addresses a different failure mode than Part 4's presence-gate gap
+- [[2026-08-09_0400_a-conversation-that-was-never-recordable]] — a prior seal/relay/witnessing
+  investigation; relevant background for the relay-fan-out truncation-fix direction in Part 3
