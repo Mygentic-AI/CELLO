@@ -17,8 +17,8 @@ description: >
   threshold; the client never verifies the directory's signature on a session assignment at all;
   and the relay has almost no abuse controls. Also establishes that NOBODY verifies the sealed root
   against the local transcript on the normal seal path — each side's code comments defer the check
-  to the other. All five design decisions are RESOLVED (each states its ruling inline); 26 build items remain,
-  plus one live-deployment verification.
+  to the other. Decisions 1-5 ruled inline; 6 and 7 raised by a completeness review and open. 38 build items,
+  two of which are live-deployment verifications that cannot be answered by reading code.
 ---
 
 # Live P2P exposure — what ephemeral Peer IDs actually bought, and the gaps found chasing it
@@ -547,7 +547,7 @@ assignment first, then gate on it.**
 
 ---
 
-## Part 10 — The pattern behind three of these findings
+## Part 10 — The pattern behind four of these findings
 
 The same defect shape has now been found four times, across two investigations:
 
@@ -707,9 +707,9 @@ launch blocker.
 you** — that path is outbound and already works. It is needed to accept a counterparty's dial. The
 real question is whether accepting *direct* dials is worth an open port at all.
 
-**Not verified:** that circuit reservations need no listening socket was reasoned from how
-circuit-relay-v2 works, not confirmed against this libp2p version in our tree. Confirm before
-treating it as decided. This is Design Decision 2 below.
+**Since verified — see the VERIFIED block below.** A reservation genuinely needs no listening
+socket. It is moot under Design Decision 2, which kept the socket for other reasons; if option (b) is
+ever reopened, this is the settled half of it.
 
 ---
 
@@ -865,7 +865,9 @@ runtime URL match. Two log events discriminate it.
 ## Design Decisions
 
 Each entry states the choice that had to be made, the options weighed, and what was decided.
-All five are decided; nothing here is outstanding.
+Decisions 1–5 are ruled. Decision 4 carries a deliberately deferred follow-on (scheduled, with a
+trigger — build item 34). Decisions 6 and 7 were surfaced by the completeness review and **need a
+ruling**.
 
 ---
 
@@ -995,131 +997,262 @@ encryption layer must not cost a property the existing one already provides.**
 
 ---
 
+### 6. Whether the transcript record should carry per-message sender proof
+
+**NEEDS A RULING — surfaced by the completeness review, 2026-08-21.**
+
+Part 4 established that the stored record has **no sender signature and no sender field**. A
+transcript row holds the message and a direction — "sent" or "received" — and the Merkle leaf holds a
+content hash and a kind byte. Attribution comes entirely from local session state.
+
+Items 1–5 stop the injection at ingest. **Neither makes the stored record self-describing**, which
+leaves two consequences: anything ingested before the fix can never be audited, and any *future*
+ingest defect is again undetectable after the fact, because the record carries no independent
+evidence of who spoke.
+
+- **(a) Accept it.** Once ingest is gated, session state *is* the authority for attribution. No
+  per-message signature is stored. Record as a known bounded property.
+- **(b) Store the sender's signature with each leaf**, so the record proves authorship independently
+  of whatever gate was in force when it was written.
+
+**Recommendation: (a), recorded explicitly rather than left silent.** (b) is a wire and schema change
+touching the seal path, for a property that items 1–5 already deliver at the boundary — and this
+investigation has just spent its length establishing that the fix belongs at the gate. But the
+limitation is real and should be written down: **the local transcript cannot independently prove who
+authored a message.** Revisit if the transcript is ever presented as third-party evidence rather than
+as the operator's own record, because that is the point at which "the gate was correct" stops being a
+sufficient answer.
+
+---
+
+### 7. Whether the relay's long-lived per-agent handle is accepted or mitigated
+
+**NEEDS A RULING — surfaced by the completeness review, 2026-08-21.**
+
+The standing receiver holds a **relay reservation from agent-online, independent of any session**. For
+an agent that is not constantly in sessions, that receiver identity is stable for long stretches and
+is known to that one relay. The April design made relay/directory operator separation a *protocol
+constraint* specifically so that no single party could correlate an agent across sessions — the
+reservation hands one party a persistent per-agent handle it did not have in that model.
+
+Build item 26 (reservations with several relays) is an **availability** fix and does not address this.
+
+- **(a) Accept it** as an inherent cost of relay-mediated inbound reachability, and disclose it
+  alongside the metadata disclosure in build item 36.
+- **(b) Rotate the receiver identity on a timer** when no session has consumed it, so an idle agent
+  does not present one stable handle indefinitely.
+- **(c) Spread reservations across several relays** so no single relay sees a continuous handle —
+  which item 26 would deliver as a side effect.
+
+**Recommendation: (a) plus (c) as a side effect of item 26.** (b) buys little for real cost: the relay
+sees the reconnection either way and can trivially link old and new identities by timing, so rotation
+against a party that watches continuously is theatre. (c) is genuinely useful and is already being
+built for availability reasons, so the linkability benefit is free. What matters is that this is
+**stated** rather than left as an unexamined erosion of a property the design record treats as a
+protocol constraint.
+
+---
+
+
+---
+
 ## What Needs to Be Built or Modified
+
+Grouped by what they achieve. Dependencies are called out where order matters.
+
+### A — Close the injection path
 
 1. **Pin the direct-path content frame to the dialing peer.** Require `remotePeerId` to equal the
    session's counterparty Peer ID, and make `session_id` required-and-equal. The session-abandon
    handler three blocks above already does exactly this — copy it.
 
-2. **Make the identity proof a gate, not a log line.** A missing, malformed, **or** mismatched sender
+2. **Pin the direct-path delivery acknowledgement too — and audit every other handler on that
+   protocol.** The ack handler performs no sender check and no session check, and a forged ack cancels
+   the park-on-undelivered timer, so a stranger holding an open connection can make an operator's
+   messages vanish while they appear delivered. Item 1 alone does not close this — it is scoped to the
+   content frame. Apply the same gate, then check **every** frame handler registered on the session
+   protocol rather than only the two named here.
+
+3. **Make the identity proof a gate, not a log line.** A missing, malformed, **or** mismatched sender
    proof must all take the same hard-fail path. Sequence position may stay soft; identity may never
    be. Applies to the direct content path and to the seal ingest path from the previous
    investigation.
 
-3. **Gate the standing receiver on the session assignment — assignment-named dialers only.** Refuse
+4. **Sweep for the checked-then-ignored pattern rather than fixing four instances.** Part 10 states
+   that this is one pattern, not four bugs, and that a list which fixes instances individually leaves
+   the next one to be found later — items 1–3 and 11 fix exactly the four known instances. For every
+   frame handler and every verification call in daemon, directory and relay, answer two questions:
+   does a failed check take a hard-fail path, and does a **missing or malformed** proof take the same
+   path as a mismatched one? Fix every hit, and **rewrite — do not delete — every nearby comment that
+   asserts a property the code does not enforce**; in three of the four known instances that comment
+   is why the gap survived review.
+
+5. **Close existing connections when the gate narrows.** Promotion currently sets the allowed peer for
+   future connections only. It must also disconnect every peer not on the new list. Without this,
+   items 1–4 still leave a pre-positioned connection attached when the content protocol activates.
+
+### B — Shrink the network surface
+
+6. **Verify the directory's signature on the session assignment client-side.** Currently the parser
+   only checks that signatures are 64 bytes. **Item 7 is worthless without this** — gating on an
+   unverified document just relocates the trust. Do this first.
+
+7. **Gate the standing receiver on the session assignment — assignment-named dialers only.** Refuse
    any dialer whose Peer ID is not named in a live, directory-signed assignment. The responder always
    receives the offer and reports its Peer ID *before* the counterparty dials, so the assignment
-   always exists in time. **Settled 2026-08-21** — no trusted-tier bypass, because the gate sees a
-   transport Peer ID that is freshly minted per session and unknowable in advance; trust tiers do
-   their work one layer up at session acceptance. Depends on item 4. Superseded in scope if
-   Design Decision 2 lands on binding no socket at all.
+   always exists in time. No trusted-tier bypass: the gate sees a transport Peer ID minted per session
+   and unknowable in advance, and trust tiers do their work one layer up at session acceptance
+   (Design Decision 2). **This also closes the `identify` disclosure in Part 4 step 4** — a stranger
+   currently receives the agent's public key, listen addresses and protocol list — which has no other
+   mitigation on the list. Depends on item 6.
 
-4. **Verify the directory's signature on the session assignment client-side.** Currently the parser
-   only checks that signatures are 64 bytes. Item 3 is worthless without this.
-
-5. **Close existing connections when the gate narrows.** Promotion currently sets the allowed peer
-   for future connections only. It must also disconnect every peer not on the new list.
-
-6. **Drop unauthenticated idle connections.** A connection that has completed the handshake but
-   authenticated to nothing and done nothing should be closed on a timer.
-
-7. **Stop the directory-facing node listening at all.** It currently binds `/ip4/0.0.0.0/tcp/0` —
-   a real open port on every interface — while registering **no protocol handler**, and the
-   directory **never dials a client**. It has no reason to accept inbound connections. An empty
-   listen configuration removes it from the attack surface entirely: no socket, no port, nothing to
-   scan and nothing to gate. This is strictly stronger than filtering who may connect.
+8. **Stop the directory-facing node listening at all.** It currently binds `/ip4/0.0.0.0/tcp/0` — a
+   real open port on every interface — while registering **no protocol handler**, and the directory
+   **never dials a client**. It has no reason to accept inbound connections. An empty listen
+   configuration removes it from the attack surface entirely: no socket, no port, nothing to scan and
+   nothing to gate. Strictly stronger than filtering who may connect.
 
    *Fallback only if something turns out to need inbound there:* install the existing
-   `DirectoryConnectionGater`, which is written but constructed only in tests. Do not treat the
-   gater as the primary fix — not listening is the fix.
+   `DirectoryConnectionGater`, which is written but constructed only in tests. Not listening is the
+   fix; the gater is the consolation prize.
 
-8. **Require session context for relay access.** No relay service without a directory-issued
-   assignment naming the caller as a participant — including for collecting parked content, where the
-   original session's assignment is the credential.
+9. **Drop unauthenticated idle connections.** A connection that has completed the handshake but
+   authenticated to nothing and done nothing should be closed on a timer.
 
-9. **Fix the liveness query.** Require the caller to be a named participant in the session it asks
-   about, and scope the answer to that session rather than a global map.
+10. **Install a connection gater on the relay, including the reservation-dial restriction hook.**
+    Reservations are granted to any peer up to the 4096 cap, and the libp2p hook that restricts who
+    may dial *through* to a reservation holder is never installed — so an agent's circuit address is
+    dialable by anyone who learns it. **This is the relay-side twin of item 7**, and without it item 7
+    only closes the direct route while the circuit route stays open. Gate reservation grants on the
+    same directory-signed credential as item 19, and restrict circuit dials to the assignment-named
+    counterparty.
 
-10. **Have the relay verify that an authenticating key is a registered agent**, rather than accepting
-    any Ed25519 keypair.
+### C — Bind the receipt to the transcript
 
-11. **Add rate limiting to the relay** — per peer and per pubkey, on authentication, hash submission,
-    gap-fill, liveness query, and content-park deposit. Bound the content-park store per depositor.
+11. **Bind the receipt to the transcript, client-side.** The client must verify the certified root
+    against its own tree before accepting or co-signing a certificate. Shape is settled — Design
+    Decision 1(a), move the bilateral certified root into the content-hash domain, which makes this a
+    one-line comparison of two hashes the client already holds. Once both roots live in one domain,
+    root equality implies leaf-set equality, so this also covers the missing bilateral leaf-count
+    check noted in Part 5.
 
-12. **Re-enable the per-session idle timer in the production relay binary**, and restore a duration
-    and byte cap on relayed connections.
+12. **Have the directory verify the SEAL leaf's `final_root` too.** Its own comment defers this to a
+    client check that does not exist, and the check is structurally impossible today because
+    `final_root` survives only inside a SHA-256 pre-image that is never transmitted. Decision 1(a)
+    removes that obstacle. **Ship this with item 11 and delete the deferral comment** — fixing one
+    side of a mutual deferral and leaving the other half pointing at it is how this gap was created.
 
-13. **Fix the two relay-client leaks** — graceful shutdown must close relay clients, and the
-    seal-only detached path must unregister its session.
+13. **Make the diverged flag act.** Local/relay leaf divergence is already detected on the next send,
+    and today it only changes what `cello status` prints. It must block the session from sealing and
+    surface as a hard error. This is the cheapest item on the list and it fires **before** the seal —
+    item 11 catches the same divergence later, by a different mechanism. A detection that reaches only
+    a status string is not a control.
 
-14. **Add replay protection to the directory-admin relay frames** — a nonce or timestamp in the
-    signed body.
+14. **Make the seal-readiness check symmetric.** It counts only leaves the relay holds that we lack.
+    It must also fail when the local tree holds leaves the relay never witnessed — which is the
+    direction an injected or forged leaf actually appears in, and therefore the one this whole
+    investigation is about.
 
-15. **Bind the receipt to the transcript.** The client must verify the certified root against its own
-    tree before accepting or co-signing a certificate. See Design Decision 1 for the
-    three shapes this can take.
+15. **Replace the directory's circular root check.** The directory recomputes the root from the same
+    leaf array the relay supplied, using the same code — so it validates arithmetic, not the relay. It
+    cannot detect a relay that dropped or reordered a leaf. Compare against something the relay did
+    not supply: the parties' own reported roots (which item 11 makes available in one hash domain), or
+    an independently reconstructed per-leaf signature chain.
 
-16. **Implement `cello_get_inclusion_proof`.** Currently a `not_implemented` stub; it is what lets an
+16. **Delete the dead `seal_attempt` path.** Decision 1 chose the content-hash-domain comparison over
+    reviving it, so the directory's complete-but-unreachable handler, its tests, and the relay test
+    asserting the frame never appears should go with item 11. A fully written seal handler with no
+    sender reads as abandoned work to anyone auditing the repo — and this repo is read by prospective
+    adopters.
+
+17. **Implement `cello_get_inclusion_proof`.** Currently a `not_implemented` stub; it is what lets an
     operator prove a specific message sits under a sealed root.
 
-17. **Give an agent reservations with more than one relay.** Inbound reachability currently rests on a
+18. **Replace the seal spine tests.** Ten tests assert both sides ended with the same sealed root;
+    both sides in fact received the same bytes from the same certificate, so they would stay green if
+    the directory certified a root over a completely different leaf set. Replace with tests asserting
+    each side's **own** tree matches the certified root.
+
+### D — Relay authorization and abuse controls
+
+19. **Require session context for relay access.** No relay service without a directory-issued
+    assignment naming the caller as a participant — including for collecting parked content, where the
+    original session's assignment is the credential the caller already holds.
+
+20. **Fix the liveness query.** Require the caller to be a named participant in the session it asks
+    about, and scope the answer to that session rather than a global map.
+
+21. **Have the relay verify that an authenticating key is a registered agent**, rather than accepting
+    any Ed25519 keypair.
+
+22. **Add rate limiting to the relay** — per peer and per pubkey, on authentication, hash submission,
+    gap-fill, liveness query, and content-park deposit. Bound the content-park store per depositor.
+
+23. **Re-enable the per-session idle timer in the production relay binary**, and restore a duration
+    and byte cap on relayed connections.
+
+24. **Fix the two relay-client leaks** — graceful shutdown must close relay clients, and the seal-only
+    detached path must unregister its session.
+
+25. **Delete the directory-admin push handler, or justify keeping it.** It is live but has no caller —
+    the directory no longer dials it. Adding replay protection (a nonce or timestamp in the signed
+    body, which it lacks) hardens a code path nothing uses. **Deleting it is cheaper and strictly
+    safer**; if it is kept, the reason belongs in the code.
+
+26. **Give an agent reservations with more than one relay.** Inbound reachability currently rests on a
     single relay, which is also the cheapest way to take the agent offline.
 
-17a. **Put infrastructure-level volumetric DDoS protection in front of the relay.** Every abuse
-    control on this list is application-layer — it changes who is *admitted*, not how much traffic
-    *arrives*. A gate runs after the TCP connection is made and the handshake has begun; it does
-    nothing against raw flooding. The relay is public-facing on GCP with its port open to
-    `0.0.0.0/0`, and [[server-infrastructure]] already states the requirement — *"relay nodes must
-    implement raw-volume DDoS mitigation at the infrastructure level"* — which is not built. Cloud
-    Armor or equivalent. **This is the only item on the list that addresses actual denial of
-    service**; everything else addresses unauthorised access.
+27. **Put infrastructure-level volumetric DDoS protection in front of the relay.** Every other abuse
+    control here is application-layer — it changes who is *admitted*, not how much traffic *arrives*.
+    A gate runs after the TCP connection is made and the handshake has begun; it does nothing against
+    raw flooding. The relay is public-facing on GCP with its port open to `0.0.0.0/0`, and
+    [[server-infrastructure]] already states the requirement — *"relay nodes must implement raw-volume
+    DDoS mitigation at the infrastructure level"* — which is not built. Cloud Armor or equivalent.
+    **This is the only item on the list that addresses actual denial of service**; everything else
+    addresses unauthorised access.
 
-18. **Fix the directory-authentication fail-open.** The challenge must not be silently skipped when
+28. **Fix the directory-authentication fail-open.** The challenge must not be silently skipped when
     the directory URL fails a byte-exact match against a bundled endpoint. Resolve the bootstrap
-    coordinate over an authenticated channel rather than plaintext HTTP.
+    coordinate over an authenticated channel rather than plaintext HTTP. Scope this **after** item 33.
 
-19. **Replace the seal spine tests that assert both sides received the same certificate bytes** with
-    tests that assert each side's *own* tree matches the certified root.
+### E — Own the encryption
 
-19a. **Add application-layer content encryption on the live path, independent of libp2p.** Today live
+29. **Add application-layer content encryption on the live path, independent of libp2p.** Today live
     content is plaintext inside the transport's Noise session — confidentiality is real but it is
-    *libp2p's* key agreement over *libp2p's* ephemeral transport keys. **CELLO therefore cannot
-    upgrade its own confidentiality guarantee.** The driver is post-quantum readiness: migrating to PQ
-    primitives must not wait on libp2p's timeline or accept libp2p's algorithm choices. The threat is
+    *libp2p's* key agreement over *libp2p's* ephemeral transport keys, so **CELLO cannot upgrade its
+    own confidentiality guarantee.** The driver is post-quantum readiness: migrating to PQ primitives
+    must not wait on libp2p's timeline or accept libp2p's algorithm choices. The threat is
     harvest-now-decrypt-later — every cross-NAT conversation is relayed today, so it is recordable at
     fixed endpoints today, and adding the layer later does not protect traffic already sent. The
-    parked-content seal is a working in-tree pattern to extend. **Shape decided: per-session
-    ephemeral handshake with a PQ hook in the derivation — Design Decision 5.** Not static-static;
-    that would void forward secrecy.
+    parked-content seal is a working in-tree pattern to extend. Shape settled in Design Decision 5:
+    per-session ephemeral handshake with a PQ hook in the derivation. Not static-static — that would
+    void forward secrecy.
 
-19b. **Salt the content hash.** It is currently an unsalted SHA-256 of the plaintext, submitted to the
-    relay and stored. A relay holding those hashes can *guess* a message and confirm the guess —
-    which defeats content privacy for short predictable messages ("yes", "approved", a price, a
-    name). Use a per-session salt derived alongside the session key, so the hash stays deterministic
-    for both participants and useless to anyone else. The salt comes out of the same handshake as the
-    session key (Design Decision 5) — one agreement, two outputs. **This is a wire change** — it
-    alters what is submitted and what the directory verifies, so it must be sequenced with the seal
-    work in item 15 rather than shipped independently.
+30. **Salt the content hash.** Currently an unsalted SHA-256 of the plaintext, submitted to the relay
+    and stored, so a relay holding those hashes can *guess* a message and confirm the guess — which
+    defeats content privacy for short predictable messages ("yes", "approved", a price, a name). Use a
+    per-session salt from the same handshake as the session key (Design Decision 5) — one agreement,
+    two outputs. **This is a wire change**; sequence it with item 11 rather than shipping it alone.
 
-21. **Repair hole punching.** Root cause identified: `@libp2p/tcp` has no port reuse, so DCUtR is a
-    timed direct dial rather than a simultaneous-open punch, and it has never succeeded in production.
-    Three candidate routes, none evaluated: patch TCP port reuse (Node's connect accepts a local port
-    and address, but whether it permits binding to a port an active listener holds is unverified);
-    adopt QUIC (UDP hole punching is materially more reliable and is where NAT traversal actually
-    lives); adopt WebRTC (purpose-built, with ICE and STUN). **Not a launch blocker** — the relay
-    cannot read relayed content (Part 13), so the confidentiality claim survives while every cross-NAT
-    conversation is relayed. What must be corrected regardless is the **frequency** claim: public
-    material citing an 80–90% direct rate describes hole punching that has never worked. See item 20.
+### F — Verify against the live deployment (cannot be answered by reading code)
 
-22. **Rewrite the audit document.** Already intended before launch; recorded here so the rewrite starts
-    from corrected facts. Four of its seven cited file paths no longer exist (pre-repo-split layout),
-    and its supporting detail for the encryption claim is wrong — it states content is additionally
-    encrypted at the application layer, which is true only for parked content, and cites the database
-    backup file as evidence. **The claims themselves are true; the document proves them badly**, which
-    for a trust-infrastructure product whose evaluators point a coding agent at the repo is worse than
-    publishing nothing.
+31. **Confirm which directory-authentication path actually fires in production.** The challenge runs
+    only when the resolved directory URL byte-matches a bundled endpoint, and the production URL is a
+    raw IP specifically to satisfy that match. Two log events discriminate challenge-ran from
+    challenge-skipped. **Read them on the live daemon before scoping item 28** — if it is skipping,
+    the production client is not authenticating the directory at all, and item 28 moves from hardening
+    to launch-blocking.
 
-20. **Correct the outward-facing claims** in the investor competitive analysis and the GTM messaging
+32. **Confirm the relay's configured directory-key set in production.** The keys come from environment
+    variables, and a known-parked item notes that if the extra-keys variable is empty the relay
+    silently accepts assignments from **one** directory only — so a session brokered by either of the
+    other two would be unusable. That is a single-region dependency inside a system whose premise is
+    routing around a dead node. Verify the deployed value, and make an empty set fail startup loudly
+    rather than degrade silently.
+
+### G — Correct the record
+
+33. **Correct the outward-facing claims** in the investor competitive analysis and the GTM messaging
     framework. The June internal documents were corrected in `d683099f`; the drafts repo was not.
 
     **These claims do not become true once the list above is built — they become _partially_ true,
@@ -1131,15 +1264,61 @@ encryption layer must not cost a property the existing one already provides.**
     - ❌ "No persistent endpoint" — **false**; gating changes who gets in, not that the endpoint exists
     - ❌ "No persistent endpoint to DDoS" — **false**, and structurally so
 
-    The second point is the one to internalise: **a gate does not stop a flood.** It runs at the
-    encrypted-connection layer, after the TCP connection is made and the handshake has begun. Packets
-    still arrive; connections are still opened. Application-layer authorization and volumetric denial
-    of service are different problems, and only item 17a addresses the second.
+    **A gate does not stop a flood.** It runs at the encrypted-connection layer, after the TCP
+    connection is made and the handshake has begun. Packets still arrive; connections are still
+    opened. Application-layer authorization and volumetric denial of service are different problems,
+    and only item 27 addresses the second.
 
     **The claim that is both true and strong is about _authorization_, not _addressability_** — e.g.
     *"strangers cannot reach your agent; only counterparties the directory has authorized."* Anything
     promising the absence of an endpoint is unachievable for a system that accepts incoming
     connections at all, and should not be written again.
+
+    **Also correct the frequency claim.** Material citing an 80–90% direct-connection rate describes
+    hole punching that has never worked (item 37). The *confidentiality* disclosure survives — the
+    relay cannot read relayed content — but "most sessions are direct" does not.
+
+34. **Record the single-node relay assignment as a known bounded property.** Decision 4 chose to leave
+    it and explicitly required that it be written down rather than silently left — this item is that
+    requirement. Put it in the threat-model/protocol reference: one directory node's key signs the
+    relay-facing assignment while the client-facing artifact requires a threshold; practical reach is
+    a relay-side session record and a Peer ID binding, gated behind also being an authenticated
+    participant named in the assignment; it cannot make the permanent record lie. Include the deferred
+    (b)-versus-(c) evaluation as an open item scheduled with the cryptographic-sortition work, so it
+    has a trigger rather than resurfacing as a fresh discovery.
+
+35. **Disclose the IP exposure, and surface relay-only routing as an operator choice.** A direct
+    session reveals the operator's IP address to the counterparty permanently — no gate, port change
+    or ephemeral identity removes it, and anyone who has talked to you directly can flood you
+    afterwards with no protocol remedy. (a) State this in the shipped client documentation, which
+    currently says nothing about it. (b) Promote relay-only routing from a footnote in the
+    architecture record to a real operator setting.
+
+36. **State the relay's metadata visibility** in shipped documentation and outward-facing material.
+    The relay sees who talks to whom, when, how often, and message sizes. This is inherent to its role
+    and cannot be removed; the day-zero review already acknowledges it. Write it beside the true claim
+    that the relay cannot read message content, so it is a disclosed property rather than something a
+    customer's follow-up question exposes.
+
+37. **Rewrite the audit document.** Already intended before launch; recorded here so the rewrite starts
+    from corrected facts. Four of its seven cited file paths no longer exist (pre-repo-split layout),
+    and its supporting detail for the encryption claim is wrong — it states content is additionally
+    encrypted at the application layer, which is true only for parked content, and cites the database
+    backup file as evidence. **The claims themselves are true; the document proves them badly**, which
+    for a trust-infrastructure product whose evaluators point a coding agent at the repo is worse than
+    publishing nothing.
+
+### H — Scheduled, explicitly not launch-blocking
+
+38. **Repair hole punching.** Root cause identified: `@libp2p/tcp` has no port reuse, so DCUtR is a
+    timed direct dial rather than a simultaneous-open punch, and it has never succeeded in production.
+    Three candidate routes, none evaluated: patch TCP port reuse (Node's connect accepts a local port
+    and address, but whether it permits binding to a port an active listener holds is unverified);
+    adopt QUIC (UDP hole punching is materially more reliable and is where NAT traversal actually
+    lives); adopt WebRTC (purpose-built, with ICE and STUN). **Not a launch blocker** — the relay
+    cannot read relayed content (Part 13), so the confidentiality claim survives while every cross-NAT
+    conversation is relayed. The claim that must be corrected regardless is the frequency one — item
+    33.
 
 ---
 
