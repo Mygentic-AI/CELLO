@@ -276,3 +276,81 @@ grep '"session.standing_receiver.reservation.lost"' ~/.cello/daemon.log \
 catching transcript divergence immediately.
 
 ---
+
+## Entry 2 — DOD-M15-DIVERGE-1: clause checklist and counterbalance, before the code (2026-08-21)
+
+**Target:** a session whose local tree has provably parted from the relay's counter **cannot be
+sealed**, and the operator is told why in the response — instead of the condition reaching only the
+text `cello status` prints.
+
+**Branch:** `m15/diverge` (cello-client). **Enforcer named by the line:** receipt.
+
+### Clause checklist (from the DoD line, expanded)
+
+1. Local/relay leaf divergence is **already detected correctly** on the next send — confirm, do not
+   rebuild.
+2. It is **already logged at ERROR** — `session.tree.position_behind_frontier`. **The log line
+   stays.** (Invariant 2: never delete a log line to satisfy this.)
+3. **ADD:** the agent is told in the response.
+4. **ADD:** the session is **blocked from sealing**.
+5. **ADD:** `sealReadiness` becomes **symmetric** — it must also fail when the local tree holds
+   leaves the relay never witnessed.
+
+### What the trace found (producers and consumers, per Debugging Discipline)
+
+**`#diverged`** (`session-node-manager.ts:734`) has exactly one producer and one consumer.
+
+- **Producer, `placeOwnLeaf` :6911** — `assignedSeq < nextExpected`, i.e. an ack came back *behind*
+  our frontier. Logs `session.tree.position_behind_frontier` at ERROR with an accurate `impact`
+  string, appends at the tail, returns `diverged: true`.
+- **Consumer, `sealReadinessView` :6329** — returns `{ state: "unknown", reason:
+  "record_diverged_from_relay" }`. **That view's only caller is `daemon.ts:2011`,
+  `probeSealReadiness`, which feeds the `cello status` / `cello_status` payload.** Confirmed by
+  grep across `core/` — no other reader exists.
+
+So the DoD line's claim is exact: **the detection reaches a status string and nothing else.**
+
+**The symmetry gap, stated precisely.** `sealReadiness.ready = missingLeaves === 0 && heldCount ===
+0`. Both counters measure the *relay-has-that-we-lack* direction. Nothing in `ready` measures the
+opposite direction, which has **two** producers:
+
+- `placeOwnLeaf` :6911 — our own send landing behind the frontier (sets `#diverged`).
+- `ingestReceivedContent` :6103 — **`session.content.unwitnessed`**: a relay IS attached, the
+  sender's leaf should have been submitted and witnessed, it was not, and the content is **logged at
+  WARN and ingested anyway**. This is the same checked-then-ignored shape as the rest of the
+  milestone, one layer down, and it appends a leaf the relay never witnessed.
+
+`ready` cannot see either. The close gate that consumes it (`close-session-handler.ts:628`) is
+correct and well-built — it just cannot be told.
+
+### 🚨 The trap this unit must not fall into
+
+The existing refusal at :628 is `session_incomplete`, and its guidance says *"wait a moment and
+close again"* and *"the daemon just pulled from the relay and the gap is still there"*. That is
+right for a session waiting on arrival. **It is wrong for a diverged session, permanently** — the
+tree and the relay counter can never agree again, so waiting is futile and retrying ends at
+`force: true` with no receipt. Folding divergence into `ready` without branching the reason would
+substitute a transient explanation for a permanent condition — the exact error-substitution class
+this milestone exists to remove, reintroduced by the fix for it.
+
+**So: a distinct reason and distinct guidance, not a shared one.**
+
+### The counterbalance (Invariant 1), stated before the code
+
+**This gate is ergonomics over a check that already happens elsewhere, and that is the honest
+answer.** The party it constrains is the operator's own daemon, and an operator who patches it out
+harms only themselves: the counterparty's daemon independently recomputes the root and refuses to
+co-sign, answering `leaf_count_mismatch`. **That independent refusal is the counterbalance and it
+already exists** — it runs on the peer's machine, over the peer's own tree, and no edit to this
+daemon reaches it.
+
+What this unit adds is not enforcement but *timing*: today the operator learns at the moment the
+refusal becomes terminal and the receipt is already gone; after it, they learn while a retry is
+still possible. Recorded plainly so nobody later mistakes this gate for the security boundary — per
+Invariant 1, a guard running on the party it constrains is ergonomics, and saying so is the
+requirement.
+
+**Next:** red tests against the fixture (`two-connection-fixture.ts`, extended — never a
+from-scratch fixture), then implement.
+
+---
