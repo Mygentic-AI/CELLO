@@ -921,16 +921,18 @@ runtime URL match. Two log events discriminate it.
     primitives must not wait on libp2p's timeline or accept libp2p's algorithm choices. The threat is
     harvest-now-decrypt-later — every cross-NAT conversation is relayed today, so it is recordable at
     fixed endpoints today, and adding the layer later does not protect traffic already sent. The
-    parked-content seal is a working in-tree pattern to extend. Shape is Outstanding Design
-    Decision 5.
+    parked-content seal is a working in-tree pattern to extend. **Shape decided: per-session
+    ephemeral handshake with a PQ hook in the derivation — Decisions Made 14.** Not static-static;
+    that would void forward secrecy.
 
 19b. **Salt the content hash.** It is currently an unsalted SHA-256 of the plaintext, submitted to the
     relay and stored. A relay holding those hashes can *guess* a message and confirm the guess —
     which defeats content privacy for short predictable messages ("yes", "approved", a price, a
     name). Use a per-session salt derived alongside the session key, so the hash stays deterministic
-    for both participants and useless to anyone else. **This is a wire change** — it alters what is
-    submitted and what the directory verifies, so it must be sequenced with the seal work in item 15
-    rather than shipped independently.
+    for both participants and useless to anyone else. The salt comes out of the same handshake as the
+    session key (Decisions Made 14) — one agreement, two outputs. **This is a wire change** — it
+    alters what is submitted and what the directory verifies, so it must be sequenced with the seal
+    work in item 15 rather than shipped independently.
 
 20. **Correct the outward-facing claims** in the investor competitive analysis and the GTM messaging
     framework. The June internal documents were corrected in `d683099f`; the drafts repo was not.
@@ -1090,6 +1092,9 @@ derivation written to accept an additional shared secret makes (c) an addition r
 **Note the interaction with build item 19b:** the per-session salt for the content hash should come
 out of this same derivation. One handshake, two outputs.
 
+*Decided — see Decisions Made 14. Left here as the record of what was weighed, including why the
+intuitive option was rejected.*
+
 ---
 
 ## Decisions Made (Andre, 2026-08-21)
@@ -1175,7 +1180,31 @@ new finding — it was written as a placeholder. Recorded so the rewrite starts 
 four cited paths no longer exist, and the application-layer encryption claim is true only of parked
 content.
 
-**13. Settled, moved out of design decisions and into the build list: the standing receiver's gate
+**14. Application-layer encryption shape: option (b) — per-session ephemeral handshake, with the
+post-quantum hook built in from the start.** Decided 2026-08-21.
+
+Concretely, this means:
+
+- **Each side mints a fresh keypair per session**, the two agree a session key, and the ephemerals
+  are destroyed at session close. This preserves the "never transmitted" property that was the
+  original intent while keeping **forward secrecy** — an identity key that leaks later does not
+  decrypt past conversations.
+- **Static-static was explicitly rejected**, even though it is the more intuitive reading of "both
+  sides hold the same key". One key derived from long-term identities never changes, so a single
+  identity-key compromise retroactively opens every conversation that agent ever had. That is
+  strictly worse than the status quo, since libp2p's transport already uses fresh ephemerals per
+  connection, and it would silently void the forward-secrecy property [[design-problems]] claims as
+  structural. **Adding our own layer must not cost a property the existing one already provides.**
+- **The key derivation must accept an additional shared secret from day one**, even before there is a
+  post-quantum contribution to put in it. Hybrid PQ then becomes mixing a second agreed secret into
+  the same derivation — an addition, not a rewrite. Since PQ independence is the entire reason for
+  this work, designing the derivation without the hook would defeat the purpose.
+- **The content-hash salt (build item 19b) comes out of this same handshake.** One agreement, two
+  outputs — the message-sealing key and the per-session salt.
+
+This closes the last open design decision from this investigation.
+
+**15. Settled, moved out of design decisions and into the build list: the standing receiver's gate
 admits assignment-named dialers only.** Not a genuine X-versus-Y choice — a trusted-tier bypass
 cannot work at this layer, because the gate sees a transport Peer ID that is freshly minted per
 session and unknowable in advance. Trust tiers already do their work one layer up at session
