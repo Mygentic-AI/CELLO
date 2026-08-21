@@ -163,6 +163,17 @@ different repos, different disciplines, neither blocks the other.
 - **Enforcer:** receipt. *(Not run — the unit is carried by suite + review; the enforcer itself is
   built by `DOD-M15-INTERRUPTED-1` and this line is re-asserted there.)*
 
+### `DOD-M15-FREEZE-STATUS-1` — ❌ A defensive freeze is distinguishable in the session RECORD
+Split from `DOD-M15-FRAME-1`, whose own clause asks that the freeze carry a status *"distinct from
+an ordinary counterparty-absent close"*. It does not yet.
+- `#freezeOnIdentityFailure` tears down via `destroySessionNode(..., "error")`, and `"error"` maps to
+  DB status `interrupted` — **the same row an ordinary teardown writes.** So the freeze is
+  distinguishable in the log and in behaviour, and invisible in the record an operator reads later.
+- The sessions table has no reason/detail column. Adding one is a **client-side migration**, which
+  on an operator's machine is unrecoverable if it fails — so it belongs in its own reviewed unit
+  with an upgrade test against a populated pre-migration database, not riding inside a security fix.
+- Until it lands, the ERROR log event is the only durable account of *why* a session ended this way.
+
 ### `DOD-M15-UNWITNESSED-1` — ❌ The two SUSPECTED partings are judged, not ignored
 Split from `DOD-M15-DIVERGE-1` on review — that clause covered three producers and only the proven
 one could ship safely. **Neither of these is visible to `sealReadiness` today.**

@@ -691,3 +691,107 @@ because it will recur on a fresh clone.
 **DoD amended, follow-ons named, tag flipped ✅.**
 
 ---
+
+## Entry 6 — DOD-M15-FRAME-1: built in three parts — REVIEW IN FLIGHT, tag stays 🟡 (2026-08-22)
+
+**Branch `m15/frame`, commits `4015c7f` (gate + signer), `15a960a` (eviction), `551930b` (tests).**
+Gate: 4001 passed, lint, forced typecheck, build — all run so they could fail. **Not merged; the tag
+does not flip until the reviewer's verdict is quoted.**
+
+### The counterbalance, before the code (Invariant 1)
+
+**Unlike `DOD-M15-DIVERGE-1`, this one is a real boundary rather than ergonomics.** The check runs on
+the RECEIVER's daemon and constrains the SENDER, who is a stranger — they cannot patch the code that
+refuses them, and no edit to their own daemon reaches ours. That is the shape Invariant 1 asks for.
+
+The honest caveat is the mirror image, and it is why this unit does not stand alone: **the party best
+placed to detect a wrong signer is also a party that can be compromised**, and a compromised receiver
+could weaponize "signature mismatch" as a false accusation. So the response is split. Freezing what
+THIS daemon trusts is always safe unilaterally — it limits only us and harms nobody. Asserting on the
+record that a counterparty misbehaved is NOT done here, and needs corroboration from a party the
+accusing client does not control: `DOD-M15-CORROBORATE-1`, where the relay holds the sender's signed
+hash independently and never routes it through the receiver.
+
+### Part 1 — one gate, above the dispatch
+
+`session_abandoned_notice` already had both checks, correct and complete. `content_frame` had a
+session check that fired only when the field was PRESENT (`&&`, where its sibling twenty lines up
+used `||`), and no sender check at all. `content_delivery_ack` had neither — a shape test and a
+string compare.
+
+**Shared rather than copied, and that is the design decision worth attacking.** Copying the pattern
+into two more branches fixes today's three frame types and leaves the fifth — added later by someone
+who did not read the comment — unguarded again. Above the dispatch the guard is the DEFAULT: a new
+frame type is protected by construction and has to opt out visibly.
+
+**The "audit every handler" clause is satisfied by ENUMERATION, not by inspection of the two named.**
+`grep` for senders on `CELLO_CONTENT_PROTOCOL_ID` returns exactly three, and all three carry
+`session_id`. That is what makes a shared required-field gate safe rather than a guess.
+
+### Part 1b — the signer check stops being advisory
+
+`#recordFrameOrdering` returned `null` for six different reasons and the caller ingested regardless.
+Two of those six are **proof that the signer is not who this session is with**. It now returns
+`{ seq, fatal? }`, and the split follows Invariant 2 exactly: **position may be soft, identity may
+not.**
+
+- **Fatal:** `bad_signature`, and `signer_not_counterparty` when the counterparty is known.
+- **Soft:** `malformed`, `hash_mismatch`, `counterparty_unknown`, decode-throw, absent record.
+
+The fatal `signer_not_counterparty` case is the **session-open MITM detection** from the T-of-N
+investigation, which found this check *"fires correctly, and its answer is thrown away."* A rogue
+quorum of the directories holding shares for B can sign a false `SessionAssignment` naming M's key as
+B's; everything downstream is genuinely real, because M signs with M's own valid key, and nothing is
+missing for A to notice. **This comparison is the one place the substitution shows**, because
+`counterparty_pubkey` comes from A's own request and is untouched by anything the directory returns.
+
+An ABSENT record stays soft deliberately — that is the documented relay-degraded path, and refusing
+it would make the relay a precondition for reading mail.
+
+### Part 2 — the foothold, not just what it sends
+
+`setAllowedPeer` sets the list libp2p consults *when a connection is established*. It does not evict.
+A stranger attached to the open standing receiver is still attached after promotion. Part 1 refuses
+their frames; part 2 removes them, so they are not sitting there when the next protocol activates.
+
+Relay peers are exempt: they are on the outbound allowlist because reservation refreshes ride them,
+and hanging one up would cost the agent its inbound reachability to remove a peer that cannot speak
+the content protocol anyway. Best-effort by construction — a failed hangup must not fail a session
+setup mid-flight, and the frame gate is the load-bearing control regardless.
+
+**A structural parity test caught what I had missed.** `msg-022` scans establishment for calls and
+asserts revival makes the same ones; it went red on the new sweep. Worth checking rather than
+exempting on sight — and revival turns out to build a fresh node behind a gater that is narrow from
+birth, so no connection can predate the narrowing. Exempted with that reasoning recorded, not waved
+through.
+
+### Three test fakes were testing a transport that does not exist
+
+`CelloNode.handle` is `(stream, remotePeerId)`; `node.ts` supplies
+`connection?.remotePeer?.toString()`, the Noise-authenticated identity. Three fakes declared
+single-argument handlers, so every frame they delivered arrived from nobody — invisible while nothing
+checked it.
+
+**The falsification that mattered before trusting the gate:** is `remotePeerId` ever legitimately
+absent on a real inbound content stream? If so this breaks all messaging. The decisive evidence is
+that `session_abandoned_notice` **already** refuses on `!remotePeerId`, in production, and abandon
+notices work. The fakes were the gap.
+
+### One clause NOT met, carried rather than claimed
+
+The freeze's status is **not** distinct from an ordinary teardown: `destroySessionNode(..., "error")`
+writes DB status `interrupted`, the same row a counterparty-gone teardown writes. The sessions table
+has no reason column and adding one is a client-side migration — unrecoverable on an operator's
+machine if it fails — so it belongs in its own reviewed unit with an upgrade test against a populated
+database, not riding inside a security fix. **`DOD-M15-FREEZE-STATUS-1`.**
+
+### Teeth, verified rather than asserted
+
+Revert test: peer check disabled and the session check returned to its old `&&` form → the stranger
+case, the omission case, and the forged-ack case all go red. Restored → 19 pass. The omission case
+needed a hand-built frame, because `sendContent` always sets `session_id` and could never produce it
+— **the only code that could express that case was an attacker's, which is exactly why it survived.**
+
+**Next:** the reviewer's verdict, then fix every finding, quote it, flip the tag, merge.
+
+---
