@@ -713,6 +713,39 @@ treating it as decided. This is Outstanding Design Decision 2 below.
 
 ---
 
+## Part 12 — Volumetric denial of service: what is actually defensible
+
+Everything else in this document is about **unauthorized access** — who is admitted. This is about
+**flooding** — how much traffic arrives. They are separate problems with separate answers, and
+conflating them is what produced the false claims in the first place.
+
+**Against the relay: solvable, and it is ordinary infrastructure work.** Scrubbing in front of the
+public endpoint (Cloud Armor or equivalent), plus reservations with more than one relay so a single
+one going down does not take agents offline. Build items 17 and 17a. This is a bought problem, not a
+research problem.
+
+**Against a user's machine: nothing at the application layer helps.** Once packets arrive at a home
+connection the link is saturated before any of our code runs. Rate limiting, gating, authentication —
+all of it executes after the damage.
+
+**So the only client-side defence is not being addressable — which is Outstanding Design Decision 2.**
+
+This is the convergence worth seeing: **relay-mediated inbound _is_ the volumetric DDoS defence for
+clients.** It moves the addressable endpoint off the operator's laptop and onto infrastructure that
+can have scrubbing in front of it. An attacker holding only a circuit address must flood the relay to
+reach the agent — and the relay is precisely the thing that can be defended. The surface is not
+irreducible; the choice is whether it sits on a laptop or on a machine we control.
+
+**The one limit no architecture removes:** a direct peer-to-peer connection exposes the operator's IP
+address to the counterparty. Routing requires it. So anyone an agent has talked to directly can flood
+it afterwards regardless of ports, gates or ephemerality.
+[[2026-06-11_1030_daemon-transport-architecture]] §7 concedes this and offers relay routing as the
+mitigation for operators who do not want to reveal their network location — a correct escape hatch
+that needs to become a documented, surfaced choice rather than a footnote. Nothing in the shipped
+client documentation currently discloses that direct sessions reveal the operator's IP.
+
+---
+
 ## Part 13 — Can the relay read your messages? No. But the live path depends on libp2p to say so
 
 Verified 2026-08-21, in response to the question raised by Part 11: if everything crossing a NAT
@@ -956,39 +989,6 @@ runtime URL match. Two log events discriminate it.
     *"strangers cannot reach your agent; only counterparties the directory has authorized."* Anything
     promising the absence of an endpoint is unachievable for a system that accepts incoming
     connections at all, and should not be written again.
-
----
-
-## Part 12 — Volumetric denial of service: what is actually defensible
-
-Everything else in this document is about **unauthorized access** — who is admitted. This is about
-**flooding** — how much traffic arrives. They are separate problems with separate answers, and
-conflating them is what produced the false claims in the first place.
-
-**Against the relay: solvable, and it is ordinary infrastructure work.** Scrubbing in front of the
-public endpoint (Cloud Armor or equivalent), plus reservations with more than one relay so a single
-one going down does not take agents offline. Build items 17 and 17a. This is a bought problem, not a
-research problem.
-
-**Against a user's machine: nothing at the application layer helps.** Once packets arrive at a home
-connection the link is saturated before any of our code runs. Rate limiting, gating, authentication —
-all of it executes after the damage.
-
-**So the only client-side defence is not being addressable — which is Outstanding Design Decision 2.**
-
-This is the convergence worth seeing: **relay-mediated inbound _is_ the volumetric DDoS defence for
-clients.** It moves the addressable endpoint off the operator's laptop and onto infrastructure that
-can have scrubbing in front of it. An attacker holding only a circuit address must flood the relay to
-reach the agent — and the relay is precisely the thing that can be defended. The surface is not
-irreducible; the choice is whether it sits on a laptop or on a machine we control.
-
-**The one limit no architecture removes:** a direct peer-to-peer connection exposes the operator's IP
-address to the counterparty. Routing requires it. So anyone an agent has talked to directly can flood
-it afterwards regardless of ports, gates or ephemerality.
-[[2026-06-11_1030_daemon-transport-architecture]] §7 concedes this and offers relay routing as the
-mitigation for operators who do not want to reveal their network location — a correct escape hatch
-that needs to become a documented, surfaced choice rather than a footnote. Nothing in the shipped
-client documentation currently discloses that direct sessions reveal the operator's IP.
 
 ---
 
