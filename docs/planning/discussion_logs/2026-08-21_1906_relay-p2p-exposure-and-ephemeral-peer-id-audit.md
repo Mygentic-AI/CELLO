@@ -568,6 +568,51 @@ instance to be found later.
 
 ---
 
+## Part 11 — Does the standing receiver need to exist, and does it need to listen?
+
+Raised by Andre after reading the above, and it reframes the whole exposure question.
+
+**The mental model in the design record is accurate.** A pre-made node sits ready; an inbound session
+consumes it; it becomes that session's node; a fresh receiver is built behind it. The stated reason
+is latency — the address is already known, already registered with the relay, already reachability-
+checked, so the directory can hand it out immediately.
+
+There is a second, more structural reason: **the responder must report its Peer ID to the directory
+before the directory can issue the initiator's assignment.** Creating a node on demand adds a
+round-trip to every session setup. The pre-made receiver removes it.
+
+**But the standing receiver is doing two jobs that got conflated:**
+
+1. Being a **pre-warmed node** so session setup is fast.
+2. Being the **open listening surface** that accepts inbound connections.
+
+**Job 2 is the entire attack surface in Part 4. And job 2 is only needed for _direct_ dials.**
+
+**Relay-mediated inbound requires no listening socket.** A circuit reservation works by the reserving
+peer dialling the relay *outbound* and holding that connection open; inbound connections arrive back
+over it. That is precisely why it works for peers behind NAT.
+
+So there is a third option nobody has weighed: **accept inbound only through the relay and bind
+nothing at all.** The daemon would then have **zero listening sockets** — outbound to the directory,
+outbound to the relay, and that is the entire network surface. Every finding in Part 4 becomes
+unreachable, because there is no port to dial.
+
+**The cost is direct P2P on the inbound side.** An agent still dials out directly when it initiates.
+But when someone calls *it*, the connection comes via the relay — putting the relay in the path, which
+is the privacy trade [[2026-06-11_1030_daemon-transport-architecture]] §7 already discusses. Note that
+for essentially every retail user behind NAT this is already what happens; the open port serves a
+minority of deployments with public IPs.
+
+**Answering the question directly: the standing receiver is not needed for the directory to reach
+you** — that path is outbound and already works. It is needed to accept a counterparty's dial. The
+real question is whether accepting *direct* dials is worth an open port at all.
+
+**Not verified:** that circuit reservations need no listening socket was reasoned from how
+circuit-relay-v2 works, not confirmed against this libp2p version in our tree. Confirm before
+treating it as decided. This is Outstanding Design Decision 2 below.
+
+---
+
 ## Scorecard against the four original hypotheses
 
 **"Ephemeral Peer IDs reduced the DDoS surface."** No. The node made ephemeral binds loopback and was
@@ -609,10 +654,13 @@ runtime URL match. Two log events discriminate it.
    be. Applies to the direct content path and to the seal ingest path from the previous
    investigation.
 
-3. **Gate the standing receiver on the session assignment.** Refuse any dialer whose Peer ID is not
-   named in a live, directory-signed assignment. The responder always receives the offer and reports
-   its Peer ID *before* the counterparty dials, so the assignment always exists in time. Depends on
-   item 4.
+3. **Gate the standing receiver on the session assignment — assignment-named dialers only.** Refuse
+   any dialer whose Peer ID is not named in a live, directory-signed assignment. The responder always
+   receives the offer and reports its Peer ID *before* the counterparty dials, so the assignment
+   always exists in time. **Settled 2026-08-21** — no trusted-tier bypass, because the gate sees a
+   transport Peer ID that is freshly minted per session and unknowable in advance; trust tiers do
+   their work one layer up at session acceptance. Depends on item 4. Superseded in scope if
+   Outstanding Design Decision 2 lands on binding no socket at all.
 
 4. **Verify the directory's signature on the session assignment client-side.** Currently the parser
    only checks that signatures are 64 bytes. Item 3 is worthless without this.
@@ -623,8 +671,15 @@ runtime URL match. Two log events discriminate it.
 6. **Drop unauthenticated idle connections.** A connection that has completed the handshake but
    authenticated to nothing and done nothing should be closed on a timer.
 
-7. **Install a gater on the directory-facing node.** `DirectoryConnectionGater` exists and is
-   constructed only in tests.
+7. **Stop the directory-facing node listening at all.** It currently binds `/ip4/0.0.0.0/tcp/0` —
+   a real open port on every interface — while registering **no protocol handler**, and the
+   directory **never dials a client**. It has no reason to accept inbound connections. An empty
+   listen configuration removes it from the attack surface entirely: no socket, no port, nothing to
+   scan and nothing to gate. This is strictly stronger than filtering who may connect.
+
+   *Fallback only if something turns out to need inbound there:* install the existing
+   `DirectoryConnectionGater`, which is written but constructed only in tests. Do not treat the
+   gater as the primary fix — not listening is the fix.
 
 8. **Require session context for relay access.** No relay service without a directory-issued
    assignment naming the caller as a participant — including for collecting parked content, where the
@@ -658,6 +713,15 @@ runtime URL match. Two log events discriminate it.
 17. **Give an agent reservations with more than one relay.** Inbound reachability currently rests on a
     single relay, which is also the cheapest way to take the agent offline.
 
+17a. **Put infrastructure-level volumetric DDoS protection in front of the relay.** Every abuse
+    control on this list is application-layer — it changes who is *admitted*, not how much traffic
+    *arrives*. A gate runs after the TCP connection is made and the handshake has begun; it does
+    nothing against raw flooding. The relay is public-facing on GCP with its port open to
+    `0.0.0.0/0`, and [[server-infrastructure]] already states the requirement — *"relay nodes must
+    implement raw-volume DDoS mitigation at the infrastructure level"* — which is not built. Cloud
+    Armor or equivalent. **This is the only item on the list that addresses actual denial of
+    service**; everything else addresses unauthorised access.
+
 18. **Fix the directory-authentication fail-open.** The challenge must not be silently skipped when
     the directory URL fails a byte-exact match against a bundled endpoint. Resolve the bootstrap
     coordinate over an authenticated channel rather than plaintext HTTP.
@@ -667,6 +731,25 @@ runtime URL match. Two log events discriminate it.
 
 20. **Correct the outward-facing claims** in the investor competitive analysis and the GTM messaging
     framework. The June internal documents were corrected in `d683099f`; the drafts repo was not.
+
+    **These claims do not become true once the list above is built — they become _partially_ true,
+    and the difference matters.** After every fix:
+
+    - ✅ "No stranger can open a session with you or send you content" — true
+    - ✅ "Nothing from a previous session lets someone reach you" — true
+    - ✅ "No unauthenticated inbound surface" — true
+    - ❌ "No persistent endpoint" — **false**; gating changes who gets in, not that the endpoint exists
+    - ❌ "No persistent endpoint to DDoS" — **false**, and structurally so
+
+    The second point is the one to internalise: **a gate does not stop a flood.** It runs at the
+    encrypted-connection layer, after the TCP connection is made and the handshake has begun. Packets
+    still arrive; connections are still opened. Application-layer authorization and volumetric denial
+    of service are different problems, and only item 17a addresses the second.
+
+    **The claim that is both true and strong is about _authorization_, not _addressability_** — e.g.
+    *"strangers cannot reach your agent; only counterparties the directory has authorized."* Anything
+    promising the absence of an endpoint is unachievable for a system that accepts incoming
+    connections at all, and should not be written again.
 
 ---
 
@@ -686,23 +769,27 @@ missing comparison. Three shapes:
 - **(c) Ship a reported root on the bilateral submit too** and reuse the unilateral verification path
   that already works.
 
-**Recommendation: (c), then (b).** (c) reuses a verification path that is already built and proven on
-the unilateral path, which makes it the smallest correct change and avoids a domain migration
-entirely. (b) is worth adding afterwards because catching divergence before notarization is
-strictly better than catching it after, and the expensive half is already written. (a) is the
-cleanest end state but pays a migration cost on every existing receipt for a property (c) delivers
-without one.
+**Original recommendation was (c), then (b) — on the grounds that (a) pays a migration cost on every
+existing receipt. That reasoning was wrong for our situation and is superseded; see Decisions Made.**
 
-**2. What the standing receiver's gate should admit.**
+**2. Whether the daemon should bind a listening socket at all.** *(Raised after the first draft — see
+Part 11.)*
 
-- **(a) Assignment-only** — refuse any dialer not named in a live directory-signed assignment.
-- **(b) Assignment plus a trusted-tier bypass** — also admit whitelisted and VIP contacts directly.
+- **(a) Keep the open port** — accept direct inbound dials, and gate them on the assignment.
+- **(b) Bind nothing** — accept inbound only via relay circuit, which needs no listening socket.
+  Zero listening sockets on the whole daemon.
+- **(c) Bind nothing by default, opt in** — operators with public IPs who want direct inbound set an
+  env var; everyone else has no port.
 
-**Recommendation: (a).** (b) cannot work at this layer. The gate sees a transport Peer ID, which is
-freshly minted per session and unknowable in advance; there is nothing stable about a trusted contact
-to put on a list. Trust tiers already do their work one layer up, at session acceptance, which is the
-right place for them. Assignment-only is also strictly simpler — no list to maintain and no
-synchronisation between contact state and transport state.
+**Recommendation: (c), pending the verification named in Part 11.** It gives retail users — who are
+behind NAT, already relayed, and have no firewall — an attack surface of literally nothing, while
+preserving direct inbound for the deployments that can actually use it. (b) is the strongest security
+position but removes a capability some deployments legitimately want, and it puts the relay in the
+path for every inbound session, which is a privacy regression the record already treats as a real
+trade. (a) keeps a port open on every laptop in order to serve a minority of deployments.
+
+**Blocking prerequisite:** confirm that a circuit reservation genuinely requires no listening socket
+in this libp2p version. If it does require one, (b) and (c) both collapse and (a) is the only option.
 
 **3. Whether the relay should learn agent registration state.**
 
@@ -737,6 +824,43 @@ bounded gain. (c) is a substantially larger change. The right time to reopen it 
 cryptographic-sortition work already decided, since that is when directory-side threshold mechanics
 are being touched anyway. **This should be recorded as a known bounded property rather than silently
 left.**
+
+---
+
+## Decisions Made (Andre, 2026-08-21)
+
+**1. Receipt binding: option (a) — move the bilateral certified root into the content-hash domain.**
+**This reverses the recommendation above, and the reversal is the point.** The only argument for (c)
+was avoiding a migration on previously sealed receipts. We are in alpha with one user and everything
+is being wiped before launch, so there is no data to preserve and that argument is void. With the
+migration cost removed, (a) is strictly better: the client's check becomes a one-line comparison of
+two hashes it already holds, both seal paths use a single hash domain, and the unilateral path stops
+being a special case. Alpha is precisely when this is free.
+
+*General rule this illustrates, worth carrying forward:* a recommendation that survives only on
+backward-compatibility grounds is not a recommendation — re-derive it against an empty database.
+
+**2. Listening socket: not yet decided.** Open pending the libp2p verification named in Part 11. This
+is the highest-leverage open question in the document — if the answer is that we can bind nothing,
+every finding in Part 4 becomes unreachable rather than merely gated.
+
+**3. Relay authorization: option (b) — the relay verifies a directory-signed credential the caller
+presents, and learns nothing itself.** Keeps the relay a signature-verifier rather than a stateful
+consortium participant, adds no relay-to-directory dependency or per-request latency, and preserves
+the extractability property that lets an enterprise run its own relay
+([[project_relay_is_future_enterprise_deliverable|relay as future enterprise deliverable]]).
+
+**4. Relay-facing assignment signature: option (a) for launch — accept the single-node signature as a
+known, bounded property and document it as such. Hardening to follow.** The choice between (b)
+requiring T directory signatures and (c) introducing a directory-consortium threshold key **needs a
+deeper evaluation and is deliberately not being made now.** Natural time to do that evaluation is
+alongside the cryptographic-sortition work, when directory-side threshold mechanics are already open.
+
+**5. Settled, moved out of design decisions and into the build list: the standing receiver's gate
+admits assignment-named dialers only.** Not a genuine X-versus-Y choice — a trusted-tier bypass
+cannot work at this layer, because the gate sees a transport Peer ID that is freshly minted per
+session and unknowable in advance. Trust tiers already do their work one layer up at session
+acceptance. See build item 3.
 
 ---
 
