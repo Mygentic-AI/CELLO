@@ -19,12 +19,16 @@ description: >
 > **49 DoD lines**, 1 ✅ (`DOD-M15-SPIKE-1`), 1 🅿️ (`DOD-M15-SWEEP-1`, sequencing only), rest ❌.
 > Every line is inside the launch gate; the gate is a state, not a date.
 
-- **NEXT ACTION: `DOD-M15-DIVERGE-1`** (Tier 2) — the cheapest line in the milestone. Acts on
-  signals that already exist, no wire dependency, and starts catching transcript divergence before
-  Tier 4 lands. `cello-client`, branch `m15/diverge`.
-- **Then either** `DOD-M15-FRAME-1` (the injection path — the worst-looking finding in the
-  milestone) **or** `DOD-M15-LEDGER-1` + `DOD-M15-AUDITME-1` (Tier 1, no dependencies, and
-  `AUDIT-ME.md` is at the root of a public repo).
+- **`DOD-M15-DIVERGE-1` is 🟡 IMPLEMENTED, REVIEW IN FLIGHT** — cello-client branch `m15/diverge`,
+  commit `4478a03`. Gate green: daemon 2470, monorepo 3995 passed, lint, forced typecheck, build,
+  all run so they could fail. **The tag does not flip until the reviewer's verdict is quoted in a
+  journal entry.** Not merged.
+- **`DOD-M15-LEDGER-1` is part-swept** — 13 rows across `AUDIT-ME.md`, `README.md`, and the shipped
+  skill/tool surfaces (→ Entries 3–4, rows in the DoD). Remaining: the rest of the MCP tool
+  descriptions, CLI help, status output.
+- **NEXT ACTION after the review lands:** fix every finding, quote the verdict, flip the tag, merge
+  `m15/diverge`. **Then `DOD-M15-FRAME-1`** — the injection path, the worst-looking finding in the
+  milestone, and the line that also makes four of the screening claims true.
 - **Spike answers that re-scoped lines → Entry 1:** step-6 directory auth IS active in production
   (`DOD-M15-DIRAUTH-1` does not escalate); both relays accept all three directories (the feared
   single-directory dependency does not exist); relay selection is effectively deterministic at 99:1

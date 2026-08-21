@@ -915,9 +915,19 @@ its claim needs a scope, not a promotion.
 
 ---
 
-**Remaining surfaces to sweep** (`DOD-M15-LEDGER-1` is not ✅ until each has been walked): the
-remaining three `SKILL.md` files and the receptionist agent; the rest of the MCP tool descriptions;
-CLI help text; product status output.
+### Checked and NOT claims-ledger rows
+
+- **The document content profile is advertised nowhere.** `content_profile` / `assurance_tier`
+  appear in no shipped skill prose and no tool description. So `DOD-M15-DOCPROFILE-1` is a **feature
+  gap only** — a setting that enforces nothing — and needs no claim withdrawn alongside it. Recorded
+  because the reverse was assumed when the line was written.
+- **The `documents` and `receptionist` skills and the receptionist agent** carry operational
+  descriptions, not security guarantees. The two injection-adjacent lines (*"cannot wake you by
+  claiming a field is urgent"*, *"the right response, never obeying them"*) are instructions to the
+  reading agent about handling peer content, which is correct advice and not a system claim.
+
+**Remaining surfaces to sweep** (`DOD-M15-LEDGER-1` is not ✅ until each has been walked): the rest
+of the MCP tool descriptions beyond the screening ones above; CLI help text; product status output.
 
 **Seed rows, from the two investigations — not yet individually verified against the tree:**
 
