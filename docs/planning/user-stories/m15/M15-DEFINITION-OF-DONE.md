@@ -797,11 +797,63 @@ Rulings that bind every line above. **Re-asking one is decision theatre** (M15-P
 *Built by `DOD-M15-LEDGER-1`. Rows are added as surfaces are swept; a claim with no row is an
 unaudited claim.*
 
-| Claim | Where it appears | Disposition | Evidence |
-|---|---|---|---|
-| *(to be populated — `DOD-M15-LEDGER-1`)* | | | |
+## Swept 2026-08-21 — `AUDIT-ME.md`, root of the PUBLIC `Mygentic-AI/cello-client` repo
 
-**Seed rows, known before the sweep starts:**
+**Five rows, ranked by what a hostile reader finds first.** Every one was measured by running the
+document's own instructions against the tree — which is exactly what its name invites. → Entry 3.
+
+| # | Claim, as written | Verdict | Disposition |
+|---|---|---|---|
+| 1 | Claim 3: *"outbound network connections **only** to the directory node … and to relay nodes … no telemetry endpoints … **or any other outbound HTTP calls**"* | **FALSE** | **withdrawn + rewritten with disclosure** |
+| 2 | Claim 1: *"Message content is **additionally encrypted at the application layer** (AES-GCM envelope)"* | **FALSE as scoped** | **withdrawn + corrected** |
+| 3 | Header: *"**All paths listed are valid** — packages were extracted … by REPOSPLIT-002"* | **FALSE** | **made true** |
+| 4 | Verification cmd 1: `grep -r "plaintext" core/transport/src/  # should find nothing` | **wrong command, right code** | **made true** |
+| 5 | Scope: the document audits network behaviour and never mentions `core/daemon/` | **structural gap** | **made true** |
+
+**Row 1 is the one that matters and it is the worst artifact in the milestone.** The daemon makes
+outbound HTTPS calls to **`https://api.telegram.org`** — `getUpdates` and `sendMessage` in
+`core/daemon/src/telegram-bot-client.ts:27,42`. That is the doorbell feature: deliberate,
+operator-configured, and the thing that reaches a phone. **Nothing about it is wrong except that a
+public document says it does not happen.** And the document's *own* command 4 finds it —
+`grep -rln "fetch(\|http\.request\|https\.request" core/*/src/` returns that file and only that
+file. An evaluator following the instructions in a file called AUDIT-ME reaches a false claim in
+about ten seconds.
+
+**Write the replacement forward-safe.** `core/gateway/src/detect/deberta-model-manifest.ts:16`
+carries `https://huggingface.co/…` as the classifier's download base. It has no production caller
+today (`DOD-M15-SCREENINSTALL-1`), so it is not currently a destination — but it becomes one the
+moment that line ships, and a claim that has to be rewritten again then is a claim written wrong now.
+
+**Row 2** is the miscited-evidence case. Live content is plaintext inside libp2p's Noise session;
+only *parked* content carries an application-layer AES-GCM envelope. The document cites
+`core/client/src/client-backup.ts` — the **database backup** file — as evidence for *message*
+encryption, which is a different thing entirely, and that path does not exist either.
+
+**Row 3, measured:** four of the eight cited paths are gone —
+`core/adapter-claude-code/src/server.ts`, `core/client/src/client-backup.ts`,
+`core/client/src/client.ts`, `core/protocol-types/src/envelope.ts`. **`core/client/` does not exist
+at all**; the surviving four are `core/crypto/src/ed25519.ts`, `core/transport/src/node.ts`,
+`core/transport/src/types.ts`, `package.json`. The document asserts its own correctness in its
+opening paragraph and is wrong.
+
+**Row 4:** the command returns 5 hits — all of them comments and tests *asserting that plaintext is
+absent* (`// Noise ONLY — no plaintext. SI-001.`). **The code is right and the instruction is
+wrong**, which is the whole shape of this document: true claims, proved badly. Rewrite the command
+so a correct tree produces the result the document predicts.
+
+**Checked and NOT a finding**, recorded so it is not re-raised: `code.claude.com` and
+`hermes-agent.nousresearch.com` appear only in a doc comment and an install-hint error string, not
+as outbound calls; `docs.cello.dev` — which would breach the one-domain rule — appears only inside
+an illustrative comment in a test file, and nothing ships it.
+
+---
+
+**Remaining surfaces to sweep** (`DOD-M15-LEDGER-1` is not ✅ until each has been walked):
+`README.md`; the five shipped `plugins/cello/skills/*/SKILL.md` and the receptionist agent; MCP tool
+descriptions in `core/adapter-claude-code/src/bin/cello-mcp.ts`; CLI help text; product status
+output.
+
+**Seed rows, from the two investigations — not yet individually verified against the tree:**
 
 | Claim | Where | Disposition |
 |---|---|---|

@@ -354,3 +354,109 @@ requirement.
 from-scratch fixture), then implement.
 
 ---
+
+## Entry 3 — DOD-M15-LEDGER-1 (partial): AUDIT-ME.md swept, and it fails its own instructions (2026-08-21)
+
+**Target:** sweep the live claim surfaces and give each claim a disposition. This entry covers the
+first and most exposed surface — `AUDIT-ME.md` at the root of the **public**
+`Mygentic-AI/cello-client` repo. Confirmed public via `gh repo view` (`"visibility":"PUBLIC"`).
+Ledger rows are in the DoD; the measurement is here.
+
+**Method: run the document's own verification commands against the tree.** That is what its name
+invites an evaluator to do, so it is the only honest way to audit it.
+
+### Row 1 — Claim 3 is false, and the document's own command proves it
+
+> *"The CELLO client makes outbound network connections **only** to the directory node … and to
+> relay nodes … There are no telemetry endpoints, analytics beacons, error reporting services, **or
+> any other outbound HTTP calls.**"*
+
+Its **command 4**, run verbatim:
+
+```
+$ grep -rln "fetch(\|http\.request\|https\.request" core/*/src/
+core/daemon/src/telegram-bot-client.ts
+```
+
+```
+core/daemon/src/telegram-bot-client.ts:27:  const url = `https://api.telegram.org/bot${this.botToken}/getUpdates?…`
+core/daemon/src/telegram-bot-client.ts:28:  const res = await fetch(url);
+core/daemon/src/telegram-bot-client.ts:42:  const url = `https://api.telegram.org/bot${this.botToken}/sendMessage`;
+core/daemon/src/telegram-bot-client.ts:43:  const res = await fetch(url, {
+```
+
+**Nothing about the feature is wrong.** That is the Telegram doorbell — deliberate,
+operator-configured, and the mechanism that reaches a phone. The defect is entirely that a public
+document says it does not happen, in a file named AUDIT-ME, discoverable by following that file's
+own instructions in about ten seconds. This is the single most Moltbook-shaped artifact in the
+milestone and it is a wording fix, not an engineering one.
+
+**Write the replacement FORWARD-SAFE.** `core/gateway/src/detect/deberta-model-manifest.ts:16`
+holds `https://huggingface.co/protectai/deberta-v3-small-prompt-injection-v2/resolve/main/` as the
+classifier's download base. `installModel` has no production caller, so it is not a destination
+today — but it becomes one the moment `DOD-M15-SCREENINSTALL-1` ships. A claim that would have to be
+rewritten again then is a claim being written wrong now.
+
+### Row 2 — the miscited evidence
+
+Claim 1 says message content is *"additionally encrypted at the application layer (AES-GCM
+envelope)"* and cites `core/client/src/client-backup.ts`. Two problems: live content is **plaintext
+inside libp2p's Noise session** (only *parked* content carries an app-layer envelope — relay audit
+Part 13), and the cited file is the **database backup** encryption, a different thing entirely. It
+also does not exist.
+
+### Row 3 — the document asserts its own correctness and is wrong
+
+Opening paragraph: *"All paths listed are valid."* Measured, 8 cited paths:
+
+```
+MISSING core/adapter-claude-code/src/server.ts
+MISSING core/client/src/client-backup.ts
+MISSING core/client/src/client.ts
+MISSING core/protocol-types/src/envelope.ts
+OK      core/crypto/src/ed25519.ts
+OK      core/transport/src/node.ts
+OK      core/transport/src/types.ts
+OK      package.json
+```
+
+**`core/client/` does not exist at all.** Four of eight, not four of seven — the earlier count
+excluded `package.json`. Half the document's evidence cannot be opened.
+
+### Row 4 — a verification command that a CORRECT tree fails
+
+```
+$ grep -r "plaintext" core/transport/src/   # document says: should find nothing
+core/transport/src/node.ts:      // Noise ONLY — no plaintext. SI-001.
+core/transport/src/types.ts:   * Used by tests to verify Noise is present and plaintext is absent (SI-001, SI-003).
+core/transport/src/__tests__/node.test.ts:describe("AC-005: Noise-only security (no plaintext)", () => {
+… 5 hits
+```
+
+Every hit is a comment or a test **asserting plaintext is absent**. The code is right; the
+instruction is wrong. This is the document's whole shape in one line: **true claims, proved badly** —
+which for a trust product whose evaluators point a coding agent at the repo is worse than publishing
+nothing.
+
+### Row 5 — the package it never mentions
+
+`core/daemon/` appears nowhere in a document auditing network behaviour, and the daemon is where
+that behaviour now lives — including the one call that falsifies Claim 3. The document predates the
+daemon becoming the main surface and was never re-scoped.
+
+### Checked and NOT findings — recorded so they are not re-raised
+
+- `https://code.claude.com` — a doc-comment link in `channel-params.ts`. Not a call.
+- `https://hermes-agent.nousresearch.com` — inside an install-hint error string in the CLI. Not a call.
+- `docs.cello.dev` — **would** breach the one-domain rule, and appears only inside an illustrative
+  comment in `dod-onboard-help-1-tool-parity.test.ts`. Nothing ships it.
+
+### Scope note — this line is NOT done
+
+Four surfaces remain: `README.md`; the five shipped `SKILL.md` files and the receptionist agent; the
+MCP tool descriptions; CLI help and product status output. `DOD-M15-LEDGER-1` stays ❌ until each is
+walked. **The rewrite of `AUDIT-ME.md` itself is `DOD-M15-AUDITME-1` and is not started** — and per
+M15-PROCEDURE §2f the replacement wording is Andre's call, so that unit prepares variants rather
+than publishing. Deleting a flatly false claim does not wait; choosing what replaces it does.
+
+---
