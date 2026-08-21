@@ -36,6 +36,7 @@ unchanged from the main doc — this is a relocation, not a rewrite. Cross-refer
 - A sealed session's unread messages rang the doorbell as live work — `DOD-TERMINAL-WAKE-1` — fixed 2026-08-06
 - A conversation could silently stop being recordable — `DOD-WITNESS-STALL-1` — root-caused and fixed 2026-08-09
 - Logging out said the daemon had stopped while it was still on the network — `DOD-LOGOUT-EXIT-1` — fixed 2026-08-06
+- You cannot retract a trust signal — and the tool says you did — `DOD-SIGNAL-REVOKE-BROKEN-1` — fixed and shipped; tarball + live fleet verified 2026-08-21
 - Fixed and verified — a short list of earlier closures (first-message witness, co-attendance, frontier strand, SEC-1, SEC-2, daemon cleanup, crypto-at-rest, config)
 - Ruled out without a fix — the FROST debug-logging report (overstated)
 - The old "already solid" list — a lesson kept about unverified confidence claims
@@ -1065,6 +1066,113 @@ itself — because the handles *are* released, every local check agrees with the
 Worth noting this is the second appearance of a shape an earlier pass already celebrated as fixed:
 the review of the double-daemon fix caught that the shutdown command was trusting the same broken
 logic. The class came back through a different door.
+
+---
+
+## You cannot retract a trust signal — and the tool says you did
+
+**Designation: `DOD-SIGNAL-REVOKE-BROKEN-1`** — ✅ **FIXED, SHIPPED AND VERIFIED. Moved out of
+[[launch-triage]] on 2026-08-21 after checking the published tarball and the live fleet.**
+
+**What an operator gets today.** You retract a trust signal. The tool answers **`queued`, not
+`revoked`**, and says in plain words that your local copy is deliberately kept so a failure leaves
+you able to retry. The request rides the sealed submission queue to the portal, which checks the
+signal is one you may retract and revokes it at the directory. Nothing is destroyed on the way, and
+nothing reports success for an operation that did not happen.
+
+**What it used to do.** The tool answered `ok: true`, deleted your local copy, and the directory
+never received the revocation — so every node kept serving the signal and you no longer held a copy
+to retry with. The one operation whose entire purpose is taking something back did nothing, reported
+success, and destroyed the ability to try again. Four defects in one handler: it POSTed to the
+directory's **health** port instead of the internal API, signed as the AGENT where the route needs
+an enrolled submitter, contacted ONE node under a comment claiming it contacted all three, and
+returned `ok: true` unconditionally while hard-deleting the local copy "regardless of directory
+result."
+
+**The design question the item carried is settled.** It asked whether to route revocation through
+the portal or enrol agents to revoke directly at the directory. **Andre's call was the portal**, and
+the reason is recorded at the call site: the directory deliberately cannot tell a `track_record`
+from a `github_id` (opaque `type`, no enum, so a new signal type never needs a directory deploy),
+and both are portal-issued, so `issuer_kind` does not separate them. A direct verb would revoke a
+behavioural record on request with only an editable client in the way. The portal minted the signal
+and knows what it is, so the category rule is real there rather than advisory in the client.
+
+### Verification, 2026-08-21 — the tarball and the fleet, not the branch
+
+**Published `latest`, daemon `0.0.181`, checked in the unpacked tarball.** All four defects absent
+from the built artifact: no direct directory call of any kind remains (the old URL survives only
+inside a comment describing what used to be there), the path is agent → portal → directory, the
+fan-out is the shared queue and carries a warning when a node already held the submission, and
+`ok: true` is no longer unconditional — a failure to queue returns `ok: false`, success returns
+`revoked: false, queued: true`, and **there is no delete of the local copy anywhere in the handler.**
+
+**The drain that finishes the job** — absent on 2026-08-10, which is what made the first "proof" a
+hand-driven fake — runs every minute, last ran without error minutes before this check.
+
+**Both revocations have reached all three nodes**, and the effective view honours them:
+
+| signal | recorded | type | effective status |
+|---|---|---|---|
+| `db4e32c0…` | 2026-08-10 | github_id | **revoked** on all three |
+| `7fa402bc…` | 2026-08-11 | github_id | **revoked** on all three |
+
+**That retires a second claim the item carried:** five Tier-A column dispositions rested on the
+replication mechanism working, and the item said it "has never carried a single row… cannot be
+proven until this is fixed." It carries two rows, converged, honoured by the effective view on every
+node. That half is proven.
+
+**The proof covers the published build.** The portal-routed rewrite landed 2026-08-10 (`a279d79` +
+`9284c7c`); the live proof ran 2026-08-11 against exactly that code; nothing has touched the handler
+since. The version shipping is the version proven, not a later one that drifted.
+
+**Not exercised recently:** no revocation has flowed since 2026-08-11. The queue itself gets daily
+traffic from endorsements and refusals, so the drain is continuously verified; only the
+revocation-specific branch is idle.
+
+### Two things that shipped alongside it, recorded so they are not re-derived
+
+**Removing your last passkey now revokes the signal claiming you have one** (portal
+`portal-1cb90e7`, 2026-08-10). Before, that route touched the signal not at all, so removing your
+only passkey left a live signal telling counterparties you still had a factor you no longer had — a
+false claim about a security feature, reachable by simply removing a passkey. TOTP already did this
+correctly; the two now share one implementation.
+
+**Revoke refuses signals that are not the operator's to destroy**, before signing and before any
+local write. Three categories, decided with Andre: **mandatory** (`track_record`, `email`, `phone`) —
+a track record its subject can delete is worth nothing to anyone, and the other two assert only THAT
+a channel was verified, never the address or number; **security-derived** (`webauthn`, `totp`) —
+mirrors of a portal factor, removed by turning the factor off, because revoking one directly leaves
+the factor on with no signal and no way to regenerate it; and **discretionary** — everything else,
+the default, so a new signal type never needs a client release. The client guard is UX and says so
+in its own header; the real enforcement is the portal for mandatory types and the directory for
+attestations, where `signal_records_effective` already makes a non-issuer's tombstone inert.
+
+**Refuse-after-accept** (daemon `0.0.158`): removing an endorsement you already accepted. Refusal
+previously worked only while an attestation was pending, so once you said yes you were stuck with it
+being presented. It is refusal rather than revocation on purpose — the decision is RECORDED rather
+than erased, and a refused signal is already inert everywhere it is checked. Scoped to peer-issued
+attestations only, filtered on ISSUER and deliberately NOT on type: a hostile peer can issue a signal
+it calls `track_record`, and refusing a stranger's claim about you is precisely what the verb is for.
+Without that scope every operator would have had a back door to suppressing their own mandatory
+signals by consent. Revert-tested — dropping that one clause fails two of the eight tests.
+
+### The process lesson, which outlived the defect
+
+The 2026-08-10 entry claimed this was proven live and was wrong. That proof reached all three nodes
+only because the drain was POSTed **by hand** — nothing in the system called it, the queue had no
+consumer at all, and an operator doing exactly the same thing would have watched `queued` sit there
+forever. The defect was one level up from the feature: the definition of done said "revoke a signal
+and show all three databases reading revoked", every verb in which belongs to the person testing, so
+supplying the missing machinery by hand PASSED it. **A clause has to be an action the OPERATOR takes
+unattended, or it can be satisfied by the tester standing in for the part that does not exist.**
+Fixed by `cello-portal-ingress-drain` (Cloud Scheduler, every minute) — see `infra/GCP-STATE.md`.
+
+This was never revocation-specific. Endorsements, refusals and withdrawals ride the same queue and
+were failing identically; they just read as latency. Revocation was the first feature whose whole
+value sits on the far side of the drain.
+
+Full record, including the four failed attempts and why the review could not have caught them:
+[[M10B-DEFINITION-OF-DONE]] § `DOD-END-REVOKE-3`.
 
 ---
 

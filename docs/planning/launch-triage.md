@@ -1,13 +1,14 @@
 ---
 name: Launch Triage
 type: triage
-date: 2026-07-31
+date: 2026-08-21
 topics: [launch, security, backup, receipt-integrity, kill-switch, daemon-lifecycle, telegram, install, triage, sealed-sessions, wake, relay, observability]
 status: open
 description: >
   Open items only — not implemented, or implemented but not yet proven live. Ranked by what
   actually goes wrong if left alone, not by build status. Closed items leave entirely; the record
   of what shipped lives in the milestone DoD docs and in `git log` on this file, not here.
+  De-duplicated 2026-08-21: 22 items, down from 24.
 ---
 
 # Launch Triage
@@ -21,6 +22,29 @@ or is it something they could *forgive*? Ruin = they can't get the core value, o
 Most things are forgivable.
 
 # Open — ranked (order decided by Andre, 2026-08-04)
+
+> ### De-duplication pass, 2026-08-21 — 24 items to 22, no work lost
+>
+> The list had accumulated the failure it warns about below: the same defect written down more than
+> once, in different words, in different slots. Four changes, all recorded in the items themselves:
+>
+> - **`DOD-TERMINAL-STATE-DIVERGENCE-1` was filed twice** — once as the cure, once as the missing
+>   proof, nine slots apart, neither aware of the other. Now one item (5) with two open halves.
+> - **`DOD-SIGNAL-REVOKE-BROKEN-1` is fixed and left the list.** It carried a green header and a body
+>   underneath still describing all four defects as standing. Checked 2026-08-21 against the
+>   published tarball and all three live nodes: the green header is right, the body was stale. Full
+>   record and the verification in [[launch-triage-archive]].
+> - **`DOD-DOC-RECONCILE-TERMINAL-1` merged into the retried-message item (18)** — its storm was
+>   fixed the day it was found, and its residual has the same unexplained cause as that item's one
+>   open unknown. Two entries were inviting two people to chase one root.
+> - **The `counterparty_offline` error string became its own item (17).** It was a footnote written
+>   into three separate items at once, which made it read as a caveat on each instead of as work
+>   anyone would pick up.
+>
+> **The general lesson, worth more than the four edits:** a defect that is a *shared cause* of
+> several items gets buried as a note on each of them, and a defect with two halves gets filed as two
+> items that drift apart. Both are invisible to a reader going down the list in order. When adding an
+> item, search this file for its designation first.
 
 > ## ⚠️ A MARKER ON THIS LIST TRACKS WHOEVER LAST EDITED IT — NOT THE CODE
 >
@@ -152,7 +176,10 @@ layer and into the daemon as an actual capability.
 
 **Why it ranks last among real work:** its failure mode fires only on device loss, and a day-one
 user with no accumulated endorsements or history loses a re-registration, not the product. The
-kill-switch and false-claim items above fire for every user immediately.
+items it was ranked against fire for every user immediately. (The original wording named the
+kill-switch and false-claim items "above"; both have since closed and moved to
+[[launch-triage-archive]], so the comparison no longer points anywhere. The ruling stands on its own
+reasoning.)
 
 **Scope, decided 2026-08-04 (Andre):** the launch shape is smaller than the old framing implied.
 - **Backup** = exporting the (SQLCipher) database for transport. Not hard.
@@ -168,18 +195,90 @@ Confirmed still open as of 2026-07-30 — M9B's closure note records that `cello
 
 ## 5. Two sides can hold incompatible beliefs about which terminal path a session is on
 
-**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — 🟢 **THE CURE IS BUILT AND PUBLISHED,
-2026-08-09.** A close that fails now ASKS the directory whether the seal already happened, and
-returns the receipt if it does (`daemon 0.0.151`, on `latest` since 2026-08-09). Distinct from
+**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** — 🟡 **CURE BUILT AND PUBLISHED, NEVER PROVEN.**
+**Merged 2026-08-21: this was filed twice under the same designation — this slot for the cure and a
+second slot nine places down for the missing proof, each written as though the other did not exist.
+They are one item with two open halves.** Distinct from
 `DOD-FRONTIER-MISMATCH-DURABLE-1`, which covers *leaf* divergence — here the leaves agree and the
 statuses do not.
 
-**What's still owed — the whole of what's open.** Nothing asks on the daemon's own initiative: the
-pull only fires when an operator hits the stuck state and tries to close or read a receipt, so a
+**What was built.** A close that fails now ASKS the directory whether the seal already happened, and
+returns the receipt if it does (`daemon 0.0.151`, on `latest` since 2026-08-09).
+
+### Open half A — nothing asks on its own initiative
+
+The pull only fires when an operator hits the stuck state and tries to close or read a receipt, so a
 session stranded and never touched again stays stranded — there is no startup sweep. Also,
 **sessions sealed before the V58 migration (2026-08-09) can never be served by the pull** — their
 `leaf_count`/`legibility` were never recorded, so no verifiable certificate can be reconstructed for
 them. This fix prevents future divergence; it does not repair past divergence.
+
+**⚠️ And the pull itself has never once succeeded — see item 22
+(`DOD-M12B-PULL-NEVER-RECOVERS-1`), which counted 157 attempts and 0 recoveries on one daemon in one
+day.** That is a measurement of THIS mechanism. Do not read the 🟢 that used to head this item as
+evidence the cure works; it is evidence the cure was written.
+
+### Open half B — interrupted-session sealing has never been proven end to end
+
+`4759b4b` (daemon 0.0.147) fixed the defect where an interrupted close agreed a signed record with
+the counterparty and **never asked anyone to notarize it** — the session reached a mutually signed
+state that nobody was ever asked to stamp, and sat there until the relay swept it. The fix is
+deployed and the code path demonstrably runs: on a real attempt the daemon logged
+`session.interrupted.responder.acked` followed by `session.interrupted.seal.leaf.submit_failed` —
+that is the request being made, where the previous build logged nothing at all because nothing asked.
+
+**But no interrupted session has ever been sealed with it.** Every stranded session available at the
+time predated the 2026-08-08 relay restart, so the relay had already dropped them and answered
+`session_not_found`. They were force-closed after confirming no certificate existed on any node.
+
+**What is unproven, precisely:** that an interrupted session whose relay session still EXISTS can be
+notarized end to end and produce a receipt. That case has never run.
+
+> ### 🔴 ANSWERED 2026-08-17 — it could never have run, and now it can
+> `4759b4b` made the interrupted close SUBMIT a seal leaf. **One leaf can never notarize anything.**
+> The relay stamps a chain only once BOTH parties have posted a SEAL ctrl leaf, and the responder
+> never posts one — `inbound-seal-request.ts` persists its commitment, acks, and stops. So the
+> notarization this item has been waiting to observe was structurally impossible, and no live test
+> could ever have produced it.
+>
+> Worse, the escalation that WOULD have finished the job — the unilateral seal, which asks the
+> directory to notarize with the counterparty absent — lived in the close handler's `active` branch,
+> below an `interrupted` branch that returns from every exit. **Unreachable.** So an interrupted
+> session could not obtain a receipt even when a human closed it by hand, which is the plain-language
+> version of *"most of the time we can't even close them"*.
+>
+> **And there was a second layer, found by the review of the fix.** Even once the escalation ran and
+> the directory notarized, the session's ROW never changed: every seal-completion path ends with
+> `destroySessionNode(..., "sealed")`, which returns early when the session has no in-memory node
+> and writes the status 26 lines below that guard. An interrupted session has no node by
+> construction. So the receipt was stored against a row that still said `interrupted` — `cello_sessions`
+> showed it stuck, the close verb still refused it by name, and the automatic resolver re-ran the
+> whole ceremony on the next boot and then advised force-abandoning a session that already held a
+> valid receipt. Fixed in `6e2a9fa`.
+>
+> **This is why the proof this item asks for would still have looked like a failure even after the
+> first fix.** Whoever runs it should assert on the session's STATUS, not only on the certificate.
+>
+> **🔴 WHY THE PROOF HAS NOT BEEN RUN, and it is not for lack of trying.** It needs two daemons with
+> REGISTERED agents, and registration requires a `preAuthToken` *"issued by the CELLO Operations
+> Agent (Telegram)"* — a human step only Andre can take. The alternative, running it against his own
+> five live agents, would seal his open sessions as a side effect of the test. **So this proof is
+> blocked on Andre issuing two pre-auth tokens for throwaway agents**, and that is the whole
+> blocker: the code is written, reviewed twice and gated green.
+>
+> Fixed in `DOD-M12B-INTERRUPTED-ESCALATE-1` (cello-client `af8d4bb`): the escalation is a shared
+> helper both branches call. It fires when the two sides agreed OR when the counterparty never
+> answered, and **never after a refusal** — a rejection means the trees disagree, and notarizing over
+> a stated objection is the one thing a trust layer must not do. Not yet published; the live proof
+> this item asks for is still owed and is now actually possible.
+>
+> Same investigation: **114 of 118 interrupted sessions came from our own shutdown sweep and zero
+> from any transport event** — see
+> [[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]].
+
+**How to prove it:** open a session, exchange a few messages, restart the daemon to interrupt it,
+then close it — all inside the relay's 24-hour retention. Minutes of work, and it either produces a
+receipt or a named failure.
 
 Full root-cause trace, rejected designs and the build: [[M8C-DEFINITION-OF-DONE]] §
 `DOD-TERMINAL-STATE-DIVERGENCE-1` (M8C-PROCEDURE §5d, `DOD-INV-PUSHPULL`).
@@ -458,7 +557,8 @@ by the ops-agent deploy on 2026-08-09.
 **Why it is keyed this way, which is the interesting part.** It needed something to throttle on and
 did not want to hold the address, so it took the domain as the safer-looking half. The trade-off
 fails in both directions: too coarse to protect, and too coarse to be safe. Same root shape as the
-`account_email_stubs` fork above — a domain standing in for a person — but a different blast radius.
+`account_email_stubs` fork (`DOD-EMAIL-STUB-FORK-1`, now in [[launch-triage-archive]]) — a domain
+standing in for a person — but a different blast radius.
 
 **The fix is smaller than the problem.** One line below the domain extraction the code already
 computes the address fingerprint (`hashEmail(email)`) and stores it. Keying the limiter on that
@@ -471,204 +571,7 @@ backend. Nothing about the fix touches the directory or the protocol.
 
 ---
 
-## 13. Interrupted-session sealing is shipped and has never been proven
-
-**Designation: `DOD-TERMINAL-STATE-DIVERGENCE-1`** (verification half) — ⚠️ **SHIPPED, UNPROVEN.**
-Unranked. Small, but filed because "shipped" reads as "works" on a list like this one, and here it
-does not.
-
-`4759b4b` (daemon 0.0.147) fixed the defect where an interrupted close agreed a signed record with
-the counterparty and **never asked anyone to notarize it** — the session reached a mutually signed
-state that nobody was ever asked to stamp, and sat there until the relay swept it.
-
-**The fix is deployed and the code path demonstrably runs**: on a real attempt the daemon logged
-`session.interrupted.responder.acked` followed by `session.interrupted.seal.leaf.submit_failed` —
-that is the request being made, where the previous build logged nothing at all because nothing asked.
-
-**But no interrupted session has ever been sealed with it.** Every stranded session available at the
-time predated the 2026-08-08 relay restart, so the relay had already dropped them and answered
-`session_not_found`. They were force-closed after confirming no certificate existed on any node.
-
-**What is unproven, precisely:** that an interrupted session whose relay session still EXISTS can be
-notarized end to end and produce a receipt. That case has never run.
-
-> ### 🔴 ANSWERED 2026-08-17 — it could never have run, and now it can
-> `4759b4b` made the interrupted close SUBMIT a seal leaf. **One leaf can never notarize anything.**
-> The relay stamps a chain only once BOTH parties have posted a SEAL ctrl leaf, and the responder
-> never posts one — `inbound-seal-request.ts` persists its commitment, acks, and stops. So the
-> notarization this item has been waiting to observe was structurally impossible, and no live test
-> could ever have produced it.
->
-> Worse, the escalation that WOULD have finished the job — the unilateral seal, which asks the
-> directory to notarize with the counterparty absent — lived in the close handler's `active` branch,
-> below an `interrupted` branch that returns from every exit. **Unreachable.** So an interrupted
-> session could not obtain a receipt even when a human closed it by hand, which is the plain-language
-> version of *"most of the time we can't even close them"*.
->
-> **And there was a second layer, found by the review of the fix.** Even once the escalation ran and
-> the directory notarized, the session's ROW never changed: every seal-completion path ends with
-> `destroySessionNode(..., "sealed")`, which returns early when the session has no in-memory node
-> and writes the status 26 lines below that guard. An interrupted session has no node by
-> construction. So the receipt was stored against a row that still said `interrupted` — `cello_sessions`
-> showed it stuck, the close verb still refused it by name, and the automatic resolver re-ran the
-> whole ceremony on the next boot and then advised force-abandoning a session that already held a
-> valid receipt. Fixed in `6e2a9fa`.
->
-> **This is why the proof this item asks for would still have looked like a failure even after the
-> first fix.** Whoever runs it should assert on the session's STATUS, not only on the certificate.
->
-> **🔴 WHY THE PROOF HAS NOT BEEN RUN, and it is not for lack of trying.** It needs two daemons with
-> REGISTERED agents, and registration requires a `preAuthToken` *"issued by the CELLO Operations
-> Agent (Telegram)"* — a human step only Andre can take. The alternative, running it against his own
-> five live agents, would seal his open sessions as a side effect of the test. **So this proof is
-> blocked on Andre issuing two pre-auth tokens for throwaway agents**, and that is the whole
-> blocker: the code is written, reviewed twice and gated green.
->
-> Fixed in `DOD-M12B-INTERRUPTED-ESCALATE-1` (cello-client `af8d4bb`): the escalation is a shared
-> helper both branches call. It fires when the two sides agreed OR when the counterparty never
-> answered, and **never after a refusal** — a rejection means the trees disagree, and notarizing over
-> a stated objection is the one thing a trust layer must not do. Not yet published; the live proof
-> this item asks for is still owed and is now actually possible.
->
-> Same investigation: **114 of 118 interrupted sessions came from our own shutdown sweep and zero
-> from any transport event** — see
-> [[2026-08-17_2036_interrupted-sessions-why-they-cannot-resume]].
-
-**How to prove it:** open a session, exchange a few messages, restart the daemon to interrupt it,
-then close it — all inside the relay's 24-hour retention. Minutes of work, and it either produces a
-receipt or a named failure.
-
-
-## 14. You cannot retract a trust signal — and the tool says you did
-
-**Designation: `DOD-SIGNAL-REVOKE-BROKEN-1`** — ✅ **FIXED AND PROVEN LIVE 2026-08-11. Retraction
-works, on all three nodes, with nobody driving it.**
-
-> ```
-> gcp-use1   7fa402bc7d04 | revoked | revocation_rows 1
-> gcp-usc1   7fa402bc7d04 | revoked | revocation_rows 1
-> gcp-euw1   7fa402bc7d04 | revoked | revocation_rows 1
-> ```
-> A real `github_id`, revoked from the daemon at 12:57, drained by the **scheduler** at 12:57:02,
-> revoked by the portal at 12:57:03, replicated to every node. No hand on the trigger.
->
-> **⚠️ The 2026-08-10 version of this entry claimed the same thing and was wrong.** That proof
-> (`db4e32c09cf7`) reached all three nodes only because the drain was POSTed by hand. Nothing in the
-> system called it — the queue had no consumer at all, so an operator doing exactly the same thing
-> would have watched `queued` sit there forever. The defect was one level up from the feature: the
-> definition of done said "revoke a signal and show all three databases reading revoked", every verb
-> in which belongs to the person testing, so supplying the missing machinery by hand PASSED it. A
-> clause has to be an action the OPERATOR takes unattended, or it can be satisfied by the tester
-> standing in for the part that does not exist. Fixed by `cello-portal-ingress-drain`
-> (Cloud Scheduler, every minute) — see `infra/GCP-STATE.md`.
->
-> **This was never revocation-specific.** Endorsements, refusals and withdrawals ride the same queue
-> and were failing identically; they just read as latency. Revocation was the first feature whose
-> whole value sits on the far side of the drain.
->
-> **What an operator gets.** Retracting a signal now actually retracts it, everywhere, and the answer
-> is honest at every step: `queued` while it is queued, never `revoked` before it is. Your local copy
-> is KEPT until the directory confirms, so a failure leaves you able to retry rather than destroying
-> the evidence — which is what the old verb did on every single attempt, while reporting success.
->
-> And the things that must NOT be retractable are refused, server-side: your track record, verified
-> email and phone. Passkey and authenticator signals are removed by turning the factor off in the
-> portal, which revokes them as a consequence.
->
-> Full record, including the four failed attempts and why the review could not have caught them:
-> [[M10B-DEFINITION-OF-DONE]] § `DOD-END-REVOKE-3`. Found by running it against the live fleet.
-
-> ### What shipped 2026-08-10, and what did not
->
-> **Shipped, live:** removing your last passkey now revokes the signal that claims you have one
-> (portal `portal-1cb90e7`). Before, that route touched the signal not at all, so removing your only
-> passkey left a live signal telling counterparties you still had a factor you no longer had — a
-> false claim about a security feature, reachable by simply removing a passkey. TOTP already did this
-> correctly; the two now share one implementation.
->
-> **Shipped, published (daemon `0.0.157`, pending Andre's promotion):** revoke now refuses signals
-> that are not the operator's to destroy, BEFORE signing and BEFORE the unconditional local delete.
-> Three categories, decided with Andre: **mandatory** (`track_record`, `email`, `phone`) — a track
-> record its subject can delete is worth nothing to anyone, and the other two assert only THAT a
-> channel was verified, never the address or number; **security-derived** (`webauthn`, `totp`) —
-> mirrors of a portal factor, removed by turning the factor off, never revoked directly, because
-> revoking one directly leaves the factor on with no signal and NO WAY to regenerate it; and
-> **discretionary** — everything else, the default, so a new signal type never needs a client release.
->
-> **NOT fixed — the verb is still broken for the signals that ARE revocable.** All four original
-> defects stand: it posts to the health port instead of the internal API, signs as the agent when the
-> route needs an enrolled submitter, contacts one node under a comment claiming all three, and returns
-> `ok: true` while hard-deleting the local copy regardless. So revoking your GitHub link still fails
-> and still lies about it. What changed is only that it can no longer do that to your track record.
->
-> **BUILT AND PUBLISHED (daemon `0.0.158`) — refuse-after-accept**, the decision Andre made for
-> removing an endorsement you already accepted. Refusal previously worked only while an attestation
-> was pending, so once you said yes you were stuck with it being presented. It is refusal rather than
-> revocation on purpose: the decision is RECORDED rather than erased, and a refused signal is already
-> inert everywhere it is checked.
->
-> **The scope was the dangerous half.** A refused signal is inert, so widening refusal without a
-> filter would have handed every operator a back door to suppressing their own MANDATORY signals —
-> refuse your `track_record` and it stops being presented, achieving by consent exactly what
-> revocation is forbidden from doing. Scoped to peer-issued attestations only, filtered on ISSUER and
-> deliberately NOT on type: a hostile peer can issue a signal it calls `track_record`, and refusing a
-> stranger's claim about you is precisely what the verb is for. Revert-tested — dropping that one
-> clause fails two of the eight tests.
->
-> **Enforcement note.** The client guard is UX and says so in its own header — the operator owns that
-> process. The real enforcement is the portal for mandatory types (server-side, and the only party
-> that knows a signal is a track record rather than a GitHub link, since directory `type` is
-> deliberately opaque per `DOD-INV-ZERO-BUMP`) and the directory for attestations, where
-> `signal_records_effective` already makes a non-issuer's tombstone inert. Unranked. **Proposed slot: high.** This is the retraction verb, and it has never worked.
-
-**What happens to you.** You revoke a trust signal. The tool answers `ok: true` and tells you the
-signal is gone. Your local copy IS deleted. **The directory never receives the revocation**, so every
-node keeps the signal and keeps serving it to counterparties — and you no longer hold a copy to retry
-with. The one operation whose entire purpose is taking something back does nothing, reports success,
-and destroys your ability to try again.
-
-**Measured, not inferred.** Revoked `3a6512df…` (an inert, twice-superseded track record) from a live
-agent. Before: `superseded` on all three nodes, `signal_revocations` empty everywhere. After: **identical
-on all three — still `superseded`, still zero revocation rows** — and the signal gone from the local
-wallet. The tool's own response carried the failure and returned success anyway:
-`{"ok":true, "removed_locally":true, "directory_results":[{"ok":false,"detail":"not found"}]}`.
-
-**Four defects in one handler** (`core/daemon/src/daemon.ts`, the `cello_trust_signals_revoke` handler):
-
-1. **Wrong port.** It POSTs `/internal/signal/revoke` to the directory's **health** port 9090. The
-   route lives on the internal API server, port **8081**. The 404 is what "not found" is.
-2. **Wrong identity.** The route's outer check requires an enrolled `submitter`; the daemon signs as
-   the AGENT. `authorized_issuers` holds one row and it is the portal's KMS key. The intended path is
-   agent → portal → directory, with the agent's authority carried INSIDE the body as
-   `revoker_pubkey` + `revoker_signature` (V53). The daemon sends neither.
-3. **One node, not three.** `const directoryUrls = [directoryUrl]` sits under a comment that says
-   "POST to all directory nodes … all reachable nodes get the tombstone."
-4. **`ok: true` unconditionally, and the local delete is unconditional too** — the code comment states
-   it: *"Always hard-delete locally regardless of directory result."* The directory results are
-   attached to the response and never consulted.
-
-**Why it stayed hidden:** nothing else exercises the path, and the response looks like success. It is
-the same shape as every other defect found today — a green answer over a failed operation.
-
-**This is also why the replication half could never be proven.** `signal_revocations` is empty on all
-three nodes because no revocation has ever been written by anyone. Five of the Tier-A column
-dispositions (`signal_records.is_tombstone`, `.status`, `.revoked_at`, `.revoker_pubkey`,
-`.revoker_signature`) rest on the claim that the FACT replicates via `signal_revocations` and the
-effective view unions it. That mechanism is correct in code and **has never carried a single row.**
-It cannot be proven until this is fixed.
-
-**The fix needs a decision, because it is a design question, not a bug fix:** route revocation
-through the portal exactly as submission is routed (the portal is the enrolled submitter and can carry
-the agent's inner authorization), or enrol agents to revoke their own signals directly at the
-directory. The first matches the existing chokepoint design; the second is fewer hops but widens who
-may write to the directory. **Andre's call.** Everything else — the port, the fan-out, and the false
-`ok: true` — is unambiguous and should be fixed whichever way that goes.
-
-**Do not "fix" this by making the local delete conditional alone.** The operator must be told the
-retraction failed, and the local copy must survive so a retry is possible.
-
-
-## 15. A directory node goes deaf for 40 seconds at a time, and comes back on its own
+## 13. A directory node goes deaf for 40 seconds at a time, and comes back on its own
 
 **Designation: `DOD-NODE-HEAP-GROWTH-1`** — 🟡 **MITIGATED 2026-08-16, CAUSE NOT ESTABLISHED.**
 Unranked. **Proposed slot: high — the mitigation is a delay, not a fix, and when it expires the
@@ -708,7 +611,7 @@ candidate. A 60-second memory sampler now runs on all three nodes; the growth ra
 measurement that decides whether this closes or becomes a real hunt.
 
 
-## 16. Nothing watches anything — the signal sat at 100× normal for days and nobody was told
+## 14. Nothing watches anything — the signal sat at 100× normal for days and nobody was told
 
 **Designation: `DOD-NODE-ALERTING-1`** — ❌ **OPEN.** Unranked. **Proposed slot: high, and cheap —
 this is the item that would have made `DOD-NODE-HEAP-GROWTH-1` a one-hour problem instead of a one-day one.**
@@ -738,7 +641,7 @@ at WARNING AND ABOVE ONLY** — the first version logged at info, produced perfe
 left the instance, and cost a second roll of all three nodes to fix.
 
 
-## 17. `cello status` can tell you a node is unreachable for hours after it recovered
+## 15. `cello status` can tell you a node is unreachable for hours after it recovered
 
 **Designation: `DOD-STATUS-STALE-ROSTER-1`** — ❌ **OPEN.** Unranked. **Proposed slot: alongside
 `DOD-NODE-ALERTING-1` — it is small, and it is the reason a real fault took a day to see.**
@@ -764,7 +667,7 @@ minutes rather than presenting a stale one as current. **Do not fix it by hiding
 stale** — absent and healthy must not look alike.
 
 
-## 18. One lost packet drops a directory node from the roster for the whole sweep
+## 16. One lost packet drops a directory node from the roster for the whole sweep
 
 **Designation: `DOD-BOOTSTRAP-PROBE-RETRY-1`** — ❌ **OPEN.** Unranked. **Proposed slot: high on the
 ruin test — this one fails for a normal user on a normal connection, with no fault anywhere in the
@@ -790,17 +693,38 @@ not a longer wait.
 **Suggested shape:** ~3 attempts at ~8 s with a bounded total (~20 s), so it survives a lost packet
 but still gives up in bounded time against a node that is genuinely down. Numbers are a decision.
 
-> **The error message is its own defect, and it is shared by `DOD-NODE-HEAP-GROWTH-1`,
-> `DOD-STATUS-STALE-ROSTER-1`, and this item.** On 2026-08-16 a
-> single user-facing string — **`counterparty_offline`** — was returned for a garbage-collecting node,
-> for a short roster, and for a stale gateway on the far side. It names the other agent, which was
-> online and reachable in all three cases, and names nothing that was actually broken. Most of a day
-> went into the network path before the node was suspected, because the error pointed away from every
-> real cause. Whatever else is done here, **a roster that is below threshold must say so** rather than
-> borrowing a word about the counterparty.
+See item 17 — the error this returns names the wrong thing, and that is now filed separately.
 
 
-## 19. A retried message permanently kills the conversation it was retried in
+## 17. One error string is returned for three unrelated faults, and it names none of them
+
+**Designation: `DOD-COUNTERPARTY-OFFLINE-LIE-1`** — ❌ **OPEN. Extracted 2026-08-21 from item 16,
+where it was a footnote inside one of the three items it belongs to.** It was previously written
+into `DOD-NODE-HEAP-GROWTH-1`, `DOD-STATUS-STALE-ROSTER-1` and `DOD-BOOTSTRAP-PROBE-RETRY-1` at
+once, which meant it read as a caveat on each rather than as work anyone would pick up.
+
+**What it costs a customer.** They are told the agent they are trying to reach is offline. That
+agent is online. Nothing they can do changes it, and nothing they are shown names anything real —
+so the fault looks like the other person's problem, which is the worst shape a bug can have for a
+product whose whole proposition is reliable agent-to-agent contact.
+
+**Measured 2026-08-16.** A single user-facing string — **`counterparty_offline`** — was returned
+for three unrelated faults on the same day: a garbage-collecting directory node (item 13), a roster
+that had fallen below threshold (item 16), and a stale gateway on the far side. The counterparty was
+online and reachable in all three cases. **Most of a day went into the network path before the node
+was suspected**, because the error pointed away from every real cause.
+
+**What "fixed" looks like.** A roster below threshold must say so rather than borrowing a word about
+the counterparty; a node that cannot be reached must be named as such. The rule generalises and is
+worth stating once: **an error names what the system observed, never a conclusion it inferred about
+a party it did not check.**
+
+**Why it is worth its own slot.** It is cheap, it is not blocked on any of the three faults it
+currently hides, and it converts each of them from a day of investigation into an hour. It is the
+same argument as item 14 (nothing watches anything) and belongs in the same pass.
+
+
+## 18. A retried message permanently kills the conversation it was retried in
 
 **Designation: `DOD-M12B-SUBMIT-ID-1`** (and the rest of **[[M12B-DEFINITION-OF-DONE]]**) — ❌
 **OPEN, cause ESTABLISHED and measured.** Unranked. **Proposed slot: at or near the top — this is
@@ -835,26 +759,28 @@ advancing the counter or the relay's own tree, a client that stops re-asking, an
 discipline so a leaf index IS its assigned position. Runbook: [[M12B-PROCEDURE]] (§2f governs the
 relay roll — it is a bilateral wire contract). Evidence: [[M12B-BUILD-JOURNAL]] Entry 1.
 
-**One open unknown, carried as `DOD-M12B-ACK-1`:** what stops the FIRST acknowledgement. The spiral
-needs one unacknowledged send to start and that first failure was never traced.
+### The one open unknown, and the other item that turned out to be the same unknown
 
+**`DOD-M12B-ACK-1`: what stops the FIRST acknowledgement.** The spiral needs one unacknowledged send
+to start, and that first failure was never traced. Everything above is the spiral; this is its
+trigger, and it is the only part not yet explained.
 
-## 20. A document you were removed from dials its old readers forever, four times a minute
+**`DOD-DOC-RECONCILE-TERMINAL-1` was merged into this item on 2026-08-21, because its remaining open
+half IS the unknown above.** It was filed separately as "a document you were removed from dials its
+old readers forever, four times a minute" — 321 dials in 85 minutes against two documents, 367
+pieces of content held on one daemon in one morning, two agents on one machine unable to hold a
+conversation at all. **That storm was fixed the same day it was found** (removed-holder check +
+refusal backoff, verified live: 0 refusals, 0 held on a fresh session). What survived the fix is a
+much slower version of the same gap — **2 holds per 20 minutes, down from 367 per morning** — whose
+root cause is the same stream-closed error as `DOD-M12B-ACK-1`, not a defect specific to documents.
+Fixing the first acknowledgement is expected to close both; keeping them apart invited two people to
+chase one cause.
 
-**Designation: `DOD-DOC-RECONCILE-TERMINAL-1`** — ❌ **OPEN**, but narrower than it was filed. The
-2026-08-17 storm this item describes (321 dials in 85 minutes against two documents, 367 pieces of
-content held on one daemon in one morning, two agents on one machine unable to hold a conversation
-at all) was FIXED the same day it was found — removed-holder check + refusal backoff, verified live
-(0 refusals, 0 held on a fresh session). **What's still open is the residual, not the storm:** a
-much slower version of the gap still opens (2 holds per 20 minutes, down from 367 per morning), and
-its root cause is the same stream-closed error tracked as M12B's top line (`DOD-M12B-ACK-1`) — not
-a defect specific to this item. Unranked.
+Full investigation of the document storm — the three stacking defects behind it and the re-scope to
+"this is why messaging didn't work at all": [[M12B-DEFINITION-OF-DONE]] §
+`DOD-DOC-RECONCILE-TERMINAL-1`, [[M12B-BUILD-JOURNAL]].
 
-Full investigation — the three stacking defects behind the original storm and the re-scope to "this
-is why messaging didn't work at all": [[M12B-DEFINITION-OF-DONE]] § `DOD-DOC-RECONCILE-TERMINAL-1`,
-[[M12B-BUILD-JOURNAL]].
-
-## 21. A close doesn't tell you it's waiting, so you force it and forfeit the receipt it was about to earn
+## 19. A close doesn't tell you it's waiting, so you force it and forfeit the receipt it was about to earn
 
 **Designation: `DOD-M12B-CLOSE-SILENT-WAIT-1`** — 🟡 **HALF FIXED 2026-08-17.** The wait now
 announces itself when it starts — with the deadline and the cost of forcing — and a session mid-seal
@@ -875,7 +801,7 @@ a decision, parked rather than taken in passing.
 Full trace: [[M12B-DEFINITION-OF-DONE]] § `DOD-M12B-CLOSE-SILENT-WAIT-1`, [[M12B-BUILD-JOURNAL]]
 Entry 19.
 
-## 22. A transport hiccup can permanently kill a perfectly healthy conversation
+## 20. A transport hiccup can permanently kill a perfectly healthy conversation
 
 **Designation: `DOD-M12B-TRANSPORT-FAULT-NOT-TERMINAL-1`** — ❌ **OPEN, found 2026-08-19 while
 fixing `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` (closed). Upstream of the two items below it,
@@ -904,7 +830,7 @@ directory) from a merits failure (the directory examined the seal and refused it
 merits case terminalises. A transport failure instead leaves the session active, so the client
 retries rather than believing it is over.
 
-## 23. The relay has one word for "sealed" and one word for "gave up," and they are the same word
+## 21. The relay has one word for "sealed" and one word for "gave up," and they are the same word
 
 **Designation: `DOD-M12B-TERMINAL-REASON-1`** — ❌ **OPEN, found 2026-08-19 while fixing
 `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` (closed).**
@@ -937,7 +863,7 @@ older client fails safely rather than silently misreading a new answer the same 
 this one today. **Wire-visible: the relay must tolerate the new reasons before any client is allowed
 to depend on them** (§2f) — the same staged-rollout discipline M12B already uses.
 
-## 24. The one safety net for `DOD-M12B-TERMINAL-REASON-1` has never once caught anything
+## 22. The one safety net for `DOD-M12B-TERMINAL-REASON-1` has never once caught anything
 
 **Designation: `DOD-M12B-PULL-NEVER-RECOVERS-1`** — ❌ **OPEN, found 2026-08-19 while fixing
 `DOD-RELAY-DIRECTORY-CONNECTION-LIFECYCLE-1` (closed). Needs investigation before any fix — not a
