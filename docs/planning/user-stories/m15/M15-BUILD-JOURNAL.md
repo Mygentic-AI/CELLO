@@ -40,7 +40,13 @@ description: >
 - **HEAD commits:** trustless-cello `main` — see `git log`; cello-client `main` — see `git log`.
 - **Published versions:** unchanged; no M15 publish has occurred.
 - **Parked:** `DOD-M15-SWEEP-1` (sequencing: after `DOD-M15-FRAME-1` and Tier 4).
-- **Claims ledger:** seeded with 9 rows in the DoD; not yet swept (`DOD-M15-LEDGER-1`).
+- **Claims ledger:** 13 swept rows + 8 unverified seed rows, in the DoD. Worst row: `AUDIT-ME.md`'s
+  Claim 3 says the client makes no outbound HTTP calls beyond directory and relay, and the
+  document's OWN command finds `api.telegram.org`. Sweep is partial — see the DIVERGE/LEDGER
+  bullets above for what remains.
+- **`DOD-M15-FRAME-1` is TRACED, not started** (→ Entry 4). Read-only; no edits, because its file is
+  the one under review. The fix is largely mechanical — `session_abandoned_notice` in the same
+  switch is a complete correct reference to copy.
 
 ---
 
