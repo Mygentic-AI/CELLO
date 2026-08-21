@@ -16,13 +16,18 @@ description: >
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
 > ### 🟢 TIER 0 CLOSED. First Tier-2 unit shipped and reviewed. Tier 1 part-swept.
-> **51 DoD lines** (2 added by review), 2 ✅, 1 🅿️, rest ❌. Every line is inside the launch gate;
+> **52 DoD lines** (3 added by review + build), 2 ✅, 1 🟡 (`DOD-M15-FRAME-1`), 1 🅿️, rest ❌. Every line is inside the launch gate;
 > the gate is a state, not a date.
 
-- **NEXT ACTION: `DOD-M15-FRAME-1`** — the injection path, the worst-looking finding in the
-  milestone, and the line that also makes four of the screening claims true. **Already traced
-  (→ Entry 4) and largely mechanical:** `session_abandoned_notice` sits in the same switch as a
-  complete, correct reference to copy. Branch `m15/frame`.
+- **NEXT ACTION: land the `DOD-M15-FRAME-1` review** — fix every finding, quote the verdict in a
+  journal entry, flip the tag, merge `m15/frame`. **Then** either `DOD-M15-SURFACE-1` (stop the
+  directory-facing node listening; drop idle unauthenticated connections — small, no protocol
+  impact) or finish `DOD-M15-LEDGER-1`'s remaining surfaces.
+- **`DOD-M15-FRAME-1` is 🟡 BUILT, REVIEW IN FLIGHT** (→ Entries 4, 6) — branch `m15/frame`,
+  commits `4015c7f` + `15a960a` + `551930b`, gate green at 4001 tests. Not merged. **One clause
+  deliberately unmet and carried as `DOD-M15-FREEZE-STATUS-1`:** the defensive freeze writes the
+  same DB status as an ordinary teardown, because a reason column is a client-side migration that
+  belongs in its own reviewed unit.
 - **`DOD-M15-DIVERGE-1` is ✅** — cello-client `4478a03` + `9f05300`, merged. Ten review findings,
   three blocking, all fixed; verdict quoted in Entry 5. **Two follow-on lines came out of it:**
   `DOD-M15-UNWITNESSED-1` (the two *suspected* partings, one of which the review found and I had
@@ -49,9 +54,10 @@ description: >
   Claim 3 says the client makes no outbound HTTP calls beyond directory and relay, and the
   document's OWN command finds `api.telegram.org`. Sweep is partial — see the DIVERGE/LEDGER
   bullets above for what remains.
-- **`DOD-M15-FRAME-1` is TRACED, not started** (→ Entry 4). Read-only; no edits, because its file is
-  the one under review. The fix is largely mechanical — `session_abandoned_notice` in the same
-  switch is a complete correct reference to copy.
+- **Pattern worth carrying into every remaining unit:** both units so far were finished by a test
+  the *fixture* was wrong about, not the code — an away test asserting a diverged tree seals, and
+  three fakes delivering frames from nobody. **A fixture that has drifted from the transport asserts
+  a system that does not exist**, and it hides exactly the class this milestone is closing.
 
 ---
 
