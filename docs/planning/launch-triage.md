@@ -871,8 +871,8 @@ retries rather than believing it is over.
 stories, and both are behaving correctly given what they were told. One side believes it holds a
 receipt. It holds nothing.
 
-**Measured on session `df2a2a08`.** The relay refused that seal at 04:53 on a transport fault (item
-34). The counterparty's next status check got back `session_sealed` — the SAME string the relay
+**Measured on session `df2a2a08`.** The relay refused that seal at 04:53 on a transport fault
+(`DOD-M12B-TRANSPORT-FAULT-NOT-TERMINAL-1`). The counterparty's next status check got back `session_sealed` — the SAME string the relay
 uses for an actual successful notarization — and wrote a terminal "sealed" row at 04:58, six minutes
 before its own close attempt even timed out. It holds no certificate, because none was ever
 notarized. Meanwhile this side got a different answer (`relay_session_gone`), correctly read it as
