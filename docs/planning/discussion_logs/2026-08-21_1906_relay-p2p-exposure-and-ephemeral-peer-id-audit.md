@@ -1353,6 +1353,133 @@ Grouped by what they achieve. Dependencies are called out where order matters.
 
 ---
 
+## How These Collapse into Units of Work
+
+The A–H groups above are organised by **what a fix achieves**, which is how to read the list. That is
+not how it ships. A unit of work has to be one repo (or an explicitly coordinated cross-repo change),
+independently reviewable, and independently deployable — a different axis, and on that axis the
+grouping above misfiles several items. Item 10 sits under "network surface" but is relay code
+belonging with the relay auth work; items 24 and 28 sit under "relay" but are client code; and the
+seal change is one protocol change currently spread across four groups.
+
+**39 items collapse into 18 units.** Cross-repo units carry the standing rule: a change to a
+cello-client package needs an explicit version-bump acceptance criterion plus the corresponding
+`package.json` update in trustless-cello, or the two sides silently run different code.
+
+### Phase 0 — run before scoping anything else
+
+**U1 · Live-deployment verification spike** — items **31, 32, 33**
+*No repo. No code.* Three questions that cannot be answered by reading source, whose answers change
+the scope of other units. Item 31 decides whether U13 is hardening or launch-blocking. Item 32 may
+expose a silent single-directory dependency in the relay. Item 33 decides whether U12 delivers the
+linkability mitigation Decision 7 assumes, or only availability. **Do these first — they are hours,
+and they re-price the rest.**
+
+### Phase 1 — launch-blocking
+
+**U2 · Direct-path frame handler hardening** — items **1, 2, 3, 5**
+*cello-client.* One diff across the session content handler and the connection gater. Pin the content
+frame and the delivery ack to the dialing peer, make missing/malformed/mismatched proof share one
+hard-fail path, and disconnect peers when the gate narrows. Grouped because they are the same
+handlers and the same file, and because fixing any subset leaves the injection path open.
+
+**U3 · Assignment verification and receiver gating** — items **6, 7**
+*cello-client.* Item 6 must land first, but they ship together: gating on an unverified assignment
+just relocates the trust, so a release containing 7 without 6 is worse than neither.
+
+**U4 · Client transport surface reduction** — items **8, 9**
+*cello-client, transport package.* Stop the directory-facing node listening; drop unauthenticated idle
+connections. Small, independent, no protocol impact.
+
+**U5 · Relay authorization** — items **10, 19, 20, 21**
+*trustless-cello, relay package.* One authorization surface: require a directory-signed assignment for
+relay service, scope the liveness query to named participants, verify the authenticating key is a real
+agent, and install the connection gater plus the reservation-dial hook. **Depends on U3** — the client
+must be presenting a verified assignment before the relay can require one.
+
+### Phase 2 — the seal protocol change
+
+**U6 · Per-session key agreement** — item **29**
+*cello-client, crypto + daemon.* The per-session ephemeral handshake from Decision 5, with the PQ hook
+in the derivation. **Ships before U7** because it produces both outputs U7 consumes: the message
+sealing key and the per-session hash salt.
+
+**U7 · The seal wire change** — items **11, 12, 15, 16, 18, 30**, plus Decision 1(a) and Decision 6
+*Both repos — the largest and most coupled unit on the list.* Move the bilateral certified root into
+the content-hash domain; client verifies the certified root against its own tree; directory verifies
+the SEAL leaf's `final_root`; replace the directory's circular root check; store the sender's
+signature with each leaf; salt the content hash; delete the dead `seal_attempt` path; replace the
+misleading spine tests. **These cannot be split.** Every one is a change to the same wire format or
+depends on the domain change, and shipping any of them alone leaves the two sides disagreeing about
+what a root means. Needs version-bump ACs on both sides.
+
+**U8 · Seal detection gates** — items **13, 14**
+*cello-client.* Make the diverged flag block sealing instead of changing a status string; make the
+readiness check symmetric. **Independent of U7's wire change** — both act on signals that already
+exist — so this can ship first and starts catching divergence immediately.
+
+**U9 · Inclusion proof** — item **17**
+*cello-client.* Depends on U7 for a root domain the client can reproduce.
+
+### Parallel tracks — no dependency on the above
+
+**U10 · Relay abuse controls** — items **22, 23, 25**
+*trustless-cello, relay package.* Rate limiting, re-enable the idle timer and relayed-connection caps,
+delete the dead directory-admin handler. Independent of U5, though both touch the relay so batch the
+deploy.
+
+**U11 · Client relay-client lifecycle** — item **24**
+*cello-client.* The two leaks. Small and standalone.
+
+**U12 · Multi-relay reservations** — item **26**, plus whatever item 33 returns
+*Both repos.* Availability first; the linkability benefit Decision 7 claims is real only if U1's item
+33 shows selection actually spreads.
+
+**U13 · Directory authentication hardening** — item **28**
+*cello-client, bootstrap path.* Close the fail-open; authenticate the bootstrap coordinate.
+**Scope set by U1's item 31** — if the challenge is being skipped in production today, this moves into
+Phase 1.
+
+**U14 · Relay infrastructure DDoS protection** — item **27**
+*trustless-cello, Terraform.* Cloud Armor or equivalent. Entirely different discipline from every
+other unit — infrastructure, not protocol — so it parallelises cleanly with anything.
+
+**U15 · Claims and documentation** — items **34, 35, 36(a), 37, 38**
+*Drafts repo, vault, cello-client docs.* Correct the outward-facing claims, record the single-node
+relay assignment as a known bounded property, disclose the IP exposure and the relay's metadata
+visibility, rewrite the audit document. No code, no dependencies, and **the only track that can start
+immediately** — the claims are wrong today regardless of what gets built.
+
+**U16 · Relay-only routing as an operator setting** — item **36(b)**
+*cello-client.* The feature half of item 36. Small, and it is the escape hatch that makes the IP
+disclosure in U15 actionable rather than just a warning.
+
+### Deferred
+
+**U17 · Hole punching repair** — item **39**
+*Research spike, then cello-client transport.* Route selection first (patch TCP port reuse / QUIC /
+WebRTC), then implementation. Explicitly not launch-blocking.
+
+**U18 · Checked-then-ignored sweep** — item **4**
+*Both repos. Unknown scope — an audit exercise, not a fix.* **Run after U2 and U7**, so the four known
+instances are already closed and the sweep is hunting the unknown fifth rather than rediscovering
+what is already on this list.
+
+### What this changes about sequencing
+
+Three things fall out of the mapping that were not visible in the flat list:
+
+1. **U1 is free and re-prices two other units.** It should run before anything is scoped.
+2. **U6 must precede U7**, which was not obvious when the encryption work sat in its own group — the
+   handshake produces the salt the seal wire change consumes.
+3. **U8 can ship immediately and independently.** It is the cheapest work on the entire list and it
+   starts catching transcript divergence before the much larger U7 lands.
+
+---
+
+
+---
+
 ## Related Documents
 
 - [[2026-08-21_1135_tofn-decoupling-and-seal-integrity-gaps]] — the companion investigation from
