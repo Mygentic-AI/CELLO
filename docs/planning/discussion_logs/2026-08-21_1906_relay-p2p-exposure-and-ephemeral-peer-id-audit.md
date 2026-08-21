@@ -3,7 +3,7 @@ name: Live P2P exposure — what ephemeral Peer IDs actually bought, and the gap
 type: discussion
 date: 2026-08-21
 topics: [transport, libp2p, relay, peer-id, ephemeral, standing-receiver, connection-gater, ddos, attack-surface, unlinkability, privacy, content-injection, seal, merkle-root, session-assignment, directory-auth, threat-model, security]
-status: open-needs-decision
+status: decided-pending-build
 description: >
   Investigation into whether making libp2p Peer IDs ephemeral (stood up per session, torn down at
   close) actually reduced the attack surface for retail users with no firewall in front of them —
@@ -17,7 +17,8 @@ description: >
   threshold; the client never verifies the directory's signature on a session assignment at all;
   and the relay has almost no abuse controls. Also establishes that NOBODY verifies the sealed root
   against the local transcript on the normal seal path — each side's code comments defer the check
-  to the other.
+  to the other. All five design decisions are RESOLVED (see Decisions Made); 24 build items remain,
+  plus one live-deployment verification.
 ---
 
 # Live P2P exposure — what ephemeral Peer IDs actually bought, and the gaps found chasing it
@@ -922,7 +923,7 @@ runtime URL match. Two log events discriminate it.
     harvest-now-decrypt-later — every cross-NAT conversation is relayed today, so it is recordable at
     fixed endpoints today, and adding the layer later does not protect traffic already sent. The
     parked-content seal is a working in-tree pattern to extend. **Shape decided: per-session
-    ephemeral handshake with a PQ hook in the derivation — Decisions Made 14.** Not static-static;
+    ephemeral handshake with a PQ hook in the derivation — Decisions Made 11.** Not static-static;
     that would void forward secrecy.
 
 19b. **Salt the content hash.** It is currently an unsalted SHA-256 of the plaintext, submitted to the
@@ -930,7 +931,7 @@ runtime URL match. Two log events discriminate it.
     which defeats content privacy for short predictable messages ("yes", "approved", a price, a
     name). Use a per-session salt derived alongside the session key, so the hash stays deterministic
     for both participants and useless to anyone else. The salt comes out of the same handshake as the
-    session key (Decisions Made 14) — one agreement, two outputs. **This is a wire change** — it
+    session key (Decisions Made 11) — one agreement, two outputs. **This is a wire change** — it
     alters what is submitted and what the directory verifies, so it must be sequenced with the seal
     work in item 15 rather than shipped independently.
 
@@ -1092,7 +1093,7 @@ derivation written to accept an additional shared secret makes (c) an addition r
 **Note the interaction with build item 19b:** the per-session salt for the content hash should come
 out of this same derivation. One handshake, two outputs.
 
-*Decided — see Decisions Made 14. Left here as the record of what was weighed, including why the
+*Decided — see Decisions Made 11. Left here as the record of what was weighed, including why the
 intuitive option was rejected.*
 
 ---
@@ -1132,7 +1133,7 @@ requiring T directory signatures and (c) introducing a directory-consortium thre
 deeper evaluation and is deliberately not being made now.** Natural time to do that evaluation is
 alongside the cryptographic-sortition work, when directory-side threshold mechanics are already open.
 
-**6. Hole punching is broken and its repair is a scoped project, not a mystery.** Root cause is
+**5. Hole punching is broken and its repair is a scoped project, not a mystery.** Root cause is
 identified — no TCP port reuse in the JavaScript libp2p transport, so DCUtR is a timed direct dial
 rather than a simultaneous-open punch. Andre confirms this matches observed behaviour: he has never
 seen a successful punch, only same-machine direct connections or relayed ones. Three candidate routes
@@ -1140,7 +1141,7 @@ seen a successful punch, only same-machine direct connections or relayed ones. T
 the relay-encryption question is settled**, because that decides whether hole punching is a scheduled
 improvement or a launch blocker.
 
-**7. The perception problem is distinct from the technical one, and is the reason the encryption
+**6. The perception problem is distinct from the technical one, and is the reason the encryption
 question is urgent.** Andre's framing, recorded because it sets the bar for what may be claimed:
 
 > The public position has always been that most peer-to-peer connections end up direct — roughly
@@ -1155,15 +1156,15 @@ question is urgent.** Andre's framing, recorded because it sets the bar for what
 So the technical question — can the relay decrypt what passes through it — determines whether this is
 a performance problem or a truthfulness problem.
 
-**9. The relay-encryption question is answered and the perception problem dissolves.** The relay
+**7. The relay-encryption question is answered and the perception problem dissolves.** The relay
 cannot read message content on any path — verified. So even though every cross-NAT conversation is
 relayed for its whole duration, *"the relay never sees your conversations"* remains **true**. The
 disclosure about a relay fallback stays defensible; what needs revising is the **frequency** claim
 (the 80–90% direct figure describes hole punching that has never worked), not the confidentiality
 claim. **Hole-punching repair is therefore a scheduled improvement, not a launch blocker** — which
-resolves the sequencing question in Decision 6.
+resolves the sequencing question in Decision 5.
 
-**10. Application-layer content encryption on the live path must be built, and the reason is
+**8. Application-layer content encryption on the live path must be built, and the reason is
 post-quantum independence.** Andre's ruling: peer-to-peer content confidentiality must not depend on
 libp2p. *"At some point in the not too distant future we may upgrade a portion of our cryptographic
 libraries and processes to become quantum computing resistant. We don't want to have encryption
@@ -1172,15 +1173,15 @@ Outstanding Design Decision 5. Note this is time-sensitive rather than deferrabl
 recorded today is decryptable later, so the window for protecting a given conversation closes when it
 is sent, not when the fix ships.
 
-**11. Salt the content hash.** Build item 19b. An unsalted plaintext hash lets a relay confirm guessed
+**9. Salt the content hash.** Build item 19b. An unsalted plaintext hash lets a relay confirm guessed
 messages. Sequenced with the seal work, since it is a wire change.
 
-**12. The audit document is known-broken and its rewrite is already intended before launch.** Not a
+**10. The audit document is known-broken and its rewrite is already intended before launch.** Not a
 new finding — it was written as a placeholder. Recorded so the rewrite starts from corrected facts:
 four cited paths no longer exist, and the application-layer encryption claim is true only of parked
 content.
 
-**14. Application-layer encryption shape: option (b) — per-session ephemeral handshake, with the
+**11. Application-layer encryption shape: option (b) — per-session ephemeral handshake, with the
 post-quantum hook built in from the start.** Decided 2026-08-21.
 
 Concretely, this means:
@@ -1204,7 +1205,7 @@ Concretely, this means:
 
 This closes the last open design decision from this investigation.
 
-**15. Settled, moved out of design decisions and into the build list: the standing receiver's gate
+**12. Settled, moved out of design decisions and into the build list: the standing receiver's gate
 admits assignment-named dialers only.** Not a genuine X-versus-Y choice — a trusted-tier bypass
 cannot work at this layer, because the gate sees a transport Peer ID that is freshly minted per
 session and unknowable in advance. Trust tiers already do their work one layer up at session
