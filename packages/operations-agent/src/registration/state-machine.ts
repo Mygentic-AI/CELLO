@@ -871,11 +871,26 @@ export class RegistrationStateMachine {
     }
 
     const email = message.trim();
-    const emailDomain = extractEmailDomain(email); // retained for rate limiter only
     const emailStubHash = hashEmail(email); // stored in DB
 
-    // Check OTP rate limit (AC-009)
-    const rateLimited = this.#isRateLimited(emailDomain, record.id, correlationId);
+    /**
+     * DOD-M15-SIGNUP-1 — THROTTLE THE PERSON, NOT THEIR EMPLOYER.
+     *
+     * This keyed on the email DOMAIN, at 5 requests per hour. Consumer signups cluster on a handful
+     * of domains, so the sixth gmail.com user in any hour was refused a verification code because
+     * five strangers had asked for one first — and an invite wave IS a burst on one domain, which
+     * is the case this most reliably breaks. Meanwhile a real abuser simply uses more than one
+     * domain. Too coarse to protect and too coarse to be safe, in one key.
+     *
+     * `emailStubHash` is the line above: SHA-256 of the normalized address, which the row already
+     * stores. Keying on it holds no new data and leaks nothing the system does not already keep.
+     *
+     * `email_domain` was DROPPED from the schema in V30 and replaced by `email_stub_hash`,
+     * deliberately, because a domain standing in for a person is the wrong granularity for this
+     * system. The limiter was the last consumer of the concept — `extractEmailDomain` now has no
+     * production caller at all.
+     */
+    const rateLimited = this.#isRateLimited(emailStubHash, record.id, correlationId);
     if (rateLimited) {
       await channel.send(from, "Too many verification code requests. Please wait up to an hour before trying again.");
       return record;
@@ -1219,22 +1234,35 @@ export class RegistrationStateMachine {
    * Emits registration.otp.rate_limited at WARN if limit exceeded.
    * Does NOT send any channel message — the caller is responsible for awaiting the notification.
    */
-  #isRateLimited(emailDomain: string, registrationId: string, correlationId: string): boolean {
+  /**
+   * DOD-M15-SIGNUP-1: keyed on the ADDRESS FINGERPRINT (`email_stub_hash`), never the domain.
+   *
+   * ⚠️ STILL IN MEMORY, AND THAT IS A KNOWN GAP, NOT AN OVERSIGHT. `#rateLimitMap` lives in a
+   * single-instance process, so every restart and every deploy empties it — it was wiped by the
+   * ops-agent deploy on 2026-08-09. A limiter an abuser clears by waiting for a deploy barely
+   * limits anyone; what this change fixes is the half that hurts real users, who were being refused
+   * because a stranger sharing their email provider asked first. Making it durable needs a table
+   * and a migration, which is `DOD-M15-SIGNUP-DURABLE-1`.
+   */
+  #isRateLimited(emailStubHash: string, registrationId: string, correlationId: string): boolean {
     const now = new Date();
-    const entry = this.#rateLimitMap.get(emailDomain);
+    const entry = this.#rateLimitMap.get(emailStubHash);
 
     if (entry) {
       const windowAge = now.getTime() - entry.windowStart.getTime();
       if (windowAge > OTP_RATE_WINDOW_MS) {
         // Window expired — reset
-        this.#rateLimitMap.set(emailDomain, { count: 1, windowStart: now });
+        this.#rateLimitMap.set(emailStubHash, { count: 1, windowStart: now });
         return false;
       }
 
       if (entry.count >= OTP_RATE_LIMIT_PER_HOUR) {
         this.#deps.logger.warn("registration.otp.rate_limited", {
           registrationId,
-          emailDomain,
+          // A PREFIX, not the whole hash. It is enough to correlate two refusals as the same
+          // requester in a log, and it is not a stable identifier anyone can carry off — the same
+          // stub-only posture the schema adopted when it dropped the domain in V30.
+          emailStubPrefix: emailStubHash.slice(0, 12),
           sendCount: entry.count,
           correlationId,
         });
@@ -1243,7 +1271,7 @@ export class RegistrationStateMachine {
 
       entry.count++;
     } else {
-      this.#rateLimitMap.set(emailDomain, { count: 1, windowStart: now });
+      this.#rateLimitMap.set(emailStubHash, { count: 1, windowStart: now });
     }
 
     return false;

@@ -626,34 +626,64 @@ describeIntegration("RegistrationEngine integration", () => {
 
   // ─── AC-009 ─────────────────────────────────────────────────────────────────
 
-  it("AC-009: 6th OTP send within 1 hour is rate-limited; registration.otp.rate_limited logged", async () => {
+  /**
+   * DOD-M15-SIGNUP-1 — this AC used to encode the defect.
+   *
+   * The original test sent `user1@example.com` … `user6@example.com` — SIX DIFFERENT PEOPLE sharing
+   * one domain — and asserted the sixth was refused. It passed, and what it pinned was the bug: a
+   * limiter keyed on the email domain, throttling strangers against each other. At launch that is
+   * an invite wave, which is precisely a burst on one domain.
+   *
+   * Both halves are now asserted, because either alone is satisfiable by a broken implementation:
+   * a limiter that never fires passes the second, and the domain-keyed one passed the first.
+   */
+  const resetToAwaitingEmail = async (): Promise<void> => {
+    // After each OTP send the record moves to AWAITING_EMAIL_OTP. Reset via the repo between sends.
+    // Relies on the engine querying the DB on every inbound message (not the in-memory map).
+    const repo = new RegistrationRepository(pool);
+    const active = await repo.findActiveByChannelUser("cli", userId);
+    if (active && active.state !== "AWAITING_EMAIL") {
+      await repo.transition(active.id, "AWAITING_EMAIL");
+    }
+  };
+
+  it("AC-009: a 6th OTP send for the SAME address within 1 hour is rate-limited", async () => {
     await channelState.injectMessage(userId, "hello");
     await channelState.injectMessage(userId, `CONTACT:${userId}:+447911111111`);
 
-    // Send 5 emails (each triggers an OTP send)
     for (let i = 1; i <= 5; i++) {
-      await channelState.injectMessage(userId, `user${i}@example.com`);
-      // After each OTP send the record moves to AWAITING_EMAIL_OTP.
-      // This test directly resets state via repo.transition() between each OTP send.
-      // It relies on the engine querying the DB on every inbound message (not the in-memory map).
-      // See M-001 in the code review — this is intentional design.
-      const repo = new RegistrationRepository(pool);
-      const active = await repo.findActiveByChannelUser("cli", userId);
-      if (active && active.state !== "AWAITING_EMAIL") {
-        await repo.transition(active.id, "AWAITING_EMAIL");
-      }
+      await channelState.injectMessage(userId, "same.person@example.com");
+      await resetToAwaitingEmail();
     }
-
-    // 6th attempt
-    await channelState.injectMessage(userId, "user6@example.com");
+    await channelState.injectMessage(userId, "same.person@example.com");
 
     const rateLimitedEvent = loggerState.events.find((e) => e.event === "registration.otp.rate_limited");
     expect(rateLimitedEvent).toBeDefined();
     expect(rateLimitedEvent?.method).toBe("warn");
     expect(rateLimitedEvent?.context?.registrationId).toBeDefined();
-    expect(rateLimitedEvent?.context?.emailDomain).toBe("example.com");
-    // sendCount is the number of successful sends when the limit was reached (5 successful, 6th refused)
+    // The KEY is the address fingerprint. A prefix is logged, never the domain and never the whole
+    // hash — enough to correlate two refusals as one requester, not a stable identifier to carry off.
+    expect(rateLimitedEvent?.context?.emailStubPrefix).toBeDefined();
+    expect(String(rateLimitedEvent?.context?.emailStubPrefix)).toHaveLength(12);
+    expect(rateLimitedEvent?.context?.emailDomain, "the domain must not be logged at all").toBeUndefined();
+    // sendCount is the number of successful sends when the limit was reached (5 sent, 6th refused)
     expect(rateLimitedEvent?.context?.sendCount).toBe(5);
     expect(rateLimitedEvent?.context?.correlationId).toBeDefined();
+  });
+
+  it("DOD-M15-SIGNUP-1: six DIFFERENT people on one domain do NOT throttle each other", async () => {
+    // The regression this fix exists for, and the exact shape of an invite wave.
+    await channelState.injectMessage(userId, "hello");
+    await channelState.injectMessage(userId, `CONTACT:${userId}:+447911111111`);
+
+    for (let i = 1; i <= 6; i++) {
+      await channelState.injectMessage(userId, `person${i}@gmail.com`);
+      await resetToAwaitingEmail();
+    }
+
+    expect(
+      loggerState.events.find((e) => e.event === "registration.otp.rate_limited"),
+      "six unrelated people sharing an email provider must not refuse each other a verification code",
+    ).toBeUndefined();
   });
 });
