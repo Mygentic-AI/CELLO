@@ -464,3 +464,91 @@ M15-PROCEDURE §2f the replacement wording is Andre's call, so that unit prepare
 than publishing. Deleting a flatly false claim does not wait; choosing what replaces it does.
 
 ---
+
+## Entry 4 — DOD-M15-FRAME-1: confirm-first trace (read-only, pre-implementation, 2026-08-21)
+
+**Why now:** `DOD-M15-DIVERGE-1`'s review is in flight over `session-node-manager.ts`, so this is a
+**read-only trace only** — no edits to that file until the review lands and the branch merges. The
+trace is what makes the unit mechanical when it is pulled.
+
+**Every claim in the relay audit's Finding 1 is confirmed against the tree, and the evidence is
+stronger than the audit stated.** All three frame types live in ONE switch in
+`core/daemon/src/session-node-manager.ts`, within about 60 lines of each other. One of them is a
+complete, correct reference implementation. The other two are the defect.
+
+### `session_abandoned_notice` (:7807) — THE REFERENCE. Copy this.
+
+```
+const expected = this.#activeNodes.get(this.#k(agentName, sessionId))?.counterpartySessionPeerId;
+if (!remotePeerId || !expected || remotePeerId !== expected) { … return; }   // peer: absence REFUSED
+const claimed = frame["session_id"];
+if (typeof claimed !== "string" || claimed !== sessionId) { … return; }      // session: absence REFUSED
+```
+
+Both checks collapse missing/malformed/mismatched into one refusal — which is Invariant 2's third
+requirement, already implemented, three years of argument settled in two lines. And its comment
+**describes the exact attack this milestone is fixing**, in the tree, today:
+
+> *"a session node is a promoted standing receiver, and a standing receiver accepts everyone.
+> libp2p's gater runs at connection establishment and does not close connections that already exist,
+> so a peer that dialled this node earlier still holds a live connection after `setAllowedPeer`
+> narrows it."*
+
+**The codebase already understands the attack and applied the fix to exactly one frame type.** That
+is the finding: not ignorance, but an incomplete application — which is why the DoD line says audit
+EVERY handler on the protocol rather than the two named ones.
+
+### `content_delivery_ack` (:7795) — NO CHECKS AT ALL
+
+```
+if (frame["type"] === "content_delivery_ack") {
+  const ackHash = frame["content_hash"];
+  const level = frame["level"];
+  if (ackHash instanceof Uint8Array && level === "persisted") {
+    this.#resolveAwaitingAck(agentName, sessionId, ackHash);
+  }
+  return;
+}
+```
+
+No peer check. No session check. A shape test and a string compare. A stranger holding a
+pre-positioned connection forges one and cancels the park-on-undelivered timer, so **the operator's
+message silently vanishes while appearing delivered.** Confirms audit item 2.
+
+### `content_frame` (:7859) — THE OMISSION BYPASS, exactly as predicted
+
+```
+const framedSessionId = frame["session_id"];
+if (typeof framedSessionId === "string" && framedSessionId !== sessionId) { … return; }
+```
+
+**`&&`, not `||`.** The check fires only when the field is PRESENT as a string — omit it and the
+guard passes. Its sibling twenty lines up uses `typeof claimed !== "string" || claimed !== sessionId`
+and refuses absence. Same file, same switch, opposite conclusion from the same author's own comment.
+And there is **no `remotePeerId` comparison anywhere in this branch.**
+
+### The checked-then-ignored instance, admitted in its own comment
+
+`#recordFrameOrdering` is the real signature check — it verifies the signature and confirms the
+signer is the expected counterparty. Its call site:
+
+> *"A bad/absent record is non-fatal: the content still ingests, ordered by the witness stream /
+> arrival as before."*
+
+The check runs, returns `null`, and the content is ingested regardless. This is the milestone's spine
+pattern with the code stating the property out loud. **It is also why item 3 of the DoD line is
+separate from items 1–2:** pinning the frame to the dialing peer does not by itself make the
+signature proof a gate, and an attacker who omits `structure1_cbor`/`structure2_cbor` skips the
+check entirely rather than failing it.
+
+### What this makes the unit
+
+Largely mechanical, which is the best possible outcome for the worst-looking finding in the
+milestone: apply the `session_abandoned_notice` shape to `content_frame` and
+`content_delivery_ack`, make `#recordFrameOrdering`'s answer a hard-fail on all three shapes, then
+walk every remaining handler on the protocol. The one genuinely new piece is disconnecting
+already-attached peers when the gate narrows (`setAllowedPeer`), because libp2p will not do it.
+
+**Not started. No edits made.** Pulled after `DOD-M15-DIVERGE-1` merges.
+
+---
