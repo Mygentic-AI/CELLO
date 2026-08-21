@@ -2,7 +2,7 @@
 name: T-of-N decoupling, and the seal-integrity gaps found chasing it
 type: discussion
 date: 2026-08-21
-topics: [frost, threshold, dkg, quorum, seal, unilateral-seal, directory, relay, sortition, protocol-design, security]
+topics: [frost, threshold, dkg, quorum, seal, unilateral-seal, directory, relay, sortition, protocol-design, security, session-establishment, session-assignment, mitm, identity-binding, relay-witness, client-compromise]
 status: open-needs-decision
 description: >
   Investigation intent, stated up front because it drove everything below: can the FROST signing
@@ -14,9 +14,15 @@ description: >
   co-signing directory nodes never re-verify transcript content, and only the seal initiator gets a
   pre-signature veto — the counterparty only finds out after the notarization already exists. A
   third, confirmed gap: the unilateral-seal fallback gates purely on elapsed time (600s default),
-  never on the counterparty's actual reachability. Ends with a live proposal — decoupling T via
+  never on the counterparty's actual reachability. Covers a live proposal — decoupling T via
   unpredictable random committee selection (cryptographic sortition) instead of deterministic
-  majority — and what it would actually require to deliver the same guarantee.
+  majority — and what it would actually require to deliver the same guarantee. Extends into a
+  fourth, confirmed gap found while nailing the scope of session-establishment forgery: a real
+  wrong-signer detection exists in the client's live message-ingest path, fires correctly, and is
+  silently discarded — bounded precisely (self-exposes at seal time, live-only deception, cannot
+  forge evidence against the impersonated agent) — with a fix direction (make the check block,
+  emergency-freeze with neutral tagging) and its own adversarial check (a compromised client could
+  weaponize the fix as a false accusation; relay-side corroboration, ideally proactive, closes it).
 ---
 
 # T-of-N decoupling, and the seal-integrity gaps found chasing it
@@ -263,6 +269,208 @@ committing to it, not eyeballed.
 
 ---
 
+## Part 6 — What a FROST ceremony actually is (the conceptual correction that started this)
+
+Recorded because it's the misunderstanding that made the T-of-N question hard to reason about in
+the first place, and because the corrected model is what makes Parts 7–9 below legible.
+
+**Not "shatter a key into shards that get welded back together."** In naive secret-sharing, using
+the key means physically reconstructing it — for at least an instant, the complete secret exists in
+one place. FROST never does this, not even transiently. Each shareholder uses only their own share
+to compute their own piece of the *signature*; the pieces combine into one valid signature via
+ordinary public math. The full private key is never assembled anywhere, by anyone, at any point.
+
+**Light-math picture:** a straight line is fully determined by any two points on it — pick any two
+points on the same line and you can derive exactly where it crosses a given axis, even though
+neither point *is* that crossing value. Give five people one point each, secretly, and no single
+person — and no group smaller than two — can compute the crossing value. But *any* two of the five
+can, jointly, and it doesn't matter which two: any pair on the same line gets the same answer.
+That's T=2 of N=5. A curve that needs three points to pin down instead of two is T=3. Each
+participant's private key, in this picture, is their one point — not a fragment of a bigger key
+needing reassembly, but a complete, independent secret that happens to sit on a curve shared with
+the rest of the group.
+
+**This directly explains why DKG needs broad participation but signing doesn't.** DKG is the
+one-time act of creating the curve and handing each participant their point — real participation is
+required because points aren't minted later (barring a separate resharing ceremony, Part 2). Signing
+is just "gather any T of the already-existing points" — and because any T points on the same curve
+agree, it doesn't matter *which* T show up. That flexibility is real, not the system being lenient.
+
+**Consequence, confirmed directly against this structure: the client is not privileged in the FROST
+math.** CELLO's group is `(T, N+1)` — client plus N directories, T needed. Nothing in FROST requires
+the client to be one of the T. Two directories alone, reaching T on their own, can produce a fully
+valid signature with the client never contacted, never aware. CELLO's software always includes the
+client when *it's* the one driving a ceremony it initiated — that's a software convention, not a
+cryptographic floor.
+
+**But a valid signature over a fabricated root is inert, not dangerous, on its own — because signing
+a root doesn't retroactively create real content underneath it.** A Merkle root only means something
+because every leaf beneath it carries the sender's own K_local signature, and colluding directories
+never hold that key. So T-of-a-target's-quorum compromise can produce a validly-signed number that
+corresponds to nothing real — checkable and exposed the moment anyone pulls the actual leaves.
+**This is the correct, load-bearing reason majority-of-directories does *not*, by itself, let a
+compromised quorum forge a false transcript for a real, uninvolved agent** — confirmed correct
+reasoning, with one condition attached: it holds only as long as verifying a seal always means
+checking the leaves against the real signer, not just confirming the FROST signature is
+mathematically valid (Part 3's Gap 1/Gap 2 are exactly a case where that condition was not met).
+
+---
+
+## Part 7 — The session-open gap: scoped and bounded precisely
+
+Chasing "does the K_local anchor protect session-open the same way it protects the seal" surfaced a
+real, confirmed gap — and then, on closer trace, a real, confirmed *bound* on how bad it actually is.
+
+**What session-open actually attests, and why it's a different claim than the seal's.** The seal
+attests to *content*: a specific, already-lived conversation ended in this state. Session-open
+attests to *identity*: the pubkey your daemon is about to exchange messages with really is the one
+registered to the party you meant to reach. There is no prior signed history to check that claim
+against — the `SessionAssignment` binding *is* the origin of trust for the session, not a
+confirmation of something already agreed. That asymmetry is the entire reason this needed separate
+treatment from the seal findings in Part 3.
+
+**The forgery does not require anyone's private key, and that's what makes it different from
+everything in Part 6.** A rogue majority of the *specific* directories holding shares for the target
+agent (call them B) can FROST-sign a false `SessionAssignment` claiming a different pubkey (M's) is
+B's session key — no K_local forgery needed anywhere, because the claim being forged is "here is
+who you're talking to," not "here is what was said." Once agent A accepts that binding, everything
+downstream becomes genuinely, legitimately real: A sends real messages, M replies with M's own real,
+valid K_local signature (M is a real, properly-registered agent — nothing about M's own identity is
+fake), the hash chain is intact, the eventual seal is fully valid. There is no missing signature
+anywhere for A to notice, because M never needed to forge anything downstream — only the one-time
+claim of who A was about to talk to.
+
+**Scoped precisely against a concrete example (N=7, and separately N=11 with a malicious client
+counted toward T): the malicious client's own share is irrelevant to forging as a *different* target
+agent.** A share only ever authenticates its own holder. To impersonate B specifically, the attacker
+needs shares from B's own DKG quorum — not M's, and not "any T directories in the network." Compromising
+directories that never held a share for B is cryptographically inert against B, regardless of how
+legitimate M's own identity is. And because the real B (and B's client) is by definition not
+participating in an impersonation of B, there is no client slot to lean on — the attacker needs the
+**full T from B's directory quorum alone**, a strictly harder bar than "any T of N."
+
+**Checked in code whether already knowing B's real pubkey protects the connection step: it does
+not, today.** `initiate-session-handler.ts` labels the resulting session with whatever `target_pubkey`
+the caller specified in its own request — it does not cross-check that value against what the
+(possibly forged) assignment's connection info actually leads to before dialing. Knowing B's real key
+in advance buys nothing at the connection-establishment step as currently implemented.
+
+**Checked whether anything catches it once the session is live: yes, and here is the exact, confirmed
+shape of the defect.** `session-node-manager.ts`'s `#recordFrameOrdering` genuinely verifies each
+message's signature and genuinely checks that the signer matches the session's registered
+counterparty (`pubkeyMatchesHex(s1Pubkey, counterparty)`) — a real "wrong signer" detection exists
+and correctly fires the moment M signs with its own key instead of B's. But the result is discarded:
+the calling code treats a failed/absent ordering record as uniformly non-fatal ("the content still
+ingests"), and `ingestReceivedContent` attributes the message to `record.counterparty_pubkey` — the
+session's stored label — rather than to whatever was actually, cryptographically proven. The check
+exists, fires correctly, and its answer is thrown away.
+
+**Checked whether this poisons the *permanent* record too, not just the live view: it does not.**
+At seal time, `directory-node.ts` verifies each leaf's signature against the pubkey **embedded in
+that leaf itself** (`leaf.s2.sender_pubkey`), never against a cached session label. So a sealed,
+notarized record of this session would correctly show M's real pubkey as the participant — not B's.
+**This bounds the harm precisely: the deception is live-only, not permanent.** It can fool A during
+the conversation — enabling exactly the harm named below — but it cannot produce a lasting record
+that looks like it was genuinely with B. Comparing the sealed receipt's actual participant pubkey
+against the pubkey originally intended exposes it, after the fact, every time. One thread not fully
+resolved: `verifySealLeaves` only constrains the final two SEAL control leaves to be from two
+distinct participants; whether every earlier content leaf is independently constrained to that same
+pair (as opposed to merely being internally self-consistent) was not confirmed. It did not change
+the finding above, because in the traced MITM scenario the "two participants" the record shows are
+simply A and M throughout — nothing about a real, absent B ever enters the leaf sequence — but it is
+a distinct, unresolved question worth closing separately.
+
+**The actual, bounded harm, confirmed: A can be duped into disclosing something to M while believing
+it is disclosing to B.** Not forged evidence against B — nothing can ever make it look like B said or
+agreed to anything, because nothing here touches B's key — but a live confidentiality/social-
+engineering harm, fully real for the duration of the conversation, self-exposing only afterward.
+
+**Analogy that holds up:** dialing a phone number, but the phone company — the trusted routing layer
+— hands you to an impostor instead of the number you dialed. Not an incidental misroute; a betrayal
+by the party whose entire job is to connect you correctly.
+
+---
+
+## Part 8 — Fix direction: make the existing check block, not just log
+
+The mechanism needed already exists in the code and already checks the right value — `counterparty_pubkey`
+is set from A's own request, untouched by anything the directory returns, so it is structurally immune
+to directory-side compromise. **The fix is not new cryptography; it is removing a silent fallback.**
+
+- **Split "where in the sequence" from "who sent it," and stop treating them the same.** A missing or
+  malformed *ordering* record is genuinely fine to fall back on (arrival order, recovered later from
+  the witness stream) — that's optional metadata. A message that fails to supply a valid, parseable,
+  verified signature from the expected counterparty is **never** fine to fall back on, for *any* of
+  the three reasons a check can fail — missing, malformed, or mismatched. Treating "we couldn't tell"
+  and "we proved it's wrong" as equivalent-and-harmless is itself the hole: an attacker who wants to
+  evade a mismatch check simply never supplies a checkable signature at all, and today that omission
+  is treated as harmless. All three must collapse into one response.
+- **That response: refuse the message outright** — no ingest, no display, no attribution to anyone —
+  and fire as early as the very first message, closing the exposure window to effectively nothing
+  rather than waiting for a pattern to emerge.
+- **Treat detection as session-ending, not per-message.** One proven wrong-signer event is not "drop
+  this message and hope the next one is better" — it's evidence the connection itself isn't who it
+  claims. The response is an **immediate, unilateral, emergency freeze** — distinct from an ordinary
+  unilateral seal (counterparty simply unreachable, timer elapsed) — carrying its own status so
+  nothing downstream conflates "they didn't answer in time" with "we caught something that didn't
+  check out."
+- **The freeze's tag must describe an observation, not a verdict.** Something like "a message failed
+  to verify against the expected counterparty's key; session frozen defensively; cause undetermined"
+  — never an assertion of the counterparty's intent. The same signal (signature mismatch) could come
+  from a real impersonation attempt, or from CELLO's own infrastructure mishandling a fallback path —
+  a relay bug, a bad deploy, an uncovered edge case in the direct-connection failover. The system has
+  no way to distinguish those from the signal alone and should not pretend to. This mirrors an
+  existing CELLO pattern rather than inventing a new one: account-recovery already anchors a
+  "compromise window" to logged events instead of a guess, and already accepts that some evidence
+  cannot distinguish misconduct from an innocent cause. This flag should not feed automatically into
+  any trust-signal or reputation score, for the same reason.
+
+---
+
+## Part 9 — Defense-in-depth: the client raising this flag can itself be the compromised party
+
+Adversarial check on Part 8's own fix, in the same spirit as everything before it: the party best
+positioned to *detect* a wrong-signer event (the receiving client) is also a party that can itself be
+compromised — and a compromised client weaponizing "signature mismatch" as a false accusation against
+an innocent counterparty is a new attack surface the Part 8 fix would otherwise introduce.
+
+- **Separate the safe part of the response from the part that needs corroboration.** Freezing
+  locally the instant a client's own check fails is always safe to do unilaterally — it only limits
+  what that client itself trusts, and harms no one. What must **not** be asserted unilaterally is the
+  accusatory record: "session frozen, signature failed to verify" should not be written down as
+  something that could reflect on the counterparty until corroborated by a party the accusing client
+  doesn't control.
+- **The relay is that corroborating witness, and it works for a precise reason: its copy of what the
+  sender signed never passes through the receiving client at all.** The sender reports its signed
+  hash to the relay independently of whatever path the content itself takes to the receiver. A
+  compromised receiving client has no way to touch, edit, or suppress that independent copy. Pulling
+  it and checking it against the counterparty's real key — on demand, the moment a mismatch is
+  suspected — either corroborates the claim or exposes the accusing client as the actual problem. No
+  new cryptography: this is the identical check the directory already performs at seal time
+  (`leaf.s2.sender_pubkey` verified against `structure1_cbor`/`sender_signature`), just triggered
+  early instead of only at close.
+- **Sharper still: the relay should run this proactively, continuously, not only on demand.** It is
+  bound to the session at setup with both participants' real pubkeys already in hand, and it already
+  receives every signed hash as messages flow — checking each one against the two expected pubkeys
+  costs it nothing new. This catches a mismatch the instant the first bad hash arrives, independent
+  of whether the receiving client ever notices or is even running its own check correctly — which
+  specifically closes the "what if the accusing client is the compromised one" gap, since detection
+  no longer depends on that client's cooperation or honesty at all. Detection is not enforcement,
+  though: the relay still has to alert the affected daemon (and could additionally refuse to keep
+  relaying/witnessing for a session it's flagged, a lever it has that the client alone doesn't).
+- **One relay is still one witness, and that ties directly back to Part 3's truncation fix.** A
+  single relay could simply decline to run the check, or lie about the result — the same reasoning
+  that made a single relay's account insufficient for truncation-resistance applies here without
+  modification. If the multi-relay fan-out proposed in Part 3 ships (2–3 relays receiving the live
+  hash stream instead of one), each of them running this same proactive check turns it into a cheap,
+  decentralized detection layer with no single point of trust — client, directory, or relay. Three
+  separate problems in this log converge on the same one piece of infrastructure, which is a good
+  sign it's the right thing to build, not a coincidence.
+- **This whole layer stays inside the "blind witness" design.** Verifying a signature against a known
+  pubkey never requires reading message content — nothing new is exposed to the relay by any of this.
+
+---
+
 ## Open items — Andre's call
 
 - Whether and when to require dual-party pre-signature approval for bilateral seals (Part 3 fix).
@@ -273,9 +481,20 @@ committing to it, not eyeballed.
   600s clock, and whether that's a launch-relevant fix or an accepted limitation.
 - Whether to pursue a real sortition design for session-establishment threshold selection, and if
   so, sizing T/N/assumed-compromise-fraction explicitly before building it.
+- Whether to make the existing wrong-signer detection (Part 8) a hard, blocking, session-ending gate
+  from message one, and design the emergency-freeze status/tag (neutral wording, no automatic
+  trust-signal impact) that goes with it.
+- Whether to build relay-side corroboration of a client-reported signature mismatch (Part 9),
+  including whether to make it proactive/continuous rather than on-demand — this is the same
+  multi-relay fan-out investment as Part 3's truncation fix, serving a second purpose.
+- Whether every content leaf (not just the final SEAL pair) should be independently confirmed to
+  belong to one of the session's two registered participants at seal time — flagged in Part 7 as
+  not fully resolved, distinct from the confirmed finding it sits next to.
 - None of the above blocks on the others — they're independently scoped, and independently
   deferrable, but the escape-hatch risk noted in Part 4 means the bilateral-seal fix and the
-  unilateral-seal fix should probably not ship far apart from each other.
+  unilateral-seal fix should probably not ship far apart from each other, and Part 9's relay
+  corroboration should not ship far apart from Part 8's blocking gate (the gate alone reopens the
+  false-accusation risk Part 9 exists to close).
 
 ---
 
