@@ -848,10 +848,38 @@ an illustrative comment in a test file, and nothing ships it.
 
 ---
 
-**Remaining surfaces to sweep** (`DOD-M15-LEDGER-1` is not ✅ until each has been walked):
-`README.md`; the five shipped `plugins/cello/skills/*/SKILL.md` and the receptionist agent; MCP tool
-descriptions in `core/adapter-claude-code/src/bin/cello-mcp.ts`; CLI help text; product status
-output.
+## Swept 2026-08-21 — `README.md`, same public repo
+
+| # | Claim, as written | Verdict | Disposition |
+|---|---|---|---|
+| 6 | Headline ¶1: *"each conversation produces a tamper-evident, bilaterally-sealed audit trail that **both parties can independently verify**"* | **FALSE today** | **made true** by `DOD-M15-SEALWIRE-1` |
+| 7 | Headline ¶1: *"relayed as encrypted blobs the relay cannot read"* | **TRUE** | verified, no action |
+| 8 | *"A session name is **private to you** — never sent to the counterparty, the relay, or the directory"* | **TRUE** | verified, no action |
+| 9 | *"`standing_receiver_ready` on its own is true even for a receiver no relay would grant a circuit reservation to — behind NAT, that agent is dialable by nobody"* | **TRUE** | verified, no action |
+
+**Row 6 is the first paragraph of a public repository**, and it names the one property the relay
+audit found nobody holds: **the receipt is not bound to the transcript.** A party can verify the
+directory signed *a* root; it cannot verify that root is *its conversation*, because the client
+takes the sealed root off the wire, checks the signature, stores it, and discards the root it
+computed one step earlier. "Independently verify" is exactly the word that does not survive.
+
+**Scope discipline, carried from the audit and not to be inflated:** no working attack against the
+seal was demonstrated. The statable property is that the receipt is not bound to the transcript and
+nothing would say so if the two diverged. The row is a claim defect, not an exploit.
+
+**Disposition is made-true rather than withdrawn** because `DOD-M15-SEALWIRE-1` is inside the gate
+and makes the sentence true. It must not ship before that line lands — a claim that becomes true is
+still false until it does.
+
+**Rows 7–9 were checked, not assumed**, and all three hold. Row 8 verified structurally:
+`session_name` appears in **no** wire type in `core/protocol-types/src`. Recorded so a later sweep
+does not re-open them.
+
+---
+
+**Remaining surfaces to sweep** (`DOD-M15-LEDGER-1` is not ✅ until each has been walked): the five
+shipped `plugins/cello/skills/*/SKILL.md` and the receptionist agent; MCP tool descriptions in
+`core/adapter-claude-code/src/bin/cello-mcp.ts`; CLI help text; product status output.
 
 **Seed rows, from the two investigations — not yet individually verified against the tree:**
 
