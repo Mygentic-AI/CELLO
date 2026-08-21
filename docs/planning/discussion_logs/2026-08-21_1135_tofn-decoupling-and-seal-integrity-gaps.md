@@ -544,6 +544,49 @@ ship far apart.
   — unlike the on-demand version — doesn't depend on the client's own (possibly compromised)
   cooperation to ever get triggered at all.
 
+All four are now decided — see Decisions Made below. Left here as the record of what was weighed.
+
+---
+
+## Decisions Made (Andre, 2026-08-21)
+
+1. **Unilateral-seal trigger: hybrid.** Confirmed as recommended — a time floor paired with
+   third-party-evidenced delivery failure once the relay fan-out lands, never elapsed time alone.
+
+2. **Unilateral-seal timeout: tiered, not a single constant. Agreed — concrete tiers proposed below
+   to make this actionable rather than leaving "tiered" abstract:**
+   - **Standard tier (default, unchanged):** today's behavior stays exactly as is — a flat 600s
+     (10 min) elapsed-time trigger, no evidence required. This is the common, casual case; there's no
+     reason to slow it down, and it has no dependency on the relay fan-out work.
+   - **High-stakes tier (explicit opt-in):** either party marks the session as high-stakes — e.g. a
+     `stakes: "high"` flag on `cello_close_session`, or set earlier and carried for the session's
+     lifetime. Opt-in, not auto-detected: nothing in the infrastructure can safely infer "this is
+     consequential" from content — the relay is deliberately blind to it, and the directory never
+     sees it either, so only the agents themselves can know. For this tier: raise the timeout floor
+     substantially — **proposing 1 hour (3600s) as a starting point**, long enough that a busy-but-
+     present counterparty composing a careful reply doesn't get cut off, short enough that a genuinely
+     gone counterparty doesn't leave the session hanging indefinitely; open to adjustment once there's
+     real usage data — **and** require decision 1's hybrid check as mandatory, not optional: for this
+     tier, elapsed time alone is never sufficient, evidenced absence is required before falling back.
+   - This gives decision 1 a natural home instead of applying uniformly everywhere: standard sessions
+     keep the simpler, dependency-free time-only path; high-stakes sessions require the full hybrid
+     check once it exists — so the harder engineering work only gates the cases where it matters.
+
+3. **T-of-N: pursue cryptographic sortition. Decided yes — sequencing is the only thing still TBD.**
+   Reverses the deferral this doc originally recommended. Rationale, preserved as given: at N=3 today,
+   `majority(N)` is already T=2, so the real-world exposure from not having sortition yet is small —
+   but user growth expected within the next month or two will require N to grow, and that is exactly
+   when `majority(N)`'s cost (T rising in lockstep) turns into a real operational problem. **Going
+   forward, Definitions of Done for new T-of-N-dependent work should assume sortition will eventually
+   replace `majority(N)`, not treat the current policy as permanent.** A cutover mechanism is expected
+   at implementation time rather than a flag-day switch — existing agents registered under
+   `majority(N)` need a transition path, not an instant change of rules underneath them (the same
+   migration-cost caution this project already applies to threshold changes generally). Exactly when
+   this gets built, and in what order relative to the other items in this log, remains open.
+
+4. **Relay corroboration: proactive.** Confirmed as recommended — every relay checks every hash
+   against the session's two registered participants as it arrives, not only when a client asks.
+
 ---
 
 ## Related Documents
