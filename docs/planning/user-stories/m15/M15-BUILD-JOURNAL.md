@@ -1698,3 +1698,101 @@ Gate on the committed tree: **155 passed** (193 files), lint 0 errors, typecheck
   CI workflow that *does* run `pnpm run test` without setting it. Held back deliberately: that repo
   has a review in flight on `m15/assign` and adding commits underneath a running reviewer is how a
   verdict ends up describing a tree that no longer exists.
+
+## Entry 16 — two reviews, and what they cost the units that had already been written
+
+Both `DOD-M15-ASSIGN-1` and `DOD-M15-CI-SKIPS-SILENT-1` came back **DEVIATIONS FOUND [blocking]**.
+Neither was a style pass. Between them they found one complete security bypass, one regression I had
+shipped an hour earlier, and two guards that reported healthy because they could not see the thing
+they were checking for.
+
+### The one that mattered: a check that one unsigned field switched off
+
+`signature_type` rides in the assignment frame and no signature covers it. The parser reads anything
+that is not the literal `"frost"` — **an absent field included** — as `"single"`. The verifier
+branched on that value *before* loading the agent's registration, and the single-key branch verified
+`directory_signature` against the `directory_pubkey` sitting beside it **in the same unsigned
+frame**. A key checked against itself proves nothing.
+
+So the entire unit was disabled by omitting one field: mint a keypair, name an impostor as the
+counterparty, sign it properly, drop the field. The anti-circularity comparison, the threshold
+verify and the fail-closed were all stepped over — and the assignment arrived looking *verified*.
+
+The defence I had written for that branch was a comment saying production always produces FROST. The
+reviewer checked it against the producer and confirmed the comment was **true** — the directory
+hardcodes `"frost"` at a single site with no conditional. **The comment was correct and the code was
+still exploitable**, because what production produces is not what an attacker sends.
+
+**Rule:** a branch reachable only by a value the wire controls is reachable by anyone who controls
+the wire. "Production never sends that" describes the honest sender, and the honest sender is not
+the threat.
+
+The registration is now loaded before the branch, a registered agent refuses any non-FROST
+assignment by name, and the single-key branch is **deleted** rather than guarded — with `verify` no
+longer imported, because leaving that call available in the file is how the bypass comes back.
+
+### The regression I shipped, and why my own test missed it
+
+The outbound carve-out I wrote *specifically* to protect message parking keyed off
+`allowedPeerId === null`. The offer-time narrowing sets that field. So the moment an agent received
+one inbound offer, its receiver — still the daemon's general-purpose dialer, no assignment yet —
+silently lost the right to dial anything except that one peer.
+
+Two casualties, and the second is not a papercut: the content-park deposit/pull, and the
+**restart-seal submission**, which dials a relay endpoint persisted from an *earlier* session and so
+is on no allowlist by construction. An agent that merely RECEIVED an offer would stop being able to
+submit a seal, and the operator would see `relay_unavailable` — a transport label for what was
+actually a local gater decision.
+
+My test asserted the carve-out **only in the `null` state**. It passed. The reviewer's phrasing is
+the lesson: *"an implementation that narrows the outbound gate the moment an offer arrives passes it
+— which is F2, shipped."*
+
+**Rule:** when a guard is conditional on a piece of state, test it in every state that guard will
+actually see — not only the one it was written in. The states the code moves through are the test
+matrix; the state it starts in is one row.
+
+### Two guards that could not see
+
+- **The sentinel that could never fire.** Its job was to catch the skip-detection regex drifting
+  away from the idiom it looks for. The regex **matched the file's own doc comment quoting that
+  idiom**, so it was permanently satisfied by itself: every gated suite in the repo could have
+  migrated to a new form and it would still have reported one. It also inflated the count.
+- **The announcement nobody read.** A `console.warn` from inside a test landed **4,851 lines before
+  the end of a 22,418-line run**, wedged between transport logs, with a headline number (64) that
+  contradicted vitest's own summary (38) in the same output. Moving it to a `process.on("exit")`
+  handler was worse — tests run in workers, so it never reached the terminal at all. It is now a
+  reporter, running in the main process, printing **after** the summary, using the run's own numbers
+  with skips and todos counted separately because vitest reports them separately one line above.
+
+**Rule:** "it is in the output" is not the same as "the reader saw it", and a number the reader
+cannot reconcile with the line above it is a number they discount. Measure where it lands.
+
+### The clause I amended rather than ticked
+
+`DOD-M15-ASSIGN-1` (b) said the receiver refuses any dialer not named in a live **directory-signed**
+assignment. It does not. It narrows from `session_offer`, a frame with three fields and **no
+signature**, so the peer allowed to dial is chosen by whichever directory node sent it.
+
+What (b) genuinely buys is the removal of the *unauthenticated* attacker, which was a real open
+door. What it does not buy is protection from a malicious directory — the same hole (a) closes one
+layer up, still open one layer down. **The DoD line is amended to say so, and the gap is carried as
+`DOD-M15-OFFER-SIGNED-1`.** Ticking the original wording would have been the letter-versus-spirit
+failure this milestone already fell into once.
+
+### Carried, as named lines rather than dissolved
+
+| new line | what it holds |
+|---|---|
+| `DOD-M15-OFFER-SIGNED-1` | the offer that opens the receiver's door is unsigned |
+| `DOD-M15-OFFER-EXPIRY-1` | the narrowing never expires, and a second offer evicts the first initiator |
+| `DOD-M15-RESPONDER-VERIFY-1` | the responder persists an unverified `signer_pubkey` **as the seal trust anchor** |
+| `DOD-M15-COMPOSE-CI-1` | `engine.test.ts` — the DoD's own named example — still asserts nothing |
+| `DOD-M15-SPINE-LANE-1` | 38 spine/cross-machine files never collect under any environment |
+
+### Gates
+
+cello-client `b72e74b` + `5ebdd74`: **4024 → 348 files passed**, lint, typecheck, build.
+trustless-cello `73d83abe`: **156 passed**, lint 0 errors, typecheck. Every fix revert-tested,
+including the two bypasses the old guards allowed (a commented-out projects entry; an undeclared
+config exclusion) — both now turn the guard red.

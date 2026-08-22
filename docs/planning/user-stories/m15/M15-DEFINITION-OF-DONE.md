@@ -233,7 +233,21 @@ is a separate line rather than a bullet.**
   without measurement breaks *reachability* — the one property this milestone must not trade away.
   Measure a healthy daemon's connection count first.
 
-### `DOD-M15-CI-SKIPS-SILENT-1` — ❌ A suite that skips itself does not report green
+### `DOD-M15-CI-SKIPS-SILENT-1` — 🟡 A suite that skips itself does not report green
+> **Built + reviewed + review fixes landed 2026-08-22 → Entries 15, 16.** trustless-cello
+> `99734664` + `73d83abe`, cello-client `5ebdd74`. **The review's verdict was DEVIATIONS FOUND
+> [blocking]**, and the blocking items are fixed: the self-satisfying sentinel, the guard blind to
+> file-level exclusion, the two wiring-check bypasses, and an announcement that landed 4,851 lines
+> before the end of the run. **Found beyond the line's own scope:** three packages holding 24 test
+> files that the root gate had never collected — the signup limiter units had reported a green gate
+> containing none of their own tests.
+>
+> **Two clauses do NOT close and are carried below as their own lines**, rather than being absorbed
+> into a ✅ they did not earn: `engine.test.ts` still asserts nothing, and the 38 spine /
+> cross-machine files still never collect. Both are now *visible* — which is what this line could
+> honestly deliver — but visible is not run.
+- **Carried → `DOD-M15-COMPOSE-CI-1`:** the named example still executes zero assertions.
+- **Carried → `DOD-M15-SPINE-LANE-1`:** the spine suites are excluded at the project-config layer.
 Found by the `DOD-M15-SIGNUP-1` review, and it is this milestone's own subject applied to its
 evidence: **a green run that asserted nothing.**
 - `packages/operations-agent/src/__tests__/engine.test.ts` is wrapped in
@@ -246,6 +260,34 @@ evidence: **a green run that asserted nothing.**
   a title carrying the reason, plus one unconditional test that FAILS when `CELLO_ENV` is unset in
   a CI environment, so "we did not test this" cannot look like "this passed".
 - **Audit every `describe.skip`/`skipIf` in both repos** for the same shape while in here.
+
+### `DOD-M15-COMPOSE-CI-1` — ❌ The suites that need a database actually run somewhere
+Split from `DOD-M15-CI-SKIPS-SILENT-1`, whose own named example — `operations-agent/engine.test.ts`
+— is still gated on `CELLO_ENV=local` and still executes **zero assertions** on every run. That line
+made the silence audible; it did not make the tests run, and the difference matters because
+`engine.test.ts` holds the only coverage of the signup rate limiter's KEY (one requester capped
+across six addresses, normalization buying nothing, requesters not affecting each other).
+- **595 of 2266 tests — a quarter of the suite — are inert on a default run.** They cover RLS
+  policies, hash-chain constraints and migrations: exactly the things a unit test cannot fake.
+- **trustless-cello has no CI at all** (`.github/` holds issue templates; Cloud Build builds images;
+  the buildspecs run smoke scripts). So "run them in CI" means *create the CI*, which is why this is
+  its own line and not a clause someone could have quietly ticked.
+- The compose Postgres already exists and `CELLO_ENV=local pnpm run test` already works locally.
+- **Enforcer:** receipt.
+
+### `DOD-M15-SPINE-LANE-1` — ❌ The spine suites are run, or their absence is a decision on the record
+Split from `DOD-M15-CI-SKIPS-SILENT-1`. 38 files — the M8D spine lane plus the cross-machine
+transport tests — are excluded by `packages/e2e-tests/vitest.config.ts` and therefore **never
+collect under any environment**. Worse than the env-gated suites, which at least print a skipped
+line; these produce no output at all.
+- They are now *declared* with a written reason, and an undeclared exclusion fails the gate. That
+  closes the silence, not the gap.
+- The spine suites are the multi-process evidence the milestone-close gate depends on
+  (`.claude/CLAUDE.md`: "No milestone closes until a live multi-process smoke test passes"). A lane
+  that nothing runs cannot serve that.
+- **Decide and record which it is:** wire the lane into a command that runs on a schedule, or state
+  in writing that it is manual-only and name who runs it before a milestone closes.
+- **Enforcer:** receipt.
 
 ### `DOD-M15-SIGNUP-DURABLE-1` — ❌ The signup limiter survives a deploy
 Split from `DOD-M15-SIGNUP-1`, which rekeyed the limiter from the email domain to the address
@@ -340,9 +382,21 @@ neither. They ship together.
 - **(a) The client verifies the directory's signature on the session assignment.** Today the parser
   shape-validates only, asserting signatures are 64 bytes, with a comment naming a downstream
   verification site that does not exist in the tree.
-- **(b) The standing receiver refuses any dialer whose Peer ID is not named in a live,
-  directory-signed assignment.** The responder always reports its Peer ID before the counterparty
-  dials, so the assignment always exists in time. No trusted-tier bypass — the gate sees a transport
+- **(b) The standing receiver refuses any dialer whose Peer ID is not named in a live
+  ~~directory-signed assignment~~ SESSION OFFER.** ⚠️ **AMENDED 2026-08-22 after review — the
+  original wording claimed something the implementation does not do, and the honest fix is to stop
+  claiming it rather than to let a ✅ cover it.** The gate is narrowed from `session_offer`, which
+  carries three fields and **no signature**. So the peer allowed to dial is chosen by whichever
+  directory node sent that frame, with nothing verifying the frame.
+  - **What (b) therefore buys, precisely:** it removes the *unauthenticated* attacker — anyone who
+    is not the directory and was part of no negotiation. That was a real open door: every agent that
+    came online admitted any dialer on the network, and libp2p does not re-run a gater against a
+    live connection, so the stranger survived promotion into the session.
+  - **What it does NOT buy:** protection from a malicious directory, which can name an impostor and
+    have the gate faithfully open to them. That is the same trust hole clause (a) closes one layer
+    up, left open one layer down — **carried as `DOD-M15-OFFER-SIGNED-1`.**
+  - The responder always reports its Peer ID before the counterparty dials, so the offer always
+    arrives in time. No trusted-tier bypass — the gate sees a transport
   Peer ID minted per session and unknowable in advance; trust tiers do their work one layer up at
   session acceptance (Decision 2).
 - **This also closes the `identify` disclosure**, which has no other mitigation on the list: a
@@ -368,6 +422,51 @@ neither. They ship together.
 - The standing receiver's socket **stays** (Decision 2) — it is load-bearing for same-machine and
   same-LAN sessions, which the launch intent names explicitly, and it becomes required again if hole
   punching is ever repaired.
+
+### `DOD-M15-OFFER-SIGNED-1` — ❌ The frame that opens your door is signed by more than one node
+Split from `DOD-M15-ASSIGN-1` (b), whose review found the clause claimed "directory-signed" while
+the implementation narrows the receiver's gate from `session_offer` — a frame carrying three fields
+and no signature at all.
+- **The shape is the one clause (a) exists to close, one layer down.** (a) stops a single
+  compromised directory naming your counterparty on the INITIATOR side; (b) hands that same single
+  directory unilateral authority to name who may dial your RECEIVER.
+- Not an immediate exploit: the named peer still has to complete Noise, and `DOD-M15-FRAME-1`'s
+  frame gate refuses what it then says. It is a trust concentration, not an open door.
+- **Two candidate shapes, and the trade is real:** sign the offer (a directory change, and the offer
+  currently precedes the ceremony that would sign it), or defer narrowing to `acceptSession` where a
+  signed assignment IS in hand — which reopens the pre-accept window the receiver gate just closed.
+- **Enforcer:** stranger.
+
+### `DOD-M15-OFFER-EXPIRY-1` — ❌ An invitation to dial does not stand open forever
+Split from `DOD-M15-ASSIGN-1` (b) review F5. `admitOfferedDialer` names a peer and **nothing ever
+clears it**, so the DoD's word "live" is not enforced.
+- An offer never followed by an assignment — initiator aborts, directory faults, the accept send
+  fails — leaves the receiver holding a standing invitation to that peer **indefinitely**.
+- **Two inbound offers close together are now mutually exclusive at the transport:** both are told
+  to dial the same receiver, the second narrows the gate away from the first, and the first
+  initiator is refused with a `connection.rejected` naming a peer id it never heard of. Before the
+  gate existed, whichever dialed first simply won.
+- **Fix shape:** bind the narrowing to the session id it came from, revert it when the accept send
+  fails, and expire it on the same clock the directory uses before it gives up waiting for an accept.
+- **Enforcer:** journey.
+
+### `DOD-M15-RESPONDER-VERIFY-1` — ❌ The responder stops trusting a key it never checked
+Split from `DOD-M15-ASSIGN-1` (a) review F4. Verification runs on the **initiator** path only. The
+review confirmed the responder genuinely cannot perform the anti-circularity comparison today —
+nothing in the tree holds a counterparty's FROST `primary_pubkey` — but also found what the
+responder DOES with the assignment it cannot verify, which the code comment did not say:
+- It pulls `signer_pubkey` out of the unverified frame and persists it as
+  `sessions.counterparty_primary_pubkey`, **which the seal coordinator then reads as the trust
+  anchor for verifying the counterparty's seal certificate.** An unverified frame value is the root
+  of a later trust decision. That is "acting on it" in this line's own sense.
+- **Two things the responder CAN do with what it already holds, neither needing a directory lookup:**
+  verify the signature is internally consistent over the recomputed TBS (catches a tampered or
+  garbage assignment, which today reaches the seal path unchallenged); and TOFU-pin
+  `counterparty_primary_pubkey` across sessions with the same counterparty, refusing a change —
+  today both readers key by session id, so a repeat counterparty is re-trusted from scratch.
+- Whether to add a directory lookup or revive the connection package is a protocol-shape decision
+  and is **not** part of this line; the two above are.
+- **Enforcer:** stranger.
 
 ### `DOD-M15-RELAYAUTH-1` — ❌ No relay service without a directory-issued assignment
 **Depends on `DOD-M15-ASSIGN-1`** — the client must be presenting a verified assignment before the
