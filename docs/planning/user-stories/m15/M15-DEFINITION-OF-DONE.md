@@ -1073,7 +1073,18 @@ them.
 - **Product status output** (`cello status` / `cello_status`) reports state and names next actions.
   None of its guidance asserts a security guarantee.
 
-**The sweep is complete — all four live surfaces walked:** the public repo (root docs, README,
+> ### 🔴 THIS SENTENCE WAS WRONG AND IS THE REVIEW'S BLOCKING FINDING (2026-08-22 → Entry 14)
+> **The sweep was NOT complete.** Three of four surfaces had unaudited claims, including two the
+> section below declares clean. Missed: the CLI's *"tamper-proof"* and *"it would no longer match"*
+> (`registry.ts:538,868`); **`core/adapter-claude-code/SKILL.md`, the file that ships in the npm
+> tarball**, never walked; the README asserting screening is NOT active, false the other way; and the
+> **public GitHub repo description** advertising four native adapters that do not exist.
+>
+> **Why**: completeness rested on a three-word grep — *never / cannot / impossible* — and none of
+> *tamper-proof, ACTIVE, screened, encrypted, verifiable, notarized, proof* was in it. **A prose
+> ledger is a chore that looks like a control.** The fix is `DOD-M15-CLAIM-SCANNER-1` below.
+
+**Four live surfaces walked (INCOMPLETELY — see above):** the public repo (root docs, README,
 comments), the shipped package (tool descriptions, skill prose, CLI help), product status output,
 and shipped client documentation.
 

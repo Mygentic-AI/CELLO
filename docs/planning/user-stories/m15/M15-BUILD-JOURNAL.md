@@ -1426,3 +1426,94 @@ rather than closing it.
 rather than logging. Then the receiver gate.
 
 ---
+
+## Entry 14 — LEDGER-1 + CLAIM-COMMENTS-1 reviewed: BOTH BLOCKING, tags reverted (2026-08-22)
+
+**Andre challenged this while the review was in flight — *"following the letter of the definition of
+done but not the spirit… am I wrong?"* He was not wrong, and the review says so harder.**
+
+### Verdict — QUOTED
+
+> **SPEC: DEVIATIONS FOUND** — `[blocking]`. `LEDGER-1`'s own closing clause ("the line is not ✅
+> while a surface is unswept") is unmet on three of its four surfaces. `CLAIM-COMMENTS-1`'s headline
+> clause is unmet: two comments in the public repo still assert properties the code lacks, one of
+> which the repo itself already documented as false.
+>
+> **HOLLOW TESTS FOUND** — `[blocking]` for `LEDGER-1` only… neither unit ships a test; both fail
+> the revert test. Acceptable for the comment rewrites, not for the ledger, whose completeness is
+> the deliverable and is currently pinned by nothing.
+>
+> **REMOVALS PROVEN** — rewrite-never-delete holds in all three files.
+>
+> **I am not rubber-stamping.** The three comment rewrites are correct, independently verified… What
+> does not hold is the sentence the last commit added: **"The sweep is complete — all four live
+> surfaces walked."**
+
+### What it found on surfaces I declared clean
+
+- **CLI help carries three security claims.** *"tamper-proof"* (`registry.ts:538`) — harder than
+  anything the system does. *"if a single message were altered, added or dropped, it would no longer
+  match"* (`:868`) — **the exact comparison this milestone's own audit found nobody performs.** And
+  the screening claim verbatim (`:932`), which the screening fix would have patched four places and
+  missed.
+- **`core/adapter-claude-code/SKILL.md` — the file that actually ships in the npm tarball — was
+  never swept.** Different file from the plugin's copy (379 lines vs 309). It carries the screening
+  claim verbatim plus three more. **The repo already knew:** `plugin-skills-audit.test.ts` opens by
+  saying that file *"rides in the connect tarball."*
+- **The README says screening is NOT active** — false in the *other* direction, on the file a
+  first-time reader opens.
+- **The GitHub repo description advertises native adapters for OpenClaw, NanoClaw, IronClaw and
+  ZeroClaw.** They do not exist. First line an evaluator reads; no row.
+
+### The diagnosis, in the reviewer's words and Andre's
+
+> It did not take an edit to rot it — **it shipped incomplete, because completeness rested on one
+> person's grep vocabulary at one moment.**
+
+My sweep used *never / cannot / impossible*. **None of** *tamper-proof, tamper-evident, ACTIVE,
+screened, encrypted, verifiable, notarized, proof* **was in it.** That is the letter/spirit gap
+exactly: a prose ledger is a chore that looks like a control.
+
+### The fix, and the repo already has the pattern
+
+A **build-time claim scanner**: a claim vocabulary regex, scanned over surfaces **enumerated by the
+system** — `package.json#files` for the tarball, the plugin manifests, `registry.ts` summary/help
+literals, root `*.md` — where **every hit must appear in a table with a disposition, and an unlisted
+hit fails the build.** That inverts the loop the way lens 4 demands: iterate what the system has,
+not a hand-maintained list. It would have caught all three HIGHs at commit time.
+
+**Live proof it works, from minutes later:** the daemon's existing `dod-onboard-help-1-vocabulary`
+audit — same shape, for CLI verbs — caught me writing `cello register` into a user-facing string
+when the verb is `register-agent`. The chore missed four claim surfaces; the scanner caught a typo
+in a string I had just written.
+
+### Other findings actioned or carried
+
+- **HIGH-5 — FIXED IMMEDIATELY** (cello-client `1ddcd63`): `session-assignment-parser.ts`'s header
+  named a verification site that did not exist. **`DOD-M15-ASSIGN-1` fixed the call site below it
+  and left the false header standing** — the same shape as the pair this unit did fix, in the file
+  that unit was editing.
+- **HIGH-4** — row 13 assigns `cello-mcp.ts:190` to this unit and the unit did not deliver it.
+- **MEDIUM-6** — rows 10–13's disposition is wrong: `SCREENINSTALL-1` ships an **optional** install,
+  so "ACTIVE" stays false for anyone who does not run it. Correct disposition is *disclosed as a
+  bounded property*, and the ledger's own "partially true is false" rule applies to the flip itself.
+- **MEDIUM-9** — `AUDIT-ME.md`'s command 2 greps two paths that **no longer exist**, finds nothing,
+  exits 0, and reads as PASSED. A diagnostic that checked nothing and reported success, inside the
+  document the milestone calls its most exposed artifact.
+- **A fourth column for the ledger:** *enforced by whom*. It would make row 6 self-evidently false
+  (nobody), row 7 safe (structural), and rows 10–13 bounded (the operator's own daemon — ergonomics
+  by Invariant 1's own first non-qualifying answer).
+
+### Verified correct, so it is not re-litigated
+
+All four rows the reviewer re-derived independently **held** — the Telegram call, four-of-eight dead
+paths, `session_name` in no wire type (by a stronger check than mine), and the README's
+"independently verify" being genuinely false. **All three comment rewrites verified TRUE against the
+code**, including the two I was least sure of: `final_root` really is unrecoverable from the wire,
+and the heartbeat cause really is mutability rather than a key collision — the repo's own
+`ae-spec-required-columns` test already says *"needs a real Tier-B merge, not a spec edit."*
+
+**`DOD-M15-LEDGER-1` → ❌. `DOD-M15-CLAIM-COMMENTS-1` → ❌.** Both stay open until the scanner exists
+and the missed surfaces have rows.
+
+---
