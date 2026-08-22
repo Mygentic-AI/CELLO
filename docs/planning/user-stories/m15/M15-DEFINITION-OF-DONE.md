@@ -298,6 +298,24 @@ It is not.
     accounts, with the same hash pair every run.
   - The remaining failures of this class (per-pseudonym aggregates, "no leaf in >1 checkpoint", row
     counts) are the ordinary shared-table kind and are separable.
+- **PROGRESS 2026-08-22 (`ac5c1a8c`): the chain-poisoning slice is closed — 32 failures → 25.** Five
+  files were putting holes in `user_accounts` two ways: raw INSERTs stamping a literal `chain_hash`
+  (`'seed'`, `'burn-chain'`), and cleanup DELETEs through a superuser pool. Both replaced by a shared
+  `seedAccount()` through the chained writer plus per-run unique ids. `cross-node-discovery-pg.live`
+  needed no change and is the model: `BEGIN`/`ROLLBACK` per test, so nothing commits.
+- **THE NEXT SLICE IS `TRUNCATE`, and Postgres named it exactly.** Six of the remaining 25 are
+  deadlocks, and the server log gives both sides:
+  - one process running `TRUNCATE conversation_proof_leaf_checkpoints, conversation_seal_staging,
+    conversation_proof_mmr_nodes, conversation_proof_leaves, directory_checkpoints RESTART IDENTITY
+    CASCADE` — an `AccessExclusiveLock` on the whole set;
+  - against another still running `INSERT INTO conversation_seal_staging …`.
+  **Ten test files use `TRUNCATE`** on shared tables. This is the blanket reset the fix-shape note
+  above rejects, and it fails in the two ways predicted: it deadlocks against anything concurrent,
+  and it wipes rows other files are asserting on.
+- **A SEPARATE FINDING INSIDE THAT ONE, and the more interesting half:** the process holding the
+  other side of the deadlock is **inserting seals** — a directory node that a previous test started
+  and never stopped, still working. A leaked live node is not only a deadlock partner; it writes
+  rows nobody expects, at times nobody controls. Find and stop it before touching the truncates.
 - **The generalisation is worth more than the fix, and belongs in the launch conversation:** a
   linear whole-table hash chain means **any** deletion — a retention policy, a GDPR erasure, an
   operator cleanup — turns `verifyChain` permanently red, after which a genuine tamper cannot be
