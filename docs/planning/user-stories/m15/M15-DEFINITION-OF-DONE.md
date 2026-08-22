@@ -261,6 +261,25 @@ evidence: **a green run that asserted nothing.**
   a CI environment, so "we did not test this" cannot look like "this passed".
 - **Audit every `describe.skip`/`skipIf` in both repos** for the same shape while in here.
 
+### `DOD-M15-DIRECTORY-ROT-1` — ❌ 28 directory tests that have been failing unwatched
+Found 2026-08-22 by running the database suites for the first time (Entry 17). Not a regression from
+any unit in this milestone — **these have been red for as long as nobody ran them**, which is the
+concrete cost of `DOD-M15-CI-SKIPS-SILENT-1` and the reason that line's own carried work matters.
+- **28 failing tests across 16 files**, all in `packages/directory`, all `CELLO_ENV=local`-gated:
+  `account-001`, `dod-accounts-chain-1`, `dod-dirdata-read-1`, `federation-002`, both `lever-002`
+  suites, `m10-present-1-dumb-check`, `m10b-deliver-1-agent-by-pubkey`, `m6b-004-si-001`,
+  `m6b-009-pg-pool-config`, `persist-007-mmr`, `persist-017-mmr-checkpoint-visibility`,
+  `persist-021-adapter-boundary-audit`, `pg-ae-store.live`, `trust-001-pickup-repository.live`,
+  `writeapi-001-agent-write.live`.
+- **Triage before fixing.** The ops-agent set turned out to be three distinct causes wearing one
+  symptom (a missing grant, a wrong role, and cross-test contention on a unique index). Assume the
+  same here: some will be genuine defects, some test-isolation, some stale expectations against a
+  schema that moved. **A test asserting behaviour that has since changed on purpose gets its
+  assertion updated and SAID SO in the journal — never deleted quietly.**
+- **Do not batch this into one commit.** One cause per commit, so the record shows what was actually
+  wrong rather than "fixed 28 tests".
+- **Enforcer:** receipt.
+
 ### `DOD-M15-COMPOSE-CI-1` — ❌ The suites that need a database actually run somewhere
 Split from `DOD-M15-CI-SKIPS-SILENT-1`, whose own named example — `operations-agent/engine.test.ts`
 — is still gated on `CELLO_ENV=local` and still executes **zero assertions** on every run. That line
@@ -369,12 +388,27 @@ injection path open.
   assertion of intent, and **excluded from feeding any trust-signal or reputation score.**
 - **Enforcer:** stranger.
 
-### `DOD-M15-ASSIGN-1` — 🟡 The assignment is verified, then gated on
-> **Both clauses built 2026-08-22 → Entries 13, 14.** cello-client `1ddcd63` + `3985cb2` (a),
-> `59ac4db` (b). Gate green at 4018. **Review in flight — the tag does not move until its verdict is
-> quoted in the journal.** The `identify` disclosure closes as a consequence of (b): a stranger who
-> cannot complete the handshake never reaches the protocol that would hand back the agent's public
-> key, listen addresses and protocol list.
+### `DOD-M15-ASSIGN-1` — ✅ The assignment is verified, then gated on
+> **Shipped and reviewed 2026-08-22 → Entries 13, 14, 16, 17.** cello-client `1ddcd63` + `3985cb2`
+> (a), `59ac4db` (b), `b72e74b` + `6a80b00` (review fixes). Gate: **4028 passed**, lint, typecheck,
+> build.
+>
+> **Two review passes — the hard cap — and the second returned:** *"SPEC: FAITHFUL — all five
+> findings addressed as described; no clause silently simplified in the fixes. NO SILENT FALLBACKS.
+> ERRORS NAME THEIR CAUSE. TESTS HAVE TEETH — the wiring test survives the revert test. REMOVALS
+> PROVEN."* The two items it said it would not close on (`N2` the 19-second test reaching production
+> code by a legacy fallback, `N3` the relay carve-out resting on a directory-supplied set) are both
+> fixed in `6a80b00`.
+>
+> **The first pass found a complete bypass of clause (a)** — one unsigned field (`signature_type`)
+> routed the check to a branch that verified a key against itself — **and a regression clause (b)
+> had shipped an hour earlier**, where narrowing the gate silently cost the agent its ability to
+> submit a seal. Both closed. The `identify` disclosure closes as a consequence of (b): a stranger
+> who cannot complete the handshake never reaches the protocol that would hand back the agent's
+> public key, listen addresses and protocol list.
+>
+> **Carried, as named lines rather than folded into this tag:** `DOD-M15-OFFER-SIGNED-1`,
+> `DOD-M15-OFFER-EXPIRY-1`, `DOD-M15-RESPONDER-VERIFY-1`.
 
 **Order is load-bearing: verification lands first.** Gating on an unverified document relocates
 trust rather than closing it, so a release carrying the gate without the verification is worse than

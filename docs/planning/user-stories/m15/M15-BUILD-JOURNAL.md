@@ -1796,3 +1796,94 @@ cello-client `b72e74b` + `5ebdd74`: **4024 → 348 files passed**, lint, typeche
 trustless-cello `73d83abe`: **156 passed**, lint 0 errors, typecheck. Every fix revert-tested,
 including the two bypasses the old guards allowed (a commented-out projects entry; an undeclared
 config exclusion) — both now turn the guard red.
+
+## Entry 17 — `DOD-M15-ASSIGN-1` closes ✅, and the database suites finally ran
+
+### The verdict, quoted
+
+Second pass on the fix commit, which is the hard cap:
+
+> **SPEC: FAITHFUL** — all five findings addressed as described; no clause silently simplified in
+> the fixes. **NO SILENT FALLBACKS** — every new branch refuses by name. **ERRORS NAME THEIR
+> CAUSE.** **TESTS HAVE TEETH** — the wiring test **survives the revert test**. **REMOVALS PROVEN.**
+
+It named two things it would not close on, and both are fixed in `6a80b00`.
+
+### The one that was genuinely embarrassing
+
+I let a relay dial in to a standing receiver so its AutoNAT probe could be answered, and keyed that
+allowance on the gater's **outbound allowlist** — which is built from relay peer ids **the directory
+hands out**, cumulatively, including relays whose reservation never completed.
+
+This is a unit whose entire threat model is *one compromised directory*. I had handed that exact
+adversary a narrow inbound foothold: name a relay, never reserve with it, dial in anyway. The
+comment above the carve-out justified it as *"a peer this node already dials and holds a reservation
+with"* — which described a property the set did not have.
+
+**Rule:** when a check needs "a peer we have a relationship with", key it on the *evidence of the
+relationship*, not on a list that usually contains such peers. Especially when the adversary in your
+own threat model is the one populating the list.
+
+### The 19-second test on a path nobody takes
+
+The wiring test's fake answered only `session_request`, so the negotiator ran discovery to
+exhaustion — three 5-second lookups plus backoffs — gave up, and reached the code under test through
+the **legacy unsupported-directory fallback**. The assertion was real and the revert test genuine.
+It was also the slowest test in the daemon suite and it exercised a route no live agent takes.
+
+Answering the discovery lookup puts it on the production same-node path: **19s → 1.1s**, and the
+revert test now fails in **7ms** on a real assertion instead of arriving late behind a timeout. The
+route is now asserted too, so it cannot drift back to the fallback while still passing green.
+
+**Rule:** a passing test that is slow is telling you something about the path it took. 19 seconds
+was not the cost of the assertion; it was the sound of the code giving up three times first.
+
+---
+
+## The database suites ran for the first time, and V63 did not survive contact
+
+`DOD-M15-CI-SKIPS-SILENT-1` made the silence audible. The obvious next move was to stop reading
+about it and start the Postgres.
+
+**52 tests failed across 18 files** on the first run of the suites that no automation has ever
+executed.
+
+### What was mine
+
+`engine.test.ts` — every ops-agent integration test — failed with **`permission denied for table
+otp_send_log`**. The migration I had written hours earlier created the table, typechecked, linted,
+and passed a 1669-test gate **while being unusable by the only process that needs it.**
+
+Two things were missing, and the second is the one worth keeping. There was no RLS, no policy and no
+grant at all. Adding them for `cello_service` — the role every sibling migration grants — **still
+failed**, because the ops agent connects as `cello_ops_agent`, a role V26 created and deliberately
+scoped to the registration tables and nothing else.
+
+**Rule:** least privilege means a new table is invisible to a role until that role is *named*. A
+grant block that looks correct, matches every neighbouring migration, and grants the wrong role
+produces a table that exists and cannot be used.
+
+V63 was amended in place rather than patched by a V64: it exists only in a local docker volume, has
+never been deployed, and the numbering tripwire confirms nobody else took 63 — so the M5
+retrospective's rule applies in its stronger form, *get it right the first time*.
+
+### What was not mine, and got fixed anyway
+
+`m6b-016` failed with a duplicate-key violation — **passing in isolation, failing in the suite**,
+which is the signature of a shared resource rather than a broken assertion. Every test in the file
+hardcoded the same phone number, and `registrations` carries a partial UNIQUE index on the active
+phone stub. Unique per-test `userId`s hid it, because the cleanup expires the active registration
+for *this* user and one test legitimately creates a second. The phone is now per-test, which removes
+the contention rather than teaching the cleanup to chase it.
+
+### Where it stands
+
+**operations-agent: 20 files, 236 tests, all green against a real Postgres** — including
+`engine.test.ts`, the DoD's own named example, whose 17 tests had never once executed. Among them
+the OTP rate-limit tests that are the only coverage of the limiter's key.
+
+**28 failures remain, all in the `directory` package, all pre-existing.** They are not this unit's
+and they are too large for one — carried as `DOD-M15-DIRECTORY-ROT-1`.
+
+**Rule:** "the tests are skipped" and "the tests pass" are different claims, and a milestone that
+audits its own evidence has to spend the twenty minutes finding out which one it has.
