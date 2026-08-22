@@ -1117,3 +1117,90 @@ setting them without measurement breaks *reachability* — the one property this
 trade away.
 
 ---
+
+## Entry 10 — DOD-M15-SIGNUP-1: second review, both blocking findings fixed, ✅ (2026-08-22)
+
+**`4922d72c` → `127a5a29` → `f9f271f4`.** Two review passes — the hard cap. Gate: operations-agent
+231 passed, lint, forced typecheck.
+
+### Second verdict — QUOTED
+
+> **SPEC: DEVIATIONS FOUND** — the address-fingerprint clause is deviated from, but Entry 8 journals
+> the decision with its reasoning, so it is a legitimate correction, not a silent simplification.
+> Not blocking on that ground. F4 is blocking as a documentation defect: the DoD and the deferral
+> line still prescribe the overturned design and name a deleted field.
+>
+> **NO SILENT FALLBACKS** — the limiter itself introduces none, and the in-memory limitation is
+> stated rather than hidden.
+>
+> **ERROR SUBSTITUTION FOUND** — `[blocking]`, F1. A delivery-layer refusal surfaces to the person
+> as *"Incorrect code. You have 2 attempts remaining."* after a silence… **This unit is what made
+> that path reachable, so it belongs to this unit and not to a later one.**
+>
+> **HOLLOW TESTS FOUND** — `[blocking]`. Test 2 does not survive the revert test… Nothing asserts
+> the sixth send was prevented, nothing asserts the person is told, the rolling reset is unpinned,
+> and record-after-success is unpinned.
+>
+> **REMOVALS PROVEN** — verified independently across both sibling repos…
+>
+> I am not rubber-stamping this. The rekey is right, the reasoning in the comments is the best in
+> the file, and the honesty about the in-memory gap is exactly what invariant 1 asks for. What it
+> does not yet have is a test that would notice if any of the four properties it fixed were undone,
+> and it has un-shadowed a delivery-layer refusal whose user-facing behaviour is silence followed by
+> an accusation.
+
+### F1 — the finding I would not have thought to look for
+
+**Fixing one thing made a second thing reachable.** The old domain key counted a *superset* of the
+delivery provider's per-address limiter on a *coarser* key, so `RateLimitError` could never fire from
+registration — it was dead code reached only in theory. Making the two limiters orthogonal woke it
+up. Two admitted users registering against one shared mailbox now hit the per-address five while
+neither is near their own.
+
+And what waking it up looked like: **silence, then "Incorrect code. You have 2 attempts
+remaining."** The row had already moved to `AWAITING_EMAIL_OTP`, so the next message was read as a
+code. Now the send is wrapped, the upstream cause is logged instead of destroyed by a generic engine
+error, the person is told nothing was sent, and **the record is rolled back** — which matters as much
+as the message, because without it they stay in the state that produces the accusation.
+
+**The general lesson, and it is worth more than the fix:** un-shadowing a refusal means owning how it
+fails. A guard that has never fired has never had its failure path exercised, and "it was already
+there" is not a defence when your change is what made it reachable.
+
+### F2 — the layer I handed victim-protection to did not normalise its key
+
+Moving per-address protection *to* the delivery provider made that provider's key load-bearing — and
+it keyed on the raw string, so `Victim@x.com` and `victim@x.com` were separate buckets in both the
+send log **and the bounce set**. One shift key bought a fresh allowance. The bounce half needs no
+attacker: a user whose address hard-bounces retypes it with different capitalisation and we mail a
+known-bad address again, which is SES reputation damage on the ordinary path.
+
+### F4 — the spec still prescribed the design the review overturned
+
+Both DoD lines said *"rekey … to the address fingerprint"* and the durability line named
+`#rateLimitMap`, a field this branch deleted. **Whoever picked up durability would have built a table
+keyed on the victim.** Corrected with the reasoning visible rather than quietly rewritten.
+
+### Four bypasses, each closed and each verified by making the mutation
+
+| Bypass | Now |
+|---|---|
+| Log the warn and send anyway | **red** — `otpState.captured.length` is asserted, not just the event |
+| Never tell the person | **red** — the refusal copy is asserted on `channelState.sent` |
+| Make the window permanent | **red** — a clock-advancing test proves the allowance returns |
+| Record before the send | **red** — a provider double that throws proves the five are intact |
+
+Test 1 also put its six addresses on **one domain**, so restoring the domain key left it green — it
+was detecting a log field, not the key. Six domains now. The normalization test became vacuous the
+moment the key stopped being the email, and is replaced by the window-roll test.
+
+### A methodology note I nearly shipped past
+
+**The first window-bypass run passed, and I almost recorded that as a weak test.** The mutation had
+silently patched the wrong limiter — two limiters in this file share the line
+`const live = stamps.filter((t) => t > cutoff)`, and a `replace(..., 1)` took the first. **A revert
+test that passes is only evidence if the mutation landed where you think it did.**
+
+**Tag ✅. Merged.**
+
+---

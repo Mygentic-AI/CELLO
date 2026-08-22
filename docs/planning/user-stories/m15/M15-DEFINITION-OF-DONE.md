@@ -432,7 +432,13 @@ lost that way).
 - **Answering early orphans the unilateral escalation that runs inline after the wait** — that
   changes the close contract and what produces the receipt. Decide the contract, then build.
 
-### `DOD-M15-SIGNUP-1` — ❌ Signup throttles a person, not their employer
+### `DOD-M15-SIGNUP-1` — ✅ Signup throttles a person, not their employer
+> **Shipped and reviewed 2026-08-22 → Entries 8, 10.** `4922d72c` + `127a5a29` + `f9f271f4`. **TWO
+> review passes — the hard cap.** The first found that my rekey removed the only cap on a requester
+> and that my own test pinned the abuse case as required; the second found that un-shadowing the
+> delivery-layer refusal surfaced it to the person as *"Incorrect code"* after a silence. Both
+> fixed. **Carried:** `DOD-M15-SIGNUP-DURABLE-1` (still in memory) and `DOD-M15-CI-SKIPS-SILENT-1`
+> (this file's evidence does not run in CI).
 `DOD-OTP-RATELIMIT-KEY-1`. The sixth person from a domain in an hour is refused a verification code.
 An invite wave **is** a burst on one domain.
 - Rekey the limiter from the email domain to **the REQUESTER** (the channel user). Holds no new data
