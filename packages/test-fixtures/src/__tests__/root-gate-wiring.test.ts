@@ -242,29 +242,38 @@ describe("DOD-M15-CI-SKIPS-SILENT-1: environment-gated suites announce themselve
 
   it("FAILS in CI rather than letting an untested run look like a tested one", () => {
     /**
-     * DORMANT IN THIS REPO TODAY, and that is stated here rather than left to be discovered.
+     * LIVE NOW. This was dormant when written — the repo had no workflow at all — and
+     * `.github/workflows/ci.yml` (DOD-M15-COMPOSE-CI-1, first half) made it real.
      *
-     * trustless-cello has no GitHub Actions workflow; its Cloud Build configs build and push images
-     * and its buildspecs run smoke scripts. Nothing automated runs `pnpm run test` here, so this
-     * guard cannot currently fire, and its revert test (red under CI=1) is evidence the MECHANISM
-     * works, not evidence that anything is being enforced.
+     * ─── The escape hatch, and why it is a variable and not a deletion ────────────────────────
      *
-     * It is live the day a workflow is added, and it is live TODAY in cello-client, whose
-     * `.github/workflows/ci.yml` does run `pnpm run test` and where Actions sets CI=true. Porting
-     * it there is carried as its own item.
+     * That workflow deliberately runs the UNIT gate only: the database suites are blocked on
+     * `DOD-M15-DIRECTORY-ROT-1`, and a permanently red required check teaches everyone to ignore
+     * the pipeline, which is worse than an honest absence. So CI genuinely does run without
+     * `CELLO_ENV=local`, on purpose.
+     *
+     * Deleting this guard to accommodate that would throw away the case it exists for: a run that
+     * skips the integration suites WITHOUT anyone having decided to. So the opt-out is explicit —
+     * the workflow sets `CELLO_GATE_UNIT_ONLY`, next to a comment saying what it costs — and an
+     * unacknowledged CI run still fails. The difference between "we chose not to test this" and
+     * "we did not notice we weren't testing this" is the whole subject of this milestone.
      */
-    if (!inCi || isLocal) {
+    const acknowledgedUnitOnly =
+      process.env["CELLO_GATE_UNIT_ONLY"] !== undefined && process.env["CELLO_GATE_UNIT_ONLY"] !== "";
+
+    if (!inCi || isLocal || acknowledgedUnitOnly) {
       expect(true).toBe(true);
       return;
     }
 
     expect(
       isLocal,
-      `CI ran the test suite without CELLO_ENV=local, so ${envGatedFiles().length} CELLO_ENV-gated ` +
-        `test files were skipped and the run would otherwise have reported green having asserted ` +
-        `nothing about the database. Either start the compose Postgres and set CELLO_ENV=local in ` +
-        `the workflow, or remove this guard deliberately — do not let "we did not test this" keep ` +
-        `looking like "this passed".`,
+      `CI ran the test suite without CELLO_ENV=local and without acknowledging it, so ` +
+        `${envGatedFiles().length} CELLO_ENV-gated test files were skipped and the run would ` +
+        `otherwise have reported green having asserted nothing about the database. Either start the ` +
+        `compose Postgres and set CELLO_ENV=local, or set CELLO_GATE_UNIT_ONLY=1 in the workflow ` +
+        `with a comment saying why — the point is that skipping them is a DECISION someone made, ` +
+        `not something nobody noticed.`,
     ).toBe(true);
   });
 });
