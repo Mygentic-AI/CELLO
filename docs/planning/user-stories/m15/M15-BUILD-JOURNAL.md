@@ -15,9 +15,9 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 TWO TIER-2 UNITS MERGED. Two more built with reviews in flight.
-> **55 DoD lines**, 4 ✅, 2 🟡 (`SIGNUP-1`, `SURFACE-1`), 1 🅿️, rest ❌. Every line is inside the
-> launch gate; the gate is a state, not a date.
+> ### 🟢 FOUR UNITS MERGED. One built with its review in flight.
+> **55 DoD lines**, 5 ✅, 1 🟡 (`SURFACE-1`), 1 🅿️, rest ❌. Every line is inside the launch gate;
+> the gate is a state, not a date.
 
 - **NEXT ACTION: land the two reviews in flight**, then continue `DOD-M15-LEDGER-1`'s remaining
   surfaces (MCP tool descriptions, CLI help, status output) — docs-only, no code conflict.
@@ -25,11 +25,11 @@ description: >
   commit `a1da749`, gate green at 4008. One line: the directory-facing node stops listening. **The
   falsification is the unit** — `listenAddresses()` IS announced to the directory, and five checks
   establish nothing consumes it. Idle half split to `DOD-M15-IDLE-CONNS-1`.
-- **`DOD-M15-SIGNUP-1` is 🟡 REBUILT, SECOND REVIEW IN FLIGHT** (→ Entry 8) — trustless-cello
-  `m15/signup`, `4922d72c` + `127a5a29`. **The first review found my fix removed the only cap on a
-  requester and that my own test pinned the abuse case as required behaviour.** Now per-requester;
-  per-address stays in the delivery provider where it already was. This is the hard cap — after this
-  pass, remaining findings become ACs on other units.
+- **`DOD-M15-SIGNUP-1` is ✅** (→ Entries 8, 10) — merged. **Two review passes, the hard cap.** The
+  first: my rekey removed the only cap on a requester, and my own test pinned the abuse case as
+  required. The second: un-shadowing the delivery-layer refusal surfaced it to the person as
+  *"Incorrect code"* after a silence — **reachable because of this unit**, so owned by it.
+  **Carried:** `DOD-M15-SIGNUP-DURABLE-1`, `DOD-M15-CI-SKIPS-SILENT-1`.
 - **`DOD-M15-FRAME-1` is ✅** (→ Entries 4, 6, 7) — merged. Six review findings, three blocking,
   all fixed; verdict quoted in Entry 7. **The worst was my own fix reintroducing the milestone's
   own pattern:** the defensive freeze wrote `interrupted`, which is the REVIVABLE status, so the
@@ -62,10 +62,15 @@ description: >
   Claim 3 says the client makes no outbound HTTP calls beyond directory and relay, and the
   document's OWN command finds `api.telegram.org`. Sweep is partial — see the DIVERGE/LEDGER
   bullets above for what remains.
-- **Pattern worth carrying into every remaining unit:** both units so far were finished by a test
-  the *fixture* was wrong about, not the code — an away test asserting a diverged tree seals, and
-  three fakes delivering frames from nobody. **A fixture that has drifted from the transport asserts
-  a system that does not exist**, and it hides exactly the class this milestone is closing.
+- **Three patterns worth carrying into every remaining unit**, each earned by a review finding:
+  1. **A fixture that has drifted from the real thing asserts a system that does not exist** — an
+     away test asserting a diverged tree seals; three fakes delivering frames from nobody; six
+     addresses on one domain pretending to be six people.
+  2. **Fixing one guard can wake a second one that has never fired.** Un-shadowing a refusal means
+     owning how it fails — "it was already there" is not a defence when your change made it
+     reachable.
+  3. **A revert test that PASSES is only evidence if the mutation landed where you think.** One
+     nearly went in the journal as a weak test when it had patched the wrong limiter.
 
 ---
 
