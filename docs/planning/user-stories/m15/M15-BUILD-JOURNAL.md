@@ -1209,3 +1209,81 @@ test that passes is only evidence if the mutation landed where you think it did.
 **Tag ✅. Merged.**
 
 ---
+
+## Entry 11 — DOD-M15-SURFACE-1: reviewed clean, six findings fixed, ✅ (2026-08-22)
+
+**cello-client `a1da749` + `a0940f1`; trustless-cello `007b6909`.** Gate: 4008 passed, lint, forced
+typecheck, build.
+
+### Verdict — QUOTED
+
+> **SPEC: FAITHFUL**
+> **NO SILENT FALLBACKS**
+> **ERRORS NAME THEIR CAUSE** (one `[pre-existing]` substitution noted at
+> `registration-manager.ts:256`, outside the diff)
+> **TESTS HAVE TEETH** — both new tests survive THE REVERT TEST, verified by simulation and by
+> positive control; two LOW boundary weaknesses (F4, F5). Separately: `trustless-cello`'s AC-005
+> test is hollow by the self-supplied-fixture shape and now asserts something production no longer
+> does (F2).
+> **REMOVALS PROVEN**
+>
+> Nothing here is blocking. F1 and F2 should be fixed before the tag goes green.
+>
+> **Am I rubber-stamping?** The diff touches transport surface and session establishment, which is
+> exactly where I am expected to find something, so I pushed hardest there and came up with nothing
+> that breaks. I am reporting that as a clean result rather than manufacturing a finding, because
+> the five traces plus the empirical dial test are independent of each other and all agree.
+
+**All five falsification claims independently confirmed**, plus two the reviewer checked that I had
+not: **no wire signature covers `participant_a/b.multiaddrs`** (both TBS builders read — neither
+includes it), and **no non-empty validation exists on either side** (round-tripped `{multiaddrs: []}`
+through `cbor-x`; both guards pass). It also **built and ran a throwaway transport test** proving a
+zero-listener node still dials out and opens a stream — the property the FROST DKG fan-out depends
+on, tested rather than argued.
+
+### F1 — two comments in one expression, disagreeing about the fact this unit changed
+
+The comment above the change still called this node *"bound on 0.0.0.0"*, thirty lines above the
+block explaining that it binds nothing. **That is how the binding gets "restored" by a later session
+that stops reading at the first comment** — and this project has the record for it.
+
+**Rewritten, not deleted, because the constraint underneath is still load-bearing:** leaving
+`nodeType` unset would still add `circuitRelayServer` and advertise HOP, and **HOP rides connections
+we opened, not only ones we accept.** Not listening does not make the opt-out redundant.
+
+### F2 — a test asserting a property of its own fixture
+
+`AC-005` asserted both participants carry at least one multiaddr. **Production now violates that on
+every session**, and the test could never notice: it builds its own libp2p nodes with real listen
+addresses and announces *those*. It would have stayed green forever whatever the daemon did.
+
+**The shape is worth naming: a test whose subject it supplies itself cannot observe the thing it
+claims to guarantee.** Amended to what is actually guaranteed — a well-formed array — with the note
+that the dialable endpoint travels in `initiator_session_addrs` / `counterparty_session_addrs`, from
+a different node entirely.
+
+### F3–F6
+
+**F3** — `participant_a/b.multiaddrs` is now permanently `[]`, signed over by nothing, parsed and
+dropped by the client, **and still able to reject a whole assignment if malformed** — a
+checked-then-ignored for a value nobody reads. Named as `DOD-M15-DEAD-WIRE-FIELD-1` rather than left
+implying something acts on it; removing it is a bilateral wire change.
+
+**F4** — the transport test's claim sat one level above its proof: `listenAddresses()` maps
+`getMultiaddrs()`, which returns only *verified* addresses, so `[]` proves nothing is **announced**.
+The gap is bounded (the realistic regression restores `0.0.0.0` or `127.0.0.1`, both verified
+immediately), and the sibling test below is the positive control. Both facts now stated in the test
+so the pair cannot drift apart.
+
+**F5** — the source guard's slice ended at an interior key, so an address reintroduced after it
+escaped every assertion. Now ends at the literal's closing brace, and asserts it got there.
+
+**F6, `[pre-existing]` and fixed anyway** — registration reported `directory_unreachable` when the
+daemon's **own** transport node was momentarily null during a stream rebuild. A network verdict for
+a local lifecycle fact, with the production comment two lines above already saying so. It now names
+the local cause and carries what to do. **The test asserting the old string had made the
+mislabelling required behaviour** — the fourth unit in this milestone to hit that shape.
+
+**Tag ✅. Merged.**
+
+---

@@ -305,7 +305,13 @@ neither. They ship together.
   stranger currently receives the agent's public key, listen addresses and protocol list.
 - **Enforcer:** stranger.
 
-### `DOD-M15-SURFACE-1` — ❌ The daemon stops listening where nothing dials it
+### `DOD-M15-SURFACE-1` — ✅ The daemon stops listening where nothing dials it
+> **Shipped and reviewed 2026-08-22 → Entries 9, 11.** cello-client `a1da749` + `a0940f1`,
+> trustless-cello `007b6909`. **SPEC: FAITHFUL, nothing blocking** — the reviewer confirmed all five
+> falsification claims independently, plus two I had not checked (no signature covers the announced
+> multiaddrs; no non-empty validation exists), and built a throwaway test proving a zero-listener
+> node still dials out. Six findings fixed, all documentation-layer or pre-existing. **Carried:**
+> `DOD-M15-IDLE-CONNS-1`, `DOD-M15-DEAD-WIRE-FIELD-1`.
 - **The directory-facing node stops listening entirely.** It binds `/ip4/0.0.0.0/tcp/0` — a real
   open port on every interface — registers **no protocol handler**, and the directory **never dials
   a client**. An empty listen configuration removes it from the attack surface: no socket, nothing
