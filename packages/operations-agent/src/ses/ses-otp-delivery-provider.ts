@@ -155,22 +155,38 @@ export class SesOtpDeliveryProvider implements OtpDeliveryProvider {
   async sendOtp(emailAddress: string, otp: string): Promise<void> {
     const correlationId = randomUUID();
     const emailDomain = this.#extractDomain(emailAddress);
+    /**
+     * DOD-M15-SIGNUP-1 (review F2) — NORMALISE THE KEY, not the recipient.
+     *
+     * Both guards below keyed on the RAW string, so `Victim@x.com` and `victim@x.com` were separate
+     * buckets in the send log and in the bounce set. One shift key bought a fresh allowance.
+     *
+     * That became load-bearing when the state machine's limiter moved to the requester: this is now
+     * the ONLY guard on how many unsolicited "Your verification code is NNNNNN" emails one address
+     * can receive. And the bounce half needs no attacker at all — a user whose address hard-bounces
+     * retypes it with different capitalisation, the guard misses, and we send to a known-bad address
+     * again, which is SES reputation damage on the ordinary path.
+     *
+     * Matches `hashEmail`'s normalisation, so the two layers agree on what one address is. The RAW
+     * address is still what gets delivered to — only the KEY is normalised.
+     */
+    const key = emailAddress.trim().toLowerCase();
 
     // Defense-in-depth: hard bounce check before any further work
-    if (this.#bouncedAddresses.has(emailAddress)) {
+    if (this.#bouncedAddresses.has(key)) {
       throw new DeliveryError(`Address previously bounced: ${emailDomain}`, "Bounce");
     }
 
     // Rate limit check
-    if (this.#isRateLimited(emailAddress)) {
+    if (this.#isRateLimited(key)) {
       throw new RateLimitError(emailDomain);
     }
 
     // Attempt SES delivery (with throttle retry)
-    const messageId = await this.#sendWithRetry(emailAddress, otp, emailDomain, correlationId);
+    const messageId = await this.#sendWithRetry(emailAddress, otp, emailDomain, correlationId, key);
 
     // Record send for rate limiting only after successful delivery
-    this.#recordSend(emailAddress);
+    this.#recordSend(key);
 
     this.#config.logger.info("otp.delivery.sent", { emailDomain, messageId, correlationId });
   }
@@ -184,6 +200,8 @@ export class SesOtpDeliveryProvider implements OtpDeliveryProvider {
     otp: string,
     emailDomain: string,
     correlationId: string,
+    /** DOD-M15-SIGNUP-1: the NORMALISED key the bounce set is recorded under — see `sendOtp`. */
+    key: string,
   ): Promise<string> {
     let firstError: unknown;
 
@@ -197,7 +215,7 @@ export class SesOtpDeliveryProvider implements OtpDeliveryProvider {
 
     // Hard bounce — do not retry
     if (HARD_BOUNCE_ERROR_NAMES.has(errorName)) {
-      this.#bouncedAddresses.add(emailAddress);
+      this.#bouncedAddresses.add(key);
       this.#config.logger.error("otp.delivery.failed", firstError as Error, {
         emailDomain,
         sesErrorType: "Bounce",

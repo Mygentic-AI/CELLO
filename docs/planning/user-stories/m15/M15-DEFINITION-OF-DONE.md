@@ -163,6 +163,56 @@ different repos, different disciplines, neither blocks the other.
 - **Enforcer:** receipt. *(Not run — the unit is carried by suite + review; the enforcer itself is
   built by `DOD-M15-INTERRUPTED-1` and this line is re-asserted there.)*
 
+### `DOD-M15-IDLE-CONNS-1` — ❌ A connection that authenticates to nothing does not live forever
+Split from `DOD-M15-SURFACE-1`. **Its value changed while the milestone was running, which is why it
+is a separate line rather than a bullet.**
+- **What it was for:** a stranger dials the standing receiver (which accepts everyone by design),
+  holds the connection open, and is still attached when promotion narrows the gate.
+- **What `DOD-M15-FRAME-1` already took:** promotion now evicts peers outside the gate, and the
+  frame gate refuses a non-counterparty's frame and **hangs the peer up** on first contact. So the
+  *injection* half of this clause is closed.
+- **What remains is resource bounding** — a peer that connects and stays completely silent. It
+  cannot inject and it is evicted at the next promotion, but until then it costs a connection, and
+  the count is attacker-controlled on a node that accepts everyone.
+- **Mechanism, checked:** libp2p has no idle-lifetime reaper. It offers `maxConnections`,
+  `inboundConnectionThreshold`, `maxIncomingPendingConnections` and `inboundUpgradeTimeout` —
+  **rate and total caps, not idle age.** A real reaper needs per-connection "has this peer
+  authenticated to anything" state, which nothing holds today.
+- **Do not guess the caps.** They apply to every node including relay-connected ones, and a cap set
+  without measurement breaks *reachability* — the one property this milestone must not trade away.
+  Measure a healthy daemon's connection count first.
+
+### `DOD-M15-CI-SKIPS-SILENT-1` — ❌ A suite that skips itself does not report green
+Found by the `DOD-M15-SIGNUP-1` review, and it is this milestone's own subject applied to its
+evidence: **a green run that asserted nothing.**
+- `packages/operations-agent/src/__tests__/engine.test.ts` is wrapped in
+  `isLocal ? describe : describe.skip`, gated on `CELLO_ENV === "local"`, and **nothing in CI sets
+  it.** Every automated run reports that file green having executed no assertion. The same shape
+  exists elsewhere — the directory's `.live.test.ts` files and the M8D spine suites.
+- **The tests are not the problem; the silence is.** A skip whose reason is invisible in the run
+  output is indistinguishable from a pass, which is exactly the class M15 exists to close.
+- **Fix:** either run these in CI against the compose Postgres, or make the skip announce itself —
+  a title carrying the reason, plus one unconditional test that FAILS when `CELLO_ENV` is unset in
+  a CI environment, so "we did not test this" cannot look like "this passed".
+- **Audit every `describe.skip`/`skipIf` in both repos** for the same shape while in here.
+
+### `DOD-M15-SIGNUP-DURABLE-1` — ❌ The signup limiter survives a deploy
+Split from `DOD-M15-SIGNUP-1`, which rekeyed the limiter from the email domain to the address
+fingerprint but left it in memory. **The clause asking for durability is NOT met and is carried
+here rather than quietly dropped.**
+- `#otpSends` lives in a single-instance process, so every restart and every deploy empties it — it
+  was wiped by the ops-agent deploy on 2026-08-09. An abuser clears it by waiting for a release.
+- **Store the shape that shipped, not the one the clause originally named:** `channelUserId →
+  timestamp list`, rolling. A fixed window with a stale `windowStart` carries the unbounded-growth
+  problem into the database with it, and **the key is the REQUESTER, not the address fingerprint** —
+  building a table keyed on the address would rebuild the design the review overturned.
+- **What the rekey DID fix is the half that hurts real people**: five strangers sharing an email
+  provider no longer refuse the sixth a verification code, which is exactly what an invite wave
+  would have hit. What it does not yet do is bite an abuser.
+- Needs a table in the bot's own database and a Flyway migration (the registrations schema is at
+  V62). **Sequence with `DOD-M15-RELAYABUSE-1`** — both are rate-limiting work, and a limiter that
+  is durable in one place and amnesiac in another invites the wrong conclusion about which is which.
+
 ### `DOD-M15-FREEZE-STATUS-1` — ❌ A defensive freeze is distinguishable in the session RECORD
 Split from `DOD-M15-FRAME-1`, whose own clause asks that the freeze carry a status *"distinct from
 an ordinary counterparty-absent close"*. It does not yet.
@@ -199,7 +249,13 @@ cannot distinguish *not diverged* from *forgotten*: both are `false`, both read 
   an ack behind the frontier. A restart therefore costs a **wrong answer**, not a re-detection.
 - Needs a column. Until it lands, no guidance may promise that a retry answers identically.
 
-### `DOD-M15-FRAME-1` — ❌ A stranger cannot inject content on the direct path
+### `DOD-M15-FRAME-1` — ✅ A stranger cannot inject content on the direct path
+> **Shipped and reviewed 2026-08-22 → Entries 4, 6, 7.** cello-client `4015c7f` + `15a960a` +
+> `551930b` + `497cfa4`, merged. Six review findings, three blocking, all fixed. Gate: 4006 tests,
+> lint, forced typecheck, build. **One clause carried, not claimed: `DOD-M15-FREEZE-STATUS-1`.**
+> The "session-ending" clause shipped as **peer-ending** at the peer gate — a deliberate, recorded
+> deviation, because session-ending there would let a pre-positioned stranger kill any session with
+> one frame. Session-ending stays where the evidence is about the counterparty: the identity freeze.
 One diff across the session content handler and the connection gater; fixing any subset leaves the
 injection path open.
 - The direct-path **content frame** is pinned to the dialing peer: `remotePeerId` must equal the
@@ -243,8 +299,9 @@ neither. They ship together.
   to scan, nothing to gate. *Fallback only if something turns out to need inbound there:* install
   the existing `DirectoryConnectionGater`, which is written but constructed only in tests. **Not
   listening is the fix; the gater is the consolation prize.**
-- **Unauthenticated idle connections are dropped on a timer.** A connection that completed the
-  handshake, authenticated to nothing and did nothing is a foothold waiting for the door to narrow.
+- ~~**Unauthenticated idle connections are dropped on a timer.**~~ **SPLIT to
+  `DOD-M15-IDLE-CONNS-1`** below. Not silently dropped: its value changed once `DOD-M15-FRAME-1`
+  landed, and it needs state neither the transport nor the daemon holds today.
 - The standing receiver's socket **stays** (Decision 2) — it is load-bearing for same-machine and
   same-LAN sessions, which the launch intent names explicitly, and it becomes required again if hole
   punching is ever repaired.
@@ -375,11 +432,23 @@ lost that way).
 - **Answering early orphans the unilateral escalation that runs inline after the wait** — that
   changes the close contract and what produces the receipt. Decide the contract, then build.
 
-### `DOD-M15-SIGNUP-1` — ❌ Signup throttles a person, not their employer
+### `DOD-M15-SIGNUP-1` — ✅ Signup throttles a person, not their employer
+> **Shipped and reviewed 2026-08-22 → Entries 8, 10.** `4922d72c` + `127a5a29` + `f9f271f4`. **TWO
+> review passes — the hard cap.** The first found that my rekey removed the only cap on a requester
+> and that my own test pinned the abuse case as required; the second found that un-shadowing the
+> delivery-layer refusal surfaced it to the person as *"Incorrect code"* after a silence. Both
+> fixed. **Carried:** `DOD-M15-SIGNUP-DURABLE-1` (still in memory) and `DOD-M15-CI-SKIPS-SILENT-1`
+> (this file's evidence does not run in CI).
 `DOD-OTP-RATELIMIT-KEY-1`. The sixth person from a domain in an hour is refused a verification code.
 An invite wave **is** a burst on one domain.
-- Rekey the limiter from the email domain to the address fingerprint the code already computes one
-  line below (`hashEmail`). Holds no new data and leaks nothing the system does not already keep.
+- Rekey the limiter from the email domain to **the REQUESTER** (the channel user). Holds no new data
+  and leaks nothing the system does not already keep.
+  > **CORRECTED 2026-08-22 after review.** This clause originally said "the address fingerprint",
+  > and that was wrong in a way worth keeping visible: **the address is the TARGET, not the
+  > requester.** Keying on it lets one admitted user request five real verification emails per
+  > address, to unlimited addresses, from CELLO's verified sender — and it duplicates a per-address
+  > limiter the delivery provider has enforced since M6B, shadowing it dead. Per-address stays where
+  > it already lives; this limiter guards how much ONE REQUESTER can make the system do.
 - **Make it durable** — a table in the bot's own database, not an in-memory `Map` that resets on
   every restart and deploy. It was wiped by the ops-agent deploy on 2026-08-09.
 - Lives in the registration bot; touches neither the directory nor the protocol.

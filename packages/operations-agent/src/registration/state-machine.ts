@@ -110,10 +110,29 @@ const REGISTRATION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 // Re-exported here for backward compatibility with any code that imports it from state-machine.
 export { CONTACT_PROMPT_PREFIX };
 
-/** Rate limit: max OTP sends per email domain per hour */
+/**
+ * Max OTP sends ONE REQUESTER may cause per hour.
+ *
+ * DOD-M15-SIGNUP-1 — THE KEY IS THE REQUESTER, and the two wrong answers are both instructive.
+ *
+ * It was the email DOMAIN, which throttled strangers against each other: the sixth gmail.com user
+ * in any hour was refused a code because five people they have never met asked first. An invite
+ * wave is exactly a burst on one domain, so that is the case it most reliably broke.
+ *
+ * The obvious correction — key on the email ADDRESS — was worse, and shipping it is what the review
+ * caught. The address is the TARGET, not the requester. One admitted user could walk the bot through
+ * `victim1@…`, `victim2@…` and get five real "Your verification code is NNNNNN" emails per address,
+ * from CELLO's verified sender, to people who never asked. The domain key was a crude cap on that;
+ * removing it without replacing it took the cap away entirely.
+ *
+ * PER-ADDRESS ALREADY EXISTS ONE LAYER DOWN. `SesOtpDeliveryProvider` has enforced 5 per rolling
+ * hour per address since M6B, counting only sends that SUCCEEDED. Duplicating that key here bought
+ * nothing and shadowed it dead. So this limiter guards the dimension the delivery layer cannot see:
+ * how much one requester can make the system do.
+ */
 const OTP_RATE_LIMIT_PER_HOUR = 5;
 
-/** OTP rate limit window — 1 hour */
+/** OTP rate limit window — 1 hour, rolling. */
 const OTP_RATE_WINDOW_MS = 60 * 60 * 1_000;
 
 // OA-2 (2026-07-07): shared registration copy, defined once so duplicated sites can never drift
@@ -133,9 +152,12 @@ const PREAUTH_SERVER_ERROR_MSG =
   "If it keeps happening, please contact support.";
 
 // ─── Rate limit state ─────────────────────────────────────────────────────────
-
-/** In-memory rate limiter: emailDomain → { count, windowStart } */
-type RateLimitEntry = { count: number; windowStart: Date };
+//
+// DOD-M15-SIGNUP-1: the OTP limiter is now `channelUserId → send timestamps`, matching
+// `#tokenAttempts` above rather than inventing a second shape in one file. A rolling window of
+// timestamps prunes itself, which the old fixed-window `{ count, windowStart }` could not — its map
+// grew one entry per distinct key forever, and the only thing bounding it was the deploy that wiped
+// it, which is the property `DOD-M15-SIGNUP-DURABLE-1` exists to remove.
 
 // ─── Email validation ─────────────────────────────────────────────────────────
 
@@ -148,10 +170,15 @@ export function isValidEmail(s: string): boolean {
   return dotPos > 0 && dotPos < domain.length - 1;
 }
 
-/** Extract domain from a valid email address */
-export function extractEmailDomain(email: string): string {
-  return email.slice(email.indexOf("@") + 1).toLowerCase();
-}
+// DOD-M15-SIGNUP-1: `extractEmailDomain` was deleted here. It had exactly one production caller —
+// the OTP limiter — and keying that on a domain is the defect this unit fixed, so the function went
+// with it. Proven dead before removal: zero references in cello-client and cello-portal, the package
+// is `"private": true` and does not re-export this module, and the only remaining importer was its
+// own unit test.
+//
+// NOT "the last consumer of the concept", which an earlier version of this comment claimed:
+// `SesOtpDeliveryProvider` has its own `#extractDomain` and logs `emailDomain` on every OTP send.
+// The domain has not left the system; it has left the place where it was standing in for a person.
 
 /**
  * Compute the email stub hash: SHA-256(normalize(email)) where normalize
@@ -202,7 +229,8 @@ export class RegistrationStateMachine {
 
   /** channelUserId → when the gate last faulted for them. See GATE_FAULT_COOLDOWN_MS. */
   readonly #gateFaultAt = new Map<string, number>();
-  readonly #rateLimitMap: Map<string, RateLimitEntry> = new Map();
+  /** DOD-M15-SIGNUP-1: channelUserId → OTP send timestamps, rolling. Pruned on every check. */
+  readonly #otpSends = new Map<string, number[]>();
 
   constructor(deps: StateMachineDeps) {
     this.#deps = deps;
@@ -871,13 +899,51 @@ export class RegistrationStateMachine {
     }
 
     const email = message.trim();
-    const emailDomain = extractEmailDomain(email); // retained for rate limiter only
     const emailStubHash = hashEmail(email); // stored in DB
 
-    // Check OTP rate limit (AC-009)
-    const rateLimited = this.#isRateLimited(emailDomain, record.id, correlationId);
-    if (rateLimited) {
-      await channel.send(from, "Too many verification code requests. Please wait up to an hour before trying again.");
+    /**
+     * DOD-M15-SIGNUP-1 — throttle THE REQUESTER. See `OTP_RATE_LIMIT_PER_HOUR` for why this key and
+     * not the domain (throttled strangers against each other) or the address (throttled the victim,
+     * not the sender, and duplicated a limiter the delivery layer already has).
+     *
+     * A PURE CHECK. The count is recorded only after the send SUCCEEDS, below — an SES bounce or
+     * throttle used to burn one of the person's five, and keyed on anything narrower than a domain
+     * that cost lands entirely on one person, who can be locked out for an hour having never
+     * received a code. The delivery provider already gets this right for its own limiter.
+     */
+    if (this.#overOtpLimit(from)) {
+      logger.warn("registration.otp.rate_limited", {
+        registrationId: record.id,
+        // The REQUESTER is identified by the registration id, which resolves to them through the
+        // record. No email fingerprint is logged: a 12-char prefix of an unsalted SHA-256 over an
+        // address space this small is a confirmable identifier, not an anonymous one, and the
+        // earlier version of this line claimed the opposite.
+        // Review F3: MEASURED, not the constant. A field called `sendCount` hardcoded to the limit
+        // reads to an operator as an observation and can never disagree with it — so if anything
+        // ever let a sixth through, the log would still say five.
+        sendCount: (this.#otpSends.get(from) ?? []).length,
+        correlationId,
+      });
+      /**
+       * ACCURATE FOR THIS KEY, and the first draft of this line was not.
+       *
+       * Under the address key I wrote "if you mistyped it, send the correct address now" — true
+       * there, because a different address had its own budget. Under the REQUESTER key it is false:
+       * they are over their own limit whatever address they send next, and telling someone to retry
+       * something that cannot work is the affordance failure this milestone is closing, not an
+       * improvement on it.
+       *
+       * The limit is generous against real use — five codes in an hour is well past mistyping — so
+       * the honest answer is the wait, and naming the number is what makes it credible.
+       */
+      await channel.send(
+        from,
+        // Review F5: "sent", not "requested". Only successful sends are counted, so if any failed
+        // they made MORE requests than this number — and a person counting their own attempts
+        // against a wrong noun learns to distrust the number.
+        `That's ${OTP_RATE_LIMIT_PER_HOUR} verification codes sent to you in the past hour, which is the limit. ` +
+        "Please wait up to an hour and then send your email address again.",
+      );
       return record;
     }
 
@@ -901,8 +967,52 @@ export class RegistrationStateMachine {
       correlationId,
     });
 
-    // Deliver OTP only after DB write succeeds
-    await this.#deps.otpDelivery.sendOtp(email, otp);
+    /**
+     * DOD-M15-SIGNUP-1 (review F1) — A DELIVERY FAILURE MUST NOT SURFACE AS "INCORRECT CODE".
+     *
+     * What the person used to live through: they send their address, the bot goes SILENT, they
+     * resend it, and the bot answers **"Incorrect code. You have 2 attempts remaining."** Nothing
+     * ever told them no code was sent. The row had already moved to `AWAITING_EMAIL_OTP` above, so
+     * their next message was parsed as an OTP candidate; `sendOtp` throwing skipped the channel
+     * send entirely and unwound to the engine, which logs `registration.engine.error` and — with no
+     * `onError` in production — does nothing else.
+     *
+     * THIS UNIT IS WHY THAT PATH IS REACHABLE, which is why it is fixed here and not deferred. The
+     * old domain-keyed limiter counted a superset of the delivery provider's per-address limiter on
+     * a coarser key, so `RateLimitError` could never fire from registration. Now the two measure
+     * orthogonal things — a requester's own budget, and one address's — so two admitted users
+     * registering against a shared mailbox reach the per-address five while neither is near their
+     * own. Un-shadowing a refusal means owning what it looks like when it fires.
+     *
+     * ROLLING BACK MATTERS AS MUCH AS THE MESSAGE. Without it they stay in the state where their
+     * next email address reads as a wrong OTP, which is the accusation itself.
+     */
+    try {
+      await this.#deps.otpDelivery.sendOtp(email, otp);
+    } catch (err: unknown) {
+      const reason = err instanceof Error ? err.name : "unknown";
+      logger.warn("registration.otp.delivery_failed", {
+        registrationId: record.id,
+        reason,
+        // The cause, not the exit point: the upstream message names WHY delivery refused (its own
+        // per-address rate limit, a bounce, an SES fault) and the engine's generic
+        // `registration.engine.error` was destroying it.
+        detail: err instanceof Error ? err.message : String(err),
+        correlationId,
+      });
+      const rolledBack = await repository.transition(record.id, "AWAITING_EMAIL", { clearOtp: true });
+      await channel.send(
+        from,
+        "I couldn't send a code to that address just now — nothing was sent, so there's no code to enter. " +
+        "Send the address again in a few minutes, or send a different one.",
+      );
+      return rolledBack;
+    }
+    // DOD-M15-SIGNUP-1: count it only now. `sendOtp` throwing (an SES bounce, a throttle, its own
+    // per-address limit) must not spend one of this requester's five — they never got a code, and
+    // charging them for our failure is how someone ends up locked out for an hour having received
+    // nothing. The delivery provider records its own sends the same way, after success.
+    this.#recordOtpSend(from);
 
     await channel.send(from, `A 6-digit verification code has been sent to ${email} — it's valid for 15 minutes. Please enter it here.`);
 
@@ -1214,39 +1324,39 @@ export class RegistrationStateMachine {
   }
 
   /**
-   * Check and increment the rate limiter for a given email domain.
-   * Returns true if rate-limited (caller should abort and send notification), false if within limit.
-   * Emits registration.otp.rate_limited at WARN if limit exceeded.
-   * Does NOT send any channel message — the caller is responsible for awaiting the notification.
+   * Is this REQUESTER over their OTP allowance?
+   *
+   * DOD-M15-SIGNUP-1. A PURE PREDICATE — it prunes, it reads, it does not record. The count is
+   * added by `#recordOtpSend` only after a send actually succeeds, so a delivery failure never
+   * spends one of the person's five. The old version incremented here and had no compensation on
+   * throw, which under a per-person key would lock someone out for an hour having never received a
+   * code.
+   *
+   * Prunes as it goes, matching `#overTokenLimit` above rather than inventing a second shape in one
+   * file: the map then holds only requesters who have asked inside the window, instead of every
+   * requester this process has ever seen. It runs for weeks at a time.
+   *
+   * ⚠️ STILL IN MEMORY, a known gap and not an oversight: a restart or a deploy empties it, so an
+   * abuser clears it by waiting for a release. `DOD-M15-SIGNUP-DURABLE-1` carries that, and the
+   * timestamp-list shape here is what a table should store — a fixed window with a stale
+   * `windowStart` would carry the growth problem into the database with it.
    */
-  #isRateLimited(emailDomain: string, registrationId: string, correlationId: string): boolean {
-    const now = new Date();
-    const entry = this.#rateLimitMap.get(emailDomain);
-
-    if (entry) {
-      const windowAge = now.getTime() - entry.windowStart.getTime();
-      if (windowAge > OTP_RATE_WINDOW_MS) {
-        // Window expired — reset
-        this.#rateLimitMap.set(emailDomain, { count: 1, windowStart: now });
-        return false;
-      }
-
-      if (entry.count >= OTP_RATE_LIMIT_PER_HOUR) {
-        this.#deps.logger.warn("registration.otp.rate_limited", {
-          registrationId,
-          emailDomain,
-          sendCount: entry.count,
-          correlationId,
-        });
-        return true;
-      }
-
-      entry.count++;
-    } else {
-      this.#rateLimitMap.set(emailDomain, { count: 1, windowStart: now });
+  #overOtpLimit(from: string): boolean {
+    const cutoff = Date.now() - OTP_RATE_WINDOW_MS;
+    for (const [user, stamps] of this.#otpSends) {
+      const live = stamps.filter((t) => t > cutoff);
+      if (live.length === 0) this.#otpSends.delete(user);
+      else this.#otpSends.set(user, live);
     }
+    return (this.#otpSends.get(from) ?? []).length >= OTP_RATE_LIMIT_PER_HOUR;
+  }
 
-    return false;
+  /**
+   * Record an OTP send that SUCCEEDED. Called after `sendOtp` resolves, never before.
+   */
+  #recordOtpSend(from: string): void {
+    const existing = this.#otpSends.get(from) ?? [];
+    this.#otpSends.set(from, [...existing, Date.now()]);
   }
 }
 

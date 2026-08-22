@@ -15,19 +15,27 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 TIER 0 CLOSED. First Tier-2 unit shipped and reviewed. Tier 1 part-swept.
-> **52 DoD lines** (3 added by review + build), 2 ✅, 1 🟡 (`DOD-M15-FRAME-1`), 1 🅿️, rest ❌. Every line is inside the launch gate;
-> the gate is a state, not a date.
+> ### 🟢 TWO TIER-2 UNITS MERGED. Two more built with reviews in flight.
+> **55 DoD lines**, 4 ✅, 2 🟡 (`SIGNUP-1`, `SURFACE-1`), 1 🅿️, rest ❌. Every line is inside the
+> launch gate; the gate is a state, not a date.
 
-- **NEXT ACTION: land the `DOD-M15-FRAME-1` review** — fix every finding, quote the verdict in a
-  journal entry, flip the tag, merge `m15/frame`. **Then** either `DOD-M15-SURFACE-1` (stop the
-  directory-facing node listening; drop idle unauthenticated connections — small, no protocol
-  impact) or finish `DOD-M15-LEDGER-1`'s remaining surfaces.
-- **`DOD-M15-FRAME-1` is 🟡 BUILT, REVIEW IN FLIGHT** (→ Entries 4, 6) — branch `m15/frame`,
-  commits `4015c7f` + `15a960a` + `551930b`, gate green at 4001 tests. Not merged. **One clause
-  deliberately unmet and carried as `DOD-M15-FREEZE-STATUS-1`:** the defensive freeze writes the
-  same DB status as an ordinary teardown, because a reason column is a client-side migration that
-  belongs in its own reviewed unit.
+- **NEXT ACTION: land the two reviews in flight**, then continue `DOD-M15-LEDGER-1`'s remaining
+  surfaces (MCP tool descriptions, CLI help, status output) — docs-only, no code conflict.
+- **`DOD-M15-SURFACE-1` is 🟡 BUILT, REVIEW IN FLIGHT** (→ Entry 9) — cello-client `m15/surface`,
+  commit `a1da749`, gate green at 4008. One line: the directory-facing node stops listening. **The
+  falsification is the unit** — `listenAddresses()` IS announced to the directory, and five checks
+  establish nothing consumes it. Idle half split to `DOD-M15-IDLE-CONNS-1`.
+- **`DOD-M15-SIGNUP-1` is 🟡 REBUILT, SECOND REVIEW IN FLIGHT** (→ Entry 8) — trustless-cello
+  `m15/signup`, `4922d72c` + `127a5a29`. **The first review found my fix removed the only cap on a
+  requester and that my own test pinned the abuse case as required behaviour.** Now per-requester;
+  per-address stays in the delivery provider where it already was. This is the hard cap — after this
+  pass, remaining findings become ACs on other units.
+- **`DOD-M15-FRAME-1` is ✅** (→ Entries 4, 6, 7) — merged. Six review findings, three blocking,
+  all fixed; verdict quoted in Entry 7. **The worst was my own fix reintroducing the milestone's
+  own pattern:** the defensive freeze wrote `interrupted`, which is the REVIVABLE status, so the
+  operator's next read silently rebuilt the session and re-admitted the same peer while the log
+  said no further content would be accepted. **Carried:** `DOD-M15-FREEZE-STATUS-1` (durable
+  status) — F1 fixed the reversibility, which could not wait.
 - **`DOD-M15-DIVERGE-1` is ✅** — cello-client `4478a03` + `9f05300`, merged. Ten review findings,
   three blocking, all fixed; verdict quoted in Entry 5. **Two follow-on lines came out of it:**
   `DOD-M15-UNWITNESSED-1` (the two *suspected* partings, one of which the review found and I had
@@ -799,5 +807,400 @@ needed a hand-built frame, because `sendContent` always sets `session_id` and co
 — **the only code that could express that case was an attacker's, which is exactly why it survived.**
 
 **Next:** the reviewer's verdict, then fix every finding, quote it, flip the tag, merge.
+
+---
+
+## Entry 7 — DOD-M15-FRAME-1: reviewed, six findings fixed, ✅ (2026-08-22)
+
+**Built `4015c7f` + `15a960a` + `551930b`; review fixes `497cfa4`.** Gate: 4006 passed, lint, forced
+typecheck, build.
+
+### Reviewer verdict — QUOTED
+
+> **SPEC: DEVIATIONS FOUND** — "session-ending, not per-message" (F2) and "one hard-fail path" as
+> applied to the ordering record (F3) are un-journaled. `[blocking]`
+>
+> **SILENT FALLBACKS FOUND** — F1 (the freeze silently reverses on the next read) and F3 (a frame
+> with no identity proof ingests with no log). `[blocking]`
+>
+> **ERRORS NAME THEIR CAUSE** — `session.content.identity.frozen` names the cause and not the exit
+> point… No exit-point substitution anywhere in the diff. The one defect is that the frozen
+> message's *second clause* is untrue as shipped (F1), which is a correctness bug in the message,
+> not a substitution.
+>
+> **HOLLOW TESTS FOUND** — the entire `fatal` / freeze mechanism has zero coverage and survives
+> deletion with a green suite. `[blocking]`
+>
+> **REMOVALS PROVEN**
+>
+> I do not think I am rubber-stamping this: the diff touches persistence, crypto and transport
+> gating, and the two findings I would most expect to hide there — a status that quietly reverses a
+> security decision, and a signed proof the attacker can decline to supply — are both present.
+
+**Six findings. Three blocking. All fixed; nothing deferred as acceptable.**
+
+### F1 — the fix reintroduced the class the milestone exists to remove
+
+The freeze tears the node down; a teardown writes `interrupted`; **`interrupted` is the REVIVABLE
+status.** So `reviveIfNeededForRead` fired on the operator's next `cello_receive`, rebuilt a node
+behind a gater allowing the *same* peer, flipped the row to `active`, and logged a success — while
+the freeze's own line said *"no further content will be accepted on this session."*
+
+**A security decision that silently reverses itself, under a message asserting the opposite.** That
+is worse than the hole the freeze was added to close, and it is exactly the shape this milestone
+hunts. `reviveSessionNode` now refuses a frozen session by name, and the message says what is true.
+
+**Also worth keeping:** in the MITM case the code's own comment describes, the attacker who tripped
+the freeze needed only to omit the ordering record on the next frame (F3) to be ingested normally.
+The two blocking findings compounded.
+
+### F2 — the clause says session-ending; peer-ending is right, and it is a DEVIATION
+
+The DoD says the refusal is session-ending. Applied at the peer gate that would be a **worse hole**:
+a pre-positioned stranger could kill any session on the machine with one frame, trading an injection
+hole for a denial-of-service hole. So the refusal is **peer-ending** — the connection goes, the
+session does not — and the session-ending response stays where the evidence is about the session's
+counterparty, at the identity freeze.
+
+**Recorded as a deviation rather than quietly implemented**, which is the reviewer's actual
+requirement: *"I do not think you should end the session here… But the divergence from the written
+clause has to be a stated decision, not an omission."*
+
+### F3 — the MITM check was opt-in for the attacker, and my comment said otherwise
+
+The ordering record is consulted only when present, with no `else` and no log. A party that passed
+the peer gate — which in the session-open MITM they do, because M *is* the peer we dialled — omits
+`structure1_cbor`/`structure2_cbor` and is ingested silently.
+
+**My comment claimed *"this comparison is the one place the substitution shows"*, which asserted a
+property the code does not have.** It shows only when the substituting party chooses to supply the
+proof. Absent records still ingest — refusing would make the relay a precondition for reading mail —
+but the weaker guarantee no longer looks identical to the stronger one, and the comment now says so
+and points at `DOD-M15-CORROBORATE-1` for the rest.
+
+### F4, F5, F6
+
+**F4:** the eviction sweep was serial and unbounded on an **attacker-controlled** count, inside
+session establishment — N connections to an advertised receiver meant N sequential graceful closes
+before every later setup. Now concurrent, capped at 32, with the truncation **logged**, because a
+silent cap reads as "swept everything".
+
+**F5:** the parity test's exemptions were checked in one direction only, so deleting a step left a
+dead exemption carrying a written reason. Adding the inverse check **immediately found four** —
+`#recordRelayAssignment` (no call site anywhere in the manager), `#maybeAutoAcknowledgeSeal`,
+`#getUnreadReceivedCount`, `#getReceivedBytesTotal`. Removed.
+
+**F6:** the test rebuilt an encoder that matched production on the byte fields and differed on
+`useRecords`. Now imports the production `encodeCbor`, so the question cannot recur.
+
+### The gap that let all of this through
+
+> the entire `fatal` / freeze mechanism has zero coverage and survives deletion with a green suite.
+
+True, and the reason is precise: **every existing ordering test drives `recordOrderingRecord`, the
+PARK path, which by design discards `fatal`.** Nine tests that looked like coverage assert the
+pre-fix behaviour and pass identically against the old code.
+
+Five live-path tests now cover it — wrong-signer freezes, bad-signature freezes, a frozen session is
+not revived by a read, an absent record still ingests and says it was unverified, and an
+unresolvable signer does **not** freeze. Deleting the freeze block turns three of them red.
+
+**One of my own assertions was wrong and is corrected rather than forced.** The unresolvable-signer
+case does not ingest — but that is the ingest path's own pre-existing `sender_unresolved` guard, not
+this unit's freeze. Measured, and that distinction is now the point of the test. It also showed
+`counterparty_unknown` is barely reachable live; the soft branch stays anyway, because a gate whose
+correctness depends on another guard running first has a hidden precondition.
+
+### What the review CONFIRMED, so it is not re-litigated
+
+- **The enumeration holds.** `node.handle(` appears exactly once in the daemon; three frame senders,
+  all carrying `session_id`; no fourth sender anywhere in either repo.
+- **`remotePeerId` can never be legitimately absent.** `@libp2p/interface`'s `StreamHandler` types
+  `connection` as **non-optional**. This was the question that decided between a security gate and a
+  catastrophic false positive, and the three fakes were the only place `undefined` could arise.
+- **The revival exemption is true** — the revived gater is narrow from birth.
+- **Nothing was lost** removing the duplicate `session_abandoned_notice` checks: same substance,
+  same log fields, plus `agentName` and `impact`.
+- **No false positives found** across relay-degraded, same-machine, park-recovery and revived
+  sessions. The frame gate is exactly as tight as the connection gate, so it cannot refuse a
+  connection libp2p would have admitted.
+- **Excluded from trust signals, verified by absence:** `trust-signal-store.ts` has no
+  session-outcome producer; every write is an explicit operator command.
+
+### One path named for completeness
+
+`#watchRelayStream` reads `session_interrupted` frames off the relay stream. It is not a registered
+handler and rides a stream we opened to a known relay peer, so it is pinned by construction — but it
+is the other inbound frame path on a session node, and the audit clause is better served by saying
+so than by leaving it unmentioned.
+
+**Clause NOT met, carried:** `DOD-M15-FREEZE-STATUS-1` — the freeze still writes the same DB status
+as an ordinary teardown. F1 fixed the *reversibility*, which could not wait; the durable column is a
+client-side migration and gets its own reviewed unit.
+
+**Tag flipped ✅. Merged.**
+
+---
+
+## Entry 8 — DOD-M15-SIGNUP-1: the rekey was wrong, the review caught it, rebuilt (2026-08-22)
+
+**Built `4922d72c`; review fixes `127a5a29`.** Branch `m15/signup`, not merged — second review owed.
+Gate: operations-agent 230 passed, lint, typecheck.
+
+### Reviewer verdict — QUOTED
+
+> I did not rubber-stamp this. The rekey is right about the false-positive half and wrong about what
+> it leaves behind: after this change **nothing anywhere throttles a requester**, and the second new
+> test pins that as required behaviour.
+>
+> **SPEC: DEVIATIONS FOUND** — the durability clause is unmet, but it is properly journaled … so it
+> is a legitimate split, **not** a silent simplification and **not** blocking on that ground.
+>
+> **NO SILENT FALLBACKS** in the diff.
+>
+> **ERROR SUBSTITUTION FOUND** — `[pre-existing]` … `RateLimitError` says "for domain" for a
+> per-address limiter.
+>
+> **HOLLOW TESTS FOUND** — `[blocking]`. Test 2 pins the abuse case as required behaviour; test 1
+> does not distinguish the key and falls to a normalization bypass; the window-reset path is
+> unpinned; and neither test runs in CI.
+>
+> **UNPROVEN REMOVAL** — `[blocking]`. The deletion of `extractEmailDomain`'s call site is fully
+> proven. The deletion of the original AC-009 body is not: its subject is live and its replacement
+> asserts the opposite.
+
+### The finding, and it is the worst of the milestone so far
+
+**The address is the TARGET, not the requester.** Keying on it meant one admitted user could walk
+the bot through `victim1@…`, `victim2@…` and receive five real *"Your verification code is NNNNNN"*
+emails **per address**, from CELLO's verified sender, to people who never asked. Domain keying was a
+crude cap on exactly that. I removed it and put nothing in its place.
+
+**And my own test locked the hole in.** All six `personN@gmail.com` messages came from ONE `userId`
+— so it was never "six people", it was one requester asking for codes to six addresses, and the test
+asserted no refusal. **A per-requester limiter would have turned that test red. The test forbade the
+fix.**
+
+**A second layer already existed and I collapsed onto it.** `SesOtpDeliveryProvider` has enforced
+5-per-rolling-hour per address since M6B, counting only sends that SUCCEEDED. Duplicating that key
+here shadowed it dead — the state machine counts *attempts*, so its count is always ≥ SES's and
+`RateLimitError` became unreachable from registration. Net guard surface went **down**.
+
+### What it is now
+
+Per-**requester**, keyed on the channel user, matching `#tokenAttempts` already in this file rather
+than a second shape. Rolling timestamps that prune as they go — the old fixed window grew one entry
+per distinct key forever, and the only thing bounding it was the deploy that wiped it. Per-address
+stays where it belongs, one layer down.
+
+The check is pure; the count is recorded only after `sendOtp` resolves. A bounce used to spend one
+of the person's five, and under a per-person key that lands entirely on someone who never got a code.
+
+### Two things I had written that were false
+
+- **The refusal's affordance.** My first draft told them to send the corrected address immediately —
+  true under the address key, false under this one. Telling someone to retry what cannot work is the
+  failure this milestone closes, not an improvement on it.
+- **The privacy claim.** I logged a 12-char hash prefix and called it *"not a stable identifier
+  anyone can carry off"*. It is 48 bits of unsalted SHA-256 over a low-entropy space — hand someone
+  a leaked waitlist and it names who asked. The directory already logs the **full** hash at INFO, so
+  the truncation bought nothing. **A comment asserting a property the code lacks**, written into the
+  milestone that exists to remove them. The field is gone; the registration id was always enough.
+
+### Removal, now proven both ways
+
+`extractEmailDomain` deleted with its tests — zero references in either sibling repo, the package is
+`private` and does not re-export the module, its only importer was its own unit test. **The comment
+claiming it was "the last consumer of the concept" is corrected:** `SesOtpDeliveryProvider` still
+extracts and logs the domain. The domain has not left the system, only the place where it stood in
+for a person.
+
+### The revert test earned itself again
+
+Restoring the address key turns the abuse case red — and the run surfaced a **fixture defect** that
+would have failed on the next execution regardless: the wave users had static phone numbers and were
+never expired, so the third test collided with its own previous run on
+`idx_registrations_phone_stub_hash_active`. Rows here are never deleted (RLS forbids it), only
+expired, so a leftover active row is a hard failure that reads as a logic bug. Phones now derive from
+the per-run user id and every enrolled user is expired in `afterEach`. **Verified by running the file
+twice consecutively.**
+
+### One finding promoted to its own line
+
+> neither test runs in CI
+
+`describeIntegration = isLocal ? describe : describe.skip`, gated on `CELLO_ENV=local`, which nothing
+in CI sets — so that file reports green in every automated run having asserted nothing. That is this
+milestone's own subject applied to its own evidence, and it is not confined to this file.
+**`DOD-M15-CI-SKIPS-SILENT-1`.**
+
+**Second review owed before the tag flips.** The fix inverted the design the first review examined,
+which is exactly when a second pass is worth its cost — and it is the hard cap.
+
+---
+
+## Entry 9 — DOD-M15-SURFACE-1: one line, and the falsification is the whole unit (2026-08-22)
+
+**Branch `m15/surface`, commit `a1da749`. REVIEW IN FLIGHT — tag stays 🟡.** Gate: cello-client 4008
+passed, lint, forced typecheck, build.
+
+### The change
+
+`listenAddresses: ["/ip4/0.0.0.0/tcp/0"]` → `listenAddresses: []` on the directory-facing node.
+That node registers **no protocol handler at all**, and the directory **never dials a client** —
+every directory connection is one the daemon opened. So every operator ran a real open port on every
+interface, for the life of the daemon, that could reach no CELLO protocol.
+
+Not listening is strictly stronger than filtering: no socket, nothing to scan, nothing for a gater
+to get wrong. (`DirectoryConnectionGater` exists for the filtering approach and is constructed only
+in tests — the consolation prize, not the fix.)
+
+### The counterbalance, and it is an honest exception
+
+**There is no adversary to counterbalance here** — this unit REMOVES a surface rather than guarding
+one, so Invariant 1 has nothing to bite on. Recorded as an exception rather than skipped, because a
+unit with no answer to "what makes this hold against a rewritten peer?" is usually a unit that has
+not thought about it, and this one genuinely has no such party.
+
+### The falsification IS the unit
+
+A one-line change that could break every session in the product. `node.listenAddresses()` **is**
+transmitted to the directory at step 7, in `peer_info_announce`, under a comment saying it is *"so
+the directory can broker sessions"*. Removing the listener empties it.
+
+Five checks, each traced to its consumer rather than assumed:
+
+1. The directory stores it and reads it in exactly one place — `participant_a/b.multiaddrs` in the
+   session assignment.
+2. **The directory's own comment settles it:** that address is *"its per-agent DIRECTORY node, NOT
+   its standing-receiver session node, so it is NOT a valid content endpoint (using it yields 'could
+   not negotiate /cello/content')"*. The real session endpoint travels by the
+   `session_offer` → `session_offer_accept` round-trip.
+3. No client code reads `participant_a/b` multiaddrs at all.
+4. `#peerInfoAnnounced` gates `session_request` — but it is set by the frame **arriving**, not by
+   its contents, so an empty array still marks it announced.
+5. The peer id still goes in the announce, and a peer id needs no listener.
+
+**Inbound sessions are untouched.** They arrive on the standing receiver, a different node, which
+keeps its socket deliberately (relay-audit Decision 2 — load-bearing for same-machine and same-LAN).
+
+### Pinned in two places, because neither alone is enough
+
+- **`core/transport`** proves the BEHAVIOUR: an empty listen config really binds nothing rather than
+  falling back to a default. A silent default would give the daemon a port it believes it does not
+  have, which is worse than the port it had openly.
+- **`core/daemon`** guards the CALL SITE against someone restoring the address — a one-line edit
+  that would otherwise pass every test in the repo.
+
+**The second is source-level, and the limitation is stated rather than hidden:** every test in that
+file injects `createDirectoryNode`, so none of them reaches the real `createNode`. It asserts the
+slice contains `keyProvider` first, so a slice that matched nothing fails loudly instead of passing
+vacuously. Revert-tested — restoring `0.0.0.0` turns it red.
+
+**Its first version failed against my own comment.** The reasoning beside the call names the address
+it removed, so the scan matched the explanation instead of the code. Comments are stripped first now,
+the way `msg-022`'s parity test already does — a small thing, and exactly the shape that makes a
+source-level assertion untrustworthy if nobody checks it.
+
+### The other half of the line, split not dropped
+
+`DOD-M15-IDLE-CONNS-1`. Its value changed while the milestone ran: `DOD-M15-FRAME-1` now hangs a
+stranger up on first contact and evicts peers outside the gate at promotion, so the **injection**
+half is closed and what remains is resource bounding.
+
+**Mechanism checked so it is not re-derived:** libp2p has no idle-lifetime reaper —
+`maxConnections`, `inboundConnectionThreshold`, `maxIncomingPendingConnections` and
+`inboundUpgradeTimeout` are rate and total caps, not idle age. A real one needs per-connection
+"has this peer authenticated to anything" state that nothing holds today. **And the warning that
+matters more than the feature:** those caps apply to every node including relay-connected ones, so
+setting them without measurement breaks *reachability* — the one property this milestone must not
+trade away.
+
+---
+
+## Entry 10 — DOD-M15-SIGNUP-1: second review, both blocking findings fixed, ✅ (2026-08-22)
+
+**`4922d72c` → `127a5a29` → `f9f271f4`.** Two review passes — the hard cap. Gate: operations-agent
+231 passed, lint, forced typecheck.
+
+### Second verdict — QUOTED
+
+> **SPEC: DEVIATIONS FOUND** — the address-fingerprint clause is deviated from, but Entry 8 journals
+> the decision with its reasoning, so it is a legitimate correction, not a silent simplification.
+> Not blocking on that ground. F4 is blocking as a documentation defect: the DoD and the deferral
+> line still prescribe the overturned design and name a deleted field.
+>
+> **NO SILENT FALLBACKS** — the limiter itself introduces none, and the in-memory limitation is
+> stated rather than hidden.
+>
+> **ERROR SUBSTITUTION FOUND** — `[blocking]`, F1. A delivery-layer refusal surfaces to the person
+> as *"Incorrect code. You have 2 attempts remaining."* after a silence… **This unit is what made
+> that path reachable, so it belongs to this unit and not to a later one.**
+>
+> **HOLLOW TESTS FOUND** — `[blocking]`. Test 2 does not survive the revert test… Nothing asserts
+> the sixth send was prevented, nothing asserts the person is told, the rolling reset is unpinned,
+> and record-after-success is unpinned.
+>
+> **REMOVALS PROVEN** — verified independently across both sibling repos…
+>
+> I am not rubber-stamping this. The rekey is right, the reasoning in the comments is the best in
+> the file, and the honesty about the in-memory gap is exactly what invariant 1 asks for. What it
+> does not yet have is a test that would notice if any of the four properties it fixed were undone,
+> and it has un-shadowed a delivery-layer refusal whose user-facing behaviour is silence followed by
+> an accusation.
+
+### F1 — the finding I would not have thought to look for
+
+**Fixing one thing made a second thing reachable.** The old domain key counted a *superset* of the
+delivery provider's per-address limiter on a *coarser* key, so `RateLimitError` could never fire from
+registration — it was dead code reached only in theory. Making the two limiters orthogonal woke it
+up. Two admitted users registering against one shared mailbox now hit the per-address five while
+neither is near their own.
+
+And what waking it up looked like: **silence, then "Incorrect code. You have 2 attempts
+remaining."** The row had already moved to `AWAITING_EMAIL_OTP`, so the next message was read as a
+code. Now the send is wrapped, the upstream cause is logged instead of destroyed by a generic engine
+error, the person is told nothing was sent, and **the record is rolled back** — which matters as much
+as the message, because without it they stay in the state that produces the accusation.
+
+**The general lesson, and it is worth more than the fix:** un-shadowing a refusal means owning how it
+fails. A guard that has never fired has never had its failure path exercised, and "it was already
+there" is not a defence when your change is what made it reachable.
+
+### F2 — the layer I handed victim-protection to did not normalise its key
+
+Moving per-address protection *to* the delivery provider made that provider's key load-bearing — and
+it keyed on the raw string, so `Victim@x.com` and `victim@x.com` were separate buckets in both the
+send log **and the bounce set**. One shift key bought a fresh allowance. The bounce half needs no
+attacker: a user whose address hard-bounces retypes it with different capitalisation and we mail a
+known-bad address again, which is SES reputation damage on the ordinary path.
+
+### F4 — the spec still prescribed the design the review overturned
+
+Both DoD lines said *"rekey … to the address fingerprint"* and the durability line named
+`#rateLimitMap`, a field this branch deleted. **Whoever picked up durability would have built a table
+keyed on the victim.** Corrected with the reasoning visible rather than quietly rewritten.
+
+### Four bypasses, each closed and each verified by making the mutation
+
+| Bypass | Now |
+|---|---|
+| Log the warn and send anyway | **red** — `otpState.captured.length` is asserted, not just the event |
+| Never tell the person | **red** — the refusal copy is asserted on `channelState.sent` |
+| Make the window permanent | **red** — a clock-advancing test proves the allowance returns |
+| Record before the send | **red** — a provider double that throws proves the five are intact |
+
+Test 1 also put its six addresses on **one domain**, so restoring the domain key left it green — it
+was detecting a log field, not the key. Six domains now. The normalization test became vacuous the
+moment the key stopped being the email, and is replaced by the window-roll test.
+
+### A methodology note I nearly shipped past
+
+**The first window-bypass run passed, and I almost recorded that as a weak test.** The mutation had
+silently patched the wrong limiter — two limiters in this file share the line
+`const live = stamps.filter((t) => t > cutoff)`, and a `replace(..., 1)` took the first. **A revert
+test that passes is only evidence if the mutation landed where you think it did.**
+
+**Tag ✅. Merged.**
 
 ---
