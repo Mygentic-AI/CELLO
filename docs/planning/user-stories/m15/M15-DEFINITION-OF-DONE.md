@@ -163,6 +163,25 @@ different repos, different disciplines, neither blocks the other.
 - **Enforcer:** receipt. *(Not run — the unit is carried by suite + review; the enforcer itself is
   built by `DOD-M15-INTERRUPTED-1` and this line is re-asserted there.)*
 
+### `DOD-M15-IDLE-CONNS-1` — ❌ A connection that authenticates to nothing does not live forever
+Split from `DOD-M15-SURFACE-1`. **Its value changed while the milestone was running, which is why it
+is a separate line rather than a bullet.**
+- **What it was for:** a stranger dials the standing receiver (which accepts everyone by design),
+  holds the connection open, and is still attached when promotion narrows the gate.
+- **What `DOD-M15-FRAME-1` already took:** promotion now evicts peers outside the gate, and the
+  frame gate refuses a non-counterparty's frame and **hangs the peer up** on first contact. So the
+  *injection* half of this clause is closed.
+- **What remains is resource bounding** — a peer that connects and stays completely silent. It
+  cannot inject and it is evicted at the next promotion, but until then it costs a connection, and
+  the count is attacker-controlled on a node that accepts everyone.
+- **Mechanism, checked:** libp2p has no idle-lifetime reaper. It offers `maxConnections`,
+  `inboundConnectionThreshold`, `maxIncomingPendingConnections` and `inboundUpgradeTimeout` —
+  **rate and total caps, not idle age.** A real reaper needs per-connection "has this peer
+  authenticated to anything" state, which nothing holds today.
+- **Do not guess the caps.** They apply to every node including relay-connected ones, and a cap set
+  without measurement breaks *reachability* — the one property this milestone must not trade away.
+  Measure a healthy daemon's connection count first.
+
 ### `DOD-M15-CI-SKIPS-SILENT-1` — ❌ A suite that skips itself does not report green
 Found by the `DOD-M15-SIGNUP-1` review, and it is this milestone's own subject applied to its
 evidence: **a green run that asserted nothing.**
@@ -276,8 +295,9 @@ neither. They ship together.
   to scan, nothing to gate. *Fallback only if something turns out to need inbound there:* install
   the existing `DirectoryConnectionGater`, which is written but constructed only in tests. **Not
   listening is the fix; the gater is the consolation prize.**
-- **Unauthenticated idle connections are dropped on a timer.** A connection that completed the
-  handshake, authenticated to nothing and did nothing is a foothold waiting for the door to narrow.
+- ~~**Unauthenticated idle connections are dropped on a timer.**~~ **SPLIT to
+  `DOD-M15-IDLE-CONNS-1`** below. Not silently dropped: its value changed once `DOD-M15-FRAME-1`
+  landed, and it needs state neither the transport nor the daemon holds today.
 - The standing receiver's socket **stays** (Decision 2) — it is load-bearing for same-machine and
   same-LAN sessions, which the launch intent names explicitly, and it becomes required again if hole
   punching is ever repaired.
