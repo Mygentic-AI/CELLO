@@ -664,8 +664,23 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
      * the relay stores nothing about the consortium itself (DOD-INV-RELAY-EXTRACTABLE).
      */
     target?: { peerId: string; multiaddr: string },
-  ): Promise<{ ok: true } | { ok: false; reason: string; redirect?: { nodeId: string; peerId: string; multiaddr: string } }> {
-    if (!this.#node) return { ok: false, reason: "directory_unavailable" };
+  ): Promise<
+    | { ok: true }
+    | {
+        ok: false;
+        kind: "refused" | "unreachable";
+        reason: string;
+        redirect?: { nodeId: string; peerId: string; multiaddr: string };
+      }
+  > {
+    /**
+     * EVERY failure below is now classified, because the caller terminalises a session on one kind
+     * and not the other (`DOD-M15-TRANSPORT-TERMINAL-1`). Three of the four are TRANSPORT, and they
+     * were indistinguishable from a merits refusal when this returned a bare string.
+     *
+     * No libp2p node at all — nothing was dialled, so nothing was decided.
+     */
+    if (!this.#node) return { ok: false, kind: "unreachable", reason: "directory_unavailable" };
 
     const frame = CBOR_ENC.encode({
       type: "seal_submission",
@@ -694,15 +709,21 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
         const resp = cborDecode(raw) as Record<string, unknown>;
         if (resp["type"] === "seal_received") return { ok: true };
         const redirect = resp["redirect"] as { nodeId: string; peerId: string; multiaddr: string } | undefined;
+        // THE ONLY MERITS BRANCH: a directory answered on this stream. Whatever it said, it read the
+        // submission and formed an opinion — that is a verdict, and a verdict is terminal.
         return {
           ok: false,
+          kind: "refused",
           reason: (resp["reason"] as string) ?? "directory_error",
           ...(redirect?.peerId && redirect.multiaddr ? { redirect } : {}),
         };
       }
-      return { ok: false, reason: "no_response" };
+      // The stream closed carrying nothing. A directory that intends to refuse says so; silence is
+      // the connection dying, not an opinion.
+      return { ok: false, kind: "unreachable", reason: "no_response" };
     } catch (err) {
-      return { ok: false, reason: describeThrown(err) };
+      // Dial failed, connection lost, timed out. The submission never reached anyone.
+      return { ok: false, kind: "unreachable", reason: describeThrown(err) };
     }
   }
 }

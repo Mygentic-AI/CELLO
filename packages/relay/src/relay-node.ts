@@ -183,7 +183,32 @@ export interface DirectoryAdapter {
     sealData: import("./relay-types.js").SealData,
     /** Optional redirect target — which directory adjudicates this seal (see the adapter). */
     target?: { peerId: string; multiaddr: string },
-  ): Promise<{ ok: true } | { ok: false; reason: string; redirect?: { nodeId: string; peerId: string; multiaddr: string } }>;
+  ): Promise<
+    | { ok: true }
+    | {
+        ok: false;
+        /**
+         * WHICH KIND OF FAILURE — and the caller must branch on it (`DOD-M15-TRANSPORT-TERMINAL-1`).
+         *
+         *   `"refused"`      a directory READ the seal and rejected it. A verdict. Terminal, because
+         *                    retrying cannot change a merits decision.
+         *   `"unreachable"`  no directory formed an opinion — the relay could not reach one, got no
+         *                    answer, or has no libp2p node at all. **Not a verdict**, so not terminal.
+         *
+         * It was one free-form `reason` string, and the relay terminalised on both. A directory
+         * restart, a dropped circuit or a NAT rebind therefore destroyed a healthy conversation
+         * PERMANENTLY, and told both participants `session_sealed` — so each believed they held a
+         * notarized receipt of something that was never notarized.
+         *
+         * OPTIONAL, and absence means `"refused"`. An adapter that has not been updated keeps
+         * today's behaviour exactly: the conservative reading, because defaulting to `"unreachable"`
+         * would make a genuine refusal retry forever and never tell the operator it was refused.
+         */
+        kind?: "refused" | "unreachable";
+        reason: string;
+        redirect?: { nodeId: string; peerId: string; multiaddr: string };
+      }
+  >;
   /**
    * FEDERATION-003 AC-005/AC-006: Look up a relay's registered public key by relayId.
    * Returns undefined if the relayId is not registered.
@@ -1421,6 +1446,52 @@ export class CelloRelayNode {
         // this failure, and without them the alert announces a problem it cannot narrow.
         brokerPeerId: brokerTarget?.peerId ?? null,
       });
+      /**
+       * ONLY A VERDICT IS TERMINAL — `DOD-M15-TRANSPORT-TERMINAL-1`.
+       *
+       * `rejectSeal` sets `seal_rejected`, which is permanent: every later frame for this session is
+       * answered `session_sealed`. That is right when a directory examined the seal and refused it,
+       * and catastrophic when nobody examined anything — a momentary unreachability would end a
+       * healthy conversation and report it to both sides as a completed seal.
+       *
+       * On the transport branch the session is LEFT ALONE. It stays active, its leaves stay
+       * acceptable, and the seal can be attempted again — which is what the participants already
+       * believe is happening.
+       */
+      if (dirResult.kind === "unreachable") {
+        /**
+         * ROLL THE STATUS BACK TO `active`, or this fix does nothing.
+         *
+         * `submitForSeal` flips the session to `"sealing"` BEFORE the directory is asked — correct,
+         * since it stops a second concurrent seal attempt. But the `hash_submit` guard refuses
+         * anything whose status is not `"active"` and answers `session_sealed`, so a session left in
+         * `"sealing"` is just as dead as one marked `seal_rejected`, wearing a different word.
+         *
+         * The first version of this fix skipped `rejectSeal` and stopped there, and the test stayed
+         * red for exactly that reason. The seal attempt did not happen — nobody was reached — so the
+         * state it set has to be undone with it.
+         */
+        const sealingKey = Buffer.from(sessionId).toString("hex");
+        const sealingState = this.#store.getSession(sealingKey);
+        if (sealingState && sealingState.status === "sealing") {
+          this.#store.setSession(sealingKey, { ...sealingState, status: "active" });
+        }
+        this.#logger.warn("relay.seal.deferred", {
+          sessionId: Buffer.from(sessionId).toString("hex"),
+          reason: dirResult.reason,
+          adjudicator,
+          brokerPeerId: brokerTarget?.peerId ?? null,
+          impact:
+            "NO directory adjudicated this seal — the relay could not reach one. The session is left " +
+            "ACTIVE and the seal is still pending, rather than being marked permanently rejected: " +
+            "there is no verdict to be final about.",
+          guidance:
+            "Check that a directory is reachable from this relay. The participants will retry; if " +
+            "this repeats for every session, the relay's configured directory is down or its " +
+            "address is wrong — that is an outage, not a protocol failure.",
+        });
+        return;
+      }
       this.rejectSeal(sessionId, dirResult.reason);
     }
   }

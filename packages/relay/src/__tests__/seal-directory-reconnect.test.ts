@@ -174,6 +174,18 @@ describe("seal submission when the directory connection has died mid-life", () =
 
     const result = await adapter.processSeal(sessionId, SEAL);
 
-    expect(result).toEqual({ ok: false, reason: "directory_unavailable" });
+    /**
+     * EXACT, and now carrying `kind` — `DOD-M15-TRANSPORT-TERMINAL-1`.
+     *
+     * The shape gained a discriminant because the relay must branch on it: `"unreachable"` means no
+     * directory formed an opinion, so the session is left ALIVE and retryable instead of being
+     * marked permanently rejected. Having no libp2p node is the purest example — nothing was even
+     * dialled — and if this ever came back as `"refused"` a healthy conversation would be destroyed
+     * by an outage and both participants told it had sealed.
+     *
+     * Kept as a whole-object comparison on purpose: it is what decides whether a new field appears
+     * on this result, and a looser check would let the classification go missing unnoticed.
+     */
+    expect(result).toEqual({ ok: false, kind: "unreachable", reason: "directory_unavailable" });
   });
 });
