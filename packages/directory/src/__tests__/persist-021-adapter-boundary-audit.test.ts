@@ -80,6 +80,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import pg from "pg";
+import { inRolledBackTxn } from "./helpers/txn-pool.js";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -323,18 +324,33 @@ describe("PERSIST-021 AC-006: STORE_TABLES coverage gate", () => {
 // ─── Integration tests — require CELLO_ENV=local + running Postgres ───────────
 
 describeIntegration("PERSIST-021 integration: AC-001 BIGINT columns deserialized as numbers", () => {
-  beforeEach(async () => {
-    // Truncate MMR and checkpoint tables for clean state
-    await superPool.query(`
-      TRUNCATE conversation_proof_leaf_checkpoints, conversation_seal_staging,
-               conversation_proof_mmr_nodes, conversation_proof_leaves,
-               directory_checkpoints RESTART IDENTITY CASCADE
-    `);
-  });
+  /**
+   * THE TRUNCATE THAT POSTGRES CAUGHT DEADLOCKING — now inside a rolled-back transaction.
+   *
+   * This is the one the server log named, both sides quoted: this `TRUNCATE ... RESTART IDENTITY
+   * CASCADE` waiting on an `AccessExclusiveLock`, against a directory node mid-`INSERT INTO
+   * conversation_seal_staging`. It also destroyed rows other suites were asserting on, which is why
+   * the directory suite's failing set moved between identical runs.
+   *
+   * The truncate itself is load-bearing — MMR leaf indices and `mmr_position` are counted from an
+   * empty table — so it could not simply be dropped. Inside a transaction it takes the same lock but
+   * releases it at `ROLLBACK` a few milliseconds later, and nothing it removed stays removed.
+   *
+   * `txnPool` is what makes the store see it: `MmrStore` reads through `pool.query` and takes its
+   * advisory lock through `pool.connect()`, so a transaction on a separate client would have been
+   * invisible to both halves.
+   */
 
   it("AC-001: conversation_proof_leaves — leaf_index and mmr_position are JavaScript numbers after deserializeRow", async () => {
+    await inRolledBackTxn(superPool, async (txn, client) => {
+    // An empty MMR for the duration of THIS transaction only — see the describe note.
+    await client.query(`
+      TRUNCATE conversation_proof_leaf_checkpoints, conversation_seal_staging,
+               conversation_proof_mmr_nodes, conversation_proof_leaves,
+               directory_checkpoints, conversation_seals RESTART IDENTITY CASCADE
+    `);
     const logger = makeLogger();
-    const store = new MmrStore(servicePool, logger);
+    const store = new MmrStore(txn, logger);
 
     const sessionId = randomUUID();
     const sealMerkleRoot = makeMerkleRoot("ac001-leaf-test");
@@ -342,7 +358,7 @@ describeIntegration("PERSIST-021 integration: AC-001 BIGINT columns deserialized
     await store.appendSeal(sessionId, sealMerkleRoot, "corr-ac001");
 
     // AC-001: read back the raw row via superPool — pg driver returns BIGINT as string
-    const rawResult = await superPool.query<Record<string, unknown>>(
+    const rawResult = await txn.query<Record<string, unknown>>(
       "SELECT leaf_index, mmr_position FROM conversation_proof_leaves WHERE session_id = $1",
       [sessionId],
     );
@@ -356,12 +372,20 @@ describeIntegration("PERSIST-021 integration: AC-001 BIGINT columns deserialized
     const deserialized = deserializeRow("conversation_proof_leaves", rawResult.rows[0]!);
     expect(typeof deserialized["leaf_index"], "deserializeRow must coerce leaf_index to number").toBe("number");
     expect(typeof deserialized["mmr_position"], "deserializeRow must coerce mmr_position to number").toBe("number");
+    });
   });
 
   it("AC-001: conversation_proof_mmr_nodes — mmr_position is a JavaScript number after deserializeRow", async () => {
+    await inRolledBackTxn(superPool, async (txn, client) => {
+    // An empty MMR for the duration of THIS transaction only — see the describe note.
+    await client.query(`
+      TRUNCATE conversation_proof_leaf_checkpoints, conversation_seal_staging,
+               conversation_proof_mmr_nodes, conversation_proof_leaves,
+               directory_checkpoints, conversation_seals RESTART IDENTITY CASCADE
+    `);
     // A 2-leaf MMR creates an internal merge node. Verify mmr_position is deserialized as number.
     const logger = makeLogger();
-    const store = new MmrStore(servicePool, logger);
+    const store = new MmrStore(txn, logger);
 
     // Append 2 seals — second append triggers a merge node in conversation_proof_mmr_nodes
     const session1 = randomUUID();
@@ -370,7 +394,7 @@ describeIntegration("PERSIST-021 integration: AC-001 BIGINT columns deserialized
     await store.appendSeal(session2, makeMerkleRoot("ac001-node-2"), "corr-node-2");
 
     // AC-001: read back the raw row via superPool — pg driver returns BIGINT as string
-    const nodeRow = await superPool.query<Record<string, unknown>>(
+    const nodeRow = await txn.query<Record<string, unknown>>(
       "SELECT mmr_position FROM conversation_proof_mmr_nodes ORDER BY id ASC LIMIT 1",
     );
     expect(nodeRow.rows.length, "A merge node must have been created").toBeGreaterThan(0);
@@ -381,12 +405,20 @@ describeIntegration("PERSIST-021 integration: AC-001 BIGINT columns deserialized
     // After deserializeRow: mmr_position coerced to number
     const deserialized = deserializeRow("conversation_proof_mmr_nodes", nodeRow.rows[0]!);
     expect(typeof deserialized["mmr_position"], "deserializeRow must coerce mmr_position to number").toBe("number");
+    });
   });
 
   it("AC-001: directory_checkpoints — mmr_leaf_count is a JavaScript number after deserializeRow", async () => {
+    await inRolledBackTxn(superPool, async (txn, client) => {
+    // An empty MMR for the duration of THIS transaction only — see the describe note.
+    await client.query(`
+      TRUNCATE conversation_proof_leaf_checkpoints, conversation_seal_staging,
+               conversation_proof_mmr_nodes, conversation_proof_leaves,
+               directory_checkpoints, conversation_seals RESTART IDENTITY CASCADE
+    `);
     // Append 1 seal and commit a checkpoint. directory_checkpoints.mmr_leaf_count must be a number.
     const logger = makeLogger();
-    const store = new MmrStore(servicePool, logger);
+    const store = new MmrStore(txn, logger);
 
     const session1 = randomUUID();
     await store.appendSeal(session1, makeMerkleRoot("ac001-checkpoint"), "corr-chk-1");
@@ -394,7 +426,7 @@ describeIntegration("PERSIST-021 integration: AC-001 BIGINT columns deserialized
     await store.confirmCheckpoint(checkpointId);
 
     // AC-001: read back the raw row via superPool — pg driver returns BIGINT as string
-    const raw = await superPool.query<Record<string, unknown>>(
+    const raw = await txn.query<Record<string, unknown>>(
       "SELECT mmr_leaf_count FROM directory_checkpoints WHERE checkpoint_id = $1",
       [checkpointId],
     );
@@ -406,6 +438,7 @@ describeIntegration("PERSIST-021 integration: AC-001 BIGINT columns deserialized
     // After deserializeRow: mmr_leaf_count coerced to number
     const deserialized = deserializeRow("directory_checkpoints", raw.rows[0]!);
     expect(typeof deserialized["mmr_leaf_count"], "deserializeRow must coerce mmr_leaf_count to number").toBe("number");
+    });
   });
 });
 
@@ -632,14 +665,31 @@ describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT
 });
 
 describeIntegration("PERSIST-021 integration: AC-002 conversation_seals round-trip", () => {
-  beforeEach(async () => {
-    // Truncate conversation_seals for isolation
-    await superPool.query("TRUNCATE conversation_seals RESTART IDENTITY CASCADE");
-  });
+  /**
+   * THE TRUNCATE IS NOW INSIDE A ROLLED-BACK TRANSACTION, and it had to be — this block genuinely
+   * needs an empty table.
+   *
+   * Unlike the AC-001-extended block above, these assertions are WHOLE-TABLE: `verifyChain` chains
+   * from `CHAIN_GENESIS`, and `rowCount` must be exactly 3. Neither is true of a table other files
+   * have written to, so simply dropping the truncate would have traded one wrong answer for another.
+   *
+   * What made it possible is `txnPool` (see helpers/txn-pool.ts): the store's reads go through
+   * `pool.query` and `insertWithChain` calls `pool.connect()`, so a plain transaction on a separate
+   * client would have been invisible to both. Routing the store through a single-connection view of
+   * ONE client puts the truncate, the inserts and the verification in the same transaction — and
+   * `ROLLBACK` undoes all of it, truncate included.
+   *
+   * What that buys: no `AccessExclusiveLock` held across files (Postgres logged the old one
+   * deadlocking against a directory node mid-INSERT), and no rows destroyed that other suites were
+   * asserting on.
+   */
 
   it("AC-002 + AC-009: 3 seals written and read back; BIGSERIAL id as number; chain_hash as Uint8Array; adapter.persisted logged", async () => {
     const logger = makeLogger();
-    const store = new PgDirectoryStore(servicePool, logger);
+    await inRolledBackTxn(superPool, async (txn, client) => {
+    // An empty table for the duration of THIS transaction only.
+    await client.query("TRUNCATE conversation_seals RESTART IDENTITY CASCADE");
+    const store = new PgDirectoryStore(txn, logger);
 
     // Build 3 conversation_seals using insertWithChain (the store's internal mechanism).
     // PgDirectoryStore doesn't expose a public writeConversationSeal method, so we use the
@@ -689,7 +739,7 @@ describeIntegration("PERSIST-021 integration: AC-002 conversation_seals round-tr
 
     // Read back from a fresh store instance — no in-memory state
     const freshLogger = makeLogger();
-    const freshStore = new PgDirectoryStore(servicePool, freshLogger);
+    const freshStore = new PgDirectoryStore(txn, freshLogger);
 
     // Verify chain: 3 rows, no breaks
     const chainResult = await freshStore.verifyChain("conversation_seals");
@@ -697,7 +747,7 @@ describeIntegration("PERSIST-021 integration: AC-002 conversation_seals round-tr
     expect(chainResult.rowCount).toBe(3);
 
     // Verify BIGSERIAL id is a number by reading back rows
-    const rows = await superPool.query<{ id: unknown; conversation_id: string; chain_hash: string }>(
+    const rows = await txn.query<{ id: unknown; conversation_id: string; chain_hash: string }>(
       "SELECT id, conversation_id, chain_hash FROM conversation_seals ORDER BY id ASC",
     );
     expect(rows.rows).toHaveLength(3);
@@ -707,7 +757,7 @@ describeIntegration("PERSIST-021 integration: AC-002 conversation_seals round-tr
     expect(BIGINT_COLUMNS["conversation_seals"], "BIGINT_COLUMNS must declare id for conversation_seals").toContain("id");
 
     // Step 2: runtime round-trip — raw pg row has id as string; deserializeRow coerces to number.
-    const rawIdRow = await superPool.query<Record<string, unknown>>(
+    const rawIdRow = await txn.query<Record<string, unknown>>(
       "SELECT * FROM conversation_seals ORDER BY id ASC LIMIT 1",
     );
     expect(rawIdRow.rows).toHaveLength(1);
@@ -742,6 +792,7 @@ describeIntegration("PERSIST-021 integration: AC-002 conversation_seals round-tr
     expect(lastPersisted["tableName"]).toBe("conversation_seals");
     expect(lastPersisted["rowCount"]).toBe(1);
     expect(typeof lastPersisted["durationMs"]).toBe("number");
+    });
   });
 });
 
@@ -821,17 +872,22 @@ describeIntegration("PERSIST-021 integration: AC-003 connection_request round-tr
 });
 
 describeIntegration("PERSIST-021 integration: AC-004 MMR round-trip with inclusion proof", () => {
-  beforeEach(async () => {
-    await superPool.query(`
+  /**
+   * Same treatment as AC-001 above, and for the same reason: leaf indices and the inclusion proof
+   * are only meaningful counted from an empty MMR, so the truncate stays — inside a transaction that
+   * rolls back, holding its lock for milliseconds instead of across the rest of the suite.
+   */
+
+  it("AC-004 + AC-009: 3 MMR leaves appended, checkpoint committed, inclusion proof for leaf 1 verifies; BIGINT columns are numbers; adapter.persisted logged", async () => {
+    await inRolledBackTxn(superPool, async (txn, client) => {
+    // An empty MMR for the duration of THIS transaction only — see the describe note.
+    await client.query(`
       TRUNCATE conversation_proof_leaf_checkpoints, conversation_seal_staging,
                conversation_proof_mmr_nodes, conversation_proof_leaves,
                directory_checkpoints, conversation_seals RESTART IDENTITY CASCADE
     `);
-  });
-
-  it("AC-004 + AC-009: 3 MMR leaves appended, checkpoint committed, inclusion proof for leaf 1 verifies; BIGINT columns are numbers; adapter.persisted logged", async () => {
     const logger = makeLogger();
-    const store = new MmrStore(servicePool, logger);
+    const store = new MmrStore(txn, logger);
 
     const sessions = [randomUUID(), randomUUID(), randomUUID()];
     const roots = sessions.map((s) => makeMerkleRoot(s));
@@ -847,7 +903,7 @@ describeIntegration("PERSIST-021 integration: AC-004 MMR round-trip with inclusi
 
     // Request inclusion proof for leaf index 1 from a fresh store instance
     const freshLogger = makeLogger();
-    const freshStore = new MmrStore(servicePool, freshLogger);
+    const freshStore = new MmrStore(txn, freshLogger);
 
     const proof = await freshStore.getInclusionProof(sessions[1]!, freshLogger);
     expect(proof, "Proof must not be PROOF_NOT_YET_AVAILABLE").not.toBe("PROOF_NOT_YET_AVAILABLE");
@@ -857,7 +913,7 @@ describeIntegration("PERSIST-021 integration: AC-004 MMR round-trip with inclusi
     }
 
     // Verify inclusion proof against the checkpoint peak hash
-    const checkpointRow = await superPool.query<{ peak_hash: string }>(
+    const checkpointRow = await txn.query<{ peak_hash: string }>(
       "SELECT peak_hash FROM directory_checkpoints WHERE checkpoint_id = $1",
       [checkpointId],
     );
@@ -868,7 +924,7 @@ describeIntegration("PERSIST-021 integration: AC-004 MMR round-trip with inclusi
     expect(verified, "Inclusion proof for leaf 1 must verify against checkpoint peak hash").toBe(true);
 
     // AC-004: BIGINT columns in conversation_proof_leaves (leaf_index, mmr_position) are numbers
-    const leafRows = await superPool.query<{ leaf_index: unknown; mmr_position: unknown }>(
+    const leafRows = await txn.query<{ leaf_index: unknown; mmr_position: unknown }>(
       "SELECT leaf_index, mmr_position FROM conversation_proof_leaves ORDER BY id ASC",
     );
     expect(leafRows.rows).toHaveLength(3);
@@ -916,13 +972,23 @@ describeIntegration("PERSIST-021 integration: AC-004 MMR round-trip with inclusi
     expect(sealPersisted["rowCount"]).toBe(1);
     expect(typeof sealPersisted["durationMs"]).toBe("number");
     expect(sealPersisted["correlationId"]).toBe("corr-ac004-ac009");
+    });
   });
 });
 
 describeIntegration("PERSIST-021 integration: AC-007 cello_service UPDATE rejected on conversation_seals", () => {
-  beforeEach(async () => {
-    await superPool.query("TRUNCATE conversation_seals RESTART IDENTITY CASCADE");
-  });
+  /**
+   * NO TRUNCATE — it was never load-bearing here, and it was doing damage.
+   *
+   * Every assertion in this test is scoped to a freshly-minted `conversationId`: the UPDATE must be
+   * refused, and that one row must be unchanged. Neither depends on what else is in the table. The
+   * truncate was taking an `AccessExclusiveLock` over a table other suites were using — Postgres
+   * logged that lock deadlocking — and destroying their rows, to buy this test nothing.
+   *
+   * Kept on `servicePool` deliberately: the subject IS the service role being refused, so routing it
+   * through a superuser transaction (as the two blocks below do) would quietly make the assertion
+   * unfalsifiable.
+   */
 
   it("AC-007: cello_service UPDATE on conversation_seals is rejected with permission denied — not application-layer guarding", async () => {
     const logger = makeLogger();
@@ -967,13 +1033,22 @@ describeIntegration("PERSIST-021 integration: AC-007 cello_service UPDATE reject
 });
 
 describeIntegration("PERSIST-021 integration: AC-008 chain break detected at tampered row 3", () => {
-  beforeEach(async () => {
-    await superPool.query("TRUNCATE conversation_seals RESTART IDENTITY CASCADE");
-  });
+  /**
+   * TRUNCATE INSIDE A ROLLED-BACK TRANSACTION — this block genuinely needs an empty table.
+   *
+   * `breakAtSequence` is an index into the WHOLE table, so the assertion "the break is at row 3"
+   * is only true if rows 1..5 are the only rows there. Dropping the truncate would trade a
+   * deadlock for a wrong answer.
+   *
+   * Superuser is fine here: the subject is chain-break DETECTION, which is role-independent.
+   */
 
   it("AC-008: superuser UPDATE of row 3 merkle_root detected by chain verification; db.chain.break.detected logged at ERROR with { tableName, breakAtSequence, storedHash, recomputedHash }", async () => {
     const logger = makeLogger();
-    const store = new PgDirectoryStore(servicePool, logger);
+    await inRolledBackTxn(superPool, async (txn, client) => {
+    // An empty table for the duration of THIS transaction only — see the describe note.
+    await client.query("TRUNCATE conversation_seals RESTART IDENTITY CASCADE");
+    const store = new PgDirectoryStore(txn, logger);
 
     // Insert 5 rows via insertWithChain
     const conversationIds = Array.from({ length: 5 }, () => randomUUID());
@@ -995,7 +1070,7 @@ describeIntegration("PERSIST-021 integration: AC-008 chain break detected at tam
 
     // Superuser UPDATE row 3's merkle_root WITHOUT recomputing chain_hash
     // Row 3 means the 3rd row by insertion order (id = 3 in the RESTART IDENTITY sequence)
-    await superPool.query(
+    await txn.query(
       `UPDATE conversation_seals
        SET merkle_root = $1
        WHERE id = (SELECT id FROM conversation_seals ORDER BY id ASC LIMIT 1 OFFSET 2)`,
@@ -1004,7 +1079,7 @@ describeIntegration("PERSIST-021 integration: AC-008 chain break detected at tam
 
     // Run chain verification from a fresh store instance — no in-memory state
     const freshLogger = makeLogger();
-    const freshStore = new PgDirectoryStore(servicePool, freshLogger);
+    const freshStore = new PgDirectoryStore(txn, freshLogger);
     const result = await freshStore.verifyChain("conversation_seals");
 
     // Chain must be invalid — break at row 3
@@ -1023,6 +1098,7 @@ describeIntegration("PERSIST-021 integration: AC-008 chain break detected at tam
         recomputedHash: expect.any(String),
       }),
     );
+    });
   });
 });
 
@@ -1093,9 +1169,15 @@ describeIntegration("PERSIST-021 integration: SI-001 deserializeRow leaves undec
 });
 
 describeIntegration("PERSIST-021 integration: SI-002 chain_hash not accepted from caller", () => {
-  beforeEach(async () => {
-    await superPool.query("TRUNCATE conversation_seals RESTART IDENTITY CASCADE");
-  });
+  /**
+   * TRUNCATE INSIDE A ROLLED-BACK TRANSACTION — this block genuinely needs an empty table.
+   *
+   * The assertion is that the stored hash equals SHA-256(contents || prev_hash), and `prev_hash` is
+   * the current chain head — which is `CHAIN_GENESIS` only on an empty table.
+   *
+   * Superuser is fine here: the subject is the STORE ignoring a caller-supplied chain_hash, which
+   * is role-independent.
+   */
 
   it("SI-002: crafted chain_hash (0xFF * 32) in write payload is ignored; stored chain_hash = SHA-256(record_contents || prev_hash)", async () => {
     // Adversarial condition: a caller includes a forged chain_hash in the record.
@@ -1106,7 +1188,10 @@ describeIntegration("PERSIST-021 integration: SI-002 chain_hash not accepted fro
     const craftedChainHash = "f".repeat(64);
 
     const logger = makeLogger();
-    const store = new PgDirectoryStore(servicePool, logger);
+    await inRolledBackTxn(superPool, async (txn, client) => {
+    // An empty table for the duration of THIS transaction only — see the describe note.
+    await client.query("TRUNCATE conversation_seals RESTART IDENTITY CASCADE");
+    const store = new PgDirectoryStore(txn, logger);
 
     const conversationId = randomUUID();
     const merkleRoot = makeMerkleRoot("si002");
@@ -1128,7 +1213,7 @@ describeIntegration("PERSIST-021 integration: SI-002 chain_hash not accepted fro
     await store.insertWithChain("conversation_seals", record, columns, values, 5);
 
     // Read back the stored chain_hash from the live database
-    const row = await superPool.query<{ chain_hash: string; merkle_root: string; close_type: string; participant_count: number; seal_date: string }>(
+    const row = await txn.query<{ chain_hash: string; merkle_root: string; close_type: string; participant_count: number; seal_date: string }>(
       "SELECT chain_hash, merkle_root, close_type, participant_count, seal_date FROM conversation_seals WHERE conversation_id = $1",
       [conversationId],
     );
@@ -1149,5 +1234,6 @@ describeIntegration("PERSIST-021 integration: SI-002 chain_hash not accepted fro
     };
     const expectedHash = computeChainHash(serializeRecord(expectedRecord, "conversation_seals"), CHAIN_GENESIS);
     expect(storedHash, "Stored chain_hash must equal server-computed SHA-256(record || CHAIN_GENESIS)").toBe(expectedHash);
+    });
   });
 });
