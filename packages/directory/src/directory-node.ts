@@ -6183,9 +6183,24 @@ function verifySealLeaves(
   // M1 DEBT (SESSION-003-AC-002): directory should also verify that each SEAL leaf's payload
   // final_root matches the Merkle root at the appropriate stage (before initiator SEAL, after
   // initiator SEAL, after both). This requires the relay to include ctrl leaf content bytes in
-  // SealData (currently only content_hash is available). Deferred to a follow-on story since
-  // clients perform this verification locally (AC-001), maintaining the trust guarantee at the
-  // client level. See: CELLO-SESSION-003 AC-002 step (f).
+  // SealData (currently only content_hash is available). See: CELLO-SESSION-003 AC-002 step (f).
+  //
+  // ⚠️ DOD-M15-CLAIM-COMMENTS-1 — THE DEFERRAL'S STATED REASON IS FALSE, AND HAS BEEN SINCE IT WAS
+  // WRITTEN. It said this was "deferred to a follow-on story since clients perform this
+  // verification locally (AC-001), maintaining the trust guarantee at the client level". The client
+  // does NOT perform it: `seal-flows.ts` defers the same check back here, saying root agreement
+  // "belongs to the FROST seal against the directory-held tree". Each half points at the other and
+  // there is no third party, so the certified root is compared against NO participant's transcript
+  // on the bilateral path — the receipt is not bound to the transcript, and if the two diverged
+  // nothing would say so.
+  //
+  // The deferral itself is also structurally impossible as written: `final_root` survives only
+  // inside a SHA-256 pre-image that is never transmitted, so no amount of follow-on work makes this
+  // check possible without changing the wire. `DOD-M15-SEALWIRE-1` does that — it moves the
+  // bilateral certified root into the content-hash domain — and this comment is deleted with it.
+  //
+  // Kept rather than removed because it records a real gap: deleting it would leave the absence
+  // looking deliberate, which is exactly what the original wording achieved by accident.
   return { ok: true };
 }
 

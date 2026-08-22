@@ -166,11 +166,23 @@ export async function listAccountAgentsWithPresence(
 ): Promise<AgentWithPresence[]> {
   // CROSS-NODE LIVENESS (2026-07-05, Option A — mirrors resolveDiscoveryState): trust the replicated
   // ap.online flag; do NOT gate on the owning node's directory_nodes heartbeat freshness. That gate is
-  // structurally unreliable cross-node (directory_nodes heartbeats don't replicate — BIGSERIAL id
-  // collision), so for a remote-homed owning node dn.last_heartbeat_at is NULL and the AND darkened
+  // structurally unreliable cross-node (directory_nodes heartbeats don't replicate — see below),
+  // so for a remote-homed owning node dn.last_heartbeat_at is NULL and the AND darkened
   // every live remote agent → the portal showed a user's working agent as OFFLINE. Dropping the
   // conjunct keeps this surface consistent with discovery. nodeFreshnessMs is now unused (kept in the
   // signature for call-site/test stability).
+  //
+  // ⚠️ DOD-M15-CLAIM-COMMENTS-1 — WHY THE HEARTBEAT DOES NOT REPLICATE, corrected. This blamed a
+  // "BIGSERIAL id collision". That is wrong, and it is the kind of wrong that costs a day: it sends
+  // whoever picks this up at a surrogate-key problem that does not exist. `id` is simply not in the
+  // replication spec either. The actual cause is that **`last_heartbeat_at` is MUTABLE, and Tier A
+  // carries immutable columns only** — so making it replicate means giving `directory_nodes` a
+  // Tier-B mutable merge with a version column, a new merge table rather than a one-line spec edit.
+  //
+  // The same wrong explanation was corrected in `discovery-lookup.ts`; this was its second copy.
+  // Tracked as `DOD-M15-HEARTBEAT-1`, which is NOT launch-blocking: no user-facing surface reads the
+  // heartbeat any more (this one and discovery both dropped the conjunct, deliberately), and the
+  // only live consumer is the federation checkpoint, which is parked.
   void nodeFreshnessMs;
   const res = await db.query<{
     k_local_pubkey: string;
