@@ -84,6 +84,15 @@ const ROLLED_BACK: Record<string, string> = {
  * everything in it. So each entry declares HOW MANY chained deletes are legitimate; one more fails.
  */
 const ALLOWED_DELETES: Record<string, { count: number; why: string }> = {
+  "persist-004-hash-chain.test.ts": {
+    count: 1,
+    why:
+      "AC-005 deletes a row to prove verifyChain DETECTS the gap — the delete is the subject, not " +
+      "cleanup. It now runs inside inRolledBackTxn, so the break it creates is undone and no other " +
+      "suite inherits an unverifiable connection_requests table. Converting it also let the test " +
+      "assert breakAtSequence EXACTLY, which it previously could not: its own comment recorded that " +
+      "the position 'is not predictable without full table isolation'.",
+  },
   "account-001.test.ts": {
     count: 1,
     why:
@@ -123,7 +132,6 @@ const KNOWN_DEBT_DELETES = [
   "m12-ae-store-parity.live.test.ts",
   "m6b-010-startup-state-restore.test.ts",
   "persist-003-rls.test.ts",
-  "persist-004-hash-chain.test.ts",
   "persist-020-connections.test.ts",
   "persist-021-adapter-boundary-audit.test.ts", // partially converted — see the note above
   "persist-reconnect-session-survival.test.ts",
@@ -202,7 +210,7 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
 
     // Lower these as files are converted; never raise them.
     expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(9);
-    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(10);
+    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(9);
   });
 
   it("the ROLLED_BACK and ALLOWED_DELETES entries still name files that exist", () => {

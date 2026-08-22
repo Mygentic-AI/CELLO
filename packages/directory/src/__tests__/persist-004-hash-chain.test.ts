@@ -23,6 +23,7 @@ import {
   CHAIN_GENESIS,
 } from "../hash-chain.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
+import { inRolledBackTxn } from "./helpers/txn-pool.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
 // ─── Unit tests: pure hash chain logic ───────────────────────────────────────
@@ -190,9 +191,22 @@ afterAll(async () => {
 });
 
 describeIntegration("PERSIST-004 integration: hash chain in Postgres", () => {
-  // Each integration test needs a clean chain — verifyChain reads ALL rows.
-  // With forks pool (pool: "forks" in vitest.config.ts), each file runs in its own
-  // child process so beforeEach here cannot bleed into other test files.
+  /**
+   * ⚠️ THE OLD JUSTIFICATION FOR THIS TRUNCATE WAS FALSE, and it is why the truncate looked safe.
+   *
+   * It read: *"With forks pool … each file runs in its own child process so beforeEach here cannot
+   * bleed into other test files."* A separate PROCESS does not isolate a shared DATABASE. Every run
+   * of this hook destroys `notification_events` and `conversation_seals` rows belonging to every
+   * other suite, whichever process they are in — and takes an `AccessExclusiveLock` over both while
+   * doing it. `DOD-M15-DIRECTORY-ROT-1` traced the directory suite's moving failure set to exactly
+   * this class of hook, and Postgres logged one of its siblings deadlocking.
+   *
+   * The need is real: `verifyChain` reads ALL rows, so these tests genuinely require a clean table.
+   * The fix is the one AC-005 below already uses — `inRolledBackTxn`, which gives full isolation and
+   * leaves nothing behind. Converting the seven tests in this block is carried on
+   * `DOD-M15-DIRECTORY-ROT-1`; the hook stays for now so they keep passing, but nobody should read
+   * the sentence above and conclude it is harmless.
+   */
   beforeEach(async () => {
     if (!superPool) return;
     await superPool.query("TRUNCATE notification_events, conversation_seals RESTART IDENTITY CASCADE");
@@ -335,12 +349,26 @@ describeIntegration("PERSIST-004 integration: hash chain in Postgres", () => {
 
   it("AC-005: superuser DELETE of row 7 detected as chain break (sequence gap)", async () => {
     const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const serviceConnStr = DATABASE_URL.replace(
-      /^(postgres(?:ql)?):\/\/[^:]+:[^@]+@/,
-      "$1://cello_service:cello_service_dev@",
-    );
-    const pool = new pg.Pool({ connectionString: serviceConnStr });
-    const store = new PgDirectoryStore(pool, logger);
+    /**
+     * DOD-M15-DIRECTORY-ROT-1 — the deliberate break is now UNDONE, and the test got stronger for it.
+     *
+     * This test proves `verifyChain` detects a deleted row, so the DELETE is its subject rather than
+     * cleanup. But it was committed: every run left `connection_requests` permanently unverifiable
+     * for every other suite, because removing a row invalidates every row chained after it. The
+     * table's own tests then had to live with that.
+     *
+     * The cost is visible in the old assertion. It could only manage
+     * `expect(result.breakAtSequence).toBeDefined()`, and said why: *"the integration tests do not
+     * use transaction rollback between runs. Rows from prior test runs remain in the table, so the
+     * position of the deleted row varies… the exact sequence number is not predictable without full
+     * table isolation."* The test was weakened by the very pollution it was creating.
+     *
+     * Inside a rolled-back transaction it has full isolation, so the sequence number IS predictable
+     * and is now asserted exactly — and nothing survives the test.
+     */
+    await inRolledBackTxn(superPool, async (txn, client) => {
+    await client.query("TRUNCATE connection_requests RESTART IDENTITY CASCADE");
+    const store = new PgDirectoryStore(txn, logger);
 
     // Use connection_requests table to avoid interference
     const insertedIds: string[] = [];
@@ -367,8 +395,8 @@ describeIntegration("PERSIST-004 integration: hash chain in Postgres", () => {
       );
     }
 
-    // Use superuser to DELETE row 7
-    await superPool.query(
+    // Delete row 7 — the subject of this test, and now confined to the transaction.
+    await client.query(
       `DELETE FROM connection_requests WHERE request_id = $1`,
       [insertedIds[6]],
     );
@@ -379,12 +407,11 @@ describeIntegration("PERSIST-004 integration: hash chain in Postgres", () => {
     // breakAtSequence is asserted as toBeDefined() rather than a specific value because
     // the integration tests do not use transaction rollback between runs. Rows from
     // prior test runs remain in the table, so the position of the deleted row (originally
-    // index 6 within this batch) varies in absolute terms across runs. The chain break
-    // will always be detected — the exact sequence number is not predictable without
-    // full table isolation.
-    expect(result.breakAtSequence).toBeDefined();
-
-    await pool.end();
+    // EXACT, now that the transaction gives the isolation the old comment said was missing. Rows
+    // 1..6 verify; row 7 is gone, so the row that WAS eighth is the first that cannot chain to its
+    // predecessor — reported as sequence 7 in the surviving set.
+    expect(result.breakAtSequence, "with an isolated table the break position is deterministic").toBe(7);
+    });
   });
 
   it("AC-006: concurrent inserts serialized via advisory lock — no fork", async () => {
