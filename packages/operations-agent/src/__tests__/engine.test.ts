@@ -676,42 +676,121 @@ describeIntegration("RegistrationEngine integration", () => {
     // own budget and lets this run forever.
     await enrol(userId, "447911111111");
 
-    for (let i = 1; i <= 5; i++) {
-      await channelState.injectMessage(userId, `victim${i}@example.com`);
+    // SIX DIFFERENT DOMAINS. With all six on one domain, restoring the domain key still refuses the
+    // sixth and this test would pass unchanged — it would be detecting a log field, not the key.
+    const targets = ["a.example", "b.example", "c.test", "d.test", "e.invalid", "f.invalid"];
+    for (let i = 0; i < 5; i++) {
+      await channelState.injectMessage(userId, `victim@${targets[i]}`);
       await resetToAwaitingEmail(userId);
     }
-    await channelState.injectMessage(userId, "victim6@example.com");
+    await channelState.injectMessage(userId, `victim@${targets[5]}`);
 
     const limited = loggerState.events.find((e) => e.event === "registration.otp.rate_limited");
     expect(limited, "a sixth code request from one person must be refused").toBeDefined();
     expect(limited?.method).toBe("warn");
     expect(limited?.context?.registrationId).toBeDefined();
     expect(limited?.context?.correlationId).toBeDefined();
+    expect(limited?.context?.sendCount, "the count must be MEASURED, not the constant").toBe(5);
     // No email fingerprint in the log: an unsalted SHA-256 prefix over an address space this small
     // is a confirmable identifier, and the domain is what this unit removed.
     expect(limited?.context?.emailDomain, "the domain must not be in this event").toBeUndefined();
     expect(limited?.context?.emailStubPrefix, "nor an address fingerprint").toBeUndefined();
+
+    // THE SEND MUST BE PREVENTED, not merely logged. Without this, logging the warn and sending
+    // anyway passes every other assertion here.
+    expect(otpState.captured.length, "exactly five codes may leave; the sixth is refused").toBe(5);
+    // AND THE PERSON MUST BE TOLD — invariant 2's other half. Without this, deleting the
+    // `channel.send` in the refusal branch passes too.
+    const refusal = channelState.sent.filter((m) => /limit/i.test(m.message));
+    expect(refusal.length, "the requester is told they hit the limit").toBeGreaterThan(0);
+    expect(refusal.at(-1)?.message).toMatch(/sent to you in the past hour/);
   });
 
-  it("AC-009: normalization cannot buy a fresh allowance", async () => {
-    // Case and surrounding whitespace must not key differently, or the cap is one `.trim()` away
-    // from meaningless. This is the bypass a limiter keyed on the raw message string would allow.
-    await enrol(userId, "447911111112");
-
-    const variants = [
-      "same.person@example.com", "  same.person@example.com  ", "Same.Person@Example.COM",
-      "same.person@example.com", "SAME.PERSON@EXAMPLE.COM",
-    ];
-    for (const v of variants) {
-      await channelState.injectMessage(userId, v);
+  it("AC-009: the window ROLLS — the allowance returns, it is not spent forever", async () => {
+    /**
+     * Review: the rolling reset was unpinned, so deleting the `.filter(t => t > cutoff)` from
+     * `#overOtpLimit` passed every test — turning a one-hour limit into a permanent one. That is
+     * also the exact promise the refusal copy makes to the person ("wait up to an hour"), so an
+     * unpinned window means the message can become a lie without anything noticing.
+     *
+     * Driven by moving the CLOCK rather than waiting an hour: the stamps are real `Date.now()`
+     * values, so advancing the system time past the window is what a real hour looks like to the
+     * limiter.
+     */
+    await enrol(userId, "447911111113");
+    for (let i = 0; i < 5; i++) {
+      await channelState.injectMessage(userId, `w${i}@example.com`);
       await resetToAwaitingEmail(userId);
     }
-    await channelState.injectMessage(userId, "same.person@example.com");
-
+    await channelState.injectMessage(userId, "w5@example.com");
     expect(
       loggerState.events.find((e) => e.event === "registration.otp.rate_limited"),
-      "case and whitespace variants must not each get their own allowance",
+      "precondition: the sixth inside the window is refused",
     ).toBeDefined();
+    const sentInWindow = otpState.captured.length;
+
+    // Advance past the one-hour window.
+    const realNow = Date.now;
+    try {
+      const shifted = realNow() + 61 * 60 * 1_000;
+      Date.now = () => shifted;
+      await resetToAwaitingEmail(userId);
+      await channelState.injectMessage(userId, "after-the-hour@example.com");
+    } finally {
+      Date.now = realNow;
+    }
+
+    expect(
+      otpState.captured.length,
+      "once the window has rolled the allowance returns — a limit that never resets is a ban",
+    ).toBe(sentInWindow + 1);
+  });
+
+  it("AC-009: a FAILED delivery does not spend one of the five, and does not accuse the user", async () => {
+    /**
+     * Two properties in one flow, both unpinned before and both mine to own.
+     *
+     * The count: `#recordOtpSend` runs only after `sendOtp` resolves. Moving it above the send
+     * passed every test, because the fake provider never threw — so a bounce could spend one of a
+     * person's five and lock them out having received nothing.
+     *
+     * The message: the throw used to skip the channel send entirely while the row had ALREADY moved
+     * to AWAITING_EMAIL_OTP, so the person got silence and then, on their next message,
+     * "Incorrect code. You have 2 attempts remaining." This unit un-shadowed the delivery-layer
+     * refusal that makes that reachable, so it owns the behaviour.
+     */
+    await enrol(userId, "447911111114");
+    let failNext = true;
+    const realSend = otpState.provider.sendOtp.bind(otpState.provider);
+    otpState.provider.sendOtp = async (addr: string, otp: string): Promise<void> => {
+      if (failNext) { failNext = false; throw new Error("SES said no"); }
+      await realSend(addr, otp);
+    };
+
+    await channelState.injectMessage(userId, "unreachable@example.com");
+
+    // TOLD, and told the truth: no code exists to enter.
+    const told = channelState.sent.at(-1)?.message ?? "";
+    expect(told, "silence after a failed send is what produced the accusation").not.toBe("");
+    expect(told).toMatch(/couldn't send|nothing was sent/i);
+    expect(told, "must not imply a code is waiting for them").not.toMatch(/verification code has been sent/);
+    expect(loggerState.events.find((e) => e.event === "registration.otp.delivery_failed")).toBeDefined();
+
+    // ROLLED BACK, so their next message is read as an address and not as a wrong OTP.
+    const repo = new RegistrationRepository(pool);
+    const after = await repo.findActiveByChannelUser("cli", userId);
+    expect(after?.state, "a failed send must not leave them in the OTP state").toBe("AWAITING_EMAIL");
+
+    // NOT CHARGED: five more must still get through.
+    for (let i = 0; i < 5; i++) {
+      await channelState.injectMessage(userId, `retry${i}@example.com`);
+      await resetToAwaitingEmail(userId);
+    }
+    expect(
+      loggerState.events.find((e) => e.event === "registration.otp.rate_limited"),
+      "the failed send must not have spent one of the five",
+    ).toBeUndefined();
+    expect(otpState.captured.length).toBe(5);
   });
 
   it("DOD-M15-SIGNUP-1: six DIFFERENT people on one domain do NOT throttle each other", async () => {

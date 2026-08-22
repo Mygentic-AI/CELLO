@@ -918,7 +918,10 @@ export class RegistrationStateMachine {
         // record. No email fingerprint is logged: a 12-char prefix of an unsalted SHA-256 over an
         // address space this small is a confirmable identifier, not an anonymous one, and the
         // earlier version of this line claimed the opposite.
-        sendCount: OTP_RATE_LIMIT_PER_HOUR,
+        // Review F3: MEASURED, not the constant. A field called `sendCount` hardcoded to the limit
+        // reads to an operator as an observation and can never disagree with it — so if anything
+        // ever let a sixth through, the log would still say five.
+        sendCount: (this.#otpSends.get(from) ?? []).length,
         correlationId,
       });
       /**
@@ -935,7 +938,10 @@ export class RegistrationStateMachine {
        */
       await channel.send(
         from,
-        `That's ${OTP_RATE_LIMIT_PER_HOUR} verification codes requested in the past hour, which is the limit. ` +
+        // Review F5: "sent", not "requested". Only successful sends are counted, so if any failed
+        // they made MORE requests than this number — and a person counting their own attempts
+        // against a wrong noun learns to distrust the number.
+        `That's ${OTP_RATE_LIMIT_PER_HOUR} verification codes sent to you in the past hour, which is the limit. ` +
         "Please wait up to an hour and then send your email address again.",
       );
       return record;
@@ -961,8 +967,47 @@ export class RegistrationStateMachine {
       correlationId,
     });
 
-    // Deliver OTP only after DB write succeeds
-    await this.#deps.otpDelivery.sendOtp(email, otp);
+    /**
+     * DOD-M15-SIGNUP-1 (review F1) — A DELIVERY FAILURE MUST NOT SURFACE AS "INCORRECT CODE".
+     *
+     * What the person used to live through: they send their address, the bot goes SILENT, they
+     * resend it, and the bot answers **"Incorrect code. You have 2 attempts remaining."** Nothing
+     * ever told them no code was sent. The row had already moved to `AWAITING_EMAIL_OTP` above, so
+     * their next message was parsed as an OTP candidate; `sendOtp` throwing skipped the channel
+     * send entirely and unwound to the engine, which logs `registration.engine.error` and — with no
+     * `onError` in production — does nothing else.
+     *
+     * THIS UNIT IS WHY THAT PATH IS REACHABLE, which is why it is fixed here and not deferred. The
+     * old domain-keyed limiter counted a superset of the delivery provider's per-address limiter on
+     * a coarser key, so `RateLimitError` could never fire from registration. Now the two measure
+     * orthogonal things — a requester's own budget, and one address's — so two admitted users
+     * registering against a shared mailbox reach the per-address five while neither is near their
+     * own. Un-shadowing a refusal means owning what it looks like when it fires.
+     *
+     * ROLLING BACK MATTERS AS MUCH AS THE MESSAGE. Without it they stay in the state where their
+     * next email address reads as a wrong OTP, which is the accusation itself.
+     */
+    try {
+      await this.#deps.otpDelivery.sendOtp(email, otp);
+    } catch (err: unknown) {
+      const reason = err instanceof Error ? err.name : "unknown";
+      logger.warn("registration.otp.delivery_failed", {
+        registrationId: record.id,
+        reason,
+        // The cause, not the exit point: the upstream message names WHY delivery refused (its own
+        // per-address rate limit, a bounce, an SES fault) and the engine's generic
+        // `registration.engine.error` was destroying it.
+        detail: err instanceof Error ? err.message : String(err),
+        correlationId,
+      });
+      const rolledBack = await repository.transition(record.id, "AWAITING_EMAIL", { clearOtp: true });
+      await channel.send(
+        from,
+        "I couldn't send a code to that address just now — nothing was sent, so there's no code to enter. " +
+        "Send the address again in a few minutes, or send a different one.",
+      );
+      return rolledBack;
+    }
     // DOD-M15-SIGNUP-1: count it only now. `sendOtp` throwing (an SES bounce, a throttle, its own
     // per-address limit) must not spend one of this requester's five — they never got a code, and
     // charging them for our failure is how someone ends up locked out for an hour having received

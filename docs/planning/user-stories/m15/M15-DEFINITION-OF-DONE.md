@@ -200,8 +200,12 @@ evidence: **a green run that asserted nothing.**
 Split from `DOD-M15-SIGNUP-1`, which rekeyed the limiter from the email domain to the address
 fingerprint but left it in memory. **The clause asking for durability is NOT met and is carried
 here rather than quietly dropped.**
-- `#rateLimitMap` lives in a single-instance process, so every restart and every deploy empties it —
-  it was wiped by the ops-agent deploy on 2026-08-09. An abuser clears it by waiting for a release.
+- `#otpSends` lives in a single-instance process, so every restart and every deploy empties it — it
+  was wiped by the ops-agent deploy on 2026-08-09. An abuser clears it by waiting for a release.
+- **Store the shape that shipped, not the one the clause originally named:** `channelUserId →
+  timestamp list`, rolling. A fixed window with a stale `windowStart` carries the unbounded-growth
+  problem into the database with it, and **the key is the REQUESTER, not the address fingerprint** —
+  building a table keyed on the address would rebuild the design the review overturned.
 - **What the rekey DID fix is the half that hurts real people**: five strangers sharing an email
   provider no longer refuse the sixth a verification code, which is exactly what an invite wave
   would have hit. What it does not yet do is bite an abuser.
@@ -431,8 +435,14 @@ lost that way).
 ### `DOD-M15-SIGNUP-1` — ❌ Signup throttles a person, not their employer
 `DOD-OTP-RATELIMIT-KEY-1`. The sixth person from a domain in an hour is refused a verification code.
 An invite wave **is** a burst on one domain.
-- Rekey the limiter from the email domain to the address fingerprint the code already computes one
-  line below (`hashEmail`). Holds no new data and leaks nothing the system does not already keep.
+- Rekey the limiter from the email domain to **the REQUESTER** (the channel user). Holds no new data
+  and leaks nothing the system does not already keep.
+  > **CORRECTED 2026-08-22 after review.** This clause originally said "the address fingerprint",
+  > and that was wrong in a way worth keeping visible: **the address is the TARGET, not the
+  > requester.** Keying on it lets one admitted user request five real verification emails per
+  > address, to unlimited addresses, from CELLO's verified sender — and it duplicates a per-address
+  > limiter the delivery provider has enforced since M6B, shadowing it dead. Per-address stays where
+  > it already lives; this limiter guards how much ONE REQUESTER can make the system do.
 - **Make it durable** — a table in the bot's own database, not an in-memory `Map` that resets on
   every restart and deploy. It was wiped by the ops-agent deploy on 2026-08-09.
 - Lives in the registration bot; touches neither the directory nor the protocol.
