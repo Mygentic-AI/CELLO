@@ -15,15 +15,21 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 TIER 0 CLOSED. First Tier-2 unit shipped and reviewed. Tier 1 part-swept.
-> **53 DoD lines**, 4 ✅, 1 🅿️, rest ❌. Every line is inside the launch gate;
-> the gate is a state, not a date.
+> ### 🟢 TWO TIER-2 UNITS MERGED. Two more built with reviews in flight.
+> **55 DoD lines**, 4 ✅, 2 🟡 (`SIGNUP-1`, `SURFACE-1`), 1 🅿️, rest ❌. Every line is inside the
+> launch gate; the gate is a state, not a date.
 
-- **NEXT ACTION: `DOD-M15-SURFACE-1`** — stop the directory-facing node listening at all (it binds
-  every interface, registers NO protocol handler, and the directory never dials a client), and drop
-  unauthenticated idle connections. Small, no protocol impact, `cello-client`, branch `m15/surface`.
-- **`DOD-M15-SIGNUP-1` is 🟡 BUILT, REVIEW OWED** — trustless-cello branch `m15/signup`, commit
-  `4922d72c`. Gate: operations-agent 230 passed, lint, typecheck. **Not merged, not reviewed.**
+- **NEXT ACTION: land the two reviews in flight**, then continue `DOD-M15-LEDGER-1`'s remaining
+  surfaces (MCP tool descriptions, CLI help, status output) — docs-only, no code conflict.
+- **`DOD-M15-SURFACE-1` is 🟡 BUILT, REVIEW IN FLIGHT** (→ Entry 9) — cello-client `m15/surface`,
+  commit `a1da749`, gate green at 4008. One line: the directory-facing node stops listening. **The
+  falsification is the unit** — `listenAddresses()` IS announced to the directory, and five checks
+  establish nothing consumes it. Idle half split to `DOD-M15-IDLE-CONNS-1`.
+- **`DOD-M15-SIGNUP-1` is 🟡 REBUILT, SECOND REVIEW IN FLIGHT** (→ Entry 8) — trustless-cello
+  `m15/signup`, `4922d72c` + `127a5a29`. **The first review found my fix removed the only cap on a
+  requester and that my own test pinned the abuse case as required behaviour.** Now per-requester;
+  per-address stays in the delivery provider where it already was. This is the hard cap — after this
+  pass, remaining findings become ACs on other units.
 - **`DOD-M15-FRAME-1` is ✅** (→ Entries 4, 6, 7) — merged. Six review findings, three blocking,
   all fixed; verdict quoted in Entry 7. **The worst was my own fix reintroducing the milestone's
   own pattern:** the defensive freeze wrote `interrupted`, which is the REVIVABLE status, so the
@@ -1030,5 +1036,84 @@ milestone's own subject applied to its own evidence, and it is not confined to t
 
 **Second review owed before the tag flips.** The fix inverted the design the first review examined,
 which is exactly when a second pass is worth its cost — and it is the hard cap.
+
+---
+
+## Entry 9 — DOD-M15-SURFACE-1: one line, and the falsification is the whole unit (2026-08-22)
+
+**Branch `m15/surface`, commit `a1da749`. REVIEW IN FLIGHT — tag stays 🟡.** Gate: cello-client 4008
+passed, lint, forced typecheck, build.
+
+### The change
+
+`listenAddresses: ["/ip4/0.0.0.0/tcp/0"]` → `listenAddresses: []` on the directory-facing node.
+That node registers **no protocol handler at all**, and the directory **never dials a client** —
+every directory connection is one the daemon opened. So every operator ran a real open port on every
+interface, for the life of the daemon, that could reach no CELLO protocol.
+
+Not listening is strictly stronger than filtering: no socket, nothing to scan, nothing for a gater
+to get wrong. (`DirectoryConnectionGater` exists for the filtering approach and is constructed only
+in tests — the consolation prize, not the fix.)
+
+### The counterbalance, and it is an honest exception
+
+**There is no adversary to counterbalance here** — this unit REMOVES a surface rather than guarding
+one, so Invariant 1 has nothing to bite on. Recorded as an exception rather than skipped, because a
+unit with no answer to "what makes this hold against a rewritten peer?" is usually a unit that has
+not thought about it, and this one genuinely has no such party.
+
+### The falsification IS the unit
+
+A one-line change that could break every session in the product. `node.listenAddresses()` **is**
+transmitted to the directory at step 7, in `peer_info_announce`, under a comment saying it is *"so
+the directory can broker sessions"*. Removing the listener empties it.
+
+Five checks, each traced to its consumer rather than assumed:
+
+1. The directory stores it and reads it in exactly one place — `participant_a/b.multiaddrs` in the
+   session assignment.
+2. **The directory's own comment settles it:** that address is *"its per-agent DIRECTORY node, NOT
+   its standing-receiver session node, so it is NOT a valid content endpoint (using it yields 'could
+   not negotiate /cello/content')"*. The real session endpoint travels by the
+   `session_offer` → `session_offer_accept` round-trip.
+3. No client code reads `participant_a/b` multiaddrs at all.
+4. `#peerInfoAnnounced` gates `session_request` — but it is set by the frame **arriving**, not by
+   its contents, so an empty array still marks it announced.
+5. The peer id still goes in the announce, and a peer id needs no listener.
+
+**Inbound sessions are untouched.** They arrive on the standing receiver, a different node, which
+keeps its socket deliberately (relay-audit Decision 2 — load-bearing for same-machine and same-LAN).
+
+### Pinned in two places, because neither alone is enough
+
+- **`core/transport`** proves the BEHAVIOUR: an empty listen config really binds nothing rather than
+  falling back to a default. A silent default would give the daemon a port it believes it does not
+  have, which is worse than the port it had openly.
+- **`core/daemon`** guards the CALL SITE against someone restoring the address — a one-line edit
+  that would otherwise pass every test in the repo.
+
+**The second is source-level, and the limitation is stated rather than hidden:** every test in that
+file injects `createDirectoryNode`, so none of them reaches the real `createNode`. It asserts the
+slice contains `keyProvider` first, so a slice that matched nothing fails loudly instead of passing
+vacuously. Revert-tested — restoring `0.0.0.0` turns it red.
+
+**Its first version failed against my own comment.** The reasoning beside the call names the address
+it removed, so the scan matched the explanation instead of the code. Comments are stripped first now,
+the way `msg-022`'s parity test already does — a small thing, and exactly the shape that makes a
+source-level assertion untrustworthy if nobody checks it.
+
+### The other half of the line, split not dropped
+
+`DOD-M15-IDLE-CONNS-1`. Its value changed while the milestone ran: `DOD-M15-FRAME-1` now hangs a
+stranger up on first contact and evicts peers outside the gate at promotion, so the **injection**
+half is closed and what remains is resource bounding.
+
+**Mechanism checked so it is not re-derived:** libp2p has no idle-lifetime reaper —
+`maxConnections`, `inboundConnectionThreshold`, `maxIncomingPendingConnections` and
+`inboundUpgradeTimeout` are rate and total caps, not idle age. A real one needs per-connection
+"has this peer authenticated to anything" state that nothing holds today. **And the warning that
+matters more than the feature:** those caps apply to every node including relay-connected ones, so
+setting them without measurement breaks *reachability* — the one property this milestone must not
+trade away.
 
 ---
