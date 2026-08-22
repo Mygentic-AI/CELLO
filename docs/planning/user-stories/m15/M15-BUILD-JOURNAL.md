@@ -15,27 +15,36 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 FIVE UNITS MERGED AND REVIEWED. Nothing in flight.
-> **57 DoD lines**, 5 ✅, 2 🅿️, rest ❌. Every line is inside the launch gate; the gate is a state,
-> not a date. Both repos clean and pushed.
-> **`LEDGER-1` and `CLAIM-COMMENTS-1` were reverted to ❌ by review** (→ Entry 14) — the sweep
-> shipped incomplete on three of four surfaces, and the completeness it claimed is pinned by nothing.
+> ### 🟢 14 CLOSED. Nothing in flight, nothing unreviewed.
+> **65 DoD lines**, 14 ✅, 1 🟡, 2 🅿️, rest ❌. Both repos clean and pushed. Every line is inside
+> the launch gate; the gate is a state, not a date.
+> **Closed in Entry 28:** `DIRECTORY-ROT-1`, `COMPOSE-CI-1`, `OFFER-SIGNED-1`, `RESPONDER-VERIFY-1`,
+> `CLAIM-SCANNER-1`. **Carried out of them:** `GUARD-HEARD-1`, `CHAINDEBT-1`.
 
-- **NEXT ACTION: `DOD-M15-CLAIM-SCANNER-1`** — the build check that enumerates claim surfaces from
-  the system instead of from a person, then `DOD-M15-CLAIM-COMMENTS-1` (the two comments the review
-  found still standing). `SCANNER-1` comes first because it defines what "swept" means, and
-  `LEDGER-1` cannot be re-closed until something other than a grep vocabulary pins its completeness.
-- **`DOD-M15-AUDITME-1` is 🅿️ parked — Andre's call, 2026-08-22.** It is now the LAST Tier 1 line,
-  not the next one, and not before Tier 4 lands. The repo is public but **unadvertised**: nobody is
-  reading it, so the exposure is theoretical, while the tree it describes is about to be changed by
-  Tier 2 and Tier 4 — writing it now buys a second rewrite. Parked for sequencing only; it is inside
-  the gate. **The claims themselves are not parked** — they stay as ledger rows with the disposition
-  *pending rewrite*, so `SCANNER-1` does not go red on a file we deliberately deferred.
+- **NEXT ACTION: `DOD-M15-GUARD-HEARD-1`** — the fourth occurrence of the milestone's own recurring
+  pattern, and the one Andre asked to be promoted if it appeared again. Its enforcer is mechanical:
+  a test over `REFUSAL_REASONS` asserting every member reaches an agent-facing surface, and where a
+  counterparty is affected, the wire. Then `DOD-M15-CLAIM-COMMENTS-1`, which is the same pattern in
+  prose.
+- **`pnpm run test` IS NOW SERIAL under `CELLO_ENV=local`** (`vitest.config.ts`). Do not "optimise"
+  that back: parallel gave 16 failures one run and 19 the next on a freshly composed database, a
+  DIFFERENT set each time, because `directory` and `operations-agent` share one worker pool and one
+  Postgres. Serial is 205s; the unit gate keeps its parallelism at 38s.
+- **trustless-cello now has CI** (`.github/workflows/ci.yml`): a unit gate on every push plus a
+  `database` job that composes Postgres, runs Flyway to head, and runs the integration suites. **If
+  the database job goes red, do not re-disable it** — it passed 2245 tests twice on a clean database
+  when it was enabled.
+- **A test that throws in `beforeAll` is reported SKIPPED, not failed.** Three suites hid behind that
+  for months, two of them the kill switch's own. When auditing coverage, a ↓ is not evidence of
+  anything.
+- **`DOD-M15-AUDITME-1` is 🅿️ parked — Andre's call, 2026-08-22.** LAST Tier 1 line, not the next
+  one, and not before Tier 4 lands. Public but unadvertised, and the tree it describes is about to
+  change — writing it now buys a second rewrite. **The claims themselves are not parked**: they stay
+  as ledger rows with disposition *pending rewrite*, so `SCANNER-1` does not go red on a file we
+  deliberately deferred.
 - **Timing correction for any rate estimate (2026-08-22):** the overnight run lost **4h 50m** to a
-  network outage — last activity 00:42:32, resumed 05:32:14, confirmed by the push reflog (every
-  commit in this milestone pushed within ~3s, and nothing pushed in that window). Real working time
-  for the five merged units is **5h 15m**, not the 10h of wall clock. The 56m gap at 05:33–06:29 was
-  a review agent running, not the outage — pushes succeeded on both sides of it.
+  network outage — last activity 00:42:32, resumed 05:32:14, confirmed by the push reflog. The 56m
+  gap at 05:33–06:29 was a review agent, not the outage.
 - **`DOD-M15-SURFACE-1` is ✅** (→ Entries 9, 11) — merged. **SPEC: FAITHFUL, nothing blocking.**
   The reviewer confirmed all five falsification claims plus two I had not checked, and built a
   throwaway test proving a zero-listener node still dials out. Both real findings were prose. **New
@@ -2551,3 +2560,135 @@ the **same** quorum, because the first accepted session pins the key and a secon
 correctly refused as an identity substitution. It had found the feature working and modelled a repeat
 counterparty properly instead of routing around it. That is the shape worth fanning out — conversion,
 where the thinking is already done. Diagnosis is not, and would reproduce every failure Andre named.
+
+## Entry 28 — five lines close, and the closure of one corrected a claim in another
+
+### What Andre saw, and why the measurement was the right one
+
+> *"Two hours fifteen minutes since my last look… Still nine closed — same as at 13:25. But the
+> work-in-progress pile has gone from two items to five. Three items got built and none got
+> finished. That's a queue forming at the review stage, not a stall in the work — but 'closed' is
+> the only column that counts toward launch, and it's been flat for over two hours."*
+
+Accurate, and the diagnosis was sharper than mine. Underneath the queue was a habit: I had been
+treating *reviewed and fixed* as an end state. It is not — a tag moves when the verdict is written
+down, and five lines were sitting one step from done while I opened a sixth.
+
+**9 → 14.** The rule this earns: **a review whose findings are fixed but whose verdict is not
+recorded has not closed anything.** Fixing is the cheap half.
+
+### `DOD-M15-DIRECTORY-ROT-1` ✅ — and the four that were never contention
+
+Receipt: **195/196 files, 2245 tests, zero failures, twice back to back** on a database created with
+`docker compose down -v && up -d`. Two runs, because the original symptom was a failing set that
+MOVED between identical runs and one green run does not answer that.
+
+The last four failures all failed **when run alone**, so none of them was the contention this line
+was opened for. Three suites had been dead for months and reported as **skipped**:
+
+- `dod-dirdata-read-1` used `ON CONFLICT (session_id)` after V31 dropped that constraint so a
+  bilateral seal could supersede a unilateral one. The portal's track-record read — the clean-close
+  rate shown against an agent — had zero executed coverage from M7 onward.
+- `writeapi-001` named `identity_tree_entries` after V48 dropped the table. The suite's SI-001 dump,
+  which asserts a smuggled email and OAuth token appear in NO seam table, had not run since.
+- `m6b-004-si-001` polled `localhost:9090` for a directory server nothing in the dev loop starts.
+  Its own comments said *"this test assumes docker-compose is already running"* and *"we'll test
+  against the assumption"*. A test whose entire subject is that unauthenticated callers are refused
+  had never refused anything.
+
+**And the fourth was the kill switch.** V59 moved the agent↔account binding out of the mutable
+`agent_profiles.account_id` and into `agent_account_links`, because a mutable column is excluded
+from anti-entropy by construction so the link had never replicated. Its header records the cost,
+measured on the live fleet: one operator, three agents, and the three nodes held two links, one, and
+none — two of that operator's agents could not be paused. **Every fixture proving pause and burn
+work was still seeding the retired column**, so all of them were getting `403 not_owner`. The suite
+named *"burn is permanent"* was asserting nothing about burning. They were dark for exactly the
+change that broke the kill switch in production.
+
+### THE RULE THIS MILESTONE KEEPS RE-LEARNING, in a new form
+
+**A test that throws in `beforeAll` is reported as SKIPPED, not failed.** Three grey ↓ lines in a
+22,000-line run, and under the default command the suite is `describe.skip` anyway. Every one of
+these read as green for months.
+
+That is the same shape as `CI-SKIPS-SILENT-1` and the same shape as the guard-nobody-hears pattern:
+**a negative result rendered as a neutral one.** The generalisation worth keeping: *when a system
+has a third state between pass and fail, find out which one it renders as.*
+
+### The claim I had to correct, and the argument for enabling things
+
+I reported the directory suite green at **142/142**. That was the directory package **alone**. The
+root gate is ONE vitest process, so `directory` (62 database files) and `operations-agent` (8) share
+a worker pool and interleave against ONE Postgres. On a freshly composed database, same commit:
+
+| run | result |
+|---|---|
+| parallel, run 1 | 16 failures across 10 files |
+| parallel, run 2 | **19 failures across 6 files — a DIFFERENT set** |
+| serial | **0 failures, 2245 passed, 205s** |
+
+Had I enabled the CI job on the strength of the package-only run, its first run would have been red
+— which is precisely what the job was disabled to avoid. **I found this only because I ran what CI
+would run instead of reasoning about it.**
+
+The database run is now serial, scoped to `CELLO_ENV=local` in `vitest.config.ts`. Not by fixing the
+assertions: *"an unseeded directory notarizes NOTHING rather than falling open"* is a property of
+the TABLE, and scoping it to rows the test created deletes what it proves. And it is a **config
+default, not a CI flag** — a flag only CI passes means every developer meets the flaky version and
+learns to distrust the suite.
+
+### `DOD-M15-COMPOSE-CI-1` ✅
+
+The `database` job is enabled. The repo went from **no automated gate at all** to both halves
+running. Three more suites started executing when they stopped defaulting to a `cello_spine`
+database that compose does not create — 11 further tests, two of them the burn suites again.
+
+### `DOD-M15-RESPONDER-VERIFY-1` ✅ and `DOD-M15-OFFER-SIGNED-1` ✅
+
+Two review passes, the hard cap. **Verdict, quoted:**
+
+> **SILENT FALLBACKS FOUND** — F5 (a receipt accepted without verification returns a response
+> indistinguishable from a verified one) and F6 (a fabricated assignment passes internal mode and is
+> written to the durable trust anchor with no agent-facing signal). Both HIGH. **[blocking]**
+
+Both closed. And on the deletion I had made:
+
+> I looked for an input where the deleted comparison refused and the verifier admits. There is none
+> — the new check dominates on every axis… **Your deletion is safe.**
+
+### The finding that generalises, and it is the fourth occurrence
+
+> three of the five HIGH findings are the same finding wearing different clothes — **a correct guard
+> whose only proof of existence is that someone remembered to write it**… this is the fourth
+> appearance of the guard-nobody-hears pattern in this milestone, which is the threshold the
+> procedure sets for it earning its own DoD line.
+
+The reviewer proved it rather than asserting it: it reverted each fix and ran the gate — **2525
+green, 2525 green, 4057 green**. Three security fixes, each one refactor from being undone, with a
+green gate telling whoever did it that it was safe. → `DOD-M15-GUARD-HEARD-1`.
+
+**The test for any new guard, now written down: delete it and run the gate. If nothing goes red, it
+is not a guard — it is a comment that happens to execute.**
+
+### `DOD-M15-CLAIM-SCANNER-1` ✅
+
+The reviewer did not argue the scanner was weak. It **shipped three false claims past it and showed
+me the green runs**: a claim appended to an existing claim *line*, a `.md` shipped through a
+directory entry in `package.json#files`, and `core/cli/src/registry.ts` — which the DoD line named,
+and which holds **41 unadjudicated claims** printed to an operator at the moment they act.
+
+My first extraction from `registry.ts` keyed on `summary:`/`help:` and measured **three** claims in a
+1514-line file. Implausible, which is the only reason I looked — a `help` value is a multi-line
+concatenation, so the regex caught the first fragment and stopped before every line carrying a claim.
+**Rule: a measurement that is implausibly small is a bug report about the measurement.**
+
+Four vocabulary words the DoD named were missing, and the file's own comment claimed one of them
+(`encrypted`) was present and gave the reason it mattered. **A comment asserting a property the code
+lacks, inside the unit written to stop comments asserting properties the code lacks.**
+
+### Two lines carried out, not absorbed
+
+`DOD-M15-GUARD-HEARD-1` and `DOD-M15-CHAINDEBT-1` (8 files committing a literal `chain_hash`, 8
+deleting from a chained table). **A closure that absorbs its own leftovers is how a ✅ stops meaning
+anything.**
+
