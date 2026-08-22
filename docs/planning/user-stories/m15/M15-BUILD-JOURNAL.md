@@ -2403,3 +2403,74 @@ lazy: no unresolved nodes, no work.
 command — with blame-the-peer guidance, for a string the surface never emits. The reconnect skill is
 the worst of them: it is what an operator reads while diagnosing a lapsed standing receiver, the
 exact scenario the new reason was named for. All four now name what is actually returned.
+
+## Entry 26 — the branch that grew five units, and a remedy that did nothing
+
+### The merge, and what gating it actually found
+
+Andre stopped the work to point at the branch: five units stacked since 06:55, each reviewed
+individually, **never gated together on a clean tree** — in a milestone already bitten twice by green
+gates that were not running the tests they claimed. His argument was the stronger one and it was not
+about tidiness: *"if you're not constantly merging you start to build things you've already built,
+and you lose the details of what's in the other branches."* That is why the many-parallel-stories
+workflow was abandoned, and I had quietly rebuilt it.
+
+Fourteen commits fast-forwarded to `main`; branch deleted so it cannot restack.
+
+**Gating the merged tree found something worth keeping:** `rm -rf core/*/dist` is **not** a clean
+build. The `.tsbuildinfo` files survive it, so `tsc --build` believes every package is already built
+while its output is gone — and fails with `Cannot find module '@cello-protocol/daemon'`, which reads
+like a broken dependency graph and is not. A real clean is
+`rm -rf core/*/dist core/*/*.tsbuildinfo`.
+
+This is the complement of a rule already in the vault (*"deleting a source file does not remove its
+dist artifact; only `rm -rf dist` clears orphans"*). Both halves now known: **dist without
+tsbuildinfo is a broken build; tsbuildinfo without dist is a stale one.**
+
+### The finding I would not have shipped
+
+The identity-change refusal told the operator: *confirm out of band, then remove the old contact so
+the new identity is pinned afresh.*
+
+`removeContact` deletes a row from `contacts`. **The pin lives in
+`sessions.counterparty_primary_pubkey`, and nothing in the daemon ever cleared it.**
+
+So an operator who did exactly as instructed — telephoned their counterparty, confirmed the
+re-registration was genuine, removed the contact, retried — got the identical refusal. Forever. With
+no way out short of editing the database by hand.
+
+**A security control that the person it protects cannot reset is a lockout.** And printed guidance
+that reads actionable and is not is worse than none, because it spends the reader's trust as well as
+their time — they will follow it, watch it fail, and now distrust the next instruction too.
+
+**Rule:** when a refusal prints a remedy, execute the remedy. Not "check that the function exists" —
+follow it to the state it claims to change and confirm the state changes.
+
+### The check that disarmed itself
+
+`#offeredDialer` was keyed by agent alone. The gap between offer and assignment spans a cross-region
+threshold ceremony, so two overlapping inbound sessions are ordinary rather than exotic: offer P
+narrows to peer P, offer Q overwrites with peer Q, assignment P arrives and **mismatches**. A
+legitimate session refused — on the one log line that is supposed to mean *your directory is
+hostile*. Then it cleared Q's record, so assignment Q passed unchecked.
+
+An attacker could therefore disarm the check by provoking a single mismatch.
+
+`DOD-M15-OFFER-EXPIRY-1` had **already written down this exact fix shape** — "bind the narrowing to
+the session id it came from" — and the session id was in hand at both ends the whole time.
+
+**Rule:** when a carried line already prescribes a fix for the structure you are about to build, read
+it before building. The cost of not doing so was a security check that an attacker could switch off.
+
+### The third hollow test on one branch
+
+All eight tests exercised two helper functions **the test file had defined itself**, importing
+nothing from either file the unit changed. They passed with both production checks fully deleted, and
+the whole file ran in 1 ms.
+
+My justification — avoiding a two-daemon harness — was disproven by the sibling test in this same
+milestone, written days earlier after a review found the identical gap.
+
+**Rule, earned three times now:** *a test that imports nothing from the file it is named for is
+testing its own arithmetic.* The runtime is the tell: a file that exercises real handler code does
+not finish in a millisecond.

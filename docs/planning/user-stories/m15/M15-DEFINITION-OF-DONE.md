@@ -570,7 +570,30 @@ neither. They ship together.
   same-LAN sessions, which the launch intent names explicitly, and it becomes required again if hole
   punching is ever repaired.
 
-### `DOD-M15-OFFER-SIGNED-1` — ❌ The frame that opens your door is signed by more than one node
+### `DOD-M15-OFFER-SIGNED-1` — 🟡 The frame that opens your door is signed by more than one node
+> **STILL OPEN — and the work done under it does NOT close it.** cello-client `35a89e1`, `ed49869`,
+> `24ddefa`, `ccbf610` (merged to main). Second review pass in flight.
+>
+> **What was attempted and why it is not enough.** The offer's peer id is recorded and compared
+> against the assignment's. The first commit called that a counterbalance because the assignment is
+> FROST-signed — but **the responder does not verify that signature** (`session.inbound.assignment.
+> unverified`, deferred to SESSION-004), so it compares an unsigned frame against an unverified one
+> and a single compromised directory controls both. It says the same peer id twice and passes.
+> Corrected in the code and in the commit that followed.
+>
+> **What it does buy:** a consistency check between two channels — catching a stale or replayed
+> offer, a second node injecting an offer for a session it is not brokering, or a directory whose own
+> frames disagree. Real, and smaller than first claimed.
+>
+> **What DID land as a genuine counterbalance** is a different line's work and is tagged there:
+> `DOD-M15-RESPONDER-VERIFY-1` clause 2, the TOFU pin — a directory cannot rewrite what this daemon
+> recorded during an EARLIER session, so naming a different threshold key for a known counterparty is
+> refused. Bound stated: worth nothing on first contact.
+>
+> **To actually close this line**, `DOD-M15-RESPONDER-VERIFY-1` clause 1 must land first — the
+> responder verifying the assignment it is comparing against. The DoD's own ordering rule applies:
+> *gating on an unverified document relocates trust rather than closing it.*
+
 Split from `DOD-M15-ASSIGN-1` (b), whose review found the clause claimed "directory-signed" while
 the implementation narrows the receiver's gate from `session_offer` — a frame carrying three fields
 and no signature at all.
@@ -597,7 +620,14 @@ clears it**, so the DoD's word "live" is not enforced.
   fails, and expire it on the same clock the directory uses before it gives up waiting for an accept.
 - **Enforcer:** journey.
 
-### `DOD-M15-RESPONDER-VERIFY-1` — ❌ The responder stops trusting a key it never checked
+### `DOD-M15-RESPONDER-VERIFY-1` — 🟡 The responder stops trusting a key it never checked
+> **Clause 2 (TOFU pin) landed 2026-08-22** — cello-client `ed49869` + `ccbf610`, merged to main. A
+> directory that names a different threshold group key for a counterparty this agent has completed
+> sessions with is REFUSED, visibly (`cello_check_notifications`) and recoverably
+> (`cello_contact_remove` now clears the pin — it did not, and the refusal was permanent until the
+> review caught it). **Clause 1 — verify the assignment's signature is internally consistent over
+> the recomputed TBS — is NOT done**, and it is the half that stops a garbage or tampered assignment
+> being pinned in the first place. It is also what `DOD-M15-OFFER-SIGNED-1` is blocked on.
 Split from `DOD-M15-ASSIGN-1` (a) review F4. Verification runs on the **initiator** path only. The
 review confirmed the responder genuinely cannot perform the anti-circularity comparison today —
 nothing in the tree holds a counterparty's FROST `primary_pubkey` — but also found what the
