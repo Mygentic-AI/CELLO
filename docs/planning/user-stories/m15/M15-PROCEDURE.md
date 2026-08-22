@@ -338,6 +338,18 @@ Supply: the DoD line VERBATIM (all clauses), the coder's clause checklist, the d
 > ### 🚨 THE INVARIANTS LIVE HERE AS LENSES — they carry no DoD status tags
 > Every lens fires on EVERY unit's diff, whether or not that unit's DoD line mentions it.
 
+> ### 🔁 ALWAYS ASK THIS ONE, on every diff that refuses anything
+> **"This guard fires. Who hears it?"**
+>
+> Grep the diff for `logger.error(` / `logger.warn(` followed by a bare `return` or a `throw` with no
+> caller that answers. For each, demand a NAMED surface — the tool response, `recordRefusal`, the
+> inbox, a frame to the sender. **"The log" is not an answer.** Then ask what the reader does next,
+> and whether that remedy actually works.
+>
+> This is asked explicitly because it has been missed three times in one day by the coder, on three
+> separate units, each time found only because a reviewer went looking (see Invariant 2's recurring
+> box). It is the cheapest finding in the review and the one most reliably present.
+
 ### Invariant 1 — COUNTERBALANCE (BLOCKING). The client is the adversary's code.
 
 The client is open source and runs on the operator's machine. **They can rewrite it.** A guard that
@@ -372,6 +384,44 @@ verifies is the canonical instance — audit items 6 and 7, in that order); any 
 exists only if both parties are honest.
 
 ### Invariant 2 — FAIL LOUDLY, AND LOUD IS NOT THE SAME AS BLOCKING (BLOCKING)
+
+> ### 🔁 THE RECURRING ONE: **A GUARD NOBODY HEARS** (Andre, 2026-08-22)
+>
+> **This has now been written three separate times in one day, each found by a reviewer, each fixed
+> in isolation as though it were a one-off.** It is not a one-off; it is the shape this milestone's
+> own work keeps taking, and the pattern is worth more attention than any of its instances:
+>
+> 1. `DOD-M15-SIGNUP-1` — the OTP limiter failed CLOSED on a database error and told the person
+>    nothing. They send their email, get silence, resend, get silence, and the record expires seven
+>    days later. From their side the bot is dead.
+> 2. `DOD-M15-OFFER-SIGNED-1` — the offer/assignment mismatch refusal logged at ERROR and returned.
+> 3. `DOD-M15-OFFER-SIGNED-1` — the counterparty-identity-change refusal did the same, and that one
+>    is the most serious thing the inbound path can detect.
+>
+> **The tell is always the same and it is visible on the diff: a `logger.error(...)` followed by a
+> bare `return`.** The guard fires, correctly, having correctly detected exactly what it was written
+> to detect — and the only consumer is a file nobody opens.
+>
+> **Why it keeps happening, stated so it can be interrupted:** writing the detection *feels* like
+> finishing the work. The hard part — deciding what is wrong and proving it — is done, the log line
+> is right there, and the refusal is correct. The remaining question ("who is told?") reads like
+> polish. It is not: a refusal nobody hears is indistinguishable from the thing simply not happening,
+> which is precisely what an attacker wants and precisely what a confused operator concludes.
+>
+> **Three checks before any refusal path is called finished:**
+>   - **Who is told?** Name the surface — the tool response, `recordRefusal`, the inbox, a frame to
+>     the sender. "The log" is not an answer to this question.
+>   - **What do they do next?** A bare reason code is not an affordance. If the next step is outside
+>     CELLO — confirm out of band, restart the agent — say so.
+>   - **Does the remedy work?** `DOD-M15-OFFER-SIGNED-1`'s guidance told operators to remove the
+>     contact; removing the contact did not clear the thing it told them to clear, so the refusal was
+>     permanent. **A remedy that reads actionable and is not is worse than none**, because it spends
+>     the reader's trust as well as their time.
+>
+> **If this appears a FOURTH time it gets its own DoD line and an enforcement check**, on the same
+> argument that turned the claims ledger into a build check: a rule re-derived by hand every time is
+> a rule that will be missed, and this one has now been missed three times by the same person on the
+> same day.
 
 **Most failures should fail loudly. Loud does not mean blocking** — a warning that continues is
 often the right answer, and treating every failure as fatal is its own defect. What is never right
