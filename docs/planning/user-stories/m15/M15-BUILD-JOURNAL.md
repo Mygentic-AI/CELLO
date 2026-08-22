@@ -1517,3 +1517,95 @@ and the heartbeat cause really is mutability rather than a key collision — the
 and the missed surfaces have rows.
 
 ---
+
+## Entry 14 — `DOD-M15-ASSIGN-1` clause (b): the receiver that admitted everyone
+
+**Built, review in flight. Tag stays yellow until the verdict is quoted here.**
+
+### What the defect actually was, in the operator's terms
+
+An agent comes online and opens its standing receiver — the socket that waits for a counterparty to
+dial in. That receiver's connection gater was constructed with `allowedPeerId: null`, and the gater
+read null as *admit everyone*. So from the moment an agent went online to the moment a session
+claimed the receiver, **any peer who knew the address could complete a Noise handshake against it.**
+
+The window is not the whole story. libp2p never re-runs a gater against a connection that already
+exists — a fact this milestone has now hit twice. So a stranger who attached during the open window
+was **still attached after the receiver was promoted into a live session**, holding a connection
+nobody had invited, on the node that had by then become the session.
+
+### The fix, and why the ordering is the whole mechanism
+
+`null` now admits **nobody** inbound. That alone would lock out the legitimate counterparty too, so
+the second half is what makes it work: the directory's `session_offer` **names** the initiator's
+session peer id, and the responder narrows its gate to exactly that peer **before** it sends the
+`session_offer_accept` that publishes its own address.
+
+That ordering is not a detail — it is the argument. The initiator cannot learn where to dial until
+the accept it triggered has gone out, and by then the gate already names them. There is no interval
+in which the advertised address is reachable by anyone else.
+
+An offer that names **no** dialer is refused, not served. The directory already rejects a
+`session_request` without an `initiator_session_peer_id`, so a nameless offer means a directory that
+is broken or lying. Advertising anyway would be the worse failure: the initiator would dial an
+address whose gate refuses them, and the session would die at the transport with nobody able to say
+why. The reject names the cause on the frame the directory is already waiting for.
+
+### The counterbalance question (Invariant 1), asked honestly
+
+This does **not** make the responder safe against a malicious directory — a directory can name the
+wrong dialer, and clause (b) will faithfully open the door to whoever it named. What it removes is
+the *unauthenticated* attacker: someone who is not the directory and was never part of any
+negotiation. The residual — a compromised directory naming an impostor — is what clause (a)'s
+signature verification bounds on the initiator path, and what remains open on the responder path.
+Said here rather than left implicit, because clause (b) reads like a stronger guarantee than it is.
+
+### The near-miss worth recording
+
+Flipping null to deny-all **would have broken message parking**, and no test in the tree would have
+caught it. The standing receiver is not only a receiver: it doubles as the daemon's general-purpose
+dialer for errands that belong to no session — the content-park deposit and pull against the relay.
+Those are OUTBOUND dials through the same gater. A blanket deny would have cost that feature to
+close a door nobody was standing at.
+
+The deny is therefore **inbound-only**, by an explicit direction parameter. INV-5 governs who may
+come IN; an outbound dial is this agent choosing where to go.
+
+**Rule:** when inverting the meaning of a permissive default, enumerate the *consumers* of that
+default, not just its construction sites. The construction site said "standing receiver"; the
+consumer list said "and also the content-park dialer."
+
+### The test that was right and the tests that were wrong
+
+Four existing tests changed, and they split into two categories that must not be confused:
+
+- **Two asserted the defect as contract** — `"Initially open"` and `"allows connection when gater is
+  open"`. These inverted. A test that pins an open door is not protecting anything.
+- **The f16 two-daemon harness caught something real and I had to prove it was a harness gap, not a
+  regression.** It injected a `session_assignment` with no preceding `session_offer` — a sequence a
+  real directory **cannot** produce (it rejects requests without an initiator peer id, and will not
+  sign until the target has accepted an offer). Bob was therefore never told who was coming. The
+  harness now offers first, inside the negotiator seam that stands in for the directory round-trip.
+
+The evidence that settled it was a log line, not an argument: instrumenting the harness showed
+`session.node.connection.rejected` with `expectedPeerId: "(none — receiver unclaimed)"` on **bob's**
+standing receiver. Before that I had guessed wrong about which side was refusing, and a second guess
+would have been a third. The corroborating detail: the fixed harness now runs in **1083 ms instead
+of 5300 ms**, because the link establishes immediately rather than waiting out a timeout — the old
+harness had been paying a 5-second stall that nobody had read as a symptom.
+
+**Rule (re-earned):** a failing test gets traced to the producer, not attributed. The one thing that
+distinguishes "harness gap" from "I broke it" is evidence about *which side refused and why* — and
+that is one log line away, always cheaper than the argument.
+
+### Revert test
+
+Three clauses, each mutated separately, each verified to land before the result was trusted:
+
+| clause removed | tests that go red |
+|---|---|
+| inbound deny on `null` | 1 — the unclaimed-receiver denial |
+| outbound allowance | 1 — the content-park errand |
+| offer-time narrowing | 3 — all of the offer-handler contract |
+
+Gate on the committed tree: **4018 passed**, lint, typecheck, build. Commit `59ac4db`.
