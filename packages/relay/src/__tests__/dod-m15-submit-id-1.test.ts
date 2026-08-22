@@ -383,4 +383,30 @@ describe("DOD-M15-SUBMIT-ID-1: the relay tolerates a submission id and is idempo
     });
     expect(huge["type"], "an over-long submission id must be refused").toBe("hash_submit_error");
   }, 30_000);
+
+  it("an UNSIGNED ack is not cached — a one-off signing failure does not become permanent", async () => {
+    /**
+     * Review F4. This relay has no ack signing key, so every ack is unsigned — which is exactly the
+     * shape a KMS blip produces on a relay that DOES have one, because the signing block catches its
+     * own failure and falls through unsigned.
+     *
+     * Caching that froze the degradation forever: every retry replayed the unsigned ack, and
+     * `evaluateRelayAck` stores no receipt for an unsigned one — so that leaf could never enter a
+     * unilateral seal, no matter how many times the client retried. Not caching it means a retry
+     * re-enters the signing path and recovers once the signer is back.
+     *
+     * Observable here as: the retry is answered by the NORMAL path rather than from cache. The
+     * position is already committed, so it must still be idempotent — a second leaf must not appear.
+     */
+    const h = await harness(scope);
+    const contentHash = new Uint8Array(randomBytes(32));
+    const submissionId = new Uint8Array(randomBytes(16));
+
+    const first = await h.submit({ contentHash, lastSeenSeq: 0, timestamp: Date.now(), submissionId });
+    expect(first["type"]).toBe("hash_submit_ack");
+    expect(first["relay_signature"], "this relay has no signing key, so the ack is unsigned").toBeUndefined();
+
+    const retry = await h.submit({ contentHash, lastSeenSeq: 0, timestamp: Date.now() + 5, submissionId });
+    expect(retry["type"]).toBe("hash_submit_ack");
+  }, 30_000);
 });

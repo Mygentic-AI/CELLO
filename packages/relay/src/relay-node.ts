@@ -1379,8 +1379,28 @@ export class CelloRelayNode {
      * ack. Recording after the send would leave the one case the whole unit exists for (an ack that
      * did not arrive) as the one case that is not covered.
      */
-    if (submissionKey) {
-      const acks = state.issued_acks ?? new Map<string, import("./relay-types.js").HashSubmitAck>();
+    /**
+     * DO NOT CACHE AN UNSIGNED ACK — review F4.
+     *
+     * The signing block above catches its own failure, logs `relay.ack.sign.failed`, and falls
+     * through with an UNSIGNED frame. Caching that froze a one-off KMS blip into the record forever:
+     * every retransmission of that submission replayed the unsigned ack, so the position became
+     * permanently unsignable even after the signer recovered.
+     *
+     * That is not cosmetic. `evaluateRelayAck` stores NO receipt for an unsigned ack, and receipts
+     * are the leaf chain a unilateral seal carries to the directory for an offline rebuild — so that
+     * leaf could never enter a unilateral seal. Before this unit a retry would have re-signed and
+     * recovered; caching converted a transient degradation into a permanent one.
+     *
+     * The position is already committed, so re-entering the signing path on a retry is safe and
+     * idempotent.
+     */
+    const ackIsUsable = this.#ackSigningKeyProvider === null || ackFrame.relay_signature !== undefined;
+    if (submissionKey && ackIsUsable) {
+      // A COPY, not the shared reference (review F5's implementation note): `setSession`
+      // shallow-spreads, so mutating in place leaves the mutation applied even if the write below
+      // is skipped.
+      const acks = new Map(state.issued_acks ?? []);
       acks.set(submissionKey, ackFrame);
       const latest = this.#store.getSession(sessionKey);
       if (latest) this.#store.setSession(sessionKey, { ...latest, issued_acks: acks });
