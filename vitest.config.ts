@@ -1,7 +1,16 @@
 import { defineConfig } from "vitest/config";
+import SkipVisibilityReporter from "./vitest-skip-reporter.js";
 
 export default defineConfig({
   test: {
+    /**
+     * DOD-M15-CI-SKIPS-SILENT-1: `default` keeps the normal output; the second reporter adds one
+     * block AFTER the summary saying what did not run. It runs in the main process, which is the
+     * only place that reaches the terminal the operator is actually reading — a `console.warn` from
+     * inside a test lands thousands of lines earlier, and a `process.on("exit")` handler fires in a
+     * worker and never arrives at all. Both were tried.
+     */
+    reporters: ["default", new SkipVisibilityReporter()],
     projects: [
       "packages/directory",
       "packages/relay",
