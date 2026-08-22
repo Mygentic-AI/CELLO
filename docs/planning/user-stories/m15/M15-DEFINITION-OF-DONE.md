@@ -669,9 +669,16 @@ day.
 - Bilateral wire contract: the relay tolerates the new shape before any client depends on it.
 - **Enforcer:** journey, including a retried send.
 
-### `DOD-M15-BOOTSTRAP-1` — 🟡 One lost packet stops dropping a directory from the roster
-> **Built 2026-08-22 → Entry 23.** cello-client `32277f0`. Gate 350 files, lint, typecheck, build.
-> **Review in flight — the tag does not move until its verdict is quoted.** Three probes at 8 s,
+### `DOD-M15-BOOTSTRAP-1` — ✅ One lost packet stops dropping a directory from the roster
+> **Shipped and reviewed 2026-08-22 → Entries 23, 24, 25.** cello-client `32277f0`, `1bf207a`,
+> `b809066`. Gate: **350 files / 4046**, lint, typecheck, build.
+>
+> **TWO PASSES — the hard cap.** Pass two: *"F3 FIXED (correct, and revert-tested for real). F2
+> FIXED. F1 PARTIALLY FIXED — the regression moved, it did not go away."* All three of its own
+> findings are now closed, and the one that mattered was caught by the test written to close it: the
+> blocked resolver has **two** legs inside one 10 s wait, so a budget sized for one still blew it.
+> `FAST_PROBE` now fits twice, and `SIGNALING_CONNECT_WAIT_MS` is exported so the constraint is
+> asserted rather than remembered. Three probes at 8 s,
 > 20 s total cap, retrying only `timeout`/`connect_error`/`dns_error`; a deterministic answer (404,
 > 503, malformed payload) still costs exactly one probe, and the happy path costs one. Two
 > visibility additions: the unresolved warning carries how many probes were spent, and a node that
@@ -685,14 +692,20 @@ in the system.
 - ~3 attempts at ~8 s with a bounded total (~20 s). **A longer deadline alone does not fix it** — the
   win comes from a fresh connection, not a longer wait.
 
-### `DOD-M15-ERRSTRING-1` — 🟡 An error names what was observed, never an inferred conclusion
+### `DOD-M15-ERRSTRING-1` — ✅ An error names what was observed, never an inferred conclusion
 `DOD-COUNTERPARTY-OFFLINE-LIE-1`. One string, `counterparty_offline`, returned on 2026-08-16 for a
 garbage-collecting node, a roster below threshold, and a stale gateway — naming a party that was
 online in all three and nothing that was broken. Most of a day lost in the wrong subsystem.
 - A roster below threshold says so. A node that cannot be reached is named.
 - Generalises to Invariant 3: **downstream never overwrites an upstream descriptive error.**
-> **Built 2026-08-22 → Entry 23.** cello-client `a5900f3`. Gate 349 files, lint, typecheck.
-> **Review not yet dispatched — the tag does not move until its verdict is quoted.** The reachable
+> **Shipped and reviewed 2026-08-22 → Entries 23, 24, 25.** cello-client `a5900f3`, `1bf207a`,
+> `3f0afa1`, `b809066`. Gate: **350 files / 4046**, lint, typecheck, build.
+>
+> **TWO PASSES — the hard cap.** Pass two ruled the renames correct — *"both renames are correct and
+> the guidance routes to the right subsystem… they name observations, not parties"* — and found the
+> two things that were not: a test for the headline fix that **landed on a neighbouring branch**
+> (so the fix shipped with zero coverage), and a silent undercount in the shortfall arithmetic that
+> could affirm ceremonies were fine when the threshold was unmet. Both closed and revert-tested. The reachable
 > false-offline (directory says ONLINE, names no home) is now `directory_named_no_home`, whose
 > guidance says where the fault is NOT before saying what to do. The exhausted-loop fallthrough was
 > also rewritten, but tracing it showed the line is UNREACHABLE — a compiler backstop, not the

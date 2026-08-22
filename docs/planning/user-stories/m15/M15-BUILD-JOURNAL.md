@@ -2321,3 +2321,85 @@ Both shipped `SKILL.md` copies — the document the operator's agent reads when 
 documented `target_offline`, a code the surface **never emits**, with blame-the-peer guidance. That
 is worse than silence: it is confident, wrong, and in the reader's hands at the moment they are
 trying to work out whose fault something is. Replaced with the five reasons actually returned.
+
+## Entry 25 — two tests that never touched the fix they were named for
+
+`DOD-M15-BOOTSTRAP-1` and `DOD-M15-ERRSTRING-1` both close ✅ here, and the closing review's finding
+is worth more than either fix.
+
+### The verdicts, quoted
+
+> **F3 FIXED** (correct, and revert-tested for real). **F2 FIXED IN CODE — but the only test claimed
+> for it never touches the branch.** **F1 PARTIALLY FIXED — the regression moved, it did not go
+> away.** … *"both renames are correct and the guidance routes to the right subsystem…
+> `home_node_reports_no_receiver` and `home_node_not_in_reachable_roster` name observations, not
+> parties."*
+
+> **HOLLOW TESTS FOUND** — two, **both on the headline fix of their commit**.
+
+### The test that landed on the wrong branch
+
+The test for *"stop rewriting the home node's no-receiver into `counterparty_offline`"* answered
+discovery with an owning node that was absent from the fake roster. The negotiator therefore returned
+`home_node_not_in_reachable_roster` on attempt 1 and **never entered the retry loop where the fix
+lives**. Its only assertion was `.not.toBe("counterparty_offline")` — which the neighbouring branch
+satisfies for free. Revert the fix and it stayed green.
+
+**The tell was in front of me and I did not read it.** That test returned in under a second, against
+a three-attempt loop with 1 s and 3 s backoffs. Its neighbour, which does traverse the loop, takes 30.
+
+**Rule:** a test's RUNTIME is evidence about the path it took. When one test on a retry loop is
+instant and its sibling takes 30 seconds, they are not on the same code.
+
+### The test that asserted constants
+
+The `FAST_PROBE` test read four fields off two exported constants and never constructed a resolver.
+The fix is the call site; constants are inert data. Deleting the argument reverted the whole thing
+and left it green.
+
+**And rewriting it immediately caught the rest of the regression.** The blocked resolver has **two**
+legs inside one 10-second wait — the primary probe, then the roster sweep, whose `Promise.all` waits
+for the slowest node. I had put the fast budget on the primary only, so one unreachable node still
+cost 16 s in the sweep. A budget sized for one leg, spent twice.
+
+**Rule:** when a fix is "pass X at the call site", the test must observe the call site. Asserting the
+value of X proves the constant, and the constant was never in doubt.
+
+### The honest answer about the numbers
+
+`FAST_PROBE` is now 2 × 2 s, because it has to fit **twice** inside 10 s. Is that too short for a
+link where a probe was measured at 16.2 s? **Yes — and that is the answer, not a problem.** Inside a
+10-second deadline you cannot afford a 16-second probe from either leg, and pretending to try is how
+the deadline gets blown and the caller gets *nothing*. Failing fast preserves what actually helps on
+a bad link: the last-known-good endpoint, plus a background sweep on the persistent budget where
+nobody is waiting.
+
+`SIGNALING_CONNECT_WAIT_MS` is now exported, because it is a **constraint on something else** rather
+than a local number. Changing it breaks the budget test instead of silently breaking behaviour.
+
+### The arithmetic that could deny its own subject
+
+The roster-shortfall note computed `declared = reachable + unresolved`. But `manifestNodesToEndpoints`
+also drops nodes for an invalid endpoint and for a peer-id mismatch, and neither calls
+`onNodeUnresolved` — so those appear in *neither* term. With 5 declared, 2 peer-id mismatches and 1
+probe failure, it printed *"2 of 2 needed are still reachable, so ceremonies can still complete"*
+when the true threshold was 3 and they could not. **The line whose entire job is to name a shortfall
+would have affirmatively denied one** — and been silent altogether when every drop was a mismatch,
+which is the case you most want named.
+
+It now takes `declared` from the verified manifest. **Rule:** a denominator derived by addition from
+two filtered lists is a denominator that can be wrong. Take it from the source that declares it.
+
+### And it was expensive as well as wrong
+
+The note resolved the whole roster on **every** negotiation — successful ones included — purely to
+build a string two branches might use. With one node down that is +16 s on every `cello_initiate_session`.
+The condition that makes the note worth printing is exactly the condition that made it costly. Now
+lazy: no unresolved nodes, no work.
+
+### Four shipped documents naming an error that does not exist
+
+`target_offline` appeared in both `SKILL.md` copies, the **reconnect** skill, the README, and a slash
+command — with blame-the-peer guidance, for a string the surface never emits. The reconnect skill is
+the worst of them: it is what an operator reads while diagnosing a lapsed standing receiver, the
+exact scenario the new reason was named for. All four now name what is actually returned.
