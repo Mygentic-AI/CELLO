@@ -298,7 +298,15 @@ is a separate line rather than a bullet.**
   without measurement breaks *reachability* — the one property this milestone must not trade away.
   Measure a healthy daemon's connection count first.
 
-### `DOD-M15-CI-SKIPS-SILENT-1` — 🟡 A suite that skips itself does not report green
+### `DOD-M15-CI-SKIPS-SILENT-1` — ✅ A suite that skips itself does not report green
+> **CLOSED 2026-08-22.** It was reviewed the same day with the verdict quoted below and its blocking
+> items fixed; it stayed 🟡 only because one carried clause was still open. That clause is now
+> closed by `DOD-M15-COMPOSE-CI-1`: the database job runs the integration suites, so
+> `operations-agent/engine.test.ts` — the named example that "executes zero assertions" — now runs
+> **17 tests, measured**, rather than reporting green having asserted nothing.
+>
+> `DOD-M15-SPINE-LANE-1` remains ❌ and is correctly its own line, not an unpaid debt hiding under
+> this tag.
 > **Built + reviewed + review fixes landed 2026-08-22 → Entries 15, 16.** trustless-cello
 > `99734664` + `73d83abe`, cello-client `5ebdd74`. **The review's verdict was DEVIATIONS FOUND
 > [blocking]**, and the blocking items are fixed: the self-satisfying sentinel, the guard blind to
