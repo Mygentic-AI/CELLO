@@ -163,6 +163,19 @@ different repos, different disciplines, neither blocks the other.
 - **Enforcer:** receipt. *(Not run — the unit is carried by suite + review; the enforcer itself is
   built by `DOD-M15-INTERRUPTED-1` and this line is re-asserted there.)*
 
+### `DOD-M15-SIGNUP-DURABLE-1` — ❌ The signup limiter survives a deploy
+Split from `DOD-M15-SIGNUP-1`, which rekeyed the limiter from the email domain to the address
+fingerprint but left it in memory. **The clause asking for durability is NOT met and is carried
+here rather than quietly dropped.**
+- `#rateLimitMap` lives in a single-instance process, so every restart and every deploy empties it —
+  it was wiped by the ops-agent deploy on 2026-08-09. An abuser clears it by waiting for a release.
+- **What the rekey DID fix is the half that hurts real people**: five strangers sharing an email
+  provider no longer refuse the sixth a verification code, which is exactly what an invite wave
+  would have hit. What it does not yet do is bite an abuser.
+- Needs a table in the bot's own database and a Flyway migration (the registrations schema is at
+  V62). **Sequence with `DOD-M15-RELAYABUSE-1`** — both are rate-limiting work, and a limiter that
+  is durable in one place and amnesiac in another invites the wrong conclusion about which is which.
+
 ### `DOD-M15-FREEZE-STATUS-1` — ❌ A defensive freeze is distinguishable in the session RECORD
 Split from `DOD-M15-FRAME-1`, whose own clause asks that the freeze carry a status *"distinct from
 an ordinary counterparty-absent close"*. It does not yet.
