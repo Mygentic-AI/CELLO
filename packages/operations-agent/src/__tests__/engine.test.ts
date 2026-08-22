@@ -11,7 +11,8 @@
  * AC-005: 3 wrong OTPs → OTP invalidated; state transitions to AWAITING_EMAIL; new OTP cycle possible.
  * AC-006: Expired OTP → rejected; registration.otp.expired logged.
  * AC-008: 7-day expiry → record transitions to EXPIRED; fresh start allowed.
- * AC-009: 6th OTP send within 1 hour → rate limited; registration.otp.rate_limited logged.
+ * AC-009: 6th OTP send by ONE REQUESTER within 1 hour → rate limited (DOD-M15-SIGNUP-1: per
+ *   requester, not per domain and not per address — the address is the target, not the sender).
  *
  * Observability:
  *   - registration.started logged with { registrationId, channel, correlationId }
@@ -19,7 +20,8 @@
  *   - registration.email.verified logged with { registrationId, correlationId }
  *   - registration.completed logged with { registrationId, tokenId, correlationId }
  *   - registration.otp.expired logged with { registrationId, correlationId }
- *   - registration.otp.rate_limited logged at WARN with { registrationId, emailDomain, sendCount, correlationId }
+ *   - registration.otp.rate_limited logged at WARN with { registrationId, sendCount, correlationId }
+ *     (DOD-M15-SIGNUP-1: no emailDomain — the limiter keys on the REQUESTER, and the domain is gone)
  *
  * Tests use real Postgres (describeIntegration) — no mock DB.
  */
@@ -135,10 +137,11 @@ describeIntegration("RegistrationEngine integration", () => {
     // on subsequent runs. We cannot DELETE (RLS), but we can transition to EXPIRED.
     try {
       const repo = new RegistrationRepository(pool);
-      const active = await repo.findActiveByChannelUser("cli", userId);
-      if (active) {
-        await repo.transition(active.id, "EXPIRED");
+      for (const u of [userId, ...waveUsers]) {
+        const active = await repo.findActiveByChannelUser("cli", u);
+        if (active) await repo.transition(active.id, "EXPIRED");
       }
+      waveUsers.length = 0;
     } catch { /* ignore cleanup errors */ }
     await pool.end();
   });
@@ -627,59 +630,105 @@ describeIntegration("RegistrationEngine integration", () => {
   // ─── AC-009 ─────────────────────────────────────────────────────────────────
 
   /**
-   * DOD-M15-SIGNUP-1 — this AC used to encode the defect.
+   * DOD-M15-SIGNUP-1 — this AC encoded the defect, and my first correction encoded a worse one.
    *
-   * The original test sent `user1@example.com` … `user6@example.com` — SIX DIFFERENT PEOPLE sharing
-   * one domain — and asserted the sixth was refused. It passed, and what it pinned was the bug: a
-   * limiter keyed on the email domain, throttling strangers against each other. At launch that is
-   * an invite wave, which is precisely a burst on one domain.
+   * ORIGINALLY it sent `user1@example.com` … `user6@example.com` and asserted the sixth was
+   * refused. That only passes under DOMAIN keying, so it pinned the bug — strangers throttling each
+   * other. But it was never "six people": all six came from ONE `userId`. It was one requester
+   * asking for codes to six addresses, which is the ABUSE case, and it was the only test in the
+   * repo constraining it.
    *
-   * Both halves are now asserted, because either alone is satisfiable by a broken implementation:
-   * a limiter that never fires passes the second, and the domain-keyed one passed the first.
+   * MY FIRST FIX made it worse. Rekeying to the email address and rewriting this test to assert
+   * that six addresses from one user are all allowed deleted the only coverage of per-requester
+   * throttling and replaced it with an assertion that per-requester throttling must NOT happen.
+   * The test forbade the fix.
+   *
+   * The dimension these must separate is REQUESTER vs TARGET, and the three below do: one requester
+   * is capped however many addresses they use, normalization cannot buy a fresh budget, and
+   * different requesters never affect each other however much they share.
    */
-  const resetToAwaitingEmail = async (): Promise<void> => {
+  const resetToAwaitingEmail = async (user: string): Promise<void> => {
     // After each OTP send the record moves to AWAITING_EMAIL_OTP. Reset via the repo between sends.
-    // Relies on the engine querying the DB on every inbound message (not the in-memory map).
+    //
+    // NOTE, because it changes what the abuse case COSTS: production offers no direct route back to
+    // AWAITING_EMAIL. A real attacker pays three wrong OTPs or a 15-minute expiry per address — so
+    // roughly four messages each, not one. That makes the abuse slower than these tests, never
+    // impossible, and it is why the cap matters rather than being theatre.
     const repo = new RegistrationRepository(pool);
-    const active = await repo.findActiveByChannelUser("cli", userId);
+    const active = await repo.findActiveByChannelUser("cli", user);
     if (active && active.state !== "AWAITING_EMAIL") {
       await repo.transition(active.id, "AWAITING_EMAIL");
     }
   };
 
-  it("AC-009: a 6th OTP send for the SAME address within 1 hour is rate-limited", async () => {
-    await channelState.injectMessage(userId, "hello");
-    await channelState.injectMessage(userId, `CONTACT:${userId}:+447911111111`);
+  /** Extra channel users a test enrolled, expired in afterEach so they cannot collide next run. */
+  const waveUsers: string[] = [];
+
+  const enrol = async (user: string, phone: string): Promise<void> => {
+    await channelState.injectMessage(user, "hello");
+    await channelState.injectMessage(user, `CONTACT:${user}:+${phone}`);
+  };
+
+  it("AC-009: ONE requester is capped at 5 codes an hour — even across different addresses", async () => {
+    // The abuse case. Each address is a real "Your verification code is NNNNNN" email from CELLO's
+    // verified sender to whoever owns it, so the cap has to follow the person asking, not the
+    // address asked for. Deliberately SIX DIFFERENT addresses: keying on the address gives each its
+    // own budget and lets this run forever.
+    await enrol(userId, "447911111111");
 
     for (let i = 1; i <= 5; i++) {
-      await channelState.injectMessage(userId, "same.person@example.com");
-      await resetToAwaitingEmail();
+      await channelState.injectMessage(userId, `victim${i}@example.com`);
+      await resetToAwaitingEmail(userId);
+    }
+    await channelState.injectMessage(userId, "victim6@example.com");
+
+    const limited = loggerState.events.find((e) => e.event === "registration.otp.rate_limited");
+    expect(limited, "a sixth code request from one person must be refused").toBeDefined();
+    expect(limited?.method).toBe("warn");
+    expect(limited?.context?.registrationId).toBeDefined();
+    expect(limited?.context?.correlationId).toBeDefined();
+    // No email fingerprint in the log: an unsalted SHA-256 prefix over an address space this small
+    // is a confirmable identifier, and the domain is what this unit removed.
+    expect(limited?.context?.emailDomain, "the domain must not be in this event").toBeUndefined();
+    expect(limited?.context?.emailStubPrefix, "nor an address fingerprint").toBeUndefined();
+  });
+
+  it("AC-009: normalization cannot buy a fresh allowance", async () => {
+    // Case and surrounding whitespace must not key differently, or the cap is one `.trim()` away
+    // from meaningless. This is the bypass a limiter keyed on the raw message string would allow.
+    await enrol(userId, "447911111112");
+
+    const variants = [
+      "same.person@example.com", "  same.person@example.com  ", "Same.Person@Example.COM",
+      "same.person@example.com", "SAME.PERSON@EXAMPLE.COM",
+    ];
+    for (const v of variants) {
+      await channelState.injectMessage(userId, v);
+      await resetToAwaitingEmail(userId);
     }
     await channelState.injectMessage(userId, "same.person@example.com");
 
-    const rateLimitedEvent = loggerState.events.find((e) => e.event === "registration.otp.rate_limited");
-    expect(rateLimitedEvent).toBeDefined();
-    expect(rateLimitedEvent?.method).toBe("warn");
-    expect(rateLimitedEvent?.context?.registrationId).toBeDefined();
-    // The KEY is the address fingerprint. A prefix is logged, never the domain and never the whole
-    // hash — enough to correlate two refusals as one requester, not a stable identifier to carry off.
-    expect(rateLimitedEvent?.context?.emailStubPrefix).toBeDefined();
-    expect(String(rateLimitedEvent?.context?.emailStubPrefix)).toHaveLength(12);
-    expect(rateLimitedEvent?.context?.emailDomain, "the domain must not be logged at all").toBeUndefined();
-    // sendCount is the number of successful sends when the limit was reached (5 sent, 6th refused)
-    expect(rateLimitedEvent?.context?.sendCount).toBe(5);
-    expect(rateLimitedEvent?.context?.correlationId).toBeDefined();
+    expect(
+      loggerState.events.find((e) => e.event === "registration.otp.rate_limited"),
+      "case and whitespace variants must not each get their own allowance",
+    ).toBeDefined();
   });
 
   it("DOD-M15-SIGNUP-1: six DIFFERENT people on one domain do NOT throttle each other", async () => {
-    // The regression this fix exists for, and the exact shape of an invite wave.
-    await channelState.injectMessage(userId, "hello");
-    await channelState.injectMessage(userId, `CONTACT:${userId}:+447911111111`);
-
-    for (let i = 1; i <= 6; i++) {
-      await channelState.injectMessage(userId, `person${i}@gmail.com`);
-      await resetToAwaitingEmail();
+    // The regression this unit exists for, and the exact shape of an invite wave. SIX DISTINCT
+    // requesters — the earlier version used one `userId` for all six, which made it assert that the
+    // abuse case was permitted rather than that strangers are independent.
+    // Phones derived from `userId`, which carries a timestamp and a random suffix. Static numbers
+    // collide with the previous RUN on `idx_registrations_phone_stub_hash_active` — rows are never
+    // deleted here (RLS forbids it), only expired, so a leftover active row is a hard failure that
+    // looks like a logic bug. Caught by the revert test rather than by a second run.
+    const stamp = userId.replace(/\D/g, "").slice(-8).padStart(8, "0");
+    const users = Array.from({ length: 6 }, (_, i) => `${userId}-wave-${i}`);
+    for (const [i, u] of users.entries()) {
+      await enrol(u, `44${stamp}${i}`);
+      await channelState.injectMessage(u, `person${i}@gmail.com`);
     }
+    waveUsers.push(...users);
 
     expect(
       loggerState.events.find((e) => e.event === "registration.otp.rate_limited"),

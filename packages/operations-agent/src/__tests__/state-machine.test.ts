@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { isValidEmail, extractEmailDomain } from "../registration/state-machine.js";
+import { isValidEmail } from "../registration/state-machine.js";
 import { generateOtp, generateOtpSalt, hashOtp, verifyOtp } from "../registration/otp.js";
 import { hashPhone, normalizePhone } from "../registration/phone.js";
 
@@ -56,12 +56,7 @@ describe("isValidEmail — AC-003b", () => {
   });
 });
 
-describe("extractEmailDomain", () => {
-  it("extracts the domain part from a valid email", () => {
-    expect(extractEmailDomain("user@example.com")).toBe("example.com");
-    expect(extractEmailDomain("a@B.IO")).toBe("b.io");
-  });
-});
+
 
 // ─── SI-001: OTP hashing ──────────────────────────────────────────────────────
 
