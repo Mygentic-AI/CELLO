@@ -2105,3 +2105,71 @@ pattern the other four should have followed was already in the same directory.
 
 **Rule:** when several files share a defect and one does not, read the one that does not before
 designing a fix. It usually already contains it.
+
+## Entry 22 — a commit message that told the next reader not to look
+
+### The finding I would rank above the code in this batch
+
+`ac5c1a8c` fixed five files that were poisoning the account hash chain, and its message said:
+
+> *"cross-node-discovery-pg.live needed no change and is the pattern the others should have
+> followed: it wraps each test in BEGIN/ROLLBACK, so its inserts never commit."*
+
+True of its first two `describe` blocks. **Its third cannot** — the store opens its own pool
+connection, so a transaction on a separate client would not isolate its reads, and the file has
+always said exactly that in a comment. That block committed a `user_accounts` row with a literal
+`chain_hash` on a **fixed** account id, with a `DELETE` either side of it: both of the two patterns
+the commit was removing from everywhere else.
+
+**An exonerating sentence is worse than an omission.** An omission leaves a file unexamined; a
+clearance tells the next person the file has *been* examined, so the next `chain broke at sequence N`
+gets diagnosed from scratch with this one ruled out.
+
+**Rule:** when a commit clears something by name, that clearance needs the same evidence as a claim
+— check the whole file, not the pattern you noticed first. "It uses BEGIN/ROLLBACK" was true of what
+I read and false of what I shipped.
+
+### The comment that was holding up a whole-table assertion
+
+`account-001` AC-005 verifies `verifyChain('user_accounts')` over the **entire table**. What justified
+that was a note reading *"no row can exist that was inserted outside the chain mechanism. Chain
+validity holds globally."*
+
+It was not true when it was written. A guard run over the test directory found **nineteen**
+counter-examples — files committing a literal `chain_hash`, and files deleting from chained tables.
+This is the CELLO shape the vault already names: *a comment asserting a safety property is how
+defects survive review.* Here it also made a real assertion look justified.
+
+So the constraint is a test now, iterating the directory rather than trusting a sentence. Two design
+choices in it are worth keeping:
+
+- **A declared BACKLOG, not a blanket exemption.** Nineteen files cannot be converted in one unit,
+  and switching the guard off until they are is how the constraint never arrives. The lists are
+  named, counted, and **shrink-only** — a name that stops violating must be removed, and the counts
+  are pinned so debt cannot be appended instead of fixed.
+- **Exemptions are COUNTED.** The first version exempted `account-001` by file, because one of its
+  deletes is the subject of a test (AC-006 asserts the service role is refused). Reintroducing an
+  ordinary cleanup delete into that file then **passed** — I checked, and it did. A file-level
+  exemption is a hole the size of the file.
+
+**Rule:** an allowlist entry names a specific permitted thing, never a file. If you cannot say how
+many, you are exempting everything in it.
+
+### Two more, both "the fix reached less than its own description"
+
+- `describeCause` was applied to **one of fifteen** error sites in the entrypoint, while the test's
+  own describe line claimed *"an error that reaches the operator ALWAYS names a cause."* The other
+  fourteen could still emit `reason:""` on the same pg path. All fifteen now route through it, with a
+  test asserting none is left.
+- The pool-concurrency test that `6301d36e` made *run* was **tautological**: `max: 50` with 50
+  concurrent queries cannot exceed 50, so it passed with no cap at all. Making a test execute is not
+  the same as giving it teeth. Now `max: 5` against 50, plus an assertion that all 50 completed —
+  which is what distinguishes a cap that queues from one that drops.
+
+### And a warning that had nowhere to live
+
+The fix stops new damage and **cannot repair old**. `cello_dev` right now: 108 rows, exactly one
+break, at the row whose predecessor was deleted two minutes before the fix landed. On any developer's
+existing database those chain assertions stay red **for reasons already fixed**, indistinguishable
+from a fresh break. `docker compose down -v && docker compose up -d`, once. It is on the DoD line now
+rather than in my head, which is the only reason anyone else would ever know.

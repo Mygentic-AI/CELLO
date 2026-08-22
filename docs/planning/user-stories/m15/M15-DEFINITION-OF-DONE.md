@@ -316,6 +316,18 @@ It is not.
   other side of the deadlock is **inserting seals** — a directory node that a previous test started
   and never stopped, still working. A leaked live node is not only a deadlock partner; it writes
   rows nobody expects, at times nobody controls. Find and stop it before touching the truncates.
+- **⚠️ EXISTING DEV DATABASES ARE ALREADY SCARRED, and nothing tells you.** The fix stops NEW damage;
+  it cannot repair old. A database that ran the pre-fix fixtures has a permanent break — measured on
+  `cello_dev`: 108 rows, exactly one break, at the row whose predecessor was deleted minutes before
+  the fix landed. On any such database `account-001` AC-005/AC-007 and the `dod-accounts-chain-1`
+  chain assertions stay red **for reasons already fixed**, and nothing distinguishes a historical
+  scar from a fresh break — which is the same diagnostic hole this line exists to close, moved one
+  level up. **Required once, per developer machine:**
+  `docker compose down -v && docker compose up -d` (or `TRUNCATE user_accounts CASCADE`).
+- **STILL OPEN — the backlog is declared, not hidden.** `dod-m15-directory-rot-1-chain-writes.test.ts`
+  enumerates it: **9 files still commit a literal `chain_hash`**, **10 still delete from a chained
+  table**. New violations fail immediately; the lists are shrink-only and their counts are pinned, so
+  the debt cannot grow quietly. Converting them is the rest of this line.
 - **The generalisation is worth more than the fix, and belongs in the launch conversation:** a
   linear whole-table hash chain means **any** deletion — a retention policy, a GDPR erasure, an
   operator cleanup — turns `verifyChain` permanently red, after which a genuine tamper cannot be
@@ -334,7 +346,19 @@ It is not.
   assertion updated and **said so in the journal** — never deleted quietly.
 - **Enforcer:** receipt.
 
-### `DOD-M15-COMPOSE-CI-1` — ❌ The suites that need a database actually run somewhere
+### `DOD-M15-COMPOSE-CI-1` — 🟡 The suites that need a database actually run somewhere
+> **First half shipped 2026-08-22 → Entry 22.** `2558167f`. The repo had **no automated gate at
+> all** — nothing ran tests, lint or typecheck on a push, ever. The unit gate now runs on every push
+> and PR. **The database job is written and disabled behind `if: false`** with its blocker named,
+> because enabling it today is a permanently red required check and a red check everyone learns to
+> ignore is worse than an honest absence.
+>
+> **This is NOT closed until the database job is enabled**, which is blocked on
+> `DOD-M15-DIRECTORY-ROT-1`. Also forced a reconciliation: the skip guard fails when CI skips the
+> integration suites, and this workflow deliberately does that — so the opt-out is an explicit
+> `CELLO_GATE_UNIT_ONLY` next to a comment saying what it costs, and an *unacknowledged* CI run
+> still fails.
+
 Split from `DOD-M15-CI-SKIPS-SILENT-1`, whose own named example — `operations-agent/engine.test.ts`
 — is still gated on `CELLO_ENV=local` and still executes **zero assertions** on every run. That line
 made the silence audible; it did not make the tests run, and the difference matters because
