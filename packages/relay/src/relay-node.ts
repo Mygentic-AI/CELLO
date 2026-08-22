@@ -784,14 +784,23 @@ export class CelloRelayNode {
     protocolLog("RELAY", `Seal confirmed: ${truncHex(key)}`);
   }
 
-  rejectSeal(sessionId: Uint8Array, _reason: string): void {
+  rejectSeal(sessionId: Uint8Array, reason: string): void {
     const key = Buffer.from(sessionId).toString("hex");
     this.#cleanupSessionTracking(key);
     const state = this.#store.getSession(key);
     if (state) {
-      this.#store.setSession(key, { ...state, status: "seal_rejected" });
+      /**
+       * THE CAUSE IS KEPT — review F6, Invariant 3.
+       *
+       * The parameter was `_reason` and reached nothing but a stdout line, so a participant asking
+       * why their conversation ended got `seal_refused` and no more. `merkle_root_mismatch`,
+       * `causal_chain_violated` and `leaf_signature_invalid` are three very different problems with
+       * three different next steps, and collapsing them into one exit-point label is exactly what
+       * this milestone exists to stop.
+       */
+      this.#store.setSession(key, { ...state, status: "seal_rejected", seal_rejected_reason: reason });
     }
-    protocolLog("RELAY", `Seal rejected: ${truncHex(key)}, reason: ${_reason}`);
+    protocolLog("RELAY", `Seal rejected: ${truncHex(key)}, reason: ${reason}`);
   }
 
   // ─── Stream handler ─────────────────────────────────────────────────────────
@@ -1097,9 +1106,15 @@ export class CelloRelayNode {
     // M7-SESSION-001: reset idle timer on activity
     this.#resetSessionIdleTimer(sessionKey);
 
-    const reply = async (error: HashSubmitErrorReason) => {
+    // `detail` carries the UPSTREAM cause when one is known — the directory's own refusal reason,
+    // which `rejectSeal` used to discard (review F6). The `reason` names the class; `detail` names
+    // what actually happened.
+    const reply = async (error: HashSubmitErrorReason, detail?: string) => {
       try {
-        await this.#sendFrame(stream, encodeHashSubmitError({ type: "hash_submit_error", reason: error }));
+        await this.#sendFrame(
+          stream,
+          encodeHashSubmitError({ type: "hash_submit_error", reason: error, ...(detail ? { detail } : {}) }),
+        );
       } catch (err) {
         this.#logger.error("relay.send.failed", {
           event: "hash_submit_error",
@@ -1129,7 +1144,7 @@ export class CelloRelayNode {
     senderPubkeyHex: string,
     frame: import("./relay-types.js").HashSubmit,
     sessionKey: string,
-    reply: (e: HashSubmitErrorReason) => Promise<void>
+    reply: (e: HashSubmitErrorReason, detail?: string) => Promise<void>
   ): Promise<void> {
     const state = this.#store.getSession(sessionKey);
     if (!state) { await reply("session_not_found"); return; }
@@ -1144,7 +1159,12 @@ export class CelloRelayNode {
        * The cost is not cosmetic: an operator told their conversation sealed goes looking for a
        * notarized receipt that does not exist, and stops investigating a failure that needs them.
        */
-      await reply(state.status === "seal_rejected" ? "seal_refused" : "seal_in_progress");
+      // The directory's OWN cause rides along when we have it (review F6) — `seal_refused` names
+      // that a verdict happened, `detail` names what the verdict was.
+      await reply(
+        state.status === "seal_rejected" ? "seal_refused" : "seal_in_progress",
+        state.status === "seal_rejected" ? state.seal_rejected_reason : undefined,
+      );
       return;
     }
 

@@ -147,6 +147,12 @@ export type HashSubmitErrorReason =
 export interface HashSubmitError {
   type: "hash_submit_error";
   reason: HashSubmitErrorReason;
+  /**
+   * The UPSTREAM cause, when the relay has one — e.g. the directory's `merkle_root_mismatch` behind
+   * a `seal_refused`. Optional: most refusals are self-explanatory, and an older client ignores an
+   * unknown field. Invariant 3 — `reason` is the class, `detail` is what happened.
+   */
+  detail?: string;
 }
 
 export interface HashSubmitAck {
@@ -226,6 +232,13 @@ export interface RelaySessionState {
   seq_counter: number;           // 0 initially; incremented to 1 on first leaf
   leaf_log: Array<{ kind: RelayLeafKind; s2: Structure2; structure1_cbor: Uint8Array }>; // ordered
   status: SessionStatus;
+  /**
+   * The DIRECTORY's reason for refusing the seal, when the status is `seal_rejected`.
+   *
+   * `rejectSeal` took the cause and discarded it (`_reason`), so a participant learned only that a
+   * refusal happened. Invariant 3: the upstream cause survives downstream.
+   */
+  seal_rejected_reason?: string;
   /**
    * RFC 6962 incremental stack. Each entry is the root of a complete 2^height-leaf subtree.
    * Invariant: entries are in ascending height order; no two entries share the same height.

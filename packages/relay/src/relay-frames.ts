@@ -57,7 +57,10 @@ export function encodeHashSubmitAck(frame: HashSubmitAck): Uint8Array {
 }
 
 export function encodeHashSubmitError(frame: HashSubmitError): Uint8Array {
-  return ENC.encode({ type: frame.type, reason: frame.reason });
+  // `detail` rides only when present — Invariant 3 (DOD-M15-TERMINAL-REASON-1 review F6): the relay
+  // carries the DIRECTORY's own refusal cause instead of discarding it behind a class name. An
+  // older client ignores an unknown field, so this is additive on the wire.
+  return ENC.encode({ type: frame.type, reason: frame.reason, ...(frame.detail ? { detail: frame.detail } : {}) });
 }
 
 export function encodeLeafDeliver(frame: LeafDeliver): Uint8Array {
