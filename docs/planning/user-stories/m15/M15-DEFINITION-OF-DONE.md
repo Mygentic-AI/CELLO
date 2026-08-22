@@ -1042,8 +1042,25 @@ its claim needs a scope, not a promotion.
   claiming a field is urgent"*, *"the right response, never obeying them"*) are instructions to the
   reading agent about handling peer content, which is correct advice and not a system claim.
 
-**Remaining surfaces to sweep** (`DOD-M15-LEDGER-1` is not ✅ until each has been walked): the rest
-of the MCP tool descriptions beyond the screening ones above; CLI help text; product status output.
+## Swept 2026-08-22 — CLI help and product status output
+
+**Clean. No security claims on either**, recorded as a negative so the next sweep does not re-walk
+them.
+
+- **CLI help / command text** (`core/cli/src`) is operational description only. The claim-shaped
+  words grep finds — *never*, *cannot*, *impossible* — are all in **source comments about
+  implementation discipline** (`json-out.ts`'s *"never synthesize an `ok:true`"*, `cli-args.ts`'s
+  argument-parsing rules). Instructions to maintainers, not assertions to a user, and accurate.
+- **Product status output** (`cello status` / `cello_status`) reports state and names next actions.
+  None of its guidance asserts a security guarantee.
+
+**The sweep is complete — all four live surfaces walked:** the public repo (root docs, README,
+comments), the shipped package (tool descriptions, skill prose, CLI help), product status output,
+and shipped client documentation.
+
+**The dispositions are assigned here; ACTING on them is other lines' work** —
+`DOD-M15-AUDITME-1`, `DOD-M15-CLAIM-SCREEN-1`, `DOD-M15-CLAIM-COMMENTS-1`, `DOD-M15-DISCLOSE-1`,
+and, for the made-true rows, the units that make them true.
 
 **Seed rows, from the two investigations — not yet individually verified against the tree:**
 
