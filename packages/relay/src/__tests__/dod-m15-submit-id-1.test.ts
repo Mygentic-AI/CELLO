@@ -163,33 +163,41 @@ async function harness(scope: ReturnType<typeof createTestScope>) {
     await makeAssignment(sessionId, await clientA.getPublicKey(), await clientB.getPublicKey(), dirKp),
   )).toEqual({ ok: true });
 
-  const cn = await createNode({ keyProvider: clientA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-  await cn.start();
-  scope.addCleanup(async () => { await cn.stop(); });
-  await cn.dial(node.listenAddresses()[0]!);
-  const stream = await cn.newStream(node.getPeerId(), RELAY_PROTOCOL_ID);
-  const reader = new StreamReader(stream);
-  await performRelayAuth(reader, stream, clientA);
+  /**
+   * BOTH participants get a stream. The second one is not decoration: the submission-id key is
+   * SENDER-SCOPED, and the only way to test that is to have the other party try to use an id.
+   */
+  const connect = async (kp: ReturnType<typeof generateKeypair>) => {
+    const cn = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await cn.start();
+    scope.addCleanup(async () => { await cn.stop(); });
+    await cn.dial(node.listenAddresses()[0]!);
+    const stream = await cn.newStream(node.getPeerId(), RELAY_PROTOCOL_ID);
+    const reader = new StreamReader(stream);
+    await performRelayAuth(reader, stream, kp);
 
-  /** Submit one leaf and return the relay's answer. */
-  const submit = async (o: {
-    contentHash: Uint8Array;
-    lastSeenSeq: number;
-    timestamp: number;
-    submissionId?: Uint8Array;
-  }): Promise<Record<string, unknown>> => {
-    const { structure1_cbor, sender_signature } = await makeS1({ sessionId, kp: clientA, ...o });
-    sendFrame(stream, CBOR_ENC.encode({
-      type: "hash_submit", session_id: sessionId, leaf_kind: MSG_LEAF, structure1_cbor, sender_signature,
-    }) as Uint8Array);
-    let resp = await reader.readDecoded();
-    for (let i = 0; i < 5 && resp["type"] !== "hash_submit_ack" && resp["type"] !== "hash_submit_error"; i++) {
-      resp = await reader.readDecoded();
-    }
-    return resp;
+    return async (o: {
+      contentHash: Uint8Array;
+      lastSeenSeq: number;
+      timestamp: number;
+      submissionId?: Uint8Array;
+    }): Promise<Record<string, unknown>> => {
+      const { structure1_cbor, sender_signature } = await makeS1({ sessionId, kp, ...o });
+      sendFrame(stream, CBOR_ENC.encode({
+        type: "hash_submit", session_id: sessionId, leaf_kind: MSG_LEAF, structure1_cbor, sender_signature,
+      }) as Uint8Array);
+      let resp = await reader.readDecoded();
+      for (let i = 0; i < 6 && resp["type"] !== "hash_submit_ack" && resp["type"] !== "hash_submit_error"; i++) {
+        resp = await reader.readDecoded();
+      }
+      return resp;
+    };
   };
 
-  return { submit };
+  const submit = await connect(clientA);
+  const submitAsB = await connect(clientB);
+
+  return { submit, submitAsB };
 }
 
 describe("DOD-M15-SUBMIT-ID-1: the relay tolerates a submission id and is idempotent on it", () => {
@@ -290,5 +298,89 @@ describe("DOD-M15-SUBMIT-ID-1: the relay tolerates a submission id and is idempo
     expect(one["type"]).toBe("hash_submit_ack");
     expect(two["type"]).toBe("hash_submit_ack");
     expect(two["sequence_number"]).not.toBe(one["sequence_number"]);
+  }, 30_000);
+
+  it("★ THE COUNTERPARTY CANNOT STEAL AN ACK by reusing your submission id", async () => {
+    /**
+     * The sender-scoping of the key, which the type's comment claims and nothing tested — review T4.
+     * And it is REACHABLE, not theoretical: B sees every `structure1_cbor` A sends, because it rides
+     * both `leaf_deliver` and the content frame. So B learns A's submission ids by ordinary
+     * participation.
+     *
+     * With an unscoped key, B mints a frame carrying A's id — correctly signed by B, so it passes
+     * verification — and is handed A'S ACK: A's sequence_number and A's structure2_cbor. B's message
+     * is silently never witnessed while B is told it was, and B stamps A's ordering record into its
+     * own content frame.
+     */
+    const h = await harness(scope);
+    const sharedId = new Uint8Array(randomBytes(16));
+
+    const aFirst = await h.submit({
+      contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now(), submissionId: sharedId,
+    });
+    expect(aFirst["type"]).toBe("hash_submit_ack");
+
+    const bReusing = await h.submitAsB({
+      contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now() + 5, submissionId: sharedId,
+    });
+
+    expect(bReusing["type"], `B was refused outright: ${String(bReusing["reason"])}`).toBe("hash_submit_ack");
+    expect(
+      bReusing["sequence_number"],
+      "B was handed A's ack. B's own message is never witnessed while B is told it was, and B now " +
+        "stamps A's ordering record into its own content frame — reachable, because B observes A's " +
+        "submission ids on the wire as an ordinary participant.",
+    ).not.toBe(aFirst["sequence_number"]);
+  }, 30_000);
+
+  it("a retry does not advance the TREE either, not just the counter", async () => {
+    /**
+     * Review T3. The retry test compared `sequence_number` and nothing else — so moving the
+     * idempotency check to AFTER the leaf append would still return the original number while the
+     * counter advanced and the leaf was appended twice. The DoD clause names both: "without
+     * advancing the counter OR the relay's own tree".
+     *
+     * `structure2_cbor` is the tree's own record of the leaf, so byte-identity pins it; and a third
+     * submission with a FRESH id must land at first+1, which is only true if the retry consumed
+     * nothing.
+     */
+    const h = await harness(scope);
+    const contentHash = new Uint8Array(randomBytes(32));
+    const submissionId = new Uint8Array(randomBytes(16));
+
+    const first = await h.submit({ contentHash, lastSeenSeq: 0, timestamp: Date.now(), submissionId });
+    const retry = await h.submit({ contentHash, lastSeenSeq: 0, timestamp: Date.now() + 5, submissionId });
+    expect(retry["structure2_cbor"], "the retry must replay the ORIGINAL leaf, byte for byte")
+      .toEqual(first["structure2_cbor"]);
+
+    const next = await h.submit({
+      contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now() + 9,
+      submissionId: new Uint8Array(randomBytes(16)),
+    });
+    expect(
+      next["sequence_number"],
+      "the next real message must land immediately after the first — if the retry had consumed a " +
+        "position or appended a leaf, this would be first+2",
+    ).toBe((first["sequence_number"] as number) + 1);
+  }, 30_000);
+
+  it("a MALFORMED submission id is refused, never ignored", async () => {
+    /**
+     * Review T5. Silently dropping a malformed id would hand the sender a FRESH position for
+     * something they declared a retry — the exact defect this unit fixes, wearing a valid ack. The
+     * decoder gates Ed25519 verification, so "refuse rather than coerce" is the only safe reading.
+     */
+    const h = await harness(scope);
+    const empty = await h.submit({
+      contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now(),
+      submissionId: new Uint8Array(0),
+    });
+    expect(empty["type"], "an empty submission id must be refused").toBe("hash_submit_error");
+
+    const huge = await h.submit({
+      contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now() + 5,
+      submissionId: new Uint8Array(64),
+    });
+    expect(huge["type"], "an over-long submission id must be refused").toBe("hash_submit_error");
   }, 30_000);
 });
