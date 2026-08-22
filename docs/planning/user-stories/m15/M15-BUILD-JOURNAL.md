@@ -1356,3 +1356,73 @@ rather than a spec edit.
 **A corrected comment can have copies.** Fixing the instance you found is not fixing the claim.
 
 ---
+
+## Entry 13 — DOD-M15-ASSIGN-1: confirm-first trace, and a correction to the audit's framing (2026-08-22)
+
+**Branch `m15/assign`. Trace only — no code yet.** Recorded before implementing because the unit is
+security-critical crypto verification and the trace changed what the fix can honestly claim.
+
+### Confirmed: the named verification site does not exist
+
+`session-assignment-parser.ts`'s header says *"the FROST/single signature is verified downstream by
+the transport/session layer against the directory's pinned key."* Verified independently:
+`buildSessionEstablishmentTbs` is exported from `protocol-types` and called by the directory to
+**sign** and by the FROST signer — **never anywhere to verify.** The parser shape-validates only
+(`dirSig.length !== 64`). Another comment naming a check that is not there.
+
+### The correction that matters: the signature is NOT a directory's
+
+The field is called `directory_signature`, and the relay audit already flagged the naming. Tracing
+the signer settles what verification can mean:
+
+- `signature_type: "frost"` → `signer_pubkey` is **the INITIATOR's FROST group key** (their
+  `primary_pubkey`). The directory signs with `#thresholdSigners.get(initiatorHex)` — the quorum
+  holding **A's** shares.
+- `signature_type: "single"` → verifies against `directory_pubkey`.
+- `signer_pubkey` is **NOT in the TBS** — it rides in the frame.
+
+**That last point is the trap.** Verifying a signature against a key the same frame supplies is
+circular: an attacker supplies both. The check is only worth anything if `signer_pubkey` is
+compared against something the client knows independently.
+
+### What each party can honestly verify
+
+| Party | Holds the assignment? | Independent knowledge | Meaningful check |
+|---|---|---|---|
+| **Initiator (A)** | yes — `outbound-sessions.ts:374` | **its own `primaryPubkey`**, persisted by `registration-persistence.ts` | ✅ `signer_pubkey === my primary_pubkey`, then verify the sig over the TBS |
+| **Relay** | the relay-facing half | its configured consortium key set | ✅ already verified today — this half is not the gap |
+| **Responder (B)** | carries the relay assignment forward | A's K_local, **not** A's `primary_pubkey` | ❌ would need a directory lookup of A's profile first |
+
+**So the implementable half is the initiator's**, and it is genuinely worth doing: it proves **A's
+own quorum authorized this session with these exact parameters** — session id, both pubkeys, both
+session peer ids and address sets, transport mode. A frame forged by anyone who is not that quorum
+fails.
+
+### ⚠️ What this does NOT close, stated before building so the fix cannot over-claim
+
+**It does not close the session-open MITM.** The audit's framing — *"a rogue majority of the
+directories holding shares for the target agent B can FROST-sign a false SessionAssignment claiming
+M's pubkey is B's"* — needs one correction against the code: **the signature is by the INITIATOR's
+quorum, not the target's.** So an assignment substituting M for B would be signed by **A's own
+quorum** and would verify perfectly on A's side.
+
+Verifying the assignment therefore proves *this session was authorized*, never *the counterparty is
+who you meant*. The substitution is caught at ingest by the wrong-signer check that
+`DOD-M15-FRAME-1` made blocking, and closed properly by relay corroboration
+(`DOD-M15-CORROBORATE-1`).
+
+**This is exactly the over-claim `DOD-M15-FRAME-1`'s review caught me making once already** — a
+comment asserting a check shows something it only partly shows. Writing the bound down first.
+
+### Why clause (b) still needs clause (a)
+
+The DoD line's ordering — verify, then gate — holds for a reason the trace confirms: gating the
+standing receiver on "is this dialer named in a live assignment" is only as good as the assignment.
+Without verification the gate consults a document anybody could have written, which relocates trust
+rather than closing it.
+
+**Next:** implement the initiator-side verification — compare `signer_pubkey` against the persisted
+`primaryPubkey`, rebuild the TBS from the assignment's own fields, verify, and **refuse on failure**
+rather than logging. Then the receiver gate.
+
+---
