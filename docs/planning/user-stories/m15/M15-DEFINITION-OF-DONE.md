@@ -118,7 +118,32 @@ may present inbound screening as fully active. When it lands, this row flips to 
 - Distinguishes the character-denylist layer (live) from the semantic layer (not installable).
 - **Withdrawal now, truth later** — both dispositions are legitimate; silence is not.
 
-### `DOD-M15-CLAIM-SCANNER-1` — ❌ An unlisted claim fails the build
+### `DOD-M15-CLAIM-SCANNER-1` — ✅ An unlisted claim fails the build
+> **CLOSED 2026-08-22.** The reviewer did not argue the scanner was weak — it **shipped three false
+> claims past it and showed the green runs.** All three closed, each re-tested afterwards rather
+> than assumed:
+>
+> 1. **A new claim appended to an existing claim LINE** — it counted lines, so
+>    *"CELLO guarantees nobody can ever read your messages, not even us"* added to a sentence that
+>    already made a claim shipped three absolutes with the count unchanged. It counts MATCHES now,
+>    which is also stable when a paragraph reflows.
+> 2. **A `.md` shipped via a DIRECTORY entry in `package.json#files`** — enumeration followed only
+>    entries literally spelled `.md`. That is the same failure as the tarball `SKILL.md` this unit
+>    exists to prevent; the hand-kept list had moved from an array into a spelling convention.
+> 3. **`core/cli/src/registry.ts` was never read** — the DoD named it, and it holds the
+>    highest-stakes prose in the repo: what is printed to an operator at the moment they act.
+>    **41 unadjudicated claims, none ever counted.**
+>
+> My first extraction there keyed on `summary:`/`help:` and measured THREE claims in a 1514-line
+> file. Implausible, which is the only reason I looked: `help` is a multi-line concatenation, so the
+> regex caught the first fragment and stopped before every line carrying a claim.
+>
+> Four vocabulary words the line named were missing — `encrypted`, `screened`, `proof`, `ACTIVE`.
+> The file's own comment claimed `encrypted` was present and gave the reason. **A comment asserting
+> a property the code lacks, inside the unit written to stop exactly that.**
+>
+> **Backlog: 188 claims across 10 surfaces** (was 101 across 9). Shrink-only; a new claim fails the
+> build, revert-tested. Adjudicating them is `DOD-M15-LEDGER-1`.
 **The review's central finding, and Andre's word for it was "letter, not spirit."** A prose ledger is
 a chore that looks like a control: `DOD-M15-LEDGER-1` shipped incomplete because completeness rested
 on one grep vocabulary at one moment — *never / cannot / impossible* — and missed *tamper-proof*,
@@ -261,7 +286,35 @@ evidence: **a green run that asserted nothing.**
   a CI environment, so "we did not test this" cannot look like "this passed".
 - **Audit every `describe.skip`/`skipIf` in both repos** for the same shape while in here.
 
-### `DOD-M15-DIRECTORY-ROT-1` — 🟡 The directory suite cannot survive its own run
+### `DOD-M15-DIRECTORY-ROT-1` — ✅ The directory suite cannot survive its own run
+> **CLOSED 2026-08-22.** Receipt, on a database created with `docker compose down -v && up -d`:
+> **195/196 files, 2245 tests, zero failures — twice back to back.** Two runs because the original
+> symptom was that the failing set MOVED between identical runs, and one green run does not answer
+> that.
+>
+> **The last four failures were not contention at all** — every one failed when run alone. Three
+> suites had been dead for months and were reported as SKIPPED, because vitest marks a suite whose
+> `beforeAll` throws as skipped rather than failed. `dod-dirdata-read-1` used `ON CONFLICT
+> (session_id)` after V31 dropped that constraint; `writeapi-001` named `identity_tree_entries`
+> after V48 dropped the table; `m6b-004-si-001` polled for a directory server nothing starts.
+>
+> **And the cause of the fourth was the kill switch.** V59 moved the agent↔account binding into
+> `agent_account_links`; every fixture proving pause and burn work still seeded only the retired
+> `agent_profiles.account_id`, so all of them were getting `403 not_owner`. The suite named *"burn
+> is permanent"* was asserting nothing about burning. Those tests were dark for exactly the change
+> that broke the kill switch in production (V59's header: one operator, three agents, two of them
+> unpausable).
+>
+> **The final blocker was cross-PACKAGE, and it corrected a claim.** 142/142 was the directory
+> package alone; the root gate runs one vitest process, so directory and operations-agent interleave
+> against one database. Parallel gave 16 failures one run and 19 the next. The database run is now
+> serial (`vitest.config.ts`, scoped to `CELLO_ENV=local`) — the whole-table assertions are RIGHT
+> and scoping them to own-rows would delete what they prove.
+>
+> **Carried, not absorbed:** the shrink-only guard still names **8 files committing a literal
+> `chain_hash`** and **8 deleting from a chained table**. They no longer break the run — the guard
+> is what keeps the list from growing — but converting them is real work and is now
+> `DOD-M15-CHAINDEBT-1` rather than a footnote under a ✅.
 Found 2026-08-22 by running the database suites for the first time (Entry 17), then **triaged before
 being worked** (Entry 18) — which changed what the work is. The first reading was "28 rotten tests".
 It is not.
@@ -361,7 +414,17 @@ It is not.
   assertion updated and **said so in the journal** — never deleted quietly.
 - **Enforcer:** receipt.
 
-### `DOD-M15-COMPOSE-CI-1` — 🟡 The suites that need a database actually run somewhere
+### `DOD-M15-COMPOSE-CI-1` — ✅ The suites that need a database actually run somewhere
+> **CLOSED 2026-08-22.** The `database` job in `.github/workflows/ci.yml` is enabled: compose
+> Postgres, Flyway to head with a hard failure if it does not reach it, then `CELLO_ENV=local pnpm
+> run test`. The repo went from **no automated gate at all** to both halves running.
+>
+> A quarter of the suite — RLS policies, hash-chain constraints, migrations — was inert on every
+> run. It is not any more, and 11 further tests began executing when three suites stopped defaulting
+> to a `cello_spine` database that compose does not create.
+>
+> Enabling it is what found the cross-package contention above, which is the argument for enabling
+> things rather than reasoning about them.
 > **First half shipped 2026-08-22 → Entry 22.** `2558167f`. The repo had **no automated gate at
 > all** — nothing ran tests, lint or typecheck on a push, ever. The unit gate now runs on every push
 > and PR. **The database job is written and disabled behind `if: false`** with its blocker named,
@@ -386,6 +449,52 @@ across six addresses, normalization buying nothing, requesters not affecting eac
   its own line and not a clause someone could have quietly ticked.
 - The compose Postgres already exists and `CELLO_ENV=local pnpm run test` already works locally.
 - **Enforcer:** receipt.
+
+### `DOD-M15-GUARD-HEARD-1` — ❌ A guard that fires is heard by somebody
+**The pattern that recurred four times in one milestone, now its own line** — Andre's rule: fixed
+individually three times is a coincidence, a fourth is a defect class. Each occurrence was found by
+a person READING, never by a test.
+
+The four, and none of them was a missing check — every one was a check that fired into silence:
+
+1. `DOD-M15-SIGNUP-DURABLE-1` — a fail-closed refusal invisible to the person it refused. A
+   table-scoped database error took the whole signup flow down while the health check reported
+   healthy; from each person's side the bot was simply dead.
+2. `DOD-M15-OFFER-SIGNED-1` — two security refusals recorded in memory only. No durable row (so
+   parked content re-pulls forever), and no word to the counterparty, who saw a transport-shaped
+   failure naming nothing that was wrong.
+3. `DOD-M15-RESPONDER-VERIFY-1` — an identity refusal whose printed remedy did not work, and a
+   certificate accepted without verification returning the same shape as a verified one.
+4. The review of that unit, which found **three fixes each deletable with a fully green gate**
+   (2525, 2525, 4057 tests) — a guard whose only proof of existence was that someone remembered it.
+
+- **The test, for any new guard:** delete it and run the gate. If nothing goes red, it is not a
+  guard, it is a comment that happens to execute.
+- **The second test:** name who hears it. The LOG is not an answer on its own — Invariant 2 is loud
+  in the log **and** in the agent-facing response, never one instead of the other. For a refusal
+  that affects a counterparty, they are a third audience.
+- **Fix shape:** a review lens is already in `M15-PROCEDURE.md` ("This guard fires. Who hears it?").
+  This line is for the mechanical half — an enumeration over the refusal reason codes asserting each
+  one reaches the operator surface and, where a counterparty is involved, the wire.
+- **Enforcer:** a test that fails when a `REFUSAL_REASONS` member has no path to an agent-facing
+  surface.
+
+### `DOD-M15-CHAINDEBT-1` — ❌ No fixture puts a hole in a hash-chained table
+Split from `DOD-M15-DIRECTORY-ROT-1` when that line closed, rather than being absorbed into a ✅ it
+did not earn. The suite survives its own run; this is the debt that no longer breaks it.
+
+- `dod-m15-directory-rot-1-chain-writes.test.ts` names **8 files still committing a literal
+  `chain_hash`** and **8 still deleting from a chained table**. Shrink-only and pinned, so the debt
+  cannot grow quietly — a NEW violation fails immediately.
+- **Why it still matters with the run green:** `verifyChain` chains each row to the previous row's
+  stored hash, so any delete invalidates every row after it. These files are one `docker compose`
+  reset away from being harmless and one careless edit away from poisoning a run again.
+- **The generalisation is the launch-relevant half, and it is not a test problem:** a linear
+  whole-table hash chain means ANY deletion — a retention policy, a GDPR erasure, an operator
+  tidying a bad row — turns `verifyChain` permanently red, after which a genuine tamper cannot be
+  distinguished from that baseline. That is word for word the failure `DOD-ACCOUNTS-CHAIN-1` was
+  opened to fix.
+- **Enforcer:** the existing guard's lists reach zero.
 
 ### `DOD-M15-SPINE-LANE-1` — ❌ The spine suites are run, or their absence is a decision on the record
 Split from `DOD-M15-CI-SKIPS-SILENT-1`. 38 files — the M8D spine lane plus the cross-machine
@@ -570,7 +679,23 @@ neither. They ship together.
   same-LAN sessions, which the launch intent names explicitly, and it becomes required again if hole
   punching is ever repaired.
 
-### `DOD-M15-OFFER-SIGNED-1` — 🟡 The frame that opens your door is signed by more than one node
+### `DOD-M15-OFFER-SIGNED-1` — ✅ The frame that opens your door is signed by more than one node
+> **CLOSED 2026-08-22**, unblocked by `DOD-M15-RESPONDER-VERIFY-1` — this line always needed the
+> responder to verify what it was comparing against, and it now does.
+>
+> **Reviewer's verdict, quoted:** *"Clause 1 — verify the signature is internally consistent over
+> the recomputed TBS: **implemented**. Clause 2 — TOFU-pin `counterparty_primary_pubkey` across
+> sessions, refusing a change: **implemented**. 'catches a tampered or garbage assignment which
+> today reaches the seal path unchallenged': **implemented, with a test that survives the revert**."*
+> And on the deletion: *"I looked for an input where the deleted comparison refused and the verifier
+> admits. There is none — the new check dominates on every axis… **Your deletion is safe.**"*
+>
+> Its **HOLLOW TESTS FOUND [blocking]** finding is fixed, not waived. Three fixes were each
+> deletable with a fully green gate (2525, 2525, 4057 tests). Each now has a test that goes red,
+> confirmed by re-running the same reverts. The reviewer also demonstrated that the three
+> "ACCEPTS …" tests asserted only the ABSENCE of a refusal — and the accept path was dying on a
+> missing stub every time, which also produces no refusal event, so they passed on the absence of
+> something that could not happen. They now assert the session reaches the agent.
 > **STILL OPEN — and the work done under it does NOT close it.** cello-client `35a89e1`, `ed49869`,
 > `24ddefa`, `ccbf610` (merged to main). Second review pass in flight.
 >
@@ -620,7 +745,26 @@ clears it**, so the DoD's word "live" is not enforced.
   fails, and expire it on the same clock the directory uses before it gives up waiting for an accept.
 - **Enforcer:** journey.
 
-### `DOD-M15-RESPONDER-VERIFY-1` — 🟡 The responder stops trusting a key it never checked
+### `DOD-M15-RESPONDER-VERIFY-1` — ✅ The responder stops trusting a key it never checked
+> **CLOSED 2026-08-22.** Two review passes — the hard cap — and every blocking finding is fixed.
+> Gate: 4066 tests, lint, typecheck, clean build (`dist` and `.tsbuildinfo` removed first).
+>
+> **Reviewer's verdict, quoted:** *"**SILENT FALLBACKS FOUND** — F5 (a receipt accepted without
+> verification returns a response indistinguishable from a verified one) and F6 (a fabricated
+> assignment passes internal mode and is written to the durable trust anchor with no agent-facing
+> signal). Both HIGH. [blocking]"* Both closed: `verified` now rides on the sealed-receipt response
+> with a note saying not to present it as proof, and `verification: pinned | first_contact` rides on
+> the inbound session event with the out-of-band confirmation named.
+>
+> Also quoted, because it is the finding that generalises: *"three of the five HIGH findings are the
+> same finding wearing different clothes — **a correct guard whose only proof of existence is that
+> someone remembered to write it**… this is the fourth appearance of the guard-nobody-hears pattern
+> in this milestone, which is the threshold the procedure sets for it earning its own DoD line."*
+> → `DOD-M15-GUARD-HEARD-1`.
+>
+> **What this line actually bought, in one sentence:** a tampered assignment used to reach the seal
+> path unchallenged AND GET PINNED, poisoning every later session with that counterparty; it is now
+> refused on first contact, before anything is recorded.
 > **Clause 2 (TOFU pin) landed 2026-08-22** — cello-client `ed49869` + `ccbf610`, merged to main. A
 > directory that names a different threshold group key for a counterparty this agent has completed
 > sessions with is REFUSED, visibly (`cello_check_notifications`) and recoverably
