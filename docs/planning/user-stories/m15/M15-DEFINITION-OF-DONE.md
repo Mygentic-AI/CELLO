@@ -1204,15 +1204,27 @@ diagnosed until this lands.
   state through a fresh connection always sees `false`. Rename or annotate — both Andre and a Hermes
   agent misread it during one investigation.
 
-### `DOD-M15-SELECTION-1` — 🟡 A connection is never bound to an agent it did not select
-> **BUILT 2026-08-22, review in flight.** Clause 1 needed no code: the two rules that looked like
-> they contradicted each other — a release must stay eligible for the sole-online fallback, and a
-> reconnect must attend nothing — only conflict if *resolving a subject* and *attending* are the same
-> act. They are not, and `attended_by: 0` after release+reconnect measures it rather than arguing it.
-> Clause 2 is real code: a fallback selection is now named in the RESPONSE, at the IPC boundary — the
-> one place every response passes through, so the seventeenth handler cannot forget it. Revert-tested
-> both ways: dropping the notice goes red, and so does annotating EVERY response, because a signal
-> that fires on the ordinary case is not a signal.
+### `DOD-M15-SELECTION-1` — ✅ A connection is never bound to an agent it did not select
+> **CLOSED 2026-08-23** (→ Entry 33). Reviewer verdict quoted: *"**SPEC: DEVIATIONS FOUND** — clause
+> 2 is satisfied on MCP only; the CLI half is untranslated and connections without `ipc.connect` get
+> nothing [blocking]… **HOLLOW TESTS FOUND** [blocking] — F1 is the serious one: the diagnosis test
+> does not exercise the fallback and would stay green under the exact mutation the commit claims it
+> pins… I am not rubber-stamping this. Clause 1's reasoning holds up under independent tracing — you
+> did not talk yourself into it — but the artifact you committed to make that conclusion durable does
+> not do the job, and the clause-2 implementation ships an instruction a CLI operator cannot type."*
+> All eleven findings fixed. Gate: 4130 tests, lint, typecheck, clean build.
+>
+> **Clause 1 needed no code**, and the reasoning survived independent attack: a release must stay
+> eligible for the sole-online fallback and a reconnect must attend nothing, which only conflict if
+> *resolving a subject* and *attending* are the same act. They are not — three consumers all read the
+> `currentAgent` field the fallback never writes.
+> **Clause 2 was where my own defects were.** The notice was keyed to the CONNECTION, so under
+> parallel tool calls it rode whichever response finished first — a call that named its agent was
+> told it had not, while the call that actually fell back said nothing. It now lives in the request's
+> async context. It was also spread in downstream of `renderForSurface`, so a CLI operator was told to
+> run `cello_use_agent`, which is not a command; and it offered "name the agent on each call" as a
+> remedy, which leaves the connection exactly as unattended.
+> **Carried:** `DOD-M15-VOCAB-ORDERING-1`.
 `DOD-AGENT-SELECTION-UNWARRANTED-1`. **Depends on `DOD-M15-IPCVISIBLE-1`.** One defect with two
 faces: after a daemon restart a released agent was silently reinstated (under a *different*
 operator's agent name on the same daemon); after an `/mcp` reconnect a selection that had been made
@@ -1225,6 +1237,19 @@ was silently dropped.
   response**, not announced as an accomplished fact.
 - Diagnosis first: reproduce with a daemon restart after a release, with the trigger field from
   `DOD-M15-IPCVISIBLE-1` distinguishing replay from fallback in one run.
+
+### `DOD-M15-VOCAB-ORDERING-1` — ❌ A response cannot be assembled after it has been translated
+Split from `DOD-M15-SELECTION-1`, where it cost an operator-facing defect. `renderForSurface` is a
+PASS at ONE point in the pipeline: anything spread into a response after that point ships
+untranslated, and MCP tool names are not commands a terminal can run.
+- The instance: a fallback notice added at the IPC write told a CLI caller to *"Run
+  `cello_use_agent`"*. The real command is `cello use-agent`. `isInstructionKey` would have rewritten
+  it — the string simply arrived after the rewrite had run.
+- **The prose audit is structurally blind to this class.** It checks that tokens naming tools are
+  REAL tool names, and `cello_use_agent` is one. The defect is the ORDERING, and nothing watches it.
+- The guard belongs on the pipeline, not the vocabulary: make it unrepresentable to add response
+  fields downstream of the renderer, or assert at the boundary that no `*guidance` value leaving for
+  a CLI surface contains an MCP verb.
 
 ### `DOD-M15-DOORBELL-1` — ✅ A daemon shutdown does not ring like an incoming message
 > **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →

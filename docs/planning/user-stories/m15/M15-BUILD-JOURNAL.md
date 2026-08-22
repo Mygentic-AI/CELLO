@@ -15,16 +15,25 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟡 25 ✅, 2 🟡, 2 🅿️, 37 ❌. Both repos clean, pushed, on main.
-> **`SELECTION-1` IS THE UNREVIEWED ONE** — built in `9a53a29` + `e8e70d0` (cello-client), reviewer
-> dispatched, verdict not yet in. Under the WIP limit the ONLY permitted work is closing it: fix its
-> findings, quote the verdict, flip the tag. Do not pull a new line first.
-> (`DEAD-WIRE-FIELD-1` is the other 🟡 and does NOT count against the limit — its client half is
-> reviewed and closed in Entry 32; it stays yellow only because the bilateral wire half is carried.)
+> ### 🟢 26 ✅, 1 🟡 (carried half only), 2 🅿️, 37 ❌. Both repos clean, pushed, on main.
+> **No unreviewed work.** `SELECTION-1` closed in Entry 33 — all eleven findings fixed, verdict
+> quoted, gate green both repos (4130 client / 2265 server). `DEAD-WIRE-FIELD-1` is the remaining 🟡
+> and does NOT count against the WIP limit: its client half is reviewed and closed (Entry 32), and it
+> stays yellow only because the bilateral wire half is carried. **A new line may start.**
 
-- **NEXT ACTION: close `SELECTION-1`** — apply the reviewer's findings, quote the verdict in a new
-  entry, flip the tag to ✅. THEN pull ONE new ❌ line. Candidates in the messaging tier:
-  `FREEZE-STATUS-1`, `UNWITNESSED-1`, `STALEROSTER-1`.
+- **NEXT ACTION: pull ONE new ❌ line.** `STALEROSTER-1` is the recommended pick — client-side,
+  unilateral, no wire change and no migration, and the producer/consumer map is already done (see the
+  next bullet). `FREEZE-STATUS-1` needs a client-side DB migration, which the DoD says must be its own
+  reviewed unit with an upgrade test against a populated pre-migration database. `UNWITNESSED-1` needs
+  a fixture that can attach a relay client.
+- **`STALEROSTER-1` IS ALREADY DIAGNOSED — do not re-derive it.** `unresolvedNodes` /
+  `unresolvedSweptAt` are written ONLY by `resolveConsortiumRoster` in `consortium-bootstrap.ts`, and
+  the only caller is `createRosterAwareEndpointResolver`'s `getConsortiumRoster` — i.e. the FAILOVER
+  path. When the primary resolves, no sweep runs, so the reading freezes at the last failing sweep (or
+  at the startup seed) forever. `checked_at` already exists on the status block. The remaining work is
+  the two remedies the line names: sweep on a slow timer even when healthy, AND mark a reading older
+  than N minutes as stale. **Not** by hiding the field — the line forbids it, because absent and
+  healthy must not look alike.
 - **THE WIRE-CHANGE CONVOY.** Three changes are pending and undeployed and must move together:
   `SUBMIT-ID-1`'s 7-element Structure 1, `TERMINAL-REASON-1`'s new reasons, and
   `DEAD-WIRE-FIELD-1`'s field removal. Loosen `directory-frames.ts:1182`'s `parseParticipant` in the
@@ -3023,3 +3032,111 @@ stayed green. **"It did not fail" is a shadow. Name the value.** Now a worked ex
 - **`DOD-M15-PARSEFAIL-CAUSE-1`** — `assignment_parse_failed` is one exit-point label over ~12
   causes. Removing two of them is what made the class visible.
 
+
+---
+
+## Entry 33 — the notice I added to stop a silent fallback went to the wrong call, and told CLI users to run a command that does not exist
+
+`DOD-M15-SELECTION-1` → ✅. Eleven findings. **Four blocking, and all four were in the fix I shipped,
+not in the code it was fixing.** That is the second unit in a row where the review's real yield was
+my own work rather than the defect on the line.
+
+### The verdict, quoted
+
+> **SPEC: DEVIATIONS FOUND** — clause 2 is satisfied on MCP only; the CLI half is untranslated and
+> connections without `ipc.connect` get nothing [blocking].
+> **SILENT FALLBACKS FOUND** — F8 (fallback fires, response says nothing) and F9 (notice consumed
+> then dropped) [F8 blocking].
+> **ERRORS NAME THEIR CAUSE** — no error substitution in this diff; the guidance names the actual
+> mechanism, and names it accurately.
+> **HOLLOW TESTS FOUND** [blocking] — F1 is the serious one: the diagnosis test does not exercise the
+> fallback and would stay green under the exact mutation the commit claims it pins. […] **Test 1 does
+> NOT survive the revert test. Test 3 survives only the crudest revert.**
+> **REMOVALS PROVEN** — n/a.
+>
+> *"I am not rubber-stamping this. Clause 1's reasoning holds up under independent tracing — you did
+> not talk yourself into it — but the artifact you committed to make that conclusion durable does not
+> do the job, and the clause-2 implementation ships an instruction a CLI operator cannot type."*
+
+### Clause 1 was sound, and the test I wrote to prove it proved nothing
+
+I asked the reviewer to attack the diagnosis specifically, because I had got this same line wrong in
+the opposite direction earlier and had to revert. The reasoning survived: **resolving a subject and
+attending are different acts**, verified independently at three consumers that all read the same
+`currentAgent` field the fallback never writes — the doorbell router, the away-message decision, and
+the attendance count. The reviewer found a fourth place the codebase already says it, which I had not
+cited.
+
+**But the test was vacuous.** It reconnected and called `cello_list_agents`, which never resolves an
+agent at all. So `attended_by` was 0 for a reason with no connection to the property, and the
+mutation the commit claimed it pinned — making the fallback register attendance — left it green. A
+test that measures the right number for the wrong reason is worse than no test: it retires the
+question.
+
+### The notice went to whichever call finished first
+
+Claude Code issues tool calls in parallel. I keyed the notice to the CONNECTION and read it back at
+the response boundary, so:
+
+1. the agent calls `cello_receive` with nothing selected — the fallback fires, records the notice,
+   and the handler blocks for up to 30 seconds;
+2. in the same turn it calls `cello_sessions` naming `bob` outright — no fallback;
+3. `cello_sessions` returns first and takes the notice on its way out.
+
+Bob's response says *"no agent was selected, so 'solo' was used"* — **false, on the one call that did
+name an agent** — while the call that actually fell back says nothing. Exactly inverted. A notice is
+a fact about one CALL, so it now lives in that call's async context and dies with it.
+
+### And it told CLI users to run something that is not a command
+
+I spread the notice in at the IPC write, which is downstream of `renderForSurface`. The vocabulary
+layer rewrites any key ending in `guidance` and *would* have turned `cello_use_agent` into `cello
+use-agent` for a terminal — it just arrived after the rewrite had run. So `cello inbox` handed the
+operator an instruction they cannot type, which is the exact failure that layer exists to prevent.
+
+**The prose audit is structurally blind to it.** `cello_use_agent` IS a real tool name, so the
+allowlist check passes while the operator is stranded. The guard is the ORDERING, and nothing was
+watching the ordering.
+
+### The remedy that does not remedy
+
+The guidance offered two verbs. *"Name the agent explicitly on each call"* fixes which agent a call
+is about and leaves the connection **exactly as unattended** — an agent taking that option believes
+it has acted on the warning and is still deaf. It now says so outright.
+
+It also missed the consequence the operator's CORRESPONDENT sees. With attendance unset,
+`sendAwayResponse` does not early-return: **anyone who opens a session is sent an away auto-reply
+while you sit there able to answer.** That is more visible than the missing doorbell, and it was not
+in the notice.
+
+### Where I disagree with the review, and it matters
+
+F11 argued the DoD's reported symptom — *reinstated under a **different** operator's agent name* —
+cannot come from the sole-online fallback, since it needs exactly one agent online. It can. The
+scenario is not two agents online; it is **A releases and A's agent goes offline, leaving B's agent
+as the only one online** — so A's connection acts as B's identity. `onlineAgents.size === 1` is
+satisfied. The shim's replay cache (since fixed) was a second route to the same symptom, not the only
+one. Clause 2's notice is what makes that case non-silent, which is the line's own stated remedy.
+
+### Five mutations the suite could not see
+
+Each is now a test, and each was confirmed red by deleting the guard: the sticky notice (every test
+made at most ONE post-fallback call, so a missing clear was invisible), two requests in flight, a
+handler that throws, the CLI surface, and a connection that never handshook.
+
+Finding a genuinely throwing handler needed a probe — **none of them throw deliberately**, they all
+return `{ok:false}`. `cello_close_session` with a non-string `session_id` resolves the agent into SQL
+bind param 1 and dies binding param 2: resolve-then-throw, the exact ordering the leak needs.
+
+The guidance assertion checked for the token `cello_use_agent` and stayed green when the entire body
+was replaced with `"Run cello_use_agent."` — dropping the explanation that is the whole point.
+**Hollow-test Q4 again, one unit after I wrote the box.** Agreeing with it is still not obeying it.
+
+Gate: 4130 tests, lint, typecheck, clean build. Server side re-gated at 2265.
+
+### Carried
+
+- **`DOD-M15-VOCAB-ORDERING-1`** (new) — the vocabulary rewrite is a PASS at one point in the
+  pipeline, and anything spread into a response after it ships untranslated. This unit hit it; the
+  audit cannot see it because the untranslated token is a legitimate tool name. Needs a guard on the
+  ordering, not on the vocabulary.
