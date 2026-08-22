@@ -261,7 +261,7 @@ evidence: **a green run that asserted nothing.**
   a CI environment, so "we did not test this" cannot look like "this passed".
 - **Audit every `describe.skip`/`skipIf` in both repos** for the same shape while in here.
 
-### `DOD-M15-DIRECTORY-ROT-1` — ❌ The directory suite cannot survive its own run
+### `DOD-M15-DIRECTORY-ROT-1` — 🟡 The directory suite cannot survive its own run
 Found 2026-08-22 by running the database suites for the first time (Entry 17), then **triaged before
 being worked** (Entry 18) — which changed what the work is. The first reading was "28 rotten tests".
 It is not.
