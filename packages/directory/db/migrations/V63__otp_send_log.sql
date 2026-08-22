@@ -56,6 +56,64 @@ CREATE INDEX IF NOT EXISTS idx_otp_send_log_requester_time
 CREATE INDEX IF NOT EXISTS idx_otp_send_log_sent_at
   ON otp_send_log (sent_at);
 
+-- ─── Row-level security, policies and grants ───────────────────────────────────────────────────
+--
+-- THE FIRST VERSION OF THIS MIGRATION HAD NONE OF THIS, and every ops-agent integration test failed
+-- with `permission denied for table otp_send_log`. It was invisible for one reason worth recording:
+-- those suites are gated on CELLO_ENV=local and had never run in any automated context
+-- (DOD-M15-CI-SKIPS-SILENT-1, same milestone). A table can be created, typecheck, lint, and pass a
+-- 1669-test gate while being unusable by the only process that needs it.
+--
+-- APPEND-ONLY, matching `registrations` and `signal_revocations`. There is no UPDATE policy and
+-- DELETE is revoked from the service role: a rate-limit record that the limited party's own service
+-- could edit or remove is not a rate limit. Retention deletion is an operator action against a role
+-- that holds DELETE, not something the request path can reach.
+
+ALTER TABLE otp_send_log ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'otp_send_log' AND policyname = 'insert_only'
+  ) THEN
+    CREATE POLICY insert_only ON otp_send_log
+      FOR INSERT TO cello_service WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'otp_send_log' AND policyname = 'select_all'
+  ) THEN
+    CREATE POLICY select_all ON otp_send_log
+      FOR SELECT TO cello_service USING (true);
+  END IF;
+  -- THE ROLE THAT ACTUALLY WRITES THIS TABLE. The ops agent connects as `cello_ops_agent`, a role
+  -- V26 created and deliberately scoped to the registration tables and nothing else. Granting only
+  -- `cello_service` — which the second version of this migration did — left every ops-agent
+  -- integration test failing with `permission denied` against a table whose grants looked correct
+  -- in the file. Least privilege means a new table is invisible to that role until it is named.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'otp_send_log' AND policyname = 'insert_ops_agent'
+  ) THEN
+    CREATE POLICY insert_ops_agent ON otp_send_log
+      FOR INSERT TO cello_ops_agent WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'otp_send_log' AND policyname = 'select_ops_agent'
+  ) THEN
+    CREATE POLICY select_ops_agent ON otp_send_log
+      FOR SELECT TO cello_ops_agent USING (true);
+  END IF;
+END $$;
+
+GRANT INSERT, SELECT ON otp_send_log TO cello_service;
+GRANT INSERT, SELECT ON otp_send_log TO cello_ops_agent;
+-- BIGSERIAL: the INSERTs above cannot allocate an id without this.
+GRANT USAGE, SELECT ON SEQUENCE otp_send_log_id_seq TO cello_service;
+GRANT USAGE, SELECT ON SEQUENCE otp_send_log_id_seq TO cello_ops_agent;
+-- Append-only, enforced rather than described (SI-002, as `registrations` does). A rate-limit record
+-- the limited party's own service could edit or delete is not a rate limit.
+REVOKE UPDATE, DELETE ON otp_send_log FROM cello_service;
+REVOKE UPDATE, DELETE ON otp_send_log FROM cello_ops_agent;
+
 COMMENT ON TABLE otp_send_log IS
   'DOD-M15-SIGNUP-DURABLE-1: append-only log of successful signup OTP sends, keyed on the REQUESTER '
   '(channel, channel_user_id) and never on the email address or domain. Backs the rolling-window '

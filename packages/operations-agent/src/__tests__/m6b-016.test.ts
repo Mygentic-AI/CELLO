@@ -135,9 +135,10 @@ async function driveToCompletion(
   otpState: ReturnType<typeof makeTestOtpDelivery>,
   userId: string,
   email: string,
+  phone: string,
 ): Promise<void> {
   await channelState.injectMessage(userId, "hello");
-  await channelState.injectMessage(userId, `CONTACT:${userId}:+447911123456`);
+  await channelState.injectMessage(userId, `CONTACT:${userId}:+${phone}`);
   await channelState.injectMessage(userId, email);
   const otp = otpState.captured[otpState.captured.length - 1].otp;
   await channelState.injectMessage(userId, otp);
@@ -147,6 +148,7 @@ async function driveToCompletion(
 
 describeIntegration("M6B-016 — Registration Data Integrity", () => {
   let pool: pg.Pool;
+  let phone: string;
   let engine: RegistrationEngine;
   let loggerState: ReturnType<typeof makeTestLogger>;
   let channelState: ReturnType<typeof makeTestChannel>;
@@ -161,6 +163,21 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     otpState = makeTestOtpDelivery();
     preAuthState = makeCapturingPreAuth();
     userId = `m6b016-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    /**
+     * A PHONE PER TEST, not a shared constant.
+     *
+     * `registrations` carries a partial UNIQUE index on `phone_stub_hash` where the state is
+     * active, so every test in this file hardcoding +447911123456 made them contend for one row.
+     * Each test already minted a unique `userId`, which hid it: the afterEach cleanup expires the
+     * active registration for THIS user, and a test that legitimately creates a second registration
+     * (AC-002 re-registers with a different email) leaves one behind under the same phone.
+     *
+     * The symptom was `duplicate key value violates unique constraint` in a LATER test — passing in
+     * isolation, failing in the suite, which is the signature of a shared resource rather than a
+     * broken assertion. Making the phone unique removes the contention instead of patching the
+     * cleanup to chase it.
+     */
+    phone = `4479${String(Date.now()).slice(-6)}${Math.floor(Math.random() * 900 + 100)}`;
 
     engine = new RegistrationEngine({
       pool,
@@ -193,7 +210,7 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     const expectedHash = hashEmail(email);
 
     // Drive registration to completion
-    await driveToCompletion(channelState, otpState, userId, email);
+    await driveToCompletion(channelState, otpState, userId, email, phone);
 
     // Verify email_stub_hash in DB
     const result = await pool.query<{ email_stub_hash: string | null }>(
@@ -232,7 +249,7 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     const differentEmail = "attacker@example.com";
 
     // Complete the first registration
-    await driveToCompletion(channelState, otpState, userId, originalEmail);
+    await driveToCompletion(channelState, otpState, userId, originalEmail, phone);
 
     // Start re-registration: send message → get warning
     await channelState.injectMessage(userId, "hello");
@@ -240,7 +257,7 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     await channelState.injectMessage(userId, "CONFIRM");
 
     // Drive through phone verification
-    await channelState.injectMessage(userId, `CONTACT:${userId}:+447911123456`);
+    await channelState.injectMessage(userId, `CONTACT:${userId}:+${phone}`);
 
     // Submit the DIFFERENT email
     await channelState.injectMessage(userId, differentEmail);
@@ -281,12 +298,12 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     const email = "same@example.com";
 
     // Complete the first registration
-    await driveToCompletion(channelState, otpState, userId, email);
+    await driveToCompletion(channelState, otpState, userId, email, phone);
 
     // Start re-registration
     await channelState.injectMessage(userId, "hello");
     await channelState.injectMessage(userId, "CONFIRM");
-    await channelState.injectMessage(userId, `CONTACT:${userId}:+447911123456`);
+    await channelState.injectMessage(userId, `CONTACT:${userId}:+${phone}`);
 
     // Submit the SAME email
     await channelState.injectMessage(userId, email);
@@ -306,7 +323,7 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
   it("AC-004: registration completion upserts into channel_identities", async () => {
     const email = "channel@example.com";
 
-    await driveToCompletion(channelState, otpState, userId, email);
+    await driveToCompletion(channelState, otpState, userId, email, phone);
 
     // Verify channel_identities has a row
     const result = await pool.query<{
@@ -339,12 +356,12 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     const email = "reregister@example.com";
 
     // First registration
-    await driveToCompletion(channelState, otpState, userId, email);
+    await driveToCompletion(channelState, otpState, userId, email, phone);
 
     // Re-registration
     await channelState.injectMessage(userId, "hello");
     await channelState.injectMessage(userId, "CONFIRM");
-    await channelState.injectMessage(userId, `CONTACT:${userId}:+447911123456`);
+    await channelState.injectMessage(userId, `CONTACT:${userId}:+${phone}`);
     await channelState.injectMessage(userId, email);
     const otpEntry = otpState.captured[otpState.captured.length - 1];
     await channelState.injectMessage(userId, otpEntry.otp);
@@ -365,7 +382,7 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     const email = "copy@example.com";
 
     // Complete first registration
-    await driveToCompletion(channelState, otpState, userId, email);
+    await driveToCompletion(channelState, otpState, userId, email, phone);
 
     // Trigger re-registration warning
     await channelState.injectMessage(userId, "hello");
@@ -396,7 +413,7 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     const email = "payload@example.com";
     const expectedHash = hashEmail(email);
 
-    await driveToCompletion(channelState, otpState, userId, email);
+    await driveToCompletion(channelState, otpState, userId, email, phone);
 
     // Verify the captured pre-auth request
     expect(preAuthState.calls.length).toBe(1);
@@ -410,7 +427,7 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
 
   it("SI-001: channel_user_id is never sent to the directory pre-auth API", async () => {
     const email = "si001@example.com";
-    await driveToCompletion(channelState, otpState, userId, email);
+    await driveToCompletion(channelState, otpState, userId, email, phone);
 
     // The pre-auth call should contain phoneStubHash and emailStubHash, NOT channel_user_id
     const call = preAuthState.calls[0];
@@ -429,12 +446,12 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     const attackerEmail = "attacker@evil.com";
 
     // Complete the legitimate user's first registration
-    await driveToCompletion(channelState, otpState, userId, originalEmail);
+    await driveToCompletion(channelState, otpState, userId, originalEmail, phone);
 
     // Attacker triggers re-registration and submits a different email
     await channelState.injectMessage(userId, "hello");
     await channelState.injectMessage(userId, "CONFIRM");
-    await channelState.injectMessage(userId, `CONTACT:${userId}:+447911123456`);
+    await channelState.injectMessage(userId, `CONTACT:${userId}:+${phone}`);
     await channelState.injectMessage(userId, attackerEmail);
     const otpEntry = otpState.captured[otpState.captured.length - 1];
 
@@ -455,7 +472,7 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
 
   it("SI-003: cello_ops_agent role cannot DELETE from channel_identities", async () => {
     const email = "si003@example.com";
-    await driveToCompletion(channelState, otpState, userId, email);
+    await driveToCompletion(channelState, otpState, userId, email, phone);
 
     // Attempt to delete — should fail with permission denied
     await expect(
