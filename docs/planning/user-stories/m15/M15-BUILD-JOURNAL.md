@@ -2173,3 +2173,69 @@ break, at the row whose predecessor was deleted two minutes before the fix lande
 existing database those chain assertions stay red **for reasons already fixed**, indistinguishable
 from a fresh break. `docker compose down -v && docker compose up -d`, once. It is on the DoD line now
 rather than in my head, which is the only reason anyone else would ever know.
+
+## Entry 23 — two errors that named the wrong thing, and a probe that gave up too early
+
+### `DOD-M15-ERRSTRING-1` — the message that contradicted itself
+
+`counterparty_offline` was returned on 2026-08-16 for a garbage-collecting node, a roster below
+threshold, and a stale gateway. The counterparty was online in all three. Most of a day went into the
+wrong subsystem.
+
+The reachable producer is almost comic once you see it. When the directory answered *online* but
+named no node holding them, the code returned `counterparty_offline` — and the guidance attached to
+that very reason said, in the next sentence, *"the directory reported the counterparty online."* One
+message, two halves, contradicting each other. The half an operator acts on is the reason, so they go
+and ask the one party whose side is working.
+
+It now returns `directory_named_no_home`, and its guidance says where the fault is **not** before
+saying what to do: *"there is nothing for them to fix on their side."*
+
+**The part I got wrong first, and it matters more than the fix.** I also rewrote the exhausted-loop
+fallthrough, describing it in a comment as *the catch-all behind the incident*. Then I traced it:
+every branch in that loop either `continue`s while attempts remain or returns, and the body ends in
+`return result`. **The line is unreachable** — a compiler backstop. My comment would have sent the
+next reader to a line that has never executed, which is the same failure mode as the bug I was
+fixing, one level up.
+
+**Rule:** before writing the sentence that explains a defect, check that the line you are blaming can
+run. "This is the catch-all" is a claim about control flow, and control flow is readable.
+
+It still must not name a party. A backstop that fires is by definition an unpredicted case — the
+worst possible moment to assert someone specific is at fault.
+
+Two regression tests pin what this must *not* do: a directory that genuinely reports offline is
+quoted rather than second-guessed, and an unknown agent keeps its own reason. A fourth pins
+Invariant 3 directly — an upstream `timeout` survives to the caller instead of being restated as a
+claim about whether the counterparty is online.
+
+### `DOD-M15-BOOTSTRAP-1` — a longer wait would not have helped
+
+The bootstrap probe gave each directory node **one** attempt with a 5-second deadline. A packet lost
+during the TCP handshake is abandoned inside the retransmit backoff, and the node is dropped from the
+roster. Nothing is wrong with the node, the network, or the code — it is a normal user on a normal
+lossy link, and one of their directories silently disappears.
+
+The counter-intuitive part is why a bigger timeout does not fix it: **waiting longer on the original
+socket keeps waiting on the same lost handshake.** The win is a *fresh connection*. So: three
+attempts at 8 s, capped at 20 s total, each a new `fetch`.
+
+**What is NOT retried is half the design.** A 404, a 503, or a payload with no `/p2p/` is a definite
+answer from a server that is demonstrably reachable. Retrying it spends the whole budget to receive
+the same reply three times and delays every other node in the roster. Only `timeout`,
+`connect_error` and `dns_error` get another connection.
+
+**A retry that succeeds silently hides a degrading link**, so two things now surface it: the
+unresolved warning carries how many probes were spent — a node dropped after one deterministic 404
+and one dropped after three timeouts used to read identically, and they call for opposite responses —
+and a node that answered only on a retry logs `resolved_after_retry` at INFO. Not WARN: nothing is
+wrong yet, and a warning on a recovered probe is noise. But before the retry existed, those same
+conditions dropped the node entirely.
+
+**Rule (the one worth keeping):** when a fix adds resilience, add the signal that says the resilience
+was *needed*. Otherwise the system quietly absorbs a worsening condition until it exceeds the new
+margin too, and the first anyone hears of it is the second outage.
+
+The existing classification tests were updated to assert `attempts` exactly rather than being
+loosened to `toMatchObject` — so they now also pin the policy: a DNS blip gets three probes, a 503
+gets one, and the happy path costs exactly one.

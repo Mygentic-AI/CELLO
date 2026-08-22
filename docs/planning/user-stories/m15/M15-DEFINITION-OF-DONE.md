@@ -326,6 +326,19 @@ It is not.
   `docker compose down -v && docker compose up -d` (or `TRUNCATE user_accounts CASCADE`).
   **DONE on this machine 2026-08-22** — reset and verified: `account-001` + `dod-accounts-chain-1`,
   18 tests, green. Any OTHER machine that ran the pre-fix suite still needs it once.
+- **THE REMAINING TRUNCATES ARE A DESIGN TASK, not a mechanical one — checked, 2026-08-22.** The
+  easy half of `persist-021` converted cleanly to `BEGIN`/`ROLLBACK` (its tests only read back what
+  they wrote, so they never needed the row to persist). The blocks that are LEFT truncate
+  `conversation_seals` because they make **whole-table** assertions — `verifyChain` chaining from
+  `CHAIN_GENESIS`, `expect(rowCount).toBe(3)` — which are only true of an empty table.
+  - `TRUNCATE` is transactional in Postgres, so the obvious fix is to do it inside the rolled-back
+    transaction. **That does not work as-is:** the writes go through `PgDirectoryStore`, which holds
+    its own pool and calls `.connect()` for the advisory lock, so it would not see the transaction's
+    truncate. Same reason `cross-node-discovery`'s third block could not use one.
+  - **So the choice is:** route the store through a single caller-supplied connection (a change to
+    its shape, or a test-only subclass), or give these assertions a scope they can own. Not a
+    fixture edit — it is the whole-table-assertion problem in its hardest form, and it should be
+    decided once and applied to every truncating block rather than improvised per file.
 - **STILL OPEN — the backlog is declared, not hidden.** `dod-m15-directory-rot-1-chain-writes.test.ts`
   enumerates it: **9 files still commit a literal `chain_hash`**, **10 still delete from a chained
   table**. New violations fail immediately; the lists are shrink-only and their counts are pinned, so
@@ -656,7 +669,14 @@ day.
 - Bilateral wire contract: the relay tolerates the new shape before any client depends on it.
 - **Enforcer:** journey, including a retried send.
 
-### `DOD-M15-BOOTSTRAP-1` — ❌ One lost packet stops dropping a directory from the roster
+### `DOD-M15-BOOTSTRAP-1` — 🟡 One lost packet stops dropping a directory from the roster
+> **Built 2026-08-22 → Entry 23.** cello-client `32277f0`. Gate 350 files, lint, typecheck, build.
+> **Review in flight — the tag does not move until its verdict is quoted.** Three probes at 8 s,
+> 20 s total cap, retrying only `timeout`/`connect_error`/`dns_error`; a deterministic answer (404,
+> 503, malformed payload) still costs exactly one probe, and the happy path costs one. Two
+> visibility additions: the unresolved warning carries how many probes were spent, and a node that
+> answered only on a retry logs `resolved_after_retry` — nothing is wrong yet, but the path is
+> losing packets, and before this those conditions dropped it entirely.
 `DOD-BOOTSTRAP-PROBE-RETRY-1`. Fails for a normal user on a lossy link with nothing wrong anywhere
 in the system.
 - `fetchBootstrapResult` gives each node one attempt with a 5-second deadline and no retry; a probe
@@ -665,12 +685,18 @@ in the system.
 - ~3 attempts at ~8 s with a bounded total (~20 s). **A longer deadline alone does not fix it** — the
   win comes from a fresh connection, not a longer wait.
 
-### `DOD-M15-ERRSTRING-1` — ❌ An error names what was observed, never an inferred conclusion
+### `DOD-M15-ERRSTRING-1` — 🟡 An error names what was observed, never an inferred conclusion
 `DOD-COUNTERPARTY-OFFLINE-LIE-1`. One string, `counterparty_offline`, returned on 2026-08-16 for a
 garbage-collecting node, a roster below threshold, and a stale gateway — naming a party that was
 online in all three and nothing that was broken. Most of a day lost in the wrong subsystem.
 - A roster below threshold says so. A node that cannot be reached is named.
 - Generalises to Invariant 3: **downstream never overwrites an upstream descriptive error.**
+> **Built 2026-08-22 → Entry 23.** cello-client `a5900f3`. Gate 349 files, lint, typecheck.
+> **Review not yet dispatched — the tag does not move until its verdict is quoted.** The reachable
+> false-offline (directory says ONLINE, names no home) is now `directory_named_no_home`, whose
+> guidance says where the fault is NOT before saying what to do. The exhausted-loop fallthrough was
+> also rewritten, but tracing it showed the line is UNREACHABLE — a compiler backstop, not the
+> source of the incident, and the comment now says so rather than sending the next reader wrong.
 
 ### `DOD-M15-TRANSPORT-TERMINAL-1` — ❌ A transport blip stops killing a healthy conversation
 `DOD-M12B-TRANSPORT-FAULT-NOT-TERMINAL-1`. Upstream of the two lines below it; fixing it likely
