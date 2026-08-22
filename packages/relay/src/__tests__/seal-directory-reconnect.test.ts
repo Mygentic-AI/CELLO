@@ -189,3 +189,78 @@ describe("seal submission when the directory connection has died mid-life", () =
     expect(result).toEqual({ ok: false, kind: "unreachable", reason: "directory_unavailable" });
   });
 });
+
+describe("DOD-M15-TRANSPORT-TERMINAL-1: processSeal CLASSIFIES its failures", () => {
+  /**
+   * THE HALF THE UNIT'S OWN TEST FILE CANNOT REACH — review T1.
+   *
+   * `dod-m15-transport-terminal-1.test.ts` substitutes the whole `DirectoryAdapter` with a stub that
+   * returns whatever the test hands it. Every assertion there is about the RELAY'S BRANCH on `kind`
+   * — never about this method ASSIGNING it. So the classification that *is* the unit had no test,
+   * and the review measured what that permitted:
+   *
+   *   - flip the merits branch to `unreachable` → every refused seal becomes non-terminal, retries
+   *     forever, and the operator is never told their seal was rejected. **Gate stayed green.**
+   *   - flip a transport branch to `refused` → the original defect, fully restored, on the most
+   *     likely field case. **Gate stayed green.**
+   *
+   * The test that names the defect and the code that classifies it were not connected.
+   */
+  it("a directory that ANSWERS with an error is a VERDICT — kind: refused", async () => {
+    const node = {
+      ...nodeBase(),
+      dial: vi.fn(async () => ({ peerId: PEER_ID })),
+      newStream: vi.fn(async () => fakeStream({ type: "error", reason: "merkle_root_mismatch" })),
+    };
+    const adapter = new NetworkDirectoryAdapter({ directoryPeerId: PEER_ID, directoryMultiaddrs: [MULTIADDR] });
+    adapter.connect(node as never);
+
+    const result = await adapter.processSeal(sessionId, SEAL);
+
+    expect(result).toEqual({ ok: false, kind: "refused", reason: "merkle_root_mismatch" });
+  });
+
+  it("a stream that closes SILENTLY is UNKNOWN, not unreachable — the submission was sent", async () => {
+    /**
+     * Review F2. The directory acknowledges only after its FULL ceremony — FROST, database write,
+     * `session_sealed` pushed to both clients — so silence means the outcome is unknown, not that
+     * nothing happened. Classifying it `unreachable` let the relay reopen a session the directory
+     * may already have notarized.
+     */
+    const node = {
+      ...nodeBase(),
+      dial: vi.fn(async () => ({ peerId: PEER_ID })),
+      newStream: vi.fn(async () => ({
+        send: vi.fn(),
+        close: vi.fn(async () => {}),
+        async *[Symbol.asyncIterator]() { /* closes carrying nothing */ },
+      })),
+    };
+    const adapter = new NetworkDirectoryAdapter({ directoryPeerId: PEER_ID, directoryMultiaddrs: [MULTIADDR] });
+    adapter.connect(node as never);
+
+    const result = await adapter.processSeal(sessionId, SEAL);
+
+    expect(result).toEqual({ ok: false, kind: "unknown", reason: "no_response" });
+  });
+
+  it("a stream that cannot be OPENED is unreachable — nothing reached anyone", async () => {
+    // The only case that proves nothing was decided: the frame never went on the wire.
+    const node = {
+      ...nodeBase(),
+      dial: vi.fn(async () => ({ peerId: PEER_ID })),
+      newStream: vi.fn(async () => { throw connectionLost(); }),
+    };
+    const adapter = new NetworkDirectoryAdapter({ directoryPeerId: PEER_ID, directoryMultiaddrs: [MULTIADDR] });
+    adapter.connect(node as never);
+
+    const result = await adapter.processSeal(sessionId, SEAL);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(
+      result.kind,
+      "a failure to open the stream is the one transport case that proves nothing was decided",
+    ).toBe("unreachable");
+  });
+});

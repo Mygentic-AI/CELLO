@@ -668,7 +668,13 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
     | { ok: true }
     | {
         ok: false;
-        kind: "refused" | "unreachable";
+        /**
+         * `unreachable` — nothing was decided AND nothing was sent. Safe to roll back.
+         * `unknown`     — the submission WENT ON THE WIRE and no answer came back. The directory may
+         *                 have notarized it. Not safe to roll back, not safe to terminalise.
+         * `refused`     — a directory read it and rejected it. A verdict.
+         */
+        kind: "refused" | "unreachable" | "unknown";
         reason: string;
         redirect?: { nodeId: string; peerId: string; multiaddr: string };
       }
@@ -690,6 +696,9 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
       seq_count: sealData.seq_count,
     }) as Uint8Array;
 
+    // Whether the frame reached the wire. A pre-send failure proves nothing was decided; a
+    // post-send one does not (review F2).
+    let sent = false;
     try {
       // Ensure connected — to the redirect target when one was supplied, else the configured node.
       const addrs = target ? [target.multiaddr] : this.#directoryMultiaddrs;
@@ -697,6 +706,7 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
 
       const stream = await this.#openDirectoryStream(this.#node, addrs, peerId);
       stream.send(lp.encode.single(frame));
+      sent = true;
       await stream.close();
 
       for await (const chunk of lp.decode(stream)) {
@@ -718,12 +728,28 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
           ...(redirect?.peerId && redirect.multiaddr ? { redirect } : {}),
         };
       }
-      // The stream closed carrying nothing. A directory that intends to refuse says so; silence is
-      // the connection dying, not an opinion.
-      return { ok: false, kind: "unreachable", reason: "no_response" };
+      /**
+       * UNKNOWN, not unreachable — review F2, and the distinction is load-bearing.
+       *
+       * The submission was SENT. The directory's `processSeal` runs the FULL ceremony — FROST,
+       * database write, `session_sealed` pushed to BOTH clients — and only THEN writes
+       * `seal_received` back to us. That window is where the relay spends essentially all of its
+       * seal time, and it is exactly where a MIG roll or NAT rebind kills the stream.
+       *
+       * So silence here does not mean nothing happened. It means we do not know, and treating it as
+       * "unreachable" would roll the session back to `active` while the directory holds a valid
+       * certificate over root R — after which a retry seals a LARGER leaf set as R′, and the two
+       * parties hold a receipt the directory has no row for.
+       */
+      return { ok: false, kind: "unknown", reason: "no_response" };
     } catch (err) {
-      // Dial failed, connection lost, timed out. The submission never reached anyone.
-      return { ok: false, kind: "unreachable", reason: describeThrown(err) };
+      /**
+       * A throw AFTER the send is also unknown, for the same reason. Only a failure to establish the
+       * stream at all proves nothing was decided — and `#openDirectoryStream` throwing is that case.
+       */
+      const thrown = describeThrown(err);
+      const neverSent = !sent;
+      return { ok: false, kind: neverSent ? "unreachable" : "unknown", reason: thrown };
     }
   }
 }

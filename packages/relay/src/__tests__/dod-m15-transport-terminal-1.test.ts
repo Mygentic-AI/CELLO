@@ -150,7 +150,7 @@ async function makeAssignment(
 async function sealThen(opts: {
   scope: ReturnType<typeof createTestScope>;
   /** What the directory adapter does when asked to adjudicate. */
-  answer: () => Promise<{ ok: true } | { ok: false; kind?: "refused" | "unreachable"; reason: string }>;
+  answer: () => Promise<{ ok: true } | { ok: false; kind?: "refused" | "unreachable" | "unknown"; reason: string }>;
 }): Promise<{ stillAcceptsLeaves: boolean; nextReason: string | undefined; asked: number }> {
   const dirKp = generateKeypair();
   const dirPub = await dirKp.getPublicKey();
@@ -261,7 +261,7 @@ describe("DOD-M15-TRANSPORT-TERMINAL-1: only a verdict is terminal", () => {
      */
     const out = await sealThen({
       scope,
-      answer: async () => ({ ok: false as const, kind: "unreachable" as const, reason: "connection_lost: no open connection to peer" }),
+      answer: async () => ({ ok: false as const, kind: "unreachable" as const, reason: "dial_failed: could not open a stream" }),
     });
     expect(out.asked).toBeGreaterThan(0);
     expect(
@@ -281,6 +281,32 @@ describe("DOD-M15-TRANSPORT-TERMINAL-1: only a verdict is terminal", () => {
       answer: async () => ({ ok: false as const, kind: "unreachable" as const, reason: "directory_unavailable" }),
     });
     expect(out.stillAcceptsLeaves, "no directory was even contacted; nothing was decided").toBe(true);
+  }, 30_000);
+
+  it("an UNKNOWN outcome is neither reopened nor terminalised — review F2", async () => {
+    /**
+     * SENT, NO ANSWER. The directory acknowledges only after its FULL ceremony, so silence may mean
+     * it notarized this session and the acknowledgement died on the way home.
+     *
+     * Reopening would be the dangerous half: the tree could grow past a root the directory has
+     * already certified, a retry would seal a LARGER leaf set as R′, and both parties would hold a
+     * receipt the directory has no row for. My first version classified this as `unreachable` and
+     * did exactly that.
+     *
+     * Terminalising is equally wrong — the seal may have succeeded. So the session stays
+     * non-accepting: honest about what is not known.
+     */
+    const out = await sealThen({
+      scope,
+      answer: async () => ({ ok: false as const, kind: "unknown" as const, reason: "no_response" }),
+    });
+    expect(out.asked).toBeGreaterThan(0);
+    expect(
+      out.stillAcceptsLeaves,
+      "An unknown outcome reopened the session. The directory may hold a certificate over the " +
+        "current root; accepting another leaf lets a later seal certify a DIFFERENT root, and the " +
+        "two parties end up holding a receipt the directory never stored.",
+    ).toBe(false);
   }, 30_000);
 
   it("an UNCLASSIFIED failure is treated as a verdict — fail closed, not open", async () => {

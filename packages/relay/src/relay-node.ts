@@ -238,7 +238,7 @@ export interface DirectoryAdapter {
          * today's behaviour exactly: the conservative reading, because defaulting to `"unreachable"`
          * would make a genuine refusal retry forever and never tell the operator it was refused.
          */
-        kind?: "refused" | "unreachable";
+        kind?: "refused" | "unreachable" | "unknown";
         reason: string;
         redirect?: { nodeId: string; peerId: string; multiaddr: string };
       }
@@ -1559,6 +1559,37 @@ export class CelloRelayNode {
        * acceptable, and the seal can be attempted again — which is what the participants already
        * believe is happening.
        */
+      /**
+       * `unknown` — SENT, NO ANSWER. Neither rolled back nor terminalised (review F2).
+       *
+       * The directory acknowledges only AFTER its full ceremony, so silence may mean it notarized
+       * this session and the acknowledgement died on the way home. Rolling back to `active` would
+       * let the tree grow past a root the directory has already certified: a retry then seals a
+       * LARGER leaf set as R′, both parties hold a receipt for R′, and the directory's only stored
+       * notarization is R — with nothing anywhere reconciling them. Terminalising is equally wrong:
+       * the seal may have succeeded, and `seal_refused` would tell both parties it did not.
+       *
+       * So the session stays `sealing`: non-accepting, not terminal, and honest about what is not
+       * known. That is the state the OLD code left every transport failure in — correct here, wrong
+       * for the case that never reached a directory at all, which is why the two are now separate.
+       */
+      if (dirResult.kind === "unknown") {
+        this.#logger.error("relay.seal.outcome_unknown", {
+          sessionId: Buffer.from(sessionId).toString("hex"),
+          reason: dirResult.reason,
+          adjudicator,
+          impact:
+            "the seal submission was SENT and no answer came back, so this relay cannot tell whether " +
+            "the directory notarized it. The session is left non-accepting rather than reopened — " +
+            "reopening could let the tree grow past a root that is already certified.",
+          guidance:
+            "Ask the directory whether it holds a notarization for this session before doing " +
+            "anything else. If it does, the parties already have their receipt and this relay is " +
+            "simply behind. If it does not, the seal can be retried.",
+        });
+        return;
+      }
+
       if (dirResult.kind === "unreachable") {
         /**
          * ROLL THE STATUS BACK TO `active`, or this fix does nothing.
