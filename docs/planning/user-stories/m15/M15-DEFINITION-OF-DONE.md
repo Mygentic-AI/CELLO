@@ -315,7 +315,13 @@ injection path open.
   assertion of intent, and **excluded from feeding any trust-signal or reputation score.**
 - **Enforcer:** stranger.
 
-### `DOD-M15-ASSIGN-1` — ❌ The assignment is verified, then gated on
+### `DOD-M15-ASSIGN-1` — 🟡 The assignment is verified, then gated on
+> **Both clauses built 2026-08-22 → Entries 13, 14.** cello-client `1ddcd63` + `3985cb2` (a),
+> `59ac4db` (b). Gate green at 4018. **Review in flight — the tag does not move until its verdict is
+> quoted in the journal.** The `identify` disclosure closes as a consequence of (b): a stranger who
+> cannot complete the handshake never reaches the protocol that would hand back the agent's public
+> key, listen addresses and protocol list.
+
 **Order is load-bearing: verification lands first.** Gating on an unverified document relocates
 trust rather than closing it, so a release carrying the gate without the verification is worse than
 neither. They ship together.
