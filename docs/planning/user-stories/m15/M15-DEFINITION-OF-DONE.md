@@ -274,9 +274,16 @@ It is not.
 | full project, on a **freshly migrated** database | **32 failures** — so it is not accumulated pollution across days; the suite poisons itself *within one run* |
 | each failing file **individually** | all pass except one |
 
-- **The one genuine defect is `m6b-009-pg-pool-config`** — "pool max enforced under concurrent load"
-  fails 2 tests alone, on a clean database. That is a real finding about pool configuration and it is
-  the only one of the 32 that is about the code under test.
+- **CORRECTION (same day, `6301d36e`): there is NO directory code defect among the 32.** The one
+  suspect, `m6b-009-pg-pool-config` AC-001, threw `DATABASE_URL is required for AC-001 integration
+  test` — while AC-002 forty lines above in the same file, and `persist-004-hash-chain`, both
+  default to the compose Postgres. Under the documented command it never tested pool concurrency at
+  all; it reported a red environment error, every time. Given the default its siblings use, it runs
+  and **passes**. Fixed, with the sibling-consistency pinned by a test.
+- **One real thing did come out of chasing it**, and it is not on this list's subject: the
+  unreachable-database path — the loudest line the process emits, on the way to `exit(1)` — logged
+  `"reason":""`, because pg had thrown an `Error` whose message was empty. Fixed in the same commit;
+  see `describe-cause.ts`.
 - **Everything else is cross-file database contention.** The files share one Postgres, and the tests
   that fail are the ones asserting **whole-table properties** — `verifyChain` over an entire chained
   table, per-pseudonym aggregate stats, "no leaf in more than one checkpoint", row counts. Any other

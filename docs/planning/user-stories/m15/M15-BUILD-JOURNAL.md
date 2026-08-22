@@ -1943,3 +1943,48 @@ design choice in it, which is exactly the kind of thing a repair list hides.
 truncates the shared tables. That would make every file's passing depend on running inside a suite
 that truncates — the same fragility pointing the other way, and invisible until someone runs a file
 alone. The DoD line now names scoping-to-own-rows or per-test transactional rollback instead.
+
+## Entry 19 — the last directory "defect" was not one either
+
+Entry 18 ended with *"one genuine defect: `m6b-009-pg-pool-config`"*. Chasing it down, that is wrong:
+**none of the 32 directory failures is a defect in the directory.**
+
+AC-001 threw `DATABASE_URL is required for AC-001 integration test`. Forty lines above it in the
+**same file**, AC-002 defaults to `postgresql://postgres:dev@localhost:5433/cello_dev` — and so does
+`persist-004-hash-chain`. So under the command the repo documents
+(`docker compose up -d && CELLO_ENV=local pnpm run test`) this test never tested pool concurrency.
+It reported a red environment error, every time, forever. Given the default its siblings already
+use, it runs and passes.
+
+**Rule:** failing loudly on a missing precondition is right; inventing a precondition your siblings
+default away is a test that never runs. And a test that never runs is not a test — which is the same
+sentence this milestone opened with, arriving from the other direction.
+
+### The thing worth keeping, found sideways
+
+While chasing that, the unreachable-database path logged this on its way to `exit(1)`:
+
+```
+{"event":"directory.db.unavailable","level":"error","host":"localhost","port":"5433",
+ "database":"cello_dev","nodeId":"local","env":"local","reason":""}
+```
+
+The loudest line the process emits, carrying no cause at all. The code was preserving `err.message`
+faithfully — pg had thrown an `Error` whose message was **empty**. It cost me a wrong first guess
+about which credential was at fault before I read the source.
+
+A blank message is not a reason to fall silent: pg attaches a `code` — `ECONNREFUSED`, `28P01` for a
+bad password, `3D000` for a missing database — that names the fault exactly. `describeCause` now
+falls back through code, then constructor name, then a literal statement that the error carried
+nothing, so the reader always learns whether the silence is **ours or the driver's**.
+
+**Rule (Invariant 3, sharpened):** "preserve the upstream cause" is not satisfied by forwarding a
+field. It is satisfied when the field can never be empty. `err.message` is not guaranteed to say
+anything, and the one time it says nothing is the one time someone is reading.
+
+### Where DIRECTORY-ROT-1 now stands
+
+All 32 failures are cross-file database contention: files share one Postgres, and the failing tests
+are the ones asserting **whole-table** properties. That is the whole of the remaining work, and it
+carries a design choice (scope assertions to own rows, or per-test transactional rollback) rather
+than a repair list.
