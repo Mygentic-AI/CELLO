@@ -277,6 +277,38 @@ ledger in the DoD: one row per claim, its current text, where it appears, and it
 
 ## 2. The core loop (one unit = one DoD line)
 
+> ### 🔒 WIP LIMIT: ONE. Never start a unit while another is unreviewed.
+>
+> **The rule:** at most ONE 🟡 line at a time. If a 🟡 exists, the only permitted work is reviewing
+> it, fixing its findings, and closing it. Not "mostly" — the count is one, and it is countable:
+> `grep -c "— 🟡" M15-DEFINITION-OF-DONE.md`. Two is a violation, not a judgement call.
+>
+> **Why this is a hard limit and not a preference.** The loop below has ALWAYS said review is step 9
+> and "back to 1" is step 12. It was skipped anyway, twice in one day (2026-08-22), because each
+> individual skip is locally reasonable — the gate is green, the next line is right there, and
+> reviewing feels like the thing that can wait. It cannot. Andre, after the second time:
+>
+> > *"I don't think you should do anything new until you've reviewed all these things… you shouldn't
+> > let it grow like that again. I don't understand the justification for that."*
+>
+> There was none. The first pile was five, cleared on request; the second was seven, built after
+> being told.
+>
+> **What the backlog actually costs**, measured on the units that WERE reviewed that day:
+> - a check that was **already switched off** on one of three reason codes, in the committed tree
+> - three security fixes each **deletable with a fully green gate**
+> - guidance that cleared every automated bar while naming no action the reader could perform
+> - two demonstrated bypasses of a guard, shipped past it with green runs
+>
+> Every one of those is invisible to the author's own tests by construction. So an unreviewed unit is
+> not "done pending paperwork" — **its defects are still live, and they compound**: the next unit is
+> built on top of a foundation nobody has attacked yet, which is how a bad assumption gets three
+> units deep before anything notices.
+>
+> **The only exception** is a review that cannot run (agent unavailable, tooling broken). Then the
+> unit stays 🟡, that is recorded in the journal in one line, and **still nothing new starts** —
+> pick up documentation, ledger adjudication, or a carried backlog item instead.
+
 1. **Find the red** — lowest non-✅ DoD line in the active tier. Don't skip ahead.
 2. **State the target** — one sentence of observable behavior, PLUS expand the full DoD line (every
    clause) into a clause checklist in the journal. That checklist is what the reviewer receives.
