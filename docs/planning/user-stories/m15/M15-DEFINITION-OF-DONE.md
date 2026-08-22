@@ -1152,7 +1152,17 @@ CPU against a healthy idle of 0.3–0.4% for days.
   AND ABOVE ONLY** — the first version logged at info, produced perfect lines that never left the
   instance, and cost a second roll of all three nodes.
 
-### `DOD-M15-STALEROSTER-1` — ❌ A stale reading refuses to present itself as current
+### `DOD-M15-STALEROSTER-1` — 🟡 A stale reading refuses to present itself as current
+> **BUILT 2026-08-23, review in flight.** The freeze has one cause: `resolveConsortiumRoster` is the
+> only writer of the reading, and its only caller is the FAILOVER path — so the daemon measures only
+> while it is unhealthy, and RECOVERING is what stops it noticing it recovered. Fixed with a slow
+> background sweep that runs regardless of health.
+> **The half I did not expect:** a daemon with an EXPIRED manifest reported no directory trouble at
+> all. The block was emitted only when the failure list was non-empty, so "nothing has ever looked"
+> rendered byte-identical to "all three nodes answered". `never_measured` is now its own kind.
+> **The revert test caught the half that mattered** — deleting the daemon's sweep wiring left all
+> thirteen tests green, because they tested the sweeper and not the sweep. The scheduler is now
+> injectable and a fourteenth test drives a tick and asserts the reading MOVES.
 `DOD-STATUS-STALE-ROSTER-1`. Measured twice on two machines: both daemons displayed node failures
 from minutes long past while `curl` reached all three nodes in 37–184 ms.
 - `directory_endpoints_unresolved` freezes once the daemon returns to its healthy path, because the

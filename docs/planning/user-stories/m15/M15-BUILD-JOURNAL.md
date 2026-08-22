@@ -15,25 +15,23 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 26 ✅, 1 🟡 (carried half only), 2 🅿️, 37 ❌. Both repos clean, pushed, on main.
-> **No unreviewed work.** `SELECTION-1` closed in Entry 33 — all eleven findings fixed, verdict
-> quoted, gate green both repos (4130 client / 2265 server). `DEAD-WIRE-FIELD-1` is the remaining 🟡
-> and does NOT count against the WIP limit: its client half is reviewed and closed (Entry 32), and it
-> stays yellow only because the bilateral wire half is carried. **A new line may start.**
+> ### 🟡 26 ✅, 2 🟡, 2 🅿️, 36 ❌. Both repos clean, pushed, on main.
+> **`STALEROSTER-1` IS THE UNREVIEWED ONE** — built in `981baed` + `1305439` (cello-client), reviewer
+> dispatched, verdict not yet in. Under the WIP limit the ONLY permitted work is closing it: fix its
+> findings, quote the verdict, flip the tag. Do not pull a new line first.
+> (`DEAD-WIRE-FIELD-1` is the other 🟡 and does NOT count against the limit — its client half is
+> reviewed and closed in Entry 32; it stays yellow only because the bilateral wire half is carried.)
+> Gate at build time: 4144 client tests, lint, typecheck, clean build.
 
-- **NEXT ACTION: pull ONE new ❌ line.** `STALEROSTER-1` is the recommended pick — client-side,
-  unilateral, no wire change and no migration, and the producer/consumer map is already done (see the
-  next bullet). `FREEZE-STATUS-1` needs a client-side DB migration, which the DoD says must be its own
-  reviewed unit with an upgrade test against a populated pre-migration database. `UNWITNESSED-1` needs
-  a fixture that can attach a relay client.
-- **`STALEROSTER-1` IS ALREADY DIAGNOSED — do not re-derive it.** `unresolvedNodes` /
-  `unresolvedSweptAt` are written ONLY by `resolveConsortiumRoster` in `consortium-bootstrap.ts`, and
-  the only caller is `createRosterAwareEndpointResolver`'s `getConsortiumRoster` — i.e. the FAILOVER
-  path. When the primary resolves, no sweep runs, so the reading freezes at the last failing sweep (or
-  at the startup seed) forever. `checked_at` already exists on the status block. The remaining work is
-  the two remedies the line names: sweep on a slow timer even when healthy, AND mark a reading older
-  than N minutes as stale. **Not** by hiding the field — the line forbids it, because absent and
-  healthy must not look alike.
+- **NEXT ACTION: close `STALEROSTER-1`** — apply the reviewer's findings, quote the verdict in a new
+  entry, flip the tag to ✅. THEN pull ONE new ❌ line. `FREEZE-STATUS-1` needs a client-side DB
+  migration, which the DoD says must be its own reviewed unit with an upgrade test against a populated
+  pre-migration database. `UNWITNESSED-1` needs a fixture that can attach a relay client.
+- **`git checkout` DURING MUTATION TESTING HAS NOW DESTROYED WORK TWICE IN TWO UNITS.** The rule is
+  not "commit before mutating a unit" — it is commit before EVERY mutation round. Both times the
+  sequence was identical: commit, add more uncommitted work, mutate again, `git checkout` to restore,
+  and the new work went with it. The tree is at its most exposed exactly when it is being broken
+  deliberately.
 - **THE WIRE-CHANGE CONVOY.** Three changes are pending and undeployed and must move together:
   `SUBMIT-ID-1`'s 7-element Structure 1, `TERMINAL-REASON-1`'s new reasons, and
   `DEAD-WIRE-FIELD-1`'s field removal. Loosen `directory-frames.ts:1182`'s `parseParticipant` in the
