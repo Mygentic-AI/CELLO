@@ -41,6 +41,7 @@ import pg from "pg";
 import { FileKeyProvider, InMemoryKeyProvider } from "@cello-protocol/crypto";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { createDirectoryNode, ClientDelegatedSigner } from "../directory-node.js";
+import { describeCause } from "../describe-cause.js";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
 import { StdoutLogger, LocalEnvelopeKeyProvider, LocalClientStore, InMemoryRelayWal, LocalJobScheduler, LocalAuditLogShipper, InMemoryNotificationQueue, DevTokenValidator, DevNonceBinder } from "@cello-protocol/interfaces/stubs";
 import type { AuditLogShipper, NotificationQueue, TokenValidator, NonceBinder, DirectoryKeyProvider } from "@cello-protocol/interfaces";
@@ -284,7 +285,7 @@ async function dieUnavailable(err: unknown, target: Record<string, string | unde
     ...target,
     nodeId,
     env,
-    reason: err instanceof Error ? err.message : String(err),
+    reason: describeCause(err),
   });
   await pgPool?.end().catch(() => { /* already broken; the cause is logged above */ });
   process.exit(1);

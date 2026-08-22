@@ -263,10 +263,23 @@ describeIntegration("CELLO-M6B-009 AC-001: pool max enforced under concurrent lo
     // Requires CELLO_ENV=local and a live Postgres at DATABASE_URL.
 
     const pg = await import("pg");
-    const connectionString = process.env["DATABASE_URL"];
-    if (!connectionString) {
-      throw new Error("DATABASE_URL is required for AC-001 integration test");
-    }
+    /**
+     * DEFAULTS TO THE COMPOSE POSTGRES, like every sibling — it used to throw instead.
+     *
+     * `CELLO_ENV=local` already means "the docker compose database is up", and both AC-002 forty
+     * lines above and `persist-004-hash-chain` reach it by defaulting to this exact string. This
+     * test alone demanded `DATABASE_URL` and threw without it, so under the standard documented
+     * command (`docker compose up -d && CELLO_ENV=local pnpm run test`) it did not test pool
+     * concurrency — it reported a red environment error, every time, forever.
+     *
+     * That is this milestone's own subject in miniature: a test that cannot run is not a test, and
+     * an environment precondition invented by one file out of a suite that agrees on a default is
+     * a precondition nobody will satisfy. Failing loudly was the right instinct and the wrong
+     * target — the loudness belongs on a database that is genuinely absent, which pg reports on
+     * connect with a real cause attached.
+     */
+    const connectionString =
+      process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
 
     const poolMax = 50;
     const pool = new pg.default.Pool({ connectionString, max: poolMax });
