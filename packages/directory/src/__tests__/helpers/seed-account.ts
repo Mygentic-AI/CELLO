@@ -29,9 +29,19 @@
  */
 
 import type pg from "pg";
+import type { Logger } from "@cello-protocol/interfaces";
 import { PgDirectoryStore } from "../../adapters/pg-directory-store.js";
 
-const SILENT = { debug() {}, info() {}, warn() {}, error() {} };
+/**
+ * `satisfies Logger`, not `as never`.
+ *
+ * The cast was doing nothing but disabling the check it looked like it satisfied — and the sibling
+ * that used the same trick had NO `debug` method, safe only because the chained writer happens not
+ * to call it today. Add one `logger.debug` to `insertWithChain` and that fixture dies in `beforeAll`
+ * with `logger.debug is not a function`, which looks nothing like its cause. `satisfies` makes the
+ * compiler catch the next method the interface gains.
+ */
+export const SILENT_LOGGER = { debug() {}, info() {}, warn() {}, error() {} } satisfies Logger;
 
 export async function seedAccount(
   pool: pg.Pool,
@@ -39,7 +49,7 @@ export async function seedAccount(
 ): Promise<void> {
   // `createAccount` computes the hash against the CURRENT chain head, which is the whole point —
   // the value cannot be supplied by a caller and stay correct.
-  await new PgDirectoryStore(pool, SILENT as never).createAccount({
+  await new PgDirectoryStore(pool, SILENT_LOGGER).createAccount({
     accountId: params.accountId,
     phoneStubHash: params.phoneStubHash,
     ...(params.emailStubHash !== undefined ? { emailStubHash: params.emailStubHash } : {}),

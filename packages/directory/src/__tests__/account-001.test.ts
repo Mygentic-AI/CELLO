@@ -537,10 +537,22 @@ describeIntegration(
         // Fresh verifier instance — no prior in-memory state
         const verifyLogger = makeLogger();
         const verifyStore = new PgDirectoryStore(servicePool, verifyLogger);
-        // Note: verifyChain covers the full user_accounts table (all rows inserted by all
-        // test runs), not just the two rows inserted above. This is correct because all
-        // rows in user_accounts are inserted via insertWithChain — no row can exist that
-        // was inserted outside the chain mechanism. Chain validity holds globally.
+        /**
+         * THIS ASSERTION COVERS THE WHOLE TABLE, so it is only as true as every fixture in the repo.
+         *
+         * The previous note here said *"no row can exist that was inserted outside the chain
+         * mechanism. Chain validity holds globally."* That was a comment asserting a property the
+         * codebase did not have, and this test was the thing it was propping up: at the time it was
+         * written, six test files were inserting `user_accounts` rows with a literal `chain_hash`
+         * (`'seed'`, `'rt-chain-aabbccdd'`) or deleting rows out of the middle of the chain, and
+         * each one made this line fail for reasons nothing here could explain.
+         *
+         * The property is real but it is a CONSTRAINT, not a fact: every fixture that writes
+         * `user_accounts` must go through `seedAccount()`, and none may delete from it. That is now
+         * enforced by `dod-m15-directory-rot-1-chain-writes.test.ts` — which iterates the test
+         * directory rather than trusting a sentence — because a comment is not an enforcement
+         * mechanism and this table has already proved it twice.
+         */
         const result = await verifyStore.verifyChain("user_accounts");
         expect(result.valid).toBe(true);
 

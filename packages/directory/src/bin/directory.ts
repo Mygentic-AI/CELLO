@@ -336,7 +336,7 @@ async function openStore(databaseUrl: string): Promise<PgDirectoryStore> {
       logger.error("migration.version.query.denied", {
         ...target,
         env,
-        reason: err instanceof Error ? err.message : String(err),
+        reason: describeCause(err),
         remediation: "the node's role needs SELECT on flyway_schema_history (V50); it is not the role that ran the migrations",
       });
       await pgPool.end().catch(() => { /* already reported */ });
@@ -395,7 +395,7 @@ const store = await (async () => {
     // as verify-full. Use no-verify: traffic is encrypted; cert chain is AWS-internal on VPC.
     databaseUrl = `postgresql://${secret.username}:${encodeURIComponent(secret.password)}@${secret.host}:${secret.port}/${secret.dbname}?sslmode=no-verify`;
   } catch (err: unknown) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = describeCause(err);
     logSecretsUnavailable(logger, { nodeId, region: awsRegion, reason });
     process.exit(1);
   }
@@ -614,7 +614,7 @@ if (env === "local") {
   try {
     kp = await FileKeyProvider.load(keyPath);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = describeCause(err);
     logger.error("adapter.init.failed", { adapterName: "FileKeyProvider", reason: msg });
     process.exit(1);
   }
@@ -625,7 +625,7 @@ if (env === "local") {
     const seed = Buffer.from(nodePrivateKeyHex, "hex");
     kp = new InMemoryKeyProvider(seed);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = describeCause(err);
     logger.error("adapter.init.failed", { adapterName: "InMemoryKeyProvider", reason: msg });
     process.exit(1);
   }
@@ -761,7 +761,7 @@ if (env === "local") {
       nextToken = resp.NextToken;
     } while (nextToken);
   } catch (err: unknown) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = describeCause(err);
     // SSM call failed entirely (auth error, network error, etc.) — emit the error event
     // directly here rather than delegating to parseNodeRegistryEntries, because we want
     // distinct guidance text for an AWS API failure vs. a successful but empty response.
@@ -862,7 +862,7 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
     try {
       await mgr.loadManifest();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = describeCause(err);
       // In local mode, manifest load failure is non-fatal — fall back to hardcoded relay
       logger.error("relay.manifest.load.failed", { reason: msg, attempt: 5, env });
       mgr.stop();
@@ -901,7 +901,7 @@ relayPoolManager = await (async (): Promise<RelayPoolManager | undefined> => {
   try {
     await mgr.loadManifest();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = describeCause(err);
     if (msg.includes("manifest not found")) {
       // FEDERATION-E2E-001: secondary regions may not have a manifest yet.
       // RelayPoolManager is non-operational; session assignments will use the
@@ -1160,7 +1160,7 @@ if (consortiumManifestPath) {
   } catch (err: unknown) {
     logger.error("directory.manifest.store.load.failed", {
       path: consortiumManifestPath,
-      reason: err instanceof Error ? err.message : String(err),
+      reason: describeCause(err),
     });
     process.exit(1);
   }
@@ -1233,7 +1233,7 @@ try {
     logger,
   });
 } catch (err: unknown) {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = describeCause(err);
   logger.error("adapter.init.failed", { adapterName: "CelloDirectoryNode", reason: msg });
   process.exit(1);
 }
@@ -1284,7 +1284,7 @@ if (store instanceof PgDirectoryStore) {
   } catch (err: unknown) {
     logger.error("adapter.state.load.failed", {
       stateType: "pending_connection_requests",
-      reason: err instanceof Error ? err.message : String(err),
+      reason: describeCause(err),
     });
   }
 
@@ -1295,7 +1295,7 @@ if (store instanceof PgDirectoryStore) {
   } catch (err: unknown) {
     logger.error("adapter.state.load.failed", {
       stateType: "session_participants_and_last_activity",
-      reason: err instanceof Error ? err.message : String(err),
+      reason: describeCause(err),
     });
   }
 
@@ -1309,7 +1309,7 @@ if (store instanceof PgDirectoryStore) {
     } catch (err: unknown) {
       logger.error("directory.presence.startup.reconcile.failed", {
         nodeId,
-        reason: err instanceof Error ? err.message : String(err),
+        reason: describeCause(err),
       });
     }
   }
@@ -1362,7 +1362,7 @@ logger.info("adapter.initialised", {
 try {
   await networkRelay.connect(result.node);
 } catch (err: unknown) {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = describeCause(err);
   // Log but don't exit — relay may not be reachable yet; adapter will retry on each call
   logger.error("adapter.init.failed", { adapterName: "NetworkRelayAdapter", reason: msg });
 }
@@ -1469,7 +1469,7 @@ const shutdown = () => {
     .then(() => auditLogShipper.flush())
     // audit.shipper.flushed is emitted by the adapter itself — do not log it again here
     .catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = describeCause(err);
       logger.error("adapter.init.failed", { adapterName: "shutdown", reason: msg });
     })
     .finally(() => process.exit(0));

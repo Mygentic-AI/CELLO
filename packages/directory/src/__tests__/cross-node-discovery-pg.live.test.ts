@@ -10,6 +10,8 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import pg from "pg";
+import { randomUUID } from "node:crypto";
+import { seedAccount } from "./helpers/seed-account.js";
 import {
   upsertPresenceOnline,
   upsertPresenceOffline,
@@ -179,26 +181,38 @@ describeLive("cross-node presence fix — heartbeat upsert under the REAL cello_
 
 describeLive("cross-node discovery — profile read-through (FINDING-8, boot-cache miss)", () => {
   let pool: pg.Pool;
-  // A unique key per run so parallel/prior runs never collide; explicit cleanup (no txn — the store
-  // uses its own pool connection, so a txn on a separate client would not isolate its reads).
-  const KPUB = "kpub-xnode-readthrough-" + "aabbccdd";
-  const PRIMARY = "ppub-xnode-readthrough-aabbccdd";
-  const ACCT = "00000000-0000-0000-0000-0000000000e2";
+  /**
+   * THIS BLOCK CANNOT USE THE TRANSACTION the two above it use, and that is why it was the sixth
+   * chain-poisoner while the file as a whole looked like the good example.
+   *
+   * The store opens its own pool connection, so a transaction held on a separate client would not
+   * isolate its reads — the comment here has always said so. What followed from that was a
+   * committed `user_accounts` row carrying a LITERAL `chain_hash` (`'rt-chain-aabbccdd'`) on a
+   * FIXED account id, with a DELETE either side of it. Both are the exact patterns
+   * DOD-M15-DIRECTORY-ROT-1 removed from five other files, and the commit that removed them named
+   * this file as needing no change — an exoneration that would have sent the next reader past it.
+   *
+   * The fix does not need the transaction back. Per-run ids mean nothing collides, so no cleanup is
+   * required; `seedAccount()` writes through the chained writer, so the row is a real link rather
+   * than a hole.
+   */
+  const RUN = randomUUID().slice(0, 8);
+  const KPUB = `kpub-xnode-readthrough-${RUN}`;
+  const PRIMARY = `ppub-xnode-readthrough-${RUN}`;
+  const ACCT = randomUUID();
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DB_URL });
-    await pool.query(`DELETE FROM agent_profiles WHERE k_local_pubkey = $1`, [KPUB]);
-    await pool.query(`DELETE FROM user_accounts WHERE account_id = $1`, [ACCT]);
-    await pool.query(
-      `INSERT INTO user_accounts (account_id, phone_stub_hash, email_stub_hash, chain_hash)
-       VALUES ($1, 'rt-phone-aabbccdd', 'rt-email-aabbccdd', 'rt-chain-aabbccdd')
-       ON CONFLICT DO NOTHING`,
-      [ACCT],
-    );
+    await seedAccount(pool, {
+      accountId: ACCT,
+      phoneStubHash: `rt-phone-${RUN}`,
+      emailStubHash: `rt-email-${RUN}`,
+    });
   });
   afterAll(async () => {
+    // agent_profiles is NOT hash-chained, so removing this fixture row is safe.
     await pool.query(`DELETE FROM agent_profiles WHERE k_local_pubkey = $1`, [KPUB]);
-    await pool.query(`DELETE FROM user_accounts WHERE account_id = $1`, [ACCT]);
+    // user_accounts is chained and append-only — the row stays. Per-run ids make that free.
     await pool.end();
   });
 

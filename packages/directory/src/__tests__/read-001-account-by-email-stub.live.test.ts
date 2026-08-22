@@ -11,7 +11,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { createInternalApiServer } from "../internal-api-server.js";
-import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
+import { seedAccount } from "./helpers/seed-account.js";
 
 const DB_URL =
   process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
@@ -52,7 +52,7 @@ describeLive("READ-001 live — /internal/account-by-email-stub (real Postgres +
      * `createAccount` computes the hash against the current chain head, so the seed row is a
      * genuine link rather than a hole. Combined with the per-run ids above, no cleanup is needed.
      */
-    await new PgDirectoryStore(pool, noopLogger as never).createAccount({
+    await seedAccount(pool, {
       accountId: ACCOUNT_ID,
       phoneStubHash: phoneStub,
       emailStubHash: emailStub,

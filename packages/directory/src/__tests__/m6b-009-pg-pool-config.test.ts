@@ -281,27 +281,50 @@ describeIntegration("CELLO-M6B-009 AC-001: pool max enforced under concurrent lo
     const connectionString =
       process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
 
-    const poolMax = 50;
+    /**
+     * MAX BELOW THE CONCURRENCY, deliberately — review M4.
+     *
+     * This used to set `max: 50` and issue exactly 50 concurrent queries, then assert
+     * `totalCount <= 50`. `totalCount` cannot exceed the number of clients requested, so it passed
+     * for ANY configuration — `max: 10000`, or no `max` at all. Making the test run (it had been
+     * throwing an environment error and never executing) did not give it teeth; it only stopped it
+     * being red for the wrong reason.
+     *
+     * With the cap BELOW the offered load, the assertion can only hold if the cap is doing
+     * something. Delete `max` from the options and this goes red.
+     */
+    const poolMax = 5;
+    const CONCURRENT = 50;
     const pool = new pg.default.Pool({ connectionString, max: poolMax });
 
     try {
       let maxObservedTotal = 0;
 
       // Launch 50 concurrent queries, each measuring totalCount while holding a connection
+      let completed = 0;
       await Promise.all(
-        Array.from({ length: 50 }, async () => {
+        Array.from({ length: CONCURRENT }, async () => {
           const client = await pool.connect();
           try {
             maxObservedTotal = Math.max(maxObservedTotal, pool.totalCount);
             await client.query("SELECT 1");
+            completed++;
           } finally {
             client.release();
           }
         }),
       );
 
-      // The pool must never have opened more connections than poolMax
-      expect(maxObservedTotal).toBeLessThanOrEqual(poolMax);
+      // The pool must never have opened more connections than poolMax. With CONCURRENT (50) well
+      // above poolMax (5), this can only hold if the cap is actually enforced — the previous
+      // version set them equal, which made the assertion true of any configuration at all.
+      expect(maxObservedTotal, `pool opened ${maxObservedTotal} connections against max ${poolMax}`)
+        .toBeLessThanOrEqual(poolMax);
+
+      // ...and the excess was QUEUED, not dropped. Without this, a pool that capped connections by
+      // failing the surplus requests would also satisfy the line above.
+      expect(completed, "every offered query must still complete — the cap queues, it does not drop")
+        .toBe(CONCURRENT);
     } finally {
       await pool.end();
     }

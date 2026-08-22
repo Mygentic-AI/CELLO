@@ -18,6 +18,27 @@ import { describeCause } from "../describe-cause.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 describe("DOD-M15-DIRECTORY-ROT-1: an error that reaches the operator always names a cause", () => {
+  it("EVERY error site in the directory entrypoint routes through describeCause", () => {
+    /**
+     * The describe line above claims a universal property, and the first version of this fix earned
+     * only one site of it — `dieUnavailable`. Fourteen others in the same file still did
+     * `err instanceof Error ? err.message : String(err)`, several on the same pg path that produced
+     * the empty message in the first place. An `adapter.init.failed` with `reason: ""` is the
+     * identical dead end, one function away.
+     *
+     * Asserted against the source because the property is "no site was missed", which no single
+     * runtime test can show.
+     */
+    const src = readFileSync(join(HERE, "..", "bin", "directory.ts"), "utf8");
+    const rawSites = src.match(/instanceof Error \? [^:]*\.message : String\(/g) ?? [];
+    expect(
+      rawSites,
+      `${rawSites.length} error sites in bin/directory.ts still read err.message directly. pg throws ` +
+        `errors with an EMPTY message, so each of these can emit reason:"" — the loudest line a ` +
+        `process writes, carrying nothing. Route them through describeCause().`,
+    ).toEqual([]);
+  });
+
   /**
    * The observed line, verbatim, on the way to exit(1):
    *
