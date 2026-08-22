@@ -6,22 +6,32 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { createInternalApiServer } from "../internal-api-server.js";
+import { seedAccount } from "./helpers/seed-account.js";
 
 const DB_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
 const API_KEY = "test-writeapi-live-key";
 
-const ACCOUNT_A = "00000000-0000-0000-0000-00000000aaa1";
-const ACCOUNT_B = "00000000-0000-0000-0000-00000000bbb2";
-const AGENT_A = "writeapi-live-agent-A";
-const AGENT_B = "writeapi-live-agent-B";
-const KP_A = "11".repeat(32);
-const KP_B = "22".repeat(32);
-const PP_A = "33".repeat(32);
-const PP_B = "44".repeat(32);
+/**
+ * PER-RUN UNIQUE, so the account rows never need deleting.
+ *
+ * `user_accounts` is hash-chained and append-only: `verifyChain` chains each row to the previous
+ * row's stored hash, so a delete invalidates every row after it — in every other file, for the rest
+ * of the run. The fixed ids here forced a delete-then-insert seed, which was one of the causes of
+ * `chain broke at sequence 2` surfacing in suites that never touch accounts.
+ */
+const RUN = randomUUID().slice(0, 8);
+const ACCOUNT_A = randomUUID();
+const ACCOUNT_B = randomUUID();
+const AGENT_A = `writeapi-live-agent-A-${RUN}`;
+const AGENT_B = `writeapi-live-agent-B-${RUN}`;
+const KP_A = createHash("sha256").update(`writeapi-kpa-${RUN}`).digest("hex");
+const KP_B = createHash("sha256").update(`writeapi-kpb-${RUN}`).digest("hex");
+const PP_A = createHash("sha256").update(`writeapi-ppa-${RUN}`).digest("hex");
+const PP_B = createHash("sha256").update(`writeapi-ppb-${RUN}`).digest("hex");
 
 const RAW_EMAIL = "victim-operator@example.com";
 const RAW_TOKEN = "ya29.A0ARrdaM-super-secret-oauth-token-value";
@@ -41,22 +51,20 @@ describeLive("WRITEAPI-001 live — /internal/agent-write (real Postgres + HTTP)
     await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = ANY($1)`, [[AGENT_A, AGENT_B]]);
     await pool.query(`DELETE FROM pickup_queue WHERE agent_id = ANY($1)`, [[AGENT_A, AGENT_B]]);
     await pool.query(`DELETE FROM agent_profiles WHERE agent_id = ANY($1)`, [[AGENT_A, AGENT_B]]);
-    await pool.query(`DELETE FROM user_accounts WHERE account_id = ANY($1)`, [[ACCOUNT_A, ACCOUNT_B]]);
+    // No pre-delete of user_accounts: the ids are per-run, and the table is append-only.
 
     for (const [acct, email] of [
-      [ACCOUNT_A, "writeapi-a@example.com"],
-      [ACCOUNT_B, "writeapi-b@example.com"],
+      [ACCOUNT_A, `writeapi-a-${RUN}@example.com`],
+      [ACCOUNT_B, `writeapi-b-${RUN}@example.com`],
     ] as const) {
-      await pool.query(
-        `INSERT INTO user_accounts (account_id, phone_stub_hash, email_stub_hash, chain_hash)
-         VALUES ($1, $2, $3, $4)`,
-        [
-          acct,
-          createHash("sha256").update(acct + "-phone").digest("hex"),
-          createHash("sha256").update(email).digest("hex"),
-          "writeapi-seed-chain",
-        ],
-      );
+      // Seeded through the CHAINED writer. This used to INSERT `chain_hash: 'writeapi-seed-chain'`
+      // — a literal string in a hash-chained table, which is a hole that fails verifyChain at that
+      // row and every row after it, for the whole run.
+      await seedAccount(pool, {
+        accountId: acct,
+        phoneStubHash: createHash("sha256").update(acct + "-phone").digest("hex"),
+        emailStubHash: createHash("sha256").update(email).digest("hex"),
+      });
     }
     // Two agents — AGENT_A owned by ACCOUNT_A, AGENT_B owned by ACCOUNT_B.
     for (const [agentId, kp, pp, acct] of [
@@ -82,7 +90,7 @@ describeLive("WRITEAPI-001 live — /internal/agent-write (real Postgres + HTTP)
     await pool.query(`DELETE FROM identity_tree_entries WHERE agent_id = ANY($1)`, [[AGENT_A, AGENT_B]]).catch(() => {});
     await pool.query(`DELETE FROM pickup_queue WHERE agent_id = ANY($1)`, [[AGENT_A, AGENT_B]]).catch(() => {});
     await pool.query(`DELETE FROM agent_profiles WHERE agent_id = ANY($1)`, [[AGENT_A, AGENT_B]]).catch(() => {});
-    await pool.query(`DELETE FROM user_accounts WHERE account_id = ANY($1)`, [[ACCOUNT_A, ACCOUNT_B]]).catch(() => {});
+    // user_accounts rows are LEFT IN PLACE — append-only and hash-chained; deleting breaks the chain.
     await pool.end();
   });
 

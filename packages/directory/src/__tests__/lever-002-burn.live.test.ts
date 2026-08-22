@@ -6,6 +6,8 @@
 // the separated heavier part. Run against a DB with the full migration history (cello_spine).
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { randomUUID, createHash } from "node:crypto";
+import { seedAccount } from "./helpers/seed-account.js";
 import pg from "pg";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
@@ -15,10 +17,19 @@ import type { Logger } from "@cello-protocol/interfaces";
 
 const DB_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_spine";
 const API_KEY = "test-burn-live-key";
-const ACCOUNT = "00000000-0000-0000-0000-00000000bbbb";
-const AGENT = "burn-live-agent";
-const KP = "bb".repeat(32);
-const PP = "cc".repeat(32);
+/**
+ * PER-RUN UNIQUE, so nothing here needs deleting.
+ *
+ * `user_accounts` is hash-chained and append-only: `verifyChain` chains each row to the previous
+ * row's stored hash, so a delete invalidates every row after it — in every other file, for the rest
+ * of the run. The fixed ids below forced a delete-then-insert seed, and that delete was one of the
+ * causes of `chain broke at sequence 2` surfacing in suites that never touch accounts.
+ */
+const RUN = randomUUID().slice(0, 8);
+const ACCOUNT = randomUUID();
+const AGENT = `burn-live-agent-${RUN}`;
+const KP = createHash("sha256").update(`burn-kp-${RUN}`).digest("hex");
+const PP = createHash("sha256").update(`burn-pp-${RUN}`).digest("hex");
 
 const noopLogger = { info() {}, warn() {}, error() {} };
 const describeLive = process.env.CELLO_ENV === "local" ? describe : describe.skip;
@@ -30,14 +41,14 @@ describeLive("LEVER-002 live — burn is permanent; accountability survives", ()
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DB_URL });
-    await pool.query(`DELETE FROM agent_suspensions WHERE agent_id = $1`, [AGENT]);
-    await pool.query(`DELETE FROM agent_profiles WHERE agent_id = $1`, [AGENT]);
-    await pool.query(`DELETE FROM user_accounts WHERE account_id = $1`, [ACCOUNT]);
-    await pool.query(
-      `INSERT INTO user_accounts (account_id, phone_stub_hash, email_stub_hash, chain_hash)
-       VALUES ($1, 'burn-phone', 'burn-email', 'burn-chain')`,
-      [ACCOUNT],
-    );
+    // Seeded through the CHAINED writer. This used to INSERT with `chain_hash: 'burn-chain'` — a
+    // literal string in a hash-chained table, which is a hole that fails verifyChain at that row and
+    // every row after it, run-wide. No pre-delete is needed now that the ids are per-run.
+    await seedAccount(pool, {
+      accountId: ACCOUNT,
+      phoneStubHash: createHash("sha256").update(`burn-phone-${RUN}`).digest("hex"),
+      emailStubHash: createHash("sha256").update(`burn-email-${RUN}`).digest("hex"),
+    });
     await pool.query(
       `INSERT INTO agent_profiles (k_local_pubkey, primary_pubkey, registered_at, status, chain_hash, account_id, agent_id)
        VALUES ($1, $2, 1, 'active', 'burn-chain', $3, $4)`,
@@ -52,7 +63,7 @@ describeLive("LEVER-002 live — burn is permanent; accountability survives", ()
     if (server) await new Promise<void>((r) => server.close(() => r()));
     await pool.query(`DELETE FROM agent_suspensions WHERE agent_id = $1`, [AGENT]).catch(() => {});
     await pool.query(`DELETE FROM agent_profiles WHERE agent_id = $1`, [AGENT]).catch(() => {});
-    await pool.query(`DELETE FROM user_accounts WHERE account_id = $1`, [ACCOUNT]).catch(() => {});
+    // user_accounts is NOT deleted — append-only and hash-chained; see the seed above.
     await pool.end();
   });
 

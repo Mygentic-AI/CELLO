@@ -15,6 +15,7 @@ import { generateKeypair } from "@cello-protocol/crypto";
 import { encodeCbor } from "@cello-protocol/protocol-types";
 import { queryAccountFacts, buildSignalRequestTbs } from "../signal-write.js";
 import type { Logger } from "@cello-protocol/interfaces";
+import { seedAccount } from "./helpers/seed-account.js";
 
 const describeIntegration = process.env.CELLO_ENV === "local" ? describe : describe.skip;
 const silent: Logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -49,22 +50,21 @@ describeIntegration("DOD-MINT-INTERNAL-1 dep — verified-account-facts query (a
     // The EMAIL stub moved to account_email_stubs, because the column of the same name is populated
     // after the row exists and therefore never crossed between nodes. Seeding the column alone
     // reproduces the live defect precisely: `phone` mints and `email` is silently skipped.
-    await pool.query(
-      "INSERT INTO user_accounts (account_id, phone_stub_hash, chain_hash) VALUES ($1,$2,'seed')",
-      [acctBoth, stub("both-phone")]);
+    // Chained writer, not a raw INSERT: this used to stamp a literal 'seed' into `chain_hash`,
+    // which made the row a hole and failed verifyChain for every row after it, run-wide.
+    await seedAccount(pool, { accountId: acctBoth, phoneStubHash: stub("both-phone") });
     await pool.query(
       "INSERT INTO account_email_stubs (email_stub_hash, account_id) VALUES ($1,$2)",
       [stub("both-email"), acctBoth]);
     // The phone-only account gets NO stub row at all — which is what "email unverified" now looks
     // like, rather than a NULL column.
-    await pool.query(
-      "INSERT INTO user_accounts (account_id, phone_stub_hash, chain_hash) VALUES ($1,$2,'seed')",
-      [acctPhoneOnly, stub("phoneonly-phone")]);
+    await seedAccount(pool, { accountId: acctPhoneOnly, phoneStubHash: stub("phoneonly-phone") });
   });
 
   afterAll(async () => {
     if (pool) {
-      await pool.query("DELETE FROM user_accounts WHERE account_id = ANY($1)", [[acctBoth, acctPhoneOnly]]).catch(() => {});
+      // user_accounts rows are LEFT IN PLACE: the table is append-only and hash-chained, so a
+      // delete breaks every row after it. `tag` salts the ids, so nothing collides across runs.
       await pool.query("DELETE FROM authorized_issuers WHERE label = $1", [tag]).catch(() => {});
       await pool.end();
     }

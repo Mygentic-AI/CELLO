@@ -154,10 +154,25 @@ async function cleanupAccounts(accountIds: string[]): Promise<void> {
     `DELETE FROM agent_profiles WHERE account_id IN (${placeholders})`,
     accountIds,
   );
-  await superPool.query(
-    `DELETE FROM user_accounts WHERE account_id IN (${placeholders})`,
-    accountIds,
-  );
+  /**
+   * `user_accounts` IS NOT DELETED, and that is the fix rather than an omission.
+   *
+   * The table is hash-chained and append-only: `verifyChain` walks it in order and chains each row
+   * to THE PREVIOUS ROW'S STORED HASH. So removing any row permanently invalidates every row after
+   * it — the successor was chained to a predecessor that no longer exists.
+   *
+   * These deletes were the cause of `chain broke at sequence 2` appearing in files that never touch
+   * accounts, for the whole run, with the same hash pair every time. The table dump showed the
+   * holes plainly: row id 1, then 10, then 15.
+   *
+   * They also went through a SUPERUSER pool, which is the tell: V22 grants `cello_service` INSERT
+   * and SELECT only, so production genuinely cannot do this. The cleanup held a privilege the
+   * application does not have and used it to break an invariant the application cannot break.
+   *
+   * Nothing is needed in its place. `makePhoneStubHash()` salts every stub with a fresh UUID and
+   * account ids are minted per test, so no row here can collide with another run — the deletion was
+   * tidiness, and it cost the chain.
+   */
 }
 
 // ─── AC-001: Schema inspection ────────────────────────────────────────────────
@@ -436,7 +451,7 @@ describeIntegration(
       } finally {
         await cleanupAccounts([accountId1]);
         // accountId2 was never inserted — cleanup attempt is safe (no rows)
-        await superPool.query("DELETE FROM user_accounts WHERE account_id = $1", [accountId2]).catch(() => { /* ignore */ });
+        // user_accounts is append-only + hash-chained: deleting breaks every later row. See cleanupAccounts().
       }
     });
   },
@@ -506,7 +521,7 @@ describeIntegration(
       try {
         // Clean the table for deterministic chain verification
         await superPool.query("DELETE FROM agent_profiles WHERE account_id IN ($1, $2)", [accountId1, accountId2]);
-        await superPool.query("DELETE FROM user_accounts WHERE account_id IN ($1, $2)", [accountId1, accountId2]);
+        // user_accounts rows are left in place — deleting from a hash-chained table breaks the chain.
 
         await store.createAccount({
           accountId: accountId1,
@@ -633,7 +648,7 @@ describeIntegration(
       try {
         // Clean for deterministic chain
         await superPool.query("DELETE FROM agent_profiles WHERE account_id = $1", [accountId]);
-        await superPool.query("DELETE FROM user_accounts WHERE account_id = $1", [accountId]);
+        // user_accounts rows are left in place — deleting from a hash-chained table breaks the chain.
 
         // INSERT without email_stub_hash (only mandatory fields)
         await store.createAccount({
@@ -864,10 +879,7 @@ describeIntegration(
           "DELETE FROM agent_profiles WHERE account_id = $1",
           [accountId],
         ).catch(() => { /* ignore */ });
-        await superPool.query(
-          "DELETE FROM user_accounts WHERE account_id = $1",
-          [accountId],
-        ).catch(() => { /* ignore */ });
+        // user_accounts rows are left in place — see cleanupAccounts() for why deleting breaks the chain.
       }
     });
   },
