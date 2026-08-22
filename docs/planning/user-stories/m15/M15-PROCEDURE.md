@@ -340,6 +340,13 @@ ledger in the DoD: one row per claim, its current text, where it appears, and it
 >    return the original number while the tree grew. Assert the artifact (`structure2_cbor`), and
 >    assert the NEXT operation lands where it should.
 >
+>    **This one is harder to obey than to agree with**, and there is a worked example: on
+>    `DEAD-WIRE-FIELD-1` I applied all four questions BEFORE dispatching and still failed this one.
+>    The test asserted `not.toBeNull()` — "it did not refuse" — while the code's promise was "the
+>    field yields `[]`". Those feel like the same assertion and are not: review measured that a
+>    mutation returning the malformed value verbatim, and one FABRICATING an address into the field,
+>    both stayed green. **"It did not fail" is a shadow. Name the value.**
+>
 > **And one structural rule:** a property asserted only by a COMMENT is not asserted. `SUBMIT-ID-1`'s
 > key was documented as sender-scoped with no test, and the attack was reachable by ordinary
 > participation — the counterparty sees your submission ids on the wire.
