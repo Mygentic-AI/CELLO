@@ -15,14 +15,14 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 17 ✅, 8 🟡 (BUILT, UNREVIEWED), 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
-> **Andre went to bed 2026-08-22 evening. The watchdog cron is re-armed at 23-minute intervals.**
-> Seven units were built tonight and NONE has been reviewed — that is the top of the queue, and it
-> is the same queue-at-review shape Andre called out at 15:40. Fixing is the cheap half.
+> ### 🟢 25 ✅, **0 🟡**, 2 🅿️, 38 ❌. Both repos clean, pushed, on main. Both gates green.
+> Seven units closed in Entry 31 with both verdicts quoted. **The WIP count is ZERO** — which is the
+> state §2's limit requires before any new line starts.
 
-- **NEXT ACTION: dispatch `cello-unit-reviewer` on tonight's seven 🟡 units**, in batches by area
-  (relay seal path / daemon client path), then quote each verdict in the journal and flip the tags.
-  Two passes is the hard cap. Only then pull a new ❌ line.
+- **NEXT ACTION: the hollow-test mechanism**, then ONE new ❌ line under the WIP limit.
+  Hollow tests went 2 → 3 → 5 across the milestone's review rounds and are found in every one. The
+  shape: the test covers the case that was in mind while fixing, which is the blind spot that made
+  the bug. The revert test catches code that exists; it cannot catch a branch nobody tested.
 - **⚠️ `DOD-M15-SUBMIT-ID-1` HAS A DEPLOYMENT ORDER.** The relay half is in; the CLIENT half must not
   ship until this relay is DEPLOYED. `decodeStructure1` required exactly 6 elements, so a client
   emitting a submission id has every frame refused by the relay running right now. Deploying is
@@ -2888,4 +2888,75 @@ clear, so **the file IS the agent**. Nothing about the word "backup" suggests th
 **Delete the guard, run the gate.** It caught a defect in every unit — including three of my own
 fixes that were green-on-deletion, and one guard of mine that was *already switched off* in the
 committed tree. It is now step 9 of the watchdog.
+
+## Entry 31 — seven units close, and most of the 24 findings were mine from that evening
+
+**18 → 25 ✅, WIP count zero.** Both gates green: 4111 client tests, 2265 relay tests with the
+database live.
+
+### The verdicts, on the record
+
+Relay path (`TRANSPORT-TERMINAL-1`, `TERMINAL-REASON-1`, `SUBMIT-ID-1`):
+
+> **SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS FOUND** … **ERROR SUBSTITUTION FOUND** …
+> **HOLLOW TESTS FOUND** — T1 through T5. T1 is the serious one: the classification that *is*
+> TRANSPORT-TERMINAL-1 has no test on two of its three branches, and the mutation you asked me to
+> hunt for — making a merits refusal non-terminal — leaves the gate green.
+
+And its headline, which is the sentence to keep:
+
+> **two of the three units ship a defect that is worse than the one they fix, and both are on the
+> same axis** — the relay changed the words and the states it uses to end a conversation, but nothing
+> on the other side of the wire was changed to hear them.
+
+Daemon path (`BACKUP-1`, `DOORBELL-1`, `DIVERGE-DURABLE-1`, `IPCVISIBLE-1`):
+
+> **SILENT FALLBACKS FOUND** — F4 (`readLock` → null → proceed) [blocking]; F5 (mode silently not
+> applied on overwrite) [blocking]; F6/F7 (crash-window states that open and are wrong, no fsync)
+> [blocking]… I am not rubber-stamping this: BACKUP-1 writes a private key and overwrites a
+> database, and it has three findings in exactly those two operations plus an agent-facing surface
+> that cannot be called.
+
+### The part that matters more than the count
+
+**Most of the 24 were defects I introduced that evening**, in units I had already declared
+gate-green:
+
+- a rename that made a refused seal **non-terminal on the client** — three consumers branched on the
+  old literal, so a refused conversation would have run on against a chain that had stopped growing.
+  That is the 68-minute defect those sets exist to prevent, reintroduced *by changing a string*.
+- `mode: 0o600` is honoured only at `O_CREAT`, so `--force` onto an existing 0644 file left a
+  **world-readable signing key**. Measured, not reasoned.
+- the divergence flag written and cleared **without the agent key**, so on the loopback case — two of
+  Andre's agents on one daemon — one side sealing ERASED the other's divergence. This line's own
+  defect, produced by this line's own clear.
+- a restore guard that **failed open** on a stale or corrupt lock, overwriting a live database.
+- two tools that **could not be called at all**: empty parameter schemas against a daemon requiring
+  `path`, so the guidance named a parameter the caller had no way to send. Forever.
+- a rollback that could **resurrect a session the directory had already notarized**, because the
+  directory acknowledges only AFTER its full ceremony — so silence is not "unreachable", it is
+  "unknown".
+
+Every one passed my own tests and a green gate. **That is the WIP limit's justification in a
+sentence**, and it is why the limit is a count rather than another paragraph.
+
+### Andre's read on the numbers was right
+
+He flagged 24 findings across seven units as suspiciously low: single units drew 6–10 earlier that
+day; seven at once drew 3.4 apiece. The SHAPE of what came back argues the same way — both reviewers
+found the whole-unit holes (a classification with no test on two of three branches; an agent-facing
+surface that cannot be invoked) and comparatively little detail. Reviewing seven at once spread the
+attention. One unit at a time from here.
+
+### The defect class that is NOT improving
+
+Hollow tests: **two, then three, then five**, found in every review round of the milestone. The
+common shape, looking at all ten together: **I write the test for the case I had in mind while
+fixing, which is the same blind spot that produced the bug.** Examples from this round — a scoping
+test using two sessions of ONE agent when the breaking case is two AGENTS on one session; a recorder
+seeded with a plausible default so a path reporting nothing still passed; two shipped log lines with
+no test at all.
+
+The revert test catches code that EXISTS. It cannot catch a branch nobody wrote a test for. That
+needs its own mechanism, and it is the next thing to build.
 
