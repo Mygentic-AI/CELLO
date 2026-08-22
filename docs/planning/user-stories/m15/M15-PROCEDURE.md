@@ -309,6 +309,41 @@ ledger in the DoD: one row per claim, its current text, where it appears, and it
 > unit stays 🟡, that is recorded in the journal in one line, and **still nothing new starts** —
 > pick up documentation, ledger adjudication, or a carried backlog item instead.
 
+> ### 🕳️ THE HOLLOW TEST — the one defect class that has not improved
+>
+> Found in EVERY review round of this milestone: **2 → 3 → 5**. It is now the most persistent defect
+> in the work, and vigilance has not moved it, so it gets a procedure.
+>
+> **The shape, from ten instances:** *I write the test for the case I had in mind while fixing — which
+> is the same blind spot that produced the bug.* The test passes, the gate is green, and the property
+> is unheld.
+>
+> **The revert test does not catch this.** Deleting a guard proves the test covers code that EXISTS.
+> It cannot catch a branch nobody wrote a test for, or an assertion that passes for the wrong reason.
+> Both checks are needed and they catch different things.
+>
+> **Before a unit is done, ask these four. They are cheap and each has caught a real one:**
+>
+> 1. **What did I stub, and does the property live in the stub?** `TRANSPORT-TERMINAL-1` replaced the
+>    whole adapter, so every test asserted the relay's BRANCH on a value and nothing asserted the
+>    code that ASSIGNS it — the classification that *was* the unit had no test on two of three
+>    branches.
+> 2. **Is the fixture the shape that BREAKS, or a neighbouring shape that works?**
+>    `DIVERGE-DURABLE-1`'s scoping test used two sessions of ONE agent. The breaking case is two
+>    AGENTS on one session (the loopback the schema comment describes) — the wrong shape passed over
+>    the defect.
+> 3. **Would this assertion pass if the code did NOTHING?** A recorder pre-seeded with a plausible
+>    default made "reports a trigger on EVERY path" vacuous: a branch reporting nothing left the
+>    initialiser, null equalled null, green. Start recorders `undefined` and assert they were set.
+> 4. **Did I assert the OUTCOME or the mechanism's shadow?** The retry test compared
+>    `sequence_number` alone, so moving the idempotency check after the leaf append would still
+>    return the original number while the tree grew. Assert the artifact (`structure2_cbor`), and
+>    assert the NEXT operation lands where it should.
+>
+> **And one structural rule:** a property asserted only by a COMMENT is not asserted. `SUBMIT-ID-1`'s
+> key was documented as sender-scoped with no test, and the attack was reachable by ordinary
+> participation — the counterparty sees your submission ids on the wire.
+
 1. **Find the red** — lowest non-✅ DoD line in the active tier. Don't skip ahead.
 2. **State the target** — one sentence of observable behavior, PLUS expand the full DoD line (every
    clause) into a clause checklist in the journal. That checklist is what the reviewer receives.
