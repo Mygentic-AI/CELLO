@@ -15,17 +15,27 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 SIX UNITS MERGED, ALL REVIEWED. Nothing in flight.
-> **56 DoD lines**, 6 ✅, 1 🅿️, rest ❌. Every line is inside the launch gate; the gate is a state,
+> ### 🟢 FIVE UNITS MERGED AND REVIEWED. Nothing in flight.
+> **57 DoD lines**, 5 ✅, 2 🅿️, rest ❌. Every line is inside the launch gate; the gate is a state,
 > not a date. Both repos clean and pushed.
+> **`LEDGER-1` and `CLAIM-COMMENTS-1` were reverted to ❌ by review** (→ Entry 14) — the sweep
+> shipped incomplete on three of four surfaces, and the completeness it claimed is pinned by nothing.
 
-- **NEXT ACTION: `DOD-M15-AUDITME-1`** — rewrite `AUDIT-ME.md` at the root of the PUBLIC repo. The
-  ledger sweep is done and this is its worst row: the file's own command 4 finds
-  `api.telegram.org`, falsifying its Claim 3. **Per M15-PROCEDURE §2f the replacement WORDING is
-  Andre's call** — prepare variants, delete what is flatly false, do not publish a rewrite. Deleting
-  a false claim and fixing a code comment do not wait; choosing what replaces them does.
-  **Alternative if that stalls:** `DOD-M15-CLAIM-COMMENTS-1` (rewrite the six known false comments —
-  no wording gate) or `DOD-M15-RELAYAUTH-1` (Tier 2, depends on `ASSIGN-1` which is not built).
+- **NEXT ACTION: `DOD-M15-CLAIM-SCANNER-1`** — the build check that enumerates claim surfaces from
+  the system instead of from a person, then `DOD-M15-CLAIM-COMMENTS-1` (the two comments the review
+  found still standing). `SCANNER-1` comes first because it defines what "swept" means, and
+  `LEDGER-1` cannot be re-closed until something other than a grep vocabulary pins its completeness.
+- **`DOD-M15-AUDITME-1` is 🅿️ parked — Andre's call, 2026-08-22.** It is now the LAST Tier 1 line,
+  not the next one, and not before Tier 4 lands. The repo is public but **unadvertised**: nobody is
+  reading it, so the exposure is theoretical, while the tree it describes is about to be changed by
+  Tier 2 and Tier 4 — writing it now buys a second rewrite. Parked for sequencing only; it is inside
+  the gate. **The claims themselves are not parked** — they stay as ledger rows with the disposition
+  *pending rewrite*, so `SCANNER-1` does not go red on a file we deliberately deferred.
+- **Timing correction for any rate estimate (2026-08-22):** the overnight run lost **4h 50m** to a
+  network outage — last activity 00:42:32, resumed 05:32:14, confirmed by the push reflog (every
+  commit in this milestone pushed within ~3s, and nothing pushed in that window). Real working time
+  for the five merged units is **5h 15m**, not the 10h of wall clock. The 56m gap at 05:33–06:29 was
+  a review agent running, not the outage — pushes succeeded on both sides of it.
 - **`DOD-M15-SURFACE-1` is ✅** (→ Entries 9, 11) — merged. **SPEC: FAITHFUL, nothing blocking.**
   The reviewer confirmed all five falsification claims plus two I had not checked, and built a
   throwaway test proving a zero-listener node still dials out. Both real findings were prose. **New

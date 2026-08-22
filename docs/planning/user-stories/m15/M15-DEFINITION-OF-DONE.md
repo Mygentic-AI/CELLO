@@ -89,7 +89,19 @@ a bounded property**.
   withdrawn, never softened.
 - A claim with no row is an unaudited claim; the line is not ✅ while a surface is unswept.
 
-### `DOD-M15-AUDITME-1` — ❌ `AUDIT-ME.md` survives the audit it invites
+### `DOD-M15-AUDITME-1` — 🅿️ `AUDIT-ME.md` survives the audit it invites
+**Trigger: the last Tier 1 line to be worked, and not before Tier 4 lands** (Andre, 2026-08-22).
+Parked for sequencing only — it is inside the gate and launch still waits for it. The reasoning: the
+repo is public but **unadvertised**, so the exposure is theoretical, and the document's job is to
+describe what the system finally does. Written now it describes a tree that Tier 2 and Tier 4 are
+about to change underneath it, and every such change is a second rewrite. **Its claims are corrected
+by the lines around it either way** — the false encryption detail is a ledger row with a disposition,
+and the stale file paths are a mechanical fix. What waits is the document that presents them.
+- **Do not let this park hide a claim.** `DOD-M15-CLAIM-SCANNER-1` enumerates surfaces from the
+  system, and root `*.md` of the public repo is one of them. Every claim in this file must already
+  sit in the ledger with a disposition of *pending rewrite → `DOD-M15-AUDITME-1`* before the scanner
+  ships, or the scanner fails the build on a file we deliberately parked.
+
 Rewrite `AUDIT-ME.md` at the root of the **public** `Mygentic-AI/cello-client` repo.
 - Four of its seven cited file paths no longer exist (pre-repo-split layout) — every path resolves,
   verified by opening it.
