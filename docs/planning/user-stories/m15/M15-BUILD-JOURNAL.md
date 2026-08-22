@@ -1988,3 +1988,55 @@ All 32 failures are cross-file database contention: files share one Postgres, an
 are the ones asserting **whole-table** properties. That is the whole of the remaining work, and it
 carries a design choice (scope assertions to own rows, or per-test transactional rollback) rather
 than a repair list.
+
+## Entry 20 — the contention has a mechanism, and it is deletion
+
+Entry 18 called the remaining 31 directory failures "cross-file contention" and left it there. That
+was a category, not a cause, and it was quietly wrong in a way worth correcting: **other tests
+writing rows does not break a hash chain.** A correctly chained INSERT leaves the chain valid however
+many rows arrive. So "they share a database" never explained *"chain broke at sequence 2"*.
+
+### The produce → consume path
+
+**Consumer.** `verifyChain` (`hash-chain.ts`) walks the table in order, seeds `previousHash` with
+`CHAIN_GENESIS`, and for each row recomputes `computeChainHash(serialized, previousHash)` against the
+row's stored hash. Each row is therefore chained to **the previous row's stored hash** — not to
+anything intrinsic to itself.
+
+**The consequence that follows from that alone:** removing any row invalidates **every row after
+it**. The successor was chained to a predecessor that no longer exists.
+
+**Producer.** `account-001.test.ts` (six sites) and `read-001-account-by-email-stub.live.test.ts`
+clean up after themselves with `DELETE FROM user_accounts …`.
+
+**The gap.** They do it through a **superuser pool**. Production cannot: V22 grants `cello_service`
+INSERT and SELECT only, and the table is append-only by design. **The tests hold a privilege the
+application does not have, and use it to break an invariant the application cannot break.**
+
+**The evidence that closes it.** Dumping the table after a full run: row `id=1`, then `id=10`, `15`,
+`18` — gaps where rows were deleted. Row 1 verifies against genesis; row 2 is the first survivor
+after a hole, and fails. Reported as *"chain broke at sequence 2"*, with the same stored/recomputed
+pair every run, in files that never touch accounts.
+
+### The generalisation, which matters more than the fix
+
+A linear whole-table hash chain means **any** deletion turns `verifyChain` permanently red: a
+retention policy, a GDPR erasure, an operator tidying a bad row. And once it is red, a **genuine
+tamper cannot be distinguished from that baseline** — which is word for word the failure
+`DOD-ACCOUNTS-CHAIN-1` was opened to fix, quoted in `directory-node.ts`:
+
+> *"EVERY real account was outside the chain, `verifyChain("user_accounts")` was permanently red, and
+> a genuine tamper on the table binding a human to an agent could not be told from that baseline."*
+
+The tests are currently reproducing that exact state on purpose, every run. That is a launch-relevant
+property of the design, not only a test defect, and it is now on the DoD line rather than in my head.
+
+### Rules
+
+**A category is not a cause.** "Cross-file contention" sounded like an explanation and predicted
+nothing. The moment I asked *why would an extra correctly-chained row break a chain* — it would not —
+the real mechanism was two greps away.
+
+**Check what privilege the test holds versus what the application holds.** A cleanup path that needs
+a superuser pool is doing something production cannot do. That is either a missing production
+capability or a test breaking an invariant, and both are worth knowing before the test is "fixed".

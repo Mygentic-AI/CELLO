@@ -284,11 +284,25 @@ It is not.
   unreachable-database path — the loudest line the process emits, on the way to `exit(1)` — logged
   `"reason":""`, because pg had thrown an `Error` whose message was empty. Fixed in the same commit;
   see `describe-cause.ts`.
-- **Everything else is cross-file database contention.** The files share one Postgres, and the tests
-  that fail are the ones asserting **whole-table properties** — `verifyChain` over an entire chained
-  table, per-pseudonym aggregate stats, "no leaf in more than one checkpoint", row counts. Any other
-  file writing to those tables breaks them. `vitest.config.ts` already runs one file at a time
-  (`pool: "forks", maxForks: 1`), so this is not parallelism; it is shared state with no teardown.
+- **Everything else is cross-file database contention, and the mechanism is now PROVEN rather than
+  suspected** (Entry 20). It is not "other tests wrote rows" — a correctly chained insert leaves the
+  chain valid. It is **DELETION**:
+  - `verifyChain` walks the table in order and chains each row to **the previous row's stored hash**,
+    starting from `CHAIN_GENESIS` (`hash-chain.ts`). So removing any row permanently invalidates
+    **every row after it** — the successor was chained to a predecessor that no longer exists.
+  - `account-001.test.ts` and `read-001-account-by-email-stub.live.test.ts` clean up with
+    `DELETE FROM user_accounts …`, through a **superuser pool**. Production cannot do this: V22
+    grants `cello_service` INSERT and SELECT only. The tests hold a privilege the application does
+    not, and use it to break an append-only invariant.
+  - That is exactly the reported symptom — *"chain broke at sequence 2"*, in files that never touch
+    accounts, with the same hash pair every run.
+  - The remaining failures of this class (per-pseudonym aggregates, "no leaf in >1 checkpoint", row
+    counts) are the ordinary shared-table kind and are separable.
+- **The generalisation is worth more than the fix, and belongs in the launch conversation:** a
+  linear whole-table hash chain means **any** deletion — a retention policy, a GDPR erasure, an
+  operator cleanup — turns `verifyChain` permanently red, after which a genuine tamper cannot be
+  told from the baseline. That is the precise failure `DOD-ACCOUNTS-CHAIN-1` was opened to fix, and
+  the tests are currently reproducing it on purpose every run.
 - **What that means, and it is the uncomfortable part:** these assertions can only ever have passed
   when the file was run alone. The directory's integration coverage has never worked as a gate, and
   wiring it into CI (`DOD-M15-COMPOSE-CI-1`) **fails immediately** until this is fixed. That makes
