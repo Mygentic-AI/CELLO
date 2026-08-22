@@ -613,15 +613,17 @@ export class RegistrationRepository {
   }
 
   /**
-   * Delete send rows older than `before`. Returns how many went.
+   * NO PRUNE METHOD, deliberately — and the one that was here could not have worked.
    *
-   * Deliberately NOT called on the read path. Rows past the limiter's window are still the evidence
-   * of who has been asking and how often — the thing an operator wants when working out whether a
-   * signup wave was real people. Retention is an explicit decision, not a side effect of someone
-   * signing up.
+   * `pruneOtpSendsBefore` shipped as a `DELETE FROM otp_send_log`, against a table where V63 revokes
+   * DELETE from `cello_service` AND `cello_ops_agent` — every role this repository's pool can
+   * authenticate as. It would have thrown `permission denied` on the first call, and it had no
+   * caller to make that call, so nothing revealed it. Worse was the shape it would have taken if
+   * someone later "fixed" it with a GRANT: there is no DELETE **policy**, so a role holding the
+   * privilege deletes ZERO rows and reports success — a retention sweep that silently does nothing.
+   *
+   * Retention is an operator action run as the migration owner in `psql`, not something the request
+   * path can reach. That is the property the revokes exist to guarantee: a rate-limit record the
+   * limited party's own service could remove is not a rate limit.
    */
-  async pruneOtpSendsBefore(before: Date): Promise<number> {
-    const result = await this.#pool.query(`DELETE FROM otp_send_log WHERE sent_at <= $1`, [before]);
-    return result.rowCount ?? 0;
-  }
 }

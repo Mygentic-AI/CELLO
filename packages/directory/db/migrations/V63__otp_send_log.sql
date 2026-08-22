@@ -30,9 +30,15 @@
 --
 -- ─── Retention ─────────────────────────────────────────────────────────────────────────────────
 -- Rows older than the limiter's window are dead weight for the limiter but are the evidence
--- described above, so they are NOT deleted on the read path. `pruneOtpSendsBefore` exists for a
--- deliberate operator-run or scheduled cleanup; nothing calls it automatically, so no row disappears
--- as a side effect of someone signing up.
+-- described above, so nothing deletes them on the read path — no row disappears as a side effect of
+-- someone signing up.
+--
+-- THERE IS NO APPLICATION-SIDE PRUNE, and the migration must not imply one. An earlier draft of this
+-- comment promised "an operator action against a role that holds DELETE" — no such role exists in
+-- any migration, and a `pruneOtpSendsBefore` repository method was written against it that could
+-- never have executed. Retention, when it is wanted, is `psql` as the migration owner. Granting
+-- DELETE to a service role would also need a DELETE *policy*: with RLS on and no policy, a role
+-- holding the privilege deletes zero rows and reports success.
 --
 -- NO PII. `channel_user_id` is the Telegram/WhatsApp user id the person is already identified by
 -- throughout `registrations` — this table adds no email, no phone, and no hash of either.
@@ -47,12 +53,16 @@ CREATE TABLE IF NOT EXISTS otp_send_log (
   sent_at          TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
--- The limiter's only read: "how many sends for this requester since T". Ordered DESC on sent_at so
--- the window scan stops early instead of walking a requester's whole history.
+-- The limiter's only read: "how many sends for this requester since T". The leading (channel,
+-- channel_user_id) equality is what makes it cheap; the `sent_at` predicate then bounds the range
+-- scan. DESC is a preference, not the optimisation — Postgres walks a btree backwards at no cost, so
+-- an earlier version of this comment claiming DESC is what "stops the scan early" was wrong.
 CREATE INDEX IF NOT EXISTS idx_otp_send_log_requester_time
   ON otp_send_log (channel, channel_user_id, sent_at DESC);
 
--- The retention sweep's read: "everything older than T", across all requesters.
+-- For an operator answering "what happened across everyone in this window" — a signup wave, an
+-- abuse investigation — and for a manual retention delete run as the migration owner. Not read by
+-- the application, which only ever asks about one requester.
 CREATE INDEX IF NOT EXISTS idx_otp_send_log_sent_at
   ON otp_send_log (sent_at);
 
@@ -65,9 +75,9 @@ CREATE INDEX IF NOT EXISTS idx_otp_send_log_sent_at
 -- 1669-test gate while being unusable by the only process that needs it.
 --
 -- APPEND-ONLY, matching `registrations` and `signal_revocations`. There is no UPDATE policy and
--- DELETE is revoked from the service role: a rate-limit record that the limited party's own service
--- could edit or remove is not a rate limit. Retention deletion is an operator action against a role
--- that holds DELETE, not something the request path can reach.
+-- DELETE is revoked from BOTH roles: a rate-limit record that the limited party's own service could
+-- edit or remove is not a rate limit. See the retention note above for why there is no application
+-- prune and what would be required to add one.
 
 ALTER TABLE otp_send_log ENABLE ROW LEVEL SECURITY;
 

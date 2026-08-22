@@ -480,6 +480,38 @@ describeIntegration("M6B-016 — Registration Data Integrity", () => {
     ).rejects.toThrow(/permission denied/);
   });
 
+  // ─── DOD-M15-SIGNUP-DURABLE-1: the same invariant, on the limiter's own table ────────────────
+
+  it("otp_send_log is APPEND-ONLY to cello_ops_agent — no UPDATE, no DELETE", async () => {
+    /**
+     * V63 claims this in prose — *"a rate-limit record that the limited party's own service could
+     * edit or remove is not a rate limit"* — and nothing asserted it, while the sibling table two
+     * tests above has had exactly this coverage since M6B. That asymmetry is how the migration also
+     * shipped granting the wrong role entirely: the file looked right and nothing read it back.
+     *
+     * Runs as `cello_ops_agent`, the role the ops agent actually connects as — which is the point.
+     * A grant that is correct for `cello_service` and absent for this one presents as a table that
+     * exists and cannot be used.
+     */
+    const email = "otp-append-only@example.com";
+    await driveToCompletion(channelState, otpState, userId, email, phone);
+
+    // The row is there and readable — otherwise the refusals below would prove nothing.
+    const rows = await pool.query(
+      "SELECT id FROM otp_send_log WHERE channel = 'cli' AND channel_user_id = $1",
+      [userId],
+    );
+    expect(rows.rows.length, "a completed registration must have logged its OTP send").toBeGreaterThan(0);
+
+    await expect(
+      pool.query("UPDATE otp_send_log SET sent_at = now() WHERE channel_user_id = $1", [userId]),
+    ).rejects.toThrow(/permission denied/);
+
+    await expect(
+      pool.query("DELETE FROM otp_send_log WHERE channel_user_id = $1", [userId]),
+    ).rejects.toThrow(/permission denied/);
+  });
+
   // ─── AC-008 integration gate ─────────────────────────────────────────────────
 
   it("AC-008: V30 migration applied cleanly — schema matches spec", async () => {

@@ -18,9 +18,17 @@
  * the limiter whose only coverage is a suite that does not execute would be the exact shape this
  * milestone exists to close.
  *
- * So this file is UNCONDITIONAL and covers the one dimension Postgres is not needed for: does the
- * count come from durable storage, and does it survive the process. The fake repository below
- * stands in for the database, and a NEW state machine over the SAME repository is the restart.
+ * So this file is UNCONDITIONAL and covers the one dimension Postgres is not needed for: **does the
+ * count come from the repository on every request rather than from instance state**, and does a new
+ * state machine over the same repository still see it. A NEW machine over the SAME fake log is the
+ * restart.
+ *
+ * WHAT IT CANNOT PROVE, stated because the first version of this header claimed it did: durability
+ * itself. The fake repository means nothing here exercises the SQL, the table's existence, the
+ * grants or the policies — which is precisely the dimension that was broken while this file was
+ * green (the migration granted the wrong role, and every ops-agent integration test failed with
+ * `permission denied`). That dimension belongs to `engine.test.ts`, which drives the real table as
+ * `cello_ops_agent`, and which no automated gate runs (`DOD-M15-CI-SKIPS-SILENT-1`).
  */
 
 import { describe, it, expect } from "vitest";
@@ -144,7 +152,7 @@ describe("DOD-M15-SIGNUP-DURABLE-1: the OTP limiter reads from durable storage",
     expect(log.rows.length, "a refused request must not be recorded as a send").toBe(LIMIT);
   });
 
-  it("keys the durable rows on the REQUESTER, so a second person is unaffected", async () => {
+  it("REGRESSION PIN (not new coverage — DOD-M15-SIGNUP-1 already keyed this way): the rows key on the REQUESTER", async () => {
     // The design DOD-M15-SIGNUP-1's review settled, re-asserted at the storage layer: a table keyed
     // on the address (or its domain) would rebuild the defect one level down, where it is harder to
     // see. Distinct users, distinct budgets.
@@ -164,7 +172,7 @@ describe("DOD-M15-SIGNUP-DURABLE-1: the OTP limiter reads from durable storage",
     expect(log.countSince("cli", "requester-2", new Date(0))).toBe(1);
   });
 
-  it("only rows a send that SUCCEEDED — a delivery failure does not spend the allowance", async () => {
+  it("REGRESSION PIN (not new coverage — recording after success predates this unit): a delivery failure does not spend the allowance", async () => {
     // Keyed on the requester, charging them for our delivery failure locks one person out for an
     // hour having never received a code.
     const log = new FakeSendLog();
@@ -189,17 +197,39 @@ describe("DOD-M15-SIGNUP-DURABLE-1: the OTP limiter reads from durable storage",
     expect(log.rows.length, "a failed delivery must not be recorded as a send").toBe(0);
   });
 
-  it("FAILS CLOSED when the send log cannot be read, rather than granting a fresh allowance", async () => {
-    // A limiter that answers "0" when it cannot see is not a limiter. This costs nothing it did not
-    // already cost: the log shares a database with `registrations` itself, so a database that
-    // cannot answer this cannot store the registration either.
+  it("FAILS CLOSED when the send log cannot be read — AND TELLS THE PERSON", async () => {
+    /**
+     * A limiter that answers "0" when it cannot see is not a limiter, so the refusal is right. But
+     * refusing silently is a separate defect, and it is the one that shipped: the throw unwinds to
+     * the engine, `onError` is undefined in production, and the person receives NOTHING. They resend
+     * their address, get nothing again, and the record sits until it expires a week later. From
+     * their side the bot is dead.
+     *
+     * That matters most in the case that actually happened — a missing grant on `otp_send_log` is
+     * TABLE-scoped, so `registrations` keeps working and the health check keeps reporting healthy
+     * while every signup in the system dies at this step.
+     *
+     * This file's own `#askGate` had already ruled on it: failing closed and saying so are
+     * independent. The assertion on `sent` is what makes that ruling enforceable here.
+     */
     const log = new FakeSendLog();
     log.failCount = new Error("connection terminated unexpectedly");
-    const { logger } = makeLogger();
-    const machine = makeMachine(log, logger, []);
+    const { logger, events } = makeLogger();
+    const sent: string[] = [];
+    const machine = makeMachine(log, logger, sent);
 
     await expect(requestCode(machine, "victim@example.test")).rejects.toThrow(/connection terminated/);
     expect(log.rows.length, "nothing may be sent when the allowance cannot be established").toBe(0);
+
+    // THE PERSON IS TOLD. Without this assertion the silent version passes.
+    expect(sent.length, "a refusal the person never hears is indistinguishable from a dead bot").toBe(1);
+    expect(sent[0]).toMatch(/couldn't send your verification code|nothing has been sent/i);
+
+    // ...and the operator gets the cause, not just the silence.
+    const failed = events.find((e) => e.event === "registration.otp.limit_check_failed");
+    expect(failed?.method).toBe("error");
+    expect(String(failed?.context["detail"])).toContain("connection terminated");
+    expect(String(failed?.context["guidance"])).toContain("otp_send_log");
   });
 
   it("is LOUD, and does not fail the request, when a delivered code cannot be recorded", async () => {

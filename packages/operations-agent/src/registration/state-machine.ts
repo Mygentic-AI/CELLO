@@ -920,12 +920,42 @@ export class RegistrationStateMachine {
     /**
      * DOD-M15-SIGNUP-DURABLE-1: the count now comes from the database, so it survives a deploy.
      *
-     * FAILS CLOSED on a database error, and that costs nothing it did not already cost: this log
-     * shares a database with `registrations` itself, so a database that cannot answer the limiter
-     * cannot store the registration either. The throw propagates rather than being caught into a
-     * permissive default — a limiter that answers "0" when it cannot see is not a limiter.
+     * FAILS CLOSED, AND SAYS SO. The first version of this only did the first half, and this file
+     * had already ruled on that exact mistake 600 lines above (see `#askGate`): *"Failing closed and
+     * saying so are independent. Without the telling, the engine logs, `onError` is undefined in
+     * production, and the user gets nothing at all."*
+     *
+     * The cost of getting it wrong here is worse than the gate's, because of the case that actually
+     * happened. A whole-database outage is survivable ground for a bare throw — nothing in this flow
+     * works without the pool anyway. But a TABLE-scoped failure is not: a missing grant on
+     * `otp_send_log` (which is precisely the state this unit shipped in for an hour) leaves
+     * `registrations` fully working and the health check reporting healthy, while **every signup in
+     * the system dies at the email step**. From the person's side the bot is simply dead: they send
+     * their address, receive nothing, resend it, receive nothing, and the record sits in
+     * AWAITING_EMAIL until it expires a week later.
+     *
+     * So: catch, tell them, rethrow. The refusal still refuses — nothing is sent, nothing is
+     * recorded — but the person learns it is us and that retrying later is the move.
      */
-    const otpSendCount = await this.#otpSendCount(record.channel, from);
+    let otpSendCount: number;
+    try {
+      otpSendCount = await this.#otpSendCount(record.channel, from);
+    } catch (err: unknown) {
+      logger.error("registration.otp.limit_check_failed", {
+        registrationId: record.id,
+        correlationId,
+        detail: err instanceof Error ? err.message : String(err),
+        impact:
+          "the signup rate limit could not be read, so no verification code was sent; if this is table-scoped rather than a full outage, every signup is failing here while the rest of the system looks healthy",
+        guidance:
+          "check that the ops-agent's role can SELECT otp_send_log (V63) — a grant or policy gap presents exactly like this",
+      });
+      await channel.send(
+        from,
+        "Something went wrong on our side and I couldn't send your verification code. Nothing has been sent yet. Please try again in a few minutes — if it keeps happening, it's us, not you.",
+      );
+      throw err;
+    }
     if (otpSendCount >= OTP_RATE_LIMIT_PER_HOUR) {
       logger.warn("registration.otp.rate_limited", {
         registrationId: record.id,
@@ -1339,22 +1369,23 @@ export class RegistrationStateMachine {
   }
 
   /**
-   * Is this REQUESTER over their OTP allowance?
+   * How many verification codes has this REQUESTER been sent in the last hour?
    *
-   * DOD-M15-SIGNUP-1. A PURE PREDICATE — it prunes, it reads, it does not record. The count is
-   * added by `#recordOtpSend` only after a send actually succeeds, so a delivery failure never
-   * spends one of the person's five. The old version incremented here and had no compensation on
-   * throw, which under a per-person key would lock someone out for an hour having never received a
-   * code.
+   * DOD-M15-SIGNUP-DURABLE-1. Reads `otp_send_log` (V63) — one row per SUCCESSFUL send, keyed on
+   * `(channel, channel_user_id)`, counted over a rolling window. There is no in-process state here
+   * and that is the entire point of the unit: the previous version kept a `Map` that every restart
+   * and every deploy emptied, so an abuser cleared their count by waiting for a release.
    *
-   * Prunes as it goes, matching `#overTokenLimit` above rather than inventing a second shape in one
-   * file: the map then holds only requesters who have asked inside the window, instead of every
-   * requester this process has ever seen. It runs for weeks at a time.
+   * KEYED ON THE REQUESTER, never the address or its domain. That is settled design, not a detail
+   * to optimise: the domain key throttled five strangers sharing a mail provider against the sixth,
+   * and an address key throttles the VICTIM of a typo'd address rather than the sender.
    *
-   * ⚠️ STILL IN MEMORY, a known gap and not an oversight: a restart or a deploy empties it, so an
-   * abuser clears it by waiting for a release. `DOD-M15-SIGNUP-DURABLE-1` carries that, and the
-   * timestamp-list shape here is what a table should store — a fixed window with a stale
-   * `windowStart` would carry the growth problem into the database with it.
+   * THROWS rather than answering zero. A limiter that reports "no sends yet" when it cannot see is
+   * not a limiter, so the caller fails closed on it — and tells the person, which is a separate
+   * obligation the first version of this missed. See the call site.
+   *
+   * Counting rows rather than reading a counter is also deliberate: a stored count needs a window
+   * to reset, and a stale `window_start` silently grants a fresh allowance.
    */
   async #otpSendCount(channel: string, from: string): Promise<number> {
     return this.#deps.repository.countOtpSendsSince(
