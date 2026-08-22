@@ -3,14 +3,28 @@
 // agent_key_shares forbids row deletion (append-only); the GRANT allows UPDATE of encrypted_share.
 // destroyShares must ZERO the persisted material for ALL of an agent's epochs — capability dies, the
 // row (accountability) survives — and drop the in-memory cache. Run against a DB with the full
-// migration history (cello_spine).
+// compose Postgres, like every other suite here.
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import type { EnvelopeKeyProvider, Logger } from "@cello-protocol/interfaces";
 import { EncryptedPgShareStore } from "../encrypted-share-store.js";
 
-const DB_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_spine";
+/**
+ * The compose Postgres, same as every other suite in this package.
+ *
+ * This defaulted to `cello_spine`, a database `docker-compose.yml` does not create — a leftover from
+ * when these were run by hand against a hand-built database with the full migration history. The
+ * effect was that they threw `database "cello_spine" does not exist` out of `beforeAll` on any
+ * machine that had not built one, and vitest reports a failed `beforeAll` by marking its tests
+ * SKIPPED rather than failed. So they read as green.
+ *
+ * Caught by DOD-M15-COMPOSE-CI-1: the CI job sets `CELLO_ENV=local` and nothing else, so the
+ * default is what decides — and on a freshly composed database it decided wrong. It is the same
+ * defect DOD-M15-DIRECTORY-ROT-1 already recorded once: a default inconsistent with its siblings,
+ * where the sibling forty lines away was right.
+ */
+const DB_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
 const AGENT = "burn-share-live-agent"; // agent_key_shares.agent_id holds the k_local pubkey hex
 const noopLogger: Logger = { info() {}, warn() {}, error() {}, debug() {} } as unknown as Logger;
 // destroyShares never calls encrypt/decrypt — a throwing stub proves that.

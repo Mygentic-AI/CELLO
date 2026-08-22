@@ -7,17 +7,20 @@ name: CI
 # only when a person remembered to run it locally, which is how a migration shipped that created a
 # table the ops agent could not read, and how 32 database-suite failures sat unnoticed.
 #
-# ─── What this job deliberately does NOT do yet ────────────────────────────────────────────────
+# ─── Both halves now run ───────────────────────────────────────────────────────────────────────
 #
-# It does not start Postgres and run the integration suites. That is the SECOND half of
-# DOD-M15-COMPOSE-CI-1 and it is blocked on DOD-M15-DIRECTORY-ROT-1: those suites currently fail 25
-# tests because the files share one database and assert whole-table properties, so wiring them in
-# today produces a permanently red pipeline — which teaches everyone to ignore the pipeline, the
-# opposite of the point.
+# The database job below was disabled behind `if: false`, blocked on DOD-M15-DIRECTORY-ROT-1: the
+# integration suites failed 25 tests because files shared one database and asserted whole-table
+# properties, and wiring that in would have made a permanently red required check — which teaches
+# everyone to ignore the pipeline, the opposite of the point.
 #
-# The database job is written below and DISABLED behind `if: false`, with the reason on it, rather
-# than left out. A missing job is indistinguishable from one nobody thought of; a disabled one with
-# a named blocker is a decision on the record.
+# That blocker is cleared, and clearing it turned up one more thing worth naming: the directory
+# suite passing alone was NOT sufficient. The root gate is one vitest process, so `directory` and
+# `operations-agent` interleave against one database, and on a freshly composed database the same
+# command failed 16 tests one run and 19 the next — a DIFFERENT set each time, which is the same
+# moving-failing-set signature this milestone chased before. The database run is therefore SERIAL
+# (`fileParallelism` in vitest.config.ts, scoped to CELLO_ENV=local). Serial: 2245 passing, zero
+# failures, twice back to back, 205s. The unit job below keeps its parallelism and runs in 38s.
 
 on:
   push:
@@ -52,9 +55,9 @@ jobs:
         env:
           # DOD-M15-CI-SKIPS-SILENT-1: an unacknowledged CI run that skips the integration suites
           # FAILS by design — that guard exists so "we did not test this" cannot look like "this
-          # passed". This run skips them on purpose (see the disabled database job below), so the
-          # decision is declared here rather than the guard being deleted. Remove this line the day
-          # the database job is enabled.
+          # passed". THIS job is still unit-only, and that is now a division of labour rather than a
+          # gap: it gives fast feedback on every push while the `database` job below runs the same
+          # suite for real. The acknowledgement stays because this job genuinely does skip them.
           CELLO_GATE_UNIT_ONLY: "1"
         run: pnpm run test
 
@@ -70,22 +73,26 @@ jobs:
       - name: State what did NOT run
         if: always()
         run: |
-          echo "::warning title=Integration suites did not run::This gate ran the unit tests only."
-          echo "The CELLO_ENV=local suites (database, RLS, hash chains, migrations) are skipped here."
-          echo "They are blocked on DOD-M15-DIRECTORY-ROT-1 — see the disabled job in this workflow."
+          echo "::warning title=This job ran the unit tests only::The CELLO_ENV=local suites (database, RLS, hash chains, migrations) were skipped HERE."
+          echo "They run in the 'Gate with Postgres' job of this same workflow — check that job's result before trusting this one."
 
-  # ── Database suites — DISABLED, blocked on DOD-M15-DIRECTORY-ROT-1 ────────────────────────────
+  # ── Database suites — ENABLED 2026-08-22, DOD-M15-COMPOSE-CI-1 ────────────────────────────────
   #
-  # Enable by deleting `if: false` once the directory suite survives its own run. Verify locally
-  # first with:  docker compose up -d && CELLO_ENV=local pnpm run test
+  # This is the job that actually covers RLS policies, hash-chain constraints and migrations —
+  # things a unit test cannot fake, and the reason a quarter of the suite was inert on every run.
   #
-  # Do NOT enable it "to see how bad it is" — a red required check that everyone learns to ignore is
-  # worse than an honest absence, which is what the warning step above makes visible instead.
+  # A FRESH DATABASE EVERY TIME, which is stricter than a developer's machine. Local databases carry
+  # scars: a chain broken by a pre-fix fixture stays broken, and the DoD line records having to
+  # `docker compose down -v` once to clear one. Here there is nothing to inherit, so a chain failure
+  # is always a real one.
+  #
+  # If this goes red, do NOT re-disable it. It passed 195/196 files and 2245 tests twice in a row on
+  # a clean database when it was enabled; a failure means something regressed, and hiding it
+  # recreates the exact hole this milestone exists to close.
   database:
-    name: Gate with Postgres (blocked — DOD-M15-DIRECTORY-ROT-1)
+    name: Gate with Postgres
     runs-on: ubuntu-latest
     needs: gate
-    if: false
 
     steps:
       - uses: actions/checkout@v4

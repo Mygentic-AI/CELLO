@@ -24,7 +24,21 @@ import pg from "pg";
 import { drainPickupForAgent, ackPickupDelete, sweepUndeliverablePickups } from "../pickup-repository.js";
 import { enqueuePickup } from "../agent-write-repository.js";
 
-const DB_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_spine";
+/**
+ * The compose Postgres, same as every other suite in this package.
+ *
+ * This defaulted to `cello_spine`, a database `docker-compose.yml` does not create — a leftover from
+ * when these were run by hand against a hand-built database with the full migration history. The
+ * effect was that they threw `database "cello_spine" does not exist` out of `beforeAll` on any
+ * machine that had not built one, and vitest reports a failed `beforeAll` by marking its tests
+ * SKIPPED rather than failed. So they read as green.
+ *
+ * Caught by DOD-M15-COMPOSE-CI-1: the CI job sets `CELLO_ENV=local` and nothing else, so the
+ * default is what decides — and on a freshly composed database it decided wrong. It is the same
+ * defect DOD-M15-DIRECTORY-ROT-1 already recorded once: a default inconsistent with its siblings,
+ * where the sibling forty lines away was right.
+ */
+const DB_URL = process.env.DATABASE_URL ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
 const AGENT = "trust-pickup-live-agent";
 const OTHER_AGENT = "trust-pickup-live-other-agent"; // a co-tenant — its pickups must survive AGENT's supersede
 const HASH_WEBAUTHN = "c".repeat(64);
