@@ -1292,3 +1292,67 @@ mislabelling required behaviour** — the fourth unit in this milestone to hit t
 **Tag ✅. Merged.**
 
 ---
+
+## Entry 12 — DOD-M15-LEDGER-1 + DOD-M15-CLAIM-COMMENTS-1: the claims work (2026-08-22)
+
+**trustless-cello `f075c919` + the ledger commits; cello-client `856e322`. Both 🟡 — one review
+pass owed, dispatched together because they are the same subject.** Gate: cello-client 4008 passed,
+lint both repos, typecheck both repos.
+
+### The counterbalance (Invariant 1) — an honest exception, again
+
+Neither unit guards anything. `LEDGER-1` is an audit and `CLAIM-COMMENTS-1` rewrites prose to match
+code. **The adversary here is a future reader, including us** — and the counterbalance is that every
+row records the command that produced it, so the claim can be re-checked rather than believed.
+
+### LEDGER-1 — the sweep, complete
+
+All four live surfaces walked. **22 rows.** Method throughout: run the artefact's own instructions
+against the tree rather than reading it.
+
+**The worst row is still `AUDIT-ME.md`'s Claim 3**, and it is worst because of *how* it is found:
+the file's own command 4 returns `core/daemon/src/telegram-bot-client.ts`, falsifying the claim four
+lines above it. An evaluator following the instructions in a file called AUDIT-ME reaches a false
+claim in about ten seconds.
+
+**Two clean negatives, recorded so nobody re-walks them:** CLI help and product status output carry
+no security claims — the claim-shaped words grep finds there are source comments about
+implementation discipline, and they are accurate. And `content_profile` is advertised **nowhere**,
+so `DOD-M15-DOCPROFILE-1` is a feature gap with no claim attached, which is the reverse of what its
+line assumed.
+
+### CLAIM-COMMENTS-1 — two comments deferring to each other
+
+The pair is the find. The directory's SEAL-leaf handler deferred its root check *"to a follow-on
+story since clients perform this verification locally, maintaining the trust guarantee at the client
+level"*. The client defers the same check back, saying root agreement *"belongs to the FROST seal
+against the directory-held tree"*.
+
+**Each half points at the other and there is no third party.** The certified root is compared against
+no participant's transcript on the bilateral path — which is exactly `DOD-M15-SEALWIRE-1`'s subject,
+and the reason it stayed invisible for so long.
+
+> **This is the mechanism, not just an instance:** both halves read as a *considered decision to
+> check elsewhere*. Neither reads as an omission. A reviewer checking either one finds a reason and
+> moves on. **Mutual deferral is the strongest camouflage a missing check can have**, and the only
+> way to see it is to follow the pointer.
+
+**Neither comment is deleted.** Each records a real gap, and deleting them would leave the absence
+looking deliberate — which is precisely what the original wording achieved by accident. Both now say
+that nobody performs the check, and both name the unit that closes it.
+
+**The directory's deferral is also structurally impossible as written:** `final_root` survives only
+inside a SHA-256 pre-image that is never transmitted, so no amount of follow-on work makes the check
+possible without changing the wire.
+
+### The second copy of a wrong explanation
+
+Two files blamed the heartbeat's failure to replicate on a *"BIGSERIAL `id` collision"*. One was
+corrected earlier; this was the other. **It is wrong in the way that costs a day** — it sends the
+next reader at a surrogate-key problem that does not exist. The cause is that `last_heartbeat_at` is
+**mutable** and Tier A carries immutable columns only, so replicating it needs a Tier-B merge table
+rather than a spec edit.
+
+**A corrected comment can have copies.** Fixing the instance you found is not fixing the claim.
+
+---
