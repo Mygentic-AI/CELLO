@@ -76,6 +76,9 @@ Everything already readable by someone outside — the public repo, the shipped 
 own output. The unpublished investor and GTM material is **not** in this tier (M15-PROCEDURE §0a.1).
 
 ### `DOD-M15-LEDGER-1` — ❌ Every live claim is in the ledger with a disposition
+> **Reviewed 2026-08-22 → Entry 14: BLOCKING.** The sweep shipped incomplete on three of four
+> surfaces. **Depends on `DOD-M15-CLAIM-SCANNER-1`** — the rows cannot be trusted complete until
+> something enumerates the surfaces instead of a person.
 Build the claims ledger (M15-PROCEDURE §1d) as a section of this document. One row per claim: its
 current text, where it appears, and its disposition — **made true**, **withdrawn**, or **disclosed as
 a bounded property**.
@@ -103,7 +106,30 @@ may present inbound screening as fully active. When it lands, this row flips to 
 - Distinguishes the character-denylist layer (live) from the semantic layer (not installable).
 - **Withdrawal now, truth later** — both dispositions are legitimate; silence is not.
 
+### `DOD-M15-CLAIM-SCANNER-1` — ❌ An unlisted claim fails the build
+**The review's central finding, and Andre's word for it was "letter, not spirit."** A prose ledger is
+a chore that looks like a control: `DOD-M15-LEDGER-1` shipped incomplete because completeness rested
+on one grep vocabulary at one moment — *never / cannot / impossible* — and missed *tamper-proof*,
+*ACTIVE*, *screened*, *encrypted*, *verifiable*, *notarized*, *proof*.
+- **Enumerate the SURFACES from the system, never by hand:** `package.json#files` for what actually
+  ships in the tarball, the plugin manifests, `registry.ts`'s `summary`/`help` string literals, root
+  `*.md`. **The tarball SKILL.md was missed precisely because it was not on anyone's list.**
+- **A claim vocabulary regex**, matched over those surfaces. Every hit must appear in the claims
+  table with a disposition and a reason; **an unlisted hit fails the build.**
+- **The repo already has this shape** — `plugin-skills-audit.test.ts` scans shipped skills for dead
+  tool names, and `dod-onboard-help-1-vocabulary` scans daemon strings for CLI verbs that do not
+  dispatch. The second one caught a real defect in a string written minutes after the review landed.
+- **This inverts the loop lens 4 requires:** iterate what the system has, not a list someone
+  maintains. It would have caught all three of the review's HIGH findings at commit time.
+- The prose ledger stays as the reasoning record. **The test is what makes it true tomorrow.**
+- **Add a fourth ledger column while here — *enforced by whom*.** It makes row 6 self-evidently false
+  (nobody enforces it), row 7 safe (structural), and rows 10–13 bounded (the operator's own daemon —
+  ergonomics, by Invariant 1's own first non-qualifying answer).
+
 ### `DOD-M15-CLAIM-COMMENTS-1` — ❌ No comment in the public repo asserts a property the code lacks
+> **Reviewed 2026-08-22 → Entry 14: BLOCKING.** Two comments in the public repo still assert
+> properties the code lacks. One (`session-assignment-parser.ts`) is fixed in `1ddcd63`; the other
+> (`cello-mcp.ts:190`, ledger row 13) was assigned to this unit and not delivered.
 The six known checked-then-ignored instances; three carry such a comment.
 - **Rewrite, never delete.** The comment is why the gap survived review; deleting it destroys the
   evidence that someone believed it. It is rewritten to describe what the code actually does and
