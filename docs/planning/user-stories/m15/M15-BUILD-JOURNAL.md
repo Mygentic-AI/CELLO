@@ -2040,3 +2040,68 @@ the real mechanism was two greps away.
 **Check what privilege the test holds versus what the application holds.** A cleanup path that needs
 a superuser pool is doing something production cannot do. That is either a missing production
 capability or a test breaking an invariant, and both are worth knowing before the test is "fixed".
+
+## Entry 21 — `DOD-M15-SIGNUP-DURABLE-1` closes ✅, and the chain-poisoning class is shut
+
+### The verdict, and the finding I would not have found myself
+
+> **SPEC: DEVIATIONS FOUND.** … **SILENT FALLBACKS FOUND** — no fail-open on the read (that part is
+> right), but F1 is the mirror-image defect: a fail-closed refusal that is invisible to the person it
+> refuses, on a path where a table-scoped database error takes the entire signup flow down while the
+> health check still reports healthy.
+
+**"A fail-closed refusal that is invisible to the person it refuses."** That is the shape, and I had
+written the argument against it myself, in this same file, six hundred lines above the line I broke:
+
+> *"Failing closed and saying so are independent. Without the telling, the engine logs, `onError` is
+> undefined in production, and the user gets nothing at all… From their side the bot is dead."*
+
+I then wrote a fresh comment reproducing the exact false dichotomy that passage exists to reject
+("the throw propagates rather than being caught into a permissive default"), as though catching and
+telling were the same thing as catching and continuing.
+
+**Rule:** when a file already contains a ruling on the decision in front of you, it is not
+background — it is the decision. Read it before writing the new comment justifying the opposite.
+
+And the reviewer sharpened *why* it matters here, which I had also got half-right. My argument was
+that failing closed costs nothing because the limiter shares a database with `registrations`. True
+for a whole-database outage. **False for a table-scoped failure** — a missing grant on
+`otp_send_log`, which is *precisely the state this unit shipped in for an hour*. There,
+`registrations` works, the health check reports healthy, and **every signup in the system dies at the
+email step** while looking like a dead bot to each person who tries.
+
+### The other two
+
+- **A comment that disclaimed its own fix.** The docblock on the new durable count was the old
+  in-memory one, warning *"STILL IN MEMORY, a known gap… `DOD-M15-SIGNUP-DURABLE-1` carries that"* —
+  sitting on the function that closed it. The usual CELLO defect is a comment asserting a property
+  the code lacks; this is the inverse, and it is worse in one way: it invites the next reader to go
+  and implement what is already there.
+- **A retention method that could not execute.** `pruneOtpSendsBefore` DELETEd from a table where V63
+  revokes DELETE from **both** roles the pool can authenticate as, and had no caller to reveal it.
+  The reviewer added the part I had not seen: if someone later "fixed" it with a GRANT, RLS is on and
+  there is no DELETE *policy*, so it would delete **zero rows and report success** — a retention
+  sweep that silently does nothing. Removed, and the migration no longer promises an operator role
+  that exists in no migration.
+
+---
+
+## The chain-poisoning class, shut
+
+`DIRECTORY-ROT-1` had a proven mechanism (Entry 20) and now has a fix for the largest slice of it.
+Five files were breaking `verifyChain('user_accounts')` **for the whole run**, in suites that never
+touch accounts, by two habits:
+
+1. **Raw INSERTs with a literal `chain_hash`** — `'seed'`, `'burn-chain'`, `'writeapi-seed-chain'`,
+   `'read-001-seed-chain'`. A hash not computed against the current chain head is a hole.
+2. **DELETEs in cleanup**, through a superuser pool.
+
+Both are now a shared `seedAccount()` that goes through the chained writer, plus per-run unique ids
+so nothing needs cleaning up. **32 failures → 25.**
+
+The best part of the investigation is a file that needed no change: `cross-node-discovery-pg.live`
+wraps every test in `BEGIN`/`ROLLBACK`, so its inserts never commit and cannot pollute anything. The
+pattern the other four should have followed was already in the same directory.
+
+**Rule:** when several files share a defect and one does not, read the one that does not before
+designing a fix. It usually already contains it.

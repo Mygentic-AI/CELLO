@@ -344,7 +344,27 @@ line; these produce no output at all.
   in writing that it is manual-only and name who runs it before a milestone closes.
 - **Enforcer:** receipt.
 
-### `DOD-M15-SIGNUP-DURABLE-1` — ❌ The signup limiter survives a deploy
+### `DOD-M15-SIGNUP-DURABLE-1` — ✅ The signup limiter survives a deploy
+> **Shipped and reviewed 2026-08-22 → Entries 17, 19, 21.** `45506993` (unit), `ec053ed3` (the
+> migration fix that running the database suites exposed), `edb2e5fb` (review fixes). Gate: 20 files
+> / 237 tests green against a real Postgres; 157 / 1678 on the default gate; lint 0, typecheck.
+>
+> **Review verdict:** *"SPEC: DEVIATIONS FOUND"* — and all three blocking items are fixed:
+> - **The refusal nobody heard.** Failing closed on a database error is right; doing only that meant
+>   the person received **nothing** — no message, resend, nothing again, record expiring seven days
+>   later. This file had already ruled on that exact mistake 600 lines above (*"Failing closed and
+>   saying so are independent"*) and the new code reproduced the false dichotomy that passage
+>   rejects. Now: catch, tell them, rethrow — pinned by an assertion that goes red without it.
+> - **A comment that disclaimed the fix.** The docblock on the durable count was the old in-memory
+>   one, still warning *"STILL IN MEMORY … `DOD-M15-SIGNUP-DURABLE-1` carries that"* — on the
+>   function that closed it.
+> - **A retention method that could not run.** `pruneOtpSendsBefore` DELETEd from a table where V63
+>   revokes DELETE from both roles the pool can authenticate as, and had no caller. Removed.
+>
+> The reviewer confirmed the two clauses the DoD line specifically warned about — **rolling shape**
+> and **requester key** — are faithful, and that the fail-closed argument holds for a whole-database
+> outage while failing for the table-scoped case that actually happened.
+
 Split from `DOD-M15-SIGNUP-1`, which rekeyed the limiter from the email domain to the address
 fingerprint but left it in memory. **The clause asking for durability is NOT met and is carried
 here rather than quietly dropped.**
