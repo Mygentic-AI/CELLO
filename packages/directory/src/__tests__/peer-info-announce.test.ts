@@ -348,27 +348,34 @@ describe("CELLO-NODE-001: peer_info_announce signaling step", () => {
 
     const asg = frameA.assignment;
 
-    // parseParticipantInfo is the function from client.ts that rejects empty peer_id.
-    // We simulate it here directly: the function returns null if peer_id is falsy.
-    function parseParticipantInfo(p: { pubkey: Uint8Array; peer_id: string; multiaddrs: string[] }) {
-      if (!p.peer_id) return null;
-      if (!p.multiaddrs || p.multiaddrs.length === 0) return null;
-      return p;
-    }
+    /**
+     * THE HAND-COPIED `parseParticipantInfo` IS GONE — it was a FALSE MIRROR.
+     *
+     * It was labelled "the function from client.ts" and reimplemented it here, rejecting an empty
+     * `peer_id` and an empty `multiaddrs`. As of `DOD-M15-DEAD-WIRE-FIELD-1` the client does neither:
+     * both fields are read by nothing and covered by no signature, and refusing over them handed any
+     * directory a free way to deny a session to two honest agents. So this simulated a client that
+     * no longer exists and asserted a guarantee the real one had stopped making.
+     *
+     * A copy of another repo's function cannot stay true, and the test cannot tell when it stops
+     * being. What this test can honestly observe is what THE DIRECTORY put in the assignment, which
+     * is its actual subject, so that is all it asserts now.
+     *
+     * Same lesson AC-005 recorded forty lines above when it was amended under `DOD-M15-SURFACE-1`:
+     * *"a test whose subject it supplies itself cannot observe the thing it claims to guarantee."*
+     */
 
-    const parsedA = parseParticipantInfo(asg.participant_a);
-    const parsedB = parseParticipantInfo(asg.participant_b);
-
-    // AC-015: parseParticipantInfo must return non-null for both entries
-    expect(parsedA).not.toBeNull();
-    expect(parsedB).not.toBeNull();
-
-    // AC-015: peer_ids match actual node PeerIds
+    // AC-015: the peer_ids the directory recorded are the announcing nodes' real PeerIds.
     const actualPeerIds = new Set([nodeA.getPeerId(), nodeB.getPeerId()]);
     expect(actualPeerIds.has(asg.participant_a.peer_id)).toBe(true);
     expect(actualPeerIds.has(asg.participant_b.peer_id)).toBe(true);
 
-    // AC-015: multiaddrs are non-empty for both
+    /**
+     * These nodes announce real addresses, so the directory should carry them through — that is a
+     * statement about THIS test's own nodes and the directory's copy of what they sent, NOT a client
+     * requirement. The client tolerates an empty or absent value, and a production client since
+     * SURFACE-1 announces `[]` because the directory-facing node no longer listens.
+     */
     expect(asg.participant_a.multiaddrs.length).toBeGreaterThan(0);
     expect(asg.participant_b.multiaddrs.length).toBeGreaterThan(0);
   });
