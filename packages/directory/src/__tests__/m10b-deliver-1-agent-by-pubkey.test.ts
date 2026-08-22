@@ -76,7 +76,16 @@ describeIntegration("DOD-END-DELIVER-1 — /internal/agent-by-pubkey", () => {
     // ordinary unknown subject as an outage.
     const res = await post({ k_local_pubkey: "ff".repeat(32) });
     expect(res.status).toBe(200);
-    expect((await res.json()) as { found: boolean }).toEqual({ found: false, agent_id: null, account_id: null });
+    // EXACT, deliberately. The route later grew `phone_stub_hash` — the operator-linkage field
+    // (policy D-29) — and this assertion is the thing that decides whether a new field on a
+    // NOT-FOUND answer is intentional. Every key here must be null: an agent this node has never
+    // heard of must not come back carrying anything at all.
+    expect((await res.json()) as { found: boolean }).toEqual({
+      found: false,
+      agent_id: null,
+      account_id: null,
+      phone_stub_hash: null,
+    });
   });
 
   it("REFUSES a malformed pubkey rather than querying with it", async () => {

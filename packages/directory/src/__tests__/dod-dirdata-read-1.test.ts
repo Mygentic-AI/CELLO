@@ -5,13 +5,35 @@
  * clean-close rate computed from seal_notarizations + conversation_seals (both replicated).
  *
  * Gated on CELLO_ENV=local (Docker Postgres).
+ *
+ * ─── THIS FILE HAD NOT RUN SINCE V31 (`DOD-M15-DIRECTORY-ROT-1`) ───────────────────────────────
+ *
+ * Its setup used `ON CONFLICT (session_id)`. `V31__seal_notarization_superseding.sql` DROPPED that
+ * constraint — a bilateral seal must be able to supersede a unilateral one — and replaced it with
+ * `UNIQUE (session_id, seal_type)`. So every run since threw *"there is no unique or exclusion
+ * constraint matching the ON CONFLICT specification"* out of `beforeAll`.
+ *
+ * **And that was invisible under the documented command.** The suite is gated on `CELLO_ENV=local`;
+ * without it vitest prints eight ↓ skipped lines and a green file. With it, the throw lands in
+ * `beforeAll`, so the eight tests are *still* reported as skipped — the failure is one line in a
+ * 22,000-line run. Either way the track-record route, which the portal reads to show an agent's
+ * clean-close rate, had **zero** executed coverage for the whole of M7 onward.
+ *
+ * ─── The two habits that made it a poisoner as well as a corpse ────────────────────────────────
+ *
+ * It wrote literal `chain_hash` strings into two chained tables and then DELETEd them in `afterAll`
+ * through a superuser pool. Entry 20 proved what that does: `verifyChain` chains each row to the
+ * PREVIOUS row's stored hash, so a delete invalidates every row after it, for the whole run, in
+ * files that never touch seals. The rows now live inside a transaction that is always rolled back,
+ * which is why there is no cleanup below — and no way to forget it.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { Pool } from "pg";
+import pg, { Pool } from "pg";
 import { randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { createInternalApiServer } from "../internal-api-server.js";
+import { txnPool } from "./helpers/txn-pool.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
 const describeIntegration = process.env.CELLO_ENV === "local" ? describe : describe.skip;
@@ -27,6 +49,7 @@ interface TrackRecordResponse {
 
 describeIntegration("DOD-DIRDATA-READ-1 — GET /internal/track-record/:agentPubkey", () => {
   let pool: Pool;
+  let client: pg.PoolClient;
   let server: Server;
   let base: string;
   const API_KEY = "test-track-record-key";
@@ -45,20 +68,30 @@ describeIntegration("DOD-DIRDATA-READ-1 — GET /internal/track-record/:agentPub
     return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
   }
 
+  /**
+   * The transaction-bound pool. Both the fixture rows AND the server under test go through it, so
+   * every query in this file lands on ONE connection inside ONE transaction. Handing the server a
+   * different pool would mean it queried a connection that cannot see any of the rows below.
+   */
+  let txn: Pool;
+
   beforeAll(async () => {
     pool = new Pool({
       connectionString: process.env.DATABASE_URL || "postgresql://postgres:dev@localhost:5433/cello_dev",
     });
+    client = await pool.connect();
+    await client.query("BEGIN");
+    txn = txnPool(client);
 
     // Insert seal_notarizations rows for the test agent
     for (let i = 0; i < sessionIds.length; i++) {
       const sid = sessionIds[i];
-      await pool.query(
+      await txn.query(
         `INSERT INTO seal_notarizations
            (session_id, sealed_root, participant_a_pubkey, participant_b_pubkey,
-            close_timestamp, frost_signature, chain_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (session_id) DO NOTHING`,
+            close_timestamp, frost_signature, chain_hash, seal_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'bilateral')
+         ON CONFLICT (session_id, seal_type) DO NOTHING`,
         [
           sid,
           randomBytes(32),
@@ -72,7 +105,7 @@ describeIntegration("DOD-DIRDATA-READ-1 — GET /internal/track-record/:agentPub
     }
 
     // Insert conversation_seals for 2 of the 3 sessions
-    await pool.query(
+    await txn.query(
       `INSERT INTO conversation_seals
          (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
        VALUES ($1, $2, 'MUTUAL_SEAL', 2, '2026-01-01', $3)
@@ -83,7 +116,7 @@ describeIntegration("DOD-DIRDATA-READ-1 — GET /internal/track-record/:agentPub
         `test-cs-chain-dirdata-0-${agentPubkeyHex.slice(0, 8)}`,
       ],
     );
-    await pool.query(
+    await txn.query(
       `INSERT INTO conversation_seals
          (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
        VALUES ($1, $2, 'EXPIRE', 2, '2026-01-02', $3)
@@ -97,7 +130,7 @@ describeIntegration("DOD-DIRDATA-READ-1 — GET /internal/track-record/:agentPub
     // sessionIds[2] has no conversation_seals row (simulates seal without analytics record)
 
     server = createInternalApiServer({
-      pool,
+      pool: txn,
       internalApiKey: API_KEY,
       logger: noopLogger,
       owningNodeId: "dirdata-test-node",
@@ -108,10 +141,12 @@ describeIntegration("DOD-DIRDATA-READ-1 — GET /internal/track-record/:agentPub
 
   afterAll(async () => {
     if (server) await new Promise<void>((r) => server.close(() => r()));
-    // Clean up test data
-    for (const sid of sessionIds) {
-      await pool.query("DELETE FROM conversation_seals WHERE conversation_id = $1", [sessionIdToUuid(sid)]).catch(() => {});
-      await pool.query("DELETE FROM seal_notarizations WHERE session_id = $1", [sid]).catch(() => {});
+    // ROLLBACK is the cleanup. The DELETEs that used to stand here are the exact mechanism Entry 20
+    // proved breaks `verifyChain` for every file that runs afterwards — and they needed a superuser
+    // privilege the directory itself does not hold (V22 grants cello_service INSERT and SELECT).
+    if (client) {
+      await client.query("ROLLBACK").catch(() => { /* the connection is going back regardless */ });
+      client.release();
     }
     await pool.end();
   });
