@@ -16,18 +16,20 @@ description: >
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
 > ### 🟢 TIER 0 CLOSED. First Tier-2 unit shipped and reviewed. Tier 1 part-swept.
-> **52 DoD lines** (3 added by review + build), 2 ✅, 1 🟡 (`DOD-M15-FRAME-1`), 1 🅿️, rest ❌. Every line is inside the launch gate;
+> **53 DoD lines**, 4 ✅, 1 🅿️, rest ❌. Every line is inside the launch gate;
 > the gate is a state, not a date.
 
-- **NEXT ACTION: land the `DOD-M15-FRAME-1` review** — fix every finding, quote the verdict in a
-  journal entry, flip the tag, merge `m15/frame`. **Then** either `DOD-M15-SURFACE-1` (stop the
-  directory-facing node listening; drop idle unauthenticated connections — small, no protocol
-  impact) or finish `DOD-M15-LEDGER-1`'s remaining surfaces.
-- **`DOD-M15-FRAME-1` is 🟡 BUILT, REVIEW IN FLIGHT** (→ Entries 4, 6) — branch `m15/frame`,
-  commits `4015c7f` + `15a960a` + `551930b`, gate green at 4001 tests. Not merged. **One clause
-  deliberately unmet and carried as `DOD-M15-FREEZE-STATUS-1`:** the defensive freeze writes the
-  same DB status as an ordinary teardown, because a reason column is a client-side migration that
-  belongs in its own reviewed unit.
+- **NEXT ACTION: `DOD-M15-SURFACE-1`** — stop the directory-facing node listening at all (it binds
+  every interface, registers NO protocol handler, and the directory never dials a client), and drop
+  unauthenticated idle connections. Small, no protocol impact, `cello-client`, branch `m15/surface`.
+- **`DOD-M15-SIGNUP-1` is 🟡 BUILT, REVIEW OWED** — trustless-cello branch `m15/signup`, commit
+  `4922d72c`. Gate: operations-agent 230 passed, lint, typecheck. **Not merged, not reviewed.**
+- **`DOD-M15-FRAME-1` is ✅** (→ Entries 4, 6, 7) — merged. Six review findings, three blocking,
+  all fixed; verdict quoted in Entry 7. **The worst was my own fix reintroducing the milestone's
+  own pattern:** the defensive freeze wrote `interrupted`, which is the REVIVABLE status, so the
+  operator's next read silently rebuilt the session and re-admitted the same peer while the log
+  said no further content would be accepted. **Carried:** `DOD-M15-FREEZE-STATUS-1` (durable
+  status) — F1 fixed the reversibility, which could not wait.
 - **`DOD-M15-DIVERGE-1` is ✅** — cello-client `4478a03` + `9f05300`, merged. Ten review findings,
   three blocking, all fixed; verdict quoted in Entry 5. **Two follow-on lines came out of it:**
   `DOD-M15-UNWITNESSED-1` (the two *suspected* partings, one of which the review found and I had
@@ -799,5 +801,137 @@ needed a hand-built frame, because `sendContent` always sets `session_id` and co
 — **the only code that could express that case was an attacker's, which is exactly why it survived.**
 
 **Next:** the reviewer's verdict, then fix every finding, quote it, flip the tag, merge.
+
+---
+
+## Entry 7 — DOD-M15-FRAME-1: reviewed, six findings fixed, ✅ (2026-08-22)
+
+**Built `4015c7f` + `15a960a` + `551930b`; review fixes `497cfa4`.** Gate: 4006 passed, lint, forced
+typecheck, build.
+
+### Reviewer verdict — QUOTED
+
+> **SPEC: DEVIATIONS FOUND** — "session-ending, not per-message" (F2) and "one hard-fail path" as
+> applied to the ordering record (F3) are un-journaled. `[blocking]`
+>
+> **SILENT FALLBACKS FOUND** — F1 (the freeze silently reverses on the next read) and F3 (a frame
+> with no identity proof ingests with no log). `[blocking]`
+>
+> **ERRORS NAME THEIR CAUSE** — `session.content.identity.frozen` names the cause and not the exit
+> point… No exit-point substitution anywhere in the diff. The one defect is that the frozen
+> message's *second clause* is untrue as shipped (F1), which is a correctness bug in the message,
+> not a substitution.
+>
+> **HOLLOW TESTS FOUND** — the entire `fatal` / freeze mechanism has zero coverage and survives
+> deletion with a green suite. `[blocking]`
+>
+> **REMOVALS PROVEN**
+>
+> I do not think I am rubber-stamping this: the diff touches persistence, crypto and transport
+> gating, and the two findings I would most expect to hide there — a status that quietly reverses a
+> security decision, and a signed proof the attacker can decline to supply — are both present.
+
+**Six findings. Three blocking. All fixed; nothing deferred as acceptable.**
+
+### F1 — the fix reintroduced the class the milestone exists to remove
+
+The freeze tears the node down; a teardown writes `interrupted`; **`interrupted` is the REVIVABLE
+status.** So `reviveIfNeededForRead` fired on the operator's next `cello_receive`, rebuilt a node
+behind a gater allowing the *same* peer, flipped the row to `active`, and logged a success — while
+the freeze's own line said *"no further content will be accepted on this session."*
+
+**A security decision that silently reverses itself, under a message asserting the opposite.** That
+is worse than the hole the freeze was added to close, and it is exactly the shape this milestone
+hunts. `reviveSessionNode` now refuses a frozen session by name, and the message says what is true.
+
+**Also worth keeping:** in the MITM case the code's own comment describes, the attacker who tripped
+the freeze needed only to omit the ordering record on the next frame (F3) to be ingested normally.
+The two blocking findings compounded.
+
+### F2 — the clause says session-ending; peer-ending is right, and it is a DEVIATION
+
+The DoD says the refusal is session-ending. Applied at the peer gate that would be a **worse hole**:
+a pre-positioned stranger could kill any session on the machine with one frame, trading an injection
+hole for a denial-of-service hole. So the refusal is **peer-ending** — the connection goes, the
+session does not — and the session-ending response stays where the evidence is about the session's
+counterparty, at the identity freeze.
+
+**Recorded as a deviation rather than quietly implemented**, which is the reviewer's actual
+requirement: *"I do not think you should end the session here… But the divergence from the written
+clause has to be a stated decision, not an omission."*
+
+### F3 — the MITM check was opt-in for the attacker, and my comment said otherwise
+
+The ordering record is consulted only when present, with no `else` and no log. A party that passed
+the peer gate — which in the session-open MITM they do, because M *is* the peer we dialled — omits
+`structure1_cbor`/`structure2_cbor` and is ingested silently.
+
+**My comment claimed *"this comparison is the one place the substitution shows"*, which asserted a
+property the code does not have.** It shows only when the substituting party chooses to supply the
+proof. Absent records still ingest — refusing would make the relay a precondition for reading mail —
+but the weaker guarantee no longer looks identical to the stronger one, and the comment now says so
+and points at `DOD-M15-CORROBORATE-1` for the rest.
+
+### F4, F5, F6
+
+**F4:** the eviction sweep was serial and unbounded on an **attacker-controlled** count, inside
+session establishment — N connections to an advertised receiver meant N sequential graceful closes
+before every later setup. Now concurrent, capped at 32, with the truncation **logged**, because a
+silent cap reads as "swept everything".
+
+**F5:** the parity test's exemptions were checked in one direction only, so deleting a step left a
+dead exemption carrying a written reason. Adding the inverse check **immediately found four** —
+`#recordRelayAssignment` (no call site anywhere in the manager), `#maybeAutoAcknowledgeSeal`,
+`#getUnreadReceivedCount`, `#getReceivedBytesTotal`. Removed.
+
+**F6:** the test rebuilt an encoder that matched production on the byte fields and differed on
+`useRecords`. Now imports the production `encodeCbor`, so the question cannot recur.
+
+### The gap that let all of this through
+
+> the entire `fatal` / freeze mechanism has zero coverage and survives deletion with a green suite.
+
+True, and the reason is precise: **every existing ordering test drives `recordOrderingRecord`, the
+PARK path, which by design discards `fatal`.** Nine tests that looked like coverage assert the
+pre-fix behaviour and pass identically against the old code.
+
+Five live-path tests now cover it — wrong-signer freezes, bad-signature freezes, a frozen session is
+not revived by a read, an absent record still ingests and says it was unverified, and an
+unresolvable signer does **not** freeze. Deleting the freeze block turns three of them red.
+
+**One of my own assertions was wrong and is corrected rather than forced.** The unresolvable-signer
+case does not ingest — but that is the ingest path's own pre-existing `sender_unresolved` guard, not
+this unit's freeze. Measured, and that distinction is now the point of the test. It also showed
+`counterparty_unknown` is barely reachable live; the soft branch stays anyway, because a gate whose
+correctness depends on another guard running first has a hidden precondition.
+
+### What the review CONFIRMED, so it is not re-litigated
+
+- **The enumeration holds.** `node.handle(` appears exactly once in the daemon; three frame senders,
+  all carrying `session_id`; no fourth sender anywhere in either repo.
+- **`remotePeerId` can never be legitimately absent.** `@libp2p/interface`'s `StreamHandler` types
+  `connection` as **non-optional**. This was the question that decided between a security gate and a
+  catastrophic false positive, and the three fakes were the only place `undefined` could arise.
+- **The revival exemption is true** — the revived gater is narrow from birth.
+- **Nothing was lost** removing the duplicate `session_abandoned_notice` checks: same substance,
+  same log fields, plus `agentName` and `impact`.
+- **No false positives found** across relay-degraded, same-machine, park-recovery and revived
+  sessions. The frame gate is exactly as tight as the connection gate, so it cannot refuse a
+  connection libp2p would have admitted.
+- **Excluded from trust signals, verified by absence:** `trust-signal-store.ts` has no
+  session-outcome producer; every write is an explicit operator command.
+
+### One path named for completeness
+
+`#watchRelayStream` reads `session_interrupted` frames off the relay stream. It is not a registered
+handler and rides a stream we opened to a known relay peer, so it is pinned by construction — but it
+is the other inbound frame path on a session node, and the audit clause is better served by saying
+so than by leaving it unmentioned.
+
+**Clause NOT met, carried:** `DOD-M15-FREEZE-STATUS-1` — the freeze still writes the same DB status
+as an ordinary teardown. F1 fixed the *reversibility*, which could not wait; the durable column is a
+client-side migration and gets its own reviewed unit.
+
+**Tag flipped ✅. Merged.**
 
 ---

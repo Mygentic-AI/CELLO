@@ -199,7 +199,13 @@ cannot distinguish *not diverged* from *forgotten*: both are `false`, both read 
   an ack behind the frontier. A restart therefore costs a **wrong answer**, not a re-detection.
 - Needs a column. Until it lands, no guidance may promise that a retry answers identically.
 
-### `DOD-M15-FRAME-1` — ❌ A stranger cannot inject content on the direct path
+### `DOD-M15-FRAME-1` — ✅ A stranger cannot inject content on the direct path
+> **Shipped and reviewed 2026-08-22 → Entries 4, 6, 7.** cello-client `4015c7f` + `15a960a` +
+> `551930b` + `497cfa4`, merged. Six review findings, three blocking, all fixed. Gate: 4006 tests,
+> lint, forced typecheck, build. **One clause carried, not claimed: `DOD-M15-FREEZE-STATUS-1`.**
+> The "session-ending" clause shipped as **peer-ending** at the peer gate — a deliberate, recorded
+> deviation, because session-ending there would let a pre-positioned stranger kill any session with
+> one frame. Session-ending stays where the evidence is about the counterparty: the identity freeze.
 One diff across the session content handler and the connection gater; fixing any subset leaves the
 injection path open.
 - The direct-path **content frame** is pinned to the dialing peer: `remotePeerId` must equal the
