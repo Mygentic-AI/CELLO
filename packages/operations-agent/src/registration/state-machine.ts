@@ -229,8 +229,14 @@ export class RegistrationStateMachine {
 
   /** channelUserId → when the gate last faulted for them. See GATE_FAULT_COOLDOWN_MS. */
   readonly #gateFaultAt = new Map<string, number>();
-  /** DOD-M15-SIGNUP-1: channelUserId → OTP send timestamps, rolling. Pruned on every check. */
-  readonly #otpSends = new Map<string, number[]>();
+  // DOD-M15-SIGNUP-DURABLE-1 removed `#otpSends` (channelUserId → timestamps, in memory). It was
+  // emptied by every restart and every deploy — the ops-agent deploy on 2026-08-09 wiped it — so an
+  // abuser cleared their count by waiting for a release. The same rolling-window shape now lives in
+  // V63 `otp_send_log`, still keyed on the REQUESTER. See `#otpSendCount` / `#recordOtpSend`.
+  //
+  // `#tokenAttempts` above is deliberately NOT moved: its own comment states the condition under
+  // which memory is sound (exactly one ops-agent process long-polls the one bot token) and, unlike
+  // the OTP limiter, a redemption attempt costs an attacker a round-trip they cannot batch.
 
   constructor(deps: StateMachineDeps) {
     this.#deps = deps;
@@ -911,7 +917,16 @@ export class RegistrationStateMachine {
      * that cost lands entirely on one person, who can be locked out for an hour having never
      * received a code. The delivery provider already gets this right for its own limiter.
      */
-    if (this.#overOtpLimit(from)) {
+    /**
+     * DOD-M15-SIGNUP-DURABLE-1: the count now comes from the database, so it survives a deploy.
+     *
+     * FAILS CLOSED on a database error, and that costs nothing it did not already cost: this log
+     * shares a database with `registrations` itself, so a database that cannot answer the limiter
+     * cannot store the registration either. The throw propagates rather than being caught into a
+     * permissive default — a limiter that answers "0" when it cannot see is not a limiter.
+     */
+    const otpSendCount = await this.#otpSendCount(record.channel, from);
+    if (otpSendCount >= OTP_RATE_LIMIT_PER_HOUR) {
       logger.warn("registration.otp.rate_limited", {
         registrationId: record.id,
         // The REQUESTER is identified by the registration id, which resolves to them through the
@@ -921,7 +936,7 @@ export class RegistrationStateMachine {
         // Review F3: MEASURED, not the constant. A field called `sendCount` hardcoded to the limit
         // reads to an operator as an observation and can never disagree with it — so if anything
         // ever let a sixth through, the log would still say five.
-        sendCount: (this.#otpSends.get(from) ?? []).length,
+        sendCount: otpSendCount,
         correlationId,
       });
       /**
@@ -1012,7 +1027,7 @@ export class RegistrationStateMachine {
     // per-address limit) must not spend one of this requester's five — they never got a code, and
     // charging them for our failure is how someone ends up locked out for an hour having received
     // nothing. The delivery provider records its own sends the same way, after success.
-    this.#recordOtpSend(from);
+    await this.#recordOtpSend(record.channel, from, correlationId);
 
     await channel.send(from, `A 6-digit verification code has been sent to ${email} — it's valid for 15 minutes. Please enter it here.`);
 
@@ -1341,22 +1356,38 @@ export class RegistrationStateMachine {
    * timestamp-list shape here is what a table should store — a fixed window with a stale
    * `windowStart` would carry the growth problem into the database with it.
    */
-  #overOtpLimit(from: string): boolean {
-    const cutoff = Date.now() - OTP_RATE_WINDOW_MS;
-    for (const [user, stamps] of this.#otpSends) {
-      const live = stamps.filter((t) => t > cutoff);
-      if (live.length === 0) this.#otpSends.delete(user);
-      else this.#otpSends.set(user, live);
-    }
-    return (this.#otpSends.get(from) ?? []).length >= OTP_RATE_LIMIT_PER_HOUR;
+  async #otpSendCount(channel: string, from: string): Promise<number> {
+    return this.#deps.repository.countOtpSendsSince(
+      channel,
+      from,
+      new Date(Date.now() - OTP_RATE_WINDOW_MS),
+    );
   }
 
   /**
    * Record an OTP send that SUCCEEDED. Called after `sendOtp` resolves, never before.
+   *
+   * DOD-M15-SIGNUP-DURABLE-1: writes a row rather than touching a map, so the count outlives the
+   * process. A failure to record is LOUD but must not fail the request — the person has already
+   * received their code, and turning a bookkeeping failure into a visible error for someone who was
+   * served correctly helps nobody. The consequence is named in the log rather than left for a reader
+   * to work out: this send is not counted, so the requester's next one is judged against a total
+   * that is short by at least this row.
    */
-  #recordOtpSend(from: string): void {
-    const existing = this.#otpSends.get(from) ?? [];
-    this.#otpSends.set(from, [...existing, Date.now()]);
+  async #recordOtpSend(channel: string, from: string, correlationId: string): Promise<void> {
+    try {
+      await this.#deps.repository.recordOtpSend(channel, from);
+    } catch (err: unknown) {
+      this.#deps.logger.error("registration.otp.send_not_recorded", {
+        channel,
+        correlationId,
+        detail: err instanceof Error ? err.message : String(err),
+        impact:
+          "a verification code was delivered but not written to the send log, so this requester's rate limit is under-counted by at least one and they get more sends than the limit allows",
+        guidance:
+          "check the ops-agent database connection and whether V63 otp_send_log exists; repeated occurrences mean the signup limiter is not enforcing",
+      });
+    }
   }
 }
 

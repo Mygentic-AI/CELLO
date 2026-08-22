@@ -299,9 +299,14 @@ variable "ops_agent_image_tag" {
 
 variable "ops_agent_expected_migration_version" {
   type        = string
-  default     = "62"
+  default     = "63"
   description = "Schema version the ops agent asserts. Bump with every new V{N} migration — a stale value crash-loops it on a fresh deploy."
 }
+
+# 62 → 63 on 2026-08-22, with V63 otp_send_log (DOD-M15-SIGNUP-DURABLE-1). Bumped in the same commit
+# as the migration, which is the only ordering that does not reproduce the drift documented below —
+# the assertion is checked at startup, so a bump that lands "later" lands after the next restart has
+# already crash-looped or, worse, after a stale value has been warning unread for nine days.
 
 # 57 → 62 on 2026-08-09. It had been stale since at least 2026-07-31 (57 against an expected 56) and
 # was five migrations behind by the time anyone looked: V58 seal-certificate fields, V59 agent-account

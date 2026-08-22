@@ -139,8 +139,14 @@ describe("directory migration numbering", () => {
     // replicates, plus the effective-status view rewritten to consult it. The tombstone was already
     // crossing and landing as an ACTIVE record.
     //
-    // This tripwire found the collision it exists for, in both directions, on the same day. Whoever
-    // takes 63 updates this line.
-    expect(nextFree, "coordination agreement says V63 is the next free number").toBe(63);
+    // This tripwire found the collision it exists for, in both directions, on the same day.
+    //
+    // V63 was consumed on 2026-08-22 — `otp_send_log` (DOD-M15-SIGNUP-DURABLE-1), the signup OTP
+    // rate limiter moved out of process memory. It had been emptied by every restart, so an abuser
+    // cleared their count by waiting for a release. The tripwire fired on this one too, within
+    // minutes of the file landing, which is the third time it has earned itself.
+    //
+    // Whoever takes 64 updates this line.
+    expect(nextFree, "coordination agreement says V64 is the next free number").toBe(64);
   });
 });

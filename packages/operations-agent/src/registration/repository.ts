@@ -564,4 +564,64 @@ export class RegistrationRepository {
       [phoneStubHash, channel, channelUserId],
     );
   }
+
+  // ─── DOD-M15-SIGNUP-DURABLE-1: the OTP send log ────────────────────────────
+  //
+  // The signup rate limiter used to live in process memory, so every restart and every deploy
+  // emptied it — an abuser cleared their count by waiting for a release. These three methods put it
+  // in the database (V63 `otp_send_log`), keyed on the REQUESTER and never on the email address or
+  // its domain, which is the design DOD-M15-SIGNUP-1's review settled.
+  //
+  // Nothing here swallows a database error. The caller fails CLOSED on a throw, and it can afford to:
+  // this table shares a database with `registrations` itself, so a database that cannot answer the
+  // limiter cannot store the registration either. Failing closed costs nothing that was going to work.
+
+  /**
+   * How many OTP sends has this requester had since `since`?
+   *
+   * The limiter's only read. Counts rows rather than trusting a stored counter, so there is no
+   * window to go stale and no reset to get wrong.
+   */
+  async countOtpSendsSince(channel: string, channelUserId: string, since: Date): Promise<number> {
+    const result = await this.#pool.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM otp_send_log
+       WHERE channel = $1 AND channel_user_id = $2 AND sent_at > $3`,
+      [channel, channelUserId, since],
+    );
+    // pg returns COUNT(*) as a string (bigint), and Number("") is 0 — so an empty/absent value would
+    // read as "no sends yet" and grant a fresh allowance. Assert the parse instead of defaulting.
+    const raw = result.rows[0]?.count;
+    const count = raw === undefined ? Number.NaN : Number(raw);
+    if (!Number.isFinite(count)) {
+      throw new Error(`otp_send_log count returned a non-numeric value (${String(raw)}) — refusing to guess an allowance`);
+    }
+    return count;
+  }
+
+  /**
+   * Record an OTP send that SUCCEEDED.
+   *
+   * Called after delivery resolves, never before. A bounced or throttled send must not spend one of
+   * the person's allowance — keyed on the requester, that cost lands entirely on one person, who
+   * would be locked out for an hour having never received a code.
+   */
+  async recordOtpSend(channel: string, channelUserId: string): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO otp_send_log (channel, channel_user_id) VALUES ($1, $2)`,
+      [channel, channelUserId],
+    );
+  }
+
+  /**
+   * Delete send rows older than `before`. Returns how many went.
+   *
+   * Deliberately NOT called on the read path. Rows past the limiter's window are still the evidence
+   * of who has been asking and how often — the thing an operator wants when working out whether a
+   * signup wave was real people. Retention is an explicit decision, not a side effect of someone
+   * signing up.
+   */
+  async pruneOtpSendsBefore(before: Date): Promise<number> {
+    const result = await this.#pool.query(`DELETE FROM otp_send_log WHERE sent_at <= $1`, [before]);
+    return result.rowCount ?? 0;
+  }
 }
