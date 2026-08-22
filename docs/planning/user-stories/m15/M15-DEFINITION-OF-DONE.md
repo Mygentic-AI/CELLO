@@ -163,6 +163,19 @@ different repos, different disciplines, neither blocks the other.
 - **Enforcer:** receipt. *(Not run — the unit is carried by suite + review; the enforcer itself is
   built by `DOD-M15-INTERRUPTED-1` and this line is re-asserted there.)*
 
+### `DOD-M15-DEAD-WIRE-FIELD-1` — ❌ `participant_a/b.multiaddrs` is always empty and read by nobody
+Found by the `DOD-M15-SURFACE-1` review. Not a break — it is the reverse of one.
+- Since the directory-facing node stopped listening, this wire field is **permanently `[]`** on
+  every session assignment. The directory stores it, **signs nothing over it** (neither the session
+  nor the relay TBS includes it — verified), and the client parses it and drops it: the only read of
+  a parsed assignment's participants takes `.pubkey`.
+- **It is also a checked-then-ignored:** the client's parser will reject an entire session assignment
+  if this array is malformed — for a value nothing ever reads.
+- **Why it is its own line:** removing a wire field is a bilateral change across both repos, and
+  under Decision 2's reasoning a schema change is cheapest now. Leaving it costs nothing at runtime
+  and costs a reader the assumption that something acts on it.
+- Sequence with any other wire change so the two repos move once, not twice.
+
 ### `DOD-M15-IDLE-CONNS-1` — ❌ A connection that authenticates to nothing does not live forever
 Split from `DOD-M15-SURFACE-1`. **Its value changed while the milestone was running, which is why it
 is a separate line rather than a bullet.**

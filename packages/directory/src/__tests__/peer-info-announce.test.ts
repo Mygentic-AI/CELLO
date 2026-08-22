@@ -5,8 +5,11 @@
  *
  * Tests cover:
  *   AC-014: authenticated client without peer_info_announce → session_request returns peer_not_registered
- *   AC-005 (updated): full handshake including peer_info_announce → both participant entries
- *           have non-empty peer_id and at least one multiaddr
+ *   AC-005 (amended by DOD-M15-SURFACE-1): full handshake including peer_info_announce → both
+ *           participant entries have a non-empty peer_id and a WELL-FORMED multiaddrs array.
+ *           NOT non-empty multiaddrs: a real client's directory-facing node listens on nothing and
+ *           announces none, deliberately. The dialable endpoint travels in
+ *           initiator_session_addrs / counterparty_session_addrs instead.
  *   AC-015: real libp2p nodes complete full handshake via peer_info_announce wire protocol;
  *           SessionAssignment participant peer_ids match actual node PeerIds
  *
@@ -242,7 +245,7 @@ describe("CELLO-NODE-001: peer_info_announce signaling step", () => {
 
   // ─── AC-005 (updated): peer_info_announce → participant entries have real peer info ──
 
-  it("AC-005 (updated): after peer_info_announce, session_assignment has non-empty peer_id and multiaddrs for both participants", async () => {
+  it("AC-005 (amended): after peer_info_announce, session_assignment has a non-empty peer_id and a well-formed multiaddrs array for both participants", async () => {
     const keyA = generateKeypair();
     const keyB = generateKeypair();
 
@@ -276,9 +279,29 @@ describe("CELLO-NODE-001: peer_info_announce signaling step", () => {
     expect(asg.participant_a.peer_id.length).toBeGreaterThan(0);
     expect(asg.participant_b.peer_id.length).toBeGreaterThan(0);
 
-    // AC-005 updated: both participants have at least one multiaddr
-    expect(asg.participant_a.multiaddrs.length).toBeGreaterThan(0);
-    expect(asg.participant_b.multiaddrs.length).toBeGreaterThan(0);
+    /**
+     * DOD-M15-SURFACE-1 — AC-005 AMENDED: `multiaddrs` is guaranteed WELL-FORMED, never NON-EMPTY.
+     *
+     * This asserted `length > 0`, and **production violates that on every session now**: a real
+     * client's directory-facing node deliberately announces no addresses, because it listens on
+     * nothing. It registers no protocol handler and the directory never dials a client, so the port
+     * it used to bind could reach no CELLO protocol.
+     *
+     * The old assertion never noticed, and could not: `connectAuthAndAnnounce` builds its own libp2p
+     * nodes with real listen addresses and announces THOSE. The test asserted a property of its own
+     * fixture rather than of the shipping client, so it would have stayed green forever whatever the
+     * daemon did. That is the shape worth naming — **a test whose subject it supplies itself cannot
+     * observe the thing it claims to guarantee.**
+     *
+     * What IS guaranteed, and what the directory actually depends on, is the shape. The dialable
+     * endpoint never travelled here anyway: it rides `initiator_session_addrs` /
+     * `counterparty_session_addrs`, which come from the standing receiver — a different node — via
+     * the `session_offer` → `session_offer_accept` round-trip.
+     */
+    expect(Array.isArray(asg.participant_a.multiaddrs)).toBe(true);
+    expect(Array.isArray(asg.participant_b.multiaddrs)).toBe(true);
+    expect(asg.participant_a.multiaddrs.every((m) => typeof m === "string")).toBe(true);
+    expect(asg.participant_b.multiaddrs.every((m) => typeof m === "string")).toBe(true);
 
     // Verify the peer_ids correspond to the actual client nodes
     const expectedPeerIdA = nodeA.getPeerId();
