@@ -1887,3 +1887,59 @@ and they are too large for one — carried as `DOD-M15-DIRECTORY-ROT-1`.
 
 **Rule:** "the tests are skipped" and "the tests pass" are different claims, and a milestone that
 audits its own evidence has to spend the twenty minutes finding out which one it has.
+
+## Entry 18 — "28 rotten tests" was the wrong diagnosis, and triaging first changed the work
+
+Entry 17 closed with 28 directory failures carried as `DOD-M15-DIRECTORY-ROT-1`, described as tests
+that "have been red for as long as nobody ran them". That framing was wrong, and the DoD line I had
+just written told me to triage before fixing. Doing so took about twenty minutes and turned a
+28-item repair list into one defect plus one structural problem.
+
+### What the evidence actually said
+
+Four checks, in order, each one prompted by the last:
+
+1. **Ran the project twice, back to back.** The failing sets were *different*. A stable list of
+   broken tests does not do that.
+2. **Ran the failing files individually.** Nearly all of them passed.
+3. **Reset the database completely and ran the whole project on freshly applied migrations.**
+   Still **32 failures**. So it is not pollution accumulating across days — **the suite poisons
+   itself within a single run.**
+4. **Ran the remaining suspects individually on that fresh database.** All passed but one.
+
+### The finding
+
+**One genuine defect:** `m6b-009-pg-pool-config` — "pool max enforced under concurrent load" fails
+alone, on a clean database. That is the only one of the 32 that is about the code under test.
+
+**The other 31 are cross-file database contention.** The files share one Postgres, and the tests that
+fail are precisely those asserting **whole-table properties**: `verifyChain` across an entire chained
+table, per-pseudonym aggregate statistics, "no leaf appears in more than one checkpoint", row counts.
+Any other file writing to those tables breaks them. This is not parallelism — `vitest.config.ts`
+already runs one file at a time with `maxForks: 1`. It is shared state with no teardown.
+
+### Why this matters more than the number did
+
+**These assertions can only ever have passed when their file was run alone.** The directory's
+integration coverage has never worked as a gate. That reorders the milestone's own plan:
+`DOD-M15-COMPOSE-CI-1` wants these suites wired into CI, and wiring them in today produces an
+immediately red pipeline — so `DIRECTORY-ROT-1` is a **blocker** for it, not a parallel nicety.
+
+It also puts a bound on the earlier good news. Entry 17 celebrated 236 ops-agent tests going green
+against a real database. That still holds — but the reason the directory half looked worse is not
+that it rotted harder; it is that the directory tests make **whole-table** claims and the ops-agent
+tests mostly do not.
+
+### The rule
+
+**Triage before repairing, and let the shape of the failures pick the diagnosis.** Three properties
+were visible for free and each one ruled out a whole class of explanation: the set *moved* between
+runs (so not a fixed list of broken tests), the files *passed alone* (so not the code under test),
+and a *fresh database did not help* (so not accumulated pollution). Twenty minutes of that turned
+"fix 28 tests" into "fix 1 test and one isolation model" — and the second is real work with a real
+design choice in it, which is exactly the kind of thing a repair list hides.
+
+**Corollary, recorded because I nearly did it:** the tempting fix is a global `beforeEach` that
+truncates the shared tables. That would make every file's passing depend on running inside a suite
+that truncates — the same fragility pointing the other way, and invisible until someone runs a file
+alone. The DoD line now names scoping-to-own-rows or per-test transactional rollback instead.

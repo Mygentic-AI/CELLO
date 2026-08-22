@@ -261,23 +261,38 @@ evidence: **a green run that asserted nothing.**
   a CI environment, so "we did not test this" cannot look like "this passed".
 - **Audit every `describe.skip`/`skipIf` in both repos** for the same shape while in here.
 
-### `DOD-M15-DIRECTORY-ROT-1` — ❌ 28 directory tests that have been failing unwatched
-Found 2026-08-22 by running the database suites for the first time (Entry 17). Not a regression from
-any unit in this milestone — **these have been red for as long as nobody ran them**, which is the
-concrete cost of `DOD-M15-CI-SKIPS-SILENT-1` and the reason that line's own carried work matters.
-- **28 failing tests across 16 files**, all in `packages/directory`, all `CELLO_ENV=local`-gated:
-  `account-001`, `dod-accounts-chain-1`, `dod-dirdata-read-1`, `federation-002`, both `lever-002`
-  suites, `m10-present-1-dumb-check`, `m10b-deliver-1-agent-by-pubkey`, `m6b-004-si-001`,
-  `m6b-009-pg-pool-config`, `persist-007-mmr`, `persist-017-mmr-checkpoint-visibility`,
-  `persist-021-adapter-boundary-audit`, `pg-ae-store.live`, `trust-001-pickup-repository.live`,
-  `writeapi-001-agent-write.live`.
-- **Triage before fixing.** The ops-agent set turned out to be three distinct causes wearing one
-  symptom (a missing grant, a wrong role, and cross-test contention on a unique index). Assume the
-  same here: some will be genuine defects, some test-isolation, some stale expectations against a
-  schema that moved. **A test asserting behaviour that has since changed on purpose gets its
-  assertion updated and SAID SO in the journal — never deleted quietly.**
-- **Do not batch this into one commit.** One cause per commit, so the record shows what was actually
-  wrong rather than "fixed 28 tests".
+### `DOD-M15-DIRECTORY-ROT-1` — ❌ The directory suite cannot survive its own run
+Found 2026-08-22 by running the database suites for the first time (Entry 17), then **triaged before
+being worked** (Entry 18) — which changed what the work is. The first reading was "28 rotten tests".
+It is not.
+
+**The failing set MOVES between identical runs**, and almost every failing file **passes on its own**:
+
+| checked | result |
+|---|---|
+| full project, run twice back to back | different failing sets both times |
+| full project, on a **freshly migrated** database | **32 failures** — so it is not accumulated pollution across days; the suite poisons itself *within one run* |
+| each failing file **individually** | all pass except one |
+
+- **The one genuine defect is `m6b-009-pg-pool-config`** — "pool max enforced under concurrent load"
+  fails 2 tests alone, on a clean database. That is a real finding about pool configuration and it is
+  the only one of the 32 that is about the code under test.
+- **Everything else is cross-file database contention.** The files share one Postgres, and the tests
+  that fail are the ones asserting **whole-table properties** — `verifyChain` over an entire chained
+  table, per-pseudonym aggregate stats, "no leaf in more than one checkpoint", row counts. Any other
+  file writing to those tables breaks them. `vitest.config.ts` already runs one file at a time
+  (`pool: "forks", maxForks: 1`), so this is not parallelism; it is shared state with no teardown.
+- **What that means, and it is the uncomfortable part:** these assertions can only ever have passed
+  when the file was run alone. The directory's integration coverage has never worked as a gate, and
+  wiring it into CI (`DOD-M15-COMPOSE-CI-1`) **fails immediately** until this is fixed. That makes
+  this line a blocker for that one, not a parallel nicety.
+- **Fix shape — decide per test, do not blanket-truncate:** a test asserting a whole-table invariant
+  either scopes its assertion to rows it created (a per-test tenant/pseudonym/session id), or the
+  file takes a transactional rollback per test. Truncating shared tables in a global `beforeEach`
+  is the tempting third option and is the wrong one — it makes every file's passing depend on
+  running in a suite that truncates, which is the same fragility pointing the other way.
+- **One cause per commit.** A test asserting behaviour that has since changed on purpose gets its
+  assertion updated and **said so in the journal** — never deleted quietly.
 - **Enforcer:** receipt.
 
 ### `DOD-M15-COMPOSE-CI-1` — ❌ The suites that need a database actually run somewhere
