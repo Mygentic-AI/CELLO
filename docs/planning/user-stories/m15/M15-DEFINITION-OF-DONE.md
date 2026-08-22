@@ -266,7 +266,39 @@ different repos, different disciplines, neither blocks the other.
 - **Enforcer:** receipt. *(Not run — the unit is carried by suite + review; the enforcer itself is
   built by `DOD-M15-INTERRUPTED-1` and this line is re-asserted there.)*
 
-### `DOD-M15-DEAD-WIRE-FIELD-1` — ❌ `participant_a/b.multiaddrs` is always empty and read by nobody
+### `DOD-M15-DEAD-WIRE-FIELD-1` — 🟡 (client half done; the wire removal is bilateral and carried)
+> **CLIENT HALF CLOSED 2026-08-23.** Reviewer verdict: *"**SPEC: FAITHFUL** — for the client half as
+> scoped… **HOLLOW TESTS FOUND [blocking]** — question 4 fails: the outcome (`[]`) is unasserted, and
+> four mutations stay green."* All findings fixed; the reviewer's green mutations re-run red.
+> Gate: 4121 client tests, 2265 relay tests with the database live.
+>
+> **It also verified the premise independently rather than taking it from me** — no signature covers
+> the field (both TBS builders, both repos), nothing reads it (every consumer takes `.pubkey`), and
+> it is `[]` on the wire. With one caveat worth keeping: that describes THIS TREE, not the deployed
+> fleet — a client older than `SURFACE-1` still announces real addresses.
+>
+> **F1, and it is the finding of the round: the identical defect sat one line above.**
+> `participant.peer_id` met every clause, and was WORSE — the killing value is not a bug's output but
+> a DEFAULT the directory writes on purpose (`directory-node.ts:2049` on auth, `:3867` on a map
+> miss, `:4120` copies it in), and nothing gates it because the only announce requirement checks the
+> INITIATOR, never the TARGET. So an agent whose announce is late could not be talked to at all: a
+> valid FROST-signed assignment, refused by both clients over an empty string neither reads. **My
+> suite could not tell — deleting the peer_id guard left all five tests green.** Fixed and tested.
+>
+> **F3:** a tolerated-but-malformed field is now reported (optional callback, no logger dependency in
+> a pure shape-validator). ABSENT is deliberately silent — once the wire half lands that is the
+> normal case, and a signal that fires on the normal case is not a signal.
+>
+> **CARRIED, both:**
+> - **The wire removal itself** — bilateral, sequenced with `SUBMIT-ID-1`'s 7-element Structure 1 and
+>   `TERMINAL-REASON-1`'s reasons so the two repos move once. ⚠️ `directory-frames.ts:1182`'s
+>   `parseParticipant` requires both fields and is called from ~110 test sites; loosen it in the SAME
+>   commit as the removal or that suite goes red the day the field leaves.
+> - **→ `DOD-M15-PARSEFAIL-CAUSE-1` (new):** `assignment_parse_failed` is one exit-point label over
+>   ~12 distinct causes. This unit removed two of them, which is why the class is now visible:
+>   returning the FIELD that failed instead of `null` would make the next one an afternoon rather
+>   than a week. Invariant 3.
+ `participant_a/b.multiaddrs` is always empty and read by nobody
 Found by the `DOD-M15-SURFACE-1` review. Not a break — it is the reverse of one.
 - Since the directory-facing node stopped listening, this wire field is **permanently `[]`** on
   every session assignment. The directory stores it, **signs nothing over it** (neither the session
