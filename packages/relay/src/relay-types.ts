@@ -210,6 +210,17 @@ export interface SessionAssignment {
 export type SessionStatus = "active" | "sealing" | "seal_rejected";
 
 export interface RelaySessionState {
+  /**
+   * DOD-M15-SUBMIT-ID-1 — acks already issued, keyed by `<senderHex>:<submissionIdHex>`.
+   *
+   * A retransmission is answered from here instead of being given a new canonical position. Keyed by
+   * SENDER as well as id so two participants cannot collide by minting the same id, and scoped to
+   * the session so it dies with it — a retry only means anything inside the conversation it belongs
+   * to, and the relay keeps no session state past the seal.
+   *
+   * Optional so existing persisted state loads unchanged.
+   */
+  issued_acks?: Map<string, import("./relay-types.js").HashSubmitAck>;
   assignment: SessionAssignment;
   genesis_prev_root: Uint8Array; // SHA-256(sorted(A,B) || session_id || session_timestamp)
   seq_counter: number;           // 0 initially; incremented to 1 on first leaf

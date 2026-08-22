@@ -137,6 +137,18 @@ interface Structure1Fields {
   session_id: Uint8Array;
   last_seen_seq: number;
   timestamp: number | bigint;
+  /**
+   * DOD-M15-SUBMIT-ID-1 — the sender's own id for THIS SEND, stable across its retransmissions.
+   *
+   * Optional, because every client in the field today sends six elements and must keep working.
+   * When present, the relay answers a repeat with the ORIGINAL position instead of allocating a new
+   * one.
+   *
+   * MINTED BY THE SENDER, and it has to be: Structure 1 carries a timestamp, so a retry is
+   * byte-different and unrecognisable; and `content_hash` cannot stand in for it, because sending
+   * identical content twice in one conversation is two messages, not a duplicate.
+   */
+  submission_id?: Uint8Array;
 }
 
 function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
@@ -146,9 +158,21 @@ function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
   } catch {
     return null;
   }
-  if (!Array.isArray(arr) || arr.length !== 6) return null;
+  /**
+   * SIX OR SEVEN — `DOD-M15-SUBMIT-ID-1`, and this relaxation is the whole "tolerate first" half.
+   *
+   * It was `!== 6`, so a client that appended a submission id had every frame refused as
+   * `signature_invalid` by any relay not yet updated — including the one deployed. The relay
+   * therefore has to accept the new shape BEFORE any client emits it; a client-first rollout breaks
+   * every message in flight.
+   *
+   * Still a fixed set of lengths rather than `>= 6`: an arbitrarily long array is a frame this
+   * version does not understand, and accepting it would mean verifying a signature over bytes whose
+   * meaning is not agreed.
+   */
+  if (!Array.isArray(arr) || (arr.length !== 6 && arr.length !== 7)) return null;
 
-  const [_pv, _ch, _spk, _sid, _lss, _ts] = arr;
+  const [_pv, _ch, _spk, _sid, _lss, _ts, _subId] = arr;
 
   if (typeof _pv !== "number") return null;
   const chBytes = _ch instanceof Uint8Array ? _ch : Buffer.isBuffer(_ch) ? new Uint8Array(_ch as Buffer) : null;
@@ -160,6 +184,15 @@ function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
   if (typeof _lss !== "number") return null;
   if (typeof _ts !== "number" && typeof _ts !== "bigint") return null;
 
+  let subIdBytes: Uint8Array | undefined;
+  if (arr.length === 7) {
+    const b = _subId instanceof Uint8Array ? _subId : Buffer.isBuffer(_subId) ? new Uint8Array(_subId as Buffer) : null;
+    // Present-but-malformed is REFUSED, not ignored. Silently dropping it would give the sender a
+    // fresh position for what they declared a retry — the exact defect, wearing a valid ack.
+    if (!b || b.length === 0 || b.length > 32) return null;
+    subIdBytes = b;
+  }
+
   return {
     protocol_version: _pv,
     content_hash: chBytes,
@@ -167,6 +200,7 @@ function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
     session_id: sidBytes,
     last_seen_seq: _lss,
     timestamp: _ts,
+    ...(subIdBytes ? { submission_id: subIdBytes } : {}),
   };
 }
 
@@ -1204,6 +1238,47 @@ export class CelloRelayNode {
       await reply("last_seen_seq_ahead"); return;
     }
 
+    /**
+     * A DECLARED RETRY IS ANSWERED FROM THE RECORD — `DOD-M15-SUBMIT-ID-1`.
+     *
+     * Before allocating anything. The sender said "this is submission X again", and the signature
+     * above proves they said it, so the honest answer is the position X already has — not a new one.
+     *
+     * Placed after signature verification deliberately: an unsigned or forged frame must never be
+     * able to read back another sender's ack. And before the sequence allocation, because
+     * allocating and then discarding would still advance the counter, which is the defect.
+     *
+     * `last_seen_seq_ahead` is checked first and stays first: a retry whose last_seen_seq is beyond
+     * what this relay has is a client that has diverged, and that is worth refusing loudly rather
+     * than answering from cache.
+     */
+    const submissionKey = s1.submission_id
+      ? `${senderPubkeyHex}:${Buffer.from(s1.submission_id).toString("hex")}`
+      : null;
+    if (submissionKey) {
+      const already = state.issued_acks?.get(submissionKey);
+      if (already) {
+        this.#logger.info("relay.submit.retransmission", {
+          sessionId: sessionKey,
+          sequence: already.sequence_number,
+          impact:
+            "answered from the original ack — the sequence counter and the relay's tree are " +
+            "unchanged, so this message still occupies exactly one canonical position",
+        });
+        try {
+          await this.#sendFrame(stream, encodeHashSubmitAck(already));
+        } catch (err) {
+          this.#logger.error("relay.send.failed", {
+            event: "hash_submit_ack_replay",
+            seq: already.sequence_number,
+            sessionId: sessionKey,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return;
+      }
+    }
+
     const seq = state.seq_counter + 1;
 
     // prev_root for this leaf = running root of all prior leaves (O(1) read from state).
@@ -1296,6 +1371,19 @@ export class CelloRelayNode {
           err: sigErr instanceof Error ? sigErr.message : String(sigErr),
         });
       }
+    }
+
+    /**
+     * RECORD BEFORE SENDING. If the send throws, the position has already been allocated and the
+     * leaf is already in the tree — so the retransmission that follows must be answered with THIS
+     * ack. Recording after the send would leave the one case the whole unit exists for (an ack that
+     * did not arrive) as the one case that is not covered.
+     */
+    if (submissionKey) {
+      const acks = state.issued_acks ?? new Map<string, import("./relay-types.js").HashSubmitAck>();
+      acks.set(submissionKey, ackFrame);
+      const latest = this.#store.getSession(sessionKey);
+      if (latest) this.#store.setSession(sessionKey, { ...latest, issued_acks: acks });
     }
 
     try {
