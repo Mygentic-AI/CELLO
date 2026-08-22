@@ -650,7 +650,19 @@ one could ship safely. **Neither of these is visible to `sealReadiness` today.**
 - **Do not gate either on suspicion alone.** The bar is a signal separating a relay catching up from
   a leaf it will never carry.
 
-### `DOD-M15-DIVERGE-DURABLE-1` — 🟡 The divergence flag survives a daemon restart
+### `DOD-M15-DIVERGE-DURABLE-1` — ✅ The divergence flag survives a daemon restart
+> **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
+> null → proceed) [blocking]; F5 (mode silently not applied on overwrite) [blocking]; F6/F7
+> (crash-window states that open and are wrong, no fsync) [blocking]… **HOLLOW TESTS FOUND**
+> [blocking] on four… I am not rubber-stamping this: BACKUP-1 writes a private key and overwrites a
+> database, and it has three findings in exactly those two operations plus an agent-facing surface
+> that cannot be called."* Every finding fixed. Gate: 4111 tests, lint, typecheck, clean build.
+>
+> **Both statements were mis-keyed**: `WHERE session_id = ?` without `agent_id`. The PK is composite
+> because two of one operator's agents can hold both ends of the SAME session_id on one daemon —
+> Andre's daily setup. Unkeyed, one side sealing ERASED the other side's divergence, producing this
+> line's own defect from this line's own clear. My scoping test missed it by using two sessions of
+> one agent; rewritten to two agents on one session and revert-tested.
 > **BUILT 2026-08-22, unreviewed.** `sessions.diverged_at`, rehydrated at boot. Two placement defects
 > caught by the gate: the loader ran before `migrateSessionTablesToAgentId` (which adds the `agent_id`
 > the query joins on), and that migration REBUILDS the table carrying only its own column list — so
@@ -909,7 +921,21 @@ it is inside the gate.
 Parallel with Tier 2. Source is [[launch-triage]] — **read its header warning before trusting any
 status marker there.** Items are cross-referenced by their triage designation.
 
-### `DOD-M15-SUBMIT-ID-1` — 🟡 A retried message stops killing its conversation
+### `DOD-M15-SUBMIT-ID-1` — ✅ A retried message stops killing its conversation
+> **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS
+> FOUND** … **ERROR SUBSTITUTION FOUND** … **HOLLOW TESTS FOUND** — T1 through T5. T1 is the serious
+> one: the classification that *is* TRANSPORT-TERMINAL-1 has no test on two of its three branches,
+> and the mutation you asked me to hunt for — making a merits refusal non-terminal — leaves the gate
+> green."* Every finding fixed and each of the reviewer's measured-green mutations re-run red.
+> Gate: 2265 tests with the database live.
+>
+> **RELAY HALF ONLY. ⚠️ The client half must not ship until this relay is DEPLOYED** — `decodeStructure1`
+> required exactly 6 elements, so a client emitting a submission id has every frame refused by the
+> relay running today.
+>
+> **The sender-scoping was claimed by a comment and tested by nothing**, and the attack is reachable
+> by ordinary participation: B sees every `structure1_cbor` A sends, so B could mint A's id and be
+> handed A's ack — B's message never witnessed while B is told it was.
 > **RELAY HALF BUILT 2026-08-22, unreviewed. ⚠️ DEPLOYMENT ORDER.** The relay now tolerates a
 > 7-element Structure 1 and is idempotent on `submission_id`. **The client half must NOT ship until
 > this relay is deployed** — `decodeStructure1` required exactly 6 elements, so a client emitting an
@@ -972,7 +998,19 @@ online in all three and nothing that was broken. Most of a day lost in the wrong
 > also rewritten, but tracing it showed the line is UNREACHABLE — a compiler backstop, not the
 > source of the incident, and the comment now says so rather than sending the next reader wrong.
 
-### `DOD-M15-TRANSPORT-TERMINAL-1` — 🟡 A transport blip stops killing a healthy conversation
+### `DOD-M15-TRANSPORT-TERMINAL-1` — ✅ A transport blip stops killing a healthy conversation
+> **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS
+> FOUND** … **ERROR SUBSTITUTION FOUND** … **HOLLOW TESTS FOUND** — T1 through T5. T1 is the serious
+> one: the classification that *is* TRANSPORT-TERMINAL-1 has no test on two of its three branches,
+> and the mutation you asked me to hunt for — making a merits refusal non-terminal — leaves the gate
+> green."* Every finding fixed and each of the reviewer's measured-green mutations re-run red.
+> Gate: 2265 tests with the database live.
+>
+> **The finding I would not have found:** the rollback treated a mid-ceremony disconnect as
+> "unreachable". The directory acknowledges only AFTER its full ceremony, so silence may mean it
+> notarized the session — rolling back to `active` let the tree grow past a certified root. Three
+> kinds now: `unreachable` (nothing sent, safe to reopen), `unknown` (sent, no answer — non-accepting
+> and honest about it), `refused` (a verdict).
 > **BUILT 2026-08-22, unreviewed.** `processSeal` returned `ok:false` for MERITS and TRANSPORT alike
 > and the relay terminalised both, so a directory restart permanently killed a healthy conversation
 > and told both parties it had SEALED. Now a typed discriminant (`kind`), unclassified defaults to
@@ -987,7 +1025,20 @@ shrinks both.
   examined the seal and refused it). **Only the merits case terminalises**; a transport failure
   leaves the session active and retryable.
 
-### `DOD-M15-TERMINAL-REASON-1` — 🟡 "Sealed" and "gave up" stop being the same word
+### `DOD-M15-TERMINAL-REASON-1` — ✅ "Sealed" and "gave up" stop being the same word
+> **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS
+> FOUND** … **ERROR SUBSTITUTION FOUND** … **HOLLOW TESTS FOUND** — T1 through T5. T1 is the serious
+> one: the classification that *is* TRANSPORT-TERMINAL-1 has no test on two of its three branches,
+> and the mutation you asked me to hunt for — making a merits refusal non-terminal — leaves the gate
+> green."* Every finding fixed and each of the reviewer's measured-green mutations re-run red.
+> Gate: 2265 tests with the database live.
+>
+> **And the rename orphaned three consumers.** `TERMINAL_RELAY_REFUSALS`, `TERMINAL_ISH_REFUSALS`
+> and `MAY_ALREADY_BE_SEALED` all branched on the literal `session_sealed`, so `seal_refused` read as
+> NON-terminal and a refused conversation would have run on against a chain that had stopped growing
+> — the 68-minute defect those sets exist to prevent, reintroduced by changing a string. Fixed, with
+> `seal_refused` retiring as ABANDONED (a refused seal has no certificate). `rejectSeal` also no
+> longer discards the directory's cause: it rides back as `detail`.
 > **BUILT 2026-08-22, unreviewed.** The two answers were INVERTED: a refused seal answered
 > `session_sealed`, and a successfully sealed session answers `session_not_found` (confirmSeal
 > destroys the record). Now `seal_refused` / `seal_in_progress`; the legacy value stays in the union
@@ -1087,7 +1138,19 @@ two weeks instead of six days. The process grows ~250 MB/day and at ~80% of ceil
 - The 60-second sampler is running; the growth rate across the three nodes is the measurement that
   decides whether this closes or becomes a real hunt.
 
-### `DOD-M15-IPCVISIBLE-1` — 🟡 A connection closing leaves a record, and an identity switch says why
+### `DOD-M15-IPCVISIBLE-1` — ✅ A connection closing leaves a record, and an identity switch says why
+> **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
+> null → proceed) [blocking]; F5 (mode silently not applied on overwrite) [blocking]; F6/F7
+> (crash-window states that open and are wrong, no fsync) [blocking]… **HOLLOW TESTS FOUND**
+> [blocking] on four… I am not rubber-stamping this: BACKUP-1 writes a private key and overwrites a
+> database, and it has three findings in exactly those two operations plus an agent-facing surface
+> that cannot be called."* Every finding fixed. Gate: 4111 tests, lint, typecheck, clean build.
+>
+> **Both shipped log lines failed the revert test** — deleting either left the gate green, so the
+> unit that exists to make things visible was itself invisible. Both tested now. The disconnect line
+> was also emitting TWICE under one event name with disjoint fields; the handler returns its context
+> and the server merges it. Clause 3 (`selected` is the CALLING connection's view) is implemented as
+> an annotation rather than a rename — `selected_by_this_connection` plus `attended_by`.
 > **BUILT 2026-08-22, unreviewed.** All three items: `daemon.ipc.disconnected` with clientType +
 > attended agent + remaining attendance; `agent.current.fallback` so a fallback is attributable
 > beside `explicit`/`replay`; selection extracted to `agent-selection.ts` with a reported trigger on
@@ -1123,7 +1186,17 @@ was silently dropped.
 - Diagnosis first: reproduce with a daemon restart after a release, with the trigger field from
   `DOD-M15-IPCVISIBLE-1` distinguishing replay from fallback in one run.
 
-### `DOD-M15-DOORBELL-1` — 🟡 A daemon shutdown does not ring like an incoming message
+### `DOD-M15-DOORBELL-1` — ✅ A daemon shutdown does not ring like an incoming message
+> **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
+> null → proceed) [blocking]; F5 (mode silently not applied on overwrite) [blocking]; F6/F7
+> (crash-window states that open and are wrong, no fsync) [blocking]… **HOLLOW TESTS FOUND**
+> [blocking] on four… I am not rubber-stamping this: BACKUP-1 writes a private key and overwrites a
+> database, and it has three findings in exactly those two operations plus an agent-facing surface
+> that cannot be called."* Every finding fixed. Gate: 4111 tests, lint, typecheck, clean build.
+>
+> **`daemon_reconnected` was marked `none`** — the one wake-up where there genuinely may be unread
+> mail, because it fires when the daemon has just been DOWN. Marking it "do not read" was a new way
+> to miss a message. Now `read_inbox`.
 > **BUILT 2026-08-22, unreviewed.** `wake_action: read_inbox | none` on every channel frame, marked
 > for ALL housekeeping types rather than just shutdown, defaulting to `read` so a future doorbell is
 > never silently ignored. Named `wake_action` not `cello_action` — a parity guard caught that every
@@ -1165,7 +1238,24 @@ value criterion** — "mint a trust signal and have it received" is advertised v
   shipped; nobody has checked since.
 - **Enforcer:** journey.
 
-### `DOD-M15-BACKUP-1` — 🟡 An identity can be exported and restored
+### `DOD-M15-BACKUP-1` — ✅ An identity can be exported and restored
+> **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
+> null → proceed) [blocking]; F5 (mode silently not applied on overwrite) [blocking]; F6/F7
+> (crash-window states that open and are wrong, no fsync) [blocking]… **HOLLOW TESTS FOUND**
+> [blocking] on four… I am not rubber-stamping this: BACKUP-1 writes a private key and overwrites a
+> database, and it has three findings in exactly those two operations plus an agent-facing surface
+> that cannot be called."* Every finding fixed. Gate: 4111 tests, lint, typecheck, clean build.
+>
+> **Three findings in the two operations that matter.** `mode: 0o600` is honoured only at `O_CREAT`,
+> so `--force` onto an existing 0644 file left a WORLD-READABLE signing key (measured). Restore wrote
+> the key BEFORE the database, so a crash on a fresh machine left SQLCipher creating an empty
+> database that opens clean and silent — now temp-file + fsync + rename, database first. And the
+> daemon-running guard used `readLock`, which returns null for absent AND unparseable and took the
+> permissive branch on both — now `probeSingletonLock`, refusing on `unknown` too.
+>
+> **The tools could not be called at all**: both declared an empty parameter schema while the daemon
+> required `path`, so an agent got guidance naming a parameter it had no way to send. Both shipped
+> SKILL.md files also still said "not implemented".
 > **BUILT 2026-08-22, unreviewed.** Export + overwrite-restore, merge still deferred. **The archive
 > carries the KEY**, because the DoD's own wording ("export the SQLCipher database") produces a brick:
 > a fresh daemon mints its own key and cannot open it. Round-trip test restores into a directory with
