@@ -15,17 +15,16 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 14 CLOSED. Nothing in flight, nothing unreviewed.
-> **65 DoD lines**, 14 ✅, 1 🟡, 2 🅿️, rest ❌. Both repos clean and pushed. Every line is inside
-> the launch gate; the gate is a state, not a date.
-> **Closed in Entry 28:** `DIRECTORY-ROT-1`, `COMPOSE-CI-1`, `OFFER-SIGNED-1`, `RESPONDER-VERIFY-1`,
-> `CLAIM-SCANNER-1`. **Carried out of them:** `GUARD-HEARD-1`, `CHAINDEBT-1`.
+> ### 🟢 17 CLOSED. Nothing in flight, nothing unreviewed.
+> **65 DoD lines**, 17 ✅, 2 🅿️, rest ❌. Both repos clean and pushed.
+> **Closed in Entry 29:** `GUARD-HEARD-1`, `CLAIM-COMMENTS-1`, `CLAIM-SCREEN-1`.
 
-- **NEXT ACTION: `DOD-M15-GUARD-HEARD-1`** — the fourth occurrence of the milestone's own recurring
-  pattern, and the one Andre asked to be promoted if it appeared again. Its enforcer is mechanical:
-  a test over `REFUSAL_REASONS` asserting every member reaches an agent-facing surface, and where a
-  counterparty is affected, the wire. Then `DOD-M15-CLAIM-COMMENTS-1`, which is the same pattern in
-  prose.
+- **NEXT ACTION: `DOD-M15-LEDGER-1`** — 188 unadjudicated claims across 10 shipped surfaces, now
+  enumerated by the scanner instead of by a person. The scanner defines what "swept" means, so the
+  ledger can finally be closed against something. Then `DOD-M15-SPINE-LANE-1`.
+- **REFUSAL REASONS ARE A CLOSED UNION** (`AnyRefusalReason`). Do not widen it back to `string` to
+  make an error go away — a free-form reason was invisible to every test in the milestone's own
+  guard file, and the type is the only thing that can see a code that does not exist yet.
 - **`pnpm run test` IS NOW SERIAL under `CELLO_ENV=local`** (`vitest.config.ts`). Do not "optimise"
   that back: parallel gave 16 failures one run and 19 the next on a freshly composed database, a
   DIFFERENT set each time, because `directory` and `operations-agent` share one worker pool and one
@@ -2691,4 +2690,88 @@ lacks, inside the unit written to stop comments asserting properties the code la
 `DOD-M15-GUARD-HEARD-1` and `DOD-M15-CHAINDEBT-1` (8 files committing a literal `chain_hash`, 8
 deleting from a chained table). **A closure that absorbs its own leftovers is how a ✅ stops meaning
 anything.**
+
+## Entry 29 — the guard against unheard guards had three gaps nobody could hear
+
+`DOD-M15-GUARD-HEARD-1` ✅, `DOD-M15-CLAIM-COMMENTS-1` ✅, `DOD-M15-CLAIM-SCREEN-1` ✅. **17 closed.**
+
+### The finding that matters most, and it is about the FUTURE not the past
+
+The reviewer did not report an opinion. It ran each mutation and gave the count: **8/8 green, 24/24
+green, 24/24 green.**
+
+> **HOLLOW TESTS FOUND** [blocking]: H1 (the retry check is disarmed on 1 of 3 reasons in the
+> committed tree), H2 (guidance unasserted on one of two returns — the DOD-M12B shape recurring),
+> H3 (a reason that never enters the constant is invisible to every assertion). **Each was measured,
+> not inferred.**
+
+**H3 is the one worth carrying forward.** Every assertion in the guard enumerated `REFUSAL_REASONS`.
+So a NEW security refusal, added next month with a code that never joined the constant, was
+invisible to all of them: the guard fires, the operator gets a bare code with no guidance, the gate
+stays green. `recordRefusal` took `reason: string`, which permitted exactly that.
+
+**A test cannot see a code that does not exist yet. A type can.** The union is closed now, and the
+change immediately caught a test seeding `"sender_cap"` — a reason no refusal path emits, so that
+test had been proving the inbox handles something production never produces.
+
+**The rule:** when a guard works by enumerating a list, ask what happens to the item that is not on
+the list yet. If the answer is "nothing", the enumeration belongs in the type system, not the test.
+
+### A check that was already switched off, in the tree, at commit time
+
+H1. The retry rule flagged guidance telling the RESPONDER's operator to "retry" — which they cannot,
+they did not start the session. But it excused any string that ALSO contained *"nothing for you to
+retry"*, and one entry legitimately contains that phrase. So that entry was **permanently exempt**.
+The reviewer prefixed it with a wrong "Retry now to reach a different directory node" → 8/8 green,
+while the identical edit to a sibling went red.
+
+The copy-paste that would do it is not hypothetical: that sentence exists verbatim in the LOG
+guidance for the same refusal, where it is correct, because a log is read by whoever is debugging
+rather than by the refused party.
+
+**The rule:** an exclusion evaluated over the whole string exempts the whole string. Scope a
+negative to the sentence it negates.
+
+### The proxy that got gamed, and what replaced it
+
+M6. A 120-character floor on guidance, standing in for "carries a cause AND a next step". The
+reviewer cleared it with 154 characters of *"Something went wrong with this session and it was not
+accepted"*, twice, plus *"Contact support if needed"* — magic phrase present, floor cleared, no verb
+the reader can perform, Invariant 4 violated in the same breath. The three real entries are 433, 510
+and 455 characters, so the floor constrained nothing in the live range.
+
+Kept as a stub-catch and NAMED as a floor. The property is now an allowlist of real affordances — a
+`cello_*` tool, an action outside CELLO, a decision about a counterparty — and **it caught a live
+gap on its first run**: the dialer-mismatch guidance said what happened and named nothing to do.
+
+### `CLAIM-SCREEN-1`: the repo shipped both errors at once, in opposite directions
+
+- `README.md`: screening is *"planned, not yet active"* — false; two of three layers enforce.
+- `setup/SKILL.md`: screening *"is active"* — overstates; the semantic layer needs a model nothing
+  ships.
+
+A prospective user reading one concluded there was no protection; reading the other, that they were
+fully covered. **Neither could have discovered the truth from the repo.** All three surfaces agree
+now, and the skill names the hole rather than leaving it to be found.
+
+### The guard caught its own author
+
+The first README rewrite added one absolute — *"a higher tier never buys less"* — and the claim
+scanner failed the build. The claim is true, but the scanner's own message says raising the baseline
+is the one response that is never right, so it was reworded. **A guard that only ever fires on other
+people is not evidence of much.**
+
+### `CLAIM-COMMENTS-1`: rewrite-never-delete made the enforcer harder, and that is the interesting part
+
+The comment this line still owed was a **mangled half-edit** — truncated mid-sentence, and wrong in
+both directions at different times.
+
+The enforcer is a denylist of sentences investigated and found false. The subtlety: the rule is
+*rewrite, never delete*, because a deleted comment takes with it the evidence somebody believed it,
+and an absence reads as deliberate — which is what the original wording achieved by accident. So
+every corrected comment QUOTES the sentence it retires, and a naive check would have fired on the
+quotes and forced deletion of exactly the evidence the rule preserves.
+
+**The rule:** when a guard and the rule it enforces disagree, the guard is wrong. Matches are
+excluded only where the surrounding block marks them retired, and the escape hatch has its own test.
 

@@ -112,7 +112,29 @@ Rewrite `AUDIT-ME.md` at the root of the **public** `Mygentic-AI/cello-client` r
   true claim that the relay cannot read content — so it is disclosed, not exposed by a follow-up.
 - **The claims in it are true; the document proved them badly.** The rewrite proves them.
 
-### `DOD-M15-CLAIM-SCREEN-1` — ❌ Nothing reports screening as active while its semantic half is inert
+### `DOD-M15-CLAIM-SCREEN-1` — ✅ Nothing reports screening as active while its semantic half is inert
+> **CLOSED 2026-08-22.** The DoD's own ruling settled it without needing Andre — *"Withdrawal now,
+> truth later — both dispositions are legitimate; silence is not."* Removing an unsupported claim is
+> a withdrawal, not new copy.
+>
+> **THE REPO SHIPPED BOTH ERRORS AT ONCE, IN OPPOSITE DIRECTIONS.** `README.md` said screening was
+> *"planned, not yet active — the daemon currently passes messages through unscreened"*, which is
+> false: the deterministic sanitizer and the pattern matcher have been live and enforcing since the
+> gateway was wired. `plugins/cello/skills/setup/SKILL.md` said it *"is active"*, and the
+> `cello_contact_set_tier` description said *"ACTIVE at every tier"* — both overstating, because the
+> layer that judges MEANING loads only if an ONNX classifier sits at `~/.cello/gateway-model` and
+> nothing ships one.
+>
+> So a prospective user reading the README concluded there was no screening; one reading the skill
+> concluded prompt-injection defense was fully on. The gap between them is the part that matters:
+> the pattern layer stops what someone thought to write a pattern for.
+>
+> All three now agree, and the skill NAMES the hole — read the gateway's `layer2=` startup line
+> before relying on screening against a determined attacker — rather than leaving it to be found.
+>
+> **The guard caught its own author:** the first README rewrite added one absolute (*"never buys
+> less"*) and the claim scanner failed the build. Reworded, because its own message says raising the
+> baseline is the one response that is never right.
 Until `DOD-M15-SCREENINSTALL-1` lands, no status output, tool description, skill prose or document
 may present inbound screening as fully active. When it lands, this row flips to made-true.
 - Distinguishes the character-denylist layer (live) from the semantic layer (not installable).
@@ -163,7 +185,25 @@ on one grep vocabulary at one moment — *never / cannot / impossible* — and m
   (nobody enforces it), row 7 safe (structural), and rows 10–13 bounded (the operator's own daemon —
   ergonomics, by Invariant 1's own first non-qualifying answer).
 
-### `DOD-M15-CLAIM-COMMENTS-1` — ❌ No comment in the public repo asserts a property the code lacks
+### `DOD-M15-CLAIM-COMMENTS-1` — ✅ No comment in the public repo asserts a property the code lacks
+> **CLOSED 2026-08-22.** Both halves of the mutual deferral were verified fixed rather than assumed,
+> and the outstanding `cello-mcp.ts` comment was found to be a **mangled half-edit** — truncated
+> mid-sentence, and wrong in BOTH directions at different times: first that screening was inert
+> (true only before the gateway was wired), then that it was live without naming the layer that is
+> not.
+>
+> **Enforcer: a DENYLIST, not a count** (`dod-m15-claim-comments-1.test.ts`). The claim scanner counts
+> prose on shipped surfaces because there is a bounded set of files an operator reads; source
+> comments are unbounded, and the dangerous ones are dangerous for a reason that is known once
+> somebody has traced it. Each entry is a sentence investigated and found false, with what it cost,
+> printed on failure.
+>
+> **The subtlety that made it hard:** the rule is *rewrite, never delete* — a deleted comment takes
+> with it the evidence somebody believed it, and an absence reads as deliberate. So every corrected
+> comment QUOTES the sentence it retires, and a naive check would have forced deletion of exactly
+> the evidence the rule preserves. Matches are excluded only when the surrounding ~900 characters
+> mark them as retired, and there is a test on that escape hatch so a correction at the top of a
+> file cannot license a fresh false claim at the bottom. Revert-tested.
 > **Reviewed 2026-08-22 → Entry 14: BLOCKING.** Two comments in the public repo still assert
 > properties the code lacks. One (`session-assignment-parser.ts`) is fixed in `1ddcd63`; the other
 > (`cello-mcp.ts:190`, ledger row 13) was assigned to this unit and not delivered.
@@ -450,7 +490,35 @@ across six addresses, normalization buying nothing, requesters not affecting eac
 - The compose Postgres already exists and `CELLO_ENV=local pnpm run test` already works locally.
 - **Enforcer:** receipt.
 
-### `DOD-M15-GUARD-HEARD-1` — ❌ A guard that fires is heard by somebody
+### `DOD-M15-GUARD-HEARD-1` — ✅ A guard that fires is heard by somebody
+> **CLOSED 2026-08-22.** Enforcer: `dod-m15-guard-heard-1.test.ts`, 11 tests. Gate 4080, lint,
+> typecheck, clean build.
+>
+> **Reviewer's verdict, quoted:** *"**HOLLOW TESTS FOUND** [blocking]: **H1** (the retry check is
+> disarmed on 1 of 3 reasons in the committed tree), **H2** (guidance unasserted on one of two
+> returns — the DOD-M12B shape recurring), **H3** (a reason that never enters the constant is
+> invisible to every assertion). Each was measured, not inferred."*
+>
+> All three closed and each of the reviewer's own mutations re-run afterwards:
+>
+> - **H3 is now a COMPILE ERROR**, which is the only real fix. `recordRefusal` took `reason: string`,
+>   so a NEW security refusal recording a free-form code was invisible to every assertion — all of
+>   them enumerate the constant, and a test cannot see a code that does not exist yet. **A type can.**
+>   The set is closed: `AnyRefusalReason = RefusalReason | CapacityReason`. It immediately caught a
+>   test seeding `"sender_cap"`, a reason no refusal path emits.
+> - **H1** — the retry check excused any guidance containing *"nothing for you to retry"* anywhere in
+>   the string, and one entry legitimately contains that phrase, so it was **permanently exempt in
+>   the committed tree**. Sentence-scoped now.
+> - **H2** — `cello_check_notifications` has two returns and only one was driven. The other is taken
+>   whenever the agent has ended-unread sessions, i.e. the ordinary steady state.
+> - **M6** — the reviewer gamed the 120-char floor with padding. The floor stays as a stub-catch and
+>   is named as a floor; the property is now an **affordance allowlist**, which caught a live gap on
+>   its first run.
+> - **M7** — enumerated over reasons across all three audiences (inbox, durable row, wire), with a
+>   stranger-tier counterexample so it cannot be satisfied by telling everyone everything.
+>
+> **The generalisation, and the reason this line existed:** *"a per-site test covers the sites that
+> exist; the failure mode this line names is the NEXT site."*
 **The pattern that recurred four times in one milestone, now its own line** — Andre's rule: fixed
 individually three times is a coincidence, a fourth is a defect class. Each occurrence was found by
 a person READING, never by a test.
