@@ -15,14 +15,19 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 25 ✅, **0 🟡**, 2 🅿️, 38 ❌. Both repos clean, pushed, on main. Both gates green.
-> Seven units closed in Entry 31 with both verdicts quoted. **The WIP count is ZERO** — which is the
-> state §2's limit requires before any new line starts.
+> ### 🟢 25 ✅, 1 🟡 (carried half only), 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
+> **No unreviewed work.** `DEAD-WIRE-FIELD-1`'s client half is reviewed and closed (Entry 32); the
+> line stays 🟡 only because its bilateral wire half is carried, so the WIP limit is satisfied and a
+> new line may start.
 
-- **NEXT ACTION: the hollow-test mechanism**, then ONE new ❌ line under the WIP limit.
-  Hollow tests went 2 → 3 → 5 across the milestone's review rounds and are found in every one. The
-  shape: the test covers the case that was in mind while fixing, which is the blind spot that made
-  the bug. The revert test catches code that exists; it cannot catch a branch nobody tested.
+- **NEXT ACTION: pull ONE new ❌ line** under the WIP limit — finish it, review it, close it, then
+  the next. Candidates in the messaging tier: `SELECTION-1` (precondition now met — but its own line
+  says diagnosis FIRST, and I skipped that once already and had to revert), `FREEZE-STATUS-1`,
+  `UNWITNESSED-1`, `STALEROSTER-1`.
+- **THE WIRE-CHANGE CONVOY.** Three changes are pending and undeployed and must move together:
+  `SUBMIT-ID-1`'s 7-element Structure 1, `TERMINAL-REASON-1`'s new reasons, and
+  `DEAD-WIRE-FIELD-1`'s field removal. Loosen `directory-frames.ts:1182`'s `parseParticipant` in the
+  SAME commit as the removal (~110 test call sites).
 - **⚠️ `DOD-M15-SUBMIT-ID-1` HAS A DEPLOYMENT ORDER.** The relay half is in; the CLIENT half must not
   ship until this relay is DEPLOYED. `decodeStructure1` required exactly 6 elements, so a client
   emitting a submission id has every frame refused by the relay running right now. Deploying is
@@ -2959,4 +2964,58 @@ no test at all.
 
 The revert test catches code that EXISTS. It cannot catch a branch nobody wrote a test for. That
 needs its own mechanism, and it is the next thing to build.
+
+## Entry 32 — the first unit under the WIP limit, and the defect one line above the one I fixed
+
+`DOD-M15-DEAD-WIRE-FIELD-1` client half, reviewed and closed. The line stays 🟡: the wire removal is
+bilateral and genuinely not done, and marking it ✅ would be the absorbed-into-a-tick-it-did-not-earn
+shape this milestone keeps rejecting.
+
+### Verdict
+
+> **SPEC: FAITHFUL** — for the client half as scoped… **HOLLOW TESTS FOUND [blocking]** — question 4
+> fails: the outcome (`[]`) is unasserted, and four mutations stay green.
+
+It also **verified the premise independently** rather than taking it from me — no signature covers
+the field (both TBS builders, both repos), nothing reads it (every consumer takes `.pubkey`), it is
+`[]` on the wire. One caveat kept: that describes THIS TREE, not the deployed fleet; a client older
+than `SURFACE-1` still announces real addresses.
+
+### F1 — the identical defect sat ONE LINE ABOVE, and it was worse
+
+`participant.peer_id` met every clause of the DoD line, and the value that kills it is not a bug's
+output — it is a **default the directory writes on purpose**: `directory-node.ts:2049` seeds
+`{ peer_id: "", multiaddrs: [] }` on auth, `:3867` uses the same on a map miss, `:4120` copies it
+into `participant_a/b`. Nothing gates it, because the only announce requirement checks that the
+INITIATOR announced — **the TARGET never has to**.
+
+So an agent whose peer-info announce is late or absent could not be talked to at all. The directory
+brokers the session, FROST-signs a valid assignment, pushes it to both sides — and both clients
+refuse it over an empty string neither reads. The operator is told the assignment was *"missing or
+malformed"* when it was neither, which points at the directory's signing path while the cause is an
+in-memory map miss on a different agent's announce.
+
+**My suite could not tell.** Review measured that deleting the `peer_id` guard entirely left all five
+of my tests green. *The mutation that would have COMPLETED my own unit's thesis passed my own suite.*
+
+### The rule that earns its place
+
+**When a unit's thesis is "this field is dead, stop refusing over it", the next question is: what
+else in this function is dead?** I fixed the instance named in the DoD line and stopped. The line's
+own logic ran one line further and I did not follow it.
+
+### And Q4 is harder to obey than to agree with
+
+I applied all four hollow-test questions to this unit BEFORE dispatching — the box was an hour old —
+and still failed Q4. The test asserted `not.toBeNull()`; the promise was `[]`. Those feel identical
+and are not: a mutation returning the malformed value verbatim, and one FABRICATING an address, both
+stayed green. **"It did not fail" is a shadow. Name the value.** Now a worked example in §2.
+
+### Carried, not absorbed
+
+- **The wire removal** — bilateral, rides with `SUBMIT-ID-1` and `TERMINAL-REASON-1` so the repos move
+  once. ⚠️ `directory-frames.ts:1182` requires both fields and is called from ~110 test sites; it
+  must be loosened in the SAME commit or that suite goes red the day the field leaves.
+- **`DOD-M15-PARSEFAIL-CAUSE-1`** — `assignment_parse_failed` is one exit-point label over ~12
+  causes. Removing two of them is what made the class visible.
 
