@@ -1204,7 +1204,15 @@ diagnosed until this lands.
   state through a fresh connection always sees `false`. Rename or annotate — both Andre and a Hermes
   agent misread it during one investigation.
 
-### `DOD-M15-SELECTION-1` — ❌ A connection is never bound to an agent it did not select
+### `DOD-M15-SELECTION-1` — 🟡 A connection is never bound to an agent it did not select
+> **BUILT 2026-08-22, review in flight.** Clause 1 needed no code: the two rules that looked like
+> they contradicted each other — a release must stay eligible for the sole-online fallback, and a
+> reconnect must attend nothing — only conflict if *resolving a subject* and *attending* are the same
+> act. They are not, and `attended_by: 0` after release+reconnect measures it rather than arguing it.
+> Clause 2 is real code: a fallback selection is now named in the RESPONSE, at the IPC boundary — the
+> one place every response passes through, so the seventeenth handler cannot forget it. Revert-tested
+> both ways: dropping the notice goes red, and so does annotating EVERY response, because a signal
+> that fires on the ordinary case is not a signal.
 `DOD-AGENT-SELECTION-UNWARRANTED-1`. **Depends on `DOD-M15-IPCVISIBLE-1`.** One defect with two
 faces: after a daemon restart a released agent was silently reinstated (under a *different*
 operator's agent name on the same daemon); after an `/mcp` reconnect a selection that had been made
