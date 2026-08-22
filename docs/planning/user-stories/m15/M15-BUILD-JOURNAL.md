@@ -2239,3 +2239,85 @@ margin too, and the first anyone hears of it is the second outage.
 The existing classification tests were updated to assert `attempts` exactly rather than being
 loosened to `toMatchObject` — so they now also pin the policy: a DNS blip gets three probes, a 503
 gets one, and the happy path costs exactly one.
+
+## Entry 24 — the retry broke the thing it was protecting
+
+Both units came back with findings, and the two that matter are both cases of a fix reaching past
+the thing it was fixing.
+
+### The regression I shipped inside a resilience fix
+
+`DOD-M15-BOOTSTRAP-1` gave the bootstrap probe three attempts at 8 s so a lost packet would stop
+dropping a healthy directory. I applied that budget everywhere `fetchBootstrapResult` is called.
+
+**One of those callers is the endpoint resolver, which runs on EVERY connect attempt** — and the
+signaling stream turns over roughly every 70 seconds. So on a lossy link the resolver could now spend
+16 s. `outbound-sessions` waits **10 s** for signaling before giving up. `cello_initiate_session`
+would have started failing with `directory_signaling_timeout` **on exactly the links this unit
+existed to help.**
+
+The reconnect path now takes a fail-fast budget — two probes at 4 s. Still a fresh connection, which
+is the entire mechanism; persistence belongs where nothing is blocked on the answer, which is the
+roster sweep, which runs its nodes in parallel.
+
+**Rule:** a timeout is never a local decision. Before changing one, find what is WAITING on it — the
+number that matters is the caller's deadline, not the operation's. The test now asserts the two
+against each other rather than describing them, because they were chosen together and a later edit to
+either must break it.
+
+### And the retry's own policy was still dropping nodes
+
+The 8 s deadline covers the response body, not just the request. A server that sends headers and then
+stalls — **the ordinary shape of a lossy mobile link, which is this unit's whole subject** — aborts
+inside `resp.json()`, which was classified `bad_response`.
+
+That is wrong twice. It sends the operator to inspect a payload that was never received. And
+`bad_response` is deliberately *not* retryable, so the node got one probe and was dropped: the exact
+outcome the retry exists to prevent, delivered by the retry's own policy.
+
+**Rule:** when you add a policy that treats classes differently, walk each class back to what actually
+produces it. I had reasoned about `bad_response` as "the server sent us something malformed" and
+never asked what else could land in that catch.
+
+### The error I asked about was the one that mattered
+
+I left one `counterparty_offline` in place and asked the reviewer to rule on it. It rewrote the home
+node's `target_offline` — which means *"I have no live stream registered for that agent"* — into a
+claim that the agent is offline.
+
+At least four conditions produce that, and only one is "they are offline". The commonest is the
+peer's receiver **registration** lapsing on a signaling reconnect, and this daemon's own notes record
+**46 of 48 reconnects in one hour** leaving every agent unregistered while `cello_status`,
+`agent.online` and the directory's own presence table all still showed them healthy.
+
+So the operator is sent to ask a person whose side is working, about a registration on a stream on
+the *directory's* side. It is now `home_node_reports_no_receiver`, and the guidance leads with the
+fact that it is usually not their fault.
+
+Two more of the same family: a message asserting a node *"may have left the consortium"* when the
+roster it checked contains only the **reachable** subset — so the usual cause was our own probe not
+answering, and before the retry a single lost packet produced that sentence. And guidance telling the
+operator to run `cello_status` to find a node id that was in scope four lines above.
+
+### The clause I had not delivered
+
+*"A roster below threshold says so."* A signing ceremony needs a majority of the declared nodes, and
+when two of five are unreachable a session failure is very often a symptom of that. `cello_status`
+reported it; the **error the operator was actually holding** said nothing — and the error is what
+people act on.
+
+The negotiator could not have said it: `resolveConsortiumRoster` returns only the reachable subset,
+so it cannot tell three-of-three from three-of-five. Threading the unresolved list through supplies
+the other half.
+
+**Appended, never substituted.** Replacing the observed reason with "roster short" would be this
+line's own defect pointing the other way — a guess is a guess whichever direction it points. And it
+says nothing when the roster is whole, because a note that fires on the healthy case is noise, and
+noise is how a real shortfall gets scrolled past on the day it matters.
+
+### The one that ships
+
+Both shipped `SKILL.md` copies — the document the operator's agent reads when something fails —
+documented `target_offline`, a code the surface **never emits**, with blame-the-peer guidance. That
+is worse than silence: it is confident, wrong, and in the reader's hands at the moment they are
+trying to work out whose fault something is. Replaced with the five reasons actually returned.
