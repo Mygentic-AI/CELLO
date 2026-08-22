@@ -116,7 +116,31 @@ export type HashSubmitErrorReason =
   | "signature_invalid"
   | "sender_mismatch"
   | "last_seen_seq_ahead"
+  /**
+   * DOD-M15-TERMINAL-REASON-1 — three answers where there was one, because the one was wrong.
+   *
+   * `session_sealed` was returned for EVERY non-active status, and it was never true of either of
+   * them. A refused seal is the opposite of sealed, and an in-flight one has not sealed yet. Worse,
+   * a session that genuinely sealed is not in this branch at all — `confirmSeal` destroys it, so it
+   * answers `session_not_found` — which made the two answers exactly inverted: success reported as
+   * "not found", failure reported as "sealed".
+   *
+   * `session_sealed` is KEPT in the union rather than removed: it is what older relays still send,
+   * and a client that meets it should treat it as the ambiguous legacy value it always was.
+   */
   | "session_sealed"
+  /** A directory read the seal and REFUSED it. Terminal, and there is no receipt. */
+  | "seal_refused"
+  /**
+   * A seal is in flight — nothing notarized yet, and it may still succeed.
+   *
+   * DEFENSIVE, and honestly labelled: a client cannot normally observe this, because `hash_submit`
+   * serializes per session (`await prev`) and adjudication runs inside that lock, so a concurrent
+   * submission blocks until the seal resolves and then sees the outcome. It exists so the branch
+   * cannot silently fall back to the wrong word if the lock is ever released earlier, and because
+   * `DOD-M15-TRANSPORT-TERMINAL-1` made `sealing` a state a session can leave as well as enter.
+   */
+  | "seal_in_progress"
   /** FEDERATION-003 AC-006/SI-002: predecessor relay ACK could not be verified */
   | "RELAY_PREDECESSOR_UNKNOWN";
 

@@ -1099,7 +1099,20 @@ export class CelloRelayNode {
   ): Promise<void> {
     const state = this.#store.getSession(sessionKey);
     if (!state) { await reply("session_not_found"); return; }
-    if (state.status !== "active") { await reply("session_sealed"); return; }
+    if (state.status !== "active") {
+      /**
+       * SAY WHICH — `DOD-M15-TERMINAL-REASON-1`. This answered `session_sealed` for every non-active
+       * status, and it was never true of either one that reaches here: `seal_rejected` is the
+       * OPPOSITE of sealed, and `sealing` has not sealed yet. A successfully sealed session does not
+       * reach this line at all, because `confirmSeal` destroys it — so success reported as
+       * "not found" and refusal reported as "sealed", exactly inverted.
+       *
+       * The cost is not cosmetic: an operator told their conversation sealed goes looking for a
+       * notarized receipt that does not exist, and stops investigating a failure that needs them.
+       */
+      await reply(state.status === "seal_rejected" ? "seal_refused" : "seal_in_progress");
+      return;
+    }
 
     const aHex = Buffer.from(state.assignment.participant_a).toString("hex");
     const bHex = Buffer.from(state.assignment.participant_b).toString("hex");

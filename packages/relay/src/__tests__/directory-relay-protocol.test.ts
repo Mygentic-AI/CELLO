@@ -453,7 +453,7 @@ describe("AC-004: confirm_seal → confirm_ok; hash_submit returns session_not_f
 
 // ─── AC-005: reject_seal → reject_ok; session sealed_rejected ────────────────
 
-describe("AC-005: reject_seal → reject_ok; hash_submit returns session_sealed", () => {
+describe("AC-005: reject_seal → reject_ok; hash_submit returns seal_refused", () => {
   let scope = createTestScope();
   beforeEach(() => { scope = createTestScope(); });
   afterEach(() => scope.run(async () => {}));
@@ -486,7 +486,8 @@ describe("AC-005: reject_seal → reject_ok; hash_submit returns session_sealed"
     const response = await dirReader.readDecoded();
     expect(response["type"]).toBe("reject_ok");
 
-    // Verify session is seal_rejected: hash_submit should return session_sealed
+    // Verify session is seal_rejected: hash_submit names the REFUSAL (DOD-M15-TERMINAL-REASON-1),
+    // where it used to answer "session_sealed" — a word that meant the opposite of what happened.
     const clientNodeA = await createNode({ keyProvider: clientKpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await clientNodeA.start();
     scope.addCleanup(async () => { await clientNodeA.stop(); });
@@ -508,7 +509,7 @@ describe("AC-005: reject_seal → reject_ok; hash_submit returns session_sealed"
 
     const err = await readerA.readDecoded();
     expect(err["type"]).toBe("hash_submit_error");
-    expect(err["reason"]).toBe("session_sealed");
+    expect(err["reason"]).toBe("seal_refused");
 
     streamA.close().catch(() => {});
   }, 20_000);

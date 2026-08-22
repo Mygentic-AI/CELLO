@@ -211,9 +211,26 @@ describeIntegration("M6B-010: PgDirectoryStore startup state load", () => {
     const sessions = await store.loadActiveSessionParticipants();
     const found = sessions.find((s) => s.sessionId === sessionId);
     expect(found).toBeDefined();
-    // genesisTimestampMs should be within the window of before/after write
-    expect(found!.genesisTimestampMs).toBeGreaterThanOrEqual(beforeWrite);
-    expect(found!.genesisTimestampMs).toBeLessThanOrEqual(afterWrite + 1000); // +1s tolerance
+    /**
+     * TWO CLOCKS, so the tolerance has to be symmetric.
+     *
+     * `beforeWrite`/`afterWrite` come from Node's `Date.now()` on the HOST. `genesisTimestampMs`
+     * comes from `sessions.created_at`, a Postgres `TIMESTAMPTZ` set by `NOW()` inside the Docker
+     * VM. Those clocks are not the same clock and drift by a few milliseconds — Docker Desktop's VM
+     * is a common few ms off after a resume.
+     *
+     * The upper bound already carried 1s of slack for exactly this reason. The lower bound carried
+     * NONE, so a VM running a few ms behind the host failed the run: measured 1787414919664 against
+     * a `beforeWrite` of 1787414919668 — four milliseconds, and red.
+     *
+     * The property being tested is "the genesis timestamp is derived from created_at rather than
+     * being 0 or undefined", and a window of ±1s proves that just as well as a strict one while
+     * being true of both clocks.
+     */
+    expect(found!.genesisTimestampMs).toBeGreaterThanOrEqual(beforeWrite - 1000);
+    expect(found!.genesisTimestampMs).toBeLessThanOrEqual(afterWrite + 1000);
+    // The assertion that actually carries the spec: a real derived timestamp, not a zero default.
+    expect(found!.genesisTimestampMs).toBeGreaterThan(1_600_000_000_000);
     // IMP-001: Verify the key format round-trip — loaded sessionId must not contain dashes.
     expect(found!.sessionId).not.toContain("-");
 

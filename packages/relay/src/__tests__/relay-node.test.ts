@@ -1055,7 +1055,16 @@ describe("DB-002: rejectSeal retains state, marks session seal_rejected", () => 
 
     const resp = await rA.readDecoded();
     expect(resp["type"]).toBe("hash_submit_error");
-    expect(resp["reason"]).toBe("session_sealed");
+    /**
+     * `seal_refused`, not `session_sealed` — `DOD-M15-TERMINAL-REASON-1`.
+     *
+     * The old word was returned for every non-active status and was true of none of them: a refused
+     * seal is the OPPOSITE of sealed, and a successfully sealed session never reaches this branch
+     * because `confirmSeal` destroys it. Success reported "not found" and failure reported "sealed",
+     * exactly inverted. The assertion moves to the successor rather than being deleted — the subject
+     * changed on purpose.
+     */
+    expect(resp["reason"]).toBe("seal_refused");
 
     sA.close().catch(() => {}); sB.close().catch(() => {});
     await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
