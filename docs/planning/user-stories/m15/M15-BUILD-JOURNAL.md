@@ -15,16 +15,21 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 FOUR UNITS MERGED. One built with its review in flight.
-> **55 DoD lines**, 5 ✅, 1 🟡 (`SURFACE-1`), 1 🅿️, rest ❌. Every line is inside the launch gate;
-> the gate is a state, not a date.
+> ### 🟢 SIX UNITS MERGED, ALL REVIEWED. Nothing in flight.
+> **56 DoD lines**, 6 ✅, 1 🅿️, rest ❌. Every line is inside the launch gate; the gate is a state,
+> not a date. Both repos clean and pushed.
 
-- **NEXT ACTION: land the two reviews in flight**, then continue `DOD-M15-LEDGER-1`'s remaining
-  surfaces (MCP tool descriptions, CLI help, status output) — docs-only, no code conflict.
-- **`DOD-M15-SURFACE-1` is 🟡 BUILT, REVIEW IN FLIGHT** (→ Entry 9) — cello-client `m15/surface`,
-  commit `a1da749`, gate green at 4008. One line: the directory-facing node stops listening. **The
-  falsification is the unit** — `listenAddresses()` IS announced to the directory, and five checks
-  establish nothing consumes it. Idle half split to `DOD-M15-IDLE-CONNS-1`.
+- **NEXT ACTION: `DOD-M15-AUDITME-1`** — rewrite `AUDIT-ME.md` at the root of the PUBLIC repo. The
+  ledger sweep is done and this is its worst row: the file's own command 4 finds
+  `api.telegram.org`, falsifying its Claim 3. **Per M15-PROCEDURE §2f the replacement WORDING is
+  Andre's call** — prepare variants, delete what is flatly false, do not publish a rewrite. Deleting
+  a false claim and fixing a code comment do not wait; choosing what replaces them does.
+  **Alternative if that stalls:** `DOD-M15-CLAIM-COMMENTS-1` (rewrite the six known false comments —
+  no wording gate) or `DOD-M15-RELAYAUTH-1` (Tier 2, depends on `ASSIGN-1` which is not built).
+- **`DOD-M15-SURFACE-1` is ✅** (→ Entries 9, 11) — merged. **SPEC: FAITHFUL, nothing blocking.**
+  The reviewer confirmed all five falsification claims plus two I had not checked, and built a
+  throwaway test proving a zero-listener node still dials out. Both real findings were prose. **New
+  follow-ons:** `DOD-M15-DEAD-WIRE-FIELD-1`, and `DOD-M15-IDLE-CONNS-1` from the split.
 - **`DOD-M15-SIGNUP-1` is ✅** (→ Entries 8, 10) — merged. **Two review passes, the hard cap.** The
   first: my rekey removed the only cap on a requester, and my own test pinned the abuse case as
   required. The second: un-shadowing the delivery-layer refusal surfaced it to the person as
@@ -40,9 +45,9 @@ description: >
   three blocking, all fixed; verdict quoted in Entry 5. **Two follow-on lines came out of it:**
   `DOD-M15-UNWITNESSED-1` (the two *suspected* partings, one of which the review found and I had
   missed) and `DOD-M15-DIVERGE-DURABLE-1` (the flag is still memory-only across a restart).
-- **`DOD-M15-LEDGER-1` is part-swept** — 13 rows across `AUDIT-ME.md`, `README.md`, and the shipped
-  skill/tool surfaces (→ Entries 3, and rows in the DoD). Remaining: the rest of the MCP tool
-  descriptions, CLI help, status output.
+- **`DOD-M15-LEDGER-1`: the SWEEP is complete** — all four live surfaces walked, dispositions
+  assigned (→ Entry 3 + the ledger section of the DoD). CLI help and status output came back clean.
+  **Acting on the rows is other lines' work.** The line itself is 🟡 pending one review pass.
 - **Process note worth keeping:** the review's own diagnosis of why its blocking finding shipped —
   *every close-gate test stubs `sealReadiness` and every manager test calls it directly, so nothing
   drove a real manager through a real teardown.* A unit whose tests all sit on one side of a seam
