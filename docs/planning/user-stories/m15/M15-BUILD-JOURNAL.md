@@ -2474,3 +2474,80 @@ milestone, written days earlier after a review found the identical gap.
 **Rule, earned three times now:** *a test that imports nothing from the file it is named for is
 testing its own arithmetic.* The runtime is the tell: a file that exercises real handler code does
 not finish in a millisecond.
+
+## Entry 27 — the responder starts verifying, and two checks turn out to be one
+
+### What was missing
+
+The initiator verified its session assignment; the **responder did not verify at all**. It logged
+`session.inbound.assignment.unverified` and proceeded — so the dialer it opened its receiver to, and
+the `signer_pubkey` it persisted as the seal trust anchor, were whatever the directory said.
+
+That is why `DOD-M15-OFFER-SIGNED-1` could not close: comparing an unsigned offer against an
+unverified assignment compares two things one compromised directory controls.
+
+### The circularity, and what broke it
+
+The initiator's verifier compares `signer_pubkey` against the agent's **own** persisted
+`primaryPubkey`. The responder has no equivalent — the assignment is signed by the *initiator's*
+quorum — and verifying a frame's signature against a key from the same frame proves nothing. That
+circularity is why this was deferred rather than written.
+
+**The TOFU pin breaks it.** For a repeat counterparty the expected signer is what THIS daemon
+recorded during an earlier session, which no directory can retroactively change. Two modes, and the
+weaker one says it is weaker:
+
+- **PINNED** — the signature must verify under the pinned key. Non-circular. Covers every repeat.
+- **INTERNAL** (first contact) — nothing independent to check against, so this verifies only that the
+  signature holds over the assignment's own recomputed contents. It does **not** authenticate the
+  directory and is not claimed to. What it catches is a **tampered or garbage** assignment, which
+  previously reached the seal path unchallenged **and got pinned** — poisoning every later session
+  with that counterparty. Refusing it is what stops a bad first contact becoming a permanent one.
+
+### The duplicate I nearly shipped
+
+I had already written a separate pin comparison in the inbound handler. Once the verifier took the
+pin as its expected signer, that block became **unreachable** — and it was the weaker of the two: it
+checked that the frame *named* the right key, where the verifier checks the signature *verifies*
+under it. A directory that names a key it does not hold passes a comparison and fails a verification.
+
+Collapsed to one. **Rule:** two checks for one property is how they drift — the survivor gets fixed
+and the dead one keeps asserting the old rule to whoever reads it next.
+
+### Thirteen fixtures were relying on the absence of this check
+
+Turning verification on broke thirteen test files. They were not wrong to exist — they test contact
+whitelisting, doorbells, moniker resolution, away-mode, none of which is about signatures. They were
+wrong to be **unverifiable**, which is exactly the property production had lost while every one of
+them stayed green.
+
+**Rule:** when a check is added and fixtures break, the fixtures were the evidence that the check was
+missing. Count them before deciding the change is too disruptive.
+
+### The workflow experiment (Andre, 2026-08-22)
+
+Andre asked whether dynamic workflows could parallelise this, with a warning from experience:
+fan-out/fan-in gates on the slowest, agents lack shared context, and two agents sometimes build the
+same thing — expensive at merge, and the more-finished version wins rather than the better one.
+
+Thirteen files, one mechanical transformation each, was the right shape. What made it safe:
+
+- **The shared piece was written BEFORE the fan-out.** `helpers/signed-assignment.ts` plus worked
+  examples meant no agent designed anything — so no two agents could converge on competing versions.
+  That is the answer to the missing-shared-context problem: do not ask agents to agree, hand them
+  the agreement.
+- **One named file per agent**, with "other agents are editing sibling files right now" in the
+  prompt. Merge conflict structurally impossible.
+- **Each agent ran only its own file** — never the suite, so no contention over the shared Postgres,
+  which is the very defect being fixed elsewhere in this milestone.
+- **`pipeline`, not a barrier**, and items sized equally so the spread was minutes.
+- **No agent committed.** The gate and the commit stayed with me.
+
+First run: 3/3 converted, **zero assertion lines altered** (verified by diff, not by their report),
+test counts unchanged, 146 seconds.
+
+One agent returned something better than its diff: the two-offer test needed both offers signed by
+the **same** quorum, because the first accepted session pins the key and a second from a fresh key is
+correctly refused as an identity substitution. It had found the feature working and modelled a repeat
+counterparty properly instead of routing around it. That is the shape worth fanning out — conversion,
+where the thinking is already done. Diagnosis is not, and would reproduce every failure Andre named.
