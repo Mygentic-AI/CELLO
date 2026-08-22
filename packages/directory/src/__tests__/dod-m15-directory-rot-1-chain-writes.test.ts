@@ -109,6 +109,8 @@ const KNOWN_DEBT_INSERTS = [
   "persist-008-analytics.test.ts",
   "persist-018-seal-notarizations.test.ts",
   "persist-020-connections.test.ts",
+  // PARTIALLY converted: its AC-001-extended block now runs in a rolled-back transaction (7 fake
+  // chain_hash inserts, 7 deletes and a TRUNCATE removed). Other blocks in the file still violate.
   "persist-021-adapter-boundary-audit.test.ts",
   "presence-001-repository.test.ts",
 ];
@@ -123,7 +125,7 @@ const KNOWN_DEBT_DELETES = [
   "persist-003-rls.test.ts",
   "persist-004-hash-chain.test.ts",
   "persist-020-connections.test.ts",
-  "persist-021-adapter-boundary-audit.test.ts",
+  "persist-021-adapter-boundary-audit.test.ts", // partially converted — see the note above
   "persist-reconnect-session-survival.test.ts",
 ];
 

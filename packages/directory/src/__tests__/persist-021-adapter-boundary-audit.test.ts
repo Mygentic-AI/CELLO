@@ -78,7 +78,7 @@
  *   correlationId is passed from calling context; omitted if not present.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import pg from "pg";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
@@ -417,24 +417,46 @@ describeIntegration("PERSIST-021 integration: AC-001 BIGINT columns deserialized
 //   3. Calls deserializeRow — asserts each declared BIGINT column is typeof "number"
 
 describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT tables", () => {
+  /**
+   * EVERY TEST IN THIS BLOCK RUNS IN A TRANSACTION THAT IS ROLLED BACK.
+   *
+   * It used to TRUNCATE three tables in `beforeEach` and DELETE its own rows at the end of each
+   * test. Both were doing damage nothing here needed:
+   *
+   *   - Seven of these tables are HASH-CHAINED, and every insert supplied its own `chain_hash`.
+   *     A hash not computed against the current chain head is a hole: `verifyChain` fails at that
+   *     row and every row after it, for the whole run, in files that have nothing to do with this
+   *     one. The deletes then broke the chain a second way, by removing a row a successor was
+   *     chained to.
+   *   - The TRUNCATE took an `AccessExclusiveLock` over shared tables and DEADLOCKED against a
+   *     directory node that was mid-INSERT into `conversation_seal_staging` — Postgres named both
+   *     sides in its log.
+   *
+   * None of it was needed. These tests only assert that BIGINT columns come back as strings from
+   * pg and as numbers after `deserializeRow`; they never need the row to outlive the assertion.
+   * A rolled-back transaction gives them a row to read and leaves nothing behind — no cleanup, no
+   * lock held across files, no hole in anyone's chain.
+   */
+  let txn: pg.PoolClient;
+
   beforeEach(async () => {
-    await superPool.query(`
-      TRUNCATE notification_events, notification_queue, pending_connection_requests
-      RESTART IDENTITY CASCADE
-    `);
-    // agent_profiles, conversation_attestations, conversation_participation,
-    // seal_notarizations, connection_requests, connections are not truncated here because they
-    // may have FK dependencies. Each test inserts and queries by a known unique key.
+    txn = await superPool.connect();
+    await txn.query("BEGIN");
+  });
+
+  afterEach(async () => {
+    await txn.query("ROLLBACK");
+    txn.release();
   });
 
   it("AC-001: agent_profiles — id and registered_at are numbers after deserializeRow", async () => {
     const pubkey = randomBytes(32).toString("hex");
-    await superPool.query(
+    await txn.query(
       `INSERT INTO agent_profiles (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, chain_hash)
        VALUES ($1, $2, '', '', 1700000000000, 'active', $3)`,
       [pubkey, randomBytes(32).toString("hex"), randomBytes(32).toString("hex")],
     );
-    const raw = await superPool.query<Record<string, unknown>>(
+    const raw = await txn.query<Record<string, unknown>>(
       "SELECT id, registered_at FROM agent_profiles WHERE k_local_pubkey = $1",
       [pubkey],
     );
@@ -444,23 +466,22 @@ describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT
     const d = deserializeRow("agent_profiles", raw.rows[0]!);
     expect(typeof d["id"]).toBe("number");
     expect(typeof d["registered_at"]).toBe("number");
-    await superPool.query("DELETE FROM agent_profiles WHERE k_local_pubkey = $1", [pubkey]);
   });
 
   it("AC-001: conversation_attestations — id is a number after deserializeRow", async () => {
     // Need a parent conversation_seals row first
     const convId = randomUUID();
-    await superPool.query(
+    await txn.query(
       `INSERT INTO conversation_seals (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
        VALUES ($1, $2, 'MUTUAL_SEAL', 2, CURRENT_DATE, $3)`,
       [convId, randomBytes(32).toString("hex"), randomBytes(32).toString("hex")],
     );
-    await superPool.query(
+    await txn.query(
       `INSERT INTO conversation_attestations (conversation_id, participant_pseudonym, attestation, seal_signature, chain_hash)
        VALUES ($1, 'test-pseudonym', 'CLEAN', $2, $3)`,
       [convId, randomBytes(32).toString("hex"), randomBytes(32).toString("hex")],
     );
-    const raw = await superPool.query<Record<string, unknown>>(
+    const raw = await txn.query<Record<string, unknown>>(
       "SELECT id FROM conversation_attestations WHERE conversation_id = $1",
       [convId],
     );
@@ -468,23 +489,21 @@ describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT
     expect(typeof raw.rows[0]!["id"]).toBe("string");
     const d = deserializeRow("conversation_attestations", raw.rows[0]!);
     expect(typeof d["id"]).toBe("number");
-    await superPool.query("DELETE FROM conversation_attestations WHERE conversation_id = $1", [convId]);
-    await superPool.query("DELETE FROM conversation_seals WHERE conversation_id = $1", [convId]);
   });
 
   it("AC-001: conversation_participation — id is a number after deserializeRow", async () => {
     const convId = randomUUID();
-    await superPool.query(
+    await txn.query(
       `INSERT INTO conversation_seals (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
        VALUES ($1, $2, 'MUTUAL_SEAL', 2, CURRENT_DATE, $3)`,
       [convId, randomBytes(32).toString("hex"), randomBytes(32).toString("hex")],
     );
-    await superPool.query(
+    await txn.query(
       `INSERT INTO conversation_participation (conversation_id, party_pseudonym, chain_hash)
        VALUES ($1, 'test-party', $2)`,
       [convId, randomBytes(32).toString("hex")],
     );
-    const raw = await superPool.query<Record<string, unknown>>(
+    const raw = await txn.query<Record<string, unknown>>(
       "SELECT id FROM conversation_participation WHERE conversation_id = $1",
       [convId],
     );
@@ -492,18 +511,16 @@ describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT
     expect(typeof raw.rows[0]!["id"]).toBe("string");
     const d = deserializeRow("conversation_participation", raw.rows[0]!);
     expect(typeof d["id"]).toBe("number");
-    await superPool.query("DELETE FROM conversation_participation WHERE conversation_id = $1", [convId]);
-    await superPool.query("DELETE FROM conversation_seals WHERE conversation_id = $1", [convId]);
   });
 
   it("AC-001: notification_events — id is a number after deserializeRow", async () => {
     const notifId = randomUUID();
-    await superPool.query(
+    await txn.query(
       `INSERT INTO notification_events (notification_id, recipient_pseudonym, notification_type, payload_hash, chain_hash)
        VALUES ($1, 'test-recip', 'SYSTEM', $2, $3)`,
       [notifId, randomBytes(32).toString("hex"), randomBytes(32).toString("hex")],
     );
-    const raw = await superPool.query<Record<string, unknown>>(
+    const raw = await txn.query<Record<string, unknown>>(
       "SELECT id FROM notification_events WHERE notification_id = $1",
       [notifId],
     );
@@ -511,12 +528,11 @@ describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT
     expect(typeof raw.rows[0]!["id"]).toBe("string");
     const d = deserializeRow("notification_events", raw.rows[0]!);
     expect(typeof d["id"]).toBe("number");
-    await superPool.query("DELETE FROM notification_events WHERE notification_id = $1", [notifId]);
   });
 
   it("AC-001: seal_notarizations — id and close_timestamp are numbers after deserializeRow", async () => {
     const sessionIdBytes = randomBytes(16);
-    await superPool.query(
+    await txn.query(
       `INSERT INTO seal_notarizations
          (session_id, sealed_root, participant_a_pubkey, participant_b_pubkey, frost_signature, close_timestamp, chain_hash)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -530,7 +546,7 @@ describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT
         randomBytes(32).toString("hex"),
       ],
     );
-    const raw = await superPool.query<Record<string, unknown>>(
+    const raw = await txn.query<Record<string, unknown>>(
       "SELECT id, close_timestamp FROM seal_notarizations WHERE session_id = $1",
       [sessionIdBytes],
     );
@@ -540,17 +556,16 @@ describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT
     const d = deserializeRow("seal_notarizations", raw.rows[0]!);
     expect(typeof d["id"]).toBe("number");
     expect(typeof d["close_timestamp"]).toBe("number");
-    await superPool.query("DELETE FROM seal_notarizations WHERE session_id = $1", [sessionIdBytes]);
   });
 
   it("AC-001: connection_requests — id is a number after deserializeRow", async () => {
     const requestId = randomBytes(16).toString("hex");
-    await superPool.query(
+    await txn.query(
       `INSERT INTO connection_requests (request_id, requester_pseudonym, target_pseudonym, outcome, chain_hash)
        VALUES ($1, 'req-a', 'req-b', 'ACCEPTED', $2)`,
       [requestId, randomBytes(32).toString("hex")],
     );
-    const raw = await superPool.query<Record<string, unknown>>(
+    const raw = await txn.query<Record<string, unknown>>(
       "SELECT id FROM connection_requests WHERE request_id = $1",
       [requestId],
     );
@@ -558,19 +573,18 @@ describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT
     expect(typeof raw.rows[0]!["id"]).toBe("string");
     const d = deserializeRow("connection_requests", raw.rows[0]!);
     expect(typeof d["id"]).toBe("number");
-    await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [requestId]);
   });
 
   it("AC-001: connections — id and established_at are numbers after deserializeRow", async () => {
     const connectionId = randomBytes(16).toString("hex");
     const participantA = randomBytes(32).toString("hex");
     const participantB = randomBytes(32).toString("hex");
-    await superPool.query(
+    await txn.query(
       `INSERT INTO connections (connection_id, participant_a, participant_b, established_at, status, chain_hash)
        VALUES ($1, $2, $3, $4, 'active', $5)`,
       [connectionId, participantA, participantB, 1700000000000, randomBytes(32).toString("hex")],
     );
-    const raw = await superPool.query<Record<string, unknown>>(
+    const raw = await txn.query<Record<string, unknown>>(
       "SELECT id, established_at FROM connections WHERE connection_id = $1",
       [connectionId],
     );
@@ -580,17 +594,16 @@ describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT
     const d = deserializeRow("connections", raw.rows[0]!);
     expect(typeof d["id"]).toBe("number");
     expect(typeof d["established_at"]).toBe("number");
-    await superPool.query("DELETE FROM connections WHERE connection_id = $1", [connectionId]);
   });
 
   it("AC-001: notification_queue — id is a number after deserializeRow", async () => {
     const recipientPubkey = randomBytes(32).toString("hex");
-    await superPool.query(
+    await txn.query(
       `INSERT INTO notification_queue (pubkey_hex, payload)
        VALUES ($1, '{}')`,
       [recipientPubkey],
     );
-    const raw = await superPool.query<Record<string, unknown>>(
+    const raw = await txn.query<Record<string, unknown>>(
       "SELECT id FROM notification_queue WHERE pubkey_hex = $1 ORDER BY id DESC LIMIT 1",
       [recipientPubkey],
     );
@@ -598,17 +611,16 @@ describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT
     expect(typeof raw.rows[0]!["id"]).toBe("string");
     const d = deserializeRow("notification_queue", raw.rows[0]!);
     expect(typeof d["id"]).toBe("number");
-    await superPool.query("DELETE FROM notification_queue WHERE pubkey_hex = $1", [recipientPubkey]);
   });
 
   it("AC-001: pending_connection_requests — id is a number after deserializeRow", async () => {
     const targetPubkey = randomBytes(32).toString("hex");
-    await superPool.query(
+    await txn.query(
       `INSERT INTO pending_connection_requests (target_pubkey, payload)
        VALUES ($1, '{}'::jsonb)`,
       [targetPubkey],
     );
-    const raw = await superPool.query<Record<string, unknown>>(
+    const raw = await txn.query<Record<string, unknown>>(
       "SELECT id FROM pending_connection_requests WHERE target_pubkey = $1",
       [targetPubkey],
     );
@@ -616,7 +628,6 @@ describeIntegration("PERSIST-021 integration: AC-001 (extended) remaining BIGINT
     expect(typeof raw.rows[0]!["id"]).toBe("string");
     const d = deserializeRow("pending_connection_requests", raw.rows[0]!);
     expect(typeof d["id"]).toBe("number");
-    await superPool.query("DELETE FROM pending_connection_requests WHERE target_pubkey = $1", [targetPubkey]);
   });
 });
 

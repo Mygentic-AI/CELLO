@@ -324,6 +324,8 @@ It is not.
   scar from a fresh break — which is the same diagnostic hole this line exists to close, moved one
   level up. **Required once, per developer machine:**
   `docker compose down -v && docker compose up -d` (or `TRUNCATE user_accounts CASCADE`).
+  **DONE on this machine 2026-08-22** — reset and verified: `account-001` + `dod-accounts-chain-1`,
+  18 tests, green. Any OTHER machine that ran the pre-fix suite still needs it once.
 - **STILL OPEN — the backlog is declared, not hidden.** `dod-m15-directory-rot-1-chain-writes.test.ts`
   enumerates it: **9 files still commit a literal `chain_hash`**, **10 still delete from a chained
   table**. New violations fail immediately; the lists are shrink-only and their counts are pinned, so
