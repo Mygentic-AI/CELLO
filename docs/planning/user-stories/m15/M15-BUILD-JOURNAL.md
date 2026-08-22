@@ -1609,3 +1609,82 @@ Three clauses, each mutated separately, each verified to land before the result 
 | offer-time narrowing | 3 — all of the offer-handler contract |
 
 Gate on the committed tree: **4018 passed**, lint, typecheck, build. Commit `59ac4db`.
+
+## Entry 15 — `DOD-M15-CI-SKIPS-SILENT-1`: the gate that could not see a quarter of itself
+
+**Built, review in flight. Tag stays yellow until the verdict is quoted here.**
+
+### The thing I went looking for, and the worse thing I found
+
+The DoD line was about **environment-gated suites**: integration tests wrapped in
+`CELLO_ENV === "local" ? describe : describe.skip`, which report as skipped on every run that does
+not set the variable, and a skip that does not say why is indistinguishable from a pass.
+
+That is real — 64 files, 595 of 2266 tests, a **quarter of the suite** silently inert. But looking
+for it turned up a second failure of the same class that nobody had named:
+
+**`vitest.config.ts` lists its projects explicitly, and three workspace packages were not on the
+list.** `operations-agent` (19 test files), `interfaces` (4), `test-fixtures` (1). The gate
+collected 168 files, printed a healthy green total, and never mentioned the other 24. Not skipped —
+**never collected**. There is no line in the output where they would have appeared.
+
+### Why this one stings
+
+**The signup limiter units earlier in this milestone reported a green gate that did not contain a
+single one of their own tests.** Every operations-agent test lives in a package the root gate could
+not see. `DOD-M15-SIGNUP-1` and `DOD-M15-SIGNUP-DURABLE-1` were both written, tested, and recorded
+against a gate figure of ~4000 passing tests, none of which were theirs.
+
+That is this milestone's exact subject — evidence that asserted nothing — occurring **inside the
+milestone's own process**, twice, before anyone looked.
+
+Wiring the three packages in takes the gate from **168 files to 192** and turns on **185
+previously-unrun operations-agent assertions**. Nothing broke, which is the only comfortable part of
+this entry: the tests were fine. Nobody was running them.
+
+### The comment that was already there
+
+The projects array already carried a warning, added with the seal notifier in August:
+
+> *"A package absent from this list has its tests silently skipped by the root gate — they neither
+> run nor report, which reads as 'no tests to run' rather than 'your tests are not wired in'."*
+
+Someone wrote that, understood it exactly, and the next omission happened anyway. **A comment is not
+an enforcement mechanism**, and adding a third one would have been the same move a third time.
+
+So the fix is a test. `root-gate-wiring.test.ts` fails — naming the offending package — when any
+workspace package containing `.test.ts` files is missing from the list.
+
+**Rule:** when the record shows a warning was already written and then not heeded, the next
+intervention must be one that *cannot* be walked past. Prose has been tried and has the result.
+
+### The two halves of loud (Invariant 2)
+
+- **Always, everywhere:** the run prints a banner naming how many suites did not execute, what they
+  would have covered (database, RLS policies, hash-chain constraints, migrations), and the exact
+  command to run them. Warning **and** the count in the output, not one instead of the other.
+- **In CI: it fails.** A local developer skipping the slow suites is making an informed choice and
+  the banner informs them. CI has no reader to inform, so there the only honest behaviour is red.
+
+The count is derived by **reading the sources**, not by annotating call sites. Annotating ~70 sites
+fixes 70 files and drifts on the 71st; deriving it means suite 65 is covered the day it is written.
+**This is a deliberate substitution for the DoD's "a title carrying the reason" clause** — same
+purpose (the reason is visible in the run output), different mechanism — and it is flagged to the
+reviewer as the thing most likely to be letter-versus-spirit in the wrong direction.
+
+### Revert test
+
+| clause removed | result |
+|---|---|
+| `operations-agent` unwired from projects | wiring test red, **naming `operations-agent` in the message** |
+| `CI=1`, no `CELLO_ENV` | CI guard red |
+| `CI=1`, `CELLO_ENV=local` | all 19 green — the guard does not fire on a genuinely tested run |
+
+Gate on the committed tree: **155 passed** (193 files), lint 0 errors, typecheck. Commit `99734664`.
+
+### Carried
+
+- **The same audit is owed on cello-client**, which has 6 skip-gated files (`CELLO_E2E_LIVE`) and a
+  CI workflow that *does* run `pnpm run test` without setting it. Held back deliberately: that repo
+  has a review in flight on `m15/assign` and adding commits underneath a running reviewer is how a
+  verdict ends up describing a tree that no longer exists.
