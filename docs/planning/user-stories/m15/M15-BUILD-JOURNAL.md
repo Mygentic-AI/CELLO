@@ -15,27 +15,32 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 17 CLOSED. Nothing in flight, nothing unreviewed.
-> **65 DoD lines**, 17 ✅, 2 🅿️, rest ❌. Both repos clean and pushed.
-> **Closed in Entry 29:** `GUARD-HEARD-1`, `CLAIM-COMMENTS-1`, `CLAIM-SCREEN-1`.
+> ### 🟢 17 ✅, 8 🟡 (BUILT, UNREVIEWED), 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
+> **Andre went to bed 2026-08-22 evening. The watchdog cron is re-armed at 23-minute intervals.**
+> Seven units were built tonight and NONE has been reviewed — that is the top of the queue, and it
+> is the same queue-at-review shape Andre called out at 15:40. Fixing is the cheap half.
 
-- **NEXT ACTION: `DOD-M15-LEDGER-1`** — 188 unadjudicated claims across 10 shipped surfaces, now
-  enumerated by the scanner instead of by a person. The scanner defines what "swept" means, so the
-  ledger can finally be closed against something. Then `DOD-M15-SPINE-LANE-1`.
-- **REFUSAL REASONS ARE A CLOSED UNION** (`AnyRefusalReason`). Do not widen it back to `string` to
-  make an error go away — a free-form reason was invisible to every test in the milestone's own
-  guard file, and the type is the only thing that can see a code that does not exist yet.
-- **`pnpm run test` IS NOW SERIAL under `CELLO_ENV=local`** (`vitest.config.ts`). Do not "optimise"
-  that back: parallel gave 16 failures one run and 19 the next on a freshly composed database, a
-  DIFFERENT set each time, because `directory` and `operations-agent` share one worker pool and one
-  Postgres. Serial is 205s; the unit gate keeps its parallelism at 38s.
-- **trustless-cello now has CI** (`.github/workflows/ci.yml`): a unit gate on every push plus a
-  `database` job that composes Postgres, runs Flyway to head, and runs the integration suites. **If
-  the database job goes red, do not re-disable it** — it passed 2245 tests twice on a clean database
-  when it was enabled.
-- **A test that throws in `beforeAll` is reported SKIPPED, not failed.** Three suites hid behind that
-  for months, two of them the kill switch's own. When auditing coverage, a ↓ is not evidence of
-  anything.
+- **NEXT ACTION: dispatch `cello-unit-reviewer` on tonight's seven 🟡 units**, in batches by area
+  (relay seal path / daemon client path), then quote each verdict in the journal and flip the tags.
+  Two passes is the hard cap. Only then pull a new ❌ line.
+- **⚠️ `DOD-M15-SUBMIT-ID-1` HAS A DEPLOYMENT ORDER.** The relay half is in; the CLIENT half must not
+  ship until this relay is DEPLOYED. `decodeStructure1` required exactly 6 elements, so a client
+  emitting a submission id has every frame refused by the relay running right now. Deploying is
+  Andre's call — park the client half rather than shipping it.
+- **`DOD-M15-SELECTION-1` is unblocked but deliberately NOT done.** Its precondition
+  (`IPCVISIBLE-1`) is built. The line sequences it — *"diagnosis first… with the trigger field
+  distinguishing replay from fallback in one run"* — and I skipped that once already tonight and had
+  to revert. Reproduce with a daemon restart after a release BEFORE changing behaviour.
+- **The sole-online fallback is DELIBERATE (CC-3, the post-/mcp-reconnect papercut).** Do not switch
+  it off for MCP. Four tests say no. The DoD wants it EXPLICIT IN THE RESPONSE, not removed.
+- **`pnpm run test` IS SERIAL under `CELLO_ENV=local`** (`vitest.config.ts`). Do not "optimise" it
+  back: parallel gave 16 failures one run and 19 the next on a fresh database.
+- **Docker is NOT a blocker** — start it (`open -a Docker`, poll `docker info`, `docker compose up
+  -d`), then `CELLO_ENV=local pnpm run test`.
+- **`AUDIT-ME.md` IS DELETED** (Andre, tonight): an inaccurate sample with no readers that kept
+  pulling agents into fake-urgent work. Do not recreate or audit it.
+- **THE REVERT TEST CAUGHT A DEFECT IN EVERY UNIT TONIGHT, INCLUDING MINE.** Delete the guard, run
+  the gate. If nothing goes red it is not a guard. Three of my own fixes were green-on-deletion.
 - **`DOD-M15-AUDITME-1` is 🅿️ parked — Andre's call, 2026-08-22.** LAST Tier 1 line, not the next
   one, and not before Tier 4 lands. Public but unadvertised, and the tree it describes is about to
   change — writing it now buys a second rewrite. **The claims themselves are not parked**: they stay

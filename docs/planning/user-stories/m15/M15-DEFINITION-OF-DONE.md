@@ -642,7 +642,12 @@ one could ship safely. **Neither of these is visible to `sealReadiness` today.**
 - **Do not gate either on suspicion alone.** The bar is a signal separating a relay catching up from
   a leaf it will never carry.
 
-### `DOD-M15-DIVERGE-DURABLE-1` — ❌ The divergence flag survives a daemon restart
+### `DOD-M15-DIVERGE-DURABLE-1` — 🟡 The divergence flag survives a daemon restart
+> **BUILT 2026-08-22, unreviewed.** `sessions.diverged_at`, rehydrated at boot. Two placement defects
+> caught by the gate: the loader ran before `migrateSessionTablesToAgentId` (which adds the `agent_id`
+> the query joins on), and that migration REBUILDS the table carrying only its own column list — so
+> the new column was being DROPPED on the one boot a legacy database upgrades, and a dropped
+> divergence reads as healthy. Both fixed.
 `#diverged` is in memory. `DOD-M15-DIVERGE-1` closed the in-process hole — it is no longer dropped
 on node teardown, only at a terminal status — but a restart still empties it, and the read site
 cannot distinguish *not diverged* from *forgotten*: both are `false`, both read ready.
@@ -896,7 +901,13 @@ it is inside the gate.
 Parallel with Tier 2. Source is [[launch-triage]] — **read its header warning before trusting any
 status marker there.** Items are cross-referenced by their triage designation.
 
-### `DOD-M15-SUBMIT-ID-1` — ❌ A retried message stops killing its conversation
+### `DOD-M15-SUBMIT-ID-1` — 🟡 A retried message stops killing its conversation
+> **RELAY HALF BUILT 2026-08-22, unreviewed. ⚠️ DEPLOYMENT ORDER.** The relay now tolerates a
+> 7-element Structure 1 and is idempotent on `submission_id`. **The client half must NOT ship until
+> this relay is deployed** — `decodeStructure1` required exactly 6 elements, so a client emitting an
+> id has every frame refused by the relay running today. Content-hash dedup is explicitly rejected
+> (two identical messages are two messages) and there is a test for it. I deleted the
+> `last_seen_seq_ahead` guard while inserting this; the gate caught it, it is restored.
 `DOD-M12B-SUBMIT-ID-1` + the rest of [[M12B-DEFINITION-OF-DONE]]. **The top line of this tier:**
 basic messaging between two healthy agents, failing silently and unrecoverably. One message consumed
 49 canonical positions; verified content destroyed at teardown fired 20 times on one daemon in one
@@ -953,7 +964,13 @@ online in all three and nothing that was broken. Most of a day lost in the wrong
 > also rewritten, but tracing it showed the line is UNREACHABLE — a compiler backstop, not the
 > source of the incident, and the comment now says so rather than sending the next reader wrong.
 
-### `DOD-M15-TRANSPORT-TERMINAL-1` — ❌ A transport blip stops killing a healthy conversation
+### `DOD-M15-TRANSPORT-TERMINAL-1` — 🟡 A transport blip stops killing a healthy conversation
+> **BUILT 2026-08-22, unreviewed.** `processSeal` returned `ok:false` for MERITS and TRANSPORT alike
+> and the relay terminalised both, so a directory restart permanently killed a healthy conversation
+> and told both parties it had SEALED. Now a typed discriminant (`kind`), unclassified defaults to
+> `refused` so no existing caller loosens. The first fix did nothing — skipping `rejectSeal` left the
+> session in `sealing`, which the `hash_submit` guard answers identically; the status is rolled back
+> to `active` too. Both halves revert-tested.
 `DOD-M12B-TRANSPORT-FAULT-NOT-TERMINAL-1`. Upstream of the two lines below it; fixing it likely
 shrinks both.
 - `rejectSeal` terminalises unconditionally on every path, with no branch for "the failure was
@@ -962,7 +979,13 @@ shrinks both.
   examined the seal and refused it). **Only the merits case terminalises**; a transport failure
   leaves the session active and retryable.
 
-### `DOD-M15-TERMINAL-REASON-1` — ❌ "Sealed" and "gave up" stop being the same word
+### `DOD-M15-TERMINAL-REASON-1` — 🟡 "Sealed" and "gave up" stop being the same word
+> **BUILT 2026-08-22, unreviewed.** The two answers were INVERTED: a refused seal answered
+> `session_sealed`, and a successfully sealed session answers `session_not_found` (confirmSeal
+> destroys the record). Now `seal_refused` / `seal_in_progress`; the legacy value stays in the union
+> because older relays still send it. **`sealing` is not client-observable** — `hash_submit`
+> serializes per session and adjudication runs inside that lock, measured by a 30s hang — so the test
+> asserts the serialization and says so rather than faking the unobservable case.
 `DOD-M12B-TERMINAL-REASON-1`. Two sides of one dead conversation get two stories and both behave
 correctly given what they were told; one believes it holds a receipt and holds nothing.
 - `session_sealed` is currently the reply for **every** non-active status, `seal_rejected` included.
@@ -1056,7 +1079,15 @@ two weeks instead of six days. The process grows ~250 MB/day and at ~80% of ceil
 - The 60-second sampler is running; the growth rate across the three nodes is the measurement that
   decides whether this closes or becomes a real hunt.
 
-### `DOD-M15-IPCVISIBLE-1` — ❌ A connection closing leaves a record, and an identity switch says why
+### `DOD-M15-IPCVISIBLE-1` — 🟡 A connection closing leaves a record, and an identity switch says why
+> **BUILT 2026-08-22, unreviewed.** All three items: `daemon.ipc.disconnected` with clientType +
+> attended agent + remaining attendance; `agent.current.fallback` so a fallback is attributable
+> beside `explicit`/`replay`; selection extracted to `agent-selection.ts` with a reported trigger on
+> every path.
+>
+> **I over-corrected first and four tests stopped me** — I switched the sole-online fallback OFF for
+> MCP, which CC-3 added deliberately to fix the post-reconnect papercut. Behaviour is UNCHANGED;
+> attribution is the deliverable, which is the sequencing `SELECTION-1` asks for.
 `DOD-IPC-DISCONNECT-VISIBLE-1`. **Precondition for `DOD-M15-SELECTION-1`** — that defect cannot be
 diagnosed until this lands.
 - `daemon.ipc.connected` is emitted on every open and **nothing on close**, so a live client and a
@@ -1084,7 +1115,13 @@ was silently dropped.
 - Diagnosis first: reproduce with a daemon restart after a release, with the trigger field from
   `DOD-M15-IPCVISIBLE-1` distinguishing replay from fallback in one run.
 
-### `DOD-M15-DOORBELL-1` — ❌ A daemon shutdown does not ring like an incoming message
+### `DOD-M15-DOORBELL-1` — 🟡 A daemon shutdown does not ring like an incoming message
+> **BUILT 2026-08-22, unreviewed.** `wake_action: read_inbox | none` on every channel frame, marked
+> for ALL housekeeping types rather than just shutdown, defaulting to `read` so a future doorbell is
+> never silently ignored. Named `wake_action` not `cello_action` — a parity guard caught that every
+> `cello_*` token in shipped prose is a TOOL, and an agent would try to call it. Both SKILL.md files
+> document it. My comment crediting a skip with the anti-spoof property was WRONG (the assignment
+> order carries it); corrected rather than left standing.
 Shutdown is forwarded through the notification channel with the same generic shape as a real
 doorbell, so an agent following the contract calls the inbox, gets `daemon_not_running`, and reports
 a protocol failure while the actual event goes unreported.
@@ -1120,7 +1157,14 @@ value criterion** — "mint a trust signal and have it received" is advertised v
   shipped; nobody has checked since.
 - **Enforcer:** journey.
 
-### `DOD-M15-BACKUP-1` — ❌ An identity can be exported and restored
+### `DOD-M15-BACKUP-1` — 🟡 An identity can be exported and restored
+> **BUILT 2026-08-22, unreviewed.** Export + overwrite-restore, merge still deferred. **The archive
+> carries the KEY**, because the DoD's own wording ("export the SQLCipher database") produces a brick:
+> a fresh daemon mints its own key and cannot open it. Round-trip test restores into a directory with
+> a DIFFERENT key to prove it. The archive is therefore as sensitive as a private key and both
+> surfaces say so. Restore validates fully in memory before touching disk. `cello restore` is CLI-only
+> (a live daemon could flush its own pages over the restored ones); `cello backup` is CLI too, so an
+> identity can be exported when the daemon will not start.
 `DOD-CUSTODY-DAEMON-1`. `backup` and `restore` exist as commands and report "not implemented"; a lost
 machine loses the agent permanently.
 - **Backup** = exporting the SQLCipher database for transport.
