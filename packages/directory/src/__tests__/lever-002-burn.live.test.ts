@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID, createHash } from "node:crypto";
-import { seedAccount } from "./helpers/seed-account.js";
+import { seedAccount, seedAgentLink } from "./helpers/seed-account.js";
 import pg from "pg";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
@@ -54,6 +54,11 @@ describeLive("LEVER-002 live — burn is permanent; accountability survives", ()
        VALUES ($1, $2, 1, 'active', 'burn-chain', $3, $4)`,
       [KP, PP, ACCOUNT, AGENT],
     );
+    // THE LINK THE KILL SWITCH READS. `agent_profiles.account_id` above is the legacy binding; V59
+    // moved authorization to `agent_account_links` because the mutable column never replicated. A
+    // node missing this row answers 403 not_owner to a pause or a burn — which is what this suite,
+    // whose entire subject is that a burn works, has been getting ever since.
+    await seedAgentLink(pool, { agentId: AGENT, accountId: ACCOUNT });
     server = createInternalApiServer({ pool, internalApiKey: API_KEY, logger: noopLogger, owningNodeId: "test-node" });
     await new Promise<void>((r) => server.listen(0, () => r()));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

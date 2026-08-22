@@ -70,6 +70,11 @@ function violates(text: string, kind: "insert" | "delete"): boolean {
  * longer violates must be removed.
  */
 const ROLLED_BACK: Record<string, string> = {
+  "dod-dirdata-read-1.test.ts":
+    "the whole suite runs on one client inside BEGIN/ROLLBACK — the server under test is handed " +
+    "txnPool(client), so its reads land on the same connection as the fixture's writes. Its two " +
+    "literal chain_hash inserts therefore never commit, and the DELETE cleanup they needed is gone " +
+    "with them: rollback is the cleanup, and there is nothing left to forget.",
   "cross-node-discovery-pg.live.test.ts":
     "its first two describe blocks wrap every test in BEGIN/ROLLBACK on the same client, so their " +
     "inserts never commit. Its third block could not (the store uses its own pool connection) and " +
@@ -111,7 +116,6 @@ function deleteCount(text: string): number {
 
 /** Still committing a literal chain_hash. Shrink; do not add. DOD-M15-DIRECTORY-ROT-1 owns these. */
 const KNOWN_DEBT_INSERTS = [
-  "dod-dirdata-read-1.test.ts",
   "federation-003.test.ts",
   "persist-003-rls.test.ts",
   "persist-006-pgaudit.test.ts",
@@ -126,7 +130,6 @@ const KNOWN_DEBT_INSERTS = [
 
 /** Still deleting from a chained table. Shrink; do not add. */
 const KNOWN_DEBT_DELETES = [
-  "dod-dirdata-read-1.test.ts",
   "federation-001.test.ts",
   "federation-003.test.ts",
   "m12-ae-store-parity.live.test.ts",

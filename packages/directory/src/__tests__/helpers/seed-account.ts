@@ -56,3 +56,37 @@ export async function seedAccount(
     correlationId: params.correlationId ?? `seed-${params.accountId}`,
   });
 }
+
+/**
+ * seedAgentLink — bind an agent to an account in the table AUTHORIZATION ACTUALLY READS.
+ *
+ * ─── Why a fixture that sets `agent_profiles.account_id` is no longer enough ───────────────────
+ *
+ * `V59__agent_account_links.sql` moved the binding out of that mutable column and into an
+ * append-only table, because a mutable column is excluded from anti-entropy by construction and so
+ * the link had never replicated. Measured on the live fleet on 2026-08-07, for one operator with
+ * three agents: one node held two links, another held one, a third held none.
+ *
+ * **The kill switch rides on this.** `isAgentOwnedByAccount` asks `agent_account_links`, and a node
+ * without the row answers `403 not_owner` — a deliberate refusal, so the client stops rather than
+ * trying elsewhere. Two of that operator's three agents could not be paused at all.
+ *
+ * Every fixture proving pause/burn works was still seeding only the old column, so every one of
+ * them got that 403. They did not report it: the suites are gated on `CELLO_ENV=local`, and the
+ * failures sat unread (`DOD-M15-DIRECTORY-ROT-1`). The tests written to prove the kill switch works
+ * were dark for exactly the change that broke the kill switch in production.
+ *
+ * Mirrors the production writer in `PgDirectoryStore.createAccount` — same INSERT, same
+ * `ON CONFLICT (agent_id) DO NOTHING`. The table is not hash-chained, so a plain insert is correct
+ * here; with per-run unique agent ids there is nothing to clean up.
+ */
+export async function seedAgentLink(
+  pool: pg.Pool,
+  params: { agentId: string; accountId: string },
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO agent_account_links (agent_id, account_id) VALUES ($1,$2)
+     ON CONFLICT (agent_id) DO NOTHING`,
+    [params.agentId, params.accountId],
+  );
+}
