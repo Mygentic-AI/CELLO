@@ -163,6 +163,20 @@ different repos, different disciplines, neither blocks the other.
 - **Enforcer:** receipt. *(Not run — the unit is carried by suite + review; the enforcer itself is
   built by `DOD-M15-INTERRUPTED-1` and this line is re-asserted there.)*
 
+### `DOD-M15-CI-SKIPS-SILENT-1` — ❌ A suite that skips itself does not report green
+Found by the `DOD-M15-SIGNUP-1` review, and it is this milestone's own subject applied to its
+evidence: **a green run that asserted nothing.**
+- `packages/operations-agent/src/__tests__/engine.test.ts` is wrapped in
+  `isLocal ? describe : describe.skip`, gated on `CELLO_ENV === "local"`, and **nothing in CI sets
+  it.** Every automated run reports that file green having executed no assertion. The same shape
+  exists elsewhere — the directory's `.live.test.ts` files and the M8D spine suites.
+- **The tests are not the problem; the silence is.** A skip whose reason is invisible in the run
+  output is indistinguishable from a pass, which is exactly the class M15 exists to close.
+- **Fix:** either run these in CI against the compose Postgres, or make the skip announce itself —
+  a title carrying the reason, plus one unconditional test that FAILS when `CELLO_ENV` is unset in
+  a CI environment, so "we did not test this" cannot look like "this passed".
+- **Audit every `describe.skip`/`skipIf` in both repos** for the same shape while in here.
+
 ### `DOD-M15-SIGNUP-DURABLE-1` — ❌ The signup limiter survives a deploy
 Split from `DOD-M15-SIGNUP-1`, which rekeyed the limiter from the email domain to the address
 fingerprint but left it in memory. **The clause asking for durability is NOT met and is carried

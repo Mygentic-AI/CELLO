@@ -935,3 +935,100 @@ client-side migration and gets its own reviewed unit.
 **Tag flipped ✅. Merged.**
 
 ---
+
+## Entry 8 — DOD-M15-SIGNUP-1: the rekey was wrong, the review caught it, rebuilt (2026-08-22)
+
+**Built `4922d72c`; review fixes `127a5a29`.** Branch `m15/signup`, not merged — second review owed.
+Gate: operations-agent 230 passed, lint, typecheck.
+
+### Reviewer verdict — QUOTED
+
+> I did not rubber-stamp this. The rekey is right about the false-positive half and wrong about what
+> it leaves behind: after this change **nothing anywhere throttles a requester**, and the second new
+> test pins that as required behaviour.
+>
+> **SPEC: DEVIATIONS FOUND** — the durability clause is unmet, but it is properly journaled … so it
+> is a legitimate split, **not** a silent simplification and **not** blocking on that ground.
+>
+> **NO SILENT FALLBACKS** in the diff.
+>
+> **ERROR SUBSTITUTION FOUND** — `[pre-existing]` … `RateLimitError` says "for domain" for a
+> per-address limiter.
+>
+> **HOLLOW TESTS FOUND** — `[blocking]`. Test 2 pins the abuse case as required behaviour; test 1
+> does not distinguish the key and falls to a normalization bypass; the window-reset path is
+> unpinned; and neither test runs in CI.
+>
+> **UNPROVEN REMOVAL** — `[blocking]`. The deletion of `extractEmailDomain`'s call site is fully
+> proven. The deletion of the original AC-009 body is not: its subject is live and its replacement
+> asserts the opposite.
+
+### The finding, and it is the worst of the milestone so far
+
+**The address is the TARGET, not the requester.** Keying on it meant one admitted user could walk
+the bot through `victim1@…`, `victim2@…` and receive five real *"Your verification code is NNNNNN"*
+emails **per address**, from CELLO's verified sender, to people who never asked. Domain keying was a
+crude cap on exactly that. I removed it and put nothing in its place.
+
+**And my own test locked the hole in.** All six `personN@gmail.com` messages came from ONE `userId`
+— so it was never "six people", it was one requester asking for codes to six addresses, and the test
+asserted no refusal. **A per-requester limiter would have turned that test red. The test forbade the
+fix.**
+
+**A second layer already existed and I collapsed onto it.** `SesOtpDeliveryProvider` has enforced
+5-per-rolling-hour per address since M6B, counting only sends that SUCCEEDED. Duplicating that key
+here shadowed it dead — the state machine counts *attempts*, so its count is always ≥ SES's and
+`RateLimitError` became unreachable from registration. Net guard surface went **down**.
+
+### What it is now
+
+Per-**requester**, keyed on the channel user, matching `#tokenAttempts` already in this file rather
+than a second shape. Rolling timestamps that prune as they go — the old fixed window grew one entry
+per distinct key forever, and the only thing bounding it was the deploy that wiped it. Per-address
+stays where it belongs, one layer down.
+
+The check is pure; the count is recorded only after `sendOtp` resolves. A bounce used to spend one
+of the person's five, and under a per-person key that lands entirely on someone who never got a code.
+
+### Two things I had written that were false
+
+- **The refusal's affordance.** My first draft told them to send the corrected address immediately —
+  true under the address key, false under this one. Telling someone to retry what cannot work is the
+  failure this milestone closes, not an improvement on it.
+- **The privacy claim.** I logged a 12-char hash prefix and called it *"not a stable identifier
+  anyone can carry off"*. It is 48 bits of unsalted SHA-256 over a low-entropy space — hand someone
+  a leaked waitlist and it names who asked. The directory already logs the **full** hash at INFO, so
+  the truncation bought nothing. **A comment asserting a property the code lacks**, written into the
+  milestone that exists to remove them. The field is gone; the registration id was always enough.
+
+### Removal, now proven both ways
+
+`extractEmailDomain` deleted with its tests — zero references in either sibling repo, the package is
+`private` and does not re-export the module, its only importer was its own unit test. **The comment
+claiming it was "the last consumer of the concept" is corrected:** `SesOtpDeliveryProvider` still
+extracts and logs the domain. The domain has not left the system, only the place where it stood in
+for a person.
+
+### The revert test earned itself again
+
+Restoring the address key turns the abuse case red — and the run surfaced a **fixture defect** that
+would have failed on the next execution regardless: the wave users had static phone numbers and were
+never expired, so the third test collided with its own previous run on
+`idx_registrations_phone_stub_hash_active`. Rows here are never deleted (RLS forbids it), only
+expired, so a leftover active row is a hard failure that reads as a logic bug. Phones now derive from
+the per-run user id and every enrolled user is expired in `afterEach`. **Verified by running the file
+twice consecutively.**
+
+### One finding promoted to its own line
+
+> neither test runs in CI
+
+`describeIntegration = isLocal ? describe : describe.skip`, gated on `CELLO_ENV=local`, which nothing
+in CI sets — so that file reports green in every automated run having asserted nothing. That is this
+milestone's own subject applied to its own evidence, and it is not confined to this file.
+**`DOD-M15-CI-SKIPS-SILENT-1`.**
+
+**Second review owed before the tag flips.** The fix inverted the design the first review examined,
+which is exactly when a second pass is worth its cost — and it is the hard cap.
+
+---
