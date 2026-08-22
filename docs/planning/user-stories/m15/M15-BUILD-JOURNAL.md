@@ -15,15 +15,16 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 25 ✅, 1 🟡 (carried half only), 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
-> **No unreviewed work.** `DEAD-WIRE-FIELD-1`'s client half is reviewed and closed (Entry 32); the
-> line stays 🟡 only because its bilateral wire half is carried, so the WIP limit is satisfied and a
-> new line may start.
+> ### 🟡 25 ✅, 2 🟡, 2 🅿️, 37 ❌. Both repos clean, pushed, on main.
+> **`SELECTION-1` IS THE UNREVIEWED ONE** — built in `9a53a29` + `e8e70d0` (cello-client), reviewer
+> dispatched, verdict not yet in. Under the WIP limit the ONLY permitted work is closing it: fix its
+> findings, quote the verdict, flip the tag. Do not pull a new line first.
+> (`DEAD-WIRE-FIELD-1` is the other 🟡 and does NOT count against the limit — its client half is
+> reviewed and closed in Entry 32; it stays yellow only because the bilateral wire half is carried.)
 
-- **NEXT ACTION: pull ONE new ❌ line** under the WIP limit — finish it, review it, close it, then
-  the next. Candidates in the messaging tier: `SELECTION-1` (precondition now met — but its own line
-  says diagnosis FIRST, and I skipped that once already and had to revert), `FREEZE-STATUS-1`,
-  `UNWITNESSED-1`, `STALEROSTER-1`.
+- **NEXT ACTION: close `SELECTION-1`** — apply the reviewer's findings, quote the verdict in a new
+  entry, flip the tag to ✅. THEN pull ONE new ❌ line. Candidates in the messaging tier:
+  `FREEZE-STATUS-1`, `UNWITNESSED-1`, `STALEROSTER-1`.
 - **THE WIRE-CHANGE CONVOY.** Three changes are pending and undeployed and must move together:
   `SUBMIT-ID-1`'s 7-element Structure 1, `TERMINAL-REASON-1`'s new reasons, and
   `DEAD-WIRE-FIELD-1`'s field removal. Loosen `directory-frames.ts:1182`'s `parseParticipant` in the
@@ -32,10 +33,13 @@ description: >
   ship until this relay is DEPLOYED. `decodeStructure1` required exactly 6 elements, so a client
   emitting a submission id has every frame refused by the relay running right now. Deploying is
   Andre's call — park the client half rather than shipping it.
-- **`DOD-M15-SELECTION-1` is unblocked but deliberately NOT done.** Its precondition
-  (`IPCVISIBLE-1`) is built. The line sequences it — *"diagnosis first… with the trigger field
-  distinguishing replay from fallback in one run"* — and I skipped that once already tonight and had
-  to revert. Reproduce with a daemon restart after a release BEFORE changing behaviour.
+- **`DOD-M15-SELECTION-1`'s diagnosis answered the thing that looked like a contradiction.** A
+  release must stay eligible for the sole-online fallback (`RELEASE-1`) *and* a reconnect must attend
+  nothing (`SELECTION-1`). Both hold, because **resolving a subject is not attending**: the fallback
+  answers "which agent is this call about" and never registers with the notification dispatcher. So
+  clause 1 needed no code — `attended_by: 0` after release+reconnect measures it. The harm is the
+  HALF-ATTENDED state that leaves: tools resolve and work, doorbells never arrive, and an operator
+  reads that as the protocol dropping messages rather than as a selection nobody made.
 - **The sole-online fallback is DELIBERATE (CC-3, the post-/mcp-reconnect papercut).** Do not switch
   it off for MCP. Four tests say no. The DoD wants it EXPLICIT IN THE RESPONSE, not removed.
 - **`pnpm run test` IS SERIAL under `CELLO_ENV=local`** (`vitest.config.ts`). Do not "optimise" it
