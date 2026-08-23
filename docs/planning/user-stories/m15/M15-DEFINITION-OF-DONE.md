@@ -3219,7 +3219,24 @@ portal database is running (it was 7 failures; **6 were the stopped container**)
   by endorsing themselves. Flagging a stranger's endorsement does not admit a forgery; it
   **discards the one signal that carries weight.** A wallet where every endorsement reads
   self-dealing is a wallet where third-party trust is invisible — the product's whole proposition.
-- **⚠️ RETRACTED "CONFIRMED". IT IS STILL UNDETERMINED, AND I MADE THE SAME MISTAKE TWICE.**
+- **✅ SETTLED 2026-08-24 by an assertion that NAMES BOB.** The journey now filters the wallet by
+  `issuer_pubkey === pubkeys["bob"]` and asserts **his** row. *"Bob's endorsement must BE in Alice's
+  wallet"* **PASSES**; the flag assertion still fails. **So his endorsement is present AND flagged.**
+  It is the false-positive reading, not the delivery one — and the test can no longer confuse them,
+  which is worth more than this finding: `undefined` from a `.find()` over "any endorsement" was
+  satisfied by two different bugs in two different components, and the test pointed at neither.
+- **WHAT IS ESTABLISHED, precisely, because I over-claimed this twice before getting it right:**
+  Bob's endorsement is in the wallet; it carries `same_operator: true`; the journey asserts Bob and
+  Alice are distinct operators and that assertion passes. **WHAT IS NOT ESTABLISHED: which component
+  set the flag.** Three layers are ruled out by reading — the daemon's display path, the mint's
+  double `=== true`, and a stale pin (no `signal.ingress.same_operator.pinned` in the run). The
+  producer is elsewhere and I have not found it.
+- **The paradox is the lead, and it should be handed over rather than guessed at:** the predicate
+  fails closed on both arms and Bob has his own account AND phone stub, so the computation that
+  reads those fields cannot produce `true` — yet `true` is what arrives. Either the fields the
+  predicate reads are not the fields the journey set, or `sameOperator` reaches the mint from a
+  caller that does not compute it. **Start there; do not touch the predicate.**
+- **~~RETRACTED "CONFIRMED"~~ — superseded above, kept because the sequence is the lesson.**
   What IS established: the wallet holds **four endorsements and every one carries
   `same_operator: true`**. What is NOT established — and what I claimed anyway — is that **one of
   them is Bob's.** `cello_trust_signals_list` returns `issuer_kind: "agent"` and **no issuer

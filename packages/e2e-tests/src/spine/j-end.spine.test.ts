@@ -725,13 +725,32 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     expect(((await alice.call("cello_use_agent", { name: "alice" })) as { ok?: boolean }).ok).toBe(true);
 
     const held = (await alice.call("cello_trust_signals_list", {})) as {
-      signals?: Array<{ signal_hash: string; type: string; same_operator?: boolean; consent_state?: string }>;
+      signals?: Array<{ signal_hash: string; type: string; same_operator?: boolean; consent_state?: string; issuer_pubkey?: string }>;
     };
     const coRow = (held.signals ?? []).find((x) => x.type === "endorsement" && x.same_operator === true);
     expect(coRow, `the co-owned endorsement must be FLAGGED in her wallet: ${JSON.stringify(held.signals)}`).toBeTruthy();
     // AND THE THIRD-PARTY ONE MUST NOT BE. Without this the hop would pass on an implementation that
     // flags every endorsement, which is the failure mode that makes the flag meaningless.
-    const strangerRow = (held.signals ?? []).find((x) => x.type === "endorsement" && x.same_operator !== true);
+    /**
+     * NAMED, not "some endorsement". This used to look for ANY unflagged endorsement, and that
+     * cannot distinguish two different bugs: *"Bob's endorsement is flagged as self-dealing"* and
+     * *"Bob's endorsement never reached her wallet"* both produce `undefined` here. They are
+     * different failures in different components, and the test pointed at neither.
+     *
+     * The journey knows Bob's pubkey. Asserting about HIS row makes the failure say which of the
+     * two happened — and the wallet listing now carries `issuer_pubkey`, which is what makes the
+     * comparison possible at all (it did not, until DOD-M15-SAMEOP-FALSEPOS-1 needed it).
+     */
+    const bobHex = pubkeys["bob"]!.toLowerCase();
+    const bobRows = (held.signals ?? []).filter(
+      (x) => x.type === "endorsement" && (x.issuer_pubkey ?? "").toLowerCase() === bobHex,
+    );
+    expect(
+      bobRows.length,
+      `Bob's endorsement must BE in Alice's wallet — if this is 0 the finding is delivery, not ` +
+        `same-operator: ${JSON.stringify(held.signals)}`,
+    ).toBeGreaterThan(0);
+    const strangerRow = bobRows.find((x) => x.same_operator !== true);
     expect(
       strangerRow,
       // The sibling assertion above prints the signals on failure and this one did not, so the
