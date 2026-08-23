@@ -3114,6 +3114,33 @@ The five, verbatim, all about message delivery rather than sealing:
   a producer/consumer trace of who should emit `content.delivery.acked` on that path and what
   precondition it waits on. That is a unit, and the freeze says record and move.
 
+### `DOD-M15-SAMEOP-FALSEPOS-1` — a stranger's endorsement may be flagged as self-dealing
+**POST-LAUNCH under the frozen gate (§0z.4)** — not a security hole a customer reaches; it suppresses
+a trust signal rather than admitting one. **Flagged for reclassification: it fails in the direction
+that costs the product its value, and it sits next to `DOD-M15-SAMEOP-1`, which is IN the gate.**
+
+**Measured, 2026-08-23, `j-end` HOP 9** — the only remaining failure in that journey now that the
+portal database is running (it was 7 failures; **6 were the stopped container**).
+
+- **What the journey proves and what it does not.** HOP 9's first assertion PASSES: a genuinely
+  co-owned endorsement IS flagged `same_operator === true`. The second FAILS: no endorsement in
+  Alice's wallet is left unflagged — so **Bob's genuine third-party endorsement is flagged too.**
+- **Why that direction matters.** `same_operator` exists to stop an operator manufacturing standing
+  by endorsing themselves. Flagging a stranger's endorsement does not admit a forgery; it
+  **discards the one signal that carries weight.** A wallet where every endorsement reads
+  self-dealing is a wallet where third-party trust is invisible — the product's whole proposition.
+- **⚠️ ESTABLISHED BY INFERENCE, NOT BY READING THE DATA.** Both assertions together imply every
+  endorsement row carries the flag, because `x.same_operator !== true` matches `undefined` and still
+  found nothing. **I did not see the rows** — the failing assertion did not print them. It now does;
+  the next run shows the wallet contents instead of requiring this inference.
+- **Do NOT assume it is a regression.** `same_operator` was recently APPENDED to the envelope
+  preimage (M10-D17), and this lane had never been run. A fixture that predates the field, or a
+  seeding path that sets it unconditionally, is at least as likely as a live detector fault — the
+  same file already yielded one eleven-field envelope for exactly that reason.
+- **First step:** read the printed `signals` array from the next run. If Bob's row carries
+  `same_operator: true`, trace the producer; if it is absent from the wallet entirely, the finding is
+  a different one and this line is wrong.
+
 ### `DOD-M15-TOOLDESC-SCAN-1` — The claim scanner can see MCP tool descriptions
 **POST-LAUNCH** (§0z.1): the launch risk is whether the shipped descriptions are HONEST, and
 `DOD-M15-TIERTEXT-1` audits them by hand in this milestone. This line is the durable control that

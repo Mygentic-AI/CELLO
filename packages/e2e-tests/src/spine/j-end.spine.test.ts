@@ -732,7 +732,17 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     // AND THE THIRD-PARTY ONE MUST NOT BE. Without this the hop would pass on an implementation that
     // flags every endorsement, which is the failure mode that makes the flag meaningless.
     const strangerRow = (held.signals ?? []).find((x) => x.type === "endorsement" && x.same_operator !== true);
-    expect(strangerRow, "Bob's genuine third-party endorsement must NOT be flagged").toBeTruthy();
+    expect(
+      strangerRow,
+      // The sibling assertion above prints the signals on failure and this one did not, so the
+      // finding had to be INFERRED from which of the two failed rather than read. Same lesson as
+      // every unattributable failure in this lane: the data is right here at the moment it is
+      // needed, and an assertion that omits it makes the next reader re-run to see it.
+      `Bob's genuine third-party endorsement must NOT be flagged as same-operator. If EVERY ` +
+        `endorsement in her wallet carries same_operator===true, a STRANGER's endorsement is being ` +
+        `treated as self-dealing — which suppresses exactly the signal that carries weight: ` +
+        `${JSON.stringify(held.signals)}`,
+    ).toBeTruthy();
 
     // THE CO-OWNED ONE BY HASH, never "the first pending row". By this hop Alice's queue holds more
     // than one endorsement from earlier cases, and taking the first accepted the wrong signal — the
