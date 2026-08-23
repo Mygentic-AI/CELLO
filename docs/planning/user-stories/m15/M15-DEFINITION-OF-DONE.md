@@ -2130,7 +2130,22 @@ written down nowhere, and a per-session salt fixes it as a side effect.
   `SHA-256(salt ‖ message)`, which has a length-extension weakness). Recorded as its own line so the
   exposure is on the record independently of the fix that closes it.
 
-### `DOD-M15-SEALWIRE-1` — ❌ The receipt is bound to the transcript
+### `DOD-M15-SEALWIRE-1` — 🟡 The receipt is bound to the transcript (bullets 1, 2, 6, 7 ✅; 3, 4, 5, 8 ❌)
+> **✅ BULLET 6 — the content hash is salted.** All six B2b-2 constraints, both review passes spent
+> (→ Entries 49–52). A session holding an agreed salt hashes under `hmac-sha256-salt-v1`.
+>
+> **✅ BULLET 7 — the dead `seal_attempt` path is deleted.** Both passes spent (→ Entries 53, 54).
+> Pass 2's verdict: *"The removal itself is sound; what is left is what the removal left behind."*
+> Both halves of the PERSIST-014 exchange are gone — the directory's `seal_attempt` handler and the
+> relay's `gap_fill_request` half, whose only trigger was the reply the first deletion removed.
+> Two POST-LAUNCH items fell out of it: `DOD-M15-GRACE-WINDOW-1` and `DOD-M15-RELAY-WAL-UNWIRED-1`.
+>
+> **⚠️ BULLETS 3 AND 4 ARE ONE UNIT.** Bullet 4's circular check cannot be fixed alone: its
+> replacement is bullet 3's client-signed `final_root`, which survives only inside a SHA-256
+> pre-image that is never transmitted — so it needs the wire change bullet 3 carries. The check
+> itself is KEPT; what changes is that it stops being the integrity guarantee.
+
+### `DOD-M15-SEALWIRE-1` — bullets
 **One protocol change, not six. These cannot be split** — every one changes the same wire format or
 depends on the domain change, and shipping any alone leaves the two sides disagreeing about what a
 root means. Both repos; version-bump ACs on both sides.
