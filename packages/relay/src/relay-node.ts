@@ -1089,7 +1089,7 @@ export class CelloRelayNode {
         if (parsed.type === "hash_submit") {
           await this.#processHashSubmit(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "session_liveness_query") {
-          await this.#processSessionLivenessQuery(stream, parsed);
+          await this.#processSessionLivenessQuery(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "client_record_assignment") {
           await this.#processClientRecordAssignment(stream, authedPubkeyHex!, parsed);
         }
@@ -1131,8 +1131,51 @@ export class CelloRelayNode {
    * 'gone' iff a disconnect was positively observed, 'unknown' iff never tracked.
    * The relay NEVER fabricates 'gone' from a missing entry.
    */
-  async #processSessionLivenessQuery(stream: Stream, frame: SessionLivenessQuery): Promise<void> {
+  async #processSessionLivenessQuery(stream: Stream, authedPubkeyHex: string, frame: SessionLivenessQuery): Promise<void> {
     const counterpartyHex = Buffer.from(frame.counterparty_pubkey).toString("hex");
+    /**
+     * ─── DOD-M15-RELAYAUTH-1: THIS WAS A PRESENCE ORACLE ──────────────────────────────────────
+     *
+     * The frame carries a `session_id` and this handler **echoed it back without ever reading it**,
+     * then answered from `getRecipientLiveness`, which is a GLOBAL lookup by pubkey with no check
+     * on who was asking. So any caller authenticated to the relay could ask "is pubkey X alive?"
+     * about ANY key and get a real answer with a timestamp.
+     *
+     * That is not a leak of message content — it is worse in a specific way: with a list of
+     * pubkeys and a loop, it builds a live map of **who is active and when**, for people the caller
+     * has no relationship with. Traffic analysis without the traffic.
+     *
+     * Both halves of the DoD bar are enforced here, and the pattern is not new — the identical
+     * participant check already guards `client_record_assignment` 500 lines above in this file:
+     *   1. the caller must be a named participant of the session it names, and
+     *   2. the key it asks about must be the OTHER participant of THAT session.
+     *
+     * (2) matters as much as (1): without it a legitimate participant of one session could still
+     * enumerate everyone else, using a session they really are in as the ticket.
+     */
+    const sessionIdHex = Buffer.from(frame.session_id).toString("hex");
+    const session = this.#store.getSession(sessionIdHex);
+    const participants = session
+      ? [
+          Buffer.from(session.assignment.participant_a).toString("hex"),
+          Buffer.from(session.assignment.participant_b).toString("hex"),
+        ]
+      : [];
+    const callerIsParticipant = participants.includes(authedPubkeyHex);
+    const subjectIsCounterparty = participants.includes(counterpartyHex) && counterpartyHex !== authedPubkeyHex;
+    if (!session || !callerIsParticipant || !subjectIsCounterparty) {
+      // REFUSED, and the refusal does not distinguish "no such session" from "not your session" —
+      // that difference is itself the enumeration signal this exists to remove.
+      this.#logger.warn("relay.liveness.query.refused", {
+        sessionId: truncHex(sessionIdHex),
+        caller: authedPubkeyHex.slice(0, 16),
+        reason: "not_a_participant",
+      });
+      try {
+        await this.#sendFrame(stream, CBOR_ENC.encode({ type: "session_liveness_refused", reason: "not_a_participant" }) as Uint8Array);
+      } catch { /* stream going away; the WARN above is the durable record */ }
+      return;
+    }
     const { liveness, observedAt } = this.#store.getRecipientLiveness(counterpartyHex);
     try {
       await this.#sendFrame(stream, encodeSessionLivenessResponse({
