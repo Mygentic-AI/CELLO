@@ -6749,3 +6749,112 @@ Measured: with the old roster a stranger-minted ctrl leaf **certifies**.
    test has to remember.
 3. **Run the mutant against the test's own preconditions, not just its subject.** A test whose client
    was never connected proves nothing about what it refuses to send.
+
+---
+
+## Entry 62 — the guard I wrote to close a finding checked the leaf kind and none of the properties it claimed
+
+`DOD-M15-SEALWIRE-1` bullets 3 and 4, review pass 2 — the hard cap. **Bullets 3+4 close here.**
+
+### Pass 2's verdicts
+
+> **SPEC: DEVIATIONS FOUND** — three deviations are journaled and legal (`NOTCARRIED-REFUSE-1`,
+> `SEALROOT-UNILATERAL-1`, `SEALREJECT-MUTE-1`). One is **not**: bullet 4's roster half degrades to
+> the pre-fix behaviour on any node that did not assign the session, and the comment points at a DoD
+> line covering a different question. **[blocking on a journal entry, not on code]**
+>
+> **NO SILENT FALLBACKS** — the roster fallback is announced (WARN with impact and guidance), the
+> guards refuse loud, and no `catch` swallows.
+>
+> **ERROR SUBSTITUTION FOUND** — two: HIGH-1 (a client derivation slip surfaces as a named accusation
+> of relay tampering, untested), and MEDIUM-4 (a deterministic terminal refusal is wrapped in guidance
+> declaring it "usually local and temporary" and prescribing retry).
+>
+> **HOLLOW TESTS FOUND** — one: `★★ THE CARRIED BYTES HASH TO THE SUBMITTED content_hash` does not
+> cover the production derivation it names as the worst failure of this leg.
+>
+> **REMOVALS PROVEN** — the fake extraction is a clean move: deadness structural (unexported,
+> file-local), no test lost, absence confirmed on the built artifact.
+
+### The finding, and it is about the fix rather than the defect
+
+Pass 1 found the sender leg missing. I built it, hardened the parameter to required so a dropped
+argument became `TS2554`, and shipped five tests. Pass 2's HIGH-1:
+
+> The type change catches an **omitted** argument (TS2554). It does not catch a **substituted** one.
+> […] A client-side derivation slip is surfaced as a **named accusation against a healthy relay
+> operator** — which the test file's own docblock calls "the worst possible failure of this leg" and
+> then tests only where the test supplies both values.
+
+Measured: a manager that re-derives the payload instead of passing the one it hashed compiles and
+leaves all five tests green. The mismatch then reaches the directory as `seal_payload_unbound`, whose
+guidance says *"the relay is the only party on that path — treat this as relay tampering."*
+
+And MEDIUM-1, in the same guard: the parameter's entire justification is that a SEAL payload discloses
+nothing the relay does not already know. The code enforced `leafKind === CTRL` and **nothing else**,
+so four kilobytes of the operator's text on a ctrl leaf would have crossed the wire and been refused
+only at the relay — after the disclosure the local guard exists to prevent. The relay learned this
+exact lesson at its own review one file over, and I wrote the weaker version anyway.
+
+Both closed in `submitLeaf`: the bytes must hash to the signed `content_hash`, and must decode as a
+SEAL payload naming this session.
+
+### A comment of mine was measurably false in the safer-sounding direction
+
+MEDIUM-3. I justified spreading `content_bytes` by saying an explicit `undefined` *"encodes as a
+present CBOR key, and the relay refuses it — that would turn every ordinary message into a refused
+submit."* Pass 2 executed it: the key IS emitted (0xf7) but decodes back to `undefined`, so the
+relay's guard never fires and **the frame is accepted with no payload** — a silent `not_carried`,
+which is the exact downgrade this unit exists to kill. I had written the *scarier* consequence, which
+would have sent the next reader hunting an availability bug instead of a mute one.
+
+### The one deviation that was not journaled, and it is topological
+
+HIGH-2. I fixed F3's leaf-derived roster by reading `#sessionParticipants`. That works only on a node
+that assigned the session, and the deployed topology routinely puts the seal elsewhere — confirmed
+against this repo's own words: `sessions` is deliberately excluded from anti-entropy, and
+`directory-node.ts` says *"the relay drives every seal to a SINGLE configured directory."* So the
+fallback is the ordinary federated path.
+
+Two things wrong with what I shipped, both corrected: the log was a WARN that fires on healthy closes
+(a warning on the normal case is not a signal — operators filter it and take the abnormal cases with
+it), and the comment pointed at `DOD-M15-LEAFPARTIES-1`, a line about a different question. A pointer
+to a line about something else reads as tracked. Filed properly as
+`DOD-M15-SEALROSTER-FEDERATED-1`, with the fix named: carry the roster from the relay's recorded
+**directory-signed** assignment, which is not relay-forgeable and travels with the seal.
+
+### A commit that does not typecheck, and the cause is not carelessness
+
+MEDIUM-2. At `8c58cc0` — the other lane's `UNWITNESSED-1(b)` — `submitLeaf` takes four parameters and
+`session-node-manager.ts:6349` passes five. Verified by arity, not inferred. Nothing to revert; the
+end state is correct, but `git bisect` across that range will not build.
+
+The cause is worth naming because the existing rule did not prevent it. **Both lanes commit by
+explicit path, which is the rule — and it does not help when the path is the same file.** Their
+commit swept my in-flight edit to `session-node-manager.ts` because they named that file, correctly,
+for their own change to it. Two agents editing one file in one worktree cannot be made safe by
+naming paths.
+
+### And I destroyed my own work twice in one session
+
+Neither is in the diff, both are in the record:
+
+1. I restored a mutated file with `cp /tmp/snm2.bak` — a backup **from two days ago**, left by an
+   earlier session, that I had not created and did not check. It overwrote
+   `session-node-manager.ts` with a version missing 2227 lines. Recovered with `git checkout` only
+   because the work was committed.
+2. I then restored a mutant with `git checkout` while the baseline I was testing was **uncommitted**,
+   and lost both guards I had just written.
+
+The rule that saved me the first time is the rule I broke the second: commit before mutating, and
+restore from git, never from a path in `/tmp` whose provenance you did not establish.
+
+### Rules earned
+
+1. **Required catches omission, not substitution.** A type can force a caller to pass *something*; only
+   a value check forces it to pass *the right thing*. Ask which failure the type actually closes.
+2. **A guard is finished when it enforces the property its own justification claims** — not when it
+   enforces the property that was easiest to write next to that justification.
+3. **Commit before mutating, and never restore from a `/tmp` path you did not create this session.**
+4. **Explicit-path commits do not make a shared file safe.** Two lanes in one worktree need file
+   ownership, not path hygiene.
