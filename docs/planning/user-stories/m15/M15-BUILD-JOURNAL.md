@@ -6579,3 +6579,71 @@ your own words for a proof about them, and is worse).
 rules on it rather than half-built — a `sender_sig` that is sometimes populated on sent rows and
 sometimes not, with no way to tell which, would rebuild the exact defect the received half just
 closed.
+
+---
+
+## Entry 60 — I pinned the arm the honest path never takes
+
+`DOD-M15-SEALWIRE-1` bullets 3+4, store-and-forward leg. Review pass 2 — the cap.
+
+### Reviewer verdict, quoted
+
+> **HOLLOW TESTS FOUND** — H1 and H2. Neither survives the revert test for the hop it claims to
+> cover. H2 pins the wrong branch of a two-branch guard.
+>
+> Nothing here is a security hole a customer reaches. If you fix one thing, fix **H2** — it is three
+> lines … and it is the one that would let a future "simplification" refuse every real seal while the
+> suite stays green.
+
+And on the frozen gate's question:
+
+> **What reaches a customer: nothing in this diff.** `content_bytes` is carried to the directory,
+> validated, and read by no one … It is never persisted, and the Merkle rebuild uses
+> `encodeStructure2(l.s2)`, so no operator-adjacent bytes land at rest in the hash-only directory.
+
+### The inverted comment, and why the direction matters
+
+My test used `Buffer` and asserted in prose that this is *"the exact shape a decoder hands over"*, and
+that checking `instanceof Uint8Array` alone *"would refuse every honest relay frame."*
+
+**Both halves are backwards.** `toUint8Array` normalises a `Buffer` to a plain `Uint8Array` before
+the leaf is ever stored; the adapter tags it as a typed array; the directory's decoder yields a
+`Uint8Array` and never a `Buffer`. Relay session state is purely in memory, so no restore path can
+reintroduce one.
+
+So the honest relay **always** sends `Uint8Array`, and I had pinned only the tolerated shape. A future
+narrowing to `if (!Buffer.isBuffer(cb))` would have **refused every real seal while the suite stayed
+green** — on the one hop where a refusal destroys the seal instead of degrading to `not_carried`.
+Verified by applying that exact narrowing: two tests now red.
+
+### A wire test that never touched the wire
+
+The relay half round-tripped through the **test file's** encoder rather than the adapter's. They
+differ in both options that matter — `{tagUint8Array: false}` versus
+`{useRecords: false, mapsAsObjects: false}` — measured at 334 bytes versus 315, a plain CBOR map
+versus cbor-x's record extension, `Uint8Array` versus `Buffer` on the far side.
+
+It proved cbor-x round-trips a typed array to itself. Mapping `content_bytes` out of the real frame
+builder would have left it green. `encodeSealSubmission` is extracted and the test goes through it;
+that mutation is now red.
+
+### The fix for "don't narrate a hypothesis" could not print
+
+Last pass I added an elapsed-time measurement so a load diagnosis would be a number rather than a
+story. It renders in exactly one case — a frame arriving inside the deadline with the wrong `type` —
+and **not** in either case it was written for: `expect` messages are invisible on a green run, and on
+the timeout the read *rejects*, so the line computing the elapsed time never executes.
+
+**Third comment of mine this milestone claiming a capability the code does not have, and this one was
+inside the fix for the previous instance.** Moved to the throw path, with all three competing bounds
+printed alongside it.
+
+### Rules earned
+
+1. **When a guard has two accepted shapes, pin BOTH and name which one production takes.** Pinning
+   the tolerated arm alone is worse than pinning neither: it looks like coverage and licenses a
+   narrowing that breaks everything.
+2. **A test of a hop must use the code that makes the hop.** A local encoder configured differently
+   is not the wire, however similar the bytes look.
+3. **Check where a diagnostic renders, not just that it exists.** An `expect` message is invisible on
+   success and unreachable after a throw; both are the paths a diagnostic is usually for.
