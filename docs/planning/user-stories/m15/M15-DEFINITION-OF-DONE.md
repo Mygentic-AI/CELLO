@@ -950,39 +950,30 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 - **Enforcer:** `test:spine` green, or every remaining failure carrying a written verdict of
   environment / stale-expectation / real-defect, with the real ones lined up.
 
-### `DOD-M15-NORMHASH-1` — ❌ Does inbound sanitisation change content AFTER the sender hashed it?
-**BLOCKS LAUNCH** (§0z.1) **as a QUESTION, not yet as a defect** — and it is filed as a question on
-purpose. If the answer is "yes", it is the most serious thing in this milestone; if "no", it costs
-one paragraph to close. Unclear ⇒ blocks (§0z.1).
-
-**The observation, measured** (2026-08-23, `j-legibility`, 2.3s in — long before any close):
-
-    sent:     "…you agreed to send me $1000"   (U+2026 HORIZONTAL ELLIPSIS)
-    received: "...you agreed to send me $1000"  (three ASCII full stops)
-
-**The rewrite is DELIBERATE and correct.** `core/gateway/src/detect/sanitize.ts` step 3 runs NFKC
-plus a script-lookalike map as the confusables defence — *"NFKC folds full-width, mathematical-
-alphanumeric, enclosed, and other compatibility lookalikes to their base form"* — so an attacker
-cannot smuggle a visually identical payload past screening. NFKC folds `…` to `...`. **Nothing is
-broken here and the sanitiser must not be weakened.**
-
-- **THE QUESTION: which bytes does the seal hash — the ones the sender sent, or the ones the
-  receiver kept?** Every leaf hash and the sealed root are built from content. If the receiver hashes
-  post-sanitisation and the sender hashed pre-, then **any message containing a foldable character
-  makes the two sides' trees disagree**, the roots are not byte-identical, and the conversation
-  cannot seal bilaterally. That is the product's core promise failing on an ellipsis.
-- **NOT ESTABLISHED. Do not assume either answer.** `j-loopback` seals with byte-identical roots
-  today, but its content is plain ASCII (*"loopback hello"*) so nothing folds — it cannot distinguish
-  the two cases and is not evidence.
-- **The cheapest experiment:** one journey that exchanges a message containing `…` (or a full-width
-  character) and asserts the two sealed roots are byte-identical. That single test answers it. If it
-  passes, hashing happens on a consistent side and this line closes with the reasoning recorded.
-- **If the answer is "yes, they diverge":** the fix is a design decision and Andre's, not a lane's —
-  hash pre-sanitisation, sanitise before hashing on both sides, or carry both forms. **Do not pick
-  one silently**; each trades a different thing (screening fidelity vs. transcript fidelity).
-- **`j-legibility`'s own assertion is stale regardless** — it asserts the received text is
-  byte-identical to what was sent, which contradicts a sanitiser the product is supposed to have.
-  That assertion should assert the SANITISED form, and say why.
+### `DOD-M15-NORMHASH-1` — ✅ Sanitisation cannot split the two sides' trees
+> **ANSWERED and GUARDED, 2026-08-23.** Filed as a question; **the answer is "wire bytes, both
+> sides"** — established by `CELLO_Coder_1` reading both paths, then guarded in this lane.
+>
+> - **Sender:** outbound screening runs FIRST and the hash is taken over the screened bytes —
+>   `sendBytes = modified ? outboundVerdict.content : contentBytes`, and those exact bytes go on the
+>   wire (`session-content-handlers.ts`).
+> - **Receiver:** the content-hash cross-check runs **BEFORE** `screenInbound`
+>   (`session-node-manager.ts` ~6595–6680, vs `screenInbound` at ~6867).
+>
+> **Both ends hash the bytes that crossed the wire. The sender folds before hashing; the receiver
+> hashes before folding. No fold happens between the two hashes, so an ellipsis cannot split the
+> trees.** The sanitiser is correct and stays.
+>
+> **THE LOAD-BEARING FACT IS THAT ORDERING, AND NOTHING PINNED IT.** Moving the receiver's
+> cross-check below `screenInbound` reads as a reasonable *"screen it before you trust it"* tidy-up,
+> and would make **every message containing a foldable character produce two different trees** — 
+> presenting as the core promise failing on an ellipsis.
+>
+> **The guard is a journey, not a code change:** `j-loopback` already asserts the two sealed roots
+> are byte-identical, so its message now carries `…`. One character converts an existing green test
+> into the thing that catches a future reorder. **Do not "tidy" that ellipsis back to ASCII** — the
+> file says so, because a test string that looks odd is exactly what someone cleans up, and cleaning
+> it makes the guard inert without failing.
 
 ### `DOD-M15-CLOSEROOT-1` — ❌ Five seal journeys still expect a receipt that close no longer returns
 **BLOCKS LAUNCH** (§0z.1) — but as **TEST DEBT, not a product defect.** The product is correct and
