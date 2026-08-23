@@ -4512,3 +4512,72 @@ Caught by the two new tests, not by review.
 
 Gate: 4346 client tests, lint, typecheck, build — all four by exit code. 15 mutations killed across
 both halves.
+
+---
+
+## Entry S5 (CELLO_Support) — `CHAINDEBT-1` opened: 12 files, and the half that is not a test problem
+
+Clause checklist per §2 step 2, before implementing.
+
+### The target, in one sentence
+
+No fixture in the directory suite can leave a hole in a hash-chained table, so a red `verifyChain`
+means tampering rather than housekeeping.
+
+### The state, measured
+
+`dod-m15-directory-rot-1-chain-writes.test.ts` is ✅ and pins the debt at **8 files committing a
+literal `chain_hash`** and **8 deleting from a chained table** — **12 distinct files**, four of them
+on both lists. Guard baseline confirmed green before any edit (4/4, `CELLO_ENV=local`, Docker up).
+
+| File | literal `chain_hash` | chained deletes |
+|---|---|---|
+| `persist-021-adapter-boundary-audit` | 9+ | 3 |
+| `persist-020-connections` | 2 | 13 |
+| `persist-008-analytics` | 2 | 4 |
+| `federation-003` | 1 | 6 |
+| `persist-006-pgaudit` | 1 | 1 |
+| `presence-001-repository` | 1 | — |
+| `persist-018-seal-notarizations` | multi-line | — |
+| `persist-003-rls` | multi-line | 2 |
+| `m6b-010-startup-state-restore` | — | 4 |
+| `m12-ae-store-parity.live` | — | 3 |
+| `persist-reconnect-session-survival` | — | 3 |
+| `federation-001` | — | 1 |
+
+(Counts from single-line greps, so the multi-line `INSERT`s undercount — the guard's own regex is
+the authority, not this table.)
+
+### Clause checklist — what the reviewer receives
+
+- **C1** — `KNOWN_DEBT_INSERTS` reaches **zero** and the shrink-only ceiling comes down with it.
+- **C2** — `KNOWN_DEBT_DELETES` reaches **zero**, same.
+- **C3** — every converted file still passes **its own suite**, against a real Postgres. A fixture
+  that no longer breaks the chain but no longer tests anything is a worse outcome than the debt.
+- **C4** — conversions use the existing helpers (`inRolledBackTxn`/`txnPool`, `seedAccount`) or
+  per-run unique ids. **No new from-scratch fixture** (§2e), and no `TRUNCATE` — the pattern that
+  caused this in the first place, by taking an `AccessExclusiveLock` other files were waiting on.
+- **C5** — an `ALLOWED_DELETES` entry is only added where the delete **is the subject of the test**,
+  with its count declared. Converting a file by exempting it is the failure mode, not the fix.
+
+### The counterbalance (§2b Invariant 1)
+
+**None, and stated rather than dressed up:** this is test-fixture hygiene inside our own repo. There
+is no adversary. What it protects is the *meaning of a signal* — `verifyChain` going red must mean
+tampering, and today it can mean a fixture tidied up after itself.
+
+### The half that is NOT a test problem, carried before I start
+
+The DoD line says it outright and it outlives this unit: **a linear whole-table hash chain means ANY
+deletion turns `verifyChain` permanently red** — a retention policy, a GDPR erasure, an operator
+removing one bad row. After that, a genuine tamper cannot be distinguished from the baseline. That
+is `DOD-ACCOUNTS-CHAIN-1`'s subject, not this line's, and cleaning the fixtures does not touch it.
+Recorded here so closing this line is not read as closing that one.
+
+### Hollow-test risk (§🕳️ question 1)
+
+The specific trap: **converting a fixture into `inRolledBackTxn` can make its assertions vacuous.**
+If a suite asserts a whole-table count or a chain from genesis, moving it inside a rolled-back
+transaction changes what it sees. A file that goes green because it now observes an empty table has
+not been converted — it has been switched off. Every conversion is checked by running that file's
+own suite and confirming its assertion count is unchanged.
