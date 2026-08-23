@@ -312,8 +312,24 @@ describe("AC-002: relay emits session_interrupted on idle timeout", () => {
     await performAuth(rA, sA, cA.kp);
     await performAuth(rB, sB, cB.kp);
 
-    // No hash submitted — session idles. Timer fires after 100ms.
-    const frame = await rA.readDecodedWithTimeout(2000);
+    /**
+     * No hash submitted — session idles. Timer fires after 100ms.
+     *
+     * ⚠️ 8s, NOT 2s, AND THE WIDENING IS NOT A GREEN-WASH. This test measures *"the idle timer fires
+     * and the frame is delivered"*, never *"within two seconds"* — the bound was an arbitrary 20x
+     * margin over a 100ms threshold, which is generous right up until the event loop is busy.
+     *
+     * It began failing in the FULL relay suite while passing alone, once
+     * `DOD-M15-SEALWIRE-1`'s forward-leg test added another relay node and two libp2p clients to the
+     * same run. That is real contention, not a flake: an event-loop stall long enough to swallow a
+     * 20x margin is a property of the suite's load, and every future test added to this package makes
+     * it likelier.
+     *
+     * So the number is raised to a bound that measures the assertion rather than the machine. If it
+     * ever fails again at 8s, that IS a defect — a 100ms timer eighty times late is not scheduling
+     * noise.
+     */
+    const frame = await rA.readDecodedWithTimeout(8000);
     expect(frame["type"]).toBe("session_interrupted");
     expect(frame["reason"]).toBe("timeout");
 
