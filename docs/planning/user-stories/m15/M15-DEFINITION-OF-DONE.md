@@ -3012,7 +3012,37 @@ newly broken.
 
 ---
 
-### `DOD-M15-SEALROOT-EMPTY-1` — ❌ BLOCKS LAUNCH. A close reports success and hands back no receipt
+### `DOD-M15-SEALROOT-EMPTY-1` — 🅿️ **NOT A PRODUCT DEFECT. A STALE TEST CONTRACT.** Five spine journeys assert a `close_session` shape the product deliberately retired
+> ## ⚠️ I CLASSIFIED THIS "BLOCKS LAUNCH" AN HOUR AGO AND I WAS WRONG. Corrected in place, loudly,
+> because a false launch-blocker costs exactly as much attention as a real one and this milestone has
+> spent the day proving that a confident write-up is not evidence.
+>
+> **The receipt arrives.** Polled `cello_sealed_receipt` after the close and got a real
+> `sealed_root`, `leaf_count`, `legibility`, participants — the whole certificate.
+>
+> **What actually happens:** `cello_close_session` is **non-blocking by design**. It returns
+> `{ok: true, seal_status: "committed"}` plus guidance saying, verbatim, *"The receipt is NOT YET
+> available … Fetch it with `cello_sealed_receipt`."* The blocking version was removed deliberately —
+> its own guidance names the reason: *"which is exactly how seventeen sessions were lost when this
+> call used to block."*
+>
+> **The five journeys assert `closeA.sealed_root`, which is the retired shape.** The product changed
+> and the tests did not. They are red for a contract that was correctly abandoned.
+>
+> **THE FIX IS IN THE TESTS, NOT THE DAEMON:** close, then poll `cello_sealed_receipt` for the root,
+> and assert byte-identity there. Anything that "fixes" the daemon to return a root synchronously
+> would re-introduce the blocking close that lost seventeen sessions.
+>
+> **⚠️ AND THE TEST DESTROYS ITS OWN DIAGNOSTIC.** Each of these builds a rich `diag` string — close
+> responses plus twenty daemon seal lines — and attaches it to `.toMatch()`. When the value is
+> `undefined`, `.toMatch()` throws a **TypeError before the custom message is ever rendered**, so the
+> diagnostic never prints. That is why the cluster read as unexplained: three runs and a temporary
+> `console.error` to see what the first run already knew. Use `expect(typeof x).toBe("string")` first,
+> or `toBeTruthy()`, so the message survives.
+
+<details><summary>Superseded: the original ❌ BLOCKS LAUNCH write-up, kept because the exoneration evidence in it still stands</summary>
+
+### ~~`DOD-M15-SEALROOT-EMPTY-1` — ❌ BLOCKS LAUNCH. A close reports success and hands back no receipt~~
 **Found by the other lane's first-ever spine-lane run (2026-08-23), five journeys deep. Diagnosis is
 open; what is established is below, and the exoneration evidence is the durable part.**
 
@@ -3046,3 +3076,5 @@ path, which the spine does not take. The ~4.5 s is consistent across all three r
 like a fixed timeout being hit than a race — but that is an observation, not a diagnosis.
 
 - **Enforcer:** journey — the five spine journeys above are the receipt, and they must go green.
+
+</details>
