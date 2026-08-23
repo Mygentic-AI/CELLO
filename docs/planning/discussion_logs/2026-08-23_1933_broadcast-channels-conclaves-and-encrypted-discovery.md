@@ -14,12 +14,21 @@ description: >
   removes the key-sharing trap, makes "cannot reply" a property of the shape rather than a rule
   needing three layers of enforcement, and decouples the tamper-evident record from the fan-out cost.
   Also covers delivery semantics (no doorbell, deliver at turn boundaries, why a rate limit is the
-  wrong shape), read state (sequence numbers held subscriber-side, no server cursor), subscriber-list
-  privacy and the push/pull fork it depends on, the CELLO-operated conclave as sanctioning
-  intermediary, and encrypted discovery using DCPE with per-group keys so a directory can serve
-  semantic search over descriptors it cannot read. Records the business-model conclusion that fell
-  out of it: relays are given away, directories are retained, and consortium expansion works by
-  inviting large operators to run a node.
+  wrong shape for bursty traffic, titles as a first-class field and publisher guidance as a
+  reputation-bearing promise); read state as two positions, since a read that mutates state cannot be
+  retried; and the durable record — one publisher-side log sealed in chained epochs, which is
+  certificate transparency, chosen for consistency proofs so a channel can prove it never rewrote its
+  history. The unsealed window is the equivocation window, which makes the cap on epoch length a
+  security parameter. Access model (open vs invite-only) is the axis that governs subscriber-list
+  visibility rather than a setting; the anonymous pull-only mode is DROPPED, leaving push to known
+  subscribers as the single delivery model. The daemon collects on a schedule, not the agent. Relays
+  stay stateless because the publisher's log is the durable copy, so relay loss is redelivery rather
+  than persistence; gaps are found by sequence number and, at the tail, by the directory-registered
+  epoch root; repair is subscriber-initiated and routed publisher → relay → subscribers. Also the
+  CELLO-operated conclave as sanctioning intermediary, and encrypted discovery using DCPE with
+  per-group keys so a directory can serve semantic search over descriptors it cannot read. Records the
+  business-model conclusion that fell out of it: relays are given away, directories are retained, and
+  consortium expansion works by inviting large operators to run a node.
 ---
 
 # Broadcast channels, conclaves, and encrypted discovery
@@ -225,6 +234,119 @@ one-at-a-time mode is the wrong one** — that is the competing-consumer behavio
 
 ---
 
+## Part 4b — The durable record: what a channel's history actually is
+
+**A session ends and seals. A channel never does.** So what is a channel's record, given the existing
+unit of durability is a two-party session that opens, seals and closes?
+
+### The options considered
+
+**A · One session per update, self-closing** — as document sharing works today. *For:* reuses
+everything; each update independently notarized; natural retention unit. *Against:* session explosion
+(hourly monitoring is 8,760 sessions per subscriber per year, each paying full ceremony cost for a
+200-byte "all good"). **And the one that kills it: independent sessions lose ordering.** Nothing links
+update 46 to 47, so a channel dropping or reordering an update is undetectable — twelve thousand
+perfect receipts and no way to prove the set is complete.
+
+**B · One long-lived session, never closed** — *For:* one tree, ordering provable. *Against:* **never
+seals, so never notarized** — the receipt story does not apply at all, and an indefinitely-open
+session is the unsealed revivable state M15 spent a week fixing. **Ruled out.**
+
+**C · One session, sealed and reopened periodically** — extending a sealed tree. *Against:* weakens
+what a seal means everywhere else, for one feature's benefit.
+
+**C′ · Epoch chaining — removes the objection to C.** Nothing is reopened. Each epoch is sealed
+normally; **its first leaf commits to the previous epoch's sealed root.** Ordering provable across the
+whole channel history, bounded session size, existing notarization path, natural retention unit,
+**and no new session semantics.** Log rotation with a hash link.
+
+**D · A separate object type, not a session** — *Against:* rebuilds storage, verification and
+notarization from scratch, duplicating what sessions already do.
+
+**E · No durable record — ephemeral broadcast** — *For:* trivial, free. *Against:* gives up the
+differentiator. Kept on the list as the honest baseline, because **an announcements channel may
+genuinely not need integrity** while a monitoring trail does.
+
+**F · One publisher-side log, subscribers hold receipts only** — the publisher keeps **one**
+append-only chain, not one per subscriber. *For:* the publisher writes and notarizes **once**, not
+once per recipient. Any subscriber verifies inclusion and detects gaps.
+
+> ### DECIDED: F combined with C′ — one publisher-side log, sealed in chained epochs, subscribers
+> holding inclusion receipts. **This is certificate transparency**, which matters because it is a
+> well-understood shape for an append-only log many parties verify, and it brings one property none
+> of A–E delivers.
+
+### The property that decided it
+
+**Consistency proofs.** Anyone can prove the log at T2 is a genuine *extension* of the log at T1 —
+nothing inserted, removed or rewritten in between.
+
+> That is the difference between *"I can prove I received this message"* and **"the channel can prove
+> it never rewrote its history."** For a publisher making claims to subscribers who cannot see each
+> other, that is what makes the channel trustworthy rather than merely authenticated. It also answers
+> retention cleanly: prune the artifacts, keep the roots.
+
+**Two clarifications on the mechanism**, because both were initially misread:
+
+- **Within an epoch it is a TREE, not a linked list.** That is what makes "prove message 47 is in
+  there" cheap — a handful of hashes rather than replaying everything. The chain link is at the
+  *epoch boundary* only.
+- **"It is a normal session" is approximate.** A CELLO session has two participants who both approve
+  the seal; a channel log has no counterparty. It is a **one-party record**, closest to the unilateral
+  seal path where one side seals and the artifact states what is weaker about it. Worth deciding
+  deliberately rather than inheriting.
+
+### The flow, four actors
+
+**Publishing one update**
+1. **Publisher** composes title and body.
+2. **Publisher** appends it as a leaf to its single channel log; recomputes the root locally.
+3. **Publisher** signs the artifact with the channel key — sequence number, title, body, signature,
+   and if first in an epoch, the previous epoch's sealed root.
+4. **Publisher** hands the signed artifact to the relay.
+5. **Relay** stores and forwards. **Does not open it.** Sees who, when, how big. Cannot forge or
+   alter, only fail to deliver.
+6. **Directory** — *not involved.* No per-message work at all.
+
+**Receiving**
+7. **Subscriber** collects it, verifies the signature against the channel's public key held from the
+   directory profile, checks the sequence against its own last-seen, stores it. `delivered_through`
+   advances; the agent reads at the next turn boundary and `processed_through` advances.
+   **The subscriber signs nothing** — it is a verifier of someone else's record, not a participant.
+
+**Sealing an epoch**
+8. **Publisher** sends the epoch root to the directory — on its own trigger, since it knows when a
+   batch is meaningful.
+9. **Directory** notarizes it with a threshold signature. **The only directory work in the flow, once
+   per epoch regardless of subscriber count.**
+10. **Publisher** publishes the notarized root as the first leaf of the next epoch.
+
+**What anyone can prove afterwards**
+11. **Inclusion** — message 47 was genuinely published, against the notarized root.
+12. **Agreement** — two subscribers compare notarized roots. Same root, same history. Different roots,
+    the channel forked and told them different stories.
+13. **Consistency** — epoch 5 extends epoch 4; nothing rewritten.
+
+### What a subscriber can prove BEFORE the seal — and why the cap is a security parameter
+
+- **Authenticity — yes, immediately.** The artifact is signed by the channel key. No seal needed.
+- **Non-equivocation — NO.** Nothing stops the publisher issuing a *different* message #47 to a
+  different subscriber. Both are validly signed. Until a root covering #47 is notarized there is no
+  single history to check against.
+- **Completeness — no.** You see gaps in what *you* received; you cannot prove the publisher did not
+  issue something you never got.
+
+> ### The unsealed window IS the equivocation window. How long a publisher may leave an epoch open is
+> therefore a **security parameter, not housekeeping** — which is the reason a cap must exist rather
+> than a matter of tidiness.
+
+Two mitigations worth allowing: **a subscriber can request a seal** when it needs provable evidence
+now, and two subscribers can detect equivocation *between themselves* in real time by comparing
+artifacts — cooperative detection rather than proof to a third party, but it means a publisher
+equivocating across a large audience is likely to be caught quickly.
+
+---
+
 ## Part 5 — Access control, subscriber lists, and delivery
 
 An earlier draft treated subscriber-list privacy as the primary setting and push-versus-pull as the
@@ -255,6 +377,33 @@ implicit, so nobody rediscovers it as an oversight.
 So the remaining genuine setting is narrow: on an **open** channel, whether other subscribers can see
 each other. Everything else is entailed by the access model and the delivery model.
 
+### DECIDED: the anonymous pull-only mode is dropped
+
+> **PUSH TO KNOWN SUBSCRIBERS IS THE SINGLE DELIVERY MODEL.** The top row of that table is removed —
+> narrow upside, high technical cost, mediocre experience.
+
+**The property is narrower than its name.** Anonymous *from the publisher*, yes. Anonymous full stop,
+no — the reader still connects to a relay, and the relay sees a peer fetching a specific channel.
+Described accurately it is much less compelling; described inaccurately it is a ledger line, which is
+the exact failure this milestone exists to close.
+
+**What it cost:** an entire delivery path (polling, TTL coupling, backoff, relay retention, backfill);
+ejection, which is required; the publisher's knowledge of its own reach, which is the number a
+marketplace publisher most wants; **the join step**, which two already-taken decisions depend on — the
+notification guidance of Part 3 and the unmonitored-channel notice of Part 6 both need somewhere to
+land; and any identity to rate-limit, leaving anonymous readers as an abuse surface with no handle.
+
+**None of the use cases in Part 7 need it.** Fleet coordination, announcements, hiring and the work
+marketplace all want the publisher to know its subscribers.
+
+**The real concern is covered anyway.** What people usually mind is not *the publisher* knowing but
+*the other subscribers* knowing, and that remains a setting on open channels at no cost.
+
+**What would reopen it:** a use case where subscribing is itself the sensitive act — following a
+channel run by someone you are investigating, or a competitor's. The honest version of that needs the
+**relay** blind too, not just the publisher, which is a larger piece of work than the pull path and
+must be priced as such rather than smuggled in under a name implying it is already done.
+
 ### Ejection
 
 > ### DECIDED: ejection must be possible. It is only *needed* for invite-only channels — which is
@@ -280,8 +429,97 @@ knowing its own audience.
 ### Delivery still has to happen
 
 Something must physically reach N daemons. Under the artifact model that hub is **untrusted**: it can
-neither forge nor alter, only fail to deliver. Whether it is the relay, a dedicated fan-out node, or
-scheduled subscriber pulls remains open.
+neither forge nor alter, only fail to deliver. The relay is that hub — it already parks content for
+offline recipients and hands it back on a recipient-signed pull.
+
+### What the DAEMON does, not the agent
+
+> ### DECIDED: the daemon collects on a schedule. Not the agent when it comes online.
+
+Three arguments, and the first is decisive:
+
+- **A TTL only works if something reliably collects inside the window.** If only the agent fetches, an
+  agent asleep longer than the relay's retention loses that content — and the whole retention design
+  assumed someone was there. The daemon is the only continuously-live party.
+- **It is what makes Part 3 coherent.** No doorbell, deliver at turn boundaries — that only works if
+  the content is *already local* when the boundary arrives. Agent-triggered fetching would block on
+  the network at exactly the moment we agreed not to interrupt.
+- **Daemon polling costs bandwidth; agent polling costs inference.** Given the gross-margin motivation
+  behind this whole line of thinking, that decides it on its own. It also **deduplicates** — three
+  agents on one daemon subscribed to one channel means one fetch and three local readers.
+
+It also puts the fetch in the same place as the two position markers (Part 4), which live in the
+daemon's database anyway.
+
+**The coupling this creates must be written down, because its failure is silent.** The poll interval
+and the relay TTL are now a joint constraint: a publisher setting a one-hour retention while daemons
+poll daily loses content for everyone and nobody finds out. **The TTL is a published channel
+property**, and the daemon polls faster than the shortest TTL it subscribes to, or adapts per channel.
+
+**Backoff on quiet channels** is cheap — sequence numbers show nothing new for K polls, widen the
+interval, bounded by the TTL so it never widens past the retention window.
+
+### Redelivery: what happens when the relay loses it
+
+A relay restart drops parked content. The question that looks hard — *who successfully received it and
+who still needs it?* — has a better answer than tracking it: **don't.**
+
+**The publisher already holds the durable copy.** Its channel log is the archive. So relay loss is
+never data loss, only delivery loss. This is a **redelivery problem, not a persistence problem**, and
+that reframing is what keeps relays stateless.
+
+**Gap detection is already free, except at the tail.** Sequence numbers give it: holding 45, 46, 48
+tells you 47 is missing. No relay state, no directory. What sequence numbers *cannot* detect is a
+**missing tail** — if 47 was the last message, silence is indistinguishable from nothing-was-sent.
+
+> ### That is what the directory-registered epoch root is for. The directory publishes the channel's
+> high-water mark. Directory says sealed through 52, you hold 45, you know exactly what you are
+> missing. **Interior gaps from sequence numbers, tail gaps from the directory.**
+
+> ### DECIDED: repair is SUBSCRIBER-INITIATED.
+>
+> Publisher-side redelivery means the publisher tracks who got what — **per-subscriber delivery
+> state, the exact thing the artifact model exists to eliminate.** It would reintroduce N-state
+> through the back door. The subscriber is also the only party that knows what it actually holds.
+
+**Therefore relays stay stateless.** Relay persistence becomes an optimisation, not a correctness
+requirement: relay restarts, content is gone, subscribers detect gaps and repair. Slower, still
+correct. **The rejected alternative** — the publisher periodically polling the relay to confirm it
+still holds the content — is delivery-state tracking by proxy and is not needed.
+
+The TTL stops being load-bearing for correctness. Short is fine; it is a convenience window rather
+than the only thing standing between a subscriber and its content.
+
+> ### DECIDED: a SEALED epoch is retained on the relay longer than live content.
+> Cheap hedge against the one real dependency below.
+
+### Two risks in the repair path
+
+**Publisher availability.** Repair depends on the publisher being reachable. If it is offline, gaps
+persist until it returns. The longer retention of sealed epochs is the hedge.
+
+**Thundering herd, and its target is the publisher — the weakest node in the picture.** A relay
+restarts and every subscriber detects a gap. Those requests go to a publisher that may be one daemon
+on a laptop, not to a relay built for load.
+
+Considered and rejected: **a specialised repair API outside libp2p.** New ports, new connection
+management, a new authentication surface outside the posture the relay's threat model assumes — and
+it would rebuild something that exists. **The relay's existing recipient-signed pull is the repair
+path**, with a range instead of a single item.
+
+Two mechanisms, and the second is the one that actually caps the load:
+
+- **Jitter, derived deterministically from the subscriber's own pubkey** rather than randomly. Hash
+  your pubkey into the poll window for your offset: N subscribers spread uniformly with zero
+  coordination, and *stable*, so it is reproducible when debugging rather than a heisenbug. Because
+  polls are staggered, **gap detection is staggered too** — the same mechanism solves both. Backoff
+  stays client-side for retries; jitter is what prevents the first stampede, which backoff cannot.
+- **Repair goes publisher → relay → subscribers, never publisher → each subscriber.** A subscriber
+  reports *"missing 46 through 52"*; the publisher re-parks that range on the relay **once**; every
+  subscriber missing the same range — and after a relay restart they will nearly all be missing the
+  same range — fetches it there. Publisher load becomes **one re-park per distinct missing range**,
+  not one response per subscriber. It reuses the existing parking mechanism and adds no relay state
+  beyond a TTL.
 
 ---
 
@@ -495,28 +733,60 @@ Two edges to have answers ready for:
 6. **Escalation is three separate authorities** — publisher signals, subscriber routes, personal
    agent escalates. A monitoring agent never holds a human's contact details.
 7. **The channel holds no read state.** Monotonic sequence numbers; subscribers track their own
-   position; `since_seq` is the right primitive.
+   position; `since_seq` is the right primitive. **Two positions, not one** — `delivered_through`
+   advanced by the fetch, `processed_through` advanced only by the agent — because a read that
+   mutates state cannot be retried, and agents lose context constantly.
+7b. **The durable record is one publisher-side log, sealed in chained epochs** (F + C′ —
+   certificate transparency). Within an epoch a tree; the chain link is at the epoch boundary. It is
+   a **one-party record**, closest to the unilateral seal path. **Consistency proofs** are the
+   property that decided it: the channel can prove it never rewrote its history.
+7c. **The unsealed window is the equivocation window**, so the cap on epoch length is a security
+   parameter. Before the seal a subscriber has authenticity but **not non-equivocation**.
 8. **Access model is the governing axis**: open, or invite-only / request-and-approve.
    **Invite-only entails an admin-visible subscriber list** — you cannot approve a request from a key
    you cannot see. The only genuine remaining setting is whether subscribers on an *open* channel can
    see each other.
 9. **Ejection must be possible**, is needed only for invite-only, and under pull requires an
    authenticated pull or it is advisory rather than enforced.
-10. **Discovery stays gated initially** — one CELLO-governed announcements channel, no open mechanism.
-11. **The conclave is a subscriber, and the sanction is the enforcement** — no anti-removal mechanism
+10. **The anonymous pull-only mode is dropped.** Push to known subscribers is the single delivery
+    model — the property is narrower than its name (the relay still sees the reader), it costs the
+    join step that two other decisions depend on, and no current use case needs it.
+11. **The daemon collects on a schedule, not the agent.** A TTL only works if something reliably
+    collects inside it; it is what makes turn-boundary delivery possible; and it costs bandwidth
+    rather than inference. **The TTL is a published channel property** and the poll interval must be
+    shorter than it — a coupling whose failure is silent.
+12. **Redelivery, not persistence.** The publisher's log is the durable copy, so relay loss is
+    delivery loss only. **Relays stay stateless.**
+13. **Gap detection: sequence numbers for interior gaps, the directory-registered epoch root for the
+    tail.** Silence is otherwise indistinguishable from nothing-was-sent.
+14. **Repair is subscriber-initiated** — publisher-side redelivery would reintroduce per-subscriber
+    state, the thing the artifact model exists to eliminate.
+15. **A sealed epoch is retained on the relay longer than live content.**
+16. **Repair goes publisher → relay → subscribers**, one re-park per distinct missing range. Jitter is
+    derived deterministically from the subscriber's own pubkey; backoff is client-side. **No separate
+    repair API** — the relay's existing recipient-signed pull carries a range.
+17. **Discovery stays gated initially** — one CELLO-governed announcements channel, no open mechanism.
+18. **The conclave is a subscriber, and the sanction is the enforcement** — no anti-removal mechanism
     needed.
-12. **Encrypted discovery uses per-group keys**, protecting the query rather than the public
+19. **Encrypted discovery uses per-group keys**, protecting the query rather than the public
     descriptor, with access-pattern leakage disclosed alongside.
-13. **Encrypted search is not a headline feature.** The headline is safe, private agent-to-agent
+20. **Encrypted search is not a headline feature.** The headline is safe, private agent-to-agent
     communication with conclaves.
-14. **Relays are given away; directories are retained.** Consortium expansion by inviting large
+21. **Relays are given away; directories are retained.** Consortium expansion by inviting large
     operators to run nodes.
 
 ## Open
 
-- **Push or pull.** Narrowed but not closed: it now decides only the *open* channel's behaviour,
-  since invite-only entails a known subscriber list either way. Still governs whether an open channel
-  can know its own reach, and whether an authenticated pull is needed for ejection.
+- **How long an epoch may stay open.** Publisher-triggered sealing is right — they know when a batch
+  is meaningful — but **the unsealed window is the equivocation window** (Part 4b), so the cap is a
+  security parameter rather than housekeeping. A subscriber needing provable evidence should also be
+  able to request a seal.
+- **The relay retention ceiling.** A publisher declaring long retention is volunteering someone
+  else's disk. Publisher-set or relay-operator-capped, and channels are otherwise a storage-abuse
+  vector with a legitimate-looking front door.
+- **Local retention on the subscriber.** A session ends and seals; a channel never does. A busy
+  channel over a year is unbounded local rows with no natural point to drop them. The epoch roots
+  make pruning artifacts safe — but the policy is unwritten.
 - **What a title may contain, and who validates it.** Titles are now load-bearing for notification
   rules and digests, which makes them a surface a publisher can abuse — and a place injection lands.
 - **Retraction.** A signed artifact is permanent by design. You broadcast something wrong to five
