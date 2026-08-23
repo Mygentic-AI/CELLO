@@ -288,7 +288,17 @@ export interface RelaySessionState {
   assignment: SessionAssignment;
   genesis_prev_root: Uint8Array; // SHA-256(sorted(A,B) || session_id || session_timestamp)
   seq_counter: number;           // 0 initially; incremented to 1 on first leaf
-  leaf_log: Array<{ kind: RelayLeafKind; s2: Structure2; structure1_cbor: Uint8Array }>; // ordered
+  /**
+   * Ordered. `content_bytes` is the ctrl leaf's SEAL payload when the submitting client carried one
+   * (`DOD-M15-SEALWIRE-1` bullets 3+4) — stored so it reaches the directory in `SealData`, which is
+   * the only way the directory can check a certified root against a CLIENT SIGNATURE rather than
+   * against the relay's own arithmetic.
+   *
+   * Admissible on ctrl leaves alone, and the wire decoder is what enforces that — see
+   * `HashSubmit.content_bytes`. Nothing here re-checks it, deliberately: a second, weaker copy of a
+   * security rule is how the two ends of a hop drift apart.
+   */
+  leaf_log: Array<{ kind: RelayLeafKind; s2: Structure2; structure1_cbor: Uint8Array; content_bytes?: Uint8Array }>;
   status: SessionStatus;
   /**
    * The DIRECTORY's reason for refusing the seal, when the status is `seal_rejected`.
@@ -320,7 +330,9 @@ export interface RelaySessionState {
 // ─── Seal interface ────────────────────────────────────────────────────────────
 
 export interface SealData {
-  leaves: Array<{ kind: RelayLeafKind; s2: Structure2; structure1_cbor: Uint8Array }>;
+  // `content_bytes` rides along on ctrl leaves — the client-signed SEAL payload the directory needs
+  // to break the circularity of checking a relay against the relay's own numbers.
+  leaves: Array<{ kind: RelayLeafKind; s2: Structure2; structure1_cbor: Uint8Array; content_bytes?: Uint8Array }>;
   seq_count: number;
   merkle_root: Uint8Array;
 }

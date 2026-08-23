@@ -26,6 +26,7 @@ import {
   afterEach,
 } from "@claude-flow/testing";
 import { createHash, randomBytes } from "node:crypto";
+import { encodeSealPayload } from "@cello-protocol/protocol-types";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import {
@@ -251,6 +252,101 @@ async function openStream(
   const reader = new StreamReader(stream);
   return { stream, reader };
 }
+
+// ─── DOD-M15-SEALWIRE-1 bullets 3+4: the ctrl payload's FORWARD leg ───────────
+
+describe("DOD-M15-SEALWIRE-1: a carried SEAL payload reaches the seal data", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  /**
+   * ⚠️ ACCEPTED AT THE WIRE IS NOT THE SAME AS FORWARDED, and until this test the relay did the
+   * first and not the second.
+   *
+   * Every existing assertion proved the decoder ADMITS `content_bytes`. None proved anything
+   * downstream ever sees it — and the relay was in fact discarding it. That gap inverts a diagnosis
+   * the moment a client ships the sender half: the relay would validate the payload hard, drop it,
+   * and the directory would answer `not_carried`, whose guidance reads *"the relay node serving this
+   * session is on an old build"* — against a relay on the newest build doing everything right.
+   *
+   * Why the payload has to travel at all: the directory cannot check the relay against anything the
+   * relay supplied. `final_root` is the client's own SIGNED claim and is the only value that breaks
+   * that circle, and it survives solely inside a SHA-256 pre-image the client never sends.
+   *
+   * Lives in this file, not beside the decoder tests, because the session-assignment + auth +
+   * Structure-1 machinery a real submit needs is here. Extending the established harness rather than
+   * standing up a second one is the fixture rule.
+   */
+  it("a ctrl leaf's content_bytes survives from the wire into submitForSeal — and no other kind carries any", async () => {
+    const fix = await makeFixture();
+    scope.addCleanup(fix.relayStop);
+
+    const cA = await makeClient(fix.relayAddr);
+    const cB = await makeClient(fix.relayAddr);
+    scope.addCleanup(async () => { await cA.node.stop(); });
+    scope.addCleanup(async () => { await cB.node.stop(); });
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
+
+    const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
+    const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
+    await performAuth(rA, sA, cA.kp);
+    await performAuth(rB, sB, cB.kp);
+
+    // A MESSAGE leaf first — it must come back carrying nothing, which is what makes the ctrl
+    // assertion mean something rather than "every leaf has bytes".
+    const msgHash = new Uint8Array(randomBytes(32));
+    const msg = await makeStructure1(sessionId, msgHash, cA.kp, 0);
+    sendFrame(sA, CBOR_ENC.encode({
+      type: "hash_submit", session_id: sessionId, leaf_kind: 0x00,
+      structure1_cbor: msg.structure1_cbor, sender_signature: msg.sender_signature,
+    }));
+    expect((await rA.readDecoded())["type"]).toBe("hash_submit_ack");
+    await rA.readDecoded();  // drain the echoed leaf_deliver
+    await rB.readDecoded();  // and B's copy
+
+    // The CTRL leaf, carrying a real SEAL payload. The content hash must be the client's own
+    // derivation — SHA-256(0x02 || payload) — or the relay refuses it, which is the H1 guard.
+    const payload = encodeSealPayload({
+      session_id: sessionId,
+      final_root: new Uint8Array(32).fill(0x33),
+      close_timestamp: 1_700_000_000_000,
+      attestation: "PENDING",
+    });
+    const ctrlHash = new Uint8Array(
+      createHash("sha256").update(new Uint8Array([0x02])).update(payload).digest(),
+    );
+    const ctrl = await makeStructure1(sessionId, ctrlHash, cA.kp, 1);
+    sendFrame(sA, CBOR_ENC.encode({
+      type: "hash_submit", session_id: sessionId, leaf_kind: 0x02,
+      structure1_cbor: ctrl.structure1_cbor, sender_signature: ctrl.sender_signature,
+      content_bytes: payload,
+    }));
+    const ctrlAck = await rA.readDecoded();
+    expect(ctrlAck["type"], `the ctrl submit must be accepted: ${JSON.stringify(ctrlAck)}`).toBe("hash_submit_ack");
+
+    const sealData = fix.relay.submitForSeal(sessionId);
+    expect(sealData.ok, "the session must be sealable").toBe(true);
+    const leaves = (sealData as { data: { leaves: Array<{ kind: string; content_bytes?: Uint8Array }> } }).data.leaves;
+
+    const ctrlLeaves = leaves.filter((l) => l.kind === "ctrl");
+    expect(ctrlLeaves.length, "precondition: the ctrl leaf must be in the log").toBe(1);
+    expect(
+      ctrlLeaves[0]!.content_bytes !== undefined
+        && Buffer.from(ctrlLeaves[0]!.content_bytes).equals(Buffer.from(payload)),
+      "the SEAL payload must reach the directory byte-identical — accepted and dropped is worse than refused, because it reads as an old relay",
+    ).toBe(true);
+
+    for (const l of leaves.filter((l) => l.kind !== "ctrl")) {
+      expect(
+        l.content_bytes,
+        "and no other kind may carry content — the relay must never hand the directory message plaintext",
+      ).toBeUndefined();
+    }
+  });
+});
 
 // ─── AC-001 ───────────────────────────────────────────────────────────────────
 

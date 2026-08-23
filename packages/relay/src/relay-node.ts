@@ -1399,7 +1399,10 @@ export class CelloRelayNode {
     const newState: RelaySessionState = {
       ...state,
       seq_counter: seq,
-      leaf_log: [...state.leaf_log, { kind: leafKind, s2: s2Result.structure2, structure1_cbor: frame.structure1_cbor }],
+      // `DOD-M15-SEALWIRE-1` bullets 3+4: carry the ctrl leaf's SEAL payload into session state, so
+      // `submitForSeal` and `getSealLeaves` hand it to the directory. Both build their leaf array by
+      // slicing this log, so storing it here is the whole forward leg.
+      leaf_log: [...state.leaf_log, { kind: leafKind, s2: s2Result.structure2, structure1_cbor: frame.structure1_cbor, ...(frame.content_bytes ? { content_bytes: frame.content_bytes } : {}) }],
       tree_stack: newStack,
       running_root: newRunningRoot,
     };
