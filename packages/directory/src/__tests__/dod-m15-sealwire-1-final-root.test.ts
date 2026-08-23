@@ -57,12 +57,22 @@ function ctrlHash(payload: Uint8Array): Uint8Array {
   return new Uint8Array(createHash("sha256").update(new Uint8Array([0x02])).update(payload).digest());
 }
 
-function s2(contentHash: Uint8Array, seq: number): Structure2 {
+const ALICE = new Uint8Array(32).fill(0xa1);
+const BOB = new Uint8Array(32).fill(0xb2);
+const STRANGER = new Uint8Array(32).fill(0xcc);
+
+/**
+ * ⚠️ SENDERS ARE DISTINCT NOW, and review pass 2 is why. Every leaf used one pubkey, so the
+ * "two participants disagree" test actually modelled ONE participant signing twice — and the
+ * fixture could not tell that case from a retry, because neither could the module. Both are
+ * separable here, and each has its own test.
+ */
+function s2(contentHash: Uint8Array, seq: number, sender: Uint8Array = ALICE): Structure2 {
   return {
     sequence_number: seq,
     content_hash: contentHash,
     prev_root: new Uint8Array(32),
-    sender_pubkey: new Uint8Array(32).fill(0xaa),
+    sender_pubkey: sender,
     sender_signature: new Uint8Array(64).fill(0xbb),
     relay_id: "relay",
     relay_signature: new Uint8Array(64).fill(0xcc),
@@ -75,8 +85,8 @@ function s2(contentHash: Uint8Array, seq: number): Structure2 {
  * Built here rather than stubbed, because the module now decodes it — a placeholder byte would make
  * every leaf fail as malformed and every assertion below vacuous.
  */
-function s1(contentHash: Uint8Array): Uint8Array {
-  return new Uint8Array(CBOR.encode([1, contentHash, new Uint8Array(32).fill(0xaa), SESSION_ID, 0, 1]));
+function s1(contentHash: Uint8Array, sender: Uint8Array = ALICE): Uint8Array {
+  return new Uint8Array(CBOR.encode([1, contentHash, sender, SESSION_ID, 0, 1]));
 }
 
 function msgLeaf(fill: number, seq: number): RelaySealLeaf {
@@ -89,17 +99,18 @@ function expectedRoot(msgFills: number[]): Uint8Array {
   return merkleRoot(buildMerkleTree(msgFills.map((f) => ({ kind: "hash" as const, data: new Uint8Array(32).fill(f) }))));
 }
 
-function sealLeaf(finalRoot: Uint8Array, seq: number, opts?: { sessionId?: Uint8Array; carry?: boolean; corruptPayload?: boolean }): RelaySealLeaf {
+function sealLeaf(finalRoot: Uint8Array, seq: number, opts?: { sessionId?: Uint8Array; carry?: boolean; corruptPayload?: boolean; sender?: Uint8Array }): RelaySealLeaf {
   const payload = encodeSealPayload({
     session_id: opts?.sessionId ?? SESSION_ID,
     final_root: finalRoot,
     close_timestamp: 1_700_000_000_000,
     attestation: "PENDING",
   });
+  const sender = opts?.sender ?? ALICE;
   const leaf: RelaySealLeaf = {
     kind: "ctrl",
-    s2: s2(ctrlHash(payload), seq),
-    structure1_cbor: s1(ctrlHash(payload)),
+    s2: s2(ctrlHash(payload), seq, sender),
+    structure1_cbor: s1(ctrlHash(payload), sender),
   };
   if (opts?.carry !== false) {
     leaf.content_bytes = opts?.corruptPayload ? new Uint8Array([9, 9, 9]) : payload;
@@ -112,7 +123,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
     const root = expectedRoot([0x11, 0x22, 0x33]);
     const leaves: RelaySealLeaf[] = [
       msgLeaf(0x11, 1), msgLeaf(0x22, 2), msgLeaf(0x33, 3),
-      sealLeaf(root, 4), sealLeaf(root, 5),
+      sealLeaf(root, 4, { sender: ALICE }), sealLeaf(root, 5, { sender: BOB }),
     ];
     const verdict = verifySealFinalRoots(leaves, SESSION_ID);
     expect(verdict.ok, "an honest seal must certify, or the check is a wall rather than a guard").toBe(true);
@@ -137,7 +148,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
     const honestRoot = expectedRoot([0x11, 0x22, 0x33]);
     const tampered: RelaySealLeaf[] = [
       msgLeaf(0x11, 1), /* 0x22 dropped by the relay */ msgLeaf(0x33, 3),
-      sealLeaf(honestRoot, 4), sealLeaf(honestRoot, 5),
+      sealLeaf(honestRoot, 4, { sender: ALICE }), sealLeaf(honestRoot, 5, { sender: BOB }),
     ];
     const verdict = verifySealFinalRoots(tampered, SESSION_ID);
     expect(verdict.ok, "a dropped message must not certify — the receipt would describe a conversation nobody had").toBe(false);
@@ -154,7 +165,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
     const honestRoot = expectedRoot([0x11, 0x22, 0x33]);
     const reordered: RelaySealLeaf[] = [
       msgLeaf(0x22, 1), msgLeaf(0x11, 2), msgLeaf(0x33, 3),
-      sealLeaf(honestRoot, 4), sealLeaf(honestRoot, 5),
+      sealLeaf(honestRoot, 4, { sender: ALICE }), sealLeaf(honestRoot, 5, { sender: BOB }),
     ];
     const verdict = verifySealFinalRoots(reordered, SESSION_ID);
     expect(verdict.ok, "order is part of what was signed — same count, different conversation").toBe(false);
@@ -215,7 +226,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
     const rootB = expectedRoot([0x11, 0x99]);
     const leaves: RelaySealLeaf[] = [
       msgLeaf(0x11, 1), msgLeaf(0x22, 2),
-      sealLeaf(rootA, 3), sealLeaf(rootB, 4),
+      sealLeaf(rootA, 3, { sender: ALICE }), sealLeaf(rootB, 4, { sender: BOB }),
     ];
     const verdict = verifySealFinalRoots(leaves, SESSION_ID);
     expect(verdict.ok, "two participants signing different roots cannot both be certified").toBe(false);
@@ -252,8 +263,8 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
     const root = expectedRoot([0x11, 0x22]);
     const leaves: RelaySealLeaf[] = [
       msgLeaf(0x11, 1), msgLeaf(0x22, 2),
-      sealLeaf(root, 3),                       // new client: carries
-      sealLeaf(root, 4, { carry: false }),     // old client: does not
+      sealLeaf(root, 3, { sender: ALICE }),                    // new client: carries
+      sealLeaf(root, 4, { sender: BOB, carry: false }),        // old client: does not
     ];
     const verdict = verifySealFinalRoots(leaves, SESSION_ID);
     expect(verdict.ok, "one good signature is still worth having — this must not be a refusal").toBe(true);
@@ -264,7 +275,97 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
     expect(
       String((verdict as { detail: string }).detail),
       "and must say which half is unverified, in words a caller cannot silently drop",
-    ).toMatch(/only half|the other did not carry/i);
+    ).toMatch(/only one participant/i);
+    /**
+     * Review F-5: the wording must NOT assert a rollout skew, because the unilateral path requires
+     * exactly one ctrl leaf by design — every unilateral seal lands here with the counterparty
+     * ABSENT, not out of date. Naming a build version there would be the wrong subsystem for the one
+     * seal type whose entire premise is that the other side is gone.
+     */
+    expect(
+      String((verdict as { detail: string }).detail),
+      "the detail must cover BOTH causes — absent by design, and a build that does not carry yet",
+    ).toMatch(/unilateral/i);
+  });
+
+  it("★★ A PARTY'S SEAL RETRY IS NOT EVIDENCE AGAINST THE RELAY — superseded, not disagreeing", () => {
+    /**
+     * ⚠️ REVIEW PASS 2, F-2 — the mirror of the bug pass 1 fixed, and it arrived through the door the
+     * fix opened.
+     *
+     * A party may seal, have a late in-flight message land, and seal again — `verifySealLeaves` says
+     * in its own text that an in-flight leaf must not destroy the seal. The first SEAL commits to the
+     * root over messages 1..n; the retry to 1..n+1. Walking leaves in order hit the STALE one first,
+     * found it disagreed with the relay's set, and answered *"the relay's leaf set is not the
+     * conversation the participant had."*
+     *
+     * The relay was right. The leaf was superseded. Last carried leaf per sender wins.
+     */
+    const staleRoot = expectedRoot([0x11]);              // Alice's first SEAL: before 0x22 landed
+    const currentRoot = expectedRoot([0x11, 0x22]);      // after it
+    const leaves: RelaySealLeaf[] = [
+      msgLeaf(0x11, 1),
+      sealLeaf(staleRoot, 2, { sender: ALICE }),         // superseded
+      msgLeaf(0x22, 3),
+      sealLeaf(currentRoot, 4, { sender: ALICE }),       // Alice's retry
+      sealLeaf(currentRoot, 5, { sender: BOB }),
+    ];
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID);
+    expect(
+      verdict.ok,
+      "a superseded SEAL from a party that later re-sealed correctly must not be held against the relay",
+    ).toBe(true);
+    expect(
+      (verdict as { coverage: string }).coverage,
+      "and the retry must not be counted as a SECOND participant — that is the false 'both'",
+    ).toBe("both");
+  });
+
+  it("★★ TWO SEALS FROM ONE PARTY IS NOT 'both' — the false coverage a retry used to produce", () => {
+    /**
+     * Review F-1. `seal-legibility.ts` documents that a duplicate SEAL from one party can sit in the
+     * log unremoved. Counting leaves rather than distinct senders reported `coverage: "both"` for
+     * `[ctrlA, ctrlA′, ctrlB-uncarried]` — the exact "half of this seal rests on one participant"
+     * that the union was introduced to prevent, restored by an ordinary retry and trivially forgeable
+     * by a relay duplicating a leaf, which costs it nothing and forges nothing.
+     */
+    const root = expectedRoot([0x11]);
+    const leaves: RelaySealLeaf[] = [
+      msgLeaf(0x11, 1),
+      sealLeaf(root, 2, { sender: ALICE }),
+      sealLeaf(root, 3, { sender: ALICE }),                  // same party again
+      sealLeaf(root, 4, { sender: BOB, carry: false }),      // the other party carries nothing
+    ];
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID);
+    expect(verdict.ok).toBe(true);
+    expect(
+      (verdict as { coverage: string }).coverage,
+      "two leaves from ONE participant is one signature, however many times it appears",
+    ).toBe("one");
+  });
+
+  it("★★ A SEAL LEAF FROM A NON-PARTICIPANT IS REFUSED when the caller supplies the roster", () => {
+    /**
+     * Half of the precondition the module could not previously check, turned into code. Nobody
+     * outside a conversation can close it, so a ctrl leaf signed by a third key was injected by
+     * whoever assembled the leaf set — and the relay is the only party on that path.
+     *
+     * Optional, because the module cannot invent the roster; enforced whenever it is given.
+     */
+    const root = expectedRoot([0x11]);
+    const leaves: RelaySealLeaf[] = [msgLeaf(0x11, 1), sealLeaf(root, 2, { sender: STRANGER })];
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID, [ALICE, BOB]);
+    expect(verdict.ok, "a key that is not in the conversation cannot seal it").toBe(false);
+    expect((verdict as { reason: string }).reason).toBe(SEAL_FINAL_ROOT_REASONS.SENDER_NOT_PARTICIPANT);
+
+    // And the roster must not break the honest case.
+    const honest: RelaySealLeaf[] = [
+      msgLeaf(0x11, 1), sealLeaf(root, 2, { sender: ALICE }), sealLeaf(root, 3, { sender: BOB }),
+    ];
+    expect(
+      verifySealFinalRoots(honest, SESSION_ID, [ALICE, BOB]).ok,
+      "a guard that refuses the honest case is a wall",
+    ).toBe(true);
   });
 
   it("★★ A RELAY THAT REWRITES ITS OWN ENVELOPE IS CAUGHT — the finding the first version could not see", () => {

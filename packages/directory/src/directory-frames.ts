@@ -832,10 +832,23 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
         if (anyRelay) {
           if (!relay_id || relay_timestamp === undefined || !relay_signature || relay_signature.length !== 64) return null;
         }
-        // `DOD-M15-SEALWIRE-1` bullets 3+4: the ctrl leaf's SEAL payload, when a relay carries it.
-        // `toUint8Array` or nothing — absent is a relay that has not deployed it, and a non-bytes
-        // value must never reach `createHash(...).update()`, which throws on anything else.
+        /**
+         * `DOD-M15-SEALWIRE-1` bullets 3+4: the ctrl leaf's SEAL payload, when a relay carries it.
+         *
+         * ⚠️ PRESENT-BUT-MALFORMED VOIDS THE FRAME — review pass 2, F-3. The first version took
+         * `toUint8Array` and spread the result, so a string or object became *absent* and the frame
+         * was accepted. That broke this parser's own stated rule three lines up — *"a malformed entry
+         * voids the whole carry… never silently drops a leaf"* — which every sibling field obeys, and
+         * it disagreed with the bilateral path, which refuses the identical byte as
+         * `seal_submission_content_bytes_malformed`. Two paths, opposite answers, same input.
+         *
+         * The operator cost was the worse half: dropped-to-absent surfaces downstream as
+         * `not_carried`, whose guidance says *"the relay node is on an old build"* — sending them to
+         * compare versions with a relay that is on the NEW build and sending the field correctly,
+         * while the real fault is an encoding bug in the payload.
+         */
         const content_bytes = toUint8Array(r["content_bytes"]);
+        if (r["content_bytes"] !== undefined && content_bytes === null) return null;
         parsed.push({ sequence_number, leaf_kind, structure2_cbor, structure1_cbor, relay_id, relay_timestamp, relay_signature, ...(content_bytes ? { content_bytes } : {}) });
       }
       seal_leaves = parsed;

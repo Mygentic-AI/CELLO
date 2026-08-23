@@ -104,6 +104,8 @@ export const SEAL_FINAL_ROOT_REASONS = {
   ROOT_DISAGREES: "seal_final_root_disagrees",
   /** The two participants signed DIFFERENT roots — they disagree about their own transcript. */
   PARTIES_DISAGREE: "seal_final_root_parties_disagree",
+  /** A SEAL leaf signed by a key that is not a participant in this session. */
+  SENDER_NOT_PARTICIPANT: "seal_sender_not_participant",
 } as const;
 
 export type SealFinalRootReason =
@@ -125,7 +127,9 @@ export const SEAL_FINAL_ROOT_GUIDANCE: Record<SealFinalRootReason, string> = {
   [SEAL_FINAL_ROOT_REASONS.ROOT_DISAGREES]:
     "A participant signed a transcript root that does not match the leaves the relay supplied. The relay's leaf set is not the conversation the participant had — a dropped, added or reordered message. This is the exact failure the circular root check could never see; do not certify.",
   [SEAL_FINAL_ROOT_REASONS.PARTIES_DISAGREE]:
-    "The two participants signed DIFFERENT transcript roots. They disagree about their own conversation, so no certificate can be honest about both — the relay may have shown them different message sets. Do not certify; the participants need to compare transcripts.",
+    "The two participants signed DIFFERENT transcript roots. They disagree about their own conversation, so no certificate can be honest about both — the relay may have shown them different message sets, or one side's local tree diverged (look for session.tree.position_behind_frontier on their daemon). Do not certify; the participants need to compare transcripts.",
+  [SEAL_FINAL_ROOT_REASONS.SENDER_NOT_PARTICIPANT]:
+    "A SEAL leaf was signed by a key belonging to neither participant. Nobody outside a conversation can close it, so this leaf was injected by whoever assembled the leaf set — the relay is the only party on that path. Treat it as relay tampering and do not certify.",
 };
 
 /**
@@ -202,32 +206,70 @@ function bufEqual(a: Uint8Array, b: Uint8Array): boolean {
 export function verifySealFinalRoots(
   leaves: readonly RelaySealLeaf[],
   sessionId: Uint8Array,
+  participants?: readonly Uint8Array[],
 ): SealFinalRootVerdict {
   const expected = rootOverNonCtrlLeaves(leaves);
-  let signedBy = 0;
-  let agreedRoot: Uint8Array | null = null;
+
+  /**
+   * ⚠️ KEYED ON SENDER, NOT COUNTED — review pass 2, F-1 and F-2, which are one defect wearing two
+   * names: the loop used to iterate every ctrl leaf and increment a counter.
+   *
+   * **F-1, the false "both".** A party may retry its SEAL, and `seal-legibility.ts` documents that a
+   * duplicate from one party can sit in the log unremoved. `[ctrlA, ctrlA′, ctrlB-uncarried]` then
+   * counted TWO carried payloads and reported `coverage: "both"` — the very "half of this seal rests
+   * on one participant" the union was introduced to prevent, restored by an ordinary retry, and
+   * trivially forgeable by a relay duplicating a leaf (which costs it nothing and forges nothing).
+   *
+   * **F-2, the retry accused as tampering.** A stale first SEAL commits to the root before a late
+   * in-flight message; the retry commits to the root after it. Walking leaves in order hit the STALE
+   * one first, found it disagreed with the relay's set, and answered *"the relay's leaf set is not
+   * the conversation the participant had."* The relay was right and the leaf was simply superseded.
+   *
+   * So: **last carried leaf per sender wins**, exactly as `findSealCeremonyPair` already resolves the
+   * ceremony pair. A superseded SEAL is not evidence against anybody.
+   */
+  const bySender = new Map<string, { root: Uint8Array; index: number }>();
 
   for (let i = 0; i < leaves.length; i++) {
     const leaf = leaves[i]!;
     if (leaf.kind !== "ctrl") continue;
     const bytes = leaf.content_bytes;
-    // ABSENT is a relay that has not deployed this — NOT a pass. The caller distinguishes the two.
+    // ABSENT is a relay that has not deployed this — NOT a pass. The verdict below distinguishes them.
     if (bytes === undefined) continue;
+    const senderHex = Buffer.from(leaf.s2.sender_pubkey).toString("hex");
+    const who = `leaf ${i} (sender ${senderHex.slice(0, 16)}…)`;
 
     /**
-     * ⚠️ AGAINST THE SIGNED HASH, NOT THE RELAY'S COPY — review F1.
+     * THE PARTICIPANT HALF OF THE PRECONDITION, ENFORCED HERE WHEN THE CALLER CAN SUPPLY IT.
+     *
+     * Optional because the module cannot invent the roster — but when it is given, a ctrl leaf from
+     * a key that is not one of the two participants is refused here rather than trusted to have been
+     * caught upstream. That is half of the 🚨 block above turned into code; the signature half
+     * genuinely cannot move into this module.
+     */
+    if (participants !== undefined
+        && !participants.some((p) => bufEqual(p, leaf.s2.sender_pubkey))) {
+      return {
+        ok: false,
+        reason: SEAL_FINAL_ROOT_REASONS.SENDER_NOT_PARTICIPANT,
+        detail: `${who}: a SEAL leaf signed by a key that is not a participant in this session`,
+      };
+    }
+
+    /**
+     * ⚠️ AGAINST THE SIGNED HASH, NOT THE RELAY'S COPY — pass 1, F1.
      *
      * `structure1_cbor` is the exact byte string the client's signature covers, so its `content_hash`
-     * is the client's. `s2.content_hash` is the relay's envelope field and is only equal to it
-     * because the caller's loops prove so. Binding against the relay's copy made this module's
-     * central claim true only by someone else's diligence.
+     * is the client's. `s2.content_hash` is the relay's envelope field, equal to it only because the
+     * caller's loops prove so. Binding against the relay's copy made this module's central claim true
+     * by someone else's diligence.
      */
     const s1 = decodeStructure1ContentHash(leaf.structure1_cbor);
     if (s1 === null) {
       return {
         ok: false,
         reason: SEAL_FINAL_ROOT_REASONS.PAYLOAD_MALFORMED,
-        detail: `leaf ${i}: structure1_cbor is not decodable, so there is no signed hash to bind against`,
+        detail: `${who}: structure1_cbor is not decodable, so there is no signed hash to bind against`,
       };
     }
     // A relay that rewrites its envelope is refused HERE rather than trusted to have been caught.
@@ -235,14 +277,14 @@ export function verifySealFinalRoots(
       return {
         ok: false,
         reason: SEAL_FINAL_ROOT_REASONS.PAYLOAD_UNBOUND,
-        detail: `leaf ${i}: the relay's envelope content_hash disagrees with the one the client signed`,
+        detail: `${who}: the relay's envelope content_hash disagrees with the one the client signed`,
       };
     }
     if (!bufEqual(sealContentHash(bytes), s1)) {
       return {
         ok: false,
         reason: SEAL_FINAL_ROOT_REASONS.PAYLOAD_UNBOUND,
-        detail: `leaf ${i}: SHA-256(0x02 || payload) does not equal the content_hash the client SIGNED`,
+        detail: `${who}: SHA-256(0x02 || payload) does not equal the content_hash the client SIGNED`,
       };
     }
 
@@ -251,56 +293,21 @@ export function verifySealFinalRoots(
       return {
         ok: false,
         reason: SEAL_FINAL_ROOT_REASONS.PAYLOAD_MALFORMED,
-        detail: `leaf ${i}: payload is bound to the signature but is not a decodable SEAL payload`,
+        detail: `${who}: payload is bound to the signature but is not a decodable SEAL payload`,
       };
     }
     if (!bufEqual(payload.session_id, sessionId)) {
       return {
         ok: false,
         reason: SEAL_FINAL_ROOT_REASONS.SESSION_MISMATCH,
-        detail: `leaf ${i}: payload names a different session`,
+        detail: `${who}: payload names a different session`,
       };
     }
-    /**
-     * ⚠️ PARTICIPANTS AGAINST EACH OTHER **FIRST**, THEN AGAINST THE RELAY — review F2, and the
-     * order is the whole finding.
-     *
-     * With the relay comparison first, `PARTIES_DISAGREE` was provably unreachable: any leaf that got
-     * past it already equalled `expected`, so the two signed roots could never differ by the time
-     * they were compared. Dead code — but the cost was not the dead branch, it was **what fired
-     * instead.**
-     *
-     * A client whose own tree diverged is a real, already-instrumented state: `placeOwnLeaf` with an
-     * assigned sequence behind its frontier appends at the tail, logs
-     * `session.tree.position_behind_frontier` at ERROR, and marks the session diverged. That party's
-     * `final_root` is then over a differently-ordered leaf set while the counterparty's still matches
-     * the relay. The old order answered `ROOT_DISAGREES`, whose guidance says *"the relay's leaf set
-     * is not the conversation the participant had"* — and sends the operator to audit a relay that is
-     * fine, for a fault the client already logged.
-     *
-     * Comparing the two signatures to each other first separates them honestly:
-     *   - both clients agree, the relay's set differs  → the relay is the accused, correctly;
-     *   - the clients disagree with each other         → they are, and the fix is comparing transcripts.
-     */
-    if (agreedRoot !== null && !bufEqual(agreedRoot, payload.final_root)) {
-      return {
-        ok: false,
-        reason: SEAL_FINAL_ROOT_REASONS.PARTIES_DISAGREE,
-        detail: `leaf ${i} (sender ${Buffer.from(leaf.s2.sender_pubkey).toString("hex").slice(0, 16)}…): the two SEAL leaves carry different final_root values, so the participants disagree with EACH OTHER — this is not a relay accusation`,
-      };
-    }
-    if (!bufEqual(payload.final_root, expected)) {
-      return {
-        ok: false,
-        reason: SEAL_FINAL_ROOT_REASONS.ROOT_DISAGREES,
-        detail: `leaf ${i} (sender ${Buffer.from(leaf.s2.sender_pubkey).toString("hex").slice(0, 16)}…): signed a root over a different leaf set than the relay supplied${agreedRoot === null ? "" : "; the other participant signed the SAME root, so both agree and the relay's set is the outlier"}`,
-      };
-    }
-    agreedRoot = payload.final_root;
-    signedBy++;
+    // Last carried leaf per sender wins — a retry supersedes its own earlier SEAL.
+    bySender.set(senderHex, { root: payload.final_root, index: i });
   }
 
-  if (signedBy === 0) {
+  if (bySender.size === 0) {
     /**
      * Review F5: this is also what a leaf set with NO ctrl leaf at all produces, which is a malformed
      * carry rather than a version skew. Both existing callers validate ctrl-leaf presence before they
@@ -313,13 +320,52 @@ export function verifySealFinalRoots(
       detail: "no SEAL leaf carried its payload",
     };
   }
-  if (signedBy === 1) {
+
+  /**
+   * ⚠️ COLLECT FIRST, COMPARE AFTER — review F-4, and it is what makes both verdicts reachable WITH
+   * their evidence.
+   *
+   * Comparing inside the loop meant the corroboration clause on `ROOT_DISAGREES` — *"the other
+   * participant signed the SAME root"* — could never print: a genuine relay fault returns on the
+   * FIRST carried leaf, when nothing else has been seen yet. The operator got the accusation without
+   * the one fact that makes it safe to act on.
+   */
+  const entries = [...bySender.entries()];
+  const first = entries[0]![1];
+  for (const [senderHex, e] of entries.slice(1)) {
+    if (!bufEqual(e.root, first.root)) {
+      return {
+        ok: false,
+        reason: SEAL_FINAL_ROOT_REASONS.PARTIES_DISAGREE,
+        detail: `leaf ${e.index} (sender ${senderHex.slice(0, 16)}…): the participants signed DIFFERENT final_root values, so they disagree with EACH OTHER about their own transcript — this is not a relay accusation`,
+      };
+    }
+  }
+
+  if (!bufEqual(first.root, expected)) {
     return {
-      ok: true,
-      coverage: "one",
-      verifiedRoot: expected,
-      detail: "one participant's signed root was checked; the other did not carry its payload, so only half of this seal is verified against a client signature",
+      ok: false,
+      reason: SEAL_FINAL_ROOT_REASONS.ROOT_DISAGREES,
+      detail: `leaf ${first.index}: signed a root over a different leaf set than the relay supplied`
+        + (entries.length > 1
+          ? `; all ${entries.length} participants signed the SAME root, so they agree and the relay's leaf set is the outlier`
+          : "; only one participant's payload was carried, so this is one signature against the relay's set"),
     };
   }
-  return { ok: true, coverage: "both", verifiedRoot: expected };
+
+  return bySender.size >= 2
+    ? { ok: true, coverage: "both", verifiedRoot: expected }
+    : {
+        ok: true,
+        coverage: "one",
+        verifiedRoot: expected,
+        /**
+         * ⚠️ NEUTRAL WORDING — review F-5. This said *"the other did not carry its payload"*, which
+         * names a rollout skew. On the UNILATERAL path exactly one ctrl leaf is required by design,
+         * so every unilateral seal lands here and the counterparty was ABSENT, not out of date.
+         * Pointing that operator at build versions would be the wrong subsystem for the one seal type
+         * whose entire premise is that the other side is gone.
+         */
+        detail: "only one participant's signed root was checked — the other's payload was not carried. On a unilateral seal that is expected (the counterparty was absent); on a bilateral one it means their build does not carry the payload yet.",
+      };
 }
