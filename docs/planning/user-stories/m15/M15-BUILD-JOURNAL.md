@@ -15,14 +15,19 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 29 ✅, 2 🟡 (carried halves only), 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
-> **No unreviewed work.** `CLOSEWAIT-1` closed in Entry 37 — nine findings fixed, verdict quoted,
-> gate green both repos BY EXIT CODE (4212 client). `DIRAUTH-1` and `DEAD-WIRE-FIELD-1` are 🟡 for
-> CARRIED halves only and do not block. **A new line may start.**
+> ### 🟡 29 ✅, 3 🟡, 2 🅿️, 37 ❌. Both repos clean, pushed, on main.
+> **`SEAL-FAILED-TERMINAL-1` IS THE UNREVIEWED ONE** — built in `af3062f`+ (cello-client), reviewer
+> dispatched. `DIRAUTH-1` and `DEAD-WIRE-FIELD-1` are 🟡 for CARRIED halves only and do not block.
+> Gate: 4227 client tests, lint, typecheck, build — by EXIT CODE.
 
-- **NEXT ACTION: pull ONE new ❌ line.** `SEAL-FAILED-TERMINAL-1` (new, Entry 37) is the natural
-  follow-on and is small. `FREEZE-STATUS-1` needs a client-side DB migration in its own reviewed unit.
-  `UNWITNESSED-1` needs a relay-attaching fixture.
+- **NEXT ACTION: close `SEAL-FAILED-TERMINAL-1`**, then pull ONE new ❌ line. `FREEZE-STATUS-1` needs
+  a client-side DB migration in its own reviewed unit; `UNWITNESSED-1` needs a relay-attaching fixture.
+- **🚨 THE WIRING GAP HAS NOW ESCAPED IN FOUR UNITS.** Roster sweep, its probe budget, the manifest
+  validity tick, and this unit's WRITE side. Every time the module tests were green and nothing
+  proved the daemon called the thing. In this unit I wrote a docstring naming the previous three and
+  then made the same mistake one layer up — the test injected the READER's dep directly, so deleting
+  the WRITER was green. **Ask of every unit: which side of this seam has a test, and which side only
+  has a comment?**
 - **🚨 `git checkout` IN A MUTATION LOOP HAS NOW DESTROYED WORK FIVE TIMES.** Same sequence every
   time: commit, add more work, mutate, restore, lose it. "Commit before mutating" has been written
   into three commit messages and broken three times since, so state it as a precondition instead:

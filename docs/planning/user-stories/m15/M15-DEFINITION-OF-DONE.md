@@ -1132,7 +1132,17 @@ the only safety net standing between "the relay said sealed but lied" and "the r
 > change had made impossible, and the re-close refusal named a log event emitted nowhere in the tree.
 > **Carried:** `DOD-M15-SEAL-FAILED-TERMINAL-1`.
 
-### `DOD-M15-SEAL-FAILED-TERMINAL-1` — ❌ A seal that FAILED is discoverable, not just a slow one
+### `DOD-M15-SEAL-FAILED-TERMINAL-1` — 🟡 A seal that FAILED is discoverable, not just a slow one
+> **BUILT 2026-08-23, review in flight.** `cello_sealed_receipt` now answers `seal_failed` with the
+> UPSTREAM cause, distinct from `seal_in_progress` (running) and `not_sealed_yet` (no ceremony).
+> **Stored in memory, not a column — and that is a correctness call, not a cost one.** A restart makes
+> "failed" the WRONG answer: the boot sweep flips the session to `interrupted/local` and the restart
+> seal resolver retries it, so a persisted marker would outlive its own truth and report a ceremony
+> as dead while it is being retried. A marker whose lifetime is the process matches the lifetime of
+> the condition it describes.
+> **The ordering is the load-bearing part:** a running ceremony outranks a remembered failure, and the
+> marker is cleared when a ceremony STARTS — because a re-close is the documented remedy, and a stale
+> verdict surviving the retry is `STALEROSTER-1`'s defect in a new subsystem.
 Split from `DOD-M15-CLOSEWAIT-1` (review HIGH-1, the half that remains).
 - `seal_in_progress` now distinguishes a RUNNING ceremony from "no ceremony". What is still missing is
   the terminal case: a background ceremony that **threw** leaves the session `active` with a durable
