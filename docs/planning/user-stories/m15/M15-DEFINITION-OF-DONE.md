@@ -305,6 +305,26 @@ different repos, different disciplines, neither blocks the other.
       shape, so it is part B's call: a third field, or a `refused` frame.
     - **The salted/unsalted decision is per PEER, not per session record.** `content_salt IS NULL`
       says what WE hold, never what they can verify.
+  - **PART B1 IS BUILT AND TWICE-REVIEWED (2026-08-23 → Entries 43, 44).** The RECEIVER reads
+    `content_hash_alg` off the frame and verifies under it; no sender salts. **B2's inherited ACs,
+    out of those two passes — do not re-derive them:**
+    - **The park envelope needs the algorithm field, at BOTH verifier sites.**
+      `session-node-manager.ts`'s `recoverParkedEntry` AND the independent check in
+      `content-park.ts`. Miss the second and a salted parked entry is not annexed while **the relay
+      copy is kept**, which re-creates the repeated re-pull loop that code exists to end.
+    - **A salt disagreement between two SALTING peers reports as `content_hash_mismatch`** — a state
+      difference raised as a security event, the same collapse running the other way. Part A's
+      fingerprint check is meant to pre-empt it, except a park-only session never gets one (see the
+      first AC above). Fix them together.
+    - **Persist the unverifiable mark, or give the auto-ack gate a leaf-count check.** The mark is
+      in memory: a restart between a tamper and the counterparty's SEAL ctrl leaf lets this side
+      auto-co-sign. The upgrade path is accidentally covered — a refused frame was never appended,
+      so its leaf count is short — and the auto-ack path has no such backstop.
+    - **`content.recover.alg_refusal_reconciled` has no test.** Deleting the whole block survives the
+      gate. It lands with the park-envelope work, which is what makes it testable.
+    - **The salt guidance's blind spot:** the shutdown-only `!this.#db` path in `#getSessionSalt`
+      logs nothing, so it falls into the "neither event is present ⇒ close the session" branch of the
+      `content_hash_salt_unavailable` advice.
 - **Enforcer:** receipt. *(Not run — the unit is carried by suite + review; the enforcer itself is
   built by `DOD-M15-INTERRUPTED-1` and this line is re-asserted there.)*
 
