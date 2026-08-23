@@ -38,9 +38,9 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
 > ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4403 client tests.
-> **PARTS A, B1, B2a ALL CLOSED** (→ Entries 41–46; each spent its two-pass cap). Twelve blocking
-> findings across six passes, all fixed. **WIP is free: start part B2b** — the last unit of bullet 6.
-> Its ACs are written on the `SEALWIRE-1` line; read them, do not re-derive them.
+> **PARTS A, B1, B2a CLOSED** (→ Entries 41–46, two-pass cap each). **B2b-1 BUILT AND UNREVIEWED** —
+> commits `9f71d07` → `4b26138`, reviewer dispatched. Under the WIP limit the only permitted work is
+> closing it. B2b-2 (the value stops being `sha256`) is the last unit of bullet 6.
 
 - **TIER 4 IS IN PROGRESS. `SEALWIRE-1` bullets 1 + 2 are BUILT, REVIEWED, and their blocking
   findings fixed** — the directory certifies the content-hash root, and the client verifies it
@@ -85,10 +85,26 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   - **`encodeParkEnvelope` now THROWS** on an algorithm this build cannot read. Traced: `#parkContent`
     catches it and returns `{outcome:"refused"}`, so no message is lost — but B2b should validate
     before calling rather than lean on that catch.
-- **NEXT — PART B2.** `wireContentHash` → `saltedContentHash` on the send paths, the sender-side
-  fallback announcement, and holding the first send until the salt is agreed. **Its ACs are written
-  on the `SEALWIRE-1` line — read them, do not re-derive them.** Five of them, inherited from B1's
-  two passes; the park envelope one is the trap.
+- **B2b IS SPLIT: B2b-1 THREADS THE VALUE, B2b-2 CHANGES IT.** B2b-1 (built) routes every outbound
+  hash through ONE `contentHashForSession`, which returns the hash AND its algorithm together, and
+  puts the algorithm on the frame — **still `sha256` everywhere.** B2b-2 makes it consult the salt,
+  adds the sender-side fallback announcement, and holds the first send until the salt is agreed.
+  **Its ACs are written on the `SEALWIRE-1` line — read them, do not re-derive them.**
+  - **Why ONE decision point:** four send sites each deciding whether to salt is
+    `wire-content-hash.ts`'s ORIGINAL defect (five call sites, the last two wrong, two live daemons
+    to find) with a worse outcome — a message hashed one way and LABELLED another is refused by every
+    peer, including a correct one, and the refusal reads as tampering.
+- **🚨 A MUTANT SURVIVED B2b-1 UNTIL I WROTE ITS TEST:** delete `content_hash_alg` from the outbound
+  frame and 2,700 daemon tests stay green. **Nothing read what the sender puts on the wire.** The
+  receiving half is already built and trusts whatever the frame names, so this fails SILENTLY — every
+  peer reverts to assuming `sha256`. Closed by `dod-m15-send-names-its-algorithm.test.ts`, which also
+  pins that the name MATCHES the hash, recomputed from the frame alone.
+- **🚨 THE MIGRATION GUARD ONLY CHECKS ONE OF SEVEN TABLES.** `dod-agent-id-joinkey-migration` has
+  caught this class FOUR times (`read_at`, `diverged_at`, `content_salt`, and `retry_queue`'s
+  ordering record) — and it replays only the **`sessions`** inline ALTERs. The other six rebuilt
+  tables have nothing between a forgotten column and silent data loss on the upgrade boot. **Raised
+  with `CELLO_Support` over CELLO**, since their columns are exposed too; test-only, and in neither
+  of our units.
 - **🚨 THE MUTATION-LOOP RULE IS NOW IN `M15-PROCEDURE` §2**, agreed with `CELLO_Support` over CELLO
   and reviewed by me (§5 carries a pointer, not a copy). Four rules; the loop has failed EIGHT times
   across both lanes. **Rule 4 is the one my lane contributed and the one that keeps catching me:** a
