@@ -33,8 +33,6 @@ import { resolve } from "node:path";
 // DOD-M15-CHAINDEBT-1: this file seeds conversation_seals rows with a REAL chain hash, and asserts
 // at the end that the table still verifies — the runtime gate the source-reading guard cannot give.
 import { computeChainHash, serializeRecord, CHAIN_GENESIS } from "../hash-chain.js";
-import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
-import type { Logger } from "@cello-protocol/interfaces";
 
 /**
  * Insert a `conversation_seals` row whose `chain_hash` is chained to the current head.
@@ -62,12 +60,16 @@ import type { Logger } from "@cello-protocol/interfaces";
  * because `fileParallelism` is false under `CELLO_ENV=local`, so nothing else is writing this table
  * at the same time. A fixture helper, not a second implementation of the writer.
  */
+/** Every conversation_id this file seeded, so the gate at the end can re-check exactly those rows. */
+const seededConversationIds: string[] = [];
+
 async function insertChainedSeal(
   client: pg.PoolClient,
   headPool: pg.Pool,
   conversationId: string,
   merkleRoot: string,
 ): Promise<void> {
+  seededConversationIds.push(conversationId);
   const head = await headPool.query<{ chain_hash: string }>(
     `SELECT chain_hash FROM conversation_seals ORDER BY id DESC LIMIT 1`,
   );
@@ -674,21 +676,42 @@ describeIntegration("PERSIST-003 AC-006: cello_service SELECT succeeds and retur
      * `conversation_seals` and to `recordConversationSeal` but not to `insertChainedSeal`, and
      * every test in the directory stays green while this file quietly writes holes.
      *
-     * This is the assertion that closes that: the whole table, as it stands after this file has
-     * run. It is deliberately NOT scoped to one row — a hand-chained row that is wrong breaks its
-     * SUCCESSORS, and a `WHERE` clause would hide exactly that.
+     * ─── AND WHY IT IS NOT `verifyChain` OVER THE WHOLE TABLE ───────────────────────────────────
+     *
+     * The first version asserted exactly that, passed alone, and FAILED in a full run — break at
+     * position 1, on a row this file never wrote. `conversation_seals` is shared: other suites write
+     * to it and later truncate it, so a whole-table assertion here is really an assertion about
+     * whatever else happened to run first. That is the same order-dependence this unit spent the
+     * evening removing from other files, reintroduced by its own fix. Caught by the gate failing,
+     * which is the gate working.
+     *
+     * So this checks the property this file is actually responsible for: **each row it seeded
+     * chains correctly to the row that precedes it in the table.** That is precisely what breaks if
+     * `insertChainedSeal`'s record drifts from what `insertWithChain` hashes — and it is immune to
+     * anyone else's holes, which are not this file's to assert about.
      */
-    const store = new PgDirectoryStore(servicePool, {
-      debug: () => {}, info: () => {}, warn: () => {}, error: () => {},
-    } as unknown as Logger);
-    const result = await store.verifyChain("conversation_seals");
+    expect(seededConversationIds.length, "no rows were seeded — this gate would be vacuous").toBeGreaterThan(0);
+
+    const { rows } = await superPool.query<Record<string, unknown>>(
+      `SELECT * FROM conversation_seals ORDER BY id ASC`,
+    );
+    const bad: string[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]!;
+      if (!seededConversationIds.includes(String(row["conversation_id"]))) continue;
+      const prev = i === 0 ? CHAIN_GENESIS : String(rows[i - 1]!["chain_hash"]);
+      const expected = computeChainHash(serializeRecord(row, "conversation_seals"), prev);
+      if (expected !== String(row["chain_hash"])) {
+        bad.push(`${String(row["conversation_id"])} (stored ${String(row["chain_hash"]).slice(0, 12)}…, recomputed ${expected.slice(0, 12)}…)`);
+      }
+    }
     expect(
-      result.valid,
-      `conversation_seals does not verify after this file's hand-chained seeds ` +
-        `(break at ${String(result.breakAtSequence)}). Either insertChainedSeal's record no longer ` +
-        `matches what insertWithChain hashes for this table, or something else in the run left a ` +
-        `hole — both are worth stopping for.`,
-    ).toBe(true);
+      bad,
+      `These rows were seeded by insertChainedSeal and do not verify against the row before them: ` +
+        `${bad.join("; ")}. The helper's record no longer matches what insertWithChain hashes for ` +
+        `conversation_seals — most likely a column was added to the table and to the real writer ` +
+        `but not here.`,
+    ).toEqual([]);
   });
 });
 
