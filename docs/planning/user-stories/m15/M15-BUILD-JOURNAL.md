@@ -4676,3 +4676,83 @@ The park envelope needs the algorithm field, at **both** verifier sites. And a s
 between two salting peers reports as `content_hash_mismatch` — a state difference as a security
 event, the same collapse running the other way — which the part-A fingerprint check is supposed to
 pre-empt, except that a park-only session never gets one.
+
+---
+
+## Entry 44 — the label was fixed in one place and the gate in two
+
+Pass 2 of part B1, reviewing pass 1's security fix. **Three blocking findings, all in the fix.** The
+cap is two passes, so this closes the unit; what is left became acceptance criteria on part B2.
+
+### The verdict, quoted
+
+> **ERROR SUBSTITUTION FOUND** [blocking] — `content_tamper` at ERROR standing in for "their build
+> is newer than ours", at `seal-upgrade.ts:47/101`. **It is the same defect the commit was written
+> to remove, at the consumer the commit did not check.**
+> **SPEC: DEVIATIONS FOUND** — F-A (the gate went binary, its second consumer did not), F-C
+> (reason-string collision against a meaning reserved eight lines above), F-D. All un-journaled.
+> **HOLLOW TESTS FOUND** [blocking] — the `tampered never downgrades` test's decisive assertion is
+> unreachable, and the entire `content_tamper` vs `content_unverifiable` branch has no coverage
+> anywhere in the repo.
+> **NO SILENT FALLBACKS** — every refusal path marks, logs, and refuses.
+> …*"the security fix itself is sound and the marker is the right shape — but you asked me to find
+> where a second consumer of the gate was left behind and where a mutant survives, and both exist,
+> at the same conceptual seam: the label was fixed in one place and the gate in two."*
+
+### The finding, and it is the same shape as the one before it
+
+Pass 1's fix separated "refuse to sign" from "call it a tamper" — correctly — and I applied that
+separation to **one** of the two consumers of the gate. `evaluateSealUpgrade` reads the same struct,
+had only a boolean to read, and therefore hard-mapped every cause to `content_tamper`, at **ERROR**,
+with no `impact` and no `guidance` fields at all.
+
+So an honest peer on a newer build produced, on the counterparty's reconnect, a security alarm with
+no next step — the exact harm pass 1 existed to remove. And it is reachable: the `interrupted`
+teardown deliberately does not evict the mark, which is precisely the state a returning-absent-party
+upgrade runs in.
+
+The interface now carries the label rather than a boolean, so **a caller cannot flatten what it never
+receives flat**. Both causes still refuse; only the name and the log level differ. Both refusals now
+carry `impact` and `guidance`, which that path never had.
+
+### The test that would have caught it never ran
+
+My *"tampered never downgrades"* test wrapped its decisive assertion in `if (skipped.length > 0)`,
+and that was **always false**: `#maybeAutoAcknowledgeSeal` has one production call site, behind a
+relay ctrl-leaf check the test never reaches. So the whole `content_tamper` vs skew branch had no
+coverage **anywhere in the repo**, and two mutants on it survived the full 4382-test gate — including
+deleting the non-downgrade rule the test is named for.
+
+I flagged that guard as suspicious in the review brief. It was worse than suspicious: **a conditional
+assertion is a wish.** Replaced with four that drive the real gate through a seam, including the
+ordering I had not thought to test and an attacker would actually pick — send the cheap
+innocent-looking junk frame FIRST, then tamper, hoping the benign mark absorbs it.
+
+### And a string collision eight lines from my own change
+
+The comment above the gate still said a hash mismatch was the only tracked cause, and **reserved
+`content_unverifiable` for a deferred feature** (parked content unrecoverable) — while my code
+emitted exactly that string for a different condition. The day MSG-001-3b lands, the two would have
+been indistinguishable in the log. Renamed `content_verification_unavailable`; the comment is present
+tense now and says why the reserved name is off limits.
+
+### The warning that fired on the healthy case
+
+The park reconciliation was keyed by session, so after one unreadable frame **every** later park
+recovery on that session logged a WARN forever, for unrelated messages — asserting the two events
+were the same message, which nothing had established. Hash-keyed now, deleted on reconciliation, and
+capped per session because it is fed entirely by a remote party.
+
+### Revert test
+
+Five mutants after the fixes, including both the reviewer proved were surviving: flatten the label
+back to a boolean; delete the non-downgrade rule; make the auto-ack reason a constant; have the
+upgrade consumer call every cause a tamper; make the reconciliation fire for any message. **All five
+caught.** Gate: 4385 client tests, lint, typecheck, build — by exit code.
+
+### The pattern, now three units running
+
+Part A: a false sentence in a header. Part B1 pass 1: a security consequence of a refusal path.
+Part B1 pass 2: **a fix applied to one of two consumers.** Each time the code I wrote was right where
+I was looking and wrong one step to the side, and each time my own test for it asserted the thing I
+had already thought of.
