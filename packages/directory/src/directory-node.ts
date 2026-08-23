@@ -2331,13 +2331,15 @@ export class CelloDirectoryNode {
               );
             })
             .catch((err: unknown) => {
-              // A dropped ACK is not silent to the user: the signal stays undelivered and is
-              // handed to them again on the next pickup, indefinitely.
+              // A dropped ACK is not silent to the user: the signal stays unacknowledged and is
+              // handed to them again on every pickup until `sweepUndeliverablePickups` retires it
+              // at its 24-hour TTL.
               this.#logger?.error("directory.trust_signal.ack.failed", {
                 pickupId: ackId,
                 agentId: ackPubkey.slice(0, 16),
                 reason: err instanceof Error ? err.message : String(err),
-                impact: "this trust signal will be re-delivered on every subsequent pickup",
+                impact:
+                  "this trust signal will be re-delivered on every pickup until its 24-hour TTL",
               });
             });
         } else if (parsed.type === "submission_write") {
@@ -3613,8 +3615,10 @@ export class CelloDirectoryNode {
     this.#pendingConnectionRequests.delete(frame.connection_request_id);
     // M6B-010 AC-001: remove from active_connection_requests so it is not reloaded on restart.
     void this.#store.deleteActiveConnectionRequest(frame.connection_request_id).catch((err: unknown) => {
-      // The request has been answered. If this delete is lost, a restart resurrects it and the
-      // target is asked to decide on a connection they already accepted or declined.
+      // The request has been answered. If this delete is lost, a restart reloads it into the
+      // in-memory routing map — `restorePendingConnectionRequests` repopulates that map and does
+      // NOT re-send an inbound frame, so nobody is asked to decide twice. What survives is a stale
+      // routing entry that would accept a second response to a request already settled.
       this.#logger?.error("connection_request.delete.failed", {
         connectionRequestId: truncHex(frame.connection_request_id),
         verdict: frame.verdict,

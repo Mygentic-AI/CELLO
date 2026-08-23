@@ -65,13 +65,37 @@ export async function teardown(): Promise<void> {
   // The integration suite only runs against a real database; with no database there is nothing to
   // check and nothing to claim. Staying silent here is deliberate — see the note below on why this
   // does not quietly pass.
-  if (process.env["CELLO_ENV"] !== "local") return;
+  if (process.env["CELLO_ENV"] !== "local") {
+    // Said out loud. A silent skip is indistinguishable from a check that ran and found nothing,
+    // and "did this actually run?" is the question that makes a guard worthless. Verified safe:
+    // every test file in this package that opens a `pg.Pool` gates on `CELLO_ENV === "local"`, so
+    // where this skips, nothing wrote.
+    process.stderr.write(
+      "[chain-verify] skipped: CELLO_ENV is not 'local', so no test wrote to Postgres\n",
+    );
+    return;
+  }
 
   const connectionString =
     process.env["DATABASE_URL"] ?? "postgresql://postgres:dev@localhost:5433/cello_dev";
   const pool = new pg.Pool({ connectionString });
 
   try {
+    /**
+     * ─── THIS COVERS `HASH_CHAINED_TABLES`, WHICH IS NOT EVERY CHAIN IN THE DATABASE ───────────
+     *
+     * Said plainly because the shorter claim is the one a future reader would trust.
+     * `HASH_CHAINED_TABLES` is itself a hand-typed literal, and `mmr-store.ts` builds
+     * `conversation_proof_leaves` and `conversation_proof_mmr_nodes` with the SAME
+     * `computeChainHash(serializeRecord(...))` scheme and the same genesis — without being in it.
+     * Both verify today (16 and 15 rows, measured), so this is not a live break. It is a live
+     * BLIND SPOT: a test that tampers an MMR leaf and forgets to restore it is invisible here,
+     * which is precisely the shape that cost this unit three wrong diagnoses one table over.
+     *
+     * Widening the list is a separate unit — `verifyChain` is typed to `HashChainedTable`, and the
+     * MMR tables are written by a different store, so it is not a one-line change and it is not
+     * this line's scope.
+     */
     const store = new PgDirectoryStore(pool, SILENT);
     const broken: string[] = [];
     for (const table of HASH_CHAINED_TABLES) {
@@ -83,7 +107,9 @@ export async function teardown(): Promise<void> {
       // Thrown, not logged. A teardown that printed a warning would leave the suite green, and a
       // green suite with a broken chain is the precise condition that let this survive for months.
       throw new Error(
-        `The suite finished with ${String(broken.length)} hash chain(s) that do not verify:\n` +
+        `THE "Tests N passed" SUMMARY ABOVE IS NOT THE VERDICT — this ran after it. The run is ` +
+          `FAILING (exit 1).\n\n` +
+          `The suite finished with ${String(broken.length)} hash chain(s) that do not verify:\n` +
           `${broken.join("\n")}\n\n` +
           `Most likely a test tampered a chained row to prove the verifier catches a tamper, and ` +
           `did not put it back. Restore it in a \`finally\` and assert the restore worked. Do NOT ` +
