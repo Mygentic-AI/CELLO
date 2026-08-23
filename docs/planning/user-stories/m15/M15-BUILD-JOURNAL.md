@@ -37,195 +37,37 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
-> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 2825 daemon tests.
-> **PARTS A, B1, B2a, B2b-1 CLOSED** (→ Entries 41–48). **B2b-2 — the last unit of bullet 6 — is
-> IMPLEMENTED IN FULL: all six constraints** (→ Entries 49, 50). **The algorithm is no longer
-> `sha256`: a session holding an agreed salt now hashes under `hmac-sha256-salt-v1`.**
->
-> **⚠️ WIP IS NOT FREE. The flip (constraints 1/2/5) is UNREVIEWED — its review pass is out.** Do not
-> start another unit against it. Constraints 3, 4 and 6 are each reviewed or guard-only and closed.
+> ### 🟡 `SEALWIRE-1` bullets 1, 2, 6, 7 CLOSED. Bullets 3+4+5+8 remain. Both repos clean, pushed.
+> **Bullet 6 (the salt) is DONE — all six B2b-2 constraints, both review passes spent** (→ Entries
+> 49–52). A session holding an agreed salt now hashes under `hmac-sha256-salt-v1`.
+> **Bullet 7 (delete the dead `seal_attempt` path) is DONE, pass 1 findings fixed** (→ Entry 53);
+> **pass 2 is OUT on the fix diff.** Gate: client 2837, directory 1133, relay 235, interfaces 63.
 
-- **B2b-2 AS BUILT, so nobody re-derives it.** `contentHashForSession` is **async** now, and that is
-  load-bearing rather than incidental: the first send WAITS for an agreement that is genuinely in
-  flight (5s bound), because without the wait the feature can never turn on — the agreement runs on
-  peer connect, the first message hashes unsalted before it lands, and that first unsalted hash
-  closes adoption for the life of the session. Every session would fall back permanently while every
-  log line about it stayed true. The wait lives inside the hash function so a caller that drops the
-  `await` gets a **typecheck error**, not a silent unsalted send.
-- **A SESSION WITH NOTHING PENDING DOES NOT WAIT** (constraint 5). `#markSaltPending` is called from
-  `#sendSaltFrame` — a frame that actually left — never at session creation. A park-only session
-  never connects, never announces, and so never pays the bound.
-- **HASHING ITSELF CLOSES ADOPTION**, via `#hashedWithoutSalt`. `#saltAdoptionClosed`'s three counts
-  (leaves, held, in-flight) are ALL ZERO at the moment a session's first message is hashed — the leaf
-  lands a network round trip later. A contribution arriving in that window would be adopted and leave
-  the message already on the wire as the one unsalted leaf in a salted transcript.
-- **THE FALLBACK IS ANNOUNCED ONCE PER SESSION** (`session.content.unsalted`), never per message.
-- **⚠️ ONE MUTANT SURVIVES AND IS DOCUMENTED AS SURVIVING** — settling the wait `"agreed"` after a
-  FAILED persist. It is not a defect (same fallback either way, and `#persistSessionSalt` logs its
-  own failure); the un-settled waiter buys only the REMAINDER OF THE BOUND for a repair to land. The
-  comment that had claimed otherwise is corrected. Do not "fix" this by contorting a test.
-- **CONSTRAINT 4's ANSWER WAS THAT THE HAZARD CANNOT OCCUR.** The salt agreement and the v3 park
-  decoder are both in **no git tag**, so the interval build was never cut, and every published build
-  has neither. What shipped is the guard that keeps that true, not a handshake.
-
-- **TIER 4 IS IN PROGRESS. `SEALWIRE-1` bullets 1 + 2 are BUILT, REVIEWED, and their blocking
-  findings fixed** — the directory certifies the content-hash root, and the client verifies it
-  against its own carry before accepting AND before co-signing. Bullets 3–8 remain.
-- **THE KEY/SALT DECOUPLING IS DONE** (Andre's correction, Decisions #8/#9/#10): the envelope key and
-  the session salt are two independent values from one exchange. `deriveSessionSecrets` returns ONE
-  output; the salt lives in `core/crypto/src/session-salt.ts`; `content_salt BLOB` is persisted.
-- **BULLET 6 IS SPLIT IN TWO, and the seam is honest.** Part A (in flight) AGREES the salt: one frame
-  type on the peer-to-peer content stream, derive, persist, compare fingerprints, freeze loudly on
-  disagreement. Part B CONSUMES it: `wireContentHash` → `saltedContentHash`, the version
-  discriminator, and holding the first send until the salt is agreed. Part A is safe to ship alone
-  precisely because nothing consumes the salt yet — an old peer that never answers costs nothing.
-- **🚨 THE `REFUSAL_REASONS` AC WAS WRONG AND IS CORRECTED IN PART A.** I wrote it; `recordRefusal`
-  refuses an inbound session REQUEST, before a session exists. A salt disagreement happens on an
-  ESTABLISHED session, so its named reason belongs on the freeze path, not that union. The DoD line
-  now carries the correction struck-through with the reason.
-- **PART A AS BUILT, so part B does not re-derive it:** one frame type
-  `session_salt_agreement` on `/cello/content/1.0.0`, carrying EXACTLY ONE of `contribution` (32B,
-  "I hold no salt") or `fingerprint` (8B, "I hold one"). The state machine is a pure function in
-  `core/daemon/src/session-salt-agreement.ts`; the I/O and the freeze are in
-  `session-node-manager.ts`. Announced from `onPeerConnect` — the ONLY hook that fires on both sides
-  for every way the direct path comes up. Our contribution is minted ONCE per session.
-- **`#frozenSessions` IS NOW A MAP, not a Set.** The revive refusal used to hardcode the identity
-  failure's words; a salt disagreement going through the same path would have accused a counterparty
-  who did nothing. Each freezing site supplies its own reason code and guidance. **Spell the revive
-  reason out — do not derive it from the freeze reason**: doing that silently turned the stable
-  `session_frozen_identity_failure` into a family of varying strings.
-- **PART B IS THREE UNITS, RECEIVER FIRST THROUGHOUT — the only safe order for a wire change.**
-  **B1** (closed): the receiver reads `content_hash_alg` off the direct frame and verifies under it.
-  **B2a** (in review): the park envelope carries it too, at BOTH verifier sites — the second one is
-  in `content-park.ts`, not `session-node-manager.ts`, and missing it means refuse → keep the relay
-  copy → re-pull → refuse, forever. **B2b** (next): turn salting ON at the send paths.
-- **🚨 B2b'S OWN TRAPS, all found by B1/B2a reviews — read before starting:**
-  - **The two park PRODUCERS are marked in `daemon.ts`** and must pass `contentHashAlg`. The value is
-    the one the direct-path frame carried for THAT message, never re-derived from the session row.
-    The crash-backstop producer cannot follow that instruction as written — `retry_queue` has no
-    column for it, so B2b needs one (idempotent `ALTER TABLE`, and remember the agent-id rebuild).
-  - **Do NOT infer peer capability from "they completed the salt agreement."** The agreement landed
-    several commits before the v3 park decoder, so an interval build has one without the other, and a
-    v3 envelope there is refused as `unsigned_envelope` — the ATTACKER shape — and re-pulls forever.
-    Safe today only because nothing in that interval is published. Gate on a real signal.
-  - **`encodeParkEnvelope` now THROWS** on an algorithm this build cannot read. Traced: `#parkContent`
-    catches it and returns `{outcome:"refused"}`, so no message is lost — but B2b should validate
-    before calling rather than lean on that catch.
-- **B2b IS SPLIT: B2b-1 THREADS THE VALUE, B2b-2 CHANGES IT.** B2b-1 (built) routes every outbound
-  hash through ONE `contentHashForSession`, which returns the hash AND its algorithm together, and
-  puts the algorithm on the frame — **still `sha256` everywhere.** B2b-2 makes it consult the salt,
-  adds the sender-side fallback announcement, and holds the first send until the salt is agreed.
-  **Its ACs are written on the `SEALWIRE-1` line — read them, do not re-derive them.**
-  - **Why ONE decision point:** four send sites each deciding whether to salt is
-    `wire-content-hash.ts`'s ORIGINAL defect (five call sites, the last two wrong, two live daemons
-    to find) with a worse outcome — a message hashed one way and LABELLED another is refused by every
-    peer, including a correct one, and the refusal reads as tampering.
-- **🚨 EVERY OPTIONAL PARAMETER ON THIS PATH IS A SILENT FALLBACK, and I fixed two hops and left
-  five.** A default equal to the only value in play makes a dropped argument byte-identical, so four
-  mutants survived the full suite; making the parameters REQUIRED turned them into typecheck
-  failures. Then the very commit that did that left `#trackAwaitingAck` — the sibling on the same
-  code path — optional, re-opening the finding one function over. **When you make one parameter
-  required, grep the whole path for its siblings in the same edit.**
-- **🚨 A SOURCE-SLICE ASSERTION GOES BLIND ON WHITESPACE.** The guard on the durable writer sliced
-  `daemon.ts` between a marker and the next `\n    },`; reindent that brace and the slice swallows
-  the NEIGHBOURING hook, so every assertion passes with the argument deleted. Bound the length and
-  assert the anchor exists — an unbounded `slice(start, -1)` returns the rest of the file.
-- **🚨 THE DAEMON'S TEST TYPECHECK IS A 22-FILE ALLOWLIST** (`core/daemon/tsconfig.test.json`). A new
-  test file outside it is a file where "the mutants are typecheck failures now" is NOT true — two of
-  mine held real type errors the gate could not see. **Add every new test file to it.**
-- **🚨 A MUTANT SURVIVED B2b-1 UNTIL I WROTE ITS TEST:** delete `content_hash_alg` from the outbound
-  frame and 2,700 daemon tests stay green. **Nothing read what the sender puts on the wire.** The
-  receiving half is already built and trusts whatever the frame names, so this fails SILENTLY — every
-  peer reverts to assuming `sha256`. Closed by `dod-m15-send-names-its-algorithm.test.ts`, which also
-  pins that the name MATCHES the hash, recomputed from the frame alone.
-- **🚨 THE MIGRATION GUARD ONLY CHECKS ONE OF SEVEN TABLES.** `dod-agent-id-joinkey-migration` has
-  caught this class FOUR times (`read_at`, `diverged_at`, `content_salt`, and `retry_queue`'s
-  ordering record) — and it replays only the **`sessions`** inline ALTERs. The other six rebuilt
-  tables have nothing between a forgotten column and silent data loss on the upgrade boot. **Raised
-  with `CELLO_Support` over CELLO**, since their columns are exposed too; test-only, and in neither
-  of our units.
-- **🚨 THE MUTATION-LOOP RULE IS NOW IN `M15-PROCEDURE` §2**, agreed with `CELLO_Support` over CELLO
-  and reviewed by me (§5 carries a pointer, not a copy). Four rules; the loop has failed EIGHT times
-  across both lanes. **Rule 4 is the one my lane contributed and the one that keeps catching me:** a
-  mutant is not caught until it has been re-run ALONE and seen red, and a mutant that fails
-  lint/typecheck is NOT caught. It caught me again in Entry 46, on a test I had just written.
-- **🚨 NEVER WRITE A CONDITIONAL ASSERTION.** `if (result.ok) expect(a) else expect(b)` adapts to
-  whatever happens and only ever takes one branch. Found by a reviewer in B1, described by me to the
-  other lane as "a wish", and then written again by me ninety minutes later (Entry 46). If a test
-  needs two outcomes, construct both deterministically.
-- **🚨 THE FAILURE MODE OF MY LAST FOUR UNITS IS THE SAME, and it is not a coding pattern.** Part A:
-  a false sentence in a header that I then implemented faithfully. B1 pass 1: the second-order
-  security consequence of a new refusal path. B1 pass 2: a fix applied to ONE of a gate's TWO
-  consumers. Each time the code was right where I was looking and wrong one step to the side, and
-  each time my own test asserted the thing I had already thought of. **Before believing a fix is
-  complete, grep for every CONSUMER of what you changed** — and never write a conditional assertion,
-  which is how B1's decisive test ran zero times. **Its ACs are already written on the `SEALWIRE-1` line —
-  read them, do not re-derive them**: the park-only session that never agrees a salt, the divergent
-  state that leaves the far operator with silence, and salted-vs-unsalted being a fact about the
-  PEER rather than about our own row. Then `SEALWIRE-1` bullets 3–8, which are now one unit with
-  `UNWITNESSED-1`.
-- **🚨 PART A'S TWO REVIEWS COST FIVE BLOCKING FINDINGS AND THREE WERE A SENTENCE I WROTE BEING
-  WRONG**, not a statement mistyped — a header claiming the salt halves are unrecoverable (they are
-  kept, and `deriveSessionSalt` sorts), a docblock claiming no mutant could survive a storage test
-  (one did), and a commit message claiming an invariant the code did not implement. Each made the
-  wrong code look correct on re-reading. **Run the mutant before believing the prose — including
-  your own.**
-- **THE REPAIR TERMINATES BY REMEMBERING THE PEER'S BYTES** (`#saltRepairedAgainst`). An identical
-  re-offer gets our fingerprint, which is terminal for the peer; a genuinely new half still gets our
-  contribution. Do not "simplify" it into a boolean — keying on a repair COUNT breaks a real
-  re-agreement.
-- **🚨 BULLETS 3 + 4 — read `DOD-M15-UNWITNESSED-1` FIRST; it is the same problem and it is already
-  split out.** The directory cannot naively hard-gate on a SEAL leaf's declared `final_root`, because
-  the client's local tree is not guaranteed to be a prefix of the relay's leaf array: an own send
-  whose relay submit failed appends UNWITNESSED at the tail with **no flag and no ERROR**
-  (`#placeLeaf`, `assignedSeq === undefined`), and `placeOwnLeaf`'s own comment says *"the seal was
-  already lost at the unwitnessed append, not here."* A strict comparison would refuse real sessions,
-  and a root check that is wrong makes every session unsealable.
-  - **Correction to what I first wrote here:** this is NOT unaddressed. `DOD-M15-UNWITNESSED-1`
-    carries both suspected partings, names case (b) exactly, and sets the bar: *"a signal separating
-    a relay catching up from a leaf it will never carry."* (`#diverged` IS consumed — seal readiness
-    reads it directly; only the public `isSessionDiverged` wrapper has no caller.)
-  - **VERIFIED AGAINST THE CODE 2026-08-23 (was "unverified"): the SEAL leaf's `final_root` IS that
-    missing signal, and bullets 3 + 4 and `UNWITNESSED-1` are ONE piece of work.** Three facts, each
-    read rather than assumed:
-    1. **Same domain, so the comparison is possible at all.** `SessionTree` builds `kind: "hash"`
-       leaves over stored content hashes (`session-tree.ts:150,168`), which is exactly what bullet 1
-       made the directory certify (`leaves.map(l => ({kind:"hash", data: l.s2.content_hash}))`).
-       Before bullet 1 this comparison could not have been written.
-    2. **No catching-up is left at seal time.** The seal is triggered by two SEAL ctrl leaves in the
-       relay's log, and the relay refuses further submits once `sealing` — so a leaf absent from the
-       array then will never be in it. That is precisely the discriminator `UNWITNESSED-1` says is
-       missing: mid-session "absent" means *not yet*; at seal it means *never*.
-    3. **The unwitnessed own send is what a prefix check catches.** `final_root` is the root over the
-       LOCAL tree; an unwitnessed append put a leaf there that the relay never carried, so the
-       declared root matches NO prefix of the relay's array. Held out-of-order arrivals make the
-       local tree a strict prefix, which passes — correctly.
-  - **THE CHECK IS "matches SOME prefix", NOT "matches the prefix of length N".** The two sides
-    compute `final_root` at different moments — the responder's tree may already hold the initiator's
-    SEAL ctrl leaf, the initiator's cannot hold the responder's — so the matching index differs per
-    side by design. A fixed-length comparison would refuse every honest bilateral seal.
-  - **Residual, unproven and to be settled in that unit:** whether an unwitnessed RECEIVED leaf
-    (`UNWITNESSED-1` case (a)) can sit at a DIFFERENT INDEX locally than in the relay's array. Both
-    peers hold it, so counts agree, but a position difference would break prefix-matching for an
-    honest session. That is the false positive to hunt before this ships.
-- **🚨 A CLIENT-SIDE COLUMN NEEDS TWO ENTRIES** — see the shared trap above the lane blocks. Caught me
-  twice.
-- **🚨 SEALWIRE DEPLOYMENT ORDERING:** every directory node must run the new directory BEFORE any
-  client carrying the certified-root check reaches `latest` — before the roll FINISHES, not before it
-  starts. A new client against an old directory refuses EVERY bilateral seal, deterministically.
-  Relay rolls are INDEPENDENT (verified: the relay never computes, sees or stores the certified root).
-- **`OFFER-EXPIRY-1` IS DIAGNOSED AND HANDED TO THE OTHER LANE** for after Tier 4. Cause is one field:
-  `SessionConnectionGater.#allowedPeerId` is a single `string | null` and `admitInboundPeer`
-  overwrites it, so two concurrent offers are mutually exclusive and nothing ever expires the
-  invitation. Do not re-derive it.
-- **`DEAD-WIRE-FIELD-1` stays this lane's** — its carried half rides the wire-change convoy with
-  `SUBMIT-ID-1` and `TERMINAL-REASON-1`.
-- **`pnpm run test | tail` HIDES FAILURES** — a pipe returns tail's exit code. Gate with
-  `cmd > /dev/null 2>&1 && echo CLEAN || echo FAILED`.
-- **`git checkout` IN A MUTATION LOOP HAS DESTROYED WORK FIVE TIMES.** Commit, then mutate, nothing in
-  between.
-
----
+- **⚠️ BULLETS 3 AND 4 ARE ONE UNIT — do not scope them separately.** Bullet 4 (the directory's
+  circular root check) cannot be fixed alone: it rebuilds a root from the leaf array the relay
+  supplied, with the same code, and compares it to the root that same relay supplied — so it
+  validates ARITHMETIC, not the relay, and a relay that drops or reorders a leaf and reports the
+  matching root passes every time. Its replacement is bullet 3's client-signed `final_root`, which
+  needs the SEAL payload on the wire. The check itself is KEPT (a mismatch still means real
+  corruption); what changes is that it stops being the integrity guarantee.
+- **🚨 `DOD-M15-SEALFINAL-1` DOES NOT EXIST.** The bullet-4 comment used to defer to it; it appears
+  in no DoD, no journal, and no other file. Corrected to point at bullet 3, on the same line. If you
+  see that identifier anywhere else, it is the same dangling pointer — a reference to nothing reads
+  as *tracked* and stops the reader looking.
+- **THE TWO LESSONS OUT OF BULLET 6, both about how work was CHECKED rather than what it does:**
+  - **Mutate the PRODUCER of a state, not only its consumer.** A fixture discarded its peer-connect
+    handler, so the one production line registering a salt agreement — the line deciding whether
+    salting can *ever* turn on — could be deleted with the whole suite green. Eight mutants all hit
+    the consumer.
+  - **A fix pass is where regressions hide.** Pass 2's HIGH was *created by pass 1's fix*: a
+    session-scoped flag released a claim held by a sibling's in-flight message.
+- **AND OUT OF BULLET 7: a protocol has TWO ends.** I deleted the directory half of a dead exchange
+  and left the relay half — whose only trigger was the reply I had just removed — more orphaned than
+  before. Grep for the frame, then grep for what the frame's REPLY triggers.
+- **The published `@cello-protocol/client@0.0.50` still ships a `seal_attempt` sender** and is
+  npm-deprecated. Nothing installs it (connect pulls crypto/transport/interfaces only), and its send
+  is fire-and-forget, so an ignoring directory is indistinguishable from an acking one. Verified
+  against the registry and the tarball, not the repo — **audit what SHIPS, not what compiles.**
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
