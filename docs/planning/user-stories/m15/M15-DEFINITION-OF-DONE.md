@@ -3351,6 +3351,34 @@ The guidance does not merely under-inform — it instructs an action that cannot
 - **Enforcer:** `j-remove` DOD-REMOVE-3 green — the test already exists and already asserts the
   right thing; it has been failing since the lane stopped being run.
 
+### `DOD-M15-SUSPEND-UNTESTED-1` — threshold-refusal has NO test under the threshold we actually ship
+**POST-LAUNCH under the frozen gate (§0z.4)** — **nothing is broken.** This is a COVERAGE gap in a
+security control, and it is filed because "no test" and "passing test" look identical from a suite
+summary.
+
+**What nearly got reported instead:** `j-suspend-tofn` fails with *"2 suspended directories must
+block signing"* — suspension is the kill switch, so that reads as the kill switch not working. **It
+is not.** The test encodes a superseded threshold.
+
+- **The test assumes T=3.** Its own comment: *"client+1 = 2 < T=3 ⇒ NO signature"*.
+- **The shipped threshold is T=2.** `dkg-topology.ts`: `dkgThreshold = floor(nodes / 2) + 1` → **2**
+  for a 3-node consortium. `.claude/CLAUDE.md` calls this **settled and final** — *"T = majority(N)
+  (dev N=3 → T=2)… never propose all-N"*.
+- So with nodes 1 and 2 suspended, the client plus node 0 **is** the threshold. Signing succeeds.
+  **`ok: true` is the correct answer** and the assertion is asserting the old policy.
+
+- **⚠️ THE REAL CONSEQUENCE, and it is why this is a line rather than a one-word test edit.** Under
+  T=2 this journey's premise collapses: suspending 2 of 3 SIGNS, and suspending 1 of 3 SIGNS, so
+  both halves now produce the same outcome and the test **cannot distinguish threshold-refusal from
+  single-node-refusal** — which is the entire property it is named for. Blocking needs all three
+  suspended (client alone = 1 < 2).
+- **So we currently have no passing test that threshold-refusal works under the shipped threshold.**
+  The control may well be correct — `j-tofn-dkg` proves the quorum side (kill one node, registration
+  still succeeds). What is missing is the refusal side.
+- **DO NOT "fix" this by flipping the expectation to `ok: true`.** That yields a green test asserting
+  nothing about refusal, which is worse than the red one — the red at least says something is
+  unexamined. Rework the scenario for T=2, or state in writing that refusal is untested.
+
 ### `DOD-M15-TOOLDESC-SCAN-1` — The claim scanner can see MCP tool descriptions
 **POST-LAUNCH** (§0z.1): the launch risk is whether the shipped descriptions are HONEST, and
 `DOD-M15-TIERTEXT-1` audits them by hand in this milestone. This line is the durable control that
