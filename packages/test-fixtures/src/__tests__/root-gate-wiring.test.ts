@@ -123,11 +123,53 @@ describe("DOD-M15-CI-SKIPS-SILENT-1: files a project config hides never collect 
    * Each pattern must be listed here with a written reason. That is the whole mechanism: the
    * exclusions are legitimate, and the defect was that they were invisible, not that they existed.
    */
-  const KNOWN_EXCLUSIONS: Record<string, string> = {
-    "src/**/*.spine.test.ts":
-      "the M8D spine lane — multi-process suites run deliberately via their own command, not the unit gate",
-    "src/**/*.cross-machine.test.ts":
-      "needs a second machine and a relay multiaddr; run by hand via pnpm run test:cross-machine",
+  /**
+   * ─── DOD-M15-SPINE-LANE-1: A REASON IS NOT ENOUGH. THE DECISION IS RECORDED AND CHECKED ───────
+   *
+   * `CI-SKIPS-SILENT-1` made these exclusions visible, which closed the silence and not the gap: a
+   * prose reason saying a lane "runs via its own command" is a claim about the world, and nothing
+   * checked it. A command that does not exist, or that nobody is named to run, reads exactly the
+   * same in a comment as one that does.
+   *
+   * So each exclusion now declares WHICH command runs it, WHO runs it, and WHEN — and the command
+   * is verified to exist in that package's `package.json`. Prose that names a missing script fails.
+   *
+   * **The decision, recorded (§3a — manual-only, not scheduled):** neither lane is wired to a
+   * schedule, and that is deliberate rather than deferred. `cross-machine` cannot be scheduled at
+   * all — it needs a second physical machine. `spine` could be, but the CI that would host it is the
+   * stale AWS pipeline set, and building a scheduler for it is a larger job than the milestone-close
+   * gate needs. Manual with a named owner is the choice least likely to need reversing.
+   *
+   * **Measured, not assumed** (2026-08-23): `test:spine` was run and works — real binaries, real
+   * Postgres, `j-conn` green in 30s. The lane is not rotted; it is simply unattended.
+   */
+  interface Exclusion {
+    readonly why: string;
+    /** npm script in the OWNING package that runs this lane. Asserted to exist. */
+    readonly command: string;
+    /** Who runs it, and when. "Nobody, eventually" is what this field exists to prevent. */
+    readonly owner: string;
+  }
+
+  const KNOWN_EXCLUSIONS: Record<string, Exclusion> = {
+    "src/**/*.spine.test.ts": {
+      why:
+        "the M8D spine lane — multi-process suites spawning real binaries against a real Postgres. " +
+        "Too slow and too stateful for the unit gate (serial, 120s timeouts), and it needs the " +
+        "cello-portal sibling repo checked out beside this one.",
+      command: "test:spine",
+      owner:
+        "the lane closing M15 runs it BEFORE the milestone-close gate and pastes the result into " +
+        "the build journal — .claude/CLAUDE.md: 'No milestone closes until a live multi-process " +
+        "smoke test passes.' This IS that test, so a close without it is a close without evidence.",
+    },
+    "src/**/*.cross-machine.test.ts": {
+      why: "needs a SECOND physical machine and a relay multiaddr, so it cannot be scheduled at all",
+      command: "test:cross-machine",
+      owner:
+        "Andre, by hand, on the two-machine setup — the only person with the second machine. Not " +
+        "required for the milestone-close gate; required before claiming cross-machine support.",
+    },
   };
 
   function projectExcludes(pkg: string): string[] {
@@ -151,6 +193,47 @@ describe("DOD-M15-CI-SKIPS-SILENT-1: files a project config hides never collect 
       `These vitest configs exclude test files from collection, and the exclusion is not declared ` +
         `in KNOWN_EXCLUSIONS: ${undeclared.join(", ")}. Files matching them never appear in ANY run ` +
         `— not as passed, not as skipped, not at all. Add the pattern with the reason it exists.`,
+    ).toEqual([]);
+  });
+
+  it("every hidden lane names a command that EXISTS, and a person who runs it", () => {
+    /**
+     * DOD-M15-SPINE-LANE-1's enforcer. The failure this prevents is not a missing reason — those
+     * are all present — it is a reason that is no longer true. A lane declared as "run via its own
+     * command" whose command was renamed or deleted is indistinguishable, in prose, from one that
+     * works. The script name is the one part of the claim a machine can check, so it is checked.
+     *
+     * `owner` cannot be verified the same way, and is asserted non-trivial rather than pretended
+     * otherwise: what it buys is that "manual-only" has to be written as a person and a trigger,
+     * which is much harder to leave as "nobody, eventually".
+     */
+    const broken: string[] = [];
+    for (const [pattern, decl] of Object.entries(KNOWN_EXCLUSIONS)) {
+      // Every declared exclusion belongs to e2e-tests today; find the package that excludes it.
+      const owners = packageDirs().filter((p) => projectExcludes(p).includes(pattern));
+      if (owners.length === 0) {
+        broken.push(`${pattern}: declared here but NO package excludes it — the declaration is stale`);
+        continue;
+      }
+      for (const pkg of owners) {
+        const pj = join(PACKAGES, pkg, "package.json");
+        const scripts = (JSON.parse(readFileSync(pj, "utf8")) as { scripts?: Record<string, string> }).scripts ?? {};
+        if (!(decl.command in scripts)) {
+          broken.push(
+            `${pkg}: "${pattern}" says it runs via \`${decl.command}\`, and ${pkg}/package.json has no such script`,
+          );
+        }
+      }
+      if (decl.owner.trim().split(/\s+/).length < 5) {
+        broken.push(`${pattern}: owner is too thin to be a commitment — name a person and a trigger`);
+      }
+    }
+    expect(
+      broken,
+      `A hidden lane's declaration has stopped being true:\n  ${broken.join("\n  ")}\n\n` +
+        `These files never appear in ANY run, so the declaration is the ONLY thing standing between ` +
+        `them and being forgotten. If a lane is genuinely gone, delete its files and its entry — do ` +
+        `not leave a reason pointing at a command nobody can run.`,
     ).toEqual([]);
   });
 
