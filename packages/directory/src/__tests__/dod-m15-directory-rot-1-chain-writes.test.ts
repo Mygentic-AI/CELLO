@@ -79,6 +79,13 @@ const ROLLED_BACK: Record<string, string> = {
     "its first two describe blocks wrap every test in BEGIN/ROLLBACK on the same client, so their " +
     "inserts never commit. Its third block could not (the store uses its own pool connection) and " +
     "was converted to seedAccount() + per-run ids instead.",
+  "dod-m15-chaindebt-1-txn-pool.test.ts":
+    "DOD-M15-CHAINDEBT-1 review F1 — the file that PROVES the rollback works. Its one literal " +
+    "`chain_hash` is a raw INSERT inside `inRolledBackTxn` whose entire assertion is that the row " +
+    "does NOT survive; it is the strongest rollback evidence in the directory, not an exemption. " +
+    "Listed rather than reworded because the guard reads source and cannot see that the test's " +
+    "subject IS the rollback — and it correctly flagged this file the moment it was added, which " +
+    "is the guard doing its job on its author.",
   "federation-003.test.ts":
     "DOD-M15-CHAINDEBT-1 — CONVERTED. Its AC-001 block proves cello_service may INSERT and SELECT " +
     "but not UPDATE or DELETE, so the INSERT has to execute as that role; it now runs inside " +
