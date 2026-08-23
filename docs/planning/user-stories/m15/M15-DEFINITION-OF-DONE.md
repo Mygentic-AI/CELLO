@@ -3136,14 +3136,24 @@ portal database is running (it was 7 failures; **6 were the stopped container**)
   by endorsing themselves. Flagging a stranger's endorsement does not admit a forgery; it
   **discards the one signal that carries weight.** A wallet where every endorsement reads
   self-dealing is a wallet where third-party trust is invisible — the product's whole proposition.
-- **⚠️ ESTABLISHED BY INFERENCE, NOT BY READING THE DATA.** Both assertions together imply every
-  endorsement row carries the flag, because `x.same_operator !== true` matches `undefined` and still
-  found nothing. **I did not see the rows** — the failing assertion did not print them. It now does;
-  the next run shows the wallet contents instead of requiring this inference.
-- **Do NOT assume it is a regression.** `same_operator` was recently APPENDED to the envelope
-  preimage (M10-D17), and this lane had never been run. A fixture that predates the field, or a
-  seeding path that sets it unconditionally, is at least as likely as a live detector fault — the
-  same file already yielded one eleven-field envelope for exactly that reason.
+- **✅ NOW CONFIRMED BY READING THE ROWS, not inferred.** The wallet holds **FOUR endorsements and
+  every one carries `same_operator: true`** — including the `accepted` one. The earlier version of
+  this line said so by inference; `CELLO_Coder_1` correctly pointed out that inference was
+  underdetermined (`strangerRow === undefined` is equally satisfied by *"Bob's endorsement is not in
+  the wallet at all"*, a different bug in a different place). It is the first reading. The rows are
+  there and they are all flagged.
+- **✅ THE FIXTURE IS EXONERATED BY ITS OWN ASSERTION.** The journey does not seed the flag — it only
+  reads it — and at HOP 1 it asserts *"Bob and Alice must be DISTINCT operators for this hop"*
+  against `count(DISTINCT account_id)`, **and that assertion passes.** So the fixture establishes two
+  separate operators and the product flags the endorsement between them as same-operator anyway.
+- **✅ TWO PRODUCER LAYERS RULED OUT.** The daemon's display path sets the flag on a strict
+  `=== true` and omits it when false. The mint writes `composed.sameOperator === true` over
+  `args.sameOperator === true` — strict twice, so an absent input resolves to FALSE. **Both fail
+  CLOSED**, which is the opposite of the everything-gets-flagged shape. Whatever computes
+  `sameOperator` for submission is the remaining suspect.
+- **This is a real defect, not a stale test.** It fails OPEN on trust while looking like it fails
+  closed: a stranger's endorsement is discarded as self-dealing, which removes the only endorsement
+  that carries independent weight. **Post-launch by the freeze, not by severity** — Andre's call.
 - **First step:** read the printed `signals` array from the next run. If Bob's row carries
   `same_operator: true`, trace the producer; if it is absent from the wallet entirely, the finding is
   a different one and this line is wrong.
