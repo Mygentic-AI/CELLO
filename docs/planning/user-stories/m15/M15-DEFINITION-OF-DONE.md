@@ -379,6 +379,21 @@ different repos, different disciplines, neither blocks the other.
     queue carry it. **Still `sha256` everywhere.** Traced end to end and verified: direct frame, live
     park, TTF-expiry park, and the crash backstop via `retry_queue` all name the same value for the
     same message.
+  - **✅ B2b-2 IS IMPLEMENTED IN FULL — all six constraints, four units (→ Entries 49, 50).** The
+    algorithm is no longer `sha256`: a session holding an agreed salt hashes under
+    `hmac-sha256-salt-v1`. Status per constraint: **3** ✅ reviewed (the adoption rule; the review's
+    central correction was that the missing state was BILATERAL, not durable — it belongs on the
+    wire, and a column would have recorded the local verdict perfectly while the two sides
+    disagreed). **6** ✅ (the coded park error). **4** ✅ (the hazard turned out to be UNREACHABLE —
+    the salt agreement and the v3 decoder are both in no git tag, so the interval build was never
+    cut; what shipped is the guard that keeps that true, not a handshake). **1, 2, 5** 🟡 built and
+    gated, **review pass outstanding**.
+    - ⚠️ **The line below said this "changes ONE function and nothing else structural." That was
+      optimistic and is recorded rather than quietly dropped.** Constraint 2 needs the first send to
+      WAIT, and a wait needs an `await` — so `contentHashForSession` is async, and four call sites
+      plus two test files changed with it. The alternative (a separate `awaitSaltSettled()` each site
+      must remember) was rejected for the reason F4 rejected a defaulted parameter: a forgotten call
+      is a silent unsalted send, whereas a dropped `await` is a typecheck error.
   - **B2b-2 — THE LAST UNIT OF BULLET 6. It changes ONE function and nothing else structural:**
     `contentHashForSession` stops hardcoding `sha256` and consults the session salt. Everything that
     carries the value is already built and already tested, which is the point of the split.
