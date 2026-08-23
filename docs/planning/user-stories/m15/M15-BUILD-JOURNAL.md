@@ -26,6 +26,28 @@ description: >
   changes the same wire format or depends on the domain change). It also inherits two carried lines
   from KEYAGREE: it must SIGN the ephemeral public (`EPHEMERAL-AUTH-1`) and it consumes both
   KEYAGREE outputs. **Both repos, version-bump ACs on both sides.**
+- **`SEALWIRE-1` IS MAPPED — do not re-derive this, it took real reading.** The two roots and why
+  they cannot be compared today:
+  - **UNILATERAL** (`directory-node.ts` ~4630) ALREADY rebuilds the **content-hash root** —
+    `leaves.map(l => ({ kind: "hash", data: l.s2.content_hash }))` — and its own comment says why:
+    *"the root the directory signs + the present party verifies is the content-hash root… the client's
+    local SessionTree hashes each leaf as its content_hash, NOT as encodeStructure2(s2)."*
+  - **BILATERAL** (`directory-node.ts` ~5106) rebuilds from `encodeStructure2(l.s2)` — the
+    relay/directory INTERNAL integrity root, which **the client cannot reproduce** because it lacks
+    the relay-assigned Structure 2 fields. That is the whole reason the client cannot check what it
+    is signing.
+  - So **bullet 1 is: make the bilateral path certify the content-hash root too**, exactly as the
+    unilateral path already does. Keep the `encodeStructure2` chain — it proves the content_hashes
+    are authentic and correctly ordered — but it stops being the CERTIFIED root.
+  - **Bullet 4 confirmed circular:** the bilateral check compares `merkleRoot(buildMerkleTree(...))`
+    built from the relay's own leaf array against `relayRoot` supplied by the same relay, with the
+    same code. It validates arithmetic, not the relay, and cannot detect a dropped or reordered leaf.
+  - **Bullet 2's comparison lives at `seal-coordinator.ts` ~104**, where `sessionNodeManager` is
+    already in scope — `getSessionTreeRootHex(agentName, sidHex)` vs the certified `sealed_root`.
+    `verifyBilateralSealCertificate` is the wrong home: it has no access to the local tree.
+  - **The client's own root** is `getSessionTreeRootHex`, and `submitSealLeaf` already puts it in the
+    SEAL ctrl leaf as `final_root` — which is bullet 3's input on the directory side.
+
 - **⚠️ DECISIONS CARRIED #5 IS NEW AND FLAGGED FOR ANDRE:** session ephemerals are NOT persisted; a
   revived session re-handshakes. Persisting would void forward secrecy and put key material in every
   backup — irreversible once written. Do not let SEALWIRE quietly persist an ephemeral to make
