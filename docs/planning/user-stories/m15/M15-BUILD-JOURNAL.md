@@ -6104,3 +6104,83 @@ correction round.
 4. **When a deletion makes a name wrong, say so.** `#sessionLastActivity` holds session start, and
    the unilateral grace window runs from it — pre-existing, and invisible until the last writer that
    could have made the name true was removed.
+
+---
+
+## Entry 54 — the observability fix I added sits on a branch the case it was written for cannot reach
+
+`DOD-M15-SEALWIRE-1` bullet 7, review pass 2 — the hard cap. **Bullet 7 closes here.**
+
+### Reviewer verdict, quoted
+
+> **SPEC: DEVIATIONS FOUND** — pass-1 items 1, 2 and 6 are partially remediated (findings A, B, C);
+> none is journalled as a deliberate partial.
+> **SILENT FALLBACKS FOUND** — the relay boots with a `WAL_DIR` gate for a WAL nothing writes, and
+> the interface still claims crash recovery it no longer performs.
+> **ERROR SUBSTITUTION FOUND** — a deleted frame type surfaces as `not_authenticated`, unlogged on
+> the directory side … Blocking.
+> **HOLLOW TESTS FOUND** — the guard does not cover this round's own deletion.
+> **UNPROVEN REMOVAL** — no. Deadness is proven to a higher standard than pass 1 required, across
+> six repos and the published surface. **The removal itself is sound; what is left is what the
+> removal left behind.**
+
+### A: I closed an observability gap on the wrong branch
+
+Pass 1 said the terminal `else` of the signaling dispatch dropped unknown frames silently. I added a
+debug line there. **A frame type this build has dropped never reaches it.**
+`decodeInboundSignalingFrame` returns `null` for any type it does not know, and that is handled
+*before* the chain — the peer gets `not_authenticated` on an already-authenticated stream and the
+directory logs nothing. The terminal `else` only sees frames that decode cleanly and have no
+dispatch case, which a deleted type by definition is not.
+
+Worse than a missed fix: **the same wrong mechanism was the stated proof in two places** — the
+branch comment and the guard file's deadness header — both asserting that a dropped frame "degrades
+to silence" by a path it cannot take. The conclusion survives, because the only sender is
+fire-and-forget and never reads the reply, and that argument does not depend on what we answer. But
+a proof that names the wrong branch is one nobody can re-derive.
+
+What it costs downstream, in the client's own words: `not_authenticated` has **three** producers it
+cannot tell apart, so the operator lands on `submission_unsupported_by_node` via a timeout and a
+guess — because this side never said which.
+
+### B: the deletion left its dependency injected and unread, and uncovered a three-month-old fiction
+
+`#processGapFillRequest` was the only reader of `#sessionWal`. Lint cannot see the orphan, because a
+constructor assignment counts as a use. Pulling that thread: `SessionWal`, `FileSessionWal` and
+`InMemorySessionWal` have **zero production consumers** — and the composition root has never wired
+one. `bin/relay.ts` builds a WAL under an `eslint-disable` for unused-vars, **since 2026-05-16.**
+
+So relay leaf durability has never run, while `bin/relay.ts` still hard-exits without `WAL_DIR` and
+the interface header stated as fact that *"on relay crash + restart, the relay reads the WAL and
+reconstructs in-memory Merkle state leaf by leaf."* A durability claim about hash-chain leaves — the
+kind a reader trusts without checking — false for three months.
+
+**I did not delete it.** It is a complete, tested implementation of intended durability, and removing
+it is a decision about whether relay leaf durability is wanted. Every false claim is corrected, the
+injection seam kept and labelled unwired, and the gap written up as `DOD-M15-RELAY-WAL-UNWIRED-1`.
+
+### C: the guard did not guard the deletion its own commit made
+
+`getLeaves` was not a token and `packages/interfaces/src` was not scanned — so a merge or revert of
+`session-wal.ts` from a branch predating today would restore a **published-interface** method with no
+consumer, green, while the file's header called itself the revert test for a removal.
+
+### The leftover that needed a pointer, not a patch
+
+`#sessionLastActivity` is named *last activity* and holds *session start*, and the unilateral-seal
+grace window runs from it. **Any session older than ten minutes is sealable by either party at any
+moment, mid-conversation.** Written up as `DOD-M15-GRACE-WINDOW-1`, classified POST-LAUNCH: it never
+fires on its own, so nothing closes by timer; what is broken is that the protection does not protect.
+
+### Rules earned
+
+1. **Verify that a new log line fires on the case that motivated it.** Mine was on a reachable
+   branch, in the right file, in the right method — and unreachable for its own reason. No test could
+   have caught it, because no test asserted the event at all.
+2. **When you delete a consumer, check what was injected FOR it.** Lint counts a constructor
+   assignment as a use, so an orphaned dependency is invisible to every automated check.
+3. **A `.dockerignore` is part of a deletion.** `tsc --build` never removes orphaned output, and both
+   Dockerfiles copy the package wholesale before compiling — so a local build could ship code whose
+   source was deleted. Measured, not hypothetical.
+4. **Correct a wrong proof even when its conclusion holds.** Twice now the answer was right and the
+   stated mechanism was wrong, and the second one had already survived a correction round.
