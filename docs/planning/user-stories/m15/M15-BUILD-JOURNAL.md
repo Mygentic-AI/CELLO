@@ -204,9 +204,30 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
-> ### `CHAINROUNDTRIP-1` ✅ MERGED. **0 🟡 in this lane — free to start the next unit.**
-> Next: `MIGRATION-GUARD-1` (taken from Coder_1), then `SPINE-LANE-1`, `FREEZE-STATUS-1`,
-> `UNWITNESSED-1`, `RELAYAUTH-1`. Two new lines opened by its review: `SILENTACK-1`, `MMRCHAIN-1`.
+> ### `MIGRATION-GUARD-1` 🟡 — implemented in **cello-client**, REVIEW IN FLIGHT. **WIP limit met.**
+> `CHAINROUNDTRIP-1` ✅ merged. Then: `SPINE-LANE-1`, `FREEZE-STATUS-1`, `UNWITNESSED-1`,
+> `RELAYAUTH-1`. Two lines its predecessor's review opened: `SILENTACK-1`, `MMRCHAIN-1`.
+
+- **⚠️ `cello-client` IS A SHARED CHECKOUT AND CODER_1 HAS UNCOMMITTED EDITS IN IT.** A full
+  `core/daemon` run is **22 red across 4 salt/content-hash files** — theirs, mid-edit, NOT a
+  regression. `session-node-manager.ts`, `session-salt-agreement.ts`, `dod-m15-salt-adoption-rule`
+  and `vitest.config.ts` are modified in the tree and are **not mine to touch**. Commit by explicit
+  path only; never `git add -A`, never `git checkout` a file you did not write. Told them over CELLO
+  rather than assuming, and asked how they want to handle gating while both lanes share a tree.
+- **`DOD-M15-MIGRATION-GUARD-1`** (taken from Coder_1) — new test file in cello-client, committed and
+  pushed. 3/3 green, sibling joinkey guards green, tsc 0, eslint 0. **All three tests revert-tested
+  by execution**, each in its own run: delete `structure1_cbor` from the pinned DDL → red naming the
+  column; add `tier INTEGER` to contacts' createSql → red on the grandfather not running; bogus
+  ALTER in `consent-migration.ts` → red on unguarded coverage.
+- **THE RULE, and it points BOTH ways — the obvious reading breaks something.** A column belongs in
+  the pinned DDL **iff it can already be present on a legacy `agent_name`-keyed table when the re-key
+  runs.** `sessions`' and `contacts.moniker` are added before it; `retry_queue`'s arrive via a
+  constructor that runs after, but are already there on the second boot of an old database — all
+  must be in the DDL. **`contacts`' four tier columns must NOT be**: the tier migration runs after
+  the re-key and gates a ONE-TIME grandfather on the columns being absent. Put them in the DDL and
+  every already-approved contact reads UNKNOWN — the operator's address book quietly stops
+  auto-accepting people it accepted yesterday. Verified end-to-end, not taken on trust from the
+  warning.
 
 - **🔋 ONE VITEST AT A TIME, SMALLEST SCOPE. A HOOK NOW ENFORCES IT.** Two lanes share the laptop and
   I was the drain: **eight full server-suite runs tonight, most preceded by `docker compose down -v`
