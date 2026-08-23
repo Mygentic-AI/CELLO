@@ -6390,3 +6390,78 @@ cause out from behind a `seal_refused`.
 4. **A bound must fit the honest case with margin.** I set a 32-byte cap on a logged frame type and
    truncated a real one mid-word; the diagnostic then names a frame nobody can grep for, which is
    most of the value of logging it.
+
+---
+
+## Entry 59 — I set a bound longer than its enclosing timeout, twice in one night
+
+`DOD-M15-SEALWIRE-1` bullets 3+4, the relay's store-and-forward leg. Review pass 1.
+
+### Reviewer verdict, quoted
+
+> **SPEC: FAITHFUL** — bullets 3+4 land as described; the one deviation is the timing bound's stated
+> behaviour (F1), not the store-and-forward leg.
+> **TESTS HAVE TEETH** — the new test survives THE REVERT TEST (deleting the store at
+> `relay-node.ts:1405` turns it red) and is not bypassable by "every leaf carries bytes". Two blocking
+> test-quality gaps stand: **F1** … and **F3** (nothing covers the relay→directory hop, whose failure
+> mode is now a refused seal rather than a graceful `not_carried`).
+
+And, answering the INV-3 question this leg turns on:
+
+> **INV-3 holds: the relay holds only the ctrl payload, and the ctrl payload holds no plaintext.**
+> … `attestation` must equal `"PENDING"` exactly; there is no string the client chooses … appending
+> plaintext after a valid payload throws `Data read, but end of buffer not reached` … That leaves
+> `final_root` (32 client-chosen bytes) and a timestamp — and a client already controls 32 arbitrary
+> bytes per leaf via `content_hash`, so this opens no channel that did not exist.
+
+### The repeat, and it took a reviewer to make me see the pattern
+
+**A deadline is only as long as the shortest thing above it.** I broke that twice tonight:
+
+- The `j-unilateral` receipt poll was **13 minutes** inside a **120-second** vitest timeout.
+- The idle-timeout widen was **8 seconds** inside a **5-second** default I did not know `packages/relay`
+  was running on — directory and e2e-tests both set 30 s; relay set nothing.
+
+Both times the outer limit fires first, so the number I chose never applies. And both times the
+**diagnostic got worse**: a read deadline fails with *"no frame in Nms"*, which names what did not
+happen; the runner fails with *"Test timed out"*, which names where it surfaced. **My fix for an
+exit-point label replaced a cause with an exit-point label**, inside the unit whose whole subject is
+exit-point labels.
+
+I wrote the rule down after the first one and did not apply it to the second. What made it visible
+was someone else running the numbers against the config.
+
+### A hypothesis I narrated as fact
+
+I wrote that the idle test failed because of *"an event-loop stall long enough to swallow a 20x
+margin."* The evidence was: passes alone, fails in the suite, started when a new fixture joined. That
+is **consistent** with starvation and is not a measurement of it. The elapsed time is now in the
+assertion message, so the next reader gets a number rather than my story — a trend of 2.1 → 3.4 → 7.9 s
+is a load problem arriving; a cliff is something else.
+
+### The pointer that went false in the commit that wrote it
+
+The directory's deferral block said the verifier is not wired *"because no relay carries
+`content_bytes` on the wire yet"* — and a relay does, as of this same leg. That block explicitly tells
+the next reader to consult it, so it would have handed them a blocker removed by the work that wrote
+it. **Third dangling-pointer of the milestone**, and the first one I authored *and* falsified inside
+one unit.
+
+### A hop that stopped degrading gracefully
+
+Everything proved the payload reaches `submitForSeal`'s return value. The directory sees a CBOR frame,
+not a return value. Until this leg landed, a shape mismatch there was unreachable; now
+`validateSealSubmissionLeaves` refuses the whole submission and the relay treats any directory answer
+as terminal. **A mismatch destroys the seal rather than producing `not_carried`** — and nothing
+covered it.
+
+### Rules earned
+
+1. **A deadline is only as long as the shortest thing above it.** Check the enclosing timeout before
+   choosing a number, and check the package config, not the sibling package's config.
+2. **When a fix changes which message a failure prints, read the new message.** A widened bound that
+   moves the failure to the runner has made diagnosis worse while making the suite green.
+3. **"Consistent with" is not "measured".** If a diagnosis is worth writing in a commit, it is worth a
+   number in the assertion.
+4. **A test that stops at a return value has not tested a hop.** The wire is the boundary, and a
+   boundary whose failure mode just changed from degrade to refuse is where coverage is owed.
