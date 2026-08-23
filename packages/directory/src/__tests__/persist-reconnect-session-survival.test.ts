@@ -96,7 +96,9 @@ describeIntegration("TEST-RECONNECT-001: recordAcceptedConnectionRequest()", () 
     expect(result.rows[0]!["requester_pseudonym"]).toBe(requesterPseudonym);
     expect(result.rows[0]!["target_pseudonym"]).toBe(targetPseudonym);
 
-    await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [requestId]);
+    // DOD-M15-CHAINDEBT-1: the row stays. `connection_requests` is hash-chained, so deleting one
+    // leaves every later row unverifiable — and `makeHexId()` is randomBytes(16), so nothing here
+    // collides with anything and there is nothing to clean up.
   });
 
   it("createConnection() succeeds when recordAcceptedConnectionRequest() was called first", async () => {
@@ -114,8 +116,8 @@ describeIntegration("TEST-RECONNECT-001: recordAcceptedConnectionRequest()", () 
     expect(conn).not.toBeNull();
     expect(conn!.connection_id).toBe(connectionId);
 
-    await superPool.query("DELETE FROM connections WHERE connection_id = $1", [connectionId]);
-    await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [requestId]);
+    // DOD-M15-CHAINDEBT-1: no cleanup — both `connections` and `connection_requests` are
+    // hash-chained, and every id in this test is per-run random.
   });
 
   it("createConnection() throws SI-001 when recordAcceptedConnectionRequest() was NOT called", async () => {
