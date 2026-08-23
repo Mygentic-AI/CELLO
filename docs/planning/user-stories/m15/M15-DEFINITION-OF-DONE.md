@@ -888,40 +888,6 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
   caller ended in `.catch(() => {})`. Written as a guard on the SHAPE, which then found five more
   silent writes nobody was looking for.
 
-### `DOD-M15-SILENTACK-1` — ❌ A dropped notification acknowledgement is reported, not swallowed
-Found by `DOD-M15-CHAINROUNDTRIP-1` review pass 2, **by execution, not by reading** (→ Entry S10).
-The same class as that line's F2, in the same file, missed only because the guard's marker is
-`void this.#store.` and these are a different object.
-- **Ten silent writes:** `void this.#notificationQueue!.acknowledge(...).catch(() => {})` —
-  `directory-node.ts` ~2109–2152 and ~6114–6124. **What the user lives through:** a notification
-  they have already seen is handed to them again, and again, because the record that they saw it
-  never landed and nothing said so.
-- **A silent drop three lines inside the block `CHAINROUNDTRIP-1` just fixed:** in the trust-signal
-  ACK, `if (!ackAgentId) return;`. An authenticated agent whose pubkey has no `agent_id` row ACKs a
-  signal, nothing happens, nothing is logged, and it returns on every pickup for 24 hours. Note
-  this is `agent_id` vs `agent_name` territory — see the join-key rule in `.claude/CLAUDE.md`.
-- **Enforcer:** widen `CHAINROUNDTRIP-1`'s fire-and-forget guard past `void this.#store.` to every
-  `void this.#<field>.` fire-and-forget in the file. The guard's scanners are already correct — it
-  is the marker that is narrow. **Re-run the three proven bypasses after widening**; a wider guard
-  that stops catching is the worst outcome of the three.
-
-### `DOD-M15-MMRCHAIN-1` — ❌ The whole-suite chain check covers every chain, not a hand-typed list
-Found by `DOD-M15-CHAINROUNDTRIP-1` review pass 2 (→ Entry S10). **Not a live break** — measured
-read-only against the running database, both tables verify today (16 and 15 rows). It is a live
-**blind spot**, and it is the exact shape that cost `CHAINROUNDTRIP-1` three wrong diagnoses.
-- `mmr-store.ts` builds `conversation_proof_leaves` and `conversation_proof_mmr_nodes` with the same
-  `computeChainHash(serializeRecord(...))` scheme and the same genesis constant — and neither is in
-  `HASH_CHAINED_TABLES`, so the new whole-suite teardown cannot see them.
-- **A test that tampers an MMR leaf and forgets to restore it is therefore invisible**, exactly as
-  `persist-018`'s unrestored tamper was invisible before it. These two are also the ONLY chains
-  production actually calls `verifyChain` on, which makes the gap the wrong way round.
-- **`HASH_CHAINED_TABLES` is itself a hand-typed literal** and `schema-completeness` AC-005 only
-  checks one direction — every listed table has a migration, never the inverse. That is why the list
-  could silently omit two real chains.
-- Not a one-line change: `verifyChain` is typed to `HashChainedTable` and the MMR tables are written
-  by a different store. **Enforcer:** the teardown covers every chained table the schema has, and a
-  new chained table cannot be added without appearing in it.
-
 ### `DOD-M15-SPINERED-1` — ❌ The multi-process evidence lane is HALF RED, and nobody knew
 **BLOCKS LAUNCH** (§0z.1). Found by running `DOD-M15-SPINE-LANE-1`'s own lane for the first time,
 2026-08-23 — one 56-minute run, receipt in Entry S12. **Not diagnosed. Deliberately.** The
@@ -1231,17 +1197,6 @@ here rather than quietly dropped.**
   V62). **Sequence with `DOD-M15-RELAYABUSE-1`** — both are rate-limiting work, and a limiter that
   is durable in one place and amnesiac in another invites the wrong conclusion about which is which.
 
-### `DOD-M15-FREEZE-STATUS-1` — ❌ A defensive freeze is distinguishable in the session RECORD
-Split from `DOD-M15-FRAME-1`, whose own clause asks that the freeze carry a status *"distinct from
-an ordinary counterparty-absent close"*. It does not yet.
-- `#freezeOnIdentityFailure` tears down via `destroySessionNode(..., "error")`, and `"error"` maps to
-  DB status `interrupted` — **the same row an ordinary teardown writes.** So the freeze is
-  distinguishable in the log and in behaviour, and invisible in the record an operator reads later.
-- The sessions table has no reason/detail column. Adding one is a **client-side migration**, which
-  on an operator's machine is unrecoverable if it fails — so it belongs in its own reviewed unit
-  with an upgrade test against a populated pre-migration database, not riding inside a security fix.
-- Until it lands, the ERROR log event is the only durable account of *why* a session ended this way.
-
 ### `DOD-M15-UNWITNESSED-1` — ❌ The two SUSPECTED partings are judged, not ignored
 Split from `DOD-M15-DIVERGE-1` on review — that clause covered three producers and only the proven
 one could ship safely. **Neither of these is visible to `sealReadiness` today.**
@@ -1508,19 +1463,6 @@ and no signature at all.
   currently precedes the ceremony that would sign it), or defer narrowing to `acceptSession` where a
   signed assignment IS in hand — which reopens the pre-accept window the receiver gate just closed.
 - **Enforcer:** stranger.
-
-### `DOD-M15-OFFER-EXPIRY-1` — ❌ An invitation to dial does not stand open forever
-Split from `DOD-M15-ASSIGN-1` (b) review F5. `admitOfferedDialer` names a peer and **nothing ever
-clears it**, so the DoD's word "live" is not enforced.
-- An offer never followed by an assignment — initiator aborts, directory faults, the accept send
-  fails — leaves the receiver holding a standing invitation to that peer **indefinitely**.
-- **Two inbound offers close together are now mutually exclusive at the transport:** both are told
-  to dial the same receiver, the second narrows the gate away from the first, and the first
-  initiator is refused with a `connection.rejected` naming a peer id it never heard of. Before the
-  gate existed, whichever dialed first simply won.
-- **Fix shape:** bind the narrowing to the session id it came from, revert it when the accept send
-  fails, and expire it on the same clock the directory uses before it gives up waiting for an accept.
-- **Enforcer:** journey.
 
 ### `DOD-M15-RESPONDER-VERIFY-1` — ✅ The responder stops trusting a key it never checked
 > **CLOSED 2026-08-22.** Two review passes — the hard cap — and every blocking finding is fixed.
@@ -1839,34 +1781,6 @@ the only safety net standing between "the relay said sealed but lied" and "the r
 > sweep. `reviveSessionNode` clears it.
 > **Carried:** `DOD-M15-SEAL-RETRY-1`.
 
-### `DOD-M15-SEAL-RETRY-1` — ❌ A failed background ceremony retries itself
-Split from `DOD-M15-SEAL-FAILED-TERMINAL-1`. The failure is now DISCOVERABLE and re-close is a working
-manual remedy; nothing is automatic.
-- An unattended daemon sits on a durable commitment doing nothing until it is restarted — the restart
-  seal resolver is the only retry, and it only runs at boot.
-- Most of the nine resolved failure reasons are transient by nature (`seal_counterparty_pending`,
-  `seal_unilateral_timeout`, a directory briefly unreachable), so a bounded backoff would clear them
-  without an operator ever seeing `seal_failed`.
-- Reuse the resolver's discipline rather than inventing a second one: serial, staggered, with a
-  give-up stamp — and note that `DOD-M15-SEAL-FAILED-TERMINAL-1` made that stamp clearable on revive.
-
-Split from `DOD-M15-CLOSEWAIT-1` (review HIGH-1, the half that remains).
-- `seal_in_progress` now distinguishes a RUNNING ceremony from "no ceremony". What is still missing is
-  the terminal case: a background ceremony that **threw** leaves the session `active` with a durable
-  commitment, no receipt, and nothing retrying until a daemon restart.
-- The agent was handed `ok: true` at commitment, so it has no reason to suspect anything is wrong; the
-  only account of the failure is a `session.seal.background.failed` line in the daemon log.
-- Persist the last background failure on the session row and answer `seal_failed` with its reason, so
-  the state survives the read and an agent can tell "slow" from "dead".
-
-`DOD-M12B-CLOSE-SILENT-WAIT-1`. Half fixed — the wait now announces itself, which stopped operators
-reaching for `force: true` and forfeiting the receipt the wait was about to earn (17 sessions were
-lost that way).
-- The caller still waits out `CELLO_SEAL_BILATERAL_TIMEOUT_MS` (660,000 ms) before the escalation
-  that then succeeds. Measured 11m 06s.
-- **Answering early orphans the unilateral escalation that runs inline after the wait** — that
-  changes the close contract and what produces the receipt. Decide the contract, then build.
-
 ### `DOD-M15-SIGNUP-1` — ✅ Signup throttles a person, not their employer
 > **Shipped and reviewed 2026-08-22 → Entries 8, 10.** `4922d72c` + `127a5a29` + `f9f271f4`. **TWO
 > review passes — the hard cap.** The first found that my rekey removed the only cap on a requester
@@ -1923,16 +1837,6 @@ from minutes long past while `curl` reached all three nodes in 37–184 ms.
   primary resolves and no roster probe runs.
 - Either sweep on a slow timer even when healthy, or refuse to answer with a reading older than N
   minutes. **Do not fix it by hiding the field when stale** — absent and healthy must not look alike.
-
-### `DOD-M15-NODEHEAP-1` — ❌ The directory's memory growth has a cause
-`DOD-NODE-HEAP-GROWTH-1`. Mitigated, not fixed: the ceiling was raised to 4,096 MB, buying roughly
-two weeks instead of six days. The process grows ~250 MB/day and at ~80% of ceiling the node answers
-**nothing for 40 seconds** while V8 collects on the same thread that serves HTTP.
-- Establish whether the growth is a leak. Evidence points **away** from client traffic — `use1` (the
-  hardcoded primary) and `euw1` (failover only) sat 9% apart after near-identical uptime.
-- Anti-entropy, which every node runs continuously regardless of clients, is the untested candidate.
-- The 60-second sampler is running; the growth rate across the three nodes is the measurement that
-  decides whether this closes or becomes a real hunt.
 
 ### `DOD-M15-IPCVISIBLE-1` — ✅ A connection closing leaves a record, and an identity switch says why
 > **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
@@ -2002,17 +1906,6 @@ was silently dropped.
 - Diagnosis first: reproduce with a daemon restart after a release, with the trigger field from
   `DOD-M15-IPCVISIBLE-1` distinguishing replay from fallback in one run.
 
-### `DOD-M15-SWEEP-ABORT-1` — ❌ A shutdown stops the network work it started
-Split from `DOD-M15-STALEROSTER-1` (review F10). The background roster sweep spends up to ~16 s on
-`/bootstrap` probes when a node is down, on a 90–180 s cycle — so roughly one `cello logout` in eight
-lands mid-sweep.
-- The daemon now IGNORES a sweep that completes after `stop()` (no callbacks, no log, no re-arm), so
-  nothing acts on a dead daemon's behalf. **The probes themselves still run.**
-- Cancelling them means an `AbortSignal` threaded through `manifestNodesToEndpoints` and
-  `fetchBootstrapResult`, which owns a per-request controller for its own deadline and accepts no
-  external one. That is a wide signature change and did not belong inside a hardening unit.
-- The same seam would let `DOD-M12B-SHUTDOWN-1`'s reconcile sweeper stop dialing on demand.
-
 ### `DOD-M15-MANIFEST-EXPIRY-LIVE-1` — ✅ A running daemon notices its own manifest expiring
 > **CLOSED 2026-08-23** (→ Entry 35). Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F3
 > (`not_before` NaN fails open under a comment asserting it cannot) [blocking]… F4 (contradictory
@@ -2046,36 +1939,6 @@ policy for an expired manifest — it just never chose it.
   may even be the right answer — but it is undefended, undocumented, and invisible to the operator.
 - Decide it deliberately, per consumer, and write down why.
 
-### `DOD-M15-BUNDLED-2030-1` — ❌ The compiled-in manifest has a cliff and no in-band remedy
-Split from `DOD-M15-MANIFEST-EXPIRY-LIVE-1`. `BUNDLED_CONSORTIUM_MANIFEST` expires `2030-01-01`.
-- On that date **every daemon on the production default refuses to start** (ADV-002), simultaneously.
-- The only fix is upgrading `@cello-protocol/connect`, which an operator whose daemon will not start
-  has no in-product prompt to do.
-- The bundled path wires no manifest poll, so a newer manifest cannot be adopted at runtime either.
-- Needs a rotation story before it needs a fix, but the cliff should be on the record now.
-
-<!-- superseded detail from the original line, retained for the trail -->
-Found by `DOD-M15-STALEROSTER-1`'s review, and **the inverse of where that unit put the hazard.**
-- Manifest expiry is checked **only at startup** (`verifyStartupManifest`), and the bundled-manifest
-  path wires **no poll scheduler** at all.
-- So a long-running daemon whose manifest expires under it keeps probing its node set and — after
-  `STALEROSTER-1` — reports `stale: false`. A confidently fresh reading taken against an expired
-  trust anchor, which is worse than the stale reading that line was written to fix.
-- Minimum: surface `expires <= now` in the status block. Better: re-check on the manifest poll.
-
-### `DOD-M15-VOCAB-ORDERING-1` — ❌ A response cannot be assembled after it has been translated
-Split from `DOD-M15-SELECTION-1`, where it cost an operator-facing defect. `renderForSurface` is a
-PASS at ONE point in the pipeline: anything spread into a response after that point ships
-untranslated, and MCP tool names are not commands a terminal can run.
-- The instance: a fallback notice added at the IPC write told a CLI caller to *"Run
-  `cello_use_agent`"*. The real command is `cello use-agent`. `isInstructionKey` would have rewritten
-  it — the string simply arrived after the rewrite had run.
-- **The prose audit is structurally blind to this class.** It checks that tokens naming tools are
-  REAL tool names, and `cello_use_agent` is one. The defect is the ORDERING, and nothing watches it.
-- The guard belongs on the pipeline, not the vocabulary: make it unrepresentable to add response
-  fields downstream of the renderer, or assert at the boundary that no `*guidance` value leaving for
-  a CLI surface contains an MCP verb.
-
 ### `DOD-M15-DOORBELL-1` — ✅ A daemon shutdown does not ring like an incoming message
 > **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
 > null → proceed) [blocking]; F5 (mode silently not applied on overwrite) [blocking]; F6/F7
@@ -2097,16 +1960,6 @@ Shutdown is forwarded through the notification channel with the same generic sha
 doorbell, so an agent following the contract calls the inbox, gets `daemon_not_running`, and reports
 a protocol failure while the actual event goes unreported.
 - Either do not forward shutdown through the channel, or give it distinguishable metadata.
-
-### `DOD-M15-CHAINHEALTH-1` — ❌ Tamper-evidence can be checked without SSH
-`DOD-ACCOUNTS-CHAIN-1`, the remainder. The writer is fixed, deployed and the data re-measured clean
-(11 rows per node, `verifyChain` VALID on all three). What is missing is that answering *"is it still
-intact?"* requires IAP SSH to each node and credentials out of Secret Manager — which is why a stale
-"it is broken" note survived four days and nearly caused a destructive repair.
-- `verifyChain("user_accounts")` on the ops-agent health output.
-- Spin-off recorded, not repaired here: `DOD-ACCOUNTS-EMAIL-CHAIN-1` (the email half is stored but
-  not chained), and the test-isolation defect where several suites `DELETE` from this append-only
-  chained table.
 
 ### `DOD-M15-SAMEOP-1` — ❌ Same-operator standing does not depend on which node answered
 `DOD-SELF-STANDING-NULL-LINKAGE-1` + the security half of `CELLO-REPL-001`.
@@ -2178,13 +2031,6 @@ an attacker walks around.
 - **`DOD-DOC-SCREEN-STARTING-CONTENT-1`:** a document's initial seeded content — the largest single
   block of peer-authored text an operator ever receives — gets only the character denylist.
 
-### `DOD-M15-DOCPROFILE-1` — ❌ The agreed content profile is enforced by something
-`DOD-DOC-PROFILE-1`. Two parties agree a profile at the handshake; it is bound into the document id
-and immutable for its life, and **no verb consults it.** An operator who deliberately chose the
-restrictive profile gets exactly the protection of one who did not think about it.
-- Not a break — inbound updates are still screened by the general rules — but the setting is a
-  promise the system does not keep.
-
 ### `DOD-M15-HEARTBEAT-1` — ❌ Directory nodes can see each other's heartbeats
 `DOD-HEARTBEAT-REPLICATION-1`. Every node reads the other two as never-heartbeated and counts
 `availableNodes: 1` against `requiredThreshold: 2`; federation checkpoints have **never once
@@ -2196,18 +2042,6 @@ succeeded**.
   one-line spec edit.
 - **A code comment blaming a "BIGSERIAL `id` collision" is wrong** and would send the repairer at the
   wrong fix; rewrite it (Invariant / `DOD-M15-CLAIM-COMMENTS-1`).
-
-### `DOD-M15-MISMATCH-1` — ❌ An unsealable mismatch leaves a durable trace
-`DOD-FRONTIER-MISMATCH-DURABLE-1`. The strand itself is closed (dedup is keyed on relay-assigned
-position), but the mismatch flag is held **in memory and dies on every daemon restart** — which
-undercuts the "a live session sat unsealable for a week" concern that made this severe.
-- **Prefer derive-on-read from the persisted seal-rejection record**; it cannot drift from the
-  evidence, where a written flag can.
-- Inherited caveat: three paths still end unwitnessed (relay down, terminal assignment rejection,
-  retry exhaustion), so **relay position is not total** and anything keyed on it must not assume it
-  is.
-
----
 
 # Tier 4 — Own the encryption, then bind the receipt
 
@@ -2435,11 +2269,6 @@ Parallel with Tier 4 — different disciplines, no shared files.
   per-directory session failures rather than as a config gap. The startup log already makes it
   visible; make it fatal.
 
-### `DOD-M15-RELAYLEAK-1` — ❌ Relay clients are closed
-Graceful shutdown never closes relay clients, and the seal-only detached-transport path registers a
-session that is never unregistered, so a cached relay client is never closed for the process
-lifetime. Client-side, small, standalone.
-
 ### `DOD-M15-MULTIRELAY-1` — ❌ An agent's reachability does not rest on one relay
 **Scoped by `DOD-M15-SPIKE-1(c)` → Entry 1. This line is AVAILABILITY ONLY.** The client already
 requests reservations with every known relay (`reservationsRequested: 2`) — the audit's "reserves
@@ -2535,18 +2364,6 @@ The byte-match workaround is holding; the fail-open underneath it is not fixed.
   IP: the fail-open is known and was worked around with string matching rather than fixed.
 - Resolve the bootstrap coordinate over an authenticated channel; it currently comes from a plaintext
   HTTP endpoint on port 9090.
-
-### `DOD-M15-DDOS-1` — ❌ Volumetric protection sits in front of the relay
-**The only line in this milestone that addresses actual denial of service**; every other control is
-application-layer and changes who is *admitted*, not how much traffic *arrives*. A gate runs after
-the TCP connection is made and the handshake has begun.
-- Cloud Armor or equivalent in front of the public relay endpoint, which is open to `0.0.0.0/0`.
-  [[server-infrastructure]] already states the requirement and it is not built.
-- **Against a user's machine nothing at the application layer helps** — once packets arrive at a
-  home connection the link is saturated before any code runs. Relay-mediated inbound **is** the
-  client-side volumetric defense, because it moves the addressable endpoint onto infrastructure that
-  can have scrubbing in front of it.
-- Terraform; parallelises cleanly with everything.
 
 ### `DOD-M15-RELAYONLY-1` — ❌ Relay-only routing is an operator setting
 The feature half of the IP disclosure. A direct session reveals the operator's IP permanently, and
@@ -3056,12 +2873,200 @@ and, for the made-true rows, the units that make them true.
 
 # POST-LAUNCH BACKLOG
 
+**🧊 THE GATE IS FROZEN (Andre, 2026-08-23 — M15-PROCEDURE §0z.4).** Everything found from here
+lands HERE, however bad it looks, unless it is a security hole a customer actually reaches — and
+**BLOCKS is now Andre's to grant, not a lane's to choose.** Unclear no longer blocks; unclear comes
+here with the question written down.
+
 **Outside the gate. Real, worth fixing, does not stop us shipping** (M15-PROCEDURE §0z.1, Andre
 2026-08-23). Nothing here is dropped, and nothing here was written up less carefully than a blocking
 line — the classification changes what happens to a finding, never how hard it was looked for.
 
 **A line arrives here only by being classified at creation.** Moving an existing tier line down here
 is Andre's call, never a lane's.
+
+### `DOD-M15-NODEHEAP-1` — ❌ The directory's memory growth has a cause
+`DOD-NODE-HEAP-GROWTH-1`. Mitigated, not fixed: the ceiling was raised to 4,096 MB, buying roughly
+two weeks instead of six days. The process grows ~250 MB/day and at ~80% of ceiling the node answers
+**nothing for 40 seconds** while V8 collects on the same thread that serves HTTP.
+- Establish whether the growth is a leak. Evidence points **away** from client traffic — `use1` (the
+  hardcoded primary) and `euw1` (failover only) sat 9% apart after near-identical uptime.
+- Anti-entropy, which every node runs continuously regardless of clients, is the untested candidate.
+- The 60-second sampler is running; the growth rate across the three nodes is the measurement that
+  decides whether this closes or becomes a real hunt.
+
+### `DOD-M15-SEAL-RETRY-1` — ❌ A failed background ceremony retries itself
+Split from `DOD-M15-SEAL-FAILED-TERMINAL-1`. The failure is now DISCOVERABLE and re-close is a working
+manual remedy; nothing is automatic.
+- An unattended daemon sits on a durable commitment doing nothing until it is restarted — the restart
+  seal resolver is the only retry, and it only runs at boot.
+- Most of the nine resolved failure reasons are transient by nature (`seal_counterparty_pending`,
+  `seal_unilateral_timeout`, a directory briefly unreachable), so a bounded backoff would clear them
+  without an operator ever seeing `seal_failed`.
+- Reuse the resolver's discipline rather than inventing a second one: serial, staggered, with a
+  give-up stamp — and note that `DOD-M15-SEAL-FAILED-TERMINAL-1` made that stamp clearable on revive.
+
+Split from `DOD-M15-CLOSEWAIT-1` (review HIGH-1, the half that remains).
+- `seal_in_progress` now distinguishes a RUNNING ceremony from "no ceremony". What is still missing is
+  the terminal case: a background ceremony that **threw** leaves the session `active` with a durable
+  commitment, no receipt, and nothing retrying until a daemon restart.
+- The agent was handed `ok: true` at commitment, so it has no reason to suspect anything is wrong; the
+  only account of the failure is a `session.seal.background.failed` line in the daemon log.
+- Persist the last background failure on the session row and answer `seal_failed` with its reason, so
+  the state survives the read and an agent can tell "slow" from "dead".
+
+`DOD-M12B-CLOSE-SILENT-WAIT-1`. Half fixed — the wait now announces itself, which stopped operators
+reaching for `force: true` and forfeiting the receipt the wait was about to earn (17 sessions were
+lost that way).
+- The caller still waits out `CELLO_SEAL_BILATERAL_TIMEOUT_MS` (660,000 ms) before the escalation
+  that then succeeds. Measured 11m 06s.
+- **Answering early orphans the unilateral escalation that runs inline after the wait** — that
+  changes the close contract and what produces the receipt. Decide the contract, then build.
+
+### `DOD-M15-MISMATCH-1` — ❌ An unsealable mismatch leaves a durable trace
+`DOD-FRONTIER-MISMATCH-DURABLE-1`. The strand itself is closed (dedup is keyed on relay-assigned
+position), but the mismatch flag is held **in memory and dies on every daemon restart** — which
+undercuts the "a live session sat unsealable for a week" concern that made this severe.
+- **Prefer derive-on-read from the persisted seal-rejection record**; it cannot drift from the
+  evidence, where a written flag can.
+- Inherited caveat: three paths still end unwitnessed (relay down, terminal assignment rejection,
+  retry exhaustion), so **relay position is not total** and anything keyed on it must not assume it
+  is.
+
+---
+
+### `DOD-M15-FREEZE-STATUS-1` — ❌ A defensive freeze is distinguishable in the session RECORD
+Split from `DOD-M15-FRAME-1`, whose own clause asks that the freeze carry a status *"distinct from
+an ordinary counterparty-absent close"*. It does not yet.
+- `#freezeOnIdentityFailure` tears down via `destroySessionNode(..., "error")`, and `"error"` maps to
+  DB status `interrupted` — **the same row an ordinary teardown writes.** So the freeze is
+  distinguishable in the log and in behaviour, and invisible in the record an operator reads later.
+- The sessions table has no reason/detail column. Adding one is a **client-side migration**, which
+  on an operator's machine is unrecoverable if it fails — so it belongs in its own reviewed unit
+  with an upgrade test against a populated pre-migration database, not riding inside a security fix.
+- Until it lands, the ERROR log event is the only durable account of *why* a session ended this way.
+
+### `DOD-M15-SILENTACK-1` — ❌ A dropped notification acknowledgement is reported, not swallowed
+Found by `DOD-M15-CHAINROUNDTRIP-1` review pass 2, **by execution, not by reading** (→ Entry S10).
+The same class as that line's F2, in the same file, missed only because the guard's marker is
+`void this.#store.` and these are a different object.
+- **Ten silent writes:** `void this.#notificationQueue!.acknowledge(...).catch(() => {})` —
+  `directory-node.ts` ~2109–2152 and ~6114–6124. **What the user lives through:** a notification
+  they have already seen is handed to them again, and again, because the record that they saw it
+  never landed and nothing said so.
+- **A silent drop three lines inside the block `CHAINROUNDTRIP-1` just fixed:** in the trust-signal
+  ACK, `if (!ackAgentId) return;`. An authenticated agent whose pubkey has no `agent_id` row ACKs a
+  signal, nothing happens, nothing is logged, and it returns on every pickup for 24 hours. Note
+  this is `agent_id` vs `agent_name` territory — see the join-key rule in `.claude/CLAUDE.md`.
+- **Enforcer:** widen `CHAINROUNDTRIP-1`'s fire-and-forget guard past `void this.#store.` to every
+  `void this.#<field>.` fire-and-forget in the file. The guard's scanners are already correct — it
+  is the marker that is narrow. **Re-run the three proven bypasses after widening**; a wider guard
+  that stops catching is the worst outcome of the three.
+
+### `DOD-M15-OFFER-EXPIRY-1` — ❌ An invitation to dial does not stand open forever
+Split from `DOD-M15-ASSIGN-1` (b) review F5. `admitOfferedDialer` names a peer and **nothing ever
+clears it**, so the DoD's word "live" is not enforced.
+- An offer never followed by an assignment — initiator aborts, directory faults, the accept send
+  fails — leaves the receiver holding a standing invitation to that peer **indefinitely**.
+- **Two inbound offers close together are now mutually exclusive at the transport:** both are told
+  to dial the same receiver, the second narrows the gate away from the first, and the first
+  initiator is refused with a `connection.rejected` naming a peer id it never heard of. Before the
+  gate existed, whichever dialed first simply won.
+- **Fix shape:** bind the narrowing to the session id it came from, revert it when the accept send
+  fails, and expire it on the same clock the directory uses before it gives up waiting for an accept.
+- **Enforcer:** journey.
+
+### `DOD-M15-RELAYLEAK-1` — ❌ Relay clients are closed
+Graceful shutdown never closes relay clients, and the seal-only detached-transport path registers a
+session that is never unregistered, so a cached relay client is never closed for the process
+lifetime. Client-side, small, standalone.
+
+### `DOD-M15-SWEEP-ABORT-1` — ❌ A shutdown stops the network work it started
+Split from `DOD-M15-STALEROSTER-1` (review F10). The background roster sweep spends up to ~16 s on
+`/bootstrap` probes when a node is down, on a 90–180 s cycle — so roughly one `cello logout` in eight
+lands mid-sweep.
+- The daemon now IGNORES a sweep that completes after `stop()` (no callbacks, no log, no re-arm), so
+  nothing acts on a dead daemon's behalf. **The probes themselves still run.**
+- Cancelling them means an `AbortSignal` threaded through `manifestNodesToEndpoints` and
+  `fetchBootstrapResult`, which owns a per-request controller for its own deadline and accepts no
+  external one. That is a wide signature change and did not belong inside a hardening unit.
+- The same seam would let `DOD-M12B-SHUTDOWN-1`'s reconcile sweeper stop dialing on demand.
+
+### `DOD-M15-VOCAB-ORDERING-1` — ❌ A response cannot be assembled after it has been translated
+Split from `DOD-M15-SELECTION-1`, where it cost an operator-facing defect. `renderForSurface` is a
+PASS at ONE point in the pipeline: anything spread into a response after that point ships
+untranslated, and MCP tool names are not commands a terminal can run.
+- The instance: a fallback notice added at the IPC write told a CLI caller to *"Run
+  `cello_use_agent`"*. The real command is `cello use-agent`. `isInstructionKey` would have rewritten
+  it — the string simply arrived after the rewrite had run.
+- **The prose audit is structurally blind to this class.** It checks that tokens naming tools are
+  REAL tool names, and `cello_use_agent` is one. The defect is the ORDERING, and nothing watches it.
+- The guard belongs on the pipeline, not the vocabulary: make it unrepresentable to add response
+  fields downstream of the renderer, or assert at the boundary that no `*guidance` value leaving for
+  a CLI surface contains an MCP verb.
+
+### `DOD-M15-CHAINHEALTH-1` — ❌ Tamper-evidence can be checked without SSH
+`DOD-ACCOUNTS-CHAIN-1`, the remainder. The writer is fixed, deployed and the data re-measured clean
+(11 rows per node, `verifyChain` VALID on all three). What is missing is that answering *"is it still
+intact?"* requires IAP SSH to each node and credentials out of Secret Manager — which is why a stale
+"it is broken" note survived four days and nearly caused a destructive repair.
+- `verifyChain("user_accounts")` on the ops-agent health output.
+- Spin-off recorded, not repaired here: `DOD-ACCOUNTS-EMAIL-CHAIN-1` (the email half is stored but
+  not chained), and the test-isolation defect where several suites `DELETE` from this append-only
+  chained table.
+
+### `DOD-M15-DOCPROFILE-1` — ❌ The agreed content profile is enforced by something
+`DOD-DOC-PROFILE-1`. Two parties agree a profile at the handshake; it is bound into the document id
+and immutable for its life, and **no verb consults it.** An operator who deliberately chose the
+restrictive profile gets exactly the protection of one who did not think about it.
+- Not a break — inbound updates are still screened by the general rules — but the setting is a
+  promise the system does not keep.
+
+### `DOD-M15-MMRCHAIN-1` — ❌ The whole-suite chain check covers every chain, not a hand-typed list
+Found by `DOD-M15-CHAINROUNDTRIP-1` review pass 2 (→ Entry S10). **Not a live break** — measured
+read-only against the running database, both tables verify today (16 and 15 rows). It is a live
+**blind spot**, and it is the exact shape that cost `CHAINROUNDTRIP-1` three wrong diagnoses.
+- `mmr-store.ts` builds `conversation_proof_leaves` and `conversation_proof_mmr_nodes` with the same
+  `computeChainHash(serializeRecord(...))` scheme and the same genesis constant — and neither is in
+  `HASH_CHAINED_TABLES`, so the new whole-suite teardown cannot see them.
+- **A test that tampers an MMR leaf and forgets to restore it is therefore invisible**, exactly as
+  `persist-018`'s unrestored tamper was invisible before it. These two are also the ONLY chains
+  production actually calls `verifyChain` on, which makes the gap the wrong way round.
+- **`HASH_CHAINED_TABLES` is itself a hand-typed literal** and `schema-completeness` AC-005 only
+  checks one direction — every listed table has a migration, never the inverse. That is why the list
+  could silently omit two real chains.
+- Not a one-line change: `verifyChain` is typed to `HashChainedTable` and the MMR tables are written
+  by a different store. **Enforcer:** the teardown covers every chained table the schema has, and a
+  new chained table cannot be added without appearing in it.
+
+### `DOD-M15-BUNDLED-2030-1` — ❌ The compiled-in manifest has a cliff and no in-band remedy
+Split from `DOD-M15-MANIFEST-EXPIRY-LIVE-1`. `BUNDLED_CONSORTIUM_MANIFEST` expires `2030-01-01`.
+- On that date **every daemon on the production default refuses to start** (ADV-002), simultaneously.
+- The only fix is upgrading `@cello-protocol/connect`, which an operator whose daemon will not start
+  has no in-product prompt to do.
+- The bundled path wires no manifest poll, so a newer manifest cannot be adopted at runtime either.
+- Needs a rotation story before it needs a fix, but the cliff should be on the record now.
+
+<!-- superseded detail from the original line, retained for the trail -->
+Found by `DOD-M15-STALEROSTER-1`'s review, and **the inverse of where that unit put the hazard.**
+- Manifest expiry is checked **only at startup** (`verifyStartupManifest`), and the bundled-manifest
+  path wires **no poll scheduler** at all.
+- So a long-running daemon whose manifest expires under it keeps probing its node set and — after
+  `STALEROSTER-1` — reports `stale: false`. A confidently fresh reading taken against an expired
+  trust anchor, which is worse than the stale reading that line was written to fix.
+- Minimum: surface `expires <= now` in the status block. Better: re-check on the manifest poll.
+
+### `DOD-M15-DDOS-1` — ❌ Volumetric protection sits in front of the relay
+**The only line in this milestone that addresses actual denial of service**; every other control is
+application-layer and changes who is *admitted*, not how much traffic *arrives*. A gate runs after
+the TCP connection is made and the handshake has begun.
+- Cloud Armor or equivalent in front of the public relay endpoint, which is open to `0.0.0.0/0`.
+  [[server-infrastructure]] already states the requirement and it is not built.
+- **Against a user's machine nothing at the application layer helps** — once packets arrive at a
+  home connection the link is saturated before any code runs. Relay-mediated inbound **is** the
+  client-side volumetric defense, because it moves the addressable endpoint onto infrastructure that
+  can have scrubbing in front of it.
+- Terraform; parallelises cleanly with everything.
 
 ### `DOD-M15-TOOLDESC-SCAN-1` — The claim scanner can see MCP tool descriptions
 **POST-LAUNCH** (§0z.1): the launch risk is whether the shipped descriptions are HONEST, and

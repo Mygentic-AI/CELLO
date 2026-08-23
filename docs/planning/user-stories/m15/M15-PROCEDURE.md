@@ -256,6 +256,32 @@ both ruled:
 2. **Both lanes produced one.** Recording only one would give a distorted read of where the risk
    sits, and lose the actual signal: it is the WORK that carries this hazard, not a person.
 
+### 0z.4 — 🧊 THE GATE IS FROZEN (Andre, 2026-08-23). SUPERSEDES the blocking half of §0z.1.
+
+**No new line enters the gate. Either lane, rest of the milestone.**
+
+Anything found from here goes to the **POST-LAUNCH BACKLOG**, however bad it looks — **unless it is
+a security hole a customer actually reaches.** If you genuinely believe something must block, **ask
+Andre**. Do not add it yourself.
+
+Classification-at-creation (§0z.1) still applies; what changed is that **BLOCKS is now Andre's to
+grant, not a lane's to choose.** Unclear no longer blocks — unclear goes to the backlog with the
+question written down.
+
+**WHY, because the reasoning is the part that keeps this from being obeyed badly:** closures went up
+and the remaining count did not come down — **49 lines two days ago, 91 now, 37 closed.** The gate
+grew faster than two lanes could close it. §0z.1 only ever caught NEW findings, so the existing tier
+lines were never re-sorted and roughly fourteen items already agreed not to belong in the gate sat
+in it all day inflating the number. Andre is also near his weekly token quota.
+
+**This is NOT an instruction to look less hard.** Said in his words: the discipline that found five
+false passes in one day is exactly what he wants kept. It changes what happens to a finding, so that
+finding more stops making the finish line move away.
+
+**Applied 2026-08-23:** the triage ruling moved 14 lines out of the tiers into the backlog, and the
+two lines I could not call went to POST-LAUNCH under his rule *"unless a customer hits them directly
+on day one."*
+
 ### 0z.2 — THE SPAWN TRIP-WIRE: three new items from one unit and you STOP (Andre, 2026-08-23)
 
 **A COUNT, NOT A JUDGEMENT CALL. Two is fine. THREE TRIPS IT.**
