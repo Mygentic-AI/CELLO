@@ -131,19 +131,18 @@ afterAll(async () => {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Delete all rows for the given connection_ids from connections (superuser).
- * Used for test cleanup without relying on transaction rollback (which would
- * complicate tests that need to verify row persistence across PgDirectoryStore restarts).
+/*
+ * DOD-M15-CHAINDEBT-1 — `cleanupConnections` is DELETED, not left unused.
+ *
+ * It deleted rows from `connections` by id, and its docstring justified itself as "test cleanup
+ * without relying on transaction rollback". Both halves were reasonable and the result was not:
+ * `connections` is hash-chained, so every row it removed left its successors unverifiable, for the
+ * whole database, permanently.
+ *
+ * Nothing replaces it. Every id in this file is `makeHexId()` per test, so the rows collide with
+ * nothing and cost nothing by staying — and this file's own AC-005 asserts `verifyChain` over the
+ * entire `connections` table, which is precisely the assertion the cleanup was corrupting.
  */
-async function cleanupConnections(connectionIds: string[]): Promise<void> {
-  if (connectionIds.length === 0) return;
-  const placeholders = connectionIds.map((_, i) => `$${i + 1}`).join(", ");
-  await superPool.query(
-    `DELETE FROM connections WHERE connection_id IN (${placeholders})`,
-    connectionIds,
-  );
-}
 
 /**
  * Insert a matching connection_requests row so SI-001 validation passes.
@@ -355,8 +354,8 @@ describeIntegration(
       expect(fullRecord?.status).toBe("active");
 
       // Clean up
-      await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
+      // DOD-M15-CHAINDEBT-1: no cleanup. `connections` and `connection_requests` are both
+      // hash-chained; every id here is makeHexId() per test, so the rows collide with nothing.
     });
 
     // ── AC-003: Symmetric lookup ───────────────────────────────────────────────
@@ -398,8 +397,8 @@ describeIntegration(
       expect(fullRecord?.participant_b).toBe(participantB);
 
       // Clean up
-      await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
+      // DOD-M15-CHAINDEBT-1: no cleanup. `connections` and `connection_requests` are both
+      // hash-chained; every id here is makeHexId() per test, so the rows collide with nothing.
     });
 
     // ── AC-004: Restart survival ───────────────────────────────────────────────
@@ -432,8 +431,8 @@ describeIntegration(
       expect(result?.connection_id).toBe(connectionId);
 
       // Clean up
-      await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
+      // DOD-M15-CHAINDEBT-1: no cleanup. `connections` and `connection_requests` are both
+      // hash-chained; every id here is makeHexId() per test, so the rows collide with nothing.
     });
 
     // ── AC-005: Hash chain verification ───────────────────────────────────────
@@ -447,8 +446,19 @@ describeIntegration(
        * Stale rows from other tests would cause chain recomputation to fail because
        * the previous hash depends on insertion order. Clean slate before inserting.
        */
-      // Finding 4 fix: delete stale rows so chain verification starts from genesis.
-      await superPool.query("DELETE FROM connections");
+      /**
+       * DOD-M15-CHAINDEBT-1 — the table wipe is GONE, and it was itself a previous "fix".
+       *
+       * It read: *"Finding 4 fix: delete stale rows so chain verification starts from genesis."*
+       * `connections` is hash-chained, so emptying it is the single most destructive thing a
+       * fixture can do to this database — and it was done to make a chain assertion pass.
+       *
+       * The stale rows it was working around came from fixtures writing a literal `chain_hash`
+       * (this file's own seeder among them, now converted). With every row written through
+       * `insertWithChain`, the chain verifies from genesis across the whole table without anyone
+       * emptying it — which is what `verifyChain("connections")` below actually asserts, and a far
+       * stronger claim than verifying two rows in an otherwise empty table.
+       */
 
       const id1 = makeHexId();
       const id2 = makeHexId();
@@ -473,12 +483,8 @@ describeIntegration(
       const result = await verifyStore.verifyChain("connections");
       expect(result.valid).toBe(true);
 
-      // Clean up
-      await cleanupConnections([id1, id2]);
-      await superPool.query(
-        "DELETE FROM connection_requests WHERE request_id IN ($1, $2)",
-        [id1, id2],
-      );
+      // DOD-M15-CHAINDEBT-1: no cleanup — removing these two rows is exactly what would break the
+      // assertion above for the NEXT run of this test.
     });
 
     // ── AC-006: RLS blocks UPDATE ─────────────────────────────────────────────
@@ -527,8 +533,8 @@ describeIntegration(
       expect(rowResult.rows[0]?.status).toBe("active");
 
       // Clean up
-      await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
+      // DOD-M15-CHAINDEBT-1: no cleanup. `connections` and `connection_requests` are both
+      // hash-chained; every id here is makeHexId() per test, so the rows collide with nothing.
     });
 
     // ── AC-007: Observability — connection.persisted logged ───────────────────
@@ -562,8 +568,8 @@ describeIntegration(
       );
 
       // Clean up
-      await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
+      // DOD-M15-CHAINDEBT-1: no cleanup. `connections` and `connection_requests` are both
+      // hash-chained; every id here is makeHexId() per test, so the rows collide with nothing.
     });
 
     // ── AC-008: getConnection with unknown ID returns null ────────────────────
@@ -605,8 +611,8 @@ describeIntegration(
       expect(result?.status).toBe("active");
 
       // Clean up
-      await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
+      // DOD-M15-CHAINDEBT-1: no cleanup. `connections` and `connection_requests` are both
+      // hash-chained; every id here is makeHexId() per test, so the rows collide with nothing.
     });
 
     // ── SI-001: connection_id must match a pending connection_requests row ─────
@@ -663,16 +669,40 @@ describeIntegration(
       const logger = makeLogger();
       const store = new PgDirectoryStore(servicePool, logger);
 
-      // Insert a connection_requests row with outcome = 'REJECTED' (not 'ACCEPTED')
+      /**
+       * DOD-M15-CHAINDEBT-1 — a REAL chain hash, computed here rather than faked.
+       *
+       * This row must have `outcome = 'REJECTED'`, and the store's only chained writer for this
+       * table is `recordAcceptedConnectionRequest`, which hard-codes ACCEPTED. So it cannot be
+       * seeded through the store, and it cannot be rolled back either: `createConnection` below
+       * runs on a different connection and would not see an uncommitted row.
+       *
+       * What it CAN do is what the writer does — chain to the current head — using the same two
+       * helpers this file already imports for SI-002. The result is an ordinary correctly-chained
+       * row, not an exemption. It previously used `CHAIN_GENESIS`, which is the seed for the FIRST
+       * row: correct only in an empty table, and a hole in every other case.
+       */
+      const rejectedRecord: Record<string, unknown> = {
+        request_id: rejectedId,
+        requester_pseudonym: `req_${rejectedId.slice(0, 8)}`,
+        target_pseudonym: `tgt_${rejectedId.slice(0, 8)}`,
+        outcome: "REJECTED",
+      };
+      const reqHead = await superPool.query<{ chain_hash: string }>(
+        `SELECT chain_hash FROM connection_requests ORDER BY id DESC LIMIT 1`,
+      );
+      const rejectedChainHash = computeChainHash(
+        serializeRecord(rejectedRecord, "connection_requests"),
+        reqHead.rows[0]?.chain_hash ?? CHAIN_GENESIS,
+      );
       await superPool.query(
         `INSERT INTO connection_requests (request_id, requester_pseudonym, target_pseudonym, outcome, chain_hash)
-         VALUES ($1, $2, $3, 'REJECTED', $4)
-         ON CONFLICT (request_id) DO NOTHING`,
+         VALUES ($1, $2, $3, 'REJECTED', $4)`,
         [
-          rejectedId,
-          `req_${rejectedId.slice(0, 8)}`,
-          `tgt_${rejectedId.slice(0, 8)}`,
-          CHAIN_GENESIS,
+          rejectedRecord["request_id"],
+          rejectedRecord["requester_pseudonym"],
+          rejectedRecord["target_pseudonym"],
+          rejectedChainHash,
         ],
       );
 
@@ -695,8 +725,7 @@ describeIntegration(
       );
       expect(rowResult.rows[0]?.count).toBe("0");
 
-      // Clean up
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [rejectedId]);
+      // DOD-M15-CHAINDEBT-1: no cleanup — `rejectedId` is per-run and the table is hash-chained.
     });
 
     // ── SI-002: chain_hash computed server-side ────────────────────────────────
@@ -725,8 +754,22 @@ describeIntegration(
       const logger = makeLogger();
       const store = new PgDirectoryStore(servicePool, logger);
 
-      // Truncate connections to ensure clean chain (genesis start)
-      await superPool.query("DELETE FROM connections");
+      /**
+       * DOD-M15-CHAINDEBT-1 — the wipe is gone, and the assertion is computed against the REAL
+       * predecessor instead of assuming there is none.
+       *
+       * This emptied `connections` so its row would be the first and the expected hash could be
+       * computed from `CHAIN_GENESIS`. Emptying a hash-chained table destroys the tamper-evidence
+       * of every row in it, for every other suite, to make one assertion convenient.
+       *
+       * Capturing the chain head first is the same assertion without the damage: it still proves
+       * the server computes `chain_hash` itself and ignores anything a caller supplies, and it now
+       * holds wherever in the chain this row happens to land.
+       */
+      const head = await superPool.query<{ chain_hash: string }>(
+        `SELECT chain_hash FROM connections ORDER BY id DESC LIMIT 1`,
+      );
+      const previousHash = head.rows[0]?.chain_hash ?? CHAIN_GENESIS;
 
       // correlationId = connectionId so SI-001 lookup finds the matching row in connection_requests
       await store.createConnection(connectionId, participantA, participantB, establishedAt, connectionId);
@@ -740,8 +783,8 @@ describeIntegration(
       expect(row.rows).toHaveLength(1);
       const storedHash = row.rows[0]!.chain_hash;
 
-      // Independently compute what the server should have computed for the first row
-      // (CHAIN_GENESIS → because we truncated connections above before this insert)
+      // Independently compute what the server should have computed, chained to the row that
+      // actually preceded this one (genesis only when the table really was empty).
       const record: Record<string, unknown> = {
         connection_id: connectionId,
         participant_a: participantA,
@@ -749,12 +792,12 @@ describeIntegration(
         established_at: establishedAt,
         status: "active",
       };
-      const expectedHash = computeChainHash(serializeRecord(record, "connections"), CHAIN_GENESIS);
+      const expectedHash = computeChainHash(serializeRecord(record, "connections"), previousHash);
       expect(storedHash).toBe(expectedHash);
 
       // Clean up
-      await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
+      // DOD-M15-CHAINDEBT-1: no cleanup. `connections` and `connection_requests` are both
+      // hash-chained; every id here is makeHexId() per test, so the rows collide with nothing.
     });
 
     // ── SI-003: Superuser tamper detected ─────────────────────────────────────
@@ -796,9 +839,29 @@ describeIntegration(
         expect.objectContaining({ tableName: "connections" }),
       );
 
-      // Clean up
-      await cleanupConnections([connectionId]);
-      await superPool.query("DELETE FROM connection_requests WHERE request_id = $1", [connectionId]);
+      /**
+       * DOD-M15-CHAINDEBT-1 — UNDO THE TAMPER. This is the one test in the file that genuinely
+       * left the table broken, and it is why the two whole-table wipes existed.
+       *
+       * The tamper is deliberate and the assertion above is the point — but the corrupted row
+       * persisted, so `verifyChain` stayed red for every later run and every other suite, and the
+       * only remedy anyone had was to empty a hash-chained table. Restoring the column returns the
+       * row to the serialization its `chain_hash` was computed over, so the chain verifies again
+       * with nothing deleted.
+       *
+       * An UPDATE back, never a DELETE: removing the row would break its SUCCESSORS, which is the
+       * damage this whole unit exists to remove.
+       */
+      await superPool.query(
+        `UPDATE connections SET participant_a = $1 WHERE connection_id = $2`,
+        [participantA, connectionId],
+      );
+      const restored = await new PgDirectoryStore(servicePool, makeLogger()).verifyChain("connections");
+      expect(
+        restored.valid,
+        "the tamper was not fully undone — this suite would leave the connections chain red for " +
+          "every later run, which is what the table wipes used to paper over",
+      ).toBe(true);
     });
   },
 );
