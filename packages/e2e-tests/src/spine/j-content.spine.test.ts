@@ -27,6 +27,7 @@ import {
   startDaemon,
   provisionAgent,
   connectMcp,
+  awaitSealedRoot,
   cello,
   registerAgent,
   ipcCall,
@@ -676,7 +677,23 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       `\n--- daemonB ---\n${daemonB.output.split("\n").filter((l) => /seal|recover|ingest|legib/i.test(l)).slice(-18).join("\n")}`;
     expect(closeA.ok, `A close:${diag}`).toBe(true);
     expect(closeB.ok, `B close:${diag}`).toBe(true);
-    expect(closeB.sealed_root, `both sealed_root identical:${diag}`).toBe(closeA.sealed_root);
+
+    /**
+     * DOD-M15-CLOSEROOT-1: close returns a COMMITMENT, not a root — non-blocking by design
+     * ("exactly how seventeen sessions were lost when this call used to block"), so the receipt is
+     * fetched afterwards with `cello_sealed_receipt`.
+     *
+     * ⚠️ The old line here was `expect(closeB.sealed_root).toBe(closeA.sealed_root)`, and once close
+     * stopped returning a root **it passed VACUOUSLY** — `undefined === undefined`. A test asserting
+     * that two absent values are equal is green and proves nothing, which is worse than the failures
+     * elsewhere in this file: those at least announced themselves.
+     */
+    const [rootA, rootB] = await Promise.all([
+      awaitSealedRoot(connA, sessionId, { label: "A sealed receipt" }),
+      awaitSealedRoot(connB, sessionId, { label: "B sealed receipt" }),
+    ]);
+    expect(rootA, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
+    expect(rootB, `both sealed_root identical:${diag}`).toBe(rootA);
 
     // HONEST seal: B reads its certificate and the actual per-party content frontier. B received
     // exactly one in-session message (msg1), so B's signed frontier reflects that — never more.
@@ -684,7 +701,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     type Receipt = { ok?: boolean; sealed_root?: string; legibility?: { participants: LegPart[] } };
     const receipt = (await connB.call("cello_sealed_receipt", { cello_session_id: sessionId })) as Receipt;
     expect(receipt.ok, `B reads the sealed receipt:${diag}`).toBe(true);
-    expect(receipt.sealed_root, `receipt root matches the seal:${diag}`).toBe(closeB.sealed_root);
+    expect(receipt.sealed_root, `receipt root matches the seal:${diag}`).toBe(rootB);
     const frontierOf = (r: Receipt, pubkeyHex: string): number => {
       const p = (r.legibility?.participants ?? []).find((x) => x.pubkey.toLowerCase() === pubkeyHex.toLowerCase());
       expect(p, `participant ${pubkeyHex.slice(0, 8)} present in the cert:${diag}\n${JSON.stringify(r.legibility)}`).toBeTruthy();
@@ -724,7 +741,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // and B's certificate frontier is UNCHANGED: the rejected straggler could not inflate it.
     const receipt2 = (await connB.call("cello_sealed_receipt", { cello_session_id: sessionId })) as Receipt;
     expect(receipt2.ok, "session still sealed + readable after the straggler").toBe(true);
-    expect(receipt2.sealed_root, "sealed root unchanged — the straggler did not mutate the transcript").toBe(closeB.sealed_root);
+    expect(receipt2.sealed_root, "sealed root unchanged — the straggler did not mutate the transcript").toBe(rootB);
     expect(frontierOf(receipt2, pubB), "B's content frontier is unchanged — the straggler did not inflate it").toBe(bFrontierAtSeal);
   }, 120_000);
 
