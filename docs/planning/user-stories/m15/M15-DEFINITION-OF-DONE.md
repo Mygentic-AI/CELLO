@@ -733,8 +733,22 @@ did not earn. The suite survives its own run; this is the debt that no longer br
   opened to fix.
 - **Enforcer:** the existing guard's lists reach zero.
 
-### `DOD-M15-CHAINROUNDTRIP-1` — 🟡 A chained row can be verified against what the database returns
-> **All findings from review pass 1 fixed; pass 2 in flight (→ Entries S9, S10).** All TEN chained
+### `DOD-M15-CHAINROUNDTRIP-1` — ✅ A chained row can be verified against what the database returns
+> **✅ on a quoted pass-2 verdict, both passes' findings fixed (→ Entries S9, S10). Merged to main.**
+> Pass 2: *"Fix the two window scans, confirm bypasses 1 and 2 go red, and this earns ✅."* Done —
+> all THREE proven bypasses now go red, verified one at a time against the real source. Pass 2 also
+> ruled the teardown correct by independent clean-room test (*"it runs after, it fails the run, and
+> it cannot go quiet when the database is unreachable"*), confirmed five of six `impact` strings
+> true, and confirmed both tamper-restores put back the exact original bytes.
+> **The blocking finding was my own guard**: reviewer reverted this unit's headline fix and the
+> guard stayed GREEN — its fixed-size windows read past the end of what they were reading. *"A guard
+> that cannot catch the defect it was written for is worse than no guard: it retires the
+> suspicion."* Extents are now computed, not guessed.
+> **Two `impact` strings were wrong and are corrected** — a wrong `impact` is worse than no log,
+> because it sends the operator somewhere that does not exist. The verdict-path delete does NOT
+> re-ask the target to decide; it leaves a stale routing entry. The ACK is bounded by a 24h TTL, not
+> "indefinite".
+> **All findings from review pass 1 fixed (→ Entries S9, S10).** All TEN chained
 > tables verify — the exclusion is deleted and the enforcer derives its list from
 > `HASH_CHAINED_TABLES`. Gate: 2277 tests + lint + typecheck by exit code (this repo has no `build`
 > script). Reviewer's pass-1 verdict was a conditional ✅ — *"Fix F1, delete the exclusion, restore
@@ -796,6 +810,40 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
   input *because* Postgres rejects it loudly — an argument that was void while the only production
   caller ended in `.catch(() => {})`. Written as a guard on the SHAPE, which then found five more
   silent writes nobody was looking for.
+
+### `DOD-M15-SILENTACK-1` — ❌ A dropped notification acknowledgement is reported, not swallowed
+Found by `DOD-M15-CHAINROUNDTRIP-1` review pass 2, **by execution, not by reading** (→ Entry S10).
+The same class as that line's F2, in the same file, missed only because the guard's marker is
+`void this.#store.` and these are a different object.
+- **Ten silent writes:** `void this.#notificationQueue!.acknowledge(...).catch(() => {})` —
+  `directory-node.ts` ~2109–2152 and ~6114–6124. **What the user lives through:** a notification
+  they have already seen is handed to them again, and again, because the record that they saw it
+  never landed and nothing said so.
+- **A silent drop three lines inside the block `CHAINROUNDTRIP-1` just fixed:** in the trust-signal
+  ACK, `if (!ackAgentId) return;`. An authenticated agent whose pubkey has no `agent_id` row ACKs a
+  signal, nothing happens, nothing is logged, and it returns on every pickup for 24 hours. Note
+  this is `agent_id` vs `agent_name` territory — see the join-key rule in `.claude/CLAUDE.md`.
+- **Enforcer:** widen `CHAINROUNDTRIP-1`'s fire-and-forget guard past `void this.#store.` to every
+  `void this.#<field>.` fire-and-forget in the file. The guard's scanners are already correct — it
+  is the marker that is narrow. **Re-run the three proven bypasses after widening**; a wider guard
+  that stops catching is the worst outcome of the three.
+
+### `DOD-M15-MMRCHAIN-1` — ❌ The whole-suite chain check covers every chain, not a hand-typed list
+Found by `DOD-M15-CHAINROUNDTRIP-1` review pass 2 (→ Entry S10). **Not a live break** — measured
+read-only against the running database, both tables verify today (16 and 15 rows). It is a live
+**blind spot**, and it is the exact shape that cost `CHAINROUNDTRIP-1` three wrong diagnoses.
+- `mmr-store.ts` builds `conversation_proof_leaves` and `conversation_proof_mmr_nodes` with the same
+  `computeChainHash(serializeRecord(...))` scheme and the same genesis constant — and neither is in
+  `HASH_CHAINED_TABLES`, so the new whole-suite teardown cannot see them.
+- **A test that tampers an MMR leaf and forgets to restore it is therefore invisible**, exactly as
+  `persist-018`'s unrestored tamper was invisible before it. These two are also the ONLY chains
+  production actually calls `verifyChain` on, which makes the gap the wrong way round.
+- **`HASH_CHAINED_TABLES` is itself a hand-typed literal** and `schema-completeness` AC-005 only
+  checks one direction — every listed table has a migration, never the inverse. That is why the list
+  could silently omit two real chains.
+- Not a one-line change: `verifyChain` is typed to `HashChainedTable` and the MMR tables are written
+  by a different store. **Enforcer:** the teardown covers every chained table the schema has, and a
+  new chained table cannot be added without appearing in it.
 
 ### `DOD-M15-SPINE-LANE-1` — ❌ The spine suites are run, or their absence is a decision on the record
 Split from `DOD-M15-CI-SKIPS-SILENT-1`. 38 files — the M8D spine lane plus the cross-machine

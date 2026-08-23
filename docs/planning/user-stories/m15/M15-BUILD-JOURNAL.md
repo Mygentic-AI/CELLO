@@ -204,9 +204,9 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
-> ### `CHAINROUNDTRIP-1` 🟡 — REVIEW IN FLIGHT. **1 🟡 in this lane, WIP limit met.**
-> `CHAINDEBT-1` ✅ merged. Then: `MIGRATION-GUARD-1` (taken from Coder_1), `SPINE-LANE-1`,
-> `FREEZE-STATUS-1`, `UNWITNESSED-1`, `RELAYAUTH-1`.
+> ### `CHAINROUNDTRIP-1` ✅ MERGED. **0 🟡 in this lane — free to start the next unit.**
+> Next: `MIGRATION-GUARD-1` (taken from Coder_1), then `SPINE-LANE-1`, `FREEZE-STATUS-1`,
+> `UNWITNESSED-1`, `RELAYAUTH-1`. Two new lines opened by its review: `SILENTACK-1`, `MMRCHAIN-1`.
 
 - **🔋 ONE VITEST AT A TIME, SMALLEST SCOPE. A HOOK NOW ENFORCES IT.** Two lanes share the laptop and
   I was the drain: **eight full server-suite runs tonight, most preceded by `docker compose down -v`
