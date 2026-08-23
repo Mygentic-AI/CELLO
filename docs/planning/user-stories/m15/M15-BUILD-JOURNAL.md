@@ -38,9 +38,10 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
 > ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4403 client tests.
-> **PARTS A, B1, B2a CLOSED** (→ Entries 41–46, two-pass cap each). **B2b-1 BUILT AND UNREVIEWED** —
-> commits `9f71d07` → `4b26138`, reviewer dispatched. Under the WIP limit the only permitted work is
-> closing it. B2b-2 (the value stops being `sha256`) is the last unit of bullet 6.
+> **PARTS A, B1, B2a, B2b-1 ALL CLOSED** (→ Entries 41–48; each spent its two-pass cap). Nineteen
+> blocking findings across ten passes, all fixed. Gate: 2801 daemon tests, lint, both typechecks.
+> **WIP is free: B2b-2 is the LAST unit of bullet 6** — the algorithm stops being `sha256`. Its six
+> constraints are written on the `SEALWIRE-1` line; read them, do not re-derive them.
 
 - **TIER 4 IS IN PROGRESS. `SEALWIRE-1` bullets 1 + 2 are BUILT, REVIEWED, and their blocking
   findings fixed** — the directory certifies the content-hash root, and the client verifies it
@@ -94,6 +95,19 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
     `wire-content-hash.ts`'s ORIGINAL defect (five call sites, the last two wrong, two live daemons
     to find) with a worse outcome — a message hashed one way and LABELLED another is refused by every
     peer, including a correct one, and the refusal reads as tampering.
+- **🚨 EVERY OPTIONAL PARAMETER ON THIS PATH IS A SILENT FALLBACK, and I fixed two hops and left
+  five.** A default equal to the only value in play makes a dropped argument byte-identical, so four
+  mutants survived the full suite; making the parameters REQUIRED turned them into typecheck
+  failures. Then the very commit that did that left `#trackAwaitingAck` — the sibling on the same
+  code path — optional, re-opening the finding one function over. **When you make one parameter
+  required, grep the whole path for its siblings in the same edit.**
+- **🚨 A SOURCE-SLICE ASSERTION GOES BLIND ON WHITESPACE.** The guard on the durable writer sliced
+  `daemon.ts` between a marker and the next `\n    },`; reindent that brace and the slice swallows
+  the NEIGHBOURING hook, so every assertion passes with the argument deleted. Bound the length and
+  assert the anchor exists — an unbounded `slice(start, -1)` returns the rest of the file.
+- **🚨 THE DAEMON'S TEST TYPECHECK IS A 22-FILE ALLOWLIST** (`core/daemon/tsconfig.test.json`). A new
+  test file outside it is a file where "the mutants are typecheck failures now" is NOT true — two of
+  mine held real type errors the gate could not see. **Add every new test file to it.**
 - **🚨 A MUTANT SURVIVED B2b-1 UNTIL I WROTE ITS TEST:** delete `content_hash_alg` from the outbound
   frame and 2,700 daemon tests stay green. **Nothing read what the sender puts on the wire.** The
   receiving half is already built and trusts whatever the frame names, so this fails SILENTLY — every
