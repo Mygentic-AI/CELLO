@@ -1808,9 +1808,13 @@ Rulings that bind every line above. **Re-asking one is decision theatre** (M15-P
    **Why this is the least-reversing option — both safety nets already exist**, which is what makes
    it cheap rather than a rebuild:
    - `cello_get_sealed_receipt` is already a registered handler returning the same certificate.
-   - `RestartSealResolver` (`DOD-M12B-RESTART-SEAL-1`) already resolves `seal_interrupted_pending` on
-     boot — a seal commitment nobody asked the directory to notarize. So a daemon that dies during
-     the background wait finishes the job on its next start rather than orphaning it.
+   - a daemon that dies during the background wait finishes on its next start rather than orphaning
+     the session. **CORRECTED 2026-08-23 after review:** this first credited `RestartSealResolver`'s
+     `seal_interrupted_pending` branch. During the background wait the row is still `active`, so that
+     branch never sees it. What covers it is the boot sweep flipping `active → interrupted,
+     interrupted_by='local'`, which IS a branch the resolver walks — subject to `message_count > 0`
+     and `restart_seal_gave_up_at IS NULL`. **The safety net is real; the mechanism named here was
+     not, and this is the document a later session would have trusted without re-checking.**
 
    **What does NOT change:** the same inline escalation still produces the receipt, in the same
    order, from the same leaf. Only the IPC response stops waiting for it. Nothing about what is
