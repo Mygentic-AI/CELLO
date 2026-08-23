@@ -3275,3 +3275,37 @@ what bullet 8 is for: *"every one stays green if the directory certifies a root 
 different leaf set"* — the same shape, one layer along.
 
 - **Enforcer:** journey — `j-unilateral`'s first two tests are the receipt and must go green.
+
+---
+
+### `DOD-M15-NORMHASH-ORDER-1` — 🅿️ POST-LAUNCH BACKLOG. The seal survives Unicode folding by ORDERING, and nothing pins it
+**Answers the other lane's `DOD-M15-NORMHASH-1` question, checked in code 2026-08-23 rather than
+recalled.**
+
+The gateway sanitiser folds confusables via NFKC — correct, a real defence, and **it must not be
+weakened.** The question was which bytes the seal hashes, because if the two sides hash different
+ones then any message containing a foldable character makes the trees disagree and the session cannot
+seal bilaterally: **the core promise failing on an ellipsis.**
+
+**It does not, and the reason is the order of two steps:**
+
+- **Sender** — outbound screening runs FIRST; the hash is then taken over the screened bytes; those
+  exact bytes go on the wire. (`session-content-handlers.ts`: `sendBytes` is
+  `modified ? outboundVerdict.content : contentBytes`, and that is what is hashed and what is sent.)
+- **Receiver** — the content-hash cross-check runs BEFORE `screenInbound`
+  (`session-node-manager.ts`, cross-check ~6595–6680, `screenInbound` ~6867). It hashes the bytes as
+  they arrived, compares, and only then sanitises.
+
+So both sides hash **the bytes on the wire**. The sender folds before hashing; the receiver hashes
+before folding; no fold happens between the two hashes.
+
+**⚠️ THE RISK IS A FUTURE REORDER, AND IT WOULD LOOK LIKE A TIDY-UP.** Moving the cross-check below
+`screenInbound` reads as *"screen it before you trust it"* — a reasonable-sounding change that would
+break the seal for every message containing a foldable character, presenting as the product failing
+on punctuation rather than as an ordering regression.
+
+- **The fix is a test, not a code change:** one message containing `…` through a real session,
+  asserting both roots stay byte-identical. `j-loopback` is the natural home — and its content is
+  plain ASCII today, which is precisely why the journey currently passing is **not evidence** for
+  this property.
+- **Enforcer:** journey.
