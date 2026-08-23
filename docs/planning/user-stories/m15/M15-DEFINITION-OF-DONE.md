@@ -1874,6 +1874,28 @@ Rulings that bind every line above. **Re-asking one is decision theatre** (M15-P
    agreement produces and the seal items cannot be split.
 3. **The unpublished investor and GTM material is not in M15.** Never made public, never sent;
    corrected after the milestone against what actually shipped.
+7. **The content salt is stored PER KEY EPOCH, not per session** (mine, 2026-08-23, §3a — this is
+   the open question raised under #6, ruled rather than left blocking. **Andre asked to be told:**
+   this does not contradict anything he said; it answers the consequence he flagged.)
+
+   #5 requires a revived session to RE-KEY, so its salt changes mid-session. One salt per session
+   would verify only the leaves from the latest epoch and silently fail the rest of the transcript.
+
+   **Why per-epoch is the least-reversing choice, and it is not close:** per-session is a strict
+   SUBSET of per-epoch. A session that never re-keys has exactly one epoch and therefore one row, so
+   per-epoch storage costs nothing in the common case. The reverse is not true: per-session cannot
+   represent two salts at all, so the first re-key needs a schema migration on an operator's machine
+   — the one kind of change this milestone treats as unrecoverable when it goes wrong.
+
+   **What it obliges `SEALWIRE-1` to carry:** an epoch identifier on each leaf (or a range per
+   epoch), so a verifier can tell which salt applies to which leaf. And per #6's third consumer —
+   the receive-path authenticity check — the two sides must agree on the CURRENT epoch in lockstep,
+   or every inbound frame fails `content_hash_mismatch`, which `wire-content-hash.ts` calls the
+   least debuggable failure shape there is.
+
+   **REDO > BLOCK:** if this is wrong the cost is dropping an unused column. If per-session were
+   wrong the cost is a client-side migration.
+
 6. **THE TWO KEY-AGREEMENT OUTPUTS HAVE DIFFERENT LIFETIMES** (Andre, 2026-08-23 — stated before
    `SEALWIRE-1` encodes anything, because after that it is a wire change).
 
