@@ -623,6 +623,20 @@ export interface RelaySealLeaf {
   kind: RelaySealLeafKind;
   s2: Structure2;
   structure1_cbor: Uint8Array;
+  /**
+   * The ctrl leaf's PAYLOAD BYTES — `DOD-M15-SEALWIRE-1` bullets 3 and 4. Present only on `ctrl`
+   * leaves, and only from a relay that carries them.
+   *
+   * Without these the directory holds a SHA-256 of the SEAL payload and nothing else, so the
+   * client's signed `final_root` is unrecoverable and the only root check available compares the
+   * relay against itself. See `seal-final-root.ts` for why that is circular and what these bytes fix.
+   *
+   * ⚠️ OPTIONAL, AND ABSENT MEANS "a relay that has not deployed this yet" — never "verified".
+   * Receiver-first: the directory tolerates and verifies the new shape before any relay depends on
+   * it being read. Collapsing absent into a pass is the same failure Decision #15 spends a wire
+   * discriminator preventing.
+   */
+  content_bytes?: Uint8Array;
 }
 
 export interface RelaySealData {
