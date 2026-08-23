@@ -79,6 +79,11 @@ import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import { computeChainHash, serializeRecord, CHAIN_GENESIS } from "../hash-chain.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
+/** A logger for the seeder — the fixture's own writes are not what this file asserts about. */
+function makeSilentLogger(): Logger {
+  return { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+}
+
 // ─── Test environment setup ───────────────────────────────────────────────────
 
 /**
@@ -155,19 +160,28 @@ async function cleanupConnections(connectionIds: string[]): Promise<void> {
  * directory-node.ts actually generates at runtime.
  */
 async function insertMatchingConnectionRequest(connectionId: string): Promise<void> {
-  // request_id is TEXT NOT NULL UNIQUE after V12 migration.
-  // requester_pseudonym and target_pseudonym are required TEXT fields.
-  // outcome must be one of 'ACCEPTED', 'REJECTED', 'EXPIRED', 'PENDING_ESCALATION'.
-  await superPool.query(
-    `INSERT INTO connection_requests (request_id, requester_pseudonym, target_pseudonym, outcome, chain_hash)
-     VALUES ($1, $2, $3, 'ACCEPTED', $4)
-     ON CONFLICT (request_id) DO NOTHING`,
-    [
-      connectionId,
-      `req_${connectionId.slice(0, 8)}`,
-      `tgt_${connectionId.slice(0, 8)}`,
-      CHAIN_GENESIS, // minimal valid chain_hash — not verified by SI-001 in this test helper
-    ],
+  /**
+   * DOD-M15-CHAINDEBT-1 — seeded through the REAL chained writer.
+   *
+   * This wrote the row directly with `chain_hash = CHAIN_GENESIS` and a comment calling that a
+   * "minimal valid chain_hash — not verified by SI-001 in this test helper". SI-001 does not check
+   * it, but `verifyChain` does, and it is not valid: genesis is the seed for the FIRST row, so
+   * handing it to an arbitrary row breaks the chain there and at every row after it — for the whole
+   * run, including this file's OWN AC-004 chain-verification test.
+   *
+   * `recordAcceptedConnectionRequest` writes the same four columns with `outcome: 'ACCEPTED'`
+   * through `insertWithChain`, so the row is real and correctly chained. The pseudonyms keep the
+   * same derived shape so nothing that reads them changes.
+   *
+   * The old `ON CONFLICT (request_id) DO NOTHING` is not carried over: `connectionId` is
+   * `makeHexId()` per call, so a conflict would mean two tests generated the same 16 random bytes.
+   * Swallowing that would hide a fixture bug rather than a real collision.
+   */
+  const store = new PgDirectoryStore(servicePool, makeSilentLogger());
+  await store.recordAcceptedConnectionRequest(
+    connectionId,
+    `req_${connectionId.slice(0, 8)}`,
+    `tgt_${connectionId.slice(0, 8)}`,
   );
 }
 
