@@ -162,6 +162,73 @@ written up in full, with its user-visible consequence, exactly as a blocking one
 **When it is genuinely unclear, it BLOCKS.** The asymmetry is deliberate: a blocker wrongly held is
 work done early, while a blocker wrongly released is discovered by a customer.
 
+### 0z.3 — A CHECKER IS NOT FINISHED UNTIL IT HAS BEEN MADE TO FAIL (Andre, ruled 2026-08-23)
+
+> **Make it fail on purpose — AND confirm it failed for the reason you think.**
+
+**Both halves are load-bearing, and the second is the one that was missing.** Andre chose this over
+the weaker "make it fail on purpose" specifically because the weaker form misses the worst case
+already on the record: a mutation harness that read a non-zero EXIT CODE as *"a test caught the
+mutant"*, when a non-zero exit also means the mutant did not compile. It **did** go red. It went red
+for the wrong reason, and a syntax error the harness had introduced itself was recorded as a clean
+catch.
+
+**Applies to anything whose output is a verdict** — a guard, an enforcer, a source walk, a mutation
+loop, a teardown, a CI gate, a lint rule. Not to ordinary tests, which have a subject that fails on
+its own.
+
+**A false CAUGHT is worse than a false GREEN, and this is why the rule exists.** A false green leaves
+the suspicion alive — the thing still looks unproven, and someone eventually re-checks. A false
+caught **retires** the suspicion: the case is recorded as covered and nobody looks again. The second
+half of the rule is the only thing that separates them, because both are green.
+
+**FIVE instances in one day (2026-08-23), all from the two lanes, ranked by damage:**
+
+1. A guard stayed GREEN when a reviewer reverted the very fix it was written for — its fixed-size
+   scan windows read past the end of what they were reading.
+2. A mutation harness reported "caught" for a mutant that survived — the exit-code case above.
+3. A bare `catch` turned a broken parser into a green pass, inside the file whose own thesis is that
+   a checker matching nothing reports success either way.
+4. A vitest config key that does not exist was ignored in silence; a deliberately poisoned database
+   passed.
+5. A setup module's default export is treated as `setup`, so a whole-suite check ran BEFORE the
+   suite it was guarding — and a killed run (signal 143) was separately reported by a wrapper as
+   exit 0.
+
+**They are one bug.** A checker whose negative path has never been exercised is indistinguishable
+from a checker that cannot fail, and both are green. In every one of the five the POSITIVE path
+worked. Nobody had ever asked the thing to fail.
+
+**Reached independently by both lanes**, asked separately and shown nothing of each other's answer,
+from different evidence. That is why it is written down as a rule rather than as an anecdote.
+
+**The caveat belongs with the count:** five in a day is not a slide in quality. Both lanes moved from
+writing tests to writing GUARDS, and a guard is where this failure lives. Detection also worked every
+time — each was caught by a reviewer or by a deliberate poison. What was missing was never attention;
+it was a habit that runs *before* attention is needed.
+
+#### The diagnosis is broader than the rule — do not merge them
+
+The underlying error is **AN UNFALSIFIED CLAIM TREATED AS VERIFIED**, and it covers cases with no
+checker in them at all. Both lanes produced one on the same day:
+
+- A comment was written into `vitest.config.ts` calling a worker cap *"a physical constraint, not a
+  tuning preference"* — a confident justification for a premise its author had not checked, in a file
+  Andre had already declined once (CELLO_Support; caught by CELLO_Coder_1).
+- A fix for *"the wiring has no test"* shipped with no test, an hour after that exact pattern was
+  criticised (CELLO_Coder_1; caught by the receptionist).
+
+**These are recorded here TOGETHER and deliberately not folded into the rule above.** Two reasons,
+both ruled:
+
+1. **The remedies differ.** The five share a mechanism with a one-command remedy. These have no
+   checker to make fail — their remedy is *"write the test"*, which is already the rule (§R, tests
+   first, confirm red). Restating an existing rule where the gap was **compliance** rather than
+   **coverage** is how something mechanical decays into a principle, and principles do not survive a
+   busy week.
+2. **Both lanes produced one.** Recording only one would give a distorted read of where the risk
+   sits, and lose the actual signal: it is the WORK that carries this hazard, not a person.
+
 ### 0z.2 — THE SPAWN TRIP-WIRE: three new items from one unit and you STOP (Andre, 2026-08-23)
 
 **A COUNT, NOT A JUDGEMENT CALL. Two is fine. THREE TRIPS IT.**
