@@ -981,7 +981,12 @@ export function ipcCall(
 
 // ─── CLI driver: run `cello <args>` against a daemon home, capture output ───────
 export interface CliResult {
+  /** STDOUT ONLY. Safe to `JSON.parse` — see the note on `cello()` for why that had to be said. */
   stdout: string;
+  /** STDERR only. Empty on success. */
+  stderr: string;
+  /** Both streams, for the callers that want the whole transcript of a failure. */
+  output: string;
   status: number;
 }
 
@@ -1010,6 +1015,30 @@ export function registerAgent(name: string, token: string, env: Record<string, s
   return cello(["register-agent", name, token], env);
 }
 
+/**
+ * ─── DOD-M15-SPINERED-1: STDERR IS NOT STDOUT ─────────────────────────────────────────────────
+ *
+ * This used to return `stdout + stderr` glued together whenever the CLI exited non-zero. 54 call
+ * sites across 22 spine files do `JSON.parse(cello(...).stdout.trim())`, so a failing command
+ * handed them valid JSON followed by error prose and they died with:
+ *
+ *     Unexpected non-whitespace character after JSON at position 156
+ *
+ * That is ERROR SUBSTITUTION at the choke point every spine journey runs through: whatever the CLI
+ * actually said — the reason the command failed — was replaced by a parse error about position 156.
+ * Five of the lane's 49 failures report it, and one reports `Unexpected token 'C', "CELLO — a "`,
+ * which is the CLI's own help banner arriving on stderr. **None of those five names its own cause,
+ * and that is why the lane looked mysterious rather than merely broken.**
+ *
+ * Two changes, both at this one function, so no call site moves:
+ *   - `stdout` is stdout. `stderr` is its own field. A JSON parse now sees only what the CLI printed
+ *     as data.
+ *   - A failing command SAYS SO, once, with its argv, status and stderr. The diagnostic goes to the
+ *     log the run already produces, so the cause sits beside the failure instead of being inferred
+ *     from it.
+ *
+ * `output` is kept for the two callers that legitimately want both streams.
+ */
 export function cello(args: string[], env: Record<string, string>): CliResult {
   try {
     const stdout = execFileSync(process.execPath, [BINS.cli, ...args], {
@@ -1017,10 +1046,19 @@ export function cello(args: string[], env: Record<string, string>): CliResult {
       encoding: "utf8",
       timeout: 30_000,
     });
-    return { stdout, status: 0 };
+    return { stdout, stderr: "", output: stdout, status: 0 };
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string; status?: number };
-    return { stdout: (e.stdout ?? "") + (e.stderr ?? ""), status: e.status ?? 1 };
+    const stdout = e.stdout ?? "";
+    const stderr = e.stderr ?? "";
+    const status = e.status ?? 1;
+    // Named, at the moment of failure, before anything downstream can misattribute it.
+    process.stderr.write(
+      `[cello-cli] FAILED status=${String(status)} argv=${JSON.stringify(args)}\n` +
+        `[cello-cli]   stdout: ${stdout.trim().slice(0, 600) || "(empty)"}\n` +
+        `[cello-cli]   stderr: ${stderr.trim().slice(0, 600) || "(empty)"}\n`,
+    );
+    return { stdout, stderr, output: stdout + stderr, status };
   }
 }
 
