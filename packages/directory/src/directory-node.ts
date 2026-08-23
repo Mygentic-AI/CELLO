@@ -6278,8 +6278,20 @@ function verifySealLeaves(
   //
   // The deferral itself is also structurally impossible as written: `final_root` survives only
   // inside a SHA-256 pre-image that is never transmitted, so no amount of follow-on work makes this
-  // check possible without changing the wire. `DOD-M15-SEALWIRE-1` does that — it moves the
-  // bilateral certified root into the content-hash domain — and this comment is deleted with it.
+  // check possible without changing the wire.
+  //
+  // ⚠️ THIS PARAGRAPH ENDED "and this comment is deleted with it", AND THAT WAS BECOMING FALSE.
+  // `DOD-M15-SEALWIRE-1` bullets 3+4 have now built the verifier — `seal-final-root.ts`, which takes
+  // the SEAL payload bytes, binds them to the hash the client SIGNED, and compares the client's
+  // `final_root` against a root rebuilt from the relay's leaves. **It is not yet invoked from here**,
+  // because no relay carries `content_bytes` on the wire yet (receiver-first: the directory admits
+  // and verifies the shape before anything produces it).
+  //
+  // So the gap is narrower than this comment describes and is NOT yet closed. Stated plainly rather
+  // than left claiming its own deletion: a sentence promising it will be gone reads, to anyone who
+  // greps for it, as though the work happened somewhere else in the line — the same "pointer to
+  // nothing reads as tracked" failure its sibling comment twenty lines up was corrected for. Delete
+  // this block when the call is wired, not before.
   //
   // Kept rather than removed because it records a real gap: deleting it would leave the absence
   // looking deliberate, which is exactly what the original wording achieved by accident.

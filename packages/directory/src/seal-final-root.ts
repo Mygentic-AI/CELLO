@@ -29,16 +29,30 @@
  *
  * ─── What makes this NON-circular, stated precisely ────────────────────────────────────────────
  *
- * `content_hash` lives inside Structure 1, and Structure 1 is signed by the sending client. So:
+ * ⚠️ THIS PARAGRAPH USED TO SAY *"`content_hash` lives inside Structure 1, and Structure 1 is signed
+ * by the sending client"* — and then compare against **`s2.content_hash`**, which is the RELAY's
+ * envelope field. Review caught it. Structure 2 is assembled by the relay and it can put anything in
+ * there; the signed value is the one inside `structure1_cbor`. The two are proven equal by the
+ * CALLER, in both existing verification loops, and this module said nothing about needing that. A
+ * comment asserting a safety property the code does not have is how defects survive review here, and
+ * this was one.
  *
- *   1. `SHA-256(0x02 ‖ content_bytes) == s2.content_hash` binds the payload to that signature. A
- *      relay cannot fabricate or alter a payload without breaking a signature it cannot forge.
- *   2. `final_root` decoded from that payload is therefore the client's signed claim.
- *   3. Comparing it to a root rebuilt from the relay's leaf array checks the RELAY against the
- *      CLIENT.
+ * As it stands now:
  *
- * Step 1 is what the whole thing rests on. Without it this would be one more value the relay
- * supplied, compared against another value the relay supplied.
+ *   1. The payload is hashed and compared against the content hash decoded from **`structure1_cbor`**
+ *      — the bytes the client's Ed25519 signature covers. Not the relay's copy.
+ *   2. `s1.content_hash` and `s2.content_hash` are ALSO required to agree, so a relay that rewrites
+ *      its envelope is refused here rather than silently believed.
+ *   3. `final_root` from that payload is therefore the client's signed claim.
+ *   4. Comparing it to a root rebuilt from the relay's leaf array checks the RELAY against the CLIENT.
+ *
+ * 🚨 **PRECONDITION THE CALLER MUST STILL MEET, and this module cannot check it.** Steps 1–2 prove
+ * the payload matches what `structure1_cbor` says. They do NOT prove `structure1_cbor` was signed by
+ * a session participant — that is `verify(s2.sender_pubkey, structure1_cbor, s2.sender_signature)`
+ * plus a participant check, and both live in the caller (`directory-node.ts`, the unilateral and
+ * bilateral verification loops). **Call this only from a path that has already done both.** Without
+ * them a relay can mint a ctrl leaf with a key it holds, and every comparison below becomes the relay
+ * checking itself.
  *
  * ─── ⚠️ WHICH root `final_root` commits to, because it is NOT the certified root ───────────────
  *
@@ -63,6 +77,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { decode as cborDecode } from "cbor-x";
 import { buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
 import { decodeSealPayload } from "@cello-protocol/protocol-types";
 import type { RelaySealLeaf } from "./directory-types.js";
@@ -113,8 +128,20 @@ export const SEAL_FINAL_ROOT_GUIDANCE: Record<SealFinalRootReason, string> = {
     "The two participants signed DIFFERENT transcript roots. They disagree about their own conversation, so no certificate can be honest about both — the relay may have shown them different message sets. Do not certify; the participants need to compare transcripts.",
 };
 
+/**
+ * ⚠️ `coverage` IS A DISCRIMINANT, NOT A STATISTIC — review F3.
+ *
+ * The success variant used to be `{ok: true, signedBy: number}`, and a session with one new client
+ * and one old one produces exactly ONE carried payload. That returned `ok: true` with a `1` in a
+ * field no caller read and no test asserted — so throughout the entire rollout window half of these
+ * would have been "verified" against a single participant.
+ *
+ * That is the absent-versus-verified collapse this module's own header spends a paragraph
+ * forbidding, reproduced one leaf down. A union forces the caller to say which it got.
+ */
 export type SealFinalRootVerdict =
-  | { ok: true; verifiedRoot: Uint8Array; signedBy: number }
+  | { ok: true; coverage: "both"; verifiedRoot: Uint8Array }
+  | { ok: true; coverage: "one"; verifiedRoot: Uint8Array; detail: string }
   | { ok: false; reason: SealFinalRootReason; detail: string };
 
 /**
@@ -137,6 +164,29 @@ export function sealContentHash(payload: Uint8Array): Uint8Array {
   return new Uint8Array(
     createHash("sha256").update(new Uint8Array([LEAF_KIND_CTRL])).update(payload).digest(),
   );
+}
+
+/**
+ * The content hash the CLIENT SIGNED, decoded from `structure1_cbor`.
+ *
+ * Structure 1 TBS is `[protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq,
+ * timestamp]` — the exact byte string the sender's Ed25519 signature covers. Decoded here rather
+ * than taken from `s2` so this module's central claim is enforced by this module (review F1).
+ *
+ * Returns null rather than throwing: these bytes arrive off a wire, and a decode failure is a
+ * refusal to report, never an exception escaping into a stream handler.
+ */
+function decodeStructure1ContentHash(cbor: Uint8Array): Uint8Array | null {
+  let arr: unknown;
+  try {
+    arr = cborDecode(cbor);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(arr) || arr.length !== 6) return null;
+  const ch = arr[1];
+  const bytes = ch instanceof Uint8Array ? ch : Buffer.isBuffer(ch) ? new Uint8Array(ch as Buffer) : null;
+  return bytes !== null && bytes.length === 32 ? bytes : null;
 }
 
 function bufEqual(a: Uint8Array, b: Uint8Array): boolean {
@@ -165,15 +215,34 @@ export function verifySealFinalRoots(
     if (bytes === undefined) continue;
 
     /**
-     * ⚠️ THIS CHECK FIRST, ALWAYS. It is what makes everything below a statement about the CLIENT
-     * rather than about the relay. Decode before binding and a relay could hand us any payload it
-     * liked, and every subsequent comparison would be the relay checking itself.
+     * ⚠️ AGAINST THE SIGNED HASH, NOT THE RELAY'S COPY — review F1.
+     *
+     * `structure1_cbor` is the exact byte string the client's signature covers, so its `content_hash`
+     * is the client's. `s2.content_hash` is the relay's envelope field and is only equal to it
+     * because the caller's loops prove so. Binding against the relay's copy made this module's
+     * central claim true only by someone else's diligence.
      */
-    if (!bufEqual(sealContentHash(bytes), leaf.s2.content_hash)) {
+    const s1 = decodeStructure1ContentHash(leaf.structure1_cbor);
+    if (s1 === null) {
+      return {
+        ok: false,
+        reason: SEAL_FINAL_ROOT_REASONS.PAYLOAD_MALFORMED,
+        detail: `leaf ${i}: structure1_cbor is not decodable, so there is no signed hash to bind against`,
+      };
+    }
+    // A relay that rewrites its envelope is refused HERE rather than trusted to have been caught.
+    if (!bufEqual(s1, leaf.s2.content_hash)) {
       return {
         ok: false,
         reason: SEAL_FINAL_ROOT_REASONS.PAYLOAD_UNBOUND,
-        detail: `leaf ${i}: SHA-256(0x02 || payload) does not equal the signed content_hash`,
+        detail: `leaf ${i}: the relay's envelope content_hash disagrees with the one the client signed`,
+      };
+    }
+    if (!bufEqual(sealContentHash(bytes), s1)) {
+      return {
+        ok: false,
+        reason: SEAL_FINAL_ROOT_REASONS.PAYLOAD_UNBOUND,
+        detail: `leaf ${i}: SHA-256(0x02 || payload) does not equal the content_hash the client SIGNED`,
       };
     }
 
@@ -192,19 +261,39 @@ export function verifySealFinalRoots(
         detail: `leaf ${i}: payload names a different session`,
       };
     }
-    if (!bufEqual(payload.final_root, expected)) {
-      return {
-        ok: false,
-        reason: SEAL_FINAL_ROOT_REASONS.ROOT_DISAGREES,
-        detail: `leaf ${i}: participant signed a root over a different leaf set than the relay supplied`,
-      };
-    }
-    // Both participants sign the same transcript, so their roots must agree with each other too.
+    /**
+     * ⚠️ PARTICIPANTS AGAINST EACH OTHER **FIRST**, THEN AGAINST THE RELAY — review F2, and the
+     * order is the whole finding.
+     *
+     * With the relay comparison first, `PARTIES_DISAGREE` was provably unreachable: any leaf that got
+     * past it already equalled `expected`, so the two signed roots could never differ by the time
+     * they were compared. Dead code — but the cost was not the dead branch, it was **what fired
+     * instead.**
+     *
+     * A client whose own tree diverged is a real, already-instrumented state: `placeOwnLeaf` with an
+     * assigned sequence behind its frontier appends at the tail, logs
+     * `session.tree.position_behind_frontier` at ERROR, and marks the session diverged. That party's
+     * `final_root` is then over a differently-ordered leaf set while the counterparty's still matches
+     * the relay. The old order answered `ROOT_DISAGREES`, whose guidance says *"the relay's leaf set
+     * is not the conversation the participant had"* — and sends the operator to audit a relay that is
+     * fine, for a fault the client already logged.
+     *
+     * Comparing the two signatures to each other first separates them honestly:
+     *   - both clients agree, the relay's set differs  → the relay is the accused, correctly;
+     *   - the clients disagree with each other         → they are, and the fix is comparing transcripts.
+     */
     if (agreedRoot !== null && !bufEqual(agreedRoot, payload.final_root)) {
       return {
         ok: false,
         reason: SEAL_FINAL_ROOT_REASONS.PARTIES_DISAGREE,
-        detail: `leaf ${i}: the two SEAL leaves carry different final_root values`,
+        detail: `leaf ${i} (sender ${Buffer.from(leaf.s2.sender_pubkey).toString("hex").slice(0, 16)}…): the two SEAL leaves carry different final_root values, so the participants disagree with EACH OTHER — this is not a relay accusation`,
+      };
+    }
+    if (!bufEqual(payload.final_root, expected)) {
+      return {
+        ok: false,
+        reason: SEAL_FINAL_ROOT_REASONS.ROOT_DISAGREES,
+        detail: `leaf ${i} (sender ${Buffer.from(leaf.s2.sender_pubkey).toString("hex").slice(0, 16)}…): signed a root over a different leaf set than the relay supplied${agreedRoot === null ? "" : "; the other participant signed the SAME root, so both agree and the relay's set is the outlier"}`,
       };
     }
     agreedRoot = payload.final_root;
@@ -212,11 +301,25 @@ export function verifySealFinalRoots(
   }
 
   if (signedBy === 0) {
+    /**
+     * Review F5: this is also what a leaf set with NO ctrl leaf at all produces, which is a malformed
+     * carry rather than a version skew. Both existing callers validate ctrl-leaf presence before they
+     * would reach here, so the two cannot currently be confused — said out loud because that is a
+     * property of the callers, not of this function, and it stops being true if it is called earlier.
+     */
     return {
       ok: false,
       reason: SEAL_FINAL_ROOT_REASONS.NOT_CARRIED,
       detail: "no SEAL leaf carried its payload",
     };
   }
-  return { ok: true, verifiedRoot: expected, signedBy };
+  if (signedBy === 1) {
+    return {
+      ok: true,
+      coverage: "one",
+      verifiedRoot: expected,
+      detail: "one participant's signed root was checked; the other did not carry its payload, so only half of this seal is verified against a client signature",
+    };
+  }
+  return { ok: true, coverage: "both", verifiedRoot: expected };
 }

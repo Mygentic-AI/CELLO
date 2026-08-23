@@ -832,7 +832,11 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
         if (anyRelay) {
           if (!relay_id || relay_timestamp === undefined || !relay_signature || relay_signature.length !== 64) return null;
         }
-        parsed.push({ sequence_number, leaf_kind, structure2_cbor, structure1_cbor, relay_id, relay_timestamp, relay_signature });
+        // `DOD-M15-SEALWIRE-1` bullets 3+4: the ctrl leaf's SEAL payload, when a relay carries it.
+        // `toUint8Array` or nothing — absent is a relay that has not deployed it, and a non-bytes
+        // value must never reach `createHash(...).update()`, which throws on anything else.
+        const content_bytes = toUint8Array(r["content_bytes"]);
+        parsed.push({ sequence_number, leaf_kind, structure2_cbor, structure1_cbor, relay_id, relay_timestamp, relay_signature, ...(content_bytes ? { content_bytes } : {}) });
       }
       seal_leaves = parsed;
     }

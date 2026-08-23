@@ -467,6 +467,13 @@ export interface SealUnilateralLeaf {
   relay_id?: string;                 // hex of the relay ack-signing pubkey (own leaves)
   relay_timestamp?: number;          // Unix ms in the relay ACK TBS (own leaves)
   relay_signature?: Uint8Array;      // 64-byte relay ACK signature (own leaves)
+  /**
+   * `DOD-M15-SEALWIRE-1` bullets 3+4: the ctrl leaf's SEAL payload bytes, when a relay carries them.
+   * Absent means a relay that has not deployed the change — never "verified". See
+   * `seal-final-root.ts` for what these bytes make checkable and why the directory cannot check it
+   * without them.
+   */
+  content_bytes?: Uint8Array;
 }
 
 export interface SealUnilateral {

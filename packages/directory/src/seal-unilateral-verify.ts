@@ -91,7 +91,9 @@ export function reconstructCarriedSealLeaves(
     }
     const kind = LEAF_KINDS[w.leaf_kind];
     if (!kind) return { ok: false, reason: "unilateral_leaf_kind_unknown" };
-    leaves.push({ kind, s2, structure1_cbor: w.structure1_cbor });
+    // Carried through when present — dropping it here would make a relay that DOES send the payload
+    // indistinguishable from one that does not, which is the absent-versus-verified collapse again.
+    leaves.push({ kind, s2, structure1_cbor: w.structure1_cbor, ...(w.content_bytes ? { content_bytes: w.content_bytes } : {}) });
   }
   return { ok: true, leaves };
 }
@@ -126,6 +128,20 @@ export function validateSealSubmissionLeaves(
     const kind = (entry as { kind?: unknown }).kind;
     if (typeof kind !== "string" || !SEAL_SUBMISSION_LEAF_KINDS.includes(kind)) {
       return { ok: false, reason: "seal_submission_leaf_kind_unknown" };
+    }
+    /**
+     * ⚠️ `content_bytes` IS SHAPE-CHECKED HERE FOR THE SAME REASON `kind` IS — `DOD-M15-SEALWIRE-1`
+     * bullets 3+4, review F4.
+     *
+     * This frame is accepted from any dialer and no relay receipt binds it, and this function passed
+     * everything except `kind` straight through as `RelaySealData["leaves"]`. The new field is fed to
+     * `createHash(...).update(payload)`, which **throws a TypeError on anything that is not bytes** —
+     * so a plain object here escapes into the stream handler. That is the precise escape this
+     * function's own header describes for `kind`, one field along.
+     */
+    const cb = (entry as { content_bytes?: unknown }).content_bytes;
+    if (cb !== undefined && !(cb instanceof Uint8Array) && !Buffer.isBuffer(cb)) {
+      return { ok: false, reason: "seal_submission_content_bytes_malformed" };
     }
   }
   return { ok: true, leaves: raw as RelaySealData["leaves"] };

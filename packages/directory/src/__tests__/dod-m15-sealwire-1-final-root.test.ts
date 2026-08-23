@@ -36,6 +36,8 @@
 
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
+import { Encoder as CborEncoder } from "cbor-x";
+const CBOR = new CborEncoder({ tagUint8Array: false });
 import { buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
 import { encodeSealPayload } from "@cello-protocol/protocol-types";
 import {
@@ -68,8 +70,18 @@ function s2(contentHash: Uint8Array, seq: number): Structure2 {
   } as unknown as Structure2;
 }
 
+/**
+ * A real Structure 1 TBS: `[version, content_hash, sender_pubkey, session_id, last_seen_seq, ts]`.
+ * Built here rather than stubbed, because the module now decodes it — a placeholder byte would make
+ * every leaf fail as malformed and every assertion below vacuous.
+ */
+function s1(contentHash: Uint8Array): Uint8Array {
+  return new Uint8Array(CBOR.encode([1, contentHash, new Uint8Array(32).fill(0xaa), SESSION_ID, 0, 1]));
+}
+
 function msgLeaf(fill: number, seq: number): RelaySealLeaf {
-  return { kind: "msg", s2: s2(new Uint8Array(32).fill(fill), seq), structure1_cbor: new Uint8Array([1]) };
+  const h = new Uint8Array(32).fill(fill);
+  return { kind: "msg", s2: s2(h, seq), structure1_cbor: s1(h) };
 }
 
 /** Expected root — built here from the message hashes directly, not via the module. */
@@ -87,7 +99,7 @@ function sealLeaf(finalRoot: Uint8Array, seq: number, opts?: { sessionId?: Uint8
   const leaf: RelaySealLeaf = {
     kind: "ctrl",
     s2: s2(ctrlHash(payload), seq),
-    structure1_cbor: new Uint8Array([2]),
+    structure1_cbor: s1(ctrlHash(payload)),
   };
   if (opts?.carry !== false) {
     leaf.content_bytes = opts?.corruptPayload ? new Uint8Array([9, 9, 9]) : payload;
@@ -104,7 +116,10 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
     ];
     const verdict = verifySealFinalRoots(leaves, SESSION_ID);
     expect(verdict.ok, "an honest seal must certify, or the check is a wall rather than a guard").toBe(true);
-    expect((verdict as { signedBy: number }).signedBy, "both SEAL leaves must count as verified").toBe(2);
+    expect(
+      (verdict as { coverage?: string }).coverage,
+      "both SEAL leaves must be verified — 'one' would mean half this seal rests on a single participant",
+    ).toBe("both");
   });
 
   it("★★ A RELAY THAT DROPS A MESSAGE IS CAUGHT — the failure the circular check could never see", () => {
@@ -204,10 +219,85 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
     ];
     const verdict = verifySealFinalRoots(leaves, SESSION_ID);
     expect(verdict.ok, "two participants signing different roots cannot both be certified").toBe(false);
+    /**
+     * ⚠️ THIS ASSERTION USED TO ACCEPT EITHER VERDICT, AND THAT MADE IT HOLLOW. Review ran the revert
+     * test on it: delete the `PARTIES_DISAGREE` branch entirely and it stayed green, because the
+     * verdict it actually received was `ROOT_DISAGREES` — it named a branch it never reached and
+     * could not detect the removal of. A hedged assertion is what an unsure author writes, and it
+     * was mine.
+     *
+     * It is exact now, which is only possible because the comparisons were reordered: participants
+     * against each other BEFORE the relay. That ordering is the finding, and this is what pins it.
+     */
     expect(
-      [SEAL_FINAL_ROOT_REASONS.ROOT_DISAGREES, SEAL_FINAL_ROOT_REASONS.PARTIES_DISAGREE],
-      "either verdict is honest here; what must never happen is a pass",
-    ).toContain((verdict as { reason: string }).reason);
+      (verdict as { reason: string }).reason,
+      "when the two participants disagree with EACH OTHER, blaming the relay sends the operator to audit a machine that is fine",
+    ).toBe(SEAL_FINAL_ROOT_REASONS.PARTIES_DISAGREE);
+    expect(
+      String((verdict as { detail: string }).detail),
+      "and the detail must say so in words, and name which sender, because the operator's next move is to compare transcripts",
+    ).toMatch(/disagree with EACH OTHER|not a relay accusation/i);
+  });
+
+  it("★★ MIXED CARRY — one new client, one old — must NOT report as fully verified", () => {
+    /**
+     * Review F3, blocking. During the rollout a session can have one participant on a build that
+     * carries its payload and one that does not, so exactly ONE signature is checkable. That returned
+     * `ok: true` with the count in a field no caller read and no test asserted — meaning half of
+     * every such seal would have been "verified" against a single participant, for the whole window.
+     *
+     * The same absent-versus-verified collapse this module's header spends a paragraph forbidding,
+     * one leaf down. The verdict is a discriminated union now, so a caller cannot ignore it.
+     */
+    const root = expectedRoot([0x11, 0x22]);
+    const leaves: RelaySealLeaf[] = [
+      msgLeaf(0x11, 1), msgLeaf(0x22, 2),
+      sealLeaf(root, 3),                       // new client: carries
+      sealLeaf(root, 4, { carry: false }),     // old client: does not
+    ];
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID);
+    expect(verdict.ok, "one good signature is still worth having — this must not be a refusal").toBe(true);
+    expect(
+      (verdict as { coverage: string }).coverage,
+      "but it must not claim BOTH participants were checked when only one was",
+    ).toBe("one");
+    expect(
+      String((verdict as { detail: string }).detail),
+      "and must say which half is unverified, in words a caller cannot silently drop",
+    ).toMatch(/only half|the other did not carry/i);
+  });
+
+  it("★★ A RELAY THAT REWRITES ITS OWN ENVELOPE IS CAUGHT — the finding the first version could not see", () => {
+    /**
+     * ⚠️ REVIEW F1, AND IT CORRECTED THIS MODULE'S CENTRAL CLAIM.
+     *
+     * The binding check compared the payload against `s2.content_hash` — the RELAY's envelope field.
+     * The header asserted it was "inside Structure 1, which the client signs", and that is true of
+     * `structure1_cbor`'s copy, not of `s2`'s. The two are equal only because the CALLER's loops
+     * prove it, and this module documented the guarantee as if it provided it.
+     *
+     * So: a relay supplies a payload AND rewrites its envelope hash to match. Under the old code
+     * both come from the relay and agree perfectly — the circularity, back, wearing the name of the
+     * check that was supposed to remove it. The client's signed `structure1_cbor` is untouched,
+     * because forging that needs a signature the relay does not have.
+     */
+    const root = expectedRoot([0x11]);
+    const honest = sealLeaf(root, 2);
+    const forgedPayload = encodeSealPayload({
+      session_id: SESSION_ID, final_root: expectedRoot([0x11]), close_timestamp: 999, attestation: "PENDING",
+    });
+    const rewritten: RelaySealLeaf = {
+      ...honest,
+      // The relay's envelope now agrees with the relay's payload; only the SIGNED copy dissents.
+      s2: { ...honest.s2, content_hash: ctrlHash(forgedPayload) } as typeof honest.s2,
+      content_bytes: forgedPayload,
+    };
+    const verdict = verifySealFinalRoots([msgLeaf(0x11, 1), rewritten], SESSION_ID);
+    expect(
+      verdict.ok,
+      "a relay that rewrites both halves of its own envelope must not verify — that is the circle this unit exists to break",
+    ).toBe(false);
+    expect((verdict as { reason: string }).reason).toBe(SEAL_FINAL_ROOT_REASONS.PAYLOAD_UNBOUND);
   });
 
   it("★ an OLD RELAY that carries nothing is `not_carried` — never a silent pass", () => {
@@ -233,8 +323,8 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
     const junk = new Uint8Array([0xff, 0x00, 0xff]);
     const leaf: RelaySealLeaf = {
       kind: "ctrl",
-      s2: s2(ctrlHash(junk), 2),   // genuinely bound: the signed hash IS of these bytes
-      structure1_cbor: new Uint8Array([2]),
+      s2: s2(ctrlHash(junk), 2),   // genuinely bound: the SIGNED hash IS of these bytes
+      structure1_cbor: s1(ctrlHash(junk)),
       content_bytes: junk,
     };
     const verdict = verifySealFinalRoots([msgLeaf(0x11, 1), leaf], SESSION_ID);
