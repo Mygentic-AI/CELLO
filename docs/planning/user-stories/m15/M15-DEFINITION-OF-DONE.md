@@ -3727,3 +3727,51 @@ reviewer was right.**
   and the client's close path surfaces a refusal instead of a silent non-completion.
 - **Cross-repo:** needs a `@cello-protocol/protocol-types` version bump and publish (human-gated),
   then the `trustless-cello` package.json update.
+
+---
+
+### `DOD-M15-SEALROSTER-FEDERATED-1` — 🅿️ POST-LAUNCH BACKLOG. The participant roster is node-local, and the node that adjudicates a seal usually is not the node that assigned the session
+**Raised by review pass 2 on `DOD-M15-SEALWIRE-1` bullets 3+4 (HIGH-2). Verified against the code and
+against this repo's own comments, not taken from the review.**
+
+`DOD-M15-SEALWIRE-1` bullet 4's fix has two halves. The payload half is solid: the directory compares
+the relay's leaves against a root the participants themselves signed, which the relay cannot produce.
+**The roster half is solid only on a node that assigned the session**, and in the deployed topology
+that is often not the node doing the checking.
+
+**The chain, each link confirmed in code:**
+
+1. `#sessionParticipants` is in-memory, written at `session_request` on the node holding the SESSION
+   initiator's signaling stream.
+2. At boot it is reloaded only from this node's own `sessions` rows.
+3. `sessions` is deliberately excluded from anti-entropy — `ae-table-encoders.ts` lists it under
+   *"node-local by design… per-node delivery state"*, and the determination recorded there resolves an
+   earlier design doc **in favour of keeping it node-local**. So there is no store to fall back to.
+4. `directory-node.ts` says of the seal path: *"the relay drives every seal to a SINGLE configured
+   directory (`relay_primary_directory`), so any agent not homed on that node lands here."*
+
+So a seal is routinely adjudicated by a node with no record of the session, the roster silently
+reverts to the one derived from the relay's own leaf array, and a ctrl leaf minted with a key the
+relay holds is undetectable — the exact behaviour review pass 1's F3 was raised against, reachable
+again through the topology instead of through the code.
+
+**What still holds on that path**, so this is not read as "the check does nothing": the payload
+binding against the client-SIGNED `content_hash`, and whether the two participants signed the same
+root. Only the "are these two the people who opened the session" half is lost.
+
+**The fix, and why it is better than replicating `sessions`:** the relay holds the
+**directory-signed session assignment** — it recorded it, and under Option B the client presents it.
+That assignment names both participants and is signed by a directory, so it is **not
+relay-forgeable**. Carrying it with the seal submission makes the roster travel with the thing being
+adjudicated instead of being looked up from memory the adjudicating node does not have. Replicating
+`sessions` would reverse a determination this repo already made deliberately, for reasons unrelated
+to this check.
+
+**Why POST-LAUNCH under the frozen gate:** it needs a relay operator to be malicious *and* the seal to
+land on a node that did not assign the session. Launch is a single-region dev topology where the two
+coincide, so the check has its teeth today. This is a line to close before the federation widens, not
+before launch.
+
+- **Enforcer:** cross-node — a seal adjudicated by a node that did not assign the session must still
+  refuse a ctrl leaf signed by a non-participant. The current single-node test harness cannot fail
+  this case, which is why it was invisible.

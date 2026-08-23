@@ -5324,11 +5324,31 @@ export class CelloDirectoryNode {
      * restored from the store at boot — and the unilateral path already reads it. Same source, same
      * fallback chain.
      *
-     * ⚠️ WHEN NEITHER RECORD IS AVAILABLE the leaf-derived roster is used and the guarantee is
-     * WEAKER, so it is logged rather than silently substituted: a directory that has forgotten a
-     * session can still check the payload binding and the two participants' agreement with each
-     * other, but it cannot tell you those two are the people who opened the session. The underlying
-     * gap is tracked as `DOD-M15-LEAFPARTIES-1`; this call site no longer claims it is closed.
+     * ⚠️ AND THE FALLBACK IS THE COMMON CASE IN A FEDERATED DEPLOYMENT, NOT THE EXCEPTION — review
+     * pass 2, HIGH-2. My first version of this comment pointed at `DOD-M15-LEAFPARTIES-1` as the
+     * tracking line. That line is about whether earlier CONTENT leaves are constrained to the pair;
+     * it does not cover this. A pointer to a line about something else reads as tracked, which is the
+     * failure bullet 3 names in its own text.
+     *
+     * `#sessionParticipants` is in-memory, written at `session_request` on the node holding the
+     * SESSION initiator's stream, and reloaded at boot only from this node's own `sessions` rows —
+     * and `sessions` is deliberately NOT in the anti-entropy set (`ae-table-encoders.ts`: *"per-node
+     * delivery state"*). Meanwhile the relay *"drives every seal to a SINGLE configured directory
+     * (`relay_primary_directory`)"* — this file's own words, forty lines below. So the node that
+     * adjudicates a seal is frequently not the node that assigned the session, and there is no store
+     * to fall back to.
+     *
+     * What survives on that path is still worth having: the payload binding, and whether the two
+     * participants signed the SAME root. What is lost is the ability to say those two are the people
+     * who opened the session — so a relay-minted ctrl leaf goes undetected there. Tracked as
+     * `DOD-M15-SEALROSTER-FEDERATED-1`, with the real fix named: carry the roster from the relay's
+     * recorded, DIRECTORY-SIGNED assignment, which is not relay-forgeable and travels with the seal.
+     *
+     * ⚠️ INFO, NOT WARN, AND THAT IS DELIBERATE. It fires on ordinary healthy federated closes, and
+     * a warning that fires on the normal case is not a signal — it is something operators learn to
+     * filter, taking the abnormal cases with it. Same call made forty lines below for
+     * `not_carried`, for the same reason. It becomes a warning when the roster stops being missing
+     * by design.
      */
     const known = this.#sessionParticipants.get(sessionIdHex)
       ?? (() => {
@@ -5339,10 +5359,10 @@ export class CelloDirectoryNode {
       ? [Buffer.from(known.initiatorHex, "hex"), Buffer.from(known.targetHex, "hex")]
       : [pA, pB];
     if (!known) {
-      this.#logger?.warn("seal.final_root.roster_unknown", {
+      this.#logger?.info("seal.final_root.roster_unknown", {
         sessionId: sessionIdHex,
-        impact: "the final-root check ran against the roster derived from the relay's OWN leaves, so it cannot detect a leaf minted by a key the relay holds. Payload binding and participant-vs-participant agreement are still checked.",
-        guidance: "The directory has no session record for this seal — it was established by another node, or lost across a restart before replication caught up. Expected on a node that did not serve the session; investigate if it appears for sessions this node established.",
+        impact: "the final-root check ran against the roster derived from the relay's OWN leaves, so it cannot detect a ctrl leaf minted by a key the relay holds. The payload binding and the two participants' agreement with each other were still checked.",
+        guidance: "EXPECTED TODAY on any node that did not itself assign this session — `sessions` is node-local and the relay drives every seal to its own configured directory, so this is the normal federated path, not a fault. Tracked as DOD-M15-SEALROSTER-FEDERATED-1.",
         correlationId: sessionIdHex,
       });
     }
