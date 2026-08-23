@@ -31,6 +31,7 @@ import {
   startDaemon,
   connectMcp,
   cello,
+  celloJson,
   psqlSpine,
   CELLO_CLIENT_ROOT,
   TRUSTLESS_ROOT,
@@ -165,6 +166,11 @@ describe("J-CANARY — DOD-ZEROBUMP-CANARY-1: a type the system has never seen, 
     const devTag = (t: string) => `DEV-canary-${t}-${randomBytes(6).toString("hex")}`;
     const regA = cello(["register-agent", "canaryA", devTag("A")], { CELLO_DIR: dirA });
     expect(regA.status, `register-agent A failed: ${regA.stdout}`).toBe(0);
+  // DOD-M15-CLIJSON-1 ENFORCER: parse the SHIPPED binary's stdout. `register-agent` printed its
+  // onboarding hint INTO this JSON, so every consumer of a SUCCESSFUL registration broke — and the
+  // status check above stayed green throughout, because the command really did succeed. Asserting
+  // exit 0 proves the command worked; parsing proves its output is usable.
+    celloJson<{ ok?: boolean }>(regA, "register-agent canaryA");
     const regB = cello(["register-agent", "canaryB", devTag("B")], { CELLO_DIR: dirB });
     expect(regB.status, `register-agent B failed: ${regB.stdout}`).toBe(0);
 

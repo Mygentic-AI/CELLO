@@ -29,6 +29,7 @@ import {
   startDaemon,
   connectMcp,
   cello,
+  celloJson,
   psqlSpine,
   AUTH_DIRECTORY_NODE_KEY_HEX,
   AUTH_DIRECTORY_NODE_ID,
@@ -101,6 +102,9 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
       await new Promise((r) => setTimeout(r, 500));
     }
     const regA = cello(["register-agent", "agentA", `DEV-loop-A-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDir });
+    // DOD-M15-CLIJSON-1 ENFORCER: parse the SHIPPED binary's stdout — see j-canary for why the
+    // status check alone is not enough (the command succeeded AND its output was unparseable).
+    celloJson<{ ok?: boolean }>(regA, "register-agent agentA");
     expect(regA.status, `register-agent A failed: ${regA.stdout}`).toBe(0);
     const regB = cello(["register-agent", "agentB", `DEV-loop-B-${randomBytes(6).toString("hex")}`], { CELLO_DIR: celloDir });
     expect(regB.status, `register-agent B failed: ${regB.stdout}`).toBe(0);

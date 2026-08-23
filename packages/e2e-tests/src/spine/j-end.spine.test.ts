@@ -27,6 +27,7 @@ import {
   startDaemon,
   connectMcp,
   cello,
+  celloJson,
   psqlSpine,
   AUTH_DIRECTORY_NODE_KEY_HEX,
   AUTH_DIRECTORY_NODE_ID,
@@ -125,6 +126,11 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
       // real single-use token from the ops agent.
       const reg = cello(["register-agent", who, `DEV-jend-${who}-${randomBytes(6).toString("hex")}`], { CELLO_DIR: dir });
       expect(reg.status, `register-agent ${who}: ${reg.stdout}`).toBe(0);
+  // DOD-M15-CLIJSON-1 ENFORCER: parse the SHIPPED binary's stdout. `register-agent` printed its
+  // onboarding hint INTO this JSON, so every consumer of a SUCCESSFUL registration broke — and the
+  // status check above stayed green throughout, because the command really did succeed. Asserting
+  // exit 0 proves the command worked; parsing proves its output is usable.
+      celloJson<{ ok?: boolean }>(reg, `register-agent ${who}`);
       await waitConnected(dir, who);
 
       const agents = JSON.parse(cello(["agents"], { CELLO_DIR: dir }).stdout) as { agents: Array<{ name: string; pubkey: string }> };

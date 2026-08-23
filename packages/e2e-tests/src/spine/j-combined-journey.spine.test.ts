@@ -22,6 +22,7 @@ import {
   startDaemon,
   connectMcp,
   cello,
+  celloJson,
   psqlSpine,
   CELLO_CLIENT_ROOT,
   AUTH_DIRECTORY_NODE_KEY_HEX,
@@ -147,9 +148,14 @@ describe("J-COMBINED-JOURNEY — DOD-T4-JOURNEY-1: all signal classes, v1 close"
     await waitConnected(dirC, "C");
 
     const devTag = (t: string) => `DEV-comb-${t}-${randomBytes(6).toString("hex")}`;
-    expect(cello(["register-agent", "alice", devTag("A")], { CELLO_DIR: dirA }).status).toBe(0);
-    expect(cello(["register-agent", "bob", devTag("B")], { CELLO_DIR: dirB }).status).toBe(0);
-    expect(cello(["register-agent", "carol", devTag("C")], { CELLO_DIR: dirC }).status).toBe(0);
+    // DOD-M15-CLIJSON-1 ENFORCER: exit 0 proves the command worked; parsing proves its output is
+    // usable. `register-agent` printed its onboarding hint INTO the JSON, so a successful
+    // registration was unparseable and this status check stayed green throughout.
+    for (const [who, dir] of [["alice", dirA], ["bob", dirB], ["carol", dirC]] as const) {
+      const reg = cello(["register-agent", who, devTag(who[0]!.toUpperCase())], { CELLO_DIR: dir });
+      expect(reg.status, `register-agent ${who}: ${reg.stdout}`).toBe(0);
+      celloJson<{ ok?: boolean }>(reg, `register-agent ${who}`);
+    }
 
     const agentIdA = psqlSpine(`SELECT agent_id FROM agent_profiles WHERE k_local_pubkey = '${pubA}'`);
     expect(agentIdA).toMatch(/\S/);
