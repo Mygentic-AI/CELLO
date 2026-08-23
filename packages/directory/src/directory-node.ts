@@ -6300,9 +6300,21 @@ function verifySealLeaves(
   // ⚠️ THIS PARAGRAPH ENDED "and this comment is deleted with it", AND THAT WAS BECOMING FALSE.
   // `DOD-M15-SEALWIRE-1` bullets 3+4 have now built the verifier — `seal-final-root.ts`, which takes
   // the SEAL payload bytes, binds them to the hash the client SIGNED, and compares the client's
-  // `final_root` against a root rebuilt from the relay's leaves. **It is not yet invoked from here**,
-  // because no relay carries `content_bytes` on the wire yet (receiver-first: the directory admits
-  // and verifies the shape before anything produces it).
+  // `final_root` against a root rebuilt from the relay's leaves. **It is not yet invoked from here.**
+  //
+  // ⚠️ THE REASON CHANGED, AND THE OLD ONE IS NOW FALSE. This said the call was not wired *"because
+  // no relay carries `content_bytes` on the wire yet"* — and a relay does, as of the store-and-forward
+  // leg: it accepts the payload at the wire, stores it on the leaf, and hands it to this node in
+  // `SealData`. So the stated blocker was removed by the same line of work that wrote it, and a
+  // reader consulting this block — which it tells them to do — would have found a blocker that no
+  // longer exists.
+  //
+  // What remains is simply that **wiring the call is the next unit**. The precondition it must meet
+  // has not changed and is the thing to carry forward: `verifySealFinalRoots` proves the payload
+  // matches what `structure1_cbor` says, and does NOT prove `structure1_cbor` was signed by a
+  // participant. Invoke it only from a path that has already verified the signature and the
+  // participant, or a relay can mint a ctrl leaf with a key it holds and every comparison below
+  // becomes the relay checking itself.
   //
   // So the gap is narrower than this comment describes and is NOT yet closed. Stated plainly rather
   // than left claiming its own deletion: a sentence promising it will be gone reads, to anyone who

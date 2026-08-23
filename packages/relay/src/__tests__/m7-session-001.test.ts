@@ -328,9 +328,25 @@ describe("AC-002: relay emits session_interrupted on idle timeout", () => {
      * So the number is raised to a bound that measures the assertion rather than the machine. If it
      * ever fails again at 8s, that IS a defect — a 100ms timer eighty times late is not scheduling
      * noise.
+     *
+     * ⚠️ AND 8000 WAS INERT UNTIL `vitest.config.ts` GAINED A `testTimeout`. This package had none,
+     * so it ran on Vitest's 5000 ms default and the runner killed the test before this deadline could
+     * fire — the effective widening was 2 s → 5 s, and the failure message degraded from "no frame in
+     * 8000ms" to "Test timed out in 5000ms". Second time tonight I set a bound longer than its
+     * enclosing timeout; the rule is that a deadline is only as long as the shortest thing above it.
+     *
+     * The elapsed time is now in the message, so the NEXT person to see this has a number rather than
+     * a narrative: a trend from 2.1 → 3.4 → 7.9 s is a load problem arriving, and a cliff is
+     * something else. My "event-loop stall" was a hypothesis stated as fact — this measures it.
      */
+    const idleStart = Date.now();
     const frame = await rA.readDecodedWithTimeout(8000);
-    expect(frame["type"]).toBe("session_interrupted");
+    const idleElapsedMs = Date.now() - idleStart;
+    expect(
+      frame["type"],
+      `idle frame arrived after ${String(idleElapsedMs)}ms (threshold 100ms). If this number is ` +
+        `climbing across runs, the relay suite's load is the story; a cliff is something else.`,
+    ).toBe("session_interrupted");
     expect(frame["reason"]).toBe("timeout");
 
     sA.close().catch(() => {});
