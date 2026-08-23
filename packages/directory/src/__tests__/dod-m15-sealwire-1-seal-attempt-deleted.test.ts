@@ -25,8 +25,14 @@
  *     no operator following it has that package at all.
  *   - And a direct installer of that orphan is still not broken by this deletion, because the
  *     shipped send is **fire-and-forget**: `dirStream.send(...)` inside a `try/catch`, with nothing
- *     awaiting `seal_attempt_ack`. A directory that silently ignores the frame is indistinguishable,
- *     from that client's side, from one that acks an ack it never reads.
+ *     awaiting `seal_attempt_ack`. Whatever the directory answers, that client never reads it.
+ *
+ *     ⚠️ **The MECHANISM stated here was wrong twice, though the conclusion held.** It said the
+ *     frame reaches the dispatch chain's terminal *"unknown frame type — ignore"* branch. It does
+ *     not: an unknown type fails `decodeInboundSignalingFrame` and is answered with
+ *     `not_authenticated` at the decode-null site, well before the chain. The deletion is still safe
+ *     — for the fire-and-forget reason above, which does not depend on what the directory replies —
+ *     but a proof that names the wrong branch is a proof nobody can re-derive.
  *   - ⚠️ **SECOND CORRECTION TO THIS PROOF.** It said *"neither response frame had a consumer on the
  *     client side"*, and that is false for one of the two: published `client@0.0.50` consumes
  *     `seal_rejected_tree_mismatch` in four of its files. What actually holds is narrower —
@@ -64,6 +70,15 @@ import { join } from "node:path";
  */
 const DIRECTORY_SRC = new URL("..", import.meta.url).pathname;
 const RELAY_SRC = new URL("../../../relay/src", import.meta.url).pathname;
+/**
+ * ⚠️ THIRD PACKAGE — pass 2, finding C. `SessionWal.getLeaves` existed only for gap-fill and was
+ * deleted in the same commit that widened this guard, and the guard did not cover it: the token was
+ * missing AND `packages/interfaces/src` was not scanned. So the single most likely resurrection
+ * vector for that round's own work — a merge or revert of `session-wal.ts` from a branch predating
+ * today — would have restored a published-interface method with no consumer, green, while this
+ * file's header called itself the revert test for a removal.
+ */
+const INTERFACES_SRC = new URL("../../../interfaces/src", import.meta.url).pathname;
 
 /**
  * ⚠️ EXEMPT, AND IT MUST STAY EXEMPT. `restart_seal_attempt_timeout` is a LIVE daemon reason code in
@@ -108,9 +123,11 @@ const FORBIDDEN = [
    */
   "gap_fill",
   "gapfill",
+  // `SessionWal.getLeaves` — served leaves for gap-fill and nothing else.
+  "getleaves",
 ];
 
-/** Every `.ts` under `packages/directory/src`, tests included. */
+/** Every `.ts` under a package `src`, tests included. */
 function sourceFiles(dir: string, acc: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
@@ -121,7 +138,7 @@ function sourceFiles(dir: string, acc: string[] = []): string[] {
 }
 
 describe("DOD-M15-SEALWIRE-1 bullet 7: the dead seal_attempt path stays deleted", () => {
-  const files = [...sourceFiles(DIRECTORY_SRC), ...sourceFiles(RELAY_SRC)];
+  const files = [...sourceFiles(DIRECTORY_SRC), ...sourceFiles(RELAY_SRC), ...sourceFiles(INTERFACES_SRC)];
 
   it("★ the ANCHOR — this guard is actually reading BOTH packages' source", () => {
     /**
@@ -142,6 +159,10 @@ describe("DOD-M15-SEALWIRE-1 bullet 7: the dead seal_attempt path stays deleted"
       relayText,
       "and the RELAY half too, or the bullet's third clause has no coverage while looking as though it does",
     ).toContain("session_interrupted");
+    expect(
+      sourceFiles(INTERFACES_SRC).map((f) => readFileSync(f, "utf8")).join("\n"),
+      "and the INTERFACES half — a live sibling method proves the scan reached the file getLeaves was deleted from",
+    ).toContain("reconstruct");
   });
 
   it("★ no executable reference to the frame or its two replies survives, in EITHER package", () => {

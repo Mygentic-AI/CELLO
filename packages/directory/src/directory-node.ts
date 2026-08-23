@@ -685,9 +685,12 @@ export class CelloDirectoryNode {
    * PERSIST-015: `session_id_hex` → the timestamp the unilateral delivery-grace window runs from.
    *
    * ⚠️ THE NAME IS WIDER THAN THE BEHAVIOUR, AND THE GAP IS SECURITY-RELEVANT. It says *last
-   * activity*; it holds *session start*. There are exactly two writers — session creation and the
-   * restart restore, which seeds it with `genesisTimestampMs` — and **nothing refreshes it while a
-   * session is running.** So the grace period a unilateral seal must outwait is measured from when
+   * activity*; it holds *session start*. Two writers outside the `NODE_ENV=test` hooks — session
+   * creation, and the restart restore which seeds it with `genesisTimestampMs` — and **nothing
+   * refreshes it while a session is running.** (Review pass 2 counted four `set` sites: the other
+   * two are `*ForTest` helpers on this class that deliberately backdate past the grace window, and
+   * are `NODE_ENV !== "test"` guarded. The property holds; my sentence did not, and a reader
+   * grep-checking it would have found it false.) So the grace period a unilateral seal must outwait is measured from when
    * the session opened, not from when the two sides last spoke: a conversation that has been busy
    * for an hour is as eligible for a unilateral seal as one that went quiet immediately.
    *
@@ -2291,6 +2294,36 @@ export class CelloDirectoryNode {
 
         const parsed = decodeInboundSignalingFrame(frameBytes);
         if (!parsed) {
+          /**
+           * ⚠️ THIS — NOT THE TERMINAL `else` — IS WHERE A FRAME THIS BUILD HAS DROPPED LANDS.
+           *
+           * Pass 2, finding A: I put the unknown-frame log on the dispatch chain's terminal branch,
+           * and a deleted frame type can never reach it. `decodeInboundSignalingFrame` returns null
+           * for any type it does not know, which is handled HERE, before the chain runs. The
+           * terminal `else` only sees frames that decode fine and have no branch — which a deleted
+           * type by definition is not. My comment there, and the deadness proof in the guard's
+           * header, both described a path the case they were about cannot take.
+           *
+           * What the peer gets is `not_authenticated` on an already-authenticated stream, and until
+           * now the directory said nothing at all. The client's own code names the resulting
+           * ambiguity: `not_authenticated` has THREE producers — a frame from a peer that has not
+           * deployed this frame kind, a frame from one that HAS (our bug), and a frame that genuinely
+           * arrived before auth. The operator ends up at `submission_unsupported_by_node`, reached by
+           * a timeout and a guess, because this side never said which.
+           *
+           * Best-effort `type` peek: the bytes already failed a strict decode, so this must not throw
+           * and must not assert the value means anything. It is a thread to pull, not a verdict.
+           */
+          let rawType = "(undecodable)";
+          try {
+            const peek = cborDecode(frameBytes) as Record<string, unknown> | null;
+            if (peek && typeof peek["type"] === "string") rawType = peek["type"];
+          } catch { /* not CBOR, or not an object — `(undecodable)` is the honest answer */ }
+          this.#logger?.debug("directory.signaling.frame.undecodable", {
+            rawType,
+            agentPubkeyHex: authedPubkeyHex!.slice(0, 16),
+            impact: "this frame was refused with not_authenticated on an authenticated stream, which the counterparty cannot distinguish from a genuine auth failure. Most often the peer is on a build that speaks a frame kind this node does not.",
+          });
           this.#sendFrame(stream, encodeNotAuthenticated({ type: "not_authenticated" }));
           continue;
         }
@@ -2610,12 +2643,11 @@ export class CelloDirectoryNode {
           /**
            * IGNORED, BUT NO LONGER SILENT — `DOD-M15-SEALWIRE-1` bullet 7 review.
            *
-           * Ignoring is the right policy and is what makes deleting a dead frame type safe: a peer
-           * speaking a protocol this build has dropped degrades to silence rather than a torn
-           * stream. But this branch had NO log at all, not even debug — so a version-skewed peer
-           * sending an unrecognised frame was indistinguishable from a peer sending nothing, and the
-           * operator had no thread to pull. That is the exit-point-label failure in its purest form:
-           * the condition exists, and nothing anywhere names it.
+           * ⚠️ THIS IS NOT WHERE A DELETED FRAME TYPE LANDS — pass 2, finding A corrected the claim
+           * that used to be here. A type this build does not know fails `decodeInboundSignalingFrame`
+           * and is handled at the decode-null site above, which is where the observability now lives.
+           * This branch sees only frames that DECODE cleanly and have no dispatch case — a narrower
+           * and rarer thing: a frame kind we can parse and chose not to handle.
            *
            * Debug rather than warn: on a healthy federation this fires when an older or newer peer
            * speaks a frame we do not, which is expected during a roll and must not raise an alarm.

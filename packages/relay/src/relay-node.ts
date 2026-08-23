@@ -274,7 +274,13 @@ export interface RelayNodeOptions {
   directory?: DirectoryAdapter;
   store?: RelayStore;
   logger?: Logger;
-  /** PERSIST-014: SessionWal for gap-fill leaf serving. */
+  /**
+   * PERSIST-013 leaf-durability WAL. **Currently accepted and unused** — its only reader was the
+   * gap-fill handler deleted in `DOD-M15-SEALWIRE-1` bullet 7, and the composition root has never
+   * passed it in (see `bin/relay.ts`, unused since 2026-05-16). Kept as the injection seam so
+   * wiring durability is a one-line change rather than a re-plumb; see `SessionWal`'s own header
+   * for what is intent versus behaviour.
+   */
   sessionWal?: SessionWal;
   /**
    * M7-MSG-001: durable store-and-forward content store. When present, the relay
@@ -319,6 +325,9 @@ export class CelloRelayNode {
   readonly #directory: DirectoryAdapter | null;
   readonly #store: RelayStore;
   readonly #logger: Logger;
+  // Assigned, never read — see the `sessionWal` option above. Left in place rather than deleted so
+  // that wiring the WAL does not require re-threading the constructor; NOT evidence that leaf
+  // durability runs.
   readonly #sessionWal: SessionWal | null;
 
   /** M7-MSG-001: content-park handler (store-and-forward). null when no contentStore. */

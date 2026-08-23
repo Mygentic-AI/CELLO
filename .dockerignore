@@ -1,0 +1,41 @@
+# Build context exclusions — DOD-M15-SEALWIRE-1 bullet 7, review pass 2 (finding D).
+#
+# ─── Why this file exists ──────────────────────────────────────────────────────────────────────
+#
+# Both service Dockerfiles do `COPY packages/<pkg>/ packages/<pkg>/` and then compile inside the
+# image. Without a build-context exclusion, that COPY drags the developer's LOCAL `dist/` and
+# `*.tsbuildinfo` in first — and `tsc --build` is incremental and never removes orphaned outputs.
+#
+# So a local `docker build` from a working tree could ship compiled code whose source had been
+# deleted. Measured, not hypothetical: after deleting the PERSIST-014 gap-fill path, the relay's
+# local `dist/` still contained the handler, both encoders, the decoder, all four types, and an
+# orphaned compiled test file whose source no longer existed.
+#
+# CI is not affected — Cloud Build works from a fresh clone where these paths do not exist. This
+# closes the local-build case, and it also makes the context smaller and the build faster.
+#
+# ⚠️ NOT a substitute for asserting absence on the BUILT artifact. This stops stale output being
+# copied IN; it does nothing about output the build itself produces. Both checks are needed, and
+# this milestone has now been bitten by the second one twice.
+
+# Local build output — always regenerated inside the image.
+**/dist/
+**/*.tsbuildinfo
+
+# Never ship a developer's installed modules; the image runs its own pnpm install.
+**/node_modules/
+
+# Version control and editor state.
+.git/
+.gitignore
+**/.DS_Store
+
+# Local environment and secrets must never enter a build context.
+.env
+.env.*
+**/*.pem
+**/*.key
+
+# Test and coverage artifacts.
+coverage/
+**/coverage/
