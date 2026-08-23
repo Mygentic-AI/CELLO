@@ -700,6 +700,28 @@ did not earn. The suite survives its own run; this is the debt that no longer br
   opened to fix.
 - **Enforcer:** the existing guard's lists reach zero.
 
+### `DOD-M15-CHAINROUNDTRIP-1` — ❌ A chained row can be verified against what the database returns
+Found by `DOD-M15-CHAINDEBT-1`'s review and **measured, not inferred** (→ Entry S7). Three of ten
+hash-chained tables cannot verify on a freshly reset database after a fully green suite.
+- **The class:** `insertWithChain` hashes the record the CALLER supplies; `verifyChain` hashes
+  `SELECT *`. Where a column's stored type round-trips to a different JavaScript value, the two
+  serializations differ and the row **can never verify** — no tamper, no deletion, no fixture.
+- **`sessions` (`uuid`).** Production passes `sessionIdHex`, 32 chars, no dashes; Postgres returns
+  it dashed. `writeSessionWithParticipants` is the ONLY production path (`writeSession` has no
+  caller), so **every session row a live directory has written is a hole** — and the write is
+  `void … .catch(() => {})`, so it has never reported anything.
+- **`seal_notarizations` (`bytea`).** `node-pg` returns a Buffer, which serializes as
+  `{"type":"Buffer","data":[…]}`; the insert-time `Uint8Array` does not.
+- **NOT `DOD-ACCOUNTS-CHAIN-1`** — that is a deletion making a chain permanently red. This chain was
+  never green.
+- **The one test that could catch it cannot:** `federation-001` AC-012 truncates `sessions` and
+  writes a `randomUUID()` — the dashed form, a shape production never produces.
+- **Fix belongs where `SEALWIRE-1` is working** (`pg-directory-store.ts` chained-write path /
+  `hash-chain.ts` `serializeRecord`); a normalisation change and a hash-domain change in one
+  function is the §2e collision. Owner to be settled between the two lanes.
+- **Enforcer:** `verifyChain` green on every table in `HASH_CHAINED_TABLES` after a full suite run
+  on a reset database, plus a test that writes through the PRODUCTION shape.
+
 ### `DOD-M15-SPINE-LANE-1` — ❌ The spine suites are run, or their absence is a decision on the record
 Split from `DOD-M15-CI-SKIPS-SILENT-1`. 38 files — the M8D spine lane plus the cross-machine
 transport tests — are excluded by `packages/e2e-tests/vitest.config.ts` and therefore **never

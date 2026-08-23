@@ -5010,3 +5010,81 @@ next on a fresh database.
 When that gate was backgrounded and killed, the wrapper reported `[exited with code 0]` while the
 test command itself had exited **143** — SIGTERM. Read the command's own exit code, not the
 wrapper's line.
+
+---
+
+## Entry S7 (CELLO_Support) — the hash chain has never verified on three of ten tables, and the cause is a class
+
+`CHAINDEBT-1`'s review found two things that outrank the unit. Both are **verified by me, not
+relayed** — I ran them.
+
+### The measurement, on a FRESHLY RESET database after a full green suite
+
+```
+sessions             rows=8   BREAK at 6
+connection_requests  rows=24  BREAK at 6
+seal_notarizations   rows=2   BREAK at 1
+connections          rows=11  OK
+user_accounts        rows=26  OK
+relay_registrations  rows=5   OK
+conversation_seals   rows=1   OK
+```
+
+Gate: 2269 passed, 0 failed. **A completely green suite leaves three of ten hash-chained tables
+unable to verify.**
+
+### THE CLASS: the value that was HASHED is not the value that comes BACK
+
+`insertWithChain` hashes the record the caller supplies. `verifyChain` hashes `SELECT *`. When a
+column's stored type round-trips to a different JavaScript value, those two serializations differ
+and the row can never verify — **not once, not after a reset, never.**
+
+Two confirmed instances, different column types:
+
+1. **`sessions` — `uuid`.** `directory-node.ts:4195` passes `sessionIdHex` (32 chars, no dashes) to
+   `writeSessionWithParticipants`. The column is `uuid`, so Postgres returns `86997c84-e54c-…`.
+   Insert hashed the undashed form; verify hashes the dashed one. **`writeSession` has no production
+   caller, so this is the only path** — every session row a live directory has ever written is a
+   hole in the chain that exists to prove nobody touched it. The write is `void … .catch(() => {})`,
+   so it has never reported anything.
+2. **`seal_notarizations` — `bytea`.** Printed the actual serialization at verify time:
+
+   ```
+   {"close_timestamp":…,"frost_signature":{"type":"Buffer","data":[0,0,0,…
+   stored    : f29d48c241f8c726…
+   recomputed: 164b06d819c38a5c…
+   ```
+
+   `node-pg` returns `bytea` as a **Buffer**, which `JSON.stringify`s as
+   `{"type":"Buffer","data":[…]}`. The insert-time value was a `Uint8Array`, which does not. Same
+   mechanism, different type.
+
+**This is NOT `DOD-ACCOUNTS-CHAIN-1`.** That line is about a deletion making a chain permanently
+red. This is a chain that **was never green**: no tamper, no deletion, no fixture involved — the
+serialization is not round-trip-safe for non-`text` columns.
+
+### Why nobody saw it, and it is the same shape as everything else today
+
+`m6b-010` deleted its `sessions` rows after every test, so the table was never long enough to fail.
+**Removing the fixture cleanups is what made a production defect visible for the first time.** The
+cleanups were not only corrupting the chain — they were hiding the fact that it had never worked.
+
+And the one test that could have caught it cannot, by construction: `federation-001` AC-012
+`TRUNCATE`s `sessions` and then writes a single **`randomUUID()`** — the dashed form, which round-
+trips correctly. It tests a shape production never produces.
+
+### Not fixed here, and why — this is a real gate, not a park of convenience
+
+The fix is in `pg-directory-store.ts`'s chained-write path and/or `hash-chain.ts`'s
+`serializeRecord`. `CELLO_Coder_1` is in exactly those files for `SEALWIRE-1`'s certify path, and a
+**normalisation change and a hash-domain change in the same function is the collision §2e forbids**.
+Offered to them over CELLO with the evidence; awaiting their answer on whether they take it or I do.
+
+**Carried as `DOD-M15-CHAINROUNDTRIP-1`** (Tier 2) so it cannot sit as a note.
+
+### What CHAINDEBT-1 itself closes, stated precisely so the tag is not doing more work than it earned
+
+Its enforcer is *"the existing guard's lists reach zero"* — **met**: inserts 8→0, deletes 8→0,
+ceilings pinned 0/0. What it does **not** close is the property in the line's prose, because three
+tables are red for reasons no fixture causes. That residue is this entry and the new line, not a
+silent gap under a ✅.
