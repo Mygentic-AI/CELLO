@@ -621,33 +621,73 @@ describeIntegration("PERSIST-018 SI-003: superuser modification detected by chai
     const sessionIdHex = Buffer.from(notarization.session_id).toString("hex");
     await store.recordNotarization(notarization, { correlationId: "si003-corr" });
 
-    // Superuser modifies frost_signature (simulating tampering)
-    await superPool.query(
-      `UPDATE seal_notarizations SET frost_signature = $1 WHERE session_id = decode($2, 'hex')`,
-      [Buffer.alloc(64), sessionIdHex],
-    );
-
-    // Fresh verifier detects the break
-    const freshLogger: Logger = {
-      debug: vi.fn(), info: vi.fn(), warn: vi.fn(),
-      error: vi.fn() as Logger["error"],
-    };
+    /**
+     * ─── THE TAMPER MUST BE PUT BACK ───────────────────────────────────────────────────────────
+     *
+     * This row is left in a shared database. A tamper that is not restored is indistinguishable
+     * from the defect this chain exists to report: `verifyChain("seal_notarizations")` stops at
+     * the FIRST break, so one unrestored row makes the table permanently unverifiable for every
+     * test, operator and auditor that comes after — and it reads as a production integrity bug.
+     *
+     * It cost `DOD-M15-CHAINROUNDTRIP-1` three wrong diagnoses (a `bytea` round-trip, the
+     * anti-entropy path, a defaulted column) before anyone looked here. The three other tamper
+     * tests in this suite — `persist-004`, `persist-020`, `dod-accounts-chain-1` — all restore.
+     * This one did not.
+     *
+     * The restore is in a `finally` because a FAILING assertion must not leave the table red
+     * either; a test that only cleans up when it passes has cleanup exactly where it is not
+     * needed.
+     */
     const freshPool = new pg.Pool({ connectionString: toServiceUrl(DATABASE_URL) });
-    const freshStore = new PgDirectoryStore(freshPool, freshLogger);
+    try {
+      // Superuser modifies frost_signature (simulating tampering)
+      await superPool.query(
+        `UPDATE seal_notarizations SET frost_signature = $1 WHERE session_id = decode($2, 'hex')`,
+        [Buffer.alloc(64), sessionIdHex],
+      );
 
-    const result = await freshStore.verifyChain("seal_notarizations");
+      // Fresh verifier detects the break
+      const freshLogger: Logger = {
+        debug: vi.fn(), info: vi.fn(), warn: vi.fn(),
+        error: vi.fn() as Logger["error"],
+      };
+      const freshStore = new PgDirectoryStore(freshPool, freshLogger);
 
-    expect(result.valid).toBe(false);
-    expect(result.breakAtSequence).toBeDefined();
-    expect(freshLogger.error).toHaveBeenCalledWith(
-      "db.chain.break.detected",
-      expect.objectContaining({
-        tableName: "seal_notarizations",
-        breakAtSequence: 1,
-      }),
-    );
+      const result = await freshStore.verifyChain("seal_notarizations");
 
-    await pool.end();
-    await freshPool.end();
+      expect(result.valid).toBe(false);
+      expect(result.breakAtSequence).toBeDefined();
+      expect(freshLogger.error).toHaveBeenCalledWith(
+        "db.chain.break.detected",
+        expect.objectContaining({
+          tableName: "seal_notarizations",
+          breakAtSequence: 1,
+        }),
+      );
+    } finally {
+      await superPool.query(
+        `UPDATE seal_notarizations SET frost_signature = $1 WHERE session_id = decode($2, 'hex')`,
+        [Buffer.from(notarization.frost_signature), sessionIdHex],
+      );
+      await pool.end();
+      await freshPool.end();
+    }
+
+    // The restore is only worth anything if it actually restored. Assert it here rather than
+    // trusting the UPDATE: a wrong value put back is the same permanent red as no value put back.
+    const restoredPool = new pg.Pool({ connectionString: toServiceUrl(DATABASE_URL) });
+    try {
+      const restored = await new PgDirectoryStore(restoredPool, {
+        debug: () => {}, info: () => {}, warn: () => {}, error: () => {},
+      }).verifyChain("seal_notarizations");
+      expect(
+        restored.valid,
+        `SI-003 tampered a row and failed to put it back (break at ` +
+          `${String(restored.breakAtSequence)}). seal_notarizations is now permanently red for ` +
+          `every later test and for any operator who audits this table.`,
+      ).toBe(true);
+    } finally {
+      await restoredPool.end();
+    }
   });
 });

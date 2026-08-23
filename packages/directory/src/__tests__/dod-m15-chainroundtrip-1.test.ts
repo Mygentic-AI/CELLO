@@ -7,17 +7,19 @@
  * column's stored type round-trips to a different JavaScript value, those two serializations differ
  * and the row **can never verify** — no tamper, no deletion, no fixture involved.
  *
- * ONE confirmed instance, found by measuring every chained table after a fully green suite:
+ * ONE instance, found by measuring every chained table after a fully green suite:
  *
  *   sessions  BREAK at 6  — `uuid`, written as undashed hex, returned dashed. FIXED here.
  *
- * **`seal_notarizations` was recorded as a second instance of the same class and that was WRONG.**
- * I printed one row's serialization, saw `{"type":"Buffer",…}`, and concluded `bytea` round-tripped
- * badly — without checking which writer produced the row. Both writers that touch that table
- * (`recordNotarization` and the anti-entropy apply path) convert their byte fields to `Buffer`
- * before hashing, deliberately and with comments saying so. The table IS red, for a reason that is
- * reproducible and not yet identified; the exclusion note on the enforcer below records what has
- * been ruled out so nobody repeats the three wrong guesses.
+ * **`seal_notarizations` was recorded as a second instance and it is NOT one.** It was red because
+ * `persist-018` SI-003 tampers a row to prove the verifier catches a tamper, and never put it back
+ * — so the chain was reporting a tamper that really happened, exactly as designed. That test now
+ * restores in a `finally`, and this enforcer covers the table like any other.
+ *
+ * The reason that cost three wrong diagnoses is worth more than the fix: a red chain looks the same
+ * whether the data is wrong or the check is wrong, and I kept looking for a defect in the writer
+ * because the writer is where a defect WOULD be. Nothing about the evidence pointed there. The
+ * question that resolved it in one query was "which value is different, and who wrote it?"
  *
  * ─── Why the existing tests could not catch either ─────────────────────────────────────────────
  *
@@ -34,7 +36,12 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import { randomUUID, randomBytes } from "node:crypto";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
-import { serializeRecord, computeChainHash, CHAIN_GENESIS } from "../hash-chain.js";
+import {
+  serializeRecord,
+  computeChainHash,
+  CHAIN_GENESIS,
+  HASH_CHAINED_TABLES,
+} from "../hash-chain.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
 const isLocal = process.env["CELLO_ENV"] === "local";
@@ -101,19 +108,15 @@ describeIntegration("DOD-M15-CHAINROUNDTRIP-1: the production write shape verifi
 
   it("seal_notarizations: a row whose bytea columns are Uint8Array still verifies", async () => {
     /**
-     * ─── A DIAGNOSIS OF MINE THAT WAS WRONG, kept because the correction is the point ───────────
+     * THE CONSTRAINT: `recordNotarization` must keep converting every byte field with
+     * `Buffer.from(...)` before it builds the record it hashes. `node-pg` returns `bytea` as a
+     * Buffer, which serializes as `{"type":"Buffer",…}`; a `Uint8Array` does not. Drop that
+     * conversion and every notarization row becomes unverifiable the moment it is written —
+     * silently, because nothing verifies chains at runtime.
      *
-     * I recorded that `seal_notarizations` breaks because `node-pg` returns `bytea` as a Buffer
-     * while the insert-time value is a `Uint8Array`. I had printed one row's serialization and read
-     * `{"type":"Buffer",…}` in it — but I never checked which writer produced that row.
-     *
-     * `recordNotarization` **already** converts every byte field with `Buffer.from(...)` before
-     * building the record, under a comment saying exactly why: *"Buffer values are used for
-     * serialization consistency with what pg returns at verify time."* The production writer was
-     * never the problem.
-     *
-     * So this test is not a repro — it is the CONTROL that pins that. If the production notarization
-     * path ever stops normalising, this goes red.
+     * This is a CONTROL, not a repro. It passes before and after this unit, by design. It is here
+     * because that `Buffer.from` looks like redundant ceremony to anyone tidying the writer, and
+     * three separate diagnoses of an unrelated red chain went looking at it first.
      */
     await store.recordNotarization({
       session_id: randomBytes(16),
@@ -124,9 +127,8 @@ describeIntegration("DOD-M15-CHAINROUNDTRIP-1: the production write shape verifi
       frost_signature: randomBytes(64),
     });
 
-    // Scoped to THIS row rather than the whole table: the table has a separate, unrelated red row
-    // (see the enforcer below). What this pins is that the production notarization writer produces
-    // a row that chains correctly to whatever preceded it.
+    // Scoped to THIS row rather than the whole table, so a failure points at the notarization
+    // writer and not at whoever last wrote to a shared table. The enforcer below covers the table.
     const { rows } = await pool.query<Record<string, unknown>>(
       `SELECT * FROM seal_notarizations ORDER BY id ASC`,
     );
@@ -151,36 +153,23 @@ describeIntegration("DOD-M15-CHAINROUNDTRIP-1: the production write shape verifi
      * more than a green run.
      */
     /**
-     * ─── ONE TABLE IS EXCLUDED, AND IT IS EXCLUDED AS KNOWN-RED ────────────────────────────────
+     * ─── THE LIST IS DERIVED, NEVER TYPED OUT ──────────────────────────────────────────────────
      *
-     * `seal_notarizations` is NOT green and this list must not be read as saying it is. It is left
-     * out because it fails for a reason this unit did not cause and has not identified, and pinning
-     * it here would make this assertion fail for someone else's defect while telling them nothing.
+     * Iterating a hand-maintained copy is the hollow shape this milestone keeps finding: add an
+     * eleventh chained table and a typed-out loop just gets SHORTER. It never goes red, so the one
+     * table nobody remembered to wire is precisely the one table nobody checks.
      *
-     * **What is established, so whoever picks it up does not repeat my three wrong guesses:**
-     *  - Reproducible from `persist-018-seal-notarizations.test.ts` ALONE on a freshly reset
-     *    database: one row, and it does not verify against `CHAIN_GENESIS`.
-     *  - NOT the `bytea` round-trip. `recordNotarization` converts every byte field with
-     *    `Buffer.from(...)` before building the record, under a comment saying exactly why — and the
-     *    control test above proves a row written through it verifies.
-     *  - NOT the anti-entropy path. `m12-ae-store-parity` alone leaves the table GREEN, and
-     *    `pg-ae-store` converts its bytea columns to `Buffer` before calling the chained writer.
-     *  - NOT a single column the hash never covered. Recomputing with each column excluded in turn
-     *    — all eleven — reproduces the stored hash for none of them, so it is not the
-     *    `registered_at`/`seal_type` "DB default filled a field the record omitted" shape.
-     *
-     * **What would resolve it:** instrument `insertWithChain` to log the serialized record it hashes
-     * for that table, run `persist-018` once, and diff it against the serialization of the row that
-     * comes back. That is a ten-minute answer and I would rather hand over a precise repro than a
-     * fourth hypothesis.
-     *
-     * Carried on `DOD-M15-CHAINROUNDTRIP-1` as an open AC.
+     * Driving it off `HASH_CHAINED_TABLES` inverts that — the enforcer covers what the SYSTEM
+     * says is chained, and any exemption has to be written down here in `EXEMPT` where a reader
+     * trips over it, rather than expressed as an absence nobody can see.
      */
-    const tables = [
-      "connection_requests", "conversation_seals", "conversation_attestations",
-      "conversation_participation", "notification_events",
-      "connections", "sessions", "relay_registrations", "user_accounts",
-    ];
+    const EXEMPT = new Set<string>([]); // empty, and it must stay that way — see below
+    const tables = HASH_CHAINED_TABLES.filter((t) => !EXEMPT.has(t));
+    expect(
+      tables.length,
+      "the enforcer is not covering every chained table — an exemption was added without a reason",
+    ).toBe(HASH_CHAINED_TABLES.length);
+
     const broken: string[] = [];
     for (const t of tables) {
       const r = await store.verifyChain(t as never);
