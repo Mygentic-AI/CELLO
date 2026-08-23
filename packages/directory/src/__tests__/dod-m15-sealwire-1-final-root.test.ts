@@ -44,7 +44,8 @@ import {
   SEAL_FINAL_ROOT_GUIDANCE,
   type SealFinalRootReason,
 } from "../seal-final-root.js";
-import type { RelaySealLeaf, Structure2 } from "../directory-types.js";
+import type { RelaySealLeaf } from "../directory-types.js";
+import type { Structure2 } from "@cello-protocol/protocol-types";
 
 const SESSION_ID = new Uint8Array(16).fill(0x7c);
 const OTHER_SESSION = new Uint8Array(16).fill(0x3a);
