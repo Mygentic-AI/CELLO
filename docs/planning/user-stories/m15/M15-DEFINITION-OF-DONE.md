@@ -257,9 +257,16 @@ answer was worse and different.
 - **Scope:** audit **every** description in `core/adapter-claude-code/src/bin/cello-mcp.ts` in the
   same pass — fixing one claim in a file nobody has ever scanned, and leaving the rest unread, is
   the "letter, not spirit" failure `DOD-M15-CLAIM-SCANNER-1` was written against.
-- **Enforcer:** the corrected text, plus these descriptions inside a scan (see
-  `DOD-M15-TOOLDESC-SCAN-1` — the durable control, post-launch; this line's audit is what covers
-  launch).
+- **⚠️ Enforcer — NOT "I read the file". A hand audit is exactly what `DOD-M15-LEDGER-1` proved
+  unreliable** (raised by the receptionist against my own classification, and it is the right
+  objection). The audit is only trusted here because it is ONE file rather than four surfaces, and
+  it must leave evidence a later reader can check rather than an assertion that it happened:
+  - every claim-vocabulary match in `cello-mcp.ts` adjudicated into `helpers/claims-ledger.ts` with
+    its verdict and evidence, in the same three-state form the scanner already uses — so the work is
+    a **shrinking count**, not a paragraph saying it was done;
+  - each corrected description carries the test that proves the behaviour it now describes.
+  If that evidence cannot be produced for a description, the honest fix is to DELETE the claim, not
+  to soften it — §2f, and the same rule that governed the swept surfaces.
 
 ### `DOD-M15-DISCLOSE-1` — ❌ Shipped documentation discloses what the architecture cannot remove
 - **A direct session permanently reveals the operator's IP address to the counterparty.** No gate,
