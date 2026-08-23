@@ -637,7 +637,13 @@ The four, and none of them was a missing check — every one was a check that fi
 - **Enforcer:** a test that fails when a `REFUSAL_REASONS` member has no path to an agent-facing
   surface.
 
-### `DOD-M15-CHAINDEBT-1` — ❌ No fixture puts a hole in a hash-chained table
+### `DOD-M15-CHAINDEBT-1` — 🟡 No fixture puts a hole in a hash-chained table
+> **In flight (→ Entry S5), branch `m15/chaindebt-1`.** Inserts **8 → 5**, deletes **8 → 3**;
+> shrink-only ceilings lowered with each. Every converted file's OWN suite re-run against real
+> Postgres, not just the guard. **Four of the twelve were misfiled rather than debt** — already
+> inside `BEGIN`/`ROLLBACK`, or a DELETE that must be REFUSED — because the guard reads source and
+> source cannot show a rollback. Those moved to `ROLLED_BACK`/`ALLOWED_DELETES` with the reasoning
+> attached rather than being silently removed.
 Split from `DOD-M15-DIRECTORY-ROT-1` when that line closed, rather than being absorbed into a ✅ it
 did not earn. The suite survives its own run; this is the debt that no longer breaks it.
 
