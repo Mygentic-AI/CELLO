@@ -4950,3 +4950,46 @@ is unreachable, so nobody reads it as covered.
   returning false, which is what its comment claims.
 
 Gate: 4403 client tests, lint, typecheck, build — by exit code.
+
+---
+
+## Entry S6 (CELLO_Support) — the server gate cannot be run from a worktree without naming the project
+
+Short, and it applies to **both lanes**, which is why it is here rather than in a RESUME STATE block.
+
+**Symptom:** `CELLO_ENV=local pnpm run test` in `trustless-cello` fails two tests in
+`persist-002-docker.test.ts` with:
+
+> `Bind for 0.0.0.0:5433 failed: port is already allocated`
+
+**Cause, and it is nothing to do with the diff under test.** Those tests shell out to
+`docker compose run --rm flyway` with `cwd: REPO_ROOT`. Docker Compose derives its project name from
+the directory, so from a worktree at `/Users/andrep/tc-wt/chaindebt-1` it builds a **second** project
+called `chaindebt-1` and tries to bind 5433 again — while the Postgres actually serving the suite
+belongs to project `trustless-cello`, started from the main checkout. Confirmed with
+`docker compose ls` and `docker ps`: one container, `trustless-cello-postgres-1`, owns the port.
+
+**Fix — set the project name, do not start a second stack:**
+
+```
+COMPOSE_PROJECT_NAME=trustless-cello CELLO_ENV=local pnpm run test
+```
+
+12/12 on that file with it set, 10/12 without. Full server gate with it set: **2265 passed, 37
+skipped, 7 todo; lint and typecheck clean — all by exit code.**
+
+**Why it is worth an entry.** The failure names a port and a container, so it reads like a local
+Docker problem, and the natural next move — `docker compose up -d` from the worktree — makes it
+worse by starting a rival stack. Anyone running the server suite from a worktree will hit it, and
+parallel lanes are exactly the situation that puts people in worktrees.
+
+**Also worth carrying: CAP VITEST WORKERS.** `--maxWorkers=2`. Vitest defaults to one worker per
+core; the client suite run repeatedly with that default is what made the machine hot enough for
+Andre to ask what we were doing. The server suite is already serial under `CELLO_ENV=local`
+(`vitest.config.ts`) — do not "optimise" that back; parallel gave 16 failures one run and 19 the
+next on a fresh database.
+
+**And a false green to note, because it is the shape the new §2 mutation-loop box warns about.**
+When that gate was backgrounded and killed, the wrapper reported `[exited with code 0]` while the
+test command itself had exited **143** — SIGTERM. Read the command's own exit code, not the
+wrapper's line.
