@@ -1047,7 +1047,7 @@ that was WRONG. See the retraction below; it is the more useful half of this ent
 - **Enforcer:** `j-loopback` green, and a unit test at the handler that fails if any path returns
   `ok: true` without a `sealed_root` — the shape, not the instance.
 
-### `DOD-M15-CLIJSON-1` — 🟡 A command that prints JSON prints only JSON
+### `DOD-M15-CLIJSON-1` — ✅ A command that prints JSON prints only JSON
 > **FIXED, review in flight.** `cello-client` — `CommandResult` gains a `guidance` field documented
 > as stderr-only; `register()` returns pure JSON; `legacy()` routes `guidance` to the `stderr`
 > channel `CliOutput` already had and always set to `""`. tsc 0, eslint 0, CLI rebuilt.
@@ -1055,10 +1055,41 @@ that was WRONG. See the retraction below; it is the more useful half of this ent
 > on this parse error and now clears registration entirely, failing later on the separate stale
 > close-contract assertion (`DOD-M15-CLOSEROOT-1`) — which is the triage confirming its own
 > clustering. **The hint is kept, on stderr.**
-> **⚠️ THE ENFORCER IS NOT WRITTEN.** The clause asks for a test that `JSON.parse`s each
-> JSON-advertising command's stdout on the success path, against the shipped binary. I verified by
-> hand through one journey. A hand-verification is not a guard — this cannot go ✅ on it, and the
-> reviewer was asked to rule on the cheapest honest version rather than let it stand.
+> **CLOSED on a quoted verdict.** Reviewer: *"This unit is not shippable as committed — it ships a
+> RED test… tsc and eslint pass; the test gate was not run for this unit."* Correct, and mine: I ran
+> typecheck and lint and skipped the package suite, which exists so that "it compiles" is not
+> mistaken for "it works". Condition met — F1 re-pointed, the enforcer added, and F2/F3 taken in the
+> same pass. Gate: 18 files / **295 tests**, tsc 0, eslint 0.
+>
+> **The guard I broke had never checked the thing that mattered.** It asserted the four onboarding
+> cues appeared in `output` — and passing said NOTHING about which stream they were on, so the hint
+> sat inside the JSON for months with that test green. It now asserts them on `guidance` (proving
+> the hint survives AND where it went) and asserts `output` by **exact equality** to the JSON, so a
+> future append is red. A substring assertion could never have done that.
+>
+> **THE ENFORCER**, priced by the reviewer and it was right: four spine journeys already register
+> against the shipped binaries and already pay for a daemon and a DKG, and each asserted only
+> `status === 0` — **true throughout the defect, because the command really did succeed.** Each now
+> also parses the stdout. *Exit 0 proves the command worked; parsing proves its output is usable, and
+> those are different claims.* Zero added runtime.
+>
+> **F2, taken in the same pass — the same defect one branch over.** Five failure branches printed
+> prose on stdout with exit 1, so `register-agent alice $TOK | jq` still died on the two failures a
+> scripter actually hits: an unset `$TOK`, and a daemon that is not up. All five now emit
+> `{ok:false, reason, guidance}`. **Verified by capturing both streams to separate files** — my
+> first check appeared to show invalid JSON and duplicate stderr, and that was my own shell
+> redirection, not the program. Measuring stopped me "fixing" an escaping bug that does not exist.
+>
+> **F3:** the top-level help named `register-agent` among the commands that *"print human text, and
+> their failures go to stdout"* — false in both halves, and addressed to exactly the reader deciding
+> whether to script onboarding.
+>
+> **CARRIED (reviewer F5), not silence:** nine `jsonOut` commands print a `Usage:` line or a whole
+> help block on **stdout** with exit 1 on an argument error — against `json-out.ts`'s own written
+> contract that *"stdout stays EMPTY so a piping script can never mistake an error body for a
+> result."* Lower severity (exit is non-zero, so a `$?`-checking script is safe), same family.
+> Also carried: `bin/cello.ts` wires `onProgress` to **stdout** — only a prose command uses it
+> today, and the day a JSON command gets progress lines this defect returns. One-line fix.
 **BLOCKS LAUNCH** (§0z.1): the CLI states its own contract — *"Prints JSON; use `--pretty` for
 humans"* — and `register-agent` breaks it on the SUCCESS path, so anything reading that output
 fails at the first step. Found by `DOD-M15-SPINERED-1`'s triage, 2026-08-23, and it is the largest
