@@ -5107,8 +5107,16 @@ export class CelloDirectoryNode {
      *
      * It is kept because a mismatch still means something is corrupt, and removing a check that can
      * only ever fire on real corruption would be a regression. What replaces it as the actual guard
-     * is the client-signed `final_root` comparison — bullet 3 — which needs the SEAL payload on the
-     * wire, and is carried as `DOD-M15-SEALFINAL-1` rather than smuggled in here.
+     * is the client-signed `final_root` comparison — **`DOD-M15-SEALWIRE-1` bullet 3, on the same
+     * line as this one** — which needs the SEAL payload on the wire.
+     *
+     * ⚠️ THIS SENTENCE USED TO DEFER TO `DOD-M15-SEALFINAL-1`, AND THAT LINE DOES NOT EXIST. It is
+     * in no DoD, no journal entry, and no other file — the only occurrence in either repository was
+     * this comment. A reader chasing it would conclude the replacement was tracked somewhere else
+     * and stop looking, which is exactly the failure bullet 3 names in its own text: *"fixing one
+     * side of a mutual deferral and leaving the other half pointing at it is how this gap was
+     * created."* Found while scoping bullet 4 and corrected rather than noted, because a pointer to
+     * nothing is worse than no pointer: it reads as tracked.
      */
     if (!bufEqual(structure2Root, relayRoot)) {
       this.#notifySealRejected(sessionIdHex, sessionId, "merkle_root_mismatch");
