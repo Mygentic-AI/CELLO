@@ -3087,6 +3087,33 @@ Three remain, all failing BEFORE any seal, all undiagnosed:
 - **Do not assume these are regressions.** This lane had never been run; a stale expectation is at
   least as likely, and two of the three have that shape.
 
+### `DOD-M15-JCONTENT-DELIVERY-1` — five message-delivery assertions in `j-content`
+**POST-LAUNCH under the frozen gate (§0z.4)** — not a security hole a customer reaches. **BUT SEE
+THE FLAG BELOW: if these are real rather than stale, they touch the advertised core value and are
+Andre's to reclassify.** I am not diagnosing them; the freeze says record and move.
+
+**Half the file passes**, including transport deposit, send-park, offline recover, startup-flush
+park, and the self-ordering frame. The seal half is FIXED — the close-contract conversion landed and
+the straggler test now runs THROUGH the seal before failing, where before it died at the close.
+
+The five, verbatim, all about message delivery rather than sealing:
+- *"only the honest entry is accepted: expected +0 to be 1"*
+- dedup — timed out after 15s waiting for `session.content.received`
+- ACK ladder — timed out after 12s waiting for `content.delivery.acked`
+- auto-recover — expected the recover log to match `"recovered":1`
+- *"straggler refused by the sealed-session guard"* (this one now reaches the seal first)
+
+- **⚠️ THE FLAG.** *"two agents connect and communicate"* is the launch intent in
+  `.claude/CLAUDE.md`, and three of these are delivery, dedup and acknowledgement — the mechanics of
+  that sentence. If they are genuine regressions they are not post-launch material. **They are here
+  because the gate is frozen and BLOCKS is Andre's to grant, not because I judged them harmless.**
+- **Equally, do not assume they are regressions.** This lane had never been run, and the same
+  file already yielded one assertion that passed VACUOUSLY (`undefined === undefined`) and two stale
+  contracts. A timeout waiting for a log event is exactly the shape a renamed event produces.
+- **Cheapest first step:** check whether `session.content.received` / `content.delivery.acked` are
+  still the emitted event names. A renamed event explains two of the five at zero cost, and the
+  taxonomy has moved before.
+
 ### `DOD-M15-TOOLDESC-SCAN-1` — The claim scanner can see MCP tool descriptions
 **POST-LAUNCH** (§0z.1): the launch risk is whether the shipped descriptions are HONEST, and
 `DOD-M15-TIERTEXT-1` audits them by hand in this milestone. This line is the durable control that
