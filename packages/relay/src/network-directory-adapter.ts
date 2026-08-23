@@ -24,6 +24,32 @@ const CBOR_ENC = new Encoder({ useRecords: false, mapsAsObjects: false });
 const DIRECTORY_RELAY_PROTOCOL_ID = "/cello/directory-relay/1.0.0";
 
 /**
+ * Build the `seal_submission` frame the directory receives.
+ *
+ * ⚠️ EXTRACTED SO IT CAN BE TESTED THROUGH — `DOD-M15-SEALWIRE-1` bullets 3+4, review H1. The frame
+ * was built inline, so the only test of the relay→directory hop round-tripped through the TEST
+ * FILE's encoder instead of this one. They are not the same: this uses
+ * `{useRecords: false, mapsAsObjects: false}` and the test's used `{tagUint8Array: false}`, which
+ * differ in both options that matter — 334 bytes versus 315, a plain CBOR map versus cbor-x's record
+ * extension, and `Uint8Array` versus `Buffer` on the far side.
+ *
+ * So the test proved cbor-x can round-trip a typed array to itself, and proved nothing about whether
+ * `seal_submission` carries `content_bytes`. Mapping the field out of `sealData.leaves` right here
+ * would have left it green.
+ *
+ * Exported for that test alone; there is one production caller, immediately below.
+ */
+export function encodeSealSubmission(sessionId: Uint8Array, sealData: SealData): Uint8Array {
+  return CBOR_ENC.encode({
+    type: "seal_submission",
+    session_id: sessionId,
+    leaves: sealData.leaves,
+    merkle_root: sealData.merkle_root,
+    seq_count: sealData.seq_count,
+  }) as Uint8Array;
+}
+
+/**
  * Render whatever was thrown into a reason an operator can act on.
  *
  * `CelloNode` does NOT throw Errors — it throws structured plain objects:
@@ -688,13 +714,7 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
      */
     if (!this.#node) return { ok: false, kind: "unreachable", reason: "directory_unavailable" };
 
-    const frame = CBOR_ENC.encode({
-      type: "seal_submission",
-      session_id: sessionId,
-      leaves: sealData.leaves,
-      merkle_root: sealData.merkle_root,
-      seq_count: sealData.seq_count,
-    }) as Uint8Array;
+    const frame = encodeSealSubmission(sessionId, sealData);
 
     // Whether the frame reached the wire. A pre-send failure proves nothing was decided; a
     // post-send one does not (review F2).

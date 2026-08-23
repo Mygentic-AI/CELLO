@@ -97,7 +97,14 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4 (pass 2, F-3): content_bytes is shape-c
     expect(decodeInboundSignalingFrame(unilateralFrame(42))).toBeNull();
   });
 
-  it("★★ THE RELAY'S OWN LEAF SHAPE IS ACCEPTED — the hop that now REFUSES rather than degrades", () => {
+  it("★★ BOTH BYTE SHAPES ARE ACCEPTED — the hop that now REFUSES rather than degrades", () => {
+    /**
+     * ⚠️ NAMED FOR WHAT IT CHECKS. This was called "the relay's own leaf shape is accepted", and
+     * review pointed out that `validateSealSubmissionLeaves` never reads `s2` or `structure1_cbor`
+     * at all — the test passes identically with both deleted. It gates `kind` and `content_bytes`
+     * and nothing else, then returns `raw` as an unchecked cast, and the DOWNSTREAM does read `s2`.
+     * Calling it shape validation invites someone to trust it for a shape it never inspects.
+     */
     /**
      * ⚠️ THE OTHER HALF OF A HOP NOTHING COVERED, and its failure mode changed when the relay
      * started sending the field.
@@ -112,10 +119,22 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4 (pass 2, F-3): content_bytes is shape-c
      * the whole submission, the directory answers an error, and the relay treats any directory answer
      * as terminal. **A mismatch destroys the seal rather than producing `not_carried`.**
      *
-     * `Buffer` on purpose: cbor-x decodes byte strings to `Buffer`, not `Uint8Array`, so a validator
-     * that checked `instanceof Uint8Array` alone would refuse every honest relay frame. (`Buffer`
-     * extends `Uint8Array`, so it passes — asserted rather than assumed, because that is the exact
-     * shape a decoder hands over and the exact assumption that would have been wrong.)
+     * ⚠️ MY COMMENT HERE WAS EXACTLY INVERTED, AND THE INVERSION WAS THE DANGEROUS DIRECTION.
+     *
+     * It said `Buffer` is *"the exact shape a decoder hands over"* and that checking
+     * `instanceof Uint8Array` alone would refuse every honest frame. Traced, and the truth is the
+     * other way round: the relay's `toUint8Array` normalises a `Buffer` to a plain `Uint8Array`
+     * before it is ever stored, the adapter's encoder tags it as a typed array, and the directory's
+     * decoder yields a **`Uint8Array` — never a `Buffer`**. There is no restore path that could
+     * reintroduce one; relay session state is purely in memory.
+     *
+     * So the honest relay ALWAYS sends `Uint8Array`, and pinning only the `Buffer` arm meant a future
+     * "simplification" to `if (!Buffer.isBuffer(cb))` would refuse **every real seal** while this test
+     * stayed green — on the one hop where a refusal destroys the seal instead of degrading to
+     * `not_carried`.
+     *
+     * Both arms are asserted now, and the honest one is named. `Buffer` remains valid because it
+     * extends `Uint8Array`; it is the tolerated shape, not the expected one.
      */
     const payload = encodeSealPayload({
       session_id: new Uint8Array(16).fill(0x11),
@@ -123,15 +142,23 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4 (pass 2, F-3): content_bytes is shape-c
       close_timestamp: 1_700_000_000_000,
       attestation: "PENDING",
     });
-    const relayShaped = [
-      { kind: "msg", s2: {}, structure1_cbor: Buffer.from([1, 2, 3]) },
-      { kind: "ctrl", s2: {}, structure1_cbor: Buffer.from([4, 5, 6]), content_bytes: Buffer.from(payload) },
-    ];
-    const verdict = validateSealSubmissionLeaves(relayShaped);
+    // THE HONEST PATH: a plain Uint8Array, which is what the relay's normaliser produces and what
+    // the directory's decoder yields. If only one arm can be pinned, it is this one.
+    const honest = validateSealSubmissionLeaves([
+      { kind: "msg", s2: {}, structure1_cbor: new Uint8Array([1, 2, 3]) },
+      { kind: "ctrl", s2: {}, structure1_cbor: new Uint8Array([4, 5, 6]), content_bytes: new Uint8Array(payload) },
+    ]);
     expect(
-      verdict.ok,
-      `a leaf set of exactly the shape the relay sends must be accepted: ${JSON.stringify(verdict)}`,
+      honest.ok,
+      `a Uint8Array payload is what every honest relay sends and MUST be accepted: ${JSON.stringify(honest)}`,
     ).toBe(true);
+
+    // AND the tolerated shape, so a validator narrowed to Uint8Array-only does not start refusing a
+    // Buffer that some future caller hands over. Buffer extends Uint8Array, so both are admissible.
+    const tolerated = validateSealSubmissionLeaves([
+      { kind: "ctrl", s2: {}, structure1_cbor: Buffer.from([4, 5, 6]), content_bytes: Buffer.from(payload) },
+    ]);
+    expect(tolerated.ok, "a Buffer must also be accepted — it IS a Uint8Array").toBe(true);
   });
 
   it("★★ the BILATERAL path refuses the same input, by name — the two must not disagree", () => {

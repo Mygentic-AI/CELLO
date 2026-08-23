@@ -27,6 +27,8 @@ import {
 } from "@claude-flow/testing";
 import { createHash, randomBytes } from "node:crypto";
 import { encodeSealPayload } from "@cello-protocol/protocol-types";
+import { encodeSealSubmission } from "../network-directory-adapter.js";
+import type { SealData } from "../relay-types.js";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import {
@@ -367,8 +369,22 @@ describe("DOD-M15-SEALWIRE-1: a carried SEAL payload reaches the seal data", () 
      * So the bytes are run through the real encoder and the real validator, rather than trusted to
      * survive because every other byte field on this frame does.
      */
-    const encoded = CBOR_ENC.encode({ leaves });
+    /**
+     * ⚠️ THROUGH THE PRODUCTION FRAME BUILDER — review H1. This encoded with THIS FILE's encoder,
+     * which is configured differently from the one that actually sends: `{tagUint8Array: false}` here
+     * versus `{useRecords: false, mapsAsObjects: false}` in the adapter. Different bytes, different
+     * framing, and a different type on the far side.
+     *
+     * So it proved cbor-x round-trips a typed array to itself, and nothing about whether
+     * `seal_submission` carries the payload — mapping `content_bytes` out of `sealData.leaves` in the
+     * adapter would have left this green. `encodeSealSubmission` is now exported for exactly this.
+     */
+    const encoded = encodeSealSubmission(sessionId, (sealData as { data: SealData }).data);
     const roundTripped = (decode(encoded) as { leaves: Array<{ kind: string; content_bytes?: Uint8Array }> }).leaves;
+    expect(
+      roundTripped.length,
+      "the frame must carry every leaf — a builder that dropped them all would satisfy the checks below vacuously",
+    ).toBe(leaves.length);
     /**
      * The relay half of the hop only. The DIRECTORY's validator cannot be imported here — the relay
      * does not depend on the directory and must not start to — so the other half is asserted in

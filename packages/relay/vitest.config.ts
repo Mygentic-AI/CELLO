@@ -15,8 +15,14 @@ export default defineConfig({
      * with `Test timed out in 5000ms`, which names where it surfaced. So a "fix" for an exit-point
      * label quietly replaced a cause with an exit-point label.
      *
-     * 30 s matches the other two packages. This raises the CEILING; it does not lengthen any test —
-     * every read here still has its own, shorter deadline, and those are what should fail.
+     * 30 s matches the other two packages, and `hookTimeout` is untouched at its 10 s default in all
+     * three.
+     *
+     * ⚠️ IT DOES NOT FOLLOW THAT EVERY READ HAS ITS OWN DEADLINE — this said so and it is false.
+     * `readDecoded()` carries none and is used ~105 times across nine relay test files, including
+     * three times in the wire-hop test. For those the runner IS the deadline, and it just moved from
+     * 5 s to 30 s. The cost is diagnostic latency on a future hang, which is the right trade for
+     * making a real read deadline reachable — but it is a cost, and the previous sentence hid it.
      */
     testTimeout: 30_000,
   },

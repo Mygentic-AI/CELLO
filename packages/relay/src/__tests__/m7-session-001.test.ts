@@ -339,14 +339,33 @@ describe("AC-002: relay emits session_interrupted on idle timeout", () => {
      * a narrative: a trend from 2.1 → 3.4 → 7.9 s is a load problem arriving, and a cliff is
      * something else. My "event-loop stall" was a hypothesis stated as fact — this measures it.
      */
+    /**
+     * ⚠️ THE MEASUREMENT WAS ON THE WRONG PATH — review H3, and it is the third comment of mine this
+     * milestone that claimed a capability the code did not have.
+     *
+     * It computed the elapsed time AFTER the await and put it in an `expect` message. That renders in
+     * exactly one case — a frame arriving inside the deadline with the wrong `type` — where elapsed
+     * time is not the story. On a green run `expect` messages are invisible, so the "trend across
+     * runs" the comment promised could never be observed. And on the TIMEOUT, which is the case the
+     * number exists for, `readDecodedWithTimeout` REJECTS: the await throws, the line computing the
+     * elapsed time never runs, and the message never renders.
+     *
+     * So it is on the throw path now, where the number is actually wanted, alongside the three bounds
+     * that decide the outcome — the relay's threshold, this read's deadline, and the runner's ceiling
+     * — because "late" means nothing without knowing what it was late against.
+     */
     const idleStart = Date.now();
-    const frame = await rA.readDecodedWithTimeout(8000);
-    const idleElapsedMs = Date.now() - idleStart;
-    expect(
-      frame["type"],
-      `idle frame arrived after ${String(idleElapsedMs)}ms (threshold 100ms). If this number is ` +
-        `climbing across runs, the relay suite's load is the story; a cliff is something else.`,
-    ).toBe("session_interrupted");
+    let frame: Record<string, unknown>;
+    try {
+      frame = await rA.readDecodedWithTimeout(8000);
+    } catch {
+      throw new Error(
+        `no idle frame after ${String(Date.now() - idleStart)}ms — relay idle threshold 100ms, ` +
+        `read deadline 8000ms, runner ceiling 30000ms. A 100ms timer this late is a load problem ` +
+        `or a defect, and the three bounds above are what tell them apart.`,
+      );
+    }
+    expect(frame["type"]).toBe("session_interrupted");
     expect(frame["reason"]).toBe("timeout");
 
     sA.close().catch(() => {});
