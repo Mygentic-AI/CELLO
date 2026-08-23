@@ -378,8 +378,20 @@ ledger in the DoD: one row per claim, its current text, where it appears, and it
 >    eats is usually something added *after* the last commit, in a file you were not mutating.
 >    **By explicit path** — `git add -A` in a shared worktree is its own way to lose the other lane's
 >    work.
-> 2. **Refuse to run against a dirty tree.** `git diff --quiet || { echo DIRTY; exit 1; }` at the top
->    of the loop. One line; it closes the whole lost-work class.
+> 2. **Refuse to run against a dirty tree.** `git status --porcelain -- <paths> | grep -q . && { echo
+>    DIRTY; exit 1; }` at the top of the loop.
+>    > **Reviewed by `CELLO_Coder_1`, and the original one-liner was `git diff --quiet`, which is
+>    > weaker than it looks.** `git diff` compares the WORKTREE to the INDEX, so it is silent on work
+>    > that is `git add`ed and not committed, and on untracked files. A restore written
+>    > `git checkout -- <path>` reads from the index and staged work survives; one written
+>    > `git checkout HEAD -- <path>` does not, and the guard would have said CLEAN either way.
+>    > `git status --porcelain` covers staged, unstaged and untracked in one read.
+>    >
+>    > **And the claim is bounded, per `CELLO_Support`'s own doubt, which was right:** this closes the
+>    > lost-work class **for a loop that restores with `git checkout`**. A loop that restores with
+>    > `git stash` can still lose work by never popping, and a loop that restores with `git clean`
+>    > destroys untracked files the check merely observed. The precondition is necessary, not
+>    > sufficient — rule 4 is what catches the rest.
 > 3. **Print a BASELINE result before the first mutant, and compare against it.** A loop that
 >    executes zero tests prints nothing, and nothing reads exactly like a pass — five mutants were
 >    once reported green having run no tests at all (zsh does not word-split an unquoted `$T`
@@ -389,6 +401,10 @@ ledger in the DoD: one row per claim, its current text, where it appears, and it
 >    argument often leaves an unused variable, the gate goes red for that, and you record coverage
 >    you do not have. If the mutation does not survive compilation, widen it until it does, or it
 >    proves nothing.
+>
+> **Why it lives in §2 and not §5** (`CELLO_Support` asked; `CELLO_Coder_1`'s call): the loop lives
+> here, next to the hollow-test box it serves, and splitting a rule across two sections is how the
+> two halves drift apart. §5 carries a one-line pointer instead of a copy.
 
 1. **Find the red** — lowest non-✅ DoD line in the active tier. Don't skip ahead.
 2. **State the target** — one sentence of observable behavior, PLUS expand the full DoD line (every
@@ -732,6 +748,9 @@ relocates trust rather than closing it), then the rest of Phase 1.
 
 ## 5. Hard rules (non-negotiable)
 
+- **A MUTANT IS NOT CAUGHT UNTIL IT HAS BEEN RE-RUN ALONE AND SEEN RED, and the loop must refuse a
+  dirty tree.** The full four rules and why the loop has failed eight times live in §2, next to the
+  hollow-test box — **a pointer here, not a copy**, so the two cannot drift apart.
 - **ABSENT IS NOT FINE.** A guard with missing input REFUSES — loudly, naming its cause. Missing,
   malformed and mismatched share one path.
 - **ERRORS NAME THEIR CAUSE, NOT THEIR EXIT POINT — and downstream never overwrites upstream.**
