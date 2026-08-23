@@ -1585,8 +1585,43 @@ Relay-audit Decision 5(b), with the PQ hook built in from the start.
 - **The derivation accepts an additional shared secret from day one**, before there is a PQ
   contribution to put in it. Hybrid PQ then becomes mixing a second agreed secret into the same
   derivation — an addition, not a rewrite. Omitting the hook defeats the entire reason for the work.
-- **One agreement, two outputs:** the message-sealing key and the per-session content-hash salt.
+- **⚠️ "One agreement, two outputs" WAS WRONG — corrected by Andre 2026-08-23, before SEALWIRE
+  encoded anything.** The envelope key and the content-hash salt are TWO INDEPENDENT VALUES agreed in
+  the SAME exchange — not two outputs of one derivation.
+  **Why the original was wrong, recorded so nobody rebuilds the coupling:** they are unrelated goals
+  that merely both need a shared secret. The envelope key stops the relay reading messages in flight
+  and MUST be destroyed at close. The salt stops anyone holding stored hashes from confirming a
+  guessed message and MUST survive for the life of the session. **Deriving both from one secret ties
+  "must be forgotten" to "must be kept forever"** — and every consequence previously flagged (salt
+  epochs, per-leaf epoch attribution, lockstep switching) was a symptom of that single coupling, not
+  a real requirement.
+  Keep the MOMENT, drop the DERIVATION: one round trip, two independent values.
 - The parked-content seal (X25519 + HKDF + AES-256-GCM) is the working in-tree pattern to extend.
+
+### `DOD-M15-HASHCORRELATE-1` — ❌ A message hash does not identify the message across sessions
+Found by Andre 2026-08-23 and **verified against the code before recording**. Live today, previously
+written down nowhere, and a per-session salt fixes it as a side effect.
+
+- `wireContentHash(content) = SHA-256(0x00 ‖ content)` — **nothing session-specific enters it.**
+  Confirmed at the definition and at all six call sites: every one passes content alone. No session
+  id, no agent pubkeys, no salt.
+- So **the same message text produces the same 32 bytes in every conversation, between every pair of
+  agents, forever.** The exposure is not merely "a relay can spot repeats within one session": a
+  relay can **correlate the same message across different sessions and different agent pairs**, and
+  can build a table of common short messages once and read them everywhere.
+- **Chaining would not have fixed it**, and the record should say so because it is the natural first
+  idea: the adversary holds the previous hash, so they would simply compute `hash(previous ‖ guess)`.
+  Chaining hides repeats; it does not hide content.
+- **Message leaves are NOT chained** — they are independent leaves in a Merkle tree. *(Refinement
+  from the verification: `Structure2` does carry a `prev_root`, but it is the RELAY's running Merkle
+  root over prior leaf records, assigned by the relay — not a client-computed chain, and not part of
+  the content hash. So "not chained" is right about the hash; a reader who greps and finds
+  `prev_root` should not conclude otherwise.)*
+- The prev-hash chain that does exist is `doc_prev_hash` on **document envelopes** — a different
+  mechanism on a different object (`core/protocol-types/src/document-envelope.ts`).
+- **Fixed by Decisions Carried #8** (per-session salt) **and #9** (HMAC rather than
+  `SHA-256(salt ‖ message)`, which has a length-extension weakness). Recorded as its own line so the
+  exposure is on the record independently of the fix that closes it.
 
 ### `DOD-M15-SEALWIRE-1` — ❌ The receipt is bound to the transcript
 **One protocol change, not six. These cannot be split** — every one changes the same wire format or
@@ -1874,7 +1909,70 @@ Rulings that bind every line above. **Re-asking one is decision theatre** (M15-P
    agreement produces and the seal items cannot be split.
 3. **The unpublished investor and GTM material is not in M15.** Never made public, never sent;
    corrected after the milestone against what actually shipped.
-7. **The content salt is stored PER KEY EPOCH, not per session** (mine, 2026-08-23, §3a — this is
+8. **THE SESSION SALT: independently agreed, both sides contribute, persisted, one per session**
+   (Andre, 2026-08-23 — supersedes #7 and corrects the "two outputs" half of #6).
+
+   One exchange at session open agrees **two independent values**:
+   - **the envelope key** — ephemeral, destroyed at close, exactly as `KEYAGREE-1` built it;
+   - **the session salt** — agreed once, unchanged for the life of the session.
+
+   Neither derived from the other, neither from the same secret.
+
+   **BOTH SIDES CONTRIBUTE TO THE SALT AND TO THE ENVELOPE KEY. A requirement on both, decided, not
+   open.** Each side sends a random contribution
+   and the salt is derived from both in a fixed canonical order, so the two compute identical bytes.
+   **Not initiator-minted:** the client is open source and a user can modify their own build, so a
+   single minter can unilaterally destroy the property for BOTH parties — always send the same salt,
+   or a low-entropy one — and every conversation that client has becomes guessable by any relay
+   holding the hashes. The honest peer cannot detect it and never consented to it. Both-contribute
+   means **one honest participant is enough**, and each side can verify its own contribution was used.
+   Same principle as the sovereign-node rule: no single party can unilaterally break a guarantee.
+   Refuse a peer contribution that is all-zero or the wrong length, exactly as the key agreement
+   already refuses a degenerate peer key.
+   **For the ENVELOPE KEY the requirement is already met, and this records HOW so nobody assumes it
+   is met by accident.** X25519 ephemeral-ephemeral combines both sides' secrets: neither party can
+   compute the result alone, and an honest party's fresh ephemeral keeps it unpredictable to any
+   observer even if the peer reuses a fixed keypair. The one way a peer COULD have forced a
+   degenerate shared value — a small-order point driving the secret to all zeros — is refused by
+   `KEYAGREE-1`, loudly, per RFC 7748 §6.1. So the property holds and is enforced; it does not need a
+   second mechanism bolted alongside. **If that refusal is ever removed, this requirement fails with
+   it** — they are the same guarantee.
+
+   **The rest of the salt rules:**
+   - **PER SESSION, not per message.** A secret 32-byte salt already makes guessing infeasible;
+     per-message would only hide which messages *within* a session are identical, which is marginal
+     next to the count, timing, size and direction already visible. **Decided — do not re-raise.**
+   - **Agreed at session open, BEFORE the first leaf is hashed.** Every leaf uses the same salt.
+   - **PERSISTED in the session record.** On re-key after a restart: does this session already have a
+     salt? Yes → use it. No → agree one. If it is not stored the lookup fails, a fresh salt is minted,
+     and a restart silently splits the transcript — the exact defect being removed, triggered by a
+     crash instead.
+   - **NOT a key.** It decrypts nothing. Storing it forever costs and weakens nothing.
+   - **Exchanged agent-to-agent**, where neither the relay nor any directory sees it. The relay cannot
+     read agent content today, so this is an existing channel. It must NOT ride in anything a
+     directory brokers.
+   - **No epochs. No per-leaf salt attribution. One salt, one session.**
+
+9. **HMAC-SHA-256, not SHA-256(salt ‖ message)** (Andre, 2026-08-23). The naive concatenation has a
+   length-extension weakness; HMAC is the standard construction and the same shape to use.
+
+10. **A SALT MISMATCH MUST BE LOUD** (Andre, 2026-08-23). This failure is the least debuggable shape
+    there is — the send succeeds and the receiver discards silently (`wire-content-hash.ts`'s own
+    header says so, and it cost two real daemons to find once already). So both sides compare a
+    **fingerprint of the salt — never the salt** — at session start and refuse the session with a
+    named reason if they differ. No silent discard loop because one side's salt did not survive a
+    restart.
+
+7. **~~The content salt is stored PER KEY EPOCH, not per session~~ — RETRACTED 2026-08-23.**
+
+   **Superseded by Decision #8.** This was mine, and it was a correct answer to a question that
+   should never have existed: epochs were needed only because the salt was derived from the ephemeral
+   key, so re-keying moved the salt with it. Andre removed the coupling — the salt is now agreed
+   independently and persists for the life of the session — so there are **no epochs, no per-leaf
+   epoch attribution, and no lockstep switching**. Left visible rather than deleted, because a future
+   reader who re-derives the coupling will re-derive this too, and the retraction is the warning.
+
+   ~~Original text:~~ The content salt is stored per key epoch (mine, 2026-08-23, §3a — this is
    the open question raised under #6, ruled rather than left blocking. **Andre asked to be told:**
    this does not contradict anything he said; it answers the consequence he flagged.)
 
