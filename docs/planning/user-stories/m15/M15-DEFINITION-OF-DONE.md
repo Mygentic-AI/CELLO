@@ -2273,6 +2273,17 @@ root means. Both repos; version-bump ACs on both sides.
 - **The content hash is salted**, from the same handshake. It is currently an unsalted SHA-256 of the
   plaintext, so a relay holding the hashes can *guess* a short predictable message — "yes",
   "approved", a price, a name — and confirm the guess.
+  > **FALLOUT, found 2026-08-24 running the spine lane (CELLO_Support):** `j-persist` fails at
+  > *"transcript message must have a committed msg leaf"*. **Not a defect and not a persistence
+  > failure** — the three leaves are there and the count assertion passes. The journey computes
+  > `sha256(0x00 ‖ content)` in its own fixture (`content-seal-fixture.ts:51`) and the daemon now
+  > computes `hmac-sha256(salt, 0x00 ‖ content)` when the session has a salt, so the lookup misses.
+  > **The fix is NOT to re-derive the salted hash in the test.** Import the daemon's own
+  > `contentHashFor(content, { alg, salt })` from `wire-content-hash.ts`, so the journey and the
+  > product agree BY CONSTRUCTION rather than by a second implementation that can drift — the same
+  > mistake `j-trust`'s hand-copied envelope type made. **Left for the salting lane:** which alg
+  > applies to a given leaf depends on whether the session held a salt when that message was
+  > written, and that is this bullet's design rather than a guess the journey lane should make.
 - **The dead `seal_attempt` path is deleted** — handler, tests, and the relay test asserting the
   frame never appears. A fully written handler with no sender reads as abandoned work to anyone
   auditing a public repo.
