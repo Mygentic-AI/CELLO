@@ -22,6 +22,7 @@ import {
   startDaemon,
   provisionAgent,
   connectMcp,
+  awaitSealedRoot,
   cello,
   registerAgent,
   writeConsortiumManifest,
@@ -139,10 +140,19 @@ async function sealSession(connA: McpConn, connB: McpConn, pubB: string, daemon:
   const diag = `\ncloseA: ${JSON.stringify(closeA)}\ncloseB: ${JSON.stringify(closeB)}\n--- directory-0 seal ---\n${daemon.output.split("\n").filter((l) => /seal|frost|single/i.test(l)).slice(-12).join("\n")}`;
   expect(closeA.ok, `A close failed:${diag}`).toBe(true);
   expect(closeB.ok, `B close failed:${diag}`).toBe(true);
-  expect(closeA.sealed_root, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
-  expect(closeB.sealed_root, `both ends' sealed_root must be byte-identical:${diag}`).toBe(closeA.sealed_root);
-  expect(closeA.seal_type, `seal must be bilateral, not a unilateral fallback:${diag}`).not.toBe("unilateral");
-  return closeA.sealed_root!;
+  /**
+   * DOD-M15-CLOSEROOT-1: close returns a COMMITMENT, not a root. It was made non-blocking
+   * deliberately — its own guidance says the blocking version is "exactly how seventeen sessions
+   * were lost" — and returns `seal_status: "committed"` plus instructions to fetch the receipt with
+   * `cello_sealed_receipt`. Asserting `closeX.sealed_root` here was the pre-change contract.
+   */
+  const [rootA, rootB] = await Promise.all([
+    awaitSealedRoot(connA, sessionIdA, { label: "A sealed receipt" }),
+    awaitSealedRoot(connB, sessionIdB, { label: "B sealed receipt" }),
+  ]);
+  expect(rootA, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
+  expect(rootB, `both ends' sealed_root must be byte-identical:${diag}`).toBe(rootA);
+  return rootA;
 }
 
 describe("J-SIGN — T-of-N session seal across the consortium (DOD-SIGN-1)", () => {
