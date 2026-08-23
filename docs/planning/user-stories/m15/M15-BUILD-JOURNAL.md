@@ -103,49 +103,44 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
-> ### 🧊 THE GATE IS FROZEN (§0z.4). **Nothing you find enters the gate.** It goes to POST-LAUNCH
-> ### BACKLOG unless it is a security hole a customer actually reaches — and BLOCKS is **Andre's to
-> ### grant**, not yours to choose. Unclear no longer blocks. This is NOT permission to look less
-> ### hard: the discipline that found five false passes in a day is what he wants kept.
->
-> **PRIORITY: `SEALWIRE-1`'s remaining four bullets. Everything else waits.** That is Coder_1's Tier
-> 4 line — **ask which bullets are yours before touching it**; picking one blind is how two lanes
-> collide on one file. I have asked and am awaiting the split. **If nothing splits cleanly, clear red
-> spine journeys instead** — the spine lane is the evidence the milestone-close gate depends on, and
-> it is still the only thing between us and a close with no proof.
+> ### 🧊 GATE FROZEN (§0z.4). Findings go to POST-LAUNCH BACKLOG unless they are a security hole a
+> ### customer reaches. **BLOCKS is Andre's to grant, not yours.** Unclear no longer blocks.
+> ### Priority: `SEALWIRE-1` — bullets **5 (done)** and **8 (blocked on Coder_1's bullet 2)** are
+> ### mine; 3+4 are theirs. Otherwise: clear red spine journeys.
 
-- **⚡ POWER IS UNSTABLE.** Commit AND push after every change. Two pushes were rejected tonight by
-  Coder_1 pushing concurrently — `git pull --rebase` then push, and **verify your commit is on
-  `origin/main` afterwards** rather than assuming the rebase kept it.
-- **🐳 Docker went down mid-run** and a journey failed with *"the database system is shutting down"*.
-  That reads as a product failure and is not one. **Start Docker + `docker compose up -d` + `docker
-  start cello-portal-postgres` before any spine run**, or the results are noise.
-- **Closed tonight:** `MIGRATION-GUARD-1` ✅, `SPINE-LANE-1` ✅, `CLIJSON-1` ✅, `CHAINROUNDTRIP-1` ✅,
-  `CHAINDEBT-1` ✅.
-- **`SPINERED-1` — the spine lane had NEVER been run; 21/36 files red.** Receipt committed at
-  `receipts/2026-08-23_spine-lane-full-run.log` (56 minutes — **do not re-run to recover it**).
-  Triage: 5 were `CLIJSON-1` (fixed), 7 the portal DB (was stopped 11 days, now up), 5 one cascade,
-  5 the stale close contract, ~8 unexamined.
-- **`CLOSEROOT-1` — close returns a COMMITMENT, not a root**, deliberately: *"exactly how seventeen
-  sessions were lost when this call used to block."* Journeys must `awaitSealedRoot(conn, id)` from
-  `live-harness.ts`. **✅ `j-loopback`, ✅ `j-refresh` green on real binaries.** `j-legibility` +
-  `j-spine` converted, unrun. Coder_1 owns `j-unilateral` / `j-upgrade` / `j-upgrade-bilateral` (the
-  ~11-minute escalation — a different timing contract, not a conversion).
-- **⚠️ GREP FOR A SECOND STALE USE.** `j-loopback` had one 70 lines below the obvious one:
-  `const root = closeA.sealed_root!` — **the `!` turned `undefined` into the STRING `"undefined"`**
-  inside a SQL query, which matched nothing and surfaced as *"the bilateral seal must populate
-  conversation_seals"*. That reads as the directory failing to record a seal. The assertion is what
-  makes a missing value look like a wrong one, and only the second implicates a subsystem.
-- **`NORMHASH-1` — OPEN QUESTION, not a defect, and the most consequential thing I found.** The
-  gateway sanitiser folds `…`→`...` via NFKC as the confusables defence. **Correct; must not be
-  weakened.** Unknown: whether the seal hashes the sender's pre-sanitisation bytes or the receiver's
-  post. If they differ, **any message with a foldable character makes the two trees disagree and the
-  session cannot seal bilaterally.** `j-loopback` is plain ASCII so nothing folds — **it is not
-  evidence.** One test answers it. If they DO diverge the fix is Andre's, not a lane's.
-- **RULE EARNED THE HARD WAY, five times today:** a checker whose negative path has never been
-  exercised is indistinguishable from one that cannot fail. §0z.3 — *make it fail on purpose, AND
-  confirm it failed for the reason you think.* My own instance: I grepped for a marker vitest does
-  not emit and reported "zero failures" when there were 21.
+- **⚡ COMMIT AND PUSH AFTER EVERY CHANGE.** Power has already failed once. Pushes get rejected when
+  the other lane pushes concurrently — `git pull --rebase` then push, and **verify the commit is on
+  `origin/main` afterwards** rather than trusting the rebase.
+- **🔌 THE SPINE LANE BINDS FIXED PORTS — ONE RUNNER ONLY.** A second run dies `EADDRINUSE :::65471`
+  and reports as *skipped with a hook timeout*, which reads as flaky and is not. Coder_1 handed me
+  the slot; ask before taking it. Start Docker + `docker compose up -d` + `docker start
+  cello-portal-postgres` first or results are noise.
+- **🚨 THE BIGGEST CORRECTION OF THE NIGHT, AND IT GOVERNS HOW TO READ THE RECEIPT.** *"A test that
+  asserts X is red"* only means *"X is broken"* **if the test reached X.** **EIGHT journeys** —
+  `j-persist`, `j-refresh`, `j-relaysig`, `j-remove`, `j-sign`, `j-suspend-tofn`, `j-tofn`,
+  `j-tofn-dkg` — died inside `register-agent` on `CLIJSON-1` before reaching their assertions.
+  **I reported the sovereign-node quorum invariant as failing. It was never tested.** Every
+  pre-fix characterisation of those eight is void; re-run before reasoning from any of them.
+- **DONE tonight:** `CHAINDEBT-1`, `CHAINROUNDTRIP-1`, `MIGRATION-GUARD-1`, `SPINE-LANE-1`,
+  `CLIJSON-1`, `NORMHASH-1` ✅. `SEALWIRE-1` bullet 5 (received half; sent half ruled
+  not-worth-its-cost). `REFUSED-INBOUND-SILENT-1` + `UNWITNESSED-1(b)` implemented.
+  `RELAYAUTH-1` liveness scoping implemented.
+- **GREEN journeys:** `j-loopback` (now carries `…` as the `NORMHASH` guard — **do not tidy it to
+  ASCII**), `j-refresh`, `j-legibility`, `j-trust`, `j-end` 9/10, `j-spine`'s seal tests.
+- **FOUR CONFIRMED DEFECTS, all POST-LAUNCH by the freeze and NOT by severity:**
+  1. `SAMEOP-FALSEPOS-1` — a **stranger's** endorsement is flagged self-dealing. Fails OPEN on trust
+     while looking closed. Fixture exonerated by its own passing assertion; display + mint paths
+     ruled out.
+  2. `RELAYSEQ-UNSIGNED-1` — dedup decides append-or-not on a relay position **nobody signs**.
+     Suppression is safe; DUPLICATION is not, and it strands the two trees silently.
+  3. `REVOKED-READS-OFFLINE-1` — a retired agent reads as *"not currently online, ask them to bring
+     it online"*. The revoked check exists and is **shadowed** by discovery.
+  4. `RELAYAUTH-1`'s oracle — **the existing test ASSERTED the leak.** A test defending a
+     vulnerability is worse than none: tightening it looks like a regression.
+- **THE RULE EARNED REPEATEDLY:** a checker whose negative path was never exercised is
+  indistinguishable from one that cannot fail. §0z.3. It caught me on my own dedup test (inert until
+  I broke the code), and I nearly shipped a bullet-8 assertion that would have reddened every
+  journey with *"the certificate does NOT cover this party's own tree"* — alarming, and false.
 
 ## Entry 0 — Milestone setup (2026-08-21)
 
