@@ -5908,3 +5908,86 @@ pinning the version a test names in its own title before asserting anything that
    one test and fails loudly the day the premise changes.
 4. **`cause` is a contract.** A field documented as machine-readable stops being one the moment a
    sentence goes in it, and every caller downstream silently loses a distinction.
+
+---
+
+## Entry 51 — the line that decides whether the feature can ever turn on was tested by nothing
+
+`DOD-M15-SEALWIRE-1` bullet 6, B2b-2, constraints 1/2/5 — the flip itself, and its review pass.
+
+### What shipped
+
+`contentHashForSession` consults the session salt. A session holding an agreed salt hashes under
+`hmac-sha256-salt-v1`; one without hashes byte-identically to every published build. The function is
+**async**, and that is load-bearing: the first send waits for an agreement that is genuinely in
+flight, bounded at five seconds.
+
+**Constraint 2 is what makes the feature exist**, and it is not obvious. The agreement runs on peer
+connect; the operator's first message is usually already moving; it hashes unsalted; and that first
+unsalted hash closes adoption for the life of the session. Without the wait, *every* session would
+fall back permanently while every log line about it stayed true.
+
+The wait lives inside the hash function rather than at the four call sites for the same reason F4
+made `contentHashAlg` required rather than defaulted: a dropped `await` is a typecheck error, a
+forgotten separate `awaitSaltSettled()` is a silent unsalted send.
+
+### Reviewer verdict, quoted
+
+> **SPEC: FAITHFUL** (constraints 1, 2, 5 all implemented; "per peer" vs "per session" is a
+> distinction without a difference for a 1:1 session)
+> **NO SILENT FALLBACKS** — the fallback is announced, the timeout is announced, the refusal is
+> announced, and no HIGH-danger silent substitution is present
+> **ERROR SUBSTITUTION FOUND** … **[blocking]**
+> **HOLLOW TESTS FOUND** — `#sendSaltFrame:9372`, the only production path that registers a pending
+> agreement, is exercised by nothing … Deleting line 9372 leaves the suite green **[blocking]**
+
+### ⚠️ The blocking finding that matters most, and why my mutation pass missed it
+
+`FakeNode.onPeerConnect(_h) {}` **discarded the handler**. So the daemon's peer-connect path ran in
+no daemon test, and the one line that registers a pending salt agreement could be deleted with the
+entire suite green.
+
+I ran eight mutants on this unit and none of them found it. The reviewer's diagnosis is exact:
+
+> Your eight-mutant pass measured `#saltForHashing`'s wait, which the seam genuinely exercises; it
+> did not measure whether anything ever puts a session into the state the seam fakes. That is the
+> mutant that matters most, because it is the one that decides whether the feature ever turns on in
+> production — **the same class of miss the unit was written to fix.**
+
+That is the third time today, and it is the sharpest instance: **I mutated the consumer of a state
+and never the producer of it.** A seam that fakes a state is not neutral — it silently substitutes
+for the only code that creates it, and every test built on the seam is blind to that code's absence.
+
+### The finding I had asked them to attack, coming back the other way round
+
+I asked the reviewer to attack `#hashedWithoutSalt` for being set too LATE. It is set too **EARLY**.
+Three `cello_send` paths compute the hash and then send nothing — a sibling holding the in-flight
+claim, the frontier moving, and a non-durable failure whose bytes go to a queue with no production
+consumer. In all three the session was permanently unsalted for a message that exists **nowhere**.
+And the new five-second wait made two of them *more* likely, because it widens the interval the
+frontier re-check exists to watch.
+
+### And the surviving mutant was better than my code
+
+I defended not-settling the waiter on a failed persist **twice**, and both defences were wrong. The
+second claimed the remaining bound gave a repair a chance to land; the review showed it essentially
+cannot, because that branch returns *before* the announce and all five `#sendSaltFrame` callers are
+triggered by a connect or an inbound frame. Only a counterparty reconnect inside those seconds could
+do it.
+
+The real trade was: a rare reconnect-within-five-seconds repair, against **five seconds of visible
+latency on the operator's first message** plus a diagnosis blaming their counterparty for our own
+disk failing. The repair loses. The code now does what the mutant did.
+
+### Rules earned
+
+1. **Mutate the PRODUCER of a state, not only its consumer.** A test seam that installs a state
+   stands in for the only production code that creates it, and nothing built on the seam can see
+   that code disappear.
+2. **A test seam obliges you to ask what it replaced.** `markSaltAgreementPendingForTest` was
+   correctly built — it delegates to the same private registration — and still left the registration
+   itself uncovered. Correct construction is not coverage.
+3. **When you ask a reviewer to attack a claim, they may find the opposite defect.** I asked whether
+   adoption closed too late; it closed too early, on three paths I had not enumerated.
+4. **A surviving mutant may be an improvement.** Before defending one, ask what it would cost the
+   operator — twice I defended a five-second stall and a misdirected diagnosis.
