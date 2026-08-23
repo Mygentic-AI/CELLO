@@ -977,13 +977,14 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > | `j-relaysig` | ✅ — after fixing a call to a command that had been renamed |
 > | `j-refresh` | ✅ |
 > | `j-remove` | 2/3 — the third is `REVOKED-READS-OFFLINE-1`, a real finding that names itself |
-> | `j-persist` | ✗ **not a persistence failure** — the leaves are there; the journey computes the pre-salt hash |
+> | `j-persist` | ✅ — fixed by the salting lane; **now also proves the session salt is agreed BEFORE the first leaf is hashed**, which nothing previously tested |
 > | `j-suspend-tofn` | ✗ **not a kill-switch failure** — the test encodes T=3; we ship T=2 |
 >
 > **So of the eight I characterised as "the floor is broken" — including the two I reported as the
-> sovereign-node invariant failing — NONE was a product defect.** Seven of those properties are now
-> positively PROVEN rather than merely un-disproven, which is a stronger position than the lane was
-> in before any of this.
+> sovereign-node invariant failing — NONE was a product defect.** **SEVEN of the eight are now
+> GREEN**, and the eighth (`j-suspend-tofn`) needs its premise reworked for T=2 rather than fixed.
+> Those properties are now positively PROVEN rather than merely un-disproven, which is a stronger
+> position than the lane was in before any of this started.
 >
 > **The re-runs ARE trustworthy**, because they happened after the fix: `j-refresh` ✅, `j-remove`
 > (real finding — `DOD-M15-REVOKED-READS-OFFLINE-1`), `j-relaysig` (real finding — a renamed command
