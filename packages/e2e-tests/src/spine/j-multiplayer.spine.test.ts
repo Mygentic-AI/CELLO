@@ -29,6 +29,7 @@ import {
   type Proc,
   type McpConn,
   CELLO_CLIENT_ROOT,
+  expectOwnTreeVerified,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
@@ -457,8 +458,22 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
         const rx = (await x.conn.call("cello_sealed_receipt", { cello_session_id: xs })) as Receipt;
         const ry = (await y.conn.call("cello_sealed_receipt", { cello_session_id: ys })) as Receipt;
         expect(rx.sealed_root, `${label}: ${x.name} has no sealed root`).toBeTruthy();
-        // Side to side, never one side's value against itself — the tamper-evidence claim.
-        expect(ry.sealed_root, `${label}: the two sides sealed different trees`).toBe(rx.sealed_root);
+        /**
+         * ⚠️ *"Side to side, never one side's value against itself — the tamper-evidence claim."*
+         * It is not the tamper-evidence claim — `SEALWIRE-1` bullet 8. Both values are read off the
+         * SAME certificate, so this stays green over a root covering a completely different leaf
+         * set. What it does prove, and is kept for, is that both sides received one certificate
+         * rather than two.
+         */
+        expect(ry.sealed_root, `${label}: the two sides received different certificates`).toBe(rx.sealed_root);
+        /**
+         * The tamper-evidence claim, made per side: each daemon checked the certified root against
+         * the leaves IT holds. This matters more here than anywhere else in the suite — one agent is
+         * in TWO concurrent sessions, so a certificate landing on the wrong session's tree is a live
+         * possibility rather than a theoretical one, and the equality above cannot see it.
+         */
+        await expectOwnTreeVerified(x.daemon, xs, { label: `${label}: ${x.name}` });
+        await expectOwnTreeVerified(y.daemon, ys, { label: `${label}: ${y.name}` });
         // MIXED: this pair carried an ordinary message AND document frames.
         expect(rx.leaf_count, `${label}: too few leaves to be a mixed tree`).toBeGreaterThan(2);
       }

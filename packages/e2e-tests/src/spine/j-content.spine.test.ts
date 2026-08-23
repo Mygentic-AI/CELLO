@@ -36,6 +36,7 @@ import {
   type SpineCluster,
   type Proc,
   type McpConn,
+  expectOwnTreeVerified,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 import { sealToRecipient, contentHashHex } from "./content-seal-fixture.js";
@@ -693,7 +694,24 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       awaitSealedRoot(connB, sessionId, { label: "B sealed receipt" }),
     ]);
     expect(rootA, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(rootB, `both sealed_root identical:${diag}`).toBe(rootA);
+    expect(rootB, `both sides received the same certificate:${diag}`).toBe(rootA);
+
+    /**
+     * AND EACH SIDE RECOGNISES THE CONVERSATION THE CERTIFICATE DESCRIBES — `SEALWIRE-1` bullet 8.
+     *
+     * The equality above is worth keeping and is not tamper-evidence: both roots are read off the
+     * SAME certificate, so it stays green over a root covering a leaf set neither party holds. This
+     * asserts each daemon's own verdict from comparing that root against the leaves IT holds —
+     * `cannot_judge` is not accepted, because that is the daemon saying it took the certificate
+     * without checking the content.
+     *
+     * ⚠️ THIS SESSION IS THE ONE WHERE IT MATTERS MOST IN THIS FILE. B's daemon was KILLED and
+     * restarted mid-session and its content came back through the park, so B's leaf set was rebuilt
+     * from durable state rather than accumulated in memory. A rebuild that dropped or reordered a
+     * leaf is exactly what the sealed-root equality cannot see and this can.
+     */
+    await expectOwnTreeVerified(daemonA, sessionId, { label: "A (after B's restart + park recovery)" });
+    await expectOwnTreeVerified(daemonB, sessionId, { label: "B (rebuilt from durable state)" });
 
     // HONEST seal: B reads its certificate and the actual per-party content frontier. B received
     // exactly one in-session message (msg1), so B's signed frontier reflects that — never more.

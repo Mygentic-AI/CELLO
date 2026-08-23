@@ -44,6 +44,7 @@ import {
   type SpineCluster,
   type Proc,
   type McpConn,
+  expectOwnTreeVerified,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
@@ -403,10 +404,30 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
     const receiptA = (await a.conn.call("cello_sealed_receipt", { cello_session_id: a.sessionId })) as Receipt;
     const receiptB = (await b.conn.call("cello_sealed_receipt", { cello_session_id: b.sessionId })) as Receipt;
     expect(receiptA.sealed_root, `A has no sealed root: ${JSON.stringify(receiptA)}`).toBeTruthy();
-    // THE PROPERTY THE WHOLE MILESTONE RESTS ON. Two independent daemons, each rebuilding from its
-    // own leaves, arriving at the same root over a tree that contains document traffic as well as
-    // messages. Compared side to side — never one side's reported value against itself.
-    expect(receiptB.sealed_root, "the two sides sealed different trees").toBe(receiptA.sealed_root);
+    /**
+     * ⚠️ THE COMMENT THAT STOOD HERE DESCRIBED A PROPERTY THIS CODE DOES NOT TEST — `SEALWIRE-1`
+     * bullet 8. It said *"two independent daemons, each rebuilding from its own leaves, arriving at
+     * the same root."* **Neither daemon rebuilds anything for this line.** Both read `sealed_root`
+     * off the same certificate, so the comparison is true whatever leaf set the directory certified
+     * — including one over a conversation neither party had. Bullet 8's words: *"every one stays
+     * green if the directory certifies a root over a completely different leaf set."*
+     *
+     * Kept, because it does prove something real and cheap: both sides received the SAME
+     * certificate rather than two different ones. That is just not tamper-evidence.
+     */
+    expect(receiptB.sealed_root, "the two sides received different certificates").toBe(receiptA.sealed_root);
+
+    /**
+     * AND HERE IS THE REBUILDING THE OLD COMMENT CLAIMED. Each daemon verified the certified root
+     * against the leaves IT holds, and said so. Asserted per side, from each side's own log —
+     * `cannot_judge` is not accepted, because that is the daemon saying it took the certificate
+     * without checking the content.
+     *
+     * This is the case the mixed tree makes worth having: document frames and an ordinary message
+     * in one tree, so a leaf-kind bug that dropped doc leaves from one side's view would show here.
+     */
+    await expectOwnTreeVerified(a.daemon, a.sessionId, { label: "A (mixed msg+doc tree)" });
+    await expectOwnTreeVerified(b.daemon, b.sessionId, { label: "B (mixed msg+doc tree)" });
     // MIXED, which is the case the doc leaf kind exists for: this session carried an ordinary
     // message AND document frames, and the seal covers both.
     expect(receiptA.leaf_count, `too few leaves to be a mixed tree: ${JSON.stringify(receiptA)}`).toBeGreaterThan(2);
@@ -740,14 +761,29 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
     const receiptA = (await a.conn.call("cello_sealed_receipt", { cello_session_id: a.sessionId })) as Receipt;
     const receiptB = (await b.conn.call("cello_sealed_receipt", { cello_session_id: b.sessionId })) as Receipt;
     expect(receiptA.sealed_root, `A has no sealed root: ${JSON.stringify(receiptA)}`).toBeTruthy();
-    // THE ASSERTION THIS FILE EXISTS FOR. A tree containing a refusal must still produce one root
-    // both parties compute independently. If a rejection leaf were counted by one side and not the
-    // other, this is where it shows — and nowhere else, because every other test's tree has no
-    // rejection in it.
+    /**
+     * ⚠️ AND THIS ONE COULD NOT HAVE SHOWN WHAT IT SAID IT SHOWS — `SEALWIRE-1` bullet 8.
+     *
+     * It claimed: *"if a rejection leaf were counted by one side and not the other, this is where it
+     * shows — and nowhere else."* It would not have. Both values come off the same certificate, so a
+     * rejection leaf counted by one side and not the other leaves this comparison equal and green.
+     * The one test in the suite whose tree contains a rejection was asserting the one thing that
+     * cannot detect a miscounted rejection.
+     *
+     * The equality is kept — same certificate, both sides — and the real check follows it.
+     */
     expect(
       receiptB.sealed_root,
-      "the two sides sealed different trees once a rejection was in one of them",
+      "the two sides received different certificates once a rejection was in the tree",
     ).toBe(receiptA.sealed_root);
+
+    /**
+     * THE ASSERTION THIS FILE EXISTS FOR, now that it can be made. Each daemon checked the certified
+     * root against its OWN leaves — which is where a rejection leaf counted by one side and not the
+     * other actually surfaces, because the two sides' leaf sets would differ by exactly that leaf.
+     */
+    await expectOwnTreeVerified(a.daemon, a.sessionId, { label: "A (tree containing a rejection)" });
+    await expectOwnTreeVerified(b.daemon, b.sessionId, { label: "B (tree containing a rejection)" });
   }, 600_000);
 
   /**

@@ -396,10 +396,28 @@ describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fle
       // ── the ACTIVE-seal assertions, deferred from above ──────────────────────────────────────
       expect(ra.ok, `initiator close failed: ${ra.reason}`).toBe(true);
       expect(rb.ok, `responder close failed: ${rb.reason}`).toBe(true);
-      // Both parties must agree on the root. A seal where each side holds a different root is worse
-      // than no seal — it is two receipts that cannot both be true.
+      /**
+       * ⚠️ THIS PROVES BOTH SIDES GOT ONE CERTIFICATE — NOT THAT EITHER RECOGNISES THE
+       * CONVERSATION IT DESCRIBES. `DOD-M15-SEALWIRE-1` bullet 8.
+       *
+       * *"Both parties must agree on the root"* is true and worth keeping: two receipts that cannot
+       * both be true is a real failure and this catches it. But both values are read off the SAME
+       * certificate, so the comparison stays green over a root covering a leaf set neither party
+       * holds. Bullet 8's words: *"every one stays green if the directory certifies a root over a
+       * completely different leaf set."*
+       *
+       * ⚠️ AND THE PER-SIDE CHECK IS DELIBERATELY NOT ADDED HERE, which is the part worth stating.
+       * `expectOwnTreeVerified` reads each daemon's `session.sealed.root.checked` verdict from
+       * captured stdout, and this file spawns raw `ChildProcess` handles rather than the harness
+       * `Proc` — there is no `waitForLine` to hang it on. Plumbing log capture into the LIVE-GCP
+       * journey to gain an assertion the local journeys already make would be work spent on the one
+       * run that costs the most and happens least.
+       *
+       * `j-documents` and `j-multiplayer` carry the per-side check on the same seal path, against
+       * local binaries. If that path breaks, they go red first and for less money.
+       */
       expect(ra.sealed_root).toMatch(/^[0-9a-f]{64}$/);
-      expect(ra.sealed_root).toBe(rb.sealed_root);
+      expect(ra.sealed_root, "the two sides received different certificates").toBe(rb.sealed_root);
     },
     1_800_000,
   );
