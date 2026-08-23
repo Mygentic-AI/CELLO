@@ -1269,7 +1269,18 @@ lands mid-sweep.
   external one. That is a wide signature change and did not belong inside a hardening unit.
 - The same seam would let `DOD-M12B-SHUTDOWN-1`'s reconcile sweeper stop dialing on demand.
 
-### `DOD-M15-MANIFEST-EXPIRY-LIVE-1` — ❌ A running daemon notices its own manifest expiring
+### `DOD-M15-MANIFEST-EXPIRY-LIVE-1` — 🟡 A running daemon notices its own manifest expiring
+> **BUILT 2026-08-23, review in flight.** The window is enforced at STARTUP and nowhere else. The
+> reason it went unnoticed is that a SECOND expiry check exists and reads like coverage: the manifest
+> poll refuses to ADOPT an expired manifest — it checks the one being FETCHED, never the one held. So
+> a lapsed daemon keeps polling, keeps correctly refusing expired replacements, and keeps using the
+> dead anchor it already has.
+> **Decision (mine, logged): REPORT, DO NOT KILL.** Startup fails closed, which is the right place to
+> refuse. Killing a live daemon on a wall-clock boundary would hit every operator at once — they
+> share the bundled manifest's date — turning a rotation slip into a fleet-wide outage
+> mid-conversation. Runtime warns 7 days early, in the log AND the response.
+> **The guidance names the instinctive wrong move:** do not restart to clear it, because a restart
+> REFUSES to start and turns a degraded daemon into a dead one.
 Found by `DOD-M15-STALEROSTER-1`'s review, and **the inverse of where that unit put the hazard.**
 - Manifest expiry is checked **only at startup** (`verifyStartupManifest`), and the bundled-manifest
   path wires **no poll scheduler** at all.

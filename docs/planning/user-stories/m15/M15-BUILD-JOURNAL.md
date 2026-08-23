@@ -15,17 +15,19 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 27 ✅, 1 🟡 (carried half only), 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
-> **No unreviewed work.** `STALEROSTER-1` closed in Entry 34 — all fourteen findings fixed, verdict
-> quoted, gate green by EXIT CODE (4152 client tests, lint, typecheck, build).
-> `DEAD-WIRE-FIELD-1` is the remaining 🟡 and does NOT count against the WIP limit: its client half is
-> reviewed and closed (Entry 32), and it stays yellow only because the bilateral wire half is carried.
-> **A new line may start.**
+> ### 🟡 27 ✅, 2 🟡, 2 🅿️, 37 ❌. Both repos clean, pushed, on main.
+> **`MANIFEST-EXPIRY-LIVE-1` IS THE UNREVIEWED ONE** — built in `2a06915` + `8ed7123`
+> (cello-client), reviewer dispatched, verdict not in. Under the WIP limit the ONLY permitted work is
+> closing it. (`DEAD-WIRE-FIELD-1` is the other 🟡 and does NOT count — carried wire half only.)
+> Gate at build time: 4168 client tests, lint, typecheck, build — all by EXIT CODE.
 
-- **NEXT ACTION: pull ONE new ❌ line.** `FREEZE-STATUS-1` needs a client-side DB migration, which the
-  DoD says must be its own reviewed unit with an upgrade test against a populated pre-migration
-  database. `UNWITNESSED-1` needs a fixture that can attach a relay client. `MANIFEST-EXPIRY-LIVE-1`
-  (new, from Entry 34) is small and self-contained and may be the better next pick.
+- **NEXT ACTION: close `MANIFEST-EXPIRY-LIVE-1`**, then pull ONE new ❌ line. `FREEZE-STATUS-1` needs
+  a client-side DB migration in its own reviewed unit with an upgrade test against a populated
+  pre-migration database. `UNWITNESSED-1` needs a fixture that can attach a relay client.
+- **THE REVIEW ASK MATTERS AS MUCH AS THE BUILD.** Two units running, the review's real yield was my
+  own work, and the biggest finding both times came from telling the reviewer to attack a specific
+  CLAIM rather than to "review the diff". For `MANIFEST-EXPIRY-LIVE-1` I listed five factual claims
+  and said not to take them on trust, because the previous unit shipped two false ones.
 - **🚨 A PIPE EATS THE EXIT CODE. `pnpm run lint 2>&1 | tail -3 && git commit` reports `tail`'s
   status, not eslint's** — a lint error shipped that way on 2026-08-23. Gate with
   `cmd > /dev/null 2>&1 && echo CLEAN || echo FAILED`, never by eyeballing piped output.
