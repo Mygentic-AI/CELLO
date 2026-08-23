@@ -6279,3 +6279,70 @@ fine. Comparing the two signatures to **each other first** separates them.
    is not settled yet.
 4. **Check the DEFINITION against the PRODUCER.** The file defining the seal payload documented
    `0x00` where the producer uses `0x02`; I got it right only by reading the producer.
+
+---
+
+## Entry 56 — I counted leaves where I should have counted senders, and it produced two different bugs
+
+`DOD-M15-SEALWIRE-1` bullets 3+4, review pass 2 — the cap.
+
+### Reviewer verdict, quoted
+
+> **SPEC: DEVIATIONS FOUND** — F3's discriminant is computed on leaf count instead of distinct
+> senders; F4 is implemented on one of the two paths it claims. Neither is journaled as deliberate.
+> **SILENT FALLBACKS FOUND** — `directory-frames.ts:838` drops a malformed `content_bytes` and
+> reports the result as an un-deployed relay.
+> **ERROR SUBSTITUTION FOUND** — a party's SEAL retry surfaces as `ROOT_DISAGREES` … and a malformed
+> payload surfaces as `NOT_CARRIED` … Both send the operator to the wrong subsystem.
+> **HOLLOW TESTS FOUND** — not the three new ones (all three survive the revert test), but F4's fix
+> shipped with no test at all and reverts green.
+
+And, on whether the pass earned itself:
+
+> I am not rubber-stamping this one: the diff touches a verification boundary and I found three
+> things in it, **two of which are the same defect (sender-blind iteration) wearing different names.**
+
+### One confusion, two bugs
+
+The loop walked every ctrl leaf and incremented a counter, so it could not distinguish *two
+participants* from *one participant twice*.
+
+- **The false "both".** `seal-legibility.ts` documents in its own words that a party's SEAL retry can
+  sit in the log unremoved. `[ctrlA, ctrlA′, ctrlB-uncarried]` counted two carried payloads and
+  reported `coverage: "both"` — exactly the "half of this seal rests on one participant" the union
+  was introduced to prevent, restored by an ordinary retry, and trivially producible by a relay
+  duplicating a leaf, which costs it nothing and forges nothing.
+- **The retry accused as tampering.** A stale first SEAL commits to the root before a late in-flight
+  message; the retry commits after it. Walking in order hit the stale leaf first and answered *"the
+  relay's leaf set is not the conversation the participant had."* The relay was right and the leaf
+  was superseded — **pass 1's F2 arriving through the door pass 1's fix opened.**
+
+Keyed on sender now, last carried leaf per sender winning, which is the resolution
+`findSealCeremonyPair` already used for the ceremony pair. And the roster is enforced in-module when
+the caller supplies it, turning half the `PRECONDITION` block into code.
+
+### Two paths, opposite answers, same byte
+
+The unilateral parser took `toUint8Array` and spread it, so a string became **absent** and the frame
+was accepted — breaking the rule stated three lines above it — while the bilateral path refused the
+identical input by name. The silent-drop half is the worse one: absent surfaces as `not_carried`,
+whose guidance says *"the relay node is on an old build"*, sending an operator to compare versions
+with a relay that is on the new build and sending the field correctly.
+
+### And the accusation had lost its evidence
+
+The corroboration clause on `ROOT_DISAGREES` — *"the other participant signed the SAME root"* — could
+never print. Comparing inside the loop meant a genuine relay fault returns on the FIRST carried leaf,
+before anything else has been seen. Collect first, compare after.
+
+### Rules earned
+
+1. **Count the PRINCIPAL, not the artefact.** Two signatures from one party are one signature. Any
+   security count keyed on occurrences rather than identities is one retry away from being wrong.
+2. **A fix for "compare A before B" must be checked for the mirror.** Reordering fixed the case I had
+   and created its twin, and both were the same sender-blindness underneath.
+3. **A blocking finding closed with no test is not closed.** Pass 1's parser fix reverted green
+   across 1145 tests.
+4. **A fixture with one identity cannot test a two-identity property.** Every leaf used one pubkey, so
+   "the two participants disagree" modelled one participant signing twice — and the fixture could not
+   tell that from a retry, because neither could the code.
