@@ -6432,3 +6432,69 @@ relay receipt"* binding it. The stricter of the two was the side that had a rece
    shared stream the cost lands on conversations that had nothing to do with it.
 4. **A guard that can no longer fail is not automatically dead.** Say what job it still does, or the
    next reader deletes it for the job it no longer does.
+
+---
+
+## Entry 58 — a missing `await` in my own error reply was a remote process kill
+
+`DOD-M15-SEALWIRE-1` bullets 3+4, relay leg, review pass 2 — the cap.
+
+### Reviewer verdict, quoted
+
+> Two blocking findings remain, both in the H2 fix, both in `relay-node.ts`. Everything else is
+> non-blocking. I did not rubber-stamp: the H1 and H5 fixes hold up, the live test is real, and the
+> ceiling call is right.
+
+> **ERROR SUBSTITUTION FOUND** — `content_not_permitted` collapses nine causes and its `detail`
+> contradicts itself on the session-binding case. **[blocking]**
+> **HOLLOW TESTS FOUND — none.** All four new/changed assertions survive the revert test.
+
+### The one that could have taken the relay down
+
+I wrote `try { this.#sendFrame(...) } catch { }`. `#sendFrame` is `async`, so a synchronous throw
+inside it becomes a **rejected promise** — which that `catch` cannot see. Dead code claiming to
+handle precisely the failure it could not observe, nothing else handling it, and Node's default since
+v15 is to terminate the process.
+
+That it throws is documented, not inferred: libp2p's `MessageStream.send` throws when the send buffer
+is full or the stream is closed for writing. **Both are reachable by any authenticated client** — reset
+the stream immediately after a refused submit, or flood refused submits without draining. On a shared
+relay that is every session on the node, killed by one peer, **introduced by the fix I had just made
+for a different observability defect.**
+
+Every other `#sendFrame` call in that file awaits or attaches a `.catch()`. Mine was the anomaly. And
+lint could not have caught it: the config uses the non-type-checked preset, which excludes
+`no-floating-promises`.
+
+### One reason answering for nine conditions, contradicting itself on two
+
+`!parsed` catches every decode failure of a submit, and I replied `content_not_permitted` to all of
+them. Two produced a message that argues with itself:
+
+- **The session-binding case — the check the previous pass's own fix added.** A ctrl leaf whose
+  payload named a different session was told *"content_bytes is admissible on ctrl leaves only
+  (0x02); this frame declared leaf_kind 2."* Leaf kind 2 **is** ctrl. It named the one rule the author
+  had obeyed and said nothing about the mismatch actually detected.
+- **A submit carrying no content at all** — a short signature, an empty `structure1_cbor` — was
+  reported as a content-policy violation on a frame with no content in it.
+
+### And the text nobody could read
+
+The relay composes a `detail` for every `hash_submit_error`, and `relay-types.ts` states the
+invariant: *"`reason` is the class, `detail` is what happened."* **The client's only reader took
+`reason` and dropped `detail` on the floor.** So the invariant had never been true end to end, and two
+separate pieces of work were composing text that went nowhere — this unit's refusal detail, and
+`DOD-M15-TERMINAL-REASON-1`'s F6, where `detail` exists specifically to carry the *directory's* refusal
+cause out from behind a `seal_refused`.
+
+### Rules earned
+
+1. **An `async` call inside a `try/catch` without `await` is a lie in both directions** — the catch
+   cannot fire, and the rejection escapes to the process. Check the callee's signature before
+   trusting the guard around it.
+2. **When one branch catches N conditions, the reply must classify, not label.** The evidence to do
+   it was already in hand — the peek that produced the log line.
+3. **A message is not delivered until something reads it.** Assert the last hop, not the wire.
+4. **A bound must fit the honest case with margin.** I set a 32-byte cap on a logged frame type and
+   truncated a real one mid-word; the diagnostic then names a frame nobody can grep for, which is
+   most of the value of logging it.
