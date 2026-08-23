@@ -37,11 +37,36 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
-> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4403 client tests.
-> **PARTS A, B1, B2a, B2b-1 ALL CLOSED** (→ Entries 41–48; each spent its two-pass cap). Nineteen
-> blocking findings across ten passes, all fixed. Gate: 2801 daemon tests, lint, both typechecks.
-> **WIP is free: B2b-2 is the LAST unit of bullet 6** — the algorithm stops being `sha256`. Its six
-> constraints are written on the `SEALWIRE-1` line; read them, do not re-derive them.
+> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 2825 daemon tests.
+> **PARTS A, B1, B2a, B2b-1 CLOSED** (→ Entries 41–48). **B2b-2 — the last unit of bullet 6 — is
+> IMPLEMENTED IN FULL: all six constraints** (→ Entries 49, 50). **The algorithm is no longer
+> `sha256`: a session holding an agreed salt now hashes under `hmac-sha256-salt-v1`.**
+>
+> **⚠️ WIP IS NOT FREE. The flip (constraints 1/2/5) is UNREVIEWED — its review pass is out.** Do not
+> start another unit against it. Constraints 3, 4 and 6 are each reviewed or guard-only and closed.
+
+- **B2b-2 AS BUILT, so nobody re-derives it.** `contentHashForSession` is **async** now, and that is
+  load-bearing rather than incidental: the first send WAITS for an agreement that is genuinely in
+  flight (5s bound), because without the wait the feature can never turn on — the agreement runs on
+  peer connect, the first message hashes unsalted before it lands, and that first unsalted hash
+  closes adoption for the life of the session. Every session would fall back permanently while every
+  log line about it stayed true. The wait lives inside the hash function so a caller that drops the
+  `await` gets a **typecheck error**, not a silent unsalted send.
+- **A SESSION WITH NOTHING PENDING DOES NOT WAIT** (constraint 5). `#markSaltPending` is called from
+  `#sendSaltFrame` — a frame that actually left — never at session creation. A park-only session
+  never connects, never announces, and so never pays the bound.
+- **HASHING ITSELF CLOSES ADOPTION**, via `#hashedWithoutSalt`. `#saltAdoptionClosed`'s three counts
+  (leaves, held, in-flight) are ALL ZERO at the moment a session's first message is hashed — the leaf
+  lands a network round trip later. A contribution arriving in that window would be adopted and leave
+  the message already on the wire as the one unsalted leaf in a salted transcript.
+- **THE FALLBACK IS ANNOUNCED ONCE PER SESSION** (`session.content.unsalted`), never per message.
+- **⚠️ ONE MUTANT SURVIVES AND IS DOCUMENTED AS SURVIVING** — settling the wait `"agreed"` after a
+  FAILED persist. It is not a defect (same fallback either way, and `#persistSessionSalt` logs its
+  own failure); the un-settled waiter buys only the REMAINDER OF THE BOUND for a repair to land. The
+  comment that had claimed otherwise is corrected. Do not "fix" this by contorting a test.
+- **CONSTRAINT 4's ANSWER WAS THAT THE HAZARD CANNOT OCCUR.** The salt agreement and the v3 park
+  decoder are both in **no git tag**, so the interval build was never cut, and every published build
+  has neither. What shipped is the guard that keeps that true, not a handshake.
 
 - **TIER 4 IS IN PROGRESS. `SEALWIRE-1` bullets 1 + 2 are BUILT, REVIEWED, and their blocking
   findings fixed** — the directory certifies the content-hash root, and the client verifies it
