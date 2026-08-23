@@ -6538,3 +6538,44 @@ No fold happens between the two hashes. **The ordering is the load-bearing fact 
 it**, so `j-loopback`'s message now carries `…`: the journey that already asserted byte-identical
 roots is now the thing that catches a future reorder of the receiver's hash-check. Verified green
 with the fold in place.
+
+
+---
+
+## Entry S14 (CELLO_Support) — bullet 5: the received half is done, and the sent half is a different problem
+
+**RECEIVED messages now carry proof.** `#recordFrameOrdering` already verified the Structure-2
+signature against the pubkey inside the sender's own signed bytes, and already matched that signer
+to the session's counterparty — the strongest statement this daemon ever makes about who wrote
+something. It made that statement, used it to pick a sequence number, and **discarded it.** The row
+that outlived it stored a direction.
+
+The proof now reaches the row, and only on the verified path. Two soft paths ingest without a
+checkable record (no ordering record supplied; decode failed), and those rows say
+`local_session_state`. **A reader can tell a message whose author was PROVEN from one whose author
+was ASSUMED** — which is the bullet, and the reason `attribution` is NOT NULL: a nullable signature
+column alone leaves the two structurally identical, which is the defect rather than the fix.
+
+The test asserts the DISTINCTION rather than the value. A test checking only *"a verified row has a
+signature"* passes against a schema that stamps one onto every row regardless. Revert-tested.
+
+**MY OWN MIGRATION GUARD CAUGHT ME** — `transcript` is one of the seven rebuilt tables, so the new
+columns needed a second entry in the pinned DDL, and the inverse assertion said exactly that. Hours
+old, catching real work rather than a synthetic mutation. I also wrote the ALTERs as three literal
+statements rather than a loop, because a loop needs its own parser in the guard the way
+`retry_queue` does, while literals fall inside the generic one.
+
+### The SENT half is NOT a continuation of this, and I did not force it
+
+The transcript row for an outbound message is written at send time. The signature that would prove
+it does not exist yet — `structure1_cbor`/`structure2_cbor` come back from the RELAY's submit ack,
+after the row is already durable. So the two options are to mutate the row on ack (adding a
+mutation path to an `INSERT OR IGNORE` table whose immutability is part of why it is trustworthy),
+or to delay writing the operator's own message until a relay answers (which trades durability of
+your own words for a proof about them, and is worse).
+
+**That is a design decision, not plumbing, and the current state is HONEST:** sent rows say
+`local_session_state`, which is true. Nothing claims a proof it does not have. Recorded for whoever
+rules on it rather than half-built — a `sender_sig` that is sometimes populated on sent rows and
+sometimes not, with no way to tell which, would rebuild the exact defect the received half just
+closed.
