@@ -125,6 +125,15 @@ const ALLOWED_DELETES: Record<string, { count: number; why: string }> = {
       "AC-006 attempts a DELETE as the SERVICE role and asserts it is REFUSED. It deletes nothing, " +
       "because it fails — that is the test proving the table is append-only in production.",
   },
+  "persist-003-rls.test.ts": {
+    count: 1,
+    why:
+      "DOD-M15-CHAINDEBT-1 — the same shape as account-001 above, and it was on the debt list by " +
+      "mistake. The DELETE runs as `cello_service` and the assertion is that it THROWS permission " +
+      "denied; the row survives, which is the point. Removing this would delete the test that " +
+      "proves conversation_seals is append-only in production — the very property the rest of this " +
+      "guard exists to keep true.",
+  },
 };
 
 /** How many chained-table DELETEs a source contains. */
@@ -150,9 +159,7 @@ const KNOWN_DEBT_INSERTS = [
 const KNOWN_DEBT_DELETES = [
   "federation-001.test.ts",
   "federation-003.test.ts",
-  "m12-ae-store-parity.live.test.ts",
   "m6b-010-startup-state-restore.test.ts",
-  "persist-003-rls.test.ts",
   "persist-020-connections.test.ts",
   "persist-021-adapter-boundary-audit.test.ts", // partially converted — see the note above
   "persist-reconnect-session-survival.test.ts",
@@ -232,7 +239,7 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
     // Lower these as files are converted; never raise them. DOD-M15-CHAINDEBT-1 owns driving both
     // to zero, at which point the lists and this assertion go with them.
     expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(5);
-    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(8);
+    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(6);
   });
 
   it("the ROLLED_BACK and ALLOWED_DELETES entries still name files that exist", () => {

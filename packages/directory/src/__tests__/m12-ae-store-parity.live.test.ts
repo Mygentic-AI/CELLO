@@ -19,6 +19,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
+import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { PgAeStore, TIER_A_NATURAL_KEY_CONSTRAINTS } from "../pg-ae-store.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC } from "../ae-table-encoders.js";
@@ -242,11 +243,22 @@ describeLive("DOD-AE-STORE-1: the natural-key constraint names are REAL", () => 
 
 describeLive("DOD-AE-STORE-1: a chain containing an AE-APPLIED row still verifies", () => {
   let pool: pg.Pool;
-  const SESSION = Buffer.from("ae".repeat(16), "hex");
+  /**
+   * DOD-M15-CHAINDEBT-1 — PER-RUN UNIQUE, which is what removes the need to clean up at all.
+   *
+   * This was the fixed constant `ae` repeated 16 times, so every run wrote the same `session_id`
+   * and needed an `afterEach` DELETE to make room for the next one. That delete was the problem:
+   * `seal_notarizations` is hash-chained, so removing a row leaves every row after it unable to
+   * verify — permanently, for anyone whose database already had it, and in suites that have
+   * nothing to do with this file.
+   *
+   * A fresh id per run collides with nothing, so the rows can simply stay. Deleting was never
+   * cleanup here; it was damage that looked like tidiness.
+   */
+  const SESSION = randomBytes(16);
 
   beforeAll(() => { pool = new pg.Pool({ connectionString: DB_URL }); });
   afterAll(async () => { await pool.end(); });
-  afterEach(async () => { await pool.query("DELETE FROM seal_notarizations WHERE session_id = $1", [SESSION]); });
 
   it("applies a notarization through the REAL ChainWriter and its chain link recomputes", async () => {
     // The reviewer's highest-value gap, and he said so plainly: he traced this by hand from
