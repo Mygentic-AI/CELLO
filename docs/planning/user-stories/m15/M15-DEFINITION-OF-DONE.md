@@ -3068,6 +3068,25 @@ the TCP connection is made and the handshake has begun.
   can have scrubbing in front of it.
 - Terraform; parallelises cleanly with everything.
 
+### `DOD-M15-JSPINE-REST-1` — `j-spine`'s three non-seal assertions
+**POST-LAUNCH** (§0z.4 — the gate is frozen; not a security hole a customer reaches). Filed as ONE
+line because they are one journey's remaining debt, not three findings, and none is diagnosed.
+
+**The seal half is FIXED and green:** `DOD-SPINE-7` — *"both close → directory FROST-notarizes →
+byte-identical sealed_root"* — passes on the new poll-for-receipt contract, as does `DOD-SPINE-6`
+(send/receive with no content in the relay logs). Those are the two that matter most in this file.
+
+Three remain, all failing BEFORE any seal, all undiagnosed:
+- *"status must carry a connections list"* — the shape of `cello status` output.
+- *"agentA starts registered: expected 'stopped' to be 'registered'"* — agent lifecycle state.
+- *"negotiator should reach the directory"* — returns `standing_receiver_unavailable` where the test
+  expects `target_offline`. **Read the standing-receiver note in `.claude/CLAUDE.md` before touching
+  this**: that error is the documented first suspect for a daemon whose `cello_start_agent` never
+  landed, and it is usually a startup-ordering artefact rather than a defect. The test may simply be
+  asserting the wrong reason for a legitimately-not-ready daemon.
+- **Do not assume these are regressions.** This lane had never been run; a stale expectation is at
+  least as likely, and two of the three have that shape.
+
 ### `DOD-M15-TOOLDESC-SCAN-1` — The claim scanner can see MCP tool descriptions
 **POST-LAUNCH** (§0z.1): the launch risk is whether the shipped descriptions are HONEST, and
 `DOD-M15-TIERTEXT-1` audits them by hand in this milestone. This line is the durable control that
