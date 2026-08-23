@@ -289,7 +289,22 @@ different repos, different disciplines, neither blocks the other.
     the same wire field with nothing telling them apart. A salted sender talking to an older unsalted
     peer fails EVERY frame at the receive-path authenticity check — the least-debuggable shape again —
     and the fingerprint check does not catch it, because an old client sends no fingerprint.
-    `content_salt IS NULL → unsalted` is a legacy branch and must announce itself.
+    `content_salt IS NULL → unsalted` is a legacy branch and must announce itself. **Ruled in
+    Decisions Carried #15:** fall back, loudly, with the algorithm named on the wire; refuse only an
+    UNKNOWN algorithm.
+  - **PART A IS BUILT AND TWICE-REVIEWED (2026-08-23 → Entries 41, 42).** The salt is agreed,
+    repaired and persisted; nothing hashes with it. **Part B's ACs, carried out of those two
+    reviews — do not re-derive them:**
+    - **A park-only session never agrees a salt** (pass-1 F9). The announcement hangs off
+      `onPeerConnect`, so a session living entirely on the relay/park backstop never exchanges
+      contributions. Free today; **a session that cannot send** the moment the content hash depends
+      on the salt. Part B must either announce on a path the park case reaches, or refuse by name.
+    - **`STATE_DIVERGENT` leaves the far operator with silence** (pass-2 F19). The mismatch refusal
+      notifies the peer first; this one cannot, because the frame vocabulary has no way to say *"I am
+      stopping"* — it carries a contribution or a fingerprint and nothing else. Part B owns the frame
+      shape, so it is part B's call: a third field, or a `refused` frame.
+    - **The salted/unsalted decision is per PEER, not per session record.** `content_salt IS NULL`
+      says what WE hold, never what they can verify.
 - **Enforcer:** receipt. *(Not run — the unit is carried by suite + review; the enforcer itself is
   built by `DOD-M15-INTERRUPTED-1` and this line is re-asserted there.)*
 
