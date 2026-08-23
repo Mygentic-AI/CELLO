@@ -5991,3 +5991,84 @@ disk failing. The repair loses. The code now does what the mutant did.
    adoption closed too late; it closed too early, on three paths I had not enumerated.
 4. **A surviving mutant may be an improvement.** Before defending one, ask what it would cost the
    operator — twice I defended a five-second stall and a misdirected diagnosis.
+
+---
+
+## Entry 52 — my fix for one split-transcript window opened another, and this one was a relay round trip wide
+
+`DOD-M15-SEALWIRE-1` bullet 6, B2b-2 — review pass 2, the hard cap.
+
+### Reviewer verdict, quoted
+
+> - **SPEC: DEVIATIONS FOUND** — item 4 does not do what its comment states (F1).
+> - **SILENT FALLBACKS FOUND** — F1 is HIGH and blocking: adoption silently re-opens while a live
+>   unsalted message is between the relay witness and the wire.
+> - **ERROR SUBSTITUTION FOUND** — F2 (a local dial failure surfaced as "they did not answer") and
+>   F4 (a read failure surfaced as "our persist failed"). Both non-blocking; both have a route in the
+>   guidance.
+> - **HOLLOW TESTS FOUND** — one: the abandon test drives the method, not the three call sites.
+>   Blocking, and coupled to F1 — **the test that would catch F1 is the test that is missing.**
+> - **REMOVALS PROVEN** — n/a, nothing deleted.
+
+And, on whether the pass was worth running:
+
+> One thing worth saying plainly: this diff touches persistence and a crypto-adjacent decision point,
+> and I found a HIGH in it. That is where they hide … F1 is the kind that only shows up if you read
+> `#hashedWithoutSalt` as session-scoped rather than message-scoped.
+
+### The HIGH, in the order it happens
+
+Pass 1 found `#hashedWithoutSalt` was set too **eagerly** — three `cello_send` paths hash and then
+send nothing. I added `abandonUnsaltedHash` to release it. That fix opened a worse window than the
+one it closed, because **the flag is one bit per SESSION for a fact that is per MESSAGE**:
+
+1. Connection A hashes unsalted and sets the flag.
+2. A enters `sendContent`, which awaits a **full relay round trip** before `#trackAwaitingAck`
+   records anything. A is now invisible to every frontier count there is.
+3. Connection B hashes, sees A's in-flight claim, is refused — and calls `abandonUnsaltedHash`,
+   **deleting the flag A is still relying on.**
+4. The frontier reads `leaves=0 held=0 awaiting_ack=0 hashed=0`. Adoption re-opens.
+5. A salt frame arriving in that window is adopted and persisted.
+6. A's message lands as **leaf 0, hashed sha256**, in a session that hashes everything after it under
+   HMAC.
+
+The split transcript the entire unit exists to prevent, through a window a network round trip wide,
+introduced by the fix for the previous finding. It is now a **count**: each in-flight hash holds its
+own claim and only the last release re-opens adoption.
+
+### The test that would have caught it was missing for pass 1's exact reason
+
+The abandon test called `abandonUnsaltedHash` directly. **With one caller, a delete and a decrement
+are indistinguishable** — and deleting all three production call sites left the suite green. That is
+pass 1's blocking finding again, one method along: *the seam is exercised, the production path is
+not.*
+
+### Two error substitutions I created while fixing an error substitution
+
+Pass 1's blocking finding was that one guidance sentence served five causes. I built a closed reason
+set to end it — and then, at the settle site pass 1 asked me to add, reused `"timeout"` for a frame
+that **never left this machine**. The operator is told *"your counterparty was connected but did not
+answer"* about a message we never sent. F4 is the same shape: a salt **read** failure labelled
+`our_persist_failed`, with guidance naming a log line that will not exist.
+
+### And a comment that instructed me not to do the thing I did
+
+`#sendSaltFrame`'s header said *"nothing hashes with the salt yet, so a frame that never lands costs
+nothing today… **Do not carry this comment forward unchanged into that unit.**"* This is that unit.
+In pass 1 I corrected that exact claim inside `session.salt.announce.failed`'s `impact` — twenty
+lines below the header still asserting the opposite. A second orphaned doc block, sixty lines from
+the one I re-homed in pass 1, went the same way.
+
+### Rules earned
+
+1. **A fix pass is where regressions hide, because the finding is fresh and the fix feels checked.**
+   Both of this pass's substantive findings were *created by pass 1's fixes*, not surviving from the
+   original unit.
+2. **Ask whether state is per-SESSION or per-MESSAGE before writing a release for it.** A `Set` keyed
+   on the session read perfectly until two messages existed at once, and "two sends at once" is the
+   precondition of the very path the release was added to.
+3. **A release function with ONE test caller cannot distinguish delete from decrement.** Drive
+   concurrency with concurrency.
+4. **When a comment tells you not to carry it forward, search the whole method for its siblings.**
+   Correcting the claim where it fires and leaving it in the header is worse than either alone: one
+   of them is now authoritative and wrong.
