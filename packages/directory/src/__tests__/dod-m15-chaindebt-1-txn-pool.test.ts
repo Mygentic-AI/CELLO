@@ -84,8 +84,21 @@ describeIntegration("DOD-M15-CHAINDEBT-1 F1: inRolledBackTxn leaves nothing behi
     // The most destructive case, and the one `persist-004` has been doing on every run:
     // `TRUNCATE` is transactional in Postgres, so it is safe inside a transaction that really rolls
     // back — and catastrophic inside one that does not.
+    //
+    // SEEDS ITS OWN ROW. The first version asserted `before > 0` and relied on an earlier test
+    // having left one — which failed on a freshly reset database, correctly: a truncate test
+    // against an empty table proves nothing, and the assertion caught exactly that. Depending on
+    // sibling tests for state is the same class of fragility this whole unit removed from the
+    // fixtures.
+    // Through the CHAINED WRITER, not a raw INSERT with a literal chain_hash — seeding this test
+    // with a hole would be this unit's own subject matter committed inside the unit.
+    await new PgDirectoryStore(pool, silentLogger()).registerRelay({
+      relayId: randomUUID().replace(/-/g, ""),
+      publicKeyHex: "f".repeat(64),
+      region: "us-west-2",
+    });
     const before = await countRelays();
-    expect(before, "seed a row first or this test proves nothing").toBeGreaterThan(0);
+    expect(before, "the seed row is the thing the truncate must fail to destroy").toBeGreaterThan(0);
 
     await inRolledBackTxn(pool, async (_txn, client) => {
       await client.query("TRUNCATE relay_registrations CASCADE");
