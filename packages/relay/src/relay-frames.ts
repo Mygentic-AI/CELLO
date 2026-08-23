@@ -22,6 +22,23 @@ import type {
 
 const ENC = new Encoder({ tagUint8Array: false });
 
+/**
+ * The ctrl leaf kind — the ONLY kind whose content may reach a relay. See `HashSubmit.content_bytes`.
+ * A literal rather than an import so the guard cannot be widened by a change to a shared map that
+ * someone makes for an unrelated reason.
+ */
+const RELAY_CTRL_LEAF_KIND = 0x02;
+
+/**
+ * Ceiling on a carried SEAL payload.
+ *
+ * The real thing is `[session_id(16), final_root(32), close_timestamp, "PENDING"]` — CBOR well under
+ * 128 bytes. Without a bound, "ctrl leaves only" stops being much of a limit: it is still one
+ * unbounded write into relay session state per close, free to the client. Generous against the real
+ * payload, tiny against a message.
+ */
+const MAX_CTRL_PAYLOAD_BYTES = 512;
+
 // ─── Encode ───────────────────────────────────────────────────────────────────
 
 export function encodeAuthChallenge(frame: RelayAuthChallenge): Uint8Array {
@@ -152,7 +169,27 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
     const predecessor_relay_signature = o["predecessor_relay_signature"] !== undefined ? toUint8Array(o["predecessor_relay_signature"]) ?? undefined : undefined;
     const predecessor_relay_sequence = typeof o["predecessor_relay_sequence"] === "number" ? o["predecessor_relay_sequence"] : undefined;
     const predecessor_relay_timestamp = typeof o["predecessor_relay_timestamp"] === "number" ? o["predecessor_relay_timestamp"] : undefined;
-    return { type: "hash_submit", session_id, leaf_kind, structure1_cbor, sender_signature, predecessor_relay_id, predecessor_relay_signature, predecessor_relay_sequence, predecessor_relay_timestamp };
+    /**
+     * `DOD-M15-SEALWIRE-1` bullets 3+4 — the SEAL payload, and the guard that keeps it a seal payload.
+     *
+     * 🚨 CTRL ONLY, REFUSED AT THE WIRE. A `msg` leaf's content is the operator's plaintext and a
+     * `doc` leaf's is their document; accepting this field for either would hand a forwarding relay
+     * the thing INV-3 exists to keep from it. Refusing the FRAME rather than dropping the field is
+     * deliberate: a client sending content for a msg leaf is not a tidy-up, it is a client trying to
+     * give the relay something it must never hold.
+     *
+     * Present-but-malformed voids the frame for the same reason its directory-side sibling does —
+     * dropping it to absent makes a client that IS sending the payload indistinguishable from one
+     * that is not, and downstream that reads as "the other side is on an old build."
+     */
+    let content_bytes: Uint8Array | undefined;
+    if (o["content_bytes"] !== undefined) {
+      if (leaf_kind !== RELAY_CTRL_LEAF_KIND) return null;
+      const cb = toUint8Array(o["content_bytes"]);
+      if (!cb || cb.length === 0 || cb.length > MAX_CTRL_PAYLOAD_BYTES) return null;
+      content_bytes = cb;
+    }
+    return { type: "hash_submit", session_id, leaf_kind, structure1_cbor, sender_signature, predecessor_relay_id, predecessor_relay_signature, predecessor_relay_sequence, predecessor_relay_timestamp, ...(content_bytes ? { content_bytes } : {}) };
   }
 
   // CELLO-M7-SESSION-003: session_liveness_query

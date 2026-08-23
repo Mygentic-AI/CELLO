@@ -78,6 +78,27 @@ export interface HashSubmit {
   structure1_cbor: Uint8Array; // canonical CBOR of Structure 1
   sender_signature: Uint8Array; // 64-byte Ed25519 signature — same as inside structure1_cbor
   /**
+   * The SEAL payload bytes — `DOD-M15-SEALWIRE-1` bullets 3+4. **CTRL LEAVES ONLY.**
+   *
+   * 🚨 THIS IS THE ONE FIELD THAT CARRIES LEAF CONTENT TO A RELAY, AND THE RELAY IS THE PARTY THIS
+   * PROTOCOL EXISTS TO KEEP CONTENT AWAY FROM (INV-3). It is admissible for a ctrl leaf and for no
+   * other kind, and the reason is narrow rather than general: a SEAL payload is
+   * `[session_id, final_root, close_timestamp, "PENDING"]`, and the relay already knows all four —
+   * it assigned the session, it built the tree the root comes from, and it stamped the leaf. Nothing
+   * is disclosed.
+   *
+   * **That reasoning does not survive one leaf kind further.** A `msg` leaf's content is the
+   * operator's plaintext; a `doc` leaf's is their document. `decodeInboundFrame` therefore REFUSES
+   * the whole frame when this field appears on any non-ctrl leaf, at the wire boundary — not
+   * downstream, because by then the bytes have been received and possibly written to a WAL.
+   *
+   * Why it must travel at all: the directory cannot check the relay against anything the relay
+   * supplied. `final_root` is the client's own signed claim and is the only value that breaks that
+   * circle — and it survives solely inside a SHA-256 pre-image the client never sends. See
+   * `packages/directory/src/seal-final-root.ts`.
+   */
+  content_bytes?: Uint8Array;
+  /**
    * FEDERATION-003 AC-005/AC-006/SI-002: Predecessor relay ACK for re-submission.
    *
    * When a client re-submits a hash to a new relay after the original relay went down,
