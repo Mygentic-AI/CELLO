@@ -2225,6 +2225,21 @@ written down nowhere, and a per-session salt fixes it as a side effect.
 > replacement is bullet 3's client-signed `final_root`, which survives only inside a SHA-256
 > pre-image that is never transmitted — so it needs the wire change bullet 3 carries. The check
 > itself is KEPT; what changes is that it stops being the integrity guarantee.
+>
+> **🅿️ BULLETS 3+4 NEED A `cello-client` PUBLISH BEFORE THEY DO ANYTHING FOR AN OPERATOR — PARKED,
+> HUMAN-GATED.** The chain is four legs plus a fifth that review pass 1 found missing and nobody had
+> listed: the CLIENT SENDER. It is built now (2026-08-24, `@cello-protocol/daemon`), but a leg that
+> lives only in the repo is not a leg an operator has. Until the version cascade is published and
+> installed, every real seal still reaches the directory with no payload and lands on `not_carried`.
+>
+> This is a **stop only Andre can clear** (§🛑): the `latest` promotion is his, never mine. What I
+> can do is prepared and handed over; what runs is his call. Consequences to know before pulling it:
+> - **Directory-side behaviour is unchanged for un-upgraded clients** — receiver-first was followed,
+>   so absence stays tolerated and nothing breaks by shipping the directory first.
+> - **`DOD-M15-NOTCARRIED-REFUSE-1` cannot start until this lands.** Its whole prerequisite is the
+>   deployment fact, not a code change.
+> - **The two client-side guards can refuse a close.** Deliberate — see the sender-leg commit — but it
+>   is the one behaviour change an operator could feel, so it should not go out unannounced.
 
 ### `DOD-M15-SEALWIRE-1` — bullets
 **One protocol change, not six. These cannot be split** — every one changes the same wire format or
