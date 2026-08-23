@@ -2026,6 +2026,27 @@ value criterion** — "mint a trust signal and have it received" is advertised v
   shipped; nobody has checked since.
 - **Enforcer:** journey.
 
+> ### SCOPED 2026-08-24 — the gap is NOT where "fails over to another node" suggests
+> **Transport failover already exists and works.** `getAgentSignaling` dials through
+> `failoverEndpointResolver`, explicitly *"so this agent's signaling stream routes around a down
+> primary node"*. So the case everyone pictures — a node that is DOWN — is already handled, and
+> implementing it again would be building something that exists.
+>
+> **The unhandled case is a node that is UP and answers wrongly.** `sendSealedSubmission` takes ONE
+> already-connected `signaling` and has no node list. Its two failure reasons are
+> `submission_unsupported_by_node` (the node has not deployed submission support — **nodes deploy
+> independently, so this is the ordinary state during a roll**) and `submission_write_timeout`.
+> Neither retries anywhere. The operator re-runs the command by hand, and gets the same node.
+>
+> **So the work is: on those two reasons, retry the submission against a DIFFERENT node** — not
+> reconnect, which already happens. That needs the caller to obtain signaling to a NAMED node rather
+> than "this agent's stream", which `getAgentSignaling` does not offer today. That is the actual
+> unit, and it is connection-management work rather than a retry loop.
+>
+> **Sized, not built** — under the freeze this stays in the gate (it is an existing tier line, not a
+> new finding), and the next lane to pick it up should start from the caller's node selection, not
+> from `signal-submission.ts`, which has no node to choose between.
+
 ### `DOD-M15-BACKUP-1` — ✅ An identity can be exported and restored
 > **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
 > null → proceed) [blocking]; F5 (mode silently not applied on overwrite) [blocking]; F6/F7
