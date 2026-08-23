@@ -24,6 +24,7 @@ import {
   provisionAgent,
   connectMcp,
   cello,
+  celloJson,
   registerAgent,
   writeConsortiumManifest,
   writeSignedManifestTo,
@@ -131,10 +132,20 @@ describe("J-RELAYSIG — relay-signed ordering receipts (DOD-RELAYSIG-1)", () =>
     await sleep(1500);
 
     // ─── The daemon stored a VERIFIED relay receipt for A (it stores only when verifyRelayAck passes) ───
-    const receiptsOut = JSON.parse(cello(["receipts", "agentA"], env).stdout.trim()) as {
+    /**
+     * `relay-receipts`, not `receipts` — the command was renamed and this call was not.
+     *
+     * DOD-M15-CLIJSON-1 (carried): the failure did not say that. An unknown command prints the
+     * top-level USAGE table to **stdout** with exit 1, so `JSON.parse` died with
+     * `Unexpected token 'C', "CELLO — a "...` — the CLI's own banner, in a JSON parse error, three
+     * hops from the actual cause. `celloJson` prints the raw stdout now, which is how this was
+     * findable at all.
+     */
+    const receiptsRes = cello(["relay-receipts", "agentA"], env);
+    const receiptsOut = celloJson<{
       ok?: boolean;
       receipts?: Array<{ hash_hex?: string; relay_id?: string; sequence_number?: number; signature_hex?: string; session_id?: string }>;
-    };
+    }>(receiptsRes, "cello relay-receipts agentA");
     expect(receiptsOut.ok, `cello receipts failed: ${JSON.stringify(receiptsOut)}`).toBe(true);
     const receipts = receiptsOut.receipts ?? [];
     expect(receipts.length, `daemon must have stored ≥1 verified relay receipt after the send: ${JSON.stringify(receiptsOut)}`).toBeGreaterThanOrEqual(1);
