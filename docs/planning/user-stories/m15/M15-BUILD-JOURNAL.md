@@ -5600,3 +5600,99 @@ the database. **Non-blocking is not the same as silent.**
    Whole-suite properties belong in a teardown.
 4. **Verify a new guard by making it fail on purpose.** Two of my three wirings looked configured and
    checked nothing. Only a deliberate poison told them apart.
+
+---
+
+## Entry 49 — the missing state was on the wire, not in the schema, and I had argued the opposite
+
+`DOD-M15-SEALWIRE-1` bullet 6, part B2b-2, unit 1: the Decision #8 adoption rule.
+
+### The claim I wrote, and the half of it that was wrong
+
+I wrote the guard's file header before the review, and it said the rule **removes the need for a
+schema change**: without it, "salted or not" would need a durable per-session flag with its own
+column, its own migration, and its own entry in the rebuild DDL — which is where this milestone has
+already lost data twice. With it, `content_salt IS NULL` answers the question forever.
+
+The reviewer's central finding:
+
+> *"The claim as stated does not hold. The guard does remove the need for a column… but only because
+> the missing state belongs on the **wire**, not in the schema."*
+
+That is exactly right, and the distinction is not pedantic. `content_salt IS NULL` answers **"am I
+salted"** correctly and permanently. It cannot answer **"is this SESSION salted"** — and that is the
+question the protocol asks, because a content hash is verified by the other side.
+
+### The failure that follows, in the order an operator would meet it
+
+1. Two agents open a session. Neither has hashed anything, so both can adopt.
+2. One of them sends the first message. The content hash is computed, the frame goes out.
+3. It lands on the receiver, who appends a leaf — **while the sender is still inside its own
+   `await`, before its own leaf exists.**
+4. The salt agreement runs in that window. The receiver has a leaf and refuses. The sender has none
+   and adopts. **Both are correct.**
+5. Nothing on the wire, and nothing in either row, records that they disagree.
+6. From here every frame the salted side sends is refused by the other as
+   `content_hash_salt_unavailable` and never shown. The sender's log says the message left. The
+   receiver's log says it could not verify. Neither says *why*, because neither knows.
+
+A one-way dead conversation, from a race in a window that is a normal part of every session's first
+message.
+
+So the frame gained a third state, `adoption_closed`. A side that cannot adopt says so; the peer
+stops offering; **both end up unsalted together.**
+
+### It also restored termination, which the guard had removed
+
+`derive_and_announce` is the only transition that lets a saltless side finish. The adoption guard
+takes it away — so two saltless sides traded repair frames forever, one new libp2p stream each per
+round trip, against a per-protocol cap. Fixing the bilateral drift fixed this too: `adoption_closed`
+is terminal, and it answers exactly once.
+
+### Three findings that were one mistake
+
+The guard ran **first** — above the `!this.#db` check and outside the `try`. That:
+
+- short-circuited the `salt_already_stored` discrimination, so a session that *does* hold a valid
+  salt was told it "stays unsalted for the life of the session" after a transient read failure;
+- put `#requireAgentId`'s throw outside the `try`, where it surfaced as *"the stream read failed"*.
+
+Row state is established first now, and only a session with no salt at all reaches the adoption
+question.
+
+### The mutation pass, and the two survivors
+
+Six mutants. **Two survived, and my loop reported one of them as caught** — the same defect as
+Entry 47 in a new costume, and the only reason I know is the rule that says re-run every mutant
+alone.
+
+- **Held content dropped from the frontier sum.** A hold is a message whose hash is *already
+  computed*, waiting at a slot ahead of the tail. Counting only leaves reads "nothing hashed yet"
+  for a session that has hashed several, adopts, and then releases those holds into a tree whose
+  neighbours were hashed the other way. The split transcript by the one route that looks empty from
+  the tree.
+- **An unreadable frontier treated as an empty one.** A failed count is not zero. This is the shape
+  of guard failure hardest to see in review, because the code still reads like a guard — it opens
+  itself on exactly the storage trouble that should make it most careful.
+
+Writing the second test found a real defect: the refusal hardcoded `already_hashing`, so a frontier
+this side could not read was reported to the operator **and to the counterparty** as *"you have
+already sent messages"*. Those want opposite responses. `already_hashing` is the feature working and
+a new session fixes it; `frontier_unreadable` is local storage and a new session refuses identically.
+
+The reason is now part of the state as a **union** — `{closed: false} | {closed: true; label; why}`
+— so a caller cannot say `closed` without saying why. An optional string with a default would have
+compiled at every site that forgot and read as though it had been decided. That is Entry 47's rule
+applied at the type level instead of in a comment.
+
+### Rules earned
+
+1. **Ask whether missing state is DURABLE or BILATERAL before reaching for a column.** A schema
+   change is the reflex, and here it would have been wrong in a way that still passed every test:
+   the row would have recorded the local verdict perfectly while the two sides disagreed.
+2. **A guard that removes a transition must be checked for TERMINATION, not just correctness.** The
+   adoption rule was right about every individual frame and turned the exchange into a livelock.
+3. **"Cannot tell" is CLOSED.** Inferring "nothing happened" from "I could not look" is how a guard
+   becomes a formality, and it fails open on precisely the trouble it exists for.
+4. **A verdict computed locally and acted on bilaterally needs a wire field.** If both sides run the
+   same correct code on different state, the protocol has to carry the state.
