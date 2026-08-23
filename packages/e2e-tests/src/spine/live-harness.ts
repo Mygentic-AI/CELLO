@@ -1016,6 +1016,52 @@ export function registerAgent(name: string, token: string, env: Record<string, s
 }
 
 /**
+ * Wait for the SEALED RECEIPT after a close, and fail naming what it saw.
+ *
+ * ─── Why this exists: `close` stopped returning the root, on purpose ──────────────────────────
+ *
+ * `cello_close_session` returns `{ok:true, seal_status:"committed"}` and a guidance string saying
+ * the receipt is *not yet available*, that the seal completes once the counterparty also closes,
+ * and that `cello_sealed_receipt` is how you fetch it. It was made non-blocking deliberately —
+ * its own guidance says the blocking version is "exactly how seventeen sessions were lost".
+ *
+ * Five spine journeys still assert `closeX.sealed_root` synchronously — the OLD contract — and have
+ * been failing since the change, unnoticed, because this lane had never been run
+ * (`DOD-M15-CLOSEROOT-1`). This is the shape they move to: close, then poll.
+ *
+ * The timeout message prints the last receipt response. A bare "timed out" would leave the next
+ * reader exactly where the `.toMatch(undefined)` failures left this one — knowing something is
+ * absent and nothing about why.
+ */
+export async function awaitSealedRoot(
+  conn: McpConn,
+  sessionId: string,
+  opts: { timeoutMs?: number; label?: string } = {},
+): Promise<string> {
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const label = opts.label ?? "sealed receipt";
+  const deadline = Date.now() + timeoutMs;
+  let last: unknown = "(never queried)";
+  while (Date.now() < deadline) {
+    const receipt = (await conn.call("cello_sealed_receipt", { cello_session_id: sessionId })) as {
+      ok?: boolean;
+      sealed_root?: string;
+    };
+    last = receipt;
+    // An empty answer means "still running", not "failed" — the daemon's own words.
+    if (receipt.ok === true && typeof receipt.sealed_root === "string") return receipt.sealed_root;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(
+    `${label}: no sealed_root within ${String(timeoutMs)}ms for session ${sessionId}.\n` +
+      `  last cello_sealed_receipt response: ${JSON.stringify(last)}\n` +
+      `  close() returns a COMMITMENT, not a root — if this timed out, either the counterparty ` +
+      `never closed (the seal escalates to unilateral after ~11 minutes) or the notarization ` +
+      `genuinely failed. An empty answer means "still running", not "failed".`,
+  );
+}
+
+/**
  * Parse a CLI result as JSON, and FAIL NAMING WHAT IT CHOKED ON.
  *
  * `JSON.parse(res.stdout.trim())` — written at 54 spine call sites — throws

@@ -30,6 +30,7 @@ import {
   connectMcp,
   cello,
   celloJson,
+  awaitSealedRoot,
   psqlSpine,
   AUTH_DIRECTORY_NODE_KEY_HEX,
   AUTH_DIRECTORY_NODE_ID,
@@ -162,19 +163,31 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
     const [closeA, closeB] = (await Promise.all([
       connA.call("cello_close_session", { cello_session_id: sessionIdA }),
       connB.call("cello_close_session", { cello_session_id: sessionIdB }),
-    ])) as Array<{ ok?: boolean; sealed_root?: string; seal_type?: string; reason?: string }>;
+    ])) as Array<{ ok?: boolean; sealed_root?: string; seal_type?: string; seal_status?: string; reason?: string }>;
     const diag = `\ncloseA: ${JSON.stringify(closeA)}\ncloseB: ${JSON.stringify(closeB)}` +
       `\n--- daemon seal/session ---\n${daemon.output.split("\n").filter((l) => /seal|session|rekey|node\.created/i.test(l)).slice(-20).join("\n")}`;
     expect(closeA.ok, `A close failed:${diag}`).toBe(true);
     expect(closeB.ok, `B close failed:${diag}`).toBe(true);
-    // `.toMatch()` on undefined throws a TypeError BEFORE vitest attaches the custom message, so
-    // the `diag` string this test carefully assembles — the actual close results and the daemon's
-    // seal log — was discarded at the exact moment it was needed. Assert presence first: that
-    // failure carries the message. (DOD-M15-CLOSEROOT-1 was unattributable for this reason.)
-    expect(closeA.sealed_root, `A sealed_root is MISSING:${diag}`).toBeDefined();
-    expect(closeA.sealed_root, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(closeB.sealed_root, `both ends' sealed_root must be BYTE-IDENTICAL (one bilateral seal):${diag}`).toBe(closeA.sealed_root);
-    expect(closeA.seal_type, `seal must be bilateral (not a unilateral fallback):${diag}`).not.toBe("unilateral");
+    /**
+     * DOD-M15-CLOSEROOT-1: close returns a COMMITMENT, not a root.
+     *
+     * This used to assert `closeA.sealed_root` synchronously. That was the contract before close was
+     * made non-blocking — a change whose own guidance says the blocking version is "exactly how
+     * seventeen sessions were lost". The daemon now says so in the response: the receipt is not yet
+     * available, fetch it with `cello_sealed_receipt`, and an empty answer means "still running".
+     *
+     * Both ends are polled because the bilateral seal completes only once BOTH have closed, and the
+     * point of this journey is that the two roots are byte-identical.
+     */
+    expect(closeA.seal_status, `A close must commit to a seal:${diag}`).toBe("committed");
+    expect(closeB.seal_status, `B close must commit to a seal:${diag}`).toBe("committed");
+
+    const [rootA, rootB] = await Promise.all([
+      awaitSealedRoot(connA, sessionIdA, { label: "A sealed receipt" }),
+      awaitSealedRoot(connB, sessionIdB, { label: "B sealed receipt" }),
+    ]);
+    expect(rootA, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
+    expect(rootB, `both ends' sealed_root must be BYTE-IDENTICAL (one bilateral seal):${diag}`).toBe(rootA);
 
     // ─── DOD-FIRSTMSG-WITNESS-1 AC7 + AC8, asserted on the LIVE daemon log ────────────────────
     //
