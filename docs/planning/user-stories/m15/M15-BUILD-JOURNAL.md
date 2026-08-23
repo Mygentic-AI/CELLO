@@ -4581,3 +4581,98 @@ If a suite asserts a whole-table count or a chain from genesis, moving it inside
 transaction changes what it sees. A file that goes green because it now observes an empty table has
 not been converted — it has been switched off. Every conversion is checked by running that file's
 own suite and confirming its assertion count is unchanged.
+
+---
+
+## Entry 43 — I added an unsigned field, and it turned the tamper detector off
+
+Part B1 of `SEALWIRE-1` bullet 6 — the content-hash algorithm discriminator. Three blocking
+findings. The first is a security defect I shipped, and it is the kind that only exists *because* of
+a fix: the discriminator is right, and the second-order consequence of its refusal paths was not.
+
+### The verdict, quoted
+
+> **ERROR SUBSTITUTION FOUND** [blocking] — Finding 1, in the dangerous direction you named. **An
+> unsigned, sender-controlled field now selects between "tamper, alarm, no auto-co-sign" and
+> "version difference, do not treat this as a security event."**
+> **SILENT FALLBACKS FOUND** — Finding 2 [blocking]: a frame refused by name on the direct path is
+> silently re-accepted under an assumed `sha256` via the park route… Finding 3 [blocking]: a second
+> content-hash verifier hardcodes `sha256` with no discriminator.
+> **HOLLOW TESTS FOUND** [blocking] — a seventh mutant survives all 20 tests; an eighth survives too,
+> because the security consequence of the three refusal reasons is entirely unasserted.
+> **SPEC: FAITHFUL** — for the receiver half as scoped… "NO SENDER SALTS" was verified against both
+> repos rather than accepted.
+
+### The defect
+
+`content_hash_alg` rides the frame **envelope**. No signature covers it — the sender's signature is
+over `structure1_cbor`, which binds `content_hash` and nothing else. So the field is an
+unauthenticated claim by whoever sent the frame.
+
+Before B1, every frame failing the cross-check reached `#contentDesynced`, which gates
+auto-co-signing and unilateral ratification. **My two new refusal branches returned before it.**
+
+1. Sign Structure 1 over hash `H`, let the relay witness it.
+2. Send bytes that are not `H`'s preimage, plus one extra CBOR field: `content_hash_alg: "junk-v9"`.
+3. The receiver refuses with `content_hash_alg_unknown`. No desync mark. No alarm.
+4. The operator reads, verbatim: *"nothing was altered and nobody did anything wrong"* and
+   *"Do not treat this as a security event."*
+5. At close, the session **auto-co-signs**.
+
+One unsigned string, and the detector is off. The wired test I wrote as the counterbalance for
+exactly this risk — *"a REAL tamper is still reported as a tamper"* — only covers an attacker who
+declines to add the field.
+
+### The fix, and the counterbalance named before it
+
+Both branches now mark the session unverifiable, and **the mark carries a reason**, because the gate
+and the label answer different questions:
+
+- **The gate is binary and non-negotiable.** Never auto-sign content you could not verify. "Could
+  not" covers all three reasons.
+- **The label must not accuse.** An honest peer on a newer build produces the same refusal, and
+  raising `content_tamper` for that trains an operator to dismiss the one alarm that means
+  something. So `tampered` and `unverifiable` are separate labels on one map — one structure rather
+  than two sets, because a second set is a second thing every gate has to remember to consult.
+- **`tampered` never downgrades.** Otherwise a sender already caught clears its own alarm by sending
+  one more frame with a junk algorithm name.
+
+And the messages stopped asserting what the sender *did*. They say what we could not do, and say
+outright that the algorithm name is a claim not covered by any signature.
+
+### The verifier I did not know existed
+
+`content-park.ts` has a **second, independent** content-hash check that hardcasts `sha256` — it
+exists because the park signature does not cover the envelope content, and it returns before
+`ingestReceivedContent` runs at all. Correct today; in B2 a salted parked entry fails it, is not
+annexed, and **the relay copy is kept**, re-creating the repeated re-pull loop that code was written
+to end. My carry-forward note named one site and there were two.
+
+### And the refusal did not hold
+
+A direct-path refusal sends no ACK, so the sender's backstop parks the message; it arrives via the
+park route seconds later and is verified as `sha256`. Refused by name on one path, accepted on the
+other, with nothing linking them. Refusing there too would drop good mail — today's parked entries
+really are `sha256` — so what is wrong is the **silence**, and the reconciliation is now logged.
+
+### Test teeth
+
+Two surviving mutants, both mine and both instructive. `String()` at the frame read: an explicit
+CBOR `null` becomes `"null"` and a legacy peer is refused, while a stray number becomes the
+plausible-looking `"42"` instead of `"(number)"`. And moving the unverifiable mark between branches
+— which nothing caught because **nothing in the unit asserted on `#contentDesynced` at all**.
+
+The reviewer also corrected two of my claims rather than accepting them: the HMAC test is a
+tautology in isolation (Decision #9 is genuinely pinned, but one file over), and the
+absent-name compatibility test does not survive the revert test because it passes against pre-B1
+code unchanged — a legitimate regression guard, not evidence for this change.
+
+Six mutants before the review, five after, all caught. Gate: 4382 client tests, lint, typecheck,
+build — by exit code.
+
+### Carried to B2
+
+The park envelope needs the algorithm field, at **both** verifier sites. And a salt disagreement
+between two salting peers reports as `content_hash_mismatch` — a state difference as a security
+event, the same collapse running the other way — which the part-A fingerprint check is supposed to
+pre-empt, except that a park-only session never gets one.
