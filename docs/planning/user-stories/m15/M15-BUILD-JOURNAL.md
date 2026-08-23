@@ -38,9 +38,9 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
 > ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4403 client tests.
-> **PARTS A, B1 CLOSED** (→ Entries 41–44, two-pass cap each). **PART B2a: pass-1 findings fixed,
-> PASS 2 IN FLIGHT** (→ Entry 45). Eleven blocking findings across five passes so far, all fixed.
-> Under the WIP limit the only permitted work is closing B2a.
+> **PARTS A, B1, B2a ALL CLOSED** (→ Entries 41–46; each spent its two-pass cap). Twelve blocking
+> findings across six passes, all fixed. **WIP is free: start part B2b** — the last unit of bullet 6.
+> Its ACs are written on the `SEALWIRE-1` line; read them, do not re-derive them.
 
 - **TIER 4 IS IN PROGRESS. `SEALWIRE-1` bullets 1 + 2 are BUILT, REVIEWED, and their blocking
   findings fixed** — the directory certifies the content-hash root, and the client verifies it
@@ -89,9 +89,15 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   fallback announcement, and holding the first send until the salt is agreed. **Its ACs are written
   on the `SEALWIRE-1` line — read them, do not re-derive them.** Five of them, inherited from B1's
   two passes; the park envelope one is the trap.
-- **🚨 MY MUTATION LOOP PRODUCED A FALSE NEGATIVE** (Entry 45): it printed `✅ caught` for a mutant
-  that survives, found only by re-running it alone. **Re-run every mutant individually before
-  believing it** — and a mutant caught by lint/typecheck rather than an assertion is NOT caught.
+- **🚨 THE MUTATION-LOOP RULE IS NOW IN `M15-PROCEDURE` §2**, agreed with `CELLO_Support` over CELLO
+  and reviewed by me (§5 carries a pointer, not a copy). Four rules; the loop has failed EIGHT times
+  across both lanes. **Rule 4 is the one my lane contributed and the one that keeps catching me:** a
+  mutant is not caught until it has been re-run ALONE and seen red, and a mutant that fails
+  lint/typecheck is NOT caught. It caught me again in Entry 46, on a test I had just written.
+- **🚨 NEVER WRITE A CONDITIONAL ASSERTION.** `if (result.ok) expect(a) else expect(b)` adapts to
+  whatever happens and only ever takes one branch. Found by a reviewer in B1, described by me to the
+  other lane as "a wish", and then written again by me ninety minutes later (Entry 46). If a test
+  needs two outcomes, construct both deterministically.
 - **🚨 THE FAILURE MODE OF MY LAST FOUR UNITS IS THE SAME, and it is not a coding pattern.** Part A:
   a false sentence in a header that I then implemented faithfully. B1 pass 1: the second-order
   security consequence of a new refusal path. B1 pass 2: a fix applied to ONE of a gate's TWO
