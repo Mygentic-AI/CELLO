@@ -277,41 +277,68 @@ describeIntegration("FEDERATION-003 integration: AC-001 relay_registrations tabl
   it("AC-001: cello_service has INSERT and SELECT only on relay_registrations (not UPDATE, DELETE)", async () => {
     // Verify cello_service can INSERT and SELECT
     const servicePool = new pg.Pool({ connectionString: SERVICE_URL });
+    /**
+     * DOD-M15-CHAINDEBT-1 — one transaction, rolled back, with SAVEPOINTs around the two statements
+     * that are SUPPOSED to fail.
+     *
+     * Two things were wrong here and the second was the dangerous one.
+     *
+     * 1. The INSERT committed a literal `chain_hash` (an empty string) into `relay_registrations`,
+     *    which is hash-chained — so every row written after it failed to verify, for the whole
+     *    database, in suites that never touch federation.
+     * 2. The cleanup deleted `WHERE relay_id LIKE '________________________________'` — THIRTY-TWO
+     *    wildcards, i.e. every relay id of exactly that length, not just this test's. It reached
+     *    into other tests' rows and other runs' rows, and `.catch(() => {})` meant it said nothing
+     *    when it did.
+     *
+     * SAVEPOINTs are required rather than decorative: in Postgres a failed statement aborts the
+     * whole transaction, so without them the DELETE assertion below would fail with "current
+     * transaction is aborted" instead of the permission error it is actually testing for — a green
+     * assertion for the wrong reason.
+     */
+    const client = await servicePool.connect();
     try {
+      await client.query("BEGIN");
       // INSERT via service role — should succeed
       const testRelayId = randomUUID().replace(/-/g, "");
       const testPubKeyHex = "a".repeat(64);
-      await servicePool.query(
+      await client.query(
         `INSERT INTO relay_registrations (relay_id, public_key_hex, region, chain_hash)
          VALUES ($1, $2, $3, $4)`,
         [testRelayId, testPubKeyHex, "us-east-1", ""],
       );
 
-      // SELECT via service role — should succeed
-      const sel = await servicePool.query<{ relay_id: string }>(
+      // SELECT via service role — should succeed. Same connection, so it sees the uncommitted row.
+      const sel = await client.query<{ relay_id: string }>(
         `SELECT relay_id FROM relay_registrations WHERE relay_id = $1`,
         [testRelayId],
       );
       expect(sel.rows.length).toBe(1);
 
       // UPDATE via service role — should fail (no UPDATE privilege)
+      await client.query("SAVEPOINT before_update");
       await expect(
-        servicePool.query(
+        client.query(
           `UPDATE relay_registrations SET region = 'eu-west-1' WHERE relay_id = $1`,
           [testRelayId],
         ),
       ).rejects.toThrow();
+      await client.query("ROLLBACK TO SAVEPOINT before_update");
 
       // DELETE via service role — should fail (no DELETE privilege)
+      await client.query("SAVEPOINT before_delete");
       await expect(
-        servicePool.query(
+        client.query(
           `DELETE FROM relay_registrations WHERE relay_id = $1`,
           [testRelayId],
         ),
       ).rejects.toThrow();
+      await client.query("ROLLBACK TO SAVEPOINT before_delete");
     } finally {
-      // Cleanup via superuser
-      await superPool.query(`DELETE FROM relay_registrations WHERE relay_id LIKE '________________________________'`).catch(() => {});
+      // The rollback IS the cleanup — nothing was committed, so there is nothing to remove and no
+      // wildcard delete reaching into rows this test never wrote.
+      await client.query("ROLLBACK").catch(() => { /* connection is going back regardless */ });
+      client.release();
       await servicePool.end();
     }
   });
@@ -431,8 +458,10 @@ describeIntegration("FEDERATION-003 integration: AC-009-store-tables registerRel
     // per M4+ convention that store layers return results and handlers own observability.
     // The handler-layer event is verified in the m6b-006-relay-auto-register.test.ts wired test.
 
-    // Cleanup
-    await superPool.query(`DELETE FROM relay_registrations WHERE relay_id = $1`, [relayId]);
+    // DOD-M15-CHAINDEBT-1: the row stays. `relay_registrations` is hash-chained, and `relayId` is
+    // per-run random — so there was never a collision to clean up, only a chain to break. One of
+    // the tests in this very file asserts `verifyChain` returns valid; deleting rows here is how
+    // that assertion gets broken by a neighbour.
   });
 
   it("AC-009-store-tables: getRelayPublicKey() returns undefined for unknown relayId", async () => {
@@ -468,12 +497,23 @@ describeIntegration("FEDERATION-003 integration: AC-010-table-extra-excluded —
 
     await store.registerRelay({ relayId, publicKeyHex, region: "eu-central-1" });
 
-    // Fetch rows via superuser to run verifyChain
+    /**
+     * DOD-M15-CHAINDEBT-1 — the WHOLE table, not this test's own row.
+     *
+     * This selected `WHERE relay_id = $1` and handed `verifyChain` a one-row array. `verifyChain`
+     * chains the first row it is given from `CHAIN_GENESIS`, but the stored `chain_hash` was
+     * computed against whatever row actually preceded it in the table — so the assertion only held
+     * while this file deleted its rows after every test and left the table empty. The cleanup was
+     * not just tidiness here; this assertion was leaning on it.
+     *
+     * Verifying the whole table is both the honest shape and a stronger claim: it asserts the chain
+     * is intact end to end, which is what `verifyChain` is for, and it no longer cares what else
+     * has been registered.
+     */
     const rows = await superPool.query<Record<string, unknown>>(
-      `SELECT * FROM relay_registrations WHERE relay_id = $1 ORDER BY id ASC`,
-      [relayId],
+      `SELECT * FROM relay_registrations ORDER BY id ASC`,
     );
-    expect(rows.rows.length).toBe(1);
+    expect(rows.rows.some((r) => r["relay_id"] === relayId)).toBe(true);
 
     // deregistered_at will be NULL in the row — verifyChain must succeed because
     // deregistered_at is excluded from chain hash computation via TABLE_EXTRA_EXCLUDED.
@@ -482,8 +522,10 @@ describeIntegration("FEDERATION-003 integration: AC-010-table-extra-excluded —
     const result = verifyChain(rows.rows, logger, "relay_registrations");
     expect(result.valid, `verifyChain must return { valid: true } — if false, deregistered_at is missing from TABLE_EXTRA_EXCLUDED: ${JSON.stringify(result)}`).toBe(true);
 
-    // Cleanup
-    await superPool.query(`DELETE FROM relay_registrations WHERE relay_id = $1`, [relayId]);
+    // DOD-M15-CHAINDEBT-1: the row stays. `relay_registrations` is hash-chained, and `relayId` is
+    // per-run random — so there was never a collision to clean up, only a chain to break. One of
+    // the tests in this very file asserts `verifyChain` returns valid; deleting rows here is how
+    // that assertion gets broken by a neighbour.
   });
 });
 
@@ -534,8 +576,10 @@ describeIntegration("FEDERATION-003 integration: SI-001 relay_registrations is a
     // per M4+ convention that store layers return results and handlers own observability.
     // The handler-layer event is verified in the m6b-006-relay-auto-register.test.ts wired test.
 
-    // Cleanup
-    await superPool.query(`DELETE FROM relay_registrations WHERE relay_id = $1`, [relayId]);
+    // DOD-M15-CHAINDEBT-1: the row stays. `relay_registrations` is hash-chained, and `relayId` is
+    // per-run random — so there was never a collision to clean up, only a chain to break. One of
+    // the tests in this very file asserts `verifyChain` returns valid; deleting rows here is how
+    // that assertion gets broken by a neighbour.
   });
 
   it("AC-007/SI-001: re-registration with DIFFERENT key is rejected with RELAY_IDENTITY_CONFLICT", async () => {
@@ -565,8 +609,10 @@ describeIntegration("FEDERATION-003 integration: SI-001 relay_registrations is a
     // per M4+ convention. The store throws RELAY_IDENTITY_CONFLICT; the handler logs the event.
     // The handler-layer event is verified in the SI-003 wired test below.
 
-    // Cleanup
-    await superPool.query(`DELETE FROM relay_registrations WHERE relay_id = $1`, [relayId]);
+    // DOD-M15-CHAINDEBT-1: the row stays. `relay_registrations` is hash-chained, and `relayId` is
+    // per-run random — so there was never a collision to clean up, only a chain to break. One of
+    // the tests in this very file asserts `verifyChain` returns valid; deleting rows here is how
+    // that assertion gets broken by a neighbour.
   });
 });
 
