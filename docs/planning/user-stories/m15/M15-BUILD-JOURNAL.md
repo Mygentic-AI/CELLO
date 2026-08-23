@@ -22,6 +22,21 @@ description: >
 
 - **NEXT ACTION: close `SEAL-FAILED-TERMINAL-1`**, then pull ONE new ❌ line. `FREEZE-STATUS-1` needs
   a client-side DB migration in its own reviewed unit; `UNWITNESSED-1` needs a relay-attaching fixture.
+- **`OFFER-EXPIRY-1` IS DIAGNOSED — do not re-derive it.** Recommended next line: it is in the
+  CONNECT path, which is the core value, and its second bullet is a live mutual-exclusion defect.
+  The whole cause is one field: `SessionConnectionGater.#allowedPeerId` is a SINGLE `string | null`,
+  and `admitInboundPeer(peerId)` overwrites it. So:
+  - two inbound offers close together → the second narrows the gate away from the first → the first
+    initiator is refused with a `connection.rejected` naming a peer id it never heard of;
+  - `admitOfferedDialer` records `#offeredDialer[(agent, sessionId)]` but the GATE itself is not
+    keyed by session, so `closeInbound()` for one session closes it for whichever session narrowed
+    it last;
+  - nothing expires it, so an offer never followed by an assignment leaves a standing invitation for
+    the life of the process.
+  **Fix shape:** make the gate a SET keyed by session id with an expiry, so admitting one session
+  cannot evict another and an unclaimed offer lapses on the same clock the directory uses before it
+  gives up waiting for an accept. `getStandingReceiverAllowedPeer` (added by `RESPONDER-VERIFY-1`)
+  is the read seam already in place.
 - **🚨 THE WIRING GAP HAS NOW ESCAPED IN FOUR UNITS.** Roster sweep, its probe budget, the manifest
   validity tick, and this unit's WRITE side. Every time the module tests were green and nothing
   proved the daemon called the thing. In this unit I wrote a docstring naming the previous three and
