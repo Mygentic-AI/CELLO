@@ -159,6 +159,13 @@ export function validateSealSubmissionLeaves(
        * so the stricter of the two sides was the one that had a receipt, and the open one was the
        * one that did not. Against the standing rule that the directory holds no PII and is hash-only
        * by design, the guard belongs on both.
+       *
+       * ⚠️ NOT THE IDENTICAL RULE, AND SAYING "same rule on both sides" WAS AN OVERSTATEMENT. The
+       * relay requires the bytes to decode as a SEAL payload for THAT session; this admits any ≤512
+       * bytes on a ctrl leaf. That leaves no equivalent hole — `seal-final-root.ts` decodes the
+       * payload and binds it against the hash the client SIGNED, with a named `SESSION_MISMATCH`
+       * verdict, which is a stronger basis than the relay's — but it is enforced one layer later, and
+       * the sentence should say which property lives where rather than implying symmetry.
        */
       if (kind !== "ctrl") {
         return { ok: false, reason: "seal_submission_content_bytes_not_permitted" };

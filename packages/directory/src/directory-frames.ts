@@ -579,6 +579,17 @@ function toStringArray(v: unknown): string[] | null {
 }
 
 /** Decode a raw CBOR frame from a client signaling stream. Returns null on malformed input. */
+/**
+ * The ctrl leaf kind and the SEAL-payload ceiling, mirroring the relay's.
+ *
+ * ⚠️ NAMED RATHER THAN INLINE because drift between the two sides of a hop IS the finding this
+ * guard was added for — the relay refused content the directory accepted, and a bare literal is the
+ * copy that drifts. A real `encodeSealPayload` output is 69 bytes; 512 is generous against that and
+ * tiny against a message.
+ */
+const CTRL_LEAF_KIND = 0x02;
+const MAX_CTRL_PAYLOAD_BYTES = 512;
+
 export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignalingFrame | null {
   let obj: unknown;
   try {
@@ -853,8 +864,8 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
           // CTRL ONLY — review H5. A msg leaf's content is the operator's plaintext and a doc leaf's
           // is their document; the directory is hash-only by design and must not admit either, on a
           // frame that carries no relay receipt.
-          if (leaf_kind !== 0x02) return null;
-          if (content_bytes.length === 0 || content_bytes.length > 512) return null;
+          if (leaf_kind !== CTRL_LEAF_KIND) return null;
+          if (content_bytes.length === 0 || content_bytes.length > MAX_CTRL_PAYLOAD_BYTES) return null;
         }
         parsed.push({ sequence_number, leaf_kind, structure2_cbor, structure1_cbor, relay_id, relay_timestamp, relay_signature, ...(content_bytes ? { content_bytes } : {}) });
       }

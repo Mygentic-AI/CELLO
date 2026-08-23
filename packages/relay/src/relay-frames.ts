@@ -43,9 +43,16 @@ const RELAY_CTRL_LEAF_KIND = 0x02;
  * this relay CBOR-parse a multi-megabyte buffer per submit. The order matters: the length check is
  * above the decode, deliberately.
  *
- * A guard whose only surviving job is to protect the guard below it is worth keeping and worth
- * labelling, because the alternative is a future reader deleting it as redundant — it is redundant
- * for the property it was written for and not for the one it now serves.
+ * ⚠️ AND THE JOB IS SMALLER THAN THIS COMMENT FIRST CLAIMED. By the time this bound is reached, the
+ * outer `decode(frameBytes)` has already parsed and materialised the whole frame — so what it saves
+ * is one EXTRA parse of an already-resident buffer, not the allocation, and pathological nesting
+ * inside it is caught by `decodeSealPayload`'s own try/catch regardless. Free, worth keeping, and
+ * worth describing accurately: promising more than it delivers is the exact failure this unit is
+ * about.
+ *
+ * "Untestable" also overstated it. It is not distinguishable *by the decoder's return value*; the
+ * ordering property is assertable if the two checks are split into named functions. Not worth doing
+ * — worth saying, because "untestable" invites the next reader to stop thinking.
  */
 const MAX_CTRL_PAYLOAD_BYTES = 512;
 

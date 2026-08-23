@@ -114,6 +114,20 @@ export const DIRECTORY_RELAY_PROTOCOL_ID = "/cello/directory-relay/1.0.0";
 const AUTH_DOMAIN = "CELLO-RELAY-AUTH-v1";
 const NONCE_TTL_MS = 30_000;
 
+/**
+ * How much of an unrecognised frame's `type` reaches the log.
+ *
+ * The field is attacker-controlled and cbor-x accepts up to 4 MiB by default, so without a bound an
+ * authenticated peer can write a multi-megabyte line per refused frame. Not log forgery — the logger
+ * is `JSON.stringify`, so newlines escape — but volume, and it costs the peer nothing.
+ *
+ * ⚠️ 64, NOT 32. I set this to 32 first and it truncated a legitimate frame type mid-word in a test.
+ * The longest real type names run to the high twenties, so 32 leaves no margin and the cost of
+ * getting it wrong is a diagnostic naming a frame nobody can grep for — which is most of the value of
+ * logging the type at all. 64 still turns 4 MiB into a line, and fits anything real.
+ */
+const MAX_LOGGED_FRAME_TYPE = 64;
+
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
 // ─── Nonce registry ────────────────────────────────────────────────────────────
@@ -996,7 +1010,7 @@ export class CelloRelayNode {
             peeked = peek;
             // SLICED — review H3. `type` is attacker-controlled and cbor-x accepts up to 4 MiB by default, so
             // an authenticated client could otherwise write a multi-megabyte line per refused frame.
-            if (peek && typeof peek["type"] === "string") rawType = peek["type"].slice(0, 32);
+            if (peek && typeof peek["type"] === "string") rawType = peek["type"].slice(0, MAX_LOGGED_FRAME_TYPE);
             if (peek && typeof peek["leaf_kind"] === "number") rawLeafKind = peek["leaf_kind"];
           } catch { /* not CBOR, or not an object — "(undecodable)" is the honest answer */ }
           this.#logger.warn("relay.session.frame.refused", {
