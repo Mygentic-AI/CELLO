@@ -37,9 +37,10 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
-> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4285 client tests.
-> **IN FLIGHT: the salt AGREEMENT EXCHANGE** — `SEALWIRE-1` bullet 6, part A. The salt primitive is
-> built and its review is CLOSED (→ Entry 40, eleven findings, all fixed).
+> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4319 client tests.
+> **THE SALT AGREEMENT IS BUILT AND UNREVIEWED** — `SEALWIRE-1` bullet 6, part A, commits
+> `b08e69b` → `b6f4fdf`. Reviewer dispatched. Under the WIP limit the only permitted work is closing
+> it. The salt PRIMITIVE's own review is closed (→ Entry 40, eleven findings, all fixed).
 
 - **TIER 4 IS IN PROGRESS. `SEALWIRE-1` bullets 1 + 2 are BUILT, REVIEWED, and their blocking
   findings fixed** — the directory certifies the content-hash root, and the client verifies it
@@ -54,8 +55,21 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   precisely because nothing consumes the salt yet — an old peer that never answers costs nothing.
 - **🚨 THE `REFUSAL_REASONS` AC WAS WRONG AND IS CORRECTED IN PART A.** I wrote it; `recordRefusal`
   refuses an inbound session REQUEST, before a session exists. A salt disagreement happens on an
-  ESTABLISHED session, so its named reason belongs on the freeze path, not that union.
-- **NEXT after part A:** part B, then `SEALWIRE-1` bullets 3–8.
+  ESTABLISHED session, so its named reason belongs on the freeze path, not that union. The DoD line
+  now carries the correction struck-through with the reason.
+- **PART A AS BUILT, so part B does not re-derive it:** one frame type
+  `session_salt_agreement` on `/cello/content/1.0.0`, carrying EXACTLY ONE of `contribution` (32B,
+  "I hold no salt") or `fingerprint` (8B, "I hold one"). The state machine is a pure function in
+  `core/daemon/src/session-salt-agreement.ts`; the I/O and the freeze are in
+  `session-node-manager.ts`. Announced from `onPeerConnect` — the ONLY hook that fires on both sides
+  for every way the direct path comes up. Our contribution is minted ONCE per session.
+- **`#frozenSessions` IS NOW A MAP, not a Set.** The revive refusal used to hardcode the identity
+  failure's words; a salt disagreement going through the same path would have accused a counterparty
+  who did nothing. Each freezing site supplies its own reason code and guidance. **Spell the revive
+  reason out — do not derive it from the freeze reason**: doing that silently turned the stable
+  `session_frozen_identity_failure` into a family of varying strings.
+- **NEXT after part A:** part B — `wireContentHash` → `saltedContentHash`, the version discriminator,
+  and holding the first send until the salt is agreed. Then `SEALWIRE-1` bullets 3–8.
 - **🚨 BULLETS 3 + 4 HAVE AN UNRESOLVED DESIGN FORK — do not start them without reading this.** The
   directory cannot hard-gate on a SEAL leaf's declared `final_root`, because the client's local tree
   is NOT guaranteed to be a prefix of the relay's leaf array: content is appended locally even when
