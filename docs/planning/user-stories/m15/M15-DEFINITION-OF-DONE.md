@@ -338,7 +338,14 @@ Found by the `DOD-M15-SURFACE-1` review. Not a break — it is the reverse of on
   and costs a reader the assumption that something acts on it.
 - Sequence with any other wire change so the two repos move once, not twice.
 
-### `DOD-M15-IDLE-CONNS-1` — ❌ A connection that authenticates to nothing does not live forever
+### `DOD-M15-IDLE-CONNS-1` — 🟡 A connection that authenticates to nothing does not live forever
+> **Implemented, review in flight (→ Entry S3).** Gate 4335 tests + lint + typecheck + build by
+> exit code; 11 mutations killed across both halves. **Two of this line's premises below are STALE
+> and the diff re-scoped against them:** `ASSIGN-1` already made the receiver admit nobody inbound,
+> and the four caps below were already enforced — as libp2p defaults `createNode` never declared.
+> What shipped: the caps become ours, connections gain direction/openedAt/streamCount (the
+> measurement this line demands and nothing provided), and the standing receiver sweeps inbound
+> connections carrying no stream — sparing outbound, relays and the directory.
 Split from `DOD-M15-SURFACE-1`. **Its value changed while the milestone was running, which is why it
 is a separate line rather than a bullet.**
 - **What it was for:** a stranger dials the standing receiver (which accepts everyone by design),
