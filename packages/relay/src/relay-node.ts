@@ -990,8 +990,10 @@ export class CelloRelayNode {
            */
           let rawType = "(undecodable)";
           let rawLeafKind: number | null = null;
+          let peeked: Record<string, unknown> | null = null;
           try {
             const peek = decode(frameBytes) as Record<string, unknown> | null;
+            peeked = peek;
             // SLICED — review H3. `type` is attacker-controlled and cbor-x accepts up to 4 MiB by default, so
             // an authenticated client could otherwise write a multi-megabyte line per refused frame.
             if (peek && typeof peek["type"] === "string") rawType = peek["type"].slice(0, 32);
@@ -1020,13 +1022,51 @@ export class CelloRelayNode {
            * mislabelling.
            */
           if (rawType === "hash_submit") {
+            /**
+             * ⚠️ CLASSIFY, DO NOT COLLAPSE — review pass 2, blocking 2.
+             *
+             * `!parsed` catches EVERY decode failure of a submit — nine distinct conditions — and
+             * this replied `content_not_permitted` to all of them. Two of those produced a message
+             * that contradicts itself:
+             *
+             *   - the session-binding case, which is the very check the previous pass added: a ctrl
+             *     leaf whose payload names another session was told *"content_bytes is admissible on
+             *     ctrl leaves only (0x02); this frame declared leaf_kind 2"* — and leaf kind 2 IS
+             *     ctrl. It pointed the author at the one rule they had obeyed and said nothing about
+             *     the mismatch actually detected;
+             *   - a submit carrying no content at all — a bad signature length, an empty
+             *     `structure1_cbor` — was reported as a content-policy violation on a frame with no
+             *     content in it.
+             *
+             * So the reason is decided by whether the frame HAS the field, and the detail names the
+             * condition observed rather than the rule that happens to be nearest.
+             */
+            const carriedContent = peeked !== null && peeked["content_bytes"] !== undefined;
             try {
-              this.#sendFrame(stream, encodeHashSubmitError({
+              /**
+               * ⚠️ `await`, AND ITS ABSENCE WAS A REMOTE PROCESS KILL. `#sendFrame` is async, so a
+               * synchronous throw inside it becomes a REJECTED PROMISE — which this `catch` cannot
+               * see. It was dead code claiming to handle precisely the failure it could not observe,
+               * and nothing else handled it either, so Node's default would terminate the relay.
+               *
+               * That it throws is documented, not inferred: libp2p's `MessageStream.send` throws when
+               * the send buffer is full or the stream is closed for writing — both reachable by any
+               * authenticated client, by resetting the stream after a refused submit or by flooding
+               * refused submits without draining. On a shared relay that is every session on the
+               * node, killed by one peer.
+               *
+               * Every other `#sendFrame` call in this file awaits or attaches a `.catch()`. This one
+               * was the anomaly, and lint could not see it: the config uses the non-type-checked
+               * preset, which excludes `no-floating-promises`.
+               */
+              await this.#sendFrame(stream, encodeHashSubmitError({
                 type: "hash_submit_error",
-                reason: "content_not_permitted",
-                detail: rawLeafKind === null
-                  ? "the submit was malformed or carried a field this relay does not accept"
-                  : `content_bytes is admissible on ctrl leaves only (0x02); this frame declared leaf_kind ${rawLeafKind}`,
+                reason: carriedContent ? "content_not_permitted" : "submit_malformed",
+                detail: carriedContent
+                  ? (rawLeafKind !== null && rawLeafKind !== 0x02
+                      ? `content_bytes is admissible on ctrl leaves only (0x02); this frame declared leaf_kind ${rawLeafKind}`
+                      : "content_bytes must decode as a SEAL payload for THIS session, and must not exceed the size bound")
+                  : "the submit could not be decoded — check session_id (16 bytes), leaf_kind, structure1_cbor and a 64-byte sender_signature",
               }));
             } catch { /* the stream is going away; the WARN above is the durable record */ }
           }

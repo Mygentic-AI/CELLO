@@ -189,7 +189,18 @@ export type HashSubmitErrorReason =
    * Terminal and immediate: re-sending the same frame cannot succeed, so a timeout is the wrong
    * shape as well as the wrong word.
    */
-  | "content_not_permitted";
+  | "content_not_permitted"
+  /**
+   * The submit could not be decoded, and it carried no `content_bytes` — so it is a malformed frame
+   * rather than a content-policy refusal.
+   *
+   * ⚠️ THIS EXISTS BECAUSE `content_not_permitted` WAS ANSWERING FOR NINE CONDITIONS. A submit with a
+   * short signature or an empty `structure1_cbor` was told it had violated a content policy, on a
+   * frame with no content in it — a label for where the failure surfaced standing in for what went
+   * wrong. Splitting them costs one union member and is the difference between a client author
+   * checking their signature and a client author auditing a rule they never broke.
+   */
+  | "submit_malformed";
 
 export interface HashSubmitError {
   type: "hash_submit_error";
