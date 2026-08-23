@@ -916,10 +916,15 @@ reboot clears, and re-running to recover the failure texts costs another hour.
   `DOD-M15-CLIJSON-1`: the journeys died at their FIRST line, in `register-agent`, and **never
   reached the quorum assertion at all.**
   **So the quorum invariant was not failing. It was untested.** Those are very different claims, and
-  I reported the alarming one about a property `.claude/CLAUDE.md` calls non-negotiable. The
-  distinction matters beyond this line: *"a test that asserts X is red"* only means *"X is broken"*
-  if the test reached X, and a journey that dies at setup reaches nothing. Re-run after the
-  `CLIJSON-1` fix before making any claim about quorum in either direction.
+  I reported the alarming one about a property `.claude/CLAUDE.md` calls non-negotiable.
+  **✅ RE-RUN AND SETTLED 2026-08-24: `j-tofn-dkg` is GREEN, 2/2, 62s.** Registration fans the DKG to
+  all three nodes, and **killing one directory still lets registration succeed among the remaining
+  two.** The invariant holds. It was never broken; the journey died in `register-agent` before
+  reaching it.
+  The distinction matters beyond this line: *"a test that asserts X is red"* only means *"X is
+  broken"* **if the test reached X**, and a journey that dies at setup reaches nothing. **The loudest
+  alarm I raised all night was about a property that was fine**, and it came from reading a red test
+  without checking how far it got.
 - **What is GREEN is worth as much as what is red, and constrains the cause:** `j-conn`, `j-auth`,
   `j-onboard`, `j-int`, `j-presence`, `j-sig`, `j-antientropy` (5/5), `j-suspend`,
   `j-trust-journey`, `j-combined-journey`, `j-leg-frontier`, `j-track-record`, `j-optionb-setup`,
