@@ -1545,6 +1545,28 @@ enterprise relay stays a signature-verifier rather than becoming a directory cli
   named participant, and answers only for that session.
 - **The relay verifies that an authenticating key is a registered agent**, rather than accepting any
   Ed25519 keypair.
+
+> ### ✅ THE LIVENESS SCOPING IS DONE (2026-08-24), and the falsification found something better
+> The handler echoed `session_id` back **without ever reading it** and answered from a global
+> pubkey lookup with no caller check. Both halves of the bar now hold: the caller must be a named
+> participant of the session it cites, **and** the subject must be the OTHER participant of THAT
+> session — the second half matters as much, or a participant of one real session can still
+> enumerate everyone else using it as a ticket. The refusal deliberately does not distinguish
+> *no such session* from *not your session*; that difference is itself the enumeration signal.
+>
+> **THE EXISTING TEST ASSERTED THE LEAK.** AC-002 asked about a random 32-byte key and expected a
+> real answer. So the behaviour was not unguarded, it was **PINNED** — anyone tightening it would
+> have met a failing test that looks like a regression, and the instinct on a red test is to restore
+> the old behaviour. A test defending a vulnerability is worse than no test.
+>
+> **AND NOTHING SENDS THE FRAME.** Falsifying the fix — *what breaks if this is applied?* — found no
+> caller in either repo: an encoder, a decoder, a handler, and the only exerciser was that test. So
+> the scoping costs nothing, and the oracle was **an attack surface with no legitimate user**.
+> **NOT deleted**, deliberately: `DOD-LIVE-2` expects this query and this line's own bar specifies
+> its behaviour, so it is planned surface rather than dead code. But it is the same shape bullet 7
+> names for `seal_attempt` — *"a fully written handler with no sender reads as abandoned work to
+> anyone auditing a public repo"* — and it should either gain its caller or be removed before
+> launch. **Andre's call; recorded, not taken.**
 - **A connection gater on the relay, including the reservation-dial hook.** Reservations are granted
   to any peer up to 4096, and the hook restricting who may dial *through* to a reservation holder is
   never installed — so an agent's circuit address is dialable by anyone who learns it. **This is the
