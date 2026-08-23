@@ -139,6 +139,7 @@ import type {
   SealLegibility,
 } from "./directory-types.js";
 import { buildSealLegibility, bindLegibilityToTbs, findSealCeremonyPair } from "./seal-legibility.js";
+import { verifySealFinalRoots, SEAL_FINAL_ROOT_REASONS, SEAL_FINAL_ROOT_GUIDANCE } from "./seal-final-root.js";
 import { WALL_CLOCK } from "./directory-types.js";
 import type { DirectoryStore } from "@cello-protocol/interfaces";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
@@ -5305,6 +5306,78 @@ export class CelloDirectoryNode {
       ? [Buffer.from(participants[0], "hex"), Buffer.from(participants[1], "hex")]
       : [new Uint8Array(32), new Uint8Array(32)];
 
+    /**
+     * 🚨 `DOD-M15-SEALWIRE-1` BULLETS 3 AND 4 — THE RELAY IS FINALLY CHECKED BY SOMETHING IT DOES NOT
+     * CONTROL. Everything above this line validated the relay against the relay.
+     *
+     * The root comparison at the top of this method rebuilds a root from the leaf array the relay
+     * supplied, with the same code, and compares it to the root the same relay supplied. It therefore
+     * validates ARITHMETIC: **a relay that drops or reorders a leaf and reports the matching root
+     * passes it every time**, and the two participants receive a signed certificate over a
+     * conversation neither of them had.
+     *
+     * `final_root` is the client's OWN signed claim about its own transcript, and it is the only
+     * value in reach that the relay cannot produce. It arrives now because the relay carries the SEAL
+     * payload (bullets 3+4's earlier legs); before that it survived solely inside a SHA-256 pre-image
+     * nobody transmitted, which is why the deferral on this check was not merely unfinished but
+     * impossible to satisfy as written.
+     *
+     * ⚠️ PLACED HERE, AND THE POSITION IS THE PRECONDITION. `verifySealFinalRoots` proves the payload
+     * matches what `structure1_cbor` says; it does NOT prove `structure1_cbor` was signed by a
+     * participant. Both of those happen above: the per-leaf loop verifies
+     * `verify(s2.sender_pubkey, structure1_cbor, s2.sender_signature)` and cross-checks
+     * `s1.content_hash === s2.content_hash`, and `verifySealLeaves` confirms the ceremony pair. Call
+     * it any earlier and a relay could mint a ctrl leaf with a key it holds, and every comparison
+     * inside would become the relay checking itself again.
+     *
+     * The roster is passed so the module enforces the participant half itself rather than trusting
+     * this call site to have done it.
+     */
+    const finalRoots = verifySealFinalRoots(leaves, sessionId, [pA, pB]);
+    if (!finalRoots.ok) {
+      if (finalRoots.reason === SEAL_FINAL_ROOT_REASONS.NOT_CARRIED) {
+        /**
+         * ⚠️ ABSENT IS NOT A DISAGREEMENT, AND REFUSING IT WOULD BREAK EVERY SEAL DURING THE ROLL.
+         *
+         * A relay that has not deployed the carry sends no payload, and that is the state every
+         * relay is in until it upgrades. Treating it as a failure would take the entire federation
+         * down the moment this directory shipped — the exact ABSENT-versus-NAMED collapse Decision
+         * #15 spends a wire discriminator preventing, applied one layer up.
+         *
+         * So the seal proceeds exactly as it did before this check existed, and says so once.
+         */
+        this.#logger?.info("seal.final_root.not_carried", {
+          sessionId: sessionIdHex,
+          impact: "this seal was certified WITHOUT checking the participants' own signed root — the behaviour of every release before this check existed. Nothing is degraded relative to any shipped version.",
+          guidance: SEAL_FINAL_ROOT_GUIDANCE[finalRoots.reason],
+        });
+      } else {
+        /**
+         * A CARRIED payload that disagrees is the thing this whole line of work exists to catch, and
+         * it is refused. The reasons are distinct on purpose — a relay that altered the leaf set, two
+         * participants who disagree with each other, and a payload signed by neither of them are
+         * three different accusations against three different parties.
+         */
+        this.#logger?.error("seal.final_root.refused", {
+          sessionId: sessionIdHex,
+          reason: finalRoots.reason,
+          detail: finalRoots.detail,
+          impact: "the certificate was NOT signed. A participant's own signed transcript root does not match the leaves presented for sealing, so no honest certificate can be written over them.",
+          guidance: SEAL_FINAL_ROOT_GUIDANCE[finalRoots.reason],
+        });
+        this.#notifySealRejected(sessionIdHex, sessionId, "merkle_root_mismatch");
+        return { ok: false, reason: finalRoots.reason };
+      }
+    } else {
+      this.#logger?.info("seal.final_root.verified", {
+        sessionId: sessionIdHex,
+        coverage: finalRoots.coverage,
+        // `one` means a single participant's signature backed this root — see the verdict's own
+        // detail. Recorded because "verified" without it overstates what was checked.
+        ...(finalRoots.coverage === "one" ? { detail: finalRoots.detail } : {}),
+      });
+    }
+
     // The seal initiator authored the EARLIER of the two ceremony ctrl leaves. Derived from the
     // same kind-based helper the verification used — taking leaves[length - 2] positionally names
     // the wrong party (and resolves the wrong primary_pubkey for the FROST ceremony) as soon as a
@@ -6279,51 +6352,21 @@ function verifySealLeaves(
   // submission, and every trailing leaf would otherwise be folded into the FROST-notarized root
   // while being bound to nothing in the ceremony.
   if (ceremony.responderIndex !== leaves.length - 1) return { ok: false };
-  // M1 DEBT (SESSION-003-AC-002): directory should also verify that each SEAL leaf's payload
-  // final_root matches the Merkle root at the appropriate stage (before initiator SEAL, after
-  // initiator SEAL, after both). This requires the relay to include ctrl leaf content bytes in
-  // SealData (currently only content_hash is available). See: CELLO-SESSION-003 AC-002 step (f).
-  //
-  // ⚠️ DOD-M15-CLAIM-COMMENTS-1 — THE DEFERRAL'S STATED REASON IS FALSE, AND HAS BEEN SINCE IT WAS
-  // WRITTEN. It said this was "deferred to a follow-on story since clients perform this
-  // verification locally (AC-001), maintaining the trust guarantee at the client level". The client
-  // does NOT perform it: `seal-flows.ts` defers the same check back here, saying root agreement
-  // "belongs to the FROST seal against the directory-held tree". Each half points at the other and
-  // there is no third party, so the certified root is compared against NO participant's transcript
-  // on the bilateral path — the receipt is not bound to the transcript, and if the two diverged
-  // nothing would say so.
-  //
-  // The deferral itself is also structurally impossible as written: `final_root` survives only
-  // inside a SHA-256 pre-image that is never transmitted, so no amount of follow-on work makes this
-  // check possible without changing the wire.
-  //
-  // ⚠️ THIS PARAGRAPH ENDED "and this comment is deleted with it", AND THAT WAS BECOMING FALSE.
-  // `DOD-M15-SEALWIRE-1` bullets 3+4 have now built the verifier — `seal-final-root.ts`, which takes
-  // the SEAL payload bytes, binds them to the hash the client SIGNED, and compares the client's
-  // `final_root` against a root rebuilt from the relay's leaves. **It is not yet invoked from here.**
-  //
-  // ⚠️ THE REASON CHANGED, AND THE OLD ONE IS NOW FALSE. This said the call was not wired *"because
-  // no relay carries `content_bytes` on the wire yet"* — and a relay does, as of the store-and-forward
-  // leg: it accepts the payload at the wire, stores it on the leaf, and hands it to this node in
-  // `SealData`. So the stated blocker was removed by the same line of work that wrote it, and a
-  // reader consulting this block — which it tells them to do — would have found a blocker that no
-  // longer exists.
-  //
-  // What remains is simply that **wiring the call is the next unit**. The precondition it must meet
-  // has not changed and is the thing to carry forward: `verifySealFinalRoots` proves the payload
-  // matches what `structure1_cbor` says, and does NOT prove `structure1_cbor` was signed by a
-  // participant. Invoke it only from a path that has already verified the signature and the
-  // participant, or a relay can mint a ctrl leaf with a key it holds and every comparison below
-  // becomes the relay checking itself.
-  //
-  // So the gap is narrower than this comment describes and is NOT yet closed. Stated plainly rather
-  // than left claiming its own deletion: a sentence promising it will be gone reads, to anyone who
-  // greps for it, as though the work happened somewhere else in the line — the same "pointer to
-  // nothing reads as tracked" failure its sibling comment twenty lines up was corrected for. Delete
-  // this block when the call is wired, not before.
-  //
-  // Kept rather than removed because it records a real gap: deleting it would leave the absence
-  // looking deliberate, which is exactly what the original wording achieved by accident.
+  /**
+   * ⚠️ THE DEFERRAL THAT SAT HERE FOR TWO MILESTONES IS GONE, AND `DOD-M15-SEALWIRE-1` BULLET 3 ASKED
+   * FOR IT TO GO IN THIS DIFF — *"the deferral comment is deleted in the same diff. Fixing one side
+   * of a mutual deferral and leaving the other half pointing at it is how this gap was created."*
+   *
+   * What it said: verifying each SEAL leaf's `final_root` was "deferred to a follow-on story since
+   * clients perform this verification locally". **The client did not.** `seal-flows.ts` deferred the
+   * same check back to here, so each half read as a considered decision to check elsewhere and there
+   * was no elsewhere — the certified root was compared against NO participant's transcript.
+   *
+   * It is checked now, in `processSeal`, against the client-signed `final_root` the relay carries in
+   * each ctrl leaf's `content_bytes`. The check that could not be written is written, and it is the
+   * one non-circular thing in this method: everything else here validates the relay against values
+   * the relay supplied.
+   */
   return { ok: true };
 }
 
