@@ -242,12 +242,35 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
      * The bound is 13 minutes rather than the helper's default 60s: this journey's counterparty is
      * GONE, so the seal reaches a root by the ~11-minute unilateral escalation, not by B closing.
      */
+    /**
+     * ⚠️ 90s, NOT 13 MINUTES — my first bound was UNREACHABLE and would never have been the thing
+     * that failed. The test's own vitest timeout is 120s, so a 13-minute poll dies at 120s with
+     * "Test timed out" and the helper's diagnostic — the last receipt response, which is the useful
+     * part — never prints. A bound longer than its enclosing timeout is not a generous bound, it is
+     * a discarded one.
+     *
+     * 90s is sized from the daemon's own words in this harness: *"it escalates to a unilateral seal
+     * after about 1 minutes"* — the spine configures a short grace, not the production 11. So the
+     * root should arrive around 60s, and 90 leaves margin without exceeding the enclosing timeout.
+     */
     const sealedRoot = await awaitSealedRoot(connA, sessionIdA, {
-      timeoutMs: 13 * 60_000,
+      timeoutMs: 90_000,
       label: "A's unilateral seal",
     });
     expect(sealedRoot, `A must surface a sealed_root from the unilateral cert:${diag}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(close.seal_type, `seal_type must be 'unilateral':${diag}`).toBe("unilateral");
+    /**
+     * ⚠️ `close.seal_type` IS GONE AND NOTHING REPLACES IT. The non-blocking close returns a
+     * commitment — `{ok, seal_status: "committed", guidance}` — and `cello_sealed_receipt` does not
+     * carry `seal_type` either. So no response tells an operator whether their seal was bilateral or
+     * unilateral, which is a real gap and is on the POST-LAUNCH backlog rather than papered over
+     * here.
+     *
+     * The substantive evidence was never this field anyway: the directory's own
+     * `session.unilateral.attestation` and `session.unilateral.notarized` events, asserted below,
+     * are what prove the unilateral path ran with the counterparty ABSENT. Those are the assertions
+     * with teeth; `seal_type` was a convenience restatement of them.
+     */
+
 
     // DOD-SEAL-1/2: the directory ran the REAL notarization (verify→FROST→persist), not the
     // old unsigned bookkeeping. session.unilateral.notarized fires only after a signed
@@ -313,7 +336,7 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     const persistedAbsent = (receipt.legibility?.participants ?? []).find((p) => p.attestation_mode === "absent");
     expect(persistedAbsent, `retrieved receipt must record the counterparty 'absent':${rcptDiag}`).toBeDefined();
     expect(persistedAbsent!.pubkey, `retrieved receipt's absent party must be B (${pubB.slice(0, 16)}…):${rcptDiag}`).toBe(pubB);
-  }, 120_000);
+  }, 180_000);
 });
 
 describe("J-UNILATERAL — DOD-LIVE-2: the ABSENT gate (gone→ABSENT vs alive-but-silent→DELIVERED)", () => {
@@ -338,14 +361,16 @@ describe("J-UNILATERAL — DOD-LIVE-2: the ABSENT gate (gone→ABSENT vs alive-b
       `\n--- relay liveness ---\n${cluster.relay.output.split("\n").filter((l) => /liveness/i.test(l)).slice(-8).join("\n")}`;
 
     expect(close.ok, `A unilateral close must succeed:${diag}`).toBe(true);
-    expect(close.seal_type, `seal_type must be unilateral:${diag}`).toBe("unilateral");
+    // `close.seal_type` is gone from the non-blocking close — see the note above; the
+    // directory-log assertions below are the ones that prove the unilateral path ran.
+
     // The directory consulted the relay and got 'gone' → ABSENT (not self-asserted).
     expect(cluster.directory.output, `directory must record liveness gone:${diag}`).toMatch(/"event":"session\.unilateral\.attestation"[^}]*"liveness":"gone"/);
     expect(cluster.directory.output, `attestation must be ABSENT:${diag}`).toMatch(/"event":"session\.unilateral\.attestation"[^}]*"attestation":"ABSENT"/);
     expect(cluster.directory.output, `notarized must record ABSENT:${diag}`).toMatch(/"event":"session\.unilateral\.notarized"[^}]*"attestation":"ABSENT"/);
     // The relay positively observed B (${pubB}) gone — never fabricated.
     expect(cluster.relay.output, `relay must have observed B gone:${diag}`).toMatch(/"liveness":"gone"/);
-  }, 120_000);
+  }, 180_000);
 
   // alive-but-silent AGENT → BILATERAL via auto-acknowledge (UPGRADE-002 supersedes the old
   // unilateral-DELIVERED outcome). B stays up; its AGENT never calls close. Pre-UPGRADE-002 this
@@ -376,5 +401,5 @@ describe("J-UNILATERAL — DOD-LIVE-2: the ABSENT gate (gone→ABSENT vs alive-b
     // DOD-LIVE-2 invariant PRESERVED: an alive B is NEVER sealed ABSENT — here it SIGNED (bilateral),
     // so there is no unilateral notarization marking B absent for this session.
     expect(cluster.directory.output, `alive B must never be marked ABSENT for this session:${diag}`).not.toMatch(new RegExp(`"absentPartyPubkey":"${pubB.slice(0, 8)}[^}]*"attestation":"ABSENT"`));
-  }, 120_000);
+  }, 180_000);
 });
