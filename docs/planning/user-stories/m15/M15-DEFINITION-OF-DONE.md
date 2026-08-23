@@ -324,6 +324,32 @@ different repos, different disciplines, neither blocks the other.
     - **The salt guidance's blind spot:** the shutdown-only `!this.#db` path in `#getSessionSalt`
       logs nothing, so it falls into the "neither event is present ⇒ close the session" branch of the
       `content_hash_salt_unavailable` advice.
+  - **PART B2b-1 IS BUILT (→ Entry 47).** Every outbound hash comes from one `contentHashForSession`
+    returning the hash AND its algorithm; the frame carries it; both park producers and the durable
+    queue carry it. **Still `sha256` everywhere.** Traced end to end and verified: direct frame, live
+    park, TTF-expiry park, and the crash backstop via `retry_queue` all name the same value for the
+    same message.
+  - **B2b-2 — THE LAST UNIT OF BULLET 6. It changes ONE function and nothing else structural:**
+    `contentHashForSession` stops hardcoding `sha256` and consults the session salt. Everything that
+    carries the value is already built and already tested, which is the point of the split.
+    1. **Salt present → `hmac-sha256-salt-v1`; absent → `sha256`, and SAY SO.** Decision #15's
+       fallback announcement, once per session per peer, never per message — a warn that fires on the
+       normal case is not a signal.
+    2. **HOLD THE FIRST SEND until the agreement settles, bounded.** Decision #8: agreed *before the
+       first leaf is hashed*. On timeout the session is unsalted FOR ITS LIFE and says so — a late
+       salt must never split a transcript that already has leaves.
+    3. **The adoption rule is what makes (2) safe without a column:** `#persistSessionSalt` REFUSES a
+       salt once the session has leaves. Then "salted or not" is decided once and cannot drift.
+    4. **Do NOT infer peer capability from the salt agreement** — B2a F6. The agreement shipped
+       before the v3 park decoder, so an interval build has one without the other. Gate on a real
+       signal.
+    5. **A park-only session never agrees a salt at all** (pass-1 F9) — the announcement hangs off
+       `onPeerConnect`. Today free; here it is a session that cannot send. Fix with (1)/(2) or refuse
+       by name.
+    6. **`encodeParkEnvelope` throws a plain-English paragraph**, and B2b-2 makes that throw
+       reachable. It lands in `cause`, a field documented as the machine-readable half, and surfaces
+       as *"the relay refused the hand-off… will be re-sent when the relay link is back"* for a fault
+       that is neither. Throw a coded error, or validate before calling.
   - **PART B2a IS BUILT AND TWICE-REVIEWED (2026-08-23 → Entries 45, 46).** The park envelope carries
     the algorithm at both verifier sites. **B2b's inherited ACs, out of B2a's two passes:**
     - **`encodeParkEnvelope` THROWS a plain-English paragraph**, and B2b is what makes that throw
