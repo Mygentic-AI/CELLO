@@ -133,24 +133,47 @@ function interpolatedDelete(text: string): boolean {
  * The last test is what keeps it a backlog — the lists may shrink, never grow, and a name that no
  * longer violates must be removed.
  */
-const ROLLED_BACK: Record<string, string> = {
-  "dod-dirdata-read-1.test.ts":
+/**
+ * ─── Review F6: COUNTED, because this guard's own header condemns file-level exemptions ────────
+ *
+ * `ROLLED_BACK` used to skip the insert check for the WHOLE file, uncounted — the exact shape the
+ * `ALLOWED_DELETES` header calls "a hole the size of the file", and `DOD-M15-CHAINDEBT-1` added
+ * four more files to it. The concrete risk is not hypothetical: `federation-003` is now both
+ * file-exempt for inserts AND the home of a whole-table `verifyChain('relay_registrations')`, so a
+ * future COMMITTING insert there would be invisible to the guard and would turn that file's own
+ * assertion red with nothing pointing at the cause.
+ *
+ * Each entry now declares how many literal-`chain_hash` inserts are rolled back. One more fails.
+ */
+const ROLLED_BACK: Record<string, { count: number; why: string }> = {
+  "dod-dirdata-read-1.test.ts": {
+    count: 3,
+    why:
     "the whole suite runs on one client inside BEGIN/ROLLBACK — the server under test is handed " +
     "txnPool(client), so its reads land on the same connection as the fixture's writes. Its two " +
     "literal chain_hash inserts therefore never commit, and the DELETE cleanup they needed is gone " +
     "with them: rollback is the cleanup, and there is nothing left to forget.",
-  "cross-node-discovery-pg.live.test.ts":
+  },
+  "cross-node-discovery-pg.live.test.ts": {
+    count: 2,
+    why:
     "its first two describe blocks wrap every test in BEGIN/ROLLBACK on the same client, so their " +
     "inserts never commit. Its third block could not (the store uses its own pool connection) and " +
     "was converted to seedAccount() + per-run ids instead.",
-  "dod-m15-chaindebt-1-txn-pool.test.ts":
+  },
+  "dod-m15-chaindebt-1-txn-pool.test.ts": {
+    count: 1,
+    why:
     "DOD-M15-CHAINDEBT-1 review F1 — the file that PROVES the rollback works. Its one literal " +
     "`chain_hash` is a raw INSERT inside `inRolledBackTxn` whose entire assertion is that the row " +
     "does NOT survive; it is the strongest rollback evidence in the directory, not an exemption. " +
     "Listed rather than reworded because the guard reads source and cannot see that the test's " +
     "subject IS the rollback — and it correctly flagged this file the moment it was added, which " +
     "is the guard doing its job on its author.",
-  "federation-003.test.ts":
+  },
+  "federation-003.test.ts": {
+    count: 1,
+    why:
     "DOD-M15-CHAINDEBT-1 — CONVERTED. Its AC-001 block proves cello_service may INSERT and SELECT " +
     "but not UPDATE or DELETE, so the INSERT has to execute as that role; it now runs inside " +
     "BEGIN/ROLLBACK on a service client, with SAVEPOINTs around the two statements that are meant " +
@@ -158,7 +181,10 @@ const ROLLED_BACK: Record<string, string> = {
     "assertion would pass on 'current transaction is aborted' rather than on a permission error). " +
     "The rollback replaced a cleanup that deleted WHERE relay_id LIKE '________________________________' " +
     "— thirty-two wildcards, reaching into every other test's rows, under a .catch(() => {}).",
-  "persist-021-adapter-boundary-audit.test.ts":
+  },
+  "persist-021-adapter-boundary-audit.test.ts": {
+    count: 8,
+    why:
     "DOD-M15-CHAINDEBT-1 — MISFILED AS DEBT for its inserts. All seven literal `chain_hash` " +
     "inserts (conversation_seals, conversation_attestations, conversation_participation, " +
     "notification_events, seal_notarizations, connection_requests, connections) live in the AC-001 " +
@@ -168,27 +194,37 @@ const ROLLED_BACK: Record<string, string> = {
     "better fail loudly on the unique constraint, the other was cleanup for a row written through " +
     "insertWithChain, i.e. a correctly chained row whose removal would break the chain the same " +
     "test had just verified.",
-  "persist-006-pgaudit.test.ts":
+  },
+  "persist-006-pgaudit.test.ts": {
+    count: 1,
+    why:
     "DOD-M15-CHAINDEBT-1 — CONVERTED. Its AC-001 INSERT must really execute as `cello_service`, " +
     "because the assertion reads that statement back out of the container's pgaudit log — so it " +
     "could not be seeded through the chained writer or dropped. It is now wrapped in " +
     "BEGIN/ROLLBACK on a dedicated client from the service pool. pgaudit logs statements as they " +
     "EXECUTE rather than at commit, so the evidence survives and the hole does not. Verified by " +
     "running the suite: 13/13, including the assertion that finds the audit entry.",
-  "persist-018-seal-notarizations.test.ts":
+  },
+  "persist-018-seal-notarizations.test.ts": {
+    count: 1,
+    why:
     "DOD-M15-CHAINDEBT-1 — MISFILED AS DEBT, not converted. Its single literal `chain_hash` is the " +
     "SI-002 rollback test: it opens a dedicated client, BEGINs, writes conversation_seals and " +
     "seal_notarizations, and ROLLBACKs to prove both undo atomically when a connection drops before " +
     "COMMIT. The row is rolled back BY THE ASSERTION — the test then reads both tables and requires " +
     "zero rows. Its own comment said so at the time: 'chain_hash placeholder value is fine — this " +
     "row will be rolled back.'",
-  "presence-001-repository.test.ts":
+  },
+  "presence-001-repository.test.ts": {
+    count: 1,
+    why:
     "DOD-M15-CHAINDEBT-1 — MISFILED AS DEBT, not converted. Every query in this file runs on the " +
     "one client `beforeEach` opens with BEGIN and `afterEach` ROLLBACKs; the repo functions under " +
     "test are handed that same client rather than a pool. Verified by grep rather than by reading " +
     "the intent: the only `pool.` references in the file are `connect()` and `end()`, and the word " +
     "COMMIT does not appear. So its literal `chain_hash` is inert and always was — it was on the " +
     "backlog because the guard reads source, and source cannot see a rollback.",
+  },
 };
 
 /**
@@ -344,9 +380,19 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
     // by construction, not that — so it is a hole wherever it lands.
     const offenders: string[] = [];
     for (const { name, text } of testSources()) {
-      if (ROLLED_BACK[name] || KNOWN_DEBT_INSERTS.includes(name)) continue;
-      const allowed = ALLOWED_INSERTS[name];
+      if (KNOWN_DEBT_INSERTS.includes(name)) continue;
       const found = insertCount(text);
+      // Review F6: ROLLED_BACK is COUNTED now, exactly like ALLOWED_INSERTS. It used to skip the
+      // whole file, which is the "hole the size of the file" this guard's own header condemns —
+      // and a NEW committing insert in a rolled-back file was invisible.
+      const rolled = ROLLED_BACK[name];
+      if (rolled) {
+        if (found > rolled.count) {
+          offenders.push(`${name} (${found} literal chain_hash inserts, ${rolled.count} rolled back)`);
+        }
+        continue;
+      }
+      const allowed = ALLOWED_INSERTS[name];
       if (allowed) {
         // Exempted for a COUNT of refused inserts, not for the file — one more is a new violation.
         if (found > allowed.count) offenders.push(`${name} (${found} literal chain_hash inserts, ${allowed.count} allowed)`);
@@ -412,37 +458,33 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
     ).toEqual([]);
   });
 
-  it("THE BACKLOG ONLY SHRINKS — every named file still violates, and the counts cannot grow", () => {
+  it("THE BACKLOG IS EMPTY AND STAYS EMPTY", () => {
     /**
-     * What stops the debt lists becoming a permanent exemption nobody reads.
+     * ─── Review F8: the stale-check went vacuous when the lists reached zero ─────────────────────
      *
-     * A name that no longer violates must be REMOVED — otherwise the list overstates the work left
-     * and hides that the constraint is already stricter than it looks. And the counts are pinned, so
-     * a new violation cannot be quietly appended instead of fixed.
+     * This used to walk `KNOWN_DEBT_*` asserting every named file still violates, so a paid-down
+     * name could not linger and overstate the work left. `DOD-M15-CHAINDEBT-1` emptied both lists,
+     * and the walk then iterated nothing and asserted `[] === []` — green forever, testing nothing.
+     * Its own comment predicted it: *"at which point the lists and this assertion go with them."*
+     * They did not go, so the assertion sat there looking like coverage.
+     *
+     * What replaces it is the assertion that actually has teeth now: the lists must be EMPTY. A
+     * ceiling of zero cannot be satisfied by adding a name, so a new violation has nowhere to be
+     * parked — it has to be fixed, converted, or declared in one of the counted `ALLOWED_*` lists
+     * with a reason a reader can check.
      */
-    const sources = new Map(testSources().map((f) => [f.name, f.text]));
-    const stale = (list: string[], kind: "insert" | "delete"): string[] =>
-      list.filter((name) => {
-        const text = sources.get(name);
-        return text === undefined || !violates(text, kind);
-      });
-
-    const staleInserts = stale(KNOWN_DEBT_INSERTS, "insert");
-    const staleDeletes = stale(KNOWN_DEBT_DELETES, "delete");
-
     expect(
-      staleInserts,
-      `Fixed (or gone) — remove from KNOWN_DEBT_INSERTS so the backlog reflects the work left: ${staleInserts.join(", ")}`,
+      KNOWN_DEBT_INSERTS,
+      `The literal-chain_hash backlog was paid down to zero. A name here means someone re-added ` +
+        `debt instead of fixing it: convert the fixture, or declare it in ALLOWED_INSERTS with which ` +
+        `of the two shapes it is (REFUSED, or CORRECTLY CHAINED BY HAND).`,
     ).toEqual([]);
     expect(
-      staleDeletes,
-      `Fixed (or gone) — remove from KNOWN_DEBT_DELETES: ${staleDeletes.join(", ")}`,
+      KNOWN_DEBT_DELETES,
+      `The chained-DELETE backlog was paid down to zero. A name here means someone re-added debt: ` +
+        `use per-run unique ids and leave the rows, or declare it in ALLOWED_DELETES with a count ` +
+        `and the reason the delete IS the subject of its test.`,
     ).toEqual([]);
-
-    // Lower these as files are converted; never raise them. DOD-M15-CHAINDEBT-1 owns driving both
-    // to zero, at which point the lists and this assertion go with them.
-    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(0);
-    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(0);
   });
 
   it("the ROLLED_BACK and ALLOWED_DELETES entries still name files that exist", () => {
