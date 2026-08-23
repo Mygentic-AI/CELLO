@@ -379,15 +379,27 @@ different repos, different disciplines, neither blocks the other.
     queue carry it. **Still `sha256` everywhere.** Traced end to end and verified: direct frame, live
     park, TTF-expiry park, and the crash backstop via `retry_queue` all name the same value for the
     same message.
-  - **✅ B2b-2 IS IMPLEMENTED IN FULL — all six constraints, four units (→ Entries 49, 50).** The
+  - **✅ B2b-2 IS DONE — ALL SIX CONSTRAINTS, BOTH REVIEW PASSES SPENT (→ Entries 49–52).** The
     algorithm is no longer `sha256`: a session holding an agreed salt hashes under
-    `hmac-sha256-salt-v1`. Status per constraint: **3** ✅ reviewed (the adoption rule; the review's
-    central correction was that the missing state was BILATERAL, not durable — it belongs on the
-    wire, and a column would have recorded the local verdict perfectly while the two sides
-    disagreed). **6** ✅ (the coded park error). **4** ✅ (the hazard turned out to be UNREACHABLE —
-    the salt agreement and the v3 decoder are both in no git tag, so the interval build was never
-    cut; what shipped is the guard that keeps that true, not a handshake). **1, 2, 5** 🟡 built and
-    gated, **review pass outstanding**.
+    `hmac-sha256-salt-v1`. **This closes bullet 6.** Gate: 2837 daemon tests, lint, both typechecks.
+    - **Constraint 3** (adoption rule) — the review's central correction was that the missing state
+      is BILATERAL, not durable: it belongs on the WIRE, and a column would have recorded each side's
+      local verdict perfectly while the two disagreed.
+    - **Constraint 4** — the hazard is UNREACHABLE. The salt agreement and the v3 park decoder are
+      both in no git tag, so the interval build was never cut. What shipped is the guard that keeps
+      that true, not a handshake for something that cannot happen.
+    - **Constraint 6** — the park refusal is coded, so a local build fault stops being reported as
+      the relay refusing a hand-off it was never asked for.
+    - **Constraints 1, 2, 5** — the flip. **Two review passes, four blocking findings, all fixed**;
+      verdicts quoted in Entries 51 and 52.
+    - **🚨 THE TWO LESSONS WORTH CARRYING OUT OF THIS UNIT, both about how it was CHECKED:**
+      - Pass 1: the fixture's `onPeerConnect` discarded its handler, so the ONE production line that
+        registers a pending salt agreement — the line deciding whether salting can ever turn on —
+        could be deleted with the whole suite green. My eight mutants all hit the CONSUMER of that
+        state and none its PRODUCER. **Mutate the producer, not only the consumer.**
+      - Pass 2: the HIGH was *created by pass 1's fix*. `#hashedWithoutSalt` was one bit per SESSION
+        for a fact that is per MESSAGE, so a sibling's refusal released the claim held by a send
+        still inside its relay round trip. **A fix pass is where regressions hide.**
     - ⚠️ **The line below said this "changes ONE function and nothing else structural." That was
       optimistic and is recorded rather than quietly dropped.** Constraint 2 needs the first send to
       WAIT, and a wait needs an `await` — so `contentHashForSession` is async, and four call sites
