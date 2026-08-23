@@ -5783,3 +5783,88 @@ And the human-judgement version is mine too, not only the other lane's: I wrote 
 `vitest.config.ts` calling a worker cap "a physical constraint, not a tuning preference" — a
 confident justification for a premise I had not checked, in a file Andre had already declined once.
 Coder_1 caught it. Same shape, no automation involved.
+
+---
+
+## Entry 50 — the guard I wrote to protect the pairing did not protect it, through two revisions
+
+`DOD-M15-SEALWIRE-1` bullet 6, B2b-2, constraints 6 and 4. Two units, and the second is the one
+with the lesson.
+
+### Constraint 6: a fault that was not the relay told the operator the relay refused it
+
+What an operator lived through: they send a message, direct delivery is unavailable, so it takes the
+park route. `encodeParkEnvelope` refuses to seal it, because the entry names a content-hash algorithm
+this build cannot reproduce — the right refusal. The message is safely queued. **And they are told
+the relay refused the hand-off and it will be re-sent when the relay link is back.**
+
+Both halves are false, and each sends them somewhere that cannot help. The relay was never asked, so
+they go and look at relay health, or ask their counterparty about it, for a fault entirely local to
+their own build. And it will never re-send: every drain re-parks the same entry into the same throw,
+so the message sits there while they wait out a recovery that cannot happen.
+
+**The prose was never the problem — where it landed was.** The throw was a bare `Error` carrying a
+good paragraph, and `#parkContent` put `err.message` into `cause`: a field its own callers document
+as the *machine-readable* half, added (M12-P13) precisely so nobody would have to substring-match
+English to decide what to do. A paragraph there is unbranchable, so the fault fell into the generic
+relay branch and inherited its guidance.
+
+Fixed with a coded error, the offending value in `detail`, the paragraph kept as the message, and a
+guidance branch that says what is true.
+
+**The test note that matters.** The production hook reaches `sealParkEnvelope` only after a live
+standing receiver exists, which needs a relay reservation a fake node cannot grant — so two of the
+tests call the REAL producer through a substituted hook. That is faithful about the error and blind
+about exactly one thing: whether production lets the throw out. A source assertion covers it, and
+**pins its own anchor first**, because a check that silently matches nothing is not a check.
+
+### Constraint 4: the hazard cannot occur, so the deliverable was a guard, not a handshake
+
+The constraint said *do not infer peer capability from the salt agreement*. The worry: a peer that
+agreed a salt but cannot decode a **v3** park envelope refuses every parked copy as
+`unsigned_envelope` — the ATTACKER shape. It does not drop the entry; it re-pulls it forever while
+telling its operator it is under attack.
+
+Checked rather than inherited. **Both commits are in no git tag** — the agreement and the v3 decoder
+alike — and the decoder is the later of the two, so the next release contains both. The interval
+build was never cut. And every published build has neither: verified against the last tag that an
+unrecognised frame type on the content stream is *logged and returned from*, not an error and not a
+stream close. So a salt frame reaching an old peer costs one warning and produces no reply.
+**Silence is a NO, not a maybe** — which is exactly what makes "they agreed" a usable signal.
+
+So the deliverable is not a handshake for an unreachable hazard. It is a guard that makes the
+assumption falsifiable: a build that can agree a salt must also **accept** its own v3 envelope.
+
+### ⚠️ And that guard did not guard, twice, and only falsification showed it
+
+Green on the first run. Because the checker rule had just been settled, I falsified it. **Two mutants
+survived.**
+
+Found the cause: I was asserting `decodeParkEnvelope` — the wrong function. `unsigned_envelope`
+comes from `authenticateParkedEntry`, and a build can decode a v3 envelope perfectly and still refuse
+it, which IS the failure. Fixed it. Re-ran. **Both mutants still survived.**
+
+The real cause: the test wrote `CONTENT_HASH_ALGS.HMAC_SHA256_SALT_V1`, and that key does not exist —
+it is `HMAC_SALT_V1`. It evaluated to `undefined`, the encoder took the **v2** branch, and a test with
+"v3" in its title never encoded a v3 envelope. The closing assertion then compared `undefined` to
+`undefined` and passed.
+
+That is the same shape as the non-existent config key the other lane found, written by someone who
+had described the class out loud ninety minutes earlier. **Knowing the rule did not prevent it. Only
+running the failure did.** It is the strongest argument available for the mechanical version.
+
+Two cheap things would have caught it, and both are now in the sequence: the **test-project
+typecheck**, which flags a non-existent key instantly and which I had not run on the new file; and
+pinning the version a test names in its own title before asserting anything that depends on it.
+
+### Rules earned
+
+1. **A test that names a version, format or mode in its title must ASSERT it got one.** Everything
+   below that line is about the thing named and means nothing if the bytes are something else.
+2. **Typecheck a new test file BEFORE the mutation pass, not after.** A mutation pass over a test
+   that does not do what it says measures nothing, expensively.
+3. **When a constraint's hazard turns out to be unreachable, ship the guard that keeps it
+   unreachable — not the mitigation.** The mitigation costs a handshake nobody needs; the guard costs
+   one test and fails loudly the day the premise changes.
+4. **`cause` is a contract.** A field documented as machine-readable stops being one the moment a
+   sentence goes in it, and every caller downstream silently loses a distinction.
