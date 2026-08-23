@@ -241,7 +241,12 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
     // (best-effort, fire-and-forget after the seal — poll briefly). conversation_seals carries
     // close_type MUTUAL_SEAL + the sealed root HASH (never content); both K_locals become graph
     // nodes; the analytics edge query derives exactly one A↔B edge — the signal Sybil detection runs on.
-    const root = closeA.sealed_root!;
+    // DOD-M15-CLOSEROOT-1: `closeA.sealed_root` is undefined now that close returns a commitment —
+    // the non-null assertion turned that into the STRING "undefined" in the SQL below, so the query
+    // searched for a merkle_root that cannot exist and the poll loop below spun 24 times and failed
+    // with "the bilateral seal must populate conversation_seals". It reads as a directory gap and is
+    // the same stale contract, one assertion later. Use the root the receipt actually returned.
+    const root = rootA;
     let csCount = "0";
     for (let i = 0; i < 24 && csCount !== "1"; i++) {
       csCount = psqlSpine(`SELECT count(*) FROM conversation_seals WHERE merkle_root = '${root}';`);
