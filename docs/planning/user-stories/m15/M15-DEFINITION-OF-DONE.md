@@ -1047,7 +1047,18 @@ that was WRONG. See the retraction below; it is the more useful half of this ent
 - **Enforcer:** `j-loopback` green, and a unit test at the handler that fails if any path returns
   `ok: true` without a `sealed_root` — the shape, not the instance.
 
-### `DOD-M15-CLIJSON-1` — ❌ A command that prints JSON prints only JSON
+### `DOD-M15-CLIJSON-1` — 🟡 A command that prints JSON prints only JSON
+> **FIXED, review in flight.** `cello-client` — `CommandResult` gains a `guidance` field documented
+> as stderr-only; `register()` returns pure JSON; `legacy()` routes `guidance` to the `stderr`
+> channel `CliOutput` already had and always set to `""`. tsc 0, eslint 0, CLI rebuilt.
+> **Verified against the shipped binary, not argued:** `j-refresh` previously died at its FIRST line
+> on this parse error and now clears registration entirely, failing later on the separate stale
+> close-contract assertion (`DOD-M15-CLOSEROOT-1`) — which is the triage confirming its own
+> clustering. **The hint is kept, on stderr.**
+> **⚠️ THE ENFORCER IS NOT WRITTEN.** The clause asks for a test that `JSON.parse`s each
+> JSON-advertising command's stdout on the success path, against the shipped binary. I verified by
+> hand through one journey. A hand-verification is not a guard — this cannot go ✅ on it, and the
+> reviewer was asked to rule on the cheapest honest version rather than let it stand.
 **BLOCKS LAUNCH** (§0z.1): the CLI states its own contract — *"Prints JSON; use `--pretty` for
 humans"* — and `register-agent` breaks it on the SUCCESS path, so anything reading that output
 fails at the first step. Found by `DOD-M15-SPINERED-1`'s triage, 2026-08-23, and it is the largest
