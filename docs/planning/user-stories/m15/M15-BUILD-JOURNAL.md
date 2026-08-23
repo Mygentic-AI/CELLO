@@ -4766,3 +4766,90 @@ Part A: a false sentence in a header. Part B1 pass 1: a security consequence of 
 Part B1 pass 2: **a fix applied to one of two consumers.** Each time the code I wrote was right where
 I was looking and wrong one step to the side, and each time my own test for it asserted the thing I
 had already thought of.
+
+---
+
+## Entry 45 — both verifiers were wired with no test, and my mutation harness told me one was covered
+
+Part B2a — the park envelope carries the content-hash algorithm. Three blocking findings, plus a
+false negative in my own tooling that is the most useful thing in this entry.
+
+### The verdict, quoted
+
+> **HOLLOW TESTS FOUND — [blocking]. Nine new tests, all on `park-envelope.ts`… Not one test
+> survives the revert test against `content-park.ts` or `session-node-manager.ts`** — reverting
+> either of the unit's two production wirings leaves the whole suite green.
+> **ERROR SUBSTITUTION FOUND** — two, both [blocking]: Finding 1 (a delivery announced that does not
+> happen, repeating on every drain) and Finding 2 (`content.recover.annex.unverifiable` standing in
+> for two causes, with guidance that sends the operator to the counterparty for a fault in their own
+> salt store).
+> **SPEC: DEVIATIONS FOUND** — clause 4 is missing and un-journaled. [blocking]
+> **NO SILENT FALLBACKS** — nothing quietly substitutes and continues… I confirmed the terminal-block
+> delete is unreachable from them.
+
+### The unit tested the format and not the thing the format is for
+
+Nine tests, every one importing `park-envelope.js`. Neither `content-park.js` nor
+`session-node-manager.js` appeared in the file. **Both verifier sites — the entire subject of the
+unit — were wired with nothing pinning them**, because every park fixture in the tree is v2, and for
+`sha256` the new `contentHashFor` returns exactly what the old hardcoded expression did.
+
+My own revert test had a mutant for this and reported it caught. It was caught **by a type error**,
+not by an assertion — I narrowed the mutation to one argument and lint/typecheck failed on the
+now-unused variable. A mutant that only breaks the compiler is not caught.
+
+### The field's arrival made an existing log line start lying
+
+`content.recover.alg_refusal_reconciled` says a refused message *"is being delivered by the other
+route"*, and asserts the park path verifies as `sha256` *"where no algorithm name travels."* True by
+construction — until this diff made the park path carry the name. Now a peer that names an unreadable
+algorithm on the direct path and parks the same content as v3 is refused **again** on recovery,
+re-arms the memo, is never confirm-deleted, and repeats on every drain: an unbounded stream of
+warnings announcing a delivery that never happens, drowning the real reconciliation when the sender
+eventually re-parks as v2.
+
+I wrote that sentence one unit ago and broke it in this one.
+
+### And I collapsed a distinction I had already paid for
+
+The new park refusal folded *"we cannot read the algorithm"* and *"we hold no salt"* into one event
+with one guidance string — and for the salt case both halves of that string are wrong: the
+counterparty's version is irrelevant, and *"delivered once this daemon can verify it"* is a promise
+that cannot be kept, because the salt is not coming back and the entry loops forever.
+
+**The direct path already splits these.** B1's review F6 made that split. I undid it on the other
+route. And it is the default case rather than an edge one: this line's own pass-1 F9 records that a
+park-only session never agrees a salt at all.
+
+### The compatibility claim that was not
+
+I wrote that the v3 gate is *"structural: a salted envelope can only be addressed to a peer that
+completed the salt agreement, and a build able to do that necessarily contains this decoder."* False
+— the salt agreement landed several commits before the decoder, so an interval build has one without
+the other, and a v3 envelope there is refused as `unsigned_envelope`, **the attacker shape**. What is
+true is narrower and checkable: nothing in that interval is published. B2b now has to gate on a real
+capability signal rather than infer one.
+
+### The false negative, which is the part worth keeping
+
+Re-running the empty-string mutant **on its own** showed 36 tests green. My loop had printed
+`✅ caught`. Same class as the conditional assertion the last review found: the check ran and its
+answer was not what I read. **A harness that can report a false negative is worse than none, because
+it retires a suspicion.** Every mutant since is re-run individually before it is believed.
+
+### Revert test
+
+Six mutants including all four the reviewer proved were surviving — annex verifier passes `salt:
+null`; annex verifier hardcodes `sha256`; `recoverParkedEntry` passes `undefined`; the two refusal
+causes collapse; the reason falls back to `annex_write_failed`; the encoder folds `""` into absent.
+**All six caught, each verified individually.** Gate: 4403 client tests, lint, typecheck, build.
+
+### What the reviewer confirmed rather than took
+
+- The algorithm sitting **outside** the signed statement is genuinely different from B1's blocking
+  finding: that field rode the plaintext frame envelope; this one is inside the AEAD seal, so only
+  the authenticated sender can set it and a flip is self-DoS.
+- The accepted-version set is complete and closed; no path assumes six elements.
+- `getSessionContentSalt` cannot write, and the salt reaches no log, wire field or IPC response.
+- A refusal **cannot** delete the relay copy — the terminal-block delete is unreachable from both new
+  branches. That was the right thing to worry about.
