@@ -241,8 +241,15 @@ function deleteCount(text: string): number {
 
 /** Still committing a literal chain_hash. Shrink; do not add. DOD-M15-DIRECTORY-ROT-1 owns these. */
 const KNOWN_DEBT_INSERTS: string[] = [
-  // EMPTY. Paid down 8 -> 0 by DOD-M15-CHAINDEBT-1. persist-003-rls' remaining literal chain_hash
-  // is in ALLOWED_INSERTS (its INSERT is the one the RLS test proves is refused).
+  // EMPTY. Paid down 8 → 0 by DOD-M15-CHAINDEBT-1.
+  //
+  // The two files still matching the insert regex are in ALLOWED_INSERTS, and each entry there
+  // states which of the two shapes it is. **This comment previously said persist-003-rls was there
+  // because "its INSERT is the one the RLS test proves is refused" — that is FALSE and was caught
+  // on review (F5).** persist-003 has no refused INSERT at all; its refusals are UPDATE (AC-003)
+  // and DELETE (AC-004), and its entry twelve lines below correctly says CORRECTLY-CHAINED-BY-HAND.
+  // Left recorded rather than quietly corrected: a wrong reason attached to an exemption is how the
+  // exemption survives its next reader, which is this guard's own subject matter.
 ];
 
 /** Still deleting from a chained table. Shrink; do not add. */

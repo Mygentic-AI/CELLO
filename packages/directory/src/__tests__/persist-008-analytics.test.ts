@@ -62,9 +62,26 @@ import { AnalyticsJob } from "../analytics-job.js";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
-/** A logger for the seeder — the fixture's writes are not what this file is asserting about. */
+/**
+ * A logger for the seeder that FAILS LOUDLY.
+ *
+ * ─── Review F4: silence here buys a silent seeder ──────────────────────────────────────────────
+ *
+ * `recordConversationSeal` is best-effort by design: when it owns the transaction it catches
+ * everything, logs `conversation.seal.record.failed` at WARN, and **returns normally**. A logger
+ * whose `warn` is `() => {}` therefore turns a failed seed into a successful-looking one — the
+ * helper resolves, hands back a `conversationId`, and the rows do not exist. The three raw INSERTs
+ * this replaced threw with the Postgres error text.
+ *
+ * The exact-count assertions later in this file would still fail, so the defect could not ship
+ * silently — but it would surface as `expected +0 to be 3`, naming neither the table, the role, nor
+ * the constraint. Throwing here keeps the cause.
+ */
 function makeSilentLogger(): Logger {
-  return { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+  const shout = (event: string, ...rest: unknown[]): never => {
+    throw new Error(`seeder failed: ${event} ${JSON.stringify(rest)}`);
+  };
+  return { debug: () => {}, info: () => {}, warn: shout, error: shout } as unknown as Logger;
 }
 
 // ─── Unit tests: logger calls (no DB) ────────────────────────────────────────
