@@ -116,8 +116,24 @@ export type SealFinalRootReason =
  * cannot be added without something actionable for the reader.
  */
 export const SEAL_FINAL_ROOT_GUIDANCE: Record<SealFinalRootReason, string> = {
+  /**
+   * ⚠️ THIS GUIDANCE NAMED ONE MACHINE AND THERE ARE THREE PRODUCERS — review pass 1, F4.
+   *
+   * It said: *"if it persists after the roll, the relay node serving this session is on an old
+   * build."* One observable, three ways to reach it, and the sentence offered one explanation:
+   *
+   *   1. the CLIENT did not send the payload. This was the real state of the world when that
+   *      sentence was written — `submitLeaf` had no parameter for it, so no client on earth carried
+   *      it, and every seal would have landed here blaming a relay that was doing nothing wrong.
+   *   2. the RELAY did not forward it — the case the sentence described.
+   *   3. a relay STRIPPED it. `content_bytes` is relay-supplied, so absence is the attacker's own
+   *      off-switch: a relay that deletes a message leaf also drops both payloads and lands back in
+   *      the pre-check behaviour. Proceeding is still right during the roll — refusing would break
+   *      every seal in the federation — but the downgrade must be NAMED rather than dressed as
+   *      version skew, and it is why this cannot stay tolerated indefinitely.
+   */
   [SEAL_FINAL_ROOT_REASONS.NOT_CARRIED]:
-    "The relay did not carry the SEAL payload, so this seal was certified without checking the participants' own signed root — the behaviour of every release before this check existed. Expected while relays are still rolling out; if it persists after the roll, the relay node serving this session is on an old build.",
+    "No SEAL payload arrived, so this seal was certified WITHOUT checking the participants' own signed root — the behaviour of every release before this check existed. Three different things produce this and they are not distinguishable from here: the client did not send the payload, the relay did not forward it, or a relay STRIPPED it (the field is relay-supplied, so absence disables this check for whoever it was meant to catch). Expected while clients and relays are still rolling out. After the roll, check the CLIENT build first — it is the producer — then the relay serving this session; if both are current, treat a persistent absence as tampering rather than skew.",
   [SEAL_FINAL_ROOT_REASONS.PAYLOAD_UNBOUND]:
     "A SEAL payload arrived that does NOT hash to the content the participant signed. The participant's signature cannot have covered these bytes, so someone between them and here altered or fabricated the payload — the relay is the only party on that path. Treat this as relay tampering, not a version mismatch.",
   [SEAL_FINAL_ROOT_REASONS.PAYLOAD_MALFORMED]:

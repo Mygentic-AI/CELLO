@@ -5382,12 +5382,22 @@ export class CelloDirectoryNode {
         /**
          * ⚠️ ABSENT IS NOT A DISAGREEMENT, AND REFUSING IT WOULD BREAK EVERY SEAL DURING THE ROLL.
          *
-         * A relay that has not deployed the carry sends no payload, and that is the state every
-         * relay is in until it upgrades. Treating it as a failure would take the entire federation
-         * down the moment this directory shipped — the exact ABSENT-versus-NAMED collapse Decision
-         * #15 spends a wire discriminator preventing, applied one layer up.
+         * A client or relay that has not deployed the carry sends no payload, and that is the state
+         * every node is in until it upgrades. Treating it as a failure would take the entire
+         * federation down the moment this directory shipped — the exact ABSENT-versus-NAMED collapse
+         * Decision #15 spends a wire discriminator preventing, applied one layer up.
          *
          * So the seal proceeds exactly as it did before this check existed, and says so once.
+         *
+         * ⚠️ AND THE DOWNGRADE IS NAMED, BECAUSE THIS IS THE ATTACKER'S OWN OFF-SWITCH — F4.
+         *
+         * `content_bytes` is relay-supplied, so a relay that deletes a message leaf also strips both
+         * payloads and lands right back here, certified. Tolerating absence is correct DURING THE
+         * ROLL and only during it: once clients and relays carry the payload, a bilateral seal that
+         * arrives without one must become a refusal, or the guard is optional for exactly the party
+         * it guards against. Tracked as `DOD-M15-NOTCARRIED-REFUSE-1` — a named follow-on rather
+         * than a sentence in a comment, because "we should tighten this later" written only here is
+         * how the two-milestone deferral this line just deleted came to exist.
          */
         this.#logger?.info("seal.final_root.not_carried", {
           sessionId: sessionIdHex,

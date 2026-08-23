@@ -3515,3 +3515,60 @@ on punctuation rather than as an ordering regression.
   plain ASCII today, which is precisely why the journey currently passing is **not evidence** for
   this property.
 - **Enforcer:** journey.
+
+---
+
+### `DOD-M15-NOTCARRIED-REFUSE-1` — 🅿️ POST-LAUNCH BACKLOG. `not_carried` is the attacker's own off-switch, and it must stop being tolerated once the roll is done
+**Raised by review pass 1 on `DOD-M15-SEALWIRE-1` bullets 3+4 (finding F4), filed rather than fixed
+because the gate is frozen and this is not a hole a customer reaches today.**
+
+The final-root check is the one thing in `processSeal` that is not circular: it compares the leaves a
+relay presents against a root the participants themselves signed. It runs only when the SEAL payload
+is present — and **`content_bytes` is supplied by the relay.**
+
+So a relay that deletes a message leaf also strips both payloads, the check returns `not_carried`,
+and the seal is certified exactly as it was before the check existed. **The guard is optional for
+precisely the party it guards against.**
+
+**Tolerating absence is correct right now and only right now.** Every client and relay is
+un-upgraded until it upgrades; refusing an absent payload the moment this shipped would have broken
+every seal in the federation. That is the ABSENT-versus-NAMED distinction Decision #15 spends a wire
+discriminator on, applied one layer up, and it is why the code proceeds and logs rather than refuses.
+
+**What changes it:** once the sender leg (shipped 2026-08-24, `cello-client`) and the relay carry are
+deployed everywhere, a BILATERAL seal arriving with no payload is no longer explainable as skew. At
+that point the tolerance is the whole defect.
+
+- **The work:** flip `NOT_CARRIED` from an info-and-proceed to a refusal on the bilateral path, once
+  deployment is confirmed. Keep the unilateral path's own handling separate — its leaves are
+  client-carried and receipt-witnessed, a different threat model.
+- **The prerequisite is a deployment fact, not a code change** — which is exactly why this is a
+  tracked line and not a "tighten this later" sentence in a comment. The two-milestone deferral that
+  `DOD-M15-SEALWIRE-1` bullet 3 just deleted is what a comment-only intention becomes.
+- **Enforcer:** unit — a bilateral `processSeal` with no carried payload must be refused, with the
+  un-upgraded case covered by the rollout flag rather than by the absence itself.
+
+---
+
+### `DOD-M15-SEALROOT-UNILATERAL-1` — 🅿️ POST-LAUNCH BACKLOG. The unilateral seal path never calls the final-root verifier
+**Raised by review pass 1 on `DOD-M15-SEALWIRE-1` bullets 3+4 (finding F5).**
+
+`seal-final-root.ts`'s own header names its callers as *"the unilateral and bilateral verification
+loops."* Only the bilateral one is wired. `reconstructCarriedSealLeaves` threads `content_bytes`
+through, shape-checks it and bounds its size — and then `#processSealUnilateral` never reads it.
+
+**Why this is NOT the same severity as the bilateral gap, stated so nobody reclassifies it on the
+name alone:** the unilateral path's leaves are **client-carried**, and each own-party leaf is
+verified against the relay's signed receipt with a contiguity check. Bullet 4's circularity — the
+relay grading its own homework — does not apply in the same form there.
+
+**Why it is still real:** `DOD-M15-UNILATERAL-1` records the trigger as clock-only with no presence
+check, so the PRESENT party is the one who benefits from a trimmed leaf set, and their own signed
+`final_root` is the one value that would constrain them. The verifier that would do it is built,
+tested, and already receiving the bytes.
+
+- **The work:** call `verifySealFinalRoots` in `#processSealUnilateral` with the roster from
+  `#sessionParticipants` (that path already resolves it), and decide the `not_carried` policy
+  separately from the bilateral one.
+- **Enforcer:** unit — a unilateral seal whose carried payload names a root over a larger leaf set
+  than the one presented must be refused.
