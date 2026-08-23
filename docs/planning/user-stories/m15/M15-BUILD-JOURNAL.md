@@ -6642,3 +6642,100 @@ printed alongside it.
    is not the wire, however similar the bytes look.
 3. **Check where a diagnostic renders, not just that it exists.** An `expect` message is invisible on
    success and unreachable after a throw; both are the paths a diagnostic is usually for.
+
+---
+
+## Entry 61 — the whole chain was built except its head, and four green reviews did not notice
+
+`DOD-M15-SEALWIRE-1` bullets 3 and 4: the wiring, its test, and review pass 1's findings.
+
+### The wiring landed with no test, and my own revert test said so
+
+I wired `verifySealFinalRoots` into `processSeal`, ran the gate, committed, pushed — 1154 directory
+tests green. Then I replaced the call with a hardcoded `{ok: true}` and ran it again. **Still 1154
+green.** A verifier nothing invokes does not run, and fourteen unit tests on the verifier prove
+nothing about whether anyone calls it.
+
+### Writing the test corrected what I thought the defect was
+
+My first attempt dropped a message leaf and expected the new check to catch it. `prev_root_chain_broken`
+fired first. The test passed its `ok === false` assertion for a reason with nothing to do with the code
+under test — **a refusal is not evidence that YOUR check refused.**
+
+Chasing why the chain caught it produced the finding the test is actually built on. Structure 1, the
+only bytes a client signs, is `[version, content_hash, sender_pubkey, session_id, last_seen_seq,
+timestamp]`. **`sequence_number` and `prev_root` are not in it.** Both are relay-assigned and live
+only in Structure 2. So the prev_root chain check is circular exactly as the root comparison above it
+is: a relay that deletes a leaf recomputes the chain over what remains and every link verifies,
+because the relay produces both sides. The one signed value constraining a deletion is
+`last_seen_seq`, and it constrains only the counterparty's most recent leaf.
+
+The test uses that shape: A sends three parts before B replies, B acknowledges the third, both seal,
+the relay deletes the second part. It runs the identical tampered leaf set twice — payloads stripped
+(every pre-existing check passes, seal certified) and payloads carried (refused by name).
+
+### Review pass 1: the head of the chain did not exist
+
+> **SPEC: DEVIATIONS FOUND** — B3 and B4 both [blocking]; F1 is un-journaled and the missing leg is
+> named nowhere.
+> **SILENT FALLBACKS FOUND** — F1 (the check reports a healthy rollout state while never running)
+> and F4 (relay-controlled off-switch, framed as version skew only).
+> **ERROR SUBSTITUTION FOUND** — F2 [blocking]: six causes → `merkle_root_mismatch`, delivered to the
+> victims while the accused gets the truth.
+> **TESTS HAVE TEETH** — the three new tests are not hollow […] Two adjacent clauses (the roster
+> argument, the rejection notification) have no coverage and are revert-test survivors — F6.
+> **REMOVALS PROVEN** — comment-only deletion; the constraint underneath is carried forward.
+
+On F1:
+
+> The client computes the SEAL payload, hashes it, and **throws the payload away** […] A grep of the
+> entire `cello-client` repo for `content_bytes` returns three hits: a type comment, and the direct
+> peer-to-peer `content_frame` (a different frame). **Zero producers on `hash_submit`.**
+>
+> The four legs enumerated in `1e82dd5a` are verifier / relay wire acceptance / relay
+> store-and-forward / wiring. **A client-sender leg is in none of them and is named in no DoD bullet
+> or journal entry.** That is the "pointer to nothing reads as tracked" failure this bullet's own text
+> warns about, in its purest form.
+
+That is the finding of the milestone so far. Four legs, each specified, each reviewed, each green —
+and the producer was in nobody's list. It also explains why my revert test on the wiring was so quiet:
+with no producer, every seal returns `not_carried` and the mutation changes nothing.
+
+### The optional parameter was the same defect wearing the fix's clothes
+
+I built the sender leg with `contentBytes?: Uint8Array` and five tests. Then I ran the mutant that
+mattered — drop the argument at the one call site that must pass it, exactly reproducing what shipped
+— and **all five stayed green.** An optional parameter makes the omission type-legal and silent,
+which is how it survived four reviews the first time.
+
+It is `Uint8Array | null` and required now. Dropping it is `TS2554: Expected 5 arguments, but got 4`.
+
+### Two of my own tests passed for the wrong reason
+
+Both asserted "no frame went out". Running the guard-disabled mutant showed the refusal arriving as
+`relay_unavailable` after a 5-second auth timeout — nothing went out because an **unauthenticated**
+client cannot send anything at all. The assertions were measuring the handshake, not the guard. Both
+now perform a real successful submit first and count frames from that baseline.
+
+The same rule caught a third one on the directory side: removing `#notifySealRejected` killed the new
+test, but as a 30-second vitest timeout with a generic runner message, because `readDecoded()` blocks
+forever. Bounded at 3s, it now fails saying *"the directory caught the tampering and told nobody
+outside its own log."*
+
+### The roster was drawn from the leaves under suspicion
+
+F3, and my comment claimed the opposite was already true — it said the module *"enforces the
+participant half itself rather than trusting this call site to have done it."* The roster was the
+first two distinct senders of the relay's own leaf array. Minting a leaf is what puts a key in that
+roster, so the participant check could never fire against the only party it exists to catch.
+Measured: with the old roster a stranger-minted ctrl leaf **certifies**.
+
+### Rules earned
+
+1. **A leg nobody listed is a leg nobody built.** Enumerating the legs of a change is the artefact
+   that gets reviewed; a producer absent from that list is absent from every review of it.
+2. **An optional parameter cannot enforce a required value.** If omitting it reproduces the defect,
+   make the type refuse the omission — the compiler catches it on the machine that made it, and no
+   test has to remember.
+3. **Run the mutant against the test's own preconditions, not just its subject.** A test whose client
+   was never connected proves nothing about what it refuses to send.
