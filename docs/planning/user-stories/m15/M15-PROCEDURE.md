@@ -129,6 +129,67 @@ units, phased) and [[2026-08-21_1135_tofn-decoupling-and-seal-integrity-gaps]] (
 This removes the most common form of decision theatre available on a hardening milestone: relitigating
 whether an item is *really* launch-blocking. It is in the DoD, therefore it is in the gate. Build it.
 
+### 0z.1 — NEW findings are CLASSIFIED when they are written down (Andre, 2026-08-23)
+
+**This amends §0z for newly discovered items only. Everything already in the DoD is unaffected.**
+
+The rule above — presence in the DoD *is* launch-blocking status — was written when the DoD was a
+fixed list. It is not one: both lanes keep finding real defects, and under the unamended rule every
+one of them became a launch blocker automatically, with no way for either lane to judge otherwise.
+That makes the gate grow every time someone looks closely, which punishes looking closely.
+
+So a new item is classified **at the moment it is created**, into one of two places:
+
+| | Where it goes | Counts toward the gate? |
+|---|---|---|
+| **BLOCKS LAUNCH** | the DoD tiers, exactly as today | **yes** |
+| **POST-LAUNCH** | the DoD's **POST-LAUNCH BACKLOG** section | **no** |
+
+**The test is the launch-triage one already in `.claude/CLAUDE.md`:** at launch, if this is not done,
+does it **fundamentally ruin** a prospective customer — they cannot get the core value, or they lose
+trust in the product — or is it something they could **forgive**? *Ruin* blocks. *Forgive* is
+post-launch.
+
+**One line of reasoning, written when the item is created**, naming which of the two it is and why.
+Not a paragraph, not a defence — the line exists so the next reader can disagree with the judgement
+instead of re-deriving it.
+
+**This does NOT mean investigate less. Find everything.** Classification changes only what happens to
+a finding after it exists. Downgrading something to POST-LAUNCH to avoid the work is the failure this
+rule makes possible, and it is the one thing it must never be used for; a POST-LAUNCH item is still
+written up in full, with its user-visible consequence, exactly as a blocking one would be.
+
+**When it is genuinely unclear, it BLOCKS.** The asymmetry is deliberate: a blocker wrongly held is
+work done early, while a blocker wrongly released is discovered by a customer.
+
+### 0z.2 — THE SPAWN TRIP-WIRE: three new items from one unit and you STOP (Andre, 2026-08-23)
+
+**A COUNT, NOT A JUDGEMENT CALL. Two is fine. THREE TRIPS IT.**
+
+If a single unit produces **more than two** new items — DoD lines, backlog entries, findings that
+need their own unit, in any combination and in either classification — **stop before starting any of
+them** and report to Andre. Do not begin the third item. Do not begin the first two either, if the
+third has already appeared: the count is of what the unit *produced*, not of what is left.
+
+The report is three things, and nothing else:
+
+1. **What you were doing** — the unit, and what it was supposed to close.
+2. **What the new items are** — each with its one-line classification and its user-visible
+   consequence.
+3. **Whether the vein is still producing PRODUCTION DEFECTS or has turned into TEST-HYGIENE
+   findings.** This is the question that decides it, so answer it straight. "A test tampered a row
+   and did not restore it" is test hygiene. "Every session row a live directory wrote is
+   unverifiable" is a production defect. A unit that started as the second and drifted into the
+   first has stopped paying for itself.
+
+**Andre decides whether you continue.** Not you. This is one of the few places where stopping is
+correct and continuing is the failure — the opposite of §🛑, and deliberately so.
+
+**Why it exists:** the failure it catches is a productive vein that keeps producing, where each next
+finding is real and each next finding is smaller, and nobody notices the moment the milestone stopped
+being hardened and started being tidied. The count is the trip-wire precisely because judgement is
+what fails here — the person deepest in the vein is the worst-placed to call it.
+
 ## 0a. Severity triage (spend effort top-down, never invert)
 
 1. **A FALSE CLAIM THAT IS ALREADY READABLE.** Anything the product, the public repo, the shipped

@@ -21,10 +21,19 @@ Evidence, proofs, reviewer verdicts and run output live in [[M15-BUILD-JOURNAL]]
 **Tags:** ❌ not started · 🟡 implemented, not yet reviewed · ✅ done (written AND reviewed, with the
 reviewer's verdict quoted in the journal) · 🅿️ parked with a trigger.
 
-**A tier is a dependency boundary, not a priority.** The gate is a **state** — every line below is
-inside it, launch waits for all of them, and nothing is descoped for time (M15-PROCEDURE §0z). If a
-line turns out bigger than expected it takes longer; that is the correct outcome, not a trigger to
-argue scope.
+**A tier is a dependency boundary, not a priority.** The gate is a **state** — every line in the
+tiers below is inside it, launch waits for all of them, and nothing is descoped for time
+(M15-PROCEDURE §0z). If a line turns out bigger than expected it takes longer; that is the correct
+outcome, not a trigger to argue scope.
+
+**NEW findings are classified when written (M15-PROCEDURE §0z.1, Andre 2026-08-23).** Every line
+already in the tiers stays exactly where it is — this changes nothing retroactively. From now on a
+newly discovered item goes either into the tiers (**BLOCKS LAUNCH** — a prospective customer cannot
+get the core value, or loses trust) or into **POST-LAUNCH BACKLOG** at the foot of this file (real,
+worth fixing, does not stop us shipping), with **one line of reasoning written at creation time**.
+Only the tiers count toward the gate. **When it is genuinely unclear, it blocks** — a blocker wrongly
+held is work done early; a blocker wrongly released is found by a customer. This is not licence to
+investigate less: a post-launch item is written up in full, consequence and all.
 
 **A line's clauses are expanded at pull time**, not here — the coder writes the full clause checklist
 into the journal before implementing (M15-PROCEDURE §2 step 2), and that checklist is what the
@@ -2210,6 +2219,15 @@ Rulings that bind every line above. **Re-asking one is decision theatre** (M15-P
 1. **The gate is a state, and everything is inside it** (Andre, 2026-08-21). Launch waits for M15 to
    close. Tiers are dependency order only; nothing is descoped for time; an item's presence in this
    document *is* its launch-blocking status.
+   **AMENDED 2026-08-23 (Andre) — for NEW findings only, and it does not touch a single existing
+   line.** Presence in *the tiers* is launch-blocking status. A newly discovered item is classified
+   when it is written down: **BLOCKS LAUNCH** (a prospective customer cannot get the core value, or
+   loses trust) → the tiers; **POST-LAUNCH** (real, worth fixing, does not stop us shipping) → the
+   POST-LAUNCH BACKLOG at the foot of this file, outside the gate. One line of reasoning at creation
+   time. Unclear ⇒ blocks. **The reason for the amendment:** under the original rule, every defect
+   either lane discovered became a launch blocker automatically, so the gate grew every time someone
+   looked closely — which taxes looking closely, and looking closely is the whole milestone. This is
+   explicitly NOT permission to investigate less.
 2. **The seal wire change is in the gate**, on the migration argument rather than the security one —
    **and it pulls the content encryption in with it**, because the seal consumes the salt the key
    agreement produces and the seal items cannot be split.
@@ -2645,3 +2663,16 @@ and, for the made-true rows, the units that make them true.
 - [[launch-triage]] — source for Tier 3; read its header warning before trusting any status marker
 - [[M12B-DEFINITION-OF-DONE]] — the work order inside `DOD-M15-SUBMIT-ID-1`
 - [[end-to-end-flow]] — the canonical narrative every seal change reconciles against
+
+---
+
+# POST-LAUNCH BACKLOG
+
+**Outside the gate. Real, worth fixing, does not stop us shipping** (M15-PROCEDURE §0z.1, Andre
+2026-08-23). Nothing here is dropped, and nothing here was written up less carefully than a blocking
+line — the classification changes what happens to a finding, never how hard it was looked for.
+
+**A line arrives here only by being classified at creation.** Moving an existing tier line down here
+is Andre's call, never a lane's.
+
+_(empty — the first entries will be the triage Andre rules on, plus new findings from this point.)_
