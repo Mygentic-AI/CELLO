@@ -87,6 +87,16 @@ const ROLLED_BACK: Record<string, string> = {
     "assertion would pass on 'current transaction is aborted' rather than on a permission error). " +
     "The rollback replaced a cleanup that deleted WHERE relay_id LIKE '________________________________' " +
     "— thirty-two wildcards, reaching into every other test's rows, under a .catch(() => {}).",
+  "persist-021-adapter-boundary-audit.test.ts":
+    "DOD-M15-CHAINDEBT-1 — MISFILED AS DEBT for its inserts. All seven literal `chain_hash` " +
+    "inserts (conversation_seals, conversation_attestations, conversation_participation, " +
+    "notification_events, seal_notarizations, connection_requests, connections) live in the AC-001 " +
+    "deserializeRow block, whose `beforeEach` opens a client with BEGIN and whose `afterEach` " +
+    "ROLLBACKs it — every query in those tests runs on that client. Its two chained DELETEs were " +
+    "real and are gone: one pre-cleared a randomUUID request_id against a collision that would " +
+    "better fail loudly on the unique constraint, the other was cleanup for a row written through " +
+    "insertWithChain, i.e. a correctly chained row whose removal would break the chain the same " +
+    "test had just verified.",
   "persist-006-pgaudit.test.ts":
     "DOD-M15-CHAINDEBT-1 — CONVERTED. Its AC-001 INSERT must really execute as `cello_service`, " +
     "because the assertion reads that statement back out of the container's pgaudit log — so it " +
@@ -171,6 +181,17 @@ const ALLOWED_DELETES: Record<string, { count: number; why: string }> = {
  * Each entry says WHICH of the two it is, so "allowed" never means "unexamined".
  */
 const ALLOWED_INSERTS: Record<string, { count: number; why: string }> = {
+  "persist-003-rls.test.ts": {
+    count: 1,
+    why:
+      "CORRECTLY CHAINED BY HAND, in a single local helper (`insertChainedSeal`) that four RLS " +
+      "tests call. They each seeded conversation_seals with `chain_hash = \"0\".repeat(64)` and " +
+      "COMMITTED it. They cannot be rolled back — three insert as the SUPERUSER and then assert " +
+      "what cello_service can or cannot do to that row from a DIFFERENT connection, which would " +
+      "not see an uncommitted one — and they cannot use `recordConversationSeal`, which also " +
+      "writes participation and attestation rows these tests do not want. The helper reads the " +
+      "chain head and hashes the record against it, exactly as `insertWithChain` does.",
+  },
   "persist-020-connections.test.ts": {
     count: 1,
     why:
@@ -212,16 +233,14 @@ function deleteCount(text: string): number {
 }
 
 /** Still committing a literal chain_hash. Shrink; do not add. DOD-M15-DIRECTORY-ROT-1 owns these. */
-const KNOWN_DEBT_INSERTS = [
-  "persist-003-rls.test.ts",
-  // PARTIALLY converted: its AC-001-extended block now runs in a rolled-back transaction (7 fake
-  // chain_hash inserts, 7 deletes and a TRUNCATE removed). Other blocks in the file still violate.
-  "persist-021-adapter-boundary-audit.test.ts",
+const KNOWN_DEBT_INSERTS: string[] = [
+  // EMPTY. Paid down 8 -> 0 by DOD-M15-CHAINDEBT-1. persist-003-rls' remaining literal chain_hash
+  // is in ALLOWED_INSERTS (its INSERT is the one the RLS test proves is refused).
 ];
 
 /** Still deleting from a chained table. Shrink; do not add. */
-const KNOWN_DEBT_DELETES = [
-  "persist-021-adapter-boundary-audit.test.ts", // partially converted — see the note above
+const KNOWN_DEBT_DELETES: string[] = [
+  // EMPTY. Paid down 8 -> 0 by DOD-M15-CHAINDEBT-1.
 ];
 
 describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained table", () => {
@@ -305,8 +324,8 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
 
     // Lower these as files are converted; never raise them. DOD-M15-CHAINDEBT-1 owns driving both
     // to zero, at which point the lists and this assertion go with them.
-    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(2);
-    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(1);
+    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(0);
+    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(0);
   });
 
   it("the ROLLED_BACK and ALLOWED_DELETES entries still name files that exist", () => {
