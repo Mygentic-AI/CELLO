@@ -273,11 +273,18 @@ different repos, different disciplines, neither blocks the other.
     round trip at session open runs on the directory's signaling stream, so that is the obvious place
     to put one and it is the forbidden one. **Unrepairable once shipped** — the relay would already
     hold the salt and the hashes.
-  - **The named reasons land here**, not in `core/crypto`: add `SALT_FINGERPRINT_MISMATCH` and
-    `SALT_CONTRIBUTION_DEGENERATE` to `REFUSAL_REASONS` with total guidance. Decision #10 says
-    "refuse with a named reason", and in this codebase that means a member of that closed union —
-    `session-salt.ts`'s throws currently have no listener and no reason code (review F9). They are not
-    added ahead of a consumer, because the guidance map must be total.
+  - **The named reasons land here**, not in `core/crypto`. Decision #10 says "refuse with a named
+    reason", and `session-salt.ts`'s throws had no listener and no reason code at all (review F9).
+    ~~Add `SALT_FINGERPRINT_MISMATCH` and `SALT_CONTRIBUTION_DEGENERATE` to `REFUSAL_REASONS`.~~
+    **THAT HALF WAS WRONG — corrected in part A, 2026-08-23.** `REFUSAL_REASONS` is consumed by
+    `recordRefusal`, which refuses an inbound session *request* — the decision made **before a
+    session exists**, surfaced through `cello_inbox`, whose guidance is written for someone deciding
+    whether to accept a stranger. A salt disagreement happens **mid-flight on an established
+    session** and tears it down. Different moment, different reader, different verb; the reasons
+    would have been unreachable from any caller that union serves. They live in
+    `session-salt-agreement.ts` as `SALT_FREEZE_REASONS` + a total `SALT_FREEZE_GUIDANCE` map —
+    the *shape* copied deliberately, because the closed-set-plus-total-map part was the half that
+    was right.
   - **A VERSION DISCRIMINATOR is required.** Salted and unsalted content hashes are both 32 bytes in
     the same wire field with nothing telling them apart. A salted sender talking to an older unsalted
     peer fails EVERY frame at the receive-path authenticity check — the least-debuggable shape again —
