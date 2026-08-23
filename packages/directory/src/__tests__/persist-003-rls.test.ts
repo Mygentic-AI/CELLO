@@ -30,8 +30,11 @@ import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
-// DOD-M15-CHAINDEBT-1: this file seeds conversation_seals rows with a REAL chain hash.
+// DOD-M15-CHAINDEBT-1: this file seeds conversation_seals rows with a REAL chain hash, and asserts
+// at the end that the table still verifies — the runtime gate the source-reading guard cannot give.
 import { computeChainHash, serializeRecord, CHAIN_GENESIS } from "../hash-chain.js";
+import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
+import type { Logger } from "@cello-protocol/interfaces";
 
 /**
  * Insert a `conversation_seals` row whose `chain_hash` is chained to the current head.
@@ -48,9 +51,16 @@ import { computeChainHash, serializeRecord, CHAIN_GENESIS } from "../hash-chain.
  * uncommitted row. And they cannot go through `recordConversationSeal`, which also writes
  * participation and attestation rows these tests do not want.
  *
- * So this does exactly what `insertWithChain` does — read the head, hash the record against it —
- * leaving an ordinary valid row. The statement still runs on whichever client the caller passes,
- * which is what each test is actually asserting about.
+ * So this does what `insertWithChain` does for the HASH — read the head, hash the record against
+ * it — leaving an ordinary valid row. The statement still runs on whichever client the caller
+ * passes, which is what each test is actually asserting about.
+ *
+ * **NOT "exactly as insertWithChain does", and review (F9) was right to catch that wording.** The
+ * real writer holds `pg_advisory_xact_lock(hashtext(table))` across the head read and the INSERT,
+ * inside one transaction, so no concurrent writer can chain to the same head. This reads the head
+ * on one pool and inserts on another client with no lock and no transaction. It is safe HERE only
+ * because `fileParallelism` is false under `CELLO_ENV=local`, so nothing else is writing this table
+ * at the same time. A fixture helper, not a second implementation of the writer.
  */
 async function insertChainedSeal(
   client: pg.PoolClient,
@@ -648,6 +658,37 @@ describeIntegration("PERSIST-003 AC-006: cello_service SELECT succeeds and retur
     } finally {
       serviceClient.release();
     }
+  });
+
+  it("the rows this file seeds by hand leave conversation_seals VERIFIABLE", async () => {
+    /**
+     * ─── Review F10: the runtime gate a source-reading guard cannot give ────────────────────────
+     *
+     * `insertChainedSeal` computes `chain_hash` itself, so its correctness rests on the record it
+     * builds matching the one `insertWithChain` would hash — same columns, same exclusions. I
+     * verified that by hand, column by column, and the reviewer verified it again. **Neither is a
+     * test.**
+     *
+     * And nothing else in the suite covers it: every other `verifyChain('conversation_seals')` runs
+     * immediately after a TRUNCATE, so it never sees these rows. Add a column to
+     * `conversation_seals` and to `recordConversationSeal` but not to `insertChainedSeal`, and
+     * every test in the directory stays green while this file quietly writes holes.
+     *
+     * This is the assertion that closes that: the whole table, as it stands after this file has
+     * run. It is deliberately NOT scoped to one row — a hand-chained row that is wrong breaks its
+     * SUCCESSORS, and a `WHERE` clause would hide exactly that.
+     */
+    const store = new PgDirectoryStore(servicePool, {
+      debug: () => {}, info: () => {}, warn: () => {}, error: () => {},
+    } as unknown as Logger);
+    const result = await store.verifyChain("conversation_seals");
+    expect(
+      result.valid,
+      `conversation_seals does not verify after this file's hand-chained seeds ` +
+        `(break at ${String(result.breakAtSequence)}). Either insertChainedSeal's record no longer ` +
+        `matches what insertWithChain hashes for this table, or something else in the run left a ` +
+        `hole — both are worth stopping for.`,
+    ).toBe(true);
   });
 });
 
