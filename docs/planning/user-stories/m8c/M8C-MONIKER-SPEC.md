@@ -445,8 +445,7 @@ The interim workaround, and the manual version of exactly what C automates: run
 - [[M8C-DECISIONS]] — CC-1 (the deliberate-trust boundary MONIKER-2 AC3 preserves), D6 (session label
   as routing metadata), D14 (the parked config store MONIKER-1 AC2 avoids).
 - [[M8C-SPEC]] — parent M8C scope.
-- [[2026-08-23_1751_cello-as-agent-coordination-medium-and-m15-process-rulings|CELLO as a
-  coordination medium, and the M15 process rulings]] — first real-use test of this model, and it
+- [[M15-PROCESS-RULINGS|M15 Process Rulings]] — first real-use test of this model, and it
   holds: naming stays operator-only, and 168 sealed sessions prove continuity of a key rather than
   who someone is. Two defects found beside it — `addContact` is `INSERT OR IGNORE`, so the tier is
   frozen at first contact and never rises; and `last_offered_moniker` is stored but never surfaced,

@@ -1,29 +1,36 @@
 ---
-name: CELLO as an agent-coordination medium — dogfooding it on M15, and the process rulings that came out of it
-type: discussion
+name: M15 Process Rulings — the two-lane split, and the three rules that came out of it
+type: rulings
 date: 2026-08-23
-topics: [cello-protocol, agent-coordination, multi-agent, broadcast, listen-only, contacts, tiers, attendance, dogfooding, m15, process, definition-of-done, launch-triage, claims, product-critique, ux, threat-model]
-status: decided-pending-build
+milestone: M15
+status: open
+topics: [m15, process, definition-of-done, launch-triage, claims, checker, trip-wire, two-lane, agent-coordination, dogfooding, contacts, tiers]
 description: >
-  M15 was split across two parallel lanes (CELLO_Coder_1 on the seal work, CELLO_Support on
-  everything else) and the coordination between them was run over CELLO itself rather than through
-  Andre pasting between windows. This log records what that produced. Three process rules were ruled
-  and written in: findings are classified BLOCKS LAUNCH or POST-LAUNCH at creation rather than every
-  discovery becoming a launch blocker; a unit that spawns more than two new items trips a stop-and-
-  report; and a new checker must be made to fail on purpose AND confirmed to have failed for the
-  reason you think. The last was derived independently by both lanes from different evidence on the
-  same day. Also records an unflattering product critique of CELLO as a coordination medium from
-  first-person use — what it was actually worth, what it did not do, and the affordances that were
-  missing — plus the broadcast-agent design that came out of it: a listen-only identity that fans
-  messages out to every attendee and cannot reply, enforced at the receiver rather than the client.
-  Finally records two contact-model findings and a claims-scanner blind spot: tool descriptions have
-  never been scanned, because the scanner's markdown half enumerates from packaging config while its
-  prose-in-TypeScript half is a hand-kept list of length one.
+  M15-specific process record. On 2026-08-23 the milestone was split across two parallel lanes
+  (CELLO_Coder_1 on the seal work, CELLO_Support on everything else) and the coordination between
+  them was run over CELLO rather than through Andre pasting between windows. Three process rules
+  were ruled and written into M15-PROCEDURE: findings are classified BLOCKS LAUNCH or POST-LAUNCH at
+  creation rather than every discovery becoming a launch blocker; a unit that spawns more than two
+  new items trips a stop-and-report; and a new checker must be made to fail on purpose AND confirmed
+  to have failed for the reason you think. The last was derived independently by both lanes from
+  different evidence on the same day. Also records the findings from that session: the contact model
+  split three ways, two shipped tool descriptions promising an away-gate that does not exist, and a
+  claims-scanner blind spot — tool descriptions have never been scanned, because the scanner's
+  markdown half enumerates from packaging config while its prose-in-TypeScript half is a hand-kept
+  list of length one. Parts 2 and 3 (the product critique of CELLO as a coordination medium, and the
+  broadcast/listen-only design) are PROVISIONAL HERE and are being extracted to a dedicated
+  discussion log — they are protocol design, not milestone process.
 ---
 
-# CELLO as an agent-coordination medium, and the M15 process rulings
+# M15 Process Rulings — the two-lane split, and the three rules that came out of it
 
-## Why this log exists
+> **Scope note.** This is an **M15 milestone artifact**, not a design discussion log. Parts 1 and 4
+> belong here. **Parts 2 and 3 — the product critique of CELLO as a coordination medium, and the
+> broadcast / listen-only agent design — are PROVISIONAL and will be extracted** into a dedicated
+> discussion log in `docs/planning/discussion_logs/`, because they are protocol design that outlives
+> this milestone. They are retained here only until that log exists; do not build from them here.
+
+## Why this record exists
 
 M15 was running as a single lane and the estimate was not improving. On 2026-08-23 the work was
 split into two lanes — `CELLO_Coder_1` on the seal work, `CELLO_Support` on everything else — and
