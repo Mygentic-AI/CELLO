@@ -16,8 +16,17 @@
  *   - No sender exists at HEAD in either repo.
  *   - The only sender ever written lived in `core/client/src/relay-stream-manager.ts`, deleted with
  *     the entire M6-era in-process stack on 2026-07-13. `core/client` no longer exists.
- *   - Nothing depends on the orphaned published `@cello-protocol/client`, so no installed build can
- *     send one.
+ *   - ⚠️ **The published `@cello-protocol/client@0.0.50` DOES still ship a sender** — verified by
+ *     downloading the tarball, not by reading the repo. My first statement of this proof said no
+ *     installed build could send one, which was right for the wrong reason. What actually holds is
+ *     narrower: **nothing installs it.** Checked against npm metadata rather than the local
+ *     workspace — `@cello-protocol/connect` depends on `crypto`, `transport` and `interfaces`, and
+ *     none of those three pulls `client`. The documented install route is the plugin → connect, so
+ *     no operator following it has that package at all.
+ *   - And a direct installer of that orphan is still not broken by this deletion, because the
+ *     shipped send is **fire-and-forget**: `dirStream.send(...)` inside a `try/catch`, with nothing
+ *     awaiting `seal_attempt_ack`. A directory that silently ignores the frame is indistinguishable,
+ *     from that client's side, from one that acks an ack it never reads.
  *   - Neither response frame had a consumer on the client side either — the exchange was dead at
  *     both ends, not merely unused at one.
  *   - And had a frame somehow arrived, the dispatch chain's terminal branch is
