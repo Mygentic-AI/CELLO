@@ -6072,3 +6072,114 @@ the one I re-homed in pass 1, went the same way.
 4. **When a comment tells you not to carry it forward, search the whole method for its siblings.**
    Correcting the claim where it fires and leaving it in the header is worse than either alone: one
    of them is now authoritative and wrong.
+
+---
+
+## Entry S12 (CELLO_Support) — the receipt, and what producing it found
+
+`DOD-M15-SPINE-LANE-1` asked for a decision and a **receipt**. Producing the receipt meant running
+the lane. **The lane had never been run.** One 56-minute run, and it is **21 of 36 files red, 49 of
+98 tests**.
+
+That is the whole finding, and it is bigger than the line that produced it. The line was about
+whether a hidden lane is *declared*; the receipt says the hidden lane is *broken*, and the reason
+nobody knew is the exclusion the line exists to record. Carried as `DOD-M15-SPINERED-1` (BLOCKS),
+**deliberately undiagnosed** — §0z.2 says record and stop, and the blast radius looks shared enough
+that a wrong root cause would be expensive.
+
+### The receipt — `pnpm run test:spine`, 2026-08-23, 3,387s
+
+    ✓ j-antientropy (5 tests)
+    ✓ j-auth (6 tests)
+    ❯ j-canary (1 test | 1 failed)
+    ✓ j-combined-journey (1 test)
+    ✓ j-conn (2 tests)
+    ❯ j-content (10 tests | 5 failed)
+    ❯ j-documents (12 tests | 7 failed)
+    ❯ j-end (10 tests | 7 failed)
+    ✓ j-int (3 tests)
+    ✓ j-leg-frontier (1 test)
+    ❯ j-legibility (1 test | 1 failed)
+    ❯ j-loopback (1 test | 1 failed)
+    ❯ j-multiplayer (7 tests | 7 failed)
+    ✓ j-onboard (1 test)
+    ✓ j-optionb-setup (1 test)
+    ❯ j-persist (1 test | 1 failed)
+    ✓ j-presence (1 test)
+    ❯ j-refresh (1 test | 1 failed)
+    ❯ j-relaysig (1 test | 1 failed)
+    ❯ j-remove (3 tests | 1 failed)
+    ✓ j-sig (2 tests)
+    ❯ j-sign (1 test | 1 failed)
+    ❯ j-spine (7 tests | 4 failed)
+    ❯ j-stale-session (1 test | 1 failed)
+    ✓ j-suspend (1 test)
+    ❯ j-suspend-tofn (1 test | 1 failed)
+    ❯ j-tofn (4 tests | 1 failed)
+    ❯ j-tofn-dkg (2 tests | 2 failed)
+    ✓ j-track-record (1 test)
+    ❯ j-trust (1 test | 1 failed)
+    ✓ j-trust-journey (1 test)
+    ❯ j-unilateral (3 tests | 3 failed)
+    ❯ j-upgrade (1 test | 1 failed)
+    ❯ j-upgrade-bilateral (1 test | 1 failed)
+
+    ↓ j-gcp-live (1 skipped)   ✓ __tests__/portal-ingress-reachable (1 test)
+
+### Three observations, each labelled as what it is. NONE is a diagnosis.
+
+1. **Environmental, CONFIRMED.** `cello-portal-postgres` has been `Exited (255)` for **11 days** and
+   nothing listens on `55432`. Journeys needing the portal cannot pass. Explains the `ECONNREFUSED`
+   failures and **not** most of the rest.
+2. **A LEAD, not a cause.** Six failures are JSON parse errors; one reads `Unexpected token 'C',
+   "CELLO — a "... is not valid JSON`. That string is the CLI banner at
+   `cello-client/core/cli/src/cli-args.ts:52`. Something that should have emitted JSON emitted help
+   text. **Which caller, and why, is unestablished** — and it must not be assumed to be the same
+   caller in all six.
+3. **RULED OUT.** Not a stale build: eight `core/*/dist` directories exist and the daemon's dist is
+   newer than its source.
+
+### What is GREEN constrains the cause harder than what is red
+
+Fourteen files pass, including `j-antientropy` 5/5, `j-auth` 6/6, `j-conn`, `j-int`, `j-presence`,
+`j-sig`. **A cause that broke everything would not leave those standing.** Recording the green list
+is not padding — it is the half of the evidence that a triage will actually reason from.
+
+### What is red includes the FLOOR, not the edges
+
+- `j-spine` — *"daemon up: started"*. The most basic multi-process assertion there is.
+- `j-tofn-dkg` — *"kill one directory → registration still succeeds"*. That is the **sovereign-node
+  quorum invariant** `.claude/CLAUDE.md` calls non-negotiable.
+- `j-content` — the whole ACK / dedup / auto-recover set. `j-multiplayer` — 7 of 7.
+
+### The decision, and the part of it that is checkable
+
+Manual, not scheduled. `cross-machine` cannot be scheduled at all (a second physical machine);
+`spine` could be, but the CI that would host it is the stale AWS pipeline set. Manual with a named
+owner is the choice least likely to need reversing.
+
+The declaration used to be `Record<string, string>` — a written reason. **A reason is a claim about
+the world and nothing checked it**: a lane declared as "runs via its own command" whose command was
+renamed reads exactly like one that works. It is now `{ why, command, owner }`, and the named
+command is asserted to **exist** as a script in the excluding package. Revert-tested: renaming
+`test:spine` to `test:spine-TYPO` reddens with the right message.
+
+**The honest limit of that guard, stated here because the reviewer will find it anyway:** it proves
+the script is *present*, never that the lane *works*. `test:spine` exists and 21/36 of what it runs
+fails. Coverage of "works" is the receipt, and the receipt is now a DoD line.
+
+### One question closed rather than opened
+
+`packages/e2e-tests/vitest.config.ts` sets `dangerouslyIgnoreUnhandledErrors: true` under a comment
+calling what it swallows *"cosmetic — not actual test failures"* — a comment asserting a safety
+property, the class this milestone keeps finding. **It does not reach the spine lane.** Neither
+`vitest.spine.config.ts` nor `vitest.cross-machine.config.ts` sets it; only the fast unit config
+does. Checked rather than assumed, and worth a line here rather than a DoD entry.
+
+### The mistake in the middle of this, because it nearly became the report
+
+Mid-run I reported *"10 files done, zero failures"*. There were failures. I was grepping for `^ × src`
+and vitest marks a failing FILE with `❯`, not `×`. **A grep that matches nothing and a grep that
+matches no failures are the same empty output** — §0z.3's shape exactly, in my own status reporting
+rather than in a guard. The rule generalises past checkers: an absence of matches is only evidence
+if the pattern has been shown to match something.
