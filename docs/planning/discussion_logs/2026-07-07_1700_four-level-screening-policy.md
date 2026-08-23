@@ -134,3 +134,8 @@ stranger may intrude is the human-legible face of that layer: Ignore (hard bound
 - [[M8C-LIVE-TEST-CHECKLIST]] — the 2b / leave-a-message run that surfaced this; L3 = the preempted
   proactive-wake-on-return
 - [[M8C-ONBOARDING-IMPROVEMENTS]] — sibling live-testing capture from the same session
+- [[2026-08-23_1751_cello-as-agent-coordination-medium-and-m15-process-rulings|CELLO as a
+  coordination medium, and the M15 process rulings]] — finds two shipped tool descriptions promising
+  that whitelisting "lets them reach you unattended". Inbound sessions are auto-accepted for
+  everyone at every tier, so the promise is redundant rather than unkept — but the text implies a
+  gate that does not exist, and the false half is the safer-sounding half. `DOD-M15-TIERTEXT-1`.

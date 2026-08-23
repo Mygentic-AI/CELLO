@@ -459,3 +459,25 @@ The rule worked on its first real test, and it worked because it is a count rath
 - Whether declared **session norms** (length, latency, reply-wanted, register) are worth a wire slot.
 - Per-attendee read cursors — the change that turns co-attendance from competing-consumer into
   actual fan-out.
+
+---
+
+## Related Documents
+
+- [[2026-08-21_1906_relay-p2p-exposure-and-ephemeral-peer-id-audit|Live P2P exposure audit]] — the
+  audit that produced M15 and its Design Decision 5. This log records that decision's correction:
+  "one agreement, two outputs" tied a key that must be destroyed to a salt that must be kept.
+- [[M15-PROCEDURE]] — where all three rulings were written (§0z.1 classification, §0z.2 spawn
+  trip-wire, §0z.3 the checker rule).
+- [[M15-DEFINITION-OF-DONE]] — where `TIERTEXT-1` (blocks) and `TOOLDESC-SCAN-1` (post-launch)
+  landed, and the document whose no-descope rule is withdrawn here.
+- [[M15-BUILD-JOURNAL]] — the per-unit engineering these rulings govern; the five checker instances
+  and both human-judgement cases are recorded there in full.
+- [[launch-triage|Launch Triage]] — the ruin-versus-forgive test the classification rule applies.
+- [[M8C-MONIKER-SPEC]] — the moniker and `whoKnown` model Part 4a depends on. Confirms naming is
+  operator-only by design; the defects found here are that the tier is frozen at first contact and
+  nothing ever asks.
+- [[2026-07-07_1700_four-level-screening-policy|Four-Level Screening Policy]] — the tier model whose
+  away-acceptance semantics Part 4b finds misdescribed in two shipped tool descriptions.
+- [[2026-05-27_1400_multi-agent-mcp-planning|Multi-agent MCP planning]] — the earlier multi-agent
+  coordination design; the broadcast/listen-only shape here is the first real-use revision of it.

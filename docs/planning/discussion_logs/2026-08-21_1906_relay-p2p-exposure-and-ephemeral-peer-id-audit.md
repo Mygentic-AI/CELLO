@@ -1510,3 +1510,9 @@ Three things fall out of the mapping that were not visible in the flat list:
   the direct-path injection bypasses entirely
 - [[end-to-end-flow]] — the canonical narrative the seal sections here should be reconciled against
 - [[protocol-map]] — protocol domains and readiness
+- [[2026-08-23_1751_cello-as-agent-coordination-medium-and-m15-process-rulings|CELLO as a
+  coordination medium, and the M15 process rulings]] — **corrects Design Decision 5 of this
+  document.** "The content-hash salt comes out of this same handshake — one agreement, two outputs"
+  tied a key that must be DESTROYED at close to a salt that must SURVIVE for the life of the
+  session; the salt epochs and lockstep switching that followed were symptoms of that coupling, not
+  requirements. Also records the M15 process rulings and the first firing of the spawn trip-wire.
