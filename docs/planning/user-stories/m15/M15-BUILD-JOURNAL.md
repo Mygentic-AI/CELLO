@@ -83,157 +83,49 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
-> ### `SPINERED-1` triage in progress. `MIGRATION-GUARD-1` ✅. `SPINE-LANE-1` ✅.
-> **The spine lane had never been run. It is 21/36 red** — receipt committed at
-> `receipts/2026-08-23_spine-lane-full-run.log` (the original was in a temp dir a reboot clears).
-> Triage findings so far: the harness merged stderr into stdout (fixed), and **`cello register-agent`
-> appends prose to stdout after its JSON on the SUCCESS path** → `DOD-M15-CLIJSON-1`, the largest
-> cluster. Next clusters, unexamined: 5× `MCP error -32001 Request timed out`, 5× `.toMatch()
-> received undefined`.
-> **⚠️ I asserted a cause and was wrong, again.** I attributed the five JSON failures to the harness
-> merge and committed that before checking. Exit status is **0** — the command succeeds. The merge
-> is a real defect and was not this one. Fourth time today: evidence CONSISTENT with a cause is not
-> the cause.
+> ### 🧊 THE GATE IS FROZEN (§0z.4). **Nothing you find enters the gate.** It goes to POST-LAUNCH
+> ### BACKLOG unless it is a security hole a customer actually reaches — and BLOCKS is **Andre's to
+> ### grant**, not yours to choose. Unclear no longer blocks. This is NOT permission to look less
+> ### hard: the discipline that found five false passes in a day is what he wants kept.
 >
-> **THREE PROCEDURE CHANGES LANDED TODAY, ALL ANDRE'S, ALL IN M15-PROCEDURE:**
-> - **§0z.1** — a NEW finding is classified when written: BLOCKS LAUNCH → the tiers, POST-LAUNCH →
->   the new backlog section, one line of reasoning, **unclear ⇒ blocks**. Every existing line is
->   untouched. NOT permission to investigate less.
-> - **§0z.2** — spawn trip-wire: **more than TWO new items from one unit and you STOP** before
->   starting any of them and report. A count, not a judgement call. **It fired once already today**
->   (the tier-text thread) and Andre ruled: verify, write the items, back to the plan, no fixes.
-> - **§0z.3** — *"Make it fail on purpose, AND confirm it failed for the reason you think."*
->   Reached independently by both lanes from different evidence. See Entry S11.
->
-> **Two lines opened by that trip-wire thread:** `TIERTEXT-1` (BLOCKS) and `TOOLDESC-SCAN-1`
-> (POST-LAUNCH — the first entry in the backlog section).
-> `CHAINROUNDTRIP-1` ✅ merged. Then: `SPINE-LANE-1`, `FREEZE-STATUS-1`, `UNWITNESSED-1`,
-> `RELAYAUTH-1`. Two lines its predecessor's review opened: `SILENTACK-1`, `MMRCHAIN-1`.
+> **PRIORITY: `SEALWIRE-1`'s remaining four bullets. Everything else waits.** That is Coder_1's Tier
+> 4 line — **ask which bullets are yours before touching it**; picking one blind is how two lanes
+> collide on one file. I have asked and am awaiting the split. **If nothing splits cleanly, clear red
+> spine journeys instead** — the spine lane is the evidence the milestone-close gate depends on, and
+> it is still the only thing between us and a close with no proof.
 
-- **⚠️ `cello-client` IS A SHARED CHECKOUT AND CODER_1 HAS UNCOMMITTED EDITS IN IT.** A full
-  `core/daemon` run is **22 red across 4 salt/content-hash files** — theirs, mid-edit, NOT a
-  regression. `session-node-manager.ts`, `session-salt-agreement.ts`, `dod-m15-salt-adoption-rule`
-  and `vitest.config.ts` are modified in the tree and are **not mine to touch**. Commit by explicit
-  path only; never `git add -A`, never `git checkout` a file you did not write. Told them over CELLO
-  rather than assuming, and asked how they want to handle gating while both lanes share a tree.
-- **`DOD-M15-MIGRATION-GUARD-1`** (taken from Coder_1) — new test file in cello-client, committed and
-  pushed. 3/3 green, sibling joinkey guards green, tsc 0, eslint 0. **All three tests revert-tested
-  by execution**, each in its own run: delete `structure1_cbor` from the pinned DDL → red naming the
-  column; add `tier INTEGER` to contacts' createSql → red on the grandfather not running; bogus
-  ALTER in `consent-migration.ts` → red on unguarded coverage.
-- **THE RULE, and it points BOTH ways — the obvious reading breaks something.** A column belongs in
-  the pinned DDL **iff it can already be present on a legacy `agent_name`-keyed table when the re-key
-  runs.** `sessions`' and `contacts.moniker` are added before it; `retry_queue`'s arrive via a
-  constructor that runs after, but are already there on the second boot of an old database — all
-  must be in the DDL. **`contacts`' four tier columns must NOT be**: the tier migration runs after
-  the re-key and gates a ONE-TIME grandfather on the columns being absent. Put them in the DDL and
-  every already-approved contact reads UNKNOWN — the operator's address book quietly stops
-  auto-accepting people it accepted yesterday. Verified end-to-end, not taken on trust from the
-  warning.
-
-- **🔋 ONE VITEST AT A TIME, SMALLEST SCOPE. A HOOK NOW ENFORCES IT.** Two lanes share the laptop and
-  I was the drain: **eight full server-suite runs tonight, most preceded by `docker compose down -v`
-  + re-migration + a 25s wait.** The reset was a real method for telling a fixture hole from an
-  inherited one, and I kept doing it long after that question was answered. `npx vitest run <one
-  file>` is the default; the full suite belongs at the commit gate. **Capping workers is the WRONG
-  lever** — it lowers peak draw, not total work.
-- **`DOD-M15-CHAINROUNDTRIP-1`** (→ Entry S9), branch `m15/chainroundtrip-1`. **`sessions` FIXED** —
-  every session row a live directory wrote was a hole; the id was hashed undashed and the `uuid`
-  column returns it dashed. 10 rows green after a clean run. Gate 2275 + lint + typecheck.
-- **⚠️ THE FIX GOES AT THE PRODUCER, NOT IN `serializeRecord` — do not "simplify" it there.** Adding
-  UUID to the shared normalisations corrupts `connection_requests`: `request_id` is TEXT holding
-  thirteen live 32-hex ids, and a rule keyed on "looks like 32 hex" cannot tell those from a `uuid`
-  column's value. `serializeRecord` sees values, never column types.
-- **🚨 I GOT `seal_notarizations` WRONG THREE TIMES.** Recorded as a bytea round-trip; **retracted**.
-  Both writers `Buffer.from` deliberately and the AE suite alone leaves it green. Still red,
-  reproducible from `persist-018` ALONE on a reset database, cause unknown. Ruled out: bytea, the AE
-  path, any single defaulted column (recomputed excluding each of eleven). **The pattern in all
-  three: I read evidence CONSISTENT with a cause and stopped, instead of checking the producer.**
-- **`DOD-M15-CHAINDEBT-1` → ✅** (→ Entries S5, S7, S8), merged. Both backlogs 8→0, ceilings pinned
-  0/0. Its review's real output was `inRolledBackTxn` silently COMMITTING since it was written.
-- **🚨 RUNNING THE SERVER GATE FROM A WORKTREE NEEDS `COMPOSE_PROJECT_NAME=trustless-cello`** (→
-  Entry S6). Without it two docker/flyway tests fail on `Bind for 0.0.0.0:5433 failed: port is
-  already allocated` — Compose derives its project from the DIRECTORY, so a worktree starts a rival
-  stack. Reads like a Docker problem and is not. **And cap vitest: `--maxWorkers=2`.**
-- **FOUR OF THE TWELVE WERE MISFILED, not debt.** Already inside `BEGIN`/`ROLLBACK`, or a DELETE the
-  database must REFUSE. The guard reads source and source cannot show a rollback, so a genuinely
-  inert file still matches its regex. They moved to `ROLLED_BACK`/`ALLOWED_*` **with the reasoning
-  attached** — a name that vanishes from the list looks like work that was done.
-- **THE RECURRING SHAPE, found THREE times: an assertion leaning on the cleanup that was corrupting
-  the chain.** `federation-003` AC-010 verified a one-row slice from genesis; `persist-020` SI-002
-  computed its expected hash from `CHAIN_GENESIS`; `persist-020` AC-005 needed the table empty. Each
-  only held because the file deleted its rows. **Every conversion is now run TWICE**, the second run
-  against the first run's rows — that is the condition they used to fail under.
-- **`persist-020`'s two whole-table wipes existed because SI-003 tampers a row and never undid it.**
-  Neither comment said so. It restores by UPDATE now and asserts the chain verifies again.
-- **`DOD-M15-IDLE-CONNS-1` → ✅** (→ Entries S3, S4), merged at cello-client `73b3db5`. Nine
-  findings, five blocking, all fixed; 15 mutations killed; gate 4346 tests + lint + typecheck +
-  build by exit code.
-- **⚠️ A FINDING WITH A MEASUREMENT ATTACHED IS STILL A FINDING TO VERIFY.** The review's headline
-  (the reaper hangs up live conversations because per-message streams leave a session at zero
-  streams) **did not reproduce**: a closed stream STAYS in the listener's `connection.streams` —
-  still 1 after 10s, and under the reviewer's own scenario it climbed 1→8 with nothing reaped. I
-  repeated it as fact in a commit message and three comments before measuring. The fix stayed on a
-  better reason: not depending on that libp2p behaviour at all.
-- **`acceptSession` REUSES the node** — it moves the same `CelloNode` from `#standingReceivers` to
-  `#activeNodes`. Anything armed on a standing receiver keeps running after promotion, against the
-  counterparty. Worth remembering for any future per-node timer.
-- **`DOD-M15-LEDGER-1` → 🅿️** (→ Entry S2), merged at cello-client `30fb9ac`. Reviewed,
-  nine findings, five blocking, all fixed. Gate 4281 tests + lint + typecheck + build by exit code.
-- **DO NOT RE-OPEN THE CLAIMS SWEEP.** Seven surfaces parked, trigger = after Tier 4 with
-  `AUDITME-1`. Andre, 2026-08-23: claims prose describes a tree Tiers 2 and 4 are about to change,
-  so sweeping now buys a second rewrite. **Working it first was a judgement error** — the line was
-  picked for being numerically lowest when the park argument was already on the record next door.
-- **THE LEDGER'S GUARDS ARE NOW TEXT-ANCHORED, and the reason is worth keeping.** The reviewer
-  zeroed an entire unswept surface with ONE invented row and showed the green run; both old guards
-  compared the ledger to itself and neither to the surfaces. Rows now carry verbatim excerpts and
-  the count is derived from them. **A green run on `dod-m15-claim-scanner-1.test.ts` now means the
-  quoted text exists**; before, it meant only that the numbers were self-consistent.
-- **`C7d` HAS NO GATE AND WILL BE MISSED.** The public GitHub repo **description** advertises four
-  native adapters that do not exist (OpenClaw, NanoClaw, IronClaw, ZeroClaw) and omits the Hermes
-  bridge, which is the one integration that ships. It is the only surface on the list that is **not
-  a file in the tree**, so no scanner reaches it and no green run will ever prove it fixed. Human
-  action on github.com; wording is Andre's (§2f).
-- **Portal reading is owed** before two registry claims can be settled: `screened` in the attestation
-  text, and *"You cannot attest about yourself"* — nothing in `core/` refuses a self-attestation.
-- **LANE (agreed, session `e3adcaa7…`):** Tier 1 `LEDGER-1`, `DISCLOSE-1`; Tier 2 `IDLE-CONNS-1`,
-  `CHAINDEBT-1`, `SPINE-LANE-1`, `FREEZE-STATUS-1`*, `UNWITNESSED-1`*, `RELAYAUTH-1`; Tier 3
-  `ALERTING-1`, `NODEHEAP-1`, `SWEEP-ABORT-1`, `EXPIRY-CONSUMER-POLICY-1`, `BUNDLED-2030-1`,
-  `VOCAB-ORDERING-1`, `CHAINHEALTH-1`, `SAMEOP-1`, `ENDORSE-RETRY-1`, `SCREENINSTALL-1`,
-  `DOCPROFILE-1`, `HEARTBEAT-1`; Tier 5 `RELAYABUSE-1`, `RELAYLEAK-1`, `MULTIRELAY-1`,
-  `BOOTSTRAP-AUTH-1`, `STEP6-REPLAY-1`, `DDOS-1`, `RELAYONLY-1`. Plus `DIRAUTH-1` — its remaining
-  half IS `BOOTSTRAP-AUTH-1`, so that line goes ✅ when this lane finishes it.
-- **⚠️ `FREEZE-STATUS-1` — DO NOT WRITE A MIGRATION. The columns are already agreed and handed over.**
-  `CELLO_Coder_1` adds `frozen_at INTEGER` and `frozen_reason TEXT` alongside the session-salt column
-  in ONE migration and writes nothing to them; **all behaviour is this lane's.**
-  **The reason is §2e — one file, two branches — NOT a migration cascade.** The pre-filled version of
-  this block called it the FEDERATION-002 renumbering shape; that was corrected over CELLO and
-  accepted by both lanes. FEDERATION-002 was Flyway, server-side, versioned. The client-side
-  `sessions` migration is an idempotent `ALTER TABLE ADD COLUMN` loop with a per-column try/catch on
-  `duplicate column name` — no versions, no ordering, nothing to renumber. Do not re-import a
-  server-side failure shape onto a client-side mechanism that does not have it.
-  **The column semantics that must not be lost:** `frozen_reason` is NULL iff `frozen_at` is NULL;
-  it is deliberately **not a status value** and must **not** be folded into `interrupted_by` (whose
-  NULL is deliberately counted as the counterparty's and feeds the acceptance bound); and the durable
-  write lands **before** `destroySessionNode`, because that teardown writes `interrupted`, the
-  REVIVABLE status — a mark landing after it reproduces on disk the exact bug the in-memory
-  `#frozenSessions.add` was placed early to fix.
-  **Why the line matters:** `#frozenSessions` is memory-only today, so a restart un-freezes a session
-  frozen because someone signed with a key that was not the counterparty's, the next read revives it,
-  and the log still says it will not be revived.
-- **⚠️ `UNWITNESSED-1` — say so before touching `sealReadiness`.** Its subject is the same function
-  `CELLO_Coder_1` is editing for the certified-root check.
-- **`OFFER-EXPIRY-1` is this lane's AFTER Tier 4 lands** — not before. It changes session-open, which
-  is where the key agreement and salt exchange are being added. Its diagnosis is already written up
-  in the `CELLO_Coder_1` block; do not re-derive it.
-- **🚨 DEPLOYMENT ORDERING BINDS THIS LANE TOO.** `SEALWIRE-1` bullet 1 changed the VALUE the
-  directory certifies while the field name stayed the same, so the two versions disagree silently. A
-  NEW client against an OLD directory refuses EVERY bilateral seal — deterministic. Every node must
-  run the new directory BEFORE any client carrying the check reaches `latest`; not before the roll
-  starts, before it FINISHES. If this lane rolls a directory for an unrelated reason, that ordering
-  still applies.
-- **Decisions Carried #5–#10 landed 2026-08-23 and #7 is RETRACTED.** Re-read them before relying on
-  anything about the key agreement or the salt.
+- **⚡ POWER IS UNSTABLE.** Commit AND push after every change. Two pushes were rejected tonight by
+  Coder_1 pushing concurrently — `git pull --rebase` then push, and **verify your commit is on
+  `origin/main` afterwards** rather than assuming the rebase kept it.
+- **🐳 Docker went down mid-run** and a journey failed with *"the database system is shutting down"*.
+  That reads as a product failure and is not one. **Start Docker + `docker compose up -d` + `docker
+  start cello-portal-postgres` before any spine run**, or the results are noise.
+- **Closed tonight:** `MIGRATION-GUARD-1` ✅, `SPINE-LANE-1` ✅, `CLIJSON-1` ✅, `CHAINROUNDTRIP-1` ✅,
+  `CHAINDEBT-1` ✅.
+- **`SPINERED-1` — the spine lane had NEVER been run; 21/36 files red.** Receipt committed at
+  `receipts/2026-08-23_spine-lane-full-run.log` (56 minutes — **do not re-run to recover it**).
+  Triage: 5 were `CLIJSON-1` (fixed), 7 the portal DB (was stopped 11 days, now up), 5 one cascade,
+  5 the stale close contract, ~8 unexamined.
+- **`CLOSEROOT-1` — close returns a COMMITMENT, not a root**, deliberately: *"exactly how seventeen
+  sessions were lost when this call used to block."* Journeys must `awaitSealedRoot(conn, id)` from
+  `live-harness.ts`. **✅ `j-loopback`, ✅ `j-refresh` green on real binaries.** `j-legibility` +
+  `j-spine` converted, unrun. Coder_1 owns `j-unilateral` / `j-upgrade` / `j-upgrade-bilateral` (the
+  ~11-minute escalation — a different timing contract, not a conversion).
+- **⚠️ GREP FOR A SECOND STALE USE.** `j-loopback` had one 70 lines below the obvious one:
+  `const root = closeA.sealed_root!` — **the `!` turned `undefined` into the STRING `"undefined"`**
+  inside a SQL query, which matched nothing and surfaced as *"the bilateral seal must populate
+  conversation_seals"*. That reads as the directory failing to record a seal. The assertion is what
+  makes a missing value look like a wrong one, and only the second implicates a subsystem.
+- **`NORMHASH-1` — OPEN QUESTION, not a defect, and the most consequential thing I found.** The
+  gateway sanitiser folds `…`→`...` via NFKC as the confusables defence. **Correct; must not be
+  weakened.** Unknown: whether the seal hashes the sender's pre-sanitisation bytes or the receiver's
+  post. If they differ, **any message with a foldable character makes the two trees disagree and the
+  session cannot seal bilaterally.** `j-loopback` is plain ASCII so nothing folds — **it is not
+  evidence.** One test answers it. If they DO diverge the fix is Andre's, not a lane's.
+- **RULE EARNED THE HARD WAY, five times today:** a checker whose negative path has never been
+  exercised is indistinguishable from one that cannot fail. §0z.3 — *make it fail on purpose, AND
+  confirm it failed for the reason you think.* My own instance: I grepped for a marker vitest does
+  not emit and reported "zero failures" when there were 21.
 
 ## Entry 0 — Milestone setup (2026-08-21)
 
