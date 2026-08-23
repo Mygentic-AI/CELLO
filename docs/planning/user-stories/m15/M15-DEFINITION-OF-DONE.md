@@ -1080,6 +1080,31 @@ online in all three and nothing that was broken. Most of a day lost in the wrong
 > also rewritten, but tracing it showed the line is UNREACHABLE — a compiler backstop, not the
 > source of the incident, and the comment now says so rather than sending the next reader wrong.
 
+### `DOD-M15-REFUSED-INBOUND-SILENT-1` — ❌ A message we refused is a thing the operator gets told
+**Found while invariant-checking `DOD-M15-SEALWIRE-1` part B1 (→ Entry 43). PRE-EXISTING, not
+introduced there** — `content_hash_mismatch` has had exactly this shape since it was written; B1
+added two more refusal reasons to the same silent path, which is what made it visible.
+
+Every inbound content refusal in `ingestReceivedContent` is loud in the LOG and **reaches the agent
+nowhere.** The one agent-facing push in that area (`#onSessionStateChanged` →
+`counterparty_closing`) fires from the auto-acknowledge gate — **at close**, not at message time. So
+from the receiving operator's chair, a refused message simply never arrives.
+
+- **Why it is worse than it sounds, and why B1 raised the stakes.** A hash mismatch is rare and
+  arguably one-off. `content_hash_alg_unknown` is a **version skew, so it affects EVERY message from
+  that counterparty**: the conversation goes quiet, permanently, with a full explanation sitting in a
+  log file the operator has no reason to open. They conclude the other person stopped replying.
+- This is Invariant 4 exactly: *loud in the LOG **and** in the agent response, never one instead of
+  the other.* The sender is fine — no ACK means it parks and eventually surfaces a delivery problem.
+  It is the RECEIVER's operator who is told nothing.
+- **The bar:** the refusal reaches `cello_receive` (or the inbox) with the reason and its guidance —
+  the strings already exist and are good; they have no reader. **Bounded and deduplicated per
+  session per reason**, or a skewed peer turns one lie into a flood: the first refusal of a kind is
+  the signal, the ninetieth is noise.
+- **Do NOT show the content.** It failed verification; surfacing it is the injection path the cross-
+  check exists to close. The operator is told a message was refused and why, never what it said.
+- **Enforcer:** receipt.
+
 ### `DOD-M15-TRANSPORT-TERMINAL-1` — ✅ A transport blip stops killing a healthy conversation
 > **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS
 > FOUND** … **ERROR SUBSTITUTION FOUND** … **HOLLOW TESTS FOUND** — T1 through T5. T1 is the serious
