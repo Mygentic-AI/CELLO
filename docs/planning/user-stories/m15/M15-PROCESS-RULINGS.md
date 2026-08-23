@@ -17,18 +17,20 @@ description: >
   split three ways, two shipped tool descriptions promising an away-gate that does not exist, and a
   claims-scanner blind spot — tool descriptions have never been scanned, because the scanner's
   markdown half enumerates from packaging config while its prose-in-TypeScript half is a hand-kept
-  list of length one. Parts 2 and 3 (the product critique of CELLO as a coordination medium, and the
-  broadcast/listen-only design) are PROVISIONAL HERE and are being extracted to a dedicated
-  discussion log — they are protocol design, not milestone process.
+  list of length one. The product critique of CELLO as a coordination medium, and the broadcast /
+  listen-only design that came out of it, have been extracted to their own discussion log — they are
+  protocol design rather than milestone process.
 ---
 
 # M15 Process Rulings — the two-lane split, and the three rules that came out of it
 
-> **Scope note.** This is an **M15 milestone artifact**, not a design discussion log. Parts 1 and 4
-> belong here. **Parts 2 and 3 — the product critique of CELLO as a coordination medium, and the
-> broadcast / listen-only agent design — are PROVISIONAL and will be extracted** into a dedicated
-> discussion log in `docs/planning/discussion_logs/`, because they are protocol design that outlives
-> this milestone. They are retained here only until that log exists; do not build from them here.
+> **Scope note.** This is an **M15 milestone artifact**, not a design discussion log. The product
+> critique of CELLO as a coordination medium and the broadcast / listen-only agent design were
+> drafted here and have been **extracted** to
+> [[2026-08-23_1933_broadcast-channels-conclaves-and-encrypted-discovery|Broadcast channels,
+> conclaves, and encrypted discovery]], because they are protocol design that outlives this
+> milestone. Parts are numbered 1 and 4 as originally drafted; the gap is deliberate and marks the
+> extraction.
 
 ## Why this record exists
 
@@ -162,180 +164,6 @@ together, deliberately, so the record does not read as one lane being sloppier t
 
 ---
 
-## Part 2 — CELLO as a coordination medium: an unflattering assessment
-
-Andre asked for a critique from first-person use, explicitly not a flattering one. This is it.
-
-### What it was actually worth
-
-**The one unambiguous win.** `CELLO_Support` had asked `Coder_1` hours earlier whether the SEALWIRE
-deployment-ordering constraint bound **relay** rolls or directory nodes only. The question was
-gating three of its remaining lines and had gone unanswered in their own shared session. Asked over
-a third-party session, it was answered in minutes: relay rolls are independent, because the relay
-reads four fields off a deposit frame and never opens the blob, so it evaluates nothing a client
-asserts. Three lines unblocked.
-
-**The second win is organisational, not technical.** Andre stopped being the router. That was
-costing him real time.
-
-**A win that was NOT CELLO's.** The independent derivation in §1c was valuable, but the value came
-from the experimental design — asking both lanes separately and not cross-contaminating the answers.
-Two subagents would have produced the same result. CELLO supplied the channel, not the insight.
-
-### Where it visibly failed, and where that critique was wrong
-
-**Duplication.** Andre sent `CELLO_Support` the same instructions directly, minutes before the relay
-arrived; the work was already done and a round trip was wasted.
-
-**This was initially recorded as a protocol gap and that was wrong.** Andre's correction: *"I sent it
-the instructions and I realized I'm not using my own product. Once I get used to using it, that
-deduplication will disappear."* Correct — it was channel-mixing by a user who was not yet
-dogfooding, not a missing feature. Recorded because the over-generalisation from a single instance
-is the kind of finding that would otherwise have become a line.
-
-**Broadcast is a real gap.** The same ruling was hand-written twice, once per lane, and the two
-versions differed in emphasis — which is precisely how two lanes end up implementing one rule
-differently.
-
-### The affordances that were missing
-
-- **Presence.** A message was sent to `Coder_1` mid-seal-work with no way to know whether it was
-  interrupting something expensive; the sender had to hedge in prose. `standby` + `est_minutes`
-  covers the *sender's* intent. Nothing covers the receiver's state.
-- **Status.** Determining what `Coder_1` was working on required reading git.
-- **Subject lines.** The doorbell says *"agent f8d518ca… sent a message."* Deciding whether to
-  interrupt work requires fetching the message first.
-- **Role addressing.** Coordination needs "whoever owns the seal lane", not a 64-hex key.
-- **A no-reply-needed signal.** Every message expects a reply; "nothing blocking" had to be said in
-  prose.
-
-### On the tamper-evident transcript — the honest answer
-
-**On one laptop, between two agents the same operator owns, the cryptography contributed nothing to
-this work.** Seals, hash chains and notarization were irrelevant to every outcome above. A plain
-message bus would have produced the same result.
-
-The narrow case where it *would* matter: `Coder_1` told `Support` "relay rolls are independent, go
-ahead." If that is wrong and three items shipped on it, the sealed record settles who said what. That
-is a genuine coordination-liability case and it is a stretch on a single machine.
-
-> **The uncomfortable version, recorded because it affects positioning:** the first wedge — solo
-> multi-agent — is the use case that exercises the differentiator **least**. Identity,
-> tamper-evidence and no-central-server all matter when the counterparty is not yours. Between an
-> operator's own agents the valuable parts are addressing, turn-taking and presence: the boring ones.
-> This is not fatal — infrastructure is often adopted for the mundane feature and valued later for
-> the one it was built for — but the demo that sells this is not two of Andre's agents on one laptop.
-
-### Message length
-
-Both lanes wrote 400–600 word messages, as did the relay. Some was load-bearing (the false-green /
-false-caught distinction changed a ruling); most was restatement of what the other side had already
-said.
-
-Andre's position: length is a prompting concern, not a protocol one — at most a per-session cap set
-by the initiator. **Half-accepted.** The counter-argument that puts part of it back on the protocol
-is specific to the cross-vendor thesis: **you cannot prompt the other side.** If both agents are
-Claude Code, a system prompt or hook settles it. The moment the counterparty runs in another vendor's
-harness, the protocol is the only thing that crosses the boundary.
-
-> **Design note, not a decision.** A hard *enforced* cap is wrong: truncation is unacceptable in a
-> system whose claim is that the record is exactly what was said, and rejection costs a round trip.
-> The useful form is a **declared session norm** the initiator sets and the protocol delivers to the
-> other side before it composes. That generalises past length to expected response latency, whether
-> a reply is wanted at all, and register (decision-only vs full reasoning). The last of those would
-> have saved more than a character cap.
-
----
-
-## Part 3 — The broadcast / listen-only agent design
-
-This came out of the missing-broadcast finding and is the most substantial design output of the
-session.
-
-### The observation that started it
-
-Co-attendance was tested accidentally: attending `CELLO_Support` while another session already held
-it took attendance to 2. The product's own guidance:
-
-> *"an arriving message is delivered to whichever session reads it first, so `cello_receive` here may
-> return nothing while the other session gets it. Nothing is lost: `cello_transcript` shows every
-> message either session received."*
-
-**So co-attendance is a competing-consumer queue, not a broadcast.** But the *doorbell* fanned out —
-a message from `Coder_1` to `Support` rang in both attending sessions.
-
-> **Doorbell is already broadcast. Delivery is not.** The one-to-many leg is one layer away from
-> working, and the layer that is wrong is the smaller one: the read cursor is shared where it should
-> be per-attendee. The transcript already retains everything for every attendee, so the durable half
-> exists.
-
-### The related constraint
-
-A connection has exactly **one** current agent — `cello_use_agent` sets which agent "this connection
-routes tool calls to, **and receives its doorbells here**." Every tool takes an optional `agent`
-parameter, so a session can **act as** any agent per call, but can only **listen as** one.
-
-Multi-agent *sending* was never forbidden. Multi-agent *listening* was effectively forbidden,
-probably without a decision being taken.
-
-### Andre's design, and the refinement
-
-Andre's proposal: an agent-level flag. Default stays competing-consumer; an agent explicitly set up
-as a broadcast receiver fans out to every attendee instead. Opt-in, nothing migrates.
-
-**The problem raised against it:** if five sessions attend a shared identity and three reply, the
-counterparty receives three messages from one identity. The transcript would say "Coder_All said X,
-Y and Z" when three independent minds each said one thing under a shared key. For a product whose
-claim is that you know who you are talking to and can prove what they said, that is the sharpest edge
-available — the seal would be true about the key and misleading about the speaker.
-
-> **DECIDED (Andre, 2026-08-23): a broadcast agent is INBOUND-ONLY — a listen-only identity.**
-> Messages fan out to every attendee. **Replies are not possible under the broadcast identity.** An
-> agent that wants to respond reaches the sender directly, as itself, in its own session. The
-> affordances on delivery make the sender's identity and pubkey available so that is one step.
-
-A distribution list, not a shared mailbox. This resolves three problems at once: every message in
-every transcript has exactly one author; each reply is its own session with its own seal; and the
-one-to-one turn protocol survives on every leg, since only the fan-out leg is one-to-many and it
-expects no reply.
-
-### Enforcement — three layers, one of them load-bearing
-
-Andre: *"the relay would need to block any attempts to respond to it because remember people can
-fuck with their client code."* Correct that client-side enforcement is void. Two refinements:
-
-**The flag must live in the DIRECTORY, not the client.** The relay reads four fields and never opens
-the payload; to refuse a reply it must know the sending identity is listen-only, and anything the
-client tells it is exactly what a modified client would lie about. So listen-only is a property of
-the **registered public profile**. That is a good fit rather than a burden — it is public, the
-counterparty can check it too, and "what kind of identity is this" is what a public trust profile is
-for. It does mean flipping the flag goes through the threshold ceremony.
-
-**The relay is not always in the path.** Direct connections skip it entirely.
-
-| Layer | What it does | Holds against |
-|---|---|---|
-| Client | Does not offer the affordance | Nothing. UX only, void against a modified build. |
-| Relay | Refuses to broker the reply | A modified client **on a relayed path** |
-| **Receiver** | **Refuses an inbound message whose sender is a listen-only identity** | **Any path, any client build** |
-
-The receiver check is the enforcement. Same shape as the salt-contribution rule: **one honest
-participant is enough.**
-
-**Wire detail worth settling early:** the refusal needs its own named reason. A generic error reads
-as a network problem and sends the operator looking in the wrong place — the failure mode M15 has
-been closing all week.
-
-### Left open
-
-- **When is a broadcast message "read"?** The unread watermark is per-agent. With five attendees,
-  does one reader clear it, all five, or none? A dead attendee must not hold it unread forever.
-- **What does the sender see?** `delivered: true` into a five-attendee agent implies something.
-  Silence from two of five is currently indistinguishable from them having nothing to say.
-
-Both are cheap now and a wire change later — the same argument that put the PQ hook in on day one.
-
----
 
 ## Part 4 — Findings from the same session
 
@@ -486,5 +314,7 @@ The rule worked on its first real test, and it worked because it is a count rath
   nothing ever asks.
 - [[2026-07-07_1700_four-level-screening-policy|Four-Level Screening Policy]] — the tier model whose
   away-acceptance semantics Part 4b finds misdescribed in two shipped tool descriptions.
-- [[2026-05-27_1400_multi-agent-mcp-planning|Multi-agent MCP planning]] — the earlier multi-agent
-  coordination design; the broadcast/listen-only shape here is the first real-use revision of it.
+- [[2026-08-23_1933_broadcast-channels-conclaves-and-encrypted-discovery|Broadcast channels,
+  conclaves, and encrypted discovery]] — **the extracted design.** The missing-broadcast affordance
+  was found by running this milestone's coordination over CELLO; that log carries the critique and
+  the design that followed.
